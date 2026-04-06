@@ -142,7 +142,9 @@ export { composeRule, ScopeRegistry } from "./scope.js"
 export type {
   AuthorizePredicate,
   Disposition,
+  DocCreatedOrigin,
   ExchangeParams,
+  OnDocCreated,
   OnDocDismissed,
   OnUnresolvedDoc,
   RoutePredicate,

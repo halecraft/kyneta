@@ -10,7 +10,7 @@
 //     3. Execute: write results via change(gameStateDoc, ...)
 //
 //   Player lifecycle is managed externally via addPlayer / removePlayer,
-//   called from the onUnresolvedDoc / onDocDismissed callbacks in server.ts.
+//   called from the onDocCreated / onDocDismissed callbacks in server.ts.
 //
 // ═══════════════════════════════════════════════════════════════════════════
 

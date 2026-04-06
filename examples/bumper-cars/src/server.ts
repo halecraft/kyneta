@@ -7,7 +7,8 @@
 //   2. Creates a server-side Exchange with:
 //      - route:           input docs only visible to owner
 //      - authorize:       clients can only write their own input doc
-//      - onUnresolvedDoc:        materializes input:${peerId} docs on player connect
+//      - schemas:         declares PlayerInputDoc for auto-resolve
+//      - onDocCreated:    registers players with game loop on doc creation
 //      - onDocDismissed:  cleans up when players disconnect
 //   3. Runs the game loop at 60fps
 //   4. Serves static files from dist/ and upgrades /ws to WebSocket
@@ -18,8 +19,7 @@
 
 /// <reference types="bun-types" />
 
-import { Exchange } from "@kyneta/exchange"
-import { Interpret, Reject } from "@kyneta/schema"
+import { Exchange, type DocCreatedOrigin } from "@kyneta/exchange"
 import { WebsocketServerTransport } from "@kyneta/websocket-transport/server"
 import {
   createBunWebsocketHandlers,
@@ -54,6 +54,7 @@ const exchange = new Exchange({
     type: "service",
   },
   transports: [() => serverTransport],
+  schemas: [PlayerInputDoc],
 
   // ── route ────────────────────────────────────────────────────────
   // Outbound flow control: which peers see which documents?
@@ -85,17 +86,17 @@ const exchange = new Exchange({
     return false
   },
 
-  // ── onUnresolvedDoc ─────────────────────────────────────────────────────
-  // A client created input:${peerId} — materialize it server-side
-  // and register the player with the game loop.
+  // ── onDocCreated ─────────────────────────────────────────────────────
+  // Lifecycle notification: a doc was created in this exchange.
+  // For remote input:${peerId} docs, register the player with the game loop.
   //
-  // onUnresolvedDoc returns an Interpret disposition; the Exchange then
-  // calls exchange.get(docId, bound) internally to create the doc. After
-  // that call completes (synchronously), we can look the doc up.
-  // We schedule a microtask to register the player so the Exchange
-  // finishes its dispatch loop first.
-  onUnresolvedDoc(docId, _peer, _replicaType, _mergeStrategy) {
-    if (!docId.startsWith("input:")) return Reject()
+  // Unlike onUnresolvedDoc (a policy gate), onDocCreated fires for every
+  // doc creation regardless of how it was resolved — auto-resolve, callback,
+  // or local get(). We filter on origin: "remote" to react only to
+  // peer-announced docs.
+  onDocCreated(docId, _peer, _mode, origin: DocCreatedOrigin) {
+    if (origin !== "remote") return
+    if (!docId.startsWith("input:")) return
 
     const peerId = docId.slice("input:".length)
 
@@ -105,8 +106,6 @@ const exchange = new Exchange({
         gameLoop.addPlayer(peerId, inputDoc)
       }
     })
-
-    return Interpret(PlayerInputDoc)
   },
 
   // ── onDocDismissed ───────────────────────────────────────────────

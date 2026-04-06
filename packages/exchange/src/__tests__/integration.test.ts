@@ -21,6 +21,7 @@ import {
 } from "@kyneta/schema"
 import { Bridge, createBridgeTransport } from "@kyneta/transport"
 import { afterEach, describe, expect, it } from "vitest"
+
 import { Exchange } from "../exchange.js"
 import { sync } from "../sync.js"
 
@@ -1479,5 +1480,321 @@ describe("exchange.get() validation", () => {
     expect(doc).toBeDefined()
 
     exchange.reset()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// onDocCreated
+// ---------------------------------------------------------------------------
+
+describe("onDocCreated", () => {
+  it("fires for local get()", async () => {
+    const calls: Array<{ docId: string; mode: string; origin: string }> = []
+    const exchange = createExchange({
+      identity: { peerId: "alice" },
+      onDocCreated: (docId, _peer, mode, origin) => {
+        calls.push({ docId, mode, origin })
+      },
+    })
+
+    exchange.get("doc-1", SequentialDoc)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      docId: "doc-1",
+      mode: "interpret",
+      origin: "local",
+    })
+
+    exchange.reset()
+  })
+
+  it("fires for remote auto-resolve", async () => {
+    const bridge = new Bridge()
+    const calls: Array<{
+      docId: string
+      peerId: string
+      mode: string
+      origin: string
+    }> = []
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      schemas: [SequentialDoc],
+      onDocCreated: (docId, peer, mode, origin) => {
+        calls.push({ docId, peerId: peer.peerId, mode, origin })
+      },
+    })
+
+    exchangeA.get("doc-1", SequentialDoc)
+    await drain(40)
+
+    const remote = calls.filter(c => c.origin === "remote")
+    expect(remote).toHaveLength(1)
+    expect(remote[0]).toMatchObject({
+      docId: "doc-1",
+      peerId: "alice",
+      mode: "interpret",
+      origin: "remote",
+    })
+
+    await exchangeA.shutdown()
+    await exchangeB.shutdown()
+  })
+
+  it("fires for onUnresolvedDoc → Interpret", async () => {
+    const bridge = new Bridge()
+    let unresolvedFired = false
+    const calls: Array<{ docId: string; origin: string }> = []
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      onUnresolvedDoc: () => {
+        unresolvedFired = true
+        return Interpret(SequentialDoc)
+      },
+      onDocCreated: (docId, _peer, _mode, origin) => {
+        calls.push({ docId, origin })
+      },
+    })
+
+    exchangeA.get("doc-1", SequentialDoc)
+    await drain(40)
+
+    expect(unresolvedFired).toBe(true)
+    const remote = calls.filter(c => c.origin === "remote")
+    expect(remote).toHaveLength(1)
+    expect(remote[0]).toMatchObject({ docId: "doc-1", origin: "remote" })
+
+    await exchangeA.shutdown()
+    await exchangeB.shutdown()
+  })
+
+  it("fires on deferred → promoted via get()", async () => {
+    const bridge = new Bridge()
+    const calls: Array<{ docId: string; origin: string }> = []
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      onUnresolvedDoc: () => Defer(),
+      onDocCreated: (docId, _peer, _mode, origin) => {
+        calls.push({ docId, origin })
+      },
+    })
+
+    exchangeA.get("doc-1", SequentialDoc)
+    await drain(40)
+
+    // Deferred — onDocCreated should NOT have fired yet
+    expect(calls).toHaveLength(0)
+    expect(exchangeB.deferred.has("doc-1")).toBe(true)
+
+    // Promote via get()
+    exchangeB.get("doc-1", SequentialDoc)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({ docId: "doc-1", origin: "local" })
+
+    await exchangeA.shutdown()
+    await exchangeB.shutdown()
+  })
+
+  it("does not fire for deferred docs (two-tiered default)", async () => {
+    const bridge = new Bridge()
+    const calls: Array<{ docId: string }> = []
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      // No onUnresolvedDoc, no schemas — supported type → deferred by two-tiered default
+      onDocCreated: docId => {
+        calls.push({ docId })
+      },
+    })
+
+    exchangeA.get("doc-1", SequentialDoc)
+    await drain(40)
+
+    // Sequential is a default-supported type → deferred, NOT created
+    expect(exchangeB.deferred.has("doc-1")).toBe(true)
+    expect(calls).toHaveLength(0)
+
+    await exchangeA.shutdown()
+    await exchangeB.shutdown()
+  })
+
+  it("composes via scopes (broadcast)", async () => {
+    const calls1: string[] = []
+    const calls2: string[] = []
+
+    const exchange = createExchange({
+      identity: { peerId: "alice" },
+      onDocCreated: docId => {
+        calls1.push(docId)
+      },
+    })
+
+    exchange.register({
+      onDocCreated: docId => {
+        calls2.push(docId)
+      },
+    })
+
+    exchange.get("doc-1", SequentialDoc)
+
+    expect(calls1).toEqual(["doc-1"])
+    expect(calls2).toEqual(["doc-1"])
+
+    exchange.reset()
+  })
+
+  it("auto-resolve fires onDocCreated for every doc, not just the first (regression)", async () => {
+    const bridge = new Bridge()
+    const calls: string[] = []
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      schemas: [SequentialDoc],
+      onDocCreated: (docId, _peer, _mode, origin) => {
+        if (origin === "remote") calls.push(docId)
+      },
+    })
+
+    exchangeA.get("doc-1", SequentialDoc)
+    exchangeA.get("doc-2", SequentialDoc)
+    await drain(40)
+
+    expect(calls).toContain("doc-1")
+    expect(calls).toContain("doc-2")
+    expect(calls).toHaveLength(2)
+
+    await exchangeA.shutdown()
+    await exchangeB.shutdown()
+  })
+
+  it("internal get() from Interpret does not register schema for future auto-resolve", async () => {
+    const bridge = new Bridge()
+    let unresolvedCount = 0
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      schemas: [LoroDoc],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      replicas: [BoundReplica(loroReplicaFactory, "causal")],
+      // No schemas — rely on onUnresolvedDoc for Loro docs
+      onUnresolvedDoc: () => {
+        unresolvedCount++
+        return Interpret(LoroDoc)
+      },
+    })
+
+    exchangeA.get("doc-1", LoroDoc)
+    await drain(40)
+    expect(unresolvedCount).toBe(1)
+
+    // Second doc with same schema — onUnresolvedDoc should fire again
+    // (internal get() from Interpret did NOT register LoroDoc for auto-resolve)
+    exchangeA.get("doc-2", LoroDoc)
+    await drain(40)
+    expect(unresolvedCount).toBe(2)
+
+    await exchangeA.shutdown()
+    await exchangeB.shutdown()
+  })
+
+  it("fires for local replicate()", () => {
+    const calls: Array<{ docId: string; mode: string; origin: string }> = []
+    const exchange = createExchange({
+      identity: { peerId: "alice" },
+      replicas: [BoundReplica(loroReplicaFactory, "causal")],
+      onDocCreated: (docId, _peer, mode, origin) => {
+        calls.push({ docId, mode, origin })
+      },
+    })
+
+    exchange.replicate("doc-1", loroReplicaFactory, "causal", "hash-1")
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      docId: "doc-1",
+      mode: "replicate",
+      origin: "local",
+    })
+
+    exchange.reset()
+  })
+
+  it("fires for remote Replicate via relay", async () => {
+    const bridge = new Bridge()
+    const calls: Array<{
+      docId: string
+      peerId: string
+      mode: string
+      origin: string
+    }> = []
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      schemas: [LoroDoc],
+    })
+
+    const relay = createExchange({
+      identity: { peerId: "relay" },
+      transports: [createBridgeTransport({ transportType: "relay", bridge })],
+      replicas: [BoundReplica(loroReplicaFactory, "causal")],
+      onUnresolvedDoc: () => Replicate(),
+      onDocCreated: (docId, peer, mode, origin) => {
+        calls.push({ docId, peerId: peer.peerId, mode, origin })
+      },
+    })
+
+    exchangeA.get("shared", LoroDoc)
+    await drain(40)
+
+    const remote = calls.filter(c => c.origin === "remote")
+    expect(remote).toHaveLength(1)
+    expect(remote[0]).toMatchObject({
+      docId: "shared",
+      peerId: "alice",
+      mode: "replicate",
+      origin: "remote",
+    })
+
+    await exchangeA.shutdown()
+    await relay.shutdown()
   })
 })

@@ -287,4 +287,26 @@ describe("ScopeRegistry", () => {
       expect(handler2).toHaveBeenCalledWith(doc, alice)
     })
   })
+
+  // -----------------------------------------------------------------------
+  // onDocCreated: broadcast (all handlers called)
+  // -----------------------------------------------------------------------
+
+  describe("onDocCreated composition", () => {
+    it("all handlers are invoked (broadcast, not gate)", () => {
+      const registry = new ScopeRegistry()
+      const handler1 = vi.fn()
+      const handler2 = vi.fn()
+
+      registry.register({ route: () => true }) // no onDocCreated — must not throw
+      registry.register({ onDocCreated: handler1 })
+      registry.register({ onDocCreated: handler2 })
+
+      registry.docCreated(doc, alice, "interpret", "local")
+
+      expect(handler1).toHaveBeenCalledOnce()
+      expect(handler2).toHaveBeenCalledOnce()
+      expect(handler1).toHaveBeenCalledWith(doc, alice, "interpret", "local")
+    })
+  })
 })

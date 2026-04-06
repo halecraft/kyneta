@@ -13,6 +13,7 @@
 import type { DocId, PeerIdentityDetails } from "@kyneta/transport"
 import type {
   Disposition,
+  OnDocCreated,
   OnDocDismissed,
   OnUnresolvedDoc,
 } from "./exchange.js"
@@ -39,8 +40,8 @@ export type RulePredicate = (
  * of the document space. All fields are optional — a scope only
  * provides the predicates it cares about.
  *
- * The `onUnresolvedDoc` and `onDocDismissed` fields reuse the existing
- * types from `exchange.ts` — no wrapper types needed.
+ * The `onUnresolvedDoc`, `onDocCreated`, and `onDocDismissed` fields
+ * reuse the existing types from `exchange.ts` — no wrapper types needed.
  */
 export interface Scope {
   /** Optional name for debuggability, introspection, and replacement. */
@@ -50,6 +51,7 @@ export interface Scope {
   onUnresolvedDoc?: (
     ...args: Parameters<OnUnresolvedDoc>
   ) => Disposition | undefined
+  onDocCreated?: OnDocCreated
   onDocDismissed?: OnDocDismissed
 }
 
@@ -188,6 +190,22 @@ export class ScopeRegistry {
       if (result !== undefined) return result
     }
     return undefined
+  }
+
+  /**
+   * Composed onDocCreated — invoke all scopes that have a handler.
+   * Unlike predicates, creation is a notification, not a gate.
+   */
+  docCreated(
+    docId: DocId,
+    peer: PeerIdentityDetails,
+    mode: "interpret" | "replicate",
+    origin: "local" | "remote",
+  ): void {
+    for (const scope of this.#scopes) {
+      if (!scope.onDocCreated) continue
+      scope.onDocCreated(docId, peer, mode, origin)
+    }
   }
 
   /**

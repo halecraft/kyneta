@@ -919,6 +919,8 @@ const exchange = new Exchange({
 })
 ```
 
+`onDocCreated` fires after every successful doc creation regardless of resolution pathway — auto-resolve, `onUnresolvedDoc`, deferred promotion, or local `get()`/`replicate()`. The distinction: `onUnresolvedDoc` is a **policy gate** (decides what to do with an unresolved doc), while `onDocCreated` is a **lifecycle notification** (observes that a doc was created, with provenance via `origin: "local" | "remote"`). Applications that need to react to every new doc (e.g. registering a player, updating an admin dashboard) should use `onDocCreated`, not `onUnresolvedDoc`.
+
 ---
 
 ## 16. Route and Authorize — Information Flow Control
@@ -1659,6 +1661,7 @@ interface Scope {
   route?: RulePredicate
   authorize?: RulePredicate
   onUnresolvedDoc?: OnUnresolvedDoc
+  onDocCreated?: OnDocCreated
   onDocDismissed?: OnDocDismissed
 }
 ```
@@ -1705,6 +1708,7 @@ The `ScopeRegistry` manages the mutable scope list and delegates composition to 
 - **`route(docId, peer): boolean`** — composed route, defaults to open (`true`).
 - **`authorize(docId, peer): boolean`** — composed authorize, defaults to open (`true`).
 - **`onUnresolvedDoc(...): Disposition | undefined`** — first non-`undefined` wins (registration order).
+- **`docCreated(docId, peer, mode, origin): void`** — all handlers invoked (broadcast, not gate).
 - **`docDismissed(docId, peer): void`** — all handlers invoked (broadcast, not gate).
 - **`clear(): void`** — removes all scopes. Called during `reset()` and `shutdown()`.
 - **`get names: readonly string[]`** — names of all named scopes, in registration order.
@@ -1732,6 +1736,7 @@ The dispose function removes the scope from all compositions. After disposal, th
 | `route` | Deny wins, short-circuit | `true` (open) |
 | `authorize` | Deny wins, short-circuit | `true` (open) |
 | `onUnresolvedDoc` | First non-`undefined` wins (registration order) | `undefined` (reject with warning) |
+| `onDocCreated` | All handlers invoked (broadcast) | no-op |
 | `onDocDismissed` | All handlers invoked (broadcast) | no-op |
 
 ### Default Values — Both Open
@@ -1870,6 +1875,8 @@ Transitions:
 | Deferred | Replicated | `exchange.replicate(docId)` |
 
 Deferred docs participate in routing (`present` is sent) but do not receive data (`interest` is not sent, `handleOffer` and `handleInterest` return early for deferred entries).
+
+> **`onDocCreated` fires on transitions to Interpreted and Replicated states** (not Deferred, not Rejected). Deferred docs have no local representation yet — `onDocCreated` fires only when a doc gains a `Replica` or `Substrate`. If a deferred doc is later promoted via `exchange.get()` or `exchange.replicate()`, `onDocCreated` fires at promotion time.
 
 ### Validation Model
 

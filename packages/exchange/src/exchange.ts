@@ -133,6 +133,34 @@ export type OnUnresolvedDoc = (
 export type OnDocDismissed = (docId: DocId, peer: PeerIdentityDetails) => void
 
 /**
+ * Provenance of a document creation event.
+ * - `"local"` — the developer called `exchange.get()` or `exchange.replicate()`.
+ * - `"remote"` — a peer announced the doc via `present` and the exchange created it
+ *   (auto-resolve, `onUnresolvedDoc`, or deferred promotion triggered by `registerSchema`).
+ */
+export type DocCreatedOrigin = "local" | "remote"
+
+/**
+ * Callback invoked when a document is created in the exchange.
+ *
+ * Fires exactly once per doc when it enters the exchange as `"interpret"`
+ * or `"replicate"` — not for deferred or rejected docs. Fires for ALL
+ * creation pathways: local `get()`, local `replicate()`, remote auto-resolve,
+ * remote `onUnresolvedDoc`, and deferred-then-promoted transitions.
+ *
+ * @param docId - The document ID
+ * @param peer - For local origin, the exchange's own identity. For remote origin, the announcing peer.
+ * @param mode - `"interpret"` (full schema) or `"replicate"` (headless)
+ * @param origin - `"local"` (developer triggered) or `"remote"` (peer triggered)
+ */
+export type OnDocCreated = (
+  docId: DocId,
+  peer: PeerIdentityDetails,
+  mode: "interpret" | "replicate",
+  origin: DocCreatedOrigin,
+) => void
+
+/**
  * Options for creating an Exchange.
  */
 export type ExchangeParams = {
@@ -226,6 +254,20 @@ export type ExchangeParams = {
   onDocDismissed?: OnDocDismissed
 
   /**
+   * Called when a document is created in the exchange.
+   *
+   * Fires for every creation — local `get()`, local `replicate()`,
+   * remote auto-resolve, remote `onUnresolvedDoc`, and deferred
+   * promotions. Use `origin` to distinguish local from remote triggers.
+   *
+   * This field is syntactic sugar for the initial scope. For dynamic
+   * rule composition, use {@link Exchange.register | exchange.register()}.
+   *
+   * @default undefined (no notification)
+   */
+  onDocCreated?: OnDocCreated
+
+  /**
    * Declares document types this Exchange can interpret.
    *
    * Sugar for calling `registerSchema()` at construction time. Each
@@ -312,6 +354,7 @@ type DocCacheEntry =
 export class Exchange {
   readonly peerId: string
   readonly #peerIdIsExplicit: boolean
+  readonly #identity: PeerIdentityDetails
 
   readonly #scopes: ScopeRegistry
   readonly #capabilities: Capabilities
@@ -368,6 +411,7 @@ export class Exchange {
     route,
     authorize,
     onDocDismissed,
+    onDocCreated,
     schemas = [],
     replicas = DEFAULT_REPLICAS,
     onUnresolvedDoc,
@@ -385,6 +429,7 @@ export class Exchange {
       name: identity.name,
       type: identity.type ?? "user",
     }
+    this.#identity = fullIdentity
 
     // ── ScopeRegistry — must be initialized before the Synchronizer,
     // because the Synchronizer may call onDocCreationRequested during
@@ -398,8 +443,15 @@ export class Exchange {
     if (route) initialScope.route = route
     if (authorize) initialScope.authorize = authorize
     if (onUnresolvedDoc) initialScope.onUnresolvedDoc = onUnresolvedDoc
+    if (onDocCreated) initialScope.onDocCreated = onDocCreated
     if (onDocDismissed) initialScope.onDocDismissed = onDocDismissed
-    if (route || authorize || onUnresolvedDoc || onDocDismissed) {
+    if (
+      route ||
+      authorize ||
+      onUnresolvedDoc ||
+      onDocCreated ||
+      onDocDismissed
+    ) {
       this.#scopes.register(initialScope)
     }
 
@@ -427,7 +479,7 @@ export class Exchange {
         replicaType,
         mergeStrategy,
         schemaHash,
-      ) => {
+      ): void => {
         // 1. Schema auto-resolve
         const resolvedBound = this.#capabilities.resolveSchema(
           schemaHash,
@@ -435,7 +487,7 @@ export class Exchange {
           mergeStrategy,
         )
         if (resolvedBound) {
-          ;(this as any).get(docId, resolvedBound)
+          this.#interpretDoc(docId, resolvedBound, peer, "remote")
           return
         }
 
@@ -463,7 +515,7 @@ export class Exchange {
 
         switch (result.kind) {
           case "interpret":
-            ;(this as any).get(docId, result.bound)
+            this.#interpretDoc(docId, result.bound, peer, "remote")
             break
           case "replicate": {
             const boundReplica = this.#capabilities.resolveReplica(
@@ -478,11 +530,13 @@ export class Exchange {
               )
               return
             }
-            this.replicate(
+            this.#replicateDoc(
               docId,
               boundReplica.factory,
               mergeStrategy,
               schemaHash,
+              peer,
+              "remote",
             )
             break
           }
@@ -548,6 +602,132 @@ export class Exchange {
       this.#factoryCache.set(builder, factory)
     }
     return factory
+  }
+
+  /**
+   * Internal document creation — creates an interpreted doc without
+   * registering the schema in the auto-resolve set.
+   *
+   * This is the single creation path for interpreted docs. Both the
+   * public `get()` and internal `onDocCreationRequested` paths delegate
+   * here. `onDocCreated` fires from within — callers never fire it.
+   */
+  #interpretDoc(
+    docId: DocId,
+    bound: BoundSchema,
+    peer: PeerIdentityDetails,
+    origin: DocCreatedOrigin,
+  ): any {
+    const factory = this.#resolveFactory(bound.factory)
+    const replicaType = factory.replica.replicaType
+    if (!this.#capabilities.supportsReplicaType(replicaType)) {
+      throw new Error(
+        `[exchange] Internal error: registerSchema did not register replicaType [${replicaType}]`,
+      )
+    }
+
+    // ── Shared prefix: create substrate, build ref, wire metadata ──
+    const substrate = factory.create(bound.schema)
+
+    const ref: any = (interpret as any)(bound.schema, substrate.context())
+      .with(readable)
+      .with(writable)
+      .with(observation)
+      .done()
+
+    registerSubstrate(ref, substrate)
+    registerSync(ref, {
+      peerId: this.peerId,
+      docId,
+      synchronizer: this.#synchronizer,
+    })
+
+    this.#docCache.set(docId, {
+      mode: "interpret",
+      ref,
+      bound,
+    })
+
+    // ── Divergent tail: store vs no-store ──
+    if (this.#stores.length > 0) {
+      const hydrationOp = this.#hydrateAndRegister(
+        docId,
+        substrate,
+        factory.replica,
+        bound.strategy,
+        bound.schemaHash,
+        "interpret",
+      ).then(() => {
+        subscribe(ref, changeset => {
+          if (changeset.origin === "sync") return
+          this.#synchronizer.notifyLocalChange(docId)
+        })
+      })
+      this.#trackOp(hydrationOp)
+    } else {
+      this.#synchronizer.registerDoc({
+        mode: "interpret",
+        docId,
+        replica: substrate,
+        replicaFactory: factory.replica,
+        strategy: bound.strategy,
+        schemaHash: bound.schemaHash,
+      })
+
+      subscribe(ref, changeset => {
+        if (changeset.origin === "sync") return
+        this.#synchronizer.notifyLocalChange(docId)
+      })
+    }
+
+    // Design invariant: onDocCreated fires only from #interpretDoc and #replicateDoc.
+    this.#scopes.docCreated(docId, peer, "interpret", origin)
+
+    return ref
+  }
+
+  /**
+   * Internal document replication — creates a headless replicated doc.
+   *
+   * This is the single creation path for replicated docs. Both the
+   * public `replicate()` and internal `onDocCreationRequested` paths
+   * delegate here. `onDocCreated` fires from within.
+   */
+  #replicateDoc(
+    docId: DocId,
+    replicaFactory: ReplicaFactory<any>,
+    strategy: MergeStrategy,
+    schemaHash: string,
+    peer: PeerIdentityDetails,
+    origin: DocCreatedOrigin,
+  ): void {
+    const replica = replicaFactory.createEmpty()
+
+    this.#docCache.set(docId, { mode: "replicate" })
+
+    if (this.#stores.length > 0) {
+      const hydrationOp = this.#hydrateAndRegister(
+        docId,
+        replica,
+        replicaFactory,
+        strategy,
+        schemaHash,
+        "replicate",
+      )
+      this.#trackOp(hydrationOp)
+    } else {
+      this.#synchronizer.registerDoc({
+        mode: "replicate",
+        docId,
+        replica,
+        replicaFactory,
+        strategy,
+        schemaHash,
+      })
+    }
+
+    // Design invariant: onDocCreated fires only from #interpretDoc and #replicateDoc.
+    this.#scopes.docCreated(docId, peer, "replicate", origin)
   }
 
   /**
@@ -815,9 +995,6 @@ export class Exchange {
       }
     }
 
-    // Resolve factory from the BoundSchema's builder
-    const factory = this.#resolveFactory(bound.factory)
-
     // Auto-register this schema's capabilities. registerSchema is idempotent
     // (upserts into the registry), so repeated get() calls with the same
     // BoundSchema are safe.
@@ -828,113 +1005,7 @@ export class Exchange {
     // no infinite recursion or cache corruption.
     this.registerSchema(bound)
 
-    // After registerSchema, the replicaType must be supported. This is an
-    // invariant assertion, not a user-facing error — registerSchema always
-    // registers the replicaType as a side effect.
-    const replicaType = factory.replica.replicaType
-    if (!this.#capabilities.supportsReplicaType(replicaType)) {
-      throw new Error(
-        `[exchange] Internal error: registerSchema did not register replicaType [${replicaType}]`,
-      )
-    }
-
-    if (this.#stores.length > 0) {
-      // ── Store path: single substrate ──
-      // With structural clientID 0 (jj:ptyzqoul), factory.create(schema)
-      // produces structural ops at (0, 0..N) — identical to any stored
-      // state's structural ops. Merging stored data into this substrate
-      // deduplicates structural ops and applies application ops into the
-      // shared containers. No second Y.Doc, no merge-into-temp.
-      //
-      // The ref is returned synchronously (Zero.structural defaults).
-      // The async tail merges stored data — the changefeed fires and
-      // subscribers observe the transition.
-
-      const substrate = factory.create(bound.schema)
-
-      const ref: any = (interpret as any)(bound.schema, substrate.context())
-        .with(readable)
-        .with(writable)
-        .with(observation)
-        .done()
-
-      registerSubstrate(ref, substrate)
-      registerSync(ref, {
-        peerId: this.peerId,
-        docId,
-        synchronizer: this.#synchronizer,
-      })
-
-      // Cache — must happen before the async hydration tail
-      this.#docCache.set(docId, {
-        mode: "interpret",
-        ref,
-        bound,
-      })
-
-      const hydrationOp = this.#hydrateAndRegister(
-        docId,
-        substrate,
-        factory.replica,
-        bound.strategy,
-        bound.schemaHash,
-        "interpret",
-      ).then(() => {
-        // Wire changefeed → synchronizer AFTER hydration so that
-        // the merges during hydration (with origin "sync") don't trigger
-        // unnecessary notifyLocalChange calls.
-        // Persistence is handled by onStateAdvanced — not the changefeed.
-        subscribe(ref, changeset => {
-          if (changeset.origin === "sync") return
-          this.#synchronizer.notifyLocalChange(docId)
-        })
-      })
-      this.#trackOp(hydrationOp)
-
-      return ref as Ref<S>
-    } else {
-      // ── No storage: one-step construction ──
-      // No hydration needed — create substrate directly and register.
-      const substrate = factory.create(bound.schema)
-
-      const ref: any = (interpret as any)(bound.schema, substrate.context())
-        .with(readable)
-        .with(writable)
-        .with(observation)
-        .done()
-
-      registerSubstrate(ref, substrate)
-      registerSync(ref, {
-        peerId: this.peerId,
-        docId,
-        synchronizer: this.#synchronizer,
-      })
-
-      this.#docCache.set(docId, {
-        mode: "interpret",
-        ref,
-        bound,
-      })
-
-      this.#synchronizer.registerDoc({
-        mode: "interpret",
-        docId,
-        replica: substrate, // Substrate extends Replica
-        replicaFactory: factory.replica,
-        strategy: bound.strategy,
-        schemaHash: bound.schemaHash,
-      })
-
-      // Auto-wire changefeed → synchronizer: when a local mutation fires
-      // the changefeed, notify the synchronizer so it pushes to peers.
-      // Remote imports arrive with origin "sync" — skip those to avoid echo.
-      subscribe(ref, changeset => {
-        if (changeset.origin === "sync") return
-        this.#synchronizer.notifyLocalChange(docId)
-      })
-
-      return ref as Ref<S>
-    }
+    return this.#interpretDoc(docId, bound, this.#identity, "local") as Ref<S>
   }
 
   /**
@@ -1020,34 +1091,14 @@ export class Exchange {
       )
     }
 
-    // Create headless replica — no schema, no interpreter stack
-    const replica = replicaFactory.createEmpty()
-
-    // Cache
-    this.#docCache.set(docId, { mode: "replicate" })
-
-    if (this.#stores.length > 0) {
-      // Store path: hydrate from storage, then register with synchronizer.
-      const hydrationOp = this.#hydrateAndRegister(
-        docId,
-        replica,
-        replicaFactory,
-        strategy,
-        schemaHash,
-        "replicate",
-      )
-      this.#trackOp(hydrationOp)
-    } else {
-      // No storage: register with synchronizer immediately
-      this.#synchronizer.registerDoc({
-        mode: "replicate",
-        docId,
-        replica,
-        replicaFactory,
-        strategy,
-        schemaHash,
-      })
-    }
+    this.#replicateDoc(
+      docId,
+      replicaFactory,
+      strategy,
+      schemaHash,
+      this.#identity,
+      "local",
+    )
   }
 
   /**
@@ -1121,7 +1172,10 @@ export class Exchange {
         replicaType[1] === metadata.replicaType[1] &&
         bound.strategy === metadata.mergeStrategy
       ) {
-        ;(this as any).get(docId, bound)
+        // Safe to mutate Map during iteration per ES spec.
+        // Delete the deferred entry, then #interpretDoc inserts the new one.
+        this.#docCache.delete(docId)
+        this.#interpretDoc(docId, bound, this.#identity, "local")
       }
     }
   }

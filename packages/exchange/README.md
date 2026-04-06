@@ -220,6 +220,25 @@ const relayExchange = new Exchange({
 
 The `onUnresolvedDoc` callback receives `(docId, peer, replicaType, mergeStrategy, schemaHash)` — the full metadata from the peer's `present` message — so the receiver can make an informed decision without compile-time schema knowledge.
 
+### Observing Document Creation (`onDocCreated`)
+
+`onDocCreated` fires whenever a document is created in the exchange — whether via local `get()`, remote auto-resolve, `onUnresolvedDoc`, or deferred promotion. Use `origin` to distinguish:
+
+```ts
+const exchange = new Exchange({
+  identity: { peerId: "server" },
+  schemas: [PlayerInputDoc],
+  onDocCreated(docId, peer, mode, origin) {
+    if (origin === "remote" && docId.startsWith("input:")) {
+      const inputDoc = exchange.get(docId, PlayerInputDoc)
+      registerPlayer(peer.peerId, inputDoc)
+    }
+  },
+})
+```
+
+Unlike `onUnresolvedDoc` (a policy gate that only fires for docs the exchange couldn't auto-resolve), `onDocCreated` fires for every creation. Use `onUnresolvedDoc` to decide **what to do**; use `onDocCreated` to observe **what happened**.
+
 ### Storage
 
 The exchange supports persistent storage through **stores** — a first-class constructor parameter, separate from transports. Documents are automatically persisted on mutation and hydrated on restart — no manual save/load needed.
@@ -368,6 +387,7 @@ loroDoc.version()                // VersionVector
 | `route` | Constructor option. `(docId, peer) → boolean` — outbound flow control. Default: `() => true`. |
 | `authorize` | Constructor option. `(docId, peer) → boolean` — inbound flow control. Default: `() => true`. |
 | `onUnresolvedDoc` | Constructor option. `(docId, peer, replicaType, mergeStrategy, schemaHash) → Interpret \| Replicate \| Defer \| Reject`. Policy gate for docs not auto-resolved by the registries. |
+| `onDocCreated` | Constructor option. `(docId, peer, mode, origin) → void` — lifecycle notification for every doc creation (local and remote). |
 | `onDocDismissed` | Constructor option. `(docId, peer) → void` — react to peer leaving a document. |
 
 ### sync()
