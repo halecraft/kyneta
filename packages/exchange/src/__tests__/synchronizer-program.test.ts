@@ -3052,8 +3052,8 @@ describe("synchronizer-program", () => {
       // Doc is in the model with mode "deferred"
       const entry = result.documents.get("deferred-doc")
       expect(entry).toBeDefined()
-      expect(entry!.mode).toBe("deferred")
-      expect(entry!.version).toBe("")
+      expect(entry?.mode).toBe("deferred")
+      expect(entry?.version).toBe("")
 
       // present was sent (for routing)
       const commands = flattenCommands(cmd)
@@ -3152,8 +3152,8 @@ describe("synchronizer-program", () => {
       // Doc is now in "interpret" mode
       const entry = result.documents.get("deferred-doc")
       expect(entry).toBeDefined()
-      expect(entry!.mode).toBe("interpret")
-      expect(entry!.version).toBe("1")
+      expect(entry?.mode).toBe("interpret")
+      expect(entry?.version).toBe("1")
 
       // Both present and interest were sent
       const commands = flattenCommands(cmd)

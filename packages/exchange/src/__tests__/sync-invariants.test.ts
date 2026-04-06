@@ -16,7 +16,6 @@ import {
   change,
   Interpret,
   PlainVersion,
-  plainReplicaFactory,
   Reject,
   Replicate,
   Schema,

@@ -9,7 +9,6 @@ import {
   change,
   Interpret,
   plainReplicaFactory,
-  Reject,
   Schema,
 } from "@kyneta/schema"
 import { Bridge, createBridgeTransport } from "@kyneta/transport"

@@ -13,7 +13,6 @@ import { bindPlain, change, Interpret, Reject, Schema } from "@kyneta/schema"
 import { Bridge, createBridgeTransport } from "@kyneta/transport"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { Exchange } from "../exchange.js"
-import { sync } from "../sync.js"
 
 // ---------------------------------------------------------------------------
 // Test helpers

@@ -1,9 +1,8 @@
 // Capabilities — unit tests for the capabilities registry.
 
-import { bindLoro, LoroSchema, loroReplicaFactory } from "@kyneta/loro-schema"
+import { bindLoro, LoroSchema } from "@kyneta/loro-schema"
 import {
   BoundReplica,
-  bindEphemeral,
   bindPlain,
   type FactoryBuilder,
   lwwReplicaFactory,
@@ -84,8 +83,8 @@ describe("Capabilities", () => {
 
     const resolved = caps.resolveReplica(["plain", 1, 0], "sequential")
     expect(resolved).toBeDefined()
-    expect(resolved!.factory).toBe(plainReplicaFactory)
-    expect(resolved!.strategy).toBe("sequential")
+    expect(resolved?.factory).toBe(plainReplicaFactory)
+    expect(resolved?.strategy).toBe("sequential")
   })
 
   it("resolveReplica returns undefined for wrong strategy", () => {
@@ -189,8 +188,8 @@ describe("Capabilities", () => {
 
     const resolved = caps.resolveReplica(["loro", 1, 0], "causal")
     expect(resolved).toBeDefined()
-    expect(resolved!.factory.replicaType).toEqual(["loro", 1, 0])
-    expect(resolved!.strategy).toBe("causal")
+    expect(resolved?.factory.replicaType).toEqual(["loro", 1, 0])
+    expect(resolved?.strategy).toBe("causal")
   })
 
   // -------------------------------------------------------------------------
@@ -241,8 +240,8 @@ describe("Capabilities", () => {
     expect(lww).toBeDefined()
 
     // They should be different BoundReplica instances with different factories
-    expect(sequential!.factory).toBe(plainReplicaFactory)
-    expect(lww!.factory).toBe(lwwReplicaFactory)
-    expect(sequential!.factory).not.toBe(lww!.factory)
+    expect(sequential?.factory).toBe(plainReplicaFactory)
+    expect(lww?.factory).toBe(lwwReplicaFactory)
+    expect(sequential?.factory).not.toBe(lww?.factory)
   })
 })

@@ -22,7 +22,6 @@ import {
   BoundReplica,
   lwwReplicaFactory,
   plainReplicaFactory,
-  replicaTypesCompatible,
 } from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------

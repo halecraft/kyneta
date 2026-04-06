@@ -13,8 +13,6 @@ import {
   bindPlain,
   change,
   Interpret,
-  plainReplicaFactory,
-  Reject,
   Replicate,
   Schema,
 } from "@kyneta/schema"

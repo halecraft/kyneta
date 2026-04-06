@@ -12,28 +12,18 @@
 // - Duplicate detection (throw on same peer+topic)
 // - Hub-and-spoke relay
 
-import {
-  bindPlain,
-  change,
-  Defer,
-  Replicate,
-  Schema,
-  subscribe,
-  unwrap,
-} from "@kyneta/schema"
+import { bindPlain, Replicate, Schema } from "@kyneta/schema"
 import { Bridge, createBridgeTransport } from "@kyneta/transport"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
 import { Exchange } from "../exchange.js"
 import {
   createLineDocSchema,
   isLineDocId,
-  Line,
   lineDocId,
   openLine,
   parseLineDocId,
   routeLine,
 } from "../line.js"
-import { sync } from "../sync.js"
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -75,7 +65,7 @@ afterEach(async () => {
 // Schemas
 // ---------------------------------------------------------------------------
 
-const SignalSchema = Schema.struct({
+const _SignalSchema = Schema.struct({
   type: Schema.string(),
   sdp: Schema.string(),
 })
@@ -247,7 +237,7 @@ describe("symmetric Line send and receive via generator", () => {
     // The messages should have been delivered in order
     // (they may have already been processed by the initial scan)
     // Let's check via the queue
-    const iter = lineB[Symbol.asyncIterator]()
+    const _iter = lineB[Symbol.asyncIterator]()
 
     // The initial scan in the constructor should have processed them
     // but since onReceive was registered after, let's send more
@@ -264,7 +254,7 @@ describe("symmetric Line send and receive via generator", () => {
 
   it("iterator completes when Line is closed", async () => {
     const bridge = new Bridge()
-    const exchangeA = createExchange({
+    const _exchangeA = createExchange({
       identity: { peerId: "alice" },
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
@@ -969,7 +959,7 @@ describe("hub-and-spoke relay", () => {
       ],
     })
 
-    const exchangeServer = createExchange({
+    const _exchangeServer = createExchange({
       identity: { peerId: "server", type: "service" },
       transports: [
         createBridgeTransport({ transportType: "server-a", bridge: bridgeAS }),

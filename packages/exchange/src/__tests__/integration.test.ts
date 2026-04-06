@@ -15,8 +15,6 @@ import {
   change,
   Defer,
   Interpret,
-  lwwReplicaFactory,
-  plainReplicaFactory,
   Reject,
   Replicate,
   Schema,

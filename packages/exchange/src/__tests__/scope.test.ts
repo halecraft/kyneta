@@ -3,7 +3,7 @@
 // Architecture mirrors scope.ts: pure function tests first (composeRule),
 // then imperative shell tests (ScopeRegistry).
 
-import { bindPlain, Interpret, Reject, Schema } from "@kyneta/schema"
+import { bindPlain, Interpret, Schema } from "@kyneta/schema"
 import type { PeerIdentityDetails } from "@kyneta/transport"
 import { describe, expect, it, vi } from "vitest"
 import type { Classify } from "../exchange.js"

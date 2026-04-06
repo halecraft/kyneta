@@ -15,7 +15,6 @@
 
 import type { CallableChangefeed } from "@kyneta/changefeed"
 import {
-  type BoundSchema,
   bindPlain,
   change,
   Defer,
@@ -177,8 +176,6 @@ export class Line<SendMsg, RecvMsg> {
   readonly #inboxDocId: DocId
   readonly #outbox: any // Ref — untyped to avoid complex generic threading
   readonly #inbox: any // Ref
-  readonly #outboxBound: BoundSchema
-  readonly #inboxBound: BoundSchema
   readonly #queue: AsyncQueue<RecvMsg>
   readonly #onReceiveCallbacks = new Set<(msg: RecvMsg) => void>()
   readonly #disposeScope: () => void
@@ -197,8 +194,6 @@ export class Line<SendMsg, RecvMsg> {
     inboxDocId: DocId,
     outbox: any,
     inbox: any,
-    outboxBound: BoundSchema,
-    inboxBound: BoundSchema,
     disposeScope: () => void,
   ) {
     this.#exchange = exchange
@@ -208,8 +203,6 @@ export class Line<SendMsg, RecvMsg> {
     this.#inboxDocId = inboxDocId
     this.#outbox = outbox
     this.#inbox = inbox
-    this.#outboxBound = outboxBound
-    this.#inboxBound = inboxBound
     this.#disposeScope = disposeScope
     this.#queue = new AsyncQueue<RecvMsg>()
 
@@ -513,8 +506,6 @@ export class Line<SendMsg, RecvMsg> {
       inboxDocId,
       outbox,
       inbox,
-      outboxBound,
-      inboxBound,
       disposeScope,
     )
 
