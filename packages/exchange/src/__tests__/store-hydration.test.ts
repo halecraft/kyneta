@@ -394,7 +394,7 @@ describe("Exchange storage persistence", () => {
       identity: { peerId: "peer-b" },
       transports: [createBridgeTransport({ transportType: "side-b", bridge })],
       stores: [backend],
-      classify: () => Interpret(TestDoc),
+      onUnresolvedDoc: () => Interpret(TestDoc),
     })
 
     // Wait for sync

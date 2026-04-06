@@ -106,7 +106,6 @@ export type SynchronizerParams = {
   transports?: AnyTransport[]
   route: RoutePredicate
   authorize: AuthorizePredicate
-  supports?: (replicaType: ReplicaType) => boolean
   onDocCreationRequested?: DocCreationCallback
   onDocDismissed?: DocDismissedCallback
 }
@@ -277,13 +276,12 @@ export class Synchronizer {
     transports = [],
     route,
     authorize,
-    supports,
     onDocCreationRequested,
     onDocDismissed,
   }: SynchronizerParams) {
     this.identity = identity
 
-    this.#updateFn = createSynchronizerUpdate({ route, authorize, supports })
+    this.#updateFn = createSynchronizerUpdate({ route, authorize })
     this.#docCreationCallback = onDocCreationRequested
     this.#docDismissedCallback = onDocDismissed
 

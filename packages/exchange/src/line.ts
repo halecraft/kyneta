@@ -446,7 +446,7 @@ export class Line<SendMsg, RecvMsg> {
     if (!infrastructureScopes.has(exchange)) {
       exchange.register({
         name: "__line-infrastructure",
-        classify: (
+        onUnresolvedDoc: (
           docId: DocId,
           _peer: PeerIdentityDetails,
           _replicaType: any,
@@ -472,17 +472,14 @@ export class Line<SendMsg, RecvMsg> {
     const outboxBound = bindPlain(createLineDocSchema(sendSchema))
     const inboxBound = bindPlain(createLineDocSchema(recvSchema))
 
-    // 5. Register schemas (populates capabilities, auto-promotes deferred docs)
-    exchange.registerSchema(outboxBound)
-    exchange.registerSchema(inboxBound)
-
-    // 6-7. Create docs via exchange.get()
+    // 5-6. Create docs via exchange.get()
+    // Registration happens inside get() — no separate registerSchema() needed.
     // Cast to any — the Line class manages refs internally and doesn't
     // expose them. Avoids deep type expansion through Ref<DocSchema<...>>.
     const outbox: any = exchange.get(outboxDocId, outboxBound)
     const inbox: any = exchange.get(inboxDocId, inboxBound)
 
-    // 8. Register per-line named scope
+    // 7. Register per-line named scope
     const disposeScope = exchange.register({
       name: `line:${topic}:${remotePeerId}`,
       authorize: (
@@ -497,7 +494,7 @@ export class Line<SendMsg, RecvMsg> {
       },
     })
 
-    // 9. Construct and register
+    // 8. Construct and register
     const line = new Line(
       exchange,
       topic,

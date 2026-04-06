@@ -81,7 +81,7 @@ describe("dynamic scope route", () => {
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
-      classify: () => Interpret(SequentialDoc),
+      onUnresolvedDoc: () => Interpret(SequentialDoc),
     })
 
     // Register a scope that blocks docs starting with "secret-"
@@ -130,7 +130,7 @@ describe("dynamic scope route", () => {
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
-      classify: () => Interpret(SequentialDoc),
+      onUnresolvedDoc: () => Interpret(SequentialDoc),
     })
 
     const dispose1 = exchangeA.register({
@@ -180,7 +180,7 @@ describe("dynamic scope route", () => {
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
-      classify: () => Interpret(SequentialDoc),
+      onUnresolvedDoc: () => Interpret(SequentialDoc),
     })
 
     const dispose = exchangeA.register({
@@ -254,10 +254,10 @@ describe("dynamic scope authorize", () => {
 })
 
 // ---------------------------------------------------------------------------
-// classify via dynamic scope
+// onUnresolvedDoc via dynamic scope
 // ---------------------------------------------------------------------------
 
-describe("dynamic scope classify", () => {
+describe("dynamic scope onUnresolvedDoc", () => {
   it("dynamically registered handler materializes peer-announced docs", async () => {
     const bridge = new Bridge()
 
@@ -271,9 +271,9 @@ describe("dynamic scope classify", () => {
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
-    // Register classify dynamically via scope
+    // Register onUnresolvedDoc dynamically via scope
     const dispose = exchangeB.register({
-      classify: docId => {
+      onUnresolvedDoc: docId => {
         if (docId === "discovered") return Interpret(SequentialDoc)
         return Reject()
       },
@@ -348,7 +348,7 @@ describe("named scope replacement", () => {
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
-      classify: () => Interpret(SequentialDoc),
+      onUnresolvedDoc: () => Interpret(SequentialDoc),
     })
 
     // Named scope blocks everything
@@ -400,7 +400,7 @@ describe("relay topology", () => {
         createBridgeTransport({ transportType: "hub-a", bridge: bridgeAH }),
         createBridgeTransport({ transportType: "hub-b", bridge: bridgeHB }),
       ],
-      classify: () => Interpret(SequentialDoc),
+      onUnresolvedDoc: () => Interpret(SequentialDoc),
     })
 
     const exchangeB = createExchange({
@@ -408,7 +408,7 @@ describe("relay topology", () => {
       transports: [
         createBridgeTransport({ transportType: "bob", bridge: bridgeHB }),
       ],
-      classify: () => Interpret(SequentialDoc),
+      onUnresolvedDoc: () => Interpret(SequentialDoc),
     })
 
     // Hub blocks relay of "private" to bob

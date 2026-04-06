@@ -140,11 +140,11 @@ Six message types: two for channel establishment, four for document exchange.
 
 Document presentation — assertion of document ownership with metadata. Sent after channel establishment to announce all known documents, filtered by the `route` predicate (§16). Each entry carries per-document metadata (`replicaType`, `mergeStrategy`, `schemaHash`) so the receiver can validate compatibility before any binary exchange.
 
-The `present` metadata (`replicaType`, `mergeStrategy`, `schemaHash`) is validated against the Exchange's capability registries (§24). For unknown docs, if `replicaType` is not supported by any registry entry, the doc is **invisible** — no `classify` callback fires, a warning is emitted, and the doc is silently dropped. For known docs, all three fields are validated: `replicaType` compatibility via `replicaTypesCompatible()` (same name + same major version), `schemaHash` equality, and `mergeStrategy` equality (previously unchecked). A mismatch on any field skips the doc with a warning.
+The `present` metadata (`replicaType`, `mergeStrategy`, `schemaHash`) is validated against the Exchange's capability registries (§24). For known docs, all three fields are validated: `replicaType` compatibility via `replicaTypesCompatible()` (same name + same major version), `schemaHash` equality, and `mergeStrategy` equality (previously unchecked). A mismatch on any field skips the doc with a warning.
 
 When the receiver encounters a known doc and all three checks pass, it sends `interest`.
 
-When the receiver encounters an unknown doc ID, the capability gate (`supports`) is checked first — if the `replicaType` is unsupported, the doc is invisible. Then the `route` predicate is checked — if it returns `false` for the announcing peer, the doc is silently dropped. Otherwise, a `cmd/request-doc-creation` command is emitted (carrying `schemaHash` through). The Exchange first attempts schema auto-resolution from the `(schemaHash, replicaType, mergeStrategy)` triple (§24). If no schema matches and a `classify` callback is configured, it fires with the doc ID, the announcing peer's identity, `replicaType`, `mergeStrategy`, and `schemaHash`. The callback returns a disposition (`Interpret | Replicate | Defer | Reject`). See §15 for details.
+When the receiver encounters an unknown doc ID, the `route` predicate is checked — if it returns `false` for the announcing peer, the doc is silently dropped. Otherwise, a `cmd/request-doc-creation` command is emitted (carrying `schemaHash` through). All unknown docs flow to `onDocCreationRequested` regardless of replica type. The Exchange first attempts schema auto-resolution from the `(schemaHash, replicaType, mergeStrategy)` triple (§24). If no schema matches and a `onUnresolvedDoc` callback is configured, it fires with the doc ID, the announcing peer's identity, `replicaType`, `mergeStrategy`, and `schemaHash`. The callback returns a disposition (`Interpret | Replicate | Defer | Reject`). If no `onUnresolvedDoc` callback matches (or none is configured), the Exchange applies a two-tiered default: supported `replicaType` → Defer; unsupported `replicaType` → Reject (silently). See §15 for details.
 
 ```ts
 type PresentMsg = {
@@ -521,9 +521,9 @@ Note: `MergeStrategy`, `BoundSchema`, `bind()`, `bindPlain()`, `bindEphemeral()`
 | `src/__tests__/store-hydration.test.ts` | Exchange-level storage hydration — get/replicate hydration, network import persistence, local change persistence, flush, round-trip restart |
 | `src/__tests__/store.test.ts` | InMemoryStore — conformance suite + InMemory-specific sharedData/getStorage tests |
 | `src/testing/store-conformance.ts` | Reusable Store contract suite: lookup, ensureDoc, append, loadAll, replace, delete, listDocIds, JSON + binary payload round-trips, StoreEntry shape |
-| `src/__tests__/store-integration.test.ts` | End-to-end storage: persist+hydrate for sequential/causal/LWW, replicate mode, dismiss+delete, classify+storage |
+| `src/__tests__/store-integration.test.ts` | End-to-end storage: persist+hydrate for sequential/causal/LWW, replicate mode, dismiss+delete, onUnresolvedDoc+storage |
 | `src/__tests__/exchange.test.ts` | Exchange class — get, cache, sync, lifecycle, factory builder lifecycle |
-| `src/__tests__/integration.test.ts` | Two-peer sync for sequential, causal, LWW, heterogeneous, and `classify` dynamic creation |
+| `src/__tests__/integration.test.ts` | Two-peer sync for sequential, causal, LWW, heterogeneous, and `onUnresolvedDoc` dynamic creation |
 | `src/__tests__/sync-invariants.test.ts` | Regression tests: empty-delta fallback, ref identity, LWW stale rejection, causal deltas |
 | `src/__tests__/client-state-machine.test.ts` | ClientStateMachine — transitions, subscriptions, waitForState, reset |
 
@@ -697,7 +697,7 @@ The `examples/todo-react` example demonstrates the full Yjs + WebSocket + React 
 
 11. **End-to-end in a real app**: The `examples/todo/` app proves the full managed sync path in a running application: `LoroSchema` → `bindLoro` → `Exchange` → `WebsocketServerTransport`/`WebsocketClientTransport` → Cast compiled view → collaborative real-time sync between browser tabs. No hand-rolled WebSocket code — `change(doc, fn)` on any client automatically propagates to all peers via the changefeed → synchronizer → adapter pipeline.
 
-12. **Dynamic document creation via `classify`**: Peer A creates a document unknown to peer B. B's `classify` callback materializes the document with the correct `BoundSchema`. After sync, B has A's content. Works for sequential (PlainSubstrate) and LWW (`bindEphemeral` / `TimestampVersion`) strategies. Callback returning `Reject()` correctly suppresses creation.
+12. **Dynamic document creation via `onUnresolvedDoc`**: Peer A creates a document unknown to peer B. B's `onUnresolvedDoc` callback materializes the document with the correct `BoundSchema`. After sync, B has A's content. Works for sequential (PlainSubstrate) and LWW (`bindEphemeral` / `TimestampVersion`) strategies. Callback returning `Reject()` correctly suppresses creation. When no callback is configured, the Exchange applies a two-tiered default: supported replica type → Defer; unsupported → Reject.
 
 ---
 
@@ -779,14 +779,14 @@ The SSE adapter's functional core (`parseTextPostBody`, `SseConnection.send`) is
 
 ---
 
-## 15. Document Classification (`classify`)
+## 15. Document Classification (`onUnresolvedDoc`)
 
 ### Callback Signature
 
 ```ts
 type Disposition = Interpret | Replicate | Defer | Reject
 
-type Classify = (
+type OnUnresolvedDoc = (
   docId: DocId,
   peer: PeerIdentityDetails,
   replicaType: ReplicaType,
@@ -795,22 +795,22 @@ type Classify = (
 ) => Disposition
 ```
 
-The `classify` callback is an optional field on `ExchangeParams`. It fires when a peer announces (via `present`) a document the Exchange cannot auto-resolve from its capability registries (§24). Every code path must return an explicit disposition — there is no `undefined` return.
+The `onUnresolvedDoc` callback is an optional field on `ExchangeParams`. It fires when a peer announces (via `present`) a document the Exchange cannot auto-resolve from its capability registries (§24). Every code path must return an explicit disposition — there is no `undefined` return.
 
 ### Four Dispositions
 
-- **`Interpret(bound)`** — full interpretation with schema, ref, changefeed. The `bound` parameter is required — `classify` only fires for docs the registry can't resolve, so the caller must supply the `BoundSchema`.
+- **`Interpret(bound)`** — full interpretation with schema, ref, changefeed. The `bound` parameter is required — `onUnresolvedDoc` only fires for docs the registry can't resolve, so the caller must supply the `BoundSchema`.
 - **`Replicate()`** — parameterless headless replication. The Exchange resolves the `ReplicaFactory` from its replica registry using the `(replicaType, mergeStrategy)` pair from the `present` message. If no matching `BoundReplica` is registered, the Exchange emits a warning and rejects the doc.
 - **`Defer()`** — track the document for routing (included in `present` messages to other peers) but do not create a local representation. The doc can be promoted later via `exchange.get(docId, bound)`, `exchange.replicate(docId)`, or auto-promotion when `exchange.registerSchema(bound)` registers a matching schema.
 - **`Reject()`** — explicit rejection. The document is dropped and not tracked. Replaces the old `undefined` return.
 
-If no `classify` callback is configured anywhere (neither `ExchangeParams.classify` nor any scope's `classify`), docs that don't match a registered schema are rejected by default with a diagnostic warning.
+When no `onUnresolvedDoc` callback matches (or none is configured), the Exchange applies a two-tiered default: if the `replicaType` is supported by the capability set, the doc is **deferred** (promotion is plausible via a later `exchange.get()` or `registerSchema()`); otherwise the doc is **rejected** silently (no evidence the exchange will ever handle this format).
 
 ### Auto-Interpretation
 
-When schemas are registered via `ExchangeParams.schemas` or `exchange.registerSchema(bound)`, the Exchange auto-resolves matching docs from `present` metadata — the `(schemaHash, replicaType, mergeStrategy)` triple is looked up in the schema registry. **`classify` never fires for auto-resolved docs.** The developer declares schemas once; the Exchange handles discovery automatically.
+When schemas are registered via `ExchangeParams.schemas` or `exchange.registerSchema(bound)`, the Exchange auto-resolves matching docs from `present` metadata — the `(schemaHash, replicaType, mergeStrategy)` triple is looked up in the schema registry. **`onUnresolvedDoc` never fires for auto-resolved docs.** The developer declares schemas once; the Exchange handles discovery automatically.
 
-This means `classify` is only needed for:
+This means `onUnresolvedDoc` is only needed for:
 - Docs whose schema is not (yet) registered — return `Interpret(bound)` with an ad-hoc schema, `Defer()` to wait, or `Reject()`.
 - Docs that should be headlessly replicated — return `Replicate()`.
 - Dynamic policy decisions based on `docId` or `peer` that go beyond schema matching.
@@ -826,19 +826,19 @@ Peer A (has doc)               Peer B (doesn't have doc)
      |     mergeStrategy: "causal",   |
      |     schemaHash: "00abc..." }]  |
      |                                | handlePresent: unknown doc
-     |                                | ① supports(replicaType)?
-     |                                |   No → invisible, drop (no classify)
-     |                                |   Yes ↓
-     |                                | ② route(docId, peer)?
+     |                                | ① route(docId, peer)?
      |                                |   No → silently drop
      |                                |   Yes ↓
-     |                                | ③ cmd/request-doc-creation
-     |                                | ④ schema auto-resolve:
+     |                                | ② cmd/request-doc-creation
+     |                                | ③ schema auto-resolve:
      |                                |   resolveSchema(hash, type, strategy)
      |                                |   Match → exchange.get(docId, resolved)
      |                                |   No match ↓
-     |                                | ⑤ classify("input:alice", peerA, ...)
+     |                                | ④ onUnresolvedDoc("input:alice", peerA, ...)
      |                                |   → returns Interpret(PlayerInputDoc)
+     |                                |   (no callback? two-tiered default:
+     |                                |    supported type → Defer,
+     |                                |    unsupported type → Reject silently)
      |                                |   → exchange.get("input:alice", PlayerInputDoc)
      |                                |   → storage hydration (if configured)
      |                                |   → registerDoc → doc-ensure dispatched
@@ -854,13 +854,13 @@ Peer A (has doc)               Peer B (doesn't have doc)
 
 ### The `cmd/request-doc-creation` Command
 
-When `handlePresent` encounters an unknown doc ID that passes the capability gate and route check, the pure program emits:
+When `handlePresent` encounters an unknown doc ID that passes the route check, the pure program emits:
 
 ```ts
 { type: "cmd/request-doc-creation", docId: DocId, peer: PeerIdentityDetails, replicaType: ReplicaType, mergeStrategy: MergeStrategy, schemaHash: string }
 ```
 
-The `Synchronizer` runtime executes this command by calling the `DocCreationCallback` provided by the Exchange. The callback first attempts schema auto-resolution (§24), then falls through to `classify` if no schema matches. The callback is fire-and-forget — if it calls `exchange.get()`, the resulting `registerDoc()` → `#dispatch(doc-ensure)` is queued in `#pendingMessages` (because `#dispatching` is true) and processed before quiescence.
+The `Synchronizer` runtime executes this command by calling the `DocCreationCallback` provided by the Exchange. The callback first attempts schema auto-resolution (§24), then falls through to `onUnresolvedDoc` if no schema matches. The callback is fire-and-forget — if it calls `exchange.get()`, the resulting `registerDoc()` → `#dispatch(doc-ensure)` is queued in `#pendingMessages` (because `#dispatching` is true) and processed before quiescence.
 
 ### Reentrancy Through the Dispatch Loop
 
@@ -880,7 +880,7 @@ The `Defer` path has its own reentrancy: callback → `synchronizer.deferDoc()` 
 
 When a document is registered after channels are established (the dynamic creation case), `handleDocEnsure` sends **both** `present` and `interest` to all established channels:
 
-- **`present`**: announces the doc to peers (they may create it via their own `classify`)
+- **`present`**: announces the doc to peers (they may create it via their own `onUnresolvedDoc`)
 - **`interest`**: requests data from peers who already have the doc (essential for pulling content into the newly created empty doc)
 
 When `handleDocEnsure` fires for a doc already in `model.documents` with `mode: "deferred"`, it promotes the entry: updates mode to `"interpret"` or `"replicate"`, sets the version, and sends both `present` and `interest`.
@@ -890,21 +890,23 @@ When `handleDocEnsure` fires for a doc already in `model.documents` with `mode: 
 The vendor (`@loro-extended/repo`) handles this in `handleSyncRequest` — when a `sync-request` arrives for an unknown doc, the doc is auto-created, gated by `permissions.creation`. Kyneta's approach differs:
 
 1. **Trigger point**: `present` (not `interest`/`sync-request`), because kyneta's `interest` is only sent for docs the sender already has.
-2. **Capability gating**: The `supports` predicate (§24) is checked first — unsupported `replicaType` makes the doc invisible.
-3. **Route gating**: The `route` predicate (§16) is checked before `cmd/request-doc-creation` is emitted. If `route(docId, announcingPeer)` returns `false`, the unknown doc is silently dropped — `classify` never fires.
-4. **Auto-resolution**: Schema registry lookup happens before `classify` — most docs are resolved without any callback.
+2. **Capability gating**: The `supports` gate has been removed from the synchronizer — all unknown docs reach `onUnresolvedDoc`. The Exchange's two-tiered default uses `supportsReplicaType` to decide between Defer and Reject when no callback matches.
+3. **Route gating**: The `route` predicate (§16) is checked before `cmd/request-doc-creation` is emitted. If `route(docId, announcingPeer)` returns `false`, the unknown doc is silently dropped — `onUnresolvedDoc` never fires.
+4. **Auto-resolution**: Schema registry lookup happens before `onUnresolvedDoc` — most docs are resolved without any callback.
 5. **Gating mechanism**: a callback returning an explicit disposition (`Interpret | Replicate | Defer | Reject`), because the callback must provide the schema/factory/strategy — information a boolean predicate cannot supply.
 6. **No separate `creation` permission**: the callback subsumes the permission check. Returning `Reject()` is equivalent to denying creation.
+
+> **Note**: `onUnresolvedDoc` fires for all unresolved docs regardless of replica type — the developer has full control when a callback is provided. The two-tiered default (Defer vs. Reject based on `supportsReplicaType`) only applies when no callback matches.
 
 ### Code Example
 
 ```ts
 const exchange = new Exchange({
-  // Declare known schemas — auto-resolved, classify never fires for these
+  // Declare known schemas — auto-resolved, onUnresolvedDoc never fires for these
   schemas: [PlayerInputDoc, GameStateDoc],
 
   // Policy for docs not matched by the schema registry
-  classify: (docId, peer, replicaType, mergeStrategy, schemaHash) => {
+  onUnresolvedDoc: (docId, peer, replicaType, mergeStrategy, schemaHash) => {
     // Ad-hoc interpretation with an unregistered schema
     if (docId.startsWith("debug:")) return Interpret(DebugDoc)
     // Headless replication — Exchange resolves factory from registry
@@ -943,7 +945,7 @@ The `route` predicate gates all outbound messages. It answers: "should this peer
 | Initial present | `handleEstablishRequest` / `handleEstablishResponse` | Doc omitted from `present` message |
 | Doc-ensure broadcast | `handleDocEnsure` | Channel excluded from present+interest |
 | Push (local change + relay) | `buildPush` | Channel excluded from offer |
-| `classify` gating | `handlePresent` | `cmd/request-doc-creation` not emitted |
+| `onUnresolvedDoc` gating | `handlePresent` | `cmd/request-doc-creation` not emitted |
 
 ### `authorize` — Inbound Flow Control
 
@@ -961,23 +963,23 @@ When `authorize` rejects an offer, the peer's sync state is still updated to pre
 
 With composable scopes (§23), the invariant holds *in aggregate* — the composed `authorize` returning `true` only matters if the composed `route` also returns `true` for that peer. Individual scopes can safely have `authorize` without `route` (or vice versa) because the composition evaluates all scopes independently per field. The synchronizer only reaches `authorize` evaluation if the message was already routed.
 
-### Relationship to `classify`
+### Relationship to `onUnresolvedDoc`
 
-Three gates are evaluated in order when a peer announces an unknown doc in `handlePresent`:
+Gates are evaluated in order when a peer announces an unknown doc in `handlePresent`:
 
-1. **`supports`** (capability gate, §24) — if the `replicaType` is unsupported by any registry, the doc is **invisible**. `classify` never fires.
-2. **`route`** — if `route(docId, announcingPeer)` returns `false`, silently drop. `classify` never fires.
-3. **Schema auto-resolve** — if the `(schemaHash, replicaType, mergeStrategy)` triple matches a registered schema, auto-interpret. `classify` never fires.
-4. **`classify`** — only fires for docs the Exchange can't auto-resolve. Returns an explicit disposition.
+1. **`route`** — if `route(docId, announcingPeer)` returns `false`, silently drop. `onUnresolvedDoc` never fires.
+2. **Schema auto-resolve** — if the `(schemaHash, replicaType, mergeStrategy)` triple matches a registered schema, auto-interpret. `onUnresolvedDoc` never fires.
+3. **`onUnresolvedDoc`** — fires for all unresolved docs regardless of replica type. Returns an explicit disposition.
+4. **Two-tiered default** — if no `onUnresolvedDoc` callback matches (or none is configured): supported `replicaType` → Defer; unsupported `replicaType` → Reject (silently).
 
-After `classify` returns:
+After `onUnresolvedDoc` (or the two-tiered default) returns:
 - `Interpret(bound)` → `exchange.get()` creates the doc
 - `Replicate()` → `exchange.replicate()` creates the doc (factory from registry)
 - `Defer()` → doc tracked for routing, no local representation
 - `Reject()` → doc dropped
 - Subsequent present/interest/offer flow is subject to `route` normally
 
-This means `classify` can assume: the announcing peer already passed the route check, the `replicaType` is supported, and no registered schema matched.
+This means `onUnresolvedDoc` can assume: the announcing peer already passed the route check and no registered schema matched. The `replicaType` may or may not be supported — the callback has full control regardless.
 
 See `examples/bumper-cars/src/server.ts` for a concrete usage example — `route` restricts input doc visibility to the owning peer, and `authorize` enforces server-only writes to game state.
 
@@ -1645,7 +1647,7 @@ End-to-end tests in `transports/unix-socket/src/__tests__/` prove the full stack
 
 ## 23. Composable Scope Registration
 
-The Exchange accepts `route`, `authorize`, `classify`, and `onDocDismissed` as fixed functions in `ExchangeParams`. These work well when all document access rules are known at construction time. But higher-level primitives (Lines, rooms, game loops) need to register their own rules dynamically and remove them when done. The scope registration system generalizes the fixed predicates into a composable, dynamic model.
+The Exchange accepts `route`, `authorize`, `onUnresolvedDoc`, and `onDocDismissed` as fixed functions in `ExchangeParams`. These work well when all document access rules are known at construction time. But higher-level primitives (Lines, rooms, game loops) need to register their own rules dynamically and remove them when done. The scope registration system generalizes the fixed predicates into a composable, dynamic model.
 
 ### The Scope Type
 
@@ -1656,7 +1658,7 @@ interface Scope {
   name?: string
   route?: RulePredicate
   authorize?: RulePredicate
-  classify?: Classify
+  onUnresolvedDoc?: OnUnresolvedDoc
   onDocDismissed?: OnDocDismissed
 }
 ```
@@ -1702,8 +1704,7 @@ The `ScopeRegistry` manages the mutable scope list and delegates composition to 
 - **`register(scope): () => void`** — adds a scope, returns a dispose function.
 - **`route(docId, peer): boolean`** — composed route, defaults to open (`true`).
 - **`authorize(docId, peer): boolean`** — composed authorize, defaults to open (`true`).
-- **`classify(...): Disposition | undefined`** — first non-`undefined` wins (registration order).
-- **`hasClassify: boolean`** — `true` if any registered scope provides a `classify` handler.
+- **`onUnresolvedDoc(...): Disposition | undefined`** — first non-`undefined` wins (registration order).
 - **`docDismissed(docId, peer): void`** — all handlers invoked (broadcast, not gate).
 - **`clear(): void`** — removes all scopes. Called during `reset()` and `shutdown()`.
 - **`get names: readonly string[]`** — names of all named scopes, in registration order.
@@ -1715,7 +1716,7 @@ const dispose = exchange.register({
   name: "line:bob",
   route: (docId, peer) => docId.startsWith("line:bob:") ? peer.peerId === "bob" : undefined,
   authorize: (docId, peer) => docId.startsWith("line:bob:") ? peer.peerId === "bob" : undefined,
-  classify: (docId) => docId.startsWith("line:bob:") ? Defer() : undefined,
+  onUnresolvedDoc: (docId) => docId.startsWith("line:bob:") ? Defer() : undefined,
 })
 
 // Later, when the line is no longer needed:
@@ -1730,7 +1731,7 @@ The dispose function removes the scope from all compositions. After disposal, th
 |-------|------------|--------------------------|
 | `route` | Deny wins, short-circuit | `true` (open) |
 | `authorize` | Deny wins, short-circuit | `true` (open) |
-| `classify` | First non-`undefined` wins (registration order) | `undefined` (reject with warning) |
+| `onUnresolvedDoc` | First non-`undefined` wins (registration order) | `undefined` (reject with warning) |
 | `onDocDismissed` | All handlers invoked (broadcast) | no-op |
 
 ### Default Values — Both Open
@@ -1749,7 +1750,7 @@ If a scope has a `name`:
 
 ### Relationship to `ExchangeParams`
 
-The constructor fields (`route`, `authorize`, `classify`, `onDocDismissed`) are syntactic sugar for the initial scope. At construction time, if any are provided, they are bundled into a `Scope` and registered with the `ScopeRegistry`. This is backward compatible — existing code that passes these params works identically.
+The constructor fields (`route`, `authorize`, `onUnresolvedDoc`, `onDocDismissed`) are syntactic sugar for the initial scope. At construction time, if any are provided, they are bundled into a `Scope` and registered with the `ScopeRegistry`. This is backward compatible — existing code that passes these params works identically.
 
 The difference: previously, `route: () => true` was the only predicate. Now it's one scope among potentially many. A later `exchange.register({ route: ... })` adds a second scope whose `route` participates in the composition.
 
@@ -1826,7 +1827,7 @@ const DEFAULT_REPLICAS: readonly BoundReplica[] = [
 ]
 ```
 
-An Exchange with no explicit configuration can replicate sequential documents (via `plainReplicaFactory`) and LWW/ephemeral documents (via `lwwReplicaFactory`). Both use the `["plain", 1, 0]` wire format but with the correct version algebra for each strategy. Loro documents require explicit registration — either via `schemas: [bindLoro(S)]` or `replicas: [BoundReplica(loroReplicaFactory, "causal")]`.
+An Exchange with no explicit configuration can replicate sequential documents (via `plainReplicaFactory`) and LWW/ephemeral documents (via `lwwReplicaFactory`). Both use the `["plain", 1, 0]` wire format but with the correct version algebra for each strategy. Loro documents are registered automatically when `exchange.get()` is called with a Loro `BoundSchema` (which calls `registerSchema()` internally). Explicit upfront registration via `schemas: [bindLoro(S)]` or `replicas: [BoundReplica(loroReplicaFactory, "causal")]` is still valuable for the `present`-before-`get()` race — it ensures the Exchange can auto-resolve or defer remote Loro docs before the application calls `get()`.
 
 ### Dynamic Schema Registration
 
@@ -1842,32 +1843,29 @@ Registers a `BoundSchema` at runtime. The Exchange:
 
 This is the mechanism that enables higher-level primitives (e.g. Lines) to register their envelope schemas when they're constructed, not when the Exchange is constructed. A deferred doc whose schema didn't exist at discovery time is automatically promoted when the schema becomes available — no manual `exchange.get()` per doc required.
 
-`ExchangeParams.schemas` is sugar for calling `registerSchema()` at construction time.
+`exchange.get()` calls `registerSchema(bound)` internally, so `ExchangeParams.schemas` is sugar for upfront registration but not required. The role distinction: `schemas:` ensures readiness at construction time (handles the `present`-before-`get()` race — a peer may announce a doc before the local code calls `get()`, and without prior registration the doc would be deferred or rejected rather than auto-interpreted); `get()` expands capabilities at use time.
 
 ### The Document Lifecycle State Machine
 
 | State | In `model.documents`? | Has `Replica`? | Sends `present`? | Sends `interest`? |
 |-------|----------------------|----------------|-------------------|-------------------|
-| **Invisible** | No | No | No | No |
 | **Rejected** | No | No | No | No |
 | **Deferred** | Yes (`mode: "deferred"`) | No | Yes (routing) | No |
 | **Replicated** | Yes (`mode: "replicate"`) | Yes (headless) | Yes | Yes |
 | **Interpreted** | Yes (`mode: "interpret"`) | Yes (`Substrate`) | Yes | Yes |
 
-- **Invisible**: `replicaType` not supported by any registry. `classify` never fires.
-- **Rejected**: `classify` returned `Reject()`, or no `classify` configured for unmatched doc.
-- **Deferred**: Acknowledged for routing. No local representation. Awaiting schema registration or explicit promotion.
+- **Rejected**: `onUnresolvedDoc` returned `Reject()`, or no callback and unsupported replica type (two-tiered default).
+- **Deferred**: Acknowledged for routing. No local representation. Awaiting schema registration or explicit promotion. Also the default when no callback matches and the replica type is supported (two-tiered default).
 - **Replicated** / **Interpreted**: Full participation, as today.
 
 Transitions:
 
 | From | To | Trigger |
 |------|----|---------|
-| — | Invisible | `present` with unsupported `replicaType` |
-| — | Rejected | `classify` returns `Reject()`, or no `classify` configured |
-| — | Deferred | `classify` returns `Defer()` |
-| — | Replicated | `classify` returns `Replicate()`, or `exchange.replicate()` |
-| — | Interpreted | Schema auto-resolve, `classify` returns `Interpret(bound)`, or `exchange.get()` |
+| — | Rejected | `onUnresolvedDoc` returns `Reject()`, or no callback and unsupported replica type |
+| — | Deferred | `onUnresolvedDoc` returns `Defer()`, or no callback and supported replica type |
+| — | Replicated | `onUnresolvedDoc` returns `Replicate()`, or `exchange.replicate()` |
+| — | Interpreted | Schema auto-resolve, `onUnresolvedDoc` returns `Interpret(bound)`, or `exchange.get()` |
 | Deferred | Interpreted | `exchange.get(docId, bound)`, or auto-promoted when `exchange.registerSchema(bound)` matches |
 | Deferred | Replicated | `exchange.replicate(docId)` |
 
@@ -1881,9 +1879,10 @@ When a peer sends `present` with `{ replicaType, mergeStrategy, schemaHash }`:
 
 | Scenario | `replicaType` | `mergeStrategy` | `schemaHash` | Result |
 |----------|--------------|-----------------|-------------|--------|
-| Triple matches a `schemas` entry | ✅ validated | ✅ validated | ✅ validated (lookup key) | Auto-interpreted; `classify` does not fire |
-| No schema match, but `replicaType` supported | ✅ validated | ⚠ trusted | ⚠ trusted | `classify` fires |
-| `replicaType` not supported | — | — | — | Invisible; `classify` does not fire; warning emitted |
+| Triple matches a `schemas` entry | ✅ validated | ✅ validated | ✅ validated (lookup key) | Auto-interpreted; `onUnresolvedDoc` does not fire |
+| No schema match, `onUnresolvedDoc` configured | ✅ or ⚠ | ⚠ trusted | ⚠ trusted | `onUnresolvedDoc` fires (regardless of replica type support) |
+| No schema match, no callback, supported type | ✅ validated | ⚠ trusted | ⚠ trusted | Deferred (two-tiered default) |
+| No schema match, no callback, unsupported type | — | — | — | Rejected (two-tiered default) |
 
 **Known docs** (already in `model.documents`): all three fields are validated against the local doc entry — `replicaType` via `replicaTypesCompatible()`, `schemaHash` via equality, and `mergeStrategy` via equality. A mismatch on any field skips sync with a warning.
 
@@ -1981,9 +1980,9 @@ Each topic produces distinct doc IDs (`line:signaling:...` vs `line:rpc:...`), d
 
 ### Scope Integration
 
-Line is a standalone class — it composes with the Exchange via public API only (`register()`, `registerSchema()`, `get()`, `dismiss()`). No Exchange modification needed.
+Line is a standalone class — it composes with the Exchange via public API only (`register()`, `get()`, `dismiss()`). No Exchange modification needed. `Line.open()` no longer needs to call `registerSchema()` explicitly because `exchange.get()` handles schema registration internally.
 
-**Infrastructure scope** (`__line-infrastructure`): Registered on the first `openLine()` call. Provides a `classify` handler that returns `Defer()` for Line doc IDs. This handles the early-arrival case — when a remote peer's outbox arrives before the local peer opens a Line. The deferred doc is auto-promoted when `openLine()` calls `registerSchema()`.
+**Infrastructure scope** (`__line-infrastructure`): Registered on the first `openLine()` call. Provides a `onUnresolvedDoc` handler that returns `Defer()` for Line doc IDs. This handles the early-arrival case — when a remote peer's outbox arrives before the local peer opens a Line. The deferred doc is auto-promoted when `openLine()` calls `get()` (which registers the schema internally).
 
 **Per-line scope** (`line:${topic}:${remotePeerId}`): Registered per `openLine()` call. Provides `authorize` — only the `from` peer can write to each doc. Routing is open by default. Applications that want endpoint-only routing register their own scope using the exported `routeLine` predicate.
 
@@ -1991,8 +1990,7 @@ Line is a standalone class — it composes with the Exchange via public API only
 
 The Line class has zero coupling to Exchange internals. It uses only:
 - `exchange.register()` — scope registration
-- `exchange.registerSchema()` — capabilities registry population + deferred doc auto-promotion
-- `exchange.get()` — document creation
+- `exchange.get()` — document creation (calls `registerSchema()` internally, expanding capabilities and auto-promoting deferred docs)
 - `exchange.dismiss()` — document removal on close
 - `exchange.peers` — peer lifecycle subscription
 

@@ -6,7 +6,7 @@
 import { bindPlain, Interpret, Schema } from "@kyneta/schema"
 import type { PeerIdentityDetails } from "@kyneta/transport"
 import { describe, expect, it, vi } from "vitest"
-import type { Classify } from "../exchange.js"
+import type { OnUnresolvedDoc } from "../exchange.js"
 import { composeRule, type Scope, ScopeRegistry } from "../scope.js"
 
 // ---------------------------------------------------------------------------
@@ -226,22 +226,22 @@ describe("ScopeRegistry", () => {
   })
 
   // -----------------------------------------------------------------------
-  // classify: first-wins, short-circuit
+  // onUnresolvedDoc: first-wins, short-circuit
   // -----------------------------------------------------------------------
 
-  describe("classify composition", () => {
+  describe("onUnresolvedDoc composition", () => {
     const bound = bindPlain(Schema.doc({ value: Schema.string() }))
 
     it("first non-undefined result wins; later scopes not called", () => {
       const registry = new ScopeRegistry()
       const disposition = Interpret(bound)
-      const second = vi.fn((): ReturnType<Classify> => Interpret(bound))
+      const second = vi.fn((): ReturnType<OnUnresolvedDoc> => Interpret(bound))
 
-      registry.register({ classify: () => undefined })
-      registry.register({ classify: () => disposition })
-      registry.register({ classify: second })
+      registry.register({ onUnresolvedDoc: () => undefined })
+      registry.register({ onUnresolvedDoc: () => disposition })
+      registry.register({ onUnresolvedDoc: second })
 
-      const result = registry.classify(
+      const result = registry.onUnresolvedDoc(
         doc,
         alice,
         ["plain", 1, 0],
@@ -254,9 +254,9 @@ describe("ScopeRegistry", () => {
 
     it("all undefined → undefined", () => {
       const registry = new ScopeRegistry()
-      registry.register({ classify: () => undefined })
+      registry.register({ onUnresolvedDoc: () => undefined })
 
-      const result = registry.classify(
+      const result = registry.onUnresolvedDoc(
         doc,
         alice,
         ["plain", 1, 0],
@@ -264,17 +264,6 @@ describe("ScopeRegistry", () => {
         "hash",
       )
       expect(result).toBeUndefined()
-    })
-
-    it("hasClassify tracks handler presence across register/dispose", () => {
-      const registry = new ScopeRegistry()
-      expect(registry.hasClassify).toBe(false)
-
-      const dispose = registry.register({ classify: () => undefined })
-      expect(registry.hasClassify).toBe(true)
-
-      dispose()
-      expect(registry.hasClassify).toBe(false)
     })
   })
 

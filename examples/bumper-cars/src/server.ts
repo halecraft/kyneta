@@ -7,7 +7,7 @@
 //   2. Creates a server-side Exchange with:
 //      - route:           input docs only visible to owner
 //      - authorize:       clients can only write their own input doc
-//      - classify:        materializes input:${peerId} docs on player connect
+//      - onUnresolvedDoc:        materializes input:${peerId} docs on player connect
 //      - onDocDismissed:  cleans up when players disconnect
 //   3. Runs the game loop at 60fps
 //   4. Serves static files from dist/ and upgrades /ws to WebSocket
@@ -85,16 +85,16 @@ const exchange = new Exchange({
     return false
   },
 
-  // ── classify ─────────────────────────────────────────────────────
+  // ── onUnresolvedDoc ─────────────────────────────────────────────────────
   // A client created input:${peerId} — materialize it server-side
   // and register the player with the game loop.
   //
-  // classify returns an Interpret disposition; the Exchange then
+  // onUnresolvedDoc returns an Interpret disposition; the Exchange then
   // calls exchange.get(docId, bound) internally to create the doc. After
   // that call completes (synchronously), we can look the doc up.
   // We schedule a microtask to register the player so the Exchange
   // finishes its dispatch loop first.
-  classify(docId, _peer, _replicaType, _mergeStrategy) {
+  onUnresolvedDoc(docId, _peer, _replicaType, _mergeStrategy) {
     if (!docId.startsWith("input:")) return Reject()
 
     const peerId = docId.slice("input:".length)

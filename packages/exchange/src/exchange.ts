@@ -112,7 +112,7 @@ export type Disposition = Interpret | Replicate | Defer | Reject
  * @param schemaHash - The schema hash the remote peer uses for this document
  * @returns A disposition (`Interpret | Replicate | Defer | Reject`)
  */
-export type Classify = (
+export type OnUnresolvedDoc = (
   docId: DocId,
   peer: PeerIdentityDetails,
   replicaType: ReplicaType,
@@ -191,8 +191,8 @@ export type ExchangeParams = {
    * sync graph for each document. Checked at every outbound gate:
    * initial present, doc-ensure broadcast, relay push, local change push.
    *
-   * Also gates `classify`: if `route` returns `false` for
-   * the announcing peer, the classify callback never fires.
+   * Also gates `onUnresolvedDoc`: if `route` returns `false` for
+   * the announcing peer, the onUnresolvedDoc callback never fires.
    *
    * This field is syntactic sugar for the initial scope. For dynamic
    * rule composition, use {@link Exchange.register | exchange.register()}.
@@ -259,7 +259,7 @@ export type ExchangeParams = {
    * This field is syntactic sugar for the initial scope. For dynamic
    * rule composition, use {@link Exchange.register | exchange.register()}.
    */
-  classify?: Classify
+  onUnresolvedDoc?: OnUnresolvedDoc
 }
 
 // ---------------------------------------------------------------------------
@@ -370,7 +370,7 @@ export class Exchange {
     onDocDismissed,
     schemas = [],
     replicas = DEFAULT_REPLICAS,
-    classify,
+    onUnresolvedDoc,
   }: ExchangeParams = {}) {
     // Resolve peer identity
     const peerId = identity.peerId ?? generatePeerId()
@@ -397,9 +397,9 @@ export class Exchange {
     const initialScope: Scope = {}
     if (route) initialScope.route = route
     if (authorize) initialScope.authorize = authorize
-    if (classify) initialScope.classify = classify
+    if (onUnresolvedDoc) initialScope.onUnresolvedDoc = onUnresolvedDoc
     if (onDocDismissed) initialScope.onDocDismissed = onDocDismissed
-    if (route || authorize || classify || onDocDismissed) {
+    if (route || authorize || onUnresolvedDoc || onDocDismissed) {
       this.#scopes.register(initialScope)
     }
 
@@ -414,13 +414,12 @@ export class Exchange {
     // The route and authorize predicates delegate to the live ScopeRegistry,
     // so dynamically registered scopes are visible without recreating the
     // synchronizer's update function.
-    let warnedNoDiscoverCallback = false
     this.#synchronizer = new Synchronizer({
       identity: fullIdentity,
       transports: transports.map(factory => factory()),
       route: this.#scopes.route.bind(this.#scopes),
       authorize: this.#scopes.authorize.bind(this.#scopes),
-      supports: this.#capabilities.supportsReplicaType.bind(this.#capabilities),
+
       onDocDismissed: this.#scopes.docDismissed.bind(this.#scopes),
       onDocCreationRequested: (
         docId,
@@ -440,8 +439,8 @@ export class Exchange {
           return
         }
 
-        // 2. Classify callback
-        const result = this.#scopes.classify(
+        // 2. OnUnresolvedDoc callback
+        const result = this.#scopes.onUnresolvedDoc(
           docId,
           peer,
           replicaType,
@@ -450,15 +449,15 @@ export class Exchange {
         )
 
         if (!result) {
-          if (!this.#scopes.hasClassify && !warnedNoDiscoverCallback) {
-            warnedNoDiscoverCallback = true
-            console.warn(
-              `[exchange] Peer "${peer.peerId}" discovered document "${docId}" but no classify ` +
-                `callback is configured and no matching schema is registered. The document will be rejected. ` +
-                `To accept peer-announced documents, provide classify in ExchangeParams, register schemas, ` +
-                `or use exchange.register().`,
-            )
+          // Two-tiered default: no callback matched this doc.
+          if (this.#capabilities.supportsReplicaType(replicaType)) {
+            // Supported replica type but no schema match — defer.
+            // Promotion is plausible: a later exchange.get() or registerSchema()
+            // will expand the schema set and auto-promote.
+            this.#deferDoc(docId, replicaType, mergeStrategy, schemaHash)
           }
+          // Unsupported replica type — reject silently.
+          // No callback, no schema, no replica capability. Nothing to do.
           return
         }
 
@@ -473,7 +472,7 @@ export class Exchange {
             )
             if (!boundReplica) {
               console.warn(
-                `[exchange] classify returned Replicate() for doc "${docId}" but no BoundReplica ` +
+                `[exchange] onUnresolvedDoc returned Replicate() for doc "${docId}" but no BoundReplica ` +
                   `is registered for replicaType [${replicaType}] with strategy "${mergeStrategy}". ` +
                   `Add the appropriate BoundReplica to ExchangeParams.replicas.`,
               )
@@ -488,13 +487,7 @@ export class Exchange {
             break
           }
           case "defer":
-            this.#synchronizer.deferDoc(
-              docId,
-              replicaType,
-              mergeStrategy,
-              schemaHash,
-            )
-            this.#docCache.set(docId, { mode: "deferred" })
+            this.#deferDoc(docId, replicaType, mergeStrategy, schemaHash)
             break
           case "reject":
             // Explicitly rejected — do nothing
@@ -555,6 +548,21 @@ export class Exchange {
       this.#factoryCache.set(builder, factory)
     }
     return factory
+  }
+
+  /**
+   * Defer a document — register it in the synchronizer as deferred
+   * (participates in routing/present but not data exchange) and cache
+   * the deferred state locally.
+   */
+  #deferDoc(
+    docId: DocId,
+    replicaType: ReplicaType,
+    mergeStrategy: MergeStrategy,
+    schemaHash: string,
+  ): void {
+    this.#synchronizer.deferDoc(docId, replicaType, mergeStrategy, schemaHash)
+    this.#docCache.set(docId, { mode: "deferred" })
   }
 
   // =========================================================================
@@ -810,13 +818,23 @@ export class Exchange {
     // Resolve factory from the BoundSchema's builder
     const factory = this.#resolveFactory(bound.factory)
 
-    // Validate that the Exchange supports this factory's replicaType
+    // Auto-register this schema's capabilities. registerSchema is idempotent
+    // (upserts into the registry), so repeated get() calls with the same
+    // BoundSchema are safe.
+    //
+    // Reentrancy note: registerSchema scans deferred docs and may re-enter
+    // get() for matching docs. This is safe because inner get() calls operate
+    // on *different* docIds (the deferred docs being promoted), so there is
+    // no infinite recursion or cache corruption.
+    this.registerSchema(bound)
+
+    // After registerSchema, the replicaType must be supported. This is an
+    // invariant assertion, not a user-facing error — registerSchema always
+    // registers the replicaType as a side effect.
     const replicaType = factory.replica.replicaType
     if (!this.#capabilities.supportsReplicaType(replicaType)) {
       throw new Error(
-        `exchange.get() requires a supported replicaType. The BoundSchema's factory produces ` +
-          `replicaType [${replicaType}], but this Exchange has no compatible capability. ` +
-          `Add the appropriate BoundReplica to ExchangeParams.replicas or the BoundSchema to ExchangeParams.schemas.`,
+        `[exchange] Internal error: registerSchema did not register replicaType [${replicaType}]`,
       )
     }
 
@@ -1212,8 +1230,8 @@ export class Exchange {
    * - `true` from at least one scope, no `false` → allow
    * - all `undefined` → default (open for both route and authorize)
    *
-   * Scopes may include a `classify` handler for policy-gating documents
-   * not auto-resolved by the capabilities registry. Multiple classify
+   * Scopes may include a `onUnresolvedDoc` handler for policy-gating documents
+   * not auto-resolved by the capabilities registry. Multiple onUnresolvedDoc
    * handlers are evaluated in registration order — first non-`undefined`
    * disposition wins.
    */

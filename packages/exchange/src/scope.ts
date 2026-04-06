@@ -11,7 +11,11 @@
 //   scope list and delegates composition to the pure function.
 
 import type { DocId, PeerIdentityDetails } from "@kyneta/transport"
-import type { Classify, Disposition, OnDocDismissed } from "./exchange.js"
+import type {
+  Disposition,
+  OnDocDismissed,
+  OnUnresolvedDoc,
+} from "./exchange.js"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -35,7 +39,7 @@ export type RulePredicate = (
  * of the document space. All fields are optional — a scope only
  * provides the predicates it cares about.
  *
- * The `classify` and `onDocDismissed` fields reuse the existing
+ * The `onUnresolvedDoc` and `onDocDismissed` fields reuse the existing
  * types from `exchange.ts` — no wrapper types needed.
  */
 export interface Scope {
@@ -43,7 +47,9 @@ export interface Scope {
   name?: string
   route?: RulePredicate
   authorize?: RulePredicate
-  classify?: (...args: Parameters<Classify>) => Disposition | undefined
+  onUnresolvedDoc?: (
+    ...args: Parameters<OnUnresolvedDoc>
+  ) => Disposition | undefined
   onDocDismissed?: OnDocDismissed
 }
 
@@ -90,7 +96,7 @@ export function composeRule(
  * composition to the pure `composeRule` function.
  *
  * Internal storage: an ordered array of Scope entries (preserves
- * registration order for `classify` evaluation). A parallel
+ * registration order for `onUnresolvedDoc` evaluation). A parallel
  * Map indexes named scopes for O(1) replacement lookup.
  */
 export class ScopeRegistry {
@@ -159,20 +165,20 @@ export class ScopeRegistry {
   }
 
   /**
-   * Composed classify — evaluate scopes in registration order.
+   * Composed onUnresolvedDoc — evaluate scopes in registration order.
    * First non-`undefined` disposition wins. If all return `undefined`,
    * the result is `undefined`.
    */
-  classify(
+  onUnresolvedDoc(
     docId: DocId,
     peer: PeerIdentityDetails,
-    replicaType: Parameters<Classify>[2],
-    mergeStrategy: Parameters<Classify>[3],
+    replicaType: Parameters<OnUnresolvedDoc>[2],
+    mergeStrategy: Parameters<OnUnresolvedDoc>[3],
     schemaHash: string,
   ): Disposition | undefined {
     for (const scope of this.#scopes) {
-      if (!scope.classify) continue
-      const result = scope.classify(
+      if (!scope.onUnresolvedDoc) continue
+      const result = scope.onUnresolvedDoc(
         docId,
         peer,
         replicaType,
@@ -182,14 +188,6 @@ export class ScopeRegistry {
       if (result !== undefined) return result
     }
     return undefined
-  }
-
-  /**
-   * Whether any registered scope has a `classify` handler.
-   * Used by the Exchange to decide whether to emit the "no callback" warning.
-   */
-  get hasClassify(): boolean {
-    return this.#scopes.some(s => s.classify != null)
   }
 
   /**

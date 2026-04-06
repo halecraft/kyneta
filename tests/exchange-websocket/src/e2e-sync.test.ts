@@ -187,7 +187,6 @@ async function createConnectedPair(opts?: {
   const serverExchange = createExchange({
     identity: { peerId: serverPeerId },
     transports: [() => serverTransport],
-    schemas: [LoroDoc],
   })
 
   const clientTransport = new WebsocketClientTransport({
@@ -199,7 +198,6 @@ async function createConnectedPair(opts?: {
   const clientExchange = createExchange({
     identity: { peerId: clientPeerId },
     transports: [() => clientTransport],
-    schemas: [LoroDoc],
   })
 
   // Wait for the client to be fully ready

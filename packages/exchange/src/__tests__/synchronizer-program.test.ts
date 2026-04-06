@@ -514,7 +514,7 @@ describe("synchronizer-program", () => {
       expect(presentCmd).toBeDefined()
 
       // Should also send interest — essential for pulling data into
-      // empty docs created via classify
+      // empty docs created via onUnresolvedDoc
       const interestCmd = commands.find(
         c =>
           c.type === "cmd/send-message" &&
@@ -2932,16 +2932,15 @@ describe("synchronizer-program", () => {
   })
 
   describe("capability gate and deferred documents", () => {
-    it("handlePresent for unknown doc with unsupported replicaType emits warning, no creation", () => {
-      const update = createSynchronizerUpdate({
-        supports: rt => rt[0] === "plain" && rt[1] === 1,
-      })
+    it("handlePresent for unknown doc emits request-doc-creation regardless of replicaType", () => {
+      // No supports gate — all unknown docs flow through to creation request
+      const update = createSynchronizerUpdate()
       const [model] = init(aliceIdentity)
 
       const m = establishChannel(update, model, 1, bobIdentity)
 
-      // Bob announces a Loro doc — unsupported by our supports predicate
-      const [_result, cmd, notification] = update(
+      // Bob announces a Loro doc — no supports gate to block it
+      const [_result, cmd] = update(
         {
           type: "synchronizer/channel-receive-message",
           envelope: {
@@ -2966,14 +2965,15 @@ describe("synchronizer-program", () => {
       const creationCmds = commands.filter(
         c => c.type === "cmd/request-doc-creation",
       )
-      expect(creationCmds).toHaveLength(0)
-
-      // Should have a warning notification about unsupported replicaType
-      expect(notification).toBeDefined()
-      expect(notification?.type).toBe("notify/warning")
-      if (notification?.type === "notify/warning") {
-        expect(notification.message).toContain("unsupported")
-      }
+      // Should have a creation command — no gate to block it
+      expect(creationCmds).toHaveLength(1)
+      expect(creationCmds[0]).toMatchObject({
+        type: "cmd/request-doc-creation",
+        docId: "loro-doc",
+        replicaType: ["loro", 1, 0],
+        mergeStrategy: "causal",
+        schemaHash: "abc",
+      })
     })
 
     it("handlePresent for known doc with mismatched mergeStrategy emits warning, no interest", () => {

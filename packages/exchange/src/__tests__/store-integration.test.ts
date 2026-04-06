@@ -212,7 +212,7 @@ describe("Storage + network sync", () => {
         createBridgeTransport({ transportType: "server-side", bridge }),
       ],
       stores: [createInMemoryStore({ sharedData })],
-      classify: () => Replicate(),
+      onUnresolvedDoc: () => Replicate(),
     })
 
     const peerA = createExchange({
@@ -251,7 +251,7 @@ describe("Storage + network sync", () => {
         }),
       ],
       stores: [createInMemoryStore({ sharedData })],
-      classify: () => Replicate(),
+      onUnresolvedDoc: () => Replicate(),
     })
 
     const peerB = createExchange({
@@ -262,7 +262,7 @@ describe("Storage + network sync", () => {
           bridge: bridge2,
         }),
       ],
-      classify: () => Interpret(SequentialDoc),
+      onUnresolvedDoc: () => Interpret(SequentialDoc),
     })
 
     // Wait for server hydration + peer B sync
@@ -288,7 +288,7 @@ describe("Storage + network sync", () => {
         createBridgeTransport({ transportType: "server-side", bridge }),
       ],
       stores: [backend],
-      classify: () => Replicate(),
+      onUnresolvedDoc: () => Replicate(),
     })
 
     const client = createExchange({
@@ -336,7 +336,7 @@ describe("Storage + replicated doc", () => {
         createBridgeTransport({ transportType: "relay-side", bridge: bridge1 }),
       ],
       stores: [createInMemoryStore({ sharedData })],
-      classify: () => Replicate(),
+      onUnresolvedDoc: () => Replicate(),
     })
 
     const peerA = createExchange({
@@ -380,7 +380,7 @@ describe("Storage + replicated doc", () => {
         createBridgeTransport({ transportType: "relay-side", bridge: bridge2 }),
       ],
       stores: [createInMemoryStore({ sharedData })],
-      classify: () => Replicate(),
+      onUnresolvedDoc: () => Replicate(),
     })
 
     const peerB = createExchange({
@@ -391,7 +391,7 @@ describe("Storage + replicated doc", () => {
           bridge: bridge2,
         }),
       ],
-      classify: () => Interpret(SequentialDoc),
+      onUnresolvedDoc: () => Interpret(SequentialDoc),
     })
 
     await drain(300)
@@ -450,7 +450,7 @@ describe("No storage (baseline)", () => {
     const exchangeB = createExchange({
       identity: { peerId: "peer-b" },
       transports: [createBridgeTransport({ transportType: "side-b", bridge })],
-      classify: () => Interpret(SequentialDoc),
+      onUnresolvedDoc: () => Interpret(SequentialDoc),
     })
 
     const docA = exchangeA.get("doc-1", SequentialDoc)

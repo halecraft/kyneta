@@ -965,7 +965,7 @@ describe("hub-and-spoke relay", () => {
         createBridgeTransport({ transportType: "server-a", bridge: bridgeAS }),
         createBridgeTransport({ transportType: "server-b", bridge: bridgeSB }),
       ],
-      classify: () => Replicate(),
+      onUnresolvedDoc: () => Replicate(),
     })
 
     const exchangeB = createExchange({

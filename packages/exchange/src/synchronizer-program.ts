@@ -328,13 +328,11 @@ export type SynchronizerUpdate = (
 type CreateSynchronizerUpdateParams = {
   route: RoutePredicate
   authorize: AuthorizePredicate
-  supports: (replicaType: ReplicaType) => boolean
 }
 
 const defaultParams: CreateSynchronizerUpdateParams = {
   route: () => true,
   authorize: () => true,
-  supports: () => true,
 }
 
 /**
@@ -348,7 +346,7 @@ const defaultParams: CreateSynchronizerUpdateParams = {
 export function createSynchronizerUpdate(
   params: Partial<CreateSynchronizerUpdateParams> = {},
 ): SynchronizerUpdate {
-  const { route, authorize, supports } = { ...defaultParams, ...params }
+  const { route, authorize } = { ...defaultParams, ...params }
   return function update(
     msg: SynchronizerMessage,
     model: SynchronizerModel,
@@ -382,13 +380,7 @@ export function createSynchronizerUpdate(
         return handleDocImported(msg, model, route)
 
       case "synchronizer/channel-receive-message":
-        return handleChannelReceiveMessage(
-          msg,
-          model,
-          route,
-          authorize,
-          supports,
-        )
+        return handleChannelReceiveMessage(msg, model, route, authorize)
     }
   }
 }
@@ -740,7 +732,6 @@ function handleChannelReceiveMessage(
   model: SynchronizerModel,
   route: RoutePredicate,
   authorize: AuthorizePredicate,
-  supports: (replicaType: ReplicaType) => boolean,
 ): [SynchronizerModel, Command?, Notification?] {
   const { fromChannelId, message } = msg.envelope
 
@@ -752,7 +743,7 @@ function handleChannelReceiveMessage(
       return handleEstablishResponse(fromChannelId, message, model, route)
 
     case "present":
-      return handlePresent(fromChannelId, message, model, route, supports)
+      return handlePresent(fromChannelId, message, model, route)
 
     case "interest":
       return handleInterest(fromChannelId, message, model, route)
@@ -1004,7 +995,6 @@ function handlePresent(
   },
   model: SynchronizerModel,
   route: RoutePredicate,
-  supports: (replicaType: ReplicaType) => boolean,
 ): [SynchronizerModel, Command?, Notification?] {
   const channel = model.channels.get(fromChannelId)
   if (!channel || channel.type !== "established") return [model]
@@ -1070,17 +1060,6 @@ function handlePresent(
         },
       })
     } else if (peerState) {
-      // Capability check — must be before route
-      if (!supports(replicaType)) {
-        warnings.push({
-          type: "notify/warning",
-          message:
-            `[exchange] Peer "${peerState.identity.peerId}" announced doc "${docId}" ` +
-            `with unsupported replicaType [${replicaType}]. Add the appropriate ` +
-            `BoundReplica to ExchangeParams.replicas or a BoundSchema to ExchangeParams.schemas.`,
-        })
-        continue
-      }
       // Unknown doc — check route before requesting creation
       if (!route(docId, peerState.identity)) continue
       commands.push({

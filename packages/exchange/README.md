@@ -162,36 +162,38 @@ const exchange = new Exchange({
 
 Two predicates control information flow through the sync protocol:
 
-- **`route(docId, peer) → boolean`** — Outbound flow control. Determines which peers participate in the sync graph for each document. Checked at every outbound gate: initial `present`, doc-ensure broadcast, relay push, local change push. Also gates `onDocDiscovered` — if `route` returns `false` for the announcing peer, the callback never fires. Defaults to `() => true`.
+- **`route(docId, peer) → boolean`** — Outbound flow control. Determines which peers participate in the sync graph for each document. Checked at every outbound gate: initial `present`, doc-ensure broadcast, relay push, local change push. Also gates `onUnresolvedDoc` — if `route` returns `false` for the announcing peer, the callback never fires. Defaults to `() => true`.
 
 - **`authorize(docId, peer) → boolean`** — Inbound flow control. Determines whose mutations are accepted. Checked before importing offers from network peers. When rejected, the offer is silently dropped but peer sync state is still updated to prevent re-requesting. Defaults to `() => true`.
 
-### Interpret vs. Replicate
+### Interpret, Replicate, Defer, Reject
 
-Documents participate in the exchange at one of two tiers:
+Documents participate in the exchange at one of four dispositions:
 
 - **Interpret** — Full schema-driven interpretation with `Ref<S>`, changefeed, reads and writes. Created via `exchange.get(docId, bound)`. This is the default for client apps and application servers.
 
-- **Replicate** — Headless replication with a bare `Replica<V>`: version tracking, export/import, per-peer delta computation — but no schema, no ref, no changefeed. Created via `exchange.replicate(docId, replicaFactory, strategy, schemaHash)`. This is the correct tier for relay servers, routing servers, and storage services.
+- **Replicate** — Headless replication with a bare `Replica<V>`: version tracking, export/import, per-peer delta computation — but no schema, no ref, no changefeed. The Exchange resolves the concrete factory from its capabilities registry. This is the correct tier for relay servers, routing servers, and storage services.
+
+- **Defer** — Track the document for routing purposes but don't interpret or replicate it yet. The document can be promoted to a full disposition later via `exchange.get()` or `exchange.replicate()`.
+
+- **Reject** — Explicitly refuse to track the discovered document at all.
 
 ```ts
-import { Interpret, Replicate } from "@kyneta/schema"
-import { loroReplicaFactory } from "@kyneta/loro-schema"
+import { Interpret, Replicate, Defer, Reject } from "@kyneta/schema"
 
 // Client — full interpretation
 exchange.get("shared-doc", TodoDoc)
 
-// Relay server — headless replication (no schema knowledge needed)
-exchange.replicate("shared-doc", loroReplicaFactory, "causal", schemaHash)
+// Relay server — headless replication (factory resolved from capabilities registry)
+exchange.replicate("shared-doc")
 ```
 
-### Dynamic Document Creation (`onDocDiscovered`)
+### Dynamic Document Creation (`onUnresolvedDoc`)
 
-When a peer announces a document your exchange doesn't have, the `onDocDiscovered` callback lets you create it on demand. Return a disposition — `Interpret(bound)` for full interpretation, `Replicate(replicaFactory, strategy, schemaHash)` for headless replication, or `undefined` to ignore:
+When a peer announces a document your exchange doesn't have, the `onUnresolvedDoc` callback lets you decide how to handle it. Return a disposition — `Interpret(bound)` for full interpretation, `Replicate()` for headless replication, `Defer()` to track for routing without replicating yet, or `Reject()` to refuse:
 
 ```ts
-import { Interpret, Replicate } from "@kyneta/schema"
-import { loroReplicaFactory } from "@kyneta/loro-schema"
+import { Interpret, Replicate, Defer, Reject } from "@kyneta/schema"
 
 const PlayerInputDoc = bindEphemeral(Schema.doc({
   force: Schema.number(),
@@ -202,23 +204,21 @@ const PlayerInputDoc = bindEphemeral(Schema.doc({
 const gameExchange = new Exchange({
   identity: { peerId: "game-server", name: "server" },
   transports: [serverTransport],
-  onDocDiscovered: (docId, peer) => {
+  onUnresolvedDoc: (docId, peer) => {
     if (docId.startsWith("input:")) return Interpret(PlayerInputDoc)
-    return undefined
+    return Reject()
   },
 })
 
-// Relay server — replicate everything without schema knowledge
+// Relay server — replicate everything (factory resolved from capabilities registry)
 const relayExchange = new Exchange({
   identity: { peerId: "relay", name: "relay", type: "service" },
   transports: [upstreamTransport, downstreamTransport],
-  onDocDiscovered: (docId, peer, replicaType, mergeStrategy, schemaHash) => {
-    return Replicate(loroReplicaFactory, mergeStrategy, schemaHash)
-  },
+  onUnresolvedDoc: () => Replicate(),
 })
 ```
 
-The `onDocDiscovered` callback receives `(docId, peer, replicaType, mergeStrategy, schemaHash)` — the full metadata from the peer's `present` message — so the receiver can make an informed decision without compile-time schema knowledge.
+The `onUnresolvedDoc` callback receives `(docId, peer, replicaType, mergeStrategy, schemaHash)` — the full metadata from the peer's `present` message — so the receiver can make an informed decision without compile-time schema knowledge.
 
 ### Storage
 
@@ -260,7 +260,7 @@ await exchange1.shutdown()
 const exchange2 = new Exchange({
   identity: { peerId: "server", name: "server" },
   stores: [createInMemoryStore({ sharedData })],
-  onDocDiscovered: (docId) => Interpret(TodoDoc),
+  onUnresolvedDoc: (docId) => Interpret(TodoDoc),
 })
 // "my-doc" is restored from storage automatically
 ```
@@ -346,9 +346,11 @@ loroDoc.version()                // VersionVector
 
 | Method / Option | Description |
 |----------------|-------------|
-| `get(docId, boundSchema)` | Get or create a document in interpret mode. Returns `Ref<S>`. Requires explicit `peerId`. |
-| `replicate(docId, replicaFactory, strategy, schemaHash)` | Register a document for headless replication. No schema, no ref, no changefeed. |
+| `get(docId, boundSchema)` | Get or create a document in interpret mode. Returns `Ref<S>`. Requires explicit `peerId`. Auto-registers the schema in the capabilities registry. |
+| `replicate(docId)` | Promote a deferred document — factory resolved from the capabilities registry. |
+| `replicate(docId, replicaFactory, strategy, schemaHash)` | Register a document for headless replication with explicit arguments. No schema, no ref, no changefeed. |
 | `has(docId)` | Check if a document exists (interpret or replicate mode). |
+| `deferred` | `ReadonlySet<DocId>` — the set of deferred document IDs. Deferred docs participate in routing but have no local representation. |
 | `dismiss(docId)` | Leave the sync graph — removes locally, broadcasts `dismiss`, deletes from stores. |
 | `peers` | `CallableChangefeed<ReadonlyMap<PeerId, PeerIdentityDetails>, PeerChange>` — reactive peer presence feed. Callable as a function, subscribable for changes. |
 | `flush()` | Await all pending storage operations without disconnecting. |
@@ -361,9 +363,11 @@ loroDoc.version()                // VersionVector
 | `identity` | Constructor option. `{ peerId, name?, type? }` — peer identity. `peerId` required for `get()`. |
 | `transports` | Constructor option. `TransportFactory[]` — network connectivity. |
 | `stores` | Constructor option. `Store[]` — persistent storage backends. |
+| `schemas` | Constructor option. `BoundSchema[]` — upfront schema registration for remote discovery readiness. Optional: `exchange.get()` auto-registers the schema, so this is sugar for declaring schemas before any peer connects. |
+| `replicas` | Constructor option. `BoundReplica[]` — declares replication modes for headless participation (e.g. relay servers). |
 | `route` | Constructor option. `(docId, peer) → boolean` — outbound flow control. Default: `() => true`. |
 | `authorize` | Constructor option. `(docId, peer) → boolean` — inbound flow control. Default: `() => true`. |
-| `onDocDiscovered` | Constructor option. `(docId, peer, replicaType, mergeStrategy, schemaHash) → Interpret \| Replicate \| undefined`. |
+| `onUnresolvedDoc` | Constructor option. `(docId, peer, replicaType, mergeStrategy, schemaHash) → Interpret \| Replicate \| Defer \| Reject`. Policy gate for docs not auto-resolved by the registries. |
 | `onDocDismissed` | Constructor option. `(docId, peer) → void` — react to peer leaving a document. |
 
 ### sync()
@@ -390,8 +394,10 @@ loroDoc.version()                // VersionVector
 
 | Function | Package | Description |
 |----------|---------|-------------|
-| `Interpret(bound)` | `@kyneta/schema` | Full interpretation — schema, ref, changefeed. For `onDocDiscovered`. |
-| `Replicate(replicaFactory, strategy, schemaHash)` | `@kyneta/schema` | Headless replication — no schema, no ref. For `onDocDiscovered`. |
+| `Interpret(bound)` | `@kyneta/schema` | Full interpretation — schema, ref, changefeed. For `onUnresolvedDoc`. |
+| `Replicate()` | `@kyneta/schema` | Headless replication — factory resolved from the capabilities registry. For `onUnresolvedDoc`. |
+| `Defer()` | `@kyneta/schema` | Track for routing but don't replicate yet. Promotable via `exchange.get()` or `exchange.replicate()`. |
+| `Reject()` | `@kyneta/schema` | Explicitly refuse to track the document. |
 
 ### Escape Hatches
 
