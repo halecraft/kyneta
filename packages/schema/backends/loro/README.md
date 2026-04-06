@@ -5,14 +5,14 @@ Loro CRDT substrate for `@kyneta/schema`. Provides collaborative data types with
 ## Getting Started
 
 ```ts
-import { createLoroDoc, change, subscribe, LoroSchema, Schema } from "@kyneta/loro-schema"
+import { createLoroDoc, change, subscribe, LoroSchema } from "@kyneta/loro-schema"
 
-// Define a schema using Loro-aware annotations
+// Define a schema using LoroSchema exclusively
 const schema = LoroSchema.doc({
   title: LoroSchema.text(),
   count: LoroSchema.counter(),
-  items: Schema.list(
-    Schema.struct({ name: Schema.string(), done: Schema.boolean() }),
+  items: LoroSchema.list(
+    LoroSchema.plain.struct({ name: LoroSchema.plain.string(), done: LoroSchema.plain.boolean() }),
   ),
 })
 
@@ -115,8 +115,7 @@ const docB = createLoroDocFromSnapshot(mySchema, snapshot)
 | `change(doc, fn)` | Run mutations in a transaction. *(re-exported from `@kyneta/schema`)* |
 | `subscribe(doc, cb)` | Observe all mutations. *(re-exported from `@kyneta/schema`)* |
 | `applyChanges(doc, ops, opts?)` | Apply a list of ops declaratively. *(re-exported from `@kyneta/schema`)* |
-| `LoroSchema` | Schema constructors with Loro annotations. *(re-exported from `@kyneta/schema`)* |
-| `Schema` | Backend-agnostic schema constructors. *(re-exported from `@kyneta/schema`)* |
+| `LoroSchema` | Schema constructors with Loro annotations and composition constraints. Use `LoroSchema` exclusively when building Loro documents — it enforces Loro's container constraints at the type level. Plain values (scalars, plain structs) are available via `LoroSchema.plain.*`. |
 
 ### Low-Level Primitives (power users)
 

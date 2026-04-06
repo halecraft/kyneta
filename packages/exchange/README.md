@@ -6,15 +6,15 @@ Define your data's shape. Get sync, persistence, and presence — across any num
 import { Exchange, sync } from "@kyneta/exchange"
 import { createWebsocketClient } from "@kyneta/websocket-transport/client"
 import { bindLoro, LoroSchema } from "@kyneta/loro-schema"
-import { Schema, change } from "@kyneta/schema"
+import { change } from "@kyneta/schema"
 
 const TodoDoc = bindLoro(LoroSchema.doc({
   title: LoroSchema.text(),
-  items: Schema.list(
-    Schema.struct({
-      text: Schema.string(),
-      done: Schema.boolean()
-    })
+  items: LoroSchema.list(
+    LoroSchema.plain.struct({
+      text: LoroSchema.plain.string(),
+      done: LoroSchema.plain.boolean(),
+    }),
   ),
 }))
 
@@ -145,7 +145,7 @@ docB.theme()  // "dark"
 const ConfigDoc = bindPlain(Schema.doc({ theme: Schema.string() }))
 
 // After: Loro CRDT with causal merge — concurrent edits converge
-const ConfigDoc = bindLoro(LoroSchema.doc({ theme: Schema.string() }))
+const ConfigDoc = bindLoro(LoroSchema.doc({ theme: LoroSchema.plain.string() }))
 
 // Everything else is unchanged:
 const doc = exchange.get("config", ConfigDoc)
@@ -232,7 +232,7 @@ import { bindYjs } from "@kyneta/yjs-schema"
 // Collaborative document — Loro CRDT with causal merge
 const TodoDoc = bindLoro(LoroSchema.doc({
   title: LoroSchema.text(),
-  items: Schema.list(Schema.struct({ name: Schema.string() })),
+  items: LoroSchema.list(LoroSchema.plain.struct({ name: LoroSchema.plain.string() })),
 }))
 
 // Collaborative text — Yjs CRDT with causal merge
