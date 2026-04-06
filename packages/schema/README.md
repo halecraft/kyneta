@@ -1,8 +1,8 @@
 # @kyneta/schema
 
-Define a schema. Get a live, reactive, syncable document with full TypeScript types.
+Define a schema. Get a live, reactive, syncable document with full TypeScript type safety.
 
-`@kyneta/schema` is a mathematically rigorous but beautifully ergonomic building block for representing structured data as it changes over time. A passion project pursuing perfection. You can use plain JS, or bring your own CRDT library (e.g. Loro, Yjs).
+`@kyneta/schema` is a mathematically rigorous but beautiful and ergonomic building block for representing structured data as it changes over time. You can use plain JS, or bring your own CRDT library (e.g. Loro, Yjs).
 
 ```ts
 import { Schema, createDoc, change, subscribe } from "@kyneta/schema/basic"
@@ -27,6 +27,7 @@ change(doc, d => {
   d.games.push({ type: "catan", players: 3 })
 })
 
+doc()                    // { "title": "Ship it", "count": 0, ... }
 doc.title()              // "Ship it"
 doc.title.insert(7, "!") // surgical text edit
 doc.count.increment()    // counter delta
@@ -44,7 +45,16 @@ Zero runtime dependencies.
 
 ## What you get from one schema
 
-| Capability | How | |---|---| | **Typed reads** | `doc.title()` returns `string`, `doc()` returns the full plain snapshot | | **Typed writes** | `.set()`, `.insert()`, `.increment()`, `.push()`, `.delete()` — each ref knows its mutation surface | | **Transactions** | `change(doc, d => { ... })` → `Op[]` — atomic batching, returns captured ops | | **Sync** | `applyChanges(docB, ops)` — apply ops from another doc, network, or undo stack | | **Observation** | `subscribe(doc, cb)` for tree-level, `subscribeNode(ref, cb)` for leaf-level | | **Version tracking** | `version(doc)`, `delta(doc, fromVersion)`, `exportSnapshot(doc)` | | **Validation** | `validate(schema, data)` — same schema, no separate Zod/Yup definition | | **Template coercion** | `` `Count: ${doc.count}` `` works via `toPrimitive` — no `.()` needed |
+| Capability | How |
+|---|---|
+| **Typed reads** | `doc.title()` returns `string`, `doc()` returns the full plain snapshot |
+| **Typed writes** | `.set()`, `.insert()`, `.increment()`, `.push()`, `.delete()` — each ref knows its mutation surface |
+| **Transactions** | `change(doc, d => { ... })` → `Op[]` — atomic batching, returns captured ops |
+| **Sync** | `applyChanges(docB, ops)` — apply ops from another doc, network, or undo stack |
+| **Observation** | `subscribe(doc, cb)` for tree-level, `subscribeNode(ref, cb)` for leaf-level |
+| **Version tracking** | `version(doc)`, `delta(doc, fromVersion)`, `exportSnapshot(doc)` |
+| **Validation** | `validate(schema, data)` — same schema, no separate Zod/Yup definition |
+| **Template coercion** | `` `Count: ${doc.count}` `` works via `toPrimitive` — no `.()` needed |
 
 ## The sync story in 5 lines
 
@@ -164,7 +174,10 @@ if (!result.ok) {
 
 ## Two import paths
 
-| Path | Audience | What you get | |---|---|---| | `@kyneta/schema/basic` | App developers | `createDoc`, `change`, `subscribe`, `validate`, sync primitives — batteries included | | `@kyneta/schema` | Library authors | The full composable interpreter toolkit — build custom document systems |
+| Path | Audience | What you get |
+|---|---|---|
+| `@kyneta/schema/basic` | App developers | `createDoc`, `change`, `subscribe`, `validate`, sync primitives — batteries included |
+| `@kyneta/schema` | Library authors | The full composable interpreter toolkit — build custom document systems |
 
 Most projects only need `@kyneta/schema/basic`.
 
