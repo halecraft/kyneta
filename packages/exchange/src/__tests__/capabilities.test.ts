@@ -1,11 +1,9 @@
 // Capabilities — unit tests for the capabilities registry.
 
-import { bindLoro, LoroSchema } from "@kyneta/loro-schema"
+import { LoroSchema, loro } from "@kyneta/loro-schema"
 import {
-  BoundReplica,
-  bindPlain,
   type FactoryBuilder,
-  lwwReplicaFactory,
+  json,
   plainReplicaFactory,
   Schema,
   type SubstrateFactory,
@@ -55,7 +53,7 @@ describe("Capabilities", () => {
   it("supportsReplicaType tolerates minor version differences", () => {
     const caps = createCapabilities({
       schemas: [],
-      replicas: [BoundReplica(plainReplicaFactory, "sequential")],
+      replicas: [json.replica()],
       resolveFactory,
     })
 
@@ -66,7 +64,7 @@ describe("Capabilities", () => {
   it("supportsReplicaType rejects major version differences", () => {
     const caps = createCapabilities({
       schemas: [],
-      replicas: [BoundReplica(plainReplicaFactory, "sequential")],
+      replicas: [json.replica()],
       resolveFactory,
     })
 
@@ -94,8 +92,8 @@ describe("Capabilities", () => {
       resolveFactory,
     })
 
-    // ["plain", 1, 0] is registered with "sequential" and "lww", but not "causal"
-    const resolved = caps.resolveReplica(["plain", 1, 0], "causal")
+    // ["plain", 1, 0] is registered with "sequential" and "ephemeral", but not "concurrent"
+    const resolved = caps.resolveReplica(["plain", 1, 0], "concurrent")
     expect(resolved).toBeUndefined()
   })
 
@@ -106,7 +104,7 @@ describe("Capabilities", () => {
       resolveFactory,
     })
 
-    const resolved = caps.resolveReplica(["loro", 1, 0], "causal")
+    const resolved = caps.resolveReplica(["loro", 1, 0], "concurrent")
     expect(resolved).toBeUndefined()
   })
 
@@ -116,7 +114,7 @@ describe("Capabilities", () => {
 
   it("resolveSchema returns BoundSchema for matching triple", () => {
     const schema = Schema.doc({ title: Schema.string() })
-    const bound = bindPlain(schema)
+    const bound = json.bind(schema)
 
     const caps = createCapabilities({
       schemas: [bound],
@@ -134,7 +132,7 @@ describe("Capabilities", () => {
 
   it("resolveSchema returns undefined for wrong strategy", () => {
     const schema = Schema.doc({ title: Schema.string() })
-    const bound = bindPlain(schema)
+    const bound = json.bind(schema)
 
     const caps = createCapabilities({
       schemas: [bound],
@@ -145,14 +143,14 @@ describe("Capabilities", () => {
     const resolved = caps.resolveSchema(
       bound.schemaHash,
       ["plain", 1, 0],
-      "lww",
+      "ephemeral",
     )
     expect(resolved).toBeUndefined()
   })
 
   it("resolveSchema returns undefined for unknown hash", () => {
     const schema = Schema.doc({ title: Schema.string() })
-    const bound = bindPlain(schema)
+    const bound = json.bind(schema)
 
     const caps = createCapabilities({
       schemas: [bound],
@@ -174,7 +172,7 @@ describe("Capabilities", () => {
 
   it("schema registration auto-derives replica capability", () => {
     const loroSchema = LoroSchema.doc({ title: LoroSchema.text() })
-    const bound = bindLoro(loroSchema)
+    const bound = loro.bind(loroSchema)
 
     // No explicit Loro replicas — only DEFAULT_REPLICAS (plain-wire).
     // The Loro BoundReplica should be auto-derived from the schema.
@@ -186,10 +184,10 @@ describe("Capabilities", () => {
 
     expect(caps.supportsReplicaType(["loro", 1, 0])).toBe(true)
 
-    const resolved = caps.resolveReplica(["loro", 1, 0], "causal")
+    const resolved = caps.resolveReplica(["loro", 1, 0], "concurrent")
     expect(resolved).toBeDefined()
     expect(resolved?.factory.replicaType).toEqual(["loro", 1, 0])
-    expect(resolved?.strategy).toBe("causal")
+    expect(resolved?.strategy).toBe("concurrent")
   })
 
   // -------------------------------------------------------------------------
@@ -204,7 +202,7 @@ describe("Capabilities", () => {
     })
 
     const schema = Schema.doc({ count: Schema.number() })
-    const bound = bindPlain(schema)
+    const bound = json.bind(schema)
 
     // Before registration: nothing resolves
     expect(
@@ -234,14 +232,14 @@ describe("Capabilities", () => {
     })
 
     const sequential = caps.resolveReplica(["plain", 1, 0], "sequential")
-    const lww = caps.resolveReplica(["plain", 1, 0], "lww")
+    const ephemeral = caps.resolveReplica(["plain", 1, 0], "ephemeral")
 
     expect(sequential).toBeDefined()
-    expect(lww).toBeDefined()
+    expect(ephemeral).toBeDefined()
 
     // They should be different BoundReplica instances with different factories
     expect(sequential?.factory).toBe(plainReplicaFactory)
-    expect(lww?.factory).toBe(lwwReplicaFactory)
-    expect(sequential?.factory).not.toBe(lww?.factory)
+    expect(ephemeral?.factory).toBe(json.replica("ephemeral").factory)
+    expect(sequential?.factory).not.toBe(ephemeral?.factory)
   })
 })

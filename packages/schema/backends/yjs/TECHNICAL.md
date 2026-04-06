@@ -182,7 +182,7 @@ Container values in events (`instanceof Y.Map` / `Y.Array`) are converted to pla
 
 | Annotation | Reason | Error behavior |
 |---|---|---|
-| `counter` | No native Yjs counter type. LWW semantics would silently lose concurrent increments. | Throws at `populateRoot()` and `applyChangeToYjs()` |
+| `counter` | No native Yjs counter type. Ephemeral semantics would silently lose concurrent increments. | Throws at `populateRoot()` and `applyChangeToYjs()` |
 | `movable` | No `Y.MovableList` equivalent in Yjs | Throws at `populateRoot()` |
 | `tree` | No `Y.Tree` equivalent in Yjs | Throws at `populateRoot()` and `applyChangeToYjs()` |
 
@@ -206,13 +206,13 @@ packages/schema/yjs/
     ├── substrate.ts      # createYjsSubstrate + yjsSubstrateFactory
     ├── create.ts         # createYjsDoc + createYjsDocFromEntirety
     ├── sync.ts           # version, exportEntirety, exportSince, merge
-    ├── bind-yjs.ts       # bindYjs + hashPeerId (FNV-1a 32-bit)
-    ├── yjs-escape.ts     # yjs() escape hatch (WeakMap<Substrate, Y.Doc>)
+    ├── bind-yjs.ts       # yjs.bind + hashPeerId (FNV-1a 32-bit)
+    ├── yjs-escape.ts     # yjs.unwrap() escape hatch (WeakMap<Substrate, Y.Doc>)
     └── __tests__/
         ├── version.test.ts       # 15 tests
         ├── store-reader.test.ts  # 34 tests
         ├── substrate.test.ts     # 26 tests
-        ├── bind-yjs.test.ts      # 16 tests
+        ├── bind-yjs.test.ts      # yjs.bind tests (16 tests)
         └── create.test.ts        # 30 tests
 ```
 
@@ -231,6 +231,6 @@ All 121 tests pass, covering:
 9. **Nested structures**: push struct into list, read back via navigation
 10. **Unsupported annotations**: counter, movable, tree all throw clear errors
 11. **Deterministic clientID**: FNV-1a hash of peerId produces consistent uint32
-12. **Escape hatch**: `yjs(ref)` returns the underlying `Y.Doc`; throws for non-Yjs refs
+12. **Escape hatch**: `yjs.unwrap(ref)` returns the underlying `Y.Doc`; throws for non-Yjs refs
 13. **Bring your own doc**: `createYjsDoc(schema, existingYDoc)` wraps an existing doc
 14. **Full workflow**: create → mutate → sync → observe → bidirectional convergence

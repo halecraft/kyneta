@@ -13,7 +13,7 @@ The examples are NOT a configuration matrix or example builder. They are concret
 | 1 | **todo** | Minimal code, instant sync | Cast compiler, WebSocket, Loro, single merge strategy |
 | 2 | **todo-react** | Framework-agnostic sync layer | Same server as todo, React client, proves Exchange doesn't care about UI |
 | 3 | **chat** | Rich data types, different transport | Text CRDTs, presence, SSE transport, AI streaming |
-| 4 | **bumper-cars** | Heterogeneous documents, right tool for each job | Three merge strategies in one Exchange: causal (scoreboard counters), sequential (server-authoritative physics), LWW (player input). Demonstrates that ephemeral state is just another merge strategy, and that server-authoritative state doesn't need a CRDT. |
+| 4 | **bumper-cars** | Heterogeneous documents, right tool for each job | Three merge strategies in one Exchange: concurrent (scoreboard counters), sequential (server-authoritative physics), ephemeral (player input). Demonstrates that ephemeral state is just another merge strategy, and that server-authoritative state doesn't need a CRDT. |
 | 5 | **video-conference** | Serverless P2P sync | Stacked adapters (SSE + WebRTC). Server bootstraps discovery, WebRTC carries sync. Kill the server — peers keep syncing. |
 
 ## Stack Choices Per Example
@@ -34,7 +34,7 @@ The four axes of variation exist in the architecture. Each example exercises spe
 
 - **Framework** (Cast, React, Hono): Cast and React are demonstrated by examples. Hono is covered in a guide — the hono-counter vendor example provides reference.
 - **Transport** (WebSocket, SSE, HTTP-poll): WebSocket and SSE are demonstrated. HTTP-poll is documented as a guide once the adapter is ported.
-- **Backend** (Loro, Yjs, Plain): Loro and Plain are demonstrated. Yjs is a one-line swap documented in the todo README ("change `bindLoro` to `bindYjs`").
+- **Backend** (Loro, Yjs, Plain): Loro and Plain are demonstrated. Yjs is a one-line swap documented in the todo README ("change `loro.bind` to `yjs.bind`").
 - **Runtime** (Bun, Node): Both are demonstrated. Each example that uses Bun includes a `server-node.ts` variant.
 
 ## Prerequisites — What Must Be Built First
@@ -62,7 +62,7 @@ The existing `recipe-book` example hand-rolls WebSocket sync. It should either b
 
 ### Phase 1: Foundation (todo)
 
-Port the todo example using Cast + WebSocket + Loro + Bun. This validates the full vertical slice: `@kyneta/schema` → `bindLoro` from `@kyneta/loro-schema` → `@kyneta/exchange` → `@kyneta/websocket-network-adapter` → `@kyneta/cast` view → running app.
+Port the todo example using Cast + WebSocket + Loro + Bun. This validates the full vertical slice: `@kyneta/schema` → `loro.bind` from `@kyneta/loro-schema` → `@kyneta/exchange` → `@kyneta/websocket-network-adapter` → `@kyneta/cast` view → running app.
 
 - Domain: schema, mutations, types, seed data
 - Server: Bun entry point with `Bun.serve()`, `WebsocketServerAdapter`, `Exchange`
@@ -75,7 +75,7 @@ Port the todo example using Cast + WebSocket + Loro + Bun. This validates the fu
 Build `@kyneta/react` and the todo-react example. Proves the sync layer is framework-agnostic and the CRDT substrate is swappable.
 
 - `@kyneta/react` ✅ — `ExchangeProvider`, `useDocument`, `useValue`, `useSyncStatus`
-- Client: React view using hooks, WebSocket transport, Yjs substrate (`bindYjs`)
+- Client: React view using hooks, WebSocket transport, Yjs substrate (`yjs.bind`)
 - Server: single-process Vite middleware mode + `ws` WebSocketServer on Node (via `tsx`)
 - Demonstrates four axes of variation from the Cast todo: UI framework, CRDT substrate, build system, runtime
 
@@ -91,12 +91,12 @@ Port `@kyneta/sse-transport` and build the chat example. Introduces text CRDTs, 
 
 ### Phase 4: Bumper-cars ✅
 
-Build the bumper-cars example. Demonstrates heterogeneous merge strategies in one Exchange: sequential (`bindPlain` for server-authoritative game state including scoreboard) and LWW (`bindEphemeral` for ephemeral player input). Zero CRDT dependencies — plain substrate only, because the server is the single writer for game state and scores.
+Build the bumper-cars example. Demonstrates heterogeneous merge strategies in one Exchange: sequential (`json.bind` for server-authoritative game state including scoreboard) and ephemeral (`json.bind(schema, "ephemeral")` for ephemeral player input). Zero CRDT dependencies — plain substrate only, because the server is the single writer for game state and scores.
 
 - Domain: two schemas, two `BoundSchema` declarations, physics engine, pure `tick()` functional core
 - Server: Bun, `Bun.build()` for client, game loop at 60fps with Gather → Plan → Execute pattern, `route`/`authorize`/`onDocDiscovered`/`onDocDismissed`
 - Client: React (JSX via Bun, no Vite), joystick input writing to LWW doc via throttled `useInputSender`, rendering from sequential game-state doc (cars + scores + tick)
-- Key point: no special "presence" or "ephemeral" API — ephemeral state is `bindEphemeral()` + `exchange.get()`, same as everything else. No CRDT needed when the server is the single writer.
+- Key point: no special "presence" or "ephemeral" API — ephemeral state is `json.bind(schema, "ephemeral")` + `exchange.get()`, same as everything else. No CRDT needed when the server is the single writer.
 
 ### Phase 5: WebRTC transport + video-conference
 

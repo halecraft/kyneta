@@ -27,7 +27,7 @@ todo-react/
 ├── index.html         # 13  lines — HTML shell
 ├── vite.config.ts     #  6  lines — @vitejs/plugin-react, nothing else
 ├── src/
-│   ├── schema.ts      # 27  lines — @kyneta/schema + bindYjs
+│   ├── schema.ts      # 27  lines — @kyneta/schema + yjs.bind
 │   ├── app.tsx        # 122 lines — React component + @kyneta/react hooks
 │   ├── main.tsx       # 39  lines — Client (ExchangeProvider + mount)
 │   └── server.ts      # 102 lines — Server (Vite middleware + Exchange + ws)
@@ -51,7 +51,7 @@ todo-react/
 | Concern | Cast todo | React todo |
 |---------|-----------|------------|
 | **Schema** | `Schema.doc({ todos: ... })` | Identical |
-| **Binding** | `bindLoro(TodoSchema)` | `bindYjs(TodoSchema)` |
+| **Binding** | `loro.bind(TodoSchema)` | `yjs.bind(TodoSchema)` |
 | **Exchange** | `new Exchange({ transports: [...] })` | Identical |
 | **Transport** | WebSocket | Identical |
 | **Sync protocol** | discover → interest → offer | Identical |
@@ -63,15 +63,15 @@ The entire sync layer is unchanged. Only the UI framework, the CRDT substrate, a
 The Cast todo uses Loro:
 
 ```ts
-import { bindLoro } from "@kyneta/loro-schema"
-export const TodoDoc = bindLoro(TodoSchema)
+import { loro } from "@kyneta/loro-schema"
+export const TodoDoc = loro.bind(TodoSchema)
 ```
 
 This example uses Yjs:
 
 ```ts
-import { bindYjs } from "@kyneta/yjs-schema"
-export const TodoDoc = bindYjs(TodoSchema)
+import { yjs } from "@kyneta/yjs-schema"
+export const TodoDoc = yjs.bind(TodoSchema)
 ```
 
 Same schema. Same `exchange.get("todos", TodoDoc)`. Same three-message sync protocol. The Exchange doesn't know or care which CRDT engine is underneath.
@@ -82,7 +82,7 @@ Same schema. Same `exchange.get("todos", TodoDoc)`. Same three-message sync prot
 
 ```ts
 import { Schema } from "@kyneta/schema"
-import { bindYjs } from "@kyneta/yjs-schema"
+import { yjs } from "@kyneta/yjs-schema"
 
 export const TodoSchema = Schema.doc({
   todos: Schema.list(
@@ -93,7 +93,7 @@ export const TodoSchema = Schema.doc({
   ),
 })
 
-export const TodoDoc = bindYjs(TodoSchema)
+export const TodoDoc = yjs.bind(TodoSchema)
 ```
 
 ### 2. Provide an Exchange
@@ -193,4 +193,4 @@ This example focuses on the essentials. For more advanced patterns, see the othe
 - ❌ Authentication — no auth; all clients share one document
 - ❌ SSE transport — see the chat example
 - ❌ Cast — see the [todo](../todo/) example (shares this schema + server pattern)
-- ❌ Loro — see the [todo](../todo/) example (one-line swap: `bindLoro` ↔ `bindYjs`)
+- ❌ Loro — see the [todo](../todo/) example (one-line swap: `loro.bind` ↔ `yjs.bind`)

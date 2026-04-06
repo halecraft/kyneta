@@ -17,7 +17,7 @@
 //     stores: [createInMemoryStore()],
 //   })
 //
-//   const TodoDoc = bindLoro(LoroSchema.doc({ title: LoroSchema.text() }))  // LoroSchema from @kyneta/loro-schema
+//   const TodoDoc = loro.bind(LoroSchema.doc({ title: LoroSchema.text() }))  // loro from @kyneta/loro-schema
 //   const doc = exchange.get("my-doc", TodoDoc)
 //   sync(doc).waitForSync()
 
@@ -331,9 +331,8 @@ type DocCacheEntry =
  *
  * @example
  * ```typescript
- * import { Exchange, sync } from "@kyneta/exchange"
- * import { bindPlain } from "@kyneta/schema"
- * import { bindLoro, LoroSchema } from "@kyneta/loro-schema"
+ * import { Exchange, sync, json } from "@kyneta/exchange"
+ * import { loro, LoroSchema } from "@kyneta/loro-schema"
  *
  * const exchange = new Exchange({
  *   identity: { name: "alice" },
@@ -341,8 +340,8 @@ type DocCacheEntry =
  *   stores: [createInMemoryStore()],
  * })
  *
- * const TodoDoc = bindLoro(LoroSchema.doc({ title: LoroSchema.text() }))
- * const ConfigDoc = bindPlain(Schema.doc({ theme: Schema.string() }))
+ * const TodoDoc = loro.bind(LoroSchema.doc({ title: LoroSchema.text() }))
+ * const ConfigDoc = json.bind(Schema.doc({ theme: Schema.string() }))
  *
  * const doc = exchange.get("my-doc", TodoDoc)
  * const config = exchange.get("config", ConfigDoc)
@@ -928,15 +927,15 @@ export class Exchange {
    * messages carry the hydrated version.
    *
    * @param docId - The document ID
-   * @param bound - A BoundSchema created by `bind()`, `bindPlain()`, `bindEphemeral()`, or `bindLoro()`
+   * @param bound - A BoundSchema created by `bind()`, `json.bind()`, or `loro.bind()`
    * @returns A full-stack Ref<S> with sync capabilities via `sync()`
    *
    * @example
    * ```typescript
-   * import { bindPlain } from "@kyneta/schema"
-   * import { bindLoro, LoroSchema } from "@kyneta/loro-schema"
+   * import { json } from "@kyneta/schema"
+   * import { loro, LoroSchema } from "@kyneta/loro-schema"
    *
-   * const TodoDoc = bindLoro(LoroSchema.doc({ title: LoroSchema.text() }))
+   * const TodoDoc = loro.bind(LoroSchema.doc({ title: LoroSchema.text() }))
    * const doc = exchange.get("my-doc", TodoDoc)
    *
    * // Initial content via change() after construction:
@@ -1031,10 +1030,10 @@ export class Exchange {
    *
    * @example
    * ```typescript
-   * import { loroReplicaFactory } from "@kyneta/loro-schema"
+   * import { loro } from "@kyneta/loro-schema"
    *
    * // Schema-free relay — replicate all docs without compile-time schema knowledge
-   * exchange.replicate("shared-doc", loroReplicaFactory, "causal", "v1:abc123")
+   * exchange.replicate("shared-doc", loro.replica().factory, "causal", "v1:abc123")
    *
    * // Promote a deferred doc — factory resolved from capabilities registry
    * exchange.replicate("deferred-doc")

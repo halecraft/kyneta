@@ -2,19 +2,17 @@
 //
 // These tests prove documents converge across two Exchange instances
 // connected via BridgeTransport, for each merge strategy:
-// - Sequential (PlainSubstrate via bindPlain)
-// - Causal (LoroSubstrate via bindLoro)
-// - LWW (TimestampVersion via bindEphemeral)
+// - Sequential (PlainSubstrate via json.bind)
+// - Concurrent (LoroSubstrate via loro.bind)
+// - Ephemeral (TimestampVersion via json.bind ephemeral)
 // - Heterogeneous (mixed substrates in one exchange)
 
-import { bindLoro, LoroSchema, loroReplicaFactory } from "@kyneta/loro-schema"
+import { LoroSchema, loro, loroReplicaFactory } from "@kyneta/loro-schema"
 import {
-  BoundReplica,
-  bindEphemeral,
-  bindPlain,
   change,
   Defer,
   Interpret,
+  json,
   Reject,
   Replicate,
   Schema,
@@ -76,7 +74,7 @@ const sequentialSchema = Schema.doc({
   title: Schema.string(),
   count: Schema.number(),
 })
-const SequentialDoc = bindPlain(sequentialSchema)
+const SequentialDoc = json.bind(sequentialSchema)
 
 const loroSchema = LoroSchema.doc({
   title: LoroSchema.text(),
@@ -84,7 +82,7 @@ const loroSchema = LoroSchema.doc({
     LoroSchema.plain.struct({ name: LoroSchema.plain.string() }),
   ),
 })
-const LoroDoc = bindLoro(loroSchema)
+const LoroDoc = loro.bind(loroSchema)
 
 const presenceSchema = Schema.doc({
   cursor: Schema.struct({
@@ -93,7 +91,7 @@ const presenceSchema = Schema.doc({
   }),
   name: Schema.string(),
 })
-const PresenceDoc = bindEphemeral(presenceSchema)
+const PresenceDoc = json.bind(presenceSchema, "ephemeral")
 
 // ---------------------------------------------------------------------------
 // Sequential (PlainSubstrate) — two-peer sync
@@ -173,10 +171,10 @@ describe("Sequential sync (PlainSubstrate)", () => {
 })
 
 // ---------------------------------------------------------------------------
-// Causal (LoroSubstrate) — two-peer CRDT sync
+// Concurrent (LoroSubstrate) — two-peer CRDT sync
 // ---------------------------------------------------------------------------
 
-describe("Causal sync (LoroSubstrate)", () => {
+describe("Concurrent sync (LoroSubstrate)", () => {
   it("peer A creates doc with text, peer B syncs and gets the same state", async () => {
     const bridge = new Bridge()
 
@@ -254,10 +252,10 @@ describe("Causal sync (LoroSubstrate)", () => {
 })
 
 // ---------------------------------------------------------------------------
-// LWW (Ephemeral/Presence) — broadcast sync
+// Ephemeral (Ephemeral/Presence) — broadcast sync
 // ---------------------------------------------------------------------------
 
-describe("LWW sync (Ephemeral/Presence)", () => {
+describe("Ephemeral sync (Ephemeral/Presence)", () => {
   it("peer A sets presence, peer B receives via broadcast", async () => {
     const bridge = new Bridge()
 
@@ -291,7 +289,7 @@ describe("LWW sync (Ephemeral/Presence)", () => {
     expect(presB.cursor.y()).toBe(200)
   })
 
-  it("updates propagate via LWW broadcast", async () => {
+  it("updates propagate via ephemeral broadcast", async () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
@@ -336,18 +334,18 @@ describe("LWW sync (Ephemeral/Presence)", () => {
 // ---------------------------------------------------------------------------
 
 describe("Heterogeneous documents", () => {
-  it("one exchange hosts both sequential and causal docs, both sync", async () => {
+  it("one exchange hosts both sequential and concurrent docs, both sync", async () => {
     const bridge = new Bridge()
 
     const plainSchema = Schema.doc({
       config: Schema.string(),
     })
-    const ConfigDoc = bindPlain(plainSchema)
+    const ConfigDoc = json.bind(plainSchema)
 
     const collabSchema = LoroSchema.doc({
       text: LoroSchema.text(),
     })
-    const CollabDoc = bindLoro(collabSchema)
+    const CollabDoc = loro.bind(collabSchema)
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
@@ -389,7 +387,7 @@ describe("Heterogeneous documents", () => {
 // ---------------------------------------------------------------------------
 
 describe("Multi-hop relay (three-peer topology)", () => {
-  it("causal: mutation on A propagates through Hub to B", async () => {
+  it("concurrent: mutation on A propagates through Hub to B", async () => {
     // Two separate bridges: Alice↔Hub and Hub↔Bob
     const bridgeAH = new Bridge()
     const bridgeHB = new Bridge()
@@ -561,7 +559,7 @@ describe("onUnresolvedDoc (dynamic document creation)", () => {
     expect(exchangeB.has("ignored-doc")).toBe(false)
   })
 
-  it("LWW dynamic doc syncs correctly", async () => {
+  it("ephemeral dynamic doc syncs correctly", async () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
@@ -578,7 +576,7 @@ describe("onUnresolvedDoc (dynamic document creation)", () => {
       },
     })
 
-    // Alice creates an LWW doc
+    // Alice creates an ephemeral doc
     const presA = exchangeA.get("presence", PresenceDoc)
     change(presA, (d: any) => {
       d.cursor.x.set(100)
@@ -595,7 +593,7 @@ describe("onUnresolvedDoc (dynamic document creation)", () => {
     expect(presB.cursor.x()).toBe(100)
     expect(presB.cursor.y()).toBe(200)
 
-    // Alice updates — LWW broadcasts snapshot
+    // Alice updates — ephemeral broadcasts snapshot
     change(presA, (d: any) => {
       d.cursor.x.set(500)
       d.cursor.y.set(600)
@@ -838,7 +836,7 @@ describe("route + onUnresolvedDoc interaction", () => {
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
 describe("relay via exchange.replicate()", () => {
-  it("causal doc syncs through a schema-free relay: peer A → relay → peer B", async () => {
+  it("concurrent doc syncs through a schema-free relay: peer A → relay → peer B", async () => {
     const bridgeAR = new Bridge()
     const bridgeRB = new Bridge()
 
@@ -858,7 +856,7 @@ describe("relay via exchange.replicate()", () => {
         createBridgeTransport({ transportType: "relay-a", bridge: bridgeAR }),
         createBridgeTransport({ transportType: "relay-b", bridge: bridgeRB }),
       ],
-      replicas: [BoundReplica(loroReplicaFactory, "causal")],
+      replicas: [loro.replica()],
       onUnresolvedDoc: () => Replicate(),
     })
 
@@ -938,7 +936,7 @@ describe("relay via exchange.replicate()", () => {
     expect(docB.count()).toBe(42)
   })
 
-  it("LWW doc syncs through a schema-free relay", async () => {
+  it("ephemeral doc syncs through a schema-free relay", async () => {
     const bridgeAR = new Bridge()
     const bridgeRB = new Bridge()
 
@@ -999,7 +997,7 @@ describe("relay via exchange.replicate()", () => {
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
-      replicas: [BoundReplica(loroReplicaFactory, "causal")],
+      replicas: [loro.replica()],
       onUnresolvedDoc: docId => {
         discoveredDocId = docId
         return Replicate()
@@ -1033,7 +1031,7 @@ describe("relay via exchange.replicate()", () => {
       transports: [
         createBridgeTransport({ transportType: "relay-a", bridge: bridgeAR }),
       ],
-      replicas: [BoundReplica(loroReplicaFactory, "causal")],
+      replicas: [loro.replica()],
       onUnresolvedDoc: () => Replicate(),
     })
 
@@ -1086,7 +1084,7 @@ describe("relay via exchange.replicate()", () => {
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
       schemas: [SequentialDoc],
-      replicas: [BoundReplica(loroReplicaFactory, "causal")],
+      replicas: [loro.replica()],
       onUnresolvedDoc: docId => {
         // Interpret some docs, replicate others
         if (docId === "app-doc") return Interpret(SequentialDoc)
@@ -1713,7 +1711,7 @@ describe("onDocCreated", () => {
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
-      replicas: [BoundReplica(loroReplicaFactory, "causal")],
+      replicas: [loro.replica()],
       // No schemas — rely on onUnresolvedDoc for Loro docs
       onUnresolvedDoc: () => {
         unresolvedCount++
@@ -1739,13 +1737,13 @@ describe("onDocCreated", () => {
     const calls: Array<{ docId: string; mode: string; origin: string }> = []
     const exchange = createExchange({
       identity: { peerId: "alice" },
-      replicas: [BoundReplica(loroReplicaFactory, "causal")],
+      replicas: [loro.replica()],
       onDocCreated: (docId, _peer, mode, origin) => {
         calls.push({ docId, mode, origin })
       },
     })
 
-    exchange.replicate("doc-1", loroReplicaFactory, "causal", "hash-1")
+    exchange.replicate("doc-1", loroReplicaFactory, "concurrent", "hash-1")
 
     expect(calls).toHaveLength(1)
     expect(calls[0]).toMatchObject({
@@ -1775,7 +1773,7 @@ describe("onDocCreated", () => {
     const relay = createExchange({
       identity: { peerId: "relay" },
       transports: [createBridgeTransport({ transportType: "relay", bridge })],
-      replicas: [BoundReplica(loroReplicaFactory, "causal")],
+      replicas: [loro.replica()],
       onUnresolvedDoc: () => Replicate(),
       onDocCreated: (docId, peer, mode, origin) => {
         calls.push({ docId, peerId: peer.peerId, mode, origin })
@@ -1809,16 +1807,12 @@ describe("waitForSync semantics", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      transports: [
-        createBridgeTransport({ transportType: "alice", bridge }),
-      ],
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      transports: [
-        createBridgeTransport({ transportType: "bob", bridge }),
-      ],
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
     const docA = exchangeA.get("config", SequentialDoc)
@@ -1843,16 +1837,12 @@ describe("waitForSync semantics", () => {
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
-      transports: [
-        createBridgeTransport({ transportType: "alice", bridge }),
-      ],
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
-      transports: [
-        createBridgeTransport({ transportType: "bob", bridge }),
-      ],
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
     const docA = exchangeA.get("config", SequentialDoc)

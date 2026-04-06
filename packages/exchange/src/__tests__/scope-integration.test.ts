@@ -9,7 +9,7 @@
 // covered by the 204 pre-existing integration tests — no need to
 // duplicate that coverage here.
 
-import { bindPlain, change, Interpret, Reject, Schema } from "@kyneta/schema"
+import { change, Interpret, json, Reject, Schema } from "@kyneta/schema"
 import { Bridge, createBridgeTransport } from "@kyneta/transport"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { Exchange } from "../exchange.js"
@@ -58,7 +58,7 @@ afterEach(async () => {
 // Bound schemas
 // ---------------------------------------------------------------------------
 
-const SequentialDoc = bindPlain(
+const SequentialDoc = json.bind(
   Schema.doc({
     title: Schema.string(),
     count: Schema.number(),

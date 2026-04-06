@@ -1,6 +1,6 @@
 // line — reliable bidirectional message stream between two Exchange peers.
 //
-// A Line composes two `bindPlain` sequential documents — one per direction —
+// A Line composes two `json.bind()` sequential documents — one per direction —
 // with automatic sequence numbering, acknowledgement-based pruning, and
 // scope-based routing/authorization. The Line class is standalone: it
 // composes with the Exchange entirely through public API (register(),
@@ -15,9 +15,9 @@
 
 import type { CallableChangefeed } from "@kyneta/changefeed"
 import {
-  bindPlain,
   change,
   Defer,
+  json,
   type Plain,
   Schema,
   type Schema as SchemaNode,
@@ -469,8 +469,8 @@ export class Line<SendMsg, RecvMsg> {
     const recvSchema =
       "recv" in opts ? opts.recv : (opts as SymmetricLineOptions<any>).schema
 
-    const outboxBound = bindPlain(createLineDocSchema(sendSchema))
-    const inboxBound = bindPlain(createLineDocSchema(recvSchema))
+    const outboxBound = json.bind(createLineDocSchema(sendSchema))
+    const inboxBound = json.bind(createLineDocSchema(recvSchema))
 
     // 5-6. Create docs via exchange.get()
     // Registration happens inside get() — no separate registerSchema() needed.

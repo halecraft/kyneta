@@ -1,9 +1,8 @@
 import { change, RawPath, Schema } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
-import { bindYjs } from "../bind-yjs.js"
+import { yjs } from "../bind-yjs.js"
 import { createYjsDoc } from "../create.js"
-import { yjs } from "../yjs-escape.js"
 
 // ===========================================================================
 // Schemas used across tests
@@ -28,26 +27,26 @@ const SimpleSchema = Schema.doc({
 // Tests
 // ===========================================================================
 
-describe("bindYjs", () => {
+describe("yjs.bind", () => {
   // -------------------------------------------------------------------------
   // BoundSchema shape
   // -------------------------------------------------------------------------
 
   describe("BoundSchema", () => {
-    it("creates BoundSchema with causal strategy", () => {
-      const bound = bindYjs(TodoSchema)
+    it("creates BoundSchema with concurrent strategy", () => {
+      const bound = yjs.bind(TodoSchema)
       expect(bound._brand).toBe("BoundSchema")
       expect(bound.schema).toBe(TodoSchema)
-      expect(bound.strategy).toBe("causal")
+      expect(bound.strategy).toBe("concurrent")
     })
 
     it("has a factory builder function", () => {
-      const bound = bindYjs(TodoSchema)
+      const bound = yjs.bind(TodoSchema)
       expect(typeof bound.factory).toBe("function")
     })
 
     it("preserves the schema reference", () => {
-      const bound = bindYjs(SimpleSchema)
+      const bound = yjs.bind(SimpleSchema)
       expect(bound.schema).toBe(SimpleSchema)
     })
   })
@@ -58,7 +57,7 @@ describe("bindYjs", () => {
 
   describe("factory builder", () => {
     it("produces a working SubstrateFactory", () => {
-      const bound = bindYjs(SimpleSchema)
+      const bound = yjs.bind(SimpleSchema)
       const factory = bound.factory({ peerId: "peer-1" })
 
       const _substrate = factory.create(SimpleSchema)
@@ -75,7 +74,7 @@ describe("bindYjs", () => {
     })
 
     it("factory supports fromEntirety", () => {
-      const bound = bindYjs(SimpleSchema)
+      const bound = yjs.bind(SimpleSchema)
       const factory = bound.factory({ peerId: "peer-1" })
 
       // Create and populate
@@ -94,7 +93,7 @@ describe("bindYjs", () => {
     })
 
     it("factory supports parseVersion", () => {
-      const bound = bindYjs(SimpleSchema)
+      const bound = yjs.bind(SimpleSchema)
       const factory = bound.factory({ peerId: "peer-1" })
 
       const substrate = factory.create(SimpleSchema)
@@ -111,34 +110,34 @@ describe("bindYjs", () => {
 
   describe("deterministic clientID", () => {
     it("same peerId produces same clientID across multiple factory calls", () => {
-      const bound = bindYjs(SimpleSchema)
+      const bound = yjs.bind(SimpleSchema)
       const factory = bound.factory({ peerId: "stable-peer-id" })
 
       const _s1 = factory.create(SimpleSchema)
       const _s2 = factory.create(SimpleSchema)
 
       // Both docs should have the same clientID
-      const doc1 = yjs(createYjsDocFromFactory(factory, SimpleSchema))
-      const doc2 = yjs(createYjsDocFromFactory(factory, SimpleSchema))
+      const doc1 = yjs.unwrap(createYjsDocFromFactory(factory, SimpleSchema))
+      const doc2 = yjs.unwrap(createYjsDocFromFactory(factory, SimpleSchema))
 
       expect(doc1.clientID).toBe(doc2.clientID)
     })
 
     it("different peerIds produce different clientIDs", () => {
-      const bound = bindYjs(SimpleSchema)
+      const bound = yjs.bind(SimpleSchema)
       const factory1 = bound.factory({ peerId: "peer-alpha" })
       const factory2 = bound.factory({ peerId: "peer-beta" })
 
-      const doc1 = yjs(createYjsDocFromFactory(factory1, SimpleSchema))
-      const doc2 = yjs(createYjsDocFromFactory(factory2, SimpleSchema))
+      const doc1 = yjs.unwrap(createYjsDocFromFactory(factory1, SimpleSchema))
+      const doc2 = yjs.unwrap(createYjsDocFromFactory(factory2, SimpleSchema))
 
       expect(doc1.clientID).not.toBe(doc2.clientID)
     })
 
     it("clientID is a valid uint32", () => {
-      const bound = bindYjs(SimpleSchema)
+      const bound = yjs.bind(SimpleSchema)
       const factory = bound.factory({ peerId: "test-peer-id-12345" })
-      const doc = yjs(createYjsDocFromFactory(factory, SimpleSchema))
+      const doc = yjs.unwrap(createYjsDocFromFactory(factory, SimpleSchema))
 
       expect(typeof doc.clientID).toBe("number")
       expect(doc.clientID).toBeGreaterThanOrEqual(0)
@@ -150,13 +149,13 @@ describe("bindYjs", () => {
       const peerId = "deterministic-check-peer"
 
       // Simulate two separate "sessions" — both should hash to the same value
-      const bound1 = bindYjs(SimpleSchema)
+      const bound1 = yjs.bind(SimpleSchema)
       const factory1 = bound1.factory({ peerId })
-      const doc1 = yjs(createYjsDocFromFactory(factory1, SimpleSchema))
+      const doc1 = yjs.unwrap(createYjsDocFromFactory(factory1, SimpleSchema))
 
-      const bound2 = bindYjs(SimpleSchema)
+      const bound2 = yjs.bind(SimpleSchema)
       const factory2 = bound2.factory({ peerId })
-      const doc2 = yjs(createYjsDocFromFactory(factory2, SimpleSchema))
+      const doc2 = yjs.unwrap(createYjsDocFromFactory(factory2, SimpleSchema))
 
       expect(doc1.clientID).toBe(doc2.clientID)
     })
@@ -166,14 +165,14 @@ describe("bindYjs", () => {
   // yjs() escape hatch
   // -------------------------------------------------------------------------
 
-  describe("yjs() escape hatch", () => {
+  describe("yjs.unwrap() escape hatch", () => {
     it("returns the underlying Y.Doc from a createYjsDoc ref", () => {
       const doc = createYjsDoc(SimpleSchema)
       change(doc, (d: any) => {
         d.title.insert(0, "Escape")
         d.count.set(0)
       })
-      const yjsDoc = yjs(doc)
+      const yjsDoc = yjs.unwrap(doc)
 
       expect(yjsDoc).toBeInstanceOf(Y.Doc)
       expect(yjsDoc.getMap("root").get("count")).toBe(0)
@@ -185,7 +184,7 @@ describe("bindYjs", () => {
         d.title.insert(0, "Hello")
         d.count.set(42)
       })
-      const yjsDoc = yjs(doc)
+      const yjsDoc = yjs.unwrap(doc)
       const rootMap = yjsDoc.getMap("root")
 
       expect((rootMap.get("title") as Y.Text).toJSON()).toBe("Hello")
@@ -193,7 +192,7 @@ describe("bindYjs", () => {
     })
 
     it("throws for non-Yjs refs (plain object)", () => {
-      expect(() => yjs({})).toThrow("yjs() requires a ref")
+      expect(() => yjs.unwrap({})).toThrow("yjs.unwrap() requires a ref")
     })
 
     it("throws for non-Yjs refs (random object with properties)", () => {
@@ -201,12 +200,12 @@ describe("bindYjs", () => {
         title: () => "fake",
         count: () => 0,
       }
-      expect(() => yjs(fake)).toThrow("yjs() requires a ref")
+      expect(() => yjs.unwrap(fake)).toThrow("yjs.unwrap() requires a ref")
     })
 
     it("mutations through escape hatch are visible via kyneta ref", () => {
       const doc = createYjsDoc(SimpleSchema)
-      const yjsDoc = yjs(doc)
+      const yjsDoc = yjs.unwrap(doc)
 
       // Mutate via raw Yjs
       yjsDoc.getMap("root").set("count", 99)
@@ -218,7 +217,7 @@ describe("bindYjs", () => {
       change(doc, (d: any) => {
         d.title.insert(0, "Hello")
       })
-      const yjsDoc = yjs(doc)
+      const yjsDoc = yjs.unwrap(doc)
 
       const text = yjsDoc.getMap("root").get("title") as Y.Text
       text.insert(5, " World")

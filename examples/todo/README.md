@@ -24,7 +24,7 @@ todo/
 ├── public/
 │   └── index.html       # 13 lines — HTML shell
 ├── src/
-│   ├── schema.ts        # 32  lines — @kyneta/schema + bindLoro
+│   ├── schema.ts        # 32  lines — @kyneta/schema + loro.bind
 │   ├── app.ts           # 123 lines — @kyneta/cast view (compiled by unplugin)
 │   ├── main.ts          # 43  lines — Client (@kyneta/exchange + mount)
 │   ├── server.ts        # 87  lines — Server (@kyneta/exchange + Bun.serve)
@@ -41,7 +41,7 @@ todo/
 
 ```ts
 import { Schema } from "@kyneta/schema"
-import { bindLoro } from "@kyneta/loro-schema"
+import { loro } from "@kyneta/loro-schema"
 
 export const TodoSchema = Schema.doc({
   todos: Schema.list(
@@ -52,7 +52,7 @@ export const TodoSchema = Schema.doc({
   ),
 })
 
-export const TodoDoc = bindLoro(TodoSchema)
+export const TodoDoc = loro.bind(TodoSchema)
 ```
 
 ### 2. Create an Exchange
@@ -98,14 +98,14 @@ The Kyneta compiler transforms builder calls (`div`, `h1`, `ul`, etc.) into very
 
 ## Swap Yjs
 
-The todo uses Loro CRDTs via `bindLoro`. To use Yjs instead, change one import and one call:
+The todo uses Loro CRDTs via `loro.bind`. To use Yjs instead, change one import and one call:
 
 ```diff
-- import { bindLoro } from "@kyneta/loro-schema"
-+ import { bindYjs } from "@kyneta/yjs-schema"
+- import { loro } from "@kyneta/loro-schema"
++ import { yjs } from "@kyneta/yjs-schema"
 
-- export const TodoDoc = bindLoro(TodoSchema)
-+ export const TodoDoc = bindYjs(TodoSchema)
+- export const TodoDoc = loro.bind(TodoSchema)
++ export const TodoDoc = yjs.bind(TodoSchema)
 ```
 
 Everything else — schema, Exchange, transport, @kyneta/cast view — stays the same.
@@ -181,11 +181,11 @@ No separate read model and write model. No action creators and reducers. No manu
 
 ### The CRDT engine is a one-line swap
 
-The todo currently runs on **Loro**. To switch to **Yjs**, change one import and swap "bindLoro" for "bindYjs":
+The todo currently runs on **Loro**. To switch to **Yjs**, change one import and swap `loro.bind` for `yjs.bind`:
 
 ```diff
-- import { bindYjs } from "@kyneta/yjs-schema"
-+ import { bindLoro } from "@kyneta/loro-schema"
+- import { loro } from "@kyneta/loro-schema"
++ import { yjs } from "@kyneta/yjs-schema"
 ```
 
 The @kyneta/exchange, the @kyneta/wire protocol, the @kyneta/cast view, the server — none of them know or care. The `Substrate` interface abstracts the CRDT behind `exportSnapshot()`, `importDelta()`, and `version()`. Two completely different CRDT engines, same sync protocol, same compiled UI.

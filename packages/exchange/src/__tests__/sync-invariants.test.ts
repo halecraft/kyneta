@@ -3,18 +3,16 @@
 // These tests protect against bugs discovered during development:
 // 1. Initial content via change() syncs to peers (post-seed-removal)
 // 2. Snapshot import preserves ref object identity
-// 3. LWW stale rejection discards out-of-order arrivals
-// 4. Causal sync uses deltas after initial sync
+// 3. Ephemeral stale rejection discards out-of-order arrivals
+// 4. Concurrent sync uses deltas after initial sync
 // 5. Universal version comparison — all strategies reject stale offers
 // 6. Plain replica snapshot import falls back to replicaFactory.fromSnapshot()
 
-import { bindLoro, LoroSchema, loroReplicaFactory } from "@kyneta/loro-schema"
+import { LoroSchema, loro } from "@kyneta/loro-schema"
 import {
-  BoundReplica,
-  bindEphemeral,
-  bindPlain,
   change,
   Interpret,
+  json,
   PlainVersion,
   Reject,
   Replicate,
@@ -70,29 +68,29 @@ const seededSchema = Schema.doc({
   title: Schema.string(),
   count: Schema.number(),
 })
-const SeededDoc = bindPlain(seededSchema)
+const SeededDoc = json.bind(seededSchema)
 
 const simpleSchema = Schema.doc({
   title: Schema.string(),
 })
-const SimpleDoc = bindPlain(simpleSchema)
+const SimpleDoc = json.bind(simpleSchema)
 
 const presenceSchema = Schema.doc({
   name: Schema.string(),
   x: Schema.number(),
 })
-const PresenceDoc = bindEphemeral(presenceSchema)
+const PresenceDoc = json.bind(presenceSchema, "ephemeral")
 
 const sequentialSchema = Schema.doc({
   title: Schema.string(),
   count: Schema.number(),
 })
-const SequentialDoc = bindPlain(sequentialSchema)
+const SequentialDoc = json.bind(sequentialSchema)
 
 const loroSchema = LoroSchema.doc({
   title: LoroSchema.text(),
 })
-const LoroDoc = bindLoro(loroSchema)
+const LoroDoc = loro.bind(loroSchema)
 
 // ---------------------------------------------------------------------------
 // 1. Initial content via change() syncs to peers
@@ -198,14 +196,14 @@ describe("snapshot import preserves ref identity", () => {
 })
 
 // ---------------------------------------------------------------------------
-// 3. LWW stale rejection
+// 3. Ephemeral stale rejection
 //
-// When a peer receives an LWW offer with a timestamp older than or
+// When a peer receives an ephemeral offer with a timestamp older than or
 // equal to its current state, it must discard the offer. This prevents
 // out-of-order network delivery from overwriting newer state.
 // ---------------------------------------------------------------------------
 
-describe("LWW stale rejection", () => {
+describe("ephemeral stale rejection", () => {
   it("out-of-order arrival: newer local state is not overwritten by stale offer", async () => {
     const bridge = new Bridge()
 
@@ -244,7 +242,7 @@ describe("LWW stale rejection", () => {
     await drain()
 
     // The key invariant: after all messages settle, both sides should
-    // have consistent state. The LWW comparison runs, and state
+    // have consistent state. The ephemeral comparison runs, and state
     // converges to something consistent.
     const bobName = presB.name()
     const bobX = presB.x()
@@ -271,14 +269,14 @@ describe("LWW stale rejection", () => {
 })
 
 // ---------------------------------------------------------------------------
-// 4. Causal sync: delta (not snapshot) used when versions differ
+// 4. Concurrent sync: delta (not snapshot) used when versions differ
 //
-// Verifies that the causal merge strategy uses exportSince() for
+// Verifies that the concurrent merge strategy uses exportSince() for
 // incremental deltas when the sender is ahead, rather than always
 // falling back to snapshots.
 // ---------------------------------------------------------------------------
 
-describe("causal sync uses deltas when sender is ahead", () => {
+describe("concurrent sync uses deltas when sender is ahead", () => {
   it("after initial sync, mutations propagate as deltas (not full snapshots)", async () => {
     const bridge = new Bridge()
 
@@ -321,8 +319,8 @@ describe("causal sync uses deltas when sender is ahead", () => {
 // ---------------------------------------------------------------------------
 // 5. Universal version comparison — sequential rejects stale offers
 //
-// Before the universal version check, only LWW ran version comparison
-// before import. A regression reintroducing `if (strategy === "lww")`
+// Before the universal version check, only ephemeral ran version comparison
+// before import. A regression reintroducing `if (strategy === "ephemeral")`
 // would let stale sequential offers silently overwrite fresher state.
 // ---------------------------------------------------------------------------
 
@@ -481,14 +479,14 @@ describe("schema hash compatibility", () => {
     const bridge = new Bridge()
 
     // Schema A
-    const SchemaA = bindLoro(
+    const SchemaA = loro.bind(
       LoroSchema.doc({
         title: LoroSchema.text(),
       }),
     )
 
     // Schema B — different structure, same docId
-    const SchemaB = bindLoro(
+    const SchemaB = loro.bind(
       LoroSchema.doc({
         content: LoroSchema.text(),
         count: LoroSchema.plain.number(),
@@ -532,7 +530,7 @@ describe("schema hash compatibility", () => {
     const bridgeAR = new Bridge()
     const bridgeRC = new Bridge()
 
-    const TodoDoc = bindLoro(
+    const TodoDoc = loro.bind(
       LoroSchema.doc({
         title: LoroSchema.text(),
       }),
@@ -553,7 +551,7 @@ describe("schema hash compatibility", () => {
         createBridgeTransport({ transportType: "relay-a", bridge: bridgeAR }),
         createBridgeTransport({ transportType: "relay-c", bridge: bridgeRC }),
       ],
-      replicas: [BoundReplica(loroReplicaFactory, "causal")],
+      replicas: [loro.replica()],
       onUnresolvedDoc: () => Replicate(),
     })
 

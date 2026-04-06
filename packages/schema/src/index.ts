@@ -4,17 +4,23 @@
 // schema interpreter algebra spike.
 
 // Bind — schema + factory + strategy binding
-export type { BoundSchema, FactoryBuilder } from "./bind.js"
-// Interpret and Replicate are dual-namespace (type + value) — export from
-// the value line only; TypeScript resolves the type automatically.
+export type {
+  BoundSchema,
+  CrdtStrategy,
+  FactoryBuilder,
+  JsonStrategy,
+  SubstrateNamespace,
+} from "./bind.js"
+// Interpret, Replicate, BoundReplica are dual-namespace (type + value) —
+// export from the value line only; TypeScript resolves the type automatically.
 export {
   BoundReplica,
   bind,
-  bindEphemeral,
-  bindPlain,
+  createSubstrateNamespace,
   Defer,
   Interpret,
   isBoundSchema,
+  json,
   Reject,
   Replicate,
 } from "./bind.js"
@@ -282,8 +288,6 @@ export {
   replicaTypesCompatible,
   STRUCTURAL_YJS_CLIENT_ID,
 } from "./substrate.js"
-// LWW substrate — plain substrate wrapped with TimestampVersion for ephemeral state
-export { lwwReplicaFactory, lwwSubstrateFactory } from "./substrates/lww.js"
 // Plain substrate — plain JS object store with version tracking
 export {
   createPlainReplica,

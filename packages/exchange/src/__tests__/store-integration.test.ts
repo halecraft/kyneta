@@ -2,20 +2,13 @@
 //
 // These tests prove that the Exchange's direct Store integration
 // works with real Exchange instances, BridgeTransports, and actual substrates
-// (Plain, Loro, LWW).
+// (Plain, Loro, Ephemeral).
 //
 // Replaces the old storage-integration tests which tested the deleted
 // StorageAdapter / storage-first sync machinery.
 
-import { bindLoro, LoroSchema } from "@kyneta/loro-schema"
-import {
-  bindEphemeral,
-  bindPlain,
-  change,
-  Interpret,
-  Replicate,
-  Schema,
-} from "@kyneta/schema"
+import { LoroSchema, loro } from "@kyneta/loro-schema"
+import { change, Interpret, json, Replicate, Schema } from "@kyneta/schema"
 import { Bridge, createBridgeTransport } from "@kyneta/transport"
 import { afterEach, describe, expect, it } from "vitest"
 import { Exchange } from "../exchange.js"
@@ -67,24 +60,25 @@ afterEach(async () => {
 // Bound schemas
 // ---------------------------------------------------------------------------
 
-const SequentialDoc = bindPlain(
+const SequentialDoc = json.bind(
   Schema.doc({
     title: Schema.string(),
     count: Schema.number(),
   }),
 )
 
-const CausalDoc = bindLoro(
+const CausalDoc = loro.bind(
   LoroSchema.doc({
     title: LoroSchema.text(),
   }),
 )
 
-const PresenceDoc = bindEphemeral(
+const PresenceDoc = json.bind(
   Schema.doc({
     cursor: Schema.struct({ x: Schema.number(), y: Schema.number() }),
     name: Schema.string(),
   }),
+  "ephemeral",
 )
 
 // ===========================================================================
@@ -126,7 +120,7 @@ describe("Storage persist + hydrate", () => {
     expect(doc2.count()).toBe(42)
   })
 
-  it("causal doc (Loro): write → shutdown → restart → hydrate", async () => {
+  it("concurrent doc (Loro): write → shutdown → restart → hydrate", async () => {
     const sharedData: InMemoryStoreData = {
       entries: new Map(),
       metadata: new Map(),
@@ -158,7 +152,7 @@ describe("Storage persist + hydrate", () => {
     expect(doc2.title()).toBe("hello loro")
   })
 
-  it("LWW doc: write → shutdown → restart → hydrate", async () => {
+  it("ephemeral doc: write → shutdown → restart → hydrate", async () => {
     const sharedData: InMemoryStoreData = {
       entries: new Map(),
       metadata: new Map(),

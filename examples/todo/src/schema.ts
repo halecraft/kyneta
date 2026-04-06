@@ -24,12 +24,12 @@ export const TodoSchema = Schema.doc({
 })
 
 /** Use Loro for collaborative, realtime, shared state (WASM, ~1mb) */
-import { bindLoro } from "@kyneta/loro-schema"
-export const TodoDoc = bindLoro(TodoSchema)
+import { loro } from "@kyneta/loro-schema"
+export const TodoDoc = loro.bind(TodoSchema)
 
 /** Or, pick Yjs--it works just the same via kyneta/schema! (JS, ~300kb) */
-// import { bindYjs } from "@kyneta/yjs-schema"
-// export const TodoDoc = bindYjs(TodoSchema)
+// import { yjs } from "@kyneta/yjs-schema"
+// export const TodoDoc = yjs.bind(TodoSchema)
 
 /** Full-stack ref type: read + write + transact + changefeed. */
 export type TodoDocRef = Ref<typeof TodoSchema>

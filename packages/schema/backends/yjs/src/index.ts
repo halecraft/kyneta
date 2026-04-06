@@ -60,8 +60,9 @@ export type { Op, Ref, SubstratePayload } from "@kyneta/schema"
 // Low-level primitives — for power users and custom substrate compositions
 // ---------------------------------------------------------------------------
 
-// Bind — convenience wrapper for Yjs CRDT substrate
-export { bindYjs } from "./bind-yjs.js"
+// Namespace — the yjs substrate namespace (replaces standalone escape hatch;
+// the old `yjs(ref)` call is now `yjs.unwrap(ref)`)
+export { yjs } from "./bind-yjs.js"
 // Change mapping
 export { applyChangeToYjs, eventsToOps } from "./change-mapping.js"
 // Container creation
@@ -69,10 +70,12 @@ export { ensureContainers } from "./populate.js"
 // Reader
 export { yjsReader } from "./reader.js"
 // Substrate
-export { createYjsSubstrate, yjsSubstrateFactory } from "./substrate.js"
+export {
+  createYjsSubstrate,
+  yjsReplicaFactory,
+  yjsSubstrateFactory,
+} from "./substrate.js"
 // Version
 export { YjsVersion } from "./version.js"
-// Escape hatch — access the underlying Y.Doc from a ref
-export { yjs } from "./yjs-escape.js"
 // Container resolution
 export { resolveYjsType, stepIntoYjs } from "./yjs-resolve.js"

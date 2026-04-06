@@ -18,11 +18,7 @@ import type {
   ReplicaType,
   SubstrateFactory,
 } from "@kyneta/schema"
-import {
-  BoundReplica,
-  lwwReplicaFactory,
-  plainReplicaFactory,
-} from "@kyneta/schema"
+import { BoundReplica, json } from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
 // ReplicaKey — composite lookup key
@@ -69,17 +65,18 @@ function replicaKey(
 /**
  * Default replica bindings shipped with the exchange.
  *
- * - **plain / sequential**: monotonic-version plain JS objects with
- *   request/response sync.
- * - **lww / lww**: timestamp-versioned plain JS objects with
+ * - **json / sequential**: monotonic-version plain JS objects with
+ *   request/response sync (the default strategy).
+ * - **json / ephemeral**: timestamp-versioned plain JS objects with
  *   last-writer-wins broadcast (ephemeral/presence state).
  *
- * Consumers can extend this set by passing additional replicas to
- * `createCapabilities`.
+ * Both are provided by the `json` substrate namespace. Consumers can
+ * extend this set by passing additional replicas (e.g. `loro.replica()`)
+ * to `createCapabilities`.
  */
 export const DEFAULT_REPLICAS: readonly BoundReplica[] = [
-  BoundReplica(plainReplicaFactory, "sequential"),
-  BoundReplica(lwwReplicaFactory, "lww"),
+  json.replica(),
+  json.replica("ephemeral"),
 ]
 
 // ---------------------------------------------------------------------------

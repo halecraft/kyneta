@@ -16,9 +16,9 @@
 //
 // MergeStrategy is a string union declaring the sync algorithm the
 // exchange runs on behalf of the substrate:
-// - "causal": bidirectional exchange, concurrent versions possible (Loro)
+// - "concurrent": bidirectional exchange, concurrent versions possible (Loro)
 // - "sequential": request/response, total order (Plain)
-// - "lww": unidirectional broadcast, timestamp-based (Ephemeral)
+// - "ephemeral": unidirectional broadcast, timestamp-based (Ephemeral)
 
 import type { Schema as SchemaNode } from "./schema.js"
 import type {
@@ -28,8 +28,11 @@ import type {
   Version,
 } from "./substrate.js"
 import { computeSchemaHash } from "./substrate.js"
-import { lwwSubstrateFactory } from "./substrates/lww.js"
-import { plainSubstrateFactory } from "./substrates/plain.js"
+import { lwwReplicaFactory, lwwSubstrateFactory } from "./substrates/lww.js"
+import {
+  plainReplicaFactory,
+  plainSubstrateFactory,
+} from "./substrates/plain.js"
 
 // Re-export MergeStrategy so existing imports from "./bind.js" keep working.
 export type { MergeStrategy } from "./substrate.js"
@@ -65,8 +68,8 @@ export type FactoryBuilder<V extends Version = Version> = (context: {
  * 3. **strategy** — how does the exchange sync it?
  *
  * BoundSchemas are static declarations created at module scope via
- * `bind()`, `bindPlain()`, `bindEphemeral()`, or `bindLoro()`. They are
- * consumed at runtime by `exchange.get(docId, boundSchema)`.
+ * the substrate namespaces: `json.bind()`, `loro.bind()`, or `yjs.bind()`.
+ * They are consumed at runtime by `exchange.get(docId, boundSchema)`.
  *
  * A BoundSchema can safely be shared across multiple exchange instances.
  * Each exchange calls the factory builder independently, producing a
@@ -223,15 +226,15 @@ export function Defer(): Defer {
 /**
  * Create a BoundSchema from explicit schema, factory builder, and strategy.
  *
- * This is the general primitive. Most users should prefer the convenience
- * wrappers `bindPlain()`, `bindEphemeral()`, or `bindLoro()`.
+ * This is the general primitive. Most users should prefer the substrate
+ * namespaces: `json.bind()`, `loro.bind()`, or `yjs.bind()`.
  *
  * @example
  * ```ts
  * const MyDoc = bind({
  *   schema: Schema.doc({ title: Schema.string() }),
  *   factory: (ctx) => createMyFactory(ctx.peerId),
- *   strategy: "causal",
+ *   strategy: "concurrent",
  * })
  * ```
  */
@@ -267,58 +270,114 @@ export function isBoundSchema(value: unknown): value is BoundSchema {
 }
 
 // ---------------------------------------------------------------------------
-// bindPlain — convenience for plain JS substrate + sequential strategy
+// Strategy type aliases — constrain namespace overrides
+// ---------------------------------------------------------------------------
+
+/** Strategies available for the plain JSON substrate. */
+export type JsonStrategy = "sequential" | "ephemeral"
+
+/** Strategies available for CRDT substrates (Loro, Yjs). */
+export type CrdtStrategy = "concurrent" | "ephemeral"
+
+// ---------------------------------------------------------------------------
+// SubstrateNamespace — substrate-first API
 // ---------------------------------------------------------------------------
 
 /**
- * Bind a schema to the plain JS substrate with sequential sync strategy.
- *
- * The plain substrate wraps a `Record<string, unknown>` with monotonic
- * versioning. Sequential strategy uses request/response sync with a
- * total version order.
+ * A substrate namespace groups `bind()` and `replica()` under a single
+ * substrate identity. The strategy is a type-constrained optional
+ * parameter with a sane default. Invalid (substrate, strategy)
+ * combinations are compile errors.
  *
  * @example
  * ```ts
- * const ConfigDoc = bindPlain(Schema.doc({ theme: Schema.string() }))
- * const config = exchange.get("config", ConfigDoc)
+ * json.bind(schema)               // sequential (default)
+ * json.bind(schema, "ephemeral")  // ephemeral
+ * json.replica()                  // sequential (default)
+ * loro.bind(schema)               // concurrent (default)
+ * loro.replica("ephemeral")       // ephemeral
  * ```
  */
-export function bindPlain<S extends SchemaNode>(schema: S): BoundSchema<S> {
-  return bind({
-    schema,
-    factory: () => plainSubstrateFactory,
-    strategy: "sequential",
-  })
+export interface SubstrateNamespace<S extends MergeStrategy> {
+  bind<N extends SchemaNode>(schema: N, strategy?: S): BoundSchema<N>
+  replica(strategy?: S): BoundReplica
 }
 
 // ---------------------------------------------------------------------------
-// bindEphemeral — convenience for LWW broadcast strategy (ephemeral/presence)
+// createSubstrateNamespace — pure factory for building namespace objects
 // ---------------------------------------------------------------------------
 
 /**
- * Bind a schema to the LWW substrate for ephemeral/presence state.
+ * Create a `SubstrateNamespace` from a strategy → factory mapping.
  *
- * Uses a plain JS substrate wrapped with `TimestampVersion` for
- * cross-peer stale rejection. The exchange syncs it via last-writer-wins
- * broadcast — pushing full snapshots on every local change, with
- * timestamp-based stale filtering at the receiver.
- *
- * Ideal for cursor position, player input, typing indicators, and any
- * state where only the latest value matters.
+ * This is a pure function (Functional Core) that constructs the namespace
+ * object. The dispatch from strategy → factory is driven by the
+ * `strategies` map. Custom substrate authors can use this to build their
+ * own namespaces.
  *
  * @example
  * ```ts
- * const PresenceDoc = bindEphemeral(Schema.doc({
- *   cursor: Schema.struct({ x: Schema.number(), y: Schema.number() }),
- *   name: Schema.string(),
- * }))
- * const presence = exchange.get("presence", PresenceDoc)
+ * const json = createSubstrateNamespace({
+ *   strategies: {
+ *     sequential: { factory: () => plainSubstrateFactory, replicaFactory: plainReplicaFactory },
+ *     ephemeral: { factory: () => lwwSubstrateFactory, replicaFactory: lwwReplicaFactory },
+ *   },
+ *   defaultStrategy: "sequential",
+ * })
  * ```
  */
-export function bindEphemeral<S extends SchemaNode>(schema: S): BoundSchema<S> {
-  return bind({
-    schema,
-    factory: () => lwwSubstrateFactory,
-    strategy: "lww",
-  })
+export function createSubstrateNamespace<S extends MergeStrategy>(config: {
+  strategies: {
+    [K in S]: {
+      factory: FactoryBuilder<any>
+      replicaFactory: ReplicaFactory
+    }
+  }
+  defaultStrategy: S
+}): SubstrateNamespace<S> {
+  return {
+    bind<N extends SchemaNode>(schema: N, strategy?: S): BoundSchema<N> {
+      const s = strategy ?? config.defaultStrategy
+      return bind({
+        schema,
+        factory: config.strategies[s].factory,
+        strategy: s,
+      })
+    },
+    replica(strategy?: S): BoundReplica {
+      const s = strategy ?? config.defaultStrategy
+      return BoundReplica(config.strategies[s].replicaFactory, s)
+    },
+  }
 }
+
+// ---------------------------------------------------------------------------
+// json — the plain JSON substrate namespace
+// ---------------------------------------------------------------------------
+
+/**
+ * The plain JSON substrate namespace.
+ *
+ * - `json.bind(schema)` — sequential sync (default)
+ * - `json.bind(schema, "ephemeral")` — ephemeral/presence broadcast
+ * - `json.replica()` — sequential replication (default)
+ * - `json.replica("ephemeral")` — ephemeral replication
+ *
+ * Strategy is constrained to `JsonStrategy` (`"sequential" | "ephemeral"`).
+ * Passing `"concurrent"` is a compile error — plain substrates cannot
+ * return `"concurrent"` from `compare()`.
+ */
+export const json: SubstrateNamespace<JsonStrategy> =
+  createSubstrateNamespace<JsonStrategy>({
+    strategies: {
+      sequential: {
+        factory: () => plainSubstrateFactory,
+        replicaFactory: plainReplicaFactory,
+      },
+      ephemeral: {
+        factory: () => lwwSubstrateFactory,
+        replicaFactory: lwwReplicaFactory,
+      },
+    },
+    defaultStrategy: "sequential",
+  })

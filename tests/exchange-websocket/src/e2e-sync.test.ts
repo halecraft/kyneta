@@ -26,8 +26,8 @@
 /// <reference types="bun-types" />
 
 import { Exchange } from "@kyneta/exchange"
-import { bindLoro, LoroSchema } from "@kyneta/loro-schema"
-import { bindEphemeral, bindPlain, change, Schema } from "@kyneta/schema"
+import { LoroSchema, loro } from "@kyneta/loro-schema"
+import { change, json, Schema } from "@kyneta/schema"
 import {
   type BunWebsocketData,
   createBunWebsocketHandlers,
@@ -141,13 +141,13 @@ const sequentialSchema = Schema.doc({
   title: Schema.string(),
   count: Schema.number(),
 })
-const SequentialDoc = bindPlain(sequentialSchema)
+const SequentialDoc = json.bind(sequentialSchema)
 
 const loroSchema = LoroSchema.doc({
   title: LoroSchema.text(),
   items: Schema.list(Schema.struct({ name: Schema.string() })),
 })
-const LoroDoc = bindLoro(loroSchema)
+const LoroDoc = loro.bind(loroSchema)
 
 const presenceSchema = Schema.doc({
   cursor: Schema.struct({
@@ -156,7 +156,7 @@ const presenceSchema = Schema.doc({
   }),
   name: Schema.string(),
 })
-const PresenceDoc = bindEphemeral(presenceSchema)
+const PresenceDoc = json.bind(presenceSchema, "ephemeral")
 
 // ---------------------------------------------------------------------------
 // Helper: create connected server + client exchange pair
@@ -413,10 +413,10 @@ describe("Heterogeneous documents over Websocket", () => {
     const { serverExchange, clientExchange } = await createConnectedPair()
 
     const plainSchema = Schema.doc({ config: Schema.string() })
-    const ConfigDoc = bindPlain(plainSchema)
+    const ConfigDoc = json.bind(plainSchema)
 
     const collabSchema = LoroSchema.doc({ text: LoroSchema.text() })
-    const CollabDoc = bindLoro(collabSchema)
+    const CollabDoc = loro.bind(collabSchema)
 
     // Server: plain config doc
     const configServer = serverExchange.get("config", ConfigDoc)
@@ -456,7 +456,7 @@ describe("Large payload fragmentation over Websocket", () => {
     const largeSchema = LoroSchema.doc({
       content: LoroSchema.text(),
     })
-    const LargeDoc = bindLoro(largeSchema)
+    const LargeDoc = loro.bind(largeSchema)
 
     const docServer = serverExchange.get("large-doc", LargeDoc)
 

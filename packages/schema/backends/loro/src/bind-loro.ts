@@ -1,14 +1,15 @@
-// bind-loro — bindLoro() convenience wrapper for Loro CRDT substrate.
+// bind-loro — Loro CRDT substrate namespace and factory internals.
 //
-// Binds a schema to the Loro substrate with causal merge strategy.
+// The `loro` namespace provides `loro.bind()` and `loro.replica()` for
+// binding schemas to the Loro substrate with concurrent merge strategy.
 // The factory builder accepts { peerId } and returns a SubstrateFactory
 // that calls doc.setPeerId() on every new LoroDoc, ensuring deterministic
 // peer identity across all documents in an exchange.
 //
 // Usage:
-//   import { bindLoro } from "@kyneta/loro-schema"
+//   import { loro, LoroSchema } from "@kyneta/loro-schema"
 //
-//   const TodoDoc = bindLoro(LoroSchema.doc({
+//   const TodoDoc = loro.bind(LoroSchema.doc({
 //     title: LoroSchema.text(),
 //     items: LoroSchema.list(LoroSchema.plain.struct({ name: LoroSchema.plain.string() })),
 //   }))
@@ -16,14 +17,15 @@
 //   const doc = exchange.get("my-doc", TodoDoc)
 
 import type {
-  BoundSchema,
+  CrdtStrategy,
   Replica,
   Schema as SchemaNode,
   Substrate,
   SubstrateFactory,
+  SubstrateNamespace,
   SubstratePayload,
 } from "@kyneta/schema"
-import { BACKING_DOC, bind } from "@kyneta/schema"
+import { BACKING_DOC, createSubstrateNamespace, unwrap } from "@kyneta/schema"
 import type { LoroDoc as LoroDocType, PeerID } from "loro-crdt"
 import { LoroDoc } from "loro-crdt"
 import {
@@ -128,36 +130,65 @@ function createLoroFactory(peerId: string): SubstrateFactory<LoroVersion> {
 }
 
 // ---------------------------------------------------------------------------
-// bindLoro — the convenience wrapper
+// loro — the Loro CRDT substrate namespace
 // ---------------------------------------------------------------------------
 
 /**
- * Bind a schema to the Loro CRDT substrate with causal merge strategy.
+ * The Loro CRDT substrate namespace.
  *
- * This is the recommended way to declare a Loro-backed document type.
- * The factory builder injects a deterministic numeric Loro PeerID derived
- * from the exchange's string peerId, ensuring consistent change attribution
- * across all documents and sessions.
+ * - `loro.bind(schema)` — concurrent sync (default)
+ * - `loro.bind(schema, "ephemeral")` — ephemeral/presence broadcast
+ * - `loro.replica()` — concurrent replication (default)
+ * - `loro.replica("ephemeral")` — ephemeral replication
+ * - `loro.unwrap(ref)` — access the underlying LoroDoc
  *
- * @example
- * ```ts
- * import { bindLoro, LoroSchema } from "@kyneta/loro-schema"
- *
- * const TodoDoc = bindLoro(LoroSchema.doc({
- *   title: LoroSchema.text(),
- *   items: LoroSchema.list(LoroSchema.plain.struct({
- *     name: LoroSchema.plain.string(),
- *     done: LoroSchema.plain.boolean(),
- *   })),
- * }))
- *
- * const doc = exchange.get("my-todos", TodoDoc)
- * ```
+ * Strategy is constrained to `CrdtStrategy` (`"concurrent" | "ephemeral"`).
+ * Passing `"sequential"` is a compile error.
  */
-export function bindLoro<S extends SchemaNode>(schema: S): BoundSchema<S> {
-  return bind({
-    schema,
-    factory: ctx => createLoroFactory(ctx.peerId),
-    strategy: "causal",
-  })
+export const loro: SubstrateNamespace<CrdtStrategy> & {
+  /** Access the underlying `LoroDoc` backing a ref. */
+  unwrap(ref: object): LoroDoc
+} = {
+  ...createSubstrateNamespace<CrdtStrategy>({
+    strategies: {
+      concurrent: {
+        factory: ctx => createLoroFactory(ctx.peerId),
+        replicaFactory: loroReplicaFactory,
+      },
+      ephemeral: {
+        factory: ctx => createLoroFactory(ctx.peerId),
+        replicaFactory: loroReplicaFactory,
+      },
+    },
+    defaultStrategy: "concurrent",
+  }),
+
+  unwrap(ref: object): LoroDoc {
+    let substrate: any
+    try {
+      substrate = unwrap(ref)
+    } catch {
+      throw new Error(
+        "loro.unwrap() requires a ref backed by a Loro substrate. " +
+          "Use a doc created by exchange.get() with a loro.bind() schema, " +
+          "or by createLoroDoc().",
+      )
+    }
+
+    const doc = substrate[BACKING_DOC]
+    if (
+      !doc ||
+      typeof doc !== "object" ||
+      typeof (doc as any).toJSON !== "function" ||
+      typeof (doc as any).version !== "function" ||
+      typeof (doc as any).import !== "function"
+    ) {
+      throw new Error(
+        "loro.unwrap() requires a ref backed by a Loro substrate. " +
+          "The ref has a substrate but it is not a Loro substrate. " +
+          "Use a doc created with a loro.bind() schema or createLoroDoc().",
+      )
+    }
+    return doc as LoroDoc
+  },
 }

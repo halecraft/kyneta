@@ -6,9 +6,9 @@
 // executes.
 //
 // Three sync algorithms are dispatched by the factory's mergeStrategy:
-// - Causal: bidirectional exchange, concurrent versions possible
+// - Concurrent: bidirectional exchange, concurrent versions possible
 // - Sequential: request/response, total order
-// - LWW: unidirectional push/broadcast, timestamp-based
+// - Ephemeral: unidirectional push/broadcast, timestamp-based
 //
 // Ported from @loro-extended/repo's synchronizer-program.ts with
 // Loro-specific types replaced by substrate-agnostic equivalents.
@@ -561,7 +561,7 @@ function handleDocEnsure(
     return [updatedModel]
   }
 
-  const isCausal = msg.mergeStrategy === "causal"
+  const isCausal = msg.mergeStrategy === "concurrent"
   const interest: Command = {
     type: "cmd/send-message",
     envelope: {
@@ -1045,7 +1045,7 @@ function handlePresent(
       if (docEntry.mode === "deferred") continue
 
       // Compatible — send interest with our version
-      const isCausal = docEntry.mergeStrategy === "causal"
+      const isCausal = docEntry.mergeStrategy === "concurrent"
       commands.push({
         type: "cmd/send-message",
         envelope: {
@@ -1124,8 +1124,8 @@ function buildInterestResponse(
   const commands: Command[] = []
 
   switch (docEntry.mergeStrategy) {
-    case "causal":
-      // Causal: always send our state (the CRDT handles merge)
+    case "concurrent":
+      // Concurrent: always send our state (the CRDT handles merge)
       // Use exportSince if the peer provided a version, otherwise snapshot
       commands.push({
         type: "cmd/send-offer",
@@ -1167,8 +1167,8 @@ function buildInterestResponse(
       })
       break
 
-    case "lww":
-      // LWW: always respond with snapshot (no delta computation)
+    case "ephemeral":
+      // Ephemeral: always respond with snapshot (no delta computation)
       commands.push({
         type: "cmd/send-offer",
         docId: message.docId,
@@ -1306,7 +1306,7 @@ function buildPush(
   excludePeerId?: PeerId,
 ): Command | undefined {
   switch (docEntry.mergeStrategy) {
-    case "causal":
+    case "concurrent":
     case "sequential": {
       // Push delta offer to synced peers, filtered by route
       const raw = getSyncedPeerChannels(model, docId, excludePeerId)
@@ -1321,7 +1321,7 @@ function buildPush(
       }
     }
 
-    case "lww": {
+    case "ephemeral": {
       // Broadcast snapshot to ALL established peers, filtered by route
       const raw = getEstablishedChannelIds(model, excludePeerId)
       const channelIds = filterChannelsByRoute(model, raw, docId, route)

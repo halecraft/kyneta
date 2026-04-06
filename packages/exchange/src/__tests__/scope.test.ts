@@ -3,7 +3,7 @@
 // Architecture mirrors scope.ts: pure function tests first (composeRule),
 // then imperative shell tests (ScopeRegistry).
 
-import { bindPlain, Interpret, Schema } from "@kyneta/schema"
+import { Interpret, json, Schema } from "@kyneta/schema"
 import type { PeerIdentityDetails } from "@kyneta/transport"
 import { describe, expect, it, vi } from "vitest"
 import type { OnUnresolvedDoc } from "../exchange.js"
@@ -230,7 +230,7 @@ describe("ScopeRegistry", () => {
   // -----------------------------------------------------------------------
 
   describe("onUnresolvedDoc composition", () => {
-    const bound = bindPlain(Schema.doc({ value: Schema.string() }))
+    const bound = json.bind(Schema.doc({ value: Schema.string() }))
 
     it("first non-undefined result wins; later scopes not called", () => {
       const registry = new ScopeRegistry()

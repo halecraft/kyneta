@@ -29,11 +29,11 @@ export type {
 } from "@kyneta/transport"
 
 // ---------------------------------------------------------------------------
-// Bind — re-exported from @kyneta/schema for convenience
+// Schema binding — re-exported from @kyneta/schema for convenience
 // ---------------------------------------------------------------------------
 
 export type { BoundSchema, FactoryBuilder, MergeStrategy } from "@kyneta/schema"
-export { bind, bindEphemeral, bindPlain, isBoundSchema } from "@kyneta/schema"
+export { bind, isBoundSchema, json } from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
 // Unwrap — re-exported from @kyneta/schema for convenience

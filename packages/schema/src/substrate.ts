@@ -459,17 +459,17 @@ export function replicaTypesCompatible(
 /**
  * Declares which sync algorithm the exchange runs on behalf of a substrate.
  *
- * - **"causal"**: Bidirectional exchange. `compare()` may return
+ * - **"concurrent"**: Bidirectional exchange. `compare()` may return
  *   `"concurrent"`. Uses `exportSince()` for fine-grained deltas.
  *
  * - **"sequential"**: Request/response. Total order — `compare()` never
  *   returns `"concurrent"`. Uses `exportSince()` or `exportEntirety()`.
  *
- * - **"lww"**: Unidirectional push/broadcast. Timestamp-based. Always
+ * - **"ephemeral"**: Unidirectional push/broadcast. Timestamp-based. Always
  *   uses `exportEntirety()`. Receiver compares timestamps and discards
  *   stale arrivals.
  */
-export type MergeStrategy = "causal" | "sequential" | "lww"
+export type MergeStrategy = "concurrent" | "sequential" | "ephemeral"
 
 // ---------------------------------------------------------------------------
 // DocMetadata — per-document metadata

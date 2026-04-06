@@ -107,7 +107,7 @@ export function describeStore(
     it("ensureDoc does not overwrite existing metadata", async () => {
       const meta2 = {
         replicaType: ["loro", 1, 0] as const,
-        mergeStrategy: "causal" as const,
+        mergeStrategy: "concurrent" as const,
         schemaHash: "00test2",
       }
       await backend.ensureDoc("doc-1", plainMetadata)

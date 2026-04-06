@@ -58,7 +58,7 @@ Key subsystems:
 
 Transport-agnostic, substrate-agnostic, topology-flexible (p2p, server/client, etc) state exchange.
 
-Manages document lifecycle, coordinates adapters, and synchronizes state across peers. Three merge strategies (causal, sequential, LWW) dispatched by a TEA (The Elm Architecture) state machine over a six-message protocol: two handshake messages (establish-request, establish-response) and four sync messages (discover, interest, offer, dismiss). Hosts heterogeneous documents — Loro CRDTs, Yjs CRDTs, plain JS objects, ephemeral presence — in one sync network. Unified persistence via `notify/state-advanced`: both local mutations and network imports produce incremental `since` deltas via `exportSince(storeVersion)` → `append()`, replacing the previous split of `onDocImported` + changefeed-based `replace()`. Two-phase substrate construction (`createReplica` → hydrate → `upgrade`) ensures correct CRDT identity and structural initialization after storage hydration. Requires explicit `peerId` for `exchange.get()` to ensure causal continuity across restarts.
+Manages document lifecycle, coordinates adapters, and synchronizes state across peers. Three merge strategies (concurrent, sequential, ephemeral) dispatched by a TEA (The Elm Architecture) state machine over a six-message protocol: two handshake messages (establish-request, establish-response) and four sync messages (discover, interest, offer, dismiss). Hosts heterogeneous documents — Loro CRDTs, Yjs CRDTs, plain JS objects, ephemeral presence — in one sync network. Unified persistence via `notify/state-advanced`: both local mutations and network imports produce incremental `since` deltas via `exportSince(storeVersion)` → `append()`, replacing the previous split of `onDocImported` + changefeed-based `replace()`. Two-phase substrate construction (`createReplica` → hydrate → `upgrade`) ensures correct CRDT identity and structural initialization after storage hydration. Requires explicit `peerId` for `exchange.get()` to ensure continuity across restarts.
 
 Sub-packages:
 - **`@kyneta/wire`** (`exchange/wire/`) — binary wire protocol. CBOR codec with compact field names, 6-byte binary frame headers, and a fragmentation protocol for cloud WebSocket gateways (AWS API Gateway 128KB limit, Cloudflare Workers 1MB limit). JSON codec for debugging. See `PROTOCOL.md` for the full specification. 187 tests.
@@ -133,13 +133,13 @@ A `BoundSchema<S>` captures three choices that define a document type:
 
 1. **Schema** — what shape is the data? (`Schema.doc({ ... })`)
 2. **Factory** — how is the data stored and versioned? (`SubstrateFactory`)
-3. **Strategy** — how does the exchange sync it? (`"causal"` | `"sequential"` | `"lww"`)
+3. **Strategy** — how does the exchange sync it? (`"concurrent"` | `"sequential"` | `"ephemeral"`)
 
 Convenience wrappers make this a one-liner:
-- `bindLoro(schema)` — Loro CRDT substrate, causal merge
-- `bindYjs(schema)` — Yjs CRDT substrate, causal merge
-- `bindPlain(schema)` — plain JS substrate, sequential merge
-- `bindEphemeral(schema)` — LWW substrate (TimestampVersion), ephemeral/presence state
+- `loro.bind(schema)` — Loro CRDT substrate, concurrent merge
+- `yjs.bind(schema)` — Yjs CRDT substrate, concurrent merge
+- `json.bind(schema)` — plain JS substrate, sequential merge
+- `json.bind(schema, "ephemeral")` — ephemeral substrate (TimestampVersion), ephemeral/presence state
 
 Swapping CRDT backends is a one-import change. Everything downstream — the Exchange sync protocol, the Cast view, the WebSocket transport, the wire format — stays identical because they depend on the `Substrate` interface, not on any particular CRDT library.
 
@@ -200,9 +200,9 @@ The Exchange coordinates sync between peers via a six-message protocol — two h
 5. **dismiss** — leave the sync graph for a document (triggers `onDocDismissed`)
 
 The synchronizer is a TEA state machine — pure model updates, command outputs. Three sync algorithms are dispatched by the `BoundSchema`'s merge strategy:
-- **Causal**: bidirectional exchange, concurrent versions possible (Loro, Yjs)
-- **Sequential**: request/response, total order (Plain)
-- **LWW**: unidirectional push/broadcast, timestamp-based (ephemeral/presence)
+- **Concurrent**: bidirectional exchange, concurrent versions possible (Loro, Yjs)
+- **Sequential**: request/response, total order (JSON)
+- **Ephemeral**: unidirectional push/broadcast, timestamp-based (ephemeral/presence)
 
 Multi-hop relay: when the synchronizer imports a delta from peer A, it relays to all other synced peers (excluding A) via `buildRelayPush`.
 
@@ -228,7 +228,7 @@ Collaborative todo with React bindings. Demonstrates `@kyneta/react` hooks (`Exc
 
 ### `examples/bumper-cars`
 
-Heterogeneous documents in one Exchange — shared game state (Yjs, causal merge) alongside per-player ephemeral presence (LWW). React bindings, physics simulation, Bun server.
+Heterogeneous documents in one Exchange — shared game state (Yjs, concurrent merge) alongside per-player ephemeral presence. React bindings, physics simulation, Bun server.
 
 51 tests.
 
@@ -306,7 +306,7 @@ kyneta/
 ├── examples/
 │   ├── todo/                     Collaborative todo (Cast + Exchange + Yjs)
 │   ├── todo-react/               Collaborative todo (React + Exchange + Yjs)
-│   └── bumper-cars/              Heterogeneous docs (React + Exchange + LWW)
+│   └── bumper-cars/              Heterogeneous docs (React + Exchange + ephemeral)
 ├── tests/
 │   └── exchange-websocket/       E2E Exchange sync over real WebSockets
 ├── .plans/                       Long-term architectural plans

@@ -1,11 +1,11 @@
 // Exchange — unit tests for the public Exchange API.
 
 import { hasChangefeed } from "@kyneta/changefeed"
-import { bindLoro, LoroSchema, loro } from "@kyneta/loro-schema"
+import { LoroSchema, loro } from "@kyneta/loro-schema"
 import {
   bind,
-  bindPlain,
   change,
+  json,
   plainReplicaFactory,
   plainSubstrateFactory,
   Schema,
@@ -30,10 +30,10 @@ const testSchema = Schema.doc({
   count: Schema.number(),
 })
 
-const TestDoc = bindPlain(testSchema)
+const TestDoc = json.bind(testSchema)
 
 const otherSchema = Schema.doc({ name: Schema.string() })
-const OtherDoc = bindPlain(otherSchema)
+const OtherDoc = json.bind(otherSchema)
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -311,14 +311,14 @@ describe("Exchange", () => {
       })
 
       it("loro(ref) returns the LoroDoc for a Loro-backed exchange doc", () => {
-        const LoroDoc = bindLoro(LoroSchema.doc({ title: LoroSchema.text() }))
+        const LoroDoc = loro.bind(LoroSchema.doc({ title: LoroSchema.text() }))
         const exchange = new Exchange({
           identity: { peerId: "test" },
           schemas: [LoroDoc],
         })
         const doc = exchange.get("doc-1", LoroDoc)
 
-        const loroDoc = loro(doc)
+        const loroDoc = loro.unwrap(doc)
         expect(typeof loroDoc.toJSON).toBe("function")
         expect(typeof loroDoc.getText).toBe("function")
       })
@@ -327,7 +327,7 @@ describe("Exchange", () => {
         const exchange = new Exchange({ identity: { peerId: "test" } })
         const doc = exchange.get("doc-1", TestDoc)
 
-        expect(() => loro(doc)).toThrow("not a Loro substrate")
+        expect(() => loro.unwrap(doc)).toThrow("not a Loro substrate")
       })
     })
 

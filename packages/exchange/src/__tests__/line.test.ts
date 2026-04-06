@@ -12,7 +12,7 @@
 // - Duplicate detection (throw on same peer+topic)
 // - Hub-and-spoke relay
 
-import { bindPlain, Replicate, Schema } from "@kyneta/schema"
+import { json, Replicate, Schema } from "@kyneta/schema"
 import { Bridge, createBridgeTransport } from "@kyneta/transport"
 import { afterEach, describe, expect, it } from "vitest"
 import { Exchange } from "../exchange.js"
@@ -142,7 +142,7 @@ describe("doc ID utilities", () => {
 describe("createLineDocSchema", () => {
   it("produces a bindable doc schema", () => {
     const docSchema = createLineDocSchema(SimpleSchema)
-    const bound = bindPlain(docSchema)
+    const bound = json.bind(docSchema)
     expect(bound.schemaHash).toBeDefined()
     expect(typeof bound.schemaHash).toBe("string")
   })
@@ -946,7 +946,7 @@ describe("hub-and-spoke relay", () => {
   // before the field exists. This is a plain substrate limitation,
   // not a Line bug — the same issue would affect any sequential doc
   // with nested containers through a schema-free relay.
-  it.skip("messages flow Alice → Server → Bob via relay", async () => {
+  it("messages flow Alice → Server → Bob via relay", async () => {
     const bridgeAS = new Bridge()
     const bridgeSB = new Bridge()
 

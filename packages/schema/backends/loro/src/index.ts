@@ -42,12 +42,10 @@ export {
 // Low-level primitives — for power users and custom substrate compositions
 // ---------------------------------------------------------------------------
 
-// Bind — convenience wrapper for Loro CRDT substrate
-export { bindLoro } from "./bind-loro.js"
+// Namespace — substrate strategies + escape hatch (loro.unwrap())
+export { loro } from "./bind-loro.js"
 // Change mapping
 export { batchToOps, changeToDiff } from "./change-mapping.js"
-// Escape hatch — access the underlying LoroDoc from a ref
-export { loro } from "./loro-escape.js"
 // Container resolution
 export { resolveContainer, stepIntoLoro } from "./loro-resolve.js"
 // Reader

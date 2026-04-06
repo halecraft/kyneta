@@ -9,7 +9,7 @@
 import { Schema } from "@kyneta/schema"
 import { LoroDoc } from "loro-crdt"
 import { describe, expect, it } from "vitest"
-import { bindLoro } from "../bind-loro.js"
+import { loro } from "../bind-loro.js"
 import { PROPS_KEY } from "../loro-resolve.js"
 import { LoroSchema } from "../loro-schema.js"
 import { ensureLoroContainers, loroSubstrateFactory } from "../substrate.js"
@@ -155,8 +155,8 @@ describe("structural merge protocol (Loro)", () => {
     sub2.merge(state1, "sync")
   })
 
-  it("bindLoro factory produces merge-compatible substrates", () => {
-    const bound = bindLoro(TestSchema)
+  it("loro.bind() factory produces merge-compatible substrates", () => {
+    const bound = loro.bind(TestSchema)
 
     const factoryA = bound.factory({ peerId: "alice" })
     const factoryB = bound.factory({ peerId: "bob" })

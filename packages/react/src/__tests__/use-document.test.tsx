@@ -4,7 +4,7 @@
 // and that repeated calls with the same docId + BoundSchema return
 // the same ref identity.
 
-import { bindPlain, Schema } from "@kyneta/schema"
+import { json, Schema } from "@kyneta/schema"
 import { renderHook } from "@testing-library/react"
 import type { ReactNode } from "react"
 import { describe, expect, it } from "vitest"
@@ -20,7 +20,7 @@ const TestSchema = Schema.doc({
   count: Schema.number(),
 })
 
-const TestDoc = bindPlain(TestSchema)
+const TestDoc = json.bind(TestSchema)
 
 // ---------------------------------------------------------------------------
 // Wrapper

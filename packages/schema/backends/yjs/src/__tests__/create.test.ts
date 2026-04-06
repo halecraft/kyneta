@@ -1,11 +1,11 @@
 import { change, Schema, subscribe } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
+import { yjs } from "../bind-yjs.js"
 import { createYjsDoc, createYjsDocFromEntirety } from "../create.js"
 import { ensureContainers } from "../populate.js"
 import { exportEntirety, exportSince, merge, version } from "../sync.js"
 import { YjsVersion } from "../version.js"
-import { yjs } from "../yjs-escape.js"
 
 // ===========================================================================
 // Schemas used across tests
@@ -178,12 +178,12 @@ describe("createYjsDoc", () => {
       expect(doc.count()).toBe(77)
     })
 
-    it("yjs() escape hatch returns the same Y.Doc", () => {
+    it("yjs.unwrap() escape hatch returns the same Y.Doc", () => {
       const yjsDoc = new Y.Doc()
       ensureContainers(yjsDoc, SimpleSchema)
 
       const doc = createYjsDoc(SimpleSchema, yjsDoc)
-      const escaped = yjs(doc)
+      const escaped = yjs.unwrap(doc)
 
       expect(escaped).toBe(yjsDoc)
     })

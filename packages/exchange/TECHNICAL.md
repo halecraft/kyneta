@@ -96,13 +96,13 @@ change(doc, fn)                             adapter receives offer
 Each `BoundSchema` declares a `MergeStrategy`:
 
 ```ts
-type MergeStrategy = "causal" | "sequential" | "lww"
+type MergeStrategy = "concurrent" | "sequential" | "ephemeral"
 ```
 
 These are genuinely different protocols matched to the mathematical properties of the substrate, not transport optimizations:
 
-| Property | Causal | Sequential | LWW |
-|----------|--------|------------|-----|
+| Property | Concurrent | Sequential | Ephemeral |
+|----------|------------|------------|-----------|
 | `compare()` results | `"concurrent"` possible | Never `"concurrent"` | Never `"concurrent"` |
 | Sync direction | Bidirectional | Unidirectional per cycle | Unidirectional push |
 | `exportSince()` used | Yes (primary) | Yes (when ahead) | Never |
@@ -112,7 +112,7 @@ These are genuinely different protocols matched to the mathematical properties o
 
 ### Protocol Shapes
 
-**Causal (Loro):**
+**Concurrent (Loro):**
 1. A sends `interest { docId, version, reciprocate: true }` to B
 2. B sends `offer { docId, payload, version }` to A
 3. B sends `interest { docId, version, reciprocate: false }` to A (reciprocation)
@@ -124,7 +124,7 @@ These are genuinely different protocols matched to the mathematical properties o
 2. B compares versions → if ahead, sends `offer { docId, payload, version }` to A
 3. If B was behind, B would have sent its own interest.
 
-**LWW (Ephemeral):**
+**Ephemeral:**
 1. On connection: both sides send `interest` (version may be absent)
 2. Both respond with `offer { docId, payload, version: timestamp }`
 3. On local change: broadcast `offer` to all peers (no interest needed)
@@ -152,7 +152,7 @@ type PresentMsg = {
   docs: Array<{
     docId: DocId
     replicaType: ReplicaType      // [name, major, minor]
-    mergeStrategy: MergeStrategy  // "causal" | "sequential" | "lww"
+    mergeStrategy: MergeStrategy  // "concurrent" | "sequential" | "ephemeral"
     schemaHash: string            // schema fingerprint for compatibility check
   }>
 }
@@ -160,14 +160,14 @@ type PresentMsg = {
 
 ### `interest`
 
-A declaration of sync interest. Carries the sender's current version (serialized string) so the receiver can compute a delta. For LWW substrates, `version` may be absent on initial connection.
+A declaration of sync interest. Carries the sender's current version (serialized string) so the receiver can compute a delta. For ephemeral substrates, `version` may be absent on initial connection.
 
 ```ts
 type InterestMsg = {
   type: "interest"
   docId: DocId
-  version?: string        // serialized Version, absent for LWW initial
-  reciprocate?: boolean   // ask for bidirectional exchange (causal)
+  version?: string        // serialized Version, absent for ephemeral initial
+  reciprocate?: boolean   // ask for bidirectional exchange (concurrent)
 }
 ```
 
@@ -223,7 +223,7 @@ A `BoundSchema<S>` captures three explicit choices that define a document type:
 
 1. **Schema** — what shape is the data? (a `SchemaNode` from `@kyneta/schema`)
 2. **Factory builder** — how to construct the substrate? (a function `(ctx: { peerId }) => SubstrateFactory`)
-3. **Merge strategy** — how does the exchange sync it? (`"causal"`, `"sequential"`, or `"lww"`)
+3. **Merge strategy** — how does the exchange sync it? (`"concurrent"`, `"sequential"`, or `"ephemeral"`)
 
 ```ts
 interface BoundSchema<S extends SchemaNode = SchemaNode> {
@@ -234,10 +234,10 @@ interface BoundSchema<S extends SchemaNode = SchemaNode> {
 }
 
 type FactoryBuilder<V extends Version> = (context: { peerId: string }) => SubstrateFactory<V>
-type MergeStrategy = "causal" | "sequential" | "lww"
+type MergeStrategy = "concurrent" | "sequential" | "ephemeral"
 ```
 
-BoundSchemas are static declarations created at module scope via `bind()`, `bindPlain()`, `bindEphemeral()`, or `bindLoro()`. They are consumed at runtime by `exchange.get(docId, boundSchema)`.
+BoundSchemas are static declarations created at module scope via `json.bind(schema)`, `json.bind(schema, "ephemeral")`, `loro.bind(schema)`, or `yjs.bind(schema)`. They are consumed at runtime by `exchange.get(docId, boundSchema)`.
 
 A `BoundReplica` is the replication binding — a projection of `BoundSchema` that captures the pair needed for headless replication without schema knowledge:
 
@@ -259,21 +259,22 @@ The factory is always a **builder function**, not a static instance. This solves
 3. **Each exchange gets a fresh factory** — two exchanges sharing the same BoundSchema produce independent factory instances with their own peer identity.
 4. **Factories are cached per-exchange** — a `WeakMap<FactoryBuilder, SubstrateFactory>` ensures the builder is called at most once per exchange.
 
-For Loro substrates, the builder hashes the string peerId to a deterministic numeric Loro PeerID and returns a factory that calls `doc.setPeerId()` on every new LoroDoc. For plain/sequential substrates, the builder ignores the context: `() => plainSubstrateFactory`. For LWW/ephemeral substrates, the builder returns `lwwSubstrateFactory` (which uses the same plain substrate constructors parameterized with `timestampVersionStrategy`).
+For Loro substrates, the builder hashes the string peerId to a deterministic numeric Loro PeerID and returns a factory that calls `doc.setPeerId()` on every new LoroDoc. For plain/sequential substrates, the builder ignores the context: `() => plainSubstrateFactory`. For ephemeral substrates, the builder returns the ephemeral substrate factory (internal to the `json` namespace), which uses the same plain substrate constructors parameterized with `timestampVersionStrategy`.
 
 ### Convenience Wrappers
 
 | Function | Package | Factory | Strategy |
 |----------|---------|---------|----------|
-| `bindPlain(schema)` | `@kyneta/schema` | `() => plainSubstrateFactory` | `"sequential"` |
-| `bindEphemeral(schema)` | `@kyneta/schema` | `() => lwwSubstrateFactory` | `"lww"` |
-| `bindLoro(schema)` | `@kyneta/loro-schema` | `(ctx) => createLoroFactory(ctx.peerId)` | `"causal"` |
+| `json.bind(schema)` | `@kyneta/schema` | `() => plainSubstrateFactory` | `"sequential"` |
+| `json.bind(schema, "ephemeral")` | `@kyneta/schema` | `() => ephemeralSubstrateFactory` | `"ephemeral"` |
+| `loro.bind(schema)` | `@kyneta/loro-schema` | `(ctx) => createLoroFactory(ctx.peerId)` | `"concurrent"` |
+| `yjs.bind(schema)` | `@kyneta/yjs-schema` | `(ctx) => createYjsFactory(ctx.peerId)` | `"concurrent"` |
 
 ### Why Not `ExchangeSubstrateFactory`?
 
 The previous design used `ExchangeSubstrateFactory` — a `SubstrateFactory` extended with `mergeStrategy` and `_initialize()`. This was replaced by `BoundSchema` because:
 
-1. **Merge strategy was on the wrong entity.** The same `plainSubstrateFactory` can be used with `"sequential"` or `"lww"`. The strategy is a property of *how the exchange uses the factory*, not the factory itself.
+1. **Merge strategy was on the wrong entity.** The same `plainSubstrateFactory` can be used with `"sequential"` or `"ephemeral"`. The strategy is a property of *how the exchange uses the factory*, not the factory itself.
 2. **`_initialize()` didn't compose.** If a factory was shared across exchanges, it would be initialized with the first exchange's peerId. The builder function pattern produces a fresh factory per exchange.
 3. **Boilerplate.** Every usage required wrapping a `SubstrateFactory` to add `mergeStrategy` and `_initialize` — ~10 lines of wrapping per factory.
 
@@ -282,9 +283,9 @@ The previous design used `ExchangeSubstrateFactory` — a `SubstrateFactory` ext
 Two escape hatches provide access to the underlying substrate:
 
 - **`unwrap(ref)`** in `@kyneta/schema` — general, returns `Substrate<any>`. Uses a `WeakMap<object, Substrate>` populated by `registerSubstrate()` (called by the exchange after building the ref).
-- **`loro(ref)`** in `@kyneta/loro-schema` — Loro-specific, returns `LoroDoc`. Uses `unwrap()` internally to get the substrate, then a `WeakMap<Substrate, LoroDoc>` populated by `createLoroSubstrate()`.
+- **`loro.unwrap(ref)`** in `@kyneta/loro-schema` — Loro-specific, returns `LoroDoc`. Uses `unwrap()` internally to get the substrate, then a `WeakMap<Substrate, LoroDoc>` populated by `createLoroSubstrate()`.
 
-The two-step approach (ref → substrate → LoroDoc) avoids duplicating tracking WeakMaps and composes cleanly. Currently supports root-level refs only; child-level resolution (e.g. `loro(doc.title)` → `LoroText`) is future work.
+The two-step approach (ref → substrate → LoroDoc) avoids duplicating tracking WeakMaps and composes cleanly. Currently supports root-level refs only; child-level resolution (e.g. `loro.unwrap(doc.title)` → `LoroText`) is future work.
 
 ---
 
@@ -398,7 +399,7 @@ See §18 for the `Store` interface and §19 for the hydration/persistence archit
 
 ## 6. TimestampVersion
 
-`TimestampVersion` implements `Version` using wall-clock timestamps (milliseconds since epoch) for LWW semantics. It is defined in `@kyneta/schema` (in `src/substrates/timestamp-version.ts`) alongside the other version types and re-exported by `@kyneta/exchange` for convenience.
+`TimestampVersion` implements `Version` using wall-clock timestamps (milliseconds since epoch) for ephemeral semantics. It is defined in `@kyneta/schema` (in `src/substrates/timestamp-version.ts`) alongside the other version types and re-exported by `@kyneta/exchange` for convenience.
 
 ```ts
 class TimestampVersion implements Version {
@@ -410,7 +411,7 @@ class TimestampVersion implements Version {
 }
 ```
 
-The LWW algorithm depends on honest, time-synchronized senders. The timestamp serves dual purpose:
+The ephemeral algorithm depends on honest, time-synchronized senders. The timestamp serves dual purpose:
 1. **Out-of-order filtering**: receiver discards arrivals with older timestamps
 2. **Compare-once semantics**: no coordination needed — just compare timestamps at destination
 
@@ -422,7 +423,7 @@ Three Version implementations span the full spectrum from causal history to pure
 |---|---|---|---|
 | `LoroVersion` (VersionVector) | Loro CRDT | Partial | Full causal oplog |
 | `PlainVersion` (monotonic counter) | Plain JS | Total (single-writer) | Limited op log |
-| `TimestampVersion` (wall clock) | LWW/Ephemeral | Total (by convention) | None — latest value only |
+| `TimestampVersion` (wall clock) | Ephemeral | Total (by convention) | None — latest value only |
 
 ---
 
@@ -435,20 +436,20 @@ The synchronizer calls `replica.merge(payload, "sync")`. The substrate dispatche
   - `"since"` payloads apply ops incrementally (Op[] format, path + change pairs).
   - `"entirety"` payloads decompose to `ReplaceChange` ops through `executeBatch` (preserving ref identity and firing the changefeed). This ensures the interpreter stack, caches, and changefeed subscriptions remain intact.
 
-`exportSince()` returns `null` when there is nothing to export (e.g. the target version equals or exceeds the current version). The synchronizer treats `null` from `exportSince()` as a no-op: it logs a warning and sends nothing, since the version comparison should have caught this case first. The only path to `exportEntirety()` is when `sinceVersion` is absent (LWW pushes, or a peer that has no version to offer).
+`exportSince()` returns `null` when there is nothing to export (e.g. the target version equals or exceeds the current version). The synchronizer treats `null` from `exportSince()` as a no-op: it logs a warning and sends nothing, since the version comparison should have caught this case first. The only path to `exportEntirety()` is when `sinceVersion` is absent (ephemeral pushes, or a peer that has no version to offer).
 
 ---
 
-## 8. LWW Substrate Pattern
+## 8. Ephemeral Substrate Pattern
 
-The LWW substrate pattern is implemented by `lwwSubstrateFactory` in `@kyneta/schema` (`src/substrates/lww.ts`), consumed by `bindEphemeral()`. LWW substrates are plain substrates parameterized with `timestampVersionStrategy` — same state management, same construction functions, different version algebra:
+The ephemeral substrate pattern is implemented internally within the `json` namespace in `@kyneta/schema` (`src/substrates/lww.ts`), consumed by `json.bind(schema, "ephemeral")`. Ephemeral substrates are plain substrates parameterized with `timestampVersionStrategy` — same state management, same construction functions, different version algebra:
 
-- **State management**: shared with `plainSubstrateFactory` — same `Reader`, `applyChange`, interpreter stack, op log. The `createPlainSubstrate<V>` and `createPlainReplica<V>` constructors accept a `VersionStrategy<V>` parameter; LWW passes `timestampVersionStrategy`.
-- **Version tracking**: `TimestampVersion` produced by `strategy.current(flushCount)`. Returns `TimestampVersion(0)` when no flushes have occurred, `TimestampVersion.now()` after the first flush. The flush count parameter is ignored — LWW versions are wall-clock timestamps, not counters.
-- **Export**: `strategy.logOffset()` returns `null` (timestamps have no relationship to the op log array index), so the replication core falls back to `exportEntirety()`. The synchronizer never sets `sinceVersion` for LWW docs, so this fallback is unreachable in practice.
+- **State management**: shared with `plainSubstrateFactory` — same `Reader`, `applyChange`, interpreter stack, op log. The `createPlainSubstrate<V>` and `createPlainReplica<V>` constructors accept a `VersionStrategy<V>` parameter; ephemeral passes `timestampVersionStrategy`.
+- **Version tracking**: `TimestampVersion` produced by `strategy.current(flushCount)`. Returns `TimestampVersion(0)` when no flushes have occurred, `TimestampVersion.now()` after the first flush. The flush count parameter is ignored — ephemeral versions are wall-clock timestamps, not counters.
+- **Export**: `strategy.logOffset()` returns `null` (timestamps have no relationship to the op log array index), so the replication core falls back to `exportEntirety()`. The synchronizer never sets `sinceVersion` for ephemeral docs, so this fallback is unreachable in practice.
 - **Import**: same as plain — `merge()` dispatches on `payload.kind` and applies through `executeBatch` (substrate) or `applyChange` (replica).
 
-There is no decorator, no wrapper object, and no `context()` gotcha. Each LWW substrate is a single object produced by a single `createPlainSubstrate(storeObj, timestampVersionStrategy)` call. The `VersionStrategy<V>` interface has three pure members: `zero`, `current(flushCount)`, and `logOffset(since)`.
+There is no decorator, no wrapper object, and no `context()` gotcha. Each ephemeral substrate is a single object produced by a single `createPlainSubstrate(storeObj, timestampVersionStrategy)` call. The `VersionStrategy<V>` interface has three pure members: `zero`, `current(flushCount)`, and `logOffset(since)`.
 
 ---
 
@@ -510,7 +511,7 @@ All drain methods (except `#drainOutbound`, which uses a shift-loop) follow the 
 | `src/testing/index.ts` | Testing module barrel export |
 | `src/index.ts` | Barrel export — re-exports from `@kyneta/transport` and `@kyneta/schema` |
 
-Note: `MergeStrategy`, `BoundSchema`, `bind()`, `bindPlain()`, `bindEphemeral()`, `unwrap()`, `registerSubstrate()`, and `TimestampVersion` are defined in `@kyneta/schema` and re-exported from `@kyneta/exchange` for convenience. `bindLoro()` is defined in `@kyneta/loro-schema`.
+Note: `MergeStrategy`, `BoundSchema`, `json.bind()`, `json.replica()`, `unwrap()`, `registerSubstrate()`, and `TimestampVersion` are defined in `@kyneta/schema` and re-exported from `@kyneta/exchange` for convenience. `loro.bind()` is defined in `@kyneta/loro-schema`. `yjs.bind()` is defined in `@kyneta/yjs-schema`.
 
 ### Test Files
 
@@ -521,10 +522,10 @@ Note: `MergeStrategy`, `BoundSchema`, `bind()`, `bindPlain()`, `bindEphemeral()`
 | `src/__tests__/store-hydration.test.ts` | Exchange-level storage hydration — get/replicate hydration, network import persistence, local change persistence, flush, round-trip restart |
 | `src/__tests__/store.test.ts` | InMemoryStore — conformance suite + InMemory-specific sharedData/getStorage tests |
 | `src/testing/store-conformance.ts` | Reusable Store contract suite: lookup, ensureDoc, append, loadAll, replace, delete, listDocIds, JSON + binary payload round-trips, StoreEntry shape |
-| `src/__tests__/store-integration.test.ts` | End-to-end storage: persist+hydrate for sequential/causal/LWW, replicate mode, dismiss+delete, onUnresolvedDoc+storage |
+| `src/__tests__/store-integration.test.ts` | End-to-end storage: persist+hydrate for sequential/concurrent/ephemeral, replicate mode, dismiss+delete, onUnresolvedDoc+storage |
 | `src/__tests__/exchange.test.ts` | Exchange class — get, cache, sync, lifecycle, factory builder lifecycle |
-| `src/__tests__/integration.test.ts` | Two-peer sync for sequential, causal, LWW, heterogeneous, and `onUnresolvedDoc` dynamic creation |
-| `src/__tests__/sync-invariants.test.ts` | Regression tests: empty-delta fallback, ref identity, LWW stale rejection, causal deltas |
+| `src/__tests__/integration.test.ts` | Two-peer sync for sequential, concurrent, ephemeral, heterogeneous, and `onUnresolvedDoc` dynamic creation |
+| `src/__tests__/sync-invariants.test.ts` | Regression tests: empty-delta fallback, ref identity, ephemeral stale rejection, concurrent deltas |
 | `src/__tests__/client-state-machine.test.ts` | ClientStateMachine — transitions, subscriptions, waitForState, reset |
 
 ---
@@ -613,7 +614,7 @@ Both WebSocket and WebRTC transports use these helpers instead of inline encode/
 
 `PayloadKind` values: `0x00` = `"entirety"`, `0x01` = `"since"`.
 `PayloadEncoding` values: `0x00` = `"json"`, `0x01` = `"binary"`.
-`MergeStrategyWire` values: `0x00` = `"causal"`, `0x01` = `"sequential"`, `0x02` = `"lww"`.
+`MergeStrategyWire` values: `0x00` = `"concurrent"`, `0x01` = `"sequential"`, `0x02` = `"ephemeral"`.
 
 `present` entries carry `rt` (ReplicaType as `[string, number, number]`) and `ms` (MergeStrategyWire integer) per document.
 
@@ -667,7 +668,7 @@ Reconnection uses exponential backoff with jitter, computed by the pure `tryReco
 
 ### Integration Tests
 
-End-to-end tests in `tests/exchange-websocket/` prove the full stack over real Websocket connections for all three merge strategies (sequential, causal, LWW), heterogeneous documents, and large payload fragmentation. These use Bun's built-in Websocket server on random ports.
+End-to-end tests in `tests/exchange-websocket/` prove the full stack over real Websocket connections for all three merge strategies (sequential, concurrent, ephemeral), heterogeneous documents, and large payload fragmentation. These use Bun's built-in Websocket server on random ports.
 
 The `examples/todo-react` example demonstrates the full Yjs + WebSocket + React stack over Vite middleware mode (Node runtime), proving substrate and runtime agnosticism alongside the Loro + Bun-based `examples/todo`.
 
@@ -675,29 +676,29 @@ The `examples/todo-react` example demonstrates the full Yjs + WebSocket + React 
 
 ## 13. Verified Properties
 
-1. **Sequential sync converges**: Two exchanges with `bindPlain()`, peer A creates doc with seed, peer B syncs and reads same state. Mutations from A propagate to B after initial sync.
+1. **Sequential sync converges**: Two exchanges with `json.bind()`, peer A creates doc with seed, peer B syncs and reads same state. Mutations from A propagate to B after initial sync.
 
-2. **Causal sync converges**: Two exchanges with `bindLoro()`, concurrent edits from both peers produce identical final state on both sides (CRDT merge).
+2. **Concurrent sync converges**: Two exchanges with `loro.bind()`, concurrent edits from both peers produce identical final state on both sides (CRDT merge).
 
-3. **LWW broadcast works**: Peer A sets presence via `change()`, peer B receives snapshot via LWW broadcast, state matches. Updates propagate via subsequent broadcasts.
+3. **Ephemeral broadcast works**: Peer A sets presence via `change()`, peer B receives snapshot via ephemeral broadcast, state matches. Updates propagate via subsequent broadcasts.
 
-4. **Heterogeneous documents**: Single exchange hosts both Loro-backed (`bindLoro`) and plain-backed (`bindPlain`) documents. Both sync correctly to a peer through the same adapter infrastructure.
+4. **Heterogeneous documents**: Single exchange hosts both Loro-backed (`loro.bind()`) and plain-backed (`json.bind()`) documents. Both sync correctly to a peer through the same adapter infrastructure.
 
 5. **Factory builder isolation**: Two exchanges sharing the same `BoundSchema` get independent factory instances, each with the correct peer identity.
 
-6. **Escape hatches work**: `unwrap(ref)` returns the substrate; `loro(ref)` returns the LoroDoc. Both compose via the `WeakMap` chain (ref → substrate → LoroDoc).
+6. **Escape hatches work**: `unwrap(ref)` returns the substrate; `loro.unwrap(ref)` returns the LoroDoc. Both compose via the `WeakMap` chain (ref → substrate → LoroDoc).
 
-7. **Existing tests unaffected**: `@kyneta/schema` tests (1110) and `@kyneta/loro-schema` tests (92) pass, including new `bind`/`unwrap`/`bindLoro`/`loro` tests. The `SubstrateFactory`, `Substrate`, and `Version` interfaces are unchanged.
+7. **Existing tests unaffected**: `@kyneta/schema` tests (1110) and `@kyneta/loro-schema` tests (92) pass, including new `json.bind`/`unwrap`/`loro.bind`/`loro.unwrap` tests. The `SubstrateFactory`, `Substrate`, and `Version` interfaces are unchanged.
 
 8. **Wire codec round-trip**: All 5 message types survive encode → decode through both CBOR and JSON codecs, including `OfferMsg` with binary `SubstratePayload` (38 codec tests, 31 frame tests, 54 fragment tests).
 
-9. **Websocket transport sync**: Sequential, causal, and LWW sync all work over real Websocket connections (Bun server + client adapter). Heterogeneous documents and fragmented large payloads sync correctly (8 integration tests).
+9. **Websocket transport sync**: Sequential, concurrent, and ephemeral sync all work over real Websocket connections (Bun server + client adapter). Heterogeneous documents and fragmented large payloads sync correctly (8 integration tests).
 
 10. **Local mutations auto-trigger sync**: `change(doc, fn)` automatically notifies the synchronizer via the changefeed → `notifyLocalChange` wiring. No manual `synchronizer.notifyLocalChange()` call is needed. Echo is prevented by filtering `origin === "sync"` in the changefeed subscriber.
 
-11. **End-to-end in a real app**: The `examples/todo/` app proves the full managed sync path in a running application: `LoroSchema` → `bindLoro` → `Exchange` → `WebsocketServerTransport`/`WebsocketClientTransport` → Cast compiled view → collaborative real-time sync between browser tabs. No hand-rolled WebSocket code — `change(doc, fn)` on any client automatically propagates to all peers via the changefeed → synchronizer → adapter pipeline.
+11. **End-to-end in a real app**: The `examples/todo/` app proves the full managed sync path in a running application: `LoroSchema` → `loro.bind()` → `Exchange` → `WebsocketServerTransport`/`WebsocketClientTransport` → Cast compiled view → collaborative real-time sync between browser tabs. No hand-rolled WebSocket code — `change(doc, fn)` on any client automatically propagates to all peers via the changefeed → synchronizer → adapter pipeline.
 
-12. **Dynamic document creation via `onUnresolvedDoc`**: Peer A creates a document unknown to peer B. B's `onUnresolvedDoc` callback materializes the document with the correct `BoundSchema`. After sync, B has A's content. Works for sequential (PlainSubstrate) and LWW (`bindEphemeral` / `TimestampVersion`) strategies. Callback returning `Reject()` correctly suppresses creation. When no callback is configured, the Exchange applies a two-tiered default: supported replica type → Defer; unsupported → Reject.
+12. **Dynamic document creation via `onUnresolvedDoc`**: Peer A creates a document unknown to peer B. B's `onUnresolvedDoc` callback materializes the document with the correct `BoundSchema`. After sync, B has A's content. Works for sequential (PlainSubstrate) and ephemeral (`json.bind(schema, "ephemeral")` / `TimestampVersion`) strategies. Callback returning `Reject()` correctly suppresses creation. When no callback is configured, the Exchange applies a two-tiered default: supported replica type → Defer; unsupported → Reject.
 
 ---
 
@@ -823,7 +824,7 @@ Peer A (has doc)               Peer B (doesn't have doc)
      |── present [{ docId:           >|
      |     "input:alice",             |
      |     replicaType: ["loro",1,0], |
-     |     mergeStrategy: "causal",   |
+     |     mergeStrategy: "concurrent",|
      |     schemaHash: "00abc..." }]  |
      |                                | handlePresent: unknown doc
      |                                | ① route(docId, peer)?
@@ -1789,7 +1790,7 @@ Document identity decomposes into three layers, each refining the previous:
 
 `BoundSchema` refines `BoundReplica` with schema knowledge. `BoundReplica` refines wire metadata with a resolved factory. Every `BoundSchema` contains a `BoundReplica` by projection.
 
-`BoundReplica` captures the pair that fully determines headless replication behavior: the `ReplicaFactory` (wire format + version algebra + construction) and the `MergeStrategy` (sync protocol dispatch). This pair must be consistent — `plainReplicaFactory` uses `PlainVersion` (monotonic counter, log-offset-based deltas) while `lwwReplicaFactory` uses `TimestampVersion` (wall clock, entirety-only export). They share the same wire format `["plain", 1, 0]` but differ in version algebra, so `replicaType` alone is not sufficient to identify a replication binding.
+`BoundReplica` captures the pair that fully determines headless replication behavior: the `ReplicaFactory` (wire format + version algebra + construction) and the `MergeStrategy` (sync protocol dispatch). This pair must be consistent — the plain replica factory (internal to the `json` namespace) uses `PlainVersion` (monotonic counter, log-offset-based deltas) while the ephemeral replica factory (also internal to `json`) uses `TimestampVersion` (wall clock, entirety-only export). They share the same wire format `["plain", 1, 0]` but differ in version algebra, so `replicaType` alone is not sufficient to identify a replication binding.
 
 ### Two Registries
 
@@ -1797,7 +1798,7 @@ The `Capabilities` object holds both registries in a single nested `Map`:
 
 1. **`schemas`** — indexed by `(schemaHash, replicaType[name, major], mergeStrategy)`. Registers document types the Exchange can interpret. Each `BoundSchema` carries a `schemaHash`, a `FactoryBuilder` (which produces a `ReplicaFactory` with a `replicaType`), and a `MergeStrategy`.
 
-2. **`replicas`** — indexed by `(replicaType[name, major], mergeStrategy)`. Registers replication modes for headless participation. A `schemas` entry implies replica capability — registering `bindLoro(S)` auto-derives the corresponding `BoundReplica`. The reverse is not true.
+2. **`replicas`** — indexed by `(replicaType[name, major], mergeStrategy)`. Registers replication modes for headless participation. A `schemas` entry implies replica capability — registering `loro.bind(S)` auto-derives the corresponding `BoundReplica`. The reverse is not true.
 
 The internal data structure is a single `Map<ReplicaKey, ReplicaEntry>`:
 
@@ -1813,9 +1814,9 @@ Schema lookup is a two-level operation: outer map by `ReplicaKey`, inner map by 
 
 ```
 Map<ReplicaKey, ReplicaEntry>
-  "plain:1:sequential" → { replica: BoundReplica(plainReplicaFactory, "sequential"), schemas: {} }
-  "plain:1:lww"        → { replica: BoundReplica(lwwReplicaFactory, "lww"),          schemas: {} }
-  "loro:1:causal"      → { replica: BoundReplica(loroReplicaFactory, "causal"),      schemas: { "00abc..." → bindLoro(S) } }
+  "plain:1:sequential"  → { replica: json.replica(),              schemas: {} }
+  "plain:1:ephemeral"   → { replica: json.replica("ephemeral"),   schemas: {} }
+  "loro:1:concurrent"   → { replica: loro.replica(),              schemas: { "00abc..." → loro.bind(S) } }
 ```
 
 Lookup paths:
@@ -1827,12 +1828,12 @@ Lookup paths:
 
 ```ts
 const DEFAULT_REPLICAS: readonly BoundReplica[] = [
-  BoundReplica(plainReplicaFactory, "sequential"),
-  BoundReplica(lwwReplicaFactory, "lww"),
+  json.replica(),
+  json.replica("ephemeral"),
 ]
 ```
 
-An Exchange with no explicit configuration can replicate sequential documents (via `plainReplicaFactory`) and LWW/ephemeral documents (via `lwwReplicaFactory`). Both use the `["plain", 1, 0]` wire format but with the correct version algebra for each strategy. Loro documents are registered automatically when `exchange.get()` is called with a Loro `BoundSchema` (which calls `registerSchema()` internally). Explicit upfront registration via `schemas: [bindLoro(S)]` or `replicas: [BoundReplica(loroReplicaFactory, "causal")]` is still valuable for the `present`-before-`get()` race — it ensures the Exchange can auto-resolve or defer remote Loro docs before the application calls `get()`.
+An Exchange with no explicit configuration can replicate sequential documents (via `json.replica()`) and ephemeral documents (via `json.replica("ephemeral")`). Both use the `["plain", 1, 0]` wire format but with the correct version algebra for each strategy. Loro documents are registered automatically when `exchange.get()` is called with a Loro `BoundSchema` (which calls `registerSchema()` internally). Explicit upfront registration via `schemas: [loro.bind(S)]` or `replicas: [loro.replica()]` is still valuable for the `present`-before-`get()` race — it ensures the Exchange can auto-resolve or defer remote Loro docs before the application calls `get()`.
 
 ### Dynamic Schema Registration
 
@@ -1907,17 +1908,17 @@ The two registries create a two-tier trust model:
 
 - **Interpreted docs**: The schema registry provides **local truth**. The `BoundSchema`'s `schemaHash`, `replicaType`, and `mergeStrategy` are computed locally. Peer claims are validated against this local truth. A mismatch means the peers disagree on document structure — sync is skipped.
 
-- **Replicated docs**: The Exchange **trusts peer claims** for `mergeStrategy` and `schemaHash`. The `replicaType` is validated (it must match a registered `BoundReplica`), but the Exchange has no local source of truth for the other fields. A relay forwards `schemaHash` faithfully so interpreting peers on the far side can validate it against their own schemas.
+- **Replicated docs**: The Exchange **trusts peer claims** for `mergeStrategy` and `schemaHash`. The `replicaType` is validated (it must match a registered replica), but the Exchange has no local source of truth for the other fields. A relay forwards `schemaHash` faithfully so interpreting peers on the far side can validate it against their own schemas.
 
 This trust asymmetry is inherent: a relay cannot validate a schema it doesn't understand. The schema registry makes the trust boundary explicit — what's validated vs. what's forwarded is determined by which registry the doc was resolved from.
 
 ## 25. Line — Reliable Bidirectional Messaging
 
-The `Line` class provides reliable ordered bidirectional message streams between two Exchange peers. It composes two `bindPlain` sequential documents — one per direction — with automatic sequence numbering and acknowledgement-based pruning.
+The `Line` class provides reliable ordered bidirectional message streams between two Exchange peers. It composes two `json.bind` sequential documents — one per direction — with automatic sequence numbering and acknowledgement-based pruning.
 
 ### Motivation
 
-WebRTC signaling, RPC interactions, and command streams are **reliable ordered messaging** — not state synchronization. Modeling messages as CRDT state (ephemeral presence, LWW docs) creates signal accumulation, broadcast inefficiency, and deduplication overhead. The Line primitive provides message-passing semantics on top of the Exchange's document sync infrastructure, inheriting reconnection, offline resilience, and unified routing for free.
+WebRTC signaling, RPC interactions, and command streams are **reliable ordered messaging** — not state synchronization. Modeling messages as CRDT state (ephemeral presence, ephemeral docs) creates signal accumulation, broadcast inefficiency, and deduplication overhead. The Line primitive provides message-passing semantics on top of the Exchange's document sync infrastructure, inheriting reconnection, offline resilience, and unified routing for free.
 
 ### Document Model
 

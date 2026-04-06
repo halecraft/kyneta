@@ -1,18 +1,17 @@
-// bind-yjs — bindYjs() convenience wrapper for Yjs CRDT substrate.
+// bind-yjs — Yjs CRDT substrate namespace and factory.
 //
-// Binds a schema to the Yjs substrate with causal merge strategy.
-// The factory builder accepts { peerId } and returns a SubstrateFactory
-// that sets doc.clientID on every new Y.Doc, ensuring deterministic
-// peer identity across all documents in an exchange.
+// Provides the `yjs` substrate namespace (`yjs.bind()`, `yjs.replica()`,
+// `yjs.unwrap()`) and the internal factory builder that injects a
+// deterministic numeric Yjs clientID derived from the exchange's peerId.
 //
 // Yjs clientID is a uint32 number. We use FNV-1a hash truncated to
 // 32 bits, mirroring the Loro binding's hashPeerId pattern but
 // targeting Yjs's number type (not Loro's bigint/53-bit PeerID).
 //
 // Usage:
-//   import { bindYjs } from "@kyneta/yjs-schema"
+//   import { yjs } from "@kyneta/yjs-schema"
 //
-//   const TodoDoc = bindYjs(Schema.doc({
+//   const TodoDoc = yjs.bind(Schema.doc({
 //     title: Schema.annotated("text"),
 //     items: Schema.list(Schema.struct({ name: Schema.string() })),
 //   }))
@@ -20,14 +19,20 @@
 //   const doc = exchange.get("my-doc", TodoDoc)
 
 import type {
-  BoundSchema,
+  CrdtStrategy,
   Replica,
   Schema as SchemaNode,
   Substrate,
   SubstrateFactory,
+  SubstrateNamespace,
   SubstratePayload,
 } from "@kyneta/schema"
-import { BACKING_DOC, bind, STRUCTURAL_YJS_CLIENT_ID } from "@kyneta/schema"
+import {
+  BACKING_DOC,
+  createSubstrateNamespace,
+  STRUCTURAL_YJS_CLIENT_ID,
+  unwrap,
+} from "@kyneta/schema"
 import * as Y from "yjs"
 import { ensureContainers } from "./populate.js"
 import {
@@ -127,42 +132,64 @@ function createYjsFactory(peerId: string): SubstrateFactory<YjsVersion> {
 }
 
 // ---------------------------------------------------------------------------
-// bindYjs — the convenience wrapper
+// yjs — the Yjs CRDT substrate namespace
 // ---------------------------------------------------------------------------
 
 /**
- * Bind a schema to the Yjs CRDT substrate with causal merge strategy.
+ * The Yjs CRDT substrate namespace.
  *
- * This is the recommended way to declare a Yjs-backed document type.
- * The factory builder injects a deterministic numeric Yjs clientID derived
- * from the exchange's string peerId, ensuring consistent change attribution
- * across all documents and sessions.
+ * - `yjs.bind(schema)` — concurrent sync (default)
+ * - `yjs.bind(schema, "ephemeral")` — ephemeral/presence broadcast
+ * - `yjs.replica()` — concurrent replication (default)
+ * - `yjs.replica("ephemeral")` — ephemeral replication
+ * - `yjs.unwrap(ref)` — access the underlying Y.Doc
  *
- * **Unsupported annotations:** Yjs has no native counter, movable list,
- * or tree types. Schemas passed to `bindYjs` must not contain
- * `Schema.annotated("counter")`, `Schema.annotated("movable")`, or
- * `Schema.annotated("tree")`. These will throw at construction time.
- *
- * @example
- * ```ts
- * import { bindYjs } from "@kyneta/yjs-schema"
- * import { Schema } from "@kyneta/schema"
- *
- * const TodoDoc = bindYjs(Schema.doc({
- *   title: Schema.annotated("text"),
- *   items: Schema.list(Schema.struct({
- *     name: Schema.string(),
- *     done: Schema.boolean(),
- *   })),
- * }))
- *
- * const doc = exchange.get("my-todos", TodoDoc)
- * ```
+ * Strategy is constrained to `CrdtStrategy` (`"concurrent" | "ephemeral"`).
+ * Passing `"sequential"` is a compile error.
  */
-export function bindYjs<S extends SchemaNode>(schema: S): BoundSchema<S> {
-  return bind({
-    schema,
-    factory: ctx => createYjsFactory(ctx.peerId),
-    strategy: "causal",
-  })
+export const yjs: SubstrateNamespace<CrdtStrategy> & {
+  /** Access the underlying `Y.Doc` backing a ref. */
+  unwrap(ref: object): Y.Doc
+} = {
+  ...createSubstrateNamespace<CrdtStrategy>({
+    strategies: {
+      concurrent: {
+        factory: ctx => createYjsFactory(ctx.peerId),
+        replicaFactory: yjsReplicaFactory,
+      },
+      ephemeral: {
+        factory: ctx => createYjsFactory(ctx.peerId),
+        replicaFactory: yjsReplicaFactory,
+      },
+    },
+    defaultStrategy: "concurrent",
+  }),
+
+  unwrap(ref: object): Y.Doc {
+    let substrate: any
+    try {
+      substrate = unwrap(ref)
+    } catch {
+      throw new Error(
+        "yjs.unwrap() requires a ref backed by a Yjs substrate. " +
+          "Use a doc created by exchange.get() with a yjs.bind() schema, " +
+          "or by createYjsDoc().",
+      )
+    }
+
+    const doc = substrate[BACKING_DOC]
+    if (
+      !doc ||
+      typeof doc !== "object" ||
+      typeof (doc as any).getMap !== "function" ||
+      typeof (doc as any).clientID !== "number"
+    ) {
+      throw new Error(
+        "yjs.unwrap() requires a ref backed by a Yjs substrate. " +
+          "The ref has a substrate but it is not a Yjs substrate. " +
+          "Use a doc created with a yjs.bind() schema or createYjsDoc().",
+      )
+    }
+    return doc as Y.Doc
+  },
 }

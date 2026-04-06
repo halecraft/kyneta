@@ -1,13 +1,17 @@
-// bind — unit tests for BoundSchema, bind(), bindPlain, bindEphemeral.
+// bind — unit tests for BoundSchema, bind(), json namespace, compile-time type constraints.
 
 import { describe, expect, it, vi } from "vitest"
-import { bind, bindEphemeral, bindPlain, isBoundSchema } from "../bind.js"
+import { bind, isBoundSchema, json } from "../bind.js"
 import { replaceChange } from "../change.js"
 import { executeBatch } from "../interpreters/writable.js"
 import { RawPath } from "../path.js"
 import { Schema } from "../schema.js"
 import type { SubstratePayload } from "../substrate.js"
-import { plainSubstrateFactory } from "../substrates/plain.js"
+import { lwwReplicaFactory } from "../substrates/lww.js"
+import {
+  plainReplicaFactory,
+  plainSubstrateFactory,
+} from "../substrates/plain.js"
 import { TimestampVersion } from "../substrates/timestamp-version.js"
 
 const testSchema = Schema.doc({
@@ -21,13 +25,13 @@ describe("bind()", () => {
     const bound = bind({
       schema: testSchema,
       factory,
-      strategy: "causal",
+      strategy: "concurrent",
     })
 
     expect(isBoundSchema(bound)).toBe(true)
     expect(bound.schema).toBe(testSchema)
     expect(bound.factory).toBe(factory)
-    expect(bound.strategy).toBe("causal")
+    expect(bound.strategy).toBe("concurrent")
   })
 
   it("factory builder is called with { peerId } and returns a SubstrateFactory", () => {
@@ -48,7 +52,7 @@ describe("bind()", () => {
 
 describe("isBoundSchema()", () => {
   it("returns true for a BoundSchema", () => {
-    const bound = bindPlain(testSchema)
+    const bound = json.bind(testSchema)
     expect(isBoundSchema(bound)).toBe(true)
   })
 
@@ -60,23 +64,51 @@ describe("isBoundSchema()", () => {
   })
 })
 
-describe("bindPlain()", () => {
+describe("json.bind()", () => {
   it("creates a BoundSchema with sequential strategy", () => {
-    const bound = bindPlain(testSchema)
+    const bound = json.bind(testSchema)
     expect(bound.schema).toBe(testSchema)
     expect(bound.strategy).toBe("sequential")
   })
 })
 
-describe("bindEphemeral()", () => {
-  it("creates a BoundSchema with lww strategy", () => {
-    const bound = bindEphemeral(testSchema)
+describe("json.replica()", () => {
+  it("produces a BoundReplica with sequential strategy and plainReplicaFactory", () => {
+    const replica = json.replica()
+    expect(replica.strategy).toBe("sequential")
+    expect(replica.factory).toBe(plainReplicaFactory)
+    expect(replica.factory.replicaType).toEqual(["plain", 1, 0])
+  })
+
+  it("json.replica('ephemeral') produces a BoundReplica with ephemeral strategy and lwwReplicaFactory", () => {
+    const replica = json.replica("ephemeral")
+    expect(replica.strategy).toBe("ephemeral")
+    expect(replica.factory).toBe(lwwReplicaFactory)
+    expect(replica.factory.replicaType).toEqual(["plain", 1, 0])
+  })
+})
+
+describe("compile-time type constraints", () => {
+  it("json.bind rejects 'concurrent' strategy (compile-time + runtime)", () => {
+    // @ts-expect-error — "concurrent" not assignable to JsonStrategy
+    expect(() => json.bind(testSchema, "concurrent")).toThrow()
+  })
+
+  it("json.replica rejects 'concurrent' strategy (compile-time + runtime)", () => {
+    // @ts-expect-error — "concurrent" not assignable to JsonStrategy
+    expect(() => json.replica("concurrent")).toThrow()
+  })
+})
+
+describe("json.bind(ephemeral)", () => {
+  it("creates a BoundSchema with ephemeral strategy", () => {
+    const bound = json.bind(testSchema, "ephemeral")
     expect(bound.schema).toBe(testSchema)
-    expect(bound.strategy).toBe("lww")
+    expect(bound.strategy).toBe("ephemeral")
   })
 
   it("factory produces a substrate with TimestampVersion", () => {
-    const bound = bindEphemeral(testSchema)
+    const bound = json.bind(testSchema, "ephemeral")
     const factory = bound.factory({ peerId: "test-peer" })
     const substrate = factory.create(testSchema)
 
@@ -84,7 +116,7 @@ describe("bindEphemeral()", () => {
   })
 
   it("substrate bumps TimestampVersion on flush", () => {
-    const bound = bindEphemeral(testSchema)
+    const bound = json.bind(testSchema, "ephemeral")
     const factory = bound.factory({ peerId: "test-peer" })
     const substrate = factory.create(testSchema)
 
@@ -103,7 +135,7 @@ describe("bindEphemeral()", () => {
   })
 
   it("each mutation advances the timestamp (monotonic wall clock)", () => {
-    const bound = bindEphemeral(testSchema)
+    const bound = json.bind(testSchema, "ephemeral")
     const factory = bound.factory({ peerId: "test-peer" })
     const substrate = factory.create(testSchema)
 
@@ -126,7 +158,7 @@ describe("bindEphemeral()", () => {
   })
 
   it("fromEntirety starts with a current timestamp (not zero)", () => {
-    const bound = bindEphemeral(testSchema)
+    const bound = json.bind(testSchema, "ephemeral")
     const factory = bound.factory({ peerId: "test-peer" })
 
     // Create a substrate and export its snapshot
@@ -144,7 +176,7 @@ describe("bindEphemeral()", () => {
   })
 
   it("merge with entirety payload absorbs state and bumps timestamp", () => {
-    const bound = bindEphemeral(testSchema)
+    const bound = json.bind(testSchema, "ephemeral")
     const factory = bound.factory({ peerId: "test-peer" })
     const substrate = factory.create(testSchema)
 
@@ -167,7 +199,7 @@ describe("bindEphemeral()", () => {
   })
 
   it("merge with since payload applies ops and bumps timestamp", () => {
-    const bound = bindEphemeral(testSchema)
+    const bound = json.bind(testSchema, "ephemeral")
     const factory = bound.factory({ peerId: "test-peer" })
 
     // Create source substrate, mutate, export delta
@@ -179,7 +211,7 @@ describe("bindEphemeral()", () => {
     executeBatch(source.context(), [
       { path: RawPath.empty.field("count"), change: replaceChange(7) },
     ])
-    // LWW's exportSince delegates to exportEntirety — it always sends
+    // Ephemeral's exportSince delegates to exportEntirety — it always sends
     // the full state. The kind is "entirety", not "since".
     const payload = source.exportSince(v0Before)
     expect(payload).not.toBeNull()

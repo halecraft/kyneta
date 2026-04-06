@@ -9,7 +9,7 @@
 import { BACKING_DOC, Schema, STRUCTURAL_YJS_CLIENT_ID } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
-import { bindYjs } from "../bind-yjs.js"
+import { yjs } from "../bind-yjs.js"
 import { ensureContainers } from "../populate.js"
 import { yjsSubstrateFactory } from "../substrate.js"
 
@@ -282,10 +282,10 @@ describe("structural merge protocol (Yjs)", () => {
     expect(root2.get("count")).toBe(123)
   })
 
-  // ── bindYjs integration ──
+  // ── yjs.bind integration ──
 
-  it("bindYjs factory produces deterministic structural ops across peers", () => {
-    const bound = bindYjs(TestSchema)
+  it("yjs.bind factory produces deterministic structural ops across peers", () => {
+    const bound = yjs.bind(TestSchema)
 
     const factoryA = bound.factory({ peerId: "alice" })
     const factoryB = bound.factory({ peerId: "bob" })
@@ -301,8 +301,8 @@ describe("structural merge protocol (Yjs)", () => {
     expect(stateA.data).toEqual(stateB.data)
   })
 
-  it("bindYjs peers merge without structural conflict", () => {
-    const bound = bindYjs(TestSchema)
+  it("yjs.bind peers merge without structural conflict", () => {
+    const bound = yjs.bind(TestSchema)
 
     const factoryA = bound.factory({ peerId: "alice" })
     const factoryB = bound.factory({ peerId: "bob" })

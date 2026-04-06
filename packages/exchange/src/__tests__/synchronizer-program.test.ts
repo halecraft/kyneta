@@ -453,7 +453,7 @@ describe("synchronizer-program", () => {
                 {
                   docId: "doc-1",
                   replicaType: ["loro", 1, 0] as const,
-                  mergeStrategy: "causal" as const,
+                  mergeStrategy: "concurrent" as const,
                   schemaHash: "00test",
                 },
               ],
@@ -807,7 +807,7 @@ describe("synchronizer-program", () => {
                 {
                   docId: "doc-1",
                   replicaType: ["loro", 1, 0] as const,
-                  mergeStrategy: "causal" as const,
+                  mergeStrategy: "concurrent" as const,
                   schemaHash: "00test",
                 },
               ],
@@ -834,7 +834,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: "causal",
+          mergeStrategy: "concurrent",
           schemaHash: "00test",
         },
         m,
@@ -852,7 +852,7 @@ describe("synchronizer-program", () => {
                 {
                   docId: "doc-1",
                   replicaType: ["yjs", 2, 0] as const,
-                  mergeStrategy: "causal" as const,
+                  mergeStrategy: "concurrent" as const,
                   schemaHash: "00test",
                 },
               ],
@@ -878,7 +878,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: "causal",
+          mergeStrategy: "concurrent",
           schemaHash: "00test",
         },
         m,
@@ -896,7 +896,7 @@ describe("synchronizer-program", () => {
                 {
                   docId: "doc-1",
                   replicaType: ["yjs", 1, 3] as const,
-                  mergeStrategy: "causal" as const,
+                  mergeStrategy: "concurrent" as const,
                   schemaHash: "00test",
                 },
               ],
@@ -977,7 +977,7 @@ describe("synchronizer-program", () => {
                 {
                   docId: "new-doc",
                   replicaType: ["loro", 1, 0] as const,
-                  mergeStrategy: "causal" as const,
+                  mergeStrategy: "concurrent" as const,
                   schemaHash: "00test",
                 },
               ],
@@ -995,13 +995,13 @@ describe("synchronizer-program", () => {
       if (creation.type === "cmd/request-doc-creation") {
         expect(creation.docId).toBe("new-doc")
         expect(creation.replicaType).toEqual(["loro", 1, 0])
-        expect(creation.mergeStrategy).toBe("causal")
+        expect(creation.mergeStrategy).toBe("concurrent")
       }
     })
   })
 
   describe("interest → offer (merge strategy dispatch)", () => {
-    it("causal: interest produces send-offer + reciprocal interest when reciprocate=true", () => {
+    it("concurrent: interest produces send-offer + reciprocal interest when reciprocate=true", () => {
       const update = makeUpdate()
       const [model] = init(aliceIdentity)
 
@@ -1013,7 +1013,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: "causal",
+          mergeStrategy: "concurrent",
           schemaHash: "00test",
         },
         m,
@@ -1045,7 +1045,7 @@ describe("synchronizer-program", () => {
         expect(offerCmd.sinceVersion).toBe("v0")
       }
 
-      // Should have a reciprocal interest (since causal + reciprocate=true)
+      // Should have a reciprocal interest (since concurrent + reciprocate=true)
       const reciprocalInterest = commands.find(
         c =>
           c.type === "cmd/send-message" &&
@@ -1111,7 +1111,7 @@ describe("synchronizer-program", () => {
       expect(reciprocal).toBeUndefined()
     })
 
-    it("lww: interest produces send-offer WITHOUT sinceVersion (snapshot)", () => {
+    it("ephemeral: interest produces send-offer WITHOUT sinceVersion (snapshot)", () => {
       const update = makeUpdate()
       const [model] = init(aliceIdentity)
 
@@ -1123,7 +1123,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "1000",
-          mergeStrategy: "lww",
+          mergeStrategy: "ephemeral",
           schemaHash: "00test",
         },
         m,
@@ -1137,7 +1137,7 @@ describe("synchronizer-program", () => {
             message: {
               type: "interest",
               docId: "doc-1",
-              // LWW initial — no version
+              // Ephemeral initial — no version
             },
           },
         },
@@ -1243,7 +1243,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v0",
-          mergeStrategy: "causal",
+          mergeStrategy: "concurrent",
           schemaHash: "00test",
         },
         m,
@@ -1293,7 +1293,7 @@ describe("synchronizer-program", () => {
   })
 
   describe("local-doc-change (merge strategy dispatch)", () => {
-    it("causal: pushes delta offer to synced peers", () => {
+    it("concurrent: pushes delta offer to synced peers", () => {
       const update = makeUpdate()
       const [model] = init(aliceIdentity)
 
@@ -1305,7 +1305,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v0",
-          mergeStrategy: "causal",
+          mergeStrategy: "concurrent",
           schemaHash: "00test",
         },
         m,
@@ -1342,7 +1342,7 @@ describe("synchronizer-program", () => {
       }
     })
 
-    it("lww: broadcasts snapshot to ALL established peers", () => {
+    it("ephemeral: broadcasts snapshot to ALL established peers", () => {
       const update = makeUpdate()
       const [model] = init(aliceIdentity)
 
@@ -1354,13 +1354,13 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "presence",
           version: "1000",
-          mergeStrategy: "lww",
+          mergeStrategy: "ephemeral",
           schemaHash: "00test",
         },
         m,
       )
 
-      // Local change — no need for bob to be synced, LWW broadcasts to all
+      // Local change — no need for bob to be synced, ephemeral broadcasts to all
       const [_m2, cmd] = update(
         {
           type: "synchronizer/local-doc-change",
@@ -1453,7 +1453,7 @@ describe("synchronizer-program", () => {
       }
     })
 
-    it("causal: relays to other synced peers, excluding sender", () => {
+    it("concurrent: relays to other synced peers, excluding sender", () => {
       const update = makeUpdate()
       const [model] = init(aliceIdentity)
 
@@ -1461,7 +1461,7 @@ describe("synchronizer-program", () => {
       let m = establishChannel(update, model, 1, bobIdentity)
       m = establishChannel(update, m, 2, carolIdentity)
 
-      // Register doc as causal
+      // Register doc as concurrent
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
@@ -1469,7 +1469,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v0",
-          mergeStrategy: "causal",
+          mergeStrategy: "concurrent",
           schemaHash: "00test",
         },
         m,
@@ -1519,7 +1519,7 @@ describe("synchronizer-program", () => {
       }
     })
 
-    it("lww: relays to all established peers, excluding sender", () => {
+    it("ephemeral: relays to all established peers, excluding sender", () => {
       const update = makeUpdate()
       const [model] = init(aliceIdentity)
 
@@ -1527,7 +1527,7 @@ describe("synchronizer-program", () => {
       let m = establishChannel(update, model, 1, bobIdentity)
       m = establishChannel(update, m, 2, carolIdentity)
 
-      // Register doc as lww
+      // Register doc as ephemeral
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
@@ -1535,13 +1535,13 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "1000",
-          mergeStrategy: "lww",
+          mergeStrategy: "ephemeral",
           schemaHash: "00test",
         },
         m,
       )
 
-      // Import from Bob — LWW broadcasts to ALL established, minus sender
+      // Import from Bob — ephemeral broadcasts to ALL established, minus sender
       const [_m2, cmd] = update(
         {
           type: "synchronizer/doc-imported",
@@ -1577,7 +1577,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v0",
-          mergeStrategy: "causal",
+          mergeStrategy: "concurrent",
           schemaHash: "00test",
         },
         m,
@@ -1634,7 +1634,7 @@ describe("synchronizer-program", () => {
   })
 
   describe("present sends interest with reciprocate based on merge strategy", () => {
-    it("causal doc: present triggers interest with reciprocate=true", () => {
+    it("concurrent doc: present triggers interest with reciprocate=true", () => {
       const update = makeUpdate()
       const [model] = init(aliceIdentity)
 
@@ -1646,7 +1646,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: "causal",
+          mergeStrategy: "concurrent",
           schemaHash: "00test",
         },
         m,
@@ -1663,7 +1663,7 @@ describe("synchronizer-program", () => {
                 {
                   docId: "doc-1",
                   replicaType: ["plain", 1, 0] as const,
-                  mergeStrategy: "causal" as const,
+                  mergeStrategy: "concurrent" as const,
                   schemaHash: "00test",
                 },
               ],
@@ -1924,7 +1924,7 @@ describe("synchronizer-program", () => {
       }
     })
 
-    it("buildPush respects route for LWW relay", () => {
+    it("buildPush respects route for ephemeral relay", () => {
       // Route denies carol
       const update = createSynchronizerUpdate({
         route: (_docId, peer) => peer.peerId !== "carol",
@@ -1935,7 +1935,7 @@ describe("synchronizer-program", () => {
       m = establishChannel(update, m, 1, bobIdentity)
       m = establishChannel(update, m, 2, carolIdentity)
 
-      // Register an LWW doc
+      // Register an ephemeral doc
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
@@ -1943,7 +1943,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "presence",
           version: "0",
-          mergeStrategy: "lww",
+          mergeStrategy: "ephemeral",
           schemaHash: "00test",
         },
         m,
@@ -1988,7 +1988,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "0",
-          mergeStrategy: "lww",
+          mergeStrategy: "ephemeral",
           schemaHash: "00test",
         },
         m,
@@ -2058,7 +2058,7 @@ describe("synchronizer-program", () => {
       let m = model
       m = establishChannel(update, m, 1, bobIdentity)
 
-      // Use LWW — broadcasts to all established peers (no sync state required)
+      // Use ephemeral — broadcasts to all established peers (no sync state required)
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
@@ -2066,7 +2066,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "0",
-          mergeStrategy: "lww",
+          mergeStrategy: "ephemeral",
           schemaHash: "00test",
         },
         m,
@@ -2353,7 +2353,7 @@ describe("synchronizer-program", () => {
           mode: "replicate",
           docId: "replicated-doc",
           version: "0",
-          mergeStrategy: "causal",
+          mergeStrategy: "concurrent",
           schemaHash: "00test",
         },
         m,
@@ -2373,7 +2373,7 @@ describe("synchronizer-program", () => {
       )
       expect(presentCmd).toBeDefined()
 
-      // Should send interest with reciprocate (causal)
+      // Should send interest with reciprocate (concurrent)
       const interestCmd = commands.find(
         c =>
           c.type === "cmd/send-message" &&
@@ -2399,7 +2399,7 @@ describe("synchronizer-program", () => {
       let m = establishChannel(update, model, 1, bobIdentity)
       m = establishChannel(update, m, 2, carolIdentity)
 
-      // Register a replicated causal doc
+      // Register a replicated concurrent doc
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
@@ -2407,7 +2407,7 @@ describe("synchronizer-program", () => {
           mode: "replicate",
           docId: "rep-doc",
           version: "0",
-          mergeStrategy: "causal",
+          mergeStrategy: "concurrent",
           schemaHash: "00test",
         },
         m,
@@ -2853,7 +2853,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           version: "v1",
           replicaType: ["plain", 1, 0] as const,
-          mergeStrategy: "causal",
+          mergeStrategy: "concurrent",
           schemaHash: "hash1",
         },
         m,
@@ -2951,7 +2951,7 @@ describe("synchronizer-program", () => {
                 {
                   docId: "loro-doc",
                   replicaType: ["loro", 1, 0] as const,
-                  mergeStrategy: "causal" as const,
+                  mergeStrategy: "concurrent" as const,
                   schemaHash: "abc",
                 },
               ],
@@ -2971,7 +2971,7 @@ describe("synchronizer-program", () => {
         type: "cmd/request-doc-creation",
         docId: "loro-doc",
         replicaType: ["loro", 1, 0],
-        mergeStrategy: "causal",
+        mergeStrategy: "concurrent",
         schemaHash: "abc",
       })
     })
@@ -2994,7 +2994,7 @@ describe("synchronizer-program", () => {
         m,
       )
 
-      // Bob announces the same doc but claims "causal" mergeStrategy
+      // Bob announces the same doc but claims "concurrent" mergeStrategy
       const [_result, cmd, notification] = update(
         {
           type: "synchronizer/channel-receive-message",
@@ -3006,7 +3006,7 @@ describe("synchronizer-program", () => {
                 {
                   docId: "doc-1",
                   replicaType: ["plain", 1, 0] as const,
-                  mergeStrategy: "causal" as const,
+                  mergeStrategy: "concurrent" as const,
                   schemaHash: "hash1",
                 },
               ],

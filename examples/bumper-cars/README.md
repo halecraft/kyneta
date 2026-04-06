@@ -2,7 +2,7 @@
 
 A multiplayer bumper cars game demonstrating **heterogeneous documents** in one Exchange — two merge strategies, zero CRDT dependencies.
 
-> **Architectural point:** Different data has different sync requirements. The Exchange handles them transparently — no special "presence" or "ephemeral" API. Ephemeral state is just `bindEphemeral()` + `exchange.get()`, same as everything else.
+> **Architectural point:** Different data has different sync requirements. The Exchange handles them transparently — no special "presence" or "ephemeral" API. Ephemeral state is just `json.bind(schema, "ephemeral")` + `exchange.get()`, same as everything else.
 
 ## How to Run
 
@@ -22,8 +22,8 @@ Two document types, two merge strategies, one Exchange:
 
 | Document | Binding | Strategy | Writer | Purpose |
 |----------|---------|----------|--------|---------|
-| `game-state` | `bindPlain` | Sequential | Server only | Cars, scores, tick — the server runs physics at 60fps and pushes authoritative state to all clients |
-| `input:${peerId}` | `bindEphemeral` | LWW broadcast | One client each | Joystick/keyboard input — each client writes at ~20fps, the server reads all input docs every tick |
+| `game-state` | `json.bind` | Sequential | Server only | Cars, scores, tick — the server runs physics at 60fps and pushes authoritative state to all clients |
+| `input:${peerId}` | `json.bind(schema, "ephemeral")` | Ephemeral broadcast | One client each | Joystick/keyboard input — each client writes at ~20fps, the server reads all input docs every tick |
 
 ### Data Flow
 
@@ -34,7 +34,7 @@ Two document types, two merge strategies, one Exchange:
        │
        ▼
   change(inputDoc)
-       │  LWW broadcast
+       │  ephemeral broadcast
        ▼
   ─────────────────►  read input:A  ◄─────────────────  change(inputDoc)
                       read input:B                           ▲
@@ -67,26 +67,26 @@ onDocDismissed(docId, peer)  // removes the player's car when they disconnect
 **`src/schema.ts`** — the centerpiece file:
 
 ```ts
-import { Schema, bindPlain, bindEphemeral } from "@kyneta/schema"
+import { Schema, json } from "@kyneta/schema"
 
 // Game state — plain JS, sequential merge, server-authoritative.
 // The server is the single writer. Cars, scores, and tick are all
 // server-owned state that clients render but never mutate directly.
-export const GameStateDoc = bindPlain(Schema.doc({
+export const GameStateDoc = json.bind(Schema.doc({
   cars: Schema.record(Schema.struct({ x, y, vx, vy, rotation, color, name, hitUntil })),
   scores: Schema.record(Schema.struct({ name, color, bumps })),
   tick: Schema.number(),
 }))
 
-// Player input — LWW ephemeral, one doc per player.
+// Player input — ephemeral, one doc per player.
 // Each client writes joystick/keyboard state at ~20fps. The server
 // reads all input docs every tick. Only the latest value matters.
-export const PlayerInputDoc = bindEphemeral(Schema.doc({
+export const PlayerInputDoc = json.bind(Schema.doc({
   name, color, force, angle,
-}))
+}), "ephemeral")
 ```
 
-Two `bind*` calls. Two strategies. That's it.
+Two `json.bind` calls. Two strategies. That's it.
 
 ## What's Here
 
@@ -134,7 +134,7 @@ bumper-cars/
 
 The vendor example (`@loro-extended/examples/bumper-cars`) uses a dedicated "ephemeral/presence" system baked into the sync engine — `sync(doc).presence.setSelf(...)`, `useEphemeral(...)`, a discriminated union schema for presence types.
 
-Kyneta has none of that. Player input is a regular document bound with `bindEphemeral()`. It goes through the same Exchange, the same WebSocket adapter, the same `change()` / `useValue()` API as everything else. The LWW merge strategy handles the semantics (broadcast snapshot on every change, timestamp-based stale rejection at the receiver).
+Kyneta has none of that. Player input is a regular document bound with `json.bind(schema, "ephemeral")`. It goes through the same Exchange, the same WebSocket adapter, the same `change()` / `useValue()` API as everything else. The ephemeral merge strategy handles the semantics (broadcast snapshot on every change, timestamp-based stale rejection at the receiver).
 
 ### The server is the right tool for game state
 
@@ -147,9 +147,9 @@ This eliminates `loro-crdt` (~1MB WASM) from the client bundle entirely. The exa
 If the game were **peer-to-peer** (no authoritative server), you'd need convergent data structures for scores:
 
 ```ts
-import { LoroSchema, bindLoro } from "@kyneta/loro-schema"
+import { LoroSchema, loro } from "@kyneta/loro-schema"
 
-const ScoreboardDoc = bindLoro(LoroSchema.doc({
+const ScoreboardDoc = loro.bind(LoroSchema.doc({
   scores: LoroSchema.record(Schema.struct({
     name: Schema.string(),
     color: Schema.string(),

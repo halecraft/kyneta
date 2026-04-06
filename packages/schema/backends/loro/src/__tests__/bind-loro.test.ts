@@ -1,4 +1,4 @@
-// bindLoro and loro() escape hatch — unit tests.
+// loro.bind() and loro.unwrap() escape hatch — unit tests.
 
 import {
   isBoundSchema,
@@ -7,9 +7,8 @@ import {
   Schema,
 } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
-import { bindLoro } from "../bind-loro.js"
+import { loro } from "../bind-loro.js"
 import { createLoroDoc, getSubstrate } from "../create.js"
-import { loro } from "../loro-escape.js"
 import { LoroSchema } from "../loro-schema.js"
 
 const testSchema = LoroSchema.doc({
@@ -20,16 +19,16 @@ const testSchema = LoroSchema.doc({
   ),
 })
 
-describe("bindLoro()", () => {
-  it("creates a BoundSchema with causal strategy", () => {
-    const bound = bindLoro(testSchema)
+describe("loro.bind()", () => {
+  it("creates a BoundSchema with concurrent strategy", () => {
+    const bound = loro.bind(testSchema)
     expect(isBoundSchema(bound)).toBe(true)
     expect(bound.schema).toBe(testSchema)
-    expect(bound.strategy).toBe("causal")
+    expect(bound.strategy).toBe("concurrent")
   })
 
   it("factory builder produces a working SubstrateFactory", () => {
-    const bound = bindLoro(testSchema)
+    const bound = loro.bind(testSchema)
     const factory = bound.factory({ peerId: "test-peer-abc" })
 
     // Create a substrate and verify it works
@@ -39,7 +38,7 @@ describe("bindLoro()", () => {
   })
 
   it("same peerId always produces the same Loro PeerID (deterministic hash)", () => {
-    const bound = bindLoro(testSchema)
+    const bound = loro.bind(testSchema)
 
     // Create two factories from the same peerId
     const factory1 = bound.factory({ peerId: "alice-laptop-7f3a" })
@@ -55,8 +54,8 @@ describe("bindLoro()", () => {
     registerSubstrate(ref1, sub1)
     registerSubstrate(ref2, sub2)
 
-    const doc1 = loro(ref1)
-    const doc2 = loro(ref2)
+    const doc1 = loro.unwrap(ref1)
+    const doc2 = loro.unwrap(ref2)
 
     // Critical invariant: deterministic — same input → same output
     expect(doc1.peerIdStr).toBe(doc2.peerIdStr)
@@ -66,13 +65,13 @@ describe("bindLoro()", () => {
     const sub3 = factory3.create(testSchema)
     const ref3 = { _test: 3 }
     registerSubstrate(ref3, sub3)
-    const doc3 = loro(ref3)
+    const doc3 = loro.unwrap(ref3)
 
     expect(doc3.peerIdStr).not.toBe(doc1.peerIdStr)
   })
 })
 
-describe("loro() escape hatch", () => {
+describe("loro.unwrap() escape hatch", () => {
   it("returns the underlying LoroDoc for a root ref created via createLoroDoc", () => {
     const doc = createLoroDoc(testSchema)
 
@@ -81,13 +80,13 @@ describe("loro() escape hatch", () => {
     const substrate = getSubstrate(doc)
     registerSubstrate(doc, substrate)
 
-    const loroDoc = loro(doc)
+    const loroDoc = loro.unwrap(doc)
     expect(typeof loroDoc.toJSON).toBe("function")
     expect(typeof loroDoc.getText).toBe("function")
   })
 
   it("throws for non-Loro refs", () => {
-    expect(() => loro({})).toThrow("loro()")
+    expect(() => loro.unwrap({})).toThrow("loro.unwrap()")
   })
 
   it("throws for refs with a non-Loro substrate", () => {
@@ -97,6 +96,18 @@ describe("loro() escape hatch", () => {
     const fakeRef = { _fake: true }
     registerSubstrate(fakeRef, substrate)
 
-    expect(() => loro(fakeRef)).toThrow("not a Loro substrate")
+    expect(() => loro.unwrap(fakeRef)).toThrow("not a Loro substrate")
+  })
+})
+
+describe("compile-time type constraints", () => {
+  it("loro.bind rejects 'sequential' strategy (compile-time + runtime)", () => {
+    // @ts-expect-error — "sequential" not assignable to CrdtStrategy
+    expect(() => loro.bind(testSchema, "sequential")).toThrow()
+  })
+
+  it("loro.replica rejects 'sequential' strategy (compile-time + runtime)", () => {
+    // @ts-expect-error — "sequential" not assignable to CrdtStrategy
+    expect(() => loro.replica("sequential")).toThrow()
   })
 })

@@ -660,7 +660,7 @@ Within a single substrate lifetime, all state transitions are deltas delivered a
 
 **`LwwSubstrate`** (via `lwwSubstrateFactory`) is the third concrete implementation. It passes `timestampVersionStrategy` to the same `createPlainSubstrate`/`createPlainReplica` constructors used by `plainSubstrateFactory` — same state management, reader, and interpreter stack, but with wall-clock timestamps instead of monotonic counters. `timestampVersionStrategy.current()` returns `TimestampVersion.now()` (ignoring the flush count), and `logOffset()` returns `null` (timestamps have no relationship to the op log array — the core falls back to `exportEntirety()`). There is no decorator, no wrapper object, and no `context()` gotcha — each substrate is a single object produced by a single constructor call.
 
-The `lwwSubstrateFactory` provides the full `SubstrateFactory<TimestampVersion>` interface including two-phase construction: `createReplica()` creates a bare plain replica with `timestampVersionStrategy`; `upgrade(replica, schema)` reads the backing doc via `BACKING_DOC`, applies conditional defaults, and creates a substrate; `create(schema)` composes both; `fromEntirety(payload, schema)` delegates to `buildPlainSubstrateFromEntirety`; `parseVersion()` delegates to `TimestampVersion.parse()`. The factory is consumed by `bindEphemeral()` in `bind.ts`.
+The `lwwSubstrateFactory` provides the full `SubstrateFactory<TimestampVersion>` interface including two-phase construction: `createReplica()` creates a bare plain replica with `timestampVersionStrategy`; `upgrade(replica, schema)` reads the backing doc via `BACKING_DOC`, applies conditional defaults, and creates a substrate; `create(schema)` composes both; `fromEntirety(payload, schema)` delegates to `buildPlainSubstrateFromEntirety`; `parseVersion()` delegates to `TimestampVersion.parse()`. The `lwwSubstrateFactory` and `lwwReplicaFactory` are internal to the `json` namespace — they back `json.bind(schema, "ephemeral")` and `json.replica("ephemeral")` respectively, but are not public exports.
 
 | Version Type | Substrate | Order | History |
 |---|---|---|---|
@@ -688,18 +688,25 @@ interface BoundSchema<S extends Schema> {
 
 | Strategy | Protocol | `compare()` returns | Payload method |
 |---|---|---|---|
-| `"causal"` | Bidirectional exchange | May return `"concurrent"` | `exportSince()` deltas |
+| `"concurrent"` | Bidirectional exchange | May return `"concurrent"` | `exportSince()` deltas |
 | `"sequential"` | Request/response, total order | Never `"concurrent"` | `exportSince()` or `exportEntirety()` |
-| `"lww"` | Unidirectional push/broadcast | Timestamp-based | Always `exportEntirety()` |
+| `"ephemeral"` | Unidirectional push/broadcast | Timestamp-based | Always `exportEntirety()` |
 
 **`FactoryBuilder<V>`** is `(context: { peerId: string }) => SubstrateFactory<V>` — a deferred factory constructor. The exchange calls it lazily on first use, passing its peer identity. Each exchange instance gets a fresh factory. Factories that don't need peer identity ignore the context: `() => plainSubstrateFactory`.
 
 **Convenience wrappers:**
 
-- **`bindPlain(schema)`** — plain JS substrate + sequential strategy. For server-authoritative or single-writer data.
-- **`bindEphemeral(schema)`** — LWW substrate (plain + `TimestampVersion`) + lww strategy. For cursor position, player input, typing indicators — any state where only the latest value matters.
+The public API is organized into **substrate namespaces** — one per backend — that expose `bind()` and `replica()` methods:
 
-Backend packages provide their own binders: `bindLoro(schema)` from `@kyneta/loro-schema`, `bindYjs(schema)` from `@kyneta/yjs-schema`.
+- **`json.bind(schema)`** — plain JS substrate + sequential strategy (default). For server-authoritative or single-writer data.
+- **`json.bind(schema, "ephemeral")`** — LWW substrate (plain + `TimestampVersion`) + ephemeral strategy. For cursor position, player input, typing indicators — any state where only the latest value matters.
+- **`json.replica()`** / **`json.replica("ephemeral")`** — headless replication (no schema interpretation) for the plain JSON substrate.
+
+Backend packages provide their own namespaces: `loro.bind(schema)` / `loro.replica()` from `@kyneta/loro-schema`, `yjs.bind(schema)` / `yjs.replica()` from `@kyneta/yjs-schema`. CRDT namespaces default to `"concurrent"` strategy and also accept `"ephemeral"`. The `json` namespace accepts `"sequential"` (default) or `"ephemeral"` — passing `"concurrent"` is a compile error because plain versions cannot return `"concurrent"` from `compare()`.
+
+Escape hatches for accessing the underlying CRDT document are methods on the backend namespace: `loro.unwrap(ref)` returns the backing `LoroDoc`, `yjs.unwrap(ref)` returns the backing `Y.Doc`. The `json` namespace does not need `unwrap` — the general `unwrap(ref)` from `@kyneta/schema` already returns the `Substrate`, and plain substrates have no separate native document to access.
+
+The general `bind()` primitive remains public for custom substrate authors who need to wire up their own `FactoryBuilder` and `MergeStrategy`.
 
 BoundSchemas are consumed by `exchange.get(docId, boundSchema)`. A single Exchange can host documents with different BoundSchemas simultaneously (heterogeneous documents). The BoundSchema can safely be shared across multiple Exchange instances — each exchange calls the factory builder independently.
 
@@ -998,7 +1005,7 @@ packages/schema/
 │   ├── combinators.ts           # product, overlay, firstDefined
 │   ├── guards.ts                # Shared type-narrowing utilities (isNonNullObject, isPropertyHost)
 │   ├── interpreter-types.ts     # RefContext, Plain<S> — shared types across interpreters
-│   ├── bind.ts                  # BoundSchema, bind(), bindPlain(), bindEphemeral(), isBoundSchema()
+│   ├── bind.ts                  # BoundSchema, BoundReplica, bind(), json namespace, createSubstrateNamespace(), isBoundSchema()
 │   ├── unwrap.ts                # registerSubstrate, unwrap — general escape hatch for substrate access
 │   ├── substrate.ts             # BACKING_DOC, SubstratePrepare, Version, SubstratePayload, Substrate<V>, SubstrateFactory<V>
 │   ├── reader.ts                 # PlainState type, Reader, plainReader, readByPath, writeByPath, applyChange, pathKey
@@ -1018,7 +1025,7 @@ packages/schema/
 │   ├── substrates/
 │   │   ├── plain.ts             # PlainVersion, VersionStrategy, plainVersionStrategy, createPlainSubstrate, plainContext, plainSubstrateFactory
 │   │   ├── timestamp-version.ts # TimestampVersion — wall-clock version for LWW/ephemeral substrates
-│   │   └── lww.ts               # lwwSubstrateFactory — plain substrate + TimestampVersion strategy
+│   │   └── lww.ts               # lwwSubstrateFactory, lwwReplicaFactory — plain substrate + TimestampVersion strategy (internal to json namespace)
 │   ├── __tests__/
 │   │   ├── basic.test.ts        # Integration tests for @kyneta/schema/basic API
 │   │   ├── types.test.ts        # Type-level tests (expectTypeOf)
@@ -1044,7 +1051,7 @@ packages/schema/
 │   │   ├── validate.test.ts
 │   │   ├── substrate.test.ts
 │   │   ├── timestamp-version.test.ts  # TimestampVersion: serialize, parse, compare
-│   │   ├── bind.test.ts         # BoundSchema, bindPlain, bindEphemeral
+│   │   ├── bind.test.ts         # BoundSchema, json.bind, json.replica, namespace API
 │   │   ├── unwrap.test.ts       # registerSubstrate, unwrap
 │   │   └── advance-schema.test.ts  # advanceSchema — pure schema descent
 │   └── index.ts                 # Barrel export (Layer 1 — the full toolkit)

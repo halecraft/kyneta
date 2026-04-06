@@ -5,14 +5,14 @@
 // via onDocImported, and persists local changes via changefeed.
 
 import {
-  bindPlain,
   change,
   Interpret,
+  json,
   plainReplicaFactory,
   Schema,
 } from "@kyneta/schema"
 import { Bridge, createBridgeTransport } from "@kyneta/transport"
-import { bindYjs } from "@kyneta/yjs-schema"
+import { yjs } from "@kyneta/yjs-schema"
 import { describe, expect, it } from "vitest"
 import { Exchange } from "../exchange.js"
 import {
@@ -26,7 +26,7 @@ import type { StoreEntry } from "../store/store.js"
 // Test helpers
 // ---------------------------------------------------------------------------
 
-const TestDoc = bindPlain(
+const TestDoc = json.bind(
   Schema.doc({
     title: Schema.string(),
     count: Schema.number(),
@@ -92,7 +92,7 @@ describe("InMemoryStore", () => {
     }
     const meta2 = {
       replicaType: ["loro", 1, 0] as const,
-      mergeStrategy: "causal" as const,
+      mergeStrategy: "concurrent" as const,
       schemaHash: "00test",
     }
     await backend.ensureDoc("doc-1", meta1)
@@ -569,7 +569,7 @@ describe("exchange.get() without explicit peerId", () => {
     // but #peerIdIsExplicit is false → get() must throw.
     const exchange = new Exchange()
 
-    const Doc = bindPlain(
+    const Doc = json.bind(
       Schema.doc({
         title: Schema.string(),
       }),
@@ -589,7 +589,7 @@ describe("exchange.get() without explicit peerId", () => {
 
 describe("Yjs storage round-trip", () => {
   it("Yjs doc: write → shutdown → restart → hydrate → data preserved", async () => {
-    const YjsDoc = bindYjs(
+    const YjsDoc = yjs.bind(
       Schema.doc({
         title: Schema.annotated("text"),
         count: Schema.number(),

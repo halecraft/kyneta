@@ -6,13 +6,13 @@
 //   but bound to Yjs instead of Loro — proving substrate agnosticism.
 //
 //   One-line swap:
-//     Cast todo:  import { bindLoro } from "@kyneta/loro-schema"
-//     React todo: import { bindYjs }  from "@kyneta/yjs-schema"
+//     Cast todo:  import { loro } from "@kyneta/loro-schema"
+//     React todo: import { yjs }  from "@kyneta/yjs-schema"
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { Schema } from "@kyneta/schema"
-import { bindYjs } from "@kyneta/yjs-schema"
+import { yjs } from "@kyneta/yjs-schema"
 
 export const TodoSchema = Schema.doc({
   todos: Schema.list(
@@ -24,4 +24,4 @@ export const TodoSchema = Schema.doc({
 })
 
 /** Use Yjs for collaborative, realtime, shared state (pure JS, ~300kb) */
-export const TodoDoc = bindYjs(TodoSchema)
+export const TodoDoc = yjs.bind(TodoSchema)

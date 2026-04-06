@@ -43,8 +43,8 @@ type UseDocument = <S extends SchemaNode>(
  * ref instance (Exchange.get() is idempotent).
  *
  * ```tsx
- * import { bindLoro, LoroSchema } from "@kyneta/loro-schema"
- * const TodoDoc = bindLoro(LoroSchema.doc({ title: LoroSchema.text() }))
+ * import { loro, LoroSchema } from "@kyneta/loro-schema"
+ * const TodoDoc = loro.bind(LoroSchema.doc({ title: LoroSchema.text() }))
  *
  * function App() {
  *   const doc = useDocument("my-doc", TodoDoc)
@@ -54,7 +54,7 @@ type UseDocument = <S extends SchemaNode>(
  * ```
  *
  * @param docId - The document identifier.
- * @param bound - A BoundSchema created by `bindLoro()`, `bindPlain()`, etc.
+ * @param bound - A BoundSchema created by `loro.bind()`, `json.bind()`, etc.
  * @returns A full-stack Ref<S> with sync capabilities via `sync()`.
  */
 export const useDocument: UseDocument = (docId, bound) => {
