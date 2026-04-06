@@ -1798,3 +1798,114 @@ describe("onDocCreated", () => {
     await relay.shutdown()
   })
 })
+
+// ---------------------------------------------------------------------------
+// waitForSync — semantics: receiver-side primitive
+// ---------------------------------------------------------------------------
+
+describe("waitForSync semantics", () => {
+  it("receiver-side waitForSync resolves after originator's data arrives", async () => {
+    const bridge = new Bridge()
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [
+        createBridgeTransport({ transportType: "alice", bridge }),
+      ],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [
+        createBridgeTransport({ transportType: "bob", bridge }),
+      ],
+    })
+
+    const docA = exchangeA.get("config", SequentialDoc)
+    change(docA, (d: any) => {
+      d.title.set("dark")
+      d.count.set(42)
+    })
+
+    const docB = exchangeB.get("config", SequentialDoc)
+
+    // Receiver-side waitForSync resolves — Bob received Alice's data
+    await sync(docB).waitForSync({ timeout: 5000 })
+    expect(docB.title()).toBe("dark")
+    expect(docB.count()).toBe(42)
+  })
+
+  it("originator sees peer as 'pending' (not 'synced') — waitForSync is receiver-side", async () => {
+    // waitForSync answers "has someone sent me state?" not "has my state
+    // reached all peers?" — the originator never receives an offer back
+    // from the receiver, so the peer stays "pending" from its perspective.
+    const bridge = new Bridge()
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [
+        createBridgeTransport({ transportType: "alice", bridge }),
+      ],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [
+        createBridgeTransport({ transportType: "bob", bridge }),
+      ],
+    })
+
+    const docA = exchangeA.get("config", SequentialDoc)
+    change(docA, (d: any) => d.title.set("dark"))
+
+    const docB = exchangeB.get("config", SequentialDoc)
+    await sync(docB).waitForSync({ timeout: 5000 })
+
+    // From Alice's perspective, Bob is "pending" — Alice sent an offer
+    // but never received one back, so the handshake is one-sided.
+    const readyStates = sync(docA).readyStates
+    expect(readyStates).toHaveLength(1)
+    expect(readyStates[0].identity.peerId).toBe("bob")
+    expect(readyStates[0].status).toBe("pending")
+  })
+
+  it("three-peer hub: receiver-side waitForSync resolves through relay", async () => {
+    const bridgeAH = new Bridge()
+    const bridgeHB = new Bridge()
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [
+        createBridgeTransport({ transportType: "alice", bridge: bridgeAH }),
+      ],
+      schemas: [LoroDoc],
+    })
+
+    const exchangeHub = createExchange({
+      identity: { peerId: "hub" },
+      transports: [
+        createBridgeTransport({ transportType: "hub-a", bridge: bridgeAH }),
+        createBridgeTransport({ transportType: "hub-b", bridge: bridgeHB }),
+      ],
+      schemas: [LoroDoc],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [
+        createBridgeTransport({ transportType: "bob", bridge: bridgeHB }),
+      ],
+      schemas: [LoroDoc],
+    })
+
+    const docA = exchangeA.get("collab", LoroDoc)
+    change(docA, (d: any) => d.title.insert(0, "hello from alice"))
+
+    exchangeHub.get("collab", LoroDoc)
+    const docB = exchangeB.get("collab", LoroDoc)
+
+    // Receiver-side waitForSync resolves even through a relay hop
+    await sync(docB).waitForSync({ timeout: 5000 })
+    expect(docB.title()).toBe("hello from alice")
+  })
+})
