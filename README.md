@@ -105,7 +105,7 @@ A plain JS substrate is built into `@kyneta/schema` — no external package need
 | Package | Description | Tests |
 |---------|-------------|-------|
 | [`@kyneta/loro-schema`](./packages/schema/backends/loro) | Loro CRDT substrate for `@kyneta/schema`. Schema-aware typed reads, `applyDiff`-based writes, and a persistent event bridge. | 163 |
-| [`@kyneta/yjs-schema`](./packages/schema/backends/yjs) | Yjs CRDT substrate for `@kyneta/schema`. Same `Substrate` interface as Loro — swap with a one-line import change. | 159 |
+| [`@kyneta/yjs-schema`](./packages/schema/backends/yjs) | Yjs CRDT substrate for `@kyneta/schema`. Same `Substrate` interface as Loro — swap with a one-line import change. `yjs.bind()` validates annotation compatibility at compile time. | 159 |
 
 ### Sync
 

@@ -25,6 +25,7 @@
 import {
   type DiscriminatedSumSchema,
   isNullableSum,
+  KIND,
   type PositionalSumSchema,
   type ScalarSchema,
   type Schema,
@@ -87,7 +88,7 @@ function walk(
   const prefix = INDENT.repeat(depth)
   const lbl = label !== undefined ? `${label}: ` : ""
 
-  switch (schema._kind) {
+  switch (schema[KIND]) {
     // --- Scalar: leaf value --------------------------------------------------
     case "scalar": {
       const s = schema as ScalarSchema
@@ -201,7 +202,7 @@ function walk(
 
       // "movable" annotation — movable list.
       // The inner schema is a sequence; unwrap it and show "movable-list<...>"
-      if (tag === "movable" && schema.schema._kind === "sequence") {
+      if (tag === "movable" && schema.schema[KIND] === "sequence") {
         const itemDesc = inlineOrNull(schema.schema.item)
         if (itemDesc !== null) {
           lines.push(`${prefix}${lbl}movable-list<${itemDesc}>`)
@@ -242,7 +243,7 @@ function walk(
  * signaling the caller should render it as indented children.
  */
 function inlineOrNull(schema: Schema): string | null {
-  switch (schema._kind) {
+  switch (schema[KIND]) {
     case "scalar": {
       const s = schema as ScalarSchema
       if (s.constraint !== undefined && s.constraint.length > 0) {
@@ -258,7 +259,7 @@ function inlineOrNull(schema: Schema): string | null {
         return schema.tag
       }
       // movable list with inline item
-      if (schema.tag === "movable" && schema.schema._kind === "sequence") {
+      if (schema.tag === "movable" && schema.schema[KIND] === "sequence") {
         const inner = inlineOrNull(schema.schema.item)
         if (inner !== null) return `movable-list<${inner}>`
       }
@@ -287,7 +288,7 @@ function inlineOrNull(schema: Schema): string | null {
  * field on its own line. For other nodes, a single unlabeled child.
  */
 function walkChildren(schema: Schema, lines: string[], depth: number): void {
-  if (schema._kind === "product") {
+  if (schema[KIND] === "product") {
     for (const key of Object.keys(schema.fields)) {
       walk(schema.fields[key]!, lines, depth, key)
     }

@@ -24,18 +24,19 @@ import type { HasTransact } from "./interpreters/writable.js"
 import type { Path } from "./path.js"
 import { RawPath } from "./path.js"
 import type { Ref, RRef, RWRef } from "./ref.js"
-import type {
-  AnnotatedSchema,
-  DiscriminatedSumSchema,
-  MapSchema,
-  PositionalSumSchema,
-  ProductSchema,
-  ScalarSchema,
-  Schema,
-  SequenceSchema,
-  SumSchema,
+import {
+  KIND,
+  type AnnotatedSchema,
+  type DiscriminatedSumSchema,
+  type MapSchema,
+  type PositionalSumSchema,
+  type ProductSchema,
+  type ScalarSchema,
+  type Schema,
+  type SequenceSchema,
+  type SumSchema,
+  isNullableSum,
 } from "./schema.js"
-import { isNullableSum } from "./schema.js"
 
 // ---------------------------------------------------------------------------
 // Path — re-exported from path.ts
@@ -531,7 +532,7 @@ function interpretImpl<Ctx, A>(
     return resolvedPath
   }
 
-  switch (schema._kind) {
+  switch (schema[KIND]) {
     case "scalar":
       return interp.scalar(ctx, resolvedPath, schema)
 

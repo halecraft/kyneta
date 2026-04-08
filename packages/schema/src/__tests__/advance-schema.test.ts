@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   advanceSchema,
+  KIND,
   type RawSegment,
   rawIndex,
   rawKey,
@@ -30,13 +31,13 @@ describe("advanceSchema", () => {
 
     it("key segment returns the field schema", () => {
       const result = advanceSchema(schema, key("title"))
-      expect(result._kind).toBe("scalar")
+      expect(result[KIND]).toBe("scalar")
       expect((result as any).scalarKind).toBe("string")
     })
 
     it("key segment returns a nested product schema", () => {
       const result = advanceSchema(schema, key("nested"))
-      expect(result._kind).toBe("product")
+      expect(result[KIND]).toBe("product")
       expect(Object.keys((result as any).fields)).toEqual(["flag"])
     })
 
@@ -64,7 +65,7 @@ describe("advanceSchema", () => {
 
     it("index segment returns the item schema", () => {
       const result = advanceSchema(schema, index(0))
-      expect(result._kind).toBe("product")
+      expect(result[KIND]).toBe("product")
       expect(Object.keys((result as any).fields)).toContain("name")
     })
 
@@ -90,7 +91,7 @@ describe("advanceSchema", () => {
 
     it("key segment returns the item schema", () => {
       const result = advanceSchema(schema, key("anything"))
-      expect(result._kind).toBe("scalar")
+      expect(result[KIND]).toBe("scalar")
       expect((result as any).scalarKind).toBe("number")
     })
 
@@ -119,13 +120,13 @@ describe("advanceSchema", () => {
 
     it("unwraps doc annotation and returns field schema", () => {
       const result = advanceSchema(schema, key("title"))
-      expect(result._kind).toBe("scalar")
+      expect(result[KIND]).toBe("scalar")
       expect((result as any).scalarKind).toBe("string")
     })
 
     it("unwraps doc annotation for all fields", () => {
       const result = advanceSchema(schema, key("count"))
-      expect(result._kind).toBe("scalar")
+      expect(result[KIND]).toBe("scalar")
       expect((result as any).scalarKind).toBe("number")
     })
   })
@@ -142,7 +143,7 @@ describe("advanceSchema", () => {
 
     it("unwraps movable annotation and returns item schema", () => {
       const result = advanceSchema(schema, index(0))
-      expect(result._kind).toBe("product")
+      expect(result[KIND]).toBe("product")
       expect(Object.keys((result as any).fields)).toContain("name")
     })
   })
@@ -177,7 +178,7 @@ describe("advanceSchema", () => {
 
     it("unwraps tree annotation and returns field schema", () => {
       const result = advanceSchema(schema, key("label"))
-      expect(result._kind).toBe("scalar")
+      expect(result[KIND]).toBe("scalar")
       expect((result as any).scalarKind).toBe("string")
     })
   })
@@ -226,13 +227,13 @@ describe("advanceSchema", () => {
 
     it("product → sequence → product → scalar", () => {
       const step1 = advanceSchema(schema, key("items")) // → sequence
-      expect(step1._kind).toBe("sequence")
+      expect(step1[KIND]).toBe("sequence")
 
       const step2 = advanceSchema(step1, index(0)) // → product (item)
-      expect(step2._kind).toBe("product")
+      expect(step2[KIND]).toBe("product")
 
       const step3 = advanceSchema(step2, key("name")) // → scalar
-      expect(step3._kind).toBe("scalar")
+      expect(step3[KIND]).toBe("scalar")
       expect((step3 as any).scalarKind).toBe("string")
     })
 
@@ -240,19 +241,19 @@ describe("advanceSchema", () => {
       const step1 = advanceSchema(schema, key("items"))
       const step2 = advanceSchema(step1, index(0))
       const step3 = advanceSchema(step2, key("tags"))
-      expect(step3._kind).toBe("sequence")
+      expect(step3[KIND]).toBe("sequence")
 
       const step4 = advanceSchema(step3, index(0))
-      expect(step4._kind).toBe("scalar")
+      expect(step4[KIND]).toBe("scalar")
       expect((step4 as any).scalarKind).toBe("string")
     })
 
     it("product → product → scalar", () => {
       const step1 = advanceSchema(schema, key("settings"))
-      expect(step1._kind).toBe("product")
+      expect(step1[KIND]).toBe("product")
 
       const step2 = advanceSchema(step1, key("darkMode"))
-      expect(step2._kind).toBe("scalar")
+      expect(step2[KIND]).toBe("scalar")
       expect((step2 as any).scalarKind).toBe("boolean")
     })
   })
@@ -268,7 +269,7 @@ describe("advanceSchema", () => {
 
     it("product field returning a sum returns the sum node", () => {
       const result = advanceSchema(schema, key("bio"))
-      expect(result._kind).toBe("sum")
+      expect(result[KIND]).toBe("sum")
     })
   })
 
@@ -293,26 +294,26 @@ describe("advanceSchema", () => {
 
     it("returns text annotation for text field", () => {
       const result = advanceSchema(schema, key("title"))
-      expect(result._kind).toBe("annotated")
+      expect(result[KIND]).toBe("annotated")
       expect((result as any).tag).toBe("text")
     })
 
     it("returns counter annotation for counter field", () => {
       const result = advanceSchema(schema, key("count"))
-      expect(result._kind).toBe("annotated")
+      expect(result[KIND]).toBe("annotated")
       expect((result as any).tag).toBe("counter")
     })
 
     it("returns movable annotation for movableList field", () => {
       const result = advanceSchema(schema, key("tasks"))
-      expect(result._kind).toBe("annotated")
+      expect(result[KIND]).toBe("annotated")
       expect((result as any).tag).toBe("movable")
     })
 
     it("can descend through movableList into item struct", () => {
       const step1 = advanceSchema(schema, key("tasks")) // → annotated("movable", sequence)
       const step2 = advanceSchema(step1, index(0)) // → product (struct)
-      expect(step2._kind).toBe("product")
+      expect(step2[KIND]).toBe("product")
       expect(Object.keys((step2 as any).fields)).toContain("name")
     })
   })

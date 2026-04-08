@@ -18,6 +18,7 @@ import {
   type AnnotatedSchema,
   type DiscriminatedSumSchema,
   isNullableSum,
+  KIND,
   type MapSchema,
   type PositionalSumSchema,
   type ProductSchema,
@@ -385,7 +386,7 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
  * used in error messages for nullable sums.
  */
 function innerSchemaExpected(schema: Schema): string {
-  switch (schema._kind) {
+  switch (schema[KIND]) {
     case "scalar":
       return scalarExpected(schema.scalarKind)
     case "product":

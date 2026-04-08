@@ -22,6 +22,7 @@ import type { Schema as SchemaType } from "@kyneta/schema"
 import {
   type AnnotatedSchema,
   type DiscriminatedSumSchema,
+  type ExtractTags,
   type MapSchema,
   type PlainProductSchema,
   type PlainSchema,
@@ -71,7 +72,7 @@ export type LoroDocFieldSchema =
  * The annotation implies scalar string semantics for reads,
  * but the backend provides collaborative editing (insert, delete, marks).
  */
-function text(): AnnotatedSchema<"text", undefined> {
+function text(): AnnotatedSchema<"text", undefined, "text"> {
   return Schema.annotated("text")
 }
 
@@ -81,7 +82,7 @@ function text(): AnnotatedSchema<"text", undefined> {
  * The annotation implies scalar number semantics for reads,
  * but the backend provides increment/decrement.
  */
-function counter(): AnnotatedSchema<"counter", undefined> {
+function counter(): AnnotatedSchema<"counter", undefined, "counter"> {
   return Schema.annotated("counter")
 }
 
@@ -91,7 +92,7 @@ function counter(): AnnotatedSchema<"counter", undefined> {
  */
 function movableList<I extends SchemaType>(
   item: I,
-): AnnotatedSchema<"movable", SequenceSchema<I>> {
+): AnnotatedSchema<"movable", SequenceSchema<I, ExtractTags<I>>, "movable" | ExtractTags<I>> {
   return Schema.annotated("movable", Schema.sequence(item))
 }
 
@@ -101,7 +102,7 @@ function movableList<I extends SchemaType>(
  *
  * The `nodeData` schema describes the shape of each tree node's data.
  */
-function tree<S extends SchemaType>(nodeData: S): AnnotatedSchema<"tree", S> {
+function tree<S extends SchemaType>(nodeData: S): AnnotatedSchema<"tree", S, "tree" | ExtractTags<S>> {
   return Schema.annotated("tree", nodeData)
 }
 
@@ -127,11 +128,8 @@ function tree<S extends SchemaType>(nodeData: S): AnnotatedSchema<"tree", S> {
  */
 function doc<F extends Record<string, LoroDocFieldSchema>>(
   fields: F,
-): AnnotatedSchema<"doc", ProductSchema<F>> {
-  return Schema.doc(fields as Record<string, SchemaType>) as AnnotatedSchema<
-    "doc",
-    ProductSchema<F>
-  >
+): AnnotatedSchema<"doc", ProductSchema<F, ExtractTags<F[keyof F]>>, "doc" | ExtractTags<F[keyof F]>> {
+  return Schema.doc(fields as Record<string, SchemaType>) as any
 }
 
 // ---------------------------------------------------------------------------
@@ -191,25 +189,25 @@ const plain = {
 
   /** Fixed-key plain struct (product with no annotation).
    *  Fields are constrained to `PlainSchema` — no CRDT annotations allowed. */
-  struct<F extends Record<string, PlainSchema>>(fields: F): ProductSchema<F> {
+  struct<F extends Record<string, PlainSchema>>(fields: F): ProductSchema<F, ExtractTags<F[keyof F]>> {
     return Schema.struct(fields)
   },
 
   /** Dynamic-key plain record (map with no annotation).
    *  Item schema is constrained to `PlainSchema`. */
-  record<I extends PlainSchema>(item: I): MapSchema<I> {
+  record<I extends PlainSchema>(item: I): MapSchema<I, ExtractTags<I>> {
     return Schema.record(item)
   },
 
   /** Plain array (sequence with no annotation).
    *  Item schema is constrained to `PlainSchema`. */
-  array<I extends PlainSchema>(item: I): SequenceSchema<I> {
+  array<I extends PlainSchema>(item: I): SequenceSchema<I, ExtractTags<I>> {
     return Schema.list(item)
   },
 
   /** Union of plain schemas.
    *  Variants are constrained to `PlainSchema`. */
-  union<V extends PlainSchema[]>(...variants: [...V]): PositionalSumSchema<V> {
+  union<V extends PlainSchema[]>(...variants: [...V]): PositionalSumSchema<V, ExtractTags<V[number]>> {
     return Schema.sum(variants)
   },
 
@@ -218,7 +216,7 @@ const plain = {
   discriminatedUnion<D extends string, V extends PlainProductSchema[]>(
     discriminant: D,
     variants: [...V],
-  ): DiscriminatedSumSchema<D, V> {
+  ): DiscriminatedSumSchema<D, V, ExtractTags<V[number]>> {
     return Schema.discriminatedUnion(discriminant, variants)
   },
 
@@ -232,7 +230,7 @@ const plain = {
    */
   nullable<S extends PlainSchema>(
     inner: S,
-  ): PositionalSumSchema<[ScalarSchema<"null">, S]> {
+  ): PositionalSumSchema<[ScalarSchema<"null">, S], ExtractTags<S>> {
     return Schema.nullable(inner)
   },
 } as const

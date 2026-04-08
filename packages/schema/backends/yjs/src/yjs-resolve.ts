@@ -15,7 +15,7 @@
 // captures all mutations with correct relative paths.
 
 import type { Path, Schema as SchemaNode, Segment } from "@kyneta/schema"
-import { advanceSchema } from "@kyneta/schema"
+import { advanceSchema, KIND } from "@kyneta/schema"
 import * as Y from "yjs"
 
 // ---------------------------------------------------------------------------
@@ -82,7 +82,7 @@ export function resolveYjsType(
   // to reach the product schema whose fields are the root map's children.
   let rootProduct = rootSchema
   while (
-    rootProduct._kind === "annotated" &&
+    rootProduct[KIND] === "annotated" &&
     rootProduct.schema !== undefined
   ) {
     rootProduct = rootProduct.schema

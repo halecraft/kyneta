@@ -20,7 +20,7 @@
 // - "authoritative": request/response, total order (Plain)
 // - "ephemeral": unidirectional broadcast, timestamp-based (Ephemeral)
 
-import type { Schema as SchemaNode } from "./schema.js"
+import type { ExtractTags, Schema as SchemaNode } from "./schema.js"
 import type {
   MergeStrategy,
   ReplicaFactory,
@@ -270,6 +270,22 @@ export function isBoundSchema(value: unknown): value is BoundSchema {
 }
 
 // ---------------------------------------------------------------------------
+// RestrictTags — compile-time bind() guard
+// ---------------------------------------------------------------------------
+
+/**
+ * Type-level guard for bind(). Resolves to S when all annotation tags
+ * in S are within AllowedTags, never otherwise.
+ *
+ * Uses Exclude to check if any accumulated tags fall outside AllowedTags.
+ * When AllowedTags = string, every tag is allowed (unconstrained).
+ */
+export type RestrictTags<S, AllowedTags extends string> =
+  [Exclude<ExtractTags<S>, AllowedTags>] extends [never]
+    ? S
+    : never
+
+// ---------------------------------------------------------------------------
 // Strategy type aliases — constrain namespace overrides
 // ---------------------------------------------------------------------------
 
@@ -298,8 +314,14 @@ export type CrdtStrategy = "collaborative" | "ephemeral"
  * loro.replica("ephemeral")       // ephemeral
  * ```
  */
-export interface SubstrateNamespace<S extends MergeStrategy> {
-  bind<N extends SchemaNode>(schema: N, strategy?: S): BoundSchema<N>
+export interface SubstrateNamespace<
+  S extends MergeStrategy,
+  AllowedTags extends string = string,
+> {
+  bind<N extends SchemaNode>(
+    schema: RestrictTags<N, AllowedTags>,
+    strategy?: S,
+  ): BoundSchema<N>
   replica(strategy?: S): BoundReplica
 }
 
@@ -326,7 +348,10 @@ export interface SubstrateNamespace<S extends MergeStrategy> {
  * })
  * ```
  */
-export function createSubstrateNamespace<S extends MergeStrategy>(config: {
+export function createSubstrateNamespace<
+  S extends MergeStrategy,
+  AllowedTags extends string = string,
+>(config: {
   strategies: {
     [K in S]: {
       factory: FactoryBuilder<any>
@@ -334,7 +359,7 @@ export function createSubstrateNamespace<S extends MergeStrategy>(config: {
     }
   }
   defaultStrategy: S
-}): SubstrateNamespace<S> {
+}): SubstrateNamespace<S, AllowedTags> {
   return {
     bind<N extends SchemaNode>(schema: N, strategy?: S): BoundSchema<N> {
       const s = strategy ?? config.defaultStrategy

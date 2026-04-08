@@ -13,6 +13,24 @@
 import type { Segment } from "./path.js"
 
 // ---------------------------------------------------------------------------
+// KIND — symbol-keyed runtime discriminant
+// ---------------------------------------------------------------------------
+
+/** Runtime discriminant for the Schema union. Symbol-keyed: invisible to
+ *  JSON.stringify and Object.keys, but TypeScript narrows on it. */
+export const KIND = Symbol("kyneta:kind")
+export type KindSymbol = typeof KIND
+
+// ---------------------------------------------------------------------------
+// TAGS — phantom tag accumulator (type-level only)
+// ---------------------------------------------------------------------------
+
+/** Phantom annotation tag accumulator. Type-level only — never populated
+ *  at runtime. Enables compile-time bind() validation via ExtractTags<S>. */
+export const TAGS = Symbol("kyneta:tags")
+export type TagsSymbol = typeof TAGS
+
+// ---------------------------------------------------------------------------
 // Scalar kinds — leaf values (not a separate recursive grammar)
 // ---------------------------------------------------------------------------
 
@@ -61,10 +79,12 @@ export type Schema =
 export interface ScalarSchema<
   K extends ScalarKind = ScalarKind,
   V extends ScalarPlain<K> = ScalarPlain<K>,
+  Tags extends string = never,
 > {
-  readonly _kind: "scalar"
+  readonly [KIND]: "scalar"
   readonly scalarKind: K
   readonly constraint?: readonly V[]
+  readonly [TAGS]?: Tags
 }
 
 /**
@@ -93,24 +113,28 @@ export type ScalarPlain<K extends ScalarKind> = K extends "string"
 
 export interface ProductSchema<
   F extends Record<string, Schema> = Record<string, Schema>,
+  Tags extends string = string,
 > {
-  readonly _kind: "product"
+  readonly [KIND]: "product"
   readonly fields: Readonly<F>
   readonly discriminantKey?: string
+  readonly [TAGS]?: Tags
 }
 
 // --- Sequence ----------------------------------------------------------------
 
-export interface SequenceSchema<I extends Schema = Schema> {
-  readonly _kind: "sequence"
+export interface SequenceSchema<I extends Schema = Schema, Tags extends string = string> {
+  readonly [KIND]: "sequence"
   readonly item: I
+  readonly [TAGS]?: Tags
 }
 
 // --- Map ---------------------------------------------------------------------
 
-export interface MapSchema<I extends Schema = Schema> {
-  readonly _kind: "map"
+export interface MapSchema<I extends Schema = Schema, Tags extends string = string> {
+  readonly [KIND]: "map"
   readonly item: I
+  readonly [TAGS]?: Tags
 }
 
 // --- Sum ---------------------------------------------------------------------
@@ -123,24 +147,27 @@ export interface MapSchema<I extends Schema = Schema> {
  *    variants. Each variant is a `ProductSchema` that declares the
  *    discriminant as a constrained string scalar field (Zod-style).
  *
- * Both flavors share the `_kind: "sum"` discriminant. If `discriminant`
+ * Both flavors share the `[KIND]: "sum"` discriminant. If `discriminant`
  * is present, the sum is discriminated.
  */
 export type SumSchema = PositionalSumSchema | DiscriminatedSumSchema
 
 export interface PositionalSumSchema<
   V extends readonly Schema[] = readonly Schema[],
+  Tags extends string = string,
 > {
-  readonly _kind: "sum"
+  readonly [KIND]: "sum"
   readonly variants: V
   readonly discriminant?: undefined
+  readonly [TAGS]?: Tags
 }
 
 export interface DiscriminatedSumSchema<
   D extends string = string,
   V extends readonly ProductSchema[] = readonly ProductSchema[],
+  Tags extends string = string,
 > {
-  readonly _kind: "sum"
+  readonly [KIND]: "sum"
   readonly discriminant: D
   readonly variants: V
   /**
@@ -150,6 +177,7 @@ export interface DiscriminatedSumSchema<
    * `describe`, etc.
    */
   readonly variantMap: Readonly<Record<string, ProductSchema>>
+  readonly [TAGS]?: Tags
 }
 
 // --- Annotated ---------------------------------------------------------------
@@ -173,11 +201,13 @@ export interface DiscriminatedSumSchema<
 export interface AnnotatedSchema<
   T extends string = string,
   S extends Schema | undefined = Schema | undefined,
+  Tags extends string = string,
 > {
-  readonly _kind: "annotated"
+  readonly [KIND]: "annotated"
   readonly tag: T
   readonly schema?: S
   readonly meta?: Readonly<Record<string, unknown>>
+  readonly [TAGS]?: Tags
 }
 
 // ---------------------------------------------------------------------------
@@ -216,26 +246,30 @@ export type PlainSchema =
  */
 export interface PlainProductSchema<
   F extends Record<string, PlainSchema> = Record<string, PlainSchema>,
+  Tags extends string = never,
 > {
-  readonly _kind: "product"
+  readonly [KIND]: "product"
   readonly fields: Readonly<F>
   readonly discriminantKey?: string
+  readonly [TAGS]?: Tags
 }
 
 /**
  * Sequence (ordered collection) constrained to plain children.
  */
-export interface PlainSequenceSchema<I extends PlainSchema = PlainSchema> {
-  readonly _kind: "sequence"
+export interface PlainSequenceSchema<I extends PlainSchema = PlainSchema, Tags extends string = never> {
+  readonly [KIND]: "sequence"
   readonly item: I
+  readonly [TAGS]?: Tags
 }
 
 /**
  * Map (dynamic-key collection) constrained to plain children.
  */
-export interface PlainMapSchema<I extends PlainSchema = PlainSchema> {
-  readonly _kind: "map"
+export interface PlainMapSchema<I extends PlainSchema = PlainSchema, Tags extends string = never> {
+  readonly [KIND]: "map"
   readonly item: I
+  readonly [TAGS]?: Tags
 }
 
 /**
@@ -243,10 +277,12 @@ export interface PlainMapSchema<I extends PlainSchema = PlainSchema> {
  */
 export interface PlainPositionalSumSchema<
   V extends readonly PlainSchema[] = readonly PlainSchema[],
+  Tags extends string = never,
 > {
-  readonly _kind: "sum"
+  readonly [KIND]: "sum"
   readonly variants: V
   readonly discriminant?: undefined
+  readonly [TAGS]?: Tags
 }
 
 /**
@@ -255,12 +291,26 @@ export interface PlainPositionalSumSchema<
 export interface PlainDiscriminatedSumSchema<
   D extends string = string,
   V extends readonly PlainProductSchema[] = readonly PlainProductSchema[],
+  Tags extends string = never,
 > {
-  readonly _kind: "sum"
+  readonly [KIND]: "sum"
   readonly discriminant: D
   readonly variants: V
   readonly variantMap: Readonly<Record<string, PlainProductSchema>>
+  readonly [TAGS]?: Tags
 }
+
+// ---------------------------------------------------------------------------
+// ExtractTags — single-level indexed access for tag extraction
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract the accumulated annotation tags from a schema type.
+ *
+ * Single-level indexed access — NOT recursive. Tags are accumulated
+ * by constructors during schema construction (a type-level catamorphism).
+ */
+export type ExtractTags<S> = S extends { readonly [TAGS]?: infer T } ? (T extends string ? T : never) : never
 
 // ---------------------------------------------------------------------------
 // Structural constructors (low-level, grammar-native)
@@ -276,27 +326,27 @@ function scalar<K extends ScalarKind, V extends ScalarPlain<K>>(
   constraint?: readonly V[],
 ): ScalarSchema<K, V> {
   if (constraint !== undefined && constraint.length > 0) {
-    return { _kind: "scalar", scalarKind, constraint } as ScalarSchema<K, V>
+    return { [KIND]: "scalar", scalarKind, constraint } as ScalarSchema<K, V>
   }
-  return { _kind: "scalar", scalarKind } as ScalarSchema<K, V>
+  return { [KIND]: "scalar", scalarKind } as ScalarSchema<K, V>
 }
 
 function product<F extends Record<string, Schema>>(
   fields: F,
-): ProductSchema<F> {
-  return { _kind: "product", fields }
+): ProductSchema<F, ExtractTags<F[keyof F]>> {
+  return { [KIND]: "product", fields } as any
 }
 
-function sequence<I extends Schema>(item: I): SequenceSchema<I> {
-  return { _kind: "sequence", item }
+function sequence<I extends Schema>(item: I): SequenceSchema<I, ExtractTags<I>> {
+  return { [KIND]: "sequence", item } as any
 }
 
-function map<I extends Schema>(item: I): MapSchema<I> {
-  return { _kind: "map", item }
+function map<I extends Schema>(item: I): MapSchema<I, ExtractTags<I>> {
+  return { [KIND]: "map", item } as any
 }
 
-function sum<V extends Schema[]>(variants: [...V]): PositionalSumSchema<V> {
-  return { _kind: "sum", variants }
+function sum<V extends Schema[]>(variants: [...V]): PositionalSumSchema<V, ExtractTags<V[number]>> {
+  return { [KIND]: "sum", variants } as any
 }
 
 /**
@@ -325,14 +375,14 @@ export function buildVariantMap<D extends string>(
       )
     }
     if (
-      fieldSchema._kind !== "scalar" ||
+      fieldSchema[KIND] !== "scalar" ||
       fieldSchema.scalarKind !== "string" ||
       !fieldSchema.constraint ||
       fieldSchema.constraint.length === 0
     ) {
       throw new Error(
         `discriminatedUnion: variant ${i}'s "${discriminant}" field must be a constrained string scalar` +
-          ` (e.g. Schema.string("value")), got ${fieldSchema._kind}/${(fieldSchema as ScalarSchema).scalarKind ?? "?"}.`,
+          ` (e.g. Schema.string("value")), got ${fieldSchema[KIND]}/${(fieldSchema as ScalarSchema).scalarKind ?? "?"}.`,
       )
     }
     const discValue = fieldSchema.constraint[0] as string
@@ -349,27 +399,37 @@ export function buildVariantMap<D extends string>(
 function discriminatedSum<D extends string, V extends ProductSchema[]>(
   discriminant: D,
   variants: [...V],
-): DiscriminatedSumSchema<D, V> {
+): DiscriminatedSumSchema<D, V, ExtractTags<V[number]>> {
   const variantMap = buildVariantMap(discriminant, variants)
   // Stamp each variant with the discriminant key so interpreter layers
   // can identify and special-case the discriminant field at runtime.
   for (const variant of variants) {
     ;(variant as any).discriminantKey = discriminant
   }
-  return { _kind: "sum", discriminant, variants, variantMap }
+  return { [KIND]: "sum", discriminant, variants, variantMap } as any
 }
 
+function annotated<T extends string>(
+  tag: T,
+  schema?: undefined,
+  meta?: Record<string, unknown>,
+): AnnotatedSchema<T, undefined, T>
+function annotated<T extends string, S extends Schema>(
+  tag: T,
+  schema: S,
+  meta?: Record<string, unknown>,
+): AnnotatedSchema<T, S, T | ExtractTags<S>>
 function annotated<T extends string, S extends Schema | undefined = undefined>(
   tag: T,
   schema?: S,
   meta?: Record<string, unknown>,
 ): AnnotatedSchema<T, S> {
   return {
-    _kind: "annotated",
+    [KIND]: "annotated",
     tag,
     ...(schema !== undefined && { schema }),
     ...(meta !== undefined && { meta }),
-  } as AnnotatedSchema<T, S>
+  } as any
 }
 
 // ---------------------------------------------------------------------------
@@ -382,21 +442,21 @@ function annotated<T extends string, S extends Schema | undefined = undefined>(
 /**
  * Ordered list. Produces `sequence(item)`.
  */
-function list<I extends Schema>(item: I): SequenceSchema<I> {
+function list<I extends Schema>(item: I): SequenceSchema<I, ExtractTags<I>> {
   return sequence(item)
 }
 
 /**
  * Fixed-key struct. Produces `product(fields)`.
  */
-function struct<F extends Record<string, Schema>>(fields: F): ProductSchema<F> {
+function struct<F extends Record<string, Schema>>(fields: F): ProductSchema<F, ExtractTags<F[keyof F]>> {
   return product(fields)
 }
 
 /**
  * Dynamic-key record. Produces `map(item)`.
  */
-function record<I extends Schema>(item: I): MapSchema<I> {
+function record<I extends Schema>(item: I): MapSchema<I, ExtractTags<I>> {
   return map(item)
 }
 
@@ -409,7 +469,7 @@ function record<I extends Schema>(item: I): MapSchema<I> {
  */
 function doc<F extends Record<string, Schema>>(
   fields: F,
-): AnnotatedSchema<"doc", ProductSchema<F>> {
+): AnnotatedSchema<"doc", ProductSchema<F, ExtractTags<F[keyof F]>>, "doc" | ExtractTags<F[keyof F]>> {
   return annotated("doc", product(fields))
 }
 
@@ -498,7 +558,7 @@ function any(): ScalarSchema<"any"> {
  */
 function union<V extends Schema[]>(
   ...variants: [...V]
-): PositionalSumSchema<V> {
+): PositionalSumSchema<V, ExtractTags<V[number]>> {
   return sum(variants)
 }
 
@@ -523,7 +583,7 @@ function union<V extends Schema[]>(
 function discriminatedUnion<D extends string, V extends ProductSchema[]>(
   discriminant: D,
   variants: [...V],
-): DiscriminatedSumSchema<D, V> {
+): DiscriminatedSumSchema<D, V, ExtractTags<V[number]>> {
   return discriminatedSum(discriminant, variants)
 }
 
@@ -537,7 +597,7 @@ function discriminatedUnion<D extends string, V extends ProductSchema[]>(
  */
 function nullable<S extends Schema>(
   inner: S,
-): PositionalSumSchema<[ScalarSchema<"null">, S]> {
+): PositionalSumSchema<[ScalarSchema<"null">, S], ExtractTags<S>> {
   return sum([null_(), inner])
 }
 
@@ -622,15 +682,15 @@ export const Schema = {
  * returns `"annotated"` as well — callers that want the inner structural
  * kind should unwrap `.schema` themselves.
  */
-export function structuralKind(schema: Schema): Schema["_kind"] {
-  return schema._kind
+export function structuralKind(schema: Schema): Schema[KindSymbol] {
+  return schema[KIND]
 }
 
 /**
  * Returns `true` if the schema node is annotated (directly).
  */
 export function isAnnotated(schema: Schema): schema is AnnotatedSchema {
-  return schema._kind === "annotated"
+  return schema[KIND] === "annotated"
 }
 
 /**
@@ -642,7 +702,7 @@ export function isAnnotated(schema: Schema): schema is AnnotatedSchema {
 export function isNullableSum(schema: PositionalSumSchema): boolean {
   return (
     schema.variants.length === 2 &&
-    schema.variants[0]?._kind === "scalar" &&
+    schema.variants[0]?.[KIND] === "scalar" &&
     (schema.variants[0] as ScalarSchema).scalarKind === "null"
   )
 }
@@ -655,7 +715,7 @@ export function isNullableSum(schema: PositionalSumSchema): boolean {
  * to the underlying structure while still being able to inspect the tag.
  */
 export function unwrapAnnotation(schema: Schema): Schema | undefined {
-  if (schema._kind === "annotated") {
+  if (schema[KIND] === "annotated") {
     return schema.schema
   }
   return schema
@@ -689,7 +749,7 @@ export function unwrapAnnotation(schema: Schema): Schema | undefined {
 export function advanceSchema(schema: Schema, segment: Segment): Schema {
   // Unwrap annotations to reach the structural node
   let structural = schema
-  while (structural._kind === "annotated") {
+  while (structural[KIND] === "annotated") {
     if (structural.schema === undefined) {
       throw new Error(
         `advanceSchema: cannot advance through leaf annotation "${structural.tag}" (no inner schema)`,
@@ -698,7 +758,7 @@ export function advanceSchema(schema: Schema, segment: Segment): Schema {
     structural = structural.schema
   }
 
-  switch (structural._kind) {
+  switch (structural[KIND]) {
     case "product": {
       if (segment.role !== "key") {
         throw new Error(

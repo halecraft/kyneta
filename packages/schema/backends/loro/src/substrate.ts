@@ -10,20 +10,19 @@
 // underlying LoroDoc, regardless of source (local kyneta writes,
 // merge, external doc.import, external raw Loro API mutations).
 
-import type {
-  Replica,
-  ReplicaFactory,
-  Schema as SchemaNode,
-  Substrate,
-  SubstrateFactory,
-  SubstratePayload,
-} from "@kyneta/schema"
 import {
   BACKING_DOC,
   buildWritableContext,
-  type ChangeBase,
   executeBatch,
+  KIND,
+  type ChangeBase,
   type Path,
+  type Replica,
+  type ReplicaFactory,
+  type Schema as SchemaNode,
+  type Substrate,
+  type SubstrateFactory,
+  type SubstratePayload,
   type WritableContext,
   Zero,
 } from "@kyneta/schema"
@@ -524,13 +523,13 @@ export function ensureLoroContainers(
 ): void {
   let rootProduct = schema
   while (
-    rootProduct._kind === "annotated" &&
+    rootProduct[KIND] === "annotated" &&
     rootProduct.schema !== undefined
   ) {
     rootProduct = rootProduct.schema
   }
 
-  if (rootProduct._kind === "product") {
+  if (rootProduct[KIND] === "product") {
     for (const [key, fieldSchema] of Object.entries(rootProduct.fields).sort(
       ([a], [b]) => a.localeCompare(b),
     )) {
@@ -558,7 +557,7 @@ export function ensureRootContainer(
   fieldSchema: SchemaNode,
   conditional = false,
 ): void {
-  const tag = fieldSchema._kind === "annotated" ? fieldSchema.tag : undefined
+  const tag = fieldSchema[KIND] === "annotated" ? fieldSchema.tag : undefined
 
   switch (tag) {
     case "text":
@@ -577,11 +576,11 @@ export function ensureRootContainer(
 
   // Non-annotated structural types
   let structural = fieldSchema
-  while (structural._kind === "annotated" && structural.schema !== undefined) {
+  while (structural[KIND] === "annotated" && structural.schema !== undefined) {
     structural = structural.schema
   }
 
-  switch (structural._kind) {
+  switch (structural[KIND]) {
     case "product":
       doc.getMap(key)
       return

@@ -25,7 +25,7 @@ import type {
   TextChange,
   TextInstruction,
 } from "@kyneta/schema"
-import { advanceSchema, expandMapOpsToLeaves, RawPath } from "@kyneta/schema"
+import { advanceSchema, expandMapOpsToLeaves, KIND, RawPath } from "@kyneta/schema"
 import type {
   ContainerID,
   CounterDiff,
@@ -213,10 +213,10 @@ function sequenceChangeToDiff(
 
   // Determine the item schema (unwrap annotations to find the sequence)
   let seqSchema = targetSchema
-  while (seqSchema._kind === "annotated" && seqSchema.schema !== undefined) {
+  while (seqSchema[KIND] === "annotated" && seqSchema.schema !== undefined) {
     seqSchema = seqSchema.schema
   }
-  const itemSchema = seqSchema._kind === "sequence" ? seqSchema.item : undefined
+  const itemSchema = seqSchema[KIND] === "sequence" ? seqSchema.item : undefined
 
   for (const inst of change.instructions as readonly SequenceInstruction[]) {
     if ("retain" in inst) {
@@ -269,10 +269,10 @@ function mapChangeToDiff(
 
   // Determine the item schema for dynamic maps
   let mapSchema = targetSchema
-  while (mapSchema._kind === "annotated" && mapSchema.schema !== undefined) {
+  while (mapSchema[KIND] === "annotated" && mapSchema.schema !== undefined) {
     mapSchema = mapSchema.schema
   }
-  const valueSchema = mapSchema._kind === "map" ? mapSchema.item : undefined
+  const valueSchema = mapSchema[KIND] === "map" ? mapSchema.item : undefined
 
   // Set entries
   if (change.set) {
@@ -281,7 +281,7 @@ function mapChangeToDiff(
       let fieldSchema = valueSchema
       if (
         !fieldSchema &&
-        mapSchema._kind === "product" &&
+        mapSchema[KIND] === "product" &&
         mapSchema.fields[key]
       ) {
         fieldSchema = mapSchema.fields[key]
@@ -420,7 +420,7 @@ function annotationToContainerType(
  */
 function needsContainer(_value: unknown, schema: SchemaNode): boolean {
   // Check for annotated Loro container types BEFORE unwrapping
-  if (schema._kind === "annotated") {
+  if (schema[KIND] === "annotated") {
     if (annotationToContainerType(schema.tag) !== undefined) {
       return true
     }
@@ -428,11 +428,11 @@ function needsContainer(_value: unknown, schema: SchemaNode): boolean {
 
   // Unwrap annotations (e.g. "doc" wrapping a product)
   let s = schema
-  while (s._kind === "annotated" && s.schema !== undefined) {
+  while (s[KIND] === "annotated" && s.schema !== undefined) {
     s = s.schema
   }
 
-  return s._kind === "product" || s._kind === "map" || s._kind === "sequence"
+  return s[KIND] === "product" || s[KIND] === "map" || s[KIND] === "sequence"
 }
 
 /**
@@ -456,7 +456,7 @@ function materializeValueDiffs(
   result: [ContainerID, Diff | JsonDiff][],
 ): void {
   // Check for annotated Loro container types first (counter, text, etc.)
-  if (schema._kind === "annotated") {
+  if (schema[KIND] === "annotated") {
     const containerType = annotationToContainerType(schema.tag)
     if (containerType !== undefined) {
       // Leaf container — emit an appropriate diff to initialize it.
@@ -498,11 +498,11 @@ function materializeValueDiffs(
 
   // Unwrap annotations (e.g. "doc" wrapping a product)
   let s = schema
-  while (s._kind === "annotated" && s.schema !== undefined) {
+  while (s[KIND] === "annotated" && s.schema !== undefined) {
     s = s.schema
   }
 
-  if (s._kind === "product" && typeof value === "object" && value !== null) {
+  if (s[KIND] === "product" && typeof value === "object" && value !== null) {
     const obj = value as Record<string, unknown>
     const updated: Record<string, Value | JsonContainerID | undefined> = {}
 
@@ -546,7 +546,7 @@ function materializeValueDiffs(
     // deferred init diffs for the containers it created.
     result.push([parentCID, { type: "map", updated } as MapJsonDiff])
     result.push(...deferred)
-  } else if (s._kind === "product" && (value === undefined || value === null)) {
+  } else if (s[KIND] === "product" && (value === undefined || value === null)) {
     // Product with no value — still need to create containers for
     // annotated fields in the schema
     const updated: Record<string, Value | JsonContainerID | undefined> = {}
@@ -569,7 +569,7 @@ function materializeValueDiffs(
       result.push([parentCID, { type: "map", updated } as MapJsonDiff])
       result.push(...deferred)
     }
-  } else if (s._kind === "map" && typeof value === "object" && value !== null) {
+  } else if (s[KIND] === "map" && typeof value === "object" && value !== null) {
     const obj = value as Record<string, unknown>
     const updated: Record<string, Value | JsonContainerID | undefined> = {}
     const deferred: [ContainerID, Diff | JsonDiff][] = []
@@ -598,7 +598,7 @@ function materializeValueDiffs(
  * map, sequence), uses "Map" or "List".
  */
 function materializeCIDForSchema(schema: SchemaNode): ContainerID {
-  if (schema._kind === "annotated") {
+  if (schema[KIND] === "annotated") {
     const containerType = annotationToContainerType(schema.tag)
     if (containerType !== undefined) {
       return syntheticCID(containerType)
@@ -607,11 +607,11 @@ function materializeCIDForSchema(schema: SchemaNode): ContainerID {
 
   // Unwrap annotations to find the structural kind
   let s = schema
-  while (s._kind === "annotated" && s.schema !== undefined) {
+  while (s[KIND] === "annotated" && s.schema !== undefined) {
     s = s.schema
   }
 
-  switch (s._kind) {
+  switch (s[KIND]) {
     case "sequence":
       return syntheticCID("List")
     default:

@@ -22,7 +22,7 @@ import {
 } from "@kyneta/changefeed"
 import type { ReplaceChange } from "./change.js"
 import type { Path } from "./interpret.js"
-import { advanceSchema, type Schema as SchemaNode } from "./schema.js"
+import { advanceSchema, KIND, type Schema as SchemaNode } from "./schema.js"
 
 // ---------------------------------------------------------------------------
 // Re-exports from @kyneta/changefeed used by schema internals
@@ -144,7 +144,7 @@ function resolveSchemaKindAtPath(
   try {
     let current = schema
     // Unwrap the root annotation (e.g. doc → product)
-    while (current._kind === "annotated" && current.schema !== undefined) {
+    while (current[KIND] === "annotated" && current.schema !== undefined) {
       current = current.schema
     }
     // Walk each segment except the last — we want the schema AT the path,
@@ -153,11 +153,11 @@ function resolveSchemaKindAtPath(
       current = advanceSchema(current, segment)
     }
     // Unwrap annotations at the target position
-    while (current._kind === "annotated" && current.schema !== undefined) {
+    while (current[KIND] === "annotated" && current.schema !== undefined) {
       current = current.schema
     }
-    if (current._kind === "product") return "product"
-    if (current._kind === "map") return "map"
+    if (current[KIND] === "product") return "product"
+    if (current[KIND] === "map") return "map"
     return "other"
   } catch {
     // Schema walk failed (e.g. sum mid-path, unknown field) — safe fallback

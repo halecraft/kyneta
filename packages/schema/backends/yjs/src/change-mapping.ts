@@ -29,8 +29,9 @@ import type {
   TextChange,
   TextInstruction,
 } from "@kyneta/schema"
-import { advanceSchema, expandMapOpsToLeaves, RawPath } from "@kyneta/schema"
+import { advanceSchema, expandMapOpsToLeaves, KIND, RawPath } from "@kyneta/schema"
 import * as Y from "yjs"
+import { YJS_SUPPORTED_TAGS } from "./populate.js"
 import { resolveYjsType } from "./yjs-resolve.js"
 
 // ---------------------------------------------------------------------------
@@ -74,15 +75,15 @@ export function applyChangeToYjs(
 
     case "increment":
       throw new Error(
-        "Yjs substrate does not support counter annotations. " +
-          "Use Schema.number() with ReplaceChange instead. " +
+        `Yjs substrate does not support annotation required for "${change.type}" changes. ` +
+          `Supported annotations: ${[...YJS_SUPPORTED_TAGS].join(", ")}. ` +
           `Attempted IncrementChange with amount=${(change as IncrementChange).amount} at path [${pathToString(path)}].`,
       )
 
     case "tree":
       throw new Error(
-        "Yjs substrate does not support tree annotations. " +
-          "Yjs has no native tree type. " +
+        `Yjs substrate does not support annotation required for "${change.type}" changes. ` +
+          `Supported annotations: ${[...YJS_SUPPORTED_TAGS].join(", ")}. ` +
           `Attempted TreeChange at path [${pathToString(path)}].`,
       )
 
@@ -251,7 +252,7 @@ function maybeCreateSharedType(
   if (schema === undefined) return value
 
   const structural = unwrapAnnotations(schema)
-  const tag = schema._kind === "annotated" ? schema.tag : undefined
+  const tag = schema[KIND] === "annotated" ? schema.tag : undefined
 
   // Annotated text → Y.Text
   if (tag === "text") {
@@ -262,12 +263,15 @@ function maybeCreateSharedType(
     return text
   }
 
-  // Annotated counter/movable/tree → should not reach here (thrown earlier)
-  if (tag === "counter" || tag === "movable" || tag === "tree") {
-    throw new Error(`Yjs substrate does not support "${tag}" annotations.`)
+  // Unsupported annotation → should not reach here (thrown earlier or caught at bind time)
+  if (tag !== undefined && !YJS_SUPPORTED_TAGS.has(tag)) {
+    throw new Error(
+      `Yjs substrate does not support annotation "${tag}". ` +
+        `Supported annotations: ${[...YJS_SUPPORTED_TAGS].join(", ")}.`,
+    )
   }
 
-  switch (structural._kind) {
+  switch (structural[KIND]) {
     case "product": {
       if (
         value === null ||
@@ -328,7 +332,7 @@ function createStructuredMap(
   const map = new Y.Map()
   const structural = unwrapAnnotations(productSchema)
 
-  if (structural._kind !== "product") {
+  if (structural[KIND] !== "product") {
     // Fallback: set all values as plain
     for (const [key, val] of Object.entries(obj)) {
       map.set(key, val)
@@ -352,12 +356,15 @@ function createStructuredMap(
     structural.fields as Record<string, SchemaNode>,
   )) {
     if (key in obj) continue // already processed above
-    const tag = fieldSchema._kind === "annotated" ? fieldSchema.tag : undefined
+    const tag = fieldSchema[KIND] === "annotated" ? fieldSchema.tag : undefined
     if (tag === "text") {
       map.set(key, new Y.Text())
+    } else if (tag !== undefined && !YJS_SUPPORTED_TAGS.has(tag)) {
+      throw new Error(
+        `Yjs substrate does not support annotation "${tag}". ` +
+          `Supported annotations: ${[...YJS_SUPPORTED_TAGS].join(", ")}.`,
+      )
     }
-    // Other annotated container types (counter, movable, tree) are
-    // unsupported in Yjs and will throw if used elsewhere.
   }
 
   return map
@@ -546,7 +553,7 @@ function extractEventValue(value: unknown): unknown {
  */
 function unwrapAnnotations(schema: SchemaNode): SchemaNode {
   let s = schema
-  while (s._kind === "annotated" && s.schema !== undefined) {
+  while (s[KIND] === "annotated" && s.schema !== undefined) {
     s = s.schema
   }
   return s
@@ -568,7 +575,7 @@ function resolveSchemaAtPath(rootSchema: SchemaNode, path: Path): SchemaNode {
  */
 function getItemSchema(schema: SchemaNode): SchemaNode | undefined {
   const structural = unwrapAnnotations(schema)
-  return structural._kind === "sequence" ? structural.item : undefined
+  return structural[KIND] === "sequence" ? structural.item : undefined
 }
 
 /**
@@ -579,10 +586,10 @@ function getFieldSchema(
   key: string,
 ): SchemaNode | undefined {
   const structural = unwrapAnnotations(schema)
-  if (structural._kind === "product") {
+  if (structural[KIND] === "product") {
     return structural.fields[key]
   }
-  if (structural._kind === "map") {
+  if (structural[KIND] === "map") {
     return structural.item
   }
   return undefined

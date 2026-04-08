@@ -1,4 +1,4 @@
-import { RawPath, Schema } from "@kyneta/schema"
+import { KIND, RawPath, Schema } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
 import { ensureContainers } from "../populate.js"
@@ -63,7 +63,7 @@ function populateField(
   fieldSchema: any,
   value: unknown,
 ) {
-  const tag = fieldSchema._kind === "annotated" ? fieldSchema.tag : undefined
+  const tag = fieldSchema[KIND] === "annotated" ? fieldSchema.tag : undefined
 
   if (tag === "text") {
     // Text field — the Y.Text was already created by ensureContainers
@@ -76,7 +76,7 @@ function populateField(
 
   const structural = unwrapAnnotations(fieldSchema)
 
-  switch (structural._kind) {
+  switch (structural[KIND]) {
     case "product": {
       // Struct — recurse into the existing Y.Map
       const childMap = ymap.get(key) as Y.Map<unknown>
@@ -100,7 +100,7 @@ function populateField(
       if (arr && Array.isArray(value)) {
         for (const item of value) {
           const itemSchema = structural.item
-          if (itemSchema && unwrapAnnotations(itemSchema)._kind === "product") {
+          if (itemSchema && unwrapAnnotations(itemSchema)[KIND] === "product") {
             // Struct items: create a Y.Map for each
             const itemMap = buildStructMap(
               unwrapAnnotations(itemSchema),
@@ -150,7 +150,7 @@ function buildStructMap(
     const value = seed[key]
     if (value === undefined) continue
 
-    const tag = fieldSchema._kind === "annotated" ? fieldSchema.tag : undefined
+    const tag = fieldSchema[KIND] === "annotated" ? fieldSchema.tag : undefined
     if (tag === "text") {
       const text = new Y.Text()
       if (typeof value === "string" && value.length > 0) {
@@ -161,7 +161,7 @@ function buildStructMap(
     }
 
     const structural = unwrapAnnotations(fieldSchema)
-    switch (structural._kind) {
+    switch (structural[KIND]) {
       case "product": {
         map.set(
           key,
@@ -176,7 +176,7 @@ function buildStructMap(
             const itemSchema = structural.element ?? structural.schema
             if (
               itemSchema &&
-              unwrapAnnotations(itemSchema)._kind === "product"
+              unwrapAnnotations(itemSchema)[KIND] === "product"
             ) {
               arr.push([
                 buildStructMap(
@@ -214,16 +214,16 @@ function buildStructMap(
 
 function unwrapToProduct(schema: any): any {
   let s = schema
-  while (s._kind === "annotated" && s.schema !== undefined) {
+  while (s[KIND] === "annotated" && s.schema !== undefined) {
     s = s.schema
   }
-  if (s._kind === "product") return s
+  if (s[KIND] === "product") return s
   return null
 }
 
 function unwrapAnnotations(schema: any): any {
   let s = schema
-  while (s._kind === "annotated" && s.schema !== undefined) {
+  while (s[KIND] === "annotated" && s.schema !== undefined) {
     s = s.schema
   }
   return s

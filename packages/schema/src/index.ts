@@ -9,6 +9,7 @@ export type {
   CrdtStrategy,
   FactoryBuilder,
   JsonStrategy,
+  RestrictTags,
   SubstrateNamespace,
 } from "./bind.js"
 // Interpret, Replicate, BoundReplica are dual-namespace (type + value) —
@@ -230,6 +231,10 @@ export type {
 export type {
   AnnotatedSchema,
   DiscriminatedSumSchema,
+  // Tag extraction
+  ExtractTags,
+  // KIND symbol type
+  KindSymbol,
   MapSchema,
   PlainDiscriminatedSumSchema,
   PlainMapSchema,
@@ -249,6 +254,8 @@ export type {
   Schema as SchemaNode,
   SequenceSchema,
   SumSchema,
+  // TAGS symbol type
+  TagsSymbol,
 } from "./schema.js"
 // Schema — unified recursive grammar (backend-agnostic)
 export {
@@ -256,8 +263,10 @@ export {
   buildVariantMap,
   isAnnotated,
   isNullableSum,
+  KIND,
   Schema,
   structuralKind,
+  TAGS,
   unwrapAnnotation,
 } from "./schema.js"
 // Step — pure state transitions: (State, Change) → State

@@ -141,6 +141,8 @@ Convenience wrappers make this a one-liner:
 - `json.bind(schema)` — plain JS substrate, sequential merge
 - `json.bind(schema, "ephemeral")` — ephemeral substrate (TimestampVersion), ephemeral/presence state
 
+`bind()` validates annotation compatibility at compile time via the allowed-tags formulation. Each substrate declares which annotation tags it supports; schema nodes carry a `[TAGS]` phantom brand accumulating all annotations bottom-up. `yjs.bind()` accepts only `"text"` and `"doc"` annotations — passing a schema containing `"counter"` or `"movable"` is a compile error. `loro.bind()` and `json.bind()` accept all tags (`AllowedTags = string`).
+
 Swapping CRDT backends is a one-import change. Everything downstream — the Exchange sync protocol, the Cast view, the WebSocket transport, the wire format — stays identical because they depend on the `Substrate` interface, not on any particular CRDT library.
 
 ### Auto-Read Insertion and the `()` Snapshot Convention

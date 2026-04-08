@@ -1,11 +1,12 @@
 import { CHANGEFEED, type HasChangefeed } from "@kyneta/changefeed"
-import { describe, expectTypeOf, it } from "vitest"
+import { describe, expect, expectTypeOf, it } from "vitest"
 import {
   type AnnotatedSchema,
   bottomInterpreter,
   type ChangefeedBrand,
   type CounterRef,
   change,
+  type ExtractTags,
   type HasCaching,
   type HasCall,
   type HasRead,
@@ -14,6 +15,7 @@ import {
   type Interpreter,
   type InterpreterLayer,
   interpret,
+  KIND,
   type MapSchema,
   type NavigableMapRef,
   type NavigableSequenceRef,
@@ -37,6 +39,7 @@ import {
   type RefContext,
   type Resolve,
   type ResolveCarrier,
+  type RestrictTags,
   type RRef,
   type RWRef,
   readable,
@@ -132,8 +135,8 @@ describe("type-level: product field key and type preservation", () => {
     expectTypeOf(s.fields).toHaveProperty("age")
 
     // Accessing a known field should give back the specific schema type
-    expectTypeOf(s.fields.name._kind).toEqualTypeOf<"scalar">()
-    expectTypeOf(s.fields.age._kind).toEqualTypeOf<"scalar">()
+    expectTypeOf(s.fields.name[KIND]).toEqualTypeOf<"scalar">()
+    expectTypeOf(s.fields.age[KIND]).toEqualTypeOf<"scalar">()
   })
 
   it("Schema.struct fields preserve specific schema subtypes", () => {
@@ -144,9 +147,9 @@ describe("type-level: product field key and type preservation", () => {
     })
 
     // Each field should be its specific schema subtype
-    expectTypeOf(s.fields.title._kind).toEqualTypeOf<"scalar">()
-    expectTypeOf(s.fields.count._kind).toEqualTypeOf<"scalar">()
-    expectTypeOf(s.fields.tags._kind).toEqualTypeOf<"sequence">()
+    expectTypeOf(s.fields.title[KIND]).toEqualTypeOf<"scalar">()
+    expectTypeOf(s.fields.count[KIND]).toEqualTypeOf<"scalar">()
+    expectTypeOf(s.fields.tags[KIND]).toEqualTypeOf<"sequence">()
   })
 
   it("Schema.product does NOT allow access to non-existent field keys", () => {
@@ -170,7 +173,7 @@ describe("type-level: product field key and type preservation", () => {
 
     // Can we see through to the product's fields?
     // This requires the inner schema to be typed as ProductSchema<...>, not just Schema
-    if (inner && inner._kind === "product") {
+    if (inner && inner[KIND] === "product") {
       expectTypeOf(inner.fields).toHaveProperty("title")
       expectTypeOf(inner.fields).toHaveProperty("items")
     }
@@ -180,7 +183,7 @@ describe("type-level: product field key and type preservation", () => {
 describe("type-level: sequence and map item type preservation", () => {
   it("Schema.sequence item is the exact subtype, not just Schema", () => {
     const s = Schema.sequence(Schema.scalar("string"))
-    expectTypeOf(s.item._kind).toEqualTypeOf<"scalar">()
+    expectTypeOf(s.item[KIND]).toEqualTypeOf<"scalar">()
   })
 
   it("Schema.list item preserves the inner struct type", () => {
@@ -191,12 +194,12 @@ describe("type-level: sequence and map item type preservation", () => {
       }),
     )
     // item should be ProductSchema (or narrower), not just Schema
-    expectTypeOf(s.item._kind).toEqualTypeOf<"product">()
+    expectTypeOf(s.item[KIND]).toEqualTypeOf<"product">()
   })
 
   it("Schema.map item is the exact subtype, not just Schema", () => {
     const s = Schema.map(Schema.scalar("number"))
-    expectTypeOf(s.item._kind).toEqualTypeOf<"scalar">()
+    expectTypeOf(s.item[KIND]).toEqualTypeOf<"scalar">()
   })
 })
 
@@ -230,11 +233,11 @@ describe("type-level: sum variant preservation", () => {
         ProductSchema<{
           type: ScalarSchema<"string", string>
           content: ScalarSchema<"string", string>
-        }>,
+        }, never>,
         ProductSchema<{
           type: ScalarSchema<"string", string>
           url: ScalarSchema<"string", string>
-        }>,
+        }, never>,
       ]
     >()
     // variantMap is derived at runtime — typed as Record<string, ProductSchema>
@@ -267,22 +270,22 @@ describe("type-level: nested composition preserves types end-to-end", () => {
 
     // Inner product's fields should be typed
     const inner = s.schema!
-    if (inner._kind === "product") {
+    if (inner[KIND] === "product") {
       // title is scalar("string")
       const title = inner.fields.title
-      expectTypeOf(title._kind).toEqualTypeOf<"scalar">()
+      expectTypeOf(title[KIND]).toEqualTypeOf<"scalar">()
 
       // messages is a sequence
       const messages = inner.fields.messages
-      expectTypeOf(messages._kind).toEqualTypeOf<"sequence">()
+      expectTypeOf(messages[KIND]).toEqualTypeOf<"sequence">()
 
       // settings is a product
       const settings = inner.fields.settings
-      expectTypeOf(settings._kind).toEqualTypeOf<"product">()
+      expectTypeOf(settings[KIND]).toEqualTypeOf<"product">()
 
       // metadata is a map
       const metadata = inner.fields.metadata
-      expectTypeOf(metadata._kind).toEqualTypeOf<"map">()
+      expectTypeOf(metadata[KIND]).toEqualTypeOf<"map">()
     }
   })
 })
@@ -867,7 +870,7 @@ describe("type-level: ScalarSchema constraint type parameter", () => {
   it("Schema.scalar('string') produces ScalarSchema<'string'> (backward compat)", () => {
     const s = Schema.scalar("string")
     expectTypeOf(s.scalarKind).toEqualTypeOf<"string">()
-    expectTypeOf(s._kind).toEqualTypeOf<"scalar">()
+    expectTypeOf(s[KIND]).toEqualTypeOf<"scalar">()
   })
 })
 
@@ -1951,5 +1954,251 @@ describe("type-level: Plain<S> regression guards for sums", () => {
       | { type: "text"; body: string }
       | { type: "image"; url: string; caption: string }
     expectTypeOf<Result>().toEqualTypeOf<Expected>()
+  })
+})
+
+// ===========================================================================
+// [KIND] serialization invisibility (Task 1.7)
+// ===========================================================================
+
+describe("[KIND] is invisible to serialization", () => {
+  it("JSON.stringify does not include KIND", () => {
+    const s = Schema.string()
+    const json = JSON.stringify(s)
+    expect(json).not.toContain("kyneta:kind")
+    // Symbol keys are invisible to JSON.stringify — only data properties survive
+    expect(JSON.parse(json)).toEqual({ scalarKind: "string" })
+  })
+
+  it("Object.keys does not include KIND", () => {
+    const s = Schema.string()
+    expect(Object.keys(s)).not.toContain(KIND.toString())
+    expect(Object.keys(s)).not.toContain("Symbol(kyneta:kind)")
+    expect(Object.keys(s)).toEqual(["scalarKind"])
+  })
+
+  it("schema[KIND] is accessible and correctly valued", () => {
+    expect(Schema.string()[KIND]).toBe("scalar")
+    expect(Schema.struct({ x: Schema.string() })[KIND]).toBe("product")
+    expect(Schema.list(Schema.string())[KIND]).toBe("sequence")
+    expect(Schema.record(Schema.string())[KIND]).toBe("map")
+    expect(Schema.union(Schema.string(), Schema.number())[KIND]).toBe("sum")
+    expect(Schema.annotated("text")[KIND]).toBe("annotated")
+    expect(Schema.doc({ title: Schema.string() })[KIND]).toBe("annotated")
+  })
+
+  it("spread preserves [KIND]", () => {
+    const s = Schema.string()
+    const copy = { ...s }
+    expect(copy[KIND]).toBe("scalar")
+  })
+})
+
+// ===========================================================================
+// [TAGS] phantom tag accumulation (Task 2.5)
+// ===========================================================================
+
+describe("ExtractTags: tag accumulation through constructors", () => {
+  it("scalars have no tags (Tags defaults to never)", () => {
+    type StringTags = ExtractTags<ReturnType<typeof Schema.string>>
+    type NumberTags = ExtractTags<ReturnType<typeof Schema.number>>
+    expectTypeOf<StringTags>().toEqualTypeOf<never>()
+    expectTypeOf<NumberTags>().toEqualTypeOf<never>()
+  })
+
+  it("annotated('text') → 'text'", () => {
+    const s = Schema.annotated("text")
+    type Tags = ExtractTags<typeof s>
+    expectTypeOf<Tags>().toEqualTypeOf<"text">()
+  })
+
+  it("annotated('counter') → 'counter'", () => {
+    const s = Schema.annotated("counter")
+    type Tags = ExtractTags<typeof s>
+    expectTypeOf<Tags>().toEqualTypeOf<"counter">()
+  })
+
+  it("annotated('movable', sequence) → 'movable'", () => {
+    const s = Schema.annotated("movable", Schema.sequence(Schema.string()))
+    type Tags = ExtractTags<typeof s>
+    expectTypeOf<Tags>().toEqualTypeOf<"movable">()
+  })
+
+  it("annotated('tree', struct) → 'tree'", () => {
+    const s = Schema.annotated("tree", Schema.struct({ label: Schema.string() }))
+    type Tags = ExtractTags<typeof s>
+    expectTypeOf<Tags>().toEqualTypeOf<"tree">()
+  })
+
+  it("struct({ name: string }) → never (no annotations)", () => {
+    const s = Schema.struct({ name: Schema.string() })
+    type Tags = ExtractTags<typeof s>
+    expectTypeOf<Tags>().toEqualTypeOf<never>()
+  })
+
+  it("struct({ title: text }) → 'text'", () => {
+    const s = Schema.struct({ title: Schema.annotated("text") })
+    type Tags = ExtractTags<typeof s>
+    expectTypeOf<Tags>().toEqualTypeOf<"text">()
+  })
+
+  it("struct({ title: text, count: counter }) → 'text' | 'counter'", () => {
+    const s = Schema.struct({
+      title: Schema.annotated("text"),
+      count: Schema.annotated("counter"),
+    })
+    type Tags = ExtractTags<typeof s>
+    expectTypeOf<Tags>().toEqualTypeOf<"text" | "counter">()
+  })
+
+  it("list(struct({ title: text })) → 'text'", () => {
+    const s = Schema.list(Schema.struct({ title: Schema.annotated("text") }))
+    type Tags = ExtractTags<typeof s>
+    expectTypeOf<Tags>().toEqualTypeOf<"text">()
+  })
+
+  it("record(struct({ hits: counter })) → 'counter'", () => {
+    const s = Schema.record(Schema.struct({ hits: Schema.annotated("counter") }))
+    type Tags = ExtractTags<typeof s>
+    expectTypeOf<Tags>().toEqualTypeOf<"counter">()
+  })
+
+  it("doc({ title: text }) → 'doc' | 'text'", () => {
+    const s = Schema.doc({ title: Schema.annotated("text") })
+    type Tags = ExtractTags<typeof s>
+    expectTypeOf<Tags>().toEqualTypeOf<"doc" | "text">()
+  })
+
+  it("doc({ count: counter }) → 'doc' | 'counter'", () => {
+    const s = Schema.doc({ count: Schema.annotated("counter") })
+    type Tags = ExtractTags<typeof s>
+    expectTypeOf<Tags>().toEqualTypeOf<"doc" | "counter">()
+  })
+
+  it("doc({ title: text, items: list(struct({ name: string, done: boolean })) }) → 'doc' | 'text'", () => {
+    const s = Schema.doc({
+      title: Schema.annotated("text"),
+      items: Schema.list(
+        Schema.struct({
+          name: Schema.string(),
+          done: Schema.boolean(),
+        }),
+      ),
+    })
+    type Tags = ExtractTags<typeof s>
+    expectTypeOf<Tags>().toEqualTypeOf<"doc" | "text">()
+  })
+
+  it("deep nesting: doc > list > struct > record > struct > counter (5 levels) → 'doc' | 'counter'", () => {
+    const s = Schema.doc({
+      channels: Schema.list(
+        Schema.struct({
+          meta: Schema.record(
+            Schema.struct({
+              hits: Schema.annotated("counter"),
+            }),
+          ),
+        }),
+      ),
+    })
+    type Tags = ExtractTags<typeof s>
+    expectTypeOf<Tags>().toEqualTypeOf<"doc" | "counter">()
+  })
+
+  it("doc with movable(list(text)) → 'doc' | 'movable' | 'text'", () => {
+    const s = Schema.doc({
+      items: Schema.annotated("movable", Schema.list(Schema.annotated("text"))),
+    })
+    type Tags = ExtractTags<typeof s>
+    expectTypeOf<Tags>().toEqualTypeOf<"doc" | "movable" | "text">()
+  })
+
+  it("doc with tree(struct) → 'doc' | 'tree'", () => {
+    const s = Schema.doc({
+      hierarchy: Schema.annotated("tree", Schema.struct({ label: Schema.string() })),
+    })
+    type Tags = ExtractTags<typeof s>
+    expectTypeOf<Tags>().toEqualTypeOf<"doc" | "tree">()
+  })
+
+  it("nullable(counter) → 'counter'", () => {
+    const s = Schema.nullable(Schema.annotated("counter"))
+    type Tags = ExtractTags<typeof s>
+    expectTypeOf<Tags>().toEqualTypeOf<"counter">()
+  })
+
+  it("doc with nullable text → 'doc' | 'text'", () => {
+    const s = Schema.doc({
+      title: Schema.nullable(Schema.annotated("text")),
+    })
+    type Tags = ExtractTags<typeof s>
+    expectTypeOf<Tags>().toEqualTypeOf<"doc" | "text">()
+  })
+
+  it("union(text, counter) → 'text' | 'counter'", () => {
+    const s = Schema.union(Schema.annotated("text"), Schema.annotated("counter"))
+    type Tags = ExtractTags<typeof s>
+    expectTypeOf<Tags>().toEqualTypeOf<"text" | "counter">()
+  })
+
+  it("discriminatedUnion with mixed → tags from all variants", () => {
+    const s = Schema.discriminatedUnion("type", [
+      Schema.struct({
+        type: Schema.string("text"),
+        body: Schema.annotated("text"),
+      }),
+      Schema.struct({
+        type: Schema.string("data"),
+        value: Schema.number(),
+      }),
+    ])
+    type Tags = ExtractTags<typeof s>
+    expectTypeOf<Tags>().toEqualTypeOf<"text">()
+  })
+})
+
+describe("ExtractTags: tags survive generic constraints", () => {
+  it("tags survive Record<string, Schema> boundary via product", () => {
+    // This is the critical test: when fields flow through
+    // F extends Record<string, Schema>, do tags survive?
+    function makeStruct<F extends Record<string, SchemaNode>>(
+      fields: F,
+    ): ProductSchema<F, ExtractTags<F[keyof F]>> {
+      return Schema.struct(fields) as any
+    }
+    const s = makeStruct({
+      title: Schema.annotated("text"),
+      count: Schema.annotated("counter"),
+    })
+    type Tags = ExtractTags<typeof s>
+    expectTypeOf<Tags>().toEqualTypeOf<"text" | "counter">()
+  })
+
+  it("never exclusion → always false (never is excluded from any union)", () => {
+    const s = Schema.doc({ count: Schema.annotated("counter") })
+    type Tags = ExtractTags<typeof s>
+    // Exclude nothing → everything remains
+    type Remaining = Exclude<Tags, never>
+    expectTypeOf<Remaining>().toEqualTypeOf<"doc" | "counter">()
+  })
+})
+
+describe("RestrictTags: allowed-tags formulation", () => {
+  it("RestrictTags<S, string> always resolves to S (unconstrained substrates)", () => {
+    const s = Schema.doc({
+      title: Schema.annotated("text"),
+      count: Schema.annotated("counter"),
+      tasks: Schema.annotated("movable", Schema.sequence(Schema.string())),
+      hierarchy: Schema.annotated("tree", Schema.struct({ label: Schema.string() })),
+    })
+    // AllowedTags = string means Exclude<T, string> is always never
+    type Result = RestrictTags<typeof s, string>
+    expectTypeOf<Result>().toEqualTypeOf(s)
+  })
+
+  it("RestrictTags resolves to never when tags exceed allowed set", () => {
+    const s = Schema.doc({ count: Schema.annotated("counter") })
+    type Result = RestrictTags<typeof s, "text" | "doc">
+    expectTypeOf<Result>().toEqualTypeOf<never>()
   })
 })

@@ -17,8 +17,7 @@
 // stored in a single root LoroMap named PROPS_KEY ("_props"). This
 // avoids creating a separate root container per scalar field.
 
-import type { Path, Schema as SchemaNode, Segment } from "@kyneta/schema"
-import { advanceSchema } from "@kyneta/schema"
+import { advanceSchema, KIND, type Path, type Schema as SchemaNode, type Segment } from "@kyneta/schema"
 import type { LoroDoc, LoroList, LoroMap, LoroMovableList } from "loro-crdt"
 
 // ---------------------------------------------------------------------------
@@ -71,7 +70,7 @@ function hasKind(value: unknown): value is { kind(): string } {
  * Returns the tag string for annotated schemas, undefined otherwise.
  */
 function getAnnotationTag(schema: SchemaNode): string | undefined {
-  if (schema._kind === "annotated") {
+  if (schema[KIND] === "annotated") {
     return schema.tag
   }
   return undefined
@@ -113,7 +112,7 @@ function stepFromDoc(
   // to determine the root container type
   const structural = unwrapToStructural(fieldSchema)
 
-  switch (structural._kind) {
+  switch (structural[KIND]) {
     case "product":
       return doc.getMap(key)
     case "sequence":
@@ -137,7 +136,7 @@ function stepFromDoc(
 
 function unwrapToStructural(schema: SchemaNode): SchemaNode {
   let s = schema
-  while (s._kind === "annotated" && s.schema !== undefined) {
+  while (s[KIND] === "annotated" && s.schema !== undefined) {
     s = s.schema
   }
   return s

@@ -1,4 +1,4 @@
-import type { ProductSchema, SchemaNode, SequenceSchema } from "@kyneta/schema"
+import type { ExtractTags, ProductSchema, SchemaNode, SequenceSchema } from "@kyneta/schema"
 import { Schema } from "@kyneta/schema"
 import { describe, expect, expectTypeOf, it } from "vitest"
 import { LoroSchema } from "../loro-schema.js"
@@ -185,5 +185,56 @@ describe("type-level: LoroSchema namespace excludes non-container constructors",
   it("LoroSchema.annotated does not exist", () => {
     // @ts-expect-error — removed: low-level grammar
     expect(LoroSchema.annotated).toBeUndefined()
+  })
+})
+
+// ===========================================================================
+// LoroSchema constructors propagate [TAGS] for bind-time constraint enforcement
+// ===========================================================================
+
+describe("type-level: LoroSchema constructors propagate annotation tags", () => {
+  it("LoroSchema.text() → ExtractTags yields 'text'", () => {
+    const s = LoroSchema.text()
+    type Tags = ExtractTags<typeof s>
+    expectTypeOf<Tags>().toEqualTypeOf<"text">()
+  })
+
+  it("LoroSchema.counter() → ExtractTags yields 'counter'", () => {
+    const s = LoroSchema.counter()
+    type Tags = ExtractTags<typeof s>
+    expectTypeOf<Tags>().toEqualTypeOf<"counter">()
+  })
+
+  it("LoroSchema.movableList(plain item) → ExtractTags yields 'movable'", () => {
+    const s = LoroSchema.movableList(LoroSchema.plain.string())
+    type Tags = ExtractTags<typeof s>
+    expectTypeOf<Tags>().toEqualTypeOf<"movable">()
+  })
+
+  it("LoroSchema.tree(plain struct) → ExtractTags yields 'tree'", () => {
+    const s = LoroSchema.tree(LoroSchema.plain.struct({ label: LoroSchema.plain.string() }))
+    type Tags = ExtractTags<typeof s>
+    expectTypeOf<Tags>().toEqualTypeOf<"tree">()
+  })
+
+  it("LoroSchema.doc with mixed containers → ExtractTags yields all tags", () => {
+    const s = LoroSchema.doc({
+      title: LoroSchema.text(),
+      count: LoroSchema.counter(),
+      items: LoroSchema.list(LoroSchema.plain.struct({ name: LoroSchema.plain.string() })),
+    })
+    type Tags = ExtractTags<typeof s>
+    expectTypeOf<Tags>().toEqualTypeOf<"doc" | "text" | "counter">()
+  })
+
+  it("LoroSchema.movableList with annotated inner → ExtractTags propagates inner tags", () => {
+    const s = LoroSchema.doc({
+      items: LoroSchema.movableList(LoroSchema.plain.struct({
+        label: LoroSchema.plain.string(),
+      })),
+      title: LoroSchema.text(),
+    })
+    type Tags = ExtractTags<typeof s>
+    expectTypeOf<Tags>().toEqualTypeOf<"doc" | "movable" | "text">()
   })
 })

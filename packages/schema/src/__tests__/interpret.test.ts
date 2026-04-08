@@ -3,6 +3,7 @@ import type { Interpreter, Path } from "../index.js"
 import {
   createInterpreter,
   interpret,
+  KIND,
   plainInterpreter,
   Schema,
 } from "../index.js"
@@ -131,72 +132,72 @@ describe("interpret: plain round-trip", () => {
 describe("interpret: schema constructors produce correct grammar nodes", () => {
   it("Schema.struct() produces a product", () => {
     const s = Schema.struct({ x: Schema.number() })
-    expect(s._kind).toBe("product")
+    expect(s[KIND]).toBe("product")
   })
 
   it("Schema.list() produces a sequence", () => {
     const s = Schema.list(Schema.string())
-    expect(s._kind).toBe("sequence")
+    expect(s[KIND]).toBe("sequence")
   })
 
   it("Schema.record() produces a map", () => {
     const s = Schema.record(Schema.any())
-    expect(s._kind).toBe("map")
+    expect(s[KIND]).toBe("map")
   })
 
   it("Schema.doc() produces annotated('doc', product(...))", () => {
     const s = Schema.doc({ title: Schema.string() })
-    expect(s._kind).toBe("annotated")
+    expect(s[KIND]).toBe("annotated")
     expect(s.tag).toBe("doc")
-    expect(s.schema?._kind).toBe("product")
+    expect(s.schema?.[KIND]).toBe("product")
   })
 
   it("Schema.string() produces a bare scalar", () => {
     const s = Schema.string()
-    expect(s._kind).toBe("scalar")
+    expect(s[KIND]).toBe("scalar")
     expect(s.scalarKind).toBe("string")
   })
 
   it("Schema.nullable() produces a positional sum with null first", () => {
     const s = Schema.nullable(Schema.string())
-    expect(s._kind).toBe("sum")
+    expect(s[KIND]).toBe("sum")
     expect(s.variants).toHaveLength(2)
-    expect(s.variants[0]._kind).toBe("scalar")
+    expect(s.variants[0][KIND]).toBe("scalar")
     expect((s.variants[0] as any).scalarKind).toBe("null")
-    expect(s.variants[1]._kind).toBe("scalar")
+    expect(s.variants[1][KIND]).toBe("scalar")
     expect((s.variants[1] as any).scalarKind).toBe("string")
   })
 
   it("Schema.annotated() produces annotated with custom tag", () => {
     const s = Schema.annotated("custom")
-    expect(s._kind).toBe("annotated")
+    expect(s[KIND]).toBe("annotated")
     expect(s.tag).toBe("custom")
   })
 
   it("Schema.string('a', 'b') produces a constrained scalar", () => {
     const s = Schema.string("a", "b")
-    expect(s._kind).toBe("scalar")
+    expect(s[KIND]).toBe("scalar")
     expect(s.scalarKind).toBe("string")
     expect(s.constraint).toEqual(["a", "b"])
   })
 
   it("Schema.string() produces a scalar with no constraint field", () => {
     const s = Schema.string()
-    expect(s._kind).toBe("scalar")
+    expect(s[KIND]).toBe("scalar")
     expect(s.scalarKind).toBe("string")
     expect(s.constraint).toBeUndefined()
   })
 
   it("Schema.number(1, 2, 3) produces a constrained number scalar", () => {
     const s = Schema.number(1, 2, 3)
-    expect(s._kind).toBe("scalar")
+    expect(s[KIND]).toBe("scalar")
     expect(s.scalarKind).toBe("number")
     expect(s.constraint).toEqual([1, 2, 3])
   })
 
   it("Schema.boolean(true) produces a constrained boolean scalar", () => {
     const s = Schema.boolean(true)
-    expect(s._kind).toBe("scalar")
+    expect(s[KIND]).toBe("scalar")
     expect(s.scalarKind).toBe("boolean")
     expect(s.constraint).toEqual([true])
   })
@@ -282,21 +283,21 @@ describe("interpret: path accumulation", () => {
 describe("interpret: annotation constructors produce correct grammar nodes", () => {
   it("Schema.annotated('text') produces annotated with tag 'text'", () => {
     const s = Schema.annotated("text")
-    expect(s._kind).toBe("annotated")
+    expect(s[KIND]).toBe("annotated")
     expect(s.tag).toBe("text")
   })
 
   it("Schema.annotated('counter') produces annotated with tag 'counter'", () => {
     const s = Schema.annotated("counter")
-    expect(s._kind).toBe("annotated")
+    expect(s[KIND]).toBe("annotated")
     expect(s.tag).toBe("counter")
   })
 
   it("Schema.annotated('movable', Schema.list(...)) produces annotated('movable', sequence(...))", () => {
     const s = Schema.annotated("movable", Schema.list(Schema.string()))
-    expect(s._kind).toBe("annotated")
+    expect(s[KIND]).toBe("annotated")
     expect(s.tag).toBe("movable")
-    expect(s.schema?._kind).toBe("sequence")
+    expect(s.schema?.[KIND]).toBe("sequence")
   })
 
   it("Schema.annotated('tree', ...) produces annotated('tree', product(...))", () => {
@@ -304,9 +305,9 @@ describe("interpret: annotation constructors produce correct grammar nodes", () 
       "tree",
       Schema.struct({ label: Schema.string() }),
     )
-    expect(s._kind).toBe("annotated")
+    expect(s[KIND]).toBe("annotated")
     expect(s.tag).toBe("tree")
-    expect(s.schema?._kind).toBe("product")
+    expect(s.schema?.[KIND]).toBe("product")
   })
 })
 
@@ -316,7 +317,7 @@ describe("interpret: discriminatedUnion constructor validation", () => {
       Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
       Schema.struct({ type: Schema.string("image"), url: Schema.string() }),
     ])
-    expect(s._kind).toBe("sum")
+    expect(s[KIND]).toBe("sum")
     expect(s.discriminant).toBe("type")
     expect(s.variants).toHaveLength(2)
     expect(s.variantMap).toHaveProperty("text")

@@ -147,11 +147,14 @@ function createYjsFactory(peerId: string): SubstrateFactory<YjsVersion> {
  * Strategy is constrained to `CrdtStrategy` (`"collaborative" | "ephemeral"`).
  * Passing `"authoritative"` is a compile error.
  */
-export const yjs: SubstrateNamespace<CrdtStrategy> & {
+/** The closed set of annotation tags that the Yjs substrate supports. */
+export type YjsSupportedTag = "text" | "doc"
+
+export const yjs: SubstrateNamespace<CrdtStrategy, YjsSupportedTag> & {
   /** Access the underlying `Y.Doc` backing a ref. */
   unwrap(ref: object): Y.Doc
 } = {
-  ...createSubstrateNamespace<CrdtStrategy>({
+  ...createSubstrateNamespace<CrdtStrategy, YjsSupportedTag>({
     strategies: {
       collaborative: {
         factory: ctx => createYjsFactory(ctx.peerId),

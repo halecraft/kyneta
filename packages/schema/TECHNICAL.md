@@ -35,7 +35,7 @@ Each CRDT backend package provides its **own constructor namespace** that wraps 
 | `@kyneta/loro-schema` | `LoroSchema` | `text()`, `counter()`, `movableList()`, `tree()`, plus `plain.*` sub-namespace |
 | `@kyneta/yjs-schema` | (standalone `text()` export) | `text()` |
 
-The interpreter dispatch is identical regardless of which constructor produced the node — interpreters dispatch on `_kind` and annotation tag strings, not constructor origin. `LoroSchema.text()` and `Schema.annotated("text")` produce the same schema node.
+The interpreter dispatch is identical regardless of which constructor produced the node — interpreters dispatch on `[KIND]` and annotation tag strings, not constructor origin. `LoroSchema.text()` and `Schema.annotated("text")` produce the same schema node.
 
 **Note:** The core interpreters (`withNavigation`, `withReadable`, `withWritable`, `withChangefeed`, `describe`, `zero`) have built-in awareness of the `"text"`, `"counter"`, `"movable"`, `"tree"`, and `"doc"` annotation tags. These are the well-known tags that the grammar recognizes. Making the core fully tag-agnostic (open interpreter registry) is a possible future evolution.
 
@@ -119,9 +119,9 @@ Both `createDoc` and `createDocFromEntirety` delegate to a shared `registerDoc` 
 
 ### Schema (`src/schema.ts`)
 
-One recursive `Schema` type discriminated by `_kind`:
+One recursive `Schema` type discriminated by `[KIND]`:
 
-| `_kind` | Constructor | Description |
+| `[KIND]` | Constructor | Description |
 |---|---|---|
 | `scalar` | `Schema.scalar("string")` | Terminal value — `ScalarKind` is a string union, not a recursive type |
 | `product` | `Schema.product({ x: ..., y: ... })` | Fixed-key record. Optional `discriminantKey?: string` — see below |
@@ -145,6 +145,21 @@ Developer-facing sugar produces nodes in this grammar:
 | `Schema.doc(fields)` | `annotated("doc", product(fields))` | Root document |
 
 Backend packages provide their own annotation constructors as ergonomic wrappers around `Schema.annotated(tag)`. For example, `@kyneta/loro-schema` exports `LoroSchema.text()` → `annotated("text")`, `LoroSchema.counter()` → `annotated("counter")`, etc. The core interpreters dispatch on the annotation tag string, not the constructor origin.
+
+### Symbol-Keyed Metadata Model
+
+Schema nodes carry only data properties (`tag`, `fields`, `item`, `variants`, `scalarKind`, `constraint`, `schema`, `meta`). All infrastructure lives in symbol-keyed slots:
+
+- **`[KIND]`** — runtime discriminant. Values are `"scalar"`, `"product"`, `"sequence"`, `"map"`, `"sum"`, `"annotated"` — unchanged from the old `_kind` string field.
+- **`[TAGS]`** — phantom type-level brand accumulating annotation tags bottom-up through constructors.
+
+Both are invisible to `JSON.stringify` and `Object.keys`.
+
+**Why `[KIND]` replaces `_kind`.** The type-level interpretations (`Plain<S>`, `Ref<S>`) never used `_kind` — they dispatch structurally via `S extends AnnotatedSchema<...>`. Only runtime code needs a discriminant. A symbol key properly separates infrastructure from data.
+
+**`[TAGS]` phantom brand and `bind()` as the constraint boundary.** Tags accumulate bottom-up through constructors (type-level catamorphism). `ExtractTags<S>` reads the accumulated brand; `RestrictTags<S, AllowedTags>` constrains it; `SubstrateNamespace<S, AllowedTags>` threads the constraint into `bind()`. `PlainSchema` = constructor-side constraint (what can be composed). `[TAGS]` = bind-site constraint (what the substrate supports).
+
+**Allowed-tags formulation.** Closed by default — unknown annotations are rejected unless the substrate explicitly declares support. `AllowedTags = string` opts out entirely (Loro, json). `"text" | "doc"` (Yjs) creates a compile-time closed surface mirroring the runtime whitelist.
 
 ### `ProductSchema.discriminantKey`
 

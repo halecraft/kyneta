@@ -48,7 +48,7 @@ import { Schema } from "@kyneta/schema"
  * This is a convenience re-export so that `@kyneta/yjs-schema` users
  * don't need to import `LoroSchema` just for `text()`.
  */
-export function text(): AnnotatedSchema<"text", undefined> {
+export function text(): AnnotatedSchema<"text", undefined, "text"> {
   return Schema.annotated("text")
 }
 

@@ -19,13 +19,14 @@
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import { dispatchSum } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
-import type {
-  AnnotatedSchema,
-  MapSchema,
-  ProductSchema,
-  ScalarSchema,
-  SequenceSchema,
-  SumSchema,
+import {
+  KIND,
+  type AnnotatedSchema,
+  type MapSchema,
+  type ProductSchema,
+  type ScalarSchema,
+  type SequenceSchema,
+  type SumSchema,
 } from "../schema.js"
 import type { HasCall, HasNavigation } from "./bottom.js"
 
@@ -305,7 +306,7 @@ export function withNavigation<A extends HasCall>(
           }
           // Leaf annotation without known semantics — treat as scalar
           return this.scalar(ctx, path, {
-            _kind: "scalar" as const,
+            [KIND]: "scalar" as const,
             scalarKind: "any" as any,
           })
       }

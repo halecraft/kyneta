@@ -39,7 +39,7 @@ import type { ChangeBase } from "./change.js"
 import type { Path } from "./interpret.js"
 import type { WritableContext } from "./interpreters/writable.js"
 import type { Reader } from "./reader.js"
-import type { Schema as SchemaNode } from "./schema.js"
+import { KIND, type Schema as SchemaNode } from "./schema.js"
 
 // ---------------------------------------------------------------------------
 // BACKING_DOC — universal accessor for the backing state of any replica
@@ -122,7 +122,7 @@ export function computeSchemaHash(schema: SchemaNode): string {
  *   - annotated: `a:tag` (leaf) or `a:tag(inner)` (with inner schema)
  */
 function canonicalizeSchema(schema: SchemaNode): string {
-  switch (schema._kind) {
+  switch (schema[KIND]) {
     case "scalar": {
       const constraint = (schema as any).constraint as unknown[] | undefined
       if (constraint && constraint.length > 0) {
@@ -174,7 +174,7 @@ function canonicalizeSchema(schema: SchemaNode): string {
     }
 
     default:
-      return `?:${(schema as any)._kind}`
+      return `?:${(schema as any)[KIND]}`
   }
 }
 

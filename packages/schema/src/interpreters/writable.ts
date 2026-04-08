@@ -33,17 +33,18 @@ import {
   textChange,
 } from "../change.js"
 import type { Plain, RefContext } from "../interpreter-types.js"
-import type {
-  AnnotatedSchema,
-  DiscriminatedSumSchema,
-  MapSchema,
-  PositionalSumSchema,
-  ProductSchema,
-  ScalarKind,
-  ScalarSchema,
-  Schema,
-  SequenceSchema,
-  SumSchema,
+import {
+  KIND,
+  type AnnotatedSchema,
+  type DiscriminatedSumSchema,
+  type MapSchema,
+  type PositionalSumSchema,
+  type ProductSchema,
+  type ScalarKind,
+  type ScalarSchema,
+  type Schema,
+  type SequenceSchema,
+  type SumSchema,
 } from "../schema.js"
 import type { SubstratePrepare } from "../substrate.js"
 
@@ -727,7 +728,7 @@ export function withWritable<A>(
           }
           // Leaf annotation without known semantics — add scalar mutation
           return this.scalar(ctx, path, {
-            _kind: "scalar" as const,
+            [KIND]: "scalar" as const,
             scalarKind: "any" as ScalarKind,
           })
       }

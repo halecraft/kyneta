@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import {
   dispatchSum,
   interpret,
+  KIND,
   plainInterpreter,
   plainReader,
   Schema,
@@ -744,10 +745,10 @@ describe("dispatchSum", () => {
   it("general positional sum: dispatches to variant 0", () => {
     // A non-nullable positional sum (union of two non-null types)
     const schema: any = {
-      _kind: "sum",
+      [KIND]: "sum",
       variants: [
-        { _kind: "scalar", scalarKind: "string" },
-        { _kind: "scalar", scalarKind: "number" },
+        { [KIND]: "scalar", scalarKind: "string" },
+        { [KIND]: "scalar", scalarKind: "number" },
       ],
     }
     let calledIndex: number | undefined
@@ -763,7 +764,7 @@ describe("dispatchSum", () => {
 
   it("returns undefined when no variants match", () => {
     const schema: any = {
-      _kind: "sum",
+      [KIND]: "sum",
       variants: [],
       discriminant: "type",
       variantMap: {},

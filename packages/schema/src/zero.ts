@@ -10,6 +10,7 @@
 // and produces state invisible to the sync protocol. Initial content
 // should be applied via change() after substrate construction.
 
+import { KIND } from "./schema.js"
 import type {
   DiscriminatedSumSchema,
   PositionalSumSchema,
@@ -91,7 +92,7 @@ function annotationDefault(tag: string): { value: unknown } | undefined {
  *   otherwise delegate to inner schema, otherwise `undefined`
  */
 function structural(schema: Schema): unknown {
-  switch (schema._kind) {
+  switch (schema[KIND]) {
     case "scalar": {
       const s = schema as ScalarSchema
       if (s.constraint !== undefined && s.constraint.length > 0) {
