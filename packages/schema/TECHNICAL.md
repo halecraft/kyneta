@@ -254,6 +254,8 @@ Schema's `changefeed.ts` contains only schema-specific extensions:
 
 Pure state transitions: `(State, Change) → State`. Dispatches on the change's `type` discriminant, not on the schema — step is change-driven and schema-agnostic. Enables optimistic UI, time travel, testing without a CRDT runtime, and read-your-writes in transaction mode.
 
+`step()` belongs to the **interpretation layer**, not the replication layer. It is a state transformer that assumes known-good state — the caller has already validated and applied changes to a live document. The replication layer (`PlainReplica`) never calls `step()` during `merge()`; it appends to an internal log without interpreting ops. The interpretation layer (`PlainSubstrate`) continues to use `step()` eagerly in `prepare()`.
+
 ### Zero (`src/zero.ts`)
 
 Default values separated from the schema. `Zero.structural(schema)` derives mechanical defaults by walking the grammar. When a scalar has a non-empty `constraint`, `constraint[0]` is used as the default instead of the generic kind default. `Zero.overlay(primary, fallback, schema)` performs deep structural merge — products recurse per-key, leaves use `firstDefined`. This replaces the `_placeholder` mechanism on shapes.
@@ -580,6 +582,32 @@ For leaf refs, attaches a plain `ChangefeedProtocol` with `subscribe` (node-leve
 
 **Composition:** `withChangefeed(withWritable(withCaching(withAddressing(withReadable(withNavigation(bottomInterpreter))))))`
 
+### The Document Model: Base + Log
+
+<!-- Context: jj:oyouvrss -->
+
+Every document has the shape:
+
+```
+Document = Base(V_b) ⊕ Log(V_b → V_now)
+```
+
+Base is the state at version V_b; Log is the operations from V_b to V_now. This decomposition is universal across substrate kinds:
+
+- **Collaborative (CRDT) substrates** — base is a snapshot, log is the oplog. Merge is opaque to the framework (Loro/Yjs handle it internally).
+- **Authoritative (plain) substrates** — base is a `PlainState` object, log is `Op[][]` (one inner array per flush cycle). The substrate manages both explicitly.
+
+**The Append-Log Replica Design.** `PlainReplica.merge()` never calls `step()` — it appends incoming ops to an internal log without interpreting them. Materialized state is derived on demand from Base + Log via lazy replay (`applyChange`). The replica core is parameterized on a `materialize: () => PlainState` callback:
+
+- **Substrates** pass `() => doc` (eagerly-mutated state — `step()` already applied in `prepare()`).
+- **Replicas** pass a log-replay function (lazy materialization from base + accumulated log).
+
+This eliminates mode branching in the core — `exportEntirety()` calls `JSON.stringify(materialize())` without knowing whether materialization is eager or lazy.
+
+**Initialization ops are part of the operation history.** All substrates emit structure-creation as replicable operations. `buildUpgrade()` computes `Zero.structural(schema)` defaults and emits them as `ReplaceChange` ops through `executeBatch`. For authoritative substrates, init ops advance the version so `exportSince(v0)` returns them. For ephemeral (LWW) substrates, init ops are applied directly without entering the log — the `logOffset` probe discriminates (returns `null` for timestamps, signaling no log relationship).
+
+**Batched wire format for since payloads.** `exportSince()` returns `SerializedOp[][]` — one inner array per flush cycle. Receivers replay one flush per batch, preserving version parity across export → merge → re-export. This is critical for relay topologies where version parity must be maintained: a relay that receives 3 flushes and re-exports since its prior version must produce the same 3-batch structure.
+
 ### Substrate (`src/substrate.ts`, `src/substrates/`)
 
 The Substrate abstraction formalizes the boundary between three algebras:
@@ -688,8 +716,8 @@ interface BoundSchema<S extends Schema> {
 
 | Strategy | Protocol | `compare()` returns | Payload method |
 |---|---|---|---|
-| `"concurrent"` | Bidirectional exchange | May return `"concurrent"` | `exportSince()` deltas |
-| `"sequential"` | Request/response, total order | Never `"concurrent"` | `exportSince()` or `exportEntirety()` |
+| `"collaborative"` | Bidirectional exchange | May return `"concurrent"` | `exportSince()` deltas |
+| `"authoritative"` | Request/response, total order | Never `"concurrent"` | `exportSince()` or `exportEntirety()` |
 | `"ephemeral"` | Unidirectional push/broadcast | Timestamp-based | Always `exportEntirety()` |
 
 **`FactoryBuilder<V>`** is `(context: { peerId: string }) => SubstrateFactory<V>` — a deferred factory constructor. The exchange calls it lazily on first use, passing its peer identity. Each exchange instance gets a fresh factory. Factories that don't need peer identity ignore the context: `() => plainSubstrateFactory`.
@@ -698,11 +726,11 @@ interface BoundSchema<S extends Schema> {
 
 The public API is organized into **substrate namespaces** — one per backend — that expose `bind()` and `replica()` methods:
 
-- **`json.bind(schema)`** — plain JS substrate + sequential strategy (default). For server-authoritative or single-writer data.
+- **`json.bind(schema)`** — plain JS substrate + authoritative strategy (default). For server-authoritative or single-writer data.
 - **`json.bind(schema, "ephemeral")`** — LWW substrate (plain + `TimestampVersion`) + ephemeral strategy. For cursor position, player input, typing indicators — any state where only the latest value matters.
 - **`json.replica()`** / **`json.replica("ephemeral")`** — headless replication (no schema interpretation) for the plain JSON substrate.
 
-Backend packages provide their own namespaces: `loro.bind(schema)` / `loro.replica()` from `@kyneta/loro-schema`, `yjs.bind(schema)` / `yjs.replica()` from `@kyneta/yjs-schema`. CRDT namespaces default to `"concurrent"` strategy and also accept `"ephemeral"`. The `json` namespace accepts `"sequential"` (default) or `"ephemeral"` — passing `"concurrent"` is a compile error because plain versions cannot return `"concurrent"` from `compare()`.
+Backend packages provide their own namespaces: `loro.bind(schema)` / `loro.replica()` from `@kyneta/loro-schema`, `yjs.bind(schema)` / `yjs.replica()` from `@kyneta/yjs-schema`. CRDT namespaces default to `"collaborative"` strategy and also accept `"ephemeral"`. The `json` namespace accepts `"authoritative"` (default) or `"ephemeral"` — passing `"collaborative"` is a compile error because plain versions cannot return `"concurrent"` from `compare()`.
 
 Escape hatches for accessing the underlying CRDT document are methods on the backend namespace: `loro.unwrap(ref)` returns the backing `LoroDoc`, `yjs.unwrap(ref)` returns the backing `Y.Doc`. The `json` namespace does not need `unwrap` — the general `unwrap(ref)` from `@kyneta/schema` already returns the `Substrate`, and plain substrates have no separate native document to access.
 

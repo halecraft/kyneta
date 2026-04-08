@@ -16,8 +16,8 @@
 //
 // MergeStrategy is a string union declaring the sync algorithm the
 // exchange runs on behalf of the substrate:
-// - "concurrent": bidirectional exchange, concurrent versions possible (Loro)
-// - "sequential": request/response, total order (Plain)
+// - "collaborative": bidirectional exchange, concurrent versions possible (Loro)
+// - "authoritative": request/response, total order (Plain)
 // - "ephemeral": unidirectional broadcast, timestamp-based (Ephemeral)
 
 import type { Schema as SchemaNode } from "./schema.js"
@@ -234,7 +234,7 @@ export function Defer(): Defer {
  * const MyDoc = bind({
  *   schema: Schema.doc({ title: Schema.string() }),
  *   factory: (ctx) => createMyFactory(ctx.peerId),
- *   strategy: "concurrent",
+ *   strategy: "collaborative",
  * })
  * ```
  */
@@ -274,10 +274,10 @@ export function isBoundSchema(value: unknown): value is BoundSchema {
 // ---------------------------------------------------------------------------
 
 /** Strategies available for the plain JSON substrate. */
-export type JsonStrategy = "sequential" | "ephemeral"
+export type JsonStrategy = "authoritative" | "ephemeral"
 
 /** Strategies available for CRDT substrates (Loro, Yjs). */
-export type CrdtStrategy = "concurrent" | "ephemeral"
+export type CrdtStrategy = "collaborative" | "ephemeral"
 
 // ---------------------------------------------------------------------------
 // SubstrateNamespace — substrate-first API
@@ -291,10 +291,10 @@ export type CrdtStrategy = "concurrent" | "ephemeral"
  *
  * @example
  * ```ts
- * json.bind(schema)               // sequential (default)
+ * json.bind(schema)               // authoritative (default)
  * json.bind(schema, "ephemeral")  // ephemeral
- * json.replica()                  // sequential (default)
- * loro.bind(schema)               // concurrent (default)
+ * json.replica()                  // authoritative (default)
+ * loro.bind(schema)               // collaborative (default)
  * loro.replica("ephemeral")       // ephemeral
  * ```
  */
@@ -319,10 +319,10 @@ export interface SubstrateNamespace<S extends MergeStrategy> {
  * ```ts
  * const json = createSubstrateNamespace({
  *   strategies: {
- *     sequential: { factory: () => plainSubstrateFactory, replicaFactory: plainReplicaFactory },
+ *     authoritative: { factory: () => plainSubstrateFactory, replicaFactory: plainReplicaFactory },
  *     ephemeral: { factory: () => lwwSubstrateFactory, replicaFactory: lwwReplicaFactory },
  *   },
- *   defaultStrategy: "sequential",
+ *   defaultStrategy: "authoritative",
  * })
  * ```
  */
@@ -358,19 +358,19 @@ export function createSubstrateNamespace<S extends MergeStrategy>(config: {
 /**
  * The plain JSON substrate namespace.
  *
- * - `json.bind(schema)` — sequential sync (default)
+ * - `json.bind(schema)` — authoritative sync (default)
  * - `json.bind(schema, "ephemeral")` — ephemeral/presence broadcast
- * - `json.replica()` — sequential replication (default)
+ * - `json.replica()` — authoritative replication (default)
  * - `json.replica("ephemeral")` — ephemeral replication
  *
- * Strategy is constrained to `JsonStrategy` (`"sequential" | "ephemeral"`).
- * Passing `"concurrent"` is a compile error — plain substrates cannot
+ * Strategy is constrained to `JsonStrategy` (`"authoritative" | "ephemeral"`).
+ * Passing `"collaborative"` is a compile error — plain substrates cannot
  * return `"concurrent"` from `compare()`.
  */
 export const json: SubstrateNamespace<JsonStrategy> =
   createSubstrateNamespace<JsonStrategy>({
     strategies: {
-      sequential: {
+      authoritative: {
         factory: () => plainSubstrateFactory,
         replicaFactory: plainReplicaFactory,
       },
@@ -379,5 +379,5 @@ export const json: SubstrateNamespace<JsonStrategy> =
         replicaFactory: lwwReplicaFactory,
       },
     },
-    defaultStrategy: "sequential",
+    defaultStrategy: "authoritative",
   })

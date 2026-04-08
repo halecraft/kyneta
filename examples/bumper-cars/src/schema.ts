@@ -8,11 +8,11 @@
 //   in the same application can use different sync strategies, and the
 //   Exchange handles them transparently.
 //
-//   • GameStateDoc  — json.bind (sequential merge, server-authoritative)
+//   • GameStateDoc  — json.bind (authoritative merge, server-authoritative)
 //   • PlayerInputDoc — json.bind(ephemeral) (LWW broadcast, one per player)
 //
 //   The server is the single writer for game state (cars, scores, tick).
-//   Clients only read it. No CRDT is needed — plain JS with sequential
+//   Clients only read it. No CRDT is needed — plain JS with authoritative
 //   merge is simpler and correct.
 //
 //   If the game were peer-to-peer (no authoritative server), you'd use
@@ -24,7 +24,7 @@
 import { Schema, json } from "@kyneta/schema"
 
 // ─────────────────────────────────────────────────────────────────────────
-// Game state — plain JS, sequential merge, server-authoritative.
+// Game state — plain JS, authoritative merge, server-authoritative.
 //
 // The server is the single writer. Cars, scores, and tick are all
 // server-owned state that clients render but never mutate directly.

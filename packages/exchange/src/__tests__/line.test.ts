@@ -940,18 +940,20 @@ describe("closed Line guards", () => {
 // ---------------------------------------------------------------------------
 
 describe("hub-and-spoke relay", () => {
-  // Skip: plain substrate's Replicate() mode fails to merge nested
-  // structures (list inside doc) when the replica starts empty.
-  // The relay receives incremental ops that reference `messages`
-  // before the field exists. This is a plain substrate limitation,
-  // not a Line bug — the same issue would affect any sequential doc
-  // with nested containers through a schema-free relay.
+  // Fixed by jj:oyouvrss — two independent fixes:
+  // 1. Append-log replica + init ops: the relay's PlainReplica no longer
+  //    calls step()/applyChange() on merge, so nested structures don't
+  //    crash. Init ops enter the log and advance the version, breaking
+  //    the sync deadlock.
+  // 2. Line authorize abstain: the per-line scope now returns `undefined`
+  //    (abstain) for unknown peers instead of `false` (hard veto), so
+  //    relay-forwarded offers are accepted by the exchange-level authorize.
   it("messages flow Alice → Server → Bob via relay", async () => {
     const bridgeAS = new Bridge()
     const bridgeSB = new Bridge()
 
     // The server is a schema-free relay — it uses Replicate() for all
-    // docs, same pattern as the existing sequential relay integration test.
+    // docs, same pattern as the existing authoritative relay integration test.
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
       transports: [

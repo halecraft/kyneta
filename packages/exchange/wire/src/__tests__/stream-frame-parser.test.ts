@@ -31,7 +31,7 @@ function makePresent(docId: string): PresentMsg {
         docId,
         schemaHash: "00test",
         replicaType: ["plain", 1, 0] as const,
-        mergeStrategy: "sequential" as const,
+        mergeStrategy: "authoritative" as const,
       },
     ],
   }
@@ -191,7 +191,7 @@ describe("feedBytes", () => {
         docId: `large-doc-${i.toString().padStart(5, "0")}`,
         schemaHash: "00test",
         replicaType: ["plain", 1, 0] as const,
-        mergeStrategy: "sequential" as const,
+        mergeStrategy: "authoritative" as const,
       })
     }
 

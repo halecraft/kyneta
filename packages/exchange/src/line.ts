@@ -1,6 +1,6 @@
 // line — reliable bidirectional message stream between two Exchange peers.
 //
-// A Line composes two `json.bind()` sequential documents — one per direction —
+// A Line composes two `json.bind()` authoritative documents — one per direction —
 // with automatic sequence numbering, acknowledgement-based pruning, and
 // scope-based routing/authorization. The Line class is standalone: it
 // composes with the Exchange entirely through public API (register(),
@@ -488,8 +488,14 @@ export class Line<SendMsg, RecvMsg> {
       ): boolean | undefined => {
         // Outbox: only the local peer can write
         if (docId === outboxDocId) return peer.peerId === exchange.peerId
-        // Inbox: only the remote peer can write
-        if (docId === inboxDocId) return peer.peerId === remotePeerId
+        // Inbox: affirm the remote peer, abstain for unknowns.
+        // Abstain (undefined) instead of veto (false) so that relay
+        // topologies work — the relay server's peerId won't match
+        // remotePeerId, but the exchange-level authorize can still
+        // accept it. Hard veto would block all relay offers.
+        // Context: jj:oyouvrss (Phase 4 — authorize gap workaround)
+        if (docId === inboxDocId)
+          return peer.peerId === remotePeerId ? true : undefined
         return undefined
       },
     })

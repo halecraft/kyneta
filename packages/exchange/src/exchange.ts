@@ -281,7 +281,7 @@ export type ExchangeParams = {
    *
    * Each `BoundReplica` pairs a `ReplicaFactory` with a `MergeStrategy`,
    * defining a replication tier the Exchange can service. The defaults
-   * cover plain/sequential and lww/lww — extend this set for CRDT-backed
+   * cover plain/authoritative and lww/lww — extend this set for CRDT-backed
    * relay or storage participants.
    *
    * @default DEFAULT_REPLICAS

@@ -127,8 +127,8 @@ export const StringToPayloadEncoding: Record<string, PayloadEncodingValue> = {
  * Integer discriminators for MergeStrategy on the wire.
  */
 export const MergeStrategyWire = {
-  Concurrent: 0x00,
-  Sequential: 0x01,
+  Collaborative: 0x00,
+  Authoritative: 0x01,
   Ephemeral: 0x02,
 } as const
 
@@ -140,10 +140,10 @@ export type MergeStrategyWireValue =
  */
 export const MergeStrategyWireToString: Record<
   MergeStrategyWireValue,
-  "concurrent" | "sequential" | "ephemeral"
+  "collaborative" | "authoritative" | "ephemeral"
 > = {
-  [MergeStrategyWire.Concurrent]: "concurrent",
-  [MergeStrategyWire.Sequential]: "sequential",
+  [MergeStrategyWire.Collaborative]: "collaborative",
+  [MergeStrategyWire.Authoritative]: "authoritative",
   [MergeStrategyWire.Ephemeral]: "ephemeral",
 }
 
@@ -152,8 +152,8 @@ export const MergeStrategyWireToString: Record<
  */
 export const StringToMergeStrategyWire: Record<string, MergeStrategyWireValue> =
   {
-    concurrent: MergeStrategyWire.Concurrent,
-    sequential: MergeStrategyWire.Sequential,
+    collaborative: MergeStrategyWire.Collaborative,
+    authoritative: MergeStrategyWire.Authoritative,
     ephemeral: MergeStrategyWire.Ephemeral,
   }
 

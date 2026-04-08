@@ -145,50 +145,50 @@ describe("PlainSubstrate lifecycle", () => {
     expect(snapshotOf(substrate)).toEqual(defaults)
   })
 
-  it("version() starts at 0 for a freshly created substrate", () => {
+  it("version() starts at 1 for a freshly created substrate (init ops)", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     const f = substrate.version()
-    expect(f.value).toBe(0)
-    expect(f.serialize()).toBe("0")
+    expect(f.value).toBe(1)
+    expect(f.serialize()).toBe("1")
   })
 
   it("version() increments after mutations via the writable context", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(substrate)
 
-    expect(substrate.version().value).toBe(0)
+    expect(substrate.version().value).toBe(1)
 
     // Each change() call triggers one flush cycle → one version bump
     change(doc, d => d.title.insert(0, "Hi"))
-    expect(substrate.version().value).toBe(1)
+    expect(substrate.version().value).toBe(2)
 
     change(doc, d => d.count.increment(5))
-    expect(substrate.version().value).toBe(2)
+    expect(substrate.version().value).toBe(3)
 
     // A multi-op transaction is a single flush cycle → one version bump
     change(doc, d => {
       d.title.insert(2, " there")
       d.count.increment(3)
     })
-    expect(substrate.version().value).toBe(3)
+    expect(substrate.version().value).toBe(4)
   })
 
   it("version() does not increment for empty transactions", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(substrate)
 
-    expect(substrate.version().value).toBe(0)
+    expect(substrate.version().value).toBe(1)
 
     // applyChanges with empty array should not bump version
     applyChanges(doc, [])
-    expect(substrate.version().value).toBe(0)
+    expect(substrate.version().value).toBe(1)
   })
 
   it("version() is up-to-date inside a subscribe callback (notify-after-commit)", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(substrate)
 
-    expect(substrate.version().value).toBe(0)
+    expect(substrate.version().value).toBe(1)
 
     // Track the version value observed inside the subscriber
     const observedVersions: number[] = []
@@ -201,9 +201,8 @@ describe("PlainSubstrate lifecycle", () => {
     change(doc, d => d.title.insert(1, "B"))
 
     // Each subscriber call should see the version AFTER the flush,
-    // not the stale version from before. Without the fix, subscribers
-    // would see [0, 1, 2] instead of [1, 2, 3].
-    expect(observedVersions).toEqual([1, 2, 3])
+    // not the stale version from before.
+    expect(observedVersions).toEqual([2, 3, 4])
   })
 
   it("delta() returns the just-flushed ops inside a subscribe callback", () => {
@@ -212,12 +211,12 @@ describe("PlainSubstrate lifecycle", () => {
 
     // Track ops retrieved via delta() inside the subscriber
     const opsPerNotification: Op[][] = []
-    let prevVersion = 0
+    let prevVersion = substrate.version().value
     subscribe(doc, () => {
       const currentVer = substrate.version().value
       const payload = substrate.exportSince(new PlainVersion(prevVersion))
       if (payload) {
-        opsPerNotification.push(JSON.parse(payload.data as string) as Op[])
+        opsPerNotification.push((JSON.parse(payload.data as string) as Op[][]).flat())
       }
       prevVersion = currentVer
     })
@@ -285,7 +284,8 @@ describe("PlainSubstrate lifecycle", () => {
     expect(payload).not.toBeNull()
     expect(payload?.encoding).toBe("json")
 
-    const ops = JSON.parse(payload?.data as string) as Op[]
+    const batches = JSON.parse(payload?.data as string) as Op[][]
+    const ops = batches.flat()
     expect(ops.length).toBeGreaterThanOrEqual(2)
 
     // Should contain both a text change and an increment change
@@ -300,14 +300,14 @@ describe("PlainSubstrate lifecycle", () => {
 
     change(doc, d => d.title.insert(0, "A"))
     const f1 = substrate.version()
-    expect(f1.value).toBe(1)
+    expect(f1.value).toBe(2)
 
     change(doc, d => d.count.increment(1))
-    expect(substrate.version().value).toBe(2)
+    expect(substrate.version().value).toBe(3)
 
     // exportSince(f1) should only contain the second mutation
     const payload = substrate.exportSince(f1)!
-    const ops = JSON.parse(payload.data as string) as Op[]
+    const ops = (JSON.parse(payload.data as string) as Op[][]).flat()
     expect(ops.length).toBe(1)
     expect(ops[0]?.change.type).toBe("increment")
   })
@@ -418,14 +418,15 @@ describe("Round-trip replication", () => {
     change(docA, d => d.count.increment(1))
     change(docA, d => d.count.increment(2))
 
-    expect(substrateB.version().value).toBe(0)
+    expect(substrateB.version().value).toBe(1)
 
     const delta = substrateA.exportSince(f0)!
     substrateB.merge(delta)
 
-    // merge applies all ops in a single executeBatch call,
-    // which triggers one prepare×N + flush×1 cycle → one version bump
-    expect(substrateB.version().value).toBe(1)
+    // merge preserves batch boundaries — each batch is a separate
+    // executeBatch call → 2 version bumps (one per change on A).
+    // B starts at 1 (init) + 2 merged batches = 3.
+    expect(substrateB.version().value).toBe(3)
   })
 
   it("merge with empty ops does not increment the version", () => {
@@ -439,7 +440,7 @@ describe("Round-trip replication", () => {
     }
     substrate.merge(emptyPayload)
 
-    expect(substrate.version().value).toBe(0)
+    expect(substrate.version().value).toBe(1)
   })
 })
 
@@ -530,7 +531,7 @@ describe("merge with entirety payload (PlainSubstrate)", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     interpretSubstrate(substrate)
 
-    expect(substrate.version().value).toBe(0)
+    expect(substrate.version().value).toBe(1)
 
     const entirety: SubstratePayload = {
       kind: "entirety",
@@ -553,7 +554,7 @@ describe("merge with entirety payload (PlainSubstrate)", () => {
     }
     substrate.merge(entirety)
 
-    expect(substrate.version().value).toBe(0)
+    expect(substrate.version().value).toBe(1)
   })
 })
 
@@ -633,7 +634,7 @@ describe("Epoch boundaries", () => {
     change(docA, d => d.count.increment(100))
     change(docA, d => d.items.push({ name: "Task", done: false }))
 
-    expect(substrateA.version().value).toBe(4)
+    expect(substrateA.version().value).toBe(5)
 
     // Export snapshot and create a new substrate
     const snapshot = substrateA.exportEntirety()
@@ -679,7 +680,7 @@ describe("Epoch boundaries", () => {
 
     // Export delta since the snapshot epoch version
     const delta = substrateB.exportSince(new PlainVersion(vAfterSnapshot))!
-    const ops = JSON.parse(delta.data as string) as Op[]
+    const ops = (JSON.parse(delta.data as string) as Op[][]).flat()
     expect(ops.length).toBe(1)
     expect(ops[0]?.change.type).toBe("text")
   })

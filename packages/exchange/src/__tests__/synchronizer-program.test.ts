@@ -435,7 +435,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -453,7 +453,7 @@ describe("synchronizer-program", () => {
                 {
                   docId: "doc-1",
                   replicaType: ["loro", 1, 0] as const,
-                  mergeStrategy: "concurrent" as const,
+                  mergeStrategy: "collaborative" as const,
                   schemaHash: "00test",
                 },
               ],
@@ -493,7 +493,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -528,7 +528,7 @@ describe("synchronizer-program", () => {
       ) {
         expect(interestCmd.envelope.message.docId).toBe("doc-1")
         expect(interestCmd.envelope.message.version).toBe("v1")
-        // Sequential does not reciprocate
+        // Authoritative does not reciprocate
         expect(interestCmd.envelope.message.reciprocate).toBe(false)
       }
     })
@@ -544,7 +544,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         model,
@@ -557,7 +557,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v2",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m1,
@@ -582,7 +582,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -600,7 +600,7 @@ describe("synchronizer-program", () => {
                 {
                   docId: "doc-1",
                   replicaType: ["plain", 1, 0] as const,
-                  mergeStrategy: "sequential" as const,
+                  mergeStrategy: "authoritative" as const,
                   schemaHash: "00test",
                 },
               ],
@@ -644,7 +644,7 @@ describe("synchronizer-program", () => {
                 {
                   docId: "unknown-doc",
                   replicaType: ["plain", 1, 0] as const,
-                  mergeStrategy: "sequential" as const,
+                  mergeStrategy: "authoritative" as const,
                   schemaHash: "00test",
                 },
               ],
@@ -675,7 +675,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "known-doc",
           version: "v1",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -692,13 +692,13 @@ describe("synchronizer-program", () => {
                 {
                   docId: "known-doc",
                   replicaType: ["plain", 1, 0] as const,
-                  mergeStrategy: "sequential" as const,
+                  mergeStrategy: "authoritative" as const,
                   schemaHash: "00test",
                 },
                 {
                   docId: "unknown-doc",
                   replicaType: ["plain", 1, 0] as const,
-                  mergeStrategy: "sequential" as const,
+                  mergeStrategy: "authoritative" as const,
                   schemaHash: "00test",
                 },
               ],
@@ -740,7 +740,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -757,7 +757,7 @@ describe("synchronizer-program", () => {
                 {
                   docId: "doc-1",
                   replicaType: ["plain", 1, 0] as const,
-                  mergeStrategy: "sequential" as const,
+                  mergeStrategy: "authoritative" as const,
                   schemaHash: "00test",
                 },
               ],
@@ -789,7 +789,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -807,7 +807,7 @@ describe("synchronizer-program", () => {
                 {
                   docId: "doc-1",
                   replicaType: ["loro", 1, 0] as const,
-                  mergeStrategy: "concurrent" as const,
+                  mergeStrategy: "collaborative" as const,
                   schemaHash: "00test",
                 },
               ],
@@ -834,7 +834,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: "concurrent",
+          mergeStrategy: "collaborative",
           schemaHash: "00test",
         },
         m,
@@ -852,7 +852,7 @@ describe("synchronizer-program", () => {
                 {
                   docId: "doc-1",
                   replicaType: ["yjs", 2, 0] as const,
-                  mergeStrategy: "concurrent" as const,
+                  mergeStrategy: "collaborative" as const,
                   schemaHash: "00test",
                 },
               ],
@@ -878,7 +878,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: "concurrent",
+          mergeStrategy: "collaborative",
           schemaHash: "00test",
         },
         m,
@@ -896,7 +896,7 @@ describe("synchronizer-program", () => {
                 {
                   docId: "doc-1",
                   replicaType: ["yjs", 1, 3] as const,
-                  mergeStrategy: "concurrent" as const,
+                  mergeStrategy: "collaborative" as const,
                   schemaHash: "00test",
                 },
               ],
@@ -927,7 +927,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00aaaa",
         },
         m,
@@ -945,7 +945,7 @@ describe("synchronizer-program", () => {
                 {
                   docId: "doc-1",
                   replicaType: ["plain", 1, 0] as const,
-                  mergeStrategy: "sequential" as const,
+                  mergeStrategy: "authoritative" as const,
                   schemaHash: "00bbbb",
                 },
               ],
@@ -977,7 +977,7 @@ describe("synchronizer-program", () => {
                 {
                   docId: "new-doc",
                   replicaType: ["loro", 1, 0] as const,
-                  mergeStrategy: "concurrent" as const,
+                  mergeStrategy: "collaborative" as const,
                   schemaHash: "00test",
                 },
               ],
@@ -995,13 +995,13 @@ describe("synchronizer-program", () => {
       if (creation.type === "cmd/request-doc-creation") {
         expect(creation.docId).toBe("new-doc")
         expect(creation.replicaType).toEqual(["loro", 1, 0])
-        expect(creation.mergeStrategy).toBe("concurrent")
+        expect(creation.mergeStrategy).toBe("collaborative")
       }
     })
   })
 
   describe("interest → offer (merge strategy dispatch)", () => {
-    it("concurrent: interest produces send-offer + reciprocal interest when reciprocate=true", () => {
+    it("collaborative: interest produces send-offer + reciprocal interest when reciprocate=true", () => {
       const update = makeUpdate()
       const [model] = init(aliceIdentity)
 
@@ -1013,7 +1013,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: "concurrent",
+          mergeStrategy: "collaborative",
           schemaHash: "00test",
         },
         m,
@@ -1045,7 +1045,7 @@ describe("synchronizer-program", () => {
         expect(offerCmd.sinceVersion).toBe("v0")
       }
 
-      // Should have a reciprocal interest (since concurrent + reciprocate=true)
+      // Should have a reciprocal interest (since collaborative + reciprocate=true)
       const reciprocalInterest = commands.find(
         c =>
           c.type === "cmd/send-message" &&
@@ -1061,7 +1061,7 @@ describe("synchronizer-program", () => {
       }
     })
 
-    it("sequential: interest produces send-offer with sinceVersion", () => {
+    it("authoritative: interest produces send-offer with sinceVersion", () => {
       const update = makeUpdate()
       const [model] = init(aliceIdentity)
 
@@ -1073,7 +1073,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -1102,7 +1102,7 @@ describe("synchronizer-program", () => {
         expect(offerCmd.sinceVersion).toBe("v0")
       }
 
-      // Sequential should NOT produce a reciprocal interest
+      // Authoritative should NOT produce a reciprocal interest
       const reciprocal = commands.find(
         c =>
           c.type === "cmd/send-message" &&
@@ -1167,7 +1167,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v0",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -1243,7 +1243,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v0",
-          mergeStrategy: "concurrent",
+          mergeStrategy: "collaborative",
           schemaHash: "00test",
         },
         m,
@@ -1293,7 +1293,7 @@ describe("synchronizer-program", () => {
   })
 
   describe("local-doc-change (merge strategy dispatch)", () => {
-    it("concurrent: pushes delta offer to synced peers", () => {
+    it("collaborative: pushes delta offer to synced peers", () => {
       const update = makeUpdate()
       const [model] = init(aliceIdentity)
 
@@ -1305,7 +1305,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v0",
-          mergeStrategy: "concurrent",
+          mergeStrategy: "collaborative",
           schemaHash: "00test",
         },
         m,
@@ -1380,7 +1380,7 @@ describe("synchronizer-program", () => {
       }
     })
 
-    it("sequential with no synced peers produces no command", () => {
+    it("authoritative with no synced peers produces no command", () => {
       const update = makeUpdate()
       const [model] = init(aliceIdentity)
 
@@ -1392,7 +1392,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v0",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -1426,7 +1426,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v0",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -1453,7 +1453,7 @@ describe("synchronizer-program", () => {
       }
     })
 
-    it("concurrent: relays to other synced peers, excluding sender", () => {
+    it("collaborative: relays to other synced peers, excluding sender", () => {
       const update = makeUpdate()
       const [model] = init(aliceIdentity)
 
@@ -1461,7 +1461,7 @@ describe("synchronizer-program", () => {
       let m = establishChannel(update, model, 1, bobIdentity)
       m = establishChannel(update, m, 2, carolIdentity)
 
-      // Register doc as concurrent
+      // Register doc as collaborative
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
@@ -1469,7 +1469,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v0",
-          mergeStrategy: "concurrent",
+          mergeStrategy: "collaborative",
           schemaHash: "00test",
         },
         m,
@@ -1577,7 +1577,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v0",
-          mergeStrategy: "concurrent",
+          mergeStrategy: "collaborative",
           schemaHash: "00test",
         },
         m,
@@ -1621,7 +1621,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v0",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         model,
@@ -1634,7 +1634,7 @@ describe("synchronizer-program", () => {
   })
 
   describe("present sends interest with reciprocate based on merge strategy", () => {
-    it("concurrent doc: present triggers interest with reciprocate=true", () => {
+    it("collaborative doc: present triggers interest with reciprocate=true", () => {
       const update = makeUpdate()
       const [model] = init(aliceIdentity)
 
@@ -1646,7 +1646,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: "concurrent",
+          mergeStrategy: "collaborative",
           schemaHash: "00test",
         },
         m,
@@ -1663,7 +1663,7 @@ describe("synchronizer-program", () => {
                 {
                   docId: "doc-1",
                   replicaType: ["plain", 1, 0] as const,
-                  mergeStrategy: "concurrent" as const,
+                  mergeStrategy: "collaborative" as const,
                   schemaHash: "00test",
                 },
               ],
@@ -1689,7 +1689,7 @@ describe("synchronizer-program", () => {
       }
     })
 
-    it("sequential doc: present triggers interest with reciprocate=false", () => {
+    it("authoritative doc: present triggers interest with reciprocate=false", () => {
       const update = makeUpdate()
       const [model] = init(aliceIdentity)
 
@@ -1701,7 +1701,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -1718,7 +1718,7 @@ describe("synchronizer-program", () => {
                 {
                   docId: "doc-1",
                   replicaType: ["plain", 1, 0] as const,
-                  mergeStrategy: "sequential" as const,
+                  mergeStrategy: "authoritative" as const,
                   schemaHash: "00test",
                 },
               ],
@@ -1766,7 +1766,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "public-doc",
           version: "0",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -1778,7 +1778,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "secret-doc",
           version: "0",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -1835,7 +1835,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "public-doc",
           version: "0",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -1847,7 +1847,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "secret-doc",
           version: "0",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -1907,7 +1907,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "0",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -2033,7 +2033,7 @@ describe("synchronizer-program", () => {
                 {
                   docId: "forbidden",
                   replicaType: ["plain", 1, 0] as const,
-                  mergeStrategy: "sequential" as const,
+                  mergeStrategy: "authoritative" as const,
                   schemaHash: "00test",
                 },
               ],
@@ -2105,7 +2105,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "0",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -2162,7 +2162,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "0",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -2213,7 +2213,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "0",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -2256,7 +2256,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "0",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -2310,7 +2310,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "0",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -2353,7 +2353,7 @@ describe("synchronizer-program", () => {
           mode: "replicate",
           docId: "replicated-doc",
           version: "0",
-          mergeStrategy: "concurrent",
+          mergeStrategy: "collaborative",
           schemaHash: "00test",
         },
         m,
@@ -2373,7 +2373,7 @@ describe("synchronizer-program", () => {
       )
       expect(presentCmd).toBeDefined()
 
-      // Should send interest with reciprocate (concurrent)
+      // Should send interest with reciprocate (collaborative)
       const interestCmd = commands.find(
         c =>
           c.type === "cmd/send-message" &&
@@ -2399,7 +2399,7 @@ describe("synchronizer-program", () => {
       let m = establishChannel(update, model, 1, bobIdentity)
       m = establishChannel(update, m, 2, carolIdentity)
 
-      // Register a replicated concurrent doc
+      // Register a replicated collaborative doc
       ;[m] = update(
         {
           type: "synchronizer/doc-ensure",
@@ -2407,7 +2407,7 @@ describe("synchronizer-program", () => {
           mode: "replicate",
           docId: "rep-doc",
           version: "0",
-          mergeStrategy: "concurrent",
+          mergeStrategy: "collaborative",
           schemaHash: "00test",
         },
         m,
@@ -2490,7 +2490,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -2522,7 +2522,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -2555,7 +2555,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -2590,7 +2590,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -2602,7 +2602,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-2",
           version: "v1",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -2668,7 +2668,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -2689,7 +2689,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "00test",
         },
         m,
@@ -2853,7 +2853,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           version: "v1",
           replicaType: ["plain", 1, 0] as const,
-          mergeStrategy: "concurrent",
+          mergeStrategy: "collaborative",
           schemaHash: "hash1",
         },
         m,
@@ -2951,7 +2951,7 @@ describe("synchronizer-program", () => {
                 {
                   docId: "loro-doc",
                   replicaType: ["loro", 1, 0] as const,
-                  mergeStrategy: "concurrent" as const,
+                  mergeStrategy: "collaborative" as const,
                   schemaHash: "abc",
                 },
               ],
@@ -2971,7 +2971,7 @@ describe("synchronizer-program", () => {
         type: "cmd/request-doc-creation",
         docId: "loro-doc",
         replicaType: ["loro", 1, 0],
-        mergeStrategy: "concurrent",
+        mergeStrategy: "collaborative",
         schemaHash: "abc",
       })
     })
@@ -2988,13 +2988,13 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           docId: "doc-1",
           version: "v1",
-          mergeStrategy: "sequential",
+          mergeStrategy: "authoritative",
           schemaHash: "hash1",
         },
         m,
       )
 
-      // Bob announces the same doc but claims "concurrent" mergeStrategy
+      // Bob announces the same doc but claims "collaborative" mergeStrategy
       const [_result, cmd, notification] = update(
         {
           type: "synchronizer/channel-receive-message",
@@ -3006,7 +3006,7 @@ describe("synchronizer-program", () => {
                 {
                   docId: "doc-1",
                   replicaType: ["plain", 1, 0] as const,
-                  mergeStrategy: "concurrent" as const,
+                  mergeStrategy: "collaborative" as const,
                   schemaHash: "hash1",
                 },
               ],
@@ -3043,7 +3043,7 @@ describe("synchronizer-program", () => {
           type: "synchronizer/doc-defer",
           docId: "deferred-doc",
           replicaType: ["plain", 1, 0] as const,
-          mergeStrategy: "sequential" as const,
+          mergeStrategy: "authoritative" as const,
           schemaHash: "hash1",
         },
         m,
@@ -3083,7 +3083,7 @@ describe("synchronizer-program", () => {
           type: "synchronizer/doc-defer",
           docId: "deferred-doc",
           replicaType: ["plain", 1, 0] as const,
-          mergeStrategy: "sequential" as const,
+          mergeStrategy: "authoritative" as const,
           schemaHash: "hash1",
         },
         m,
@@ -3101,7 +3101,7 @@ describe("synchronizer-program", () => {
                 {
                   docId: "deferred-doc",
                   replicaType: ["plain", 1, 0] as const,
-                  mergeStrategy: "sequential" as const,
+                  mergeStrategy: "authoritative" as const,
                   schemaHash: "hash1",
                 },
               ],
@@ -3130,7 +3130,7 @@ describe("synchronizer-program", () => {
           type: "synchronizer/doc-defer",
           docId: "deferred-doc",
           replicaType: ["plain", 1, 0] as const,
-          mergeStrategy: "sequential" as const,
+          mergeStrategy: "authoritative" as const,
           schemaHash: "hash1",
         },
         m,
@@ -3143,7 +3143,7 @@ describe("synchronizer-program", () => {
           mode: "interpret",
           version: "1",
           replicaType: ["plain", 1, 0] as const,
-          mergeStrategy: "sequential" as const,
+          mergeStrategy: "authoritative" as const,
           schemaHash: "hash1",
         },
         m,
@@ -3181,7 +3181,7 @@ describe("synchronizer-program", () => {
           type: "synchronizer/doc-defer",
           docId: "deferred-doc",
           replicaType: ["plain", 1, 0] as const,
-          mergeStrategy: "sequential" as const,
+          mergeStrategy: "authoritative" as const,
           schemaHash: "hash1",
         },
         m,
@@ -3221,7 +3221,7 @@ describe("synchronizer-program", () => {
           type: "synchronizer/doc-defer",
           docId: "deferred-doc",
           replicaType: ["plain", 1, 0] as const,
-          mergeStrategy: "sequential" as const,
+          mergeStrategy: "authoritative" as const,
           schemaHash: "hash1",
         },
         m,

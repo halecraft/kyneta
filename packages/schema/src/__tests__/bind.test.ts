@@ -25,13 +25,13 @@ describe("bind()", () => {
     const bound = bind({
       schema: testSchema,
       factory,
-      strategy: "concurrent",
+      strategy: "collaborative",
     })
 
     expect(isBoundSchema(bound)).toBe(true)
     expect(bound.schema).toBe(testSchema)
     expect(bound.factory).toBe(factory)
-    expect(bound.strategy).toBe("concurrent")
+    expect(bound.strategy).toBe("collaborative")
   })
 
   it("factory builder is called with { peerId } and returns a SubstrateFactory", () => {
@@ -39,7 +39,7 @@ describe("bind()", () => {
     const bound = bind({
       schema: testSchema,
       factory,
-      strategy: "sequential",
+      strategy: "authoritative",
     })
 
     const result = bound.factory({ peerId: "test-peer-123" })
@@ -65,17 +65,17 @@ describe("isBoundSchema()", () => {
 })
 
 describe("json.bind()", () => {
-  it("creates a BoundSchema with sequential strategy", () => {
+  it("creates a BoundSchema with authoritative strategy", () => {
     const bound = json.bind(testSchema)
     expect(bound.schema).toBe(testSchema)
-    expect(bound.strategy).toBe("sequential")
+    expect(bound.strategy).toBe("authoritative")
   })
 })
 
 describe("json.replica()", () => {
-  it("produces a BoundReplica with sequential strategy and plainReplicaFactory", () => {
+  it("produces a BoundReplica with authoritative strategy and plainReplicaFactory", () => {
     const replica = json.replica()
-    expect(replica.strategy).toBe("sequential")
+    expect(replica.strategy).toBe("authoritative")
     expect(replica.factory).toBe(plainReplicaFactory)
     expect(replica.factory.replicaType).toEqual(["plain", 1, 0])
   })
@@ -89,14 +89,14 @@ describe("json.replica()", () => {
 })
 
 describe("compile-time type constraints", () => {
-  it("json.bind rejects 'concurrent' strategy (compile-time + runtime)", () => {
-    // @ts-expect-error — "concurrent" not assignable to JsonStrategy
-    expect(() => json.bind(testSchema, "concurrent")).toThrow()
+  it("json.bind rejects 'collaborative' strategy (compile-time + runtime)", () => {
+    // @ts-expect-error — "collaborative" not assignable to JsonStrategy
+    expect(() => json.bind(testSchema, "collaborative")).toThrow()
   })
 
-  it("json.replica rejects 'concurrent' strategy (compile-time + runtime)", () => {
-    // @ts-expect-error — "concurrent" not assignable to JsonStrategy
-    expect(() => json.replica("concurrent")).toThrow()
+  it("json.replica rejects 'collaborative' strategy (compile-time + runtime)", () => {
+    // @ts-expect-error — "collaborative" not assignable to JsonStrategy
+    expect(() => json.replica("collaborative")).toThrow()
   })
 })
 

@@ -245,7 +245,7 @@ describe("ScopeRegistry", () => {
         doc,
         alice,
         ["plain", 1, 0],
-        "sequential",
+        "authoritative",
         "hash",
       )
       expect(result).toBe(disposition)
@@ -260,7 +260,7 @@ describe("ScopeRegistry", () => {
         doc,
         alice,
         ["plain", 1, 0],
-        "sequential",
+        "authoritative",
         "hash",
       )
       expect(result).toBeUndefined()

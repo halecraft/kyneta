@@ -47,10 +47,15 @@ export function delta(doc: object, fromVersion: number): Op[] {
   const since = new PlainVersion(fromVersion)
   const payload = substrate.exportSince(since)
   if (!payload) return []
-  const raw = JSON.parse(payload.data as string) as Array<{
-    path: Array<{ type: string; key?: string; index?: number }>
-    change: Op["change"]
-  }>
+  // Wire format is batched: SerializedOp[][] — one inner array per flush cycle.
+  // Flatten to a single Op[] for the basic API consumer.
+  const batches = JSON.parse(payload.data as string) as Array<
+    Array<{
+      path: Array<{ type: string; key?: string; index?: number }>
+      change: Op["change"]
+    }>
+  >
+  const raw = batches.flat()
   return raw.map(op => ({
     path: op.path.reduce(
       (p: RawPath, seg) =>

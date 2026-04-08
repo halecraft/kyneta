@@ -6,8 +6,8 @@
 // executes.
 //
 // Three sync algorithms are dispatched by the factory's mergeStrategy:
-// - Concurrent: bidirectional exchange, concurrent versions possible
-// - Sequential: request/response, total order
+// - Collaborative: bidirectional exchange, concurrent versions possible
+// - Authoritative: request/response, total order
 // - Ephemeral: unidirectional push/broadcast, timestamp-based
 //
 // Ported from @loro-extended/repo's synchronizer-program.ts with
@@ -561,7 +561,7 @@ function handleDocEnsure(
     return [updatedModel]
   }
 
-  const isCausal = msg.mergeStrategy === "concurrent"
+  const isCausal = msg.mergeStrategy === "collaborative"
   const interest: Command = {
     type: "cmd/send-message",
     envelope: {
@@ -1045,7 +1045,7 @@ function handlePresent(
       if (docEntry.mode === "deferred") continue
 
       // Compatible — send interest with our version
-      const isCausal = docEntry.mergeStrategy === "concurrent"
+      const isCausal = docEntry.mergeStrategy === "collaborative"
       commands.push({
         type: "cmd/send-message",
         envelope: {
@@ -1124,8 +1124,8 @@ function buildInterestResponse(
   const commands: Command[] = []
 
   switch (docEntry.mergeStrategy) {
-    case "concurrent":
-      // Concurrent: always send our state (the CRDT handles merge)
+    case "collaborative":
+      // Collaborative: always send our state (the CRDT handles merge)
       // Use exportSince if the peer provided a version, otherwise snapshot
       commands.push({
         type: "cmd/send-offer",
@@ -1152,8 +1152,8 @@ function buildInterestResponse(
       }
       break
 
-    case "sequential":
-      // Sequential: compare versions. If we're ahead, send offer.
+    case "authoritative":
+      // Authoritative: compare versions. If we're ahead, send offer.
       // If we're behind, send our own interest.
       // We can't compare versions in the pure model (that requires
       // the runtime to parse versions), so we always send an offer
@@ -1306,8 +1306,8 @@ function buildPush(
   excludePeerId?: PeerId,
 ): Command | undefined {
   switch (docEntry.mergeStrategy) {
-    case "concurrent":
-    case "sequential": {
+    case "collaborative":
+    case "authoritative": {
       // Push delta offer to synced peers, filtered by route
       const raw = getSyncedPeerChannels(model, docId, excludePeerId)
       const channelIds = filterChannelsByRoute(model, raw, docId, route)
@@ -1356,7 +1356,7 @@ function getEstablishedChannelIds(
 
 /**
  * Get channel IDs of peers that have previously synced a specific doc.
- * Used for causal and sequential push-on-change.
+ * Used for causal and authoritative push-on-change.
  */
 function getSyncedPeerChannels(
   model: SynchronizerModel,

@@ -93,16 +93,24 @@ change(doc, fn)                             adapter receives offer
 
 ## 2. Merge Strategy as Dispatch Key
 
+<!-- Context: jj:oyouvrss -->
+
 Each `BoundSchema` declares a `MergeStrategy`:
 
 ```ts
-type MergeStrategy = "concurrent" | "sequential" | "ephemeral"
+type MergeStrategy = "collaborative" | "authoritative" | "ephemeral"
 ```
+
+The names describe the **developer's contract**, not the mechanism:
+
+- **`"collaborative"`** (formerly `"concurrent"`) — multiple writers, automatic convergence (CRDT). The substrate handles conflict resolution opaquely.
+- **`"authoritative"`** (formerly `"sequential"`) — single writer, linear history, total order. If two peers both write, they silently diverge. The name makes the single-writer contract visible.
+- **`"ephemeral"`** — current value only, no history. Unchanged.
 
 These are genuinely different protocols matched to the mathematical properties of the substrate, not transport optimizations:
 
-| Property | Concurrent | Sequential | Ephemeral |
-|----------|------------|------------|-----------|
+| Property | Collaborative | Authoritative | Ephemeral |
+|----------|---------------|---------------|-----------|
 | `compare()` results | `"concurrent"` possible | Never `"concurrent"` | Never `"concurrent"` |
 | Sync direction | Bidirectional | Unidirectional per cycle | Unidirectional push |
 | `exportSince()` used | Yes (primary) | Yes (when ahead) | Never |
@@ -112,14 +120,14 @@ These are genuinely different protocols matched to the mathematical properties o
 
 ### Protocol Shapes
 
-**Concurrent (Loro):**
+**Collaborative (Loro):**
 1. A sends `interest { docId, version, reciprocate: true }` to B
 2. B sends `offer { docId, payload, version }` to A
 3. B sends `interest { docId, version, reciprocate: false }` to A (reciprocation)
 4. A sends `offer { docId, payload, version }` to B
 5. Both converged via CRDT merge.
 
-**Sequential (Plain):**
+**Authoritative (Plain):**
 1. A sends `interest { docId, version }` to B
 2. B compares versions → if ahead, sends `offer { docId, payload, version }` to A
 3. If B was behind, B would have sent its own interest.
@@ -152,7 +160,7 @@ type PresentMsg = {
   docs: Array<{
     docId: DocId
     replicaType: ReplicaType      // [name, major, minor]
-    mergeStrategy: MergeStrategy  // "concurrent" | "sequential" | "ephemeral"
+    mergeStrategy: MergeStrategy  // "collaborative" | "authoritative" | "ephemeral"
     schemaHash: string            // schema fingerprint for compatibility check
   }>
 }
@@ -223,7 +231,7 @@ A `BoundSchema<S>` captures three explicit choices that define a document type:
 
 1. **Schema** — what shape is the data? (a `SchemaNode` from `@kyneta/schema`)
 2. **Factory builder** — how to construct the substrate? (a function `(ctx: { peerId }) => SubstrateFactory`)
-3. **Merge strategy** — how does the exchange sync it? (`"concurrent"`, `"sequential"`, or `"ephemeral"`)
+3. **Merge strategy** — how does the exchange sync it? (`"collaborative"`, `"authoritative"`, or `"ephemeral"`)
 
 ```ts
 interface BoundSchema<S extends SchemaNode = SchemaNode> {
@@ -234,7 +242,7 @@ interface BoundSchema<S extends SchemaNode = SchemaNode> {
 }
 
 type FactoryBuilder<V extends Version> = (context: { peerId: string }) => SubstrateFactory<V>
-type MergeStrategy = "concurrent" | "sequential" | "ephemeral"
+type MergeStrategy = "collaborative" | "authoritative" | "ephemeral"
 ```
 
 BoundSchemas are static declarations created at module scope via `json.bind(schema)`, `json.bind(schema, "ephemeral")`, `loro.bind(schema)`, or `yjs.bind(schema)`. They are consumed at runtime by `exchange.get(docId, boundSchema)`.
@@ -265,16 +273,16 @@ For Loro substrates, the builder hashes the string peerId to a deterministic num
 
 | Function | Package | Factory | Strategy |
 |----------|---------|---------|----------|
-| `json.bind(schema)` | `@kyneta/schema` | `() => plainSubstrateFactory` | `"sequential"` |
+| `json.bind(schema)` | `@kyneta/schema` | `() => plainSubstrateFactory` | `"authoritative"` |
 | `json.bind(schema, "ephemeral")` | `@kyneta/schema` | `() => ephemeralSubstrateFactory` | `"ephemeral"` |
-| `loro.bind(schema)` | `@kyneta/loro-schema` | `(ctx) => createLoroFactory(ctx.peerId)` | `"concurrent"` |
-| `yjs.bind(schema)` | `@kyneta/yjs-schema` | `(ctx) => createYjsFactory(ctx.peerId)` | `"concurrent"` |
+| `loro.bind(schema)` | `@kyneta/loro-schema` | `(ctx) => createLoroFactory(ctx.peerId)` | `"collaborative"` |
+| `yjs.bind(schema)` | `@kyneta/yjs-schema` | `(ctx) => createYjsFactory(ctx.peerId)` | `"collaborative"` |
 
 ### Why Not `ExchangeSubstrateFactory`?
 
 The previous design used `ExchangeSubstrateFactory` — a `SubstrateFactory` extended with `mergeStrategy` and `_initialize()`. This was replaced by `BoundSchema` because:
 
-1. **Merge strategy was on the wrong entity.** The same `plainSubstrateFactory` can be used with `"sequential"` or `"ephemeral"`. The strategy is a property of *how the exchange uses the factory*, not the factory itself.
+1. **Merge strategy was on the wrong entity.** The same `plainSubstrateFactory` can be used with `"authoritative"` or `"ephemeral"`. The strategy is a property of *how the exchange uses the factory*, not the factory itself.
 2. **`_initialize()` didn't compose.** If a factory was shared across exchanges, it would be initialized with the first exchange's peerId. The builder function pattern produces a fresh factory per exchange.
 3. **Boilerplate.** Every usage required wrapping a `SubstrateFactory` to add `mergeStrategy` and `_initialize` — ~10 lines of wrapping per factory.
 
@@ -614,7 +622,7 @@ Both WebSocket and WebRTC transports use these helpers instead of inline encode/
 
 `PayloadKind` values: `0x00` = `"entirety"`, `0x01` = `"since"`.
 `PayloadEncoding` values: `0x00` = `"json"`, `0x01` = `"binary"`.
-`MergeStrategyWire` values: `0x00` = `"concurrent"`, `0x01` = `"sequential"`, `0x02` = `"ephemeral"`.
+`MergeStrategyWire` values: `0x00` = `"collaborative"`, `0x01` = `"authoritative"`, `0x02` = `"ephemeral"`.
 
 `present` entries carry `rt` (ReplicaType as `[string, number, number]`) and `ms` (MergeStrategyWire integer) per document.
 
@@ -824,7 +832,7 @@ Peer A (has doc)               Peer B (doesn't have doc)
      |── present [{ docId:           >|
      |     "input:alice",             |
      |     replicaType: ["loro",1,0], |
-     |     mergeStrategy: "concurrent",|
+     |     mergeStrategy: "collaborative",|
      |     schemaHash: "00abc..." }]  |
      |                                | handlePresent: unknown doc
      |                                | ① route(docId, peer)?
@@ -1993,6 +2001,17 @@ Line is a standalone class — it composes with the Exchange via public API only
 **Infrastructure scope** (`__line-infrastructure`): Registered on the first `openLine()` call. Provides a `onUnresolvedDoc` handler that returns `Defer()` for Line doc IDs. This handles the early-arrival case — when a remote peer's outbox arrives before the local peer opens a Line. The deferred doc is auto-promoted when `openLine()` calls `get()` (which registers the schema internally).
 
 **Per-line scope** (`line:${topic}:${remotePeerId}`): Registered per `openLine()` call. Provides `authorize` — only the `from` peer can write to each doc. Routing is open by default. Applications that want endpoint-only routing register their own scope using the exported `routeLine` predicate.
+
+### The Authorize Abstain Pattern
+
+<!-- Context: jj:oyouvrss -->
+
+Scopes should return `undefined` (abstain) for unknown peers, not `false` (hard veto). This distinction is critical for relay topologies:
+
+- **Hard veto (`false`)** blocks relay-forwarded offers because the relay server's `peerId` doesn't match the expected peer. The `composeRule` function short-circuits on `false` from any scope — one veto overrules all other scopes.
+- **Abstain (`undefined`)** lets the exchange-level authorize decide. The scope declares "this doc is not my concern" rather than "this peer is forbidden."
+
+The Line scope's inbox `authorize` uses this pattern: `peer.peerId === remotePeerId ? true : undefined`. If the peer matches, explicitly allow; if not, abstain and let other scopes or the exchange default handle it. This ensures a relay server forwarding offers on behalf of the expected peer is not incorrectly blocked.
 
 ### Standalone Design
 

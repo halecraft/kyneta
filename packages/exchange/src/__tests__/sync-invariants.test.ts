@@ -4,7 +4,7 @@
 // 1. Initial content via change() syncs to peers (post-seed-removal)
 // 2. Snapshot import preserves ref object identity
 // 3. Ephemeral stale rejection discards out-of-order arrivals
-// 4. Concurrent sync uses deltas after initial sync
+// 4. Collaborative sync uses deltas after initial sync
 // 5. Universal version comparison — all strategies reject stale offers
 // 6. Plain replica snapshot import falls back to replicaFactory.fromSnapshot()
 
@@ -269,14 +269,14 @@ describe("ephemeral stale rejection", () => {
 })
 
 // ---------------------------------------------------------------------------
-// 4. Concurrent sync: delta (not snapshot) used when versions differ
+// 4. Collaborative sync: delta (not snapshot) used when versions differ
 //
-// Verifies that the concurrent merge strategy uses exportSince() for
+// Verifies that the collaborative merge strategy uses exportSince() for
 // incremental deltas when the sender is ahead, rather than always
 // falling back to snapshots.
 // ---------------------------------------------------------------------------
 
-describe("concurrent sync uses deltas when sender is ahead", () => {
+describe("collaborative sync uses deltas when sender is ahead", () => {
   it("after initial sync, mutations propagate as deltas (not full snapshots)", async () => {
     const bridge = new Bridge()
 
@@ -317,15 +317,15 @@ describe("concurrent sync uses deltas when sender is ahead", () => {
 })
 
 // ---------------------------------------------------------------------------
-// 5. Universal version comparison — sequential rejects stale offers
+// 5. Universal version comparison — authoritative rejects stale offers
 //
 // Before the universal version check, only ephemeral ran version comparison
 // before import. A regression reintroducing `if (strategy === "ephemeral")`
-// would let stale sequential offers silently overwrite fresher state.
+// would let stale authoritative offers silently overwrite fresher state.
 // ---------------------------------------------------------------------------
 
 describe("universal version comparison rejects stale offers for all strategies", () => {
-  it("sequential: second peer's stale snapshot does not overwrite fresher local state", async () => {
+  it("authoritative: second peer's stale snapshot does not overwrite fresher local state", async () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
@@ -380,7 +380,7 @@ describe("universal version comparison rejects stale offers for all strategies",
   })
 
   it("PlainVersion comparison: behind and equal skip import", () => {
-    // Direct unit test for the version algebra used by sequential strategy.
+    // Direct unit test for the version algebra used by authoritative strategy.
     // The universal check relies on this returning "behind"/"equal" to skip.
     const v1 = new PlainVersion(1)
     const v2 = new PlainVersion(2)
@@ -406,7 +406,7 @@ describe("plain replica snapshot import falls back to replicaFactory.fromSnapsho
   it("plain relay receives snapshot from peer and serves it to a late-joiner", async () => {
     const bridgeAR = new Bridge()
 
-    // Alice — full interpreter with plain/sequential substrate
+    // Alice — full interpreter with plain/authoritative substrate
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
       transports: [

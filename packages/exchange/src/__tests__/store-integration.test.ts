@@ -86,7 +86,7 @@ const PresenceDoc = json.bind(
 // ===========================================================================
 
 describe("Storage persist + hydrate", () => {
-  it("sequential doc: write → shutdown → restart with same storage → hydrate", async () => {
+  it("authoritative doc: write → shutdown → restart with same storage → hydrate", async () => {
     const sharedData: InMemoryStoreData = {
       entries: new Map(),
       metadata: new Map(),
@@ -120,7 +120,7 @@ describe("Storage persist + hydrate", () => {
     expect(doc2.count()).toBe(42)
   })
 
-  it("concurrent doc (Loro): write → shutdown → restart → hydrate", async () => {
+  it("collaborative doc (Loro): write → shutdown → restart → hydrate", async () => {
     const sharedData: InMemoryStoreData = {
       entries: new Map(),
       metadata: new Map(),

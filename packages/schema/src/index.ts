@@ -290,8 +290,10 @@ export {
 } from "./substrate.js"
 // Plain substrate — plain JS object store with version tracking
 export {
+  buildUpgrade,
   createPlainReplica,
   createPlainSubstrate,
+  objectToReplaceOps,
   PlainVersion,
   plainContext,
   plainReplicaFactory,

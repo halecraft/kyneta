@@ -2,8 +2,8 @@
 //
 // These tests prove documents converge across two Exchange instances
 // connected via BridgeTransport, for each merge strategy:
-// - Sequential (PlainSubstrate via json.bind)
-// - Concurrent (LoroSubstrate via loro.bind)
+// - Authoritative (PlainSubstrate via json.bind)
+// - Collaborative (LoroSubstrate via loro.bind)
 // - Ephemeral (TimestampVersion via json.bind ephemeral)
 // - Heterogeneous (mixed substrates in one exchange)
 
@@ -94,10 +94,10 @@ const presenceSchema = Schema.doc({
 const PresenceDoc = json.bind(presenceSchema, "ephemeral")
 
 // ---------------------------------------------------------------------------
-// Sequential (PlainSubstrate) — two-peer sync
+// Authoritative (PlainSubstrate) — two-peer sync
 // ---------------------------------------------------------------------------
 
-describe("Sequential sync (PlainSubstrate)", () => {
+describe("Authoritative sync (PlainSubstrate)", () => {
   it("peer A creates doc, peer B syncs and gets the same state", async () => {
     const bridge = new Bridge()
 
@@ -171,10 +171,10 @@ describe("Sequential sync (PlainSubstrate)", () => {
 })
 
 // ---------------------------------------------------------------------------
-// Concurrent (LoroSubstrate) — two-peer CRDT sync
+// Collaborative (LoroSubstrate) — two-peer CRDT sync
 // ---------------------------------------------------------------------------
 
-describe("Concurrent sync (LoroSubstrate)", () => {
+describe("Collaborative sync (LoroSubstrate)", () => {
   it("peer A creates doc with text, peer B syncs and gets the same state", async () => {
     const bridge = new Bridge()
 
@@ -334,7 +334,7 @@ describe("Ephemeral sync (Ephemeral/Presence)", () => {
 // ---------------------------------------------------------------------------
 
 describe("Heterogeneous documents", () => {
-  it("one exchange hosts both sequential and concurrent docs, both sync", async () => {
+  it("one exchange hosts both authoritative and collaborative docs, both sync", async () => {
     const bridge = new Bridge()
 
     const plainSchema = Schema.doc({
@@ -387,7 +387,7 @@ describe("Heterogeneous documents", () => {
 // ---------------------------------------------------------------------------
 
 describe("Multi-hop relay (three-peer topology)", () => {
-  it("concurrent: mutation on A propagates through Hub to B", async () => {
+  it("collaborative: mutation on A propagates through Hub to B", async () => {
     // Two separate bridges: Alice↔Hub and Hub↔Bob
     const bridgeAH = new Bridge()
     const bridgeHB = new Bridge()
@@ -439,7 +439,7 @@ describe("Multi-hop relay (three-peer topology)", () => {
     expect(docB.title()).toBe("hello from alice")
   })
 
-  it("sequential: mutation on A propagates through Hub to B", async () => {
+  it("authoritative: mutation on A propagates through Hub to B", async () => {
     const bridgeAH = new Bridge()
     const bridgeHB = new Bridge()
 
@@ -465,7 +465,7 @@ describe("Multi-hop relay (three-peer topology)", () => {
       ],
     })
 
-    // Hub creates the doc with initial state (sequential needs a populated source)
+    // Hub creates the doc with initial state (authoritative needs a populated source)
     const docHub = exchangeHub.get("doc-1", SequentialDoc)
     change(docHub, (d: any) => {
       d.title.set("initial")
@@ -836,7 +836,7 @@ describe("route + onUnresolvedDoc interaction", () => {
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
 describe("relay via exchange.replicate()", () => {
-  it("concurrent doc syncs through a schema-free relay: peer A → relay → peer B", async () => {
+  it("collaborative doc syncs through a schema-free relay: peer A → relay → peer B", async () => {
     const bridgeAR = new Bridge()
     const bridgeRB = new Bridge()
 
@@ -890,7 +890,7 @@ describe("relay via exchange.replicate()", () => {
     expect(docB.title()).toBe("Hello from Alice")
   })
 
-  it("sequential doc syncs through a schema-free relay", async () => {
+  it("authoritative doc syncs through a schema-free relay", async () => {
     const bridgeAR = new Bridge()
     const bridgeRB = new Bridge()
 
@@ -1119,6 +1119,86 @@ describe("relay via exchange.replicate()", () => {
     // The replicated doc should exist but not be gettable as interpreted
     expect(() => exchangeB.get("relay-doc", LoroDoc)).toThrow(/replicate mode/)
   })
+
+  it("nested authoritative doc relays through schema-free node", async () => {
+    // Three-exchange topology: Alice (Interpret) → Relay (Replicate) → Bob (Interpret)
+    // The doc has nested structure (list of structs) — validates that the
+    // append-log replica + init ops fix works end-to-end through a relay.
+    // Context: jj:oyouvrss (Phase 4 — general integration test)
+    const bridgeAR = new Bridge()
+    const bridgeRB = new Bridge()
+
+    const nestedSchema = Schema.doc({
+      title: Schema.string(),
+      items: Schema.list(
+        Schema.struct({
+          name: Schema.string(),
+          done: Schema.boolean(),
+        }),
+      ),
+      count: Schema.number(),
+    })
+    const NestedDoc = json.bind(nestedSchema)
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [
+        createBridgeTransport({ transportType: "alice", bridge: bridgeAR }),
+      ],
+    })
+
+    const relay = createExchange({
+      identity: { peerId: "relay" },
+      transports: [
+        createBridgeTransport({ transportType: "relay-a", bridge: bridgeAR }),
+        createBridgeTransport({ transportType: "relay-b", bridge: bridgeRB }),
+      ],
+      onUnresolvedDoc: () => Replicate(),
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [
+        createBridgeTransport({ transportType: "bob", bridge: bridgeRB }),
+      ],
+      onUnresolvedDoc: docId => {
+        if (docId === "nested") return Interpret(NestedDoc)
+        return Reject()
+      },
+    })
+
+    // Alice creates a doc with nested structure and writes data.
+    // Separate change() calls so each push is its own flush cycle —
+    // sequence ops within a single batch may reorder during
+    // serialization round-trips.
+    const docA = exchangeA.get("nested", NestedDoc)
+    change(docA, (d: any) => {
+      d.title.set("Task List")
+      d.count.set(2)
+    })
+    change(docA, (d: any) => {
+      d.items.push({ name: "Buy milk", done: false })
+    })
+    change(docA, (d: any) => {
+      d.items.push({ name: "Write tests", done: true })
+    })
+
+    await drain(60)
+
+    // Relay should have the doc (replicated, no schema)
+    expect(relay.has("nested")).toBe(true)
+
+    // Bob should have the doc with Alice's content
+    expect(exchangeB.has("nested")).toBe(true)
+    const docB = exchangeB.get("nested", NestedDoc)
+    expect(docB.title()).toBe("Task List")
+    expect(docB.count()).toBe(2)
+    expect(docB.items.length).toBe(2)
+    expect(docB.items.at(0)?.name()).toBe("Buy milk")
+    expect(docB.items.at(0)?.done()).toBe(false)
+    expect(docB.items.at(1)?.name()).toBe("Write tests")
+    expect(docB.items.at(1)?.done()).toBe(true)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -1268,7 +1348,7 @@ describe("capability gate", () => {
 
 describe("two-tiered default", () => {
   it("supported type → deferred, unsupported type → rejected", async () => {
-    // Peer A creates both a sequential doc (supported by default) and
+    // Peer A creates both an authoritative doc (supported by default) and
     // a Loro doc (unsupported by default on B).
     // Peer B has no onUnresolvedDoc callback and no Loro schemas.
     const bridge = new Bridge()
@@ -1292,7 +1372,7 @@ describe("two-tiered default", () => {
 
     await drain(40)
 
-    // Sequential doc: supported type → deferred by default
+    // Authoritative doc: supported type → deferred by default
     // has() returns true for deferred docs (they're in the cache),
     // but deferred.has() distinguishes them from interpreted docs.
     expect(exchangeB.deferred.has("seq-doc")).toBe(true)
@@ -1301,7 +1381,7 @@ describe("two-tiered default", () => {
     expect(exchangeB.deferred.has("loro-doc")).toBe(false)
     expect(exchangeB.has("loro-doc")).toBe(false)
 
-    // B calls get() for the sequential doc — promotes from deferred, syncs
+    // B calls get() for the authoritative doc — promotes from deferred, syncs
     const seqB = exchangeB.get("seq-doc", SequentialDoc)
     await drain(40)
 
@@ -1635,7 +1715,7 @@ describe("onDocCreated", () => {
     exchangeA.get("doc-1", SequentialDoc)
     await drain(40)
 
-    // Sequential is a default-supported type → deferred, NOT created
+    // Authoritative is a default-supported type → deferred, NOT created
     expect(exchangeB.deferred.has("doc-1")).toBe(true)
     expect(calls).toHaveLength(0)
 
@@ -1743,7 +1823,7 @@ describe("onDocCreated", () => {
       },
     })
 
-    exchange.replicate("doc-1", loroReplicaFactory, "concurrent", "hash-1")
+    exchange.replicate("doc-1", loroReplicaFactory, "collaborative", "hash-1")
 
     expect(calls).toHaveLength(1)
     expect(calls[0]).toMatchObject({

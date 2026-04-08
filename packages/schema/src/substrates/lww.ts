@@ -15,7 +15,6 @@
 // `timestampVersionStrategy` — same state management, different version
 // algebra. No decorator, no wrapper, no `context()` gotcha.
 
-import type { PlainState } from "../reader.js"
 import type { Schema as SchemaNode } from "../schema.js"
 import type {
   Replica,
@@ -24,14 +23,12 @@ import type {
   SubstrateFactory,
   SubstratePayload,
 } from "../substrate.js"
-import { BACKING_DOC } from "../substrate.js"
-import { Zero } from "../zero.js"
 import type { VersionStrategy } from "./plain.js"
 import {
   buildPlainReplicaFromEntirety,
   buildPlainSubstrateFromEntirety,
+  buildUpgrade,
   createPlainReplica,
-  createPlainSubstrate,
 } from "./plain.js"
 import { TimestampVersion } from "./timestamp-version.js"
 
@@ -73,7 +70,7 @@ export const lwwReplicaFactory: ReplicaFactory<TimestampVersion> = {
   replicaType: ["plain", 1, 0] as const,
 
   createEmpty(): Replica<TimestampVersion> {
-    return createPlainReplica({} as PlainState, timestampVersionStrategy)
+    return createPlainReplica(timestampVersionStrategy)
   },
 
   fromEntirety(payload: SubstratePayload): Replica<TimestampVersion> {
@@ -109,22 +106,14 @@ export const lwwSubstrateFactory: SubstrateFactory<TimestampVersion> = {
   replica: lwwReplicaFactory,
 
   createReplica(): Replica<TimestampVersion> {
-    return createPlainReplica({} as PlainState, timestampVersionStrategy)
+    return createPlainReplica(timestampVersionStrategy)
   },
 
   upgrade(
     replica: Replica<TimestampVersion>,
     schema: SchemaNode,
   ): Substrate<TimestampVersion> {
-    const doc = (replica as any)[BACKING_DOC] as PlainState
-    // Apply Zero.structural defaults for keys not already present
-    const defaults = Zero.structural(schema) as Record<string, unknown>
-    for (const key of Object.keys(defaults)) {
-      if (!(key in doc)) {
-        ;(doc as Record<string, unknown>)[key] = defaults[key]
-      }
-    }
-    return createPlainSubstrate(doc, timestampVersionStrategy)
+    return buildUpgrade(replica, schema, timestampVersionStrategy)
   },
 
   create(schema: SchemaNode): Substrate<TimestampVersion> {

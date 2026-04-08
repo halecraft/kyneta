@@ -296,7 +296,7 @@ export interface SubstratePayload {
  *   to each downstream peer's version).
  *
  * For causal substrates (Loro, Yjs), creating a replica requires the
- * CRDT runtime but NOT a schema. For sequential/LWW substrates, a
+ * CRDT runtime but NOT a schema. For authoritative/LWW substrates, a
  * replica is a plain JS object with an op log — no external runtime.
  */
 export interface Replica<V extends Version = Version> {
@@ -459,17 +459,17 @@ export function replicaTypesCompatible(
 /**
  * Declares which sync algorithm the exchange runs on behalf of a substrate.
  *
- * - **"concurrent"**: Bidirectional exchange. `compare()` may return
+ * - **"collaborative"**: Bidirectional exchange. `compare()` may return
  *   `"concurrent"`. Uses `exportSince()` for fine-grained deltas.
  *
- * - **"sequential"**: Request/response. Total order — `compare()` never
+ * - **"authoritative"**: Request/response. Total order — `compare()` never
  *   returns `"concurrent"`. Uses `exportSince()` or `exportEntirety()`.
  *
  * - **"ephemeral"**: Unidirectional push/broadcast. Timestamp-based. Always
  *   uses `exportEntirety()`. Receiver compares timestamps and discards
  *   stale arrivals.
  */
-export type MergeStrategy = "concurrent" | "sequential" | "ephemeral"
+export type MergeStrategy = "collaborative" | "authoritative" | "ephemeral"
 
 // ---------------------------------------------------------------------------
 // DocMetadata — per-document metadata

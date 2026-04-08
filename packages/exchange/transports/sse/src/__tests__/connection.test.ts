@@ -37,13 +37,13 @@ const presentMsg: ChannelMsg = {
     {
       docId: "doc-1",
       replicaType: ["plain", 1, 0] as const,
-      mergeStrategy: "sequential" as const,
+      mergeStrategy: "authoritative" as const,
       schemaHash: "test-hash",
     },
     {
       docId: "doc-2",
       replicaType: ["plain", 1, 0] as const,
-      mergeStrategy: "sequential" as const,
+      mergeStrategy: "authoritative" as const,
       schemaHash: "test-hash",
     },
   ],

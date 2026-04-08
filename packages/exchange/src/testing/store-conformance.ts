@@ -54,7 +54,7 @@ export async function collectAll<T>(iter: AsyncIterable<T>): Promise<T[]> {
 
 export const plainMetadata = {
   replicaType: ["plain", 1, 0] as const,
-  mergeStrategy: "sequential" as const,
+  mergeStrategy: "authoritative" as const,
   schemaHash: "00test",
 }
 
@@ -107,7 +107,7 @@ export function describeStore(
     it("ensureDoc does not overwrite existing metadata", async () => {
       const meta2 = {
         replicaType: ["loro", 1, 0] as const,
-        mergeStrategy: "concurrent" as const,
+        mergeStrategy: "collaborative" as const,
         schemaHash: "00test2",
       }
       await backend.ensureDoc("doc-1", plainMetadata)

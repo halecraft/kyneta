@@ -65,7 +65,7 @@ function replicaKey(
 /**
  * Default replica bindings shipped with the exchange.
  *
- * - **json / sequential**: monotonic-version plain JS objects with
+ * - **json / authoritative**: monotonic-version plain JS objects with
  *   request/response sync (the default strategy).
  * - **json / ephemeral**: timestamp-versioned plain JS objects with
  *   last-writer-wins broadcast (ephemeral/presence state).

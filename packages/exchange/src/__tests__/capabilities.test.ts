@@ -79,10 +79,10 @@ describe("Capabilities", () => {
       resolveFactory,
     })
 
-    const resolved = caps.resolveReplica(["plain", 1, 0], "sequential")
+    const resolved = caps.resolveReplica(["plain", 1, 0], "authoritative")
     expect(resolved).toBeDefined()
     expect(resolved?.factory).toBe(plainReplicaFactory)
-    expect(resolved?.strategy).toBe("sequential")
+    expect(resolved?.strategy).toBe("authoritative")
   })
 
   it("resolveReplica returns undefined for wrong strategy", () => {
@@ -92,8 +92,8 @@ describe("Capabilities", () => {
       resolveFactory,
     })
 
-    // ["plain", 1, 0] is registered with "sequential" and "ephemeral", but not "concurrent"
-    const resolved = caps.resolveReplica(["plain", 1, 0], "concurrent")
+    // ["plain", 1, 0] is registered with "authoritative" and "ephemeral", but not "collaborative"
+    const resolved = caps.resolveReplica(["plain", 1, 0], "collaborative")
     expect(resolved).toBeUndefined()
   })
 
@@ -104,7 +104,7 @@ describe("Capabilities", () => {
       resolveFactory,
     })
 
-    const resolved = caps.resolveReplica(["loro", 1, 0], "concurrent")
+    const resolved = caps.resolveReplica(["loro", 1, 0], "collaborative")
     expect(resolved).toBeUndefined()
   })
 
@@ -125,7 +125,7 @@ describe("Capabilities", () => {
     const resolved = caps.resolveSchema(
       bound.schemaHash,
       ["plain", 1, 0],
-      "sequential",
+      "authoritative",
     )
     expect(resolved).toBe(bound)
   })
@@ -161,7 +161,7 @@ describe("Capabilities", () => {
     const resolved = caps.resolveSchema(
       "nonexistent",
       ["plain", 1, 0],
-      "sequential",
+      "authoritative",
     )
     expect(resolved).toBeUndefined()
   })
@@ -184,10 +184,10 @@ describe("Capabilities", () => {
 
     expect(caps.supportsReplicaType(["loro", 1, 0])).toBe(true)
 
-    const resolved = caps.resolveReplica(["loro", 1, 0], "concurrent")
+    const resolved = caps.resolveReplica(["loro", 1, 0], "collaborative")
     expect(resolved).toBeDefined()
     expect(resolved?.factory.replicaType).toEqual(["loro", 1, 0])
-    expect(resolved?.strategy).toBe("concurrent")
+    expect(resolved?.strategy).toBe("collaborative")
   })
 
   // -------------------------------------------------------------------------
@@ -206,7 +206,7 @@ describe("Capabilities", () => {
 
     // Before registration: nothing resolves
     expect(
-      caps.resolveSchema(bound.schemaHash, ["plain", 1, 0], "sequential"),
+      caps.resolveSchema(bound.schemaHash, ["plain", 1, 0], "authoritative"),
     ).toBeUndefined()
     expect(caps.supportsReplicaType(["plain", 1, 0])).toBe(false)
 
@@ -215,7 +215,7 @@ describe("Capabilities", () => {
 
     // After registration: schema resolves and replica type is supported
     expect(
-      caps.resolveSchema(bound.schemaHash, ["plain", 1, 0], "sequential"),
+      caps.resolveSchema(bound.schemaHash, ["plain", 1, 0], "authoritative"),
     ).toBe(bound)
     expect(caps.supportsReplicaType(["plain", 1, 0])).toBe(true)
   })
@@ -231,7 +231,7 @@ describe("Capabilities", () => {
       resolveFactory,
     })
 
-    const sequential = caps.resolveReplica(["plain", 1, 0], "sequential")
+    const sequential = caps.resolveReplica(["plain", 1, 0], "authoritative")
     const ephemeral = caps.resolveReplica(["plain", 1, 0], "ephemeral")
 
     expect(sequential).toBeDefined()

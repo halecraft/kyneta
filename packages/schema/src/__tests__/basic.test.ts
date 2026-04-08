@@ -115,10 +115,10 @@ describe("createDocFromEntirety", () => {
 // ===========================================================================
 
 describe("sync primitives", () => {
-  it("version returns 0 initially", () => {
+  it("version returns 1 initially (init ops)", () => {
     const doc = createDoc(TestSchema)
 
-    expect(version(doc)).toBe(0)
+    expect(version(doc)).toBe(1)
   })
 
   it("version increments after mutations", () => {
@@ -143,12 +143,13 @@ describe("sync primitives", () => {
   it("delta returns ops after mutations", () => {
     const doc = createSeededDoc()
 
+    const v = version(doc)
     change(doc, d => {
       d.theme.set("light")
       d.count.increment(2)
     })
 
-    const ops = delta(doc, 0)
+    const ops = delta(doc, v)
     expect(ops.length).toBeGreaterThan(0)
   })
 
@@ -353,21 +354,23 @@ describe("WeakMap isolation", () => {
     const docA = createDoc(TestSchema)
     const docB = createDoc(TestSchema)
 
-    expect(version(docA)).toBe(0)
-    expect(version(docB)).toBe(0)
+    const vA0 = version(docA)
+    const vB0 = version(docB)
+    expect(vA0).toBe(1)
+    expect(vB0).toBe(1)
 
     change(docA, d => {
       d.theme.set("light")
     })
 
-    expect(version(docA)).toBeGreaterThan(0)
-    expect(version(docB)).toBe(0)
+    expect(version(docA)).toBeGreaterThan(vA0)
+    expect(version(docB)).toBe(vB0)
 
     change(docB, d => {
       d.count.increment(1)
     })
 
-    expect(version(docB)).toBeGreaterThan(0)
+    expect(version(docB)).toBeGreaterThan(vB0)
   })
 })
 
@@ -481,8 +484,8 @@ describe("isPopulated", () => {
     // Mutate docA
     change(docA, d => d.theme.set("synced"))
 
-    // Sync A → B
-    const ops = delta(docA, 0)
+    // Sync A → B (delta from init version, not 0, to avoid init ops)
+    const ops = delta(docA, 1)
     applyChanges(docB, ops, { origin: "sync" })
 
     expect(docB.theme.isPopulated()).toBe(true)
