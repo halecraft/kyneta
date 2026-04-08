@@ -138,14 +138,14 @@ function createYjsFactory(peerId: string): SubstrateFactory<YjsVersion> {
 /**
  * The Yjs CRDT substrate namespace.
  *
- * - `yjs.bind(schema)` — concurrent sync (default)
+ * - `yjs.bind(schema)` — collaborative sync (default)
  * - `yjs.bind(schema, "ephemeral")` — ephemeral/presence broadcast
- * - `yjs.replica()` — concurrent replication (default)
+ * - `yjs.replica()` — collaborative replication (default)
  * - `yjs.replica("ephemeral")` — ephemeral replication
  * - `yjs.unwrap(ref)` — access the underlying Y.Doc
  *
- * Strategy is constrained to `CrdtStrategy` (`"concurrent" | "ephemeral"`).
- * Passing `"sequential"` is a compile error.
+ * Strategy is constrained to `CrdtStrategy` (`"collaborative" | "ephemeral"`).
+ * Passing `"authoritative"` is a compile error.
  */
 export const yjs: SubstrateNamespace<CrdtStrategy> & {
   /** Access the underlying `Y.Doc` backing a ref. */
@@ -153,7 +153,7 @@ export const yjs: SubstrateNamespace<CrdtStrategy> & {
 } = {
   ...createSubstrateNamespace<CrdtStrategy>({
     strategies: {
-      concurrent: {
+      collaborative: {
         factory: ctx => createYjsFactory(ctx.peerId),
         replicaFactory: yjsReplicaFactory,
       },
@@ -162,7 +162,7 @@ export const yjs: SubstrateNamespace<CrdtStrategy> & {
         replicaFactory: yjsReplicaFactory,
       },
     },
-    defaultStrategy: "concurrent",
+    defaultStrategy: "collaborative",
   }),
 
   unwrap(ref: object): Y.Doc {

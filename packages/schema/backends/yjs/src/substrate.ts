@@ -132,6 +132,18 @@ export function createYjsSubstrate(
       return new YjsVersion(Y.encodeStateVector(doc))
     },
 
+    baseVersion(): YjsVersion {
+      // Yjs substrate: base is always the initial state (no advance supported).
+      return new YjsVersion(new Uint8Array([0]))
+    },
+
+    advance(_to: YjsVersion): void {
+      throw new Error(
+        "advance() on a live Yjs substrate is not yet supported. " +
+          "Use advance() on a YjsReplica instead.",
+      )
+    },
+
     exportEntirety(): SubstratePayload {
       return {
         kind: "entirety",
@@ -239,24 +251,57 @@ export function createYjsSubstrate(
  * storage without ever interpreting document fields.
  */
 export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
+  let currentDoc = doc
+  let currentBase: YjsVersion = new YjsVersion(
+    Y.encodeStateVector(new Y.Doc()),
+  )
+
   return {
-    [BACKING_DOC]: doc,
+    get [BACKING_DOC]() {
+      return currentDoc
+    },
 
     version(): YjsVersion {
-      return new YjsVersion(Y.encodeStateVector(doc))
+      return new YjsVersion(Y.encodeStateVector(currentDoc))
+    },
+
+    baseVersion(): YjsVersion {
+      return currentBase
+    },
+
+    advance(to: YjsVersion): void {
+      const baseCmp = currentBase.compare(to)
+      if (baseCmp === "ahead") {
+        throw new Error("advance(): target is behind base version")
+      }
+      const currentCmp = to.compare(this.version())
+      if (currentCmp === "ahead") {
+        throw new Error("advance(): target is ahead of current version")
+      }
+
+      // Yjs can only do full projection (to = version).
+      // For any to < version, it's a no-op — undershoot contract.
+      if (currentCmp !== "equal") return
+
+      // Full projection: create a new doc with current state, no history.
+      const update = Y.encodeStateAsUpdate(currentDoc)
+      const newDoc = new Y.Doc()
+      Y.applyUpdate(newDoc, update)
+      currentDoc = newDoc
+      currentBase = new YjsVersion(Y.encodeStateVector(currentDoc))
     },
 
     exportEntirety(): SubstratePayload {
       return {
         kind: "entirety",
         encoding: "binary",
-        data: Y.encodeStateAsUpdate(doc),
+        data: Y.encodeStateAsUpdate(currentDoc),
       }
     },
 
     exportSince(since: YjsVersion): SubstratePayload | null {
       try {
-        const bytes = Y.encodeStateAsUpdate(doc, since.sv)
+        const bytes = Y.encodeStateAsUpdate(currentDoc, since.sv)
         return { kind: "since", encoding: "binary", data: bytes }
       } catch {
         return null
@@ -273,7 +318,7 @@ export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
             "If you recently switched CRDT backends, stale clients may be sending incompatible data.",
         )
       }
-      Y.applyUpdate(doc, payload.data)
+      Y.applyUpdate(currentDoc, payload.data)
     },
   } as Replica<YjsVersion>
 }

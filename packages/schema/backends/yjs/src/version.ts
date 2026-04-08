@@ -12,6 +12,7 @@
 // decoded `Map<number, number>` (clientID → clock) maps ourselves.
 
 import type { Version } from "@kyneta/schema"
+import { versionVectorMeet } from "@kyneta/schema"
 import { decodeStateVector } from "yjs"
 
 // ---------------------------------------------------------------------------
@@ -33,6 +34,39 @@ function base64ToUint8Array(base64: string): Uint8Array {
     bytes[i] = binary.charCodeAt(i)
   }
   return bytes
+}
+
+// ---------------------------------------------------------------------------
+// State vector encoding — manual varint (unsigned LEB128)
+// ---------------------------------------------------------------------------
+
+/**
+ * Encode a state vector map to Yjs's binary state vector format.
+ *
+ * Yjs does not export `encodeStateVector(map)` — only `Y.encodeStateVector(doc)`
+ * which requires a full doc. This implements the same binary format directly:
+ * `[entryCount: varint, (clientId: varint, clock: varint)*]`
+ *
+ * Each value is encoded as an unsigned LEB128 varint.
+ */
+function encodeStateVector(map: Map<number, number>): Uint8Array {
+  const bytes: number[] = []
+
+  function writeVarUint(value: number): void {
+    while (value > 0x7f) {
+      bytes.push((value & 0x7f) | 0x80)
+      value >>>= 7
+    }
+    bytes.push(value & 0x7f)
+  }
+
+  writeVarUint(map.size)
+  for (const [clientId, clock] of map) {
+    writeVarUint(clientId)
+    writeVarUint(clock)
+  }
+
+  return new Uint8Array(bytes)
 }
 
 // ---------------------------------------------------------------------------
@@ -119,6 +153,27 @@ export class YjsVersion implements Version {
     if (hasLess && !hasGreater) return "behind"
     if (hasGreater && !hasLess) return "ahead"
     return "equal"
+  }
+
+  /**
+   * Greatest lower bound (lattice meet) of two Yjs versions.
+   *
+   * Decodes both state vectors, computes the component-wise minimum
+   * via the shared `versionVectorMeet` utility, and encodes the result
+   * back to a Yjs state vector.
+   *
+   * @throws If `other` is not a `YjsVersion`.
+   */
+  meet(other: Version): YjsVersion {
+    if (!(other instanceof YjsVersion)) {
+      throw new Error(
+        "YjsVersion can only be meet'd with another YjsVersion",
+      )
+    }
+    const thisMap = decodeStateVector(this.sv)
+    const otherMap = decodeStateVector(other.sv)
+    const result = versionVectorMeet(thisMap, otherMap)
+    return new YjsVersion(encodeStateVector(result))
   }
 
   /**

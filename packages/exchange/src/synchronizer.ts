@@ -101,11 +101,24 @@ export type DocDismissedCallback = (
   peer: PeerIdentityDetails,
 ) => void
 
+/**
+ * Epoch boundary predicate — decides whether to accept a compaction-induced
+ * entirety reset for a document that already has local state.
+ *
+ * Returns `true` to accept (reset local state), `false` to reject (diverge).
+ */
+export type EpochBoundaryPredicate = (
+  docId: DocId,
+  peer: PeerIdentityDetails,
+  strategy: MergeStrategy,
+) => boolean
+
 export type SynchronizerParams = {
   identity: PeerIdentityDetails
   transports?: AnyTransport[]
   route: RoutePredicate
   authorize: AuthorizePredicate
+  epochBoundary: EpochBoundaryPredicate
   onDocCreationRequested?: DocCreationCallback
   onDocDismissed?: DocDismissedCallback
 }
@@ -271,17 +284,21 @@ export class Synchronizer {
    */
   readonly #stateAdvancedListeners = new Set<(docId: DocId) => void>()
 
+  readonly #epochBoundary: EpochBoundaryPredicate
+
   constructor({
     identity,
     transports = [],
     route,
     authorize,
+    epochBoundary,
     onDocCreationRequested,
     onDocDismissed,
   }: SynchronizerParams) {
     this.identity = identity
 
     this.#updateFn = createSynchronizerUpdate({ route, authorize })
+    this.#epochBoundary = epochBoundary
     this.#docCreationCallback = onDocCreationRequested
     this.#docDismissedCallback = onDocDismissed
 
@@ -409,6 +426,46 @@ export class Synchronizer {
    */
   getDocRuntime(docId: DocId): DocRuntime | undefined {
     return this.#docRuntimes.get(docId)
+  }
+
+  /**
+   * Compute the least common version (LCV) for a document across all
+   * synced peers. The LCV is the greatest version that is ≤ every
+   * synced peer's last known version — the safe trim point.
+   *
+   * Returns `null` if no peers are synced for this doc (nothing to
+   * trim against), or if the doc doesn't exist.
+   *
+   * The local version is excluded — the LCV represents "what all
+   * remote participants have." Including the local version would
+   * raise the LCV incorrectly when the local node has advanced
+   * past what it's pushed to peers.
+   */
+  leastCommonVersion(docId: DocId): Version | null {
+    const runtime = this.#docRuntimes.get(docId)
+    if (!runtime) return null
+
+    let lcv: Version | null = null
+
+    for (const [, peerState] of this.model.peers) {
+      const docSync = peerState.docSyncStates.get(docId)
+      if (!docSync || docSync.status !== "synced") continue
+
+      let peerVersion: Version
+      try {
+        peerVersion = runtime.replicaFactory.parseVersion(
+          docSync.lastKnownVersion,
+        )
+      } catch {
+        // Skip peers with unparseable versions (shouldn't happen in
+        // normal operation, but defensive against corrupted state).
+        continue
+      }
+
+      lcv = lcv === null ? peerVersion : lcv.meet(peerVersion)
+    }
+
+    return lcv
   }
 
   /**
@@ -837,9 +894,10 @@ export class Synchronizer {
         case "gap": {
           const payload = runtime.replica.exportSince(gap.parsed)
           if (!payload) {
-            console.warn(
-              `[exchange] exportSince returned null for doc '${command.docId}' despite comparison '${gap.comparison}'`,
-            )
+            // exportSince returned null — the peer's version is behind
+            // the replica's base (history was trimmed via advance()).
+            // Fall back to exportEntirety() so the peer can reset.
+            enqueueOffer(runtime.replica.exportEntirety())
             return
           }
 
@@ -888,6 +946,76 @@ export class Synchronizer {
 
       case "gap":
         break
+    }
+
+    // --- Epoch boundary detection ---
+    // If this doc has previously synced with any peer and the incoming
+    // payload is an entirety, this may be a compaction-induced reset
+    // (the sender trimmed history past our version). Consult the epoch
+    // boundary policy before proceeding.
+    //
+    // We distinguish initial sync from compaction reset by checking
+    // whether ANY peer has reached "synced" status for this doc.
+    // Initial sync (first entirety from any peer) skips the policy —
+    // the existing merge path handles it correctly. Subsequent entirety
+    // payloads after the doc has been synced trigger the policy.
+    const isEntirety = command.payload.kind === "entirety"
+    const hasEverSynced = (() => {
+      for (const [, peerState] of this.model.peers) {
+        const docSync = peerState.docSyncStates.get(command.docId)
+        if (docSync && docSync.status === "synced") return true
+      }
+      return false
+    })()
+
+    if (isEntirety && hasEverSynced) {
+      // Look up the peer identity for the policy predicate.
+      const peerState = this.model.peers.get(command.fromPeerId)
+      const peerIdentity = peerState?.identity ?? {
+        peerId: command.fromPeerId,
+      }
+
+      const accept = this.#epochBoundary(
+        command.docId,
+        peerIdentity as PeerIdentityDetails,
+        runtime.strategy,
+      )
+
+      if (!accept) {
+        // Rejected — keep local state, diverge from compacted peers.
+        return
+      }
+
+      // Accepted — for CRDT replicas, replace the replica entirely
+      // (not doc.import(), which would merge and preserve local ops
+      // that reference trimmed causal anchors). For plain replicas,
+      // merge() already handles entirety correctly (decomposes to
+      // ReplaceChange ops).
+      if (runtime.mode === "replicate") {
+        // Headless replica — replace with a fresh one from the entirety.
+        try {
+          runtime.replica = runtime.replicaFactory.fromEntirety(
+            command.payload,
+          )
+        } catch (err) {
+          console.warn(
+            `[exchange] epoch boundary reset failed for doc '${command.docId}'.`,
+            err,
+          )
+          return
+        }
+
+        const newVersion = runtime.replica.version().serialize()
+        this.#dispatch({
+          type: "synchronizer/doc-imported",
+          docId: command.docId,
+          version: newVersion,
+          fromPeerId: command.fromPeerId,
+        })
+        return
+      }
+      // For interpreted substrates, fall through to normal merge —
+      // plain substrates handle entirety correctly via executeBatch.
     }
 
     try {

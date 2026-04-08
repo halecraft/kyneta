@@ -181,6 +181,17 @@ export function createLoroSubstrate(
 
     reader: reader,
 
+    baseVersion(): LoroVersion {
+      return new LoroVersion(doc.shallowSinceVV())
+    },
+
+    advance(_to: LoroVersion): void {
+      throw new Error(
+        "advance() on a live Loro substrate is not yet supported. " +
+        "Use advance() on a LoroReplica instead.",
+      )
+    },
+
     prepare(path: Path, change: ChangeBase): void {
       if (!inEventHandler) {
         // Local write: convert Change → Loro Diff, accumulate as a group.
@@ -331,24 +342,58 @@ export function createLoroSubstrate(
  * storage without ever interpreting document fields.
  */
 export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
+  let currentDoc = doc
+
   return {
-    [BACKING_DOC]: doc,
+    get [BACKING_DOC]() {
+      return currentDoc
+    },
 
     version(): LoroVersion {
-      return new LoroVersion(doc.version())
+      return new LoroVersion(currentDoc.version())
+    },
+
+    baseVersion(): LoroVersion {
+      return new LoroVersion(currentDoc.shallowSinceVV())
+    },
+
+    advance(to: LoroVersion): void {
+      const base = this.baseVersion()
+      const cmp = base.compare(to)
+      if (cmp === "ahead") {
+        throw new Error(
+          `advance(): target is behind base version`,
+        )
+      }
+      const cmpCurrent = to.compare(this.version())
+      if (cmpCurrent === "ahead") {
+        throw new Error(
+          `advance(): target is ahead of current version`,
+        )
+      }
+      // Convert VV to frontiers for the shallow-snapshot API.
+      const frontiers = currentDoc.vvToFrontiers(to.vv)
+      // Export a shallow snapshot at the target frontiers.
+      const bytes = currentDoc.export({
+        mode: "shallow-snapshot",
+        frontiers,
+      })
+      // Create a new doc from the shallow snapshot.
+      // LoroDoc.fromSnapshot handles both regular and shallow snapshots.
+      currentDoc = LoroDoc.fromSnapshot(bytes)
     },
 
     exportEntirety(): SubstratePayload {
       return {
         kind: "entirety",
         encoding: "binary",
-        data: doc.export({ mode: "snapshot" }),
+        data: currentDoc.export({ mode: "snapshot" }),
       }
     },
 
     exportSince(since: LoroVersion): SubstratePayload | null {
       try {
-        const bytes = doc.export({ mode: "update", from: since.vv })
+        const bytes = currentDoc.export({ mode: "update", from: since.vv })
         return { kind: "since", encoding: "binary", data: bytes }
       } catch {
         return null
@@ -365,7 +410,7 @@ export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
             "If you recently switched CRDT backends, stale clients may be sending incompatible data.",
         )
       }
-      doc.import(payload.data)
+      currentDoc.import(payload.data)
     },
   } as Replica<LoroVersion>
 }

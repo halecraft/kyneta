@@ -123,6 +123,15 @@ export class PlainVersion implements Version {
     if (this.#value > otherValue) return "ahead"
     return "equal"
   }
+
+  meet(other: Version): PlainVersion {
+    if (!(other instanceof PlainVersion)) {
+      throw new Error(
+        "PlainVersion can only be meet'd with another PlainVersion",
+      )
+    }
+    return new PlainVersion(Math.min(this.#value, other.#value))
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -194,6 +203,23 @@ export function createPlainSubstrate<V extends Version>(
       return replicaCore.version()
     },
 
+    baseVersion(): V {
+      return replicaCore.baseVersion()
+    },
+
+    advance(to: V): void {
+      replicaCore.advance(to, (batches: Op[][]) => {
+        // Substrate eagerly mutates doc — project trimmed ops in place.
+        // The doc is already up to date (prepare applies eagerly), but
+        // the base offset needs to advance so exportSince knows what's
+        // available. The ops in the trimmed batches are already reflected
+        // in doc — no replay needed for the substrate case.
+        // (The applyChange calls are redundant here because the substrate
+        // already applied them in prepare(). The advance callback exists
+        // for the replica case where the base is separate from the log.)
+      })
+    },
+
     exportEntirety(): SubstratePayload {
       return replicaCore.exportEntirety()
     },
@@ -260,10 +286,14 @@ function createPlainReplicaCore<V extends Version>(
   materialize: () => PlainState,
   strategy: VersionStrategy<V>,
 ) {
-  // Version log: log[i] = batch of Ops from flush cycle i.
-  // log.length is the flush count — the single source of truth for
-  // how many state-advancing operations have occurred.
+  // Version log: log[i] = batch of Ops from flush cycle (baseOffset + i).
+  // The absolute flush count is baseOffset + log.length.
   const log: Op[][] = []
+
+  // Base offset: the number of flush cycles that have been trimmed
+  // (projected into the base state). Initially 0 — no history trimmed.
+  // After advance(), baseOffset increases and log entries are spliced.
+  let baseOffset = 0
 
   // Cached version — computed once per flush cycle via strategy.current().
   // For PlainVersion (monotonic counter), this is deterministic: same
@@ -287,12 +317,68 @@ function createPlainReplicaCore<V extends Version>(
       if (pendingOps.length > 0) {
         log.push([...pendingOps])
         pendingOps.length = 0
-        cachedVersion = strategy.current(log.length)
+        cachedVersion = strategy.current(baseOffset + log.length)
       }
     },
 
     version(): V {
       return cachedVersion
+    },
+
+    baseVersion(): V {
+      return strategy.current(baseOffset)
+    },
+
+    /**
+     * Advance the base, trimming log entries before `to`.
+     *
+     * The `advanceBase` callback is invoked with the ops to project into
+     * the base state. For a substrate, this replays via `applyChange()`
+     * on the doc. For a replica, this replays onto the mutable base state.
+     *
+     * For strategies without log offset mapping (LWW/Timestamp), only
+     * full projection is supported: if `to = version()`, the entire log
+     * is projected. Otherwise, the call is a no-op.
+     */
+    advance(to: V, advanceBase: (batches: Op[][]) => void): void {
+      const targetOffset = strategy.logOffset(to)
+
+      if (targetOffset === null) {
+        // Strategy cannot map versions to log offsets (LWW/Timestamp).
+        // Only full projection is supported: to must equal version().
+        if (to.compare(this.version()) === "equal") {
+          // Full projection: project entire log, clear it.
+          if (log.length > 0) {
+            advanceBase([...log])
+            baseOffset = baseOffset + log.length
+            log.length = 0
+          }
+        }
+        // Otherwise: no-op (undershoot contract — base doesn't move).
+        return
+      }
+
+      // Validate: targetOffset must be within [baseOffset, baseOffset + log.length].
+      if (targetOffset < baseOffset) {
+        throw new Error(
+          `advance(${to.serialize()}): target offset ${targetOffset} is behind ` +
+            `base offset ${baseOffset}`,
+        )
+      }
+      if (targetOffset > baseOffset + log.length) {
+        throw new Error(
+          `advance(${to.serialize()}): target offset ${targetOffset} exceeds ` +
+            `current version offset ${baseOffset + log.length}`,
+        )
+      }
+
+      const count = targetOffset - baseOffset
+      if (count === 0) return // Already at this base — no-op.
+
+      // Project the trimmed log entries onto the base state.
+      const trimmed = log.splice(0, count)
+      advanceBase(trimmed)
+      baseOffset = targetOffset
     },
 
     exportEntirety(): SubstratePayload {
@@ -311,14 +397,15 @@ function createPlainReplicaCore<V extends Version>(
       // have no relationship to the op log array.
       if (offset === null) return this.exportEntirety()
 
-      // Nothing to send: offset is at or beyond the current log length.
-      if (offset >= log.length) return null
+      // Peer is behind the base — incremental export is not possible.
+      // The caller (synchronizer) should fall back to exportEntirety().
+      if (offset < baseOffset) return null
 
-      // Preserve batch boundaries so receivers replay one flush per batch,
-      // maintaining version parity across export → merge → re-export.
-      // Without this, relay topologies would collapse all batches into one
-      // flush cycle, destroying version parity and causing deadlocks.
-      const batches = log.slice(offset)
+      // Nothing to send: offset is at or beyond the current version.
+      if (offset >= baseOffset + log.length) return null
+
+      // Slice relative to the base offset.
+      const batches = log.slice(offset - baseOffset)
       if (batches.every(b => b.length === 0)) return null
 
       const serializedBatches = batches.map(batch => serializeOps(batch))
@@ -354,15 +441,23 @@ function createPlainReplicaCore<V extends Version>(
 export function createPlainReplica<V extends Version>(
   strategy: VersionStrategy<V>,
 ): Replica<V> {
+  // --- Mutable base state ---
+  // After advance(), the base incorporates projected ops. Starts empty.
+  // materialize() clones this and replays the retained log on top.
+  let base: PlainState = {}
+
   // --- Lazy materialization cache ---
   // The cache is the single materialized PlainState, built by replaying
-  // the entire log through applyChange(). Invalidated on every flush.
+  // the retained log on top of a clone of `base`. Invalidated on every
+  // flush and on advance.
   let cachedState: PlainState | null = null
 
-  /** Replay Base ({}) + Log through applyChange to produce current state. */
+  /** Replay Base + Log through applyChange to produce current state. */
   function materialize(): PlainState {
     if (cachedState !== null) return cachedState
-    const state: PlainState = {}
+    // Clone the base — we must not mutate it, as it represents the
+    // trim frontier and must remain stable until the next advance().
+    const state: PlainState = { ...base }
     for (const batch of core.log) {
       for (const op of batch) {
         applyChange(state, op.path, op.change)
@@ -392,6 +487,23 @@ export function createPlainReplica<V extends Version>(
 
     version(): V {
       return core.version()
+    },
+
+    baseVersion(): V {
+      return core.baseVersion()
+    },
+
+    advance(to: V): void {
+      core.advance(to, (batches: Op[][]) => {
+        // Project trimmed ops onto the base state.
+        for (const batch of batches) {
+          for (const op of batch) {
+            applyChange(base, op.path, op.change)
+          }
+        }
+      })
+      // Invalidate the materialization cache — the base has changed.
+      cachedState = null
     },
 
     exportEntirety(): SubstratePayload {

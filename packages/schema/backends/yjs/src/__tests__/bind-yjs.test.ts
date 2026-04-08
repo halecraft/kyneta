@@ -33,11 +33,11 @@ describe("yjs.bind", () => {
   // -------------------------------------------------------------------------
 
   describe("BoundSchema", () => {
-    it("creates BoundSchema with concurrent strategy", () => {
+    it("creates BoundSchema with collaborative strategy", () => {
       const bound = yjs.bind(TodoSchema)
       expect(bound._brand).toBe("BoundSchema")
       expect(bound.schema).toBe(TodoSchema)
-      expect(bound.strategy).toBe("concurrent")
+      expect(bound.strategy).toBe("collaborative")
     })
 
     it("has a factory builder function", () => {

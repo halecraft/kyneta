@@ -196,7 +196,7 @@ describe("LoroVersion", () => {
 
     it("throws when comparing with a non-LoroVersion", () => {
       const v = emptyVersion()
-      const fake = { serialize: () => "fake", compare: () => "equal" as const }
+      const fake = { serialize: () => "fake", compare: () => "equal" as const, meet: () => fake }
       expect(() => v.compare(fake)).toThrow(
         "LoroVersion can only be compared with another LoroVersion",
       )

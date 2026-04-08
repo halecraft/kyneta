@@ -470,6 +470,7 @@ export class Exchange {
       transports: transports.map(factory => factory()),
       route: this.#scopes.route.bind(this.#scopes),
       authorize: this.#scopes.authorize.bind(this.#scopes),
+      epochBoundary: this.#scopes.epochBoundary.bind(this.#scopes),
 
       onDocDismissed: this.#scopes.docDismissed.bind(this.#scopes),
       onDocCreationRequested: (
@@ -1111,6 +1112,60 @@ export class Exchange {
    */
   has(docId: DocId): boolean {
     return this.#docCache.has(docId)
+  }
+
+  /**
+   * Compute the least common version (LCV) for a document across all
+   * synced peers. The LCV is the greatest version that is ≤ every
+   * synced peer's last known version — the safe trim point for
+   * `advance()`.
+   *
+   * Returns `null` if no peers are synced for this doc, or if the
+   * doc doesn't exist.
+   *
+   * @param docId - The document to compute the LCV for
+   */
+  leastCommonVersion(docId: DocId): Version | null {
+    return this.#synchronizer.leastCommonVersion(docId)
+  }
+
+  /**
+   * Compact a document — advance the base to the LCV and replace
+   * stored payloads with the trimmed entirety.
+   *
+   * This is a convenience that composes `leastCommonVersion()` →
+   * `replica.advance()` → `exportEntirety()` → `store.replace()`.
+   *
+   * If no peers are synced, the full document is projected (all
+   * history discarded). The undershoot contract ensures the base
+   * never exceeds the LCV, so no peer is stranded.
+   *
+   * @param docId - The document to compact
+   */
+  async compact(docId: DocId): Promise<void> {
+    const runtime = this.#synchronizer.getDocRuntime(docId)
+    if (!runtime) return
+
+    const lcv = this.leastCommonVersion(docId)
+    // If no peers are synced, advance to current version (full projection).
+    const target = lcv ?? runtime.replica.version()
+
+    runtime.replica.advance(target)
+
+    // Replace stored payloads with the trimmed entirety.
+    const entirety = runtime.replica.exportEntirety()
+    const metadata: DocMetadata = {
+      replicaType: runtime.replicaFactory.replicaType,
+      mergeStrategy: runtime.strategy,
+      schemaHash: runtime.schemaHash,
+    }
+    for (const store of this.#stores) {
+      await store.ensureDoc(docId, metadata)
+      await store.replace(docId, {
+        payload: entirety,
+        version: runtime.replica.version().serialize(),
+      })
+    }
   }
 
   /**

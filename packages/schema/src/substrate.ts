@@ -239,6 +239,20 @@ export interface Version {
    * - "concurrent": neither is ahead (only possible with CRDT substrates)
    */
   compare(other: Version): "behind" | "equal" | "ahead" | "concurrent"
+
+  /**
+   * Greatest lower bound (lattice meet) of two versions.
+   *
+   * For a total order, this is `min(this, other)`.
+   * For a partial order (version vectors), this is the component-wise minimum.
+   *
+   * Algebraic properties:
+   * - Commutative: `a.meet(b) = b.meet(a)`
+   * - Associative: `a.meet(b.meet(c)) = a.meet(b).meet(c)`
+   * - Idempotent: `a.meet(a) = a`
+   * - Lower bound: `a.meet(b) ≤ a` and `a.meet(b) ≤ b`
+   */
+  meet(other: Version): Version
 }
 
 // ---------------------------------------------------------------------------
@@ -302,6 +316,39 @@ export interface SubstratePayload {
 export interface Replica<V extends Version = Version> {
   /** Current version marker. */
   version(): V
+
+  /**
+   * The earliest version this replica can serve incremental exports for.
+   *
+   * Initially the zero version (no history trimmed). After `advance(to)`,
+   * this returns the version at which retained history begins.
+   *
+   * Invariant: `baseVersion() ≤ version()` (via `compare`).
+   *
+   * `exportSince(v)` returns `null` for `v < baseVersion()`.
+   */
+  baseVersion(): V
+
+  /**
+   * Trim history, advancing the base as far as possible without exceeding `to`.
+   *
+   * Precondition: `baseVersion() ≤ to ≤ version()`, or throws.
+   *
+   * Postcondition: `baseVersion() <= to` — the substrate trims conservatively.
+   * Plain lands exactly at `to`. Loro may undershoot to the nearest critical
+   * version at or before `to`. Yjs and LWW are no-ops unless `to = version()`.
+   * The caller checks `baseVersion()` after the call to see where the base
+   * actually landed.
+   *
+   * After advance:
+   * - `exportSince(v)` returns `null` for `v < baseVersion()`
+   * - `exportEntirety()` returns the trimmed document (base + remaining log)
+   *
+   * This undershoot convention is essential for LCV safety: `advance(lcv)`
+   * guarantees no peer is stranded because the base never exceeds the
+   * safe frontier.
+   */
+  advance(to: V): void
 
   /**
    * Self-sufficient payload — everything needed to construct an

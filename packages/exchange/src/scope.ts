@@ -9,14 +9,43 @@
 //   that evaluates three-valued predicate composition.
 // - `ScopeRegistry` is the imperative shell — manages the mutable
 //   scope list and delegates composition to the pure function.
+//
+// The `onEpochBoundary` predicate governs compaction-induced resets:
+// when a peer receives an entirety payload for a document it already
+// has local state for, the epoch boundary policy decides whether to
+// accept (reset) or reject (diverge). Strategy-aware defaults apply
+// when no scope provides an opinion.
 
 import type { DocId, PeerIdentityDetails } from "@kyneta/transport"
+import type { MergeStrategy } from "@kyneta/schema"
 import type {
   Disposition,
   OnDocCreated,
   OnDocDismissed,
   OnUnresolvedDoc,
 } from "./exchange.js"
+
+// ---------------------------------------------------------------------------
+// Epoch boundary predicate
+// ---------------------------------------------------------------------------
+
+/**
+ * Predicate for compaction-induced entirety resets.
+ *
+ * Fires when the synchronizer receives an entirety payload for a document
+ * that already has local state (i.e., local version is not zero). This
+ * happens after a remote peer has called `advance()` to trim history
+ * past our known version.
+ *
+ * Returns:
+ * - `true` — accept the reset (discard local state, adopt the entirety)
+ * - `false` — reject the reset (keep local state, diverge from compacted peers)
+ * - `undefined` — no opinion (defer to other scopes or strategy-aware default)
+ */
+export type EpochBoundaryPredicate = (
+  docId: DocId,
+  peer: PeerIdentityDetails,
+) => boolean | undefined
 
 // ---------------------------------------------------------------------------
 // Types
@@ -48,6 +77,7 @@ export interface Scope {
   name?: string
   route?: RulePredicate
   authorize?: RulePredicate
+  onEpochBoundary?: EpochBoundaryPredicate
   onUnresolvedDoc?: (
     ...args: Parameters<OnUnresolvedDoc>
   ) => Disposition | undefined
@@ -164,6 +194,45 @@ export class ScopeRegistry {
    */
   authorize(docId: DocId, peer: PeerIdentityDetails): boolean {
     return composeRule(this.#scopes, "authorize", docId, peer, true)
+  }
+
+  /**
+   * Composed epoch boundary predicate.
+   *
+   * Uses three-valued composition: any scope returning `false` vetoes
+   * the reset. If no scope has an opinion, falls back to strategy-aware
+   * defaults:
+   * - `"authoritative"` → accept (followers don't write)
+   * - `"ephemeral"` → accept (no history semantics)
+   * - `"collaborative"` → accept by default (developer can override via scope)
+   */
+  epochBoundary(
+    docId: DocId,
+    peer: PeerIdentityDetails,
+    strategy: MergeStrategy,
+  ): boolean {
+    // Evaluate scopes using the same three-valued logic as route/authorize.
+    // The onEpochBoundary field uses the same (docId, peer) → boolean|undefined
+    // signature, so we reuse composeRule with a dynamic default.
+    let anyTrue = false
+    for (const scope of this.#scopes) {
+      const predicate = scope.onEpochBoundary
+      if (!predicate) continue
+      const result = predicate(docId, peer)
+      if (result === false) return false
+      if (result === true) anyTrue = true
+    }
+    if (anyTrue) return true
+
+    // Strategy-aware defaults when all scopes return undefined.
+    switch (strategy) {
+      case "authoritative":
+        return true // Followers don't write — reset is always safe.
+      case "ephemeral":
+        return true // No history semantics — reset is always safe.
+      case "collaborative":
+        return true // Accept by default; developer overrides via scope.
+    }
   }
 
   /**

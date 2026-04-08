@@ -958,6 +958,86 @@ This means schema evolution follows a simple protocol:
 
 The structural merge protocol guarantees convergence: a peer running schema v2 and a peer still on v1 will agree on all v1 containers. When the v1 peer upgrades, its `ensureContainers` call produces identical ops for the new fields — same identity, same order, same result.
 
+## Version Lattice Meet
+
+<!-- Context: jj:ppztoono -->
+
+The `Version` interface includes `meet(other)` — the greatest lower bound (lattice meet) of two versions. This is the algebraic foundation for computing the Least Common Version (LCV) across a set of peers.
+
+**Semantics by version type:**
+
+| Version Type | `meet(other)` |
+|---|---|
+| `PlainVersion` | `min(this.value, other.value)` — total order |
+| `TimestampVersion` | `min(this.timestamp, other.timestamp)` — total order |
+| `LoroVersion` | Component-wise minimum of version vectors via `versionVectorMeet` |
+| `YjsVersion` | Component-wise minimum of state vectors via `versionVectorMeet` |
+
+**Algebraic properties** (verified by tests for all four version types):
+
+- **Commutative**: `a.meet(b) = b.meet(a)`
+- **Associative**: `a.meet(b.meet(c)) = a.meet(b).meet(c)`
+- **Idempotent**: `a.meet(a) = a`
+- **Lower bound**: `a.meet(b) ≤ a` and `a.meet(b) ≤ b`
+
+These properties make `meet` a semilattice operation. The LCV of N peers is computed by folding: `LCV = v₁.meet(v₂).meet(v₃)...`. Associativity and commutativity guarantee the result is independent of fold order.
+
+### `versionVectorMeet` — Shared Utility
+
+```ts
+function versionVectorMeet<K>(a: Map<K, number>, b: Map<K, number>): Map<K, number>
+```
+
+Component-wise minimum of two version vectors (`Map<K, number>`). A key absent from one map defaults to 0, so `min(x, 0) = 0` — only keys present in **both** maps can appear in the result. Keys where the minimum is 0 are omitted.
+
+Used by both `LoroVersion` (key = `PeerID`) and `YjsVersion` (key = `number` clientID). The generic key type `K` accommodates both.
+
+---
+
+## Replica Base Version and Advance
+
+<!-- Context: jj:ppztoono -->
+
+The `Replica<V>` interface exposes two methods for history management:
+
+- **`baseVersion(): V`** — the earliest version the replica can serve incremental exports for. Initially the zero version (no history trimmed). After `advance(to)`, returns the version at which retained history begins.
+- **`advance(to: V): void`** — trim history, advancing the base as far as possible without exceeding `to`.
+
+**Invariants:**
+
+- `baseVersion() ≤ version()` (the base never exceeds the head)
+- After `advance(to)`: `baseVersion() ≤ to` (undershoot contract — the base never exceeds the ceiling)
+- `exportSince(v)` returns `null` for `v < baseVersion()` (trimmed history is gone)
+
+The undershoot contract is essential for LCV safety: `advance(lcv)` guarantees no peer is stranded because the base never advances past the safe frontier.
+
+### Per-Substrate Behavior
+
+| Substrate | `advance(to)` | Precision |
+|---|---|---|
+| **Plain** | Splice log entries ≤ `to`, replay onto base state via `applyChange` | Exact — lands precisely at `to` |
+| **Loro** | `doc.export({ mode: "shallow-snapshot", frontiers })` → new doc from snapshot | May undershoot to nearest critical version |
+| **Yjs** | No-op unless `to = version()` (full projection only) | Binary: all or nothing |
+| **LWW** | Same as Yjs — `logOffset()` returns `null`, no log relationship | Binary: all or nothing |
+
+**Plain advance** is the most granular: the `createPlainReplicaCore` maintains a `baseOffset` and an `Op[][]` log. `advance(to)` maps `to` to a log offset via `strategy.logOffset()`, splices the prefix, and calls an `advanceBase` callback that projects the trimmed ops onto the base state. The replica's materialization cache is invalidated.
+
+**Loro advance** leverages Loro's shallow-snapshot API. The target version vector is converted to frontiers via `doc.vvToFrontiers()`, then `doc.export({ mode: "shallow-snapshot", frontiers })` produces a compact representation. A new `LoroDoc` is created from this snapshot, discarding history before the frontiers. Because Loro's critical versions may not align exactly with the requested `to`, `baseVersion()` may land slightly behind `to`.
+
+**Yjs and LWW advance** can only perform full projection — collapse all history into the current state. For any `to < version()`, the call is a no-op. When `to = version()`, a fresh `Y.Doc` is created from the current state update, discarding the oplog.
+
+### Compaction Taxonomy
+
+Three forms of compaction, in increasing aggressiveness:
+
+1. **Encoding compaction** (lossless) — repack the binary representation without losing any information. Equivalent to `gzip → gunzip → gzip`. Not implemented; noted for completeness.
+
+2. **Trimming** (lossy, partial) — advance the base, projecting a prefix of history into the base state. `exportSince(v)` for `v ≥ baseVersion()` still works; `v < baseVersion()` returns `null`. Plain substrates support arbitrary trim points. Loro supports trimming to critical versions.
+
+3. **Full projection** (lossy, total) — collapse all history into the current state snapshot. `baseVersion() = version()`, so `exportSince(v)` returns `null` for all `v < version()`. This is what Yjs and LWW do when `advance(version())` is called. Any peer behind the projected version must receive an entirety payload and undergo an epoch boundary reset.
+
+---
+
 ## Verified Properties
 
 The spike validates these properties via 1,400+ tests across 27 test files:
@@ -1036,6 +1116,7 @@ packages/schema/
 │   ├── bind.ts                  # BoundSchema, BoundReplica, bind(), json namespace, createSubstrateNamespace(), isBoundSchema()
 │   ├── unwrap.ts                # registerSubstrate, unwrap — general escape hatch for substrate access
 │   ├── substrate.ts             # BACKING_DOC, SubstratePrepare, Version, SubstratePayload, Substrate<V>, SubstrateFactory<V>
+│   ├── version-vector.ts        # versionVectorMeet — shared lattice meet for version vectors (used by Loro + Yjs)
 │   ├── reader.ts                 # PlainState type, Reader, plainReader, readByPath, writeByPath, applyChange, pathKey
 │   ├── ref.ts                   # SchemaRef<S,M> parameterized core + Ref<S>, RWRef<S>, RRef<S> tier aliases
 │   ├── interpreters/

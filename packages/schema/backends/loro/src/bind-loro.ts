@@ -136,14 +136,14 @@ function createLoroFactory(peerId: string): SubstrateFactory<LoroVersion> {
 /**
  * The Loro CRDT substrate namespace.
  *
- * - `loro.bind(schema)` — concurrent sync (default)
+ * - `loro.bind(schema)` — collaborative sync (default)
  * - `loro.bind(schema, "ephemeral")` — ephemeral/presence broadcast
- * - `loro.replica()` — concurrent replication (default)
+ * - `loro.replica()` — collaborative replication (default)
  * - `loro.replica("ephemeral")` — ephemeral replication
  * - `loro.unwrap(ref)` — access the underlying LoroDoc
  *
- * Strategy is constrained to `CrdtStrategy` (`"concurrent" | "ephemeral"`).
- * Passing `"sequential"` is a compile error.
+ * Strategy is constrained to `CrdtStrategy` (`"collaborative" | "ephemeral"`).
+ * Passing `"authoritative"` is a compile error.
  */
 export const loro: SubstrateNamespace<CrdtStrategy> & {
   /** Access the underlying `LoroDoc` backing a ref. */
@@ -151,7 +151,7 @@ export const loro: SubstrateNamespace<CrdtStrategy> & {
 } = {
   ...createSubstrateNamespace<CrdtStrategy>({
     strategies: {
-      concurrent: {
+      collaborative: {
         factory: ctx => createLoroFactory(ctx.peerId),
         replicaFactory: loroReplicaFactory,
       },
@@ -160,7 +160,7 @@ export const loro: SubstrateNamespace<CrdtStrategy> & {
         replicaFactory: loroReplicaFactory,
       },
     },
-    defaultStrategy: "concurrent",
+    defaultStrategy: "collaborative",
   }),
 
   unwrap(ref: object): LoroDoc {

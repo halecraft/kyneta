@@ -2026,3 +2026,99 @@ This validates the scope + capabilities architecture: higher-level primitives co
 ### Type Safety
 
 The `Line<SendMsg, RecvMsg>` class is parameterized over concrete plain types (not schema types) to avoid deep recursive `Plain<S>` expansion. The `openLine()` function provides the typed entry point — it accepts schema types and returns `Line<Plain<Send>, Plain<Recv>>` using an interface call signature pattern that defers type evaluation.
+
+---
+
+## 26. Least Common Version and Compaction
+
+<!-- Context: jj:ppztoono -->
+
+The Exchange provides two methods for history management: `leastCommonVersion(docId)` computes the safe trim point, and `compact(docId)` executes the full compaction pipeline.
+
+### `exchange.leastCommonVersion(docId)`
+
+Computes the Least Common Version (LCV) across all synced peers for a document — the greatest version that is ≤ every synced peer's last known version. This is the safe frontier for `advance()`: trimming to the LCV guarantees every peer can still receive incremental deltas.
+
+**Algorithm:** fold `Version.meet()` across all peers in `"synced"` status for the document. The fold starts with the first peer's version and accumulates via `meet` (greatest lower bound). Peers with unparseable versions are skipped defensively.
+
+**Key design decisions:**
+
+- **Returns `null`** if no peers are synced (nothing to trim against) or the doc doesn't exist.
+- **Excludes the local version.** The LCV represents "what all remote participants have." Including the local version would raise the LCV incorrectly when the local node has advanced past what it's pushed to peers.
+
+### `exchange.compact(docId)`
+
+Convenience method composing the full compaction pipeline:
+
+1. Compute `lcv = leastCommonVersion(docId)`
+2. If no peers synced, use `replica.version()` as the target (full projection — all history discarded)
+3. `replica.advance(target)` — trim history (undershoot contract ensures safety)
+4. `replica.exportEntirety()` — export the trimmed document
+5. `store.replace(docId, entry)` — persist the compacted representation
+
+The undershoot contract (see `@kyneta/schema` TECHNICAL.md, §Replica Base Version and Advance) ensures the base never exceeds the LCV. If Loro undershoots to a critical version slightly before the LCV, that's safe — peers can still receive deltas from the actual `baseVersion()`.
+
+---
+
+## 27. Epoch Boundary Policy
+
+<!-- Context: jj:ppztoono -->
+
+When the synchronizer receives an entirety payload for a document that has previously synced (i.e., at least one peer has reached `"synced"` status), it may be a compaction-induced reset — the sender trimmed history past our version. The epoch boundary policy decides whether to accept or reject the reset.
+
+### Detection
+
+The synchronizer distinguishes initial sync from compaction reset by checking whether **any** peer has reached `"synced"` status for the document. First-ever entirety payloads (initial sync) skip the policy entirely — the existing merge path handles them correctly. Only subsequent entirety payloads after the doc has been synced trigger the policy check.
+
+### `onEpochBoundary` Predicate on Scopes
+
+```ts
+type EpochBoundaryPredicate = (
+  docId: DocId,
+  peer: PeerIdentityDetails,
+) => boolean | undefined
+```
+
+Three-valued composition via the scope registry (same semantics as `route`/`authorize`):
+
+- Any scope returning `false` → **reject** (veto wins, short-circuit)
+- At least one `true` and no `false` → **accept**
+- All `undefined` → fall back to strategy-aware defaults
+
+### Strategy-Aware Defaults
+
+When no scope provides an opinion:
+
+| Strategy | Default | Rationale |
+|---|---|---|
+| `"authoritative"` | Accept | Followers don't write — reset is safe |
+| `"ephemeral"` | Accept | No history semantics — latest state is all that matters |
+| `"collaborative"` | Accept | Safe default; developer can override via scope |
+
+### Reset Mechanics
+
+On acceptance:
+
+- **Replicated (headless) docs:** The replica is replaced entirely via `replicaFactory.fromEntirety(payload)`. This creates a fresh replica — not `doc.import()` which would merge and preserve local ops that reference trimmed causal anchors.
+- **Interpreted (substrate) docs:** Fall through to normal `merge()`. Plain substrates handle entirety correctly via `executeBatch` (decomposes to `ReplaceChange` ops, preserving ref identity and changefeed subscriptions).
+
+On rejection, the entirety is silently discarded — local state is preserved and the node diverges from compacted peers.
+
+---
+
+## 28. Synchronizer Fallback
+
+<!-- Context: jj:ppztoono -->
+
+When `exportSince(peerVersion)` returns `null` — because the peer's version is behind the replica's `baseVersion()` (history was trimmed via `advance()`) — the synchronizer falls back to `exportEntirety()`.
+
+**Protocol flow:**
+
+1. Synchronizer resolves the version gap: peer has version `V_peer`, local replica has `version()` = `V_head`.
+2. Calls `replica.exportSince(V_peer)`.
+3. If `V_peer < baseVersion()`, `exportSince` returns `null` (the ops are gone).
+4. Synchronizer enqueues `exportEntirety()` instead — the peer receives the full trimmed document.
+5. The peer's synchronizer detects an entirety payload for a previously-synced doc → epoch boundary policy fires.
+6. If accepted, the peer resets its local state to the received entirety.
+
+This fallback ensures that compaction does not strand peers — any peer that falls behind the trim frontier receives a complete state transfer and can resume incremental sync from the new base.

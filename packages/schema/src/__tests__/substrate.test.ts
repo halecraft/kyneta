@@ -116,6 +116,48 @@ describe("PlainVersion", () => {
   })
 })
 
+describe("PlainVersion.meet()", () => {
+  it("returns the minimum of two versions", () => {
+    const v3 = new PlainVersion(3)
+    const v5 = new PlainVersion(5)
+    const meet = v3.meet(v5)
+    expect(meet).toBeInstanceOf(PlainVersion)
+    expect((meet as PlainVersion).value).toBe(3)
+  })
+
+  it("is commutative", () => {
+    const a = new PlainVersion(3)
+    const b = new PlainVersion(7)
+    expect((a.meet(b) as PlainVersion).value).toBe(
+      (b.meet(a) as PlainVersion).value,
+    )
+  })
+
+  it("is idempotent", () => {
+    const v = new PlainVersion(5)
+    expect((v.meet(v) as PlainVersion).value).toBe(5)
+  })
+
+  it("meet with zero returns zero", () => {
+    const v = new PlainVersion(5)
+    const z = new PlainVersion(0)
+    expect((v.meet(z) as PlainVersion).value).toBe(0)
+  })
+
+  it("result is always ≤ both operands", () => {
+    const pairs = [
+      [0, 0], [0, 5], [3, 7], [10, 10], [100, 1],
+    ]
+    for (const [a, b] of pairs) {
+      const va = new PlainVersion(a)
+      const vb = new PlainVersion(b)
+      const m = va.meet(vb) as PlainVersion
+      expect(m.compare(va)).not.toBe("ahead")
+      expect(m.compare(vb)).not.toBe("ahead")
+    }
+  })
+})
+
 // ===========================================================================
 // Substrate lifecycle
 // ===========================================================================
@@ -748,5 +790,183 @@ describe("replicaTypesCompatible", () => {
 describe("ReplicaFactory.replicaType", () => {
   it("plainReplicaFactory identifies as plain", () => {
     expect(plainReplicaFactory.replicaType).toEqual(["plain", 1, 0])
+  })
+})
+
+// ===========================================================================
+// advance() — history trimming
+// ===========================================================================
+
+describe("PlainReplica.advance()", () => {
+  it("advance to current version (full projection) clears the log", () => {
+    const replica = plainReplicaFactory.createEmpty()
+    const source = plainSubstrateFactory.create(TestSchema)
+    const doc = interpretSubstrate(source)
+
+    change(doc, d => d.title.insert(0, "Hello"))
+    change(doc, d => d.count.increment(5))
+
+    // Merge source ops into replica
+    const delta = source.exportSince(new PlainVersion(0))!
+    replica.merge(delta)
+
+    expect(replica.version().value).toBeGreaterThan(0)
+    const vBefore = replica.version()
+
+    // Advance to current version (full projection)
+    replica.advance(replica.version())
+
+    // Version unchanged, base now equals version
+    expect(replica.version().value).toBe(vBefore.value)
+    expect(replica.baseVersion().value).toBe(vBefore.value)
+
+    // exportSince(v0) returns null — history is gone
+    expect(replica.exportSince(new PlainVersion(0))).toBeNull()
+
+    // exportEntirety still works
+    const entirety = replica.exportEntirety()
+    const parsed = JSON.parse(entirety.data as string)
+    expect(parsed.title).toBe("Hello")
+    expect(parsed.count).toBe(5)
+  })
+
+  it("partial trim: advance to midpoint preserves remaining ops", () => {
+    const replica = plainReplicaFactory.createEmpty()
+    const source = plainSubstrateFactory.create(TestSchema)
+    const doc = interpretSubstrate(source)
+
+    change(doc, d => d.title.insert(0, "A"))
+    const v2 = source.version()
+    change(doc, d => d.count.increment(1))
+    change(doc, d => d.theme.set("dark"))
+    const v4 = source.version()
+
+    // Merge all ops into replica
+    const delta = source.exportSince(new PlainVersion(0))!
+    replica.merge(delta)
+    expect(replica.version().value).toBe(v4.value)
+
+    // Advance to v2 — trims first 2 flush cycles
+    replica.advance(v2)
+
+    expect(replica.baseVersion().value).toBe(v2.value)
+    expect(replica.version().value).toBe(v4.value) // version unchanged
+
+    // exportSince(v0) = null (behind base)
+    expect(replica.exportSince(new PlainVersion(0))).toBeNull()
+    // exportSince(v2) = remaining ops
+    expect(replica.exportSince(v2)).not.toBeNull()
+
+    // State is still complete
+    const snap = JSON.parse(replica.exportEntirety().data as string)
+    expect(snap.title).toBe("A")
+    expect(snap.count).toBe(1)
+    expect(snap.theme).toBe("dark")
+  })
+
+  it("advance preserves ongoing operation — new ops can be appended after advance", () => {
+    const replica = plainReplicaFactory.createEmpty()
+    const source = plainSubstrateFactory.create(TestSchema)
+    const doc = interpretSubstrate(source)
+
+    change(doc, d => d.title.insert(0, "Before"))
+    const v2 = source.version()
+
+    const delta1 = source.exportSince(new PlainVersion(0))!
+    replica.merge(delta1)
+    replica.advance(v2)
+
+    // New ops after advance
+    change(doc, d => d.count.increment(99))
+    const delta2 = source.exportSince(v2)!
+    replica.merge(delta2)
+
+    // exportSince from base returns the new ops
+    const since = replica.exportSince(v2)
+    expect(since).not.toBeNull()
+
+    // Full state includes both pre-advance and post-advance data
+    const snap = JSON.parse(replica.exportEntirety().data as string)
+    expect(snap.title).toBe("Before")
+    expect(snap.count).toBe(99)
+  })
+
+  it("advance precondition: target beyond current version throws", () => {
+    const replica = plainReplicaFactory.createEmpty()
+    expect(() => replica.advance(new PlainVersion(999))).toThrow()
+  })
+
+  it("exportSince returns null for versions behind the base after advance", () => {
+    const replica = plainReplicaFactory.createEmpty()
+    const source = plainSubstrateFactory.create(TestSchema)
+    const doc = interpretSubstrate(source)
+
+    change(doc, d => d.title.insert(0, "A"))
+    const v2 = source.version()
+    change(doc, d => d.count.increment(1))
+    change(doc, d => d.theme.set("dark"))
+
+    replica.merge(source.exportSince(new PlainVersion(0))!)
+
+    // Before advance, exportSince(v0) works
+    expect(replica.exportSince(new PlainVersion(0))).not.toBeNull()
+
+    // Advance past v0
+    replica.advance(v2)
+
+    // After advance, v0 is behind base → null
+    expect(replica.exportSince(new PlainVersion(0))).toBeNull()
+    expect(replica.exportSince(new PlainVersion(1))).toBeNull()
+
+    // v2 (the base) still works
+    expect(replica.exportSince(v2)).not.toBeNull()
+
+    // exportEntirety always works (returns current state)
+    const snap = JSON.parse(replica.exportEntirety().data as string)
+    expect(snap.title).toBe("A")
+  })
+
+  it("round-trip: advance → exportEntirety → new replica has correct state", () => {
+    const replica = plainReplicaFactory.createEmpty()
+    const source = plainSubstrateFactory.create(TestSchema)
+    const doc = interpretSubstrate(source)
+
+    change(doc, d => d.title.insert(0, "Test"))
+    change(doc, d => d.count.increment(42))
+
+    replica.merge(source.exportSince(new PlainVersion(0))!)
+    replica.advance(replica.version())
+
+    // Create a new replica from the trimmed entirety
+    const entirety = replica.exportEntirety()
+    const replica2 = plainReplicaFactory.fromEntirety(entirety)
+
+    const snap = JSON.parse(replica2.exportEntirety().data as string)
+    expect(snap.title).toBe("Test")
+    expect(snap.count).toBe(42)
+  })
+})
+
+describe("PlainSubstrate.advance()", () => {
+  it("substrate advance works: base moves, changefeed + reader still function", () => {
+    const substrate = plainSubstrateFactory.create(TestSchema)
+    const doc = interpretSubstrate(substrate)
+
+    change(doc, d => d.title.insert(0, "Hello"))
+    const v2 = substrate.version()
+    change(doc, d => d.count.increment(5))
+
+    // Advance the substrate
+    substrate.advance(v2)
+    expect(substrate.baseVersion().value).toBe(v2.value)
+
+    // Reader still works
+    expect(doc.title()).toBe("Hello")
+    expect(doc.count()).toBe(5)
+
+    // New mutations still work
+    change(doc, d => d.theme.set("dark"))
+    expect(doc.theme()).toBe("dark")
+    expect(substrate.version().value).toBe(v2.value + 2)
   })
 })

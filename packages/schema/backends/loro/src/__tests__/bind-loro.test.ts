@@ -20,11 +20,11 @@ const testSchema = LoroSchema.doc({
 })
 
 describe("loro.bind()", () => {
-  it("creates a BoundSchema with concurrent strategy", () => {
+  it("creates a BoundSchema with collaborative strategy", () => {
     const bound = loro.bind(testSchema)
     expect(isBoundSchema(bound)).toBe(true)
     expect(bound.schema).toBe(testSchema)
-    expect(bound.strategy).toBe("concurrent")
+    expect(bound.strategy).toBe("collaborative")
   })
 
   it("factory builder produces a working SubstrateFactory", () => {

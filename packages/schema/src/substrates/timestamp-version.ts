@@ -55,6 +55,22 @@ export class TimestampVersion implements Version {
    *
    * @throws If `other` is not a `TimestampVersion`.
    */
+  /**
+   * Greatest lower bound (lattice meet) of two versions.
+   *
+   * For timestamps (total order), this is simply the minimum.
+   *
+   * @throws If `other` is not a `TimestampVersion`.
+   */
+  meet(other: Version): TimestampVersion {
+    if (!(other instanceof TimestampVersion)) {
+      throw new Error(
+        "TimestampVersion can only be meet'd with another TimestampVersion",
+      )
+    }
+    return new TimestampVersion(Math.min(this.timestamp, other.timestamp))
+  }
+
   compare(other: Version): "behind" | "equal" | "ahead" | "concurrent" {
     if (!(other instanceof TimestampVersion)) {
       throw new Error(

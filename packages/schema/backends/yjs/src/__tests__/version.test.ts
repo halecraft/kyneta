@@ -187,6 +187,7 @@ describe("YjsVersion", () => {
       const fake = {
         serialize: () => "fake",
         compare: () => "equal" as const,
+        meet: () => fake,
       }
       expect(() => v.compare(fake)).toThrow(
         "YjsVersion can only be compared with another YjsVersion",
@@ -213,6 +214,80 @@ describe("YjsVersion", () => {
       const earlyParsed = YjsVersion.parse(earlySerialized)
       expect(earlyParsed.compare(late)).toBe("behind")
       expect(late.compare(earlyParsed)).toBe("ahead")
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // meet
+  // -------------------------------------------------------------------------
+
+  describe("YjsVersion.meet()", () => {
+    it("meet of concurrent versions produces component-wise minimum", () => {
+      // Create two docs with independent edits
+      const doc1 = new Y.Doc()
+      const doc2 = new Y.Doc()
+
+      doc1.getMap("root").set("a", 1)
+      doc1.getMap("root").set("b", 2)
+      doc2.getMap("root").set("c", 3)
+
+      const v1 = new YjsVersion(Y.encodeStateVector(doc1))
+      const v2 = new YjsVersion(Y.encodeStateVector(doc2))
+
+      // meet of concurrent versions — result ≤ both
+      const meet = v1.meet(v2) as YjsVersion
+      expect(meet.compare(v1)).not.toBe("ahead")
+      expect(meet.compare(v2)).not.toBe("ahead")
+    })
+
+    it("meet of identical versions returns an equal version", () => {
+      const doc = new Y.Doc()
+      doc.getMap("root").set("x", 1)
+      const v = new YjsVersion(Y.encodeStateVector(doc))
+
+      const meet = v.meet(v) as YjsVersion
+      expect(meet.compare(v)).toBe("equal")
+    })
+
+    it("meet round-trips through Yjs decode correctly", () => {
+      // The custom encodeStateVector must produce bytes that Yjs can decode
+      const doc1 = new Y.Doc()
+      const doc2 = new Y.Doc()
+
+      doc1.getMap("root").set("x", 1)
+      doc1.getMap("root").set("y", 2)
+
+      // Sync doc1 → doc2, then doc2 makes independent edits
+      Y.applyUpdate(doc2, Y.encodeStateAsUpdate(doc1))
+      doc2.getMap("root").set("z", 3)
+
+      const v1 = new YjsVersion(Y.encodeStateVector(doc1))
+      const v2 = new YjsVersion(Y.encodeStateVector(doc2))
+
+      // v1 is behind v2 (v2 has all of v1's ops plus its own)
+      expect(v1.compare(v2)).toBe("behind")
+
+      // meet(v1, v2) should equal v1 (the behind one)
+      const meet = v1.meet(v2) as YjsVersion
+      expect(meet.compare(v1)).toBe("equal")
+
+      // The meet's state vector bytes can be decoded by Yjs
+      const decoded = Y.decodeStateVector(meet.sv)
+      expect(decoded.size).toBeGreaterThan(0)
+    })
+
+    it("meet of two behind-ahead versions gives the behind one", () => {
+      const doc = new Y.Doc()
+      doc.getMap("root").set("a", 1)
+      const early = new YjsVersion(Y.encodeStateVector(doc))
+
+      doc.getMap("root").set("b", 2)
+      const late = new YjsVersion(Y.encodeStateVector(doc))
+
+      expect(early.compare(late)).toBe("behind")
+
+      const meet = early.meet(late) as YjsVersion
+      expect(meet.compare(early)).toBe("equal")
     })
   })
 })

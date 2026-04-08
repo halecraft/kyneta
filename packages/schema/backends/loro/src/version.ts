@@ -8,6 +8,7 @@
 // for text-safe embedding in HTML meta tags, script tags, etc.
 
 import type { Version } from "@kyneta/schema"
+import { versionVectorMeet } from "@kyneta/schema"
 import { VersionVector } from "loro-crdt"
 
 // ---------------------------------------------------------------------------
@@ -86,6 +87,24 @@ export class LoroVersion implements Version {
     if (result < 0) return "behind"
     if (result > 0) return "ahead"
     return "equal"
+  }
+
+  /**
+   * Greatest lower bound (lattice meet) of two Loro versions.
+   *
+   * Computes the component-wise minimum of the two version vectors.
+   * The result is ≤ both `this` and `other`.
+   *
+   * @throws If `other` is not a `LoroVersion`.
+   */
+  meet(other: Version): LoroVersion {
+    if (!(other instanceof LoroVersion)) {
+      throw new Error(
+        "LoroVersion can only be meet'd with another LoroVersion",
+      )
+    }
+    const result = versionVectorMeet(this.vv.toJSON(), other.vv.toJSON())
+    return new LoroVersion(new VersionVector(result))
   }
 
   /**
