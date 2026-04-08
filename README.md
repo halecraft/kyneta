@@ -11,17 +11,19 @@ import { loro, LoroSchema } from "@kyneta/loro-schema"
 import { createWebsocketClient } from "@kyneta/websocket-transport/client"
 
 // 1. Define your data
-const TodoDoc = loro.bind(LoroSchema.doc({
-  title: LoroSchema.text(),
-  items: LoroSchema.list(
-    LoroSchema.plain.struct({
-      text: LoroSchema.plain.string(),
-      done: LoroSchema.plain.boolean(),
-    }),
-  ),
-}))
+const TodoDoc = loro.bind(
+  LoroSchema.doc({
+    title: LoroSchema.text(),
+    items: LoroSchema.list(
+      LoroSchema.plain.struct({
+        text: LoroSchema.plain.string(),
+        done: LoroSchema.plain.boolean(),
+      }),
+    ),
+  })
+)
 
-// 2. Create an exchange
+// 2. Create an exchange, one per peer (or server/client)
 const exchange = new Exchange({
   identity: { peerId: "alice" },
   transports: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
@@ -42,15 +44,22 @@ await sync(doc).waitForSync()
 React bindings are available today. It's easy to add other bindings.
 
 ```tsx
-import { useDocument, useValue, ExchangeProvider } from "@kyneta/react"
+import { useDocument, useValue } from "@kyneta/react"
+import { TodoDoc } from "./schema.js"
 
-function TodoTitle() {
+function TodoApp() {
   const doc = useDocument("my-todos", TodoDoc)
   const title = useValue(doc.title)
-  return <h1>{title}</h1>
-}
 
-// Note: assumes you'll use <TodoTitle /> inside an <ExchangeProvider />
+  return (
+    <div>
+      <h1>{title}</h1>
+      <button onClick={() => doc.items.push({ text: "New item", done: false })}>
+        Add
+      </button>
+    </div>
+  )
+}
 ```
 
 ## Grow Without Rewriting
