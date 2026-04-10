@@ -72,7 +72,7 @@ import { Schema, json } from "@kyneta/schema"
 // Game state — plain JS, sequential merge, server-authoritative.
 // The server is the single writer. Cars, scores, and tick are all
 // server-owned state that clients render but never mutate directly.
-export const GameStateDoc = json.bind(Schema.doc({
+export const GameStateDoc = json.bind(Schema.struct({
   cars: Schema.record(Schema.struct({ x, y, vx, vy, rotation, color, name, hitUntil })),
   scores: Schema.record(Schema.struct({ name, color, bumps })),
   tick: Schema.number(),
@@ -81,7 +81,7 @@ export const GameStateDoc = json.bind(Schema.doc({
 // Player input — ephemeral, one doc per player.
 // Each client writes joystick/keyboard state at ~20fps. The server
 // reads all input docs every tick. Only the latest value matters.
-export const PlayerInputDoc = json.bind(Schema.doc({
+export const PlayerInputDoc = json.bind(Schema.struct({
   name, color, force, angle,
 }), "ephemeral")
 ```

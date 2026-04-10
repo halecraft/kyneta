@@ -13,7 +13,7 @@ bun run example/basic/main.ts
 
 | Section | What it covers |
 |---|---|
-| **Define a Schema** | `Schema.doc({ ... })` with text, counter, list, struct, discriminated union, nullable, record |
+| **Define a Schema** | `Schema.struct({ ... })` with text, counter, list, struct, discriminated union, nullable, record |
 | **Create a Document** | `createDoc(schema, seed)` → a live, typed document |
 | **Read Values** | Callable refs (`doc.name()`), template coercion (`` `${doc.stars}` ``) |
 | **Mutations** | Text insert, counter increment, sequence push, scalar set, map set, product set |

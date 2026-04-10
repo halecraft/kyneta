@@ -7,7 +7,7 @@ Define a schema. Get a live, reactive, syncable document with full TypeScript ty
 ```ts
 import { Schema, createDoc, change, subscribe } from "@kyneta/schema/basic"
 
-const TaskDoc = Schema.doc({
+const TaskDoc = Schema.struct({
   title: Schema.annotated("text"),
   count: Schema.annotated("counter"),
   games: Schema.list(
@@ -96,7 +96,7 @@ Schema.discriminatedUnion("type", [  // native TS narrowing
 Schema.nullable(inner)               // null | inner
 
 // Root
-Schema.doc({ ... })                  // document root (annotated product)
+Schema.struct({ ... })                  // document root (annotated product)
 ```
 
 ## Collections

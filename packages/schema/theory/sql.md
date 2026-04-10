@@ -37,7 +37,7 @@ This document focuses on Option B.
 The schema grammar maps well to relational structure:
 
 ```/dev/null/mapping.txt#L1-13
-Schema.doc({                          →  database "my_doc"
+Schema.struct({                          →  database "my_doc"
   title: Schema.string(),             →  column "title" TEXT on root table
   count: Schema.number(),             →  column "count" REAL on root table
   settings: Schema.struct({           →  either embedded JSON or a child table
@@ -53,7 +53,7 @@ Schema.doc({                          →  database "my_doc"
 ```
 
 There's a design choice at every composite node: **embed or normalize?**
-A `Schema.struct` inside a `Schema.doc` could be a JSON column or a 1:1
+A `Schema.struct` inside a `Schema.struct` could be a JSON column or a 1:1
 joined table. A `Schema.list(Schema.string())` could be a JSON array
 column or a child table with an index column.
 
@@ -693,7 +693,7 @@ regardless of what's behind each substrate.
 import { bindSql } from "@kyneta/schema-sqlite"
 import { Exchange, sync } from "@kyneta/exchange"
 
-const BlogSchema = Schema.doc({
+const BlogSchema = Schema.struct({
   title: Schema.string(),
   posts: Schema.list(Schema.struct({
     title: Schema.string(),

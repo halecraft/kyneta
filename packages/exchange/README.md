@@ -114,7 +114,7 @@ The exchange is designed so that each capability is additive. You engage the nex
 ### Without an exchange — `@kyneta/schema` on its own
 
 ```ts
-const doc = createDoc(Schema.doc({ theme: Schema.string() }))
+const doc = createDoc(Schema.struct({ theme: Schema.string() }))
 doc.theme.set("dark")
 doc.theme()  // "dark"
 ```
@@ -124,7 +124,7 @@ When you need that document to sync across peers, the exchange wraps the same sc
 ### Two peers, one writer — the simplest distributed case
 
 ```ts
-const ConfigDoc = json.bind(Schema.doc({ theme: Schema.string() }))
+const ConfigDoc = json.bind(Schema.struct({ theme: Schema.string() }))
 
 // Peer A — creates the document and writes
 const exchangeA = new Exchange({
@@ -148,7 +148,7 @@ docB.theme()  // "dark"
 
 ```ts
 // Before: plain JS with sequential sync
-const ConfigDoc = json.bind(Schema.doc({ theme: Schema.string() }))
+const ConfigDoc = json.bind(Schema.struct({ theme: Schema.string() }))
 
 // After: Loro CRDT with concurrent merge — concurrent edits converge
 const ConfigDoc = loro.bind(Schema.struct({ theme: Schema.string() }))
@@ -173,7 +173,7 @@ const exchange = new Exchange({
 ### Add presence alongside your documents — same exchange
 
 ```ts
-const PresenceDoc = json.bind(Schema.doc({
+const PresenceDoc = json.bind(Schema.struct({
   cursor: Schema.struct({
     x: Schema.number(),
     y: Schema.number()
@@ -245,15 +245,15 @@ const TodoDoc = loro.bind(Schema.struct({
 }))
 
 // Collaborative text — Yjs CRDT with concurrent merge
-const NoteDoc = yjs.bind(Schema.doc({
+const NoteDoc = yjs.bind(Schema.struct({
   body: Schema.annotated("text"),
 }))
 
 // Config data — plain substrate with sequential sync
-const ConfigDoc = json.bind(Schema.doc({ theme: Schema.string() }))
+const ConfigDoc = json.bind(Schema.struct({ theme: Schema.string() }))
 
 // Ephemeral presence — ephemeral broadcast, only the latest value matters
-const PresenceDoc = json.bind(Schema.doc({
+const PresenceDoc = json.bind(Schema.struct({
   cursor: Schema.struct({ x: Schema.number(), y: Schema.number() }),
   name: Schema.string(),
 }), "ephemeral")
@@ -268,7 +268,7 @@ import { bind, createSubstrateNamespace } from "@kyneta/schema"
 
 // bind() is the general primitive — explicit schema, factory builder, strategy
 const CustomDoc = bind({
-  schema: Schema.doc({ data: Schema.string() }),
+  schema: Schema.struct({ data: Schema.string() }),
   factory: (ctx) => createMyFactory(ctx.peerId),
   strategy: "concurrent",
 })
@@ -279,7 +279,7 @@ const mySubstrate = createSubstrateNamespace({
   strategy: "concurrent",
 })
 
-const AnotherDoc = mySubstrate.bind(Schema.doc({ data: Schema.string() }))
+const AnotherDoc = mySubstrate.bind(Schema.struct({ data: Schema.string() }))
 const replica = mySubstrate.replica()
 ```
 

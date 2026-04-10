@@ -20,7 +20,7 @@ import {
 } from "@kyneta/yjs-schema"
 
 // Define a schema
-const TodoDoc = Schema.doc({
+const TodoDoc = Schema.struct({
   title: text(),
   items: Schema.list(
     Schema.struct({
@@ -105,7 +105,7 @@ importDelta(docB, delta!)
 import { bindYjs } from "@kyneta/yjs-schema"
 import { Schema, text } from "@kyneta/yjs-schema"
 
-const TodoDoc = bindYjs(Schema.doc({
+const TodoDoc = bindYjs(Schema.struct({
   title: text(),
   items: Schema.list(Schema.struct({
     name: Schema.string(),

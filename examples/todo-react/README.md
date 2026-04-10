@@ -50,7 +50,7 @@ todo-react/
 
 | Concern | Cast todo | React todo |
 |---------|-----------|------------|
-| **Schema** | `Schema.doc({ todos: ... })` | Identical |
+| **Schema** | `Schema.struct({ todos: ... })` | Identical |
 | **Binding** | `loro.bind(TodoSchema)` | `yjs.bind(TodoSchema)` |
 | **Exchange** | `new Exchange({ transports: [...] })` | Identical |
 | **Transport** | WebSocket | Identical |
@@ -84,7 +84,7 @@ Same schema. Same `exchange.get("todos", TodoDoc)`. Same three-message sync prot
 import { Schema } from "@kyneta/schema"
 import { yjs } from "@kyneta/yjs-schema"
 
-export const TodoSchema = Schema.doc({
+export const TodoSchema = Schema.struct({
   todos: Schema.list(
     Schema.struct({
       text: Schema.string(),

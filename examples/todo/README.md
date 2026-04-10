@@ -43,7 +43,7 @@ todo/
 import { Schema } from "@kyneta/schema"
 import { loro } from "@kyneta/loro-schema"
 
-export const TodoSchema = Schema.doc({
+export const TodoSchema = Schema.struct({
   todos: Schema.list(
     Schema.struct({
       text: Schema.string(),
@@ -148,7 +148,7 @@ That's it. That's the hot path. When a checkbox toggles on another tab, the CRDT
 You declare the document shape once, using an ergonomic schema DSL:
 
 ```ts
-export const TodoSchema = Schema.doc({
+export const TodoSchema = Schema.struct({
   todos: Schema.list(
     Schema.struct({
       text: Schema.string(),
