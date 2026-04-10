@@ -121,7 +121,7 @@ doc.theme()  // "dark"
 
 When you need that document to sync across peers, the exchange wraps the same schema. Your reads and writes don't change.
 
-### Two peers, plain sync — the simplest distributed case
+### Two peers, one writer — the simplest distributed case
 
 ```ts
 const ConfigDoc = json.bind(Schema.doc({ theme: Schema.string() }))
@@ -144,7 +144,7 @@ await sync(docB).waitForSync()
 docB.theme()  // "dark"
 ```
 
-### Switch to CRDTs — change the bind, not the reads/writes
+### Switch to multi-writer — change the bind, not the reads/writes
 
 ```ts
 // Before: plain JS with sequential sync
