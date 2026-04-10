@@ -11,10 +11,10 @@ import { Schema, change } from "@kyneta/schema"
 const TodoDoc = loro.bind(Schema.struct({
   title: Schema.text(),
   items: Schema.list(
-    Schema.struct({
+    Schema.struct.json({
       text: Schema.string(),
       done: Schema.boolean(),
-    }).json(),
+    }),
   ),
 }))
 
@@ -100,7 +100,14 @@ These three peers join the same network. The exchange negotiates the right sync 
 
 ## Growing Without Rewriting
 
-Most distributed state systems unintentionally punish exploration. You start with plain JSON over WebSocket. Then you need offline support, and need to rewrite for persistence. Then you need conflict resolution, and need to rewrite for CRDTs. Then you need a relay, and backtrack to duplicate your types on the server. Then you need presence, so it's natural to bolt on a second protocol. But every step invalidates the previous work done, in order to accommodate the new problem space you're exploring.
+Most distributed state systems unintentionally punish exploration. A common story:
+- You start with plain JSON messages over WebSocket.
+- Then you need durable delivery, offline support, and need to rewrite for persistence.
+- Then you need multi-device or multi-player, and conflict resolution, and need to rewrite for CRDTs.
+- Then you need a more complex topology for production, perhaps with relay nodes or fan-out, and you need to backtrack to duplicate your types on the server.
+- Then you need presence, so it's natural to bolt on a second protocol.
+ 
+But every step invalidates the previous work done, in order to accommodate the new problem space you're exploring.
 
 The exchange is designed so that each capability is additive. You engage the next level when you need it, without rewriting what came before.
 
@@ -167,7 +174,10 @@ const exchange = new Exchange({
 
 ```ts
 const PresenceDoc = json.bind(Schema.doc({
-  cursor: Schema.struct({ x: Schema.number(), y: Schema.number() }),
+  cursor: Schema.struct({
+    x: Schema.number(),
+    y: Schema.number()
+  }),
   name: Schema.string(),
 }), "ephemeral")
 
@@ -231,7 +241,7 @@ import { yjs } from "@kyneta/yjs-schema"
 // Collaborative document — Loro CRDT with concurrent merge
 const TodoDoc = loro.bind(Schema.struct({
   title: Schema.text(),
-  items: Schema.list(Schema.struct({ name: Schema.string() }).json()),
+  items: Schema.list(Schema.struct.json({ name: Schema.string() })),
 }))
 
 // Collaborative text — Yjs CRDT with concurrent merge
@@ -347,7 +357,7 @@ A single exchange hosts documents backed by different substrate types simultaneo
 
 ```ts
 const doc = exchange.get("collab-doc", TodoDoc)       // Loro CRDT, concurrent merge
-const config = exchange.get("settings", ConfigDoc)     // Plain, sequential sync
+const config = exchange.get("settings", ConfigDoc)     // Plain JSON, sequential sync
 const presence = exchange.get("presence", PresenceDoc) // ephemeral broadcast
 ```
 
