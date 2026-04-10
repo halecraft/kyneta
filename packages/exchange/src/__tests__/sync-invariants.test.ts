@@ -8,7 +8,7 @@
 // 5. Universal version comparison — all strategies reject stale offers
 // 6. Plain replica snapshot import falls back to replicaFactory.fromSnapshot()
 
-import { LoroSchema, loro } from "@kyneta/loro-schema"
+import { loro } from "@kyneta/loro-schema"
 import {
   change,
   Interpret,
@@ -87,8 +87,8 @@ const sequentialSchema = Schema.struct({
 })
 const SequentialDoc = json.bind(sequentialSchema)
 
-const loroSchema = LoroSchema.doc({
-  title: LoroSchema.text(),
+const loroSchema = Schema.struct({
+  title: Schema.text(),
 })
 const LoroDoc = loro.bind(loroSchema)
 
@@ -480,16 +480,16 @@ describe("schema hash compatibility", () => {
 
     // Schema A
     const SchemaA = loro.bind(
-      LoroSchema.doc({
-        title: LoroSchema.text(),
+      Schema.struct({
+        title: Schema.text(),
       }),
     )
 
     // Schema B — different structure, same docId
     const SchemaB = loro.bind(
-      LoroSchema.doc({
-        content: LoroSchema.text(),
-        count: LoroSchema.plain.number(),
+      Schema.struct({
+        content: Schema.text(),
+        count: Schema.number(),
       }),
     )
 
@@ -531,8 +531,8 @@ describe("schema hash compatibility", () => {
     const bridgeRC = new Bridge()
 
     const TodoDoc = loro.bind(
-      LoroSchema.doc({
-        title: LoroSchema.text(),
+      Schema.struct({
+        title: Schema.text(),
       }),
     )
 

@@ -5,16 +5,16 @@ Define your data's shape. Get sync, persistence, and presence — across any num
 ```ts
 import { Exchange, sync } from "@kyneta/exchange"
 import { createWebsocketClient } from "@kyneta/websocket-transport/client"
-import { loro, LoroSchema } from "@kyneta/loro-schema"
-import { change } from "@kyneta/schema"
+import { loro } from "@kyneta/loro-schema"
+import { Schema, change } from "@kyneta/schema"
 
-const TodoDoc = loro.bind(LoroSchema.doc({
-  title: LoroSchema.text(),
-  items: LoroSchema.list(
-    LoroSchema.plain.struct({
-      text: LoroSchema.plain.string(),
-      done: LoroSchema.plain.boolean(),
-    }),
+const TodoDoc = loro.bind(Schema.struct({
+  title: Schema.text(),
+  items: Schema.list(
+    Schema.struct({
+      text: Schema.string(),
+      done: Schema.boolean(),
+    }).json(),
   ),
 }))
 
@@ -144,7 +144,7 @@ docB.theme()  // "dark"
 const ConfigDoc = json.bind(Schema.doc({ theme: Schema.string() }))
 
 // After: Loro CRDT with concurrent merge — concurrent edits converge
-const ConfigDoc = loro.bind(LoroSchema.doc({ theme: LoroSchema.plain.string() }))
+const ConfigDoc = loro.bind(Schema.struct({ theme: Schema.string() }))
 
 // Everything else is unchanged:
 const doc = exchange.get("config", ConfigDoc)
@@ -225,13 +225,13 @@ A `BoundSchema` captures the three choices that define a document type:
 
 ```ts
 import { Schema, json } from "@kyneta/schema"
-import { loro, LoroSchema } from "@kyneta/loro-schema"
+import { loro } from "@kyneta/loro-schema"
 import { yjs } from "@kyneta/yjs-schema"
 
 // Collaborative document — Loro CRDT with concurrent merge
-const TodoDoc = loro.bind(LoroSchema.doc({
-  title: LoroSchema.text(),
-  items: LoroSchema.list(LoroSchema.plain.struct({ name: LoroSchema.plain.string() })),
+const TodoDoc = loro.bind(Schema.struct({
+  title: Schema.text(),
+  items: Schema.list(Schema.struct({ name: Schema.string() }).json()),
 }))
 
 // Collaborative text — Yjs CRDT with concurrent merge

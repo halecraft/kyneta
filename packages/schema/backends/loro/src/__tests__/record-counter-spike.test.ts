@@ -1,7 +1,7 @@
 // record-counter-spike — validate the bumper-cars scoreboard pattern.
 //
 // The bumper-cars scoreboard needs:
-//   Schema.record(Schema.struct({ name: Schema.string(), color: Schema.string(), bumps: LoroSchema.counter() }))
+//   Schema.record(Schema.struct({ name: Schema.string(), color: Schema.string(), bumps: Schema.counter() }))
 //
 // This nests a LoroCounter inside a LoroMap (the struct) inside another
 // LoroMap (the record). The key operations are:
@@ -19,7 +19,6 @@ import {
   createLoroDocFromEntirety,
   exportEntirety,
   exportSince,
-  LoroSchema,
   merge,
   Schema,
   subscribe,
@@ -33,11 +32,11 @@ import {
 const PlayerScoreSchema = Schema.struct({
   name: Schema.string(),
   color: Schema.string(),
-  bumps: LoroSchema.counter(),
+  bumps: Schema.counter(),
 })
 
-const ScoreboardSchema = LoroSchema.doc({
-  scores: LoroSchema.record(PlayerScoreSchema),
+const ScoreboardSchema = Schema.struct({
+  scores: Schema.record(PlayerScoreSchema),
 })
 
 // ===========================================================================
@@ -50,8 +49,8 @@ const PlainScoreSchema = Schema.struct({
   points: Schema.number(),
 })
 
-const PlainScoreboardSchema = LoroSchema.doc({
-  scores: LoroSchema.record(PlainScoreSchema),
+const PlainScoreboardSchema = Schema.struct({
+  scores: Schema.record(PlainScoreSchema),
 })
 
 // ===========================================================================
@@ -384,11 +383,11 @@ describe("record-of-struct-with-counter (bumper-cars scoreboard)", () => {
 // Generality: list-of-struct-with-counter
 // ===========================================================================
 
-const ListScoreSchema = LoroSchema.doc({
+const ListScoreSchema = Schema.struct({
   players: Schema.list(
     Schema.struct({
       name: Schema.string(),
-      bumps: LoroSchema.counter(),
+      bumps: Schema.counter(),
     }),
   ),
 })
@@ -473,11 +472,11 @@ describe("list-of-struct-with-counter (generality check)", () => {
 // Generality: text-inside-struct-inside-record
 // ===========================================================================
 
-const ProfileSchema = LoroSchema.doc({
-  profiles: LoroSchema.record(
+const ProfileSchema = Schema.struct({
+  profiles: Schema.record(
     Schema.struct({
       displayName: Schema.string(),
-      bio: LoroSchema.text(),
+      bio: Schema.text(),
     }),
   ),
 })

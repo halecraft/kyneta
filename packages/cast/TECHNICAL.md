@@ -1628,7 +1628,7 @@ Bun's first-match semantics route WASM files to this handler (which copies them 
 
 ### The Todo Example
 
-The `examples/todo/` app is the minimal vertical-slice example. It exercises the full managed sync path: `LoroSchema` → `bindLoro` → `Exchange` → `WebsocketServerAdapter`/`WebsocketClientAdapter` → Cast view → running app.
+The `examples/todo/` app is the minimal vertical-slice example. It exercises the full managed sync path: `Schema` → `loro.bind()` → `Exchange` → `WebsocketServerAdapter`/`WebsocketClientAdapter` → Cast view → running app.
 
 Unlike the recipe-book (which hand-rolls WebSocket sync), the todo uses `@kyneta/exchange` for all sync concerns. The `createApp(doc)` factory follows the same pattern — a pure builder function that receives a document ref and returns a Cast element — but the caller wires sync via Exchange rather than manual `subscribe`/`applyChanges`/WebSocket message passing.
 

@@ -2,7 +2,7 @@
 //
 //   Todo — Schema
 //
-//   Defines the collaborative todo document schema using LoroSchema
+//   Defines the collaborative todo document schema using Loro CRDT substrate
 //   (Loro CRDT-backed) and binds it with causal merge strategy.
 //
 //   No `id` field in the todo struct — Cast's listRegion uses index-based

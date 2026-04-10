@@ -53,9 +53,9 @@ The **schema** is `Fix(SchemaF)` — the fixed point (recursive closure) of
 this functor. A concrete schema like:
 
 ```
-LoroSchema.doc({
-  title: LoroSchema.text(),
-  todos: Schema.list(LoroSchema.plain.string()),
+Schema.struct({
+  title: Schema.text(),
+  todos: Schema.list(Schema.string()),
 })
 ```
 

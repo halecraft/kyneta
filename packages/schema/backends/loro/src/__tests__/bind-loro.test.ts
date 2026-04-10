@@ -9,13 +9,12 @@ import {
 import { describe, expect, it } from "vitest"
 import { loro } from "../bind-loro.js"
 import { createLoroDoc, getSubstrate } from "../create.js"
-import { LoroSchema } from "../loro-schema.js"
 
-const testSchema = LoroSchema.doc({
-  title: LoroSchema.text(),
-  count: LoroSchema.counter(),
-  items: LoroSchema.list(
-    LoroSchema.plain.struct({ name: LoroSchema.plain.string() }),
+const testSchema = Schema.struct({
+  title: Schema.text(),
+  count: Schema.counter(),
+  items: Schema.list(
+    Schema.struct.json({ name: Schema.string() }),
   ),
 })
 

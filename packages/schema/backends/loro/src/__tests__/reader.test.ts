@@ -2,7 +2,6 @@ import type { ProductSchema, Reader } from "@kyneta/schema"
 import { RawPath, Schema } from "@kyneta/schema"
 import { LoroDoc, LoroMap } from "loro-crdt"
 import { describe, expect, it } from "vitest"
-import { LoroSchema } from "../loro-schema.js"
 import { loroReader } from "../reader.js"
 
 // ===========================================================================
@@ -36,37 +35,37 @@ function p(...segs: (string | number)[]): RawPath {
 // Test schemas
 // ===========================================================================
 
-const SimpleDocSchema = LoroSchema.doc({
-  title: LoroSchema.text(),
-  count: LoroSchema.counter(),
-  theme: LoroSchema.plain.string(),
+const SimpleDocSchema = Schema.struct({
+  title: Schema.text(),
+  count: Schema.counter(),
+  theme: Schema.string(),
 })
 
-const ListDocSchema = LoroSchema.doc({
-  items: LoroSchema.list(
-    LoroSchema.plain.struct({
-      name: LoroSchema.plain.string(),
-      done: LoroSchema.plain.boolean(),
+const ListDocSchema = Schema.struct({
+  items: Schema.list(
+    Schema.struct.json({
+      name: Schema.string(),
+      done: Schema.boolean(),
     }),
   ),
 })
 
-const MapDocSchema = LoroSchema.doc({
-  labels: LoroSchema.record(LoroSchema.plain.string()),
+const MapDocSchema = Schema.struct({
+  labels: Schema.record(Schema.string()),
 })
 
-const NestedDocSchema = LoroSchema.doc({
-  settings: LoroSchema.struct({
-    darkMode: LoroSchema.plain.boolean(),
-    fontSize: LoroSchema.plain.number(),
+const NestedDocSchema = Schema.struct({
+  settings: Schema.struct({
+    darkMode: Schema.boolean(),
+    fontSize: Schema.number(),
   }),
 })
 
-const MovableListDocSchema = LoroSchema.doc({
-  tasks: LoroSchema.movableList(
-    LoroSchema.plain.struct({
-      title: LoroSchema.plain.string(),
-      priority: LoroSchema.plain.number(),
+const MovableListDocSchema = Schema.struct({
+  tasks: Schema.movableList(
+    Schema.struct.json({
+      title: Schema.string(),
+      priority: Schema.number(),
     }),
   ),
 })
@@ -388,11 +387,11 @@ describe("loroReader", () => {
 
   describe("dynamic zone navigation", () => {
     it("navigates through list into struct fields created by insertContainer", () => {
-      const schema = LoroSchema.doc({
-        people: LoroSchema.list(
-          LoroSchema.plain.struct({
-            name: LoroSchema.plain.string(),
-            age: LoroSchema.plain.number(),
+      const schema = Schema.struct({
+        people: Schema.list(
+          Schema.struct.json({
+            name: Schema.string(),
+            age: Schema.number(),
           }),
         ),
       })
@@ -421,11 +420,11 @@ describe("loroReader", () => {
 
   describe("concurrent peers", () => {
     it("sees merged items after sync between two peers", () => {
-      const schema = LoroSchema.doc({
-        items: LoroSchema.list(
-          LoroSchema.plain.struct({
-            name: LoroSchema.plain.string(),
-            peer: LoroSchema.plain.number(),
+      const schema = Schema.struct({
+        items: Schema.list(
+          Schema.struct.json({
+            name: Schema.string(),
+            peer: Schema.number(),
           }),
         ),
       })

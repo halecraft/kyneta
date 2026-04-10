@@ -1,6 +1,6 @@
 // Capabilities — unit tests for the capabilities registry.
 
-import { LoroSchema, loro } from "@kyneta/loro-schema"
+import { loro } from "@kyneta/loro-schema"
 import {
   type FactoryBuilder,
   json,
@@ -171,7 +171,7 @@ describe("Capabilities", () => {
   // -------------------------------------------------------------------------
 
   it("schema registration auto-derives replica capability", () => {
-    const loroSchema = LoroSchema.doc({ title: LoroSchema.text() })
+    const loroSchema = Schema.struct({ title: Schema.text() })
     const bound = loro.bind(loroSchema)
 
     // No explicit Loro replicas — only DEFAULT_REPLICAS (plain-wire).

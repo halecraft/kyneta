@@ -18,16 +18,16 @@ import {
   change,
   Schema,
 } from "@kyneta/react"
-import { bindLoro, LoroSchema } from "@kyneta/loro-schema"
+import { loro } from "@kyneta/loro-schema"
 
 // 1. Define your schema and bind to a substrate
-const TodoSchema = LoroSchema.doc({
-  title: LoroSchema.text(),
+const TodoSchema = Schema.struct({
+  title: Schema.text(),
   items: Schema.list(
     Schema.struct({ text: Schema.string(), done: Schema.boolean() }),
   ),
 })
-const TodoDoc = bindLoro(TodoSchema)
+const TodoDoc = loro.bind(TodoSchema)
 
 // 2. Wrap your app in ExchangeProvider
 function Root() {

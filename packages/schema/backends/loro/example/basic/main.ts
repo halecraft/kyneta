@@ -16,8 +16,8 @@ import {
   createLoroDocFromEntirety,
   exportEntirety,
   exportSince,
-  LoroSchema,
   merge,
+  Schema,
   subscribe,
   version,
 } from "../../src/index.js"
@@ -32,26 +32,26 @@ import { log, peer, section } from "../helpers.js"
 
 section(1, "Define a Schema")
 
-const NoteSchema = LoroSchema.doc({
-  title: LoroSchema.text(),
-  likes: LoroSchema.counter(),
-  tags: LoroSchema.list(LoroSchema.plain.string()),
-  tasks: LoroSchema.list(
-    LoroSchema.plain.struct({
-      text: LoroSchema.plain.string(),
-      done: LoroSchema.plain.boolean(),
+const NoteSchema = Schema.struct({
+  title: Schema.text(),
+  likes: Schema.counter(),
+  tags: Schema.list(Schema.string()),
+  tasks: Schema.list(
+    Schema.struct.json({
+      text: Schema.string(),
+      done: Schema.boolean(),
     }),
   ),
 })
 
 log(`
-    const NoteSchema = LoroSchema.doc({
-      title: LoroSchema.text(),                    // collaborative rich text
-      likes: LoroSchema.counter(),                 // convergent counter
-      tags:  LoroSchema.list(LoroSchema.plain.string()),  // plain list
-      tasks: LoroSchema.list(LoroSchema.plain.struct({    // list of structs
-        text: LoroSchema.plain.string(),
-        done: LoroSchema.plain.boolean(),
+    const NoteSchema = Schema.struct({
+      title: Schema.text(),                    // collaborative rich text
+      likes: Schema.counter(),                 // convergent counter
+      tags:  Schema.list(Schema.string()),            // plain list
+      tasks: Schema.list(Schema.struct.json({         // list of structs
+        text: Schema.string(),
+        done: Schema.boolean(),
       })),
     })
 `)
@@ -64,7 +64,7 @@ log(`
 
 section(2, "Create a Document")
 
-const doc = createLoroDoc(NoteSchema, { title: "Meeting Notes" })
+const doc = createLoroDoc(NoteSchema)
 
 log(`
     const doc = createLoroDoc(NoteSchema, { title: "Meeting Notes" })

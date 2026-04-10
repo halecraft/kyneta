@@ -6,6 +6,7 @@ import {
   RawPath,
   type Ref,
   readable,
+  Schema,
   type SchemaNode,
   subscribe,
   writable,
@@ -17,23 +18,23 @@ import {
   LoroVersion,
   loroSubstrateFactory,
 } from "../index.js"
-import { LoroSchema } from "../loro-schema.js"
+
 
 // ===========================================================================
 // Shared test schema
 // ===========================================================================
 
-const TestSchema = LoroSchema.doc({
-  title: LoroSchema.text(),
-  count: LoroSchema.counter(),
-  items: LoroSchema.list(
-    LoroSchema.plain.struct({
-      name: LoroSchema.plain.string(),
-      done: LoroSchema.plain.boolean(),
+const TestSchema = Schema.struct({
+  title: Schema.text(),
+  count: Schema.counter(),
+  items: Schema.list(
+    Schema.struct.json({
+      name: Schema.string(),
+      done: Schema.boolean(),
     }),
   ),
-  theme: LoroSchema.plain.string(),
-  peers: LoroSchema.record(LoroSchema.plain.boolean()),
+  theme: Schema.string(),
+  peers: Schema.record(Schema.boolean()),
 })
 
 // ===========================================================================

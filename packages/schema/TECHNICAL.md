@@ -36,16 +36,16 @@ Each CRDT backend package provides its **own constructor namespace** that is now
 
 | Package | Namespace | What it adds |
 |---|---|---|
-| `@kyneta/loro-schema` | `LoroSchema` | `doc()` (Loro root constraint), `plain.*` sub-namespace, `struct`/`list`/`record` (Loro-container variants) |
-| `@kyneta/yjs-schema` | (standalone `text()` export) | `text()` |
+| `@kyneta/loro-schema` | `loro` | `bind()` (Loro substrate binding) |
+| `@kyneta/yjs-schema` | `yjs` | `bind()` (Yjs substrate binding) |
 
-The interpreter dispatch is on `[KIND]` — each first-class type has its own kind value (`"text"`, `"counter"`, `"set"`, `"tree"`, `"movable"`). `LoroSchema.text()` and `Schema.text()` produce the same `TextSchema` node.
+The interpreter dispatch is on `[KIND]` — each first-class type has its own kind value (`"text"`, `"counter"`, `"set"`, `"tree"`, `"movable"`). All constructors live in the `Schema` namespace.
 
 **Note:** The `Interpreter` interface has 10 methods — one per `[KIND]` value: `scalar`, `product`, `sequence`, `map`, `sum`, `text`, `counter`, `set`, `tree`, `movable`. Each first-class type gets its own interpreter method rather than being dispatched through a generic annotation handler.
 
 ### Composition Constraints Are Backend-Specific
 
-Even with a unified grammar, some backends impose validity rules (e.g. Loro can't nest a CRDT container inside a plain value blob). These are **well-formedness rules** — context-sensitive constraints layered on the context-free grammar. The solution: the internal `Schema` type is unconstrained; backend-specific constructor APIs (e.g. `LoroSchema.plain.struct()` in `@kyneta/loro-schema`) use TypeScript's type system to enforce constraints at build time.
+Even with a unified grammar, some backends impose validity rules (e.g. Loro can't nest a CRDT container inside a plain value blob). These are **well-formedness rules** — context-sensitive constraints layered on the context-free grammar. The solution: the internal `Schema` type is unconstrained; constructors like `Schema.struct.json()` use TypeScript's type system to enforce constraints at build time.
 
 **`PlainSchema` — the LWW-compatible subset.** The grammar defines `PlainSchema` in `schema.ts`, a recursive type that includes the five structural kinds (`ScalarSchema`, `ProductSchema`, `SequenceSchema`, `MapSchema`, `SumSchema`) but excludes all first-class CRDT types (`TextSchema`, `CounterSchema`, `SetSchema`, `TreeSchema`, `MovableSequenceSchema`). Each structural kind has a `Plain*` counterpart (`PlainProductSchema`, `PlainSequenceSchema`, etc.) where the recursive position is narrowed from `Schema` to `PlainSchema`. These types are exported from `@kyneta/schema` for use by any backend's composition constraints.
 
@@ -57,13 +57,13 @@ Backend `plain.*` constructors use `PlainSchema` as their **parameter constraint
 
 ```ts
 // In @kyneta/loro-schema — parameter type narrowed to PlainSchema:
-LoroSchema.plain.struct<F extends Record<string, PlainSchema>>(fields: F): ProductSchema<F>
+Schema.struct.json<F extends Record<string, PlainSchema>>(fields: F): ProductSchema<F>
 
 // This compiles:
-LoroSchema.plain.struct({ name: Schema.string() })
+Schema.struct.json({ name: Schema.string() })
 
 // This is a compile error — TextSchema ∉ PlainSchema:
-LoroSchema.plain.struct({ title: Schema.text() })
+Schema.struct.json({ title: Schema.text() })
 ```
 
 The constraint is recursive: nesting a first-class CRDT type anywhere inside a `plain.*` tree or a sum variant is rejected at compile time.
@@ -162,7 +162,7 @@ Developer-facing sugar produces nodes in this grammar:
 
 **`.json()` modifier.** `Schema.struct(fields).json()`, `Schema.list(item).json()`, and `Schema.record(item).json()` create a merge boundary — everything below is an inert JSON blob with no child capabilities propagated. The `fields`/`item` must be `PlainSchema`.
 
-Backend packages provide their own constructor namespaces as thin wrappers over `Schema.*`. For example, `@kyneta/loro-schema` exports `LoroSchema.text()` which delegates to `Schema.text()`, producing the same `TextSchema` node. The `LoroSchema` namespace still exists for Loro-specific concerns like `LoroSchema.doc()` (root field constraints) and `LoroSchema.plain.*` (composition-constrained plain constructors).
+Backend packages provide bind functions (`loro.bind()`, `yjs.bind()`) that attach a substrate to a schema. All constructors live in the `Schema` namespace — there are no backend-specific constructor namespaces. The `.json()` modifier on `Schema.struct`, `Schema.list`, and `Schema.record` enforces plain-only composition constraints at compile time.
 
 ### Symbol-Keyed Metadata Model
 

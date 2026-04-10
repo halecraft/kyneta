@@ -17,7 +17,7 @@
 //     stores: [createInMemoryStore()],
 //   })
 //
-//   const TodoDoc = loro.bind(LoroSchema.doc({ title: LoroSchema.text() }))  // loro from @kyneta/loro-schema
+//   const TodoDoc = loro.bind(Schema.struct({ title: Schema.text() }))  // loro from @kyneta/loro-schema
 //   const doc = exchange.get("my-doc", TodoDoc)
 //   sync(doc).waitForSync()
 
@@ -332,7 +332,7 @@ type DocCacheEntry =
  * @example
  * ```typescript
  * import { Exchange, sync, json } from "@kyneta/exchange"
- * import { loro, LoroSchema } from "@kyneta/loro-schema"
+ * import { loro } from "@kyneta/loro-schema"
  *
  * const exchange = new Exchange({
  *   identity: { name: "alice" },
@@ -340,7 +340,7 @@ type DocCacheEntry =
  *   stores: [createInMemoryStore()],
  * })
  *
- * const TodoDoc = loro.bind(LoroSchema.doc({ title: LoroSchema.text() }))
+ * const TodoDoc = loro.bind(Schema.struct({ title: Schema.text() }))
  * const ConfigDoc = json.bind(Schema.struct({ theme: Schema.string() }))
  *
  * const doc = exchange.get("my-doc", TodoDoc)
@@ -934,9 +934,9 @@ export class Exchange {
    * @example
    * ```typescript
    * import { json } from "@kyneta/schema"
-   * import { loro, LoroSchema } from "@kyneta/loro-schema"
+   * import { loro } from "@kyneta/loro-schema"
    *
-   * const TodoDoc = loro.bind(LoroSchema.doc({ title: LoroSchema.text() }))
+   * const TodoDoc = loro.bind(Schema.struct({ title: Schema.text() }))
    * const doc = exchange.get("my-doc", TodoDoc)
    *
    * // Initial content via change() after construction:

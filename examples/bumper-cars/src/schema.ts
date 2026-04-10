@@ -16,7 +16,7 @@
 //   merge is simpler and correct.
 //
 //   If the game were peer-to-peer (no authoritative server), you'd use
-//   loro.bind() with LoroSchema.counter() for convergent concurrent score
+//   loro.bind() with Schema.counter() for convergent concurrent score
 //   increments. See the README for details.
 //
 // ═══════════════════════════════════════════════════════════════════════════

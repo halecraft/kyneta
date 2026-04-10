@@ -1,9 +1,9 @@
-// bind-constraints — compile-time and runtime tests for yjs.bind() caps enforcement.
+// bind-constraints — compile-time and runtime tests for loro.bind() caps enforcement.
 //
-// Verifies that `yjs.bind()` rejects schemas containing capabilities
-// that Yjs doesn't support (counter, movable, tree, set) at COMPILE TIME
-// via the `RestrictCaps` / `AllowedCaps` mechanism, while accepting
-// capabilities it does support (text) and plain schemas.
+// Verifies that `loro.bind()` rejects schemas containing capabilities
+// that Loro doesn't support (set) at COMPILE TIME via the `RestrictCaps`
+// / `AllowedCaps` mechanism, while accepting capabilities it does support
+// (text, counter, movable, tree, json) and plain schemas.
 
 import {
   type BoundSchema,
@@ -12,20 +12,20 @@ import {
   Schema,
 } from "@kyneta/schema"
 import { describe, expect, expectTypeOf, it } from "vitest"
-import { yjs } from "../bind-yjs.js"
+import { loro } from "../bind-loro.js"
 
 // ===========================================================================
-// §1 — Compile-time acceptance: schemas that yjs.bind() SHOULD accept
+// §1 — Compile-time acceptance: schemas that loro.bind() SHOULD accept
 // ===========================================================================
 
-describe("yjs.bind() accepts Yjs-compatible schemas", () => {
+describe("loro.bind() accepts Loro-compatible schemas", () => {
   it("plain schema (no caps)", () => {
     const schema = Schema.struct({
       name: Schema.string(),
       count: Schema.number(),
       active: Schema.boolean(),
     })
-    const bound = yjs.bind(schema)
+    const bound = loro.bind(schema)
     expect(bound).toBeDefined()
     expect(bound.schema).toBe(schema)
     expectTypeOf(bound).toMatchTypeOf<BoundSchema<typeof schema>>()
@@ -35,19 +35,48 @@ describe("yjs.bind() accepts Yjs-compatible schemas", () => {
     const schema = Schema.struct({
       title: Schema.text(),
     })
-    const bound = yjs.bind(schema)
+    const bound = loro.bind(schema)
     expect(bound).toBeDefined()
     expect(bound.schema).toBe(schema)
   })
 
-  it("schema with text + plain scalars", () => {
+  it("schema with counter", () => {
+    const schema = Schema.struct({
+      count: Schema.counter(),
+    })
+    const bound = loro.bind(schema)
+    expect(bound).toBeDefined()
+    expect(bound.schema).toBe(schema)
+  })
+
+  it("schema with movableList", () => {
+    const schema = Schema.struct({
+      items: Schema.movableList(Schema.string()),
+    })
+    const bound = loro.bind(schema)
+    expect(bound).toBeDefined()
+    expect(bound.schema).toBe(schema)
+  })
+
+  it("schema with tree", () => {
+    const schema = Schema.struct({
+      hierarchy: Schema.tree(
+        Schema.struct({ label: Schema.string() }),
+      ),
+    })
+    const bound = loro.bind(schema)
+    expect(bound).toBeDefined()
+    expect(bound.schema).toBe(schema)
+  })
+
+  it("schema with text + counter + plain scalars", () => {
     const schema = Schema.struct({
       title: Schema.text(),
-      count: Schema.number(),
+      count: Schema.counter(),
       active: Schema.boolean(),
       tags: Schema.list(Schema.string()),
     })
-    const bound = yjs.bind(schema)
+    const bound = loro.bind(schema)
     expect(bound).toBeDefined()
   })
 
@@ -63,29 +92,8 @@ describe("yjs.bind() accepts Yjs-compatible schemas", () => {
         }),
       ),
     })
-    const bound = yjs.bind(schema)
+    const bound = loro.bind(schema)
     expect(bound).toBeDefined()
-  })
-
-  it("optional text field alongside plain scalars is accepted", () => {
-    const schema = Schema.struct({
-      title: Schema.text(),
-      draft: Schema.text(),
-      count: Schema.number(),
-    })
-    const bound = yjs.bind(schema)
-    expect(bound).toBeDefined()
-  })
-
-  it("preserves full schema type through bind()", () => {
-    const schema = Schema.struct({
-      title: Schema.text(),
-      items: Schema.list(
-        Schema.struct({ name: Schema.string(), done: Schema.boolean() }),
-      ),
-    })
-    const bound = yjs.bind(schema)
-    expectTypeOf(bound.schema).toEqualTypeOf(schema)
   })
 
   it("json merge boundary is accepted", () => {
@@ -96,81 +104,57 @@ describe("yjs.bind() accepts Yjs-compatible schemas", () => {
         tags: Schema.list(Schema.string()),
       }),
     })
-    const bound = yjs.bind(schema)
+    const bound = loro.bind(schema)
     expect(bound).toBeDefined()
+  })
+
+  it("preserves full schema type through bind()", () => {
+    const schema = Schema.struct({
+      title: Schema.text(),
+      count: Schema.counter(),
+      items: Schema.list(
+        Schema.struct({ name: Schema.string(), done: Schema.boolean() }),
+      ),
+    })
+    const bound = loro.bind(schema)
+    expectTypeOf(bound.schema).toEqualTypeOf(schema)
   })
 })
 
 // ===========================================================================
-// §2 — Compile-time rejection: schemas that yjs.bind() SHOULD reject
+// §2 — Compile-time rejection: schemas that loro.bind() SHOULD reject
 // ===========================================================================
 
-describe("yjs.bind() rejects schemas with unsupported caps", () => {
-  it("rejects counter", () => {
-    const schema = Schema.struct({
-      count: Schema.counter(),
-    })
-    // @ts-expect-error — counter is not in YjsCaps
-    yjs.bind(schema)
-  })
-
-  it("rejects movableList", () => {
-    const schema = Schema.struct({
-      items: Schema.movableList(Schema.string()),
-    })
-    // @ts-expect-error — movable is not in YjsCaps
-    yjs.bind(schema)
-  })
-
-  it("rejects tree", () => {
-    const schema = Schema.struct({
-      hierarchy: Schema.tree(
-        Schema.struct({ label: Schema.string() }),
-      ),
-    })
-    // @ts-expect-error — tree is not in YjsCaps
-    yjs.bind(schema)
-  })
-
+describe("loro.bind() rejects schemas with unsupported caps", () => {
   it("rejects set", () => {
     const schema = Schema.struct({
       tags: Schema.set(Schema.string()),
     })
-    // @ts-expect-error — set is not in YjsCaps
-    yjs.bind(schema)
+    // @ts-expect-error — set is not in LoroCaps
+    loro.bind(schema)
   })
 
-  it("rejects deeply nested counter", () => {
+  it("rejects deeply nested set", () => {
     const schema = Schema.struct({
       items: Schema.list(
         Schema.struct({
           meta: Schema.record(
-            Schema.struct({ hits: Schema.counter() }),
+            Schema.struct({ tags: Schema.set(Schema.string()) }),
           ),
         }),
       ),
     })
-    // @ts-expect-error — counter is deeply nested but still caught
-    yjs.bind(schema)
+    // @ts-expect-error — set is deeply nested but still caught
+    loro.bind(schema)
   })
 
-  it("rejects mix of supported and unsupported (text + counter)", () => {
+  it("rejects mix of supported and unsupported (text + set)", () => {
     const schema = Schema.struct({
       title: Schema.text(),
-      views: Schema.counter(),
+      tags: Schema.set(Schema.string()),
     })
-    // @ts-expect-error — counter is not in YjsCaps
-    yjs.bind(schema)
-  })
-
-  it("rejects counter inside list", () => {
-    const schema = Schema.struct({
-      scores: Schema.list(
-        Schema.struct({ value: Schema.counter() }),
-      ),
-    })
-    // @ts-expect-error — counter nested inside list struct
-    yjs.bind(schema)
+    // @ts-expect-error — set is not in LoroCaps
+    loro.bind(schema)
   })
 })
 
@@ -179,7 +163,6 @@ describe("yjs.bind() rejects schemas with unsupported caps", () => {
 // ===========================================================================
 
 describe("cross-substrate: universal schema vs substrate-specific schema", () => {
-  // A schema using only universally-supported features
   const universalSchema = Schema.struct({
     title: Schema.text(),
     items: Schema.list(
@@ -190,7 +173,6 @@ describe("cross-substrate: universal schema vs substrate-specific schema", () =>
     ),
   })
 
-  // A schema using Loro-specific features (counter, movable)
   const loroSpecificSchema = Schema.struct({
     title: Schema.text(),
     count: Schema.counter(),
@@ -199,27 +181,26 @@ describe("cross-substrate: universal schema vs substrate-specific schema", () =>
     ),
   })
 
-  it("universal schema is Yjs-compatible (ExtractCaps check)", () => {
+  it("universal schema is Loro-compatible (ExtractCaps check)", () => {
     type Caps = ExtractCaps<typeof universalSchema>
-    // Only "text" — in YjsCaps
     expectTypeOf<Caps>().toEqualTypeOf<"text">()
   })
 
-  it("Loro-specific schema is NOT Yjs-compatible (ExtractCaps check)", () => {
+  it("Loro-specific schema ExtractCaps check", () => {
     type Caps = ExtractCaps<typeof loroSpecificSchema>
-    // Includes "counter" and "movable" which are NOT in YjsCaps
     expectTypeOf<Caps>().toEqualTypeOf<"text" | "counter" | "movable">()
   })
 
-  it("universal schema binds to yjs", () => {
-    const bound = yjs.bind(universalSchema)
+  it("universal schema binds to loro", () => {
+    const bound = loro.bind(universalSchema)
     expect(bound).toBeDefined()
     expect(bound.schema).toBe(universalSchema)
   })
 
-  it("Loro-specific schema is rejected by yjs.bind()", () => {
-    // @ts-expect-error — counter and movable not in YjsCaps
-    yjs.bind(loroSpecificSchema)
+  it("Loro-specific schema binds to loro", () => {
+    const bound = loro.bind(loroSpecificSchema)
+    expect(bound).toBeDefined()
+    expect(bound.schema).toBe(loroSpecificSchema)
   })
 
   it("json.bind() accepts schemas with all caps (AllowedCaps = string)", () => {
@@ -235,7 +216,7 @@ describe("cross-substrate: universal schema vs substrate-specific schema", () =>
 })
 
 // ===========================================================================
-// §4 — Edge cases: discriminated unions, multiple text fields
+// §4 — Edge cases
 // ===========================================================================
 
 describe("bind constraint edge cases", () => {
@@ -252,11 +233,11 @@ describe("bind constraint edge cases", () => {
         }),
       ]),
     })
-    const bound = yjs.bind(schema)
+    const bound = loro.bind(schema)
     expect(bound).toBeDefined()
   })
 
-  it("struct with counter alongside plain variants is rejected", () => {
+  it("struct with set alongside plain variants is rejected", () => {
     const schema = Schema.struct({
       content: Schema.discriminatedUnion("type", [
         Schema.struct({
@@ -268,10 +249,10 @@ describe("bind constraint edge cases", () => {
           url: Schema.string(),
         }),
       ]),
-      hits: Schema.counter(),
+      tags: Schema.set(Schema.string()),
     })
-    // @ts-expect-error — counter taints the whole schema
-    yjs.bind(schema)
+    // @ts-expect-error — set taints the whole schema
+    loro.bind(schema)
   })
 
   it("multiple text fields are all accepted", () => {
@@ -280,7 +261,7 @@ describe("bind constraint edge cases", () => {
       body: Schema.text(),
       summary: Schema.text(),
     })
-    const bound = yjs.bind(schema)
+    const bound = loro.bind(schema)
     expect(bound).toBeDefined()
   })
 
@@ -296,7 +277,7 @@ describe("bind constraint edge cases", () => {
       }),
       metadata: Schema.record(Schema.any()),
     })
-    const bound = yjs.bind(schema)
+    const bound = loro.bind(schema)
     expect(bound).toBeDefined()
   })
 })
@@ -305,29 +286,34 @@ describe("bind constraint edge cases", () => {
 // §5 — Root kind rejection: bind() requires a product (struct) root
 // ===========================================================================
 
-describe("yjs.bind() rejects non-product root schemas", () => {
+describe("loro.bind() rejects non-product root schemas", () => {
   it("rejects bare list at root", () => {
     // @ts-expect-error — SequenceSchema is not ProductSchema
-    yjs.bind(Schema.list(Schema.string()))
+    loro.bind(Schema.list(Schema.string()))
   })
 
   it("rejects bare record at root", () => {
     // @ts-expect-error — MapSchema is not ProductSchema
-    yjs.bind(Schema.record(Schema.string()))
+    loro.bind(Schema.record(Schema.string()))
   })
 
   it("rejects bare text at root", () => {
     // @ts-expect-error — TextSchema is not ProductSchema
-    yjs.bind(Schema.text())
+    loro.bind(Schema.text())
+  })
+
+  it("rejects bare counter at root", () => {
+    // @ts-expect-error — CounterSchema is not ProductSchema
+    loro.bind(Schema.counter())
   })
 
   it("rejects bare scalar at root", () => {
     // @ts-expect-error — ScalarSchema is not ProductSchema
-    yjs.bind(Schema.string())
+    loro.bind(Schema.string())
   })
 
   it("rejects list of structs at root", () => {
     // @ts-expect-error — SequenceSchema<ProductSchema> is still not ProductSchema
-    yjs.bind(Schema.list(Schema.struct({ name: Schema.string() })))
+    loro.bind(Schema.list(Schema.struct({ name: Schema.string() })))
   })
 })

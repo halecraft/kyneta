@@ -5,19 +5,19 @@ Schema-first, local-first. Define your data once — sync, reactivity, validatio
 ## Quick Start
 
 ```ts
-import { change } from "@kyneta/schema"
+import { Schema, change } from "@kyneta/schema"
 import { Exchange, sync } from "@kyneta/exchange"
-import { loro, LoroSchema } from "@kyneta/loro-schema"
+import { loro } from "@kyneta/loro-schema"
 import { createWebsocketClient } from "@kyneta/websocket-transport/client"
 
 // 1. Define your data
 const TodoDoc = loro.bind(
-  LoroSchema.doc({
-    title: LoroSchema.text(),
-    items: LoroSchema.list(
-      LoroSchema.plain.struct({
-        text: LoroSchema.plain.string(),
-        done: LoroSchema.plain.boolean(),
+  Schema.struct({
+    title: Schema.text(),
+    items: Schema.list(
+      Schema.struct({
+        text: Schema.string(),
+        done: Schema.boolean(),
       }),
     ),
   })

@@ -49,15 +49,15 @@ Arrow keys (or vim-style `hjkl`) navigate and change values. The footer shows th
 
 ## The Schema
 
-```examples/unix-socket-sync/src/schema.ts#L11-20
-const ConfigSchema = LoroSchema.doc({
+```examples/unix-socket-sync/src/schema.ts#L9-18
+const ConfigSchema = Schema.struct({
   darkMode:    Schema.boolean(),       // toggle
   logLevel:    Schema.string(),        // cycles: debug → info → warn → error
   region:      Schema.string(),        // cycles: us-east → eu-west → ap-south
   maintenance: Schema.boolean(),       // toggle
   maxRequests: Schema.number(),        // step ±100, range [0, 10000]
   rateLimit:   Schema.number(),        // step ±10,  range [0, 1000]
-  peers:       LoroSchema.record(Schema.boolean()),  // presence map: peerId → alive
+  peers:       Schema.record(Schema.boolean()),  // presence map: peerId → alive
 })
 ```
 

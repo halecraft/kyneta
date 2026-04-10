@@ -7,11 +7,11 @@
 // peer identity across all documents in an exchange.
 //
 // Usage:
-//   import { loro, LoroSchema } from "@kyneta/loro-schema"
+//   import { loro, Schema } from "@kyneta/loro-schema"
 //
-//   const TodoDoc = loro.bind(LoroSchema.doc({
-//     title: LoroSchema.text(),
-//     items: LoroSchema.list(LoroSchema.plain.struct({ name: LoroSchema.plain.string() })),
+//   const TodoDoc = loro.bind(Schema.struct({
+//     title: Schema.text(),
+//     items: Schema.list(Schema.struct.json({ name: Schema.string() })),
 //   }))
 //
 //   const doc = exchange.get("my-doc", TodoDoc)

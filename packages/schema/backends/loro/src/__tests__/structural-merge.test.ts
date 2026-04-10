@@ -11,7 +11,6 @@ import { LoroDoc } from "loro-crdt"
 import { describe, expect, it } from "vitest"
 import { loro } from "../bind-loro.js"
 import { PROPS_KEY } from "../loro-resolve.js"
-import { LoroSchema } from "../loro-schema.js"
 import { ensureLoroContainers, loroSubstrateFactory } from "../substrate.js"
 
 // ===========================================================================
@@ -20,7 +19,7 @@ import { ensureLoroContainers, loroSubstrateFactory } from "../substrate.js"
 
 const TestSchema = Schema.struct({
   title: Schema.text(),
-  count: LoroSchema.plain.number(),
+  count: Schema.number(),
   items: Schema.list(Schema.string()),
 })
 

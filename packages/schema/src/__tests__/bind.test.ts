@@ -98,6 +98,31 @@ describe("compile-time type constraints", () => {
     // @ts-expect-error — "collaborative" not assignable to JsonStrategy
     expect(() => json.replica("collaborative")).toThrow()
   })
+
+  it("json.bind rejects bare list at root", () => {
+    // @ts-expect-error — SequenceSchema is not ProductSchema
+    json.bind(Schema.list(Schema.string()))
+  })
+
+  it("json.bind rejects bare record at root", () => {
+    // @ts-expect-error — MapSchema is not ProductSchema
+    json.bind(Schema.record(Schema.string()))
+  })
+
+  it("json.bind rejects bare text at root", () => {
+    // @ts-expect-error — TextSchema is not ProductSchema
+    json.bind(Schema.text())
+  })
+
+  it("json.bind rejects bare scalar at root", () => {
+    // @ts-expect-error — ScalarSchema is not ProductSchema
+    json.bind(Schema.string())
+  })
+
+  it("json.bind rejects list of structs at root", () => {
+    // @ts-expect-error — SequenceSchema<ProductSchema> is still not ProductSchema
+    json.bind(Schema.list(Schema.struct({ name: Schema.string() })))
+  })
 })
 
 describe("json.bind(ephemeral)", () => {

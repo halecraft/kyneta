@@ -2,21 +2,25 @@
 
 Loro CRDT substrate for `@kyneta/schema`. Provides collaborative data types with typed refs — same schema, same API, but backed by a [Loro](https://loro.dev) document with automatic conflict resolution and sync.
 
+Schemas are defined once with `Schema.*`, then bound to Loro via `loro.bind()`. Write once, bind anywhere.
+
 ## Getting Started
 
 ```ts
-import { createLoroDoc, change, subscribe, LoroSchema } from "@kyneta/loro-schema"
+import { Schema } from "@kyneta/schema"
+import { createLoroDoc, change, subscribe, loro } from "@kyneta/loro-schema"
 
-// Define a schema using LoroSchema exclusively
-const schema = LoroSchema.doc({
-  title: LoroSchema.text(),
-  count: LoroSchema.counter(),
-  items: LoroSchema.list(
-    LoroSchema.plain.struct({ name: LoroSchema.plain.string(), done: LoroSchema.plain.boolean() }),
+// Define a schema using Schema.* — the universal grammar
+const schema = Schema.struct({
+  title: Schema.text(),
+  count: Schema.counter(),
+  items: Schema.list(
+    Schema.struct.json({ name: Schema.string(), done: Schema.boolean() }),
   ),
 })
 
-// Create a live, collaborative document
+// Bind to Loro and create a live, collaborative document
+const bound = loro.bind(schema)
 const doc = createLoroDoc(schema, { title: "Hello" })
 
 // Read and write through the typed ref API
@@ -38,13 +42,39 @@ subscribe(doc, changeset => {
 })
 ```
 
+## Write Once, Bind Anywhere
+
+Schemas are backend-agnostic. The same `Schema.*` definition works with any substrate — Loro, Yjs, or plain JSON:
+
+```ts
+import { Schema } from "@kyneta/schema"
+import { loro } from "@kyneta/loro-schema"
+import { json } from "@kyneta/schema"
+
+const schema = Schema.struct({
+  title: Schema.text(),
+  count: Schema.counter(),
+  items: Schema.list(
+    Schema.struct.json({ name: Schema.string(), done: Schema.boolean() }),
+  ),
+})
+
+// Bind to Loro for collaborative editing
+const loroBound = loro.bind(schema)
+
+// Bind to JSON for server-side or non-collaborative use
+const jsonBound = json.bind(schema)
+```
+
+`loro.bind()` enforces Loro's capability constraints at compile time via `LoroCaps`. If your schema uses a capability Loro doesn't support (e.g. `Schema.set()`), `loro.bind()` produces a type error.
+
 ## Bring Your Own LoroDoc
 
 If you already have a `LoroDoc` (e.g. from a state bus), pass it directly:
 
 ```ts
 import { LoroDoc } from "loro-crdt"
-import { createLoroDoc, subscribe, LoroSchema } from "@kyneta/loro-schema"
+import { createLoroDoc, subscribe } from "@kyneta/loro-schema"
 
 const loroDoc = new LoroDoc()
 const doc = createLoroDoc(mySchema, loroDoc)
@@ -65,7 +95,6 @@ Two peers exchange state via `exportSince` / `importDelta`:
 import {
   createLoroDoc, change, subscribe,
   version, exportSince, importDelta,
-  LoroSchema
 } from "@kyneta/loro-schema"
 
 // Peer A
@@ -99,8 +128,8 @@ const docB = createLoroDocFromSnapshot(mySchema, snapshot)
 
 | Export | Description |
 |--------|-------------|
-| `bindLoro(schema)` | Bind a schema to the Loro CRDT substrate with causal merge strategy. Returns a `BoundSchema<S>` for use with `exchange.get()`. The factory builder injects a deterministic numeric Loro PeerID derived from the exchange's string peerId. |
-| `loro(ref)` | Escape hatch — returns the `LoroDoc` backing a root document ref. Throws if the ref is not backed by a Loro substrate. Currently supports root refs only; child-level resolution is future work. |
+| `loro.bind(schema)` | Bind a schema to the Loro CRDT substrate. Enforces `LoroCaps` constraints at compile time — schemas containing unsupported capabilities (e.g. `Schema.set()`) are rejected. Returns a `BoundSchema<S>` for use with `exchange.get()`. The factory builder injects a deterministic numeric Loro PeerID derived from the exchange's string peerId. |
+| `loro.unwrap(ref)` | Escape hatch — returns the `LoroDoc` backing a root document ref. Throws if the ref is not backed by a Loro substrate. Currently supports root refs only; child-level resolution is future work. |
 
 ### Batteries-Included (most users)
 
@@ -115,7 +144,27 @@ const docB = createLoroDocFromSnapshot(mySchema, snapshot)
 | `change(doc, fn)` | Run mutations in a transaction. *(re-exported from `@kyneta/schema`)* |
 | `subscribe(doc, cb)` | Observe all mutations. *(re-exported from `@kyneta/schema`)* |
 | `applyChanges(doc, ops, opts?)` | Apply a list of ops declaratively. *(re-exported from `@kyneta/schema`)* |
-| `LoroSchema` | Schema constructors with Loro annotations and composition constraints. Use `LoroSchema` exclusively when building Loro documents — it enforces Loro's container constraints at the type level. Plain values (scalars, plain structs) are available via `LoroSchema.plain.*`. |
+
+### Schema Constructors
+
+Schemas are defined with `Schema.*` from `@kyneta/schema`. All constructors are backend-agnostic:
+
+| Constructor | Description |
+|-------------|-------------|
+| `Schema.struct(fields)` | Product type → `LoroMap` container |
+| `Schema.list(item)` | Sequence type → `LoroList` container |
+| `Schema.record(item)` | Map type → `LoroMap` container |
+| `Schema.text()` | Collaborative text → `LoroText` |
+| `Schema.counter()` | CRDT counter → `LoroCounter` |
+| `Schema.movableList(item)` | Movable list → `LoroMovableList` |
+| `Schema.tree(nodeData)` | Tree → `LoroTree` |
+| `Schema.struct.json(fields)` | JSON merge boundary — struct stored as opaque JSON in parent container |
+| `Schema.list.json(item)` | JSON merge boundary — array stored as opaque JSON |
+| `Schema.record.json(item)` | JSON merge boundary — record stored as opaque JSON |
+| `Schema.string()` | Plain string scalar (stored in `_props` at root) |
+| `Schema.number()` | Plain number scalar |
+| `Schema.boolean()` | Plain boolean scalar |
+| `Schema.nullable(inner)` | Nullable wrapper |
 
 ### Low-Level Primitives (power users)
 
@@ -128,6 +177,7 @@ const docB = createLoroDocFromSnapshot(mySchema, snapshot)
 | `changeToDiff(path, change, schema, doc)` | Convert a kyneta Change to Loro `[ContainerID, Diff][]` tuples. |
 | `batchToOps(batch, schema)` | Convert a Loro event batch to kyneta `Op[]`. |
 | `LoroVersion` | `Version` implementation wrapping Loro's `VersionVector`. |
+| `LoroCaps` | Capability type: `"text" | "counter" | "movable" | "tree" | "json"`. |
 
 ## Event Bridge Contract
 

@@ -11,5 +11,4 @@ onlyBuiltDependencies:
   - classic-level
   - esbuild
 
-overrides:
-  '@halecraft/verify': link:../halecraft/verify
+

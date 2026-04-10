@@ -7,7 +7,7 @@
 // - Ephemeral (TimestampVersion via json.bind ephemeral)
 // - Heterogeneous (mixed substrates in one exchange)
 
-import { LoroSchema, loro, loroReplicaFactory } from "@kyneta/loro-schema"
+import { loro, loroReplicaFactory } from "@kyneta/loro-schema"
 import {
   change,
   Defer,
@@ -76,10 +76,10 @@ const sequentialSchema = Schema.struct({
 })
 const SequentialDoc = json.bind(sequentialSchema)
 
-const loroSchema = LoroSchema.doc({
-  title: LoroSchema.text(),
-  items: LoroSchema.list(
-    LoroSchema.plain.struct({ name: LoroSchema.plain.string() }),
+const loroSchema = Schema.struct({
+  title: Schema.text(),
+  items: Schema.list(
+    Schema.struct.json({ name: Schema.string() }),
   ),
 })
 const LoroDoc = loro.bind(loroSchema)
@@ -342,8 +342,8 @@ describe("Heterogeneous documents", () => {
     })
     const ConfigDoc = json.bind(plainSchema)
 
-    const collabSchema = LoroSchema.doc({
-      text: LoroSchema.text(),
+    const collabSchema = Schema.struct({
+      text: Schema.text(),
     })
     const CollabDoc = loro.bind(collabSchema)
 

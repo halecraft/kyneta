@@ -20,7 +20,7 @@
 // - "authoritative": request/response, total order (Plain)
 // - "ephemeral": unidirectional broadcast, timestamp-based (Ephemeral)
 
-import type { ExtractCaps, Schema as SchemaNode } from "./schema.js"
+import type { ExtractCaps, ProductSchema, Schema as SchemaNode } from "./schema.js"
 import type {
   MergeStrategy,
   ReplicaFactory,
@@ -318,7 +318,7 @@ export interface SubstrateNamespace<
   S extends MergeStrategy,
   AllowedCaps extends string = string,
 > {
-  bind<N extends SchemaNode>(
+  bind<N extends ProductSchema>(
     schema: RestrictCaps<N, AllowedCaps>,
     strategy?: S,
   ): BoundSchema<N>
@@ -361,7 +361,7 @@ export function createSubstrateNamespace<
   defaultStrategy: S
 }): SubstrateNamespace<S, AllowedCaps> {
   return {
-    bind<N extends SchemaNode>(schema: N, strategy?: S): BoundSchema<N> {
+    bind<N extends ProductSchema>(schema: N, strategy?: S): BoundSchema<N> {
       const s = strategy ?? config.defaultStrategy
       return bind({
         schema,

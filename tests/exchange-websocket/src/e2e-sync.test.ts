@@ -26,7 +26,7 @@
 /// <reference types="bun-types" />
 
 import { Exchange } from "@kyneta/exchange"
-import { LoroSchema, loro } from "@kyneta/loro-schema"
+import { loro } from "@kyneta/loro-schema"
 import { change, json, Schema } from "@kyneta/schema"
 import {
   type BunWebsocketData,
@@ -143,8 +143,8 @@ const sequentialSchema = Schema.struct({
 })
 const SequentialDoc = json.bind(sequentialSchema)
 
-const loroSchema = LoroSchema.doc({
-  title: LoroSchema.text(),
+const loroSchema = Schema.struct({
+  title: Schema.text(),
   items: Schema.list(Schema.struct({ name: Schema.string() })),
 })
 const LoroDoc = loro.bind(loroSchema)
@@ -415,7 +415,7 @@ describe("Heterogeneous documents over Websocket", () => {
     const plainSchema = Schema.struct({ config: Schema.string() })
     const ConfigDoc = json.bind(plainSchema)
 
-    const collabSchema = LoroSchema.doc({ text: LoroSchema.text() })
+    const collabSchema = Schema.struct({ text: Schema.text() })
     const CollabDoc = loro.bind(collabSchema)
 
     // Server: plain config doc
@@ -453,8 +453,8 @@ describe("Large payload fragmentation over Websocket", () => {
     })
 
     // Create a Loro doc with enough data to exceed the threshold
-    const largeSchema = LoroSchema.doc({
-      content: LoroSchema.text(),
+    const largeSchema = Schema.struct({
+      content: Schema.text(),
     })
     const LargeDoc = loro.bind(largeSchema)
 

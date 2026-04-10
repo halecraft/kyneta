@@ -2195,3 +2195,67 @@ describe("RestrictCaps: allowed-caps formulation", () => {
     expectTypeOf<Result>().toEqualTypeOf<never>()
   })
 })
+
+// ===========================================================================
+// Schema.struct.json / Schema.list.json / Schema.record.json — PlainSchema constraint
+// ===========================================================================
+
+describe("type-level: .json() constructors enforce PlainSchema constraint", () => {
+  it("struct.json accepts plain scalars", () => {
+    const s = Schema.struct.json({
+      name: Schema.string(),
+      count: Schema.number(),
+      active: Schema.boolean(),
+    })
+    expectTypeOf(s).toMatchTypeOf<ProductSchema>()
+    expectTypeOf(s).toMatchTypeOf<SchemaNode>()
+  })
+
+  it("struct.json accepts nested plain struct", () => {
+    const inner = Schema.struct.json({ x: Schema.string() })
+    const outer = Schema.struct.json({ nested: inner })
+    expectTypeOf(outer).toMatchTypeOf<ProductSchema>()
+  })
+
+  it("record.json accepts plain schema item", () => {
+    const s = Schema.record.json(Schema.string())
+    expectTypeOf(s).toMatchTypeOf<SchemaNode>()
+  })
+
+  it("list.json accepts plain schema item", () => {
+    const s = Schema.list.json(Schema.number())
+    expectTypeOf(s).toMatchTypeOf<SequenceSchema>()
+  })
+
+  it("struct.json rejects TextSchema", () => {
+    // @ts-expect-error — TextSchema does not extend PlainSchema
+    Schema.struct.json({ title: Schema.text() })
+  })
+
+  it("struct.json rejects CounterSchema", () => {
+    // @ts-expect-error — CounterSchema does not extend PlainSchema
+    Schema.struct.json({ count: Schema.counter() })
+  })
+
+  it("list.json rejects TextSchema", () => {
+    // @ts-expect-error — TextSchema does not extend PlainSchema
+    Schema.list.json(Schema.text())
+  })
+
+  it("record.json rejects TextSchema", () => {
+    // @ts-expect-error — TextSchema does not extend PlainSchema
+    Schema.record.json(Schema.text())
+  })
+
+  it("struct.json rejects nested first-class type via sequence", () => {
+    // @ts-expect-error — SequenceSchema<TextSchema> does not extend PlainSchema
+    Schema.struct.json({ items: Schema.list(Schema.text()) })
+  })
+
+  it("nested .json() composition is accepted", () => {
+    const s = Schema.struct.json({
+      x: Schema.struct.json({ y: Schema.string() }),
+    })
+    expectTypeOf(s).toMatchTypeOf<ProductSchema>()
+  })
+})

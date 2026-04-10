@@ -1,6 +1,6 @@
 # @kyneta/loro-schema — Technical Reference
 
-Loro CRDT substrate for `@kyneta/schema`. Wraps a `LoroDoc` with schema-aware typed reads, writes, versioning, and export/import through the standard `Substrate<LoroVersion>` interface. The `LoroSchema` namespace is a thin wrapper over `Schema.*` that adds `doc()` (Loro root constraints) and `plain.*` (composition-constrained constructors). `LoroCaps = "text" | "counter" | "movable" | "tree" | "json"`.
+Loro CRDT substrate for `@kyneta/schema`. Wraps a `LoroDoc` with schema-aware typed reads, writes, versioning, and export/import through the standard `Substrate<LoroVersion>` interface. Schemas are defined with `Schema.*` from `@kyneta/schema`, then bound to Loro via `loro.bind()`. Capability constraints are enforced at compile time by `LoroCaps = "text" | "counter" | "movable" | "tree" | "json"`.
 
 ---
 
@@ -350,42 +350,45 @@ This stripping is safe because `_props` only exists as a root-level container. I
 
 ---
 
-## 12. `LoroDocFieldSchema` and Namespace Partitioning
+## 12. `LoroCaps` and Capability Constraints
 
-The `LoroSchema` namespace is a thin wrapper over `Schema.*`. It exposes Loro container constructors at the top level and plain values via `LoroSchema.plain.*`. First-class types (`text()`, `counter()`, `movableList()`, `tree()`) delegate directly to their `Schema.*` counterparts — `LoroSchema.text()` produces the same `TextSchema` node as `Schema.text()`.
+`LoroCaps` + `loro.bind()` is the sole mechanism for constraining which schemas can target the Loro substrate. There is no separate `LoroDocFieldSchema` type or `LoroSchema` namespace — schemas are defined with `Schema.*` and capability enforcement happens at bind time.
 
-### Namespace structure
+### How it works
 
-| Level | Constructors | Produces |
+Every first-class CRDT type carries a `[CAPS]` phantom brand declaring its required merge capability:
+
+| `Schema.*` constructor | `[CAPS]` brand | Loro container |
 |---|---|---|
-| `LoroSchema.*` | `struct`, `list`, `record` | Loro containers (`LoroMap`, `LoroList`) |
-| `LoroSchema.*` | `text`, `counter`, `movableList`, `tree` | First-class CRDT types (delegates to `Schema.*`) |
-| `LoroSchema.*` | `doc` | Document root (constrained to `LoroDocFieldSchema`) |
-| `LoroSchema.plain.*` | `string`, `number`, `boolean`, `null`, `undefined`, `bytes`, `any` | Scalars (stored in `_props` at root) |
-| `LoroSchema.plain.*` | `struct`, `record`, `array`, `union`, `discriminatedUnion`, `nullable` | Plain composites (constrained to `PlainSchema` children) |
+| `Schema.text()` | `"text"` | `LoroText` |
+| `Schema.counter()` | `"counter"` | `LoroCounter` |
+| `Schema.movableList(item)` | `"movable"` | `LoroMovableList` |
+| `Schema.tree(nodeData)` | `"tree"` | `LoroTree` |
+| `Schema.struct.json(fields)` | `"json"` | Opaque JSON in parent container |
+| `Schema.list.json(item)` | `"json"` | Opaque JSON in parent container |
+| `Schema.record.json(item)` | `"json"` | Opaque JSON in parent container |
 
-### `LoroDocFieldSchema`
+Structural types (`Schema.struct`, `Schema.list`, `Schema.record`) and scalars (`Schema.string`, `Schema.number`, `Schema.boolean`, `Schema.nullable`) carry no capability brand — they are universally supported.
 
-The `LoroDocFieldSchema` type constrains what `LoroSchema.doc()` accepts as root fields:
+### Compile-time enforcement
+
+`loro.bind(schema)` uses `ExtractCaps<S>` to collect all capability brands in the schema tree, then checks that every extracted cap is assignable to `LoroCaps`. If the schema contains a capability Loro doesn't support (e.g. `"set"` from `Schema.set()`), the call produces a compile-time type error:
 
 ```ts
-type LoroDocFieldSchema =
-  | ProductSchema           // → LoroMap
-  | SequenceSchema          // → LoroList
-  | MapSchema               // → LoroMap
-  | TextSchema              // → LoroText
-  | CounterSchema           // → LoroCounter
-  | SetSchema               // → LoroSet (future)
-  | TreeSchema              // → LoroTree
-  | MovableSequenceSchema   // → LoroMovableList
-  | PlainSchema             // → stored in _props LoroMap
+const schema = Schema.struct({
+  tags: Schema.set(Schema.string()),  // [CAPS] = "set"
+})
+// @ts-expect-error — "set" is not in LoroCaps
+loro.bind(schema)
 ```
 
-This excludes non-plain `SumSchema` (sums containing first-class CRDT types), which cannot be meaningfully stored as root fields. For example, `nullable(text())` is rejected — a `LoroText` cannot be null. Plain sums are allowed via `PlainSchema` (e.g. `LoroSchema.plain.nullable(LoroSchema.plain.string())`).
+### `.json()` merge boundaries
 
-### Rationale
+The `.json()` suffix on structural constructors (`Schema.struct.json`, `Schema.list.json`, `Schema.record.json`) marks a **merge boundary**. Below a `.json()` node, the entire subtree is stored as opaque JSON — no individual CRDT containers are created for children. This trades fine-grained merge for simplicity and performance. The `"json"` capability is in `LoroCaps`, so `.json()` nodes are accepted by `loro.bind()`.
 
-Loro's data model requires named containers at the document root. The `_props` mechanism (§11) transparently stores plain values, but exposing `LoroSchema.boolean()` at the top level was misleading — it is identical to `Schema.boolean()` and has no Loro container backing. Requiring `LoroSchema.plain.boolean()` signals explicitly that the value is plain JSON stored inside the `_props` container, not a first-class Loro CRDT.
+### Root scalar fields
+
+Root-level scalars (`Schema.string()`, `Schema.number()`, `Schema.boolean()`, sum types) are stored in a single root `LoroMap` keyed by `_props` (see §11). This is handled transparently by the substrate — no special schema annotation is needed.
 
 ---
 
@@ -394,12 +397,6 @@ Loro's data model requires named containers at the document root. The `_props` m
 ```
 src/
 ├── index.ts              Public API surface. Re-exports from all modules.
-│
-├── loro-schema.ts        LoroSchema namespace — thin wrapper over Schema.* with
-│                         container constructors at top level, plain values via
-│                         `plain.*` sub-namespace.
-│                         LoroDocFieldSchema type — constrains LoroSchema.doc() fields.
-│                         doc() — Loro root with field constraints.
 │
 ├── substrate.ts          createLoroSubstrate() — Substrate<LoroVersion> implementation.
 │                         loroSubstrateFactory — SubstrateFactory (create, fromEntirety, parseVersion).

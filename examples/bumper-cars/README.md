@@ -147,18 +147,19 @@ This eliminates `loro-crdt` (~1MB WASM) from the client bundle entirely. The exa
 If the game were **peer-to-peer** (no authoritative server), you'd need convergent data structures for scores:
 
 ```ts
-import { LoroSchema, loro } from "@kyneta/loro-schema"
+import { Schema } from "@kyneta/schema"
+import { loro } from "@kyneta/loro-schema"
 
-const ScoreboardDoc = loro.bind(LoroSchema.doc({
-  scores: LoroSchema.record(Schema.struct({
+const ScoreboardDoc = loro.bind(Schema.struct({
+  scores: Schema.record(Schema.struct({
     name: Schema.string(),
     color: Schema.string(),
-    bumps: LoroSchema.counter(),  // concurrent increments converge
+    bumps: Schema.counter(),  // concurrent increments converge
   })),
 }))
 ```
 
-`LoroSchema.counter()` handles concurrent increments via the Loro CRDT engine. Multiple peers can call `.increment(1)` simultaneously, and the counter converges to the correct total. But when there's a single authoritative server, that complexity is unnecessary — and kyneta lets you choose the right tool.
+`Schema.counter()` handles concurrent increments via the Loro CRDT engine. Multiple peers can call `.increment(1)` simultaneously, and the counter converges to the correct total. But when there's a single authoritative server, that complexity is unnecessary — and kyneta lets you choose the right tool.
 
 ### Gather → Plan → Execute
 

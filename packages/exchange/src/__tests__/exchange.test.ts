@@ -1,7 +1,7 @@
 // Exchange — unit tests for the public Exchange API.
 
 import { hasChangefeed } from "@kyneta/changefeed"
-import { LoroSchema, loro } from "@kyneta/loro-schema"
+import { loro } from "@kyneta/loro-schema"
 import {
   bind,
   change,
@@ -311,7 +311,7 @@ describe("Exchange", () => {
       })
 
       it("loro(ref) returns the LoroDoc for a Loro-backed exchange doc", () => {
-        const LoroDoc = loro.bind(LoroSchema.doc({ title: LoroSchema.text() }))
+        const LoroDoc = loro.bind(Schema.struct({ title: Schema.text() }))
         const exchange = new Exchange({
           identity: { peerId: "test" },
           schemas: [LoroDoc],

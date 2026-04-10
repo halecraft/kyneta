@@ -7,7 +7,7 @@
 // Replaces the old storage-integration tests which tested the deleted
 // StorageAdapter / storage-first sync machinery.
 
-import { LoroSchema, loro } from "@kyneta/loro-schema"
+import { loro } from "@kyneta/loro-schema"
 import { change, Interpret, json, Replicate, Schema } from "@kyneta/schema"
 import { Bridge, createBridgeTransport } from "@kyneta/transport"
 import { afterEach, describe, expect, it } from "vitest"
@@ -68,8 +68,8 @@ const SequentialDoc = json.bind(
 )
 
 const CausalDoc = loro.bind(
-  LoroSchema.doc({
-    title: LoroSchema.text(),
+  Schema.struct({
+    title: Schema.text(),
   }),
 )
 

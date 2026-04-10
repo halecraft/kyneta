@@ -6,9 +6,9 @@ import {
   createLoroDocFromEntirety,
   exportEntirety,
   exportSince,
-  LoroSchema,
   LoroVersion,
   merge,
+  Schema,
   subscribe,
   version,
 } from "../index.js"
@@ -17,16 +17,16 @@ import {
 // Shared test schema
 // ===========================================================================
 
-const TestSchema = LoroSchema.doc({
-  title: LoroSchema.text(),
-  count: LoroSchema.counter(),
-  items: LoroSchema.list(
-    LoroSchema.plain.struct({
-      name: LoroSchema.plain.string(),
-      done: LoroSchema.plain.boolean(),
+const TestSchema = Schema.struct({
+  title: Schema.text(),
+  count: Schema.counter(),
+  items: Schema.list(
+    Schema.struct.json({
+      name: Schema.string(),
+      done: Schema.boolean(),
     }),
   ),
-  theme: LoroSchema.plain.string(),
+  theme: Schema.string(),
 })
 
 // ===========================================================================
