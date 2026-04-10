@@ -20,7 +20,11 @@
 // - "authoritative": request/response, total order (Plain)
 // - "ephemeral": unidirectional broadcast, timestamp-based (Ephemeral)
 
-import type { ExtractCaps, ProductSchema, Schema as SchemaNode } from "./schema.js"
+import type {
+  ExtractCaps,
+  ProductSchema,
+  Schema as SchemaNode,
+} from "./schema.js"
 import type {
   MergeStrategy,
   ReplicaFactory,
@@ -280,10 +284,11 @@ export function isBoundSchema(value: unknown): value is BoundSchema {
  * Uses Exclude to check if any accumulated caps fall outside AllowedCaps.
  * When AllowedCaps = string, every cap is allowed (unconstrained).
  */
-export type RestrictCaps<S, AllowedCaps extends string> =
-  [Exclude<ExtractCaps<S>, AllowedCaps>] extends [never]
-    ? S
-    : never
+export type RestrictCaps<S, AllowedCaps extends string> = [
+  Exclude<ExtractCaps<S>, AllowedCaps>,
+] extends [never]
+  ? S
+  : never
 
 // ---------------------------------------------------------------------------
 // Strategy type aliases — constrain namespace overrides

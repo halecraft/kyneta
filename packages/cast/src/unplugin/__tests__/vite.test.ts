@@ -15,7 +15,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { build, type Plugin, type Rollup } from "vite"
+import { build, type Rollup } from "vite"
 import { afterAll, describe, expect, it } from "vitest"
 import vitePlugin from "../adapters/vite.js"
 import {
@@ -28,7 +28,7 @@ type RollupOutput = Rollup.RollupOutput
 type OutputChunk = Rollup.OutputChunk
 
 /** Narrow the plugin return (Vite 6 may return Plugin | Plugin[]) */
-function getPlugin(options?: Record<string, unknown>): Plugin {
+function getPlugin(options?: Record<string, unknown>) {
   const result = vitePlugin(options)
   if (Array.isArray(result)) return result[0]!
   return result
@@ -81,7 +81,7 @@ async function buildWithVite(
 
     plugins: [
       // The Kyneta plugin under test
-      vitePlugin(pluginOptions),
+      vitePlugin(pluginOptions) as any,
     ],
 
     build: {

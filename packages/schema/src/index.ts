@@ -312,9 +312,9 @@ export {
 } from "./substrates/plain.js"
 // Timestamp version — wall-clock version for LWW/ephemeral substrates
 export { TimestampVersion } from "./substrates/timestamp-version.js"
-// Version vector — shared lattice utilities for version vectors
-export { versionVectorMeet } from "./version-vector.js"
 // Unwrap — general escape hatch for accessing the Substrate backing a ref
 export { registerSubstrate, unwrap } from "./unwrap.js"
+// Version vector — shared lattice utilities for version vectors
+export { versionVectorMeet } from "./version-vector.js"
 // Zero — default values derived from the schema grammar
 export { scalarDefault, Zero } from "./zero.js"

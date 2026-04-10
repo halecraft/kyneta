@@ -99,9 +99,7 @@ export class LoroVersion implements Version {
    */
   meet(other: Version): LoroVersion {
     if (!(other instanceof LoroVersion)) {
-      throw new Error(
-        "LoroVersion can only be meet'd with another LoroVersion",
-      )
+      throw new Error("LoroVersion can only be meet'd with another LoroVersion")
     }
     const result = versionVectorMeet(this.vv.toJSON(), other.vv.toJSON())
     return new LoroVersion(new VersionVector(result))

@@ -204,7 +204,7 @@ describe("BridgeTransport", () => {
           docId: "test-doc",
           schemaHash: "00test",
           replicaType: ["plain", 1, 0] as const,
-          mergeStrategy: "sequential" as const,
+          mergeStrategy: "authoritative" as const,
         },
       ],
     }

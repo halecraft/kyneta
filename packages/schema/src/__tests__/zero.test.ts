@@ -167,11 +167,7 @@ describe("Zero.structural: first-class types", () => {
   })
 
   it("movableList → empty array", () => {
-    expect(
-      Zero.structural(
-        Schema.movableList(Schema.string()),
-      ),
-    ).toEqual([])
+    expect(Zero.structural(Schema.movableList(Schema.string()))).toEqual([])
   })
 
   it("struct with first-class types delegates correctly", () => {

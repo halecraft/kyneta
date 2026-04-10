@@ -147,7 +147,8 @@ function resolveSchemaKindAtPath(
     for (const segment of path.segments) {
       current = advanceSchema(current, segment)
     }
-    if (current[KIND] === "product" || current[KIND] === "tree") return "product"
+    if (current[KIND] === "product" || current[KIND] === "tree")
+      return "product"
     if (current[KIND] === "map" || current[KIND] === "set") return "map"
     return "other"
   } catch {

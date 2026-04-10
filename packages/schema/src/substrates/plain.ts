@@ -444,7 +444,7 @@ export function createPlainReplica<V extends Version>(
   // --- Mutable base state ---
   // After advance(), the base incorporates projected ops. Starts empty.
   // materialize() clones this and replays the retained log on top.
-  let base: PlainState = {}
+  const base: PlainState = {}
 
   // --- Lazy materialization cache ---
   // The cache is the single materialized PlainState, built by replaying
@@ -580,9 +580,7 @@ export function plainContext(doc: PlainState): WritableContext {
  * - `stateImageToOps` (entirety payload absorption)
  * - `buildUpgrade` (initialization ops for missing schema keys)
  */
-export function objectToReplaceOps(
-  state: Record<string, unknown>,
-): Op[] {
+export function objectToReplaceOps(state: Record<string, unknown>): Op[] {
   const ops: Op[] = []
   for (const [key, value] of Object.entries(state)) {
     ops.push({

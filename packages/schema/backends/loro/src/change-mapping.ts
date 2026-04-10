@@ -25,7 +25,13 @@ import type {
   TextChange,
   TextInstruction,
 } from "@kyneta/schema"
-import { advanceSchema, expandMapOpsToLeaves, KIND, RawPath, structuralKind } from "@kyneta/schema"
+import {
+  advanceSchema,
+  expandMapOpsToLeaves,
+  KIND,
+  RawPath,
+  structuralKind,
+} from "@kyneta/schema"
 import type {
   ContainerID,
   CounterDiff,
@@ -215,7 +221,7 @@ function sequenceChangeToDiff(
   const sk = structuralKind(targetSchema)
   const itemSchema =
     sk === "sequence" && "item" in targetSchema
-      ? (targetSchema as any).item as SchemaNode
+      ? ((targetSchema as any).item as SchemaNode)
       : undefined
 
   for (const inst of change.instructions as readonly SequenceInstruction[]) {
@@ -271,7 +277,7 @@ function mapChangeToDiff(
   const sk = structuralKind(targetSchema)
   const valueSchema =
     sk === "map" && "item" in targetSchema
-      ? (targetSchema as any).item as SchemaNode
+      ? ((targetSchema as any).item as SchemaNode)
       : undefined
 
   // Set entries
@@ -563,7 +569,11 @@ function materializeValueDiffs(
       result.push([parentCID, { type: "map", updated } as MapJsonDiff])
       result.push(...deferred)
     }
-  } else if ((kind === "map" || kind === "set") && typeof value === "object" && value !== null) {
+  } else if (
+    (kind === "map" || kind === "set") &&
+    typeof value === "object" &&
+    value !== null
+  ) {
     const obj = value as Record<string, unknown>
     const updated: Record<string, Value | JsonContainerID | undefined> = {}
     const deferred: [ContainerID, Diff | JsonDiff][] = []
@@ -572,7 +582,12 @@ function materializeValueDiffs(
       if (needsContainer(entryValue, (schema as any).item)) {
         const childCID = materializeCIDForSchema((schema as any).item)
         updated[key] = jsonCID(childCID)
-        materializeValueDiffs(entryValue, (schema as any).item, childCID, deferred)
+        materializeValueDiffs(
+          entryValue,
+          (schema as any).item,
+          childCID,
+          deferred,
+        )
       } else {
         updated[key] = entryValue as Value
       }

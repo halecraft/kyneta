@@ -15,7 +15,7 @@
 // captures all mutations with correct relative paths.
 
 import type { Path, Schema as SchemaNode, Segment } from "@kyneta/schema"
-import { advanceSchema, KIND } from "@kyneta/schema"
+import { advanceSchema } from "@kyneta/schema"
 import * as Y from "yjs"
 
 // ---------------------------------------------------------------------------

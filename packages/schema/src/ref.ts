@@ -170,7 +170,8 @@ export type SchemaRef<S extends Schema, M extends RefMode> =
       : // --- Set (map-like shape) ---
         S extends SetSchema<infer I>
         ? Wrap<
-            ReadableMapRef<SchemaRef<I, M>, Plain<I>> & WritableMapRef<Plain<I>>,
+            ReadableMapRef<SchemaRef<I, M>, Plain<I>> &
+              WritableMapRef<Plain<I>>,
             M
           >
         : // --- Tree (delegate to inner nodeData) ---
@@ -186,53 +187,54 @@ export type SchemaRef<S extends Schema, M extends RefMode> =
               >
             : // --- Scalar ---
               S extends ScalarSchema<infer _K, infer V>
-      ? Wrap<
-          (() => V) & {
-            [Symbol.toPrimitive](hint: string): V | string
-          } & ScalarRef<V>,
-          M
-        >
-      : // --- Product ---
-        S extends ProductSchema<infer F>
-        ? Wrap<
-            (() => { [K in keyof F]: Plain<F[K]> }) & {
-              readonly [K in keyof F]: SchemaRef<F[K], M>
-            } & ProductRef<{ [K in keyof F]: Plain<F[K]> }>,
-            M
-          >
-        : // --- Sequence ---
-          S extends SequenceSchema<infer I>
-          ? Wrap<
-              ReadableSequenceRef<SchemaRef<I, M>, Plain<I>> & SequenceRef,
-              M
-            >
-          : // --- Map ---
-            S extends MapSchema<infer I>
-            ? Wrap<
-                ReadableMapRef<SchemaRef<I, M>, Plain<I>> &
-                  WritableMapRef<Plain<I>>,
-                M
-              >
-            : // --- Sum ---
-              S extends PositionalSumSchema<infer V>
-              ? V extends readonly [
-                  ScalarSchema<"null", any>,
-                  infer Inner extends Schema,
-                ]
-                ? // Nullable sugar: collapse to a single ref with nullable value domain
-                  Wrap<
-                    (() => Plain<Inner> | null) & {
-                      [Symbol.toPrimitive](
-                        hint: string,
-                      ): Plain<Inner> | null | string
-                    } & ScalarRef<Plain<Inner> | null>,
+              ? Wrap<
+                  (() => V) & {
+                    [Symbol.toPrimitive](hint: string): V | string
+                  } & ScalarRef<V>,
+                  M
+                >
+              : // --- Product ---
+                S extends ProductSchema<infer F>
+                ? Wrap<
+                    (() => { [K in keyof F]: Plain<F[K]> }) & {
+                      readonly [K in keyof F]: SchemaRef<F[K], M>
+                    } & ProductRef<{ [K in keyof F]: Plain<F[K]> }>,
                     M
                   >
-                : // General positional sum: distribute over variant union
-                  SchemaRef<V[number], M>
-              : S extends DiscriminatedSumSchema<infer D, infer V>
-                ? DiscriminantProductRef<V[number]["fields"], D, M>
-                : unknown
+                : // --- Sequence ---
+                  S extends SequenceSchema<infer I>
+                  ? Wrap<
+                      ReadableSequenceRef<SchemaRef<I, M>, Plain<I>> &
+                        SequenceRef,
+                      M
+                    >
+                  : // --- Map ---
+                    S extends MapSchema<infer I>
+                    ? Wrap<
+                        ReadableMapRef<SchemaRef<I, M>, Plain<I>> &
+                          WritableMapRef<Plain<I>>,
+                        M
+                      >
+                    : // --- Sum ---
+                      S extends PositionalSumSchema<infer V>
+                      ? V extends readonly [
+                          ScalarSchema<"null", any>,
+                          infer Inner extends Schema,
+                        ]
+                        ? // Nullable sugar: collapse to a single ref with nullable value domain
+                          Wrap<
+                            (() => Plain<Inner> | null) & {
+                              [Symbol.toPrimitive](
+                                hint: string,
+                              ): Plain<Inner> | null | string
+                            } & ScalarRef<Plain<Inner> | null>,
+                            M
+                          >
+                        : // General positional sum: distribute over variant union
+                          SchemaRef<V[number], M>
+                      : S extends DiscriminatedSumSchema<infer D, infer V>
+                        ? DiscriminantProductRef<V[number]["fields"], D, M>
+                        : unknown
 
 // ---------------------------------------------------------------------------
 // Tier aliases — the user-facing ref types

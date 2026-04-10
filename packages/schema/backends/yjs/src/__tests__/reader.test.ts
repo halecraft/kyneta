@@ -15,10 +15,7 @@ import { yjsReader } from "../reader.js"
  * After `ensureContainers` the doc has the correct shared types but no
  * values. We populate values via raw Yjs API within a single transact.
  */
-function setup(
-  schema: any,
-  seed?: Record<string, unknown>,
-) {
+function setup(schema: any, seed?: Record<string, unknown>) {
   const doc = new Y.Doc()
   ensureContainers(doc, schema)
   if (seed) {
@@ -166,15 +163,9 @@ function buildStructMap(
         if (Array.isArray(value)) {
           for (const item of value) {
             const itemSchema = fieldSchema.item
-            if (
-              itemSchema &&
-              itemSchema[KIND] === "product"
-            ) {
+            if (itemSchema && itemSchema[KIND] === "product") {
               arr.push([
-                buildStructMap(
-                  itemSchema,
-                  item as Record<string, unknown>,
-                ),
+                buildStructMap(itemSchema, item as Record<string, unknown>),
               ])
             } else {
               arr.push([item])
@@ -203,8 +194,6 @@ function buildStructMap(
   }
   return map
 }
-
-
 
 /** Build a RawPath from variadic key/index segments. */
 function p(...segs: (string | number)[]): RawPath {

@@ -78,9 +78,7 @@ const SequentialDoc = json.bind(sequentialSchema)
 
 const loroSchema = Schema.struct({
   title: Schema.text(),
-  items: Schema.list(
-    Schema.struct.json({ name: Schema.string() }),
-  ),
+  items: Schema.list(Schema.struct.json({ name: Schema.string() })),
 })
 const LoroDoc = loro.bind(loroSchema)
 

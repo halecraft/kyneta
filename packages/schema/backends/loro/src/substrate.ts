@@ -13,9 +13,9 @@
 import {
   BACKING_DOC,
   buildWritableContext,
+  type ChangeBase,
   executeBatch,
   KIND,
-  type ChangeBase,
   type Path,
   type Replica,
   type ReplicaFactory,
@@ -187,7 +187,7 @@ export function createLoroSubstrate(
     advance(_to: LoroVersion): void {
       throw new Error(
         "advance() on a live Loro substrate is not yet supported. " +
-        "Use advance() on a LoroReplica instead.",
+          "Use advance() on a LoroReplica instead.",
       )
     },
 
@@ -360,15 +360,11 @@ export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
       const base = this.baseVersion()
       const cmp = base.compare(to)
       if (cmp === "ahead") {
-        throw new Error(
-          `advance(): target is behind base version`,
-        )
+        throw new Error(`advance(): target is behind base version`)
       }
       const cmpCurrent = to.compare(this.version())
       if (cmpCurrent === "ahead") {
-        throw new Error(
-          `advance(): target is ahead of current version`,
-        )
+        throw new Error(`advance(): target is ahead of current version`)
       }
       // Convert VV to frontiers for the shallow-snapshot API.
       const frontiers = currentDoc.vvToFrontiers(to.vv)

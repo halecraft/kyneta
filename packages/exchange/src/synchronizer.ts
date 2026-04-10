@@ -994,9 +994,7 @@ export class Synchronizer {
       if (runtime.mode === "replicate") {
         // Headless replica — replace with a fresh one from the entirety.
         try {
-          runtime.replica = runtime.replicaFactory.fromEntirety(
-            command.payload,
-          )
+          runtime.replica = runtime.replicaFactory.fromEntirety(command.payload)
         } catch (err) {
           console.warn(
             `[exchange] epoch boundary reset failed for doc '${command.docId}'.`,

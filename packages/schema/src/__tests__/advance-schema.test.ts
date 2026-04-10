@@ -136,9 +136,7 @@ describe("advanceSchema", () => {
   // -------------------------------------------------------------------------
 
   describe("movableList", () => {
-    const schema = Schema.movableList(
-      Schema.struct({ name: Schema.string() }),
-    )
+    const schema = Schema.movableList(Schema.struct({ name: Schema.string() }))
 
     it("index segment returns the item schema", () => {
       const result = advanceSchema(schema, index(0))
@@ -172,9 +170,7 @@ describe("advanceSchema", () => {
   // -------------------------------------------------------------------------
 
   describe("tree", () => {
-    const schema = Schema.tree(
-      Schema.struct({ label: Schema.string() }),
-    )
+    const schema = Schema.tree(Schema.struct({ label: Schema.string() }))
 
     it("delegates to nodeData and returns field schema", () => {
       const result = advanceSchema(schema, key("label"))

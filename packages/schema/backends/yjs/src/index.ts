@@ -15,6 +15,9 @@
 // Batteries-included API — one import, one createYjsDoc call, done
 // ---------------------------------------------------------------------------
 
+// Types (re-exported for convenience)
+export type { Changeset } from "@kyneta/changefeed"
+export type { Op, Ref, SubstratePayload } from "@kyneta/schema"
 // Mutation & observation (re-exported from @kyneta/schema for convenience)
 // Schema definition (re-exported for convenience)
 export {
@@ -34,18 +37,14 @@ export {
   version,
 } from "./sync.js"
 
-// Types (re-exported for convenience)
-export type { Changeset } from "@kyneta/changefeed"
-export type { Op, Ref, SubstratePayload } from "@kyneta/schema"
-
 // ---------------------------------------------------------------------------
 // Low-level primitives — for power users and custom substrate compositions
 // ---------------------------------------------------------------------------
 
+export type { YjsCaps } from "./bind-yjs.js"
 // Namespace — the yjs substrate namespace (replaces standalone escape hatch;
 // the old `yjs(ref)` call is now `yjs.unwrap(ref)`)
 export { yjs } from "./bind-yjs.js"
-export type { YjsCaps } from "./bind-yjs.js"
 // Change mapping
 export { applyChangeToYjs, eventsToOps } from "./change-mapping.js"
 // Container creation

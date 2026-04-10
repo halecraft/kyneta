@@ -296,9 +296,7 @@ describe("interpret: first-class type constructors produce correct grammar nodes
   })
 
   it("Schema.tree(...) produces a tree node", () => {
-    const s = Schema.tree(
-      Schema.struct({ label: Schema.string() }),
-    )
+    const s = Schema.tree(Schema.struct({ label: Schema.string() }))
     expect(s[KIND]).toBe("tree")
   })
 })

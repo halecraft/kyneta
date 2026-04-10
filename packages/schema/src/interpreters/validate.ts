@@ -334,11 +334,7 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
     return undefined
   },
 
-  text(
-    ctx: ValidateContext,
-    path: Path,
-    _schema: TextSchema,
-  ): unknown {
+  text(ctx: ValidateContext, path: Path, _schema: TextSchema): unknown {
     const value = path.read(ctx.root)
 
     if (typeof value !== "string") {
@@ -350,11 +346,7 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
     return value
   },
 
-  counter(
-    ctx: ValidateContext,
-    path: Path,
-    _schema: CounterSchema,
-  ): unknown {
+  counter(ctx: ValidateContext, path: Path, _schema: CounterSchema): unknown {
     const value = path.read(ctx.root)
 
     if (typeof value !== "number") {

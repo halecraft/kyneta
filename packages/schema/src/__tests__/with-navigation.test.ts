@@ -317,9 +317,7 @@ describe("withNavigation: first-class types", () => {
   })
 
   it("movableList delegates to inner sequence", () => {
-    const schema = Schema.movableList(
-      Schema.struct({ title: Schema.string() }),
-    )
+    const schema = Schema.movableList(Schema.struct({ title: Schema.string() }))
     const store = [{ title: "A" }, { title: "B" }] as any
     const ctx: RefContext = { reader: plainReader(store) }
     const result = interpret(schema, navInterp, ctx) as any

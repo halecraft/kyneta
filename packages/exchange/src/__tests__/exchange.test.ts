@@ -575,7 +575,12 @@ describe("Exchange", () => {
   describe("replicate()", () => {
     it("registers a replicated doc visible via has()", () => {
       const exchange = createExchange()
-      exchange.replicate("rep-doc", plainReplicaFactory, "authoritative", "00test")
+      exchange.replicate(
+        "rep-doc",
+        plainReplicaFactory,
+        "authoritative",
+        "00test",
+      )
       expect(exchange.has("rep-doc")).toBe(true)
     })
 
@@ -594,7 +599,12 @@ describe("Exchange", () => {
 
     it("replicate() throws if docId already registered via replicate()", () => {
       const exchange = createExchange()
-      exchange.replicate("doc-1", plainReplicaFactory, "authoritative", "00test")
+      exchange.replicate(
+        "doc-1",
+        plainReplicaFactory,
+        "authoritative",
+        "00test",
+      )
       expect(() =>
         exchange.replicate(
           "doc-1",
@@ -607,13 +617,23 @@ describe("Exchange", () => {
 
     it("get() throws if docId is registered in replicate mode", () => {
       const exchange = createExchange()
-      exchange.replicate("doc-1", plainReplicaFactory, "authoritative", "00test")
+      exchange.replicate(
+        "doc-1",
+        plainReplicaFactory,
+        "authoritative",
+        "00test",
+      )
       expect(() => exchange.get("doc-1", TestDoc)).toThrow(/replicate mode/)
     })
 
     it("dismiss() works for replicated docs", () => {
       const exchange = createExchange()
-      exchange.replicate("rep-doc", plainReplicaFactory, "authoritative", "00test")
+      exchange.replicate(
+        "rep-doc",
+        plainReplicaFactory,
+        "authoritative",
+        "00test",
+      )
       expect(exchange.has("rep-doc")).toBe(true)
       exchange.dismiss("rep-doc")
       expect(exchange.has("rep-doc")).toBe(false)
@@ -622,7 +642,12 @@ describe("Exchange", () => {
     it("has() returns true for both interpret and replicate modes", () => {
       const exchange = createExchange()
       exchange.get("int-doc", TestDoc)
-      exchange.replicate("rep-doc", plainReplicaFactory, "authoritative", "00test")
+      exchange.replicate(
+        "rep-doc",
+        plainReplicaFactory,
+        "authoritative",
+        "00test",
+      )
       expect(exchange.has("int-doc")).toBe(true)
       expect(exchange.has("rep-doc")).toBe(true)
       expect(exchange.has("unknown")).toBe(false)

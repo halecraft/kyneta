@@ -3,10 +3,21 @@ import { versionVectorMeet } from "../version-vector.js"
 
 describe("versionVectorMeet", () => {
   it("returns component-wise minimum for overlapping keys", () => {
-    const a = new Map([["A", 5], ["B", 3]])
-    const b = new Map([["A", 2], ["B", 7]])
+    const a = new Map([
+      ["A", 5],
+      ["B", 3],
+    ])
+    const b = new Map([
+      ["A", 2],
+      ["B", 7],
+    ])
     const result = versionVectorMeet(a, b)
-    expect(result).toEqual(new Map([["A", 2], ["B", 3]]))
+    expect(result).toEqual(
+      new Map([
+        ["A", 2],
+        ["B", 3],
+      ]),
+    )
   })
 
   it("omits keys only present in one map (absent defaults to 0)", () => {
@@ -17,35 +28,64 @@ describe("versionVectorMeet", () => {
   })
 
   it("empty map is the lattice bottom", () => {
-    const a = new Map([["A", 5], ["B", 3]])
+    const a = new Map([
+      ["A", 5],
+      ["B", 3],
+    ])
     const b = new Map<string, number>()
     expect(versionVectorMeet(a, b).size).toBe(0)
     expect(versionVectorMeet(b, a).size).toBe(0)
   })
 
   it("is idempotent", () => {
-    const m = new Map([["X", 3], ["Y", 7]])
+    const m = new Map([
+      ["X", 3],
+      ["Y", 7],
+    ])
     expect(versionVectorMeet(m, m)).toEqual(m)
   })
 
   it("is commutative", () => {
-    const a = new Map([["A", 5], ["B", 3], ["C", 1]])
-    const b = new Map([["A", 2], ["B", 7], ["D", 4]])
+    const a = new Map([
+      ["A", 5],
+      ["B", 3],
+      ["C", 1],
+    ])
+    const b = new Map([
+      ["A", 2],
+      ["B", 7],
+      ["D", 4],
+    ])
     expect(versionVectorMeet(a, b)).toEqual(versionVectorMeet(b, a))
   })
 
   it("is associative", () => {
-    const a = new Map([["X", 5], ["Y", 3]])
-    const b = new Map([["X", 2], ["Y", 7]])
-    const c = new Map([["X", 4], ["Y", 1]])
+    const a = new Map([
+      ["X", 5],
+      ["Y", 3],
+    ])
+    const b = new Map([
+      ["X", 2],
+      ["Y", 7],
+    ])
+    const c = new Map([
+      ["X", 4],
+      ["Y", 1],
+    ])
     const ab_c = versionVectorMeet(versionVectorMeet(a, b), c)
     const a_bc = versionVectorMeet(a, versionVectorMeet(b, c))
     expect(ab_c).toEqual(a_bc)
   })
 
   it("works with numeric keys (Yjs clientID)", () => {
-    const a = new Map([[1, 10], [2, 20]])
-    const b = new Map([[1, 5], [3, 15]])
+    const a = new Map([
+      [1, 10],
+      [2, 20],
+    ])
+    const b = new Map([
+      [1, 5],
+      [3, 15],
+    ])
     const result = versionVectorMeet(a, b)
     expect(result).toEqual(new Map([[1, 5]]))
   })

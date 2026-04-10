@@ -184,7 +184,9 @@ function canonicalizeSchema(schema: SchemaNode): string {
       return `t:movable(${canonicalizeSchema((schema as any).item as SchemaNode)})`
 
     default:
-      throw new Error(`canonicalizeSchema: unknown schema kind "${(schema as any)[KIND]}"`)
+      throw new Error(
+        `canonicalizeSchema: unknown schema kind "${(schema as any)[KIND]}"`,
+      )
   }
 }
 

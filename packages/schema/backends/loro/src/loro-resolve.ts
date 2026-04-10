@@ -17,7 +17,13 @@
 // stored in a single root LoroMap named PROPS_KEY ("_props"). This
 // avoids creating a separate root container per scalar field.
 
-import { advanceSchema, KIND, structuralKind, type Path, type Schema as SchemaNode, type Segment } from "@kyneta/schema"
+import {
+  advanceSchema,
+  KIND,
+  type Path,
+  type Schema as SchemaNode,
+  type Segment,
+} from "@kyneta/schema"
 import type { LoroDoc, LoroList, LoroMap, LoroMovableList } from "loro-crdt"
 
 // ---------------------------------------------------------------------------

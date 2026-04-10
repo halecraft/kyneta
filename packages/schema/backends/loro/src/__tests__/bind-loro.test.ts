@@ -13,9 +13,7 @@ import { createLoroDoc, getSubstrate } from "../create.js"
 const testSchema = Schema.struct({
   title: Schema.text(),
   count: Schema.counter(),
-  items: Schema.list(
-    Schema.struct.json({ name: Schema.string() }),
-  ),
+  items: Schema.list(Schema.struct.json({ name: Schema.string() })),
 })
 
 describe("loro.bind()", () => {

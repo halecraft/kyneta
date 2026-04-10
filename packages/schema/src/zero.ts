@@ -10,7 +10,6 @@
 // and produces state invisible to the sync protocol. Initial content
 // should be applied via change() after substrate construction.
 
-import { KIND } from "./schema.js"
 import type {
   DiscriminatedSumSchema,
   PositionalSumSchema,
@@ -18,6 +17,7 @@ import type {
   ScalarSchema,
   Schema,
 } from "./schema.js"
+import { KIND } from "./schema.js"
 
 // ---------------------------------------------------------------------------
 // Scalar defaults
@@ -52,8 +52,6 @@ export function scalarDefault(kind: ScalarKind): unknown {
       return undefined
   }
 }
-
-
 
 // ---------------------------------------------------------------------------
 // Zero.structural — derive defaults from the schema grammar

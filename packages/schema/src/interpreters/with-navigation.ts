@@ -19,17 +19,17 @@
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import { dispatchSum } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
-import {
-  type CounterSchema,
-  type MapSchema,
-  type MovableSequenceSchema,
-  type ProductSchema,
-  type ScalarSchema,
-  type SequenceSchema,
-  type SetSchema,
-  type SumSchema,
-  type TextSchema,
-  type TreeSchema,
+import type {
+  CounterSchema,
+  MapSchema,
+  MovableSequenceSchema,
+  ProductSchema,
+  ScalarSchema,
+  SequenceSchema,
+  SetSchema,
+  SumSchema,
+  TextSchema,
+  TreeSchema,
 } from "../schema.js"
 import type { HasCall, HasNavigation } from "./bottom.js"
 
@@ -272,11 +272,7 @@ export function withNavigation<A extends HasCall>(
     // --- Text ------------------------------------------------------------------
     // Leaf type — pass through to base. withReadable will fill [CALL]
     // and add toPrimitive later.
-    text(
-      ctx: RefContext,
-      path: Path,
-      schema: TextSchema,
-    ): A & HasNavigation {
+    text(ctx: RefContext, path: Path, schema: TextSchema): A & HasNavigation {
       return base.text(ctx, path, schema) as A & HasNavigation
     },
 

@@ -55,8 +55,8 @@ import {
   subscribeNode,
   type TextRef,
   type TextSchema,
-  type TreeSchema,
   TRANSACT,
+  type TreeSchema,
   type WithTransact,
   type Wrap,
   type Writable,
@@ -225,14 +225,20 @@ describe("type-level: sum variant preservation", () => {
     // variants is a tuple — length is known at the type level
     expectTypeOf(s.variants).toEqualTypeOf<
       [
-        ProductSchema<{
-          type: ScalarSchema<"string", string>
-          content: ScalarSchema<"string", string>
-        }, never>,
-        ProductSchema<{
-          type: ScalarSchema<"string", string>
-          url: ScalarSchema<"string", string>
-        }, never>,
+        ProductSchema<
+          {
+            type: ScalarSchema<"string", string>
+            content: ScalarSchema<"string", string>
+          },
+          never
+        >,
+        ProductSchema<
+          {
+            type: ScalarSchema<"string", string>
+            url: ScalarSchema<"string", string>
+          },
+          never
+        >,
       ]
     >()
     // variantMap is derived at runtime — typed as Record<string, PlainProductSchema>
@@ -623,9 +629,7 @@ describe("type-level: first-class type KIND preservation", () => {
   })
 
   it("Schema.tree() → KIND is literal 'tree'", () => {
-    const s = Schema.tree(
-      Schema.struct({ label: Schema.string() }),
-    )
+    const s = Schema.tree(Schema.struct({ label: Schema.string() }))
     expectTypeOf(s[KIND]).toEqualTypeOf<"tree">()
   })
 })
@@ -951,9 +955,7 @@ describe("type-level: PlainSchema rejects first-class CRDT types", () => {
   })
 
   it("TreeSchema does NOT extend PlainSchema", () => {
-    expectTypeOf<
-      TreeSchema<ProductSchema>
-    >().not.toMatchTypeOf<PlainSchema>()
+    expectTypeOf<TreeSchema<ProductSchema>>().not.toMatchTypeOf<PlainSchema>()
   })
 
   it("ProductSchema containing TextSchema does NOT extend PlainProductSchema", () => {
@@ -1592,7 +1594,10 @@ describe("type-level: withChangefeed contributes HasChangefeed to A", () => {
 
 describe("type-level: InterpretBuilder<S, Ctx, Brands>", () => {
   it("two-arg interpret returns InterpretBuilder with schema type", () => {
-    const pointSchema = Schema.struct({ x: Schema.number(), y: Schema.number() })
+    const pointSchema = Schema.struct({
+      x: Schema.number(),
+      y: Schema.number(),
+    })
     const ctx: RefContext = { reader: plainReader({ x: 0, y: 0 }) }
     const builder = interpret(pointSchema, ctx)
     expectTypeOf(builder).toMatchTypeOf<
@@ -1720,7 +1725,10 @@ describe("type-level: fluent results are accepted by facade functions", () => {
 
 // Shared schema fixtures for sum type tests
 const _discUnionSchema = Schema.discriminatedUnion("type", [
-  Schema.struct({ type: Schema.string("text" as const), body: Schema.string() }),
+  Schema.struct({
+    type: Schema.string("text" as const),
+    body: Schema.string(),
+  }),
   Schema.struct({
     type: Schema.string("image" as const),
     url: Schema.string(),

@@ -606,7 +606,9 @@ describe("validate: first-class types", () => {
 
   it("struct — non-object", () => {
     const sStruct = Schema.struct({ title: Schema.string() })
-    expect(() => validateUntyped(sStruct, "nope")).toThrow(SchemaValidationError)
+    expect(() => validateUntyped(sStruct, "nope")).toThrow(
+      SchemaValidationError,
+    )
   })
 
   it("movableList — delegates to inner sequence", () => {
@@ -624,9 +626,7 @@ describe("validate: first-class types", () => {
   })
 
   it("tree — delegates to inner", () => {
-    const s = Schema.tree(
-      Schema.struct({ label: Schema.string() }),
-    )
+    const s = Schema.tree(Schema.struct({ label: Schema.string() }))
     expect(validate(s, { label: "root" })).toEqual({ label: "root" })
   })
 })

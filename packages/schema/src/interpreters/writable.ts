@@ -33,22 +33,20 @@ import {
   textChange,
 } from "../change.js"
 import type { Plain, RefContext } from "../interpreter-types.js"
-import {
-  KIND,
-  type CounterSchema,
-  type DiscriminatedSumSchema,
-  type MapSchema,
-  type MovableSequenceSchema,
-  type PositionalSumSchema,
-  type ProductSchema,
-  type ScalarKind,
-  type ScalarSchema,
-  type Schema,
-  type SequenceSchema,
-  type SetSchema,
-  type SumSchema,
-  type TextSchema,
-  type TreeSchema,
+import type {
+  CounterSchema,
+  DiscriminatedSumSchema,
+  MapSchema,
+  MovableSequenceSchema,
+  PositionalSumSchema,
+  ProductSchema,
+  ScalarSchema,
+  Schema,
+  SequenceSchema,
+  SetSchema,
+  SumSchema,
+  TextSchema,
+  TreeSchema,
 } from "../schema.js"
 import type { SubstratePrepare } from "../substrate.js"
 
@@ -669,8 +667,7 @@ export function withWritable<A>(
         // Read current text length via store inspection (not carrier call)
         // so navigate+write stacks work without a reading layer.
         const current = ctx.reader.read(path)
-        const currentLength =
-          typeof current === "string" ? current.length : 0
+        const currentLength = typeof current === "string" ? current.length : 0
         ctx.dispatch(
           path,
           textChange([

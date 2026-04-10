@@ -25,9 +25,10 @@ import type { Path } from "./path.js"
 import { RawPath } from "./path.js"
 import type { Ref, RRef, RWRef } from "./ref.js"
 import {
-  KIND,
   type CounterSchema,
   type DiscriminatedSumSchema,
+  isNullableSum,
+  KIND,
   type MapSchema,
   type MovableSequenceSchema,
   type PositionalSumSchema,
@@ -39,7 +40,6 @@ import {
   type SumSchema,
   type TextSchema,
   type TreeSchema,
-  isNullableSum,
 } from "./schema.js"
 
 // ---------------------------------------------------------------------------
@@ -702,8 +702,7 @@ export function createInterpreter<Ctx, A>(
     text:
       overrides.text ?? ((ctx, path, schema) => fallback(ctx, path, schema)),
     counter:
-      overrides.counter ??
-      ((ctx, path, schema) => fallback(ctx, path, schema)),
+      overrides.counter ?? ((ctx, path, schema) => fallback(ctx, path, schema)),
     set:
       overrides.set ??
       ((ctx, path, schema, _item) => fallback(ctx, path, schema)),

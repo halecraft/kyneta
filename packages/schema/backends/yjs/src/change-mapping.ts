@@ -29,7 +29,12 @@ import type {
   TextChange,
   TextInstruction,
 } from "@kyneta/schema"
-import { advanceSchema, expandMapOpsToLeaves, KIND, RawPath } from "@kyneta/schema"
+import {
+  advanceSchema,
+  expandMapOpsToLeaves,
+  KIND,
+  RawPath,
+} from "@kyneta/schema"
 import * as Y from "yjs"
 import { resolveYjsType } from "./yjs-resolve.js"
 

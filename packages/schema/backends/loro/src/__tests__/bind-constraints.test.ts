@@ -60,9 +60,7 @@ describe("loro.bind() accepts Loro-compatible schemas", () => {
 
   it("schema with tree", () => {
     const schema = Schema.struct({
-      hierarchy: Schema.tree(
-        Schema.struct({ label: Schema.string() }),
-      ),
+      hierarchy: Schema.tree(Schema.struct({ label: Schema.string() })),
     })
     const bound = loro.bind(schema)
     expect(bound).toBeDefined()
@@ -176,9 +174,7 @@ describe("cross-substrate: universal schema vs substrate-specific schema", () =>
   const loroSpecificSchema = Schema.struct({
     title: Schema.text(),
     count: Schema.counter(),
-    tasks: Schema.movableList(
-      Schema.struct({ name: Schema.string() }),
-    ),
+    tasks: Schema.movableList(Schema.struct({ name: Schema.string() })),
   })
 
   it("universal schema is Loro-compatible (ExtractCaps check)", () => {

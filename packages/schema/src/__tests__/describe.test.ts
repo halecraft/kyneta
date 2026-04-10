@@ -167,9 +167,7 @@ testDescribe("describe: base grammar", () => {
         name: Schema.string(),
         count: Schema.number(),
       })
-      expect(describe(s)).toBe(
-        ["name: string", "count: number"].join("\n"),
-      )
+      expect(describe(s)).toBe(["name: string", "count: number"].join("\n"))
     })
 
     it("describes struct with nested struct and list", () => {
@@ -258,9 +256,9 @@ testDescribe("describe: annotation rendering", () => {
 
   testDescribe("movable list", () => {
     it("describes movable list with inline item", () => {
-      expect(
-        describe(Schema.movableList(Schema.string())),
-      ).toBe("movable-list<string>")
+      expect(describe(Schema.movableList(Schema.string()))).toBe(
+        "movable-list<string>",
+      )
     })
 
     it("describes movable list with complex item", () => {

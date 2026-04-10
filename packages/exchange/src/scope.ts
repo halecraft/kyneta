@@ -16,8 +16,8 @@
 // accept (reset) or reject (diverge). Strategy-aware defaults apply
 // when no scope provides an opinion.
 
-import type { DocId, PeerIdentityDetails } from "@kyneta/transport"
 import type { MergeStrategy } from "@kyneta/schema"
+import type { DocId, PeerIdentityDetails } from "@kyneta/transport"
 import type {
   Disposition,
   OnDocCreated,

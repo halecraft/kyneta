@@ -61,9 +61,12 @@ describe("withReadable: scalar", () => {
   })
 
   it("ref() reflects live store mutations", () => {
-    const { doc, store } = createDoc(Schema.struct({ count: Schema.number() }), {
-      count: 10,
-    })
+    const { doc, store } = createDoc(
+      Schema.struct({ count: Schema.number() }),
+      {
+        count: 10,
+      },
+    )
     expect(doc.count()).toBe(10)
     store.count = 42
     expect(doc.count()).toBe(42)
@@ -405,44 +408,32 @@ describe("withReadable: annotated", () => {
   })
 
   it("counter ref returns current number when called", () => {
-    const { doc } = createDoc(
-      Schema.struct({ count: Schema.counter() }),
-      {
-        count: 42,
-      },
-    )
+    const { doc } = createDoc(Schema.struct({ count: Schema.counter() }), {
+      count: 42,
+    })
     expect(doc.count()).toBe(42)
   })
 
   it("counter ref returns 0 when store value is not a number", () => {
-    const { doc } = createDoc(
-      Schema.struct({ count: Schema.counter() }),
-      {
-        count: "oops",
-      },
-    )
+    const { doc } = createDoc(Schema.struct({ count: Schema.counter() }), {
+      count: "oops",
+    })
     expect(doc.count()).toBe(0)
   })
 
   it("counter ref toPrimitive is hint-aware", () => {
-    const { doc } = createDoc(
-      Schema.struct({ count: Schema.counter() }),
-      {
-        count: 42,
-      },
-    )
+    const { doc } = createDoc(Schema.struct({ count: Schema.counter() }), {
+      count: 42,
+    })
     expect(doc.count[Symbol.toPrimitive]("string")).toBe("42")
     expect(doc.count[Symbol.toPrimitive]("number")).toBe(42)
     expect(doc.count[Symbol.toPrimitive]("default")).toBe(42)
   })
 
   it("counter ref works in template literal", () => {
-    const { doc } = createDoc(
-      Schema.struct({ count: Schema.counter() }),
-      {
-        count: 7,
-      },
-    )
+    const { doc } = createDoc(Schema.struct({ count: Schema.counter() }), {
+      count: 7,
+    })
     expect(`Stars: ${doc.count}`).toBe("Stars: 7")
   })
 
@@ -462,8 +453,6 @@ describe("withReadable: annotated", () => {
     const { doc } = createDoc(schema, { data: "leaf" })
     expect(doc.data()).toBe("leaf")
   })
-
-
 })
 
 // ===========================================================================

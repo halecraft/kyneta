@@ -127,7 +127,10 @@ export interface ProductSchema<
 
 // --- Sequence ----------------------------------------------------------------
 
-export interface SequenceSchema<I extends Schema = Schema, Caps extends string = string> {
+export interface SequenceSchema<
+  I extends Schema = Schema,
+  Caps extends string = string,
+> {
   readonly [KIND]: "sequence"
   readonly item: I
   readonly [CAPS]?: Caps
@@ -135,7 +138,10 @@ export interface SequenceSchema<I extends Schema = Schema, Caps extends string =
 
 // --- Map ---------------------------------------------------------------------
 
-export interface MapSchema<I extends Schema = Schema, Caps extends string = string> {
+export interface MapSchema<
+  I extends Schema = Schema,
+  Caps extends string = string,
+> {
   readonly [KIND]: "map"
   readonly item: I
   readonly [CAPS]?: Caps
@@ -224,7 +230,10 @@ export interface CounterSchema<Caps extends string = "counter"> {
  * `set()` is NOT `PlainSchema` — it requires non-LWW merge and cannot
  * appear inside sums or `.json()` subtrees.
  */
-export interface SetSchema<I extends Schema = Schema, Caps extends string = string> {
+export interface SetSchema<
+  I extends Schema = Schema,
+  Caps extends string = string,
+> {
   readonly [KIND]: "set"
   readonly item: I
   readonly [CAPS]?: Caps
@@ -240,7 +249,10 @@ export interface SetSchema<I extends Schema = Schema, Caps extends string = stri
  * `tree()` is NOT `PlainSchema` — it requires non-LWW merge and cannot
  * appear inside sums or `.json()` subtrees.
  */
-export interface TreeSchema<S extends Schema = Schema, Caps extends string = string> {
+export interface TreeSchema<
+  S extends Schema = Schema,
+  Caps extends string = string,
+> {
   readonly [KIND]: "tree"
   readonly nodeData: S
   readonly [CAPS]?: Caps
@@ -255,7 +267,10 @@ export interface TreeSchema<S extends Schema = Schema, Caps extends string = str
  * `movableList()` is NOT `PlainSchema` — it requires non-LWW merge and
  * cannot appear inside sums or `.json()` subtrees.
  */
-export interface MovableSequenceSchema<I extends Schema = Schema, Caps extends string = string> {
+export interface MovableSequenceSchema<
+  I extends Schema = Schema,
+  Caps extends string = string,
+> {
   readonly [KIND]: "movable"
   readonly item: I
   readonly [CAPS]?: Caps
@@ -306,7 +321,10 @@ export interface PlainProductSchema<
 /**
  * Sequence (ordered collection) constrained to plain children.
  */
-export interface PlainSequenceSchema<I extends PlainSchema = PlainSchema, Caps extends string = string> {
+export interface PlainSequenceSchema<
+  I extends PlainSchema = PlainSchema,
+  Caps extends string = string,
+> {
   readonly [KIND]: "sequence"
   readonly item: I
   readonly [CAPS]?: Caps
@@ -315,7 +333,10 @@ export interface PlainSequenceSchema<I extends PlainSchema = PlainSchema, Caps e
 /**
  * Map (dynamic-key collection) constrained to plain children.
  */
-export interface PlainMapSchema<I extends PlainSchema = PlainSchema, Caps extends string = string> {
+export interface PlainMapSchema<
+  I extends PlainSchema = PlainSchema,
+  Caps extends string = string,
+> {
   readonly [KIND]: "map"
   readonly item: I
   readonly [CAPS]?: Caps
@@ -359,7 +380,11 @@ export interface PlainDiscriminatedSumSchema<
  * Single-level indexed access — NOT recursive. Capabilities are accumulated
  * by constructors during schema construction (a type-level catamorphism).
  */
-export type ExtractCaps<S> = S extends { readonly [CAPS]?: infer T } ? (T extends string ? T : never) : never
+export type ExtractCaps<S> = S extends { readonly [CAPS]?: infer T }
+  ? T extends string
+    ? T
+    : never
+  : never
 
 // ---------------------------------------------------------------------------
 // StructuralKind — the set of base structural kinds
@@ -396,7 +421,9 @@ function product<F extends Record<string, Schema>>(
   return { [KIND]: "product", fields } as any
 }
 
-function sequence<I extends Schema>(item: I): SequenceSchema<I, ExtractCaps<I>> {
+function sequence<I extends Schema>(
+  item: I,
+): SequenceSchema<I, ExtractCaps<I>> {
   return { [KIND]: "sequence", item } as any
 }
 
@@ -404,7 +431,9 @@ function map<I extends Schema>(item: I): MapSchema<I, ExtractCaps<I>> {
   return { [KIND]: "map", item } as any
 }
 
-function sum<V extends PlainSchema[]>(variants: [...V]): PositionalSumSchema<V, ExtractCaps<V[number]>> {
+function sum<V extends PlainSchema[]>(
+  variants: [...V],
+): PositionalSumSchema<V, ExtractCaps<V[number]>> {
   return { [KIND]: "sum", variants } as any
 }
 
@@ -484,11 +513,15 @@ function set<I extends Schema>(item: I): SetSchema<I, "set" | ExtractCaps<I>> {
   return { [KIND]: "set", item } as any
 }
 
-function tree<S extends Schema>(nodeData: S): TreeSchema<S, "tree" | ExtractCaps<S>> {
+function tree<S extends Schema>(
+  nodeData: S,
+): TreeSchema<S, "tree" | ExtractCaps<S>> {
   return { [KIND]: "tree", nodeData } as any
 }
 
-function movableList<I extends Schema>(item: I): MovableSequenceSchema<I, "movable" | ExtractCaps<I>> {
+function movableList<I extends Schema>(
+  item: I,
+): MovableSequenceSchema<I, "movable" | ExtractCaps<I>> {
   return { [KIND]: "movable", item } as any
 }
 
@@ -510,7 +543,9 @@ function list<I extends Schema>(item: I): SequenceSchema<I, ExtractCaps<I>> {
  * `.json()` modifier for list — merge boundary.
  * Everything below is an inert JSON blob. No child capabilities propagated.
  */
-list.json = function listJson<I extends PlainSchema>(item: I): SequenceSchema<I, "json"> {
+list.json = function listJson<I extends PlainSchema>(
+  item: I,
+): SequenceSchema<I, "json"> {
   return { [KIND]: "sequence", item } as any
 }
 
@@ -520,7 +555,9 @@ list.json = function listJson<I extends PlainSchema>(item: I): SequenceSchema<I,
  * `struct.json(fields)` constrains children to `PlainSchema` and produces
  * a schema with only `"json"` as its capability (merge boundary).
  */
-function struct<F extends Record<string, Schema>>(fields: F): ProductSchema<F, ExtractCaps<F[keyof F]>> {
+function struct<F extends Record<string, Schema>>(
+  fields: F,
+): ProductSchema<F, ExtractCaps<F[keyof F]>> {
   return product(fields)
 }
 
@@ -528,7 +565,9 @@ function struct<F extends Record<string, Schema>>(fields: F): ProductSchema<F, E
  * `.json()` modifier for struct — merge boundary.
  * Everything below is an inert JSON blob. No child capabilities propagated.
  */
-struct.json = function structJson<F extends Record<string, PlainSchema>>(fields: F): ProductSchema<F, "json"> {
+struct.json = function structJson<F extends Record<string, PlainSchema>>(
+  fields: F,
+): ProductSchema<F, "json"> {
   return { [KIND]: "product", fields } as any
 }
 
@@ -546,7 +585,9 @@ function record<I extends Schema>(item: I): MapSchema<I, ExtractCaps<I>> {
  * `.json()` modifier for record — merge boundary.
  * Everything below is an inert JSON blob. No child capabilities propagated.
  */
-record.json = function recordJson<I extends PlainSchema>(item: I): MapSchema<I, "json"> {
+record.json = function recordJson<I extends PlainSchema>(
+  item: I,
+): MapSchema<I, "json"> {
   return { [KIND]: "map", item } as any
 }
 

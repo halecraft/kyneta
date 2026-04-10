@@ -252,9 +252,7 @@ export function createYjsSubstrate(
  */
 export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
   let currentDoc = doc
-  let currentBase: YjsVersion = new YjsVersion(
-    Y.encodeStateVector(new Y.Doc()),
-  )
+  let currentBase: YjsVersion = new YjsVersion(Y.encodeStateVector(new Y.Doc()))
 
   return {
     get [BACKING_DOC]() {

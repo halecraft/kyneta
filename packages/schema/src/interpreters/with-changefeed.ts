@@ -1062,7 +1062,6 @@ function createMapChangefeed(
  * ```
  */
 
-
 export function withChangefeed<A extends HasRead>(
   base: Interpreter<RefContext, A>,
 ): Interpreter<RefContext, A & HasChangefeed> {
@@ -1234,11 +1233,7 @@ export function withChangefeed<A extends HasRead>(
 
     // --- Text -----------------------------------------------------------------
     // Leaf type — attach a leaf changefeed + isPopulated.
-    text(
-      ctx: RefContext,
-      path: Path,
-      schema: TextSchema,
-    ): A & HasChangefeed {
+    text(ctx: RefContext, path: Path, schema: TextSchema): A & HasChangefeed {
       const result = base.text(ctx, path, schema)
 
       if (isPropertyHost(result)) {

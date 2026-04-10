@@ -146,7 +146,11 @@ describe("PlainVersion.meet()", () => {
 
   it("result is always ≤ both operands", () => {
     const pairs = [
-      [0, 0], [0, 5], [3, 7], [10, 10], [100, 1],
+      [0, 0],
+      [0, 5],
+      [3, 7],
+      [10, 10],
+      [100, 1],
     ]
     for (const [a, b] of pairs) {
       const va = new PlainVersion(a)
@@ -258,7 +262,9 @@ describe("PlainSubstrate lifecycle", () => {
       const currentVer = substrate.version().value
       const payload = substrate.exportSince(new PlainVersion(prevVersion))
       if (payload) {
-        opsPerNotification.push((JSON.parse(payload.data as string) as Op[][]).flat())
+        opsPerNotification.push(
+          (JSON.parse(payload.data as string) as Op[][]).flat(),
+        )
       }
       prevVersion = currentVer
     })

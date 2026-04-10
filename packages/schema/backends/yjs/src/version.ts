@@ -166,9 +166,7 @@ export class YjsVersion implements Version {
    */
   meet(other: Version): YjsVersion {
     if (!(other instanceof YjsVersion)) {
-      throw new Error(
-        "YjsVersion can only be meet'd with another YjsVersion",
-      )
+      throw new Error("YjsVersion can only be meet'd with another YjsVersion")
     }
     const thisMap = decodeStateVector(this.sv)
     const otherMap = decodeStateVector(other.sv)

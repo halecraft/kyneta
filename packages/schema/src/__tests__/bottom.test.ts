@@ -8,14 +8,6 @@ import { bottomInterpreter, CALL, makeCarrier } from "../interpreters/bottom.js"
 // Shared fixtures
 // ===========================================================================
 
-const structuralDocSchema = Schema.struct({
-  settings: Schema.struct({
-    darkMode: Schema.boolean(),
-    fontSize: Schema.number(),
-  }),
-  metadata: Schema.record(Schema.any()),
-})
-
 const annotatedDocSchema = Schema.struct({
   title: Schema.text(),
   count: Schema.counter(),

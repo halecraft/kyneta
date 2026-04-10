@@ -42,7 +42,7 @@ export {
 // ---------------------------------------------------------------------------
 
 // Namespace — substrate strategies + escape hatch (loro.unwrap())
-export { loro, type LoroCaps } from "./bind-loro.js"
+export { type LoroCaps, loro } from "./bind-loro.js"
 // Change mapping
 export { batchToOps, changeToDiff } from "./change-mapping.js"
 // Container resolution

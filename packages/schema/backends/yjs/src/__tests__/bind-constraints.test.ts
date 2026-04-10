@@ -124,9 +124,7 @@ describe("yjs.bind() rejects schemas with unsupported caps", () => {
 
   it("rejects tree", () => {
     const schema = Schema.struct({
-      hierarchy: Schema.tree(
-        Schema.struct({ label: Schema.string() }),
-      ),
+      hierarchy: Schema.tree(Schema.struct({ label: Schema.string() })),
     })
     // @ts-expect-error — tree is not in YjsCaps
     yjs.bind(schema)
@@ -144,9 +142,7 @@ describe("yjs.bind() rejects schemas with unsupported caps", () => {
     const schema = Schema.struct({
       items: Schema.list(
         Schema.struct({
-          meta: Schema.record(
-            Schema.struct({ hits: Schema.counter() }),
-          ),
+          meta: Schema.record(Schema.struct({ hits: Schema.counter() })),
         }),
       ),
     })
@@ -165,9 +161,7 @@ describe("yjs.bind() rejects schemas with unsupported caps", () => {
 
   it("rejects counter inside list", () => {
     const schema = Schema.struct({
-      scores: Schema.list(
-        Schema.struct({ value: Schema.counter() }),
-      ),
+      scores: Schema.list(Schema.struct({ value: Schema.counter() })),
     })
     // @ts-expect-error — counter nested inside list struct
     yjs.bind(schema)
@@ -194,9 +188,7 @@ describe("cross-substrate: universal schema vs substrate-specific schema", () =>
   const loroSpecificSchema = Schema.struct({
     title: Schema.text(),
     count: Schema.counter(),
-    tasks: Schema.movableList(
-      Schema.struct({ name: Schema.string() }),
-    ),
+    tasks: Schema.movableList(Schema.struct({ name: Schema.string() })),
   })
 
   it("universal schema is Yjs-compatible (ExtractCaps check)", () => {
