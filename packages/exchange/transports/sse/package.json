@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/sse-transport",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "SSE (Server-Sent Events) network adapter for @kyneta/exchange — client, server, and Express integration",
   "author": "Duane Johnson",
   "license": "MIT",
@@ -40,7 +40,7 @@
   "peerDependencies": {
     "@kyneta/machine": "^1.0.0",
     "@kyneta/transport": "^1.0.0",
-    "@kyneta/wire": "^1.1.0"
+    "@kyneta/wire": "^1.2.0"
   },
   "peerDependenciesMeta": {
     "express": {

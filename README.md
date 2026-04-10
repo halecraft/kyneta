@@ -68,7 +68,7 @@ Every step below is additive — earlier code doesn't change.
 
 | Step | What changes | What stays the same |
 |------|-------------|-------------------|
-| **Local document** | `createDoc(schema)` — no network, no exchange | — |
+| **Local document** | `createDoc(schema)` — no network, no exchange; type-safe, reactive doc, with validation | — |
 | **Two peers, plain sync** | Add `Exchange` + transport | Schema, reads, writes |
 | **Switch to CRDTs** | `json.bind(schema)` → `loro.bind(schema)` | Exchange, transport, reads, writes |
 | **Add persistence** | Add `stores: [leveldb()]` to exchange config | Everything above |
@@ -95,7 +95,7 @@ See the [`@kyneta/exchange` README](./packages/exchange/README.md) for the full 
 | Package | Description | Tests |
 |---------|-------------|-------|
 | [`@kyneta/changefeed`](./packages/changefeed) | Universal reactive contract — a Moore machine identified by `[CHANGEFEED]`. Zero dependencies. | 24 |
-| [`@kyneta/schema`](./packages/schema) | Schema interpreter algebra. One recursive `Schema` type, one generic `interpret()` catamorphism, pluggable interpreters for reading, mutation, observation, and validation. Zero runtime dependencies. | 1,540 |
+| [`@kyneta/schema`](./packages/schema) | Schema interpreter algebra. One recursive `Schema` type, one generic `interpret()` catamorphism, pluggable interpreters for reading, mutation, observation, and validation. Only dependency is `@kyneta/changefeed`. | 1,540 |
 | [`@kyneta/machine`](./packages/machine) | Universal Mealy machine algebra — pure state transitions with effect outputs. Powers the exchange synchronizer and all transport clients. Zero dependencies. | 45 |
 
 ### Substrates
