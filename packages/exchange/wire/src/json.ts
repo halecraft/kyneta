@@ -24,7 +24,9 @@ import type {
 import type { TextCodec } from "./codec.js"
 
 // ---------------------------------------------------------------------------
-// Base64 helpers
+// Base64 helpers — intentional local copy.
+// @kyneta/wire does not depend on @kyneta/schema (different dependency
+// subtree), so these cannot be imported from the shared base64.ts module.
 // ---------------------------------------------------------------------------
 
 /**

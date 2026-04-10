@@ -38,21 +38,15 @@ Runtime container type is determined exclusively via the **`.kind()` method**, n
 "Map" | "List" | "Text" | "Counter" | "MovableList" | "Tree"
 ```
 
-The `hasKind` guard used throughout the codebase:
+Three shared guards in `loro-guards.ts` centralize all Loro runtime type discrimination:
 
-```ts
-function hasKind(value: unknown): value is { kind(): string } {
-  return (
-    value !== null &&
-    value !== undefined &&
-    typeof value === "object" &&
-    "kind" in value &&
-    typeof (value as any).kind === "function"
-  )
-}
-```
+| Guard | Return type | Use case |
+|---|---|---|
+| `hasKind(value)` | `{ kind(): string }` | Base guard — any object with a `.kind()` method |
+| `isLoroContainer(value)` | `{ kind(): string; id: ContainerID }` | Wider guard — also guarantees `.id` (sound: checks `"id" in value`) |
+| `isLoroDoc(value)` | `LoroDoc` | Structural document guard (checks `getMap`, `getText`, `commit`, `peerIdStr`, etc.) |
 
-This is necessary because Loro container objects are opaque handles, not class instances from the JS perspective. `instanceof` checks against imported classes are unreliable across module boundaries and bundler configurations; `.kind()` is the stable contract.
+`hasKind` is the base discriminator. Loro container objects are opaque handles, not class instances from the JS perspective. `instanceof` checks against imported classes are unreliable across module boundaries and bundler configurations; `.kind()` is the stable contract. `isLoroContainer` extends `hasKind` with a verified `.id` property — used by `changeToDiff` and `replaceChangeToDiff` where the `ContainerID` is needed. `isLoroDoc` distinguishes a `LoroDoc` from its child containers using structural property checks.
 
 Value extraction from containers by kind:
 

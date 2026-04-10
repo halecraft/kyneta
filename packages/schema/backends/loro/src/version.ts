@@ -8,29 +8,12 @@
 // for text-safe embedding in HTML meta tags, script tags, etc.
 
 import type { Version } from "@kyneta/schema"
-import { versionVectorMeet } from "@kyneta/schema"
+import {
+  base64ToUint8Array,
+  uint8ArrayToBase64,
+  versionVectorMeet,
+} from "@kyneta/schema"
 import { VersionVector } from "loro-crdt"
-
-// ---------------------------------------------------------------------------
-// Base64 helpers (platform-agnostic, no Node.js Buffer dependency)
-// ---------------------------------------------------------------------------
-
-function uint8ArrayToBase64(bytes: Uint8Array): string {
-  let binary = ""
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]!)
-  }
-  return btoa(binary)
-}
-
-function base64ToUint8Array(base64: string): Uint8Array {
-  const binary = atob(base64)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i)
-  }
-  return bytes
-}
 
 // ---------------------------------------------------------------------------
 // LoroVersion

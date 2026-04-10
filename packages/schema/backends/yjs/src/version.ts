@@ -12,29 +12,13 @@
 // decoded `Map<number, number>` (clientID → clock) maps ourselves.
 
 import type { Version } from "@kyneta/schema"
-import { versionVectorMeet } from "@kyneta/schema"
+import {
+  base64ToUint8Array,
+  uint8ArrayToBase64,
+  versionVectorCompare,
+  versionVectorMeet,
+} from "@kyneta/schema"
 import { decodeStateVector } from "yjs"
-
-// ---------------------------------------------------------------------------
-// Base64 helpers (platform-agnostic, no Node.js Buffer dependency)
-// ---------------------------------------------------------------------------
-
-function uint8ArrayToBase64(bytes: Uint8Array): string {
-  let binary = ""
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]!)
-  }
-  return btoa(binary)
-}
-
-function base64ToUint8Array(base64: string): Uint8Array {
-  const binary = atob(base64)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i)
-  }
-  return bytes
-}
 
 // ---------------------------------------------------------------------------
 // State vector encoding — manual varint (unsigned LEB128)
@@ -105,54 +89,19 @@ export class YjsVersion implements Version {
   /**
    * Compare with another version using version-vector partial order.
    *
-   * Decodes both state vectors via `Y.decodeStateVector()` to get
-   * `Map<number, number>` (clientID → clock), then compares:
+   * Delegates to the shared `versionVectorCompare` utility after decoding
+   * both state vectors via `Y.decodeStateVector()`.
    *
-   * - Collect the union of all client IDs from both maps.
-   * - For each client, compare clocks (missing client = clock 0).
-   * - If all clocks in `this` ≤ `other` and at least one strictly less → `"behind"`
-   * - If all clocks in `this` ≥ `other` and at least one strictly greater → `"ahead"`
-   * - If all clocks equal → `"equal"`
-   * - Otherwise → `"concurrent"`
-   *
-   * Throws if `other` is not a `YjsVersion`.
+   * @throws If `other` is not a `YjsVersion`.
    */
   compare(other: Version): "behind" | "equal" | "ahead" | "concurrent" {
     if (!(other instanceof YjsVersion)) {
       throw new Error("YjsVersion can only be compared with another YjsVersion")
     }
-
-    const thisMap = decodeStateVector(this.sv)
-    const otherMap = decodeStateVector(other.sv)
-
-    // Collect the union of all client IDs
-    const allClients = new Set<number>()
-    for (const id of thisMap.keys()) allClients.add(id)
-    for (const id of otherMap.keys()) allClients.add(id)
-
-    let hasLess = false
-    let hasGreater = false
-
-    for (const clientId of allClients) {
-      const thisClock = thisMap.get(clientId) ?? 0
-      const otherClock = otherMap.get(clientId) ?? 0
-
-      if (thisClock < otherClock) {
-        hasLess = true
-      }
-      if (thisClock > otherClock) {
-        hasGreater = true
-      }
-
-      // Early exit: if we've seen both less and greater, it's concurrent
-      if (hasLess && hasGreater) {
-        return "concurrent"
-      }
-    }
-
-    if (hasLess && !hasGreater) return "behind"
-    if (hasGreater && !hasLess) return "ahead"
-    return "equal"
+    return versionVectorCompare(
+      decodeStateVector(this.sv),
+      decodeStateVector(other.sv),
+    )
   }
 
   /**

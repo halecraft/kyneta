@@ -22,6 +22,7 @@ import type {
 } from "@kyneta/schema"
 import { interpret, observation, readable, writable } from "@kyneta/schema"
 import type { LoroDoc } from "loro-crdt"
+import { isLoroDoc } from "./loro-guards.js"
 import { createLoroSubstrate, loroSubstrateFactory } from "./substrate.js"
 import type { LoroVersion } from "./version.js"
 
@@ -69,25 +70,6 @@ function registerDoc(
     .done()
   substrates.set(doc, substrate)
   return doc
-}
-
-// ---------------------------------------------------------------------------
-// isLoroDoc — runtime check for LoroDoc
-// ---------------------------------------------------------------------------
-
-function isLoroDoc(value: unknown): value is LoroDoc {
-  return (
-    value !== null &&
-    value !== undefined &&
-    typeof value === "object" &&
-    "getMap" in value &&
-    "getText" in value &&
-    "getList" in value &&
-    "getCounter" in value &&
-    "commit" in value &&
-    "peerIdStr" in value &&
-    typeof (value as any).commit === "function"
-  )
 }
 
 // ---------------------------------------------------------------------------

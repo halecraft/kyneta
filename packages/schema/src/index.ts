@@ -3,6 +3,8 @@
 // This barrel re-exports the three core modules that make up the
 // schema interpreter algebra spike.
 
+// Base64 — platform-agnostic encoding utilities
+export { base64ToUint8Array, uint8ArrayToBase64 } from "./base64.js"
 // Bind — schema + factory + strategy binding
 export type {
   BoundSchema,
@@ -315,6 +317,6 @@ export { TimestampVersion } from "./substrates/timestamp-version.js"
 // Unwrap — general escape hatch for accessing the Substrate backing a ref
 export { registerSubstrate, unwrap } from "./unwrap.js"
 // Version vector — shared lattice utilities for version vectors
-export { versionVectorMeet } from "./version-vector.js"
+export { versionVectorCompare, versionVectorMeet } from "./version-vector.js"
 // Zero — default values derived from the schema grammar
 export { scalarDefault, Zero } from "./zero.js"

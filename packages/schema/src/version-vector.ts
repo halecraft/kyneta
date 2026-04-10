@@ -1,4 +1,8 @@
-// version-vector — shared utility for version vector lattice operations.
+// version-vector — shared utilities for version vector lattice operations.
+//
+// Two algebraic operations over version vectors (Map<K, number>):
+// - versionVectorMeet: lattice meet (greatest lower bound)
+// - versionVectorCompare: partial-order comparison
 //
 // Used by both Loro (VersionVector → Map<PeerID, number>) and Yjs
 // (state vector → Map<number, number>) backends. The generic key type
@@ -37,4 +41,49 @@ export function versionVectorMeet<K>(
   }
 
   return result
+}
+
+// ---------------------------------------------------------------------------
+// versionVectorCompare — partial-order comparison
+// ---------------------------------------------------------------------------
+
+/**
+ * Compare two version vectors using the standard partial order.
+ *
+ * For each key in the union of both maps (absent defaults to 0):
+ * - If all components of `a` ≤ `b` and at least one strictly less → `"behind"`
+ * - If all components of `a` ≥ `b` and at least one strictly greater → `"ahead"`
+ * - If all components equal → `"equal"`
+ * - Otherwise (some less, some greater) → `"concurrent"`
+ *
+ * Algebraic properties:
+ * - Reflexive: `compare(a, a) = "equal"`
+ * - Antisymmetric: if `compare(a, b) = "behind"` then `compare(b, a) = "ahead"`
+ * - Transitive: if `compare(a, b) = "behind"` and `compare(b, c) = "behind"` then `compare(a, c) = "behind"`
+ */
+export function versionVectorCompare<K>(
+  a: Map<K, number>,
+  b: Map<K, number>,
+): "behind" | "equal" | "ahead" | "concurrent" {
+  const allKeys = new Set<K>()
+  for (const key of a.keys()) allKeys.add(key)
+  for (const key of b.keys()) allKeys.add(key)
+
+  let hasLess = false
+  let hasGreater = false
+
+  for (const key of allKeys) {
+    const aVal = a.get(key) ?? 0
+    const bVal = b.get(key) ?? 0
+
+    if (aVal < bVal) hasLess = true
+    if (aVal > bVal) hasGreater = true
+
+    // Early exit: concurrent as soon as we see both directions
+    if (hasLess && hasGreater) return "concurrent"
+  }
+
+  if (hasLess && !hasGreater) return "behind"
+  if (hasGreater && !hasLess) return "ahead"
+  return "equal"
 }

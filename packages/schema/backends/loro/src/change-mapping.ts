@@ -49,6 +49,7 @@ import type {
   TreeDiff,
   Value,
 } from "loro-crdt"
+import { hasKind, isLoroContainer } from "./loro-guards.js"
 import { PROPS_KEY, resolveContainer } from "./loro-resolve.js"
 
 // ---------------------------------------------------------------------------
@@ -73,20 +74,6 @@ function syntheticCID(
 
 function jsonCID(cid: ContainerID): JsonContainerID {
   return `🦜:${cid}` as JsonContainerID
-}
-
-// ---------------------------------------------------------------------------
-// hasKind helper
-// ---------------------------------------------------------------------------
-
-function hasKind(value: unknown): value is { kind(): string; id: ContainerID } {
-  return (
-    value !== null &&
-    value !== undefined &&
-    typeof value === "object" &&
-    "kind" in value &&
-    typeof (value as any).kind === "function"
-  )
 }
 
 // ---------------------------------------------------------------------------
@@ -129,7 +116,7 @@ export function changeToDiff(
 
   // Get the ContainerID
   let targetCID: ContainerID
-  if (hasKind(resolved)) {
+  if (isLoroContainer(resolved)) {
     targetCID = resolved.id
   } else {
     // The path resolved to a scalar value inside a container.
@@ -139,7 +126,7 @@ export function changeToDiff(
     }
     const parentPath = path.slice(0, -1)
     const parentResolved = resolveContainer(doc, schema, parentPath)
-    if (!hasKind(parentResolved)) {
+    if (!isLoroContainer(parentResolved)) {
       // Parent is the LoroDoc (root level) — use the _props map
       const propsMap = (parentResolved as any).getMap(PROPS_KEY)
       targetCID = propsMap.id as ContainerID
@@ -337,7 +324,7 @@ function replaceChangeToDiff(
   // If the parent is the LoroDoc itself (root-level field), the target
   // depends on the field type. For scalars/sums, they're stored in the
   // shared _props LoroMap. For containers, use the container's own ID.
-  if (!hasKind(parentResolved)) {
+  if (!isLoroContainer(parentResolved)) {
     // Parent is the LoroDoc — this is a root-level replace.
     // Scalars at root are stored in _props.
     if (lastSeg.role === "key") {

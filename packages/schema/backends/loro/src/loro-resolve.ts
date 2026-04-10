@@ -25,6 +25,7 @@ import {
   type Segment,
 } from "@kyneta/schema"
 import type { LoroDoc, LoroList, LoroMap, LoroMovableList } from "loro-crdt"
+import { hasKind, isLoroDoc } from "./loro-guards.js"
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -37,35 +38,6 @@ import type { LoroDoc, LoroList, LoroMap, LoroMovableList } from "loro-crdt"
  * as entries in `doc.getMap(PROPS_KEY)`.
  */
 export const PROPS_KEY = "_props"
-
-// ---------------------------------------------------------------------------
-// Container type guards (via .kind(), never instanceof)
-// ---------------------------------------------------------------------------
-
-function isLoroDoc(value: unknown): value is LoroDoc {
-  return (
-    value !== null &&
-    value !== undefined &&
-    typeof value === "object" &&
-    "getMap" in value &&
-    "getText" in value &&
-    "getList" in value &&
-    "getCounter" in value &&
-    typeof (value as any).getMap === "function" &&
-    // LoroDoc has peerIdStr; containers do not
-    "peerIdStr" in value
-  )
-}
-
-function hasKind(value: unknown): value is { kind(): string } {
-  return (
-    value !== null &&
-    value !== undefined &&
-    typeof value === "object" &&
-    "kind" in value &&
-    typeof (value as any).kind === "function"
-  )
-}
 
 // ---------------------------------------------------------------------------
 // stepFromDoc — resolve a root-level container from a LoroDoc

@@ -10,21 +10,8 @@
 
 import type { Path, Reader, Schema as SchemaNode } from "@kyneta/schema"
 import type { LoroDoc } from "loro-crdt"
+import { hasKind } from "./loro-guards.js"
 import { resolveContainer } from "./loro-resolve.js"
-
-// ---------------------------------------------------------------------------
-// Container kind helpers
-// ---------------------------------------------------------------------------
-
-function hasKind(value: unknown): value is { kind(): string } {
-  return (
-    value !== null &&
-    value !== undefined &&
-    typeof value === "object" &&
-    "kind" in value &&
-    typeof (value as any).kind === "function"
-  )
-}
 
 /**
  * Extract a scalar value from a Loro container or return a plain value as-is.

@@ -45,6 +45,8 @@ export {
 export { type LoroCaps, loro } from "./bind-loro.js"
 // Change mapping
 export { batchToOps, changeToDiff } from "./change-mapping.js"
+// Guards — shared Loro runtime type guards
+export { hasKind, isLoroContainer, isLoroDoc } from "./loro-guards.js"
 // Container resolution
 export { resolveContainer, stepIntoLoro } from "./loro-resolve.js"
 // Reader

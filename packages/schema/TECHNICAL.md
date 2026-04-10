@@ -1001,11 +1001,21 @@ This means schema evolution follows a simple protocol:
 
 The structural merge protocol guarantees convergence: a peer running schema v2 and a peer still on v1 will agree on all v1 containers. When the v1 peer upgrades, its `ensureContainers` call produces identical ops for the new fields — same identity, same order, same result.
 
-## Version Lattice Meet
+## Version Vector Algebra
 
 <!-- Context: jj:ppztoono -->
 
-The `Version` interface includes `meet(other)` — the greatest lower bound (lattice meet) of two versions. This is the algebraic foundation for computing the Least Common Version (LCV) across a set of peers.
+The `Version` interface includes `meet(other)` — the greatest lower bound (lattice meet) — and `compare(other)` — the partial-order comparison. These two operations form the algebraic foundation for computing the Least Common Version (LCV) and sync decisions across peers.
+
+Both operations are implemented as shared utilities in `version-vector.ts`, generic over the key type `K` to accommodate both Loro (`PeerID`) and Yjs (`number` clientID) version vectors.
+
+### `versionVectorMeet` — Lattice Meet (Greatest Lower Bound)
+
+```ts
+function versionVectorMeet<K>(a: Map<K, number>, b: Map<K, number>): Map<K, number>
+```
+
+Component-wise minimum of two version vectors. A key absent from one map defaults to 0, so `min(x, 0) = 0` — only keys present in **both** maps can appear in the result. Keys where the minimum is 0 are omitted.
 
 **Semantics by version type:**
 
@@ -1025,15 +1035,21 @@ The `Version` interface includes `meet(other)` — the greatest lower bound (lat
 
 These properties make `meet` a semilattice operation. The LCV of N peers is computed by folding: `LCV = v₁.meet(v₂).meet(v₃)...`. Associativity and commutativity guarantee the result is independent of fold order.
 
-### `versionVectorMeet` — Shared Utility
+### `versionVectorCompare` — Partial-Order Comparison
 
 ```ts
-function versionVectorMeet<K>(a: Map<K, number>, b: Map<K, number>): Map<K, number>
+function versionVectorCompare<K>(a: Map<K, number>, b: Map<K, number>): "behind" | "equal" | "ahead" | "concurrent"
 ```
 
-Component-wise minimum of two version vectors (`Map<K, number>`). A key absent from one map defaults to 0, so `min(x, 0) = 0` — only keys present in **both** maps can appear in the result. Keys where the minimum is 0 are omitted.
+Standard version-vector partial order. For each key in the union of both maps (absent defaults to 0): if all components of `a` ≤ `b` and at least one strictly less → `"behind"`; all ≥ and at least one strictly greater → `"ahead"`; all equal → `"equal"`; otherwise → `"concurrent"`.
 
-Used by both `LoroVersion` (key = `PeerID`) and `YjsVersion` (key = `number` clientID). The generic key type `K` accommodates both.
+Used by `YjsVersion.compare()` — Yjs does not export a state vector comparison function, so the shared utility implements it. `LoroVersion.compare()` delegates to Loro's native `VersionVector.compare()` instead.
+
+**Algebraic properties** (verified by tests):
+
+- **Reflexive**: `compare(a, a) = "equal"`
+- **Antisymmetric**: if `compare(a, b) = "behind"` then `compare(b, a) = "ahead"`
+- **Transitive**: if `compare(a, b) = "behind"` and `compare(b, c) = "behind"` then `compare(a, c) = "behind"`
 
 ---
 
@@ -1159,7 +1175,8 @@ packages/schema/
 │   ├── bind.ts                  # BoundSchema, BoundReplica, bind(), json namespace, createSubstrateNamespace(), isBoundSchema()
 │   ├── unwrap.ts                # registerSubstrate, unwrap — general escape hatch for substrate access
 │   ├── substrate.ts             # BACKING_DOC, SubstratePrepare, Version, SubstratePayload, Substrate<V>, SubstrateFactory<V>
-│   ├── version-vector.ts        # versionVectorMeet — shared lattice meet for version vectors (used by Loro + Yjs)
+│   ├── base64.ts                # uint8ArrayToBase64, base64ToUint8Array — platform-agnostic encoding (used by Loro + Yjs version implementations)
+│   ├── version-vector.ts        # versionVectorMeet, versionVectorCompare — shared version vector algebra (used by Loro + Yjs)
 │   ├── reader.ts                 # PlainState type, Reader, plainReader, readByPath, writeByPath, applyChange, pathKey
 │   ├── ref.ts                   # SchemaRef<S,M> parameterized core + Ref<S>, RWRef<S>, RRef<S> tier aliases
 │   ├── interpreters/
