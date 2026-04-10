@@ -41,7 +41,7 @@ import type { PeerChange } from "./types.js"
  * iterator — they never see the envelope fields.
  */
 export function createLineDocSchema<S extends SchemaNode>(messageSchema: S) {
-  return Schema.doc({
+  return Schema.struct({
     messages: Schema.list(
       Schema.struct({
         seq: Schema.number(),

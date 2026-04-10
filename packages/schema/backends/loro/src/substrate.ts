@@ -521,16 +521,9 @@ export function ensureLoroContainers(
   schema: SchemaNode,
   conditional: boolean,
 ): void {
-  let rootProduct = schema
-  while (
-    rootProduct[KIND] === "annotated" &&
-    rootProduct.schema !== undefined
-  ) {
-    rootProduct = rootProduct.schema
-  }
-
-  if (rootProduct[KIND] === "product") {
-    for (const [key, fieldSchema] of Object.entries(rootProduct.fields).sort(
+  // The schema is now directly a ProductSchema (no annotation wrapper)
+  if (schema[KIND] === "product") {
+    for (const [key, fieldSchema] of Object.entries(schema.fields).sort(
       ([a], [b]) => a.localeCompare(b),
     )) {
       ensureRootContainer(doc, key, fieldSchema as SchemaNode, conditional)
@@ -557,9 +550,8 @@ export function ensureRootContainer(
   fieldSchema: SchemaNode,
   conditional = false,
 ): void {
-  const tag = fieldSchema[KIND] === "annotated" ? fieldSchema.tag : undefined
-
-  switch (tag) {
+  // Dispatch on the schema's [KIND] directly — no annotation unwrapping
+  switch (fieldSchema[KIND]) {
     case "text":
       doc.getText(key)
       return
@@ -572,15 +564,7 @@ export function ensureRootContainer(
     case "tree":
       doc.getTree(key)
       return
-  }
-
-  // Non-annotated structural types
-  let structural = fieldSchema
-  while (structural[KIND] === "annotated" && structural.schema !== undefined) {
-    structural = structural.schema
-  }
-
-  switch (structural[KIND]) {
+    case "set":
     case "product":
       doc.getMap(key)
       return

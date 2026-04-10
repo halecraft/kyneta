@@ -26,7 +26,7 @@ import { plainReader } from "../reader.js"
 // Shared fixtures
 // ===========================================================================
 
-const todoSchema = Schema.doc({
+const todoSchema = Schema.struct({
   todos: Schema.list(
     Schema.struct({
       text: Schema.string(),
@@ -35,7 +35,7 @@ const todoSchema = Schema.doc({
   ),
 })
 
-const mapSchema = Schema.doc({
+const mapSchema = Schema.struct({
   metadata: Schema.record(Schema.string()),
 })
 
@@ -231,7 +231,7 @@ describe("withAddressing: maps", () => {
 describe("withAddressing: composition", () => {
   it("stacks without withAddressing use RawPath (fallback works)", () => {
     const store = { x: 42 }
-    const schema = Schema.doc({ x: Schema.number() })
+    const schema = Schema.struct({ x: Schema.number() })
     // Build a stack WITHOUT withAddressing
     const interp = withCaching(withReadable(withNavigation(bottomInterpreter)))
     const ctx: RefContext = { reader: plainReader(store) }
@@ -331,7 +331,7 @@ describe("withAddressing: [ADDRESS_TABLE]", () => {
 
   it("sequence refs without withAddressing do NOT have ADDRESS_TABLE", () => {
     const store = { items: ["a", "b"] }
-    const schema = Schema.doc({ items: Schema.list(Schema.string()) })
+    const schema = Schema.struct({ items: Schema.list(Schema.string()) })
     const interp = withCaching(withReadable(withNavigation(bottomInterpreter)))
     const ctx: RefContext = { reader: plainReader(store) }
     const doc = interpret(schema, interp, ctx) as any

@@ -29,12 +29,16 @@ import type { ChangeBase } from "../change.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
 import type {
-  AnnotatedSchema,
+  CounterSchema,
   MapSchema,
+  MovableSequenceSchema,
   ProductSchema,
   ScalarSchema,
   SequenceSchema,
+  SetSchema,
   SumSchema,
+  TextSchema,
+  TreeSchema,
 } from "../schema.js"
 
 import type { HasCaching, HasNavigation } from "./bottom.js"
@@ -392,16 +396,147 @@ export function withCaching<A extends HasNavigation>(
       return base.sum(ctx, path, schema, baseVariants) as A & HasCaching
     },
 
-    // --- Annotated -------------------------------------------------------------
-    // Pass through — no caching for annotation handling.
-    annotated(
+    // --- Text ------------------------------------------------------------------
+    // No caching needed for text — pass through.
+    text(ctx: RefContext, path: Path, schema: TextSchema): A & HasCaching {
+      return base.text(ctx, path, schema) as A & HasCaching
+    },
+
+    // --- Counter ---------------------------------------------------------------
+    // No caching needed for counter — pass through.
+    counter(
       ctx: RefContext,
       path: Path,
-      schema: AnnotatedSchema,
-      inner: (() => A & HasCaching) | undefined,
+      schema: CounterSchema,
     ): A & HasCaching {
-      const baseInner = inner as (() => A) | undefined
-      return base.annotated(ctx, path, schema, baseInner) as A & HasCaching
+      return base.counter(ctx, path, schema) as A & HasCaching
+    },
+
+    // --- Set -------------------------------------------------------------------
+    // Delegate to address table for identity-preserving lookup (like map).
+    set(
+      ctx: RefContext,
+      path: Path,
+      schema: SetSchema,
+      item: (key: string) => A & HasCaching,
+    ): A & HasCaching {
+      // Downcast for base
+      const baseItem = item as (key: string) => A
+      const result = base.set(ctx, path, schema, baseItem) as any
+
+      // Capture the base .at() — withReadable/withNavigation installed it
+      const baseAt = result.at as (key: string) => unknown
+
+      // Override .at() with address-table-backed lookup
+      Object.defineProperty(result, "at", {
+        value: (key: string): unknown => {
+          // Discover the map address table (lazy getter from withAddressing)
+          const addressTable = (result as any)[ADDRESS_TABLE_SYM] as
+            | { byKey: Map<string, { address: any; ref: unknown }> }
+            | undefined
+
+          if (addressTable) {
+            const entry = addressTable.byKey.get(key)
+            if (entry?.ref !== undefined && !entry.address.dead) {
+              return entry.ref
+            }
+          }
+
+          // Cache miss or no address table — delegate to base.
+          return baseAt.call(result, key)
+        },
+        enumerable: false,
+        configurable: true,
+      })
+
+      // INVALIDATE handler: no-op for set changes.
+      // Tombstoning is handled by withAddressing in the prepare pipeline.
+      const invalidateSet = (_change: ChangeBase): void => {
+        // Intentionally empty — addressing layer handles all cases.
+      }
+
+      // Attach [INVALIDATE] on the ref (public API, direct use)
+      result[INVALIDATE] = invalidateSet
+
+      // Register in the prepare pipeline (writable stacks only)
+      const handlers = ensureCacheWiring(ctx)
+      registerCacheHandler(handlers, path, invalidateSet)
+
+      return result as A & HasCaching
+    },
+
+    // --- Tree ------------------------------------------------------------------
+    // Delegate via nodeData — the inner interpretation already has caching.
+    // Wrap with product-style field memoization since tree surfaces nodeData
+    // fields.
+    tree(
+      ctx: RefContext,
+      path: Path,
+      schema: TreeSchema,
+      nodeData: () => A & HasCaching,
+    ): A & HasCaching {
+      const baseNodeData = nodeData as () => A
+      return base.tree(ctx, path, schema, baseNodeData) as A & HasCaching
+    },
+
+    // --- Movable ---------------------------------------------------------------
+    // Delegate to address table for identity-preserving lookup (like sequence).
+    movable(
+      ctx: RefContext,
+      path: Path,
+      schema: MovableSequenceSchema,
+      item: (index: number) => A & HasCaching,
+    ): A & HasCaching {
+      // Downcast for base
+      const baseItem = item as (index: number) => A
+      const result = base.movable(ctx, path, schema, baseItem) as any
+
+      // Capture the base .at() — withReadable/withNavigation installed it
+      const baseAt = result.at as (index: number) => unknown
+
+      // Override .at() with address-table-backed lookup
+      Object.defineProperty(result, "at", {
+        value: (index: number): unknown => {
+          // Discover the address table (lazy getter from withAddressing)
+          const addressTable = (result as any)[ADDRESS_TABLE_SYM] as
+            | {
+                byIndex: Map<number, any>
+                byId: Map<number, { address: any; ref: unknown }>
+              }
+            | undefined
+
+          if (addressTable) {
+            const addr = addressTable.byIndex.get(index)
+            if (addr && addr.kind === "index") {
+              const entry = addressTable.byId.get(addr.id)
+              if (entry?.ref !== undefined) {
+                return entry.ref
+              }
+            }
+          }
+
+          // Cache miss or no address table — delegate to base.
+          return baseAt.call(result, index)
+        },
+        enumerable: false,
+        configurable: true,
+      })
+
+      // INVALIDATE handler: no-op for movable changes.
+      // Address advancement is handled by withAddressing in the prepare
+      // pipeline.
+      const invalidateMovable = (_change: ChangeBase): void => {
+        // Intentionally empty — addressing layer handles all cases.
+      }
+
+      // Attach [INVALIDATE] on the ref (public API, direct use)
+      result[INVALIDATE] = invalidateMovable
+
+      // Register in the prepare pipeline (writable stacks only)
+      const handlers = ensureCacheWiring(ctx)
+      registerCacheHandler(handlers, path, invalidateMovable)
+
+      return result as A & HasCaching
     },
   }
 }

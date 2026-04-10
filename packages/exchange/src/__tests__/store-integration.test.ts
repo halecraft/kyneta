@@ -61,7 +61,7 @@ afterEach(async () => {
 // ---------------------------------------------------------------------------
 
 const SequentialDoc = json.bind(
-  Schema.doc({
+  Schema.struct({
     title: Schema.string(),
     count: Schema.number(),
   }),
@@ -74,7 +74,7 @@ const CausalDoc = loro.bind(
 )
 
 const PresenceDoc = json.bind(
-  Schema.doc({
+  Schema.struct({
     cursor: Schema.struct({ x: Schema.number(), y: Schema.number() }),
     name: Schema.string(),
   }),

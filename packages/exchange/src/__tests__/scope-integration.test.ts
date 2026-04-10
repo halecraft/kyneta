@@ -59,7 +59,7 @@ afterEach(async () => {
 // ---------------------------------------------------------------------------
 
 const SequentialDoc = json.bind(
-  Schema.doc({
+  Schema.struct({
     title: Schema.string(),
     count: Schema.number(),
   }),

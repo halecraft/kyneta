@@ -15,13 +15,13 @@ import { YjsVersion } from "../version.js"
 // Schemas used across tests
 // ===========================================================================
 
-const SimpleSchema = Schema.doc({
-  title: Schema.annotated("text"),
+const SimpleSchema = Schema.struct({
+  title: Schema.text(),
   count: Schema.number(),
   items: Schema.list(Schema.string()),
 })
 
-const StructListSchema = Schema.doc({
+const StructListSchema = Schema.struct({
   tasks: Schema.list(
     Schema.struct({
       name: Schema.string(),
@@ -30,8 +30,8 @@ const StructListSchema = Schema.doc({
   ),
 })
 
-const FullSchema = Schema.doc({
-  title: Schema.annotated("text"),
+const FullSchema = Schema.struct({
+  title: Schema.text(),
   count: Schema.number(),
   active: Schema.boolean(),
   items: Schema.list(Schema.string()),
@@ -512,29 +512,26 @@ describe("YjsSubstrate", () => {
   // Counter annotation throws
   // -------------------------------------------------------------------------
 
-  describe("unsupported annotations", () => {
-    it("counter annotation throws clear error at construction", () => {
-      const CounterSchema = Schema.doc({
-        count: Schema.annotated("counter"),
+  describe("unsupported kinds", () => {
+    it("counter throws clear error at construction", () => {
+      const CounterSchema = Schema.struct({
+        count: Schema.counter(),
       })
 
       expect(() => yjsSubstrateFactory.create(CounterSchema)).toThrow("counter")
     })
 
-    it("movable annotation throws clear error at construction", () => {
-      const MovableSchema = Schema.doc({
-        items: Schema.annotated("movable", Schema.list(Schema.string())),
+    it("movableList throws clear error at construction", () => {
+      const MovableSchema = Schema.struct({
+        items: Schema.movableList(Schema.string()),
       })
 
       expect(() => yjsSubstrateFactory.create(MovableSchema)).toThrow("movable")
     })
 
-    it("tree annotation throws clear error at construction", () => {
-      const TreeSchema = Schema.doc({
-        tree: Schema.annotated(
-          "tree",
-          Schema.struct({ label: Schema.string() }),
-        ),
+    it("tree throws clear error at construction", () => {
+      const TreeSchema = Schema.struct({
+        tree: Schema.tree(Schema.struct({ label: Schema.string() })),
       })
 
       expect(() => yjsSubstrateFactory.create(TreeSchema)).toThrow("tree")

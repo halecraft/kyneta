@@ -18,12 +18,6 @@ import type { Schema as SchemaNode } from "@kyneta/schema"
 import { KIND, STRUCTURAL_YJS_CLIENT_ID, Zero } from "@kyneta/schema"
 import * as Y from "yjs"
 
-/**
- * The closed set of annotation tags that the Yjs substrate supports at runtime.
- * Mirrors the compile-time `YjsSupportedTag` type in `bind-yjs.ts`.
- */
-export const YJS_SUPPORTED_TAGS: ReadonlySet<string> = new Set(["text", "doc"])
-
 // ---------------------------------------------------------------------------
 // ensureContainers — top-level entry point
 // ---------------------------------------------------------------------------
@@ -32,9 +26,9 @@ export const YJS_SUPPORTED_TAGS: ReadonlySet<string> = new Set(["text", "doc"])
  * Ensure that a Y.Doc's root map contains the correct Yjs shared types
  * matching the schema structure.
  *
- * Obtains the root map via `doc.getMap("root")`, unwraps the root product
- * schema, and creates empty containers for each field within a single
- * `doc.transact()` call for atomicity.
+ * Obtains the root map via `doc.getMap("root")`, reads the root product
+ * schema's fields, and creates empty containers for each field within a
+ * single `doc.transact()` call for atomicity.
  *
  * When `conditional` is true, fields that already exist in the root map
  * are skipped. This is the correct mode after hydration — containers
@@ -51,7 +45,7 @@ export const YJS_SUPPORTED_TAGS: ReadonlySet<string> = new Set(["text", "doc"])
  * structural ops across all peers, enabling Yjs deduplication on merge.
  *
  * @param doc - The Y.Doc to prepare
- * @param schema - The root document schema (typically annotated("doc", product))
+ * @param schema - The root document schema (a ProductSchema)
  * @param conditional - If true, skip fields that already exist in the root map.
  *   Context: jj:smmulzkm (two-phase substrate construction)
  */
@@ -62,15 +56,7 @@ export function ensureContainers(
 ): void {
   const rootMap = doc.getMap("root")
 
-  let rootProduct = schema
-  while (
-    rootProduct[KIND] === "annotated" &&
-    rootProduct.schema !== undefined
-  ) {
-    rootProduct = rootProduct.schema
-  }
-
-  if (rootProduct[KIND] !== "product") {
+  if (schema[KIND] !== "product") {
     return
   }
 
@@ -81,7 +67,7 @@ export function ensureContainers(
 
   try {
     doc.transact(() => {
-      for (const [key, fieldSchema] of Object.entries(rootProduct.fields).sort(
+      for (const [key, fieldSchema] of Object.entries(schema.fields).sort(
         ([a], [b]) => a.localeCompare(b),
       )) {
         if (conditional && rootMap.has(key)) continue
@@ -101,48 +87,36 @@ export function ensureContainers(
 /**
  * Ensure a root-level Yjs shared type exists for a schema field.
  *
- * Dispatches based on the schema annotation tag and structural kind:
- * - `annotated("text")` → empty Y.Text
- * - unsupported annotation → throws (tag not in `YJS_SUPPORTED_TAGS`)
- * - `product` → empty Y.Map (recursive for nested products)
- * - `sequence` → empty Y.Array
- * - `map` → empty Y.Map
- * - `scalar`/`sum` → no-op (plain values don't need containers)
+ * Dispatches on `[KIND]`:
+ * - `"text"` → empty Y.Text
+ * - `"product"` → empty Y.Map (recursive for nested products)
+ * - `"sequence"` → empty Y.Array
+ * - `"map"` → empty Y.Map
+ * - `"scalar"` / `"sum"` → Zero.structural default
+ * - `"counter"` / `"set"` / `"tree"` / `"movable"` → throw (not supported by Yjs)
  */
 function ensureRootField(
   rootMap: Y.Map<unknown>,
   key: string,
   fieldSchema: SchemaNode,
 ): void {
-  const tag = fieldSchema[KIND] === "annotated" ? fieldSchema.tag : undefined
-
-  if (tag !== undefined) {
-    if (!YJS_SUPPORTED_TAGS.has(tag)) {
-      throw new Error(
-        `Yjs substrate does not support annotation "${tag}". ` +
-          `Supported annotations: ${[...YJS_SUPPORTED_TAGS].join(", ")}. ` +
-          `Encountered unsupported annotation at root field "${key}".`,
-      )
-    }
-    if (tag === "text") {
+  switch (fieldSchema[KIND]) {
+    case "text":
       rootMap.set(key, new Y.Text())
       return
-    }
-    // "doc" falls through to structural unwrapping below
-  }
 
-  const structural = unwrapAnnotations(fieldSchema)
-
-  switch (structural[KIND]) {
     case "product":
-      rootMap.set(key, ensureMapContainers(structural))
+      rootMap.set(key, ensureMapContainers(fieldSchema))
       return
+
     case "sequence":
       rootMap.set(key, new Y.Array())
       return
+
     case "map":
       rootMap.set(key, new Y.Map())
       return
+
     case "scalar":
     case "sum": {
       // Plain values don't need shared type containers, but they DO
@@ -154,6 +128,16 @@ function ensureRootField(
       }
       return
     }
+
+    case "counter":
+    case "set":
+    case "tree":
+    case "movable":
+      throw new Error(
+        `Yjs substrate does not support [KIND]="${fieldSchema[KIND]}". ` +
+          `Supported kinds: text, product, sequence, map, scalar, sum. ` +
+          `Encountered unsupported kind at root field "${key}".`,
+      )
   }
 }
 
@@ -167,37 +151,33 @@ function ensureRootField(
  *
  * Only creates containers for fields that require Yjs shared types
  * (text → Y.Text, product → Y.Map, sequence → Y.Array, map → Y.Map).
- * Scalar and sum fields are left empty — they'll be written as plain
- * values via change() when needed.
+ * Scalar and sum fields are set to their structural zero defaults.
  */
 function ensureMapContainers(schema: SchemaNode): Y.Map<unknown> {
   const map = new Y.Map()
-  const structural = unwrapAnnotations(schema)
 
-  if (structural[KIND] !== "product") return map
+  if (schema[KIND] !== "product") return map
 
   for (const [key, fieldSchema] of Object.entries(
-    structural.fields as Record<string, SchemaNode>,
+    schema.fields as Record<string, SchemaNode>,
   ).sort(([a], [b]) => a.localeCompare(b))) {
-    const tag = fieldSchema[KIND] === "annotated" ? fieldSchema.tag : undefined
+    switch (fieldSchema[KIND]) {
+      case "text":
+        map.set(key, new Y.Text())
+        break
 
-    if (tag === "text") {
-      map.set(key, new Y.Text())
-      continue
-    }
-
-    const fs = unwrapAnnotations(fieldSchema)
-
-    switch (fs[KIND]) {
       case "product":
         map.set(key, ensureMapContainers(fieldSchema))
         break
+
       case "sequence":
         map.set(key, new Y.Array())
         break
+
       case "map":
         map.set(key, new Y.Map())
         break
+
       case "scalar":
       case "sum": {
         const zero = Zero.structural(fieldSchema)
@@ -206,23 +186,18 @@ function ensureMapContainers(schema: SchemaNode): Y.Map<unknown> {
         }
         break
       }
+
+      case "counter":
+      case "set":
+      case "tree":
+      case "movable":
+        throw new Error(
+          `Yjs substrate does not support [KIND]="${fieldSchema[KIND]}". ` +
+            `Supported kinds: text, product, sequence, map, scalar, sum. ` +
+            `Encountered unsupported kind at nested field "${key}".`,
+        )
     }
   }
 
   return map
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Unwrap annotation wrappers to reach the structural schema node.
- */
-function unwrapAnnotations(schema: SchemaNode): SchemaNode {
-  let s = schema
-  while (s[KIND] === "annotated" && s.schema !== undefined) {
-    s = s.schema
-  }
-  return s
 }

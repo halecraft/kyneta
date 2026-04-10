@@ -8,8 +8,8 @@ import { createYjsDoc } from "../create.js"
 // Schemas used across tests
 // ===========================================================================
 
-const TodoSchema = Schema.doc({
-  title: Schema.annotated("text"),
+const TodoSchema = Schema.struct({
+  title: Schema.text(),
   items: Schema.list(
     Schema.struct({
       name: Schema.string(),
@@ -18,8 +18,8 @@ const TodoSchema = Schema.doc({
   ),
 })
 
-const SimpleSchema = Schema.doc({
-  title: Schema.annotated("text"),
+const SimpleSchema = Schema.struct({
+  title: Schema.text(),
   count: Schema.number(),
 })
 

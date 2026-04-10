@@ -27,7 +27,7 @@ import type { StoreEntry } from "../store/store.js"
 // ---------------------------------------------------------------------------
 
 const TestDoc = json.bind(
-  Schema.doc({
+  Schema.struct({
     title: Schema.string(),
     count: Schema.number(),
   }),
@@ -570,7 +570,7 @@ describe("exchange.get() without explicit peerId", () => {
     const exchange = new Exchange()
 
     const Doc = json.bind(
-      Schema.doc({
+      Schema.struct({
         title: Schema.string(),
       }),
     )
@@ -590,8 +590,8 @@ describe("exchange.get() without explicit peerId", () => {
 describe("Yjs storage round-trip", () => {
   it("Yjs doc: write → shutdown → restart → hydrate → data preserved", async () => {
     const YjsDoc = yjs.bind(
-      Schema.doc({
-        title: Schema.annotated("text"),
+      Schema.struct({
+        title: Schema.text(),
         count: Schema.number(),
       }),
     )

@@ -119,7 +119,11 @@ export function computeSchemaHash(schema: SchemaNode): string {
  *   - sequence: `q(item)`
  *   - map: `m(value)`
  *   - sum: `u(v0,v1,...)` for positional, `d:disc(tag0:...,tag1:...)` for discriminated
- *   - annotated: `a:tag` (leaf) or `a:tag(inner)` (with inner schema)
+ *   - text: `t:text`
+ *   - counter: `t:counter`
+ *   - set: `t:set(item)`
+ *   - tree: `t:tree(nodeData)`
+ *   - movable: `t:movable(item)`
  */
 function canonicalizeSchema(schema: SchemaNode): string {
   switch (schema[KIND]) {
@@ -164,17 +168,23 @@ function canonicalizeSchema(schema: SchemaNode): string {
       return `u(${parts.join(",")})`
     }
 
-    case "annotated": {
-      const tag = (schema as any).tag as string
-      const inner = (schema as any).schema as SchemaNode | undefined
-      if (inner !== undefined) {
-        return `a:${tag}(${canonicalizeSchema(inner)})`
-      }
-      return `a:${tag}`
-    }
+    case "text":
+      return `t:text`
+
+    case "counter":
+      return `t:counter`
+
+    case "set":
+      return `t:set(${canonicalizeSchema((schema as any).item as SchemaNode)})`
+
+    case "tree":
+      return `t:tree(${canonicalizeSchema((schema as any).nodeData as SchemaNode)})`
+
+    case "movable":
+      return `t:movable(${canonicalizeSchema((schema as any).item as SchemaNode)})`
 
     default:
-      return `?:${(schema as any)[KIND]}`
+      throw new Error(`canonicalizeSchema: unknown schema kind "${(schema as any)[KIND]}"`)
   }
 }
 

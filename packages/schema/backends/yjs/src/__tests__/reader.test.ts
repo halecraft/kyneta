@@ -16,7 +16,7 @@ import { yjsReader } from "../reader.js"
  * values. We populate values via raw Yjs API within a single transact.
  */
 function setup(
-  schema: ReturnType<typeof Schema.doc>,
+  schema: any,
   seed?: Record<string, unknown>,
 ) {
   const doc = new Y.Doc()
@@ -42,11 +42,11 @@ function setup(
  */
 function populateSeed(
   ymap: Y.Map<unknown>,
-  schema: ReturnType<typeof Schema.doc>,
+  schema: any,
   seed: Record<string, unknown>,
 ) {
-  const rootProduct = unwrapToProduct(schema)
-  if (!rootProduct) return
+  if (schema[KIND] !== "product") return
+  const rootProduct = schema
 
   for (const [key, value] of Object.entries(seed)) {
     if (value === undefined) continue
@@ -63,20 +63,15 @@ function populateField(
   fieldSchema: any,
   value: unknown,
 ) {
-  const tag = fieldSchema[KIND] === "annotated" ? fieldSchema.tag : undefined
-
-  if (tag === "text") {
-    // Text field — the Y.Text was already created by ensureContainers
-    const text = ymap.get(key) as Y.Text
-    if (text && typeof value === "string" && value.length > 0) {
-      text.insert(0, value)
+  switch (fieldSchema[KIND]) {
+    case "text": {
+      // Text field — the Y.Text was already created by ensureContainers
+      const text = ymap.get(key) as Y.Text
+      if (text && typeof value === "string" && value.length > 0) {
+        text.insert(0, value)
+      }
+      return
     }
-    return
-  }
-
-  const structural = unwrapAnnotations(fieldSchema)
-
-  switch (structural[KIND]) {
     case "product": {
       // Struct — recurse into the existing Y.Map
       const childMap = ymap.get(key) as Y.Map<unknown>
@@ -84,7 +79,7 @@ function populateField(
         for (const [childKey, childValue] of Object.entries(
           value as Record<string, unknown>,
         )) {
-          const childFieldSchema = (structural.fields as Record<string, any>)[
+          const childFieldSchema = (fieldSchema.fields as Record<string, any>)[
             childKey
           ]
           if (!childFieldSchema) continue
@@ -99,11 +94,11 @@ function populateField(
       const arr = ymap.get(key) as Y.Array<unknown>
       if (arr && Array.isArray(value)) {
         for (const item of value) {
-          const itemSchema = structural.item
-          if (itemSchema && unwrapAnnotations(itemSchema)[KIND] === "product") {
+          const itemSchema = fieldSchema.item
+          if (itemSchema && itemSchema[KIND] === "product") {
             // Struct items: create a Y.Map for each
             const itemMap = buildStructMap(
-              unwrapAnnotations(itemSchema),
+              itemSchema,
               item as Record<string, unknown>,
             )
             arr.push([itemMap])
@@ -150,22 +145,19 @@ function buildStructMap(
     const value = seed[key]
     if (value === undefined) continue
 
-    const tag = fieldSchema[KIND] === "annotated" ? fieldSchema.tag : undefined
-    if (tag === "text") {
-      const text = new Y.Text()
-      if (typeof value === "string" && value.length > 0) {
-        text.insert(0, value)
+    switch (fieldSchema[KIND]) {
+      case "text": {
+        const text = new Y.Text()
+        if (typeof value === "string" && value.length > 0) {
+          text.insert(0, value)
+        }
+        map.set(key, text)
+        break
       }
-      map.set(key, text)
-      continue
-    }
-
-    const structural = unwrapAnnotations(fieldSchema)
-    switch (structural[KIND]) {
       case "product": {
         map.set(
           key,
-          buildStructMap(structural, value as Record<string, unknown>),
+          buildStructMap(fieldSchema, value as Record<string, unknown>),
         )
         break
       }
@@ -173,14 +165,14 @@ function buildStructMap(
         const arr = new Y.Array()
         if (Array.isArray(value)) {
           for (const item of value) {
-            const itemSchema = structural.element ?? structural.schema
+            const itemSchema = fieldSchema.item
             if (
               itemSchema &&
-              unwrapAnnotations(itemSchema)[KIND] === "product"
+              itemSchema[KIND] === "product"
             ) {
               arr.push([
                 buildStructMap(
-                  unwrapAnnotations(itemSchema),
+                  itemSchema,
                   item as Record<string, unknown>,
                 ),
               ])
@@ -212,22 +204,7 @@ function buildStructMap(
   return map
 }
 
-function unwrapToProduct(schema: any): any {
-  let s = schema
-  while (s[KIND] === "annotated" && s.schema !== undefined) {
-    s = s.schema
-  }
-  if (s[KIND] === "product") return s
-  return null
-}
 
-function unwrapAnnotations(schema: any): any {
-  let s = schema
-  while (s[KIND] === "annotated" && s.schema !== undefined) {
-    s = s.schema
-  }
-  return s
-}
 
 /** Build a RawPath from variadic key/index segments. */
 function p(...segs: (string | number)[]): RawPath {
@@ -242,18 +219,18 @@ function p(...segs: (string | number)[]): RawPath {
 // Schemas used across tests
 // ===========================================================================
 
-const TextSchema = Schema.doc({
-  title: Schema.annotated("text"),
-  subtitle: Schema.annotated("text"),
+const TextSchema = Schema.struct({
+  title: Schema.text(),
+  subtitle: Schema.text(),
 })
 
-const ScalarSchema = Schema.doc({
+const ScalarSchema = Schema.struct({
   name: Schema.string(),
   count: Schema.number(),
   active: Schema.boolean(),
 })
 
-const NestedStructSchema = Schema.doc({
+const NestedStructSchema = Schema.struct({
   profile: Schema.struct({
     first: Schema.string(),
     last: Schema.string(),
@@ -264,7 +241,7 @@ const NestedStructSchema = Schema.doc({
   }),
 })
 
-const ListSchema = Schema.doc({
+const ListSchema = Schema.struct({
   items: Schema.list(Schema.string()),
   structs: Schema.list(
     Schema.struct({
@@ -274,12 +251,12 @@ const ListSchema = Schema.doc({
   ),
 })
 
-const MapSchema = Schema.doc({
+const MapSchema = Schema.struct({
   labels: Schema.record(Schema.string()),
 })
 
-const MixedSchema = Schema.doc({
-  title: Schema.annotated("text"),
+const MixedSchema = Schema.struct({
+  title: Schema.text(),
   count: Schema.number(),
   items: Schema.list(
     Schema.struct({

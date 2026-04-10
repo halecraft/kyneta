@@ -91,7 +91,7 @@ describe("loro.unwrap() escape hatch", () => {
 
   it("throws for refs with a non-Loro substrate", () => {
     const substrate = plainSubstrateFactory.create(
-      Schema.doc({ title: Schema.string() }),
+      Schema.struct({ title: Schema.string() }),
     )
     const fakeRef = { _fake: true }
     registerSubstrate(fakeRef, substrate)

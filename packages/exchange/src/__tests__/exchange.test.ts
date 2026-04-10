@@ -25,14 +25,14 @@ import type { PeerChange } from "../types.js"
 // Test schemas (bound at module scope)
 // ---------------------------------------------------------------------------
 
-const testSchema = Schema.doc({
+const testSchema = Schema.struct({
   title: Schema.string(),
   count: Schema.number(),
 })
 
 const TestDoc = json.bind(testSchema)
 
-const otherSchema = Schema.doc({ name: Schema.string() })
+const otherSchema = Schema.struct({ name: Schema.string() })
 const OtherDoc = json.bind(otherSchema)
 
 // ---------------------------------------------------------------------------

@@ -124,13 +124,13 @@ describe("RawPath", () => {
       expect(c.format()).toBe("a.b[0]")
     })
 
-    it("throws when passed an AddressedPath", () => {
+    it("promotes to AddressedPath when passed an AddressedPath", () => {
       const raw = RawPath.empty.field("a")
       const registry = new AddressTableRegistry()
-      const addressed = new AddressedPath([], registry)
-      expect(() => raw.concat(addressed)).toThrow(
-        "Cannot concat AddressedPath onto RawPath",
-      )
+      const addressed = new AddressedPath([], registry).field("b")
+      const result = raw.concat(addressed)
+      expect(result.isAddressed).toBe(true)
+      expect(result.length).toBe(2)
     })
   })
 
@@ -321,11 +321,13 @@ describe("AddressedPath", () => {
       expect(c).toBeInstanceOf(AddressedPath)
     })
 
-    it("throws when passed a RawPath", () => {
+    it("promotes RawPath to AddressedPath when concatenating", () => {
       const addressed = new AddressedPath([], registry).field("a")
-      expect(() => addressed.concat(RawPath.empty)).toThrow(
-        "Cannot concat RawPath onto AddressedPath",
-      )
+      const raw = RawPath.empty.field("b")
+      const result = addressed.concat(raw)
+      expect(result.isAddressed).toBe(true)
+      expect(result.length).toBe(2)
+      expect(result).toBeInstanceOf(AddressedPath)
     })
   })
 

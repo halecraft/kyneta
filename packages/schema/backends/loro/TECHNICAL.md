@@ -1,6 +1,6 @@
 # @kyneta/loro-schema — Technical Reference
 
-Loro CRDT substrate for `@kyneta/schema`. Wraps a `LoroDoc` with schema-aware typed reads, writes, versioning, and export/import through the standard `Substrate<LoroVersion>` interface.
+Loro CRDT substrate for `@kyneta/schema`. Wraps a `LoroDoc` with schema-aware typed reads, writes, versioning, and export/import through the standard `Substrate<LoroVersion>` interface. The `LoroSchema` namespace is a thin wrapper over `Schema.*` that adds `doc()` (Loro root constraints) and `plain.*` (composition-constrained constructors). `LoroCaps = "text" | "counter" | "movable" | "tree" | "json"`.
 
 ---
 
@@ -75,7 +75,7 @@ The Loro container tree divides into two zones with different identity character
 
 **Root products and nested structs.** Container paths are deterministic — they derive entirely from the schema field names.
 
-- Root field `title` (annotated `"text"`) → `doc.getText("title")`, CID is `cid:root-title:Text`.
+- Root field `title` (`TextSchema`) → `doc.getText("title")`, CID is `cid:root-title:Text`.
 - Nested struct field `items[0].metadata` → resolved by walking `doc.getList("items").get(0).get("metadata")`.
 
 Static-zone containers have **stable ContainerIDs** that are independent of which peer created them, because the schema defines their position.
@@ -352,14 +352,14 @@ This stripping is safe because `_props` only exists as a root-level container. I
 
 ## 12. `LoroDocFieldSchema` and Namespace Partitioning
 
-The `LoroSchema` namespace exposes **only Loro container constructors** at the top level. Plain values (scalars, sums) are available exclusively via `LoroSchema.plain.*`.
+The `LoroSchema` namespace is a thin wrapper over `Schema.*`. It exposes Loro container constructors at the top level and plain values via `LoroSchema.plain.*`. First-class types (`text()`, `counter()`, `movableList()`, `tree()`) delegate directly to their `Schema.*` counterparts — `LoroSchema.text()` produces the same `TextSchema` node as `Schema.text()`.
 
 ### Namespace structure
 
 | Level | Constructors | Produces |
 |---|---|---|
 | `LoroSchema.*` | `struct`, `list`, `record` | Loro containers (`LoroMap`, `LoroList`) |
-| `LoroSchema.*` | `text`, `counter`, `movableList`, `tree` | Loro annotation containers |
+| `LoroSchema.*` | `text`, `counter`, `movableList`, `tree` | First-class CRDT types (delegates to `Schema.*`) |
 | `LoroSchema.*` | `doc` | Document root (constrained to `LoroDocFieldSchema`) |
 | `LoroSchema.plain.*` | `string`, `number`, `boolean`, `null`, `undefined`, `bytes`, `any` | Scalars (stored in `_props` at root) |
 | `LoroSchema.plain.*` | `struct`, `record`, `array`, `union`, `discriminatedUnion`, `nullable` | Plain composites (constrained to `PlainSchema` children) |
@@ -370,14 +370,18 @@ The `LoroDocFieldSchema` type constrains what `LoroSchema.doc()` accepts as root
 
 ```ts
 type LoroDocFieldSchema =
-  | ProductSchema      // → LoroMap
-  | SequenceSchema     // → LoroList
-  | MapSchema          // → LoroMap
-  | AnnotatedSchema    // → LoroText, LoroCounter, etc.
-  | PlainSchema        // → stored in _props LoroMap
+  | ProductSchema           // → LoroMap
+  | SequenceSchema          // → LoroList
+  | MapSchema               // → LoroMap
+  | TextSchema              // → LoroText
+  | CounterSchema           // → LoroCounter
+  | SetSchema               // → LoroSet (future)
+  | TreeSchema              // → LoroTree
+  | MovableSequenceSchema   // → LoroMovableList
+  | PlainSchema             // → stored in _props LoroMap
 ```
 
-This excludes non-plain `SumSchema` (sums containing CRDT annotations), which cannot be meaningfully stored as root fields. For example, `nullable(text())` is rejected — a `LoroText` cannot be null. Plain sums are allowed via `PlainSchema` (e.g. `LoroSchema.plain.nullable(LoroSchema.plain.string())`).
+This excludes non-plain `SumSchema` (sums containing first-class CRDT types), which cannot be meaningfully stored as root fields. For example, `nullable(text())` is rejected — a `LoroText` cannot be null. Plain sums are allowed via `PlainSchema` (e.g. `LoroSchema.plain.nullable(LoroSchema.plain.string())`).
 
 ### Rationale
 
@@ -391,10 +395,11 @@ Loro's data model requires named containers at the document root. The `_props` m
 src/
 ├── index.ts              Public API surface. Re-exports from all modules.
 │
-├── loro-schema.ts        LoroSchema namespace — container constructors at top level,
-│                         plain values via `plain.*` sub-namespace.
+├── loro-schema.ts        LoroSchema namespace — thin wrapper over Schema.* with
+│                         container constructors at top level, plain values via
+│                         `plain.*` sub-namespace.
 │                         LoroDocFieldSchema type — constrains LoroSchema.doc() fields.
-│                         doc() override — narrowed from Record<string, Schema>.
+│                         doc() — Loro root with field constraints.
 │
 ├── substrate.ts          createLoroSubstrate() — Substrate<LoroVersion> implementation.
 │                         loroSubstrateFactory — SubstrateFactory (create, fromEntirety, parseVersion).
@@ -406,7 +411,7 @@ src/
 │
 ├── loro-resolve.ts       resolveContainer() — left-fold path resolution over Loro tree.
 │                         stepIntoLoro() — single fold step (LoroDoc root vs container child).
-│                         stepFromDoc() — root-level dispatch by schema annotation tag.
+│                         stepFromDoc() — root-level dispatch by schema [KIND].
 │                         stepFromContainer() — child dispatch by .kind().
 │                         PROPS_KEY constant ("_props").
 │

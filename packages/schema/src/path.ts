@@ -346,9 +346,13 @@ export class RawPath extends AbstractPath {
     return new RawPath(this.segments.slice(start, end))
   }
 
-  concat(other: Path): RawPath {
+  concat(other: Path): Path {
     if (other.isAddressed) {
-      throw new Error("Cannot concat AddressedPath onto RawPath")
+      // The other path is addressed — promote this RawPath to addressed
+      // using the other's registry, then concat as AddressedPaths.
+      const addressed = other as AddressedPath
+      const selfAsAddressed = resolveToAddressed(this, addressed.registry)
+      return selfAsAddressed.concat(addressed)
     }
     return new RawPath([...this.segments, ...(other as RawPath).segments])
   }
@@ -570,7 +574,13 @@ export class AddressedPath extends AbstractPath {
 
   concat(other: Path): AddressedPath {
     if (!other.isAddressed) {
-      throw new Error("Cannot concat RawPath onto AddressedPath")
+      // The other path is raw — resolve it to addressed using our registry,
+      // then concat as AddressedPaths.
+      const otherAddressed = resolveToAddressed(other as RawPath, this.registry)
+      return new AddressedPath(
+        [...this.segments, ...otherAddressed.segments],
+        this.registry,
+      )
     }
     return new AddressedPath(
       [...this.segments, ...(other as AddressedPath).segments],

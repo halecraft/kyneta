@@ -20,9 +20,9 @@ import { hasTransact, TRANSACT } from "../index.js"
 // Shared fixtures
 // ===========================================================================
 
-const TestSchema = Schema.doc({
-  title: Schema.annotated("text"),
-  count: Schema.annotated("counter"),
+const TestSchema = Schema.struct({
+  title: Schema.text(),
+  count: Schema.counter(),
   items: Schema.list(
     Schema.struct({
       name: Schema.string(),

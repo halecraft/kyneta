@@ -43,7 +43,7 @@ import {
  * deeply nested schemas.
  *
  * ```ts
- * const schema = Schema.doc({
+ * const schema = Schema.struct({
  *   title: Schema.string(),
  *   count: Schema.number(),
  *   items: Schema.list(Schema.struct({
@@ -182,51 +182,45 @@ function walk(
       return
     }
 
-    // --- Annotated: semantic enrichment --------------------------------------
-    case "annotated": {
-      const tag = schema.tag
+    // --- Text: first-class leaf ----------------------------------------------
+    case "text": {
+      lines.push(`${prefix}${lbl}text`)
+      return
+    }
 
-      // Leaf annotations (no inner schema)
-      if (schema.schema === undefined) {
-        lines.push(`${prefix}${lbl}${tag}`)
-        return
-      }
+    // --- Counter: first-class leaf -------------------------------------------
+    case "counter": {
+      lines.push(`${prefix}${lbl}counter`)
+      return
+    }
 
-      // "doc" annotation — the root document wrapper.
-      // Render as "doc" heading, then delegate to inner product's fields.
-      if (tag === "doc") {
-        lines.push(`${prefix}${lbl}doc`)
-        walkChildren(schema.schema, lines, depth + 1)
-        return
-      }
-
-      // "movable" annotation — movable list.
-      // The inner schema is a sequence; unwrap it and show "movable-list<...>"
-      if (tag === "movable" && schema.schema[KIND] === "sequence") {
-        const itemDesc = inlineOrNull(schema.schema.item)
-        if (itemDesc !== null) {
-          lines.push(`${prefix}${lbl}movable-list<${itemDesc}>`)
-        } else {
-          lines.push(`${prefix}${lbl}movable-list`)
-          walkChildren(schema.schema.item, lines, depth + 1)
-        }
-        return
-      }
-
-      // "tree" annotation — tree with typed node data.
-      if (tag === "tree") {
-        lines.push(`${prefix}${lbl}tree`)
-        walkChildren(schema.schema, lines, depth + 1)
-        return
-      }
-
-      // Generic annotation with inner schema
-      const innerDesc = inlineOrNull(schema.schema)
-      if (innerDesc !== null) {
-        lines.push(`${prefix}${lbl}@${tag}<${innerDesc}>`)
+    // --- Set: first-class container ------------------------------------------
+    case "set": {
+      const itemDesc = inlineOrNull(schema.item)
+      if (itemDesc !== null) {
+        lines.push(`${prefix}${lbl}set<${itemDesc}>`)
       } else {
-        lines.push(`${prefix}${lbl}@${tag}`)
-        walkChildren(schema.schema, lines, depth + 1)
+        lines.push(`${prefix}${lbl}set`)
+        walkChildren(schema.item, lines, depth + 1)
+      }
+      return
+    }
+
+    // --- Tree: first-class container -----------------------------------------
+    case "tree": {
+      lines.push(`${prefix}${lbl}tree`)
+      walkChildren(schema.nodeData, lines, depth + 1)
+      return
+    }
+
+    // --- Movable: first-class container --------------------------------------
+    case "movable": {
+      const itemDesc = inlineOrNull(schema.item)
+      if (itemDesc !== null) {
+        lines.push(`${prefix}${lbl}movable-list<${itemDesc}>`)
+      } else {
+        lines.push(`${prefix}${lbl}movable-list`)
+        walkChildren(schema.item, lines, depth + 1)
       }
       return
     }
@@ -253,17 +247,23 @@ function inlineOrNull(schema: Schema): string | null {
       return schema.scalarKind
     }
 
-    case "annotated":
-      // Leaf annotations like text, counter
-      if (schema.schema === undefined) {
-        return schema.tag
-      }
-      // movable list with inline item
-      if (schema.tag === "movable" && schema.schema[KIND] === "sequence") {
-        const inner = inlineOrNull(schema.schema.item)
-        if (inner !== null) return `movable-list<${inner}>`
-      }
+    case "text":
+      return "text"
+
+    case "counter":
+      return "counter"
+
+    case "movable": {
+      const inner = inlineOrNull(schema.item)
+      if (inner !== null) return `movable-list<${inner}>`
       return null
+    }
+
+    case "set": {
+      const inner = inlineOrNull(schema.item)
+      if (inner !== null) return `set<${inner}>`
+      return null
+    }
 
     case "sequence": {
       const inner = inlineOrNull(schema.item)
@@ -277,7 +277,7 @@ function inlineOrNull(schema: Schema): string | null {
       return null
     }
 
-    // Products, sums — never inline
+    // Products, sums, trees — never inline
     default:
       return null
   }

@@ -14,7 +14,7 @@ import {
 // Shared fixture
 // ---------------------------------------------------------------------------
 
-const pointSchema = Schema.doc({
+const pointSchema = Schema.struct({
   x: Schema.number(),
   y: Schema.number(),
 })

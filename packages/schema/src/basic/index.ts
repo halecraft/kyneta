@@ -27,12 +27,16 @@ export {
 // --- Types ---
 export type { Ref, RRef } from "../ref.js"
 export type {
-  AnnotatedSchema,
+  CounterSchema,
   MapSchema,
+  MovableSequenceSchema,
   ProductSchema,
   ScalarSchema,
   Schema as SchemaNode,
   SequenceSchema,
+  SetSchema,
+  TextSchema,
+  TreeSchema,
 } from "../schema.js"
 // --- Schema definition ---
 export { Schema } from "../schema.js"

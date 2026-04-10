@@ -56,13 +56,13 @@ function idxSeg(
 // Shared fixtures
 // ===========================================================================
 
-const chatDocSchema = Schema.doc({
-  title: Schema.annotated("text"),
-  count: Schema.annotated("counter"),
+const chatDocSchema = Schema.struct({
+  title: Schema.text(),
+  count: Schema.counter(),
   messages: Schema.list(
     Schema.struct({
       author: Schema.string(),
-      body: Schema.annotated("text"),
+      body: Schema.text(),
     }),
   ),
   settings: Schema.struct({
@@ -617,7 +617,7 @@ describe("changefeed: TRANSACT preserved", () => {
 describe("changefeed: transaction integration", () => {
   it("no subscriber notifications during transaction buffering", () => {
     const store = { x: 0, y: 0 }
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       x: Schema.number(),
       y: Schema.number(),
     })
@@ -689,7 +689,7 @@ describe("changefeed: transaction integration", () => {
 
   it("store buffers changes during transaction until commit", () => {
     const store = { x: 0, y: 0 }
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       x: Schema.number(),
       y: Schema.number(),
     })
@@ -715,7 +715,7 @@ describe("changefeed: transaction integration", () => {
 
   it("commit delivers exactly one Changeset per affected path", () => {
     const store = { x: 0, y: 0 }
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       x: Schema.number(),
       y: Schema.number(),
     })
@@ -785,7 +785,7 @@ describe("changefeed: transaction integration", () => {
 describe("changefeed: batched notification", () => {
   it("transaction commit delivers one Changeset with N changes to same-path subscriber", () => {
     const store = { x: 0, y: 0 }
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       x: Schema.number(),
       y: Schema.number(),
     })
@@ -815,7 +815,7 @@ describe("changefeed: batched notification", () => {
 
   it("subscriber sees fully-applied state when Changeset arrives", () => {
     const store = { x: 0, y: 0 }
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       x: Schema.number(),
       y: Schema.number(),
     })
@@ -858,7 +858,7 @@ describe("changefeed: batched notification", () => {
 
   it("origin tagging: commit(origin) attaches origin to emitted Changeset", () => {
     const store = { x: 0, y: 0 }
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       x: Schema.number(),
       y: Schema.number(),
     })
@@ -911,7 +911,7 @@ describe("changefeed: batched notification", () => {
 
   it("multiple paths in one transaction: each path gets its own Changeset", () => {
     const store = { x: 0, y: 0 }
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       x: Schema.number(),
       y: Schema.number(),
     })
@@ -944,7 +944,7 @@ describe("changefeed: batched notification", () => {
 
   it("no notification for paths without subscribers", () => {
     const store = { x: 0, y: 0 }
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       x: Schema.number(),
       y: Schema.number(),
     })
@@ -1025,7 +1025,7 @@ describe("changefeed: map child refs have changefeed", () => {
 
 describe("changefeed: edge cases", () => {
   it("subscribe on leaf ref at scalar path fires on set", () => {
-    const schema = Schema.doc({ n: Schema.number() })
+    const schema = Schema.struct({ n: Schema.number() })
     const store = { n: 42 }
     const ctx = plainContext(store)
     const doc = interpret(schema, ctx)
@@ -1043,7 +1043,7 @@ describe("changefeed: edge cases", () => {
   })
 
   it("empty sequence has ComposedChangefeed", () => {
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       items: Schema.list(Schema.string()),
     })
     const store = { items: [] as string[] }
@@ -1058,7 +1058,7 @@ describe("changefeed: edge cases", () => {
   })
 
   it("empty map has ComposedChangefeed", () => {
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       labels: Schema.record(Schema.string()),
     })
     const store = { labels: {} }
@@ -1104,8 +1104,8 @@ describe("changefeed: edge cases", () => {
 
 describe("expandMapOpsToLeaves", () => {
   // Schema for tests: settings is a product (expand), peers is a map (preserve)
-  const testSchema = Schema.doc({
-    title: Schema.annotated("text"),
+  const testSchema = Schema.struct({
+    title: Schema.text(),
     settings: Schema.struct({
       a: Schema.boolean(),
       b: Schema.number(),
@@ -1116,7 +1116,7 @@ describe("expandMapOpsToLeaves", () => {
     }),
     items: Schema.list(Schema.string()),
     entries: Schema.list(Schema.record(Schema.boolean())),
-    count: Schema.annotated("counter"),
+    count: Schema.counter(),
     peers: Schema.record(Schema.boolean()),
   })
 
@@ -1278,7 +1278,7 @@ describe("expandMapOpsToLeaves", () => {
 describe("changefeed: flush boundary enforcement", () => {
   it("change() propagates subscriber error, not secondary abort error", () => {
     const store = { x: 0 }
-    const schema = Schema.doc({ x: Schema.number() })
+    const schema = Schema.struct({ x: Schema.number() })
     const ctx = plainContext(store)
     const doc = interpret(schema, ctx)
       .with(readable)
@@ -1302,7 +1302,7 @@ describe("changefeed: flush boundary enforcement", () => {
 
   it("re-entrant change() during notification delivery throws descriptive error", () => {
     const store = { x: 0, y: 0 }
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       x: Schema.number(),
       y: Schema.number(),
     })

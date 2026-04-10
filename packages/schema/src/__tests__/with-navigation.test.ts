@@ -20,7 +20,7 @@ import { plainReader } from "../reader.js"
 // Shared fixtures
 // ===========================================================================
 
-const structuralDocSchema = Schema.doc({
+const structuralDocSchema = Schema.struct({
   settings: Schema.struct({
     darkMode: Schema.boolean(),
     fontSize: Schema.number(),
@@ -28,9 +28,9 @@ const structuralDocSchema = Schema.doc({
   metadata: Schema.record(Schema.any()),
 })
 
-const _annotatedDocSchema = Schema.doc({
-  title: Schema.annotated("text"),
-  count: Schema.annotated("counter"),
+const _annotatedDocSchema = Schema.struct({
+  title: Schema.text(),
+  count: Schema.counter(),
   messages: Schema.list(
     Schema.struct({
       author: Schema.string(),
@@ -236,7 +236,7 @@ describe("withNavigation: map navigation", () => {
 
 describe("withNavigation: sum dispatch", () => {
   it("discriminated union dispatches to correct variant", () => {
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       item: Schema.discriminatedUnion("type", [
         Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
         Schema.struct({ type: Schema.string("image"), url: Schema.string() }),
@@ -254,7 +254,7 @@ describe("withNavigation: sum dispatch", () => {
   })
 
   it("nullable sum dispatches based on null/non-null", () => {
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       bio: Schema.nullable(Schema.string()),
     })
 
@@ -278,25 +278,25 @@ describe("withNavigation: sum dispatch", () => {
 // Annotated: delegation
 // ===========================================================================
 
-describe("withNavigation: annotated delegation", () => {
-  it("doc annotation delegates to inner (product gets getters)", () => {
-    const schema = Schema.doc({
-      title: Schema.annotated("text"),
-      count: Schema.annotated("counter"),
+describe("withNavigation: first-class types", () => {
+  it("struct with first-class type children has field getters", () => {
+    const schema = Schema.struct({
+      title: Schema.text(),
+      count: Schema.counter(),
     })
     const store = { title: "Hello", count: 0 }
     const ctx: RefContext = { reader: plainReader(store) }
     const doc = interpret(schema, navInterp, ctx) as any
 
-    // doc delegates to product — field getters should work
+    // product — field getters should work
     expect(Object.keys(doc)).toContain("title")
     expect(Object.keys(doc)).toContain("count")
     expect(typeof doc.title).toBe("function")
     expect(typeof doc.count).toBe("function")
   })
 
-  it("text annotation produces a carrier (no toPrimitive — that's withReadable)", () => {
-    const schema = Schema.annotated("text")
+  it("text produces a carrier (no toPrimitive — that's withReadable)", () => {
+    const schema = Schema.text()
     const store = "Hello" as any
     const ctx: RefContext = { reader: plainReader(store) }
     const result = interpret(schema, navInterp, ctx) as any
@@ -306,8 +306,8 @@ describe("withNavigation: annotated delegation", () => {
     expect(() => result()).toThrow("No call behavior configured")
   })
 
-  it("counter annotation produces a carrier (no toPrimitive)", () => {
-    const schema = Schema.annotated("counter")
+  it("counter produces a carrier (no toPrimitive)", () => {
+    const schema = Schema.counter()
     const store = 42 as any
     const ctx: RefContext = { reader: plainReader(store) }
     const result = interpret(schema, navInterp, ctx) as any
@@ -316,10 +316,9 @@ describe("withNavigation: annotated delegation", () => {
     expect(() => result()).toThrow("No call behavior configured")
   })
 
-  it("movable list annotation delegates to inner sequence", () => {
-    const schema = Schema.annotated(
-      "movable",
-      Schema.list(Schema.struct({ title: Schema.string() })),
+  it("movableList delegates to inner sequence", () => {
+    const schema = Schema.movableList(
+      Schema.struct({ title: Schema.string() }),
     )
     const store = [{ title: "A" }, { title: "B" }] as any
     const ctx: RefContext = { reader: plainReader(store) }
@@ -332,8 +331,8 @@ describe("withNavigation: annotated delegation", () => {
     expect(typeof child).toBe("function")
   })
 
-  it("tree annotation delegates to inner", () => {
-    const schema = Schema.annotated("tree", Schema.string())
+  it("tree delegates to inner", () => {
+    const schema = Schema.tree(Schema.string())
     const store = "leaf" as any
     const ctx: RefContext = { reader: plainReader(store) }
     const result = interpret(schema, navInterp, ctx) as any
@@ -350,7 +349,7 @@ describe("withNavigation: navigate + write stack", () => {
   const navWriteInterp = withWritable(withNavigation(bottomInterpreter))
 
   it("product field navigation works", () => {
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       title: Schema.string(),
       count: Schema.number(),
     })
@@ -363,7 +362,7 @@ describe("withNavigation: navigate + write stack", () => {
   })
 
   it("ref() throws (no reader configured)", () => {
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       title: Schema.string(),
     })
     const store = { title: "hello" }
@@ -374,7 +373,7 @@ describe("withNavigation: navigate + write stack", () => {
   })
 
   it(".set() works on navigated scalar child", () => {
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       title: Schema.string(),
     })
     const store: Record<string, unknown> = { title: "hello" }
@@ -386,7 +385,7 @@ describe("withNavigation: navigate + write stack", () => {
   })
 
   it("sequence .at(i) returns a navigable+writable ref", () => {
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       items: Schema.list(Schema.struct({ name: Schema.string() })),
     })
     const store = { items: [{ name: "a" }, { name: "b" }] }
@@ -406,7 +405,7 @@ describe("withNavigation: navigate + write stack", () => {
   })
 
   it(".push() works on sequence", () => {
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       items: Schema.list(Schema.string()),
     })
     const store = { items: ["a", "b"] }
@@ -418,8 +417,8 @@ describe("withNavigation: navigate + write stack", () => {
   })
 
   it("text .update() works without reading layer", () => {
-    const schema = Schema.doc({
-      title: Schema.annotated("text"),
+    const schema = Schema.struct({
+      title: Schema.text(),
     })
     const store = { title: "hello" }
     const ctx = plainContext(store)
@@ -430,7 +429,7 @@ describe("withNavigation: navigate + write stack", () => {
   })
 
   it("map .set() and .delete() work", () => {
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       labels: Schema.record(Schema.string()),
     })
     const store = { labels: { color: "red" } }
@@ -455,7 +454,7 @@ describe("withNavigation: read-only changefeed stack", () => {
   )
 
   it("produces refs with [CHANGEFEED]", () => {
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       title: Schema.string(),
       count: Schema.number(),
     })
@@ -468,7 +467,7 @@ describe("withNavigation: read-only changefeed stack", () => {
   })
 
   it(".current returns a value (valid Moore machine)", () => {
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       title: Schema.string(),
     })
     const store = { title: "Hello" }
@@ -481,7 +480,7 @@ describe("withNavigation: read-only changefeed stack", () => {
   })
 
   it(".subscribe returns an unsubscribe function (never fires)", () => {
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       title: Schema.string(),
     })
     const store = { title: "Hello" }
@@ -499,7 +498,7 @@ describe("withNavigation: read-only changefeed stack", () => {
   })
 
   it("composite .current returns a fresh snapshot", () => {
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       settings: Schema.struct({
         darkMode: Schema.boolean(),
         fontSize: Schema.number(),

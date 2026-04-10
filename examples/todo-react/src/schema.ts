@@ -14,7 +14,7 @@
 import { Schema } from "@kyneta/schema"
 import { yjs } from "@kyneta/yjs-schema"
 
-export const TodoSchema = Schema.doc({
+export const TodoSchema = Schema.struct({
   todos: Schema.list(
     Schema.struct({
       text: Schema.string(),

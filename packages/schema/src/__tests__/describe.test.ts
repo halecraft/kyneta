@@ -161,19 +161,19 @@ testDescribe("describe: base grammar", () => {
     })
   })
 
-  testDescribe("doc (structural root)", () => {
-    it("describes doc with scalar fields", () => {
-      const s = Schema.doc({
+  testDescribe("struct (structural root)", () => {
+    it("describes struct with scalar fields", () => {
+      const s = Schema.struct({
         name: Schema.string(),
         count: Schema.number(),
       })
       expect(describe(s)).toBe(
-        ["doc", "  name: string", "  count: number"].join("\n"),
+        ["name: string", "count: number"].join("\n"),
       )
     })
 
-    it("describes doc with nested struct and list", () => {
-      const s = Schema.doc({
+    it("describes struct with nested struct and list", () => {
+      const s = Schema.struct({
         tasks: Schema.list(
           Schema.struct({
             title: Schema.string(),
@@ -191,22 +191,21 @@ testDescribe("describe: base grammar", () => {
 
       expect(describe(s)).toBe(
         [
-          "doc",
-          "  tasks: list",
-          "    title: string",
-          "    done: boolean",
-          "    priority: number",
-          "  settings:",
-          "    visibility: string",
-          "    maxTasks: number",
-          "    archived: boolean",
-          "  labels: record<string>",
+          "tasks: list",
+          "  title: string",
+          "  done: boolean",
+          "  priority: number",
+          "settings:",
+          "  visibility: string",
+          "  maxTasks: number",
+          "  archived: boolean",
+          "labels: record<string>",
         ].join("\n"),
       )
     })
 
-    it("describes doc with discriminated union field", () => {
-      const s = Schema.doc({
+    it("describes struct with discriminated union field", () => {
+      const s = Schema.struct({
         content: Schema.discriminatedUnion("type", [
           Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
           Schema.struct({
@@ -219,40 +218,15 @@ testDescribe("describe: base grammar", () => {
 
       expect(describe(s)).toBe(
         [
-          "doc",
-          "  content: union(type)",
-          "    text:",
-          '      type: string("text")',
-          "      body: string",
-          "    image:",
-          '      type: string("image")',
-          "      url: string",
-          "      width: number",
+          "content: union(type)",
+          "  text:",
+          '    type: string("text")',
+          "    body: string",
+          "  image:",
+          '    type: string("image")',
+          "    url: string",
+          "    width: number",
         ].join("\n"),
-      )
-    })
-  })
-
-  testDescribe("generic annotations", () => {
-    it("describes unknown leaf annotation", () => {
-      expect(describe(Schema.annotated("timestamp"))).toBe("timestamp")
-    })
-
-    it("describes generic annotation with inline inner", () => {
-      const s = Schema.annotated("timestamp", Schema.scalar("number"))
-      expect(describe(s)).toBe("@timestamp<number>")
-    })
-
-    it("describes generic annotation with complex inner", () => {
-      const s = Schema.annotated(
-        "versioned",
-        Schema.product({
-          value: Schema.string(),
-          version: Schema.number(),
-        }),
-      )
-      expect(describe(s)).toBe(
-        ["@versioned", "  value: string", "  version: number"].join("\n"),
       )
     })
   })
@@ -274,29 +248,26 @@ testDescribe("describe: base grammar", () => {
 testDescribe("describe: annotation rendering", () => {
   testDescribe("leaf annotations", () => {
     it("describes text", () => {
-      expect(describe(Schema.annotated("text"))).toBe("text")
+      expect(describe(Schema.text())).toBe("text")
     })
 
     it("describes counter", () => {
-      expect(describe(Schema.annotated("counter"))).toBe("counter")
+      expect(describe(Schema.counter())).toBe("counter")
     })
   })
 
   testDescribe("movable list", () => {
     it("describes movable list with inline item", () => {
       expect(
-        describe(Schema.annotated("movable", Schema.list(Schema.string()))),
+        describe(Schema.movableList(Schema.string())),
       ).toBe("movable-list<string>")
     })
 
     it("describes movable list with complex item", () => {
-      const s = Schema.annotated(
-        "movable",
-        Schema.list(
-          Schema.struct({
-            name: Schema.string(),
-          }),
-        ),
+      const s = Schema.movableList(
+        Schema.struct({
+          name: Schema.string(),
+        }),
       )
       expect(describe(s)).toBe(["movable-list", "  name: string"].join("\n"))
     })
@@ -304,8 +275,7 @@ testDescribe("describe: annotation rendering", () => {
 
   testDescribe("tree", () => {
     it("describes tree with node data", () => {
-      const s = Schema.annotated(
-        "tree",
+      const s = Schema.tree(
         Schema.struct({
           label: Schema.string(),
           weight: Schema.number(),
@@ -319,14 +289,14 @@ testDescribe("describe: annotation rendering", () => {
 
   testDescribe("list with annotation item", () => {
     it("describes list with inline annotation item", () => {
-      expect(describe(Schema.list(Schema.annotated("text")))).toBe("list<text>")
+      expect(describe(Schema.list(Schema.text()))).toBe("list<text>")
     })
 
     it("inlines movable-list inside a labeled field", () => {
       const s = Schema.struct({
         a: Schema.list(Schema.number()),
         b: Schema.record(Schema.boolean()),
-        c: Schema.annotated("movable", Schema.list(Schema.string())),
+        c: Schema.movableList(Schema.string()),
       })
       expect(describe(s)).toBe(
         [
@@ -340,10 +310,10 @@ testDescribe("describe: annotation rendering", () => {
 
   testDescribe("realistic nested schemas", () => {
     it("describes a full annotated project schema", () => {
-      const s = Schema.doc({
-        name: Schema.annotated("text"),
-        description: Schema.annotated("text"),
-        stars: Schema.annotated("counter"),
+      const s = Schema.struct({
+        name: Schema.text(),
+        description: Schema.text(),
+        stars: Schema.counter(),
         tasks: Schema.list(
           Schema.struct({
             title: Schema.string(),
@@ -361,32 +331,31 @@ testDescribe("describe: annotation rendering", () => {
 
       expect(describe(s)).toBe(
         [
-          "doc",
-          "  name: text",
-          "  description: text",
-          "  stars: counter",
-          "  tasks: list",
-          "    title: string",
-          "    done: boolean",
-          "    priority: number",
-          "  settings:",
-          "    visibility: string",
-          "    maxTasks: number",
-          "    archived: boolean",
-          "  labels: record<string>",
+          "name: text",
+          "description: text",
+          "stars: counter",
+          "tasks: list",
+          "  title: string",
+          "  done: boolean",
+          "  priority: number",
+          "settings:",
+          "  visibility: string",
+          "  maxTasks: number",
+          "  archived: boolean",
+          "labels: record<string>",
         ].join("\n"),
       )
     })
 
     it("describes deeply nested containers", () => {
-      const s = Schema.doc({
+      const s = Schema.struct({
         channels: Schema.list(
           Schema.struct({
-            name: Schema.annotated("text"),
+            name: Schema.text(),
             messages: Schema.list(
               Schema.struct({
                 author: Schema.string(),
-                body: Schema.annotated("text"),
+                body: Schema.text(),
                 reactions: Schema.record(Schema.number()),
               }),
             ),
@@ -396,29 +365,24 @@ testDescribe("describe: annotation rendering", () => {
 
       expect(describe(s)).toBe(
         [
-          "doc",
-          "  channels: list",
-          "    name: text",
-          "    messages: list",
-          "      author: string",
-          "      body: text",
-          "      reactions: record<number>",
+          "channels: list",
+          "  name: text",
+          "  messages: list",
+          "    author: string",
+          "    body: text",
+          "    reactions: record<number>",
         ].join("\n"),
       )
     })
 
     it("describes schema with movable list and tree", () => {
-      const s = Schema.doc({
-        tasks: Schema.annotated(
-          "movable",
-          Schema.list(
-            Schema.struct({
-              title: Schema.string(),
-            }),
-          ),
+      const s = Schema.struct({
+        tasks: Schema.movableList(
+          Schema.struct({
+            title: Schema.string(),
+          }),
         ),
-        hierarchy: Schema.annotated(
-          "tree",
+        hierarchy: Schema.tree(
           Schema.struct({
             label: Schema.string(),
             color: Schema.string(),
@@ -428,12 +392,11 @@ testDescribe("describe: annotation rendering", () => {
 
       expect(describe(s)).toBe(
         [
-          "doc",
-          "  tasks: movable-list",
-          "    title: string",
-          "  hierarchy: tree",
-          "    label: string",
-          "    color: string",
+          "tasks: movable-list",
+          "  title: string",
+          "hierarchy: tree",
+          "  label: string",
+          "  color: string",
         ].join("\n"),
       )
     })
@@ -502,12 +465,6 @@ testDescribe("describe: annotation rendering", () => {
       )
     })
 
-    it("renders nullable<text> for annotated inner", () => {
-      expect(describe(Schema.nullable(Schema.annotated("text")))).toBe(
-        "nullable<text>",
-      )
-    })
-
     it("non-nullable union with 3 variants renders as union", () => {
       const s = Schema.union(Schema.null(), Schema.string(), Schema.number())
       expect(describe(s)).toBe(
@@ -528,13 +485,13 @@ testDescribe("describe: annotation rendering", () => {
       )
     })
 
-    it("nullable field in doc", () => {
-      const s = Schema.doc({
+    it("nullable field in struct", () => {
+      const s = Schema.struct({
         name: Schema.string(),
         bio: Schema.nullable(Schema.string()),
       })
       expect(describe(s)).toBe(
-        ["doc", "  name: string", "  bio: nullable<string>"].join("\n"),
+        ["name: string", "bio: nullable<string>"].join("\n"),
       )
     })
   })

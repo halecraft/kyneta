@@ -53,26 +53,7 @@ export function scalarDefault(kind: ScalarKind): unknown {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Annotation-specific defaults
-// ---------------------------------------------------------------------------
 
-/**
- * Returns a default value for well-known annotation tags, or `undefined`
- * if the tag is not recognized (in which case the caller should fall
- * through to the inner schema or a generic default).
- */
-function annotationDefault(tag: string): { value: unknown } | undefined {
-  switch (tag) {
-    case "text":
-      return { value: "" }
-    case "counter":
-      return { value: 0 }
-    // "doc", "movable", "tree" — delegate to inner schema
-    default:
-      return undefined
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Zero.structural — derive defaults from the schema grammar
@@ -135,19 +116,20 @@ function structural(schema: Schema): unknown {
       return structural(variants[0]!)
     }
 
-    case "annotated": {
-      // Check for annotation-specific default first
-      const known = annotationDefault(schema.tag)
-      if (known !== undefined) {
-        return known.value
-      }
-      // Delegate to inner schema if present
-      if (schema.schema !== undefined) {
-        return structural(schema.schema)
-      }
-      // No inner schema and no known annotation — undefined
-      return undefined
-    }
+    case "text":
+      return ""
+
+    case "counter":
+      return 0
+
+    case "set":
+      return []
+
+    case "tree":
+      return structural(schema.nodeData)
+
+    case "movable":
+      return []
   }
 }
 

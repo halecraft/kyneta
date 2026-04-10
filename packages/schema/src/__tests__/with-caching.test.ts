@@ -28,7 +28,7 @@ import { RawPath } from "../path.js"
 // Shared fixtures
 // ===========================================================================
 
-const structuralDocSchema = Schema.doc({
+const structuralDocSchema = Schema.struct({
   settings: Schema.struct({
     darkMode: Schema.boolean(),
     fontSize: Schema.number(),
@@ -36,9 +36,9 @@ const structuralDocSchema = Schema.doc({
   metadata: Schema.record(Schema.any()),
 })
 
-const annotatedDocSchema = Schema.doc({
-  title: Schema.annotated("text"),
-  count: Schema.annotated("counter"),
+const annotatedDocSchema = Schema.struct({
+  title: Schema.text(),
+  count: Schema.counter(),
   messages: Schema.list(
     Schema.struct({
       author: Schema.string(),
@@ -134,7 +134,7 @@ describe("withCaching: product referential identity", () => {
 // ===========================================================================
 
 describe("withCaching: sequence referential identity", () => {
-  const schema = Schema.doc({
+  const schema = Schema.struct({
     messages: Schema.list(
       Schema.struct({
         author: Schema.string(),
@@ -218,7 +218,7 @@ describe("withCaching: sequence referential identity", () => {
 // ===========================================================================
 
 describe("withCaching: map referential identity", () => {
-  const schema = Schema.doc({
+  const schema = Schema.struct({
     metadata: Schema.record(Schema.number()),
   })
 
@@ -289,7 +289,7 @@ describe("withCaching: map referential identity", () => {
 // ===========================================================================
 
 describe("withCaching: hybrid discriminant", () => {
-  const schema = Schema.doc({
+  const schema = Schema.struct({
     item: Schema.discriminatedUnion("type", [
       Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
       Schema.struct({ type: Schema.string("image"), url: Schema.string() }),
@@ -413,7 +413,7 @@ describe("withCaching: INVALIDATE product", () => {
 // ===========================================================================
 
 describe("withCaching: INVALIDATE sequence", () => {
-  const schema = Schema.doc({
+  const schema = Schema.struct({
     items: Schema.list(Schema.struct({ name: Schema.string() })),
   })
 
@@ -455,7 +455,7 @@ describe("withCaching: INVALIDATE sequence", () => {
 // ===========================================================================
 
 describe("withCaching: INVALIDATE map", () => {
-  const schema = Schema.doc({
+  const schema = Schema.struct({
     metadata: Schema.record(Schema.number()),
   })
 
@@ -494,19 +494,19 @@ describe("withCaching: INVALIDATE map", () => {
 
 describe("withCaching: leaf pass-through", () => {
   it("scalar refs do not have [INVALIDATE]", () => {
-    const schema = Schema.doc({ n: Schema.number() })
+    const schema = Schema.struct({ n: Schema.number() })
     const { doc } = createDoc(schema, { n: 42 })
     expect(INVALIDATE in doc.n).toBe(false)
   })
 
-  it("text annotation refs do not have [INVALIDATE]", () => {
-    const schema = Schema.doc({ title: Schema.annotated("text") })
+  it("text refs do not have [INVALIDATE]", () => {
+    const schema = Schema.struct({ title: Schema.text() })
     const { doc } = createDoc(schema, { title: "Hello" })
     expect(INVALIDATE in doc.title).toBe(false)
   })
 
-  it("counter annotation refs do not have [INVALIDATE]", () => {
-    const schema = Schema.doc({ count: Schema.annotated("counter") })
+  it("counter refs do not have [INVALIDATE]", () => {
+    const schema = Schema.struct({ count: Schema.counter() })
     const { doc } = createDoc(schema, { count: 0 })
     expect(INVALIDATE in doc.count).toBe(false)
   })
@@ -518,7 +518,7 @@ describe("withCaching: leaf pass-through", () => {
 
 describe("withCaching: sum dispatch", () => {
   it("discriminated sum dispatches correctly", () => {
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       item: Schema.discriminatedUnion("type", [
         Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
         Schema.struct({ type: Schema.string("image"), url: Schema.string() }),
@@ -531,7 +531,7 @@ describe("withCaching: sum dispatch", () => {
   })
 
   it("nullable sum dispatches correctly", () => {
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       bio: Schema.nullable(Schema.string()),
     })
     const { doc: doc1 } = createDoc(schema, { bio: null })
@@ -593,7 +593,7 @@ describe("withCaching: prepare-pipeline invalidation", () => {
     ),
   )
 
-  const docSchema = Schema.doc({
+  const docSchema = Schema.struct({
     settings: Schema.struct({
       darkMode: Schema.boolean(),
       fontSize: Schema.number(),
@@ -694,7 +694,7 @@ describe("withCaching: degradation without withAddressing", () => {
   })
 
   it("sequence .at(i) returns fresh ref each time without withAddressing", () => {
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       items: Schema.list(Schema.string()),
     })
     const { doc } = createDocNoAddressing(schema, { items: ["a", "b"] })
@@ -709,8 +709,8 @@ describe("withCaching: degradation without withAddressing", () => {
   })
 
   it("map .at(key) returns fresh ref each time without withAddressing", () => {
-    const schema = Schema.doc({
-      metadata: Schema.record(Schema.number()),
+    const schema = Schema.struct({
+      metadata: Schema.record(Schema.string()),
     })
     const { doc } = createDocNoAddressing(schema, { metadata: { a: 1 } })
 
@@ -733,7 +733,7 @@ describe("withCaching: read-only stack backward compatibility", () => {
       settings: { darkMode: false, fontSize: 14 },
     }
     const ctx: RefContext = { reader: plainReader(store) }
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       settings: Schema.struct({
         darkMode: Schema.boolean(),
         fontSize: Schema.number(),

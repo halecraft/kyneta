@@ -70,7 +70,7 @@ afterEach(async () => {
 // Bound schemas (module scope)
 // ---------------------------------------------------------------------------
 
-const sequentialSchema = Schema.doc({
+const sequentialSchema = Schema.struct({
   title: Schema.string(),
   count: Schema.number(),
 })
@@ -84,7 +84,7 @@ const loroSchema = LoroSchema.doc({
 })
 const LoroDoc = loro.bind(loroSchema)
 
-const presenceSchema = Schema.doc({
+const presenceSchema = Schema.struct({
   cursor: Schema.struct({
     x: Schema.number(),
     y: Schema.number(),
@@ -337,7 +337,7 @@ describe("Heterogeneous documents", () => {
   it("one exchange hosts both authoritative and collaborative docs, both sync", async () => {
     const bridge = new Bridge()
 
-    const plainSchema = Schema.doc({
+    const plainSchema = Schema.struct({
       config: Schema.string(),
     })
     const ConfigDoc = json.bind(plainSchema)
@@ -1128,7 +1128,7 @@ describe("relay via exchange.replicate()", () => {
     const bridgeAR = new Bridge()
     const bridgeRB = new Bridge()
 
-    const nestedSchema = Schema.doc({
+    const nestedSchema = Schema.struct({
       title: Schema.string(),
       items: Schema.list(
         Schema.struct({

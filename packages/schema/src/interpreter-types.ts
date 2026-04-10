@@ -12,14 +12,18 @@
 import type { Path } from "./path.js"
 import type { Reader } from "./reader.js"
 import type {
-  AnnotatedSchema,
+  CounterSchema,
   DiscriminatedSumSchema,
   MapSchema,
+  MovableSequenceSchema,
   PositionalSumSchema,
   ProductSchema,
   ScalarSchema,
   Schema,
   SequenceSchema,
+  SetSchema,
+  TextSchema,
+  TreeSchema,
 } from "./schema.js"
 
 // ---------------------------------------------------------------------------
@@ -71,7 +75,7 @@ export interface RefContext {
  * snapshot types, and anywhere you need the "just data" shape of a schema.
  *
  * ```ts
- * const s = Schema.doc({
+ * const s = Schema.struct({
  *   title: Schema.string(),
  *   count: Schema.number(),
  *   items: Schema.list(Schema.struct({
@@ -95,43 +99,32 @@ export interface RefContext {
  * ```
  */
 export type Plain<S extends Schema> =
-  // --- Annotated: dispatch on tag ---
-  S extends AnnotatedSchema<infer Tag, infer Inner>
-    ? Tag extends "text"
-      ? string
-      : Tag extends "counter"
-        ? number
-        : Tag extends "doc"
-          ? Inner extends ProductSchema<infer F>
-            ? { [K in keyof F]: Plain<F[K]> }
-            : unknown
-          : Tag extends "movable"
-            ? Inner extends SequenceSchema<infer I>
-              ? Plain<I>[]
-              : unknown
-            : Tag extends "tree"
-              ? Inner extends Schema
-                ? Plain<Inner>
-                : unknown
-              : // Unknown annotation with inner — delegate
-                Inner extends Schema
-                ? Plain<Inner>
-                : unknown
-    : // --- Scalar ---
-      S extends ScalarSchema<infer _K, infer V>
-      ? V
-      : // --- Product ---
-        S extends ProductSchema<infer F>
-        ? { [K in keyof F]: Plain<F[K]> }
-        : // --- Sequence ---
-          S extends SequenceSchema<infer I>
-          ? Plain<I>[]
-          : // --- Map ---
-            S extends MapSchema<infer I>
-            ? { [key: string]: Plain<I> }
-            : // --- Sum ---
-              S extends PositionalSumSchema<infer V>
-              ? Plain<V[number]>
-              : S extends DiscriminatedSumSchema<infer _D, infer V>
-                ? Plain<V[number]>
-                : unknown
+  // --- First-class CRDT types ---
+  S extends TextSchema
+    ? string
+    : S extends CounterSchema
+      ? number
+      : S extends SetSchema<infer I>
+        ? Plain<I>[]
+        : S extends TreeSchema<infer Inner>
+          ? Plain<Inner>
+          : S extends MovableSequenceSchema<infer I>
+            ? Plain<I>[]
+            : // --- Scalar ---
+              S extends ScalarSchema<infer _K, infer V>
+              ? V
+              : // --- Product ---
+                S extends ProductSchema<infer F>
+                ? { [K in keyof F]: Plain<F[K]> }
+                : // --- Sequence ---
+                  S extends SequenceSchema<infer I>
+                  ? Plain<I>[]
+                  : // --- Map ---
+                    S extends MapSchema<infer I>
+                    ? { [key: string]: Plain<I> }
+                    : // --- Sum ---
+                      S extends PositionalSumSchema<infer V>
+                      ? Plain<V[number]>
+                      : S extends DiscriminatedSumSchema<infer _D, infer V>
+                        ? Plain<V[number]>
+                        : unknown

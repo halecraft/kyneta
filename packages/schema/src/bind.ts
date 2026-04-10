@@ -20,7 +20,7 @@
 // - "authoritative": request/response, total order (Plain)
 // - "ephemeral": unidirectional broadcast, timestamp-based (Ephemeral)
 
-import type { ExtractTags, Schema as SchemaNode } from "./schema.js"
+import type { ExtractCaps, Schema as SchemaNode } from "./schema.js"
 import type {
   MergeStrategy,
   ReplicaFactory,
@@ -232,7 +232,7 @@ export function Defer(): Defer {
  * @example
  * ```ts
  * const MyDoc = bind({
- *   schema: Schema.doc({ title: Schema.string() }),
+ *   schema: Schema.struct({ title: Schema.string() }),
  *   factory: (ctx) => createMyFactory(ctx.peerId),
  *   strategy: "collaborative",
  * })
@@ -270,18 +270,18 @@ export function isBoundSchema(value: unknown): value is BoundSchema {
 }
 
 // ---------------------------------------------------------------------------
-// RestrictTags — compile-time bind() guard
+// RestrictCaps — compile-time bind() guard
 // ---------------------------------------------------------------------------
 
 /**
- * Type-level guard for bind(). Resolves to S when all annotation tags
- * in S are within AllowedTags, never otherwise.
+ * Type-level guard for bind(). Resolves to S when all capability tags
+ * in S are within AllowedCaps, never otherwise.
  *
- * Uses Exclude to check if any accumulated tags fall outside AllowedTags.
- * When AllowedTags = string, every tag is allowed (unconstrained).
+ * Uses Exclude to check if any accumulated caps fall outside AllowedCaps.
+ * When AllowedCaps = string, every cap is allowed (unconstrained).
  */
-export type RestrictTags<S, AllowedTags extends string> =
-  [Exclude<ExtractTags<S>, AllowedTags>] extends [never]
+export type RestrictCaps<S, AllowedCaps extends string> =
+  [Exclude<ExtractCaps<S>, AllowedCaps>] extends [never]
     ? S
     : never
 
@@ -316,10 +316,10 @@ export type CrdtStrategy = "collaborative" | "ephemeral"
  */
 export interface SubstrateNamespace<
   S extends MergeStrategy,
-  AllowedTags extends string = string,
+  AllowedCaps extends string = string,
 > {
   bind<N extends SchemaNode>(
-    schema: RestrictTags<N, AllowedTags>,
+    schema: RestrictCaps<N, AllowedCaps>,
     strategy?: S,
   ): BoundSchema<N>
   replica(strategy?: S): BoundReplica
@@ -350,7 +350,7 @@ export interface SubstrateNamespace<
  */
 export function createSubstrateNamespace<
   S extends MergeStrategy,
-  AllowedTags extends string = string,
+  AllowedCaps extends string = string,
 >(config: {
   strategies: {
     [K in S]: {
@@ -359,7 +359,7 @@ export function createSubstrateNamespace<
     }
   }
   defaultStrategy: S
-}): SubstrateNamespace<S, AllowedTags> {
+}): SubstrateNamespace<S, AllowedCaps> {
   return {
     bind<N extends SchemaNode>(schema: N, strategy?: S): BoundSchema<N> {
       const s = strategy ?? config.defaultStrategy

@@ -81,7 +81,7 @@ type CreateDoc = <S extends SchemaType>(schema: S) => Ref<S>
  * after construction:
  *
  * ```ts
- * const doc = createDoc(Schema.doc({
+ * const doc = createDoc(Schema.struct({
  *   title: Schema.string(),
  *   count: Schema.number(),
  * }))

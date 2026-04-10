@@ -31,7 +31,6 @@ import type {
 } from "@kyneta/schema"
 import { advanceSchema, expandMapOpsToLeaves, KIND, RawPath } from "@kyneta/schema"
 import * as Y from "yjs"
-import { YJS_SUPPORTED_TAGS } from "./populate.js"
 import { resolveYjsType } from "./yjs-resolve.js"
 
 // ---------------------------------------------------------------------------
@@ -75,15 +74,15 @@ export function applyChangeToYjs(
 
     case "increment":
       throw new Error(
-        `Yjs substrate does not support annotation required for "${change.type}" changes. ` +
-          `Supported annotations: ${[...YJS_SUPPORTED_TAGS].join(", ")}. ` +
+        `Yjs substrate does not support "${change.type}" changes. ` +
+          `Counter requires a CRDT backend that supports counters (e.g. Loro). ` +
           `Attempted IncrementChange with amount=${(change as IncrementChange).amount} at path [${pathToString(path)}].`,
       )
 
     case "tree":
       throw new Error(
-        `Yjs substrate does not support annotation required for "${change.type}" changes. ` +
-          `Supported annotations: ${[...YJS_SUPPORTED_TAGS].join(", ")}. ` +
+        `Yjs substrate does not support "${change.type}" changes. ` +
+          `Tree requires a CRDT backend that supports trees (e.g. Loro). ` +
           `Attempted TreeChange at path [${pathToString(path)}].`,
       )
 
@@ -251,27 +250,16 @@ function maybeCreateSharedType(
 ): unknown {
   if (schema === undefined) return value
 
-  const structural = unwrapAnnotations(schema)
-  const tag = schema[KIND] === "annotated" ? schema.tag : undefined
-
-  // Annotated text → Y.Text
-  if (tag === "text") {
-    const text = new Y.Text()
-    if (typeof value === "string" && value.length > 0) {
-      text.insert(0, value)
+  switch (schema[KIND]) {
+    // First-class text → Y.Text
+    case "text": {
+      const text = new Y.Text()
+      if (typeof value === "string" && value.length > 0) {
+        text.insert(0, value)
+      }
+      return text
     }
-    return text
-  }
 
-  // Unsupported annotation → should not reach here (thrown earlier or caught at bind time)
-  if (tag !== undefined && !YJS_SUPPORTED_TAGS.has(tag)) {
-    throw new Error(
-      `Yjs substrate does not support annotation "${tag}". ` +
-        `Supported annotations: ${[...YJS_SUPPORTED_TAGS].join(", ")}.`,
-    )
-  }
-
-  switch (structural[KIND]) {
     case "product": {
       if (
         value === null ||
@@ -281,13 +269,13 @@ function maybeCreateSharedType(
       ) {
         return value
       }
-      return createStructuredMap(value as Record<string, unknown>, structural)
+      return createStructuredMap(value as Record<string, unknown>, schema)
     }
 
     case "sequence": {
       if (!Array.isArray(value)) return value
       const arr = new Y.Array()
-      const itemSchema = structural.item
+      const itemSchema = schema.item
       const items = (value as unknown[]).map(item =>
         maybeCreateSharedType(item, itemSchema),
       )
@@ -305,15 +293,26 @@ function maybeCreateSharedType(
         return value
       }
       const map = new Y.Map()
-      const valueSchema = structural.item
+      const valueSchema = schema.item
       for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
         map.set(k, maybeCreateSharedType(v, valueSchema))
       }
       return map
     }
 
+    // Unsupported first-class CRDT types — should not reach here
+    // (rejected at bind time by caps check)
+    case "counter":
+    case "set":
+    case "tree":
+    case "movable":
+      throw new Error(
+        `Yjs substrate does not support [KIND]="${schema[KIND]}". ` +
+          `This should have been caught at bind() time.`,
+      )
+
     default:
-      // Scalar, sum, or other — return as plain value
+      // Scalar, sum — return as plain value
       return value
   }
 }
@@ -330,9 +329,8 @@ function createStructuredMap(
   productSchema: SchemaNode,
 ): Y.Map<any> {
   const map = new Y.Map()
-  const structural = unwrapAnnotations(productSchema)
 
-  if (structural[KIND] !== "product") {
+  if (productSchema[KIND] !== "product") {
     // Fallback: set all values as plain
     for (const [key, val] of Object.entries(obj)) {
       map.set(key, val)
@@ -343,27 +341,21 @@ function createStructuredMap(
   // Process fields present in the value object
   for (const [key, val] of Object.entries(obj)) {
     if (val === undefined) continue
-    const fieldSchema = structural.fields[key]
+    const fieldSchema = productSchema.fields[key]
     const yjsVal = fieldSchema ? maybeCreateSharedType(val, fieldSchema) : val
     map.set(key, yjsVal)
   }
 
-  // Create shared types for annotated fields declared in the schema
+  // Create shared types for first-class CRDT fields declared in the schema
   // but missing from the value object. This ensures Yjs containers
   // exist for later mutation (e.g. .insert() on a text field inside
   // a struct inside a record/list).
   for (const [key, fieldSchema] of Object.entries(
-    structural.fields as Record<string, SchemaNode>,
+    productSchema.fields as Record<string, SchemaNode>,
   )) {
     if (key in obj) continue // already processed above
-    const tag = fieldSchema[KIND] === "annotated" ? fieldSchema.tag : undefined
-    if (tag === "text") {
+    if (fieldSchema[KIND] === "text") {
       map.set(key, new Y.Text())
-    } else if (tag !== undefined && !YJS_SUPPORTED_TAGS.has(tag)) {
-      throw new Error(
-        `Yjs substrate does not support annotation "${tag}". ` +
-          `Supported annotations: ${[...YJS_SUPPORTED_TAGS].join(", ")}.`,
-      )
     }
   }
 
@@ -549,17 +541,6 @@ function extractEventValue(value: unknown): unknown {
 // ---------------------------------------------------------------------------
 
 /**
- * Unwrap annotation wrappers to reach the structural schema node.
- */
-function unwrapAnnotations(schema: SchemaNode): SchemaNode {
-  let s = schema
-  while (s[KIND] === "annotated" && s.schema !== undefined) {
-    s = s.schema
-  }
-  return s
-}
-
-/**
  * Resolve the schema at a given path by walking through advanceSchema.
  */
 function resolveSchemaAtPath(rootSchema: SchemaNode, path: Path): SchemaNode {
@@ -574,8 +555,9 @@ function resolveSchemaAtPath(rootSchema: SchemaNode, path: Path): SchemaNode {
  * Get the item schema from a sequence schema, if available.
  */
 function getItemSchema(schema: SchemaNode): SchemaNode | undefined {
-  const structural = unwrapAnnotations(schema)
-  return structural[KIND] === "sequence" ? structural.item : undefined
+  if (schema[KIND] === "sequence") return schema.item
+  if (schema[KIND] === "movable") return schema.item
+  return undefined
 }
 
 /**
@@ -585,12 +567,14 @@ function getFieldSchema(
   schema: SchemaNode,
   key: string,
 ): SchemaNode | undefined {
-  const structural = unwrapAnnotations(schema)
-  if (structural[KIND] === "product") {
-    return structural.fields[key]
+  if (schema[KIND] === "product") {
+    return schema.fields[key]
   }
-  if (structural[KIND] === "map") {
-    return structural.item
+  if (schema[KIND] === "map") {
+    return schema.item
+  }
+  if (schema[KIND] === "set") {
+    return schema.item
   }
   return undefined
 }

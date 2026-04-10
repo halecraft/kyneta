@@ -4,7 +4,7 @@
 // (i.e. bottomInterpreter or anything above it) and adds structural
 // navigation: product field getters, sequence .at()/.length/iterator,
 // map .at()/.has()/.keys()/.size/.entries()/.values()/iterator, sum
-// dispatch, and annotated delegation.
+// dispatch, and first-class type delegation.
 //
 // Navigation is a coalgebra: A → F(A) — revealing addressable child
 // positions within a composite. It says "give me a handle to the child
@@ -20,13 +20,16 @@ import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import { dispatchSum } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
 import {
-  KIND,
-  type AnnotatedSchema,
+  type CounterSchema,
   type MapSchema,
+  type MovableSequenceSchema,
   type ProductSchema,
   type ScalarSchema,
   type SequenceSchema,
+  type SetSchema,
   type SumSchema,
+  type TextSchema,
+  type TreeSchema,
 } from "../schema.js"
 import type { HasCall, HasNavigation } from "./bottom.js"
 
@@ -266,50 +269,173 @@ export function withNavigation<A extends HasCall>(
       return base.sum(ctx, path, schema, baseVariants) as A & HasNavigation
     },
 
-    // --- Annotated -------------------------------------------------------------
-    // Delegating annotations (doc, movable, tree) pass through to inner.
-    // Leaf annotations without known semantics delegate to scalar.
-    // Text/counter annotations pass through — reading is withReadable's job.
-    annotated(
+    // --- Text ------------------------------------------------------------------
+    // Leaf type — pass through to base. withReadable will fill [CALL]
+    // and add toPrimitive later.
+    text(
       ctx: RefContext,
       path: Path,
-      schema: AnnotatedSchema,
-      inner: (() => A & HasNavigation) | undefined,
+      schema: TextSchema,
     ): A & HasNavigation {
-      switch (schema.tag) {
-        case "text":
-        case "counter":
-          // Leaf annotations — pass through to base. withReadable will
-          // fill [CALL] and add toPrimitive later.
-          return base.annotated(
-            ctx,
-            path,
-            schema,
-            inner as (() => A) | undefined,
-          ) as A & HasNavigation
+      return base.text(ctx, path, schema) as A & HasNavigation
+    },
 
-        case "doc":
-        case "movable":
-        case "tree":
-          // Delegating annotations — inner was already interpreted.
-          if (inner !== undefined) {
-            return inner()
-          }
-          // No inner — produce a bare carrier
-          return base.annotated(ctx, path, schema, undefined) as A &
-            HasNavigation
+    // --- Counter ---------------------------------------------------------------
+    // Leaf type — pass through to base. withReadable will fill [CALL]
+    // and add toPrimitive later.
+    counter(
+      ctx: RefContext,
+      path: Path,
+      schema: CounterSchema,
+    ): A & HasNavigation {
+      return base.counter(ctx, path, schema) as A & HasNavigation
+    },
 
-        default:
-          // Unknown annotation — delegate to inner if present
-          if (inner !== undefined) {
-            return inner()
+    // --- Set -------------------------------------------------------------------
+    // Delegate like map — set has the same structural addressing surface.
+    set(
+      ctx: RefContext,
+      path: Path,
+      schema: SetSchema,
+      item: (key: string) => A & HasNavigation,
+    ): A & HasNavigation {
+      // Downcast for base
+      const baseItem = item as (key: string) => A
+      const result = base.set(ctx, path, schema, baseItem) as any
+
+      // .at(key) — NO caching. Calls item(key) fresh each time.
+      // Returns undefined for missing keys.
+      Object.defineProperty(result, "at", {
+        value: (key: string): unknown => {
+          if (!ctx.reader.hasKey(path, key)) {
+            return undefined
           }
-          // Leaf annotation without known semantics — treat as scalar
-          return this.scalar(ctx, path, {
-            [KIND]: "scalar" as const,
-            scalarKind: "any" as any,
-          })
+          return item(key)
+        },
+        enumerable: false,
+        configurable: true,
+      })
+
+      // .has(key)
+      Object.defineProperty(result, "has", {
+        value: (key: string): boolean => {
+          return ctx.reader.hasKey(path, key)
+        },
+        enumerable: false,
+        configurable: true,
+      })
+
+      // .keys()
+      Object.defineProperty(result, "keys", {
+        value: (): string[] => ctx.reader.keys(path),
+        enumerable: false,
+        configurable: true,
+      })
+
+      // .size
+      Object.defineProperty(result, "size", {
+        get(): number {
+          return ctx.reader.keys(path).length
+        },
+        enumerable: false,
+        configurable: true,
+      })
+
+      // .entries()
+      Object.defineProperty(result, "entries", {
+        value: function* (): IterableIterator<[string, unknown]> {
+          for (const key of ctx.reader.keys(path)) {
+            yield [key, result.at(key)]
+          }
+        },
+        enumerable: false,
+        configurable: true,
+      })
+
+      // .values()
+      Object.defineProperty(result, "values", {
+        value: function* (): IterableIterator<unknown> {
+          for (const key of ctx.reader.keys(path)) {
+            yield result.at(key)
+          }
+        },
+        enumerable: false,
+        configurable: true,
+      })
+
+      // [Symbol.iterator]
+      Object.defineProperty(result, Symbol.iterator, {
+        value: function* (): IterableIterator<[string, unknown]> {
+          for (const key of ctx.reader.keys(path)) {
+            yield [key, result.at(key)]
+          }
+        },
+        enumerable: false,
+        configurable: true,
+      })
+
+      return result as A & HasNavigation
+    },
+
+    // --- Tree ------------------------------------------------------------------
+    // Delegate via nodeData() — tree navigation surfaces the inner
+    // product's fields. Like product delegation.
+    tree(
+      ctx: RefContext,
+      path: Path,
+      schema: TreeSchema,
+      nodeData: () => A & HasNavigation,
+    ): A & HasNavigation {
+      const baseNodeData = nodeData as () => A
+      const result = base.tree(ctx, path, schema, baseNodeData)
+      // The nodeData thunk was already interpreted by the catamorphism
+      // with the full interpreter stack, so the inner product already
+      // has navigation installed. We just return the tree's carrier.
+      return result as A & HasNavigation
+    },
+
+    // --- Movable ---------------------------------------------------------------
+    // Delegate like sequence — movable has the same structural addressing.
+    movable(
+      ctx: RefContext,
+      path: Path,
+      schema: MovableSequenceSchema,
+      item: (index: number) => A & HasNavigation,
+    ): A & HasNavigation {
+      // Downcast for base
+      const baseItem = item as (index: number) => A
+      const result = base.movable(ctx, path, schema, baseItem) as any
+
+      // .at(i) — NO caching. Calls item(i) fresh each time.
+      // Bounds checking: negative or out-of-bounds returns undefined.
+      Object.defineProperty(result, "at", {
+        value: (index: number): unknown => {
+          const len = ctx.reader.arrayLength(path)
+          if (index < 0 || index >= len) return undefined
+          return item(index)
+        },
+        enumerable: false,
+        configurable: true,
+      })
+
+      // .length — live from store
+      Object.defineProperty(result, "length", {
+        get() {
+          return ctx.reader.arrayLength(path)
+        },
+        enumerable: false,
+        configurable: true,
+      })
+
+      // [Symbol.iterator] — yields child refs
+      result[Symbol.iterator] = function* () {
+        const len = ctx.reader.arrayLength(path)
+        for (let i = 0; i < len; i++) {
+          yield result.at(i)
+        }
       }
+
+      return result as A & HasNavigation
     },
   }
 }

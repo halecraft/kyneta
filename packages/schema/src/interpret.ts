@@ -7,8 +7,8 @@
 // Key design decisions:
 // - Product fields are thunks (() => A) — laziness preserved
 // - Sequence/map children are closures ((index/key) => A)
-// - Annotations pass through: the interpreter sees the tag, meta,
-//   and (if present) the already-interpreted inner result
+// - First-class CRDT types (text, counter, set, tree, movable) each
+//   have a dedicated interpreter case
 //
 // The module also provides:
 // - InterpreterLayer — a typed wrapper around an interpreter transformer
@@ -26,15 +26,19 @@ import { RawPath } from "./path.js"
 import type { Ref, RRef, RWRef } from "./ref.js"
 import {
   KIND,
-  type AnnotatedSchema,
+  type CounterSchema,
   type DiscriminatedSumSchema,
   type MapSchema,
+  type MovableSequenceSchema,
   type PositionalSumSchema,
   type ProductSchema,
   type ScalarSchema,
   type Schema,
   type SequenceSchema,
+  type SetSchema,
   type SumSchema,
+  type TextSchema,
+  type TreeSchema,
   isNullableSum,
 } from "./schema.js"
 
@@ -69,12 +73,11 @@ export { RawPath, rawIndex, rawKey } from "./path.js"
  *   `(key: string) => A`. The interpreter calls them to create child
  *   interpretations on demand.
  *
- * ### Annotations
+ * ### First-class CRDT types
  *
- * The `annotated` case receives the tag, optional metadata, the raw
- * inner schema (if any), and a thunk that produces the interpreted
- * inner result (if there is an inner schema). The interpreter decides
- * what to do: ignore annotations, dispatch on tag, delegate to inner, etc.
+ * `text` and `counter` are leaves — no child thunks. `set` and `movable`
+ * take item closures (keyed by string / indexed by number). `tree` takes
+ * a single `nodeData` thunk for its recursive node schema.
  */
 export interface Interpreter<Ctx, A> {
   scalar(ctx: Ctx, path: Path, schema: ScalarSchema): A
@@ -97,11 +100,19 @@ export interface Interpreter<Ctx, A> {
 
   sum(ctx: Ctx, path: Path, schema: SumSchema, variants: SumVariants<A>): A
 
-  annotated(
+  text(ctx: Ctx, path: Path, schema: TextSchema): A
+
+  counter(ctx: Ctx, path: Path, schema: CounterSchema): A
+
+  set(ctx: Ctx, path: Path, schema: SetSchema, item: (key: string) => A): A
+
+  tree(ctx: Ctx, path: Path, schema: TreeSchema, nodeData: () => A): A
+
+  movable(
     ctx: Ctx,
     path: Path,
-    schema: AnnotatedSchema,
-    inner: (() => A) | undefined,
+    schema: MovableSequenceSchema,
+    item: (index: number) => A,
   ): A
 }
 
@@ -453,7 +464,11 @@ function isInterpreter(value: unknown): boolean {
     typeof obj.sequence === "function" &&
     typeof obj.map === "function" &&
     typeof obj.sum === "function" &&
-    typeof obj.annotated === "function"
+    typeof obj.text === "function" &&
+    typeof obj.counter === "function" &&
+    typeof obj.set === "function" &&
+    typeof obj.tree === "function" &&
+    typeof obj.movable === "function"
   )
 }
 
@@ -609,27 +624,40 @@ function interpretImpl<Ctx, A>(
       return interp.sum(ctx, resolvedPath, schema, variants)
     }
 
-    case "annotated": {
-      // If there's an inner schema, provide a thunk for it.
-      // Annotated reuses the parent path (no new segment appended).
-      // The inner thunk uses effectivePath() so that withAddressing's
-      // rootPath is picked up after the annotated method installs it.
-      const innerThunk: (() => A) | undefined =
-        schema.schema !== undefined
-          ? () => {
-              const innerPath = effectivePath()
-              const result = interpretImpl(
-                schema.schema!,
-                interp,
-                ctx,
-                innerPath,
-              )
-              getOnRefCreated()?.(innerPath, result)
-              return result
-            }
-          : undefined
+    case "text":
+      return interp.text(ctx, resolvedPath, schema)
 
-      return interp.annotated(ctx, resolvedPath, schema, innerThunk)
+    case "counter":
+      return interp.counter(ctx, resolvedPath, schema)
+
+    case "set": {
+      const itemFn = (key: string): A => {
+        const childPath = effectivePath().field(key)
+        const result = interpretImpl(schema.item, interp, ctx, childPath)
+        getOnRefCreated()?.(childPath, result)
+        return result
+      }
+      return interp.set(ctx, resolvedPath, schema, itemFn)
+    }
+
+    case "tree": {
+      const nodeDataThunk = (): A => {
+        const innerPath = effectivePath()
+        const result = interpretImpl(schema.nodeData, interp, ctx, innerPath)
+        getOnRefCreated()?.(innerPath, result)
+        return result
+      }
+      return interp.tree(ctx, resolvedPath, schema, nodeDataThunk)
+    }
+
+    case "movable": {
+      const itemFn = (index: number): A => {
+        const childPath = effectivePath().item(index)
+        const result = interpretImpl(schema.item, interp, ctx, childPath)
+        getOnRefCreated()?.(childPath, result)
+        return result
+      }
+      return interp.movable(ctx, resolvedPath, schema, itemFn)
     }
   }
 }
@@ -671,8 +699,19 @@ export function createInterpreter<Ctx, A>(
     sum:
       overrides.sum ??
       ((ctx, path, schema, _variants) => fallback(ctx, path, schema)),
-    annotated:
-      overrides.annotated ??
-      ((ctx, path, schema, _inner) => fallback(ctx, path, schema)),
+    text:
+      overrides.text ?? ((ctx, path, schema) => fallback(ctx, path, schema)),
+    counter:
+      overrides.counter ??
+      ((ctx, path, schema) => fallback(ctx, path, schema)),
+    set:
+      overrides.set ??
+      ((ctx, path, schema, _item) => fallback(ctx, path, schema)),
+    tree:
+      overrides.tree ??
+      ((ctx, path, schema, _nodeData) => fallback(ctx, path, schema)),
+    movable:
+      overrides.movable ??
+      ((ctx, path, schema, _item) => fallback(ctx, path, schema)),
   }
 }

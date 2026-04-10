@@ -44,7 +44,7 @@ const _writableInterpreter = fullInterpreter
 // Shared fixture: pure structural schema (no annotations)
 // ---------------------------------------------------------------------------
 
-const structuralDocSchema = Schema.doc({
+const structuralDocSchema = Schema.struct({
   settings: Schema.struct({
     darkMode: Schema.boolean(),
     fontSize: Schema.number(),
@@ -284,7 +284,7 @@ describe("writable: map ref", () => {
 describe("writable: transactions", () => {
   it("actions accumulate in transaction and do not apply until commit", () => {
     const store = { x: 0, y: 0 }
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       x: Schema.number(),
       y: Schema.number(),
     })
@@ -308,7 +308,7 @@ describe("writable: transactions", () => {
 
   it("dispatch applies immediately outside a transaction", () => {
     const store = { x: 0 }
-    const schema = Schema.doc({ x: Schema.number() })
+    const schema = Schema.struct({ x: Schema.number() })
     const ctx = plainContext(store)
     const doc = interpret(schema, ctx).with(readable).with(writable).done()
 
@@ -322,7 +322,7 @@ describe("writable: transactions", () => {
 // ---------------------------------------------------------------------------
 
 describe("writable: discriminated sum", () => {
-  const schema = Schema.doc({
+  const schema = Schema.struct({
     item: Schema.discriminatedUnion("type", [
       Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
       Schema.struct({ type: Schema.string("image"), url: Schema.string() }),
@@ -361,7 +361,7 @@ describe("writable: discriminated sum", () => {
 // ---------------------------------------------------------------------------
 
 describe("writable: nullable (positional sum)", () => {
-  const schema = Schema.doc({
+  const schema = Schema.struct({
     bio: Schema.nullable(Schema.string()),
   })
 
@@ -400,13 +400,13 @@ describe("writable: nullable (positional sum)", () => {
 // Shared fixture: annotated document schema (with annotations)
 // ---------------------------------------------------------------------------
 
-const annotatedDocSchema = Schema.doc({
-  title: Schema.annotated("text"),
-  count: Schema.annotated("counter"),
+const annotatedDocSchema = Schema.struct({
+  title: Schema.text(),
+  count: Schema.counter(),
   messages: Schema.list(
     Schema.struct({
       author: Schema.string(),
-      body: Schema.annotated("text"),
+      body: Schema.text(),
     }),
   ),
   settings: Schema.struct({
@@ -584,7 +584,7 @@ describe("writable: portable refs (annotated)", () => {
 // ===========================================================================
 
 describe("writable: invalidate-before-dispatch", () => {
-  const listSchema = Schema.doc({
+  const listSchema = Schema.struct({
     items: Schema.list(Schema.struct({ name: Schema.string() })),
   })
 
@@ -660,7 +660,7 @@ describe("writable: invalidate-before-dispatch", () => {
 
 describe("writable: cacheless stack", () => {
   it("push() works without caching, store updated, no crash", () => {
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       items: Schema.list(Schema.struct({ name: Schema.string() })),
     })
     const store = { items: [{ name: "a" }] }
@@ -675,7 +675,7 @@ describe("writable: cacheless stack", () => {
   })
 
   it("map .set() works without caching", () => {
-    const schema = Schema.doc({ meta: Schema.record(Schema.number()) })
+    const schema = Schema.struct({ meta: Schema.record(Schema.number()) })
     const store = { meta: { a: 1 } }
     const ctx = plainContext(store)
     const doc = interpret(schema, cachelessInterpreter, ctx) as unknown as Ref<
@@ -687,7 +687,7 @@ describe("writable: cacheless stack", () => {
   })
 
   it("scalar .set() works without caching", () => {
-    const schema = Schema.doc({ n: Schema.number() })
+    const schema = Schema.struct({ n: Schema.number() })
     const store = { n: 0 }
     const ctx = plainContext(store)
     const doc = interpret(schema, cachelessInterpreter, ctx) as unknown as Ref<
@@ -868,7 +868,7 @@ describe("writable: TRANSACT attachment", () => {
   })
 
   it("[TRANSACT] is present on cacheless stack refs", () => {
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       n: Schema.number(),
     })
     const store = { n: 0 }

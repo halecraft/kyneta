@@ -35,12 +35,16 @@ import {
   type SequenceAddressTable,
 } from "../path.js"
 import type {
-  AnnotatedSchema,
+  CounterSchema,
   MapSchema,
+  MovableSequenceSchema,
   ProductSchema,
   ScalarSchema,
   SequenceSchema,
+  SetSchema,
   SumSchema,
+  TextSchema,
+  TreeSchema,
 } from "../schema.js"
 import type { HasNavigation } from "./bottom.js"
 
@@ -397,15 +401,89 @@ export function withAddressing<A extends HasNavigation>(
       return base.sum(ctx, path, schema, variants)
     },
 
-    // --- Annotated -------------------------------------------------------------
-    annotated(
+    // --- Text ------------------------------------------------------------------
+    text(ctx: RefContext, path: Path, schema: TextSchema): A {
+      getOrCreateRegistry(ctx)
+      return base.text(ctx, path, schema)
+    },
+
+    // --- Counter ---------------------------------------------------------------
+    counter(ctx: RefContext, path: Path, schema: CounterSchema): A {
+      getOrCreateRegistry(ctx)
+      return base.counter(ctx, path, schema)
+    },
+
+    // --- Set -------------------------------------------------------------------
+    // Hook into prepare for tombstoning on key deletion (like map).
+    set(
       ctx: RefContext,
       path: Path,
-      schema: AnnotatedSchema,
-      inner: (() => A) | undefined,
+      schema: SetSchema,
+      item: (key: string) => A,
+    ): A {
+      const registry = getOrCreateRegistry(ctx)
+      const result = base.set(ctx, path, schema, item)
+      const mapPathKey = path.key
+
+      if (isPropertyHost(result)) {
+        Object.defineProperty(result, ADDRESS_TABLE, {
+          get() {
+            return registry.getMapTable(mapPathKey)
+          },
+          enumerable: false,
+          configurable: true,
+        })
+      }
+
+      const handlers = ensureAddressingWiring(ctx)
+      registerAddressingHandler(handlers, path, (change: ChangeBase) => {
+        const t = registry.getMapTable(path.key)
+        if (t) handleMapChange(t, change)
+      })
+
+      return result
+    },
+
+    // --- Tree ------------------------------------------------------------------
+    tree(
+      ctx: RefContext,
+      path: Path,
+      schema: TreeSchema,
+      nodeData: () => A,
     ): A {
       getOrCreateRegistry(ctx)
-      return base.annotated(ctx, path, schema, inner)
+      return base.tree(ctx, path, schema, nodeData)
+    },
+
+    // --- Movable ---------------------------------------------------------------
+    // Hook into prepare for address advancement on structural changes (like sequence).
+    movable(
+      ctx: RefContext,
+      path: Path,
+      schema: MovableSequenceSchema,
+      item: (index: number) => A,
+    ): A {
+      const registry = getOrCreateRegistry(ctx)
+      const result = base.movable(ctx, path, schema, item)
+      const seqPathKey = path.key
+
+      if (isPropertyHost(result)) {
+        Object.defineProperty(result, ADDRESS_TABLE, {
+          get() {
+            return registry.getSequenceTable(seqPathKey)
+          },
+          enumerable: false,
+          configurable: true,
+        })
+      }
+
+      const handlers = ensureAddressingWiring(ctx)
+      registerAddressingHandler(handlers, path, (change: ChangeBase) => {
+        const t = registry.getSequenceTable(path.key)
+        if (t) handleSequenceChange(t, change)
+      })
+
+      return result
     },
   }
 }

@@ -341,7 +341,7 @@ type DocCacheEntry =
  * })
  *
  * const TodoDoc = loro.bind(LoroSchema.doc({ title: LoroSchema.text() }))
- * const ConfigDoc = json.bind(Schema.doc({ theme: Schema.string() }))
+ * const ConfigDoc = json.bind(Schema.struct({ theme: Schema.string() }))
  *
  * const doc = exchange.get("my-doc", TodoDoc)
  * const config = exchange.get("config", ConfigDoc)

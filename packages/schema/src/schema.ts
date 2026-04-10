@@ -1,14 +1,12 @@
 // Schema — a single recursive type for document structure.
 //
 // The grammar has five structural constructors (scalar, product, sequence,
-// map, sum) plus an open annotation mechanism. Annotations attach backend
-// semantics without changing the recursive structure.
+// map, sum) plus first-class leaf/container types (text, counter, set,
+// tree, movable). The `.json()` modifier on struct/list/record creates
+// a merge boundary — everything below is an inert JSON blob.
 //
-// This grammar is backend-agnostic. Backend-specific annotation
-// constructors live in their respective backend packages (e.g.
-// @kyneta/loro-schema, @kyneta/yjs-schema). The developer-facing Schema
-// namespace provides structural constructors and the open `annotated()`
-// mechanism.
+// This grammar is backend-agnostic. Substrates declare closed capability
+// sets via `[CAPS]` and enforce them at `bind()` time.
 
 import type { Segment } from "./path.js"
 
@@ -22,13 +20,13 @@ export const KIND = Symbol("kyneta:kind")
 export type KindSymbol = typeof KIND
 
 // ---------------------------------------------------------------------------
-// TAGS — phantom tag accumulator (type-level only)
+// CAPS — phantom capability accumulator (type-level only)
 // ---------------------------------------------------------------------------
 
-/** Phantom annotation tag accumulator. Type-level only — never populated
- *  at runtime. Enables compile-time bind() validation via ExtractTags<S>. */
-export const TAGS = Symbol("kyneta:tags")
-export type TagsSymbol = typeof TAGS
+/** Phantom capability accumulator. Type-level only — never populated
+ *  at runtime. Enables compile-time bind() validation via ExtractCaps<S>. */
+export const CAPS = Symbol("kyneta:caps")
+export type CapsSymbol = typeof CAPS
 
 // ---------------------------------------------------------------------------
 // Scalar kinds — leaf values (not a separate recursive grammar)
@@ -37,9 +35,6 @@ export type TagsSymbol = typeof TAGS
 /**
  * The set of built-in scalar kinds. This is intentionally a string union
  * rather than a recursive type — scalars are terminal.
- *
- * Third-party backends can use custom scalar kinds via the `annotated`
- * mechanism (e.g. `annotated("timestamp", scalar("number"))`).
  */
 export type ScalarKind =
   | "string"
@@ -55,16 +50,21 @@ export type ScalarKind =
 // ---------------------------------------------------------------------------
 
 /**
- * A schema node. This is the fixed point of a functor with six cases:
+ * A schema node. This is the fixed point of a functor with ten cases:
  *
  * - `scalar(kind)` — leaf value
- * - `product(fields)` — fixed-key record (struct, doc)
+ * - `product(fields)` — fixed-key record (struct)
  * - `sequence(item)` — ordered collection (list)
  * - `map(item)` — dynamic-key collection (record)
  * - `sum(variants)` — tagged union
- * - `annotated(tag, schema?)` — semantic enrichment
+ * - `text()` — collaborative text (character-level CRDT)
+ * - `counter()` — additive counter (increment/decrement CRDT)
+ * - `set(item)` — unordered collection with add-wins semantics
+ * - `tree(nodeData)` — hierarchical tree with move operations
+ * - `movable(item)` — ordered collection with move operations
  *
- * The grammar is backend-agnostic. Backends attach meaning via annotations.
+ * The grammar is backend-agnostic. Substrates declare which capabilities
+ * they support via closed capability sets.
  */
 export type Schema =
   | ScalarSchema
@@ -72,19 +72,23 @@ export type Schema =
   | SequenceSchema
   | MapSchema
   | SumSchema
-  | AnnotatedSchema
+  | TextSchema
+  | CounterSchema
+  | SetSchema
+  | TreeSchema
+  | MovableSequenceSchema
 
 // --- Scalar ------------------------------------------------------------------
 
 export interface ScalarSchema<
   K extends ScalarKind = ScalarKind,
   V extends ScalarPlain<K> = ScalarPlain<K>,
-  Tags extends string = never,
+  Caps extends string = never,
 > {
   readonly [KIND]: "scalar"
   readonly scalarKind: K
   readonly constraint?: readonly V[]
-  readonly [TAGS]?: Tags
+  readonly [CAPS]?: Caps
 }
 
 /**
@@ -113,28 +117,28 @@ export type ScalarPlain<K extends ScalarKind> = K extends "string"
 
 export interface ProductSchema<
   F extends Record<string, Schema> = Record<string, Schema>,
-  Tags extends string = string,
+  Caps extends string = string,
 > {
   readonly [KIND]: "product"
   readonly fields: Readonly<F>
   readonly discriminantKey?: string
-  readonly [TAGS]?: Tags
+  readonly [CAPS]?: Caps
 }
 
 // --- Sequence ----------------------------------------------------------------
 
-export interface SequenceSchema<I extends Schema = Schema, Tags extends string = string> {
+export interface SequenceSchema<I extends Schema = Schema, Caps extends string = string> {
   readonly [KIND]: "sequence"
   readonly item: I
-  readonly [TAGS]?: Tags
+  readonly [CAPS]?: Caps
 }
 
 // --- Map ---------------------------------------------------------------------
 
-export interface MapSchema<I extends Schema = Schema, Tags extends string = string> {
+export interface MapSchema<I extends Schema = Schema, Caps extends string = string> {
   readonly [KIND]: "map"
   readonly item: I
-  readonly [TAGS]?: Tags
+  readonly [CAPS]?: Caps
 }
 
 // --- Sum ---------------------------------------------------------------------
@@ -149,23 +153,27 @@ export interface MapSchema<I extends Schema = Schema, Tags extends string = stri
  *
  * Both flavors share the `[KIND]: "sum"` discriminant. If `discriminant`
  * is present, the sum is discriminated.
+ *
+ * **Sum variants must be `PlainSchema`.** Sums are always LWW — the value
+ * is replaced atomically. Placing a non-LWW type (text, counter, set,
+ * tree, movable) inside a sum is a merge-semantic contradiction.
  */
 export type SumSchema = PositionalSumSchema | DiscriminatedSumSchema
 
 export interface PositionalSumSchema<
-  V extends readonly Schema[] = readonly Schema[],
-  Tags extends string = string,
+  V extends readonly PlainSchema[] = readonly PlainSchema[],
+  Caps extends string = string,
 > {
   readonly [KIND]: "sum"
   readonly variants: V
   readonly discriminant?: undefined
-  readonly [TAGS]?: Tags
+  readonly [CAPS]?: Caps
 }
 
 export interface DiscriminatedSumSchema<
   D extends string = string,
-  V extends readonly ProductSchema[] = readonly ProductSchema[],
-  Tags extends string = string,
+  V extends readonly PlainProductSchema[] = readonly PlainProductSchema[],
+  Caps extends string = string,
 > {
   readonly [KIND]: "sum"
   readonly discriminant: D
@@ -176,56 +184,97 @@ export interface DiscriminatedSumSchema<
    * field constraint. Used by `dispatchSum`, `interpret`, `validate`,
    * `describe`, etc.
    */
-  readonly variantMap: Readonly<Record<string, ProductSchema>>
-  readonly [TAGS]?: Tags
+  readonly variantMap: Readonly<Record<string, PlainProductSchema>>
+  readonly [CAPS]?: Caps
 }
 
-// --- Annotated ---------------------------------------------------------------
+// --- Text --------------------------------------------------------------------
 
 /**
- * Semantic enrichment. An annotation wraps an optional inner schema with
- * a string tag and optional metadata. The tag set is open — backends
- * define their own.
+ * Collaborative text — character-level CRDT with insert/delete/mark
+ * operations. A first-class leaf type with its own operation algebra.
  *
- * Well-known tags recognized by the core interpreters:
- * - `"text"` — collaborative text (inner: none, implies scalar string)
- * - `"counter"` — counter semantics (inner: none, implies scalar number)
- * - `"movable"` — move-capable sequence (inner: sequence)
- * - `"tree"` — hierarchical tree (inner: product for node data)
- * - `"doc"` — document root (inner: product)
- *
- * Third-party examples:
- * - `"timestamp"` — Firestore timestamp
- * - `"richtext"` — rich text with marks
+ * `text()` is NOT `PlainSchema` — it requires non-LWW merge and cannot
+ * appear inside sums or `.json()` subtrees.
  */
-export interface AnnotatedSchema<
-  T extends string = string,
-  S extends Schema | undefined = Schema | undefined,
-  Tags extends string = string,
-> {
-  readonly [KIND]: "annotated"
-  readonly tag: T
-  readonly schema?: S
-  readonly meta?: Readonly<Record<string, unknown>>
-  readonly [TAGS]?: Tags
+export interface TextSchema<Caps extends string = "text"> {
+  readonly [KIND]: "text"
+  readonly [CAPS]?: Caps
+}
+
+// --- Counter -----------------------------------------------------------------
+
+/**
+ * Additive counter — increment/decrement CRDT. A first-class leaf type.
+ *
+ * `counter()` is NOT `PlainSchema` — it requires non-LWW merge and cannot
+ * appear inside sums or `.json()` subtrees.
+ */
+export interface CounterSchema<Caps extends string = "counter"> {
+  readonly [KIND]: "counter"
+  readonly [CAPS]?: Caps
+}
+
+// --- Set ---------------------------------------------------------------------
+
+/**
+ * Unordered collection with add-wins semantics. Structurally analogous
+ * to `map` but with set operations (add, delete, has).
+ *
+ * `set()` is NOT `PlainSchema` — it requires non-LWW merge and cannot
+ * appear inside sums or `.json()` subtrees.
+ */
+export interface SetSchema<I extends Schema = Schema, Caps extends string = string> {
+  readonly [KIND]: "set"
+  readonly item: I
+  readonly [CAPS]?: Caps
+}
+
+// --- Tree --------------------------------------------------------------------
+
+/**
+ * Hierarchical tree with move-subtree operations. Each node carries
+ * structured data (`nodeData`). Trees navigate by node ID, support
+ * parent/child relationships, and have move-subtree operations.
+ *
+ * `tree()` is NOT `PlainSchema` — it requires non-LWW merge and cannot
+ * appear inside sums or `.json()` subtrees.
+ */
+export interface TreeSchema<S extends Schema = Schema, Caps extends string = string> {
+  readonly [KIND]: "tree"
+  readonly nodeData: S
+  readonly [CAPS]?: Caps
+}
+
+// --- MovableSequence ---------------------------------------------------------
+
+/**
+ * Ordered collection with move operations. Structurally analogous to
+ * `sequence` but with additional move/reorder operations.
+ *
+ * `movableList()` is NOT `PlainSchema` — it requires non-LWW merge and
+ * cannot appear inside sums or `.json()` subtrees.
+ */
+export interface MovableSequenceSchema<I extends Schema = Schema, Caps extends string = string> {
+  readonly [KIND]: "movable"
+  readonly item: I
+  readonly [CAPS]?: Caps
 }
 
 // ---------------------------------------------------------------------------
-// PlainSchema — the annotation-free subset of Schema
+// PlainSchema — the subset of Schema that doesn't require non-LWW merge
 // ---------------------------------------------------------------------------
 
 /**
- * The subset of the schema grammar that contains no annotations.
+ * The subset of the schema grammar that requires only LWW merge.
  *
- * `PlainSchema` is the recursive type used by backend `plain.*`
- * constructors to enforce Loro's well-formedness rule: CRDT containers
- * (text, counter, movable list, tree) — which are all represented as
- * `AnnotatedSchema` — cannot appear inside plain value blobs.
+ * `PlainSchema` is the input constraint for:
+ * - `.json()` modifier (merge boundary — everything below is inert JSON)
+ * - Sum variants (sums are always LWW — variants are replaced atomically)
  *
- * This type lives in the grammar layer (not in any backend) because it
- * is a *structural* subset — "schema without annotations" — with no
- * backend-specific knowledge. Other backends with their own annotation
- * tags can reuse the same constraint.
+ * This type excludes `TextSchema`, `CounterSchema`, `SetSchema`,
+ * `TreeSchema`, and `MovableSequenceSchema` — they all require non-LWW
+ * merge semantics that are contradicted by LWW contexts.
  *
  * Every `PlainSchema` value is also a `Schema` value (structural subtype),
  * so plain schemas work with `interpret()`, `describe()`, `validate()`,
@@ -246,30 +295,30 @@ export type PlainSchema =
  */
 export interface PlainProductSchema<
   F extends Record<string, PlainSchema> = Record<string, PlainSchema>,
-  Tags extends string = never,
+  Caps extends string = string,
 > {
   readonly [KIND]: "product"
   readonly fields: Readonly<F>
   readonly discriminantKey?: string
-  readonly [TAGS]?: Tags
+  readonly [CAPS]?: Caps
 }
 
 /**
  * Sequence (ordered collection) constrained to plain children.
  */
-export interface PlainSequenceSchema<I extends PlainSchema = PlainSchema, Tags extends string = never> {
+export interface PlainSequenceSchema<I extends PlainSchema = PlainSchema, Caps extends string = string> {
   readonly [KIND]: "sequence"
   readonly item: I
-  readonly [TAGS]?: Tags
+  readonly [CAPS]?: Caps
 }
 
 /**
  * Map (dynamic-key collection) constrained to plain children.
  */
-export interface PlainMapSchema<I extends PlainSchema = PlainSchema, Tags extends string = never> {
+export interface PlainMapSchema<I extends PlainSchema = PlainSchema, Caps extends string = string> {
   readonly [KIND]: "map"
   readonly item: I
-  readonly [TAGS]?: Tags
+  readonly [CAPS]?: Caps
 }
 
 /**
@@ -277,12 +326,12 @@ export interface PlainMapSchema<I extends PlainSchema = PlainSchema, Tags extend
  */
 export interface PlainPositionalSumSchema<
   V extends readonly PlainSchema[] = readonly PlainSchema[],
-  Tags extends string = never,
+  Caps extends string = string,
 > {
   readonly [KIND]: "sum"
   readonly variants: V
   readonly discriminant?: undefined
-  readonly [TAGS]?: Tags
+  readonly [CAPS]?: Caps
 }
 
 /**
@@ -291,26 +340,36 @@ export interface PlainPositionalSumSchema<
 export interface PlainDiscriminatedSumSchema<
   D extends string = string,
   V extends readonly PlainProductSchema[] = readonly PlainProductSchema[],
-  Tags extends string = never,
+  Caps extends string = string,
 > {
   readonly [KIND]: "sum"
   readonly discriminant: D
   readonly variants: V
   readonly variantMap: Readonly<Record<string, PlainProductSchema>>
-  readonly [TAGS]?: Tags
+  readonly [CAPS]?: Caps
 }
 
 // ---------------------------------------------------------------------------
-// ExtractTags — single-level indexed access for tag extraction
+// ExtractCaps — single-level indexed access for capability extraction
 // ---------------------------------------------------------------------------
 
 /**
- * Extract the accumulated annotation tags from a schema type.
+ * Extract the accumulated capability tags from a schema type.
  *
- * Single-level indexed access — NOT recursive. Tags are accumulated
+ * Single-level indexed access — NOT recursive. Capabilities are accumulated
  * by constructors during schema construction (a type-level catamorphism).
  */
-export type ExtractTags<S> = S extends { readonly [TAGS]?: infer T } ? (T extends string ? T : never) : never
+export type ExtractCaps<S> = S extends { readonly [CAPS]?: infer T } ? (T extends string ? T : never) : never
+
+// ---------------------------------------------------------------------------
+// StructuralKind — the set of base structural kinds
+// ---------------------------------------------------------------------------
+
+/**
+ * The base structural kinds that interpreters and substrates can map to.
+ * New first-class types map to these structural analogs.
+ */
+export type StructuralKind = "scalar" | "product" | "sequence" | "map" | "sum"
 
 // ---------------------------------------------------------------------------
 // Structural constructors (low-level, grammar-native)
@@ -333,19 +392,19 @@ function scalar<K extends ScalarKind, V extends ScalarPlain<K>>(
 
 function product<F extends Record<string, Schema>>(
   fields: F,
-): ProductSchema<F, ExtractTags<F[keyof F]>> {
+): ProductSchema<F, ExtractCaps<F[keyof F]>> {
   return { [KIND]: "product", fields } as any
 }
 
-function sequence<I extends Schema>(item: I): SequenceSchema<I, ExtractTags<I>> {
+function sequence<I extends Schema>(item: I): SequenceSchema<I, ExtractCaps<I>> {
   return { [KIND]: "sequence", item } as any
 }
 
-function map<I extends Schema>(item: I): MapSchema<I, ExtractTags<I>> {
+function map<I extends Schema>(item: I): MapSchema<I, ExtractCaps<I>> {
   return { [KIND]: "map", item } as any
 }
 
-function sum<V extends Schema[]>(variants: [...V]): PositionalSumSchema<V, ExtractTags<V[number]>> {
+function sum<V extends PlainSchema[]>(variants: [...V]): PositionalSumSchema<V, ExtractCaps<V[number]>> {
   return { [KIND]: "sum", variants } as any
 }
 
@@ -362,9 +421,9 @@ function sum<V extends Schema[]>(variants: [...V]): PositionalSumSchema<V, Extra
  */
 export function buildVariantMap<D extends string>(
   discriminant: D,
-  variants: readonly ProductSchema[],
-): Record<string, ProductSchema> {
-  const map: Record<string, ProductSchema> = {}
+  variants: readonly PlainProductSchema[],
+): Record<string, PlainProductSchema> {
+  const map: Record<string, PlainProductSchema> = {}
   for (let i = 0; i < variants.length; i++) {
     const variant = variants[i]!
     const fieldSchema = variant.fields[discriminant]
@@ -396,10 +455,10 @@ export function buildVariantMap<D extends string>(
   return map
 }
 
-function discriminatedSum<D extends string, V extends ProductSchema[]>(
+function discriminatedSum<D extends string, V extends PlainProductSchema[]>(
   discriminant: D,
   variants: [...V],
-): DiscriminatedSumSchema<D, V, ExtractTags<V[number]>> {
+): DiscriminatedSumSchema<D, V, ExtractCaps<V[number]>> {
   const variantMap = buildVariantMap(discriminant, variants)
   // Stamp each variant with the discriminant key so interpreter layers
   // can identify and special-case the discriminant field at runtime.
@@ -409,68 +468,86 @@ function discriminatedSum<D extends string, V extends ProductSchema[]>(
   return { [KIND]: "sum", discriminant, variants, variantMap } as any
 }
 
-function annotated<T extends string>(
-  tag: T,
-  schema?: undefined,
-  meta?: Record<string, unknown>,
-): AnnotatedSchema<T, undefined, T>
-function annotated<T extends string, S extends Schema>(
-  tag: T,
-  schema: S,
-  meta?: Record<string, unknown>,
-): AnnotatedSchema<T, S, T | ExtractTags<S>>
-function annotated<T extends string, S extends Schema | undefined = undefined>(
-  tag: T,
-  schema?: S,
-  meta?: Record<string, unknown>,
-): AnnotatedSchema<T, S> {
-  return {
-    [KIND]: "annotated",
-    tag,
-    ...(schema !== undefined && { schema }),
-    ...(meta !== undefined && { meta }),
-  } as any
+// ---------------------------------------------------------------------------
+// First-class leaf/container constructors
+// ---------------------------------------------------------------------------
+
+function text(): TextSchema<"text"> {
+  return { [KIND]: "text" } as TextSchema<"text">
+}
+
+function counter(): CounterSchema<"counter"> {
+  return { [KIND]: "counter" } as CounterSchema<"counter">
+}
+
+function set<I extends Schema>(item: I): SetSchema<I, "set" | ExtractCaps<I>> {
+  return { [KIND]: "set", item } as any
+}
+
+function tree<S extends Schema>(nodeData: S): TreeSchema<S, "tree" | ExtractCaps<S>> {
+  return { [KIND]: "tree", nodeData } as any
+}
+
+function movableList<I extends Schema>(item: I): MovableSequenceSchema<I, "movable" | ExtractCaps<I>> {
+  return { [KIND]: "movable", item } as any
 }
 
 // ---------------------------------------------------------------------------
 // Developer-facing sugar — structural constructors
 // ---------------------------------------------------------------------------
-// These produce structural nodes in the unified grammar. Backend-specific
-// annotation constructors (e.g. text, counter, movableList, tree) live in
-// their respective backend packages (@kyneta/loro-schema, @kyneta/yjs-schema).
 
 /**
  * Ordered list. Produces `sequence(item)`.
+ *
+ * `list.json(item)` constrains children to `PlainSchema` and produces
+ * a schema with only `"json"` as its capability (merge boundary).
  */
-function list<I extends Schema>(item: I): SequenceSchema<I, ExtractTags<I>> {
+function list<I extends Schema>(item: I): SequenceSchema<I, ExtractCaps<I>> {
   return sequence(item)
 }
 
 /**
- * Fixed-key struct. Produces `product(fields)`.
+ * `.json()` modifier for list — merge boundary.
+ * Everything below is an inert JSON blob. No child capabilities propagated.
  */
-function struct<F extends Record<string, Schema>>(fields: F): ProductSchema<F, ExtractTags<F[keyof F]>> {
+list.json = function listJson<I extends PlainSchema>(item: I): SequenceSchema<I, "json"> {
+  return { [KIND]: "sequence", item } as any
+}
+
+/**
+ * Fixed-key struct. Produces `product(fields)`.
+ *
+ * `struct.json(fields)` constrains children to `PlainSchema` and produces
+ * a schema with only `"json"` as its capability (merge boundary).
+ */
+function struct<F extends Record<string, Schema>>(fields: F): ProductSchema<F, ExtractCaps<F[keyof F]>> {
   return product(fields)
 }
 
 /**
- * Dynamic-key record. Produces `map(item)`.
+ * `.json()` modifier for struct — merge boundary.
+ * Everything below is an inert JSON blob. No child capabilities propagated.
  */
-function record<I extends Schema>(item: I): MapSchema<I, ExtractTags<I>> {
+struct.json = function structJson<F extends Record<string, PlainSchema>>(fields: F): ProductSchema<F, "json"> {
+  return { [KIND]: "product", fields } as any
+}
+
+/**
+ * Dynamic-key record. Produces `map(item)`.
+ *
+ * `record.json(item)` constrains children to `PlainSchema` and produces
+ * a schema with only `"json"` as its capability (merge boundary).
+ */
+function record<I extends Schema>(item: I): MapSchema<I, ExtractCaps<I>> {
   return map(item)
 }
 
 /**
- * Document root. Produces `annotated("doc", product(fields))`.
- *
- * Structurally a product, but the "doc" annotation tells interpreters
- * this is the root entry point (analogous to TypedDoc in the current
- * codebase).
+ * `.json()` modifier for record — merge boundary.
+ * Everything below is an inert JSON blob. No child capabilities propagated.
  */
-function doc<F extends Record<string, Schema>>(
-  fields: F,
-): AnnotatedSchema<"doc", ProductSchema<F, ExtractTags<F[keyof F]>>, "doc" | ExtractTags<F[keyof F]>> {
-  return annotated("doc", product(fields))
+record.json = function recordJson<I extends PlainSchema>(item: I): MapSchema<I, "json"> {
+  return { [KIND]: "map", item } as any
 }
 
 // ---------------------------------------------------------------------------
@@ -552,13 +629,15 @@ function any(): ScalarSchema<"any"> {
 /**
  * Positional union of schemas. Produces `sum(variants)`.
  *
+ * Variants must be `PlainSchema` — sums are always LWW.
+ *
  * ```ts
  * Schema.union(Schema.string(), Schema.number())
  * ```
  */
-function union<V extends Schema[]>(
+function union<V extends PlainSchema[]>(
   ...variants: [...V]
-): PositionalSumSchema<V, ExtractTags<V[number]>> {
+): PositionalSumSchema<V, ExtractCaps<V[number]>> {
   return sum(variants)
 }
 
@@ -568,6 +647,8 @@ function union<V extends Schema[]>(
  * Follows the Zod/Valibot convention: every variant is a product
  * (struct) that includes the discriminant as a constrained string
  * scalar field. The discriminant value is the field's constraint.
+ *
+ * Variants must be `PlainProductSchema` — sums are always LWW.
  *
  * ```ts
  * Schema.discriminatedUnion("type", [
@@ -580,10 +661,10 @@ function union<V extends Schema[]>(
  * @throws If any variant's discriminant field is not a constrained string scalar.
  * @throws If two variants share the same discriminant value.
  */
-function discriminatedUnion<D extends string, V extends ProductSchema[]>(
+function discriminatedUnion<D extends string, V extends PlainProductSchema[]>(
   discriminant: D,
   variants: [...V],
-): DiscriminatedSumSchema<D, V, ExtractTags<V[number]>> {
+): DiscriminatedSumSchema<D, V, ExtractCaps<V[number]>> {
   return discriminatedSum(discriminant, variants)
 }
 
@@ -591,13 +672,18 @@ function discriminatedUnion<D extends string, V extends ProductSchema[]>(
  * Nullable schema — sugar for `union(null, inner)`.
  * Produces `sum([scalar("null"), inner])`.
  *
+ * The inner type must be `PlainSchema` — sums are always LWW.
+ * `nullable(text())` is a compile error. Use `nullable(string())`
+ * for a nullable LWW string, or the visibility flag pattern
+ * (boolean + persistent text field) for nullable-or-collaborative-text.
+ *
  * ```ts
  * Schema.nullable(Schema.string()) // string | null
  * ```
  */
-function nullable<S extends Schema>(
+function nullable<S extends PlainSchema>(
   inner: S,
-): PositionalSumSchema<[ScalarSchema<"null">, S], ExtractTags<S>> {
+): PositionalSumSchema<[ScalarSchema<"null">, S], ExtractCaps<S>> {
   return sum([null_(), inner])
 }
 
@@ -609,7 +695,7 @@ function nullable<S extends Schema>(
  * Schema constructors. Usage:
  *
  * ```ts
- * const myDoc = Schema.doc({
+ * const myDoc = Schema.struct({
  *   tags: Schema.list(Schema.string()),
  *   metadata: Schema.struct({
  *     author: Schema.string(),
@@ -626,15 +712,16 @@ function nullable<S extends Schema>(
  * `Schema.struct`, `Schema.list`, `Schema.record`,
  * `Schema.union`, `Schema.discriminatedUnion`, `Schema.nullable`
  *
- * **Root:**
- * `Schema.doc`
+ * **First-class CRDT types:**
+ * `Schema.text`, `Schema.counter`, `Schema.set`, `Schema.tree`,
+ * `Schema.movableList`
+ *
+ * **Merge boundary:**
+ * `Schema.struct.json`, `Schema.list.json`, `Schema.record.json`
  *
  * **Low-level (grammar-native, power users):**
  * `Schema.scalar`, `Schema.product`, `Schema.sequence`, `Schema.map`,
- * `Schema.sum`, `Schema.discriminatedSum`, `Schema.annotated`
- *
- * Backend-specific annotation constructors (text, counter, movableList,
- * tree) live in their respective backend packages.
+ * `Schema.sum`, `Schema.discriminatedSum`
  */
 export const Schema = {
   // Low-level structural constructors
@@ -644,7 +731,6 @@ export const Schema = {
   map,
   sum,
   discriminatedSum,
-  annotated,
 
   // Scalars (leaf values)
   string: string_,
@@ -663,8 +749,12 @@ export const Schema = {
   discriminatedUnion,
   nullable,
 
-  // Root
-  doc,
+  // First-class CRDT types
+  text,
+  counter,
+  set,
+  tree,
+  movableList,
 } as const
 
 // ---------------------------------------------------------------------------
@@ -672,25 +762,36 @@ export const Schema = {
 // ---------------------------------------------------------------------------
 
 /**
- * Returns the structural kind of a schema node, looking through
- * annotations to find the underlying structure.
+ * Returns the structural kind of a schema node, mapping first-class
+ * CRDT types to their structural analogs.
  *
- * For annotated nodes without an inner schema (e.g. `text()`, `counter()`),
- * returns `"annotated"` — the annotation IS the structure.
- *
- * For annotated nodes with an inner schema (e.g. `movableList()`, `doc()`),
- * returns `"annotated"` as well — callers that want the inner structural
- * kind should unwrap `.schema` themselves.
+ * | `[KIND]`    | `structuralKind()` return |
+ * |-------------|---------------------------|
+ * | `"scalar"`  | `"scalar"`                |
+ * | `"product"` | `"product"`               |
+ * | `"sequence"`| `"sequence"`              |
+ * | `"map"`     | `"map"`                   |
+ * | `"sum"`     | `"sum"`                   |
+ * | `"text"`    | `"scalar"`                |
+ * | `"counter"` | `"scalar"`                |
+ * | `"set"`     | `"map"`                   |
+ * | `"tree"`    | `"product"`               |
+ * | `"movable"` | `"sequence"`              |
  */
-export function structuralKind(schema: Schema): Schema[KindSymbol] {
-  return schema[KIND]
-}
-
-/**
- * Returns `true` if the schema node is annotated (directly).
- */
-export function isAnnotated(schema: Schema): schema is AnnotatedSchema {
-  return schema[KIND] === "annotated"
+export function structuralKind(schema: Schema): StructuralKind {
+  switch (schema[KIND]) {
+    case "text":
+    case "counter":
+      return "scalar"
+    case "set":
+      return "map"
+    case "tree":
+      return "product"
+    case "movable":
+      return "sequence"
+    default:
+      return schema[KIND]
+  }
 }
 
 /**
@@ -707,20 +808,6 @@ export function isNullableSum(schema: PositionalSumSchema): boolean {
   )
 }
 
-/**
- * If the schema is annotated, returns the inner schema (if any).
- * Otherwise returns the schema itself.
- *
- * This is useful for interpreters that want to "see through" annotations
- * to the underlying structure while still being able to inspect the tag.
- */
-export function unwrapAnnotation(schema: Schema): Schema | undefined {
-  if (schema[KIND] === "annotated") {
-    return schema.schema
-  }
-  return schema
-}
-
 // ---------------------------------------------------------------------------
 // advanceSchema — pure schema descent for a single path segment
 // ---------------------------------------------------------------------------
@@ -733,11 +820,11 @@ export function unwrapAnnotation(schema: Schema): Schema | undefined {
  * `interpretImpl`'s field/item path construction. It walks one step
  * down the schema tree — no store access, no Loro dependency.
  *
- * Annotations are unwrapped before dispatching:
- * - `doc(product)` → unwrap to product
- * - `movable(sequence)` → unwrap to sequence
- * - `tree(inner)` → unwrap to inner
- * - other annotations with inner → unwrap to inner
+ * First-class types are dispatched directly:
+ * - `text` / `counter` — leaf types, cannot advance (throws)
+ * - `set` — advance to `.item` on any key (like map)
+ * - `tree` — advance to `.nodeData` then descend (like product)
+ * - `movable` — advance to `.item` on index (like sequence)
  *
  * Sum types are never advanced through — sums resolve by value (store
  * inspection), not by path segment. If a field's schema is a sum,
@@ -747,18 +834,7 @@ export function unwrapAnnotation(schema: Schema): Schema | undefined {
  *   index segment on a product, or key segment on a scalar).
  */
 export function advanceSchema(schema: Schema, segment: Segment): Schema {
-  // Unwrap annotations to reach the structural node
-  let structural = schema
-  while (structural[KIND] === "annotated") {
-    if (structural.schema === undefined) {
-      throw new Error(
-        `advanceSchema: cannot advance through leaf annotation "${structural.tag}" (no inner schema)`,
-      )
-    }
-    structural = structural.schema
-  }
-
-  switch (structural[KIND]) {
+  switch (schema[KIND]) {
     case "product": {
       if (segment.role !== "key") {
         throw new Error(
@@ -766,7 +842,7 @@ export function advanceSchema(schema: Schema, segment: Segment): Schema {
         )
       }
       const key = segment.resolve() as string
-      const fieldSchema = structural.fields[key]
+      const fieldSchema = schema.fields[key]
       if (!fieldSchema) {
         throw new Error(`advanceSchema: product has no field "${key}"`)
       }
@@ -779,7 +855,7 @@ export function advanceSchema(schema: Schema, segment: Segment): Schema {
           `advanceSchema: sequence expects an index segment, got key segment "${segment.resolve()}"`,
         )
       }
-      return structural.item
+      return schema.item
     }
 
     case "map": {
@@ -788,17 +864,51 @@ export function advanceSchema(schema: Schema, segment: Segment): Schema {
           `advanceSchema: map expects a key segment, got index segment`,
         )
       }
-      return structural.item
+      return schema.item
     }
 
     case "scalar":
       throw new Error(
-        `advanceSchema: cannot advance into a scalar (kind: ${structural.scalarKind})`,
+        `advanceSchema: cannot advance into a scalar (kind: ${schema.scalarKind})`,
       )
 
     case "sum":
       throw new Error(
         `advanceSchema: cannot advance through a sum (sums resolve by value, not by path segment)`,
       )
+
+    case "text":
+      throw new Error(
+        `advanceSchema: cannot advance into text (leaf type, no inner schema)`,
+      )
+
+    case "counter":
+      throw new Error(
+        `advanceSchema: cannot advance into counter (leaf type, no inner schema)`,
+      )
+
+    case "set": {
+      if (segment.role !== "key") {
+        throw new Error(
+          `advanceSchema: set expects a key segment, got index segment`,
+        )
+      }
+      return schema.item
+    }
+
+    case "tree": {
+      // Advance into node data — delegates to the inner schema.
+      // Full tree navigation (by node ID) is deferred.
+      return advanceSchema(schema.nodeData, segment)
+    }
+
+    case "movable": {
+      if (segment.role !== "index") {
+        throw new Error(
+          `advanceSchema: movable sequence expects an index segment, got key segment "${segment.resolve()}"`,
+        )
+      }
+      return schema.item
+    }
   }
 }

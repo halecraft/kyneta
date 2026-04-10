@@ -9,7 +9,7 @@
 // know which Loro API to call.
 //
 // The root case (LoroDoc) uses typed root container accessors
-// (doc.getMap, doc.getText, etc.) based on the schema annotation.
+// (doc.getMap, doc.getText, etc.) based on the schema's [KIND].
 // Non-root cases use generic container .get() methods with .kind()
 // for runtime type discrimination.
 //
@@ -17,7 +17,7 @@
 // stored in a single root LoroMap named PROPS_KEY ("_props"). This
 // avoids creating a separate root container per scalar field.
 
-import { advanceSchema, KIND, type Path, type Schema as SchemaNode, type Segment } from "@kyneta/schema"
+import { advanceSchema, KIND, structuralKind, type Path, type Schema as SchemaNode, type Segment } from "@kyneta/schema"
 import type { LoroDoc, LoroList, LoroMap, LoroMovableList } from "loro-crdt"
 
 // ---------------------------------------------------------------------------
@@ -62,21 +62,6 @@ function hasKind(value: unknown): value is { kind(): string } {
 }
 
 // ---------------------------------------------------------------------------
-// resolveAnnotationTag — determine the Loro container type for a schema
-// ---------------------------------------------------------------------------
-
-/**
- * Determine the annotation tag for a schema node, if any.
- * Returns the tag string for annotated schemas, undefined otherwise.
- */
-function getAnnotationTag(schema: SchemaNode): string | undefined {
-  if (schema[KIND] === "annotated") {
-    return schema.tag
-  }
-  return undefined
-}
-
-// ---------------------------------------------------------------------------
 // stepFromDoc — resolve a root-level container from a LoroDoc
 // ---------------------------------------------------------------------------
 
@@ -93,9 +78,8 @@ function stepFromDoc(
   fieldSchema: SchemaNode,
   key: string,
 ): unknown {
-  const tag = getAnnotationTag(fieldSchema)
-
-  switch (tag) {
+  // Dispatch on the schema's [KIND] directly — no annotation unwrapping
+  switch (fieldSchema[KIND]) {
     case "text":
       return doc.getText(key)
     case "counter":
@@ -104,15 +88,7 @@ function stepFromDoc(
       return doc.getMovableList(key)
     case "tree":
       return doc.getTree(key)
-    default:
-      break
-  }
-
-  // Non-annotated structural types: use the structural kind
-  // to determine the root container type
-  const structural = unwrapToStructural(fieldSchema)
-
-  switch (structural[KIND]) {
+    case "set":
     case "product":
       return doc.getMap(key)
     case "sequence":
@@ -128,18 +104,6 @@ function stepFromDoc(
       // Unknown kind — try _props as fallback
       return (doc.getMap(PROPS_KEY) as LoroMap).get(key)
   }
-}
-
-// ---------------------------------------------------------------------------
-// unwrapToStructural — unwrap annotations to reach the structural node
-// ---------------------------------------------------------------------------
-
-function unwrapToStructural(schema: SchemaNode): SchemaNode {
-  let s = schema
-  while (s[KIND] === "annotated" && s.schema !== undefined) {
-    s = s.schema
-  }
-  return s
 }
 
 // ---------------------------------------------------------------------------

@@ -10,7 +10,6 @@
  */
 
 import { CHANGEFEED, hasChangefeed } from "@kyneta/changefeed"
-import { LoroSchema } from "@kyneta/loro-schema"
 import {
   interpret,
   isIncrementChange,
@@ -50,13 +49,13 @@ installDOMGlobals()
 // Schema fixture
 // ---------------------------------------------------------------------------
 
-const todoSchema = LoroSchema.doc({
-  title: LoroSchema.text(),
-  count: LoroSchema.counter(),
-  items: LoroSchema.list(
+const todoSchema = Schema.struct({
+  title: Schema.text(),
+  count: Schema.counter(),
+  items: Schema.list(
     Schema.struct({
-      text: LoroSchema.text(),
-      done: LoroSchema.plain.boolean(),
+      text: Schema.text(),
+      done: Schema.boolean(),
     }),
   ),
 })

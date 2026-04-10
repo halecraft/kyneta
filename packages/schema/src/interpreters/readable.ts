@@ -10,14 +10,18 @@
 
 import type { Plain } from "../interpreter-types.js"
 import type {
-  AnnotatedSchema,
+  CounterSchema,
   DiscriminatedSumSchema,
   MapSchema,
+  MovableSequenceSchema,
   PositionalSumSchema,
   ProductSchema,
   ScalarSchema,
   Schema,
   SequenceSchema,
+  SetSchema,
+  TextSchema,
+  TreeSchema,
 } from "../schema.js"
 import type { NavigableMapRef, NavigableSequenceRef } from "./navigable.js"
 
@@ -86,7 +90,7 @@ export interface ReadableMapRef<T = unknown, V = unknown>
  * navigation. Leaf nodes have `[Symbol.toPrimitive]`.
  *
  * ```ts
- * const s = Schema.doc({
+ * const s = Schema.struct({
  *   title: Schema.string(),
  *   count: Schema.number(),
  * })
@@ -98,58 +102,46 @@ export interface ReadableMapRef<T = unknown, V = unknown>
  * ```
  */
 export type Readable<S extends Schema> =
-  // --- Annotated: dispatch on tag ---
-  S extends AnnotatedSchema<infer Tag, infer Inner>
-    ? Tag extends "text"
-      ? (() => string) & { [Symbol.toPrimitive](hint: string): string }
-      : Tag extends "counter"
-        ? (() => number) & {
-            [Symbol.toPrimitive](hint: string): number | string
-          }
-        : Tag extends "doc"
-          ? Inner extends ProductSchema<infer F>
-            ? (() => { [K in keyof F]: Plain<F[K]> }) & {
-                readonly [K in keyof F]: Readable<F[K]>
-              }
-            : unknown
-          : Tag extends "movable"
-            ? Inner extends SequenceSchema<infer I>
-              ? ReadableSequenceRef<Readable<I>, Plain<I>>
-              : unknown
-            : Tag extends "tree"
-              ? Inner extends Schema
-                ? Readable<Inner>
-                : unknown
-              : // Unknown annotation with inner — delegate
-                Inner extends Schema
-                ? Readable<Inner>
-                : unknown
-    : // --- Scalar ---
-      S extends ScalarSchema<infer _K, infer V>
-      ? (() => V) & { [Symbol.toPrimitive](hint: string): V | string }
-      : // --- Product ---
-        S extends ProductSchema<infer F>
-        ? (() => { [K in keyof F]: Plain<F[K]> }) & {
-            readonly [K in keyof F]: Readable<F[K]>
-          }
-        : // --- Sequence ---
-          S extends SequenceSchema<infer I>
-          ? ReadableSequenceRef<Readable<I>, Plain<I>>
-          : // --- Map ---
-            S extends MapSchema<infer I>
-            ? ReadableMapRef<Readable<I>, Plain<I>>
-            : // --- Sum ---
-              S extends PositionalSumSchema<infer V>
-              ? V extends readonly [
-                  ScalarSchema<"null", any>,
-                  infer Inner extends Schema,
-                ]
-                ? (() => Plain<Inner> | null) & {
-                    [Symbol.toPrimitive](
-                      hint: string,
-                    ): Plain<Inner> | null | string
+  // --- First-class leaf types ---
+  S extends TextSchema
+    ? (() => string) & { [Symbol.toPrimitive](hint: string): string }
+    : S extends CounterSchema
+      ? (() => number) & {
+          [Symbol.toPrimitive](hint: string): number | string
+        }
+      : // --- First-class container types ---
+        S extends SetSchema<infer I>
+        ? ReadableMapRef<Readable<I>, Plain<I>>
+        : S extends TreeSchema<infer Inner>
+          ? Readable<Inner>
+          : S extends MovableSequenceSchema<infer I>
+            ? ReadableSequenceRef<Readable<I>, Plain<I>>
+            : // --- Scalar ---
+              S extends ScalarSchema<infer _K, infer V>
+              ? (() => V) & { [Symbol.toPrimitive](hint: string): V | string }
+              : // --- Product ---
+                S extends ProductSchema<infer F>
+                ? (() => { [K in keyof F]: Plain<F[K]> }) & {
+                    readonly [K in keyof F]: Readable<F[K]>
                   }
-                : Readable<V[number]>
-              : S extends DiscriminatedSumSchema<infer D, infer V>
-                ? ReadableDiscriminantProductRef<V[number]["fields"], D>
-                : unknown
+                : // --- Sequence ---
+                  S extends SequenceSchema<infer I>
+                  ? ReadableSequenceRef<Readable<I>, Plain<I>>
+                  : // --- Map ---
+                    S extends MapSchema<infer I>
+                    ? ReadableMapRef<Readable<I>, Plain<I>>
+                    : // --- Sum ---
+                      S extends PositionalSumSchema<infer V>
+                      ? V extends readonly [
+                          ScalarSchema<"null", any>,
+                          infer Inner extends Schema,
+                        ]
+                        ? (() => Plain<Inner> | null) & {
+                            [Symbol.toPrimitive](
+                              hint: string,
+                            ): Plain<Inner> | null | string
+                          }
+                        : Readable<V[number]>
+                      : S extends DiscriminatedSumSchema<infer D, infer V>
+                        ? ReadableDiscriminantProductRef<V[number]["fields"], D>
+                        : unknown

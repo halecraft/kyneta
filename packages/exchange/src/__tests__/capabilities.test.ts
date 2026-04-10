@@ -113,7 +113,7 @@ describe("Capabilities", () => {
   // -------------------------------------------------------------------------
 
   it("resolveSchema returns BoundSchema for matching triple", () => {
-    const schema = Schema.doc({ title: Schema.string() })
+    const schema = Schema.struct({ title: Schema.string() })
     const bound = json.bind(schema)
 
     const caps = createCapabilities({
@@ -131,7 +131,7 @@ describe("Capabilities", () => {
   })
 
   it("resolveSchema returns undefined for wrong strategy", () => {
-    const schema = Schema.doc({ title: Schema.string() })
+    const schema = Schema.struct({ title: Schema.string() })
     const bound = json.bind(schema)
 
     const caps = createCapabilities({
@@ -149,7 +149,7 @@ describe("Capabilities", () => {
   })
 
   it("resolveSchema returns undefined for unknown hash", () => {
-    const schema = Schema.doc({ title: Schema.string() })
+    const schema = Schema.struct({ title: Schema.string() })
     const bound = json.bind(schema)
 
     const caps = createCapabilities({
@@ -201,7 +201,7 @@ describe("Capabilities", () => {
       resolveFactory,
     })
 
-    const schema = Schema.doc({ count: Schema.number() })
+    const schema = Schema.struct({ count: Schema.number() })
     const bound = json.bind(schema)
 
     // Before registration: nothing resolves

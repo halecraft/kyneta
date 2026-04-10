@@ -9,7 +9,7 @@ export type {
   CrdtStrategy,
   FactoryBuilder,
   JsonStrategy,
-  RestrictTags,
+  RestrictCaps,
   SubstrateNamespace,
 } from "./bind.js"
 // Interpret, Replicate, BoundReplica are dual-namespace (type + value) —
@@ -229,18 +229,20 @@ export type {
   Wrap,
 } from "./ref.js"
 export type {
-  AnnotatedSchema,
+  // Capability extraction
+  CapsSymbol,
+  CounterSchema,
   DiscriminatedSumSchema,
-  // Tag extraction
-  ExtractTags,
+  ExtractCaps,
   // KIND symbol type
   KindSymbol,
   MapSchema,
+  MovableSequenceSchema,
   PlainDiscriminatedSumSchema,
   PlainMapSchema,
   PlainPositionalSumSchema,
   PlainProductSchema,
-  // Plain subset (no annotations) — used by backend composition constraints
+  // Plain subset (no non-LWW types) — used by .json() and sum constraints
   PlainSchema,
   PlainSequenceSchema,
   PositionalSumSchema,
@@ -253,21 +255,21 @@ export type {
   // The recursive union
   Schema as SchemaNode,
   SequenceSchema,
+  SetSchema,
+  StructuralKind,
   SumSchema,
-  // TAGS symbol type
-  TagsSymbol,
+  TextSchema,
+  TreeSchema,
 } from "./schema.js"
 // Schema — unified recursive grammar (backend-agnostic)
 export {
   advanceSchema,
   buildVariantMap,
-  isAnnotated,
+  CAPS,
   isNullableSum,
   KIND,
   Schema,
   structuralKind,
-  TAGS,
-  unwrapAnnotation,
 } from "./schema.js"
 // Step — pure state transitions: (State, Change) → State
 export {

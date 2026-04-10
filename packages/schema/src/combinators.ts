@@ -9,12 +9,16 @@
 
 import type { Interpreter, Path, SumVariants } from "./interpret.js"
 import type {
-  AnnotatedSchema,
+  CounterSchema,
   MapSchema,
+  MovableSequenceSchema,
   ProductSchema,
   ScalarSchema,
   SequenceSchema,
+  SetSchema,
   SumSchema,
+  TextSchema,
+  TreeSchema,
 } from "./schema.js"
 
 // ---------------------------------------------------------------------------
@@ -163,27 +167,75 @@ export function product<Ctx, A, B>(
       ]
     },
 
-    annotated(
+    // --- First-class leaf types -----------------------------------------------
+
+    text(ctx: Ctx, path: Path, schema: TextSchema): [A, B] {
+      return [f.text(ctx, path, schema), g.text(ctx, path, schema)]
+    },
+
+    counter(ctx: Ctx, path: Path, schema: CounterSchema): [A, B] {
+      return [f.counter(ctx, path, schema), g.counter(ctx, path, schema)]
+    },
+
+    // --- First-class container types ------------------------------------------
+
+    set(
       ctx: Ctx,
       path: Path,
-      schema: AnnotatedSchema,
-      inner: (() => [A, B]) | undefined,
+      schema: SetSchema,
+      item: (key: string) => [A, B],
     ): [A, B] {
-      if (inner === undefined) {
-        return [
-          f.annotated(ctx, path, schema, undefined),
-          g.annotated(ctx, path, schema, undefined),
-        ]
+      const cache = new Map<string, [A, B]>()
+      const force = (key: string): [A, B] => {
+        let v = cache.get(key)
+        if (v === undefined) {
+          v = item(key)
+          cache.set(key, v)
+        }
+        return v
       }
-      // Memoize the inner thunk
+      return [
+        f.set(ctx, path, schema, k => force(k)[0]),
+        g.set(ctx, path, schema, k => force(k)[1]),
+      ]
+    },
+
+    tree(
+      ctx: Ctx,
+      path: Path,
+      schema: TreeSchema,
+      nodeData: () => [A, B],
+    ): [A, B] {
+      // Memoize the nodeData thunk
       let cached: [A, B] | undefined
       const force = (): [A, B] => {
-        if (cached === undefined) cached = inner()
+        if (cached === undefined) cached = nodeData()
         return cached
       }
       return [
-        f.annotated(ctx, path, schema, () => force()[0]),
-        g.annotated(ctx, path, schema, () => force()[1]),
+        f.tree(ctx, path, schema, () => force()[0]),
+        g.tree(ctx, path, schema, () => force()[1]),
+      ]
+    },
+
+    movable(
+      ctx: Ctx,
+      path: Path,
+      schema: MovableSequenceSchema,
+      item: (index: number) => [A, B],
+    ): [A, B] {
+      const cache = new Map<number, [A, B]>()
+      const force = (index: number): [A, B] => {
+        let v = cache.get(index)
+        if (v === undefined) {
+          v = item(index)
+          cache.set(index, v)
+        }
+        return v
+      }
+      return [
+        f.movable(ctx, path, schema, i => force(i)[0]),
+        g.movable(ctx, path, schema, i => force(i)[1]),
       ]
     },
   }
@@ -278,15 +330,51 @@ export function overlay<Ctx, A>(
       )
     },
 
-    annotated(
+    // --- First-class leaf types -----------------------------------------------
+
+    text(ctx: Ctx, path: Path, schema: TextSchema): A {
+      return merge(
+        primary.text(ctx, path, schema),
+        fallback.text(ctx, path, schema),
+        path,
+      )
+    },
+
+    counter(ctx: Ctx, path: Path, schema: CounterSchema): A {
+      return merge(
+        primary.counter(ctx, path, schema),
+        fallback.counter(ctx, path, schema),
+        path,
+      )
+    },
+
+    // --- First-class container types ------------------------------------------
+
+    set(ctx: Ctx, path: Path, schema: SetSchema, item: (key: string) => A): A {
+      return merge(
+        primary.set(ctx, path, schema, item),
+        fallback.set(ctx, path, schema, item),
+        path,
+      )
+    },
+
+    tree(ctx: Ctx, path: Path, schema: TreeSchema, nodeData: () => A): A {
+      return merge(
+        primary.tree(ctx, path, schema, nodeData),
+        fallback.tree(ctx, path, schema, nodeData),
+        path,
+      )
+    },
+
+    movable(
       ctx: Ctx,
       path: Path,
-      schema: AnnotatedSchema,
-      inner: (() => A) | undefined,
+      schema: MovableSequenceSchema,
+      item: (index: number) => A,
     ): A {
       return merge(
-        primary.annotated(ctx, path, schema, inner),
-        fallback.annotated(ctx, path, schema, inner),
+        primary.movable(ctx, path, schema, item),
+        fallback.movable(ctx, path, schema, item),
         path,
       )
     },

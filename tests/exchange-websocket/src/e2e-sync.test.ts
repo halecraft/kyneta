@@ -137,7 +137,7 @@ afterEach(async () => {
 // Bound schemas (module scope)
 // ---------------------------------------------------------------------------
 
-const sequentialSchema = Schema.doc({
+const sequentialSchema = Schema.struct({
   title: Schema.string(),
   count: Schema.number(),
 })
@@ -149,7 +149,7 @@ const loroSchema = LoroSchema.doc({
 })
 const LoroDoc = loro.bind(loroSchema)
 
-const presenceSchema = Schema.doc({
+const presenceSchema = Schema.struct({
   cursor: Schema.struct({
     x: Schema.number(),
     y: Schema.number(),
@@ -412,7 +412,7 @@ describe("Heterogeneous documents over Websocket", () => {
   it("one connection hosts both sequential and causal docs, both sync", async () => {
     const { serverExchange, clientExchange } = await createConnectedPair()
 
-    const plainSchema = Schema.doc({ config: Schema.string() })
+    const plainSchema = Schema.struct({ config: Schema.string() })
     const ConfigDoc = json.bind(plainSchema)
 
     const collabSchema = LoroSchema.doc({ text: LoroSchema.text() })

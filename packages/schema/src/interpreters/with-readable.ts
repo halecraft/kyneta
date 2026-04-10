@@ -11,7 +11,7 @@
 // 2. Adds .get() convenience methods:
 //    - Sequence: .get(i) returns plain value (equivalent to .at(i)?.())
 //    - Map: .get(key) returns plain value (equivalent to .at(key)?.())
-// 3. Adds [Symbol.toPrimitive] for scalar/text/counter annotations
+// 3. Adds [Symbol.toPrimitive] for scalar/text/counter
 //
 // Navigation (product field getters, .at(), .length, .keys(), etc.) is
 // NOT provided here — that's withNavigation's job. withReadable assumes
@@ -24,14 +24,17 @@
 
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
-import {
-  KIND,
-  type AnnotatedSchema,
-  type MapSchema,
-  type ProductSchema,
-  type ScalarSchema,
-  type SequenceSchema,
-  type SumSchema,
+import type {
+  CounterSchema,
+  MapSchema,
+  MovableSequenceSchema,
+  ProductSchema,
+  ScalarSchema,
+  SequenceSchema,
+  SetSchema,
+  SumSchema,
+  TextSchema,
+  TreeSchema,
 } from "../schema.js"
 
 import type { HasNavigation, HasRead } from "./bottom.js"
@@ -204,65 +207,121 @@ export function withReadable<A extends HasNavigation>(
       return base.sum(ctx, path, schema, baseVariants) as A & HasRead
     },
 
-    // --- Annotated -------------------------------------------------------------
-    annotated(
+    // --- Text ------------------------------------------------------------------
+    // Text: callable returning string, text-specific toPrimitive.
+    text(ctx: RefContext, path: Path, schema: TextSchema): A & HasRead {
+      const result = base.text(ctx, path, schema) as any
+
+      result[CALL] = () => {
+        const v = ctx.reader.read(path)
+        return typeof v === "string" ? v : String(v ?? "")
+      }
+      result[Symbol.toPrimitive] = (_hint: string) => result[CALL]()
+      return result as A & HasRead
+    },
+
+    // --- Counter ---------------------------------------------------------------
+    // Counter: callable returning number, hint-aware toPrimitive.
+    counter(ctx: RefContext, path: Path, schema: CounterSchema): A & HasRead {
+      const result = base.counter(ctx, path, schema) as any
+
+      result[CALL] = () => {
+        const v = ctx.reader.read(path)
+        return typeof v === "number" ? v : 0
+      }
+      result[Symbol.toPrimitive] = (hint: string) => {
+        const v = result[CALL]()
+        return hint === "string" ? String(v) : v
+      }
+      return result as A & HasRead
+    },
+
+    // --- Set -------------------------------------------------------------------
+    // Delegate like map — fill CALL slot to produce a fresh record snapshot.
+    set(
       ctx: RefContext,
       path: Path,
-      schema: AnnotatedSchema,
-      inner: (() => A & HasRead) | undefined,
+      schema: SetSchema,
+      item: (key: string) => A & HasRead,
     ): A & HasRead {
-      switch (schema.tag) {
-        case "text": {
-          // Text annotation: callable returning string, text-specific toPrimitive.
-          // We call the base to get a carrier, then fill CALL.
-          const baseInner = inner as (() => A) | undefined
-          const result = base.annotated(ctx, path, schema, baseInner) as any
+      // Downcast for base
+      const baseItem = item as (key: string) => A
+      const result = base.set(ctx, path, schema, baseItem) as any
 
-          result[CALL] = () => {
-            const v = ctx.reader.read(path)
-            return typeof v === "string" ? v : String(v ?? "")
-          }
-          result[Symbol.toPrimitive] = (_hint: string) => result[CALL]()
-          return result as A & HasRead
+      // Fill CALL slot — fold child values to produce a fresh record snapshot.
+      result[CALL] = () => {
+        const keys = ctx.reader.keys(path)
+        const snapshot: Record<string, unknown> = {}
+        for (const key of keys) {
+          const child: unknown = result.at(key)
+          snapshot[key] =
+            typeof child === "function" ? (child as () => unknown)() : child
         }
-
-        case "counter": {
-          // Counter annotation: callable returning number, hint-aware toPrimitive.
-          const baseInner = inner as (() => A) | undefined
-          const result = base.annotated(ctx, path, schema, baseInner) as any
-
-          result[CALL] = () => {
-            const v = ctx.reader.read(path)
-            return typeof v === "number" ? v : 0
-          }
-          result[Symbol.toPrimitive] = (hint: string) => {
-            const v = result[CALL]()
-            return hint === "string" ? String(v) : v
-          }
-          return result as A & HasRead
-        }
-
-        case "doc":
-        case "movable":
-        case "tree":
-          // Delegating annotations — inner was already interpreted.
-          if (inner !== undefined) {
-            return inner()
-          }
-          // No inner — produce a bare carrier
-          return base.annotated(ctx, path, schema, undefined) as A & HasRead
-
-        default:
-          // Unknown annotation — delegate to inner if present
-          if (inner !== undefined) {
-            return inner()
-          }
-          // Leaf annotation without known semantics — treat as scalar
-          return this.scalar(ctx, path, {
-            [KIND]: "scalar" as const,
-            scalarKind: "any" as any,
-          })
+        return snapshot
       }
+
+      // .get(key) — returns plain value
+      Object.defineProperty(result, "get", {
+        value: (key: string): unknown => {
+          const child = result.at(key)
+          return child !== undefined ? child() : undefined
+        },
+        enumerable: false,
+        configurable: true,
+      })
+
+      return result as A & HasRead
+    },
+
+    // --- Tree ------------------------------------------------------------------
+    // Delegate via nodeData() — the inner interpretation already has
+    // reading installed.
+    tree(
+      ctx: RefContext,
+      path: Path,
+      schema: TreeSchema,
+      nodeData: () => A & HasRead,
+    ): A & HasRead {
+      const baseNodeData = nodeData as () => A
+      return base.tree(ctx, path, schema, baseNodeData) as A & HasRead
+    },
+
+    // --- Movable ---------------------------------------------------------------
+    // Delegate like sequence — fill CALL slot for array snapshot.
+    movable(
+      ctx: RefContext,
+      path: Path,
+      schema: MovableSequenceSchema,
+      item: (index: number) => A & HasRead,
+    ): A & HasRead {
+      // Downcast for base
+      const baseItem = item as (index: number) => A
+      const result = base.movable(ctx, path, schema, baseItem) as any
+
+      // Fill CALL slot — fold child values to produce a fresh array snapshot.
+      result[CALL] = () => {
+        const len = ctx.reader.arrayLength(path)
+        const snapshot: unknown[] = []
+        for (let i = 0; i < len; i++) {
+          const child: unknown = result.at(i)
+          snapshot.push(
+            typeof child === "function" ? (child as () => unknown)() : child,
+          )
+        }
+        return snapshot
+      }
+
+      // .get(i) — returns plain value (not a ref)
+      Object.defineProperty(result, "get", {
+        value: (index: number): unknown => {
+          const child = result.at(index)
+          return child !== undefined ? child() : undefined
+        },
+        enumerable: false,
+        configurable: true,
+      })
+
+      return result as A & HasRead
     },
   }
 }

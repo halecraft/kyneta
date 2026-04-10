@@ -64,24 +64,24 @@ afterEach(async () => {
 // Bound schemas (module scope)
 // ---------------------------------------------------------------------------
 
-const seededSchema = Schema.doc({
+const seededSchema = Schema.struct({
   title: Schema.string(),
   count: Schema.number(),
 })
 const SeededDoc = json.bind(seededSchema)
 
-const simpleSchema = Schema.doc({
+const simpleSchema = Schema.struct({
   title: Schema.string(),
 })
 const SimpleDoc = json.bind(simpleSchema)
 
-const presenceSchema = Schema.doc({
+const presenceSchema = Schema.struct({
   name: Schema.string(),
   x: Schema.number(),
 })
 const PresenceDoc = json.bind(presenceSchema, "ephemeral")
 
-const sequentialSchema = Schema.doc({
+const sequentialSchema = Schema.struct({
   title: Schema.string(),
   count: Schema.number(),
 })

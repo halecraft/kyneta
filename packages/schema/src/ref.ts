@@ -43,14 +43,18 @@ import type {
   WritableMapRef,
 } from "./interpreters/writable.js"
 import type {
-  AnnotatedSchema,
+  CounterSchema,
   DiscriminatedSumSchema,
   MapSchema,
+  MovableSequenceSchema,
   PositionalSumSchema,
   ProductSchema,
   ScalarSchema,
   Schema,
   SequenceSchema,
+  SetSchema,
+  TextSchema,
+  TreeSchema,
 } from "./schema.js"
 
 // ---------------------------------------------------------------------------
@@ -147,48 +151,41 @@ export type DiscriminantProductRef<
  *   - Observable (if M = "rwc": `ref[CHANGEFEED]` → `Changefeed`)
  */
 export type SchemaRef<S extends Schema, M extends RefMode> =
-  // --- Annotated: dispatch on tag ---
-  S extends AnnotatedSchema<infer Tag, infer Inner>
-    ? Tag extends "text"
+  // --- Text ---
+  S extends TextSchema
+    ? Wrap<
+        (() => string) & {
+          [Symbol.toPrimitive](hint: string): string
+        } & TextRef,
+        M
+      >
+    : // --- Counter ---
+      S extends CounterSchema
       ? Wrap<
-          (() => string) & {
-            [Symbol.toPrimitive](hint: string): string
-          } & TextRef,
+          (() => number) & {
+            [Symbol.toPrimitive](hint: string): number | string
+          } & CounterRef,
           M
         >
-      : Tag extends "counter"
+      : // --- Set (map-like shape) ---
+        S extends SetSchema<infer I>
         ? Wrap<
-            (() => number) & {
-              [Symbol.toPrimitive](hint: string): number | string
-            } & CounterRef,
+            ReadableMapRef<SchemaRef<I, M>, Plain<I>> & WritableMapRef<Plain<I>>,
             M
           >
-        : Tag extends "doc"
-          ? Inner extends ProductSchema<infer F>
+        : // --- Tree (delegate to inner nodeData) ---
+          S extends TreeSchema<infer Inner>
+          ? Inner extends Schema
+            ? SchemaRef<Inner, M>
+            : unknown
+          : // --- MovableSequence ---
+            S extends MovableSequenceSchema<infer I>
             ? Wrap<
-                (() => { [K in keyof F]: Plain<F[K]> }) & {
-                  readonly [K in keyof F]: SchemaRef<F[K], M>
-                } & ProductRef<{ [K in keyof F]: Plain<F[K]> }>,
+                ReadableSequenceRef<SchemaRef<I, M>, Plain<I>> & SequenceRef,
                 M
               >
-            : unknown
-          : Tag extends "movable"
-            ? Inner extends SequenceSchema<infer I>
-              ? Wrap<
-                  ReadableSequenceRef<SchemaRef<I, M>, Plain<I>> & SequenceRef,
-                  M
-                >
-              : unknown
-            : Tag extends "tree"
-              ? Inner extends Schema
-                ? SchemaRef<Inner, M>
-                : unknown
-              : // Unknown annotation with inner — delegate
-                Inner extends Schema
-                ? SchemaRef<Inner, M>
-                : unknown
-    : // --- Scalar ---
-      S extends ScalarSchema<infer _K, infer V>
+            : // --- Scalar ---
+              S extends ScalarSchema<infer _K, infer V>
       ? Wrap<
           (() => V) & {
             [Symbol.toPrimitive](hint: string): V | string
@@ -268,8 +265,8 @@ export type RWRef<S extends Schema> = SchemaRef<S, "rw">
  * Every node is callable, navigable, writable, transactable, and observable.
  *
  * ```ts
- * const s = Schema.doc({
- *   title: Schema.annotated("text"),
+ * const s = Schema.struct({
+ *   title: Schema.text(),
  *   items: Schema.list(Schema.struct({
  *     name: Schema.string(),
  *   })),

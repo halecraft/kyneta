@@ -23,13 +23,13 @@ import {
 // Shared fixtures
 // ===========================================================================
 
-const chatDocSchema = Schema.doc({
-  title: Schema.annotated("text"),
-  count: Schema.annotated("counter"),
+const chatDocSchema = Schema.struct({
+  title: Schema.text(),
+  count: Schema.counter(),
   messages: Schema.list(
     Schema.struct({
       author: Schema.string(),
-      body: Schema.annotated("text"),
+      body: Schema.text(),
     }),
   ),
   settings: Schema.struct({

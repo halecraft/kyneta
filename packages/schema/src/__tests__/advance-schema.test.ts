@@ -109,22 +109,22 @@ describe("advanceSchema", () => {
   })
 
   // -------------------------------------------------------------------------
-  // Annotated — doc (unwraps to product)
+  // Struct (was doc) — product dispatch
   // -------------------------------------------------------------------------
 
-  describe("annotated: doc", () => {
-    const schema = Schema.doc({
+  describe("struct", () => {
+    const schema = Schema.struct({
       title: Schema.string(),
       count: Schema.number(),
     })
 
-    it("unwraps doc annotation and returns field schema", () => {
+    it("returns field schema for key segment", () => {
       const result = advanceSchema(schema, key("title"))
       expect(result[KIND]).toBe("scalar")
       expect((result as any).scalarKind).toBe("string")
     })
 
-    it("unwraps doc annotation for all fields", () => {
+    it("returns field schema for all fields", () => {
       const result = advanceSchema(schema, key("count"))
       expect(result[KIND]).toBe("scalar")
       expect((result as any).scalarKind).toBe("number")
@@ -132,16 +132,15 @@ describe("advanceSchema", () => {
   })
 
   // -------------------------------------------------------------------------
-  // Annotated — movable (unwraps to sequence)
+  // MovableList — movable sequence dispatch
   // -------------------------------------------------------------------------
 
-  describe("annotated: movable", () => {
-    const schema = Schema.annotated(
-      "movable",
-      Schema.list(Schema.struct({ name: Schema.string() })),
+  describe("movableList", () => {
+    const schema = Schema.movableList(
+      Schema.struct({ name: Schema.string() }),
     )
 
-    it("unwraps movable annotation and returns item schema", () => {
+    it("index segment returns the item schema", () => {
       const result = advanceSchema(schema, index(0))
       expect(result[KIND]).toBe("product")
       expect(Object.keys((result as any).fields)).toContain("name")
@@ -149,34 +148,35 @@ describe("advanceSchema", () => {
   })
 
   // -------------------------------------------------------------------------
-  // Annotated — text/counter (leaf, no inner schema)
+  // Text/Counter — leaf types, cannot advance
   // -------------------------------------------------------------------------
 
-  describe("annotated: leaf", () => {
-    it("throws when advancing into text annotation (no inner schema)", () => {
-      const schema = Schema.annotated("text")
+  describe("leaf types", () => {
+    it("throws when advancing into text (leaf type, no inner schema)", () => {
+      const schema = Schema.text()
       expect(() => advanceSchema(schema, key("anything"))).toThrow(
-        "leaf annotation",
+        "cannot advance into text",
       )
     })
 
-    it("throws when advancing into counter annotation (no inner schema)", () => {
-      const schema = Schema.annotated("counter")
-      expect(() => advanceSchema(schema, index(0))).toThrow("leaf annotation")
+    it("throws when advancing into counter (leaf type, no inner schema)", () => {
+      const schema = Schema.counter()
+      expect(() => advanceSchema(schema, index(0))).toThrow(
+        "cannot advance into counter",
+      )
     })
   })
 
   // -------------------------------------------------------------------------
-  // Annotated — tree (unwraps to inner)
+  // Tree — delegates to nodeData
   // -------------------------------------------------------------------------
 
-  describe("annotated: tree", () => {
-    const schema = Schema.annotated(
-      "tree",
+  describe("tree", () => {
+    const schema = Schema.tree(
       Schema.struct({ label: Schema.string() }),
     )
 
-    it("unwraps tree annotation and returns field schema", () => {
+    it("delegates to nodeData and returns field schema", () => {
       const result = advanceSchema(schema, key("label"))
       expect(result[KIND]).toBe("scalar")
       expect((result as any).scalarKind).toBe("string")
@@ -213,7 +213,7 @@ describe("advanceSchema", () => {
   // -------------------------------------------------------------------------
 
   describe("multi-step descent", () => {
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       items: Schema.list(
         Schema.struct({
           name: Schema.string(),
@@ -277,41 +277,35 @@ describe("advanceSchema", () => {
   // Annotated doc with annotations
   // -------------------------------------------------------------------------
 
-  describe("annotated doc with annotations", () => {
-    const schema = Schema.doc({
-      title: Schema.annotated("text"),
-      count: Schema.annotated("counter"),
-      tasks: Schema.annotated(
-        "movable",
-        Schema.list(
-          Schema.struct({
-            name: Schema.string(),
-            done: Schema.boolean(),
-          }),
-        ),
+  describe("struct with first-class types", () => {
+    const schema = Schema.struct({
+      title: Schema.text(),
+      count: Schema.counter(),
+      tasks: Schema.movableList(
+        Schema.struct({
+          name: Schema.string(),
+          done: Schema.boolean(),
+        }),
       ),
     })
 
-    it("returns text annotation for text field", () => {
+    it("returns text schema for text field", () => {
       const result = advanceSchema(schema, key("title"))
-      expect(result[KIND]).toBe("annotated")
-      expect((result as any).tag).toBe("text")
+      expect(result[KIND]).toBe("text")
     })
 
-    it("returns counter annotation for counter field", () => {
+    it("returns counter schema for counter field", () => {
       const result = advanceSchema(schema, key("count"))
-      expect(result[KIND]).toBe("annotated")
-      expect((result as any).tag).toBe("counter")
+      expect(result[KIND]).toBe("counter")
     })
 
-    it("returns movable annotation for movableList field", () => {
+    it("returns movable schema for movableList field", () => {
       const result = advanceSchema(schema, key("tasks"))
-      expect(result[KIND]).toBe("annotated")
-      expect((result as any).tag).toBe("movable")
+      expect(result[KIND]).toBe("movable")
     })
 
     it("can descend through movableList into item struct", () => {
-      const step1 = advanceSchema(schema, key("tasks")) // → annotated("movable", sequence)
+      const step1 = advanceSchema(schema, key("tasks")) // → movable sequence
       const step2 = advanceSchema(step1, index(0)) // → product (struct)
       expect(step2[KIND]).toBe("product")
       expect(Object.keys((step2 as any).fields)).toContain("name")

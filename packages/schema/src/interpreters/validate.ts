@@ -15,17 +15,21 @@ import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import { interpret } from "../interpret.js"
 import type { Plain } from "../interpreter-types.js"
 import {
-  type AnnotatedSchema,
+  type CounterSchema,
   type DiscriminatedSumSchema,
   isNullableSum,
   KIND,
   type MapSchema,
+  type MovableSequenceSchema,
   type PositionalSumSchema,
   type ProductSchema,
   type ScalarSchema,
   type Schema,
   type SequenceSchema,
+  type SetSchema,
   type SumSchema,
+  type TextSchema,
+  type TreeSchema,
 } from "../schema.js"
 
 /**
@@ -330,50 +334,81 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
     return undefined
   },
 
-  annotated(
+  text(
     ctx: ValidateContext,
     path: Path,
-    schema: AnnotatedSchema,
-    inner: (() => unknown) | undefined,
+    _schema: TextSchema,
   ): unknown {
-    const tag = schema.tag
+    const value = path.read(ctx.root)
 
-    // ── Leaf annotations (no inner schema) ─────────────────────────
-    if (inner === undefined) {
-      const value = path.read(ctx.root)
+    if (typeof value !== "string") {
+      ctx.errors.push(
+        new SchemaValidationError(path.format(), "string (text)", value),
+      )
+      return undefined
+    }
+    return value
+  },
 
-      switch (tag) {
-        case "text":
-          if (typeof value !== "string") {
-            ctx.errors.push(
-              new SchemaValidationError(path.format(), "string (text)", value),
-            )
-            return undefined
-          }
-          return value
+  counter(
+    ctx: ValidateContext,
+    path: Path,
+    _schema: CounterSchema,
+  ): unknown {
+    const value = path.read(ctx.root)
 
-        case "counter":
-          if (typeof value !== "number") {
-            ctx.errors.push(
-              new SchemaValidationError(
-                path.format(),
-                "number (counter)",
-                value,
-              ),
-            )
-            return undefined
-          }
-          return value
+    if (typeof value !== "number") {
+      ctx.errors.push(
+        new SchemaValidationError(path.format(), "number (counter)", value),
+      )
+      return undefined
+    }
+    return value
+  },
 
-        default:
-          // Unknown leaf annotation — accept any value
-          return value
-      }
+  set(
+    ctx: ValidateContext,
+    path: Path,
+    _schema: SetSchema,
+    item: (key: string) => unknown,
+  ): unknown {
+    const value = path.read(ctx.root)
+
+    if (!isNonNullObject(value) || Array.isArray(value)) {
+      ctx.errors.push(new SchemaValidationError(path.format(), "object", value))
+      return undefined
     }
 
-    // ── Structural annotations (doc, movable, tree, etc.) ──────────
-    // Delegate to inner schema interpretation
-    return inner()
+    const result: Record<string, unknown> = {}
+    for (const key of Object.keys(value as Record<string, unknown>)) {
+      result[key] = item(key)
+    }
+    return result
+  },
+
+  tree(
+    _ctx: ValidateContext,
+    _path: Path,
+    _schema: TreeSchema,
+    nodeData: () => unknown,
+  ): unknown {
+    return nodeData()
+  },
+
+  movable(
+    ctx: ValidateContext,
+    path: Path,
+    _schema: MovableSequenceSchema,
+    item: (index: number) => unknown,
+  ): unknown {
+    const value = path.read(ctx.root)
+
+    if (!Array.isArray(value)) {
+      ctx.errors.push(new SchemaValidationError(path.format(), "array", value))
+      return undefined
+    }
+
+    return value.map((_element, index) => item(index))
   },
 }
 
@@ -397,11 +432,16 @@ function innerSchemaExpected(schema: Schema): string {
       return "object"
     case "sum":
       return "union"
-    case "annotated":
-      if (schema.tag === "text") return "string (text)"
-      if (schema.tag === "counter") return "number (counter)"
-      if (schema.schema !== undefined) return innerSchemaExpected(schema.schema)
-      return schema.tag
+    case "text":
+      return "string (text)"
+    case "counter":
+      return "number (counter)"
+    case "set":
+      return "object"
+    case "tree":
+      return innerSchemaExpected(schema.nodeData)
+    case "movable":
+      return "array"
   }
 }
 

@@ -18,8 +18,8 @@ import { ensureLoroContainers, loroSubstrateFactory } from "../substrate.js"
 // Schemas used across tests
 // ===========================================================================
 
-const TestSchema = Schema.doc({
-  title: Schema.annotated("text"),
+const TestSchema = Schema.struct({
+  title: Schema.text(),
   count: LoroSchema.plain.number(),
   items: Schema.list(Schema.string()),
 })
@@ -86,19 +86,19 @@ describe("structural merge protocol (Loro)", () => {
   // ── Alphabetical sort ──
 
   it("field ordering in source doesn't affect container creation order", () => {
-    const schemaA = Schema.doc({
+    const schemaA = Schema.struct({
       alpha: Schema.string(),
       beta: Schema.number(),
-      gamma: Schema.annotated("text"),
+      gamma: Schema.text(),
     })
 
     // Same fields, different insertion order — alphabetical sort should
     // override JavaScript object insertion order.
     const fields: Record<string, any> = {}
-    fields.gamma = Schema.annotated("text")
+    fields.gamma = Schema.text()
     fields.alpha = Schema.string()
     fields.beta = Schema.number()
-    const schemaB = Schema.doc(fields)
+    const schemaB = Schema.struct(fields)
 
     const docA = new LoroDoc()
     ensureLoroContainers(docA, schemaA, false)

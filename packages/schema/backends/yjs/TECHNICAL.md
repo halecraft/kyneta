@@ -2,7 +2,7 @@
 
 ## Architecture Overview
 
-`@kyneta/yjs-schema` implements `Substrate<YjsVersion>` by wrapping a `Y.Doc` with schema-aware typed reads, writes, versioning, and export/merge. The architecture mirrors `@kyneta/loro-schema` but is structurally simpler due to Yjs's imperative mutation model (no intermediate diff format, no synthetic container IDs).
+`@kyneta/yjs-schema` implements `Substrate<YjsVersion>` by wrapping a `Y.Doc` with schema-aware typed reads, writes, versioning, and export/merge. The architecture mirrors `@kyneta/loro-schema` but is structurally simpler due to Yjs's imperative mutation model (no intermediate diff format, no synthetic container IDs). `YjsCaps = "text" | "json"` — Yjs supports only text and JSON merge boundaries.
 
 ### Core Design Decisions
 
@@ -24,7 +24,7 @@ All fields live in `doc.getMap("root")`:
 
 | Schema type | Root map child | Example |
 |---|---|---|
-| `annotated("text")` | `Y.Text` | `rootMap.get("title")` → `Y.Text` |
+| `text` (`TextSchema`) | `Y.Text` | `rootMap.get("title")` → `Y.Text` |
 | `product` (struct) | `Y.Map` | `rootMap.get("profile")` → `Y.Map` |
 | `sequence` (list) | `Y.Array` | `rootMap.get("items")` → `Y.Array` |
 | `map` (record) | `Y.Map` | `rootMap.get("labels")` → `Y.Map` |
@@ -165,8 +165,8 @@ Serialization uses base64 encoding for text-safe embedding (matching the Loro pa
 | `SequenceChange` | `yarray.insert()` / `yarray.delete()` | Cursor-based walk |
 | `MapChange` | `ymap.set()` / `ymap.delete()` | Deletes first, then sets |
 | `ReplaceChange` | `parent.set(key, value)` or `parent.delete(idx) + parent.insert(idx, [value])` | Targets parent container |
-| `IncrementChange` | **throws** | Yjs has no native counter |
-| `TreeChange` | **throws** | Yjs has no native tree type |
+| `IncrementChange` | **throws** | `CounterSchema` not in `YjsCaps` |
+| `TreeChange` | **throws** | `TreeSchema` not in `YjsCaps` |
 
 ### Yjs → kyneta (Direction 2: `eventsToOps`)
 
@@ -178,13 +178,16 @@ Serialization uses base64 encoding for text-safe embedding (matching the Loro pa
 
 Container values in events (`instanceof Y.Map` / `Y.Array`) are converted to plain objects via `.toJSON()`.
 
-## Unsupported Annotations
+## Unsupported Types
 
-| Annotation | Reason | Error behavior |
+Yjs declares `YjsCaps = "text" | "json"`. The following first-class types are rejected at compile time by `yjs.bind()` (via `ExtractCaps<S> ⊆ YjsCaps` constraint) and at runtime by populate/apply:
+
+| Type | Reason | Error behavior |
 |---|---|---|
-| `counter` | No native Yjs counter type. Ephemeral semantics would silently lose concurrent increments. | Throws at `populateRoot()` and `applyChangeToYjs()` |
-| `movable` | No `Y.MovableList` equivalent in Yjs | Throws at `populateRoot()` |
-| `tree` | No `Y.Tree` equivalent in Yjs | Throws at `populateRoot()` and `applyChangeToYjs()` |
+| `CounterSchema` | No native Yjs counter type. Ephemeral semantics would silently lose concurrent increments. | Compile error at `yjs.bind()`. Throws at `populateRoot()` and `applyChangeToYjs()` |
+| `MovableSequenceSchema` | No `Y.MovableList` equivalent in Yjs | Compile error at `yjs.bind()`. Throws at `populateRoot()` |
+| `TreeSchema` | No `Y.Tree` equivalent in Yjs | Compile error at `yjs.bind()`. Throws at `populateRoot()` and `applyChangeToYjs()` |
+| `SetSchema` | No `Y.Set` equivalent in Yjs | Compile error at `yjs.bind()`. Throws at `populateRoot()` |
 
 ## File Map
 
@@ -229,7 +232,7 @@ All 121 tests pass, covering:
 7. **Changefeed bridge**: fires on `merge`, fires on external Y.Doc mutation, no double-fire on kyneta local writes
 8. **Transaction atomicity**: multi-op `change()` applies all mutations in a single Yjs transaction
 9. **Nested structures**: push struct into list, read back via navigation
-10. **Unsupported annotations**: counter, movable, tree all throw clear errors
+10. **Unsupported types**: counter, movable, tree, set all throw clear errors; `yjs.bind()` rejects them at compile time via `YjsCaps`
 11. **Deterministic clientID**: FNV-1a hash of peerId produces consistent uint32
 12. **Escape hatch**: `yjs.unwrap(ref)` returns the underlying `Y.Doc`; throws for non-Yjs refs
 13. **Bring your own doc**: `createYjsDoc(schema, existingYDoc)` wraps an existing doc

@@ -78,16 +78,6 @@ export function resolveYjsType(
   let current: unknown = rootMap
   let schema = rootSchema
 
-  // Unwrap the root annotation (e.g. annotated("doc", product))
-  // to reach the product schema whose fields are the root map's children.
-  let rootProduct = rootSchema
-  while (
-    rootProduct[KIND] === "annotated" &&
-    rootProduct.schema !== undefined
-  ) {
-    rootProduct = rootProduct.schema
-  }
-
   for (let i = 0; i < path.length; i++) {
     const seg = path.segments[i]!
     const nextSchema = advanceSchema(schema, seg)

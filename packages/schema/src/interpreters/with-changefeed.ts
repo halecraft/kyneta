@@ -48,12 +48,16 @@ import {
   type SequenceAddressTable,
 } from "../path.js"
 import type {
-  AnnotatedSchema,
+  CounterSchema,
   MapSchema,
+  MovableSequenceSchema,
   ProductSchema,
   ScalarSchema,
   SequenceSchema,
+  SetSchema,
   SumSchema,
+  TextSchema,
+  TreeSchema,
 } from "../schema.js"
 
 import type { HasRead } from "./bottom.js"
@@ -1057,6 +1061,8 @@ function createMapChangefeed(
  * roDoc[CHANGEFEED].subscribe(cb)     // valid — never fires
  * ```
  */
+
+
 export function withChangefeed<A extends HasRead>(
   base: Interpreter<RefContext, A>,
 ): Interpreter<RefContext, A & HasChangefeed> {
@@ -1226,67 +1232,161 @@ export function withChangefeed<A extends HasRead>(
       return base.sum(ctx, path, schema, variants) as A & HasChangefeed
     },
 
-    // --- Annotated ------------------------------------------------------------
-    annotated(
+    // --- Text -----------------------------------------------------------------
+    // Leaf type — attach a leaf changefeed + isPopulated.
+    text(
       ctx: RefContext,
       path: Path,
-      schema: AnnotatedSchema,
-      inner: (() => A) | undefined,
+      schema: TextSchema,
     ): A & HasChangefeed {
-      const result = base.annotated(ctx, path, schema, inner)
+      const result = base.text(ctx, path, schema)
 
-      switch (schema.tag) {
-        case "text":
-        case "counter": {
-          // Leaf annotations — attach a leaf changefeed
-          if (isPropertyHost(result)) {
-            const listeners = ensurePrepareWiring(ctx)
-            const cf = createLeafChangefeed(listeners, path, () =>
-              (result as any)[CALL](),
-            )
-            attachChangefeed(result as object, cf)
-            const ps = getPopulatedState(ctx)
-            attachIsPopulated(
-              result as object,
-              path,
-              ps.populated,
-              ps.populatedListeners,
-            )
-            return result as A & HasChangefeed
-          }
-          return result as A & HasChangefeed
-        }
-
-        case "doc":
-        case "movable":
-        case "tree":
-          // Delegating annotations — the inner case (product, sequence,
-          // etc.) already attached [CHANGEFEED] during recursion.
-          return result as A & HasChangefeed
-
-        default:
-          // Unknown annotation — if inner was provided, the inner case
-          // handled it. Otherwise treat as a leaf.
-          if (inner !== undefined) {
-            return result as A & HasChangefeed
-          }
-          if (isPropertyHost(result)) {
-            const listeners = ensurePrepareWiring(ctx)
-            const cf = createLeafChangefeed(listeners, path, () =>
-              (result as any)[CALL](),
-            )
-            attachChangefeed(result as object, cf)
-            const ps2 = getPopulatedState(ctx)
-            attachIsPopulated(
-              result as object,
-              path,
-              ps2.populated,
-              ps2.populatedListeners,
-            )
-            return result as A & HasChangefeed
-          }
-          return result as A & HasChangefeed
+      if (isPropertyHost(result)) {
+        const listeners = ensurePrepareWiring(ctx)
+        const cf = createLeafChangefeed(listeners, path, () =>
+          (result as any)[CALL](),
+        )
+        attachChangefeed(result as object, cf)
+        const ps = getPopulatedState(ctx)
+        attachIsPopulated(
+          result as object,
+          path,
+          ps.populated,
+          ps.populatedListeners,
+        )
+        return result as A & HasChangefeed
       }
+
+      return result as A & HasChangefeed
+    },
+
+    // --- Counter --------------------------------------------------------------
+    // Leaf type — attach a leaf changefeed + isPopulated.
+    counter(
+      ctx: RefContext,
+      path: Path,
+      schema: CounterSchema,
+    ): A & HasChangefeed {
+      const result = base.counter(ctx, path, schema)
+
+      if (isPropertyHost(result)) {
+        const listeners = ensurePrepareWiring(ctx)
+        const cf = createLeafChangefeed(listeners, path, () =>
+          (result as any)[CALL](),
+        )
+        attachChangefeed(result as object, cf)
+        const ps = getPopulatedState(ctx)
+        attachIsPopulated(
+          result as object,
+          path,
+          ps.populated,
+          ps.populatedListeners,
+        )
+        return result as A & HasChangefeed
+      }
+
+      return result as A & HasChangefeed
+    },
+
+    // --- Set ------------------------------------------------------------------
+    // Delegate like map — attach a composed changefeed.
+    set(
+      ctx: RefContext,
+      path: Path,
+      schema: SetSchema,
+      item: (key: string) => A,
+    ): A & HasChangefeed {
+      const result = base.set(ctx, path, schema, item)
+
+      if (isPropertyHost(result)) {
+        const listeners = ensurePrepareWiring(ctx)
+        const resultAny = result as any
+
+        const cf = createMapChangefeed(
+          listeners,
+          path,
+          () => (result as any)[CALL](),
+          (key: string) => {
+            if (typeof resultAny.at === "function") {
+              return resultAny.at(key)
+            }
+            throw new Error(
+              "withChangefeed: set ref missing .at() method. " +
+                "Ensure withNavigation is in the interpreter stack.",
+            )
+          },
+          () => ctx.reader.keys(path),
+        )
+        attachChangefeed(result as object, cf)
+        const ps = getPopulatedState(ctx)
+        attachIsPopulated(
+          result as object,
+          path,
+          ps.populated,
+          ps.populatedListeners,
+        )
+        return result as A & HasChangefeed
+      }
+
+      return result as A & HasChangefeed
+    },
+
+    // --- Tree -----------------------------------------------------------------
+    // Delegate via nodeData — the inner interpretation already has
+    // [CHANGEFEED] attached during recursion.
+    tree(
+      ctx: RefContext,
+      path: Path,
+      schema: TreeSchema,
+      nodeData: () => A,
+    ): A & HasChangefeed {
+      const result = base.tree(ctx, path, schema, nodeData)
+      // The inner case (product, etc.) already attached [CHANGEFEED]
+      // during recursion through the nodeData thunk.
+      return result as A & HasChangefeed
+    },
+
+    // --- Movable --------------------------------------------------------------
+    // Delegate like sequence — attach a composed changefeed.
+    movable(
+      ctx: RefContext,
+      path: Path,
+      schema: MovableSequenceSchema,
+      item: (index: number) => A,
+    ): A & HasChangefeed {
+      const result = base.movable(ctx, path, schema, item)
+
+      if (isPropertyHost(result)) {
+        const listeners = ensurePrepareWiring(ctx)
+        const resultAny = result as any
+
+        const cf = createSequenceChangefeed(
+          listeners,
+          path,
+          () => (result as any)[CALL](),
+          (index: number) => {
+            if (typeof resultAny.at === "function") {
+              return resultAny.at(index)
+            }
+            throw new Error(
+              "withChangefeed: movable ref missing .at() method. " +
+                "Ensure withNavigation is in the interpreter stack.",
+            )
+          },
+          () => ctx.reader.arrayLength(path),
+        )
+        attachChangefeed(result as object, cf)
+        const ps = getPopulatedState(ctx)
+        attachIsPopulated(
+          result as object,
+          path,
+          ps.populated,
+          ps.populatedListeners,
+        )
+        return result as A & HasChangefeed
+      }
+
+      return result as A & HasChangefeed
     },
   }
 }

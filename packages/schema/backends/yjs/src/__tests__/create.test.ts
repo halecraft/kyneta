@@ -11,13 +11,13 @@ import { YjsVersion } from "../version.js"
 // Schemas used across tests
 // ===========================================================================
 
-const SimpleSchema = Schema.doc({
-  title: Schema.annotated("text"),
+const SimpleSchema = Schema.struct({
+  title: Schema.text(),
   count: Schema.number(),
   items: Schema.list(Schema.string()),
 })
 
-const StructListSchema = Schema.doc({
+const StructListSchema = Schema.struct({
   tasks: Schema.list(
     Schema.struct({
       name: Schema.string(),
@@ -26,8 +26,8 @@ const StructListSchema = Schema.doc({
   ),
 })
 
-const NestedSchema = Schema.doc({
-  title: Schema.annotated("text"),
+const NestedSchema = Schema.struct({
+  title: Schema.text(),
   meta: Schema.struct({
     author: Schema.string(),
     tags: Schema.list(Schema.string()),

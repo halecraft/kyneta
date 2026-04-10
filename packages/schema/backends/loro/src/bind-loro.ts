@@ -145,11 +145,17 @@ function createLoroFactory(peerId: string): SubstrateFactory<LoroVersion> {
  * Strategy is constrained to `CrdtStrategy` (`"collaborative" | "ephemeral"`).
  * Passing `"authoritative"` is a compile error.
  */
-export const loro: SubstrateNamespace<CrdtStrategy> & {
+/**
+ * Loro capability tags — the set of first-class CRDT types that the
+ * Loro substrate supports, plus `"json"` for merge-boundary containers.
+ */
+export type LoroCaps = "text" | "counter" | "movable" | "tree" | "json"
+
+export const loro: SubstrateNamespace<CrdtStrategy, LoroCaps> & {
   /** Access the underlying `LoroDoc` backing a ref. */
   unwrap(ref: object): LoroDoc
 } = {
-  ...createSubstrateNamespace<CrdtStrategy>({
+  ...createSubstrateNamespace<CrdtStrategy, LoroCaps>({
     strategies: {
       collaborative: {
         factory: ctx => createLoroFactory(ctx.peerId),

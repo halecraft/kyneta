@@ -1,20 +1,24 @@
 // Plain interpreter — reads values from a plain JS object.
 //
 // Given a schema and a plain JS object (the "store"), this interpreter
-// reads the value at each path in the object tree. Annotations are
-// transparent — the plain interpreter reads the same way regardless
-// of annotation. This corresponds to today's `toJSON()` / `value()`
-// functionality.
+// reads the value at each path in the object tree. First-class types
+// (text, counter, set, tree, movable) are handled directly — text and
+// counter read raw values, set and movable delegate like their structural
+// analogs, and tree delegates via nodeData.
 
 import { isNonNullObject } from "../guards.js"
 import type { Interpreter, Path } from "../interpret.js"
 import type {
-  AnnotatedSchema,
+  CounterSchema,
   MapSchema,
+  MovableSequenceSchema,
   ProductSchema,
   ScalarSchema,
   SequenceSchema,
+  SetSchema,
   SumSchema,
+  TextSchema,
+  TreeSchema,
 } from "../schema.js"
 
 // ---------------------------------------------------------------------------
@@ -29,7 +33,7 @@ import type {
  *
  * ```ts
  * const store = { title: "Hello", count: 42, tags: ["a", "b"] }
- * const schema = Schema.doc({
+ * const schema = Schema.struct({
  *   title: Schema.string(),
  *   count: Schema.number(),
  *   tags: Schema.list(Schema.string()),
@@ -38,11 +42,11 @@ import type {
  * // → { title: "Hello", count: 42, tags: ["a", "b"] }
  * ```
  *
- * ### Annotations are transparent
+ * ### First-class types are transparent
  *
- * `Schema.annotated("text")` and `Schema.string()` both read a string from
- * the store. The plain interpreter doesn't distinguish between annotated
- * and unannotated nodes — it reads from the same path regardless.
+ * `Schema.text()` and `Schema.string()` both read a string from
+ * the store. The plain interpreter doesn't distinguish between first-class
+ * and structural nodes — it reads from the same path regardless.
  */
 export const plainInterpreter: Interpreter<unknown, unknown> = {
   scalar(ctx: unknown, path: Path, _schema: ScalarSchema): unknown {
@@ -126,23 +130,60 @@ export const plainInterpreter: Interpreter<unknown, unknown> = {
     return path.read(ctx)
   },
 
-  annotated(
+  // --- Text ------------------------------------------------------------------
+  // Leaf type — read the raw value at path.
+  text(ctx: unknown, path: Path, _schema: TextSchema): unknown {
+    return path.read(ctx)
+  },
+
+  // --- Counter ---------------------------------------------------------------
+  // Leaf type — read the raw value at path.
+  counter(ctx: unknown, path: Path, _schema: CounterSchema): unknown {
+    return path.read(ctx)
+  },
+
+  // --- Set -------------------------------------------------------------------
+  // Delegate like map — read the object at this path and interpret each key.
+  set(
+    ctx: unknown,
+    path: Path,
+    _schema: SetSchema,
+    item: (key: string) => unknown,
+  ): unknown {
+    const obj = path.read(ctx)
+    if (!isNonNullObject(obj)) {
+      return {}
+    }
+    const result: Record<string, unknown> = {}
+    for (const key of Object.keys(obj)) {
+      result[key] = item(key)
+    }
+    return result
+  },
+
+  // --- Tree ------------------------------------------------------------------
+  // Delegate via nodeData — the inner interpretation reads from the same path.
+  tree(
     _ctx: unknown,
     _path: Path,
-    _schema: AnnotatedSchema,
-    inner: (() => unknown) | undefined,
+    _schema: TreeSchema,
+    nodeData: () => unknown,
   ): unknown {
-    // Annotations are transparent for the plain interpreter.
-    // If there's an inner schema, delegate to it — the inner
-    // interpretation will read from the same path.
-    if (inner !== undefined) {
-      return inner()
-    }
+    return nodeData()
+  },
 
-    // Leaf annotations (text, counter) — read the raw value at path.
-    // The catamorphism passes the same path for the annotation and
-    // its inner — so for leaf annotations without inner schema,
-    // we read from the store directly.
-    return _path.read(_ctx)
+  // --- Movable ---------------------------------------------------------------
+  // Delegate like sequence — read the array and interpret each item.
+  movable(
+    ctx: unknown,
+    path: Path,
+    _schema: MovableSequenceSchema,
+    item: (index: number) => unknown,
+  ): unknown {
+    const arr = path.read(ctx)
+    if (!Array.isArray(arr)) {
+      return []
+    }
+    return arr.map((_element, index) => item(index))
   },
 }

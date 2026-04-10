@@ -1,4 +1,4 @@
-import type { ExtractTags, ProductSchema, SchemaNode, SequenceSchema } from "@kyneta/schema"
+import type { ExtractCaps, ProductSchema, SchemaNode, SequenceSchema } from "@kyneta/schema"
 import { Schema } from "@kyneta/schema"
 import { describe, expect, expectTypeOf, it } from "vitest"
 import { LoroSchema } from "../loro-schema.js"
@@ -54,31 +54,31 @@ describe("type-level: LoroSchema.plain.* constructors enforce PlainSchema constr
     expectTypeOf(s).toMatchTypeOf<SchemaNode>()
   })
 
-  // The following tests verify that AnnotatedSchema is rejected.
+  // The following tests verify that first-class CRDT types are rejected.
   // They use @ts-expect-error to confirm compile-time rejection.
 
-  it("plain.struct rejects AnnotatedSchema (text)", () => {
-    // @ts-expect-error — AnnotatedSchema<"text"> does not extend PlainSchema
+  it("plain.struct rejects TextSchema", () => {
+    // @ts-expect-error — TextSchema does not extend PlainSchema
     LoroSchema.plain.struct({ title: LoroSchema.text() })
   })
 
-  it("plain.struct rejects AnnotatedSchema (counter)", () => {
-    // @ts-expect-error — AnnotatedSchema<"counter"> does not extend PlainSchema
+  it("plain.struct rejects CounterSchema", () => {
+    // @ts-expect-error — CounterSchema does not extend PlainSchema
     LoroSchema.plain.struct({ count: LoroSchema.counter() })
   })
 
-  it("plain.record rejects AnnotatedSchema", () => {
-    // @ts-expect-error — AnnotatedSchema does not extend PlainSchema
+  it("plain.record rejects TextSchema", () => {
+    // @ts-expect-error — TextSchema does not extend PlainSchema
     LoroSchema.plain.record(LoroSchema.text())
   })
 
-  it("plain.array rejects AnnotatedSchema", () => {
-    // @ts-expect-error — AnnotatedSchema does not extend PlainSchema
+  it("plain.array rejects TextSchema", () => {
+    // @ts-expect-error — TextSchema does not extend PlainSchema
     LoroSchema.plain.array(LoroSchema.text())
   })
 
-  it("plain.struct rejects nested AnnotatedSchema via sequence", () => {
-    // @ts-expect-error — SequenceSchema<AnnotatedSchema> does not extend PlainSchema
+  it("plain.struct rejects nested first-class type via sequence", () => {
+    // @ts-expect-error — SequenceSchema<TextSchema> does not extend PlainSchema
     LoroSchema.plain.struct({ items: Schema.list(LoroSchema.text()) })
   })
 
@@ -87,8 +87,8 @@ describe("type-level: LoroSchema.plain.* constructors enforce PlainSchema constr
     expectTypeOf(s).toMatchTypeOf<SchemaNode>()
   })
 
-  it("plain.nullable rejects AnnotatedSchema", () => {
-    // @ts-expect-error — AnnotatedSchema does not extend PlainSchema
+  it("plain.nullable rejects TextSchema", () => {
+    // @ts-expect-error — TextSchema does not extend PlainSchema
     LoroSchema.plain.nullable(LoroSchema.text())
   })
 })
@@ -189,52 +189,52 @@ describe("type-level: LoroSchema namespace excludes non-container constructors",
 })
 
 // ===========================================================================
-// LoroSchema constructors propagate [TAGS] for bind-time constraint enforcement
+// LoroSchema constructors propagate [CAPS] for bind-time constraint enforcement
 // ===========================================================================
 
-describe("type-level: LoroSchema constructors propagate annotation tags", () => {
-  it("LoroSchema.text() → ExtractTags yields 'text'", () => {
+describe("type-level: LoroSchema constructors propagate capabilities", () => {
+  it("LoroSchema.text() → ExtractCaps yields 'text'", () => {
     const s = LoroSchema.text()
-    type Tags = ExtractTags<typeof s>
-    expectTypeOf<Tags>().toEqualTypeOf<"text">()
+    type Caps = ExtractCaps<typeof s>
+    expectTypeOf<Caps>().toEqualTypeOf<"text">()
   })
 
-  it("LoroSchema.counter() → ExtractTags yields 'counter'", () => {
+  it("LoroSchema.counter() → ExtractCaps yields 'counter'", () => {
     const s = LoroSchema.counter()
-    type Tags = ExtractTags<typeof s>
-    expectTypeOf<Tags>().toEqualTypeOf<"counter">()
+    type Caps = ExtractCaps<typeof s>
+    expectTypeOf<Caps>().toEqualTypeOf<"counter">()
   })
 
-  it("LoroSchema.movableList(plain item) → ExtractTags yields 'movable'", () => {
+  it("LoroSchema.movableList(plain item) → ExtractCaps yields 'movable'", () => {
     const s = LoroSchema.movableList(LoroSchema.plain.string())
-    type Tags = ExtractTags<typeof s>
-    expectTypeOf<Tags>().toEqualTypeOf<"movable">()
+    type Caps = ExtractCaps<typeof s>
+    expectTypeOf<Caps>().toEqualTypeOf<"movable">()
   })
 
-  it("LoroSchema.tree(plain struct) → ExtractTags yields 'tree'", () => {
+  it("LoroSchema.tree(plain struct) → ExtractCaps yields 'tree' | 'json'", () => {
     const s = LoroSchema.tree(LoroSchema.plain.struct({ label: LoroSchema.plain.string() }))
-    type Tags = ExtractTags<typeof s>
-    expectTypeOf<Tags>().toEqualTypeOf<"tree">()
+    type Caps = ExtractCaps<typeof s>
+    expectTypeOf<Caps>().toEqualTypeOf<"tree" | "json">()
   })
 
-  it("LoroSchema.doc with mixed containers → ExtractTags yields all tags", () => {
+  it("LoroSchema.doc with mixed containers → ExtractCaps yields all caps", () => {
     const s = LoroSchema.doc({
       title: LoroSchema.text(),
       count: LoroSchema.counter(),
       items: LoroSchema.list(LoroSchema.plain.struct({ name: LoroSchema.plain.string() })),
     })
-    type Tags = ExtractTags<typeof s>
-    expectTypeOf<Tags>().toEqualTypeOf<"doc" | "text" | "counter">()
+    type Caps = ExtractCaps<typeof s>
+    expectTypeOf<Caps>().toEqualTypeOf<"text" | "counter" | "json">()
   })
 
-  it("LoroSchema.movableList with annotated inner → ExtractTags propagates inner tags", () => {
+  it("LoroSchema.movableList with plain inner → ExtractCaps propagates caps", () => {
     const s = LoroSchema.doc({
       items: LoroSchema.movableList(LoroSchema.plain.struct({
         label: LoroSchema.plain.string(),
       })),
       title: LoroSchema.text(),
     })
-    type Tags = ExtractTags<typeof s>
-    expectTypeOf<Tags>().toEqualTypeOf<"doc" | "movable" | "text">()
+    type Caps = ExtractCaps<typeof s>
+    expectTypeOf<Caps>().toEqualTypeOf<"movable" | "json" | "text">()
   })
 })

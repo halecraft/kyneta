@@ -29,7 +29,7 @@ const readableInterpreter = withCaching(
 // Shared fixtures
 // ===========================================================================
 
-const structuralDocSchema = Schema.doc({
+const structuralDocSchema = Schema.struct({
   settings: Schema.struct({
     darkMode: Schema.boolean(),
     fontSize: Schema.number(),
@@ -48,13 +48,13 @@ function createReadOnlyDoc(storeOverrides: Record<string, unknown> = {}) {
   return { store, ctx, doc }
 }
 
-const annotatedDocSchema = Schema.doc({
-  title: Schema.annotated("text"),
-  count: Schema.annotated("counter"),
+const annotatedDocSchema = Schema.struct({
+  title: Schema.text(),
+  count: Schema.counter(),
   messages: Schema.list(
     Schema.struct({
       author: Schema.string(),
-      body: Schema.annotated("text"),
+      body: Schema.text(),
     }),
   ),
   settings: Schema.struct({
@@ -271,7 +271,7 @@ describe("readable: product lazy getters", () => {
   })
 
   it("product field named 'name' shadows Function.prototype.name", () => {
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       name: Schema.string(),
     })
     const store = { name: "test-value" }
@@ -283,7 +283,7 @@ describe("readable: product lazy getters", () => {
   })
 
   it("product field named 'length' shadows Function.prototype.length", () => {
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       length: Schema.number(),
     })
     const store = { length: 99 }
@@ -485,7 +485,7 @@ describe("readable: map ref", () => {
   })
 
   it(".get(key) returns a deep plain snapshot for structural items", () => {
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       records: Schema.record(
         Schema.struct({
           color: Schema.string(),
@@ -502,7 +502,7 @@ describe("readable: map ref", () => {
   })
 
   it("JSON.stringify(mapRef.get(key)) returns the JSON-serialized value", () => {
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       labels: Schema.record(Schema.string()),
     })
     const store = { labels: { bug: "red" } }
@@ -526,7 +526,7 @@ describe("readable: map ref", () => {
 // ===========================================================================
 
 describe("readable: discriminated sum", () => {
-  const schema = Schema.doc({
+  const schema = Schema.struct({
     item: Schema.discriminatedUnion("type", [
       Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
       Schema.struct({ type: Schema.string("image"), url: Schema.string() }),
@@ -549,7 +549,7 @@ describe("readable: discriminated sum", () => {
 })
 
 describe("readable: nullable (positional sum)", () => {
-  const schema = Schema.doc({
+  const schema = Schema.struct({
     bio: Schema.nullable(Schema.string()),
   })
 
@@ -623,9 +623,9 @@ describe("readable: composability hooks", () => {
 describe("readable: composition with withChangefeed", () => {
   it("withChangefeed(withWritable(readableInterpreter)) attaches [CHANGEFEED] to callable refs", () => {
     const store = { title: "Hello", count: 42 }
-    const schema = Schema.doc({
-      title: Schema.annotated("text"),
-      count: Schema.annotated("counter"),
+    const schema = Schema.struct({
+      title: Schema.text(),
+      count: Schema.counter(),
     })
     // withChangefeed needs WritableContext (extends RefContext)
     const ctx = plainContext(store)
@@ -646,15 +646,15 @@ describe("readable: composition with withChangefeed", () => {
 // ===========================================================================
 
 describe("type-level: Readable<S>", () => {
-  it("Readable<text()> has call signature returning string", () => {
-    const textSchema = Schema.annotated("text")
+  it("Readable<TextSchema> has call signature returning string", () => {
+    const textSchema = Schema.text()
     type Result = Readable<typeof textSchema>
     // If this compiles, the type has a call signature
     const _check: (r: Result) => string = r => r()
   })
 
-  it("Readable<counter()> has call signature returning number", () => {
-    const counterSchema = Schema.annotated("counter")
+  it("Readable<CounterSchema> has call signature returning number", () => {
+    const counterSchema = Schema.counter()
     type Result = Readable<typeof counterSchema>
     const _check: (r: Result) => number = r => r()
   })
@@ -684,8 +684,8 @@ describe("type-level: Readable<S>", () => {
     ) => Readable<ReturnType<typeof Schema.boolean>> = r => r.active
   })
 
-  it("Readable<doc({...})> has call signature and child navigation", () => {
-    const s = Schema.doc({
+  it("Readable<struct({...})> has call signature and child navigation", () => {
+    const s = Schema.struct({
       title: Schema.string(),
     })
     type Result = Readable<typeof s>

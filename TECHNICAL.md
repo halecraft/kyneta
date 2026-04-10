@@ -8,13 +8,13 @@ This monorepo contains the Kyneta framework: a compiled, delta-driven web framew
 
 Schema interpreter algebra — pure structure, pluggable interpretations.
 
-Defines a single recursive grammar (`Schema` namespace — five structural constructors plus open annotations) and a fluent `interpret()` builder that composes a six-layer interpreter stack: bottom → navigation → readable → addressing → caching → writable → changefeed. The output is a typed `Ref<S>` handle — a callable, navigable, writable, observable document reference. A `Substrate` interface abstracts state management and transfer semantics, enabling different backing stores (plain JS objects, CRDTs) behind the same interpreter stack. Backend-specific constructor namespaces (`LoroSchema`, `YjsSchema`) live in their respective substrate packages (`@kyneta/loro-schema`, `@kyneta/yjs-schema`).
+Defines a single recursive grammar (`Schema` namespace — five structural constructors plus five first-class CRDT types: `text`, `counter`, `set`, `tree`, `movable`) and a fluent `interpret()` builder that composes a six-layer interpreter stack: bottom → navigation → readable → addressing → caching → writable → changefeed. The `Interpreter` interface has 10 methods — one per `[KIND]` value. The output is a typed `Ref<S>` handle — a callable, navigable, writable, observable document reference. A `Substrate` interface abstracts state management and transfer semantics, enabling different backing stores (plain JS objects, CRDTs) behind the same interpreter stack. Backend-specific constructor namespaces (`LoroSchema`, `YjsSchema`) live in their respective substrate packages (`@kyneta/loro-schema`, `@kyneta/yjs-schema`) and are thin wrappers over `Schema.*`.
 
 Zero runtime dependencies. 1,447 tests.
 
 ### `@kyneta/loro-schema`
 
-Loro CRDT substrate for `@kyneta/schema`. Wraps a `LoroDoc` with schema-aware typed reads, `applyDiff`-based writes, and a persistent event bridge that observes all mutations regardless of source. Exports the `LoroSchema` constructor namespace with Loro-specific annotations: `text`, `counter`, `movableList`, `tree`.
+Loro CRDT substrate for `@kyneta/schema`. Wraps a `LoroDoc` with schema-aware typed reads, `applyDiff`-based writes, and a persistent event bridge that observes all mutations regardless of source. Exports the `LoroSchema` constructor namespace — a thin wrapper over `Schema.*` that adds `doc()` (Loro root constraints) and `plain.*` (composition-constrained constructors). `LoroCaps = "text" | "counter" | "movable" | "tree" | "json"`.
 
 134 tests.
 
@@ -131,7 +131,7 @@ Schema-interpreted refs, `LocalRef<T>` from `state()`, and any custom reactive t
 
 A `BoundSchema<S>` captures three choices that define a document type:
 
-1. **Schema** — what shape is the data? (`Schema.doc({ ... })`)
+1. **Schema** — what shape is the data? (`Schema.struct({ ... })`)
 2. **Factory** — how is the data stored and versioned? (`SubstrateFactory`)
 3. **Strategy** — how does the exchange sync it? (`"concurrent"` | `"sequential"` | `"ephemeral"`)
 
@@ -141,7 +141,7 @@ Convenience wrappers make this a one-liner:
 - `json.bind(schema)` — plain JS substrate, sequential merge
 - `json.bind(schema, "ephemeral")` — ephemeral substrate (TimestampVersion), ephemeral/presence state
 
-`bind()` validates annotation compatibility at compile time via the allowed-tags formulation. Each substrate declares which annotation tags it supports; schema nodes carry a `[TAGS]` phantom brand accumulating all annotations bottom-up. `yjs.bind()` accepts only `"text"` and `"doc"` annotations — passing a schema containing `"counter"` or `"movable"` is a compile error. `loro.bind()` and `json.bind()` accept all tags (`AllowedTags = string`).
+`bind()` validates capability compatibility at compile time via the `[CAPS]` phantom brand. Each substrate declares a closed set of supported capabilities: `LoroCaps = "text" | "counter" | "movable" | "tree" | "json"`, `YjsCaps = "text" | "json"`. Schema nodes carry a `[CAPS]` brand accumulating all capability requirements bottom-up via `ExtractCaps<S>`. `yjs.bind()` accepts only schemas where `ExtractCaps<S>` is within `YjsCaps` — passing a schema containing `Schema.counter()` or `Schema.movableList()` is a compile error. `loro.bind()` accepts all capabilities in `LoroCaps`. `json.bind()` accepts all capabilities (`AllowedCaps = string`).
 
 Swapping CRDT backends is a one-import change. Everything downstream — the Exchange sync protocol, the Cast view, the WebSocket transport, the wire format — stays identical because they depend on the `Substrate` interface, not on any particular CRDT library.
 
@@ -327,10 +327,10 @@ VCS: **jj** (Jujutsu).
 
 Kyneta was originally developed as `@loro-extended/*` — a set of packages extending the [Loro](https://loro.dev/) CRDT framework. The architecture has since been decoupled:
 
-- `@kyneta/schema` defines a **backend-agnostic** schema grammar (`Schema` namespace) with five structural constructors plus open annotations. Backend-specific constructor namespaces (`LoroSchema` in `@kyneta/loro-schema`, `YjsSchema` in `@kyneta/yjs-schema`) add CRDT-specific annotations (`text`, `counter`, `movableList`, `tree`) via the annotation mechanism — these are markers that substrate backends interpret, but the interpreter algebra itself is pure.
+- `@kyneta/schema` defines a **backend-agnostic** schema grammar (`Schema` namespace) with five structural constructors plus five first-class CRDT types (`text`, `counter`, `set`, `tree`, `movable`). Backend-specific constructor namespaces (`LoroSchema` in `@kyneta/loro-schema`) are thin wrappers over `Schema.*` that add substrate-specific concerns like `LoroSchema.doc()` for Loro root constraints. The `Interpreter` interface has 10 methods — one per `[KIND]` value — and the algebra itself is pure.
 - `@kyneta/loro-schema` and `@kyneta/yjs-schema` are peer substrate backends behind the same `Substrate` interface. The todo example demonstrates swapping between them with a one-line import change.
 - `@kyneta/cast` consumes the CHANGEFEED protocol, which is defined in `@kyneta/schema` and has no CRDT dependency.
 - `@kyneta/exchange` syncs documents via the `Substrate` interface — it never imports a CRDT library directly.
 - Historical documents (`LEARNINGS.md`, `theory/interpreter-algebra.md`) retain `@loro-extended` references as they are factually accurate for their era.
 
-The annotation mechanism (`Schema.annotated("text")`, `Schema.annotated("counter")`) is the bridge: it marks schema nodes with backend-specific semantics without coupling the grammar to any particular CRDT implementation.
+First-class types (`Schema.text()`, `Schema.counter()`, `Schema.set()`, `Schema.tree()`, `Schema.movableList()`) are proper grammar nodes with their own `[KIND]` values and `Interpreter` methods. The `[CAPS]` phantom brand on each schema node declares its required merge capabilities, and substrates enforce compatibility at `bind()` time via closed capability sets (`LoroCaps`, `YjsCaps`).

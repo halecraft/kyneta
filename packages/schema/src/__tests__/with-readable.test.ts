@@ -18,7 +18,7 @@ import { withReadable } from "../interpreters/with-readable.js"
 // Shared fixtures
 // ===========================================================================
 
-const structuralDocSchema = Schema.doc({
+const structuralDocSchema = Schema.struct({
   settings: Schema.struct({
     darkMode: Schema.boolean(),
     fontSize: Schema.number(),
@@ -26,9 +26,9 @@ const structuralDocSchema = Schema.doc({
   metadata: Schema.record(Schema.any()),
 })
 
-const annotatedDocSchema = Schema.doc({
-  title: Schema.annotated("text"),
-  count: Schema.annotated("counter"),
+const annotatedDocSchema = Schema.struct({
+  title: Schema.text(),
+  count: Schema.counter(),
   messages: Schema.list(
     Schema.struct({
       author: Schema.string(),
@@ -54,14 +54,14 @@ function createDoc(
 
 describe("withReadable: scalar", () => {
   it("ref() returns the current store value", () => {
-    const { doc } = createDoc(Schema.doc({ name: Schema.string() }), {
+    const { doc } = createDoc(Schema.struct({ name: Schema.string() }), {
       name: "Alice",
     })
     expect(doc.name()).toBe("Alice")
   })
 
   it("ref() reflects live store mutations", () => {
-    const { doc, store } = createDoc(Schema.doc({ count: Schema.number() }), {
+    const { doc, store } = createDoc(Schema.struct({ count: Schema.number() }), {
       count: 10,
     })
     expect(doc.count()).toBe(10)
@@ -79,22 +79,22 @@ describe("withReadable: scalar", () => {
   })
 
   it("toPrimitive with 'string' hint returns String(value)", () => {
-    const { doc } = createDoc(Schema.doc({ n: Schema.number() }), { n: 14 })
+    const { doc } = createDoc(Schema.struct({ n: Schema.number() }), { n: 14 })
     expect(doc.n[Symbol.toPrimitive]("string")).toBe("14")
   })
 
   it("toPrimitive with 'number' hint returns raw value", () => {
-    const { doc } = createDoc(Schema.doc({ n: Schema.number() }), { n: 14 })
+    const { doc } = createDoc(Schema.struct({ n: Schema.number() }), { n: 14 })
     expect(doc.n[Symbol.toPrimitive]("number")).toBe(14)
   })
 
   it("toPrimitive with 'default' hint returns raw value", () => {
-    const { doc } = createDoc(Schema.doc({ n: Schema.number() }), { n: 14 })
+    const { doc } = createDoc(Schema.struct({ n: Schema.number() }), { n: 14 })
     expect(doc.n[Symbol.toPrimitive]("default")).toBe(14)
   })
 
   it("scalar ref works in template literal", () => {
-    const { doc } = createDoc(Schema.doc({ n: Schema.number() }), { n: 14 })
+    const { doc } = createDoc(Schema.struct({ n: Schema.number() }), { n: 14 })
     expect(`value: ${doc.n}`).toBe("value: 14")
   })
 })
@@ -165,7 +165,7 @@ describe("withReadable: product", () => {
 // ===========================================================================
 
 describe("withReadable: sequence", () => {
-  const schema = Schema.doc({
+  const schema = Schema.struct({
     messages: Schema.list(
       Schema.struct({
         author: Schema.string(),
@@ -263,7 +263,7 @@ describe("withReadable: sequence", () => {
 // ===========================================================================
 
 describe("withReadable: map", () => {
-  const schema = Schema.doc({
+  const schema = Schema.struct({
     metadata: Schema.record(Schema.number()),
   })
 
@@ -368,7 +368,7 @@ describe("withReadable: map", () => {
       color: Schema.string(),
       priority: Schema.number(),
     })
-    const s = Schema.doc({ tags: Schema.record(itemSchema) })
+    const s = Schema.struct({ tags: Schema.record(itemSchema) })
     const { doc } = createDoc(s, {
       tags: { urgent: { color: "red", priority: 1 } },
     })
@@ -383,21 +383,21 @@ describe("withReadable: map", () => {
 
 describe("withReadable: annotated", () => {
   it("text ref returns current string when called", () => {
-    const { doc } = createDoc(Schema.doc({ title: Schema.annotated("text") }), {
+    const { doc } = createDoc(Schema.struct({ title: Schema.text() }), {
       title: "Hello",
     })
     expect(doc.title()).toBe("Hello")
   })
 
   it("text ref returns empty string when store value is null", () => {
-    const { doc } = createDoc(Schema.doc({ title: Schema.annotated("text") }), {
+    const { doc } = createDoc(Schema.struct({ title: Schema.text() }), {
       title: null,
     })
     expect(doc.title()).toBe("")
   })
 
   it("text ref toPrimitive produces string", () => {
-    const { doc } = createDoc(Schema.doc({ title: Schema.annotated("text") }), {
+    const { doc } = createDoc(Schema.struct({ title: Schema.text() }), {
       title: "Hello",
     })
     expect(`Title: ${doc.title}`).toBe("Title: Hello")
@@ -406,7 +406,7 @@ describe("withReadable: annotated", () => {
 
   it("counter ref returns current number when called", () => {
     const { doc } = createDoc(
-      Schema.doc({ count: Schema.annotated("counter") }),
+      Schema.struct({ count: Schema.counter() }),
       {
         count: 42,
       },
@@ -416,7 +416,7 @@ describe("withReadable: annotated", () => {
 
   it("counter ref returns 0 when store value is not a number", () => {
     const { doc } = createDoc(
-      Schema.doc({ count: Schema.annotated("counter") }),
+      Schema.struct({ count: Schema.counter() }),
       {
         count: "oops",
       },
@@ -426,7 +426,7 @@ describe("withReadable: annotated", () => {
 
   it("counter ref toPrimitive is hint-aware", () => {
     const { doc } = createDoc(
-      Schema.doc({ count: Schema.annotated("counter") }),
+      Schema.struct({ count: Schema.counter() }),
       {
         count: 42,
       },
@@ -438,7 +438,7 @@ describe("withReadable: annotated", () => {
 
   it("counter ref works in template literal", () => {
     const { doc } = createDoc(
-      Schema.doc({ count: Schema.annotated("counter") }),
+      Schema.struct({ count: Schema.counter() }),
       {
         count: 7,
       },
@@ -446,7 +446,7 @@ describe("withReadable: annotated", () => {
     expect(`Stars: ${doc.count}`).toBe("Stars: 7")
   })
 
-  it("doc annotation delegates to inner (product)", () => {
+  it("struct delegates to product", () => {
     const { doc } = createDoc(structuralDocSchema, {
       settings: { darkMode: true, fontSize: 18 },
       metadata: {},
@@ -455,21 +455,15 @@ describe("withReadable: annotated", () => {
     expect(doc.settings.darkMode()).toBe(true)
   })
 
-  it("tree annotation delegates to inner", () => {
-    const schema = Schema.doc({
-      data: Schema.annotated("tree", Schema.string()),
+  it("tree delegates to inner", () => {
+    const schema = Schema.struct({
+      data: Schema.tree(Schema.string()),
     })
     const { doc } = createDoc(schema, { data: "leaf" })
     expect(doc.data()).toBe("leaf")
   })
 
-  it("unknown annotation with inner delegates to inner", () => {
-    const schema = Schema.doc({
-      custom: Schema.annotated("custom-thing", Schema.number()),
-    })
-    const { doc } = createDoc(schema, { custom: 99 })
-    expect(doc.custom()).toBe(99)
-  })
+
 })
 
 // ===========================================================================
@@ -477,7 +471,7 @@ describe("withReadable: annotated", () => {
 // ===========================================================================
 
 describe("withReadable: discriminated sum", () => {
-  const schema = Schema.doc({
+  const schema = Schema.struct({
     item: Schema.discriminatedUnion("type", [
       Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
       Schema.struct({ type: Schema.string("image"), url: Schema.string() }),
@@ -504,7 +498,7 @@ describe("withReadable: discriminated sum", () => {
 })
 
 describe("withReadable: hybrid discriminant", () => {
-  const schema = Schema.doc({
+  const schema = Schema.struct({
     item: Schema.discriminatedUnion("type", [
       Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
       Schema.struct({ type: Schema.string("image"), url: Schema.string() }),
@@ -561,7 +555,7 @@ describe("withReadable: hybrid discriminant", () => {
   })
 
   it("non-discriminated products are unaffected", () => {
-    const plainSchema = Schema.doc({
+    const plainSchema = Schema.struct({
       settings: Schema.struct({
         darkMode: Schema.boolean(),
         fontSize: Schema.number(),
@@ -578,7 +572,7 @@ describe("withReadable: hybrid discriminant", () => {
 })
 
 describe("withReadable: nullable (positional sum)", () => {
-  const schema = Schema.doc({
+  const schema = Schema.struct({
     bio: Schema.nullable(Schema.string()),
   })
 

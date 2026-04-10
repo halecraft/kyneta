@@ -559,13 +559,13 @@ describe("validate: nullable", () => {
 // Annotated validation
 // ---------------------------------------------------------------------------
 
-describe("validate: annotated", () => {
+describe("validate: first-class types", () => {
   it("text — valid string", () => {
-    expect(validate(Schema.annotated("text"), "hello")).toBe("hello")
+    expect(validate(Schema.text(), "hello")).toBe("hello")
   })
 
   it("text — invalid (number)", () => {
-    const result = tryValidate(Schema.annotated("text"), 42)
+    const result = tryValidate(Schema.text(), 42)
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.errors[0]?.expected).toContain("text")
@@ -573,19 +573,19 @@ describe("validate: annotated", () => {
   })
 
   it("counter — valid number", () => {
-    expect(validate(Schema.annotated("counter"), 42)).toBe(42)
+    expect(validate(Schema.counter(), 42)).toBe(42)
   })
 
   it("counter — invalid (string)", () => {
-    const result = tryValidate(Schema.annotated("counter"), "nope")
+    const result = tryValidate(Schema.counter(), "nope")
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.errors[0]?.expected).toContain("counter")
     }
   })
 
-  it("doc — delegates to inner product", () => {
-    const s = Schema.doc({
+  it("struct — delegates to inner product", () => {
+    const s = Schema.struct({
       title: Schema.string(),
       count: Schema.number(),
     })
@@ -593,8 +593,8 @@ describe("validate: annotated", () => {
     expect(result).toEqual({ title: "hi", count: 5 })
   })
 
-  it("doc — invalid inner product", () => {
-    const s = Schema.doc({
+  it("struct — invalid inner product", () => {
+    const s = Schema.struct({
       title: Schema.string(),
     })
     const result = tryValidate(s, { title: 42 })
@@ -604,18 +604,18 @@ describe("validate: annotated", () => {
     }
   })
 
-  it("doc — non-object", () => {
-    const sDoc = Schema.doc({ title: Schema.string() })
-    expect(() => validateUntyped(sDoc, "nope")).toThrow(SchemaValidationError)
+  it("struct — non-object", () => {
+    const sStruct = Schema.struct({ title: Schema.string() })
+    expect(() => validateUntyped(sStruct, "nope")).toThrow(SchemaValidationError)
   })
 
   it("movableList — delegates to inner sequence", () => {
-    const s = Schema.annotated("movable", Schema.list(Schema.string()))
+    const s = Schema.movableList(Schema.string())
     expect(validate(s, ["a", "b"])).toEqual(["a", "b"])
   })
 
   it("movableList — invalid item", () => {
-    const s = Schema.annotated("movable", Schema.list(Schema.string()))
+    const s = Schema.movableList(Schema.string())
     const result = tryValidate(s, ["a", 42])
     expect(result.ok).toBe(false)
     if (!result.ok) {
@@ -624,23 +624,10 @@ describe("validate: annotated", () => {
   })
 
   it("tree — delegates to inner", () => {
-    const s = Schema.annotated(
-      "tree",
+    const s = Schema.tree(
       Schema.struct({ label: Schema.string() }),
     )
     expect(validate(s, { label: "root" })).toEqual({ label: "root" })
-  })
-
-  it("unknown annotation without inner — accepts any value", () => {
-    const sCustom = Schema.annotated("custom")
-    expect(validate(sCustom, "anything")).toBe("anything")
-    expect(validate(sCustom, 42)).toBe(42)
-  })
-
-  it("unknown annotation with inner — delegates", () => {
-    const sCustom = Schema.annotated("custom", Schema.string())
-    expect(validate(sCustom, "ok")).toBe("ok")
-    expect(() => validateUntyped(sCustom, 42)).toThrow(SchemaValidationError)
   })
 })
 
@@ -649,9 +636,9 @@ describe("validate: annotated", () => {
 // ---------------------------------------------------------------------------
 
 describe("validate: nested realistic schema", () => {
-  const ProjectSchema = Schema.doc({
-    name: Schema.annotated("text"),
-    stars: Schema.annotated("counter"),
+  const ProjectSchema = Schema.struct({
+    name: Schema.text(),
+    stars: Schema.counter(),
     tasks: Schema.list(
       Schema.struct({
         title: Schema.string(),
@@ -880,8 +867,8 @@ describe("validate: type narrowing", () => {
     expectTypeOf(result).toEqualTypeOf<"a" | "b">()
   })
 
-  it("validate narrows doc schemas", () => {
-    const s = Schema.doc({
+  it("validate narrows struct schemas", () => {
+    const s = Schema.struct({
       title: Schema.string(),
       items: Schema.list(Schema.number()),
     })
@@ -972,7 +959,7 @@ describe("validate: edge cases", () => {
 // ---------------------------------------------------------------------------
 
 describe("validate: discriminated sum round-trip", () => {
-  const schemaWithSum = Schema.doc({
+  const schemaWithSum = Schema.struct({
     name: Schema.string(),
     content: Schema.discriminatedUnion("type", [
       Schema.struct({ type: Schema.string("text"), body: Schema.string() }),

@@ -13,38 +13,31 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import type {
-  AnnotatedSchema,
-  Changeset,
-  Op,
   Ref,
   RRef,
-  Schema as SchemaType,
-  Seed,
 } from "../../src/index.js"
+import { hasChangefeed } from "@kyneta/changefeed"
 import {
   applyChanges,
   change,
   observation,
   describe,
   formatPath,
-  hasChangefeed,
   hasComposedChangefeed,
   hasTransact,
   incrementChange,
   interpret,
+  plainContext,
   plainSubstrateFactory,
+  RawPath,
   readable,
   Schema,
-  SchemaValidationError,
   sequenceChange,
   stepIncrement,
   stepSequence,
   stepText,
   subscribe,
-  subscribeNode,
   textChange,
-  tryValidate,
-  validate,
   writable,
 } from "../../src/index.js"
 
@@ -56,9 +49,9 @@ import { json, log, section } from "../helpers.js"
 
 section(1, "The Schema (same as basic, for continuity)")
 
-const ProjectSchema = Schema.doc({
-  name: Schema.annotated("text"),
-  stars: Schema.annotated("counter"),
+const ProjectSchema = Schema.struct({
+  name: Schema.text(),
+  stars: Schema.counter(),
   tasks: Schema.list(
     Schema.struct({
       title: Schema.string(),
@@ -73,12 +66,12 @@ const ProjectSchema = Schema.doc({
   content: Schema.discriminatedUnion("type", [
     Schema.struct({
       type: Schema.string("text"),
-      body: Schema.annotated("text"),
+      body: Schema.string(),
     }),
     Schema.struct({
       type: Schema.string("image"),
       url: Schema.string(),
-      caption: Schema.annotated("text"),
+      caption: Schema.string(),
     }),
   ]),
   bio: Schema.nullable(Schema.string()),
@@ -96,8 +89,8 @@ section(2, "Constructing createDoc by Hand")
 log(`
     In the basic example, createDoc is a black box. Here we open it up.
 
-    Step 1: plainSubstrateFactory.create(schema, seed)   → substrate
-    Step 2: substrate.context()                          → WritableContext
+    Step 1: plainSubstrateFactory.create(schema)   → substrate
+    Step 2: substrate.context()                    → WritableContext
     Step 3: interpret(schema, ctx)
               .with(readable)     // navigation + reading + caching
               .with(writable)     // .set, .insert, .increment
@@ -108,10 +101,7 @@ log(`
     starting from bottomInterpreter, then runs the catamorphism.
 `)
 
-const substrate = plainSubstrateFactory.create(ProjectSchema, {
-  name: "Schema Algebra",
-  content: { type: "text" as const, body: "A unified recursive grammar" },
-} satisfies Seed<typeof ProjectSchema>)
+const substrate = plainSubstrateFactory.create(ProjectSchema)
 
 const ctx = substrate.context()
 
@@ -182,12 +172,12 @@ log(`
 
 {
   const roStore = doc() as Record<string, unknown>
-  const roDoc: RRef<typeof ProjectSchema> = interpret(ProjectSchema, { store: roStore })
+  const roDoc: RRef<typeof ProjectSchema> = interpret(ProjectSchema, plainContext(roStore))
     .with(readable)
     .done()
 
   log(`
-    const roDoc = interpret(schema, { store }).with(readable).done()
+    const roDoc = interpret(schema, plainContext(store)).with(readable).done()
 
     roDoc.name() → "${roDoc.name()}"
     roDoc.tasks.at(0)?.title() → "${roDoc.tasks.at(0)?.title()}"
@@ -308,10 +298,7 @@ log(`
 
 {
   // Pure read-only
-  const roSubstrate = plainSubstrateFactory.create(ProjectSchema, {
-    name: "Snapshot",
-    content: { type: "text" as const, body: "" },
-  } satisfies Seed<typeof ProjectSchema>)
+  const roSubstrate = plainSubstrateFactory.create(ProjectSchema)
 
   const pureReadOnly: RRef<typeof ProjectSchema> = interpret(
     ProjectSchema, roSubstrate.context(),
@@ -325,10 +312,7 @@ log(`
   `)
 
   // Full reactive replica — can receive external ops
-  const replicaSub = plainSubstrateFactory.create(ProjectSchema, {
-    name: "Replica",
-    content: { type: "text" as const, body: "" },
-  } satisfies Seed<typeof ProjectSchema>)
+  const replicaSub = plainSubstrateFactory.create(ProjectSchema)
 
   const replicaDoc: Ref<typeof ProjectSchema> = interpret(
     ProjectSchema, replicaSub.context(),
@@ -340,7 +324,7 @@ log(`
   })
 
   applyChanges(replicaDoc, [
-    { path: [{ type: "key" as const, key: "name" }], change: textChange([{ insert: "✨ " }]) },
+    { path: RawPath.empty.field("name"), change: textChange([{ insert: "✨ " }]) },
   ], { origin: "external" })
 
   log(`
@@ -373,16 +357,11 @@ log(`
 `)
 
 {
-  const seed = {
-    name: "Sync Demo",
-    content: { type: "text" as const, body: "" },
-  } satisfies Seed<typeof ProjectSchema>
-
-  const subA = plainSubstrateFactory.create(ProjectSchema, seed)
+  const subA = plainSubstrateFactory.create(ProjectSchema)
   const docA: Ref<typeof ProjectSchema> = interpret(ProjectSchema, subA.context())
     .with(readable).with(writable).with(observation).done() as any
 
-  const subB = plainSubstrateFactory.create(ProjectSchema, seed)
+  const subB = plainSubstrateFactory.create(ProjectSchema)
   const docB: Ref<typeof ProjectSchema> = interpret(ProjectSchema, subB.context())
     .with(readable).with(writable).with(observation).done() as any
 

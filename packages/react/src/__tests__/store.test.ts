@@ -17,7 +17,7 @@ import {
 // Test schema
 // ---------------------------------------------------------------------------
 
-const TestSchema = Schema.doc({
+const TestSchema = Schema.struct({
   title: Schema.string(),
   count: Schema.number(),
   items: Schema.list(

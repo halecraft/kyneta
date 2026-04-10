@@ -35,16 +35,20 @@ import {
 import type { Plain, RefContext } from "../interpreter-types.js"
 import {
   KIND,
-  type AnnotatedSchema,
+  type CounterSchema,
   type DiscriminatedSumSchema,
   type MapSchema,
+  type MovableSequenceSchema,
   type PositionalSumSchema,
   type ProductSchema,
   type ScalarKind,
   type ScalarSchema,
   type Schema,
   type SequenceSchema,
+  type SetSchema,
   type SumSchema,
+  type TextSchema,
+  type TreeSchema,
 } from "../schema.js"
 import type { SubstratePrepare } from "../substrate.js"
 
@@ -387,7 +391,7 @@ export type { ScalarPlain } from "../schema.js"
  * satisfy both `Readable<S>` and `Writable<S>`.
  *
  * ```ts
- * const s = Schema.doc({
+ * const s = Schema.struct({
  *   title: Schema.string(),
  *   count: Schema.number(),
  *   settings: Schema.struct({
@@ -401,55 +405,43 @@ export type { ScalarPlain } from "../schema.js"
  * ```
  */
 export type Writable<S extends Schema> =
-  // --- Annotated: dispatch on tag ---
-  S extends AnnotatedSchema<infer Tag, infer Inner>
-    ? Tag extends "text"
-      ? TextRef
-      : Tag extends "counter"
-        ? CounterRef
-        : Tag extends "doc"
-          ? Inner extends ProductSchema<infer F>
-            ? { readonly [K in keyof F]: Writable<F[K]> } & ProductRef<{
-                [K in keyof F]: Plain<F[K]>
-              }>
-            : unknown
-          : Tag extends "movable"
-            ? Inner extends SequenceSchema<infer _I>
-              ? SequenceRef
-              : unknown
-            : Tag extends "tree"
-              ? Inner extends Schema
-                ? Writable<Inner>
-                : unknown
-              : // Unknown annotation with inner — delegate
-                Inner extends Schema
-                ? Writable<Inner>
-                : unknown
-    : // --- Scalar ---
-      S extends ScalarSchema<infer _K, infer V>
-      ? ScalarRef<V>
-      : // --- Product ---
-        S extends ProductSchema<infer F>
-        ? { readonly [K in keyof F]: Writable<F[K]> } & ProductRef<{
-            [K in keyof F]: Plain<F[K]>
-          }>
-        : // --- Sequence ---
-          S extends SequenceSchema<infer _I>
-          ? SequenceRef
-          : // --- Map ---
-            S extends MapSchema<infer I>
-            ? WritableMapRef<Plain<I>>
-            : // --- Sum ---
-              S extends PositionalSumSchema<infer V>
-              ? V extends readonly [
-                  ScalarSchema<"null", any>,
-                  infer Inner extends Schema,
-                ]
-                ? ScalarRef<Plain<Inner> | null>
-                : Writable<V[number]>
-              : S extends DiscriminatedSumSchema<infer D, infer V>
-                ? WritableDiscriminantProductRef<V[number]["fields"], D>
-                : unknown
+  // --- First-class leaf types ---
+  S extends TextSchema
+    ? TextRef
+    : S extends CounterSchema
+      ? CounterRef
+      : // --- First-class container types ---
+        S extends SetSchema<infer I>
+        ? WritableMapRef<Plain<I>>
+        : S extends TreeSchema<infer Inner>
+          ? Writable<Inner>
+          : S extends MovableSequenceSchema<infer _I>
+            ? SequenceRef
+            : // --- Scalar ---
+              S extends ScalarSchema<infer _K, infer V>
+              ? ScalarRef<V>
+              : // --- Product ---
+                S extends ProductSchema<infer F>
+                ? { readonly [K in keyof F]: Writable<F[K]> } & ProductRef<{
+                    [K in keyof F]: Plain<F[K]>
+                  }>
+                : // --- Sequence ---
+                  S extends SequenceSchema<infer _I>
+                  ? SequenceRef
+                  : // --- Map ---
+                    S extends MapSchema<infer I>
+                    ? WritableMapRef<Plain<I>>
+                    : // --- Sum ---
+                      S extends PositionalSumSchema<infer V>
+                      ? V extends readonly [
+                          ScalarSchema<"null", any>,
+                          infer Inner extends Schema,
+                        ]
+                        ? ScalarRef<Plain<Inner> | null>
+                        : Writable<V[number]>
+                      : S extends DiscriminatedSumSchema<infer D, infer V>
+                        ? WritableDiscriminantProductRef<V[number]["fields"], D>
+                        : unknown
 
 // ---------------------------------------------------------------------------
 // withWritable — interpreter transformer
@@ -643,95 +635,172 @@ export function withWritable<A>(
       return base.sum(ctx, path, schema, variants) as A & HasTransact
     },
 
-    // --- Annotated ------------------------------------------------------------
-    // Dispatch on tag to add mutation methods to leaf annotation refs.
-    // Delegating annotations ("doc", "movable", "tree") pass through.
+    // --- Text -----------------------------------------------------------------
+    // Add insert/delete/update mutation methods.
 
-    annotated(
+    text(
       ctx: WritableContext,
       path: Path,
-      schema: AnnotatedSchema,
-      inner: (() => A) | undefined,
+      schema: TextSchema,
     ): A & HasTransact {
-      const result = base.annotated(ctx, path, schema, inner) as any
+      const result = base.text(ctx, path, schema) as any
 
-      switch (schema.tag) {
-        case "text": {
-          result.insert = (index: number, content: string): void => {
-            ctx.dispatch(
-              path,
-              textChange([
-                ...(index > 0 ? [{ retain: index }] : []),
-                { insert: content },
-              ]),
-            )
-          }
-
-          result.delete = (index: number, length: number): void => {
-            ctx.dispatch(
-              path,
-              textChange([
-                ...(index > 0 ? [{ retain: index }] : []),
-                { delete: length },
-              ]),
-            )
-          }
-
-          result.update = (content: string): void => {
-            // Read current text length via store inspection (not carrier call)
-            // so navigate+write stacks work without a reading layer.
-            const current = ctx.reader.read(path)
-            const currentLength =
-              typeof current === "string" ? current.length : 0
-            ctx.dispatch(
-              path,
-              textChange([
-                ...(currentLength > 0 ? [{ delete: currentLength }] : []),
-                { insert: content },
-              ]),
-            )
-          }
-
-          attachTransact(result, ctx)
-          return result
-        }
-
-        case "counter": {
-          result.increment = (n: number = 1): void => {
-            ctx.dispatch(path, incrementChange(n))
-          }
-
-          result.decrement = (n: number = 1): void => {
-            ctx.dispatch(path, incrementChange(-n))
-          }
-
-          attachTransact(result, ctx)
-          return result
-        }
-
-        case "doc":
-        case "movable":
-        case "tree":
-          // Delegating annotations — inner was already called by the base
-          // interpreter, and the result carries the base's interpretation.
-          // withWritable's own cases (product, sequence, etc.) already
-          // attached mutation methods to the children during recursion.
-          // [TRANSACT] is already attached by the inner case (product,
-          // sequence, etc.) — no need to attach again.
-          return result
-
-        default:
-          // Unknown annotation — if the base delegated to inner or
-          // produced a scalar-like ref, add .set() for unannotated scalars.
-          if (inner !== undefined) {
-            return result
-          }
-          // Leaf annotation without known semantics — add scalar mutation
-          return this.scalar(ctx, path, {
-            [KIND]: "scalar" as const,
-            scalarKind: "any" as ScalarKind,
-          })
+      result.insert = (index: number, content: string): void => {
+        ctx.dispatch(
+          path,
+          textChange([
+            ...(index > 0 ? [{ retain: index }] : []),
+            { insert: content },
+          ]),
+        )
       }
+
+      result.delete = (index: number, length: number): void => {
+        ctx.dispatch(
+          path,
+          textChange([
+            ...(index > 0 ? [{ retain: index }] : []),
+            { delete: length },
+          ]),
+        )
+      }
+
+      result.update = (content: string): void => {
+        // Read current text length via store inspection (not carrier call)
+        // so navigate+write stacks work without a reading layer.
+        const current = ctx.reader.read(path)
+        const currentLength =
+          typeof current === "string" ? current.length : 0
+        ctx.dispatch(
+          path,
+          textChange([
+            ...(currentLength > 0 ? [{ delete: currentLength }] : []),
+            { insert: content },
+          ]),
+        )
+      }
+
+      attachTransact(result, ctx)
+      return result
+    },
+
+    // --- Counter --------------------------------------------------------------
+    // Add increment/decrement mutation methods.
+
+    counter(
+      ctx: WritableContext,
+      path: Path,
+      schema: CounterSchema,
+    ): A & HasTransact {
+      const result = base.counter(ctx, path, schema) as any
+
+      result.increment = (n: number = 1): void => {
+        ctx.dispatch(path, incrementChange(n))
+      }
+
+      result.decrement = (n: number = 1): void => {
+        ctx.dispatch(path, incrementChange(-n))
+      }
+
+      attachTransact(result, ctx)
+      return result
+    },
+
+    // --- Set ------------------------------------------------------------------
+    // Delegate like map — attach .set(), .delete(), .clear().
+
+    set(
+      ctx: WritableContext,
+      path: Path,
+      schema: SetSchema,
+      item: (key: string) => A,
+    ): A & HasTransact {
+      const result = base.set(ctx, path, schema, item) as any
+
+      Object.defineProperty(result, "set", {
+        value: (key: string, value: unknown): void => {
+          const change = mapChange({ [key]: value })
+          ctx.dispatch(path, change)
+        },
+        enumerable: false,
+        configurable: true,
+      })
+
+      Object.defineProperty(result, "delete", {
+        value: (key: string): void => {
+          const change = mapChange(undefined, [key])
+          ctx.dispatch(path, change)
+        },
+        enumerable: false,
+        configurable: true,
+      })
+
+      Object.defineProperty(result, "clear", {
+        value: (): void => {
+          const allKeys = ctx.reader.keys(path)
+          if (allKeys.length > 0) {
+            const change = mapChange(undefined, allKeys)
+            ctx.dispatch(path, change)
+          }
+        },
+        enumerable: false,
+        configurable: true,
+      })
+
+      attachTransact(result, ctx)
+      return result
+    },
+
+    // --- Tree -----------------------------------------------------------------
+    // Delegate via nodeData() — the inner interpretation already has
+    // mutation methods attached by recursion through withWritable.
+
+    tree(
+      ctx: WritableContext,
+      path: Path,
+      schema: TreeSchema,
+      nodeData: () => A,
+    ): A & HasTransact {
+      const result = base.tree(ctx, path, schema, nodeData)
+      // [TRANSACT] is already attached by the inner case (product, etc.)
+      return result as A & HasTransact
+    },
+
+    // --- Movable --------------------------------------------------------------
+    // Delegate like sequence — add .push(), .insert(), .delete().
+
+    movable(
+      ctx: WritableContext,
+      path: Path,
+      schema: MovableSequenceSchema,
+      item: (index: number) => A,
+    ): A & HasTransact {
+      const result = base.movable(ctx, path, schema, item) as any
+
+      result.push = (...items: unknown[]): void => {
+        const length = ctx.reader.arrayLength(path)
+        const change = sequenceChange([{ retain: length }, { insert: items }])
+        ctx.dispatch(path, change)
+      }
+
+      result.insert = (index: number, ...items: unknown[]): void => {
+        const change = sequenceChange([
+          ...(index > 0 ? [{ retain: index }] : []),
+          { insert: items },
+        ])
+        ctx.dispatch(path, change)
+      }
+
+      result.delete = (index: number, count: number = 1): void => {
+        const change = sequenceChange([
+          ...(index > 0 ? [{ retain: index }] : []),
+          { delete: count },
+        ])
+        ctx.dispatch(path, change)
+      }
+
+      attachTransact(result, ctx)
+      return result
     },
   }
 }

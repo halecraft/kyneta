@@ -1,10 +1,10 @@
 // record-text-spike — validate text-inside-struct patterns for Yjs backend.
 //
 // The Yjs analog of the Loro counter-in-record spike. Yjs doesn't support
-// counter annotations, but it DOES support text annotations. The same
-// structural bug exists: when a struct is dynamically inserted into a
-// record or list via .set() or .push(), text fields declared in the schema
-// but missing from the value object don't get Y.Text containers created.
+// counters, but it DOES support text. The same structural bug exists: when
+// a struct is dynamically inserted into a record or list via .set() or
+// .push(), text fields declared in the schema but missing from the value
+// object don't get Y.Text containers created.
 //
 // This spike tests:
 //   1. record(struct({ name: string(), bio: text() }))
@@ -26,7 +26,6 @@ import {
   merge,
   Schema,
   subscribe,
-  text,
   version,
 } from "../index.js"
 
@@ -34,16 +33,16 @@ import {
 // Schemas
 // ===========================================================================
 
-const ProfileSchema = Schema.doc({
+const ProfileSchema = Schema.struct({
   profiles: Schema.record(
     Schema.struct({
       displayName: Schema.string(),
-      bio: text(),
+      bio: Schema.text(),
     }),
   ),
 })
 
-const PlainRecordSchema = Schema.doc({
+const PlainRecordSchema = Schema.struct({
   profiles: Schema.record(
     Schema.struct({
       displayName: Schema.string(),
@@ -52,11 +51,11 @@ const PlainRecordSchema = Schema.doc({
   ),
 })
 
-const ListProfileSchema = Schema.doc({
+const ListProfileSchema = Schema.struct({
   players: Schema.list(
     Schema.struct({
       name: Schema.string(),
-      bio: text(),
+      bio: Schema.text(),
     }),
   ),
 })

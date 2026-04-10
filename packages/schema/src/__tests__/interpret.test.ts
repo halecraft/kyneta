@@ -13,7 +13,7 @@ import {
 // ===========================================================================
 
 describe("interpret: catamorphism laziness", () => {
-  const docSchema = Schema.doc({
+  const docSchema = Schema.struct({
     title: Schema.string(),
     count: Schema.number(),
     settings: Schema.struct({
@@ -32,11 +32,6 @@ describe("interpret: catamorphism laziness", () => {
       },
       {
         product: (_ctx, _path, _schema, fields) => fields,
-        annotated: (_ctx, _path, schema, inner) => {
-          if (inner) return inner()
-          forceCount++
-          return `annotated:${schema.tag}`
-        },
       },
     )
 
@@ -67,7 +62,7 @@ describe("interpret: catamorphism laziness", () => {
 
 describe("interpret: plain round-trip", () => {
   it("reads a flat document correctly", () => {
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       title: Schema.string(),
       count: Schema.number(),
     })
@@ -78,7 +73,7 @@ describe("interpret: plain round-trip", () => {
   })
 
   it("reads a nested document with all structural kinds", () => {
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       title: Schema.string(),
       count: Schema.number(),
       messages: Schema.list(
@@ -113,7 +108,7 @@ describe("interpret: plain round-trip", () => {
   })
 
   it("handles missing data gracefully (returns undefined for missing leaves)", () => {
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       title: Schema.string(),
       count: Schema.number(),
     })
@@ -145,11 +140,9 @@ describe("interpret: schema constructors produce correct grammar nodes", () => {
     expect(s[KIND]).toBe("map")
   })
 
-  it("Schema.doc() produces annotated('doc', product(...))", () => {
-    const s = Schema.doc({ title: Schema.string() })
-    expect(s[KIND]).toBe("annotated")
-    expect(s.tag).toBe("doc")
-    expect(s.schema?.[KIND]).toBe("product")
+  it("Schema.struct() produces a product node", () => {
+    const s = Schema.struct({ title: Schema.string() })
+    expect(s[KIND]).toBe("product")
   })
 
   it("Schema.string() produces a bare scalar", () => {
@@ -166,12 +159,6 @@ describe("interpret: schema constructors produce correct grammar nodes", () => {
     expect((s.variants[0] as any).scalarKind).toBe("null")
     expect(s.variants[1][KIND]).toBe("scalar")
     expect((s.variants[1] as any).scalarKind).toBe("string")
-  })
-
-  it("Schema.annotated() produces annotated with custom tag", () => {
-    const s = Schema.annotated("custom")
-    expect(s[KIND]).toBe("annotated")
-    expect(s.tag).toBe("custom")
   })
 
   it("Schema.string('a', 'b') produces a constrained scalar", () => {
@@ -237,13 +224,29 @@ describe("interpret: path accumulation", () => {
         paths.push({ kind: "sum", path })
         return null
       },
-      annotated(_ctx, path, schema, inner) {
-        paths.push({ kind: `annotated:${schema.tag}`, path })
-        return inner ? inner() : null
+      text(_ctx, path, _schema) {
+        paths.push({ kind: "text", path })
+        return null
+      },
+      counter(_ctx, path, _schema) {
+        paths.push({ kind: "counter", path })
+        return null
+      },
+      set(_ctx, path, _schema, _item) {
+        paths.push({ kind: "set", path })
+        return null
+      },
+      tree(_ctx, path, _schema, _nodeData) {
+        paths.push({ kind: "tree", path })
+        return null
+      },
+      movable(_ctx, path, _schema, _item) {
+        paths.push({ kind: "movable", path })
+        return null
       },
     }
 
-    const schema = Schema.doc({
+    const schema = Schema.struct({
       title: Schema.string(),
       settings: Schema.struct({
         darkMode: Schema.boolean(),
@@ -252,13 +255,9 @@ describe("interpret: path accumulation", () => {
 
     interpret(schema, pathTracker, undefined)
 
-    // Root: annotated("doc") at []
-    expect(paths[0]?.kind).toBe("annotated:doc")
+    // Root: product at []
+    expect(paths[0]?.kind).toBe("product")
     expect(paths[0]?.path.length).toBe(0)
-
-    // Inner product at [] (annotation doesn't advance path)
-    expect(paths[1]?.kind).toBe("product")
-    expect(paths[1]?.path.length).toBe(0)
 
     // title: scalar at [key:"title"]
     const titlePath = paths.find(p => p.kind === "scalar:string")
@@ -277,37 +276,30 @@ describe("interpret: path accumulation", () => {
 })
 
 // ===========================================================================
-// Annotation tests — annotation constructors
+// First-class type constructor tests
 // ===========================================================================
 
-describe("interpret: annotation constructors produce correct grammar nodes", () => {
-  it("Schema.annotated('text') produces annotated with tag 'text'", () => {
-    const s = Schema.annotated("text")
-    expect(s[KIND]).toBe("annotated")
-    expect(s.tag).toBe("text")
+describe("interpret: first-class type constructors produce correct grammar nodes", () => {
+  it("Schema.text() produces a text node", () => {
+    const s = Schema.text()
+    expect(s[KIND]).toBe("text")
   })
 
-  it("Schema.annotated('counter') produces annotated with tag 'counter'", () => {
-    const s = Schema.annotated("counter")
-    expect(s[KIND]).toBe("annotated")
-    expect(s.tag).toBe("counter")
+  it("Schema.counter() produces a counter node", () => {
+    const s = Schema.counter()
+    expect(s[KIND]).toBe("counter")
   })
 
-  it("Schema.annotated('movable', Schema.list(...)) produces annotated('movable', sequence(...))", () => {
-    const s = Schema.annotated("movable", Schema.list(Schema.string()))
-    expect(s[KIND]).toBe("annotated")
-    expect(s.tag).toBe("movable")
-    expect(s.schema?.[KIND]).toBe("sequence")
+  it("Schema.movableList(Schema.list(...)) produces a movable node", () => {
+    const s = Schema.movableList(Schema.string())
+    expect(s[KIND]).toBe("movable")
   })
 
-  it("Schema.annotated('tree', ...) produces annotated('tree', product(...))", () => {
-    const s = Schema.annotated(
-      "tree",
+  it("Schema.tree(...) produces a tree node", () => {
+    const s = Schema.tree(
       Schema.struct({ label: Schema.string() }),
     )
-    expect(s[KIND]).toBe("annotated")
-    expect(s.tag).toBe("tree")
-    expect(s.schema?.[KIND]).toBe("product")
+    expect(s[KIND]).toBe("tree")
   })
 })
 
@@ -368,19 +360,16 @@ describe("interpret: discriminatedUnion constructor validation", () => {
   })
 })
 
-describe("interpret: annotated schema plain round-trip", () => {
-  it("reads a document with annotations correctly", () => {
-    const schema = Schema.doc({
-      title: Schema.annotated("text"),
-      count: Schema.annotated("counter"),
-      messages: Schema.annotated(
-        "movable",
-        Schema.list(
-          Schema.struct({
-            author: Schema.string(),
-            body: Schema.annotated("text"),
-          }),
-        ),
+describe("interpret: first-class types plain round-trip", () => {
+  it("reads a document with first-class types correctly", () => {
+    const schema = Schema.struct({
+      title: Schema.text(),
+      count: Schema.counter(),
+      messages: Schema.movableList(
+        Schema.struct({
+          author: Schema.string(),
+          body: Schema.text(),
+        }),
       ),
     })
 

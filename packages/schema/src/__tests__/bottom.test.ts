@@ -8,7 +8,7 @@ import { bottomInterpreter, CALL, makeCarrier } from "../interpreters/bottom.js"
 // Shared fixtures
 // ===========================================================================
 
-const structuralDocSchema = Schema.doc({
+const structuralDocSchema = Schema.struct({
   settings: Schema.struct({
     darkMode: Schema.boolean(),
     fontSize: Schema.number(),
@@ -16,9 +16,9 @@ const structuralDocSchema = Schema.doc({
   metadata: Schema.record(Schema.any()),
 })
 
-const annotatedDocSchema = Schema.doc({
-  title: Schema.annotated("text"),
-  count: Schema.annotated("counter"),
+const annotatedDocSchema = Schema.struct({
+  title: Schema.text(),
+  count: Schema.counter(),
   messages: Schema.list(
     Schema.struct({
       author: Schema.string(),
@@ -31,14 +31,14 @@ const sequenceSchema = Schema.list(Schema.string())
 
 const mapSchema = Schema.record(Schema.number())
 
-const sumSchema = Schema.doc({
+const sumSchema = Schema.struct({
   item: Schema.discriminatedUnion("type", [
     Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
     Schema.struct({ type: Schema.string("image"), url: Schema.string() }),
   ]),
 })
 
-const nullableSchema = Schema.doc({
+const nullableSchema = Schema.struct({
   bio: Schema.nullable(Schema.string()),
 })
 
@@ -182,66 +182,49 @@ describe("bottom: sum (discriminated)", () => {
 
 describe("bottom: sum (nullable / positional)", () => {
   it("produces a callable function carrier", () => {
-    // The doc schema wraps nullable — bottom's annotated("doc") delegates
-    // to inner product, product ignores fields, returns a carrier.
+    // The struct schema wraps nullable — bottom's product ignores fields,
+    // returns a carrier.
     const result = interpretBottom(nullableSchema) as any
     expect(typeof result).toBe("function")
   })
 })
 
 // ===========================================================================
-// bottomInterpreter: annotated nodes
+// bottomInterpreter: first-class types
 // ===========================================================================
 
-describe("bottom: annotated", () => {
-  it("text annotation produces a callable carrier", () => {
-    const result = interpretBottom(Schema.annotated("text")) as any
+describe("bottom: text", () => {
+  it("text produces a callable carrier", () => {
+    const result = interpretBottom(Schema.text()) as any
     expect(typeof result).toBe("function")
     expect(CALL in result).toBe(true)
   })
+})
 
-  it("counter annotation produces a callable carrier", () => {
-    const result = interpretBottom(Schema.annotated("counter")) as any
+describe("bottom: counter", () => {
+  it("counter produces a callable carrier", () => {
+    const result = interpretBottom(Schema.counter()) as any
     expect(typeof result).toBe("function")
     expect(CALL in result).toBe(true)
   })
+})
 
-  it("doc annotation delegates to inner (product carrier)", () => {
-    const result = interpretBottom(structuralDocSchema) as any
-    // doc delegates to its inner product; bottom's product returns a carrier
-    expect(typeof result).toBe("function")
-    expect(CALL in result).toBe(true)
-  })
-
-  it("movableList annotation delegates to inner (sequence carrier)", () => {
-    const schema = Schema.doc({
-      items: Schema.annotated(
-        "movable",
-        Schema.list(Schema.list(Schema.struct({ title: Schema.string() }))),
+describe("bottom: movableList", () => {
+  it("movableList delegates to inner (sequence carrier)", () => {
+    const schema = Schema.struct({
+      items: Schema.movableList(
+        Schema.list(Schema.struct({ title: Schema.string() })),
       ),
     })
-    // doc → product (bottom ignores fields), so we get a carrier
+    // struct → product (bottom ignores fields), so we get a carrier
     const result = interpretBottom(schema) as any
     expect(typeof result).toBe("function")
   })
+})
 
-  it("tree annotation delegates to inner", () => {
-    const schema = Schema.annotated("tree", Schema.string())
-    const result = interpretBottom(schema) as any
-    expect(typeof result).toBe("function")
-    expect(CALL in result).toBe(true)
-  })
-
-  it("unknown annotation with inner delegates to inner", () => {
-    const schema = Schema.annotated("custom-thing", Schema.number())
-    const result = interpretBottom(schema) as any
-    expect(typeof result).toBe("function")
-    expect(CALL in result).toBe(true)
-  })
-
-  it("leaf annotation (no inner) produces its own carrier", () => {
-    // annotated with no inner schema — treated as a leaf
-    const schema = Schema.annotated("leaf-marker", undefined as any)
+describe("bottom: tree", () => {
+  it("tree produces a callable carrier", () => {
+    const schema = Schema.tree(Schema.string())
     const result = interpretBottom(schema) as any
     expect(typeof result).toBe("function")
     expect(CALL in result).toBe(true)
@@ -263,8 +246,8 @@ describe("bottom: full document tree", () => {
 
   it("every carrier in the tree is independently callable", () => {
     // Interpret individual parts to verify each kind gets a carrier
-    const text = interpretBottom(Schema.annotated("text")) as any
-    const counter = interpretBottom(Schema.annotated("counter")) as any
+    const text = interpretBottom(Schema.text()) as any
+    const counter = interpretBottom(Schema.counter()) as any
     const list = interpretBottom(Schema.list(Schema.string())) as any
     const record = interpretBottom(Schema.record(Schema.number())) as any
     const struct = interpretBottom(Schema.struct({ a: Schema.string() })) as any

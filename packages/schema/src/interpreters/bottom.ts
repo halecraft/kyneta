@@ -28,12 +28,16 @@
 import type { ChangeBase } from "../change.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import type {
-  AnnotatedSchema,
+  CounterSchema,
   MapSchema,
+  MovableSequenceSchema,
   ProductSchema,
   ScalarSchema,
   SequenceSchema,
+  SetSchema,
   SumSchema,
+  TextSchema,
+  TreeSchema,
 } from "../schema.js"
 
 // ---------------------------------------------------------------------------
@@ -247,20 +251,45 @@ export const bottomInterpreter: Interpreter<unknown, HasCall> = {
     return makeCarrier()
   },
 
-  annotated(
+  // --- First-class leaf types -----------------------------------------------
+  // Text and counter are leaf types — they get their own carrier.
+
+  text(_ctx: unknown, _path: Path, _schema: TextSchema): HasCall {
+    return makeCarrier()
+  },
+
+  counter(_ctx: unknown, _path: Path, _schema: CounterSchema): HasCall {
+    return makeCarrier()
+  },
+
+  // --- First-class container types ------------------------------------------
+  // Set delegates like map, tree delegates via nodeData, movable delegates
+  // like sequence.
+
+  set(
     _ctx: unknown,
     _path: Path,
-    _schema: AnnotatedSchema,
-    inner: (() => HasCall) | undefined,
+    _schema: SetSchema,
+    _item: (key: string) => HasCall,
   ): HasCall {
-    // Annotated nodes with an inner schema delegate to the inner
-    // interpretation. This matches the convention used by all other
-    // interpreters — the annotation wrapper is transparent at the
-    // carrier level.
-    if (inner !== undefined) {
-      return inner()
-    }
-    // Leaf annotations (no inner schema) get their own carrier.
+    return makeCarrier()
+  },
+
+  tree(
+    _ctx: unknown,
+    _path: Path,
+    _schema: TreeSchema,
+    nodeData: () => HasCall,
+  ): HasCall {
+    return nodeData()
+  },
+
+  movable(
+    _ctx: unknown,
+    _path: Path,
+    _schema: MovableSequenceSchema,
+    _item: (index: number) => HasCall,
+  ): HasCall {
     return makeCarrier()
   },
 }

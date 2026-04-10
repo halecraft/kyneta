@@ -14,7 +14,7 @@
 
 import { Schema, type Ref } from "@kyneta/schema"
 
-export const TodoSchema = Schema.doc({
+export const TodoSchema = Schema.struct({
   todos: Schema.list(
     Schema.struct({
       text: Schema.string(),

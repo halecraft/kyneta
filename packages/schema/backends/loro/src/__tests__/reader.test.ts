@@ -1,5 +1,5 @@
-import type { Reader } from "@kyneta/schema"
-import { RawPath, type Schema } from "@kyneta/schema"
+import type { ProductSchema, Reader } from "@kyneta/schema"
+import { RawPath, Schema } from "@kyneta/schema"
 import { LoroDoc, LoroMap } from "loro-crdt"
 import { describe, expect, it } from "vitest"
 import { LoroSchema } from "../loro-schema.js"
@@ -14,7 +14,7 @@ import { loroReader } from "../reader.js"
  * to populate the doc via native Loro API before creating the reader.
  */
 function createReader(
-  schema: ReturnType<typeof Schema.doc | typeof LoroSchema.doc>,
+  schema: ProductSchema,
   setup: (doc: LoroDoc) => void,
 ): { doc: LoroDoc; reader: Reader } {
   const doc = new LoroDoc()

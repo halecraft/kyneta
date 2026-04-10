@@ -11,8 +11,8 @@
 // Usage:
 //   import { yjs } from "@kyneta/yjs-schema"
 //
-//   const TodoDoc = yjs.bind(Schema.doc({
-//     title: Schema.annotated("text"),
+//   const TodoDoc = yjs.bind(Schema.struct({
+//     title: Schema.text(),
 //     items: Schema.list(Schema.struct({ name: Schema.string() })),
 //   }))
 //
@@ -147,14 +147,14 @@ function createYjsFactory(peerId: string): SubstrateFactory<YjsVersion> {
  * Strategy is constrained to `CrdtStrategy` (`"collaborative" | "ephemeral"`).
  * Passing `"authoritative"` is a compile error.
  */
-/** The closed set of annotation tags that the Yjs substrate supports. */
-export type YjsSupportedTag = "text" | "doc"
+/** The closed set of capability tags that the Yjs substrate supports. */
+export type YjsCaps = "text" | "json"
 
-export const yjs: SubstrateNamespace<CrdtStrategy, YjsSupportedTag> & {
+export const yjs: SubstrateNamespace<CrdtStrategy, YjsCaps> & {
   /** Access the underlying `Y.Doc` backing a ref. */
   unwrap(ref: object): Y.Doc
 } = {
-  ...createSubstrateNamespace<CrdtStrategy, YjsSupportedTag>({
+  ...createSubstrateNamespace<CrdtStrategy, YjsCaps>({
     strategies: {
       collaborative: {
         factory: ctx => createYjsFactory(ctx.peerId),

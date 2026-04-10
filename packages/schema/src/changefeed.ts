@@ -143,21 +143,12 @@ function resolveSchemaKindAtPath(
 ): "product" | "map" | "other" {
   try {
     let current = schema
-    // Unwrap the root annotation (e.g. doc → product)
-    while (current[KIND] === "annotated" && current.schema !== undefined) {
-      current = current.schema
-    }
-    // Walk each segment except the last — we want the schema AT the path,
-    // not the schema of the path's child.
+    // Walk each segment — we want the schema AT the path.
     for (const segment of path.segments) {
       current = advanceSchema(current, segment)
     }
-    // Unwrap annotations at the target position
-    while (current[KIND] === "annotated" && current.schema !== undefined) {
-      current = current.schema
-    }
-    if (current[KIND] === "product") return "product"
-    if (current[KIND] === "map") return "map"
+    if (current[KIND] === "product" || current[KIND] === "tree") return "product"
+    if (current[KIND] === "map" || current[KIND] === "set") return "map"
     return "other"
   } catch {
     // Schema walk failed (e.g. sum mid-path, unknown field) — safe fallback

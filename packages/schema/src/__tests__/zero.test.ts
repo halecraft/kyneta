@@ -123,23 +123,11 @@ describe("Zero.structural: structural kinds", () => {
   })
 })
 
-describe("Zero.structural: generic annotations", () => {
-  it("unknown annotation without inner → undefined", () => {
-    expect(Zero.structural(Schema.annotated("custom-thing"))).toBe(undefined)
-  })
-
-  it("unknown annotation with inner → delegates to inner", () => {
-    expect(
-      Zero.structural(Schema.annotated("custom", Schema.scalar("number"))),
-    ).toBe(0)
-  })
-})
-
-describe("Zero.structural: doc (structural root)", () => {
-  it("doc with scalar fields", () => {
+describe("Zero.structural: struct (structural root)", () => {
+  it("struct with scalar fields", () => {
     expect(
       Zero.structural(
-        Schema.doc({
+        Schema.struct({
           name: Schema.string(),
           count: Schema.number(),
           active: Schema.boolean(),
@@ -148,8 +136,8 @@ describe("Zero.structural: doc (structural root)", () => {
     ).toEqual({ name: "", count: 0, active: false })
   })
 
-  it("doc with nested struct, list, record", () => {
-    const schema = Schema.doc({
+  it("struct with nested struct, list, record", () => {
+    const schema = Schema.struct({
       settings: Schema.struct({
         darkMode: Schema.boolean(),
         fontSize: Schema.number(),
@@ -169,42 +157,42 @@ describe("Zero.structural: doc (structural root)", () => {
 // Annotated tests — annotation-specific defaults
 // ===========================================================================
 
-describe("Zero.structural: annotated schemas", () => {
+describe("Zero.structural: first-class types", () => {
   it("text → empty string", () => {
-    expect(Zero.structural(Schema.annotated("text"))).toBe("")
+    expect(Zero.structural(Schema.text())).toBe("")
   })
 
   it("counter → 0", () => {
-    expect(Zero.structural(Schema.annotated("counter"))).toBe(0)
+    expect(Zero.structural(Schema.counter())).toBe(0)
   })
 
   it("movableList → empty array", () => {
     expect(
       Zero.structural(
-        Schema.annotated("movable", Schema.list(Schema.string())),
+        Schema.movableList(Schema.string()),
       ),
     ).toEqual([])
   })
 
-  it("doc with annotations delegates correctly", () => {
+  it("struct with first-class types delegates correctly", () => {
     expect(
       Zero.structural(
-        Schema.doc({
-          title: Schema.annotated("text"),
-          count: Schema.annotated("counter"),
+        Schema.struct({
+          title: Schema.text(),
+          count: Schema.counter(),
         }),
       ),
     ).toEqual({ title: "", count: 0 })
   })
 
-  it("realistic annotated document schema", () => {
-    const chatDoc = Schema.doc({
-      title: Schema.annotated("text"),
-      count: Schema.annotated("counter"),
+  it("realistic document schema with first-class types", () => {
+    const chatDoc = Schema.struct({
+      title: Schema.text(),
+      count: Schema.counter(),
       messages: Schema.list(
         Schema.struct({
           author: Schema.string(),
-          body: Schema.annotated("text"),
+          body: Schema.text(),
         }),
       ),
       settings: Schema.struct({

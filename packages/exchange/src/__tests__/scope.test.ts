@@ -230,7 +230,7 @@ describe("ScopeRegistry", () => {
   // -----------------------------------------------------------------------
 
   describe("onUnresolvedDoc composition", () => {
-    const bound = json.bind(Schema.doc({ value: Schema.string() }))
+    const bound = json.bind(Schema.struct({ value: Schema.string() }))
 
     it("first non-undefined result wins; later scopes not called", () => {
       const registry = new ScopeRegistry()

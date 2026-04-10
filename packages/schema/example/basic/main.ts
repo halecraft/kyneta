@@ -10,11 +10,12 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import type {
-  AnnotatedSchema,
+  CounterSchema,
   Changeset,
   Op,
   Ref,
   SubstratePayload,
+  TextSchema,
 } from "../../src/basic/index.js"
 
 import {
@@ -44,9 +45,9 @@ import { json, log, section } from "../helpers.js"
 
 section(1, "Define a Schema")
 
-const ProjectSchema = Schema.doc({
-  name: Schema.annotated("text"),
-  stars: Schema.annotated("counter"),
+const ProjectSchema = Schema.struct({
+  name: Schema.text(),
+  stars: Schema.counter(),
 
   tasks: Schema.list(
     Schema.struct({
@@ -64,12 +65,12 @@ const ProjectSchema = Schema.doc({
   content: Schema.discriminatedUnion("type", [
     Schema.struct({
       type: Schema.string("text"),
-      body: Schema.annotated("text"),
+      body: Schema.string(),
     }),
     Schema.struct({
       type: Schema.string("image"),
       url: Schema.string(),
-      caption: Schema.annotated("text"),
+      caption: Schema.string(),
     }),
   ]),
 
@@ -78,7 +79,7 @@ const ProjectSchema = Schema.doc({
   labels: Schema.record(Schema.string()),
 })
 
-log(`Schema.doc({ name, stars, tasks, settings, content, bio, labels })`)
+log(`Schema.struct({ name, stars, tasks, settings, content, bio, labels })`)
 log(`\n${describe(ProjectSchema)}`)
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -468,12 +469,12 @@ section(12, "Portable Refs")
 log(`    Refs are self-contained — pass them to generic helper functions.`)
 
 // A generic function that appends a tag to any text ref
-function tag(ref: Ref<AnnotatedSchema<"text">>, label: string) {
+function tag(ref: Ref<TextSchema>, label: string) {
   ref.insert(ref().length, ` [${label}]`)
 }
 
 // A generic function that ensures a counter meets a minimum
-function ensureMinimum(ref: Ref<AnnotatedSchema<"counter">>, min: number) {
+function ensureMinimum(ref: Ref<CounterSchema>, min: number) {
   const current = ref()
   if (current < min) ref.increment(min - current)
 }

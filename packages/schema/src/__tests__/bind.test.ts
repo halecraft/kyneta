@@ -14,7 +14,7 @@ import {
 } from "../substrates/plain.js"
 import { TimestampVersion } from "../substrates/timestamp-version.js"
 
-const testSchema = Schema.doc({
+const testSchema = Schema.struct({
   title: Schema.string(),
   count: Schema.number(),
 })

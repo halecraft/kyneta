@@ -34,24 +34,6 @@ export {
   version,
 } from "./sync.js"
 
-// Text annotation convenience — so users don't need LoroSchema just for text()
-import type { AnnotatedSchema } from "@kyneta/schema"
-import { Schema } from "@kyneta/schema"
-
-/**
- * Collaborative text (CRDT). Produces `annotated("text")`.
- *
- * The annotation implies scalar string semantics for reads,
- * but the Yjs substrate provides collaborative editing (insert, delete)
- * via Y.Text.
- *
- * This is a convenience re-export so that `@kyneta/yjs-schema` users
- * don't need to import `LoroSchema` just for `text()`.
- */
-export function text(): AnnotatedSchema<"text", undefined, "text"> {
-  return Schema.annotated("text")
-}
-
 // Types (re-exported for convenience)
 export type { Changeset } from "@kyneta/changefeed"
 export type { Op, Ref, SubstratePayload } from "@kyneta/schema"
@@ -63,6 +45,7 @@ export type { Op, Ref, SubstratePayload } from "@kyneta/schema"
 // Namespace — the yjs substrate namespace (replaces standalone escape hatch;
 // the old `yjs(ref)` call is now `yjs.unwrap(ref)`)
 export { yjs } from "./bind-yjs.js"
+export type { YjsCaps } from "./bind-yjs.js"
 // Change mapping
 export { applyChangeToYjs, eventsToOps } from "./change-mapping.js"
 // Container creation

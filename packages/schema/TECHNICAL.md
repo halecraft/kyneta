@@ -10,40 +10,48 @@ The predecessor shape system (from the previous `change` package) has two separa
 
 This dual-layer split is a **Loro implementation detail**, not a schema-structural property. Loro distinguishes "containers" (CRDTs with identity) from "values" (opaque blobs inside containers). But a different backend would draw the boundary differently or not at all.
 
-The spike collapses both layers into **one recursive type** with five structural constructors plus an open annotation mechanism:
+The spike collapses both layers into **one recursive type** with five structural constructors plus five first-class CRDT leaf/container types:
 
 ```
 SchemaF<A> =
   | Scalar(kind, constraint?)       — leaf: string, number, boolean, null, bytes, any
-  | Product({ k₁: A, k₂: A, … })  — fixed-key record (struct, doc)
+  | Product({ k₁: A, k₂: A, … })  — fixed-key record (struct)
   | Sequence(A)                     — ordered collection (list)
   | Map(A)                          — dynamic-key collection (record)
   | Sum(A[])                        — union / discriminated union
-  | Annotated(tag, A?)              — semantic enrichment (text, counter, movable, tree, doc)
+  | Text                            — collaborative text (character-level CRDT)
+  | Counter                         — additive counter CRDT
+  | Set(A)                          — add-wins set CRDT
+  | Tree(A)                         — hierarchical tree with move-subtree ops
+  | MovableSequence(A)              — ordered collection with move ops
 ```
 
-Annotations attach backend semantics without changing the recursive structure. `Schema.annotated("text")` produces a text annotation. `Schema.annotated("counter")` produces a counter annotation. `Schema.annotated("movable", Schema.sequence(item))` produces a movable list. The annotation set is open — third-party backends define their own tags.
+First-class types are proper grammar nodes with their own `[KIND]` values, not annotations on structural constructors. `Schema.text()` produces a `TextSchema` node with `[KIND]: "text"`. `Schema.counter()` produces a `CounterSchema`. `Schema.movableList(item)` produces a `MovableSequenceSchema`. Each first-class type carries a `[CAPS]` phantom brand that declares its required merge capability. The capability set is closed — substrates declare which capabilities they support via `LoroCaps` or `YjsCaps`.
 
 ### Backend-Specific Constructor Namespaces
 
-The `Schema` namespace in `@kyneta/schema` provides the **backend-agnostic grammar**: scalars, structural composites, the `doc` root constructor, low-level grammar-native constructors (`scalar`, `product`, `sequence`, `map`, `sum`, `discriminatedSum`), and the universal `annotated(tag, inner?)` mechanism for semantic enrichment.
+The `Schema` namespace in `@kyneta/schema` provides the **backend-agnostic grammar**: scalars, structural composites, first-class CRDT types (`text`, `counter`, `set`, `tree`, `movableList`), low-level grammar-native constructors (`scalar`, `product`, `sequence`, `map`, `sum`, `discriminatedSum`), and the `.json()` modifier for merge boundaries.
 
-Each CRDT backend package provides its **own constructor namespace** that wraps `Schema.annotated(tag)` with ergonomic names matching that backend's vocabulary:
+Each CRDT backend package provides its **own constructor namespace** that is now a thin wrapper over `Schema.*`:
 
-| Package | Namespace | Annotation constructors |
+| Package | Namespace | What it adds |
 |---|---|---|
-| `@kyneta/loro-schema` | `LoroSchema` | `text()`, `counter()`, `movableList()`, `tree()`, plus `plain.*` sub-namespace |
+| `@kyneta/loro-schema` | `LoroSchema` | `doc()` (Loro root constraint), `plain.*` sub-namespace, `struct`/`list`/`record` (Loro-container variants) |
 | `@kyneta/yjs-schema` | (standalone `text()` export) | `text()` |
 
-The interpreter dispatch is identical regardless of which constructor produced the node — interpreters dispatch on `[KIND]` and annotation tag strings, not constructor origin. `LoroSchema.text()` and `Schema.annotated("text")` produce the same schema node.
+The interpreter dispatch is on `[KIND]` — each first-class type has its own kind value (`"text"`, `"counter"`, `"set"`, `"tree"`, `"movable"`). `LoroSchema.text()` and `Schema.text()` produce the same `TextSchema` node.
 
-**Note:** The core interpreters (`withNavigation`, `withReadable`, `withWritable`, `withChangefeed`, `describe`, `zero`) have built-in awareness of the `"text"`, `"counter"`, `"movable"`, `"tree"`, and `"doc"` annotation tags. These are the well-known tags that the grammar recognizes. Making the core fully tag-agnostic (open interpreter registry) is a possible future evolution.
+**Note:** The `Interpreter` interface has 10 methods — one per `[KIND]` value: `scalar`, `product`, `sequence`, `map`, `sum`, `text`, `counter`, `set`, `tree`, `movable`. Each first-class type gets its own interpreter method rather than being dispatched through a generic annotation handler.
 
 ### Composition Constraints Are Backend-Specific
 
 Even with a unified grammar, some backends impose validity rules (e.g. Loro can't nest a CRDT container inside a plain value blob). These are **well-formedness rules** — context-sensitive constraints layered on the context-free grammar. The solution: the internal `Schema` type is unconstrained; backend-specific constructor APIs (e.g. `LoroSchema.plain.struct()` in `@kyneta/loro-schema`) use TypeScript's type system to enforce constraints at build time.
 
-**`PlainSchema` — the annotation-free subset.** The grammar defines `PlainSchema` in `schema.ts`, a recursive type that includes all structural kinds (`ScalarSchema`, `ProductSchema`, `SequenceSchema`, `MapSchema`, `SumSchema`) but excludes `AnnotatedSchema`. Each structural kind has a `Plain*` counterpart (`PlainProductSchema`, `PlainSequenceSchema`, etc.) where the recursive position is narrowed from `Schema` to `PlainSchema`. These types are exported from `@kyneta/schema` for use by any backend's composition constraints.
+**`PlainSchema` — the LWW-compatible subset.** The grammar defines `PlainSchema` in `schema.ts`, a recursive type that includes the five structural kinds (`ScalarSchema`, `ProductSchema`, `SequenceSchema`, `MapSchema`, `SumSchema`) but excludes all first-class CRDT types (`TextSchema`, `CounterSchema`, `SetSchema`, `TreeSchema`, `MovableSequenceSchema`). Each structural kind has a `Plain*` counterpart (`PlainProductSchema`, `PlainSequenceSchema`, etc.) where the recursive position is narrowed from `Schema` to `PlainSchema`. These types are exported from `@kyneta/schema` for use by any backend's composition constraints.
+
+`PlainSchema` is the input constraint for two contexts:
+- **`.json()` modifier** — merge boundary on `struct`, `list`, `record`. Everything below is an inert JSON blob; no child capabilities propagated.
+- **Sum variants** — sums are always LWW (variants are replaced atomically), so variants must be `PlainSchema`.
 
 Backend `plain.*` constructors use `PlainSchema` as their **parameter constraint** while keeping the original `ProductSchema<F>`, `SequenceSchema<I>`, etc. as **return types**:
 
@@ -54,17 +62,17 @@ LoroSchema.plain.struct<F extends Record<string, PlainSchema>>(fields: F): Produ
 // This compiles:
 LoroSchema.plain.struct({ name: Schema.string() })
 
-// This is a compile error — AnnotatedSchema ∉ PlainSchema:
-LoroSchema.plain.struct({ title: Schema.annotated("text") })
+// This is a compile error — TextSchema ∉ PlainSchema:
+LoroSchema.plain.struct({ title: Schema.text() })
 ```
 
-The constraint is recursive: nesting an annotation anywhere inside a `plain.*` tree is rejected at compile time.
+The constraint is recursive: nesting a first-class CRDT type anywhere inside a `plain.*` tree or a sum variant is rejected at compile time.
 
-By keeping return types as the original interfaces, all downstream consumers — `interpret()`, `Plain<S>`, `Writable<S>`, `describe()`, `validate()`, `Zero.structural()` — work unchanged. The `PlainSchema` types are invisible at the API surface; they are felt only when you try to pass an annotation where plain data is expected.
+By keeping return types as the original interfaces, all downstream consumers — `interpret()`, `Plain<S>`, `Writable<S>`, `describe()`, `validate()`, `Zero.structural()` — work unchanged. The `PlainSchema` types are invisible at the API surface; they are felt only when you try to pass a CRDT type where plain data is expected.
 
-### Annotations Unify Leaf CRDTs and Structural Modifiers
+### First-Class Types Are Proper Grammar Nodes
 
-In the old grammar, `text` and `counter` were node kinds alongside `list` and `struct`. Mathematically, `text` is "a string with collaborative editing semantics" — an annotation on a scalar, not a distinct structural kind. Similarly, `movableList` is "a sequence with move semantics." The annotation mechanism captures this uniformly.
+In the predecessor design, `text`, `counter`, `movable`, `tree`, and `doc` were modeled as annotations on structural constructors via `Schema.annotated(tag, inner?)`. The refactored grammar promotes them to first-class types with their own `[KIND]` values. This is mathematically cleaner — `text` has its own operation algebra (insert/delete/mark), `counter` has increment/decrement, `set` has add/delete/has — these are not "annotations on scalars" but distinct algebraic structures with their own identities. Each gets its own `Interpreter` method, eliminating the need for tag-string dispatch inside a generic `annotated` handler.
 
 ## Architecture
 
@@ -109,7 +117,7 @@ Both `createDoc` and `createDocFromEntirety` delegate to a shared `registerDoc` 
 "basic" was chosen over "plain" because "plain" already has four meanings in the codebase:
 
 1. `Plain<S>` — the type-level plain-JS snapshot of a schema
-2. `PlainSchema` — the annotation-free subset of Schema (used by backend composition constraints)
+2. `PlainSchema` — the LWW-compatible subset of Schema (used by backend composition constraints)
 3. `PlainSubstrate` / `plainContext` / `PlainVersion` — the plain-JS substrate implementation
 4. `plainInterpreter` — the eager deep-snapshot interpreter
 
@@ -127,8 +135,12 @@ One recursive `Schema` type discriminated by `[KIND]`:
 | `product` | `Schema.product({ x: ..., y: ... })` | Fixed-key record. Optional `discriminantKey?: string` — see below |
 | `sequence` | `Schema.sequence(item)` | Ordered collection |
 | `map` | `Schema.map(item)` | Dynamic-key collection |
-| `sum` | `Schema.sum([a, b])` | Positional or discriminated union |
-| `annotated` | `Schema.annotated("text")` | Open tag + optional inner schema + optional metadata |
+| `sum` | `Schema.sum([a, b])` | Positional or discriminated union. Variants constrained to `PlainSchema` |
+| `text` | `Schema.text()` | Collaborative text — character-level CRDT |
+| `counter` | `Schema.counter()` | Additive counter CRDT |
+| `set` | `Schema.set(item)` | Add-wins set CRDT |
+| `tree` | `Schema.tree(nodeData)` | Hierarchical tree with move-subtree ops |
+| `movable` | `Schema.movableList(item)` | Ordered collection with move ops |
 
 Developer-facing sugar produces nodes in this grammar:
 
@@ -139,27 +151,33 @@ Developer-facing sugar produces nodes in this grammar:
 | `Schema.struct(fields)` | `product(fields)` | |
 | `Schema.list(item)` | `sequence(item)` | |
 | `Schema.record(item)` | `map(item)` | |
-| `Schema.union(a, b)` | `sum([a, b])` | Positional union |
-| `Schema.discriminatedUnion(key, map)` | `sum(key, map)` | Keyed variants |
+| `Schema.union(a, b)` | `sum([a, b])` | Positional union (variants must be `PlainSchema`) |
+| `Schema.discriminatedUnion(key, map)` | `sum(key, map)` | Keyed variants (variants must be `PlainSchema`) |
 | `Schema.nullable(inner)` | `sum([scalar("null"), inner])` | Sugar for `union(null, X)` |
-| `Schema.doc(fields)` | `annotated("doc", product(fields))` | Root document |
+| `Schema.text()` | `text` | First-class text type |
+| `Schema.counter()` | `counter` | First-class counter type |
+| `Schema.set(item)` | `set(item)` | First-class set type |
+| `Schema.tree(nodeData)` | `tree(nodeData)` | First-class tree type |
+| `Schema.movableList(item)` | `movable(item)` | First-class movable sequence type |
 
-Backend packages provide their own annotation constructors as ergonomic wrappers around `Schema.annotated(tag)`. For example, `@kyneta/loro-schema` exports `LoroSchema.text()` → `annotated("text")`, `LoroSchema.counter()` → `annotated("counter")`, etc. The core interpreters dispatch on the annotation tag string, not the constructor origin.
+**`.json()` modifier.** `Schema.struct(fields).json()`, `Schema.list(item).json()`, and `Schema.record(item).json()` create a merge boundary — everything below is an inert JSON blob with no child capabilities propagated. The `fields`/`item` must be `PlainSchema`.
+
+Backend packages provide their own constructor namespaces as thin wrappers over `Schema.*`. For example, `@kyneta/loro-schema` exports `LoroSchema.text()` which delegates to `Schema.text()`, producing the same `TextSchema` node. The `LoroSchema` namespace still exists for Loro-specific concerns like `LoroSchema.doc()` (root field constraints) and `LoroSchema.plain.*` (composition-constrained plain constructors).
 
 ### Symbol-Keyed Metadata Model
 
-Schema nodes carry only data properties (`tag`, `fields`, `item`, `variants`, `scalarKind`, `constraint`, `schema`, `meta`). All infrastructure lives in symbol-keyed slots:
+Schema nodes carry only data properties (`fields`, `item`, `variants`, `scalarKind`, `constraint`, `nodeData`). All infrastructure lives in symbol-keyed slots:
 
-- **`[KIND]`** — runtime discriminant. Values are `"scalar"`, `"product"`, `"sequence"`, `"map"`, `"sum"`, `"annotated"` — unchanged from the old `_kind` string field.
-- **`[TAGS]`** — phantom type-level brand accumulating annotation tags bottom-up through constructors.
+- **`[KIND]`** — runtime discriminant. Values are `"scalar"`, `"product"`, `"sequence"`, `"map"`, `"sum"`, `"text"`, `"counter"`, `"set"`, `"tree"`, `"movable"`.
+- **`[CAPS]`** — phantom type-level brand accumulating capability requirements bottom-up through constructors.
 
 Both are invisible to `JSON.stringify` and `Object.keys`.
 
-**Why `[KIND]` replaces `_kind`.** The type-level interpretations (`Plain<S>`, `Ref<S>`) never used `_kind` — they dispatch structurally via `S extends AnnotatedSchema<...>`. Only runtime code needs a discriminant. A symbol key properly separates infrastructure from data.
+**Why `[KIND]` replaces `_kind`.** The type-level interpretations (`Plain<S>`, `Ref<S>`) never used `_kind` — they dispatch structurally via `S extends TextSchema<...>` etc. Only runtime code needs a discriminant. A symbol key properly separates infrastructure from data.
 
-**`[TAGS]` phantom brand and `bind()` as the constraint boundary.** Tags accumulate bottom-up through constructors (type-level catamorphism). `ExtractTags<S>` reads the accumulated brand; `RestrictTags<S, AllowedTags>` constrains it; `SubstrateNamespace<S, AllowedTags>` threads the constraint into `bind()`. `PlainSchema` = constructor-side constraint (what can be composed). `[TAGS]` = bind-site constraint (what the substrate supports).
+**`[CAPS]` phantom brand and `bind()` as the constraint boundary.** Capabilities accumulate bottom-up through constructors (type-level catamorphism). `ExtractCaps<S>` reads the accumulated brand; `RestrictCaps<S, AllowedCaps>` constrains it; `SubstrateNamespace<S, AllowedCaps>` threads the constraint into `bind()`. `PlainSchema` = constructor-side constraint (what can be composed). `[CAPS]` = bind-site constraint (what the substrate supports).
 
-**Allowed-tags formulation.** Closed by default — unknown annotations are rejected unless the substrate explicitly declares support. `AllowedTags = string` opts out entirely (Loro, json). `"text" | "doc"` (Yjs) creates a compile-time closed surface mirroring the runtime whitelist.
+**Closed capability sets.** Each substrate declares a closed set of supported capabilities. `LoroCaps = "text" | "counter" | "movable" | "tree" | "json"`. `YjsCaps = "text" | "json"`. The `json` namespace accepts all capabilities (`AllowedCaps = string`). A schema containing `Schema.counter()` has `ExtractCaps<S> = "counter"` — `yjs.bind()` rejects it at compile time because `"counter"` is not in `YjsCaps`.
 
 ### `ProductSchema.discriminantKey`
 
@@ -196,7 +214,7 @@ The grammar has one `sum` kind with two flavors:
 
 ```ts
 Schema.discriminatedUnion("type", [
-  Schema.struct({ type: Schema.string("text"), body: Schema.annotated("text") }),
+  Schema.struct({ type: Schema.string("text"), body: Schema.string() }),
   Schema.struct({ type: Schema.string("image"), url: Schema.string() }),
 ])
 ```
@@ -287,13 +305,13 @@ Features:
 
 ### Interpret (`src/interpret.ts`)
 
-The generic catamorphism. `Interpreter<Ctx, A>` has one case per structural kind. The `interpret()` function has two overloads:
+The generic catamorphism. `Interpreter<Ctx, A>` has 10 methods — one per `[KIND]` value: `scalar`, `product`, `sequence`, `map`, `sum`, `text`, `counter`, `set`, `tree`, `movable`. The `interpret()` function has two overloads:
 
 **Three-arg (direct):** `interpret(schema, interpreter, ctx)` walks the tree and returns the raw carrier type `A`. The walker builds:
 
 - **Thunks** (`() => A`) for product fields — laziness preserved
 - **Closures** (`(index) => A` / `(key) => A`) for sequence/map children
-- **Inner thunks** for annotated nodes
+- **Inner thunks** for first-class types with inner schemas (`set`, `tree`, `movable`)
 - **Sum variants** via `SumVariants<A>` — `byIndex(i)` for positional, `byKey(k)` for discriminated
 
 **Two-arg (fluent builder):** `interpret(schema, ctx)` returns an `InterpretBuilder<S, Ctx, Brands>` that accumulates layers via `.with()` and runs the catamorphism on `.done()`.
@@ -335,7 +353,7 @@ Both `Ref<S>` and `RWRef<S>` require `HasRead` — a carrier that can't read has
 
 ### Interpreters: The Six-Layer Decomposed Stack
 
-The interpreter system is built from six composable transformer layers that stack on a universal foundation. Each layer adds exactly one capability:
+The interpreter system is built from six composable transformer layers that stack on a universal foundation. Each layer adds exactly one capability. All layers implement the full 10-method `Interpreter` interface:
 
 | Layer | Kind | Input → Output | Purpose |
 |---|---|---|---|
@@ -407,7 +425,7 @@ The universal foundation. Every schema node produces a callable **function carri
 
 The carrier is a real `Function` object, so any layer can attach properties (navigation, caching, mutation methods) without replacing the carrier identity. This identity-preserving property is critical — `withNavigation`, `withReadable`, `withAddressing`, `withCaching`, and `withWritable` all mutate the same carrier object.
 
-The `product`, `sequence`, `map`, and `sum` cases ignore their thunks/closures/variants — bottom produces inert carriers. The `annotated` case delegates to `inner()` when present.
+The `product`, `sequence`, `map`, and `sum` cases ignore their thunks/closures/variants — bottom produces inert carriers. The first-class type cases (`text`, `counter`, `set`, `tree`, `movable`) produce inert carriers; those with inner schemas (`set`, `tree`, `movable`) delegate to the inner interpretation when present.
 
 This module also defines the capability lattice interfaces (`HasCall`, `HasNavigation`, `HasRead`, `HasCaching`) and exports the `CALL` symbol.
 
@@ -419,7 +437,7 @@ The coalgebraic structural addressing transformer. Takes any `HasCall`-producing
 - **Sequence:** `.at(i)` returns a child carrier (bounds-checked via `readArrayLength`). `.length` reflects the store array length. `[Symbol.iterator]` yields child carriers.
 - **Map:** `.at(key)` returns a child carrier (checked via `readHasKey`). `.has(key)`, `.keys()`, `.size`, `.entries()`, `.values()`, `[Symbol.iterator]`.
 - **Sum:** Uses `dispatchSum(value, schema, variants)` from `reader.ts` for store-driven variant resolution. This is structural addressing — "which child position is active?" — not value reading.
-- **Annotated:** `"doc"`/`"movable"`/`"tree"` → delegate to inner. `"text"`/`"counter"` → pass through to base (reading is `withReadable`'s job).
+- **First-class types:** `movable`/`tree`/`set` → delegate to inner (these have child schemas). `text`/`counter` → pass through to base (reading is `withReadable`'s job).
 
 Navigation is a coalgebra (`A → F(A)`): it reveals addressable child positions within a composite. The `[CALL]` slot is NOT filled — calling the carrier still throws after `withNavigation` alone.
 
@@ -455,7 +473,9 @@ The refinement transformer. Requires `HasNavigation` input (structural navigatio
 - **Sequence:** `CALL` folds child values via the raw `item(i)()` closure (not `result.at()`), producing a **fresh array**. Uses `readArrayLength` for structure discovery but never returns the store array directly. The raw closure is used instead of the cached `.at()` because `withCaching`'s cache shifting can leave refs with stale paths after insert/delete. Adds `.get(i)` convenience (returns plain value, not ref).
 - **Map:** `CALL` folds child values via the raw `item(key)()` closure, producing a **fresh record**. Same design as sequence — `readKeys` for key discovery, raw closure for values. Adds `.get(key)` convenience.
 - **Sum:** Pass-through — dispatch is already handled by `withNavigation`.
-- **Annotated:** `"text"` → string-coercing reader + toPrimitive. `"counter"` → number-coercing reader + hint-aware toPrimitive. `"doc"`/`"movable"`/`"tree"` → delegate to inner.
+- **Text:** String-coercing reader + toPrimitive.
+- **Counter:** Number-coercing reader + hint-aware toPrimitive.
+- **Set/Tree/Movable:** Delegate to inner schema interpretation.
 
 **Snapshot isolation.** Composite `ref()` always returns a fresh plain object — mutating the returned value does not affect the store. `ref()` and `plainInterpreter` produce extensionally equal output for the same store state. Both are F-algebras over the schema functor; `ref()` folds through the carrier stack (benefiting from child ref caching), while `plainInterpreter` is a standalone eager fold with no carrier overhead.
 
@@ -468,7 +488,7 @@ The interposition transformer. Wraps navigation with memoization:
 - **Product:** field getters use `resolved`/`cached` memoization pattern. `ref.title === ref.title`. **Discriminant fields are excluded** — when `schema.discriminantKey` is set, both the `fieldState` initialization loop and the getter override loop skip the discriminant key. The `withNavigation` getter already returns a raw store read for the discriminant; memoizing it would cache a potentially stale value outside the normal invalidation pipeline. Skipping is both correct and simpler.
 - **Sequence:** `Map<number, A>` child cache wrapping `.at(i)`. `seq.at(0) === seq.at(0)`.
 - **Map:** `Map<string, A>` child cache wrapping `.at(key)`. `map.at("k") === map.at("k")`.
-- **Scalar, sum, annotated:** pass through (no caching needed at leaves).
+- **Scalar, sum, text, counter:** pass through (no caching needed at leaves).
 
 **Change-driven `[INVALIDATE]`:** Each structural node gets an `[INVALIDATE](change: ChangeBase)` method that interprets the change surgically:
 
@@ -505,15 +525,16 @@ An extension transformer: `withWritable(base)` takes `Interpreter<RefContext, A>
 
 - **Scalar:** `.set(value)` — dispatches `ReplaceChange` at own path.
 - **Product:** `.set(plainObject)` — dispatches `ReplaceChange` at own path. Non-enumerable. Enables atomic subtree replacement.
-- **Text:** `.insert(index, content)`, `.delete(index, length)`, `.update(content)` — dispatches `TextChange`. `update()` reads current text via `readByPath(ctx.reader, path)` (direct reader inspection, not the carrier's `[CALL]` slot) so navigate+write stacks work without a reading layer.
-- **Counter:** `.increment(n?)`, `.decrement(n?)` — dispatches `IncrementChange`.
 - **Sequence:** `.push(...items)`, `.insert(index, ...items)`, `.delete(index, count?)` — dispatches `SequenceChange`.
 - **Map:** `.set(key, value)`, `.delete(key)`, `.clear()` — dispatches `MapChange`. All non-enumerable.
 - **Sum:** pass-through — delegates to base.
+- **Text:** `.insert(index, content)`, `.delete(index, length)`, `.update(content)` — dispatches `TextChange`. `update()` reads current text via `readByPath(ctx.reader, path)` (direct reader inspection, not the carrier's `[CALL]` slot) so navigate+write stacks work without a reading layer.
+- **Counter:** `.increment(n?)`, `.decrement(n?)` — dispatches `IncrementChange`.
+- **Set/Tree/Movable:** Mutation methods appropriate to each type, plus delegation to inner schema for child navigation.
 
 Mutation methods simply construct the appropriate change and call `ctx.dispatch(path, change)`. Cache invalidation is handled by the `prepare` pipeline — `withCaching` hooks `ctx.prepare` to fire per-path invalidation handlers before store mutation. This means every change source (imperative mutation, `applyChanges`, direct `ctx.prepare` calls) gets automatic cache invalidation without manual `[INVALIDATE]` calls.
 
-**Why `withWritable` is not a `Decorator`:** The `Decorator<Ctx, A, P>` type receives `(result, ctx, path)` but no schema information. Mutation is tag-dependent (text gets `.insert()`, counter gets `.increment()`), so it needs `schema.tag` in the `annotated` case. This makes it an interpreter transformer (wraps the full 6-case interpreter) rather than a decorator.
+**Why `withWritable` is not a `Decorator`:** The `Decorator<Ctx, A, P>` type receives `(result, ctx, path)` but no schema information. Mutation is kind-dependent (text gets `.insert()`, counter gets `.increment()`), so it needs the schema's `[KIND]` in the first-class type cases. This makes it an interpreter transformer (wraps the full 10-method interpreter) rather than a decorator.
 
 #### Dispatch Model
 
@@ -585,7 +606,7 @@ An interpreter transformer: `withChangefeed(base)` takes `Interpreter<RefContext
 
 Requires `HasRead` (the `[CALL]` slot must be filled) because `.current` reads values through the carrier. Context type is `RefContext` (not `WritableContext`) — it duck-types for `prepare`/`flush` via `hasPreparePipeline()`, enabling both writable and read-only stacks.
 
-For leaf refs, attaches a plain `ChangefeedProtocol` with `subscribe` (node-level). For composite refs (product, sequence, map), attaches a `ComposedChangefeedProtocol` with both `subscribe` (node-level) and `subscribeTree` (tree-level observation via subscription composition). Note: the facade exports `subscribe` (tree-level, delegates to `subscribeTree`) and `subscribeNode` (node-level, delegates to `subscribe`) — see §Facade above for the naming rationale.
+For leaf refs (scalar, text, counter), attaches a plain `ChangefeedProtocol` with `subscribe` (node-level). For composite refs (product, sequence, map, set, tree, movable), attaches a `ComposedChangefeedProtocol` with both `subscribe` (node-level) and `subscribeTree` (tree-level observation via subscription composition). Note: the facade exports `subscribe` (tree-level, delegates to `subscribeTree`) and `subscribeNode` (node-level, delegates to `subscribe`) — see §Facade above for the naming rationale.
 
 **Read-only Moore machines.** A `Changefeed` defines a Moore machine: `.current` (output function) + `.subscribe` (transition observer). On read-only stacks (no `prepare`/`flush`), subscribers register but never fire — a valid static Moore machine. `.current` still works because it routes through the carrier's `[CALL]` slot.
 
@@ -715,7 +736,7 @@ The `lwwSubstrateFactory` provides the full `SubstrateFactory<TimestampVersion>`
 
 A `BoundSchema<S>` is a static declaration that bundles three choices into one object:
 
-1. **Schema** — what shape is the data? (`Schema` node)
+1. **Schema** — what shape is the data? (`Schema` node, typically `Schema.struct({...})`)
 2. **Factory** — how is the data stored and versioned? (`FactoryBuilder<V>`)
 3. **Strategy** — how does the exchange sync it? (`MergeStrategy`)
 
@@ -784,8 +805,9 @@ The interpreter always collects errors into a mutable `SchemaValidationError[]` 
 | `map` | Non-null, non-array object | Validates each key's value |
 | `sum` (positional) | Tries each variant with error rollback (`errors.length = mark`) | Single "expected one of union variants" error (or "nullable<X>" for nullable sums) |
 | `sum` (discriminated) | Object → discriminant exists → discriminant is string → discriminant is known key → validate variant body | Clear error for each failure mode at the discriminant path |
-| `annotated` (leaf) | `text` → string, `counter` → number | Error with annotation-qualified expected (e.g. `"string (text)"`) |
-| `annotated` (structural) | Delegates to inner thunk | Inner errors propagate |
+| `text` | String value | Error with expected `"string (text)"` |
+| `counter` | Number value | Error with expected `"number (counter)"` |
+| `set` / `tree` / `movable` | Delegates to inner schema | Inner errors propagate |
 
 **Positional sum rollback:** When trying variant `i`, snapshot `const mark = errors.length`. If the variant pushes new errors (`errors.length > mark`), reset `errors.length = mark` to discard them before trying the next variant. If all variants fail, push a single summary error. For nullable sums (detected by the same pattern as `describe()`), the error message is `"nullable<inner>"` rather than generic.
 
@@ -827,7 +849,7 @@ Several recursive conditional types map schema types to their corresponding valu
 
 **`Readable<S>`** — the callable ref type for read-only stacks. `Readable<ScalarSchema<"number">>` = `(() => number) & { [Symbol.toPrimitive]: ... }`. Used to type refs from `withCaching(withReadable(withNavigation(bottomInterpreter)))` — navigation + reading, no mutation.
 
-**`Writable<S>`** — the mutation-only ref type. `Writable<ScalarSchema<"string">>` = `ScalarRef<string>` (just `.set()`). `Writable<AnnotatedSchema<"text">>` = `TextRef` (just `.insert()`, `.delete()`, `.update()`). `SequenceRef` is mutation-only (`.push()`, `.insert()`, `.delete()`) — navigation lives in `NavigableSequenceRef` / `ReadableSequenceRef`.
+**`Writable<S>`** — the mutation-only ref type. `Writable<ScalarSchema<"string">>` = `ScalarRef<string>` (just `.set()`). `Writable<TextSchema>` = `TextRef` (just `.insert()`, `.delete()`, `.update()`). `Writable<CounterSchema>` = `CounterRef` (just `.increment()`, `.decrement()`). `SequenceRef` is mutation-only (`.push()`, `.insert()`, `.delete()`) — navigation lives in `NavigableSequenceRef` / `ReadableSequenceRef`.
 
 **`SchemaRef<S, M>`** — the parameterized recursive core for composed interpreter refs. The mode parameter `M extends RefMode` (`"rw" | "rwc"`) controls which cross-cutting concerns are intersected at every node via `Wrap<T, M>`:
 
@@ -849,10 +871,16 @@ Three named aliases provide the user-facing ref tiers:
 **`Ref<S>`** is the **primary user-facing type** for the full interpreter stack. Unifies navigation, reading, writing, `HasTransact`, and `HasChangefeed` in a single recursive type. Children are `Ref<Child>` — no `Readable<Child> & Writable<Child>` intersection needed. This eliminates the `.at()` overload conflict that plagued `Readable<S> & Writable<S>` on sequences and maps (where `ReadableSequenceRef.at()` returns `Readable<I>` but `SequenceRef.at()` returned `Writable<I>`).
 
 ```ts
+const mySchema = Schema.struct({
+  title: Schema.text(),
+  count: Schema.counter(),
+  items: Schema.list(Schema.struct({ name: Schema.string() })),
+})
 type Doc = Ref<typeof mySchema>
 // doc()           → Plain<typeof mySchema>   (reading)
 // doc.title()     → string                   (reading)
-// doc.title.set("new")                       (writing)
+// doc.title.insert(0, "hello")               (text mutation)
+// doc.count.increment()                      (counter mutation)
 // doc.items.at(0) → Ref<ItemSchema>          (navigation — unified child type)
 // doc[TRANSACT]   → WritableContext           (transaction access)
 // doc[CHANGEFEED] → ChangefeedProtocol        (observation)
@@ -868,7 +896,7 @@ The type hierarchy for collections:
 
 #### Sum Type Resolution
 
-All four type-level interpretations handle both sum flavors:
+All four type-level interpretations handle both sum flavors. Note: sum variants are constrained to `PlainSchema`, so variants never contain first-class CRDT types.
 
 **Discriminated sums** — `DiscriminatedSumSchema<D, V>` resolves via `V[number]` dispatch with a **hybrid discriminant** design. `Plain<S>` produces `Plain<V[number]>` (union of variant plain types — already a proper TS discriminated union). The three ref-producing types — `Readable<S>`, `Writable<S>`, and `SchemaRef<S, M>` — use `DiscriminantProductRef` (and its per-tier analogs) to produce hybrid product refs where the discriminant field `D` resolves to `Plain<F[D]>` (a raw string literal), while all other fields remain full recursive refs. This enables standard TypeScript discriminated union narrowing:
 
@@ -1153,7 +1181,7 @@ packages/schema/
 │   ├── __tests__/
 │   │   ├── basic.test.ts        # Integration tests for @kyneta/schema/basic API
 │   │   ├── types.test.ts        # Type-level tests (expectTypeOf)
-│   │   ├── interpret.test.ts    # Catamorphism, constructors, annotations
+│   │   ├── interpret.test.ts    # Catamorphism, constructors, first-class types
 │   │   ├── bottom.test.ts       # Bottom interpreter: carriers, CALL symbol
 │   │   ├── with-navigation.test.ts
 │   │   ├── with-readable.test.ts

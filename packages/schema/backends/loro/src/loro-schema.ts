@@ -20,10 +20,11 @@
 
 import type { Schema as SchemaType } from "@kyneta/schema"
 import {
-  type AnnotatedSchema,
+  type CounterSchema,
   type DiscriminatedSumSchema,
-  type ExtractTags,
+  type ExtractCaps,
   type MapSchema,
+  type MovableSequenceSchema,
   type PlainProductSchema,
   type PlainSchema,
   type PositionalSumSchema,
@@ -31,7 +32,34 @@ import {
   type ScalarSchema,
   Schema,
   type SequenceSchema,
+  type TextSchema,
+  type TreeSchema,
 } from "@kyneta/schema"
+
+// ---------------------------------------------------------------------------
+// Local wrappers for Schema.struct / .list / .record
+// ---------------------------------------------------------------------------
+// TypeScript's declaration emitter cannot name the internal function types
+// from @kyneta/schema's rolled-up chunk (TS4023). Wrapping them in local
+// functions with explicit return types solves this.
+
+function loroStruct<F extends Record<string, SchemaType>>(
+  fields: F,
+): ProductSchema<F, ExtractCaps<F[keyof F]>> {
+  return Schema.struct(fields)
+}
+
+function loroList<I extends SchemaType>(
+  item: I,
+): SequenceSchema<I, ExtractCaps<I>> {
+  return Schema.list(item)
+}
+
+function loroRecord<I extends SchemaType>(
+  item: I,
+): MapSchema<I, ExtractCaps<I>> {
+  return Schema.record(item)
+}
 
 // ---------------------------------------------------------------------------
 // LoroDocFieldSchema — what is valid as a direct child of LoroSchema.doc()
@@ -44,14 +72,16 @@ import {
  * - `ProductSchema` → `LoroMap` (via `LoroSchema.struct`)
  * - `SequenceSchema` → `LoroList` (via `LoroSchema.list`)
  * - `MapSchema` → `LoroMap` (via `LoroSchema.record`)
- * - `AnnotatedSchema` → `LoroText`, `LoroCounter`, `LoroMovableList`,
- *   `LoroTree` (via `LoroSchema.text`, `.counter`, `.movableList`, `.tree`)
+ * - `TextSchema` → `LoroText` (via `LoroSchema.text`)
+ * - `CounterSchema` → `LoroCounter` (via `LoroSchema.counter`)
+ * - `MovableSequenceSchema` → `LoroMovableList` (via `LoroSchema.movableList`)
+ * - `TreeSchema` → `LoroTree` (via `LoroSchema.tree`)
  *
  * **Plain values** — stored in the shared `_props` `LoroMap`:
  * - `PlainSchema` — scalars (`LoroSchema.plain.boolean()`, etc.) and
  *   plain structural types (`LoroSchema.plain.struct(...)`, etc.)
  *
- * This excludes non-plain `SumSchema` (sums containing annotations),
+ * This excludes non-plain `SumSchema` (sums containing first-class types),
  * which cannot be stored as root fields. Plain sums are allowed via
  * `PlainSchema` (e.g. `LoroSchema.plain.nullable(LoroSchema.plain.string())`).
  */
@@ -59,51 +89,54 @@ export type LoroDocFieldSchema =
   | ProductSchema
   | SequenceSchema
   | MapSchema
-  | AnnotatedSchema
+  | TextSchema
+  | CounterSchema
+  | MovableSequenceSchema
+  | TreeSchema
   | PlainSchema
 
 // ---------------------------------------------------------------------------
-// Loro-specific annotation constructors
+// Loro-specific first-class constructors
 // ---------------------------------------------------------------------------
 
 /**
- * Collaborative text (CRDT). Produces `annotated("text")`.
+ * Collaborative text (CRDT). Produces `text()`.
  *
- * The annotation implies scalar string semantics for reads,
+ * The first-class type implies scalar string semantics for reads,
  * but the backend provides collaborative editing (insert, delete, marks).
  */
-function text(): AnnotatedSchema<"text", undefined, "text"> {
-  return Schema.annotated("text")
+function text(): TextSchema<"text"> {
+  return Schema.text()
 }
 
 /**
- * Counter (CRDT). Produces `annotated("counter")`.
+ * Counter (CRDT). Produces `counter()`.
  *
- * The annotation implies scalar number semantics for reads,
+ * The first-class type implies scalar number semantics for reads,
  * but the backend provides increment/decrement.
  */
-function counter(): AnnotatedSchema<"counter", undefined, "counter"> {
-  return Schema.annotated("counter")
+function counter(): CounterSchema<"counter"> {
+  return Schema.counter()
 }
 
 /**
  * Movable list (CRDT with move semantics).
- * Produces `annotated("movable", sequence(item))`.
+ * Produces `movableList(item)`.
  */
 function movableList<I extends SchemaType>(
   item: I,
-): AnnotatedSchema<"movable", SequenceSchema<I, ExtractTags<I>>, "movable" | ExtractTags<I>> {
-  return Schema.annotated("movable", Schema.sequence(item))
+): MovableSequenceSchema<I, "movable" | ExtractCaps<I>> {
+  return Schema.movableList(item)
 }
 
 /**
  * Hierarchical tree with typed node data (CRDT).
- * Produces `annotated("tree", nodeData)`.
+ * Produces `tree(nodeData)`.
  *
  * The `nodeData` schema describes the shape of each tree node's data.
  */
-function tree<S extends SchemaType>(nodeData: S): AnnotatedSchema<"tree", S, "tree" | ExtractTags<S>> {
-  return Schema.annotated("tree", nodeData)
+function tree<S extends SchemaType>(nodeData: S): TreeSchema<S, "tree" | ExtractCaps<S>> {
+  return Schema.tree(nodeData)
 }
 
 // ---------------------------------------------------------------------------
@@ -128,8 +161,8 @@ function tree<S extends SchemaType>(nodeData: S): AnnotatedSchema<"tree", S, "tr
  */
 function doc<F extends Record<string, LoroDocFieldSchema>>(
   fields: F,
-): AnnotatedSchema<"doc", ProductSchema<F, ExtractTags<F[keyof F]>>, "doc" | ExtractTags<F[keyof F]>> {
-  return Schema.doc(fields as Record<string, SchemaType>) as any
+): ProductSchema<F, ExtractCaps<F[keyof F]>> {
+  return Schema.struct(fields as Record<string, SchemaType>) as any
 }
 
 // ---------------------------------------------------------------------------
@@ -137,7 +170,7 @@ function doc<F extends Record<string, LoroDocFieldSchema>>(
 // ---------------------------------------------------------------------------
 // These are the constructors Loro developers use for "value blobs" —
 // plain data stored inside CRDT containers. The parameter types are
-// constrained to `PlainSchema` (the annotation-free subset of Schema),
+// constrained to `PlainSchema` (the first-class-type-free subset of Schema),
 // which prevents nesting CRDT containers (text, counter, movable list,
 // tree) inside plain values at compile time.
 //
@@ -187,28 +220,28 @@ const plain = {
     return Schema.any()
   },
 
-  /** Fixed-key plain struct (product with no annotation).
-   *  Fields are constrained to `PlainSchema` — no CRDT annotations allowed. */
-  struct<F extends Record<string, PlainSchema>>(fields: F): ProductSchema<F, ExtractTags<F[keyof F]>> {
-    return Schema.struct(fields)
+  /** Fixed-key plain struct (product with json capability).
+   *  Fields are constrained to `PlainSchema` — no CRDT first-class types allowed. */
+  struct<F extends Record<string, PlainSchema>>(fields: F): ProductSchema<F, "json"> {
+    return Schema.struct.json(fields)
   },
 
-  /** Dynamic-key plain record (map with no annotation).
+  /** Dynamic-key plain record (map with json capability).
    *  Item schema is constrained to `PlainSchema`. */
-  record<I extends PlainSchema>(item: I): MapSchema<I, ExtractTags<I>> {
-    return Schema.record(item)
+  record<I extends PlainSchema>(item: I): MapSchema<I, "json"> {
+    return Schema.record.json(item)
   },
 
-  /** Plain array (sequence with no annotation).
+  /** Plain array (sequence with json capability).
    *  Item schema is constrained to `PlainSchema`. */
-  array<I extends PlainSchema>(item: I): SequenceSchema<I, ExtractTags<I>> {
-    return Schema.list(item)
+  array<I extends PlainSchema>(item: I): SequenceSchema<I, "json"> {
+    return Schema.list.json(item)
   },
 
   /** Union of plain schemas.
    *  Variants are constrained to `PlainSchema`. */
-  union<V extends PlainSchema[]>(...variants: [...V]): PositionalSumSchema<V, ExtractTags<V[number]>> {
-    return Schema.sum(variants)
+  union<V extends PlainSchema[]>(...variants: [...V]): PositionalSumSchema<V, ExtractCaps<V[number]>> {
+    return Schema.union(...variants) as any
   },
 
   /** Discriminated union of plain schemas.
@@ -216,7 +249,7 @@ const plain = {
   discriminatedUnion<D extends string, V extends PlainProductSchema[]>(
     discriminant: D,
     variants: [...V],
-  ): DiscriminatedSumSchema<D, V, ExtractTags<V[number]>> {
+  ): DiscriminatedSumSchema<D, V, ExtractCaps<V[number]>> {
     return Schema.discriminatedUnion(discriminant, variants)
   },
 
@@ -230,7 +263,7 @@ const plain = {
    */
   nullable<S extends PlainSchema>(
     inner: S,
-  ): PositionalSumSchema<[ScalarSchema<"null">, S], ExtractTags<S>> {
+  ): PositionalSumSchema<[ScalarSchema<"null">, S], ExtractCaps<S>> {
     return Schema.nullable(inner)
   },
 } as const
@@ -263,7 +296,7 @@ const plain = {
  * **Loro containers (root-level):**
  * `LoroSchema.struct`, `LoroSchema.list`, `LoroSchema.record`
  *
- * **Loro-specific annotations:**
+ * **Loro first-class CRDT types:**
  * `LoroSchema.text`, `LoroSchema.counter`,
  * `LoroSchema.movableList`, `LoroSchema.tree`
  *
@@ -281,14 +314,14 @@ const plain = {
  */
 export const LoroSchema = {
   // --- Structural composites (map to real Loro containers) ---
-  struct: Schema.struct,
-  list: Schema.list,
-  record: Schema.record,
+  struct: loroStruct,
+  list: loroList,
+  record: loroRecord,
 
   // --- Root ---
   doc,
 
-  // --- Loro-specific annotations ---
+  // --- Loro first-class CRDT types ---
   text,
   counter,
   movableList,

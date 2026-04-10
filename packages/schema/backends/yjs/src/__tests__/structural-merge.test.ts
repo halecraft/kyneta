@@ -17,8 +17,8 @@ import { yjsSubstrateFactory } from "../substrate.js"
 // Schemas used across tests
 // ===========================================================================
 
-const TestSchema = Schema.doc({
-  title: Schema.annotated("text"),
+const TestSchema = Schema.struct({
+  title: Schema.text(),
   count: Schema.number(),
   items: Schema.list(Schema.string()),
 })
@@ -138,20 +138,20 @@ describe("structural merge protocol (Yjs)", () => {
 
   it("field reordering in source doesn't affect structural ops", () => {
     // Schema A: fields in one order
-    const schemaA = Schema.doc({
+    const schemaA = Schema.struct({
       alpha: Schema.string(),
       beta: Schema.number(),
-      gamma: Schema.annotated("text"),
+      gamma: Schema.text(),
     })
 
     // Schema B: same fields, different insertion order
     // JavaScript objects preserve insertion order, so we construct
     // with a different order to verify alphabetical sort overrides it.
     const fields: Record<string, any> = {}
-    fields.gamma = Schema.annotated("text")
+    fields.gamma = Schema.text()
     fields.alpha = Schema.string()
     fields.beta = Schema.number()
-    const schemaB = Schema.doc(fields)
+    const schemaB = Schema.struct(fields)
 
     const docA = new Y.Doc()
     ensureContainers(docA, schemaA)
@@ -168,15 +168,15 @@ describe("structural merge protocol (Yjs)", () => {
   // ── Schema evolution ──
 
   it("add field after hydration, structural ops extend correctly", () => {
-    const v1Schema = Schema.doc({
-      title: Schema.annotated("text"),
+    const v1Schema = Schema.struct({
+      title: Schema.text(),
       count: Schema.number(),
     })
 
-    const v2Schema = Schema.doc({
+    const v2Schema = Schema.struct({
       count: Schema.number(),
-      notes: Schema.annotated("text"), // new field
-      title: Schema.annotated("text"),
+      notes: Schema.text(), // new field
+      title: Schema.text(),
     })
 
     // Peer A: create v1, write data, export

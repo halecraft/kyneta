@@ -30,7 +30,7 @@ import { Schema, json } from "@kyneta/schema"
 // server-owned state that clients render but never mutate directly.
 // ─────────────────────────────────────────────────────────────────────────
 
-export const GameStateSchema = Schema.doc({
+export const GameStateSchema = Schema.struct({
   cars: Schema.record(
     Schema.struct({
       x: Schema.number(),
@@ -62,7 +62,7 @@ export const GameStateDoc = json.bind(GameStateSchema)
 // reads all input docs every tick. Only the latest value matters.
 // ─────────────────────────────────────────────────────────────────────────
 
-export const PlayerInputSchema = Schema.doc({
+export const PlayerInputSchema = Schema.struct({
   name: Schema.string(),
   color: Schema.string(),
   force: Schema.number(),
