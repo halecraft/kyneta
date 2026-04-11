@@ -3,3 +3,4 @@ dist
 .turbo
 vendor
 /**/*.db
+.env
