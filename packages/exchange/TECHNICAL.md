@@ -234,11 +234,12 @@ A `BoundSchema<S>` captures three explicit choices that define a document type:
 3. **Merge strategy** — how does the exchange sync it? (`"collaborative"`, `"authoritative"`, or `"ephemeral"`)
 
 ```ts
-interface BoundSchema<S extends SchemaNode = SchemaNode> {
+interface BoundSchema<S extends SchemaNode = SchemaNode, N extends NativeMap = UnknownNativeMap> {
   readonly _brand: "BoundSchema"
   readonly schema: S
   readonly factory: FactoryBuilder<any>
   readonly strategy: MergeStrategy
+  readonly schemaHash: string
 }
 
 type FactoryBuilder<V extends Version> = (context: { peerId: string }) => SubstrateFactory<V>
@@ -286,14 +287,13 @@ The previous design used `ExchangeSubstrateFactory` — a `SubstrateFactory` ext
 2. **`_initialize()` didn't compose.** If a factory was shared across exchanges, it would be initialized with the first exchange's peerId. The builder function pattern produces a fresh factory per exchange.
 3. **Boilerplate.** Every usage required wrapping a `SubstrateFactory` to add `mergeStrategy` and `_initialize` — ~10 lines of wrapping per factory.
 
-### Escape Hatches
+### Escape Hatch
 
-Two escape hatches provide access to the underlying substrate:
+A single generic escape hatch provides access to substrate-native containers:
 
-- **`unwrap(ref)`** in `@kyneta/schema` — general, returns `Substrate<any>`. Uses a `WeakMap<object, Substrate>` populated by `registerSubstrate()` (called by the exchange after building the ref).
-- **`loro.unwrap(ref)`** in `@kyneta/loro-schema` — Loro-specific, returns `LoroDoc`. Uses `unwrap()` internally to get the substrate, then a `WeakMap<Substrate, LoroDoc>` populated by `createLoroSubstrate()`.
+- **`unwrap(ref)`** in `@kyneta/schema` — reads `ref[NATIVE]`, fully typed via the `NativeMap` functor. Works at any depth: `unwrap(doc)` returns `LoroDoc` (root), `unwrap(doc.title)` returns `LoroText` (child). No WeakMaps — the `[NATIVE]` symbol property is set during interpretation by the `nativeResolver` protocol.
 
-The two-step approach (ref → substrate → LoroDoc) avoids duplicating tracking WeakMaps and composes cleanly. Currently supports root-level refs only; child-level resolution (e.g. `loro.unwrap(doc.title)` → `LoroText`) is future work.
+The per-substrate `loro.unwrap()` and `yjs.unwrap()` functions have been removed. The generic `unwrap()` replaces them entirely, with stronger typing (return type is inferred from the ref's `HasNative<T>` mixin).
 
 ---
 

@@ -39,7 +39,8 @@ export { bind, isBoundSchema, json } from "@kyneta/schema"
 // Unwrap — re-exported from @kyneta/schema for convenience
 // ---------------------------------------------------------------------------
 
-export { registerSubstrate, unwrap } from "@kyneta/schema"
+export type { HasNativeAny } from "@kyneta/schema"
+export { unwrap } from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
 // TimestampVersion — LWW version implementation (re-exported from @kyneta/schema)

@@ -12,10 +12,10 @@
 
 import {
   change,
-  createLoroDoc,
-  createLoroDocFromEntirety,
+  createDoc,
   exportEntirety,
   exportSince,
+  loro,
   merge,
   Schema,
   subscribe,
@@ -64,10 +64,12 @@ log(`
 
 section(2, "Create a Document")
 
-const doc = createLoroDoc(NoteSchema)
+const bound = loro.bind(NoteSchema)
+const doc = createDoc(bound)
 
 log(`
-    const doc = createLoroDoc(NoteSchema, { title: "Meeting Notes" })
+    const bound = loro.bind(NoteSchema)
+    const doc = createDoc(bound)
 
     doc.title() → "${doc.title()}"
     doc.likes() → ${doc.likes()}
@@ -84,6 +86,7 @@ log(`
 section(3, "Mutate and Read")
 
 change(doc, d => {
+  d.title.insert(0, "Meeting Notes")
   d.title.insert(13, " (Q4)")
   d.likes.increment(3)
   d.tags.push("planning")
@@ -92,6 +95,7 @@ change(doc, d => {
 
 log(`
     change(doc, d => {
+      d.title.insert(0, "Meeting Notes")
       d.title.insert(13, " (Q4)")
       d.likes.increment(3)
       d.tags.push("planning")
@@ -119,8 +123,8 @@ section(4, "Two Peers, Independent Edits")
 
 // Both peers start from the same snapshot
 const snapshot = exportEntirety(doc)
-const peerA = createLoroDocFromEntirety(NoteSchema, snapshot)
-const peerB = createLoroDocFromEntirety(NoteSchema, snapshot)
+const peerA = createDoc(bound, snapshot)
+const peerB = createDoc(bound, snapshot)
 
 log(`Two peers created from the same snapshot.`)
 log(`Both start with: title="${peerA.title()}", likes=${peerA.likes()}\n`)
@@ -252,11 +256,11 @@ log(`
 section(7, "Snapshot and Restore")
 
 const fullSnapshot = exportEntirety(peerA)
-const peerC = createLoroDocFromEntirety(NoteSchema, fullSnapshot)
+const peerC = createDoc(bound, fullSnapshot)
 
 log(`
     const snapshot = exportEntirety(peerA)
-    const peerC = createLoroDocFromEntirety(NoteSchema, snapshot)
+    const peerC = createDoc(bound, snapshot)
 
     Snapshot size: ${(fullSnapshot.data as Uint8Array).byteLength} bytes (binary, compact)
 

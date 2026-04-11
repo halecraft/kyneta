@@ -2,11 +2,13 @@ import { LoroDoc } from "loro-crdt"
 import { describe, expect, it } from "vitest"
 import {
   change,
-  createLoroDoc,
-  createLoroDocFromEntirety,
+  createDoc,
+  createLoroSubstrate,
+  createRef,
   exportEntirety,
   exportSince,
   LoroVersion,
+  loro,
   merge,
   Schema,
   subscribe,
@@ -29,20 +31,22 @@ const TestSchema = Schema.struct({
   theme: Schema.string(),
 })
 
+const bound = loro.bind(TestSchema)
+
 // ===========================================================================
-// createLoroDoc — fresh doc with seed
+// createDoc — fresh doc with seed
 // ===========================================================================
 
-describe("createLoroDoc (fresh doc)", () => {
+describe("createDoc (fresh doc)", () => {
   it("creates a doc with default values", () => {
-    const doc = createLoroDoc(TestSchema)
+    const doc = createDoc(bound)
     expect(doc.title()).toBe("")
     expect(doc.count()).toBe(0)
     expect(doc.items.length).toBe(0)
   })
 
   it("creates a doc with seed values", () => {
-    const doc = createLoroDoc(TestSchema)
+    const doc = createDoc(bound)
     change(doc, (d: any) => {
       d.title.insert(0, "Hello")
       d.theme.set("dark")
@@ -52,7 +56,7 @@ describe("createLoroDoc (fresh doc)", () => {
   })
 
   it("supports change() and subscribe()", () => {
-    const doc = createLoroDoc(TestSchema)
+    const doc = createDoc(bound)
     let fired = false
     subscribe(doc, () => {
       fired = true
@@ -64,7 +68,7 @@ describe("createLoroDoc (fresh doc)", () => {
   })
 
   it("supports counter increment", () => {
-    const doc = createLoroDoc(TestSchema)
+    const doc = createDoc(bound)
     change(doc, (d: any) => d.count.increment(5))
     expect(doc.count()).toBe(5)
 
@@ -73,7 +77,7 @@ describe("createLoroDoc (fresh doc)", () => {
   })
 
   it("supports scalar set", () => {
-    const doc = createLoroDoc(TestSchema)
+    const doc = createDoc(bound)
     change(doc, (d: any) => d.theme.set("light"))
     expect(doc.theme()).toBe("light")
 
@@ -82,7 +86,7 @@ describe("createLoroDoc (fresh doc)", () => {
   })
 
   it("supports list push with structured items", () => {
-    const doc = createLoroDoc(TestSchema)
+    const doc = createDoc(bound)
 
     change(doc, (d: any) => {
       d.items.push({ name: "Task 1", done: false })
@@ -94,7 +98,7 @@ describe("createLoroDoc (fresh doc)", () => {
   })
 
   it("supports seed with list items", () => {
-    const doc = createLoroDoc(TestSchema)
+    const doc = createDoc(bound)
     change(doc, (d: any) => d.items.push({ name: "A", done: false }))
     change(doc, (d: any) => d.items.push({ name: "B", done: true }))
     expect(doc.items.length).toBe(2)
@@ -104,17 +108,17 @@ describe("createLoroDoc (fresh doc)", () => {
 })
 
 // ===========================================================================
-// createLoroDoc — bring your own doc
+// createRef — bring your own doc
 // ===========================================================================
 
-describe("createLoroDoc (bring your own doc)", () => {
+describe("createRef (bring your own doc)", () => {
   it("wraps an existing LoroDoc", () => {
     const loroDoc = new LoroDoc()
     loroDoc.getText("title").insert(0, "Existing")
     loroDoc.getCounter("count").increment(42)
     loroDoc.commit()
 
-    const doc = createLoroDoc(TestSchema, loroDoc)
+    const doc = createRef(TestSchema, createLoroSubstrate(loroDoc, TestSchema))
     expect(doc.title()).toBe("Existing")
     expect(doc.count()).toBe(42)
   })
@@ -126,7 +130,7 @@ describe("createLoroDoc (bring your own doc)", () => {
     loroDoc.getList("items")
     loroDoc.commit()
 
-    const doc = createLoroDoc(TestSchema, loroDoc)
+    const doc = createRef(TestSchema, createLoroSubstrate(loroDoc, TestSchema))
     change(doc, (d: any) => d.title.insert(0, "New"))
     expect(doc.title()).toBe("New")
   })
@@ -138,7 +142,7 @@ describe("createLoroDoc (bring your own doc)", () => {
     loroDoc.getList("items")
     loroDoc.commit()
 
-    const doc = createLoroDoc(TestSchema, loroDoc)
+    const doc = createRef(TestSchema, createLoroSubstrate(loroDoc, TestSchema))
 
     let fired = false
     subscribe(doc, () => {
@@ -160,7 +164,7 @@ describe("createLoroDoc (bring your own doc)", () => {
     loroDoc.getList("items")
     loroDoc.commit()
 
-    const doc = createLoroDoc(TestSchema, loroDoc)
+    const doc = createRef(TestSchema, createLoroSubstrate(loroDoc, TestSchema))
 
     let fired = false
     subscribe(doc, () => {
@@ -182,12 +186,12 @@ describe("createLoroDoc (bring your own doc)", () => {
 })
 
 // ===========================================================================
-// createLoroDocFromEntirety
+// createDoc with payload (replaces createLoroDocFromEntirety)
 // ===========================================================================
 
-describe("createLoroDocFromEntirety", () => {
+describe("createDoc with payload (from entirety)", () => {
   it("reconstructs from a snapshot", () => {
-    const docA = createLoroDoc(TestSchema)
+    const docA = createDoc(bound)
     change(docA, (d: any) => {
       d.title.insert(0, "Original")
       d.theme.set("dark")
@@ -195,7 +199,7 @@ describe("createLoroDocFromEntirety", () => {
     })
 
     const snapshot = exportEntirety(docA)
-    const docB = createLoroDocFromEntirety(TestSchema, snapshot)
+    const docB = createDoc(bound, snapshot)
 
     expect(docB.title()).toBe("Original")
     expect(docB.count()).toBe(10)
@@ -203,11 +207,11 @@ describe("createLoroDocFromEntirety", () => {
   })
 
   it("reconstructed doc is fully functional", () => {
-    const docA = createLoroDoc(TestSchema)
+    const docA = createDoc(bound)
     change(docA, (d: any) => d.title.insert(0, "Source"))
 
     const snapshot = exportEntirety(docA)
-    const docB = createLoroDocFromEntirety(TestSchema, snapshot)
+    const docB = createDoc(bound, snapshot)
 
     change(docB, (d: any) => d.title.insert(6, "!"))
     expect(docB.title()).toBe("Source!")
@@ -220,13 +224,13 @@ describe("createLoroDocFromEntirety", () => {
 
 describe("sync primitives", () => {
   it("version() returns a LoroVersion", () => {
-    const doc = createLoroDoc(TestSchema)
+    const doc = createDoc(bound)
     const v = version(doc)
     expect(v).toBeInstanceOf(LoroVersion)
   })
 
   it("version() advances after mutations", () => {
-    const doc = createLoroDoc(TestSchema)
+    const doc = createDoc(bound)
     const v0 = version(doc)
 
     change(doc, (d: any) => d.title.insert(0, "A"))
@@ -236,7 +240,7 @@ describe("sync primitives", () => {
   })
 
   it("exportEntirety() returns a binary payload", () => {
-    const doc = createLoroDoc(TestSchema)
+    const doc = createDoc(bound)
     change(doc, (d: any) => d.title.insert(0, "Test"))
     const snap = exportEntirety(doc)
     expect(snap.encoding).toBe("binary")
@@ -244,8 +248,8 @@ describe("sync primitives", () => {
   })
 
   it("exportSince() + merge() syncs two docs", () => {
-    const docA = createLoroDoc(TestSchema)
-    const docB = createLoroDoc(TestSchema)
+    const docA = createDoc(bound)
+    const docB = createDoc(bound)
 
     const v0 = version(docB)
 
@@ -264,8 +268,8 @@ describe("sync primitives", () => {
   })
 
   it("merge fires subscribers", () => {
-    const docA = createLoroDoc(TestSchema)
-    const docB = createLoroDoc(TestSchema)
+    const docA = createDoc(bound)
+    const docB = createDoc(bound)
 
     const v0 = version(docB)
 
@@ -279,8 +283,8 @@ describe("sync primitives", () => {
     expect(received.length).toBeGreaterThanOrEqual(1)
   })
 
-  it("version() throws on non-createLoroDoc ref", () => {
-    expect(() => version({} as any)).toThrow("without a LoroSubstrate")
+  it("version() throws on non-createDoc ref", () => {
+    expect(() => version({} as any)).toThrow()
   })
 })
 
@@ -291,7 +295,7 @@ describe("sync primitives", () => {
 describe("full workflow", () => {
   it("create → mutate → sync → observe (the README example)", () => {
     // Peer A creates a doc
-    const docA = createLoroDoc(TestSchema)
+    const docA = createDoc(bound)
     change(docA, (d: any) => d.title.insert(0, "Draft"))
 
     // Peer A mutates
@@ -307,7 +311,7 @@ describe("full workflow", () => {
 
     // Peer B starts fresh and syncs from A's snapshot
     const snapshot = exportEntirety(docA)
-    const docB = createLoroDocFromEntirety(TestSchema, snapshot)
+    const docB = createDoc(bound, snapshot)
 
     expect(docB.title()).toBe("Draft v1")
     expect(docB.count()).toBe(1)

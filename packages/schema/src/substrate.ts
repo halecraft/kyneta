@@ -46,6 +46,8 @@ import { KIND, type Schema as SchemaNode } from "./schema.js"
 // ---------------------------------------------------------------------------
 
 /**
+ * @internal
+ *
  * Symbol for accessing the backing document of a replica or substrate.
  *
  * Every kyneta-produced replica and substrate implementation places its
@@ -58,6 +60,10 @@ import { KIND, type Schema as SchemaNode } from "./schema.js"
  * it's a convention that all kyneta-produced implementations follow.
  * Factories recover the backing state via `(replica as any)[BACKING_DOC]`
  * and cast to the concrete type they know they created.
+ *
+ * Exported from the barrel for substrate packages (`@kyneta/loro-schema`,
+ * `@kyneta/yjs-schema`) that need it in their `upgrade()` methods.
+ * Not part of the public API.
  *
  * Context: jj:smmulzkm (two-phase substrate construction)
  */

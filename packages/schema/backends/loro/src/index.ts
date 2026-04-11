@@ -3,45 +3,43 @@
 // Provides a Substrate<LoroVersion> implementation that wraps a LoroDoc
 // with schema-aware typed reads, writes, versioning, and export/import.
 //
-// Batteries-included API (most users):
-//   createLoroDoc, createLoroDocFromEntirety, version, exportEntirety,
-//   exportSince, merge, change, subscribe, applyChanges
-//
-// Low-level primitives (power users):
-//   createLoroSubstrate, loroSubstrateFactory, loroReader,
-//   resolveContainer, stepIntoLoro, changeToDiff, batchToOps, LoroVersion
+// The single entry point is `createDoc(loro.bind(schema))`. For the
+// batteries-included API, import from this package. For the composable
+// toolkit, import from `@kyneta/schema` directly.
 
 // ---------------------------------------------------------------------------
-// Batteries-included API — one import, one createLoroDoc call, done
+// Generic API (re-exported from @kyneta/schema for convenience)
 // ---------------------------------------------------------------------------
 
 // Types (re-exported for convenience)
 export type { Changeset } from "@kyneta/changefeed"
-export type { Op, Ref, SubstratePayload } from "@kyneta/schema"
+export type { DocRef, Op, Ref, SubstratePayload } from "@kyneta/schema"
+// Construction
 // Mutation & observation (re-exported from @kyneta/schema for convenience)
 // Schema definition (re-exported for convenience)
+// Native escape hatch
+// Sync primitives (generic — work for any substrate)
 export {
   applyChanges,
   change,
-  Schema,
-  subscribe,
-  subscribeNode,
-} from "@kyneta/schema"
-// Construction
-export { createLoroDoc, createLoroDocFromEntirety } from "./create.js"
-// Sync primitives (Loro-specific)
-export {
+  createDoc,
+  createRef,
   exportEntirety,
   exportSince,
   merge,
+  NATIVE,
+  Schema,
+  subscribe,
+  subscribeNode,
+  unwrap,
   version,
-} from "./sync.js"
+} from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
-// Low-level primitives — for power users and custom substrate compositions
+// Loro-specific exports
 // ---------------------------------------------------------------------------
 
-// Namespace — substrate strategies + escape hatch (loro.unwrap())
+// Namespace — substrate strategies
 export { type LoroCaps, loro } from "./bind-loro.js"
 // Change mapping
 export { batchToOps, changeToDiff } from "./change-mapping.js"
@@ -49,6 +47,8 @@ export { batchToOps, changeToDiff } from "./change-mapping.js"
 export { hasKind, isLoroContainer, isLoroDoc } from "./loro-guards.js"
 // Container resolution
 export { resolveContainer, stepIntoLoro } from "./loro-resolve.js"
+// NativeMap — the Loro functor
+export type { LoroNativeMap } from "./native-map.js"
 // Reader
 export { loroReader } from "./reader.js"
 // Substrate

@@ -17,10 +17,11 @@
 // - Pre-built layers live in `./layers.ts` to avoid circular imports.
 
 import type { HasChangefeed } from "@kyneta/changefeed"
-import { isNonNullObject } from "./guards.js"
+import { isNonNullObject, isPropertyHost } from "./guards.js"
 import type { HasRead } from "./interpreters/bottom.js"
 import { bottomInterpreter } from "./interpreters/bottom.js"
 import type { HasTransact } from "./interpreters/writable.js"
+import { NATIVE } from "./native.js"
 import type { Path } from "./path.js"
 import { RawPath } from "./path.js"
 import type { Ref, RRef, RWRef } from "./ref.js"
@@ -514,6 +515,36 @@ function createBuilder(
 // interpretImpl — the actual catamorphism walk
 // ---------------------------------------------------------------------------
 
+/**
+ * Attach the [NATIVE] symbol property on a ref result.
+ *
+ * Reads the nativeResolver from the context (if present) to determine
+ * the substrate-native container at the given schema position, then
+ * sets it as a non-enumerable, non-writable property on the result.
+ *
+ * This is called for every node in interpretImpl — the universal
+ * catamorphism. When nativeResolver is absent (e.g. bare readable
+ * stacks), this is a no-op.
+ */
+function attachNative(
+  result: unknown,
+  ctx: unknown,
+  schema: Schema,
+  path: Path,
+): void {
+  const resolver = (ctx as any)?.nativeResolver as
+    | ((schema: Schema, path: Path) => unknown)
+    | undefined
+  if (resolver && isPropertyHost(result)) {
+    Object.defineProperty(result, NATIVE, {
+      value: resolver(schema, path),
+      enumerable: false,
+      writable: false,
+      configurable: false,
+    })
+  }
+}
+
 function interpretImpl<Ctx, A>(
   schema: Schema,
   interp: Interpreter<Ctx, A>,
@@ -548,8 +579,11 @@ function interpretImpl<Ctx, A>(
   }
 
   switch (schema[KIND]) {
-    case "scalar":
-      return interp.scalar(ctx, resolvedPath, schema)
+    case "scalar": {
+      const result = interp.scalar(ctx, resolvedPath, schema)
+      attachNative(result, ctx, schema, resolvedPath)
+      return result
+    }
 
     case "product": {
       // Build thunks for each field — lazy, not pre-computed.
@@ -565,7 +599,14 @@ function interpretImpl<Ctx, A>(
           return result
         }
       }
-      return interp.product(ctx, resolvedPath, schema, fieldThunks)
+      const productResult = interp.product(
+        ctx,
+        resolvedPath,
+        schema,
+        fieldThunks,
+      )
+      attachNative(productResult, ctx, schema, resolvedPath)
+      return productResult
     }
 
     case "sequence": {
@@ -576,7 +617,9 @@ function interpretImpl<Ctx, A>(
         getOnRefCreated()?.(childPath, result)
         return result
       }
-      return interp.sequence(ctx, resolvedPath, schema, itemFn)
+      const seqResult = interp.sequence(ctx, resolvedPath, schema, itemFn)
+      attachNative(seqResult, ctx, schema, resolvedPath)
+      return seqResult
     }
 
     case "map": {
@@ -587,7 +630,9 @@ function interpretImpl<Ctx, A>(
         getOnRefCreated()?.(childPath, result)
         return result
       }
-      return interp.map(ctx, resolvedPath, schema, itemFn)
+      const mapResult = interp.map(ctx, resolvedPath, schema, itemFn)
+      attachNative(mapResult, ctx, schema, resolvedPath)
+      return mapResult
     }
 
     case "sum": {
@@ -621,14 +666,22 @@ function interpretImpl<Ctx, A>(
           return interpretImpl(variantSchema, interp, ctx, resolvedPath)
         }
       }
-      return interp.sum(ctx, resolvedPath, schema, variants)
+      const sumResult = interp.sum(ctx, resolvedPath, schema, variants)
+      attachNative(sumResult, ctx, schema, resolvedPath)
+      return sumResult
     }
 
-    case "text":
-      return interp.text(ctx, resolvedPath, schema)
+    case "text": {
+      const textResult = interp.text(ctx, resolvedPath, schema)
+      attachNative(textResult, ctx, schema, resolvedPath)
+      return textResult
+    }
 
-    case "counter":
-      return interp.counter(ctx, resolvedPath, schema)
+    case "counter": {
+      const counterResult = interp.counter(ctx, resolvedPath, schema)
+      attachNative(counterResult, ctx, schema, resolvedPath)
+      return counterResult
+    }
 
     case "set": {
       const itemFn = (key: string): A => {
@@ -637,7 +690,9 @@ function interpretImpl<Ctx, A>(
         getOnRefCreated()?.(childPath, result)
         return result
       }
-      return interp.set(ctx, resolvedPath, schema, itemFn)
+      const setResult = interp.set(ctx, resolvedPath, schema, itemFn)
+      attachNative(setResult, ctx, schema, resolvedPath)
+      return setResult
     }
 
     case "tree": {
@@ -647,7 +702,9 @@ function interpretImpl<Ctx, A>(
         getOnRefCreated()?.(innerPath, result)
         return result
       }
-      return interp.tree(ctx, resolvedPath, schema, nodeDataThunk)
+      const treeResult = interp.tree(ctx, resolvedPath, schema, nodeDataThunk)
+      attachNative(treeResult, ctx, schema, resolvedPath)
+      return treeResult
     }
 
     case "movable": {
@@ -657,7 +714,9 @@ function interpretImpl<Ctx, A>(
         getOnRefCreated()?.(childPath, result)
         return result
       }
-      return interp.movable(ctx, resolvedPath, schema, itemFn)
+      const movableResult = interp.movable(ctx, resolvedPath, schema, itemFn)
+      attachNative(movableResult, ctx, schema, resolvedPath)
+      return movableResult
     }
   }
 }

@@ -1,8 +1,8 @@
 // bind-yjs — Yjs CRDT substrate namespace and factory.
 //
-// Provides the `yjs` substrate namespace (`yjs.bind()`, `yjs.replica()`,
-// `yjs.unwrap()`) and the internal factory builder that injects a
-// deterministic numeric Yjs clientID derived from the exchange's peerId.
+// Provides the `yjs` substrate namespace (`yjs.bind()`, `yjs.replica()`)
+// and the internal factory builder that injects a deterministic numeric
+// Yjs clientID derived from the exchange's peerId.
 //
 // Yjs clientID is a uint32 number. We use FNV-1a hash truncated to
 // 32 bits, mirroring the Loro binding's hashPeerId pattern but
@@ -31,9 +31,9 @@ import {
   BACKING_DOC,
   createSubstrateNamespace,
   STRUCTURAL_YJS_CLIENT_ID,
-  unwrap,
 } from "@kyneta/schema"
 import * as Y from "yjs"
+import type { YjsNativeMap } from "./native-map.js"
 import { ensureContainers } from "./populate.js"
 import {
   createYjsReplica,
@@ -142,19 +142,17 @@ function createYjsFactory(peerId: string): SubstrateFactory<YjsVersion> {
  * - `yjs.bind(schema, "ephemeral")` — ephemeral/presence broadcast
  * - `yjs.replica()` — collaborative replication (default)
  * - `yjs.replica("ephemeral")` — ephemeral replication
- * - `yjs.unwrap(ref)` — access the underlying Y.Doc
  *
  * Strategy is constrained to `CrdtStrategy` (`"collaborative" | "ephemeral"`).
  * Passing `"authoritative"` is a compile error.
+ *
+ * To access the underlying Y.Doc, use `unwrap(ref)` from `@kyneta/schema`.
  */
 /** The closed set of capability tags that the Yjs substrate supports. */
 export type YjsCaps = "text" | "json"
 
-export const yjs: SubstrateNamespace<CrdtStrategy, YjsCaps> & {
-  /** Access the underlying `Y.Doc` backing a ref. */
-  unwrap(ref: object): Y.Doc
-} = {
-  ...createSubstrateNamespace<CrdtStrategy, YjsCaps>({
+export const yjs: SubstrateNamespace<CrdtStrategy, YjsCaps, YjsNativeMap> =
+  createSubstrateNamespace<CrdtStrategy, YjsCaps, YjsNativeMap>({
     strategies: {
       collaborative: {
         factory: ctx => createYjsFactory(ctx.peerId),
@@ -166,33 +164,4 @@ export const yjs: SubstrateNamespace<CrdtStrategy, YjsCaps> & {
       },
     },
     defaultStrategy: "collaborative",
-  }),
-
-  unwrap(ref: object): Y.Doc {
-    let substrate: any
-    try {
-      substrate = unwrap(ref)
-    } catch {
-      throw new Error(
-        "yjs.unwrap() requires a ref backed by a Yjs substrate. " +
-          "Use a doc created by exchange.get() with a yjs.bind() schema, " +
-          "or by createYjsDoc().",
-      )
-    }
-
-    const doc = substrate[BACKING_DOC]
-    if (
-      !doc ||
-      typeof doc !== "object" ||
-      typeof (doc as any).getMap !== "function" ||
-      typeof (doc as any).clientID !== "number"
-    ) {
-      throw new Error(
-        "yjs.unwrap() requires a ref backed by a Yjs substrate. " +
-          "The ref has a substrate but it is not a Yjs substrate. " +
-          "Use a doc created with a yjs.bind() schema or createYjsDoc().",
-      )
-    }
-    return doc as Y.Doc
-  },
-}
+  })

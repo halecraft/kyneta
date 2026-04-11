@@ -10,8 +10,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import type {
-  CounterSchema,
   Changeset,
+  CounterSchema,
   Op,
   Ref,
   SubstratePayload,
@@ -19,20 +19,20 @@ import type {
 } from "../../src/basic/index.js"
 
 import {
-  Schema,
+  applyChanges,
+  change,
   createDoc,
   createDocFromEntirety,
-  change,
-  applyChanges,
+  delta,
+  describe,
+  exportEntirety,
+  Schema,
+  SchemaValidationError,
   subscribe,
   subscribeNode,
-  version,
-  delta,
-  exportEntirety,
-  validate,
   tryValidate,
-  SchemaValidationError,
-  describe,
+  validate,
+  version,
 } from "../../src/basic/index.js"
 
 import { json, log, section } from "../helpers.js"
@@ -193,7 +193,9 @@ log(`
 `)
 
 doc.tasks.insert(0, { title: "Setup repo", done: true, priority: 1 })
-log(`doc.tasks.insert(0, { title: "Setup repo", ... }) → length ${doc.tasks.length}`)
+log(
+  `doc.tasks.insert(0, { title: "Setup repo", ... }) → length ${doc.tasks.length}`,
+)
 
 doc.tasks.delete(0, 1)
 log(`doc.tasks.delete(0, 1) → length ${doc.tasks.length}`)
@@ -204,7 +206,10 @@ log(`
       doc.labels.get("bug")    → "${doc.labels.get("bug")}"
       doc.labels.has("bug")    → ${doc.labels.has("bug")}
       doc.labels.has("nope")   → ${doc.labels.has("nope")}
-      doc.labels.keys()        → [${doc.labels.keys().map((k: string) => `"${k}"`).join(", ")}]
+      doc.labels.keys()        → [${doc.labels
+        .keys()
+        .map((k: string) => `"${k}"`)
+        .join(", ")}]
       doc.labels.size          → ${doc.labels.size}
 `)
 
@@ -246,11 +251,11 @@ section(7, "Transactions with change()")
 log(`    change(doc, fn) captures mutations as Op[] — all five change types:`)
 
 const ops = change(doc, d => {
-  d.name.insert(0, "✨ ")                                      // text
-  d.stars.increment(10)                                         // counter
+  d.name.insert(0, "✨ ") // text
+  d.stars.increment(10) // counter
   d.tasks.push({ title: "Ship it!", done: false, priority: 3 }) // sequence
-  d.settings.set({ darkMode: true, fontSize: 20 })              // replace
-  d.labels.set("priority", "high")                               // map
+  d.settings.set({ darkMode: true, fontSize: 20 }) // replace
+  d.labels.set("priority", "high") // map
 })
 
 log(`
@@ -436,8 +441,13 @@ const badData = {
 const result = tryValidate(ProjectSchema, badData)
 if (!result.ok) {
   const descVal = (v: unknown) =>
-    v === null ? "null" : v === undefined ? "undefined"
-      : typeof v === "string" ? `"${v}"` : String(v)
+    v === null
+      ? "null"
+      : v === undefined
+        ? "undefined"
+        : typeof v === "string"
+          ? `"${v}"`
+          : String(v)
 
   log(`
     tryValidate(schema, badData) → ${result.errors.length} error(s):

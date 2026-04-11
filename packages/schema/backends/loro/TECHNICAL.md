@@ -1,6 +1,6 @@
 # @kyneta/loro-schema — Technical Reference
 
-Loro CRDT substrate for `@kyneta/schema`. Wraps a `LoroDoc` with schema-aware typed reads, writes, versioning, and export/import through the standard `Substrate<LoroVersion>` interface. Schemas are defined with `Schema.*` from `@kyneta/schema`, then bound to Loro via `loro.bind()`. Capability constraints are enforced at compile time by `LoroCaps = "text" | "counter" | "movable" | "tree" | "json"`.
+Loro CRDT substrate for `@kyneta/schema`. Wraps a `LoroDoc` with schema-aware typed reads, writes, versioning, and export/import through the standard `Substrate<LoroVersion>` interface. Schemas are defined with `Schema.*` from `@kyneta/schema`, then bound to Loro via `loro.bind()`. Capability constraints are enforced at compile time by `LoroCaps = "text" | "counter" | "movable" | "tree" | "json"`. The `LoroNativeMap` functor maps schema kinds to Loro container types, threading typed `[NATIVE]` access through every ref.
 
 ---
 
@@ -386,11 +386,46 @@ Root-level scalars (`Schema.string()`, `Schema.number()`, `Schema.boolean()`, su
 
 ---
 
-## 13. File Map
+## 13. `LoroNativeMap` — The Loro Functor
+
+`LoroNativeMap` is the concrete `NativeMap` implementation for Loro, mapping each schema kind to its Loro container type:
+
+| NativeMap slot | Loro type | Schema kind |
+|---|---|---|
+| `root` | `LoroDoc` | Root document |
+| `text` | `LoroText` | `Schema.text()` |
+| `counter` | `LoroCounter` | `Schema.counter()` |
+| `list` | `LoroList` | `Schema.list(item)` |
+| `movableList` | `LoroMovableList` | `Schema.movableList(item)` |
+| `struct` | `LoroMap` | `Schema.struct(fields)` |
+| `map` | `LoroMap` | `Schema.record(item)` |
+| `tree` | `LoroTree` | `Schema.tree(nodeData)` |
+| `set` | `undefined` | Not supported by Loro binding |
+| `scalar` | `undefined` | Scalars have no dedicated container |
+| `sum` | `undefined` | Sums are stored as scalar values |
+
+`loro.bind(schema)` produces `BoundSchema<S, LoroNativeMap>`, which flows through `DocRef<S, LoroNativeMap>` and all child `SchemaRef<S, M, LoroNativeMap>` refs. This enables fully typed native access:
+
+```
+const doc = createDoc(loro.bind(schema))
+unwrap(doc)           // LoroDoc       (typed via N["root"])
+unwrap(doc.title)     // LoroText      (typed via N["text"])
+unwrap(doc.items)     // LoroList      (typed via N["list"])
+unwrap(doc.profile)   // LoroMap       (typed via N["struct"])
+unwrap(doc.theme)     // undefined     (scalar — no container)
+```
+
+`unwrap(ref)` reads `ref[NATIVE]` — the symbol property set during interpretation by the `nativeResolver` protocol. This replaces the previous `loro.unwrap()` function and its `WeakMap<Substrate, LoroDoc>` tracking.
+
+---
+
+## 14. File Map
 
 ```
 src/
 ├── index.ts              Public API surface. Re-exports from all modules.
+│
+├── native-map.ts         LoroNativeMap — NativeMap functor mapping schema kinds to Loro types.
 │
 ├── substrate.ts          createLoroSubstrate() — Substrate<LoroVersion> implementation.
 │                         loroSubstrateFactory — SubstrateFactory (create, fromEntirety, parseVersion).
@@ -413,8 +448,13 @@ src/
 │                         syntheticCID / jsonCID — 🦜: prefix mechanism.
 │                         materializeValueDiffs — recursive structured insert expansion.
 │
+├── bind-loro.ts          loro.bind() — SubstrateNamespace<CrdtStrategy, LoroCaps, LoroNativeMap>.
+│                         createLoroFactory — factory builder with deterministic PeerID.
+│
 ├── version.ts            LoroVersion class — wraps VersionVector.
 │                         serialize/parse (base64), compare (partial order).
+│
+├── loro-guards.ts        Type guard utilities for Loro container discrimination.
 │
 └── __tests__/
     ├── store-reader.test.ts   StoreReader navigation and read tests.
@@ -422,5 +462,8 @@ src/
     │                          version tracking, snapshot export/import, delta sync,
     │                          concurrent sync, changefeed bridge (import, external, local),
     │                          no-double-fire, transactions, nested structures.
+    ├── native.test.ts         [NATIVE] symbol property and unwrap() tests.
+    ├── create.test.ts         createDoc with BoundSchema, hydration from payload.
+    ├── bind-loro.test.ts      loro.bind tests, capability constraints.
     └── version.test.ts        LoroVersion serialize/parse/compare tests.
 ```

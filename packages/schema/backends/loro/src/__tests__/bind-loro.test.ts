@@ -1,14 +1,16 @@
-// loro.bind() and loro.unwrap() escape hatch — unit tests.
+// loro.bind() and unwrap() escape hatch — unit tests.
 
 import {
+  createDoc,
+  createRef,
   isBoundSchema,
   plainSubstrateFactory,
-  registerSubstrate,
   Schema,
+  SUBSTRATE,
+  unwrap,
 } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import { loro } from "../bind-loro.js"
-import { createLoroDoc, getSubstrate } from "../create.js"
 
 const testSchema = Schema.struct({
   title: Schema.text(),
@@ -45,14 +47,12 @@ describe("loro.bind()", () => {
     const sub1 = factory1.create(testSchema)
     const sub2 = factory2.create(testSchema)
 
-    // Use the loro escape hatch to get the LoroDoc and check peerIdStr
-    const ref1 = { _test: 1 }
-    const ref2 = { _test: 2 }
-    registerSubstrate(ref1, sub1)
-    registerSubstrate(ref2, sub2)
+    // Use createRef to build full-stack refs, then unwrap to get LoroDoc
+    const ref1 = createRef(testSchema, sub1)
+    const ref2 = createRef(testSchema, sub2)
 
-    const doc1 = loro.unwrap(ref1)
-    const doc2 = loro.unwrap(ref2)
+    const doc1 = unwrap(ref1)
+    const doc2 = unwrap(ref2)
 
     // Critical invariant: deterministic — same input → same output
     expect(doc1.peerIdStr).toBe(doc2.peerIdStr)
@@ -60,40 +60,39 @@ describe("loro.bind()", () => {
     // And different peerId → different PeerID
     const factory3 = bound.factory({ peerId: "bob-desktop-9c2d" })
     const sub3 = factory3.create(testSchema)
-    const ref3 = { _test: 3 }
-    registerSubstrate(ref3, sub3)
-    const doc3 = loro.unwrap(ref3)
+    const ref3 = createRef(testSchema, sub3)
+    const doc3 = unwrap(ref3)
 
     expect(doc3.peerIdStr).not.toBe(doc1.peerIdStr)
   })
 })
 
-describe("loro.unwrap() escape hatch", () => {
-  it("returns the underlying LoroDoc for a root ref created via createLoroDoc", () => {
-    const doc = createLoroDoc(testSchema)
+describe("unwrap() escape hatch", () => {
+  it("returns the underlying LoroDoc for a root ref created via createDoc", () => {
+    const doc = createDoc(loro.bind(testSchema))
 
-    // createLoroDoc registers in its internal WeakMap but not in the
-    // general unwrap() registry (that's the exchange's job). Bridge manually.
-    const substrate = getSubstrate(doc)
-    registerSubstrate(doc, substrate)
-
-    const loroDoc = loro.unwrap(doc)
+    const loroDoc = unwrap(doc as any)
     expect(typeof loroDoc.toJSON).toBe("function")
     expect(typeof loroDoc.getText).toBe("function")
   })
 
-  it("throws for non-Loro refs", () => {
-    expect(() => loro.unwrap({})).toThrow("loro.unwrap()")
+  it("returns undefined for a bare object with no [NATIVE]", () => {
+    // The generic unwrap() reads [NATIVE]; a bare object has no such property.
+    const native = unwrap({} as any)
+    expect(native).toBeUndefined()
   })
 
-  it("throws for refs with a non-Loro substrate", () => {
-    const substrate = plainSubstrateFactory.create(
-      Schema.struct({ title: Schema.string() }),
-    )
-    const fakeRef = { _fake: true }
-    registerSubstrate(fakeRef, substrate)
+  it("returns non-LoroDoc native for refs with a non-Loro substrate", () => {
+    const schema = Schema.struct({ title: Schema.string() })
+    const substrate = plainSubstrateFactory.create(schema)
+    const fakeRef = createRef(schema, substrate)
 
-    expect(() => loro.unwrap(fakeRef)).toThrow("not a Loro substrate")
+    // unwrap returns the [NATIVE] value — for plain substrate the root
+    // ref's [NATIVE] is the plain state object, not a LoroDoc.
+    const native = unwrap(fakeRef)
+    expect(native).toBeDefined()
+    // It should NOT have LoroDoc-specific methods like getText
+    expect((native as any).getText).toBeUndefined()
   })
 })
 
@@ -106,5 +105,15 @@ describe("compile-time type constraints", () => {
   it("loro.replica rejects 'sequential' strategy (compile-time + runtime)", () => {
     // @ts-expect-error — "sequential" not assignable to CrdtStrategy
     expect(() => loro.replica("sequential")).toThrow()
+  })
+})
+
+describe("[SUBSTRATE] on refs created via createDoc", () => {
+  it("root ref carries the substrate via [SUBSTRATE] symbol", () => {
+    const doc = createDoc(loro.bind(testSchema))
+    const substrate = (doc as any)[SUBSTRATE]
+    expect(substrate).toBeDefined()
+    expect(typeof substrate.version).toBe("function")
+    expect(typeof substrate.exportEntirety).toBe("function")
   })
 })

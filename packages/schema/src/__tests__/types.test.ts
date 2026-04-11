@@ -57,7 +57,6 @@ import {
   type TextSchema,
   TRANSACT,
   type TreeSchema,
-  type WithTransact,
   type Wrap,
   type Writable,
   type WritableBrand,
@@ -1251,20 +1250,6 @@ describe("type-level: Ref<S> no .at() overload conflict on sequences", () => {
     type Child = Exclude<ReturnType<Combined["at"]>, undefined>
     expectTypeOf<Child>().toBeCallableWith()
     expectTypeOf<Child>().toHaveProperty("set")
-  })
-})
-
-describe("type-level: WithTransact helper", () => {
-  it("WithTransact<T> adds HasTransact to T", () => {
-    type Base = { x: number }
-    type Result = WithTransact<Base>
-    expectTypeOf<Result>().toHaveProperty("x")
-    expectTypeOf<Result>().toHaveProperty(TRANSACT)
-  })
-
-  it("WithTransact<T> is equivalent to Wrap<T, 'rw'>", () => {
-    type Base = { x: number }
-    expectTypeOf<WithTransact<Base>>().toEqualTypeOf<Wrap<Base, "rw">>()
   })
 })
 

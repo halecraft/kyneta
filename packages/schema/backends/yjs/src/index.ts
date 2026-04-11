@@ -3,50 +3,49 @@
 // Provides a Substrate<YjsVersion> implementation that wraps a Y.Doc
 // with schema-aware typed reads, writes, versioning, and export/import.
 //
-// Batteries-included API (most users):
-//   createYjsDoc, createYjsDocFromEntirety, version, exportEntirety,
-//   exportSince, merge, change, subscribe, applyChanges
-//
-// Low-level primitives (power users):
-//   createYjsSubstrate, yjsSubstrateFactory, yjsReader,
-//   resolveYjsType, stepIntoYjs, applyChangeToYjs, eventsToOps, YjsVersion
+// The single entry point is `createDoc(yjs.bind(schema))`. For the
+// batteries-included API, import from this package. For the composable
+// toolkit, import from `@kyneta/schema` directly.
 
 // ---------------------------------------------------------------------------
-// Batteries-included API — one import, one createYjsDoc call, done
+// Generic API (re-exported from @kyneta/schema for convenience)
 // ---------------------------------------------------------------------------
 
 // Types (re-exported for convenience)
 export type { Changeset } from "@kyneta/changefeed"
-export type { Op, Ref, SubstratePayload } from "@kyneta/schema"
+export type { DocRef, Op, Ref, SubstratePayload } from "@kyneta/schema"
+// Construction
 // Mutation & observation (re-exported from @kyneta/schema for convenience)
 // Schema definition (re-exported for convenience)
+// Native escape hatch
+// Sync primitives (generic — work for any substrate)
 export {
   applyChanges,
   change,
-  Schema,
-  subscribe,
-  subscribeNode,
-} from "@kyneta/schema"
-// Construction
-export { createYjsDoc, createYjsDocFromEntirety } from "./create.js"
-// Sync primitives (Yjs-specific)
-export {
+  createDoc,
+  createRef,
   exportEntirety,
   exportSince,
   merge,
+  NATIVE,
+  Schema,
+  subscribe,
+  subscribeNode,
+  unwrap,
   version,
-} from "./sync.js"
+} from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
-// Low-level primitives — for power users and custom substrate compositions
+// Yjs-specific exports
 // ---------------------------------------------------------------------------
 
 export type { YjsCaps } from "./bind-yjs.js"
-// Namespace — the yjs substrate namespace (replaces standalone escape hatch;
-// the old `yjs(ref)` call is now `yjs.unwrap(ref)`)
+// Namespace
 export { yjs } from "./bind-yjs.js"
 // Change mapping
 export { applyChangeToYjs, eventsToOps } from "./change-mapping.js"
+// NativeMap — the Yjs functor
+export type { YjsNativeMap } from "./native-map.js"
 // Container creation
 export { ensureContainers } from "./populate.js"
 // Reader

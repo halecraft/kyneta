@@ -195,6 +195,15 @@ export function createPlainSubstrate<V extends Version>(
     context(): WritableContext {
       if (!cachedCtx) {
         cachedCtx = buildWritableContext(substrate)
+        // Attach nativeResolver — for plain substrates, only the root
+        // has a native value (the PlainState backing object). All children
+        // are undefined since plain substrates don't have dedicated containers.
+        ;(cachedCtx as any).nativeResolver = (
+          _schema: unknown,
+          path: { segments: readonly unknown[] },
+        ) => {
+          return path.segments.length === 0 ? doc : undefined
+        }
       }
       return cachedCtx
     },
@@ -208,7 +217,7 @@ export function createPlainSubstrate<V extends Version>(
     },
 
     advance(to: V): void {
-      replicaCore.advance(to, (batches: Op[][]) => {
+      replicaCore.advance(to, (_batches: Op[][]) => {
         // Substrate eagerly mutates doc — project trimmed ops in place.
         // The doc is already up to date (prepare applies eagerly), but
         // the base offset needs to advance so exportSince knows what's

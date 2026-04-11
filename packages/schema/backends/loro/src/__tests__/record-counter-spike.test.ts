@@ -15,10 +15,10 @@
 import { describe, expect, it } from "vitest"
 import {
   change,
-  createLoroDoc,
-  createLoroDocFromEntirety,
+  createDoc,
   exportEntirety,
   exportSince,
+  loro,
   merge,
   Schema,
   subscribe,
@@ -38,6 +38,7 @@ const PlayerScoreSchema = Schema.struct({
 const ScoreboardSchema = Schema.struct({
   scores: Schema.record(PlayerScoreSchema),
 })
+const boundScoreboard = loro.bind(ScoreboardSchema)
 
 // ===========================================================================
 // Simpler variant: record of plain struct (no counter) — baseline
@@ -52,6 +53,7 @@ const PlainScoreSchema = Schema.struct({
 const PlainScoreboardSchema = Schema.struct({
   scores: Schema.record(PlainScoreSchema),
 })
+const boundPlainScoreboard = loro.bind(PlainScoreboardSchema)
 
 // ===========================================================================
 // Tests
@@ -59,7 +61,7 @@ const PlainScoreboardSchema = Schema.struct({
 
 describe("record-of-struct (plain baseline)", () => {
   it("set a record entry and read it back", () => {
-    const doc = createLoroDoc(PlainScoreboardSchema)
+    const doc = createDoc(boundPlainScoreboard)
 
     change(doc, (d: any) => {
       d.scores.set("alice", { name: "Alice", color: "#FF0000", points: 0 })
@@ -72,7 +74,7 @@ describe("record-of-struct (plain baseline)", () => {
   })
 
   it("set multiple entries and read all back", () => {
-    const doc = createLoroDoc(PlainScoreboardSchema)
+    const doc = createDoc(boundPlainScoreboard)
 
     change(doc, (d: any) => {
       d.scores.set("alice", { name: "Alice", color: "#FF0000", points: 0 })
@@ -87,7 +89,7 @@ describe("record-of-struct (plain baseline)", () => {
   })
 
   it("navigate into a record entry via .at()", () => {
-    const doc = createLoroDoc(PlainScoreboardSchema)
+    const doc = createDoc(boundPlainScoreboard)
 
     change(doc, (d: any) => {
       d.scores.set("alice", { name: "Alice", color: "#FF0000", points: 0 })
@@ -101,7 +103,7 @@ describe("record-of-struct (plain baseline)", () => {
   })
 
   it("mutate a field inside a record entry via .at().field.set()", () => {
-    const doc = createLoroDoc(PlainScoreboardSchema)
+    const doc = createDoc(boundPlainScoreboard)
 
     change(doc, (d: any) => {
       d.scores.set("alice", { name: "Alice", color: "#FF0000", points: 0 })
@@ -115,14 +117,14 @@ describe("record-of-struct (plain baseline)", () => {
   })
 
   it("syncs record-of-struct between two peers", () => {
-    const docA = createLoroDoc(PlainScoreboardSchema)
+    const docA = createDoc(boundPlainScoreboard)
 
     change(docA, (d: any) => {
       d.scores.set("alice", { name: "Alice", color: "#FF0000", points: 3 })
     })
 
     const snapshot = exportEntirety(docA)
-    const docB = createLoroDocFromEntirety(PlainScoreboardSchema, snapshot)
+    const docB = createDoc(boundPlainScoreboard, snapshot)
 
     expect(docB.scores()).toEqual({
       alice: { name: "Alice", color: "#FF0000", points: 3 },
@@ -146,7 +148,7 @@ describe("record-of-struct (plain baseline)", () => {
 
 describe("record-of-struct-with-counter (bumper-cars scoreboard)", () => {
   it("set a record entry with counter and read it back", () => {
-    const doc = createLoroDoc(ScoreboardSchema)
+    const doc = createDoc(boundScoreboard)
 
     change(doc, (d: any) => {
       d.scores.set("alice", { name: "Alice", color: "#FF0000" })
@@ -159,7 +161,7 @@ describe("record-of-struct-with-counter (bumper-cars scoreboard)", () => {
   })
 
   it("navigate into a record entry and read the counter", () => {
-    const doc = createLoroDoc(ScoreboardSchema)
+    const doc = createDoc(boundScoreboard)
 
     change(doc, (d: any) => {
       d.scores.set("alice", { name: "Alice", color: "#FF0000" })
@@ -173,7 +175,7 @@ describe("record-of-struct-with-counter (bumper-cars scoreboard)", () => {
   })
 
   it("increment a counter inside a record entry via .at().bumps.increment()", () => {
-    const doc = createLoroDoc(ScoreboardSchema)
+    const doc = createDoc(boundScoreboard)
 
     change(doc, (d: any) => {
       d.scores.set("alice", { name: "Alice", color: "#FF0000" })
@@ -188,7 +190,7 @@ describe("record-of-struct-with-counter (bumper-cars scoreboard)", () => {
   })
 
   it("multiple increments accumulate", () => {
-    const doc = createLoroDoc(ScoreboardSchema)
+    const doc = createDoc(boundScoreboard)
 
     change(doc, (d: any) => {
       d.scores.set("alice", { name: "Alice", color: "#FF0000" })
@@ -205,7 +207,7 @@ describe("record-of-struct-with-counter (bumper-cars scoreboard)", () => {
   })
 
   it("increment counters on multiple entries independently", () => {
-    const doc = createLoroDoc(ScoreboardSchema)
+    const doc = createDoc(boundScoreboard)
 
     change(doc, (d: any) => {
       d.scores.set("alice", { name: "Alice", color: "#FF0000" })
@@ -228,7 +230,7 @@ describe("record-of-struct-with-counter (bumper-cars scoreboard)", () => {
   })
 
   it("subscribe fires on counter increment inside record entry", () => {
-    const doc = createLoroDoc(ScoreboardSchema)
+    const doc = createDoc(boundScoreboard)
 
     change(doc, (d: any) => {
       d.scores.set("alice", { name: "Alice", color: "#FF0000" })
@@ -245,7 +247,7 @@ describe("record-of-struct-with-counter (bumper-cars scoreboard)", () => {
   })
 
   it("syncs record-with-counter between two peers via snapshot", () => {
-    const docA = createLoroDoc(ScoreboardSchema)
+    const docA = createDoc(boundScoreboard)
 
     change(docA, (d: any) => {
       d.scores.set("alice", { name: "Alice", color: "#FF0000" })
@@ -253,7 +255,7 @@ describe("record-of-struct-with-counter (bumper-cars scoreboard)", () => {
     change(docA, (d: any) => d.scores.at("alice").bumps.increment(5))
 
     const snapshot = exportEntirety(docA)
-    const docB = createLoroDocFromEntirety(ScoreboardSchema, snapshot)
+    const docB = createDoc(boundScoreboard, snapshot)
 
     expect(docB.scores()).toEqual({
       alice: { name: "Alice", color: "#FF0000", bumps: 5 },
@@ -264,8 +266,8 @@ describe("record-of-struct-with-counter (bumper-cars scoreboard)", () => {
   })
 
   it("syncs record-with-counter between two peers via delta", () => {
-    const docA = createLoroDoc(ScoreboardSchema)
-    const docB = createLoroDoc(ScoreboardSchema)
+    const docA = createDoc(boundScoreboard)
+    const docB = createDoc(boundScoreboard)
 
     const v0 = version(docB)
 
@@ -288,8 +290,8 @@ describe("record-of-struct-with-counter (bumper-cars scoreboard)", () => {
   })
 
   it("concurrent counter increments from two peers converge", () => {
-    const docA = createLoroDoc(ScoreboardSchema)
-    const docB = createLoroDoc(ScoreboardSchema)
+    const docA = createDoc(boundScoreboard)
+    const docB = createDoc(boundScoreboard)
 
     // Sync initial state: A creates the entry, syncs to B
     change(docA, (d: any) => {
@@ -322,9 +324,9 @@ describe("record-of-struct-with-counter (bumper-cars scoreboard)", () => {
   })
 
   it("full game scenario: multiple players, concurrent bumps, convergence", () => {
-    const server = createLoroDoc(ScoreboardSchema)
-    const clientA = createLoroDoc(ScoreboardSchema)
-    const clientB = createLoroDoc(ScoreboardSchema)
+    const server = createDoc(boundScoreboard)
+    const clientA = createDoc(boundScoreboard)
+    const clientB = createDoc(boundScoreboard)
 
     // Server creates entries for both players
     change(server, (d: any) => {
@@ -391,10 +393,11 @@ const ListScoreSchema = Schema.struct({
     }),
   ),
 })
+const boundListScore = loro.bind(ListScoreSchema)
 
 describe("list-of-struct-with-counter (generality check)", () => {
   it("push a struct with counter into a list and read it back", () => {
-    const doc = createLoroDoc(ListScoreSchema)
+    const doc = createDoc(boundListScore)
 
     change(doc, (d: any) => {
       d.players.push({ name: "Alice" })
@@ -406,7 +409,7 @@ describe("list-of-struct-with-counter (generality check)", () => {
   })
 
   it("increment a counter inside a list item", () => {
-    const doc = createLoroDoc(ListScoreSchema)
+    const doc = createDoc(boundListScore)
 
     change(doc, (d: any) => {
       d.players.push({ name: "Alice" })
@@ -420,7 +423,7 @@ describe("list-of-struct-with-counter (generality check)", () => {
   })
 
   it("push with explicit counter value", () => {
-    const doc = createLoroDoc(ListScoreSchema)
+    const doc = createDoc(boundListScore)
 
     change(doc, (d: any) => {
       d.players.push({ name: "Alice", bumps: 5 })
@@ -430,7 +433,7 @@ describe("list-of-struct-with-counter (generality check)", () => {
   })
 
   it("multiple list items with independent counters", () => {
-    const doc = createLoroDoc(ListScoreSchema)
+    const doc = createDoc(boundListScore)
 
     change(doc, (d: any) => {
       d.players.push({ name: "Alice" })
@@ -447,8 +450,8 @@ describe("list-of-struct-with-counter (generality check)", () => {
   })
 
   it("syncs list-of-struct-with-counter via delta", () => {
-    const docA = createLoroDoc(ListScoreSchema)
-    const docB = createLoroDoc(ListScoreSchema)
+    const docA = createDoc(boundListScore)
+    const docB = createDoc(boundListScore)
 
     const v0 = version(docB)
 
@@ -480,10 +483,11 @@ const ProfileSchema = Schema.struct({
     }),
   ),
 })
+const boundProfile = loro.bind(ProfileSchema)
 
 describe("text-inside-struct-inside-record (generality check)", () => {
   it("set a record entry with text and read it back", () => {
-    const doc = createLoroDoc(ProfileSchema)
+    const doc = createDoc(boundProfile)
 
     change(doc, (d: any) => {
       d.profiles.set("alice", { displayName: "Alice" })
@@ -496,7 +500,7 @@ describe("text-inside-struct-inside-record (generality check)", () => {
   })
 
   it("navigate into a record entry and read the text", () => {
-    const doc = createLoroDoc(ProfileSchema)
+    const doc = createDoc(boundProfile)
 
     change(doc, (d: any) => {
       d.profiles.set("alice", { displayName: "Alice" })
@@ -506,7 +510,7 @@ describe("text-inside-struct-inside-record (generality check)", () => {
   })
 
   it("insert text into a text field inside a record entry", () => {
-    const doc = createLoroDoc(ProfileSchema)
+    const doc = createDoc(boundProfile)
 
     change(doc, (d: any) => {
       d.profiles.set("alice", { displayName: "Alice" })
@@ -520,7 +524,7 @@ describe("text-inside-struct-inside-record (generality check)", () => {
   })
 
   it("set entry with initial text value", () => {
-    const doc = createLoroDoc(ProfileSchema)
+    const doc = createDoc(boundProfile)
 
     change(doc, (d: any) => {
       d.profiles.set("alice", { displayName: "Alice", bio: "Hi there" })
@@ -530,8 +534,8 @@ describe("text-inside-struct-inside-record (generality check)", () => {
   })
 
   it("syncs text-inside-record via delta", () => {
-    const docA = createLoroDoc(ProfileSchema)
-    const docB = createLoroDoc(ProfileSchema)
+    const docA = createDoc(boundProfile)
+    const docB = createDoc(boundProfile)
 
     const v0 = version(docB)
 
@@ -549,8 +553,8 @@ describe("text-inside-struct-inside-record (generality check)", () => {
   })
 
   it("concurrent text edits inside record entries converge", () => {
-    const docA = createLoroDoc(ProfileSchema)
-    const docB = createLoroDoc(ProfileSchema)
+    const docA = createDoc(boundProfile)
+    const docB = createDoc(boundProfile)
 
     // Sync initial state
     change(docA, (d: any) => {

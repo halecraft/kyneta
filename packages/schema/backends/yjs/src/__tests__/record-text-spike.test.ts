@@ -16,18 +16,18 @@
 //   3. Reading back: doc.profiles() should return { [key]: { name, bio } }
 //   4. Sync: two peers should converge after exchanging deltas
 
-import { describe, expect, it } from "vitest"
 import {
   change,
-  createYjsDoc,
-  createYjsDocFromEntirety,
+  createDoc,
   exportEntirety,
   exportSince,
   merge,
   Schema,
   subscribe,
   version,
-} from "../index.js"
+} from "@kyneta/schema"
+import { describe, expect, it } from "vitest"
+import { yjs } from "../bind-yjs.js"
 
 // ===========================================================================
 // Schemas
@@ -61,12 +61,20 @@ const ListProfileSchema = Schema.struct({
 })
 
 // ===========================================================================
+// Bound schemas
+// ===========================================================================
+
+const BoundProfile = yjs.bind(ProfileSchema)
+const BoundPlainRecord = yjs.bind(PlainRecordSchema)
+const BoundListProfile = yjs.bind(ListProfileSchema)
+
+// ===========================================================================
 // Baseline: record-of-struct (plain, no text)
 // ===========================================================================
 
 describe("record-of-struct (plain baseline)", () => {
   it("set a record entry and read it back", () => {
-    const doc = createYjsDoc(PlainRecordSchema)
+    const doc = createDoc(BoundPlainRecord)
 
     change(doc, (d: any) => {
       d.profiles.set("alice", { displayName: "Alice", age: 30 })
@@ -79,7 +87,7 @@ describe("record-of-struct (plain baseline)", () => {
   })
 
   it("set multiple entries and read all back", () => {
-    const doc = createYjsDoc(PlainRecordSchema)
+    const doc = createDoc(BoundPlainRecord)
 
     change(doc, (d: any) => {
       d.profiles.set("alice", { displayName: "Alice", age: 30 })
@@ -94,7 +102,7 @@ describe("record-of-struct (plain baseline)", () => {
   })
 
   it("navigate into a record entry via .at()", () => {
-    const doc = createYjsDoc(PlainRecordSchema)
+    const doc = createDoc(BoundPlainRecord)
 
     change(doc, (d: any) => {
       d.profiles.set("alice", { displayName: "Alice", age: 30 })
@@ -107,14 +115,14 @@ describe("record-of-struct (plain baseline)", () => {
   })
 
   it("syncs record-of-struct between two peers via snapshot", () => {
-    const docA = createYjsDoc(PlainRecordSchema)
+    const docA = createDoc(BoundPlainRecord)
 
     change(docA, (d: any) => {
       d.profiles.set("alice", { displayName: "Alice", age: 30 })
     })
 
     const snapshot = exportEntirety(docA)
-    const docB = createYjsDocFromEntirety(PlainRecordSchema, snapshot)
+    const docB = createDoc(BoundPlainRecord, snapshot)
 
     expect(docB.profiles()).toEqual({
       alice: { displayName: "Alice", age: 30 },
@@ -122,17 +130,14 @@ describe("record-of-struct (plain baseline)", () => {
   })
 
   it("syncs record-of-struct between two peers via delta", () => {
-    const docA = createYjsDoc(PlainRecordSchema)
+    const docA = createDoc(BoundPlainRecord)
 
     change(docA, (d: any) => {
       d.profiles.set("alice", { displayName: "Alice", age: 30 })
     })
 
     // Establish docB from snapshot (avoids Yjs clientID collision)
-    const docB = createYjsDocFromEntirety(
-      PlainRecordSchema,
-      exportEntirety(docA),
-    )
+    const docB = createDoc(BoundPlainRecord, exportEntirety(docA))
 
     const v0 = version(docB)
 
@@ -157,7 +162,7 @@ describe("record-of-struct (plain baseline)", () => {
 
 describe("text-inside-struct-inside-record", () => {
   it("set a record entry with text field omitted and read it back", () => {
-    const doc = createYjsDoc(ProfileSchema)
+    const doc = createDoc(BoundProfile)
 
     change(doc, (d: any) => {
       d.profiles.set("alice", { displayName: "Alice" })
@@ -170,7 +175,7 @@ describe("text-inside-struct-inside-record", () => {
   })
 
   it("set a record entry with text field provided and read it back", () => {
-    const doc = createYjsDoc(ProfileSchema)
+    const doc = createDoc(BoundProfile)
 
     change(doc, (d: any) => {
       d.profiles.set("alice", { displayName: "Alice", bio: "Hello world" })
@@ -183,7 +188,7 @@ describe("text-inside-struct-inside-record", () => {
   })
 
   it("navigate into a record entry and read the text", () => {
-    const doc = createYjsDoc(ProfileSchema)
+    const doc = createDoc(BoundProfile)
 
     change(doc, (d: any) => {
       d.profiles.set("alice", { displayName: "Alice" })
@@ -196,7 +201,7 @@ describe("text-inside-struct-inside-record", () => {
   })
 
   it("insert text into a text field inside a record entry (field omitted at creation)", () => {
-    const doc = createYjsDoc(ProfileSchema)
+    const doc = createDoc(BoundProfile)
 
     change(doc, (d: any) => {
       d.profiles.set("alice", { displayName: "Alice" })
@@ -210,7 +215,7 @@ describe("text-inside-struct-inside-record", () => {
   })
 
   it("insert text into a text field inside a record entry (field provided at creation)", () => {
-    const doc = createYjsDoc(ProfileSchema)
+    const doc = createDoc(BoundProfile)
 
     change(doc, (d: any) => {
       d.profiles.set("alice", { displayName: "Alice", bio: "Initial" })
@@ -224,7 +229,7 @@ describe("text-inside-struct-inside-record", () => {
   })
 
   it("set multiple entries and edit text independently", () => {
-    const doc = createYjsDoc(ProfileSchema)
+    const doc = createDoc(BoundProfile)
 
     change(doc, (d: any) => {
       d.profiles.set("alice", { displayName: "Alice" })
@@ -241,7 +246,7 @@ describe("text-inside-struct-inside-record", () => {
   })
 
   it("subscribe fires on text edit inside record entry", () => {
-    const doc = createYjsDoc(ProfileSchema)
+    const doc = createDoc(BoundProfile)
 
     change(doc, (d: any) => {
       d.profiles.set("alice", { displayName: "Alice" })
@@ -260,7 +265,7 @@ describe("text-inside-struct-inside-record", () => {
   })
 
   it("syncs text-inside-record via snapshot", () => {
-    const docA = createYjsDoc(ProfileSchema)
+    const docA = createDoc(BoundProfile)
 
     change(docA, (d: any) => {
       d.profiles.set("alice", { displayName: "Alice" })
@@ -270,7 +275,7 @@ describe("text-inside-struct-inside-record", () => {
     })
 
     const snapshot = exportEntirety(docA)
-    const docB = createYjsDocFromEntirety(ProfileSchema, snapshot)
+    const docB = createDoc(BoundProfile, snapshot)
 
     expect(docB.profiles()).toEqual({
       alice: { displayName: "Alice", bio: "Collaborative bio" },
@@ -281,7 +286,7 @@ describe("text-inside-struct-inside-record", () => {
   })
 
   it("syncs text-inside-record via delta", () => {
-    const docA = createYjsDoc(ProfileSchema)
+    const docA = createDoc(BoundProfile)
 
     change(docA, (d: any) => {
       d.profiles.set("alice", { displayName: "Alice" })
@@ -290,7 +295,7 @@ describe("text-inside-struct-inside-record", () => {
     // Establish docB from snapshot (consistent with Yjs test patterns —
     // two independently-created Y.Docs may share a clientID, causing
     // silent update drops)
-    const docB = createYjsDocFromEntirety(ProfileSchema, exportEntirety(docA))
+    const docB = createDoc(BoundProfile, exportEntirety(docA))
     const v0 = version(docB)
 
     change(docA, (d: any) => {
@@ -313,13 +318,13 @@ describe("text-inside-struct-inside-record", () => {
   })
 
   it("concurrent text edits inside record entries converge", () => {
-    const docA = createYjsDoc(ProfileSchema)
+    const docA = createDoc(BoundProfile)
 
     // Sync initial state: A creates the entry, B starts from snapshot
     change(docA, (d: any) => {
       d.profiles.set("alice", { displayName: "Alice" })
     })
-    const docB = createYjsDocFromEntirety(ProfileSchema, exportEntirety(docA))
+    const docB = createDoc(BoundProfile, exportEntirety(docA))
 
     // Both peers edit concurrently
     const vA = version(docA)
@@ -353,7 +358,7 @@ describe("text-inside-struct-inside-record", () => {
 
 describe("text-inside-struct-inside-list", () => {
   it("push a struct with text field omitted and read it back", () => {
-    const doc = createYjsDoc(ListProfileSchema)
+    const doc = createDoc(BoundListProfile)
 
     change(doc, (d: any) => {
       d.players.push({ name: "Alice" })
@@ -365,7 +370,7 @@ describe("text-inside-struct-inside-list", () => {
   })
 
   it("push a struct with text field provided and read it back", () => {
-    const doc = createYjsDoc(ListProfileSchema)
+    const doc = createDoc(BoundListProfile)
 
     change(doc, (d: any) => {
       d.players.push({ name: "Alice", bio: "Hi there" })
@@ -377,7 +382,7 @@ describe("text-inside-struct-inside-list", () => {
   })
 
   it("insert text into a text field inside a list item (field omitted at creation)", () => {
-    const doc = createYjsDoc(ListProfileSchema)
+    const doc = createDoc(BoundListProfile)
 
     change(doc, (d: any) => {
       d.players.push({ name: "Alice" })
@@ -391,7 +396,7 @@ describe("text-inside-struct-inside-list", () => {
   })
 
   it("multiple list items with independent text fields", () => {
-    const doc = createYjsDoc(ListProfileSchema)
+    const doc = createDoc(BoundListProfile)
 
     change(doc, (d: any) => {
       d.players.push({ name: "Alice" })
@@ -408,17 +413,14 @@ describe("text-inside-struct-inside-list", () => {
   })
 
   it("syncs list-of-struct-with-text via delta", () => {
-    const docA = createYjsDoc(ListProfileSchema)
+    const docA = createDoc(BoundListProfile)
 
     change(docA, (d: any) => {
       d.players.push({ name: "Alice" })
     })
 
     // Establish docB from snapshot (avoids Yjs clientID collision)
-    const docB = createYjsDocFromEntirety(
-      ListProfileSchema,
-      exportEntirety(docA),
-    )
+    const docB = createDoc(BoundListProfile, exportEntirety(docA))
     const v0 = version(docB)
 
     change(docA, (d: any) => {

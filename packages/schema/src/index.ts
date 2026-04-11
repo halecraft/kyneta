@@ -78,6 +78,8 @@ export {
 export type { MergeFn } from "./combinators.js"
 // Interpreter composition combinators
 export { firstDefined, overlay, product } from "./combinators.js"
+// Create-doc — generic document construction for any substrate
+export { createDoc, createRef } from "./create-doc.js"
 export { describe } from "./describe.js"
 export type { ApplyChangesOptions } from "./facade/change.js"
 // Facade — library-level change capture and declarative application
@@ -194,6 +196,14 @@ export {
   readable,
   writable,
 } from "./layers.js"
+// Native — NativeMap functor, NATIVE/SUBSTRATE symbols, HasNative
+export type {
+  HasNative,
+  NativeMap,
+  PlainNativeMap,
+  UnknownNativeMap,
+} from "./native.js"
+export { NATIVE, SUBSTRATE } from "./native.js"
 // Re-export path types from their canonical location
 export type {
   Address,
@@ -222,12 +232,12 @@ export {
 } from "./reader.js"
 // Ref tier types — parameterized recursive refs for composed interpreter stacks
 export type {
+  DocRef,
   Ref,
   RefMode,
   RRef,
   RWRef,
   SchemaRef,
-  WithTransact,
   Wrap,
 } from "./ref.js"
 export type {
@@ -314,8 +324,16 @@ export {
 } from "./substrates/plain.js"
 // Timestamp version — wall-clock version for LWW/ephemeral substrates
 export { TimestampVersion } from "./substrates/timestamp-version.js"
-// Unwrap — general escape hatch for accessing the Substrate backing a ref
-export { registerSubstrate, unwrap } from "./unwrap.js"
+// Sync — generic sync functions for any substrate (via ref[SUBSTRATE])
+export {
+  exportEntirety,
+  exportSince,
+  merge,
+  version,
+} from "./sync.js"
+export type { HasNativeAny } from "./unwrap.js"
+// Unwrap — typed escape hatch for accessing the native container backing a ref
+export { unwrap } from "./unwrap.js"
 // Version vector — shared lattice utilities for version vectors
 export { versionVectorCompare, versionVectorMeet } from "./version-vector.js"
 // Zero — default values derived from the schema grammar

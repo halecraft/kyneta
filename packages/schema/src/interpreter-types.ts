@@ -59,6 +59,18 @@ export interface RefContext {
    * Non-addressing stacks don't set this — the optional call is a no-op.
    */
   readonly onRefCreated?: (path: Path, ref: unknown) => void
+  /**
+   * Resolve the native container at a schema position.
+   *
+   * Provided by the substrate (via monkey-patch on the cached WritableContext).
+   * Returns the substrate-native container (LoroText, Y.Map, etc.) or
+   * `undefined` for scalars without a dedicated container.
+   *
+   * Used by `interpretImpl` to attach `[NATIVE]` on every ref during
+   * interpretation. When absent (e.g. bare readable-only stacks), `[NATIVE]`
+   * is not attached.
+   */
+  readonly nativeResolver?: (schema: Schema, path: Path) => unknown
 }
 
 // ---------------------------------------------------------------------------

@@ -34,7 +34,7 @@ import type {
 } from "loro-crdt"
 import { LoroDoc } from "loro-crdt"
 import { batchToOps, changeToDiff } from "./change-mapping.js"
-import { PROPS_KEY } from "./loro-resolve.js"
+import { PROPS_KEY, resolveContainer } from "./loro-resolve.js"
 import { loroReader } from "./reader.js"
 import { LoroVersion } from "./version.js"
 
@@ -237,6 +237,17 @@ export function createLoroSubstrate(
     context(): WritableContext {
       if (!cachedCtx) {
         cachedCtx = buildWritableContext(substrate)
+        // Attach nativeResolver — used by interpretImpl to set [NATIVE]
+        // on every ref. The resolver maps schema positions to Loro containers.
+        ;(cachedCtx as any).nativeResolver = (
+          nodeSchema: SchemaNode,
+          path: { segments: readonly unknown[] },
+        ) => {
+          if (path.segments.length === 0) return doc
+          if (nodeSchema[KIND] === "scalar" || nodeSchema[KIND] === "sum")
+            return undefined
+          return resolveContainer(doc, schema, path as any)
+        }
       }
       return cachedCtx
     },

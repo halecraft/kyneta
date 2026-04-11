@@ -1,77 +1,49 @@
-// unwrap — general escape hatch for accessing the Substrate backing a ref.
+// unwrap — typed escape hatch for accessing the native container backing a ref.
 //
-// `unwrap(ref)` returns the `Substrate<any>` that backs a given ref.
-// `registerSubstrate(ref, substrate)` populates the mapping.
+// `unwrap(ref)` reads `ref[NATIVE]` — the substrate-native container
+// attached during interpretation via the nativeResolver protocol.
 //
-// The WeakMap is populated by the exchange (or any other system that
-// constructs refs from substrates) via `registerSubstrate`. This is
-// a schema-level utility so that any consumer of `@kyneta/schema` can
-// access the substrate without depending on `@kyneta/exchange`.
+// Fully typed: the return type is inferred from the ref's [NATIVE] property.
+// For example, `unwrap(loroRef.title)` returns `LoroText`, not `unknown`.
 
-import type { Substrate } from "./substrate.js"
-
-// ---------------------------------------------------------------------------
-// Module-scoped WeakMap — maps refs to their backing substrates
-// ---------------------------------------------------------------------------
-
-const refToSubstrate = new WeakMap<object, Substrate<any>>()
+import { isPropertyHost } from "./guards.js"
+import { NATIVE } from "./native.js"
 
 // ---------------------------------------------------------------------------
-// registerSubstrate — called by the exchange (or equivalent) after
-// building a ref from a substrate
+// HasNativeAny — minimal constraint for unwrap()
 // ---------------------------------------------------------------------------
 
 /**
- * Register the substrate backing a ref.
- *
- * Called by the exchange (or any ref-constructing system) after
- * building the interpreter stack from a substrate. This enables
- * `unwrap(ref)` to retrieve the substrate later.
- *
- * Overwrites any previous registration for the same ref.
+ * Minimal constraint for `unwrap()` — any object with a `[NATIVE]` property.
  */
-export function registerSubstrate(
-  ref: object,
-  substrate: Substrate<any>,
-): void {
-  refToSubstrate.set(ref, substrate)
+export interface HasNativeAny {
+  readonly [NATIVE]: unknown
 }
 
 // ---------------------------------------------------------------------------
-// unwrap — retrieve the Substrate backing a ref
+// unwrap — typed escape hatch
 // ---------------------------------------------------------------------------
 
 /**
- * Returns the `Substrate<any>` backing the given ref.
+ * Returns the substrate-native container backing a ref.
  *
- * This is the general escape hatch for accessing substrate-level
- * capabilities (versioning, export/import) from a ref. For
- * substrate-specific escape hatches (e.g. accessing the underlying
- * `LoroDoc`), see the substrate's package (e.g. `loro()` from
- * `@kyneta/loro-schema`).
+ * Reads the `[NATIVE]` symbol property set during interpretation by
+ * the `nativeResolver` protocol. Fully typed via conditional return:
  *
- * @param ref - A ref created by `exchange.get()` or equivalent
- * @returns The `Substrate<any>` backing the ref
- * @throws If the ref has no registered substrate
- *
- * @example
  * ```ts
- * import { unwrap } from "@kyneta/schema"
- *
- * const doc = exchange.get("my-doc", MyDoc)
- * const substrate = unwrap(doc)
- * substrate.version().serialize()   // current version
- * substrate.exportEntirety()         // full state
+ * const doc = createDoc(loro.bind(schema))
+ * unwrap(doc)           // LoroDoc
+ * unwrap(doc.title)     // LoroText
+ * unwrap(doc.items)     // LoroList
+ * unwrap(doc.theme)     // undefined (scalar)
  * ```
+ *
+ * @param ref - Any ref with a `[NATIVE]` property
+ * @returns The native container (LoroText, Y.Map, PlainState, etc.) or undefined
  */
-export function unwrap(ref: object): Substrate<any> {
-  const substrate = refToSubstrate.get(ref)
-  if (!substrate) {
-    throw new Error(
-      "unwrap() requires a ref with a registered substrate. " +
-        "Refs created by exchange.get() are automatically registered. " +
-        "For manually constructed refs, call registerSubstrate(ref, substrate) first.",
-    )
+export function unwrap<R extends HasNativeAny>(ref: R): R[typeof NATIVE] {
+  if (!isPropertyHost(ref)) {
+    throw new Error("unwrap() requires a ref object.")
   }
-  return substrate
+  return (ref as any)[NATIVE]
 }

@@ -22,12 +22,18 @@ import type {
   SubstratePayload,
   WritableContext,
 } from "@kyneta/schema"
-import { BACKING_DOC, buildWritableContext, executeBatch } from "@kyneta/schema"
+import {
+  BACKING_DOC,
+  buildWritableContext,
+  executeBatch,
+  KIND,
+} from "@kyneta/schema"
 import * as Y from "yjs"
 import { applyChangeToYjs, eventsToOps } from "./change-mapping.js"
 import { ensureContainers } from "./populate.js"
 import { yjsReader } from "./reader.js"
 import { YjsVersion } from "./version.js"
+import { resolveYjsType } from "./yjs-resolve.js"
 
 // ---------------------------------------------------------------------------
 // Origin tag — used to suppress echo from our own transactions
@@ -124,6 +130,17 @@ export function createYjsSubstrate(
     context(): WritableContext {
       if (!cachedCtx) {
         cachedCtx = buildWritableContext(substrate)
+        // Attach nativeResolver — used by interpretImpl to set [NATIVE]
+        // on every ref. The resolver maps schema positions to Yjs shared types.
+        ;(cachedCtx as any).nativeResolver = (
+          nodeSchema: SchemaNode,
+          path: { segments: readonly unknown[] },
+        ) => {
+          if (path.segments.length === 0) return doc
+          if (nodeSchema[KIND] === "scalar" || nodeSchema[KIND] === "sum")
+            return undefined
+          return resolveYjsType(rootMap, schema, path as any)
+        }
       }
       return cachedCtx
     },

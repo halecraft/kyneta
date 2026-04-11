@@ -25,9 +25,10 @@ import type {
   SubstrateNamespace,
   SubstratePayload,
 } from "@kyneta/schema"
-import { BACKING_DOC, createSubstrateNamespace, unwrap } from "@kyneta/schema"
+import { BACKING_DOC, createSubstrateNamespace } from "@kyneta/schema"
 import type { LoroDoc as LoroDocType, PeerID } from "loro-crdt"
 import { LoroDoc } from "loro-crdt"
+import type { LoroNativeMap } from "./native-map.js"
 import {
   createLoroReplica,
   createLoroSubstrate,
@@ -140,10 +141,12 @@ function createLoroFactory(peerId: string): SubstrateFactory<LoroVersion> {
  * - `loro.bind(schema, "ephemeral")` — ephemeral/presence broadcast
  * - `loro.replica()` — collaborative replication (default)
  * - `loro.replica("ephemeral")` — ephemeral replication
- * - `loro.unwrap(ref)` — access the underlying LoroDoc
  *
  * Strategy is constrained to `CrdtStrategy` (`"collaborative" | "ephemeral"`).
  * Passing `"authoritative"` is a compile error.
+ *
+ * To access the underlying LoroDoc, use `unwrap(ref)` from `@kyneta/schema`
+ * which reads the `[NATIVE]` symbol property set during interpretation.
  */
 /**
  * Loro capability tags — the set of first-class CRDT types that the
@@ -151,11 +154,8 @@ function createLoroFactory(peerId: string): SubstrateFactory<LoroVersion> {
  */
 export type LoroCaps = "text" | "counter" | "movable" | "tree" | "json"
 
-export const loro: SubstrateNamespace<CrdtStrategy, LoroCaps> & {
-  /** Access the underlying `LoroDoc` backing a ref. */
-  unwrap(ref: object): LoroDoc
-} = {
-  ...createSubstrateNamespace<CrdtStrategy, LoroCaps>({
+export const loro: SubstrateNamespace<CrdtStrategy, LoroCaps, LoroNativeMap> =
+  createSubstrateNamespace<CrdtStrategy, LoroCaps, LoroNativeMap>({
     strategies: {
       collaborative: {
         factory: ctx => createLoroFactory(ctx.peerId),
@@ -167,34 +167,4 @@ export const loro: SubstrateNamespace<CrdtStrategy, LoroCaps> & {
       },
     },
     defaultStrategy: "collaborative",
-  }),
-
-  unwrap(ref: object): LoroDoc {
-    let substrate: any
-    try {
-      substrate = unwrap(ref)
-    } catch {
-      throw new Error(
-        "loro.unwrap() requires a ref backed by a Loro substrate. " +
-          "Use a doc created by exchange.get() with a loro.bind() schema, " +
-          "or by createLoroDoc().",
-      )
-    }
-
-    const doc = substrate[BACKING_DOC]
-    if (
-      !doc ||
-      typeof doc !== "object" ||
-      typeof (doc as any).toJSON !== "function" ||
-      typeof (doc as any).version !== "function" ||
-      typeof (doc as any).import !== "function"
-    ) {
-      throw new Error(
-        "loro.unwrap() requires a ref backed by a Loro substrate. " +
-          "The ref has a substrate but it is not a Loro substrate. " +
-          "Use a doc created with a loro.bind() schema or createLoroDoc().",
-      )
-    }
-    return doc as LoroDoc
-  },
-}
+  })

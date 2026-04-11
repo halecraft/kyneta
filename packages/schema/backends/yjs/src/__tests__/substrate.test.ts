@@ -1,10 +1,20 @@
-import { change, RawPath, Schema, subscribe } from "@kyneta/schema"
+import {
+  change,
+  createDoc,
+  createRef,
+  exportEntirety,
+  exportSince,
+  merge,
+  RawPath,
+  Schema,
+  subscribe,
+  version,
+} from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
-import { createYjsDoc, createYjsDocFromEntirety } from "../create.js"
+import { yjs } from "../bind-yjs.js"
 import { ensureContainers } from "../populate.js"
-import { yjsSubstrateFactory } from "../substrate.js"
-import { exportEntirety, exportSince, merge, version } from "../sync.js"
+import { createYjsSubstrate, yjsSubstrateFactory } from "../substrate.js"
 import { YjsVersion } from "../version.js"
 
 // ===========================================================================
@@ -66,7 +76,7 @@ describe("YjsSubstrate", () => {
     })
 
     it("creates a substrate and populates via change()", () => {
-      const doc = createYjsDoc(SimpleSchema)
+      const doc = createDoc(yjs.bind(SimpleSchema))
       change(doc, (d: any) => {
         d.title.insert(0, "Hello")
         d.count.set(42)
@@ -81,7 +91,7 @@ describe("YjsSubstrate", () => {
     })
 
     it("creates a substrate with partial values (unset fields stay empty)", () => {
-      const doc = createYjsDoc(SimpleSchema)
+      const doc = createDoc(yjs.bind(SimpleSchema))
       change(doc, (d: any) => {
         d.title.insert(0, "Partial")
       })
@@ -91,7 +101,7 @@ describe("YjsSubstrate", () => {
     })
 
     it("creates a substrate with nested struct values via change()", () => {
-      const doc = createYjsDoc(FullSchema)
+      const doc = createDoc(yjs.bind(FullSchema))
       change(doc, (d: any) => {
         d.meta.author.set("Alice")
       })
@@ -99,7 +109,7 @@ describe("YjsSubstrate", () => {
     })
 
     it("creates a substrate with struct list values via change()", () => {
-      const doc = createYjsDoc(StructListSchema)
+      const doc = createDoc(yjs.bind(StructListSchema))
       // Separate change() calls for list pushes to preserve order
       change(doc, (d: any) => d.tasks.push({ name: "Task 1", done: false }))
       change(doc, (d: any) => d.tasks.push({ name: "Task 2", done: true }))
@@ -114,7 +124,7 @@ describe("YjsSubstrate", () => {
 
   describe("write round-trip", () => {
     it("text insert round-trips through prepare/flush", () => {
-      const doc = createYjsDoc(SimpleSchema)
+      const doc = createDoc(yjs.bind(SimpleSchema))
       change(doc, (d: any) => {
         d.title.insert(0, "Hello")
       })
@@ -122,7 +132,7 @@ describe("YjsSubstrate", () => {
     })
 
     it("scalar set round-trips through prepare/flush", () => {
-      const doc = createYjsDoc(SimpleSchema)
+      const doc = createDoc(yjs.bind(SimpleSchema))
       change(doc, (d: any) => {
         d.count.set(42)
       })
@@ -130,7 +140,7 @@ describe("YjsSubstrate", () => {
     })
 
     it("list push round-trips through prepare/flush", () => {
-      const doc = createYjsDoc(SimpleSchema)
+      const doc = createDoc(yjs.bind(SimpleSchema))
       change(doc, (d: any) => {
         d.items.push("a")
       })
@@ -148,7 +158,7 @@ describe("YjsSubstrate", () => {
 
   describe("version tracking", () => {
     it("version advances after mutations", () => {
-      const doc = createYjsDoc(SimpleSchema)
+      const doc = createDoc(yjs.bind(SimpleSchema))
       const v1 = version(doc)
 
       change(doc, (d: any) => {
@@ -161,7 +171,7 @@ describe("YjsSubstrate", () => {
     })
 
     it("version serialize/parse round-trips", () => {
-      const doc = createYjsDoc(SimpleSchema)
+      const doc = createDoc(yjs.bind(SimpleSchema))
       change(doc, (d: any) => {
         d.title.insert(0, "Test")
         d.count.set(5)
@@ -180,7 +190,7 @@ describe("YjsSubstrate", () => {
 
   describe("export/import snapshot", () => {
     it("exports a binary payload", () => {
-      const doc = createYjsDoc(SimpleSchema)
+      const doc = createDoc(yjs.bind(SimpleSchema))
       change(doc, (d: any) => {
         d.title.insert(0, "Snapshot")
       })
@@ -190,7 +200,7 @@ describe("YjsSubstrate", () => {
     })
 
     it("reconstructs equivalent state from snapshot", () => {
-      const doc1 = createYjsDoc(SimpleSchema)
+      const doc1 = createDoc(yjs.bind(SimpleSchema))
       change(doc1, (d: any) => {
         d.title.insert(0, "Hello")
         d.count.set(42)
@@ -203,7 +213,7 @@ describe("YjsSubstrate", () => {
       })
 
       const payload = exportEntirety(doc1)
-      const doc2 = createYjsDocFromEntirety(SimpleSchema, payload)
+      const doc2 = createDoc(yjs.bind(SimpleSchema), payload)
 
       expect(doc2.title()).toBe("Hello World")
       expect(doc2.count()).toBe(42)
@@ -217,11 +227,11 @@ describe("YjsSubstrate", () => {
 
   describe("delta sync", () => {
     it("exportSince → merge syncs state", () => {
-      const doc1 = createYjsDoc(SimpleSchema)
+      const doc1 = createDoc(yjs.bind(SimpleSchema))
       change(doc1, (d: any) => {
         d.title.insert(0, "Start")
       })
-      const doc2 = createYjsDocFromEntirety(SimpleSchema, exportEntirety(doc1))
+      const doc2 = createDoc(yjs.bind(SimpleSchema), exportEntirety(doc1))
 
       const v1Before = version(doc1)
 
@@ -239,8 +249,8 @@ describe("YjsSubstrate", () => {
     })
 
     it("concurrent sync — two substrates converge after bidirectional sync", () => {
-      const doc1 = createYjsDoc(SimpleSchema)
-      const doc2 = createYjsDocFromEntirety(SimpleSchema, exportEntirety(doc1))
+      const doc1 = createDoc(yjs.bind(SimpleSchema))
+      const doc2 = createDoc(yjs.bind(SimpleSchema), exportEntirety(doc1))
 
       const v1Before = version(doc1)
       const v2Before = version(doc2)
@@ -285,11 +295,11 @@ describe("YjsSubstrate", () => {
 
   describe("changefeed", () => {
     it("fires on merge", () => {
-      const doc1 = createYjsDoc(SimpleSchema)
+      const doc1 = createDoc(yjs.bind(SimpleSchema))
       change(doc1, (d: any) => {
         d.title.insert(0, "A")
       })
-      const doc2 = createYjsDocFromEntirety(SimpleSchema, exportEntirety(doc1))
+      const doc2 = createDoc(yjs.bind(SimpleSchema), exportEntirety(doc1))
 
       const v2Before = version(doc2)
 
@@ -312,7 +322,10 @@ describe("YjsSubstrate", () => {
     it("fires on external Y.Doc mutation (raw Yjs API)", () => {
       const yjsDoc = new Y.Doc()
       ensureContainers(yjsDoc, SimpleSchema)
-      const doc = createYjsDoc(SimpleSchema, yjsDoc)
+      const doc = createRef(
+        SimpleSchema,
+        createYjsSubstrate(yjsDoc, SimpleSchema),
+      )
 
       const received: any[] = []
       subscribe(doc, (changeset: any) => {
@@ -328,7 +341,7 @@ describe("YjsSubstrate", () => {
     })
 
     it("no double-fire on kyneta local writes", () => {
-      const doc = createYjsDoc(SimpleSchema)
+      const doc = createDoc(yjs.bind(SimpleSchema))
 
       const received: any[] = []
       subscribe(doc, (changeset: any) => {
@@ -345,18 +358,15 @@ describe("YjsSubstrate", () => {
     })
 
     it("nested struct field changefeed fires on merge", () => {
-      const doc1 = createYjsDoc(StructListSchema)
-      const _doc2 = createYjsDocFromEntirety(
-        StructListSchema,
-        exportEntirety(doc1),
-      )
+      const doc1 = createDoc(yjs.bind(StructListSchema))
+      const _doc2 = createDoc(yjs.bind(StructListSchema), exportEntirety(doc1))
 
       // Add a struct item on doc1, sync to doc2
       change(doc1, (d: any) => {
         d.tasks.push({ name: "Buy milk", done: false })
       })
       const snap = exportEntirety(doc1)
-      const doc2b = createYjsDocFromEntirety(StructListSchema, snap)
+      const doc2b = createDoc(yjs.bind(StructListSchema), snap)
 
       const taskB = [...doc2b.tasks][0] as any
       expect(taskB.done()).toBe(false)
@@ -387,16 +397,13 @@ describe("YjsSubstrate", () => {
     })
 
     it("multi-key struct update fires per-field changefeeds on merge", () => {
-      const doc1 = createYjsDoc(StructListSchema)
+      const doc1 = createDoc(yjs.bind(StructListSchema))
 
       // Add a struct item, sync to doc2
       change(doc1, (d: any) => {
         d.tasks.push({ name: "Buy milk", done: false })
       })
-      const doc2 = createYjsDocFromEntirety(
-        StructListSchema,
-        exportEntirety(doc1),
-      )
+      const doc2 = createDoc(yjs.bind(StructListSchema), exportEntirety(doc1))
 
       const taskB = [...doc2.tasks][0] as any
       const v2 = version(doc2)
@@ -438,7 +445,7 @@ describe("YjsSubstrate", () => {
 
   describe("transaction support", () => {
     it("multi-op change() is atomic", () => {
-      const doc = createYjsDoc(SimpleSchema)
+      const doc = createDoc(yjs.bind(SimpleSchema))
 
       const received: any[] = []
       subscribe(doc, (changeset: any) => {
@@ -474,7 +481,7 @@ describe("YjsSubstrate", () => {
 
   describe("nested structure", () => {
     it("push struct into list, read back via navigation", () => {
-      const doc = createYjsDoc(StructListSchema)
+      const doc = createDoc(yjs.bind(StructListSchema))
 
       change(doc, (d: any) => {
         d.tasks.push({ name: "Task 1", done: false })
@@ -494,7 +501,7 @@ describe("YjsSubstrate", () => {
     })
 
     it("nested struct write round-trip", () => {
-      const doc = createYjsDoc(FullSchema)
+      const doc = createDoc(yjs.bind(FullSchema))
       change(doc, (d: any) => {
         d.meta.author.set("Alice")
       })
@@ -553,7 +560,7 @@ describe("YjsSubstrate", () => {
     })
 
     it("reconstructs from snapshot with correct state", () => {
-      const doc = createYjsDoc(SimpleSchema)
+      const doc = createDoc(yjs.bind(SimpleSchema))
       change(doc, (d: any) => {
         d.title.insert(0, "Snapshot Test")
         d.count.set(77)
@@ -561,7 +568,7 @@ describe("YjsSubstrate", () => {
       })
 
       const payload = exportEntirety(doc)
-      const doc2 = createYjsDocFromEntirety(SimpleSchema, payload)
+      const doc2 = createDoc(yjs.bind(SimpleSchema), payload)
 
       expect(doc2.title()).toBe("Snapshot Test")
       expect(doc2.count()).toBe(77)

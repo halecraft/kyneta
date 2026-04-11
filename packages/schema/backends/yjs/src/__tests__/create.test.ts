@@ -1,10 +1,17 @@
-import { change, Schema, subscribe } from "@kyneta/schema"
+import {
+  change,
+  createDoc,
+  createRef,
+  Schema,
+  subscribe,
+  unwrap,
+} from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
 import { yjs } from "../bind-yjs.js"
-import { createYjsDoc, createYjsDocFromEntirety } from "../create.js"
+import { exportEntirety, exportSince, merge, version } from "../index.js"
 import { ensureContainers } from "../populate.js"
-import { exportEntirety, exportSince, merge, version } from "../sync.js"
+import { createYjsSubstrate } from "../substrate.js"
 import { YjsVersion } from "../version.js"
 
 // ===========================================================================
@@ -36,17 +43,25 @@ const NestedSchema = Schema.struct({
 })
 
 // ===========================================================================
+// Helpers
+// ===========================================================================
+
+const boundSimple = yjs.bind(SimpleSchema)
+const boundStructList = yjs.bind(StructListSchema)
+const boundNested = yjs.bind(NestedSchema)
+
+// ===========================================================================
 // Tests
 // ===========================================================================
 
-describe("createYjsDoc", () => {
+describe("createDoc", () => {
   // -------------------------------------------------------------------------
   // Default values
   // -------------------------------------------------------------------------
 
   describe("with defaults", () => {
     it("creates a doc with empty containers for shared types", () => {
-      const doc = createYjsDoc(SimpleSchema)
+      const doc = createDoc(boundSimple)
       // Text annotation returns "" (empty Y.Text)
       expect(doc.title()).toBe("")
       // Plain scalars return structural zeros
@@ -56,7 +71,7 @@ describe("createYjsDoc", () => {
     })
 
     it("creates a doc with nested struct empty containers", () => {
-      const doc = createYjsDoc(NestedSchema)
+      const doc = createDoc(boundNested)
       expect(doc.title()).toBe("")
       // Plain scalar inside struct returns structural zero
       expect(doc.meta.author()).toBe("")
@@ -65,7 +80,7 @@ describe("createYjsDoc", () => {
     })
 
     it("creates a doc with struct list defaults", () => {
-      const doc = createYjsDoc(StructListSchema)
+      const doc = createDoc(boundStructList)
       expect(doc.tasks()).toEqual([])
       expect(doc.tasks.length).toBe(0)
     })
@@ -77,7 +92,7 @@ describe("createYjsDoc", () => {
 
   describe("with seeds", () => {
     it("creates a doc with scalar seed values", () => {
-      const doc = createYjsDoc(SimpleSchema)
+      const doc = createDoc(boundSimple)
       change(doc, (d: any) => {
         d.title.insert(0, "Hello")
         d.count.set(42)
@@ -93,7 +108,7 @@ describe("createYjsDoc", () => {
     })
 
     it("creates a doc with partial seed (defaults fill gaps)", () => {
-      const doc = createYjsDoc(SimpleSchema)
+      const doc = createDoc(boundSimple)
       change(doc, (d: any) => {
         d.title.insert(0, "Partial")
       })
@@ -103,7 +118,7 @@ describe("createYjsDoc", () => {
     })
 
     it("creates a doc with nested struct seed", () => {
-      const doc = createYjsDoc(NestedSchema)
+      const doc = createDoc(boundNested)
       change(doc, (d: any) => {
         d.title.insert(0, "Doc")
         d.meta.author.set("Alice")
@@ -118,7 +133,7 @@ describe("createYjsDoc", () => {
     })
 
     it("creates a doc with struct list seed items", () => {
-      const doc = createYjsDoc(StructListSchema)
+      const doc = createDoc(boundStructList)
       // Separate change() calls for list pushes to preserve order
       change(doc, (d: any) => d.tasks.push({ name: "Task 1", done: false }))
       change(doc, (d: any) => d.tasks.push({ name: "Task 2", done: true }))
@@ -145,7 +160,10 @@ describe("createYjsDoc", () => {
         ;(rootMap.get("items") as Y.Array<string>).push(["x"])
       })
 
-      const doc = createYjsDoc(SimpleSchema, yjsDoc)
+      const doc = createRef(
+        SimpleSchema,
+        createYjsSubstrate(yjsDoc, SimpleSchema),
+      )
       expect(doc.title()).toBe("External")
       expect(doc.count()).toBe(99)
       expect(doc.items()).toEqual(["x"])
@@ -155,7 +173,10 @@ describe("createYjsDoc", () => {
       const yjsDoc = new Y.Doc()
       ensureContainers(yjsDoc, SimpleSchema)
 
-      const doc = createYjsDoc(SimpleSchema, yjsDoc)
+      const doc = createRef(
+        SimpleSchema,
+        createYjsSubstrate(yjsDoc, SimpleSchema),
+      )
       change(doc, (d: any) => {
         d.title.insert(0, "Hello")
         d.count.set(42)
@@ -170,7 +191,10 @@ describe("createYjsDoc", () => {
       const yjsDoc = new Y.Doc()
       ensureContainers(yjsDoc, SimpleSchema)
 
-      const doc = createYjsDoc(SimpleSchema, yjsDoc)
+      const doc = createRef(
+        SimpleSchema,
+        createYjsSubstrate(yjsDoc, SimpleSchema),
+      )
 
       const rootMap = yjsDoc.getMap("root")
       rootMap.set("count", 77)
@@ -178,12 +202,15 @@ describe("createYjsDoc", () => {
       expect(doc.count()).toBe(77)
     })
 
-    it("yjs.unwrap() escape hatch returns the same Y.Doc", () => {
+    it("unwrap() escape hatch returns the same Y.Doc", () => {
       const yjsDoc = new Y.Doc()
       ensureContainers(yjsDoc, SimpleSchema)
 
-      const doc = createYjsDoc(SimpleSchema, yjsDoc)
-      const escaped = yjs.unwrap(doc)
+      const doc = createRef(
+        SimpleSchema,
+        createYjsSubstrate(yjsDoc, SimpleSchema),
+      )
+      const escaped = unwrap(doc)
 
       expect(escaped).toBe(yjsDoc)
     })
@@ -191,12 +218,12 @@ describe("createYjsDoc", () => {
 })
 
 // ===========================================================================
-// createYjsDocFromEntirety
+// createDoc with payload (fromEntirety)
 // ===========================================================================
 
-describe("createYjsDocFromEntirety", () => {
+describe("createDoc with payload", () => {
   it("reconstructs state from a snapshot", () => {
-    const doc1 = createYjsDoc(SimpleSchema)
+    const doc1 = createDoc(boundSimple)
     change(doc1, (d: any) => {
       d.title.insert(0, "Snapshot")
       d.count.set(42)
@@ -205,7 +232,7 @@ describe("createYjsDocFromEntirety", () => {
     change(doc1, (d: any) => d.items.push("b"))
 
     const payload = exportEntirety(doc1)
-    const doc2 = createYjsDocFromEntirety(SimpleSchema, payload)
+    const doc2 = createDoc(boundSimple, payload)
 
     expect(doc2.title()).toBe("Snapshot")
     expect(doc2.count()).toBe(42)
@@ -213,7 +240,7 @@ describe("createYjsDocFromEntirety", () => {
   })
 
   it("reconstructs state after mutations", () => {
-    const doc1 = createYjsDoc(SimpleSchema)
+    const doc1 = createDoc(boundSimple)
     change(doc1, (d: any) => {
       d.title.insert(0, "Start")
     })
@@ -225,7 +252,7 @@ describe("createYjsDocFromEntirety", () => {
     })
 
     const payload = exportEntirety(doc1)
-    const doc2 = createYjsDocFromEntirety(SimpleSchema, payload)
+    const doc2 = createDoc(boundSimple, payload)
 
     expect(doc2.title()).toBe("Start End")
     expect(doc2.count()).toBe(99)
@@ -233,7 +260,7 @@ describe("createYjsDocFromEntirety", () => {
   })
 
   it("reconstructs nested struct state from snapshot", () => {
-    const doc1 = createYjsDoc(NestedSchema)
+    const doc1 = createDoc(boundNested)
     change(doc1, (d: any) => {
       d.title.insert(0, "Nested")
       d.meta.author.set("Alice")
@@ -243,7 +270,7 @@ describe("createYjsDocFromEntirety", () => {
     change(doc1, (d: any) => d.meta.tags.push("v2"))
 
     const payload = exportEntirety(doc1)
-    const doc2 = createYjsDocFromEntirety(NestedSchema, payload)
+    const doc2 = createDoc(boundNested, payload)
 
     expect(doc2.title()).toBe("Nested")
     expect(doc2.meta.author()).toBe("Alice")
@@ -253,12 +280,12 @@ describe("createYjsDocFromEntirety", () => {
   })
 
   it("reconstructs struct list state from snapshot", () => {
-    const doc1 = createYjsDoc(StructListSchema)
+    const doc1 = createDoc(boundStructList)
     change(doc1, (d: any) => d.tasks.push({ name: "Task A", done: false }))
     change(doc1, (d: any) => d.tasks.push({ name: "Task B", done: true }))
 
     const payload = exportEntirety(doc1)
-    const doc2 = createYjsDocFromEntirety(StructListSchema, payload)
+    const doc2 = createDoc(boundStructList, payload)
 
     expect(doc2.tasks.length).toBe(2)
     expect((doc2.tasks.at(0) as any).name()).toBe("Task A")
@@ -266,12 +293,12 @@ describe("createYjsDocFromEntirety", () => {
   })
 
   it("is writable after reconstruction", () => {
-    const doc1 = createYjsDoc(SimpleSchema)
+    const doc1 = createDoc(boundSimple)
     change(doc1, (d: any) => {
       d.title.insert(0, "Original")
     })
     const payload = exportEntirety(doc1)
-    const doc2 = createYjsDocFromEntirety(SimpleSchema, payload)
+    const doc2 = createDoc(boundSimple, payload)
 
     change(doc2, (d: any) => {
       d.title.insert(8, " Copy")
@@ -283,12 +310,12 @@ describe("createYjsDocFromEntirety", () => {
   })
 
   it("is observable after reconstruction", () => {
-    const doc1 = createYjsDoc(SimpleSchema)
+    const doc1 = createDoc(boundSimple)
     change(doc1, (d: any) => {
       d.title.insert(0, "Original")
     })
     const payload = exportEntirety(doc1)
-    const doc2 = createYjsDocFromEntirety(SimpleSchema, payload)
+    const doc2 = createDoc(boundSimple, payload)
 
     const received: any[] = []
     subscribe(doc2, (changeset: any) => {
@@ -310,13 +337,13 @@ describe("createYjsDocFromEntirety", () => {
 describe("sync primitives", () => {
   describe("version", () => {
     it("returns a YjsVersion", () => {
-      const doc = createYjsDoc(SimpleSchema)
+      const doc = createDoc(boundSimple)
       const v = version(doc)
       expect(v).toBeInstanceOf(YjsVersion)
     })
 
     it("advances after mutations", () => {
-      const doc = createYjsDoc(SimpleSchema)
+      const doc = createDoc(boundSimple)
       const v1 = version(doc)
 
       change(doc, (d: any) => {
@@ -328,7 +355,7 @@ describe("sync primitives", () => {
     })
 
     it("serialize/parse round-trips", () => {
-      const doc = createYjsDoc(SimpleSchema)
+      const doc = createDoc(boundSimple)
       change(doc, (d: any) => {
         d.title.insert(0, "Test")
       })
@@ -341,7 +368,7 @@ describe("sync primitives", () => {
 
   describe("exportEntirety", () => {
     it("returns a binary payload", () => {
-      const doc = createYjsDoc(SimpleSchema)
+      const doc = createDoc(boundSimple)
       change(doc, (d: any) => {
         d.title.insert(0, "Snap")
       })
@@ -354,11 +381,11 @@ describe("sync primitives", () => {
 
   describe("exportSince + merge", () => {
     it("syncs incremental changes between two docs", () => {
-      const doc1 = createYjsDoc(SimpleSchema)
+      const doc1 = createDoc(boundSimple)
       change(doc1, (d: any) => {
         d.title.insert(0, "Start")
       })
-      const doc2 = createYjsDocFromEntirety(SimpleSchema, exportEntirety(doc1))
+      const doc2 = createDoc(boundSimple, exportEntirety(doc1))
 
       const v2Before = version(doc2)
 
@@ -382,8 +409,8 @@ describe("sync primitives", () => {
     })
 
     it("syncs multiple incremental deltas", () => {
-      const doc1 = createYjsDoc(SimpleSchema)
-      const doc2 = createYjsDocFromEntirety(SimpleSchema, exportEntirety(doc1))
+      const doc1 = createDoc(boundSimple)
+      const doc2 = createDoc(boundSimple, exportEntirety(doc1))
 
       // First round
       let vBefore = version(doc2)
@@ -411,11 +438,11 @@ describe("sync primitives", () => {
     })
 
     it("changefeed fires on merge", () => {
-      const doc1 = createYjsDoc(SimpleSchema)
+      const doc1 = createDoc(boundSimple)
       change(doc1, (d: any) => {
         d.title.insert(0, "Source")
       })
-      const doc2 = createYjsDocFromEntirety(SimpleSchema, exportEntirety(doc1))
+      const doc2 = createDoc(boundSimple, exportEntirety(doc1))
 
       const v2Before = version(doc2)
 
@@ -437,8 +464,8 @@ describe("sync primitives", () => {
     })
 
     it("merge passes origin to changefeed", () => {
-      const doc1 = createYjsDoc(SimpleSchema)
-      const doc2 = createYjsDocFromEntirety(SimpleSchema, exportEntirety(doc1))
+      const doc1 = createDoc(boundSimple)
+      const doc2 = createDoc(boundSimple, exportEntirety(doc1))
 
       const v2Before = version(doc2)
       change(doc1, (d: any) => {
@@ -458,7 +485,7 @@ describe("sync primitives", () => {
 
   describe("versions equal after sync", () => {
     it("versions equal after full snapshot sync", () => {
-      const doc1 = createYjsDoc(SimpleSchema)
+      const doc1 = createDoc(boundSimple)
       change(doc1, (d: any) => {
         d.title.insert(0, "Same")
       })
@@ -466,14 +493,14 @@ describe("sync primitives", () => {
         d.count.set(42)
       })
 
-      const doc2 = createYjsDocFromEntirety(SimpleSchema, exportEntirety(doc1))
+      const doc2 = createDoc(boundSimple, exportEntirety(doc1))
 
       expect(version(doc1).compare(version(doc2))).toBe("equal")
     })
 
     it("versions equal after bidirectional delta sync", () => {
-      const doc1 = createYjsDoc(SimpleSchema)
-      const doc2 = createYjsDocFromEntirety(SimpleSchema, exportEntirety(doc1))
+      const doc1 = createDoc(boundSimple)
+      const doc2 = createDoc(boundSimple, exportEntirety(doc1))
 
       const v1Before = version(doc1)
       const v2Before = version(doc2)
@@ -504,11 +531,8 @@ describe("sync primitives", () => {
 describe("full workflow", () => {
   it("create → mutate → sync → observe", () => {
     // 1. Create two docs
-    const doc1 = createYjsDoc(StructListSchema)
-    const doc2 = createYjsDocFromEntirety(
-      StructListSchema,
-      exportEntirety(doc1),
-    )
+    const doc1 = createDoc(boundStructList)
+    const doc2 = createDoc(boundStructList, exportEntirety(doc1))
 
     // 2. Set up observer on doc2
     const changes: any[] = []
@@ -559,7 +583,7 @@ describe("full workflow", () => {
 
   it("create → mutate → snapshot → reconstruct → continue", () => {
     // 1. Create and mutate
-    const doc1 = createYjsDoc(SimpleSchema)
+    const doc1 = createDoc(boundSimple)
     change(doc1, (d: any) => {
       d.title.insert(0, "Start")
     })
@@ -573,7 +597,7 @@ describe("full workflow", () => {
     const snapshot = exportEntirety(doc1)
 
     // 3. Reconstruct
-    const doc2 = createYjsDocFromEntirety(SimpleSchema, snapshot)
+    const doc2 = createDoc(boundSimple, snapshot)
     expect(doc2.title()).toBe("Start Middle")
     expect(doc2.count()).toBe(10)
     expect(doc2.items()).toEqual(["first"])
@@ -598,8 +622,8 @@ describe("full workflow", () => {
 
   it("concurrent edits converge correctly", () => {
     // 1. Create two peers from the same initial state
-    const doc1 = createYjsDoc(SimpleSchema)
-    const doc2 = createYjsDocFromEntirety(SimpleSchema, exportEntirety(doc1))
+    const doc1 = createDoc(boundSimple)
+    const doc2 = createDoc(boundSimple, exportEntirety(doc1))
 
     const v1Before = version(doc1)
     const v2Before = version(doc2)

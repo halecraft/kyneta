@@ -2,7 +2,7 @@
 
 ## Architecture Overview
 
-`@kyneta/yjs-schema` implements `Substrate<YjsVersion>` by wrapping a `Y.Doc` with schema-aware typed reads, writes, versioning, and export/merge. The architecture mirrors `@kyneta/loro-schema` but is structurally simpler due to Yjs's imperative mutation model (no intermediate diff format, no synthetic container IDs). `YjsCaps = "text" | "json"` — Yjs supports only text and JSON merge boundaries.
+`@kyneta/yjs-schema` implements `Substrate<YjsVersion>` by wrapping a `Y.Doc` with schema-aware typed reads, writes, versioning, and export/merge. The architecture mirrors `@kyneta/loro-schema` but is structurally simpler due to Yjs's imperative mutation model (no intermediate diff format, no synthetic container IDs). `YjsCaps = "text" | "json"` — Yjs supports only text and JSON merge boundaries. The `YjsNativeMap` functor maps schema kinds to Yjs shared types, threading typed `[NATIVE]` access through every ref.
 
 ### Core Design Decisions
 
@@ -17,6 +17,8 @@
 5. **Populate-then-attach for structured inserts**: When creating nested shared types at runtime (e.g., pushing a struct into a Y.Array), fields are populated *before* the shared type is inserted into its parent. This produces a single `observeDeep` event with the complete struct, rather than a cascade of child `MapChange` events.
 
 6. **Shared `populate.ts` module**: Root container population helpers are extracted into a dedicated module imported by both `substrate.ts` and `bind-yjs.ts`, avoiding the duplication present in the Loro binding.
+
+7. **`YjsNativeMap` functor**: The `NativeMap` implementation for Yjs maps schema kinds to Yjs shared types (`text → Y.Text`, `list → Y.Array`, `struct → Y.Map`, etc.). `yjs.bind(schema)` produces `BoundSchema<S, YjsNativeMap>`, threading typed `[NATIVE]` access through `DocRef<S, YjsNativeMap>` and all child refs. `unwrap(ref)` reads `ref[NATIVE]` at any depth — no per-substrate escape hatch needed.
 
 ## Root Field Mapping
 
@@ -189,6 +191,37 @@ Yjs declares `YjsCaps = "text" | "json"`. The following first-class types are re
 | `TreeSchema` | No `Y.Tree` equivalent in Yjs | Compile error at `yjs.bind()`. Throws at `populateRoot()` and `applyChangeToYjs()` |
 | `SetSchema` | No `Y.Set` equivalent in Yjs | Compile error at `yjs.bind()`. Throws at `populateRoot()` |
 
+## `YjsNativeMap` — The Yjs Functor
+
+`YjsNativeMap` is the concrete `NativeMap` implementation for Yjs, mapping each schema kind to its Yjs shared type:
+
+| NativeMap slot | Yjs type | Schema kind |
+|---|---|---|
+| `root` | `Y.Doc` | Root document |
+| `text` | `Y.Text` | `Schema.text()` |
+| `counter` | `undefined` | Not supported by Yjs (`YjsCaps` excludes `"counter"`) |
+| `list` | `Y.Array<unknown>` | `Schema.list(item)` |
+| `movableList` | `undefined` | Not supported by Yjs |
+| `struct` | `Y.Map<unknown>` | `Schema.struct(fields)` |
+| `map` | `Y.Map<unknown>` | `Schema.record(item)` |
+| `tree` | `undefined` | Not supported by Yjs |
+| `set` | `undefined` | Not supported by Yjs |
+| `scalar` | `undefined` | Scalars have no dedicated shared type |
+| `sum` | `undefined` | Sums are stored as plain values |
+
+`yjs.bind(schema)` produces `BoundSchema<S, YjsNativeMap>`, which flows through `DocRef<S, YjsNativeMap>` and all child `SchemaRef<S, M, YjsNativeMap>` refs. This enables fully typed native access:
+
+```
+const doc = createDoc(yjs.bind(schema))
+unwrap(doc)           // Y.Doc         (typed via N["root"])
+unwrap(doc.title)     // Y.Text        (typed via N["text"])
+unwrap(doc.items)     // Y.Array       (typed via N["list"])
+unwrap(doc.profile)   // Y.Map         (typed via N["struct"])
+unwrap(doc.theme)     // undefined     (scalar — no shared type)
+```
+
+`unwrap(ref)` reads `ref[NATIVE]` — the symbol property set during interpretation by the `nativeResolver` protocol. This replaces the previous `yjs.unwrap()` function and its `WeakMap<Substrate, Y.Doc>` tracking.
+
 ## File Map
 
 ```
@@ -201,27 +234,25 @@ packages/schema/yjs/
 ├── TECHNICAL.md          # This file
 └── src/
     ├── index.ts          # Barrel export + text() convenience
+    ├── native-map.ts     # YjsNativeMap — NativeMap functor mapping schema kinds to Yjs types
     ├── version.ts        # YjsVersion (state vector comparison)
     ├── yjs-resolve.ts    # stepIntoYjs + resolveYjsType (path resolution)
-    ├── store-reader.ts   # yjsStoreReader (StoreReader implementation)
+    ├── reader.ts         # yjsStoreReader (StoreReader implementation)
     ├── change-mapping.ts # applyChangeToYjs + eventsToOps (bidirectional)
     ├── populate.ts       # populateRoot + recursive helpers (shared)
     ├── substrate.ts      # createYjsSubstrate + yjsSubstrateFactory
-    ├── create.ts         # createYjsDoc + createYjsDocFromEntirety
-    ├── sync.ts           # version, exportEntirety, exportSince, merge
-    ├── bind-yjs.ts       # yjs.bind + hashPeerId (FNV-1a 32-bit)
-    ├── yjs-escape.ts     # yjs.unwrap() escape hatch (WeakMap<Substrate, Y.Doc>)
+    ├── bind-yjs.ts       # yjs.bind — SubstrateNamespace<CrdtStrategy, YjsCaps, YjsNativeMap> + hashPeerId (FNV-1a 32-bit)
     └── __tests__/
-        ├── version.test.ts       # 15 tests
-        ├── store-reader.test.ts  # 34 tests
-        ├── substrate.test.ts     # 26 tests
-        ├── bind-yjs.test.ts      # yjs.bind tests (16 tests)
-        └── create.test.ts        # 30 tests
+        ├── version.test.ts       # YjsVersion serialize/parse/compare tests
+        ├── reader.test.ts        # StoreReader navigation and read tests
+        ├── substrate.test.ts     # Full substrate lifecycle tests
+        ├── bind-yjs.test.ts      # yjs.bind tests, capability constraints, deterministic clientID
+        └── create.test.ts        # createDoc with BoundSchema, hydration from payload
 ```
 
 ## Verified Properties
 
-All 121 tests pass, covering:
+Tests cover:
 
 1. **Version round-trip**: serialize/parse preserves equality; compare produces correct partial order (equal, behind, ahead, concurrent)
 2. **Store reader liveness**: mutations via raw Yjs API are immediately visible through the StoreReader
@@ -234,6 +265,6 @@ All 121 tests pass, covering:
 9. **Nested structures**: push struct into list, read back via navigation
 10. **Unsupported types**: counter, movable, tree, set all throw clear errors; `yjs.bind()` rejects them at compile time via `YjsCaps`
 11. **Deterministic clientID**: FNV-1a hash of peerId produces consistent uint32
-12. **Escape hatch**: `yjs.unwrap(ref)` returns the underlying `Y.Doc`; throws for non-Yjs refs
-13. **Bring your own doc**: `createYjsDoc(schema, existingYDoc)` wraps an existing doc
+12. **Escape hatch**: `unwrap(ref)` returns the typed substrate-native container via `ref[NATIVE]`; works at any depth (root → `Y.Doc`, child text → `Y.Text`, etc.)
+13. **NativeMap typing**: `DocRef<S, YjsNativeMap>` provides correct `[NATIVE]` types at every node
 14. **Full workflow**: create → mutate → sync → observe → bidirectional convergence

@@ -1,38 +1,37 @@
-// unwrap — unit tests for the general escape hatch.
+// unwrap — unit tests for the [NATIVE]-based escape hatch.
 
 import { describe, expect, it } from "vitest"
-import {
-  createPlainSubstrate,
-  plainVersionStrategy,
-} from "../substrates/plain.js"
-import { registerSubstrate, unwrap } from "../unwrap.js"
+import { NATIVE } from "../native.js"
+import { unwrap } from "../unwrap.js"
 
 describe("unwrap()", () => {
-  it("returns the registered substrate", () => {
-    const store = { title: "Hello" }
-    const substrate = createPlainSubstrate(store, plainVersionStrategy)
-    const fakeRef = { _fake: true }
+  it("returns the [NATIVE] value from a ref", () => {
+    const nativeContainer = { _loroText: true }
+    const ref = { [NATIVE]: nativeContainer }
 
-    registerSubstrate(fakeRef, substrate)
-
-    expect(unwrap(fakeRef)).toBe(substrate)
+    expect(unwrap(ref)).toBe(nativeContainer)
   })
 
-  it("throws for unregistered refs", () => {
-    expect(() => unwrap({})).toThrow("unwrap()")
+  it("returns undefined when [NATIVE] is undefined (scalar)", () => {
+    const ref = { [NATIVE]: undefined }
+
+    expect(unwrap(ref)).toBeUndefined()
   })
 
-  it("overwrites previous registration for the same ref", () => {
-    const storeA = { title: "A" }
-    const storeB = { title: "B" }
-    const substrateA = createPlainSubstrate(storeA, plainVersionStrategy)
-    const substrateB = createPlainSubstrate(storeB, plainVersionStrategy)
-    const ref = { _fake: true }
+  it("throws for null", () => {
+    expect(() => unwrap(null as any)).toThrow("unwrap() requires a ref object.")
+  })
 
-    registerSubstrate(ref, substrateA)
-    expect(unwrap(ref)).toBe(substrateA)
+  it("throws for undefined", () => {
+    expect(() => unwrap(undefined as any)).toThrow(
+      "unwrap() requires a ref object.",
+    )
+  })
 
-    registerSubstrate(ref, substrateB)
-    expect(unwrap(ref)).toBe(substrateB)
+  it("throws for primitives", () => {
+    expect(() => unwrap(42 as any)).toThrow("unwrap() requires a ref object.")
+    expect(() => unwrap("hello" as any)).toThrow(
+      "unwrap() requires a ref object.",
+    )
   })
 })

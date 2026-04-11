@@ -20,6 +20,7 @@
 // - "authoritative": request/response, total order (Plain)
 // - "ephemeral": unidirectional broadcast, timestamp-based (Ephemeral)
 
+import type { NativeMap, PlainNativeMap, UnknownNativeMap } from "./native.js"
 import type {
   ExtractCaps,
   ProductSchema,
@@ -79,8 +80,13 @@ export type FactoryBuilder<V extends Version = Version> = (context: {
  * Each exchange calls the factory builder independently, producing a
  * fresh factory per exchange.
  */
-export interface BoundSchema<S extends SchemaNode = SchemaNode> {
+export interface BoundSchema<
+  S extends SchemaNode = SchemaNode,
+  N extends NativeMap = UnknownNativeMap,
+> {
   readonly _brand: "BoundSchema"
+  /** @internal Phantom field anchoring the NativeMap type parameter. */
+  readonly _nativeMap?: N
   readonly schema: S
   readonly factory: FactoryBuilder<any>
   readonly strategy: MergeStrategy
@@ -322,11 +328,12 @@ export type CrdtStrategy = "collaborative" | "ephemeral"
 export interface SubstrateNamespace<
   S extends MergeStrategy,
   AllowedCaps extends string = string,
+  N extends NativeMap = UnknownNativeMap,
 > {
-  bind<N extends ProductSchema>(
-    schema: RestrictCaps<N, AllowedCaps>,
+  bind<P extends ProductSchema>(
+    schema: RestrictCaps<P, AllowedCaps>,
     strategy?: S,
-  ): BoundSchema<N>
+  ): BoundSchema<P, N>
   replica(strategy?: S): BoundReplica
 }
 
@@ -356,6 +363,7 @@ export interface SubstrateNamespace<
 export function createSubstrateNamespace<
   S extends MergeStrategy,
   AllowedCaps extends string = string,
+  N extends NativeMap = UnknownNativeMap,
 >(config: {
   strategies: {
     [K in S]: {
@@ -364,15 +372,15 @@ export function createSubstrateNamespace<
     }
   }
   defaultStrategy: S
-}): SubstrateNamespace<S, AllowedCaps> {
+}): SubstrateNamespace<S, AllowedCaps, N> {
   return {
-    bind<N extends ProductSchema>(schema: N, strategy?: S): BoundSchema<N> {
+    bind<P extends ProductSchema>(schema: P, strategy?: S): BoundSchema<P, N> {
       const s = strategy ?? config.defaultStrategy
       return bind({
         schema,
         factory: config.strategies[s].factory,
         strategy: s,
-      })
+      }) as BoundSchema<P, N>
     },
     replica(strategy?: S): BoundReplica {
       const s = strategy ?? config.defaultStrategy
@@ -397,8 +405,8 @@ export function createSubstrateNamespace<
  * Passing `"collaborative"` is a compile error — plain substrates cannot
  * return `"concurrent"` from `compare()`.
  */
-export const json: SubstrateNamespace<JsonStrategy> =
-  createSubstrateNamespace<JsonStrategy>({
+export const json: SubstrateNamespace<JsonStrategy, string, PlainNativeMap> =
+  createSubstrateNamespace<JsonStrategy, string, PlainNativeMap>({
     strategies: {
       authoritative: {
         factory: () => plainSubstrateFactory,

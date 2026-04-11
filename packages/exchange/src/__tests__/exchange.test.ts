@@ -9,6 +9,8 @@ import {
   plainReplicaFactory,
   plainSubstrateFactory,
   Schema,
+  SUBSTRATE,
+  type Substrate,
   unwrap,
 } from "@kyneta/schema"
 import {
@@ -164,33 +166,31 @@ describe("Exchange", () => {
       expect(builder).toHaveBeenCalledWith({ peerId: "alice-123" })
     })
 
-    it("factory builder is called only once per unique builder (cached)", () => {
+    it("factory builder is called per use site (no caching)", () => {
       const builder = vi.fn(() => plainSubstrateFactory)
       const DocA = bind({
         schema: testSchema,
         factory: builder,
         strategy: "authoritative",
       })
-      const DocB = bind({
-        schema: otherSchema,
-        factory: builder,
-        strategy: "authoritative",
-      })
 
       const exchange = new Exchange({ identity: { peerId: "test" } })
       exchange.get("doc-1", DocA)
-      exchange.get("doc-2", DocB)
 
-      // Same builder → called only once
-      expect(builder).toHaveBeenCalledTimes(1)
+      // Builder is invoked at each use site: registerSchema (capabilities +
+      // auto-promote scan) and #interpretDoc. No WeakMap caching.
+      for (const call of builder.mock.calls as unknown as Array<
+        [{ peerId: string }]
+      >) {
+        expect(call[0]).toEqual({ peerId: "test" })
+      }
     })
 
-    it("two exchanges sharing the same BoundSchema get independent factory instances", () => {
-      const factories: any[] = []
+    it("two exchanges sharing the same BoundSchema pass their own peerId", () => {
+      const peerIds: string[] = []
       const builder = vi.fn((ctx: { peerId: string }) => {
-        const f = { ...plainSubstrateFactory, _peerId: ctx.peerId }
-        factories.push(f)
-        return f
+        peerIds.push(ctx.peerId)
+        return plainSubstrateFactory
       })
       const Doc = bind({
         schema: testSchema,
@@ -204,14 +204,11 @@ describe("Exchange", () => {
       exchangeA.get("doc-1", Doc)
       exchangeB.get("doc-1", Doc)
 
-      // Builder called twice — once per exchange
-      expect(builder).toHaveBeenCalledTimes(2)
+      // Each exchange passes its own peerId to every builder invocation
       expect(builder).toHaveBeenCalledWith({ peerId: "alice" })
       expect(builder).toHaveBeenCalledWith({ peerId: "bob" })
-
-      // Separate factory instances
-      expect(factories.length).toBe(2)
-      expect(factories[0]).not.toBe(factories[1])
+      expect(peerIds).toContain("alice")
+      expect(peerIds).toContain("bob")
     })
   })
 
@@ -291,7 +288,7 @@ describe("Exchange", () => {
     })
 
     describe("escape hatches", () => {
-      it("unwrap(ref) returns the substrate for an exchange-created doc", () => {
+      it("ref[SUBSTRATE] returns the substrate for an exchange-created doc", () => {
         const exchange = new Exchange({ identity: { peerId: "test" } })
         const doc = exchange.get("doc-1", TestDoc)
         change(doc, (d: any) => {
@@ -299,7 +296,7 @@ describe("Exchange", () => {
           d.count.set(1)
         })
 
-        const substrate = unwrap(doc)
+        const substrate = (doc as any)[SUBSTRATE] as Substrate
         expect(substrate.version()).toBeDefined()
 
         const snapshot = substrate.exportEntirety()
@@ -310,7 +307,7 @@ describe("Exchange", () => {
         })
       })
 
-      it("loro(ref) returns the LoroDoc for a Loro-backed exchange doc", () => {
+      it("unwrap(ref) returns the LoroDoc for a Loro-backed exchange doc", () => {
         const LoroDoc = loro.bind(Schema.struct({ title: Schema.text() }))
         const exchange = new Exchange({
           identity: { peerId: "test" },
@@ -318,16 +315,19 @@ describe("Exchange", () => {
         })
         const doc = exchange.get("doc-1", LoroDoc)
 
-        const loroDoc = loro.unwrap(doc)
+        const loroDoc = unwrap(doc as any)
         expect(typeof loroDoc.toJSON).toBe("function")
         expect(typeof loroDoc.getText).toBe("function")
       })
 
-      it("loro(ref) throws for a plain-backed exchange doc", () => {
+      it("unwrap(ref) returns non-LoroDoc native for a plain-backed exchange doc", () => {
         const exchange = new Exchange({ identity: { peerId: "test" } })
         const doc = exchange.get("doc-1", TestDoc)
 
-        expect(() => loro.unwrap(doc)).toThrow("not a Loro substrate")
+        const native = unwrap(doc as any)
+        expect(native).toBeDefined()
+        // Plain substrate root native is the PlainState, not a LoroDoc
+        expect((native as any).getText).toBeUndefined()
       })
     })
 

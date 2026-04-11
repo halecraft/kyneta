@@ -25,26 +25,21 @@ import type { CallableChangefeed } from "@kyneta/changefeed"
 import {
   type BoundReplica,
   type BoundSchema,
+  createRef,
   type Defer,
   type DocMetadata,
   type FactoryBuilder,
   type Interpret,
-  interpret,
   type MergeStrategy,
-  observation,
   type Ref,
   type Reject,
   type Replica,
   type ReplicaFactory,
   type ReplicaType,
   type Replicate,
-  readable,
-  registerSubstrate,
   type Schema as SchemaNode,
-  type SubstrateFactory,
   subscribe,
   type Version,
-  writable,
 } from "@kyneta/schema"
 import type {
   AnyTransport,
@@ -388,21 +383,6 @@ export class Exchange {
    */
   readonly #docQueues: Map<DocId, Promise<void>> = new Map()
 
-  /**
-   * Per-exchange factory cache. Each FactoryBuilder is called at most once
-   * per exchange, and the resulting SubstrateFactory is cached here.
-   *
-   * This ensures:
-   * 1. A BoundSchema shared across multiple exchanges gets a fresh factory
-   *    per exchange (with the correct peerId).
-   * 2. Multiple documents using the same BoundSchema within one exchange
-   *    share the same factory instance.
-   */
-  readonly #factoryCache = new WeakMap<
-    FactoryBuilder<any>,
-    SubstrateFactory<any>
-  >()
-
   constructor({
     identity = {},
     transports = [],
@@ -458,7 +438,8 @@ export class Exchange {
     this.#capabilities = createCapabilities({
       schemas,
       replicas: [...replicas],
-      resolveFactory: this.#resolveFactory.bind(this),
+      resolveFactory: (builder: FactoryBuilder<any>) =>
+        builder({ peerId: this.peerId }),
     })
 
     // Create synchronizer — call each factory to produce fresh adapter instances.
@@ -585,25 +566,6 @@ export class Exchange {
     }
   }
 
-  // =========================================================================
-  // PRIVATE — Factory resolution
-  // =========================================================================
-
-  /**
-   * Resolve a FactoryBuilder to a SubstrateFactory, caching per-exchange.
-   *
-   * The builder is called with `{ peerId: this.peerId }` on first use.
-   * Subsequent calls with the same builder return the cached factory.
-   */
-  #resolveFactory(builder: FactoryBuilder<any>): SubstrateFactory<any> {
-    let factory = this.#factoryCache.get(builder)
-    if (!factory) {
-      factory = builder({ peerId: this.peerId })
-      this.#factoryCache.set(builder, factory)
-    }
-    return factory
-  }
-
   /**
    * Internal document creation — creates an interpreted doc without
    * registering the schema in the auto-resolve set.
@@ -618,7 +580,7 @@ export class Exchange {
     peer: PeerIdentityDetails,
     origin: DocCreatedOrigin,
   ): any {
-    const factory = this.#resolveFactory(bound.factory)
+    const factory = bound.factory({ peerId: this.peerId })
     const replicaType = factory.replica.replicaType
     if (!this.#capabilities.supportsReplicaType(replicaType)) {
       throw new Error(
@@ -629,13 +591,8 @@ export class Exchange {
     // ── Shared prefix: create substrate, build ref, wire metadata ──
     const substrate = factory.create(bound.schema)
 
-    const ref: any = (interpret as any)(bound.schema, substrate.context())
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done()
+    const ref: any = createRef(bound.schema, substrate)
 
-    registerSubstrate(ref, substrate)
     registerSync(ref, {
       peerId: this.peerId,
       docId,
@@ -1210,10 +1167,12 @@ export class Exchange {
    * @param bound - A BoundSchema to register
    */
   registerSchema(bound: BoundSchema): void {
-    this.#capabilities.registerSchema(bound, this.#resolveFactory.bind(this))
+    this.#capabilities.registerSchema(bound, builder =>
+      builder({ peerId: this.peerId }),
+    )
 
     // Auto-promote deferred docs that match the newly registered schema
-    const factory = this.#resolveFactory(bound.factory)
+    const factory = bound.factory({ peerId: this.peerId })
     const replicaType = factory.replica.replicaType
     for (const [docId, entry] of this.#docCache) {
       if (entry.mode !== "deferred") continue

@@ -1,8 +1,20 @@
-import { change, RawPath, Schema } from "@kyneta/schema"
+import {
+  change,
+  createRef,
+  exportEntirety,
+  RawPath,
+  Schema,
+  unwrap,
+} from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
 import { yjs } from "../bind-yjs.js"
-import { createYjsDoc } from "../create.js"
+
+// ===========================================================================
+// Helper — createDoc using the generic API
+// ===========================================================================
+
+import { createDoc } from "@kyneta/schema"
 
 // ===========================================================================
 // Schemas used across tests
@@ -83,8 +95,7 @@ describe("yjs.bind", () => {
         d.title.insert(0, "Snap")
         d.count.set(42)
       })
-      const substrate1 = (unwrap as any)(doc1)
-      const snapshot = substrate1.exportEntirety()
+      const snapshot = exportEntirety(doc1)
 
       // Restore
       const substrate2 = factory.fromEntirety(snapshot, SimpleSchema)
@@ -117,8 +128,12 @@ describe("yjs.bind", () => {
       const _s2 = factory.create(SimpleSchema)
 
       // Both docs should have the same clientID
-      const doc1 = yjs.unwrap(createYjsDocFromFactory(factory, SimpleSchema))
-      const doc2 = yjs.unwrap(createYjsDocFromFactory(factory, SimpleSchema))
+      const doc1 = unwrap(
+        createYjsDocFromFactory(factory, SimpleSchema),
+      ) as Y.Doc
+      const doc2 = unwrap(
+        createYjsDocFromFactory(factory, SimpleSchema),
+      ) as Y.Doc
 
       expect(doc1.clientID).toBe(doc2.clientID)
     })
@@ -128,8 +143,12 @@ describe("yjs.bind", () => {
       const factory1 = bound.factory({ peerId: "peer-alpha" })
       const factory2 = bound.factory({ peerId: "peer-beta" })
 
-      const doc1 = yjs.unwrap(createYjsDocFromFactory(factory1, SimpleSchema))
-      const doc2 = yjs.unwrap(createYjsDocFromFactory(factory2, SimpleSchema))
+      const doc1 = unwrap(
+        createYjsDocFromFactory(factory1, SimpleSchema),
+      ) as Y.Doc
+      const doc2 = unwrap(
+        createYjsDocFromFactory(factory2, SimpleSchema),
+      ) as Y.Doc
 
       expect(doc1.clientID).not.toBe(doc2.clientID)
     })
@@ -137,7 +156,9 @@ describe("yjs.bind", () => {
     it("clientID is a valid uint32", () => {
       const bound = yjs.bind(SimpleSchema)
       const factory = bound.factory({ peerId: "test-peer-id-12345" })
-      const doc = yjs.unwrap(createYjsDocFromFactory(factory, SimpleSchema))
+      const doc = unwrap(
+        createYjsDocFromFactory(factory, SimpleSchema),
+      ) as Y.Doc
 
       expect(typeof doc.clientID).toBe("number")
       expect(doc.clientID).toBeGreaterThanOrEqual(0)
@@ -151,61 +172,70 @@ describe("yjs.bind", () => {
       // Simulate two separate "sessions" — both should hash to the same value
       const bound1 = yjs.bind(SimpleSchema)
       const factory1 = bound1.factory({ peerId })
-      const doc1 = yjs.unwrap(createYjsDocFromFactory(factory1, SimpleSchema))
+      const doc1 = unwrap(
+        createYjsDocFromFactory(factory1, SimpleSchema),
+      ) as Y.Doc
 
       const bound2 = yjs.bind(SimpleSchema)
       const factory2 = bound2.factory({ peerId })
-      const doc2 = yjs.unwrap(createYjsDocFromFactory(factory2, SimpleSchema))
+      const doc2 = unwrap(
+        createYjsDocFromFactory(factory2, SimpleSchema),
+      ) as Y.Doc
 
       expect(doc1.clientID).toBe(doc2.clientID)
     })
   })
 
   // -------------------------------------------------------------------------
-  // yjs() escape hatch
+  // unwrap() escape hatch
   // -------------------------------------------------------------------------
 
-  describe("yjs.unwrap() escape hatch", () => {
-    it("returns the underlying Y.Doc from a createYjsDoc ref", () => {
-      const doc = createYjsDoc(SimpleSchema)
+  describe("unwrap() escape hatch", () => {
+    it("returns the underlying Y.Doc from a createDoc ref", () => {
+      const doc = createDoc(yjs.bind(SimpleSchema))
       change(doc, (d: any) => {
         d.title.insert(0, "Escape")
         d.count.set(0)
       })
-      const yjsDoc = yjs.unwrap(doc)
+      const yjsDoc = unwrap(doc) as Y.Doc
 
       expect(yjsDoc).toBeInstanceOf(Y.Doc)
       expect(yjsDoc.getMap("root").get("count")).toBe(0)
     })
 
     it("returns a Y.Doc with the correct root map state", () => {
-      const doc = createYjsDoc(SimpleSchema)
+      const doc = createDoc(yjs.bind(SimpleSchema))
       change(doc, (d: any) => {
         d.title.insert(0, "Hello")
         d.count.set(42)
       })
-      const yjsDoc = yjs.unwrap(doc)
+      const yjsDoc = unwrap(doc) as Y.Doc
       const rootMap = yjsDoc.getMap("root")
 
       expect((rootMap.get("title") as Y.Text).toJSON()).toBe("Hello")
       expect(rootMap.get("count")).toBe(42)
     })
 
-    it("throws for non-Yjs refs (plain object)", () => {
-      expect(() => yjs.unwrap({})).toThrow("yjs.unwrap() requires a ref")
+    it("returns undefined for non-refs (plain object)", () => {
+      expect(unwrap({} as any)).toBeUndefined()
     })
 
-    it("throws for non-Yjs refs (random object with properties)", () => {
+    it("returns undefined for non-refs (random object with properties)", () => {
       const fake = {
         title: () => "fake",
         count: () => 0,
       }
-      expect(() => yjs.unwrap(fake)).toThrow("yjs.unwrap() requires a ref")
+      expect(unwrap(fake as any)).toBeUndefined()
+    })
+
+    it("throws for primitives", () => {
+      expect(() => unwrap(null as any)).toThrow("unwrap() requires a ref")
+      expect(() => unwrap(undefined as any)).toThrow("unwrap() requires a ref")
     })
 
     it("mutations through escape hatch are visible via kyneta ref", () => {
-      const doc = createYjsDoc(SimpleSchema)
-      const yjsDoc = yjs.unwrap(doc)
+      const doc = createDoc(yjs.bind(SimpleSchema))
+      const yjsDoc = unwrap(doc) as Y.Doc
 
       // Mutate via raw Yjs
       yjsDoc.getMap("root").set("count", 99)
@@ -213,11 +243,11 @@ describe("yjs.bind", () => {
     })
 
     it("text mutations through escape hatch are visible", () => {
-      const doc = createYjsDoc(SimpleSchema)
+      const doc = createDoc(yjs.bind(SimpleSchema))
       change(doc, (d: any) => {
         d.title.insert(0, "Hello")
       })
-      const yjsDoc = yjs.unwrap(doc)
+      const yjsDoc = unwrap(doc) as Y.Doc
 
       const text = yjsDoc.getMap("root").get("title") as Y.Text
       text.insert(5, " World")
@@ -231,14 +261,6 @@ describe("yjs.bind", () => {
 // ===========================================================================
 
 import type { Schema as SchemaType, SubstrateFactory } from "@kyneta/schema"
-import {
-  interpret,
-  observation,
-  readable,
-  registerSubstrate,
-  unwrap,
-  writable,
-} from "@kyneta/schema"
 
 /**
  * Helper to create a kyneta ref from a factory (mimicking what exchange.get does).
@@ -249,16 +271,5 @@ function createYjsDocFromFactory(
   schema: SchemaType,
 ): any {
   const substrate = factory.create(schema)
-  const doc: any = (interpret as any)(schema, substrate.context())
-    .with(readable)
-    .with(writable)
-    .with(observation)
-    .done()
-
-  // Register for escape hatch — createYjsSubstrate already registered
-  // substrate → Y.Doc internally, but we also need ref → substrate
-  // for unwrap() (used by the yjs() escape hatch).
-  registerSubstrate(doc, substrate)
-
-  return doc
+  return createRef(schema, substrate)
 }

@@ -12,21 +12,18 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-import type {
-  Ref,
-  RRef,
-} from "../../src/index.js"
 import { hasChangefeed } from "@kyneta/changefeed"
+import type { Ref, RRef } from "../../src/index.js"
 import {
   applyChanges,
   change,
-  observation,
   describe,
   formatPath,
   hasComposedChangefeed,
   hasTransact,
   incrementChange,
   interpret,
+  observation,
   plainContext,
   plainSubstrateFactory,
   RawPath,
@@ -131,7 +128,10 @@ log(`
     doc.stars() → ${doc.stars()}
     doc.tasks.length → ${doc.tasks.length}
     doc.settings.darkMode() → ${doc.settings.darkMode()}
-    doc.labels.keys() → [${doc.labels.keys().map((k: string) => `"${k}"`).join(", ")}]
+    doc.labels.keys() → [${doc.labels
+      .keys()
+      .map((k: string) => `"${k}"`)
+      .join(", ")}]
 `)
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -172,7 +172,10 @@ log(`
 
 {
   const roStore = doc() as Record<string, unknown>
-  const roDoc: RRef<typeof ProjectSchema> = interpret(ProjectSchema, plainContext(roStore))
+  const roDoc: RRef<typeof ProjectSchema> = interpret(
+    ProjectSchema,
+    plainContext(roStore),
+  )
     .with(readable)
     .done()
 
@@ -204,7 +207,9 @@ log(`
     doc.tasks.at(0) === doc.tasks.at(0) → ${doc.tasks.at(0) === doc.tasks.at(0)}
 
     Namespace isolation — only schema fields appear:
-    Object.keys(doc) → [${Object.keys(doc).map(k => `"${k}"`).join(", ")}]
+    Object.keys(doc) → [${Object.keys(doc)
+      .map(k => `"${k}"`)
+      .join(", ")}]
 
     Symbol-keyed hooks (CALL, INVALIDATE, TRANSACT, CHANGEFEED)
     are invisible to Object.keys, JSON.stringify, and for..in.
@@ -236,7 +241,9 @@ log(`
 `)
 
 // Demonstrate TRANSACT discovery
-const ops = change(doc, d => { d.stars.increment(1) })
+const ops = change(doc, d => {
+  d.stars.increment(1)
+})
 
 log(`
     change(doc, d => d.stars.increment(1)) → ${ops.length} op
@@ -256,9 +263,15 @@ log(`
 `)
 
 // stepText
-const text1 = stepText("Hello", textChange([{ retain: 5 }, { insert: " World" }]))
+const text1 = stepText(
+  "Hello",
+  textChange([{ retain: 5 }, { insert: " World" }]),
+)
 const text2 = stepText(text1, textChange([{ insert: "¡" }]))
-const text3 = stepText(text2, textChange([{ retain: text2.length }, { insert: "!" }]))
+const text3 = stepText(
+  text2,
+  textChange([{ retain: text2.length }, { insert: "!" }]),
+)
 
 log(`
     stepText("Hello",  [retain 5, insert " World"]) → "${text1}"
@@ -272,7 +285,9 @@ const seq = stepSequence(
   sequenceChange([{ retain: 1 }, { insert: [10, 20] }, { delete: 1 }]),
 )
 
-log(`    stepSequence([1,2,3,4,5], [retain 1, insert [10,20], delete 1]) → [${seq.join(", ")}]`)
+log(
+  `    stepSequence([1,2,3,4,5], [retain 1, insert [10,20], delete 1]) → [${seq.join(", ")}]`,
+)
 
 // stepIncrement
 const c1 = stepIncrement(42, incrementChange(8))
@@ -301,8 +316,11 @@ log(`
   const roSubstrate = plainSubstrateFactory.create(ProjectSchema)
 
   const pureReadOnly: RRef<typeof ProjectSchema> = interpret(
-    ProjectSchema, roSubstrate.context(),
-  ).with(readable).done()
+    ProjectSchema,
+    roSubstrate.context(),
+  )
+    .with(readable)
+    .done()
 
   log(`
     readable only:
@@ -315,17 +333,29 @@ log(`
   const replicaSub = plainSubstrateFactory.create(ProjectSchema)
 
   const replicaDoc: Ref<typeof ProjectSchema> = interpret(
-    ProjectSchema, replicaSub.context(),
-  ).with(readable).with(writable).with(observation).done() as any
+    ProjectSchema,
+    replicaSub.context(),
+  )
+    .with(readable)
+    .with(writable)
+    .with(observation)
+    .done() as any
 
   const events: string[] = []
   subscribe(replicaDoc, cs => {
     for (const e of cs.changes) events.push(formatPath(e.path))
   })
 
-  applyChanges(replicaDoc, [
-    { path: RawPath.empty.field("name"), change: textChange([{ insert: "✨ " }]) },
-  ], { origin: "external" })
+  applyChanges(
+    replicaDoc,
+    [
+      {
+        path: RawPath.empty.field("name"),
+        change: textChange([{ insert: "✨ " }]),
+      },
+    ],
+    { origin: "external" },
+  )
 
   log(`
     readable + writable + changefeed (reactive replica):
@@ -358,12 +388,24 @@ log(`
 
 {
   const subA = plainSubstrateFactory.create(ProjectSchema)
-  const docA: Ref<typeof ProjectSchema> = interpret(ProjectSchema, subA.context())
-    .with(readable).with(writable).with(observation).done() as any
+  const docA: Ref<typeof ProjectSchema> = interpret(
+    ProjectSchema,
+    subA.context(),
+  )
+    .with(readable)
+    .with(writable)
+    .with(observation)
+    .done() as any
 
   const subB = plainSubstrateFactory.create(ProjectSchema)
-  const docB: Ref<typeof ProjectSchema> = interpret(ProjectSchema, subB.context())
-    .with(readable).with(writable).with(observation).done() as any
+  const docB: Ref<typeof ProjectSchema> = interpret(
+    ProjectSchema,
+    subB.context(),
+  )
+    .with(readable)
+    .with(writable)
+    .with(observation)
+    .done() as any
 
   const syncOps = change(docA, d => {
     d.name.insert(d.name().length, " (synced)")

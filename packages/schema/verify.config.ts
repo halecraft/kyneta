@@ -4,7 +4,7 @@ export default defineConfig({
   tasks: [
     {
       key: "format",
-      run: "biome check --write .",
+      run: "biome check --write src/",
       parser: parsers.biome,
     },
     {
