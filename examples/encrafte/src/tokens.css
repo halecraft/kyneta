@@ -1,0 +1,219 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+ *
+ *   Encrafte — Design Tokens
+ *
+ *   Architecture (three layers):
+ *
+ *     1. Scale layer    — Raw Radix Colors values (violet + mauve)
+ *                         defined per-theme on :root / [data-theme]
+ *
+ *     2. Semantic layer — Intention-based aliases (--color-bg-canvas, etc.)
+ *                         reference scale vars, so they auto-adapt to theme
+ *
+ *     3. Theme switch   — [data-theme="light|dark"] on <html> is primary;
+ *                         @media (prefers-color-scheme) is the fallback
+ *
+ *   Color palette: Radix violet (accent) + mauve (gray, natural pairing)
+ *
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. Scale: Light (default) ──────────────────────────────────────────── */
+
+:root,
+[data-theme="light"] {
+  --violet-1: #fdfcfe;
+  --violet-2: #faf8ff;
+  --violet-3: #f4f0fe;
+  --violet-4: #ebe4ff;
+  --violet-5: #e1d9ff;
+  --violet-6: #d4cafe;
+  --violet-7: #c2b5f5;
+  --violet-8: #aa99ec;
+  --violet-9: #6e56cf;
+  --violet-10: #654dc4;
+  --violet-11: #6550b9;
+  --violet-12: #2f265f;
+
+  --mauve-1: #fdfcfd;
+  --mauve-2: #faf9fb;
+  --mauve-3: #f2eff3;
+  --mauve-4: #eae7ec;
+  --mauve-5: #e3dfe6;
+  --mauve-6: #dbd8e0;
+  --mauve-7: #d0cdd7;
+  --mauve-8: #bcbac7;
+  --mauve-9: #8e8c99;
+  --mauve-10: #84828e;
+  --mauve-11: #65636d;
+  --mauve-12: #211f26;
+}
+
+/* ── 2. Scale: Dark ─────────────────────────────────────────────────────── */
+
+[data-theme="dark"] {
+  --violet-1: #14121f;
+  --violet-2: #1b1525;
+  --violet-3: #291f43;
+  --violet-4: #33255b;
+  --violet-5: #3c2e69;
+  --violet-6: #473876;
+  --violet-7: #56468b;
+  --violet-8: #6958ad;
+  --violet-9: #6e56cf;
+  --violet-10: #7d66d9;
+  --violet-11: #baa7ff;
+  --violet-12: #e2ddfe;
+
+  --mauve-1: #121113;
+  --mauve-2: #1a191b;
+  --mauve-3: #232225;
+  --mauve-4: #2b292d;
+  --mauve-5: #323035;
+  --mauve-6: #3c393f;
+  --mauve-7: #49474e;
+  --mauve-8: #625f69;
+  --mauve-9: #6f6d78;
+  --mauve-10: #7c7a85;
+  --mauve-11: #b5b2bc;
+  --mauve-12: #eeeef0;
+}
+
+/* ── 3. Fallback: prefers-color-scheme ──────────────────────────────────── */
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --violet-1: #14121f;
+    --violet-2: #1b1525;
+    --violet-3: #291f43;
+    --violet-4: #33255b;
+    --violet-5: #3c2e69;
+    --violet-6: #473876;
+    --violet-7: #56468b;
+    --violet-8: #6958ad;
+    --violet-9: #6e56cf;
+    --violet-10: #7d66d9;
+    --violet-11: #baa7ff;
+    --violet-12: #e2ddfe;
+
+    --mauve-1: #121113;
+    --mauve-2: #1a191b;
+    --mauve-3: #232225;
+    --mauve-4: #2b292d;
+    --mauve-5: #323035;
+    --mauve-6: #3c393f;
+    --mauve-7: #49474e;
+    --mauve-8: #625f69;
+    --mauve-9: #6f6d78;
+    --mauve-10: #7c7a85;
+    --mauve-11: #b5b2bc;
+    --mauve-12: #eeeef0;
+  }
+}
+
+/* ── 4. Semantic tokens ─────────────────────────────────────────────────── */
+
+:root {
+  /* Backgrounds */
+  --color-bg-canvas: var(--mauve-1);
+  --color-bg-surface: var(--mauve-2);
+  --color-bg-subtle: var(--mauve-3);
+  --color-bg-muted: var(--mauve-4);
+
+  /* Foregrounds */
+  --color-fg-default: var(--mauve-12);
+  --color-fg-muted: var(--mauve-11);
+  --color-fg-subtle: var(--mauve-9);
+
+  /* Borders */
+  --color-border-default: var(--mauve-6);
+  --color-border-subtle: var(--mauve-4);
+
+  /* Accent: solid variant */
+  --color-accent-solid-bg: var(--violet-9);
+  --color-accent-solid-fg: white;
+  --color-accent-solid-bg-hover: var(--violet-10);
+
+  /* Accent: subtle variant */
+  --color-accent-subtle-bg: var(--violet-3);
+  --color-accent-subtle-fg: var(--violet-11);
+
+  /* Accent: outline variant */
+  --color-accent-outline-border: var(--violet-7);
+  --color-accent-outline-fg: var(--violet-11);
+
+  /* Accent: surface variant */
+  --color-accent-surface-bg: var(--violet-2);
+  --color-accent-surface-border: var(--violet-6);
+
+  /* Accent: plain variant */
+  --color-accent-plain-fg: var(--violet-11);
+}
+
+/* ── 5. Sizing ──────────────────────────────────────────────────────────── */
+
+:root {
+  --size-2xs: 20px;
+  --size-xs: 32px;
+  --size-sm: 36px;
+  --size-md: 40px;
+  --size-lg: 44px;
+  --size-xl: 48px;
+  --size-2xl: 56px;
+}
+
+/* ── 6. Border radius ──────────────────────────────────────────────────── */
+
+:root {
+  --radius-l1: 4px;
+  --radius-l2: 6px;
+  --radius-l3: 8px;
+  --radius-full: 9999px;
+}
+
+/* ── 7. Shadows ─────────────────────────────────────────────────────────── */
+
+:root {
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.06), 0 2px 4px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.08), 0 4px 6px rgba(0, 0, 0, 0.04);
+  --shadow-xl: 0 20px 25px rgba(0, 0, 0, 0.1), 0 8px 10px rgba(0, 0, 0, 0.04);
+}
+
+/* ── 8. Typography ──────────────────────────────────────────────────────── */
+
+:root {
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+  --font-mono: "SF Mono", "Fira Code", "Fira Mono", "JetBrains Mono", monospace;
+
+  --font-size-xs: 11px;
+  --font-size-sm: 13px;
+  --font-size-md: 15px;
+  --font-size-lg: 17px;
+  --font-size-xl: 20px;
+}
+
+/* ── 9. Global reset ────────────────────────────────────────────────────── */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--color-bg-canvas);
+  color: var(--color-fg-default);
+  -webkit-font-smoothing: antialiased;
+}

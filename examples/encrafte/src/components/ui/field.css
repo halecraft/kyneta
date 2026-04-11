@@ -1,0 +1,54 @@
+/* Field — styled wrapper for @ark-ui/react/field */
+
+[data-scope="field"][data-part="root"] {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+[data-scope="field"][data-part="label"] {
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--color-fg-default);
+}
+
+[data-scope="field"][data-part="input"] {
+  height: var(--size-md);
+  padding: 0 12px;
+  font-size: var(--font-size-sm);
+  font-family: inherit;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-l2);
+  background: var(--color-bg-canvas);
+  color: var(--color-fg-default);
+  outline: none;
+  width: 100%;
+  transition: border-color 0.15s;
+}
+
+[data-scope="field"][data-part="input"]:focus {
+  border-color: var(--color-accent-solid-bg);
+  box-shadow: 0 0 0 1px var(--color-accent-solid-bg);
+}
+
+[data-scope="field"][data-part="input"]::placeholder {
+  color: var(--color-fg-subtle);
+}
+
+[data-scope="field"][data-part="input"][data-invalid] {
+  border-color: #e5484d;
+}
+
+[data-scope="field"][data-part="input"][data-invalid]:focus {
+  box-shadow: 0 0 0 1px #e5484d;
+}
+
+[data-scope="field"][data-part="helper-text"] {
+  font-size: var(--font-size-xs);
+  color: var(--color-fg-muted);
+}
+
+[data-scope="field"][data-part="error-text"] {
+  font-size: var(--font-size-xs);
+  color: #e5484d;
+}

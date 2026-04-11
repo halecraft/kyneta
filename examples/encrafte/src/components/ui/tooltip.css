@@ -1,0 +1,35 @@
+/* Tooltip — styled wrapper for @ark-ui/react/tooltip */
+
+[data-scope="tooltip"][data-part="positioner"] {
+  z-index: 50;
+}
+
+[data-scope="tooltip"][data-part="content"] {
+  background: var(--color-fg-default);
+  color: var(--color-bg-canvas);
+  border-radius: var(--radius-l1);
+  padding: 6px 10px;
+  font-size: var(--font-size-xs);
+  box-shadow: var(--shadow-md);
+  max-width: 240px;
+  opacity: 0;
+  transform: translateY(2px);
+  transition:
+    opacity 150ms ease,
+    transform 150ms ease;
+}
+
+[data-scope="tooltip"][data-part="content"][data-state="open"] {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+[data-scope="tooltip"][data-part="content"][data-state="closed"] {
+  opacity: 0;
+  transform: translateY(2px);
+}
+
+[data-scope="tooltip"][data-part="arrow"] {
+  --arrow-size: 8px;
+  --arrow-background: var(--color-fg-default);
+}

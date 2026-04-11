@@ -1,47 +1,11 @@
 /* ═══════════════════════════════════════════════════════════════════════════
  *
- *   Encrafte — Styles
+ *   Encrafte — App Styles
  *
- *   Minimal dark theme. Full-height app with scrollable message list
- *   and input bar pinned to the bottom.
+ *   Layout and component styles. All colors, sizes, and typography
+ *   reference design tokens from tokens.css.
  *
  * ═══════════════════════════════════════════════════════════════════════════ */
-
-:root {
-  --bg: #0e0e10;
-  --bg-surface: #18181b;
-  --bg-hover: #222226;
-  --border: #2e2e32;
-  --text: #e4e4e7;
-  --text-muted: #71717a;
-  --accent: #8b5cf6;
-  --accent-dim: #6d28d9;
-  --own-bg: #1e1b4b;
-  --radius: 8px;
-}
-
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
-
-html,
-body,
-#root {
-  height: 100%;
-}
-
-body {
-  font-family:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
-    Arial, sans-serif;
-  background: var(--bg);
-  color: var(--text);
-  -webkit-font-smoothing: antialiased;
-}
 
 /* ── App layout ─────────────────────────────────────────────────────────── */
 
@@ -60,22 +24,22 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 16px 20px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--color-border-default);
 }
 
 .header h1 {
-  font-size: 18px;
+  font-size: var(--font-size-lg);
   font-weight: 600;
   letter-spacing: 0.02em;
 }
 
 .peer-id {
-  font-family: "SF Mono", "Fira Code", "Fira Mono", monospace;
-  font-size: 12px;
-  color: var(--text-muted);
-  background: var(--bg-surface);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-fg-muted);
+  background: var(--color-bg-surface);
   padding: 4px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-l1);
 }
 
 /* ── Messages ───────────────────────────────────────────────────────────── */
@@ -90,10 +54,10 @@ body {
 }
 
 .empty-state {
-  color: var(--text-muted);
+  color: var(--color-fg-muted);
   text-align: center;
   margin-top: 40vh;
-  font-size: 14px;
+  font-size: var(--font-size-sm);
   line-height: 1.6;
 }
 
@@ -102,30 +66,30 @@ body {
   flex-direction: column;
   gap: 2px;
   padding: 8px 12px;
-  border-radius: var(--radius);
-  background: var(--bg-surface);
+  border-radius: var(--radius-l3);
+  background: var(--color-bg-surface);
   max-width: 80%;
 }
 
 .message--own {
   align-self: flex-end;
-  background: var(--own-bg);
+  background: var(--violet-3);
 }
 
 .message-author {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
-  color: var(--text-muted);
+  color: var(--color-fg-muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
 .message--own .message-author {
-  color: var(--accent);
+  color: var(--violet-11);
 }
 
 .message-content {
-  font-size: 14px;
+  font-size: var(--font-size-sm);
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
@@ -137,42 +101,109 @@ body {
   display: flex;
   gap: 8px;
   padding: 16px 20px;
-  border-top: 1px solid var(--border);
-  background: var(--bg);
+  border-top: 1px solid var(--color-border-default);
+  background: var(--color-bg-canvas);
 }
 
 .input-bar input {
   flex: 1;
-  padding: 10px 14px;
-  font-size: 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-surface);
-  color: var(--text);
+  height: var(--size-md);
+  padding: 0 14px;
+  font-size: var(--font-size-sm);
+  font-family: inherit;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-l2);
+  background: var(--color-bg-surface);
+  color: var(--color-fg-default);
   outline: none;
   transition: border-color 0.15s;
 }
 
 .input-bar input:focus {
-  border-color: var(--accent);
+  border-color: var(--color-accent-solid-bg);
+  box-shadow: 0 0 0 1px var(--color-accent-solid-bg);
 }
 
 .input-bar input::placeholder {
-  color: var(--text-muted);
+  color: var(--color-fg-subtle);
 }
 
 .input-bar button {
-  padding: 10px 20px;
-  font-size: 14px;
+  height: var(--size-md);
+  padding: 0 20px;
+  font-size: var(--font-size-sm);
   font-weight: 600;
+  font-family: inherit;
   border: none;
-  border-radius: var(--radius);
-  background: var(--accent);
-  color: white;
+  border-radius: var(--radius-l2);
+  background: var(--color-accent-solid-bg);
+  color: var(--color-accent-solid-fg);
   cursor: pointer;
   transition: background 0.15s;
 }
 
 .input-bar button:hover {
-  background: var(--accent-dim);
+  background: var(--color-accent-solid-bg-hover);
+}
+
+/* ── Buttons (shared) ───────────────────────────────────────────────────── */
+
+.btn-solid {
+  height: var(--size-md);
+  padding: 0 16px;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  font-family: inherit;
+  border: none;
+  border-radius: var(--radius-l2);
+  background: var(--color-accent-solid-bg);
+  color: var(--color-accent-solid-fg);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn-solid:hover {
+  background: var(--color-accent-solid-bg-hover);
+}
+
+.btn-outline {
+  height: var(--size-md);
+  padding: 0 16px;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  font-family: inherit;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-l2);
+  background: transparent;
+  color: var(--color-fg-default);
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.btn-outline:hover {
+  background: var(--color-bg-subtle);
+  border-color: var(--color-border-default);
+}
+
+.btn-plain {
+  height: var(--size-md);
+  padding: 0 12px;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  font-family: inherit;
+  border: none;
+  border-radius: var(--radius-l2);
+  background: transparent;
+  color: var(--color-fg-muted);
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.btn-plain:hover {
+  background: var(--color-bg-subtle);
+  color: var(--color-fg-default);
 }
