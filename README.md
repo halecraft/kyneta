@@ -134,7 +134,7 @@ A plain JS substrate is built into `@kyneta/schema` — no external package need
 
 | Package | Description | Tests |
 |---------|-------------|-------|
-| [`@kyneta/index`](./packages/index) | Catalog, secondary indexes, and reactive joins over document collections. | 90 |
+| [`@kyneta/index`](./packages/index) | DBSP-grounded reactive indexing — Source, Collection, Index over ℤ-set algebra. | 112 |
 
 ### Bindings
 
