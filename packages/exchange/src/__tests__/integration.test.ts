@@ -18,7 +18,7 @@ import {
   Schema,
 } from "@kyneta/schema"
 import { Bridge, createBridgeTransport } from "@kyneta/transport"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { Exchange } from "../exchange.js"
 import { sync } from "../sync.js"
@@ -728,6 +728,7 @@ describe("dismiss", () => {
     const bridge = new Bridge()
     let dismissedDocId: string | undefined
     let dismissedPeerId: string | undefined
+    let dismissedOrigin: string | undefined
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
@@ -737,9 +738,10 @@ describe("dismiss", () => {
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
-      onDocDismissed: (docId, peer) => {
+      onDocDismissed: (docId, peer, origin) => {
         dismissedDocId = docId
         dismissedPeerId = peer.peerId
+        dismissedOrigin = origin
       },
     })
 
@@ -756,6 +758,26 @@ describe("dismiss", () => {
 
     expect(dismissedDocId).toBe("shared-doc")
     expect(dismissedPeerId).toBe("alice")
+    expect(dismissedOrigin).toBe("remote")
+  })
+
+  it("local dismiss() fires onDocDismissed with origin 'local'", async () => {
+    const dismissSpy = vi.fn()
+
+    const exchange = createExchange({
+      identity: { peerId: "alice" },
+    })
+
+    exchange.register({ onDocDismissed: dismissSpy })
+
+    exchange.get("local-doc", SequentialDoc)
+    exchange.dismiss("local-doc")
+
+    expect(dismissSpy).toHaveBeenCalledWith(
+      "local-doc",
+      expect.objectContaining({ peerId: "alice" }),
+      "local",
+    )
   })
 
   it("dismiss removes doc locally and stops sync", async () => {

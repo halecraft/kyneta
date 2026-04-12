@@ -10,8 +10,8 @@
 // Ported from @loro-extended/repo's Synchronizer with Loro-specific types
 // replaced by substrate-agnostic equivalents.
 
-import type { CallableChangefeed, Changeset } from "@kyneta/changefeed"
-import { createCallable, createChangefeed } from "@kyneta/changefeed"
+import type { ReactiveMap, ReactiveMapHandle } from "@kyneta/changefeed"
+import { createReactiveMap } from "@kyneta/changefeed"
 import type {
   DocMetadata,
   MergeStrategy,
@@ -93,12 +93,16 @@ export type DocCreationCallback = (
 ) => void
 
 /**
- * Callback invoked when a peer sends a `dismiss` message for a document.
+ * Callback invoked when a document is dismissed.
  * The Exchange wraps the user's `onDocDismissed` callback.
+ *
+ * @param origin - `"remote"` when a peer sends a dismiss message;
+ *   `"local"` when the local exchange calls `dismiss()`.
  */
 export type DocDismissedCallback = (
   docId: DocId,
   peer: PeerIdentityDetails,
+  origin: "local" | "remote",
 ) => void
 
 /**
@@ -267,8 +271,7 @@ export class Synchronizer {
 
   // Peer lifecycle — event accumulation and changefeed
   #pendingPeerEvents: PeerChange[] = []
-  #peerMap: Map<PeerId, PeerIdentityDetails> = new Map()
-  #emitPeerEvents: ((changeset: Changeset<PeerChange>) => void) | null = null
+  #peerHandle: ReactiveMapHandle<PeerId, PeerIdentityDetails, PeerChange> | null = null
 
   // Event emitter for ready state changes
   readonly #readyStateListeners = new Set<
@@ -651,16 +654,14 @@ export class Synchronizer {
     await this.transports.shutdown()
   }
 
-  createPeerFeed(): CallableChangefeed<
-    ReadonlyMap<PeerId, PeerIdentityDetails>,
-    PeerChange
-  > {
-    const [feed, emit] = createChangefeed<
-      ReadonlyMap<PeerId, PeerIdentityDetails>,
+  createPeerFeed(): ReactiveMap<PeerId, PeerIdentityDetails, PeerChange> {
+    const [feed, handle] = createReactiveMap<
+      PeerId,
+      PeerIdentityDetails,
       PeerChange
-    >(() => this.#peerMap)
-    this.#emitPeerEvents = emit
-    return createCallable(feed)
+    >()
+    this.#peerHandle = handle
+    return feed
   }
 
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -817,7 +818,7 @@ export class Synchronizer {
       case "cmd/notify-doc-dismissed":
         // Fire-and-forget: the Exchange's onDocDismissed callback
         // handles application-level cleanup (e.g. exchange.dismiss()).
-        this.#docDismissedCallback?.(command.docId, command.peer)
+        this.#docDismissedCallback?.(command.docId, command.peer, "remote")
         break
 
       case "cmd/dispatch":
@@ -1060,7 +1061,7 @@ export class Synchronizer {
    * Drain accumulated peer lifecycle events at quiescence.
    *
    * Follows the snapshot-then-clear pattern: snapshot the pending events,
-   * reset the field, then rebuild #peerMap from the model and emit.
+   * reset the field, then rebuild the peer map from the model and emit.
    * The field is clean before any subscriber code runs.
    *
    * Context: jj:qpurktzy (peer lifecycle feed)
@@ -1071,29 +1072,27 @@ export class Synchronizer {
 
     if (events.length === 0) return
 
-    // Rebuild #peerMap from model (single source of truth at quiescence)
-    this.#peerMap = new Map(
-      Array.from(this.model.peers).map(([peerId, peerState]) => [
-        peerId,
-        peerState.identity,
-      ]),
-    )
+    // Rebuild peer map from model (single source of truth at quiescence)
+    this.#peerHandle!.clear()
+    for (const [peerId, peerState] of this.model.peers) {
+      this.#peerHandle!.set(peerId, peerState.identity)
+    }
 
     // Emit to subscribers
-    this.#emitPeerEvents?.({ changes: events })
+    this.#peerHandle!.emit({ changes: events })
   }
 
   #emitSyntheticPeerLeftEvents(): void {
-    if (this.model.peers.size === 0 || !this.#emitPeerEvents) return
+    if (this.model.peers.size === 0 || !this.#peerHandle) return
 
     const events: PeerChange[] = Array.from(this.model.peers.values()).map(
       peerState => ({ type: "peer-left" as const, peer: peerState.identity }),
     )
 
     // Clear peer map (consistent with the about-to-be-wiped model)
-    this.#peerMap = new Map()
+    this.#peerHandle.clear()
 
-    this.#emitPeerEvents({ changes: events })
+    this.#peerHandle.emit({ changes: events })
   }
 
   /**

@@ -328,6 +328,7 @@ describe("dynamic scope onDocDismissed", () => {
     expect(dismissSpy).toHaveBeenCalledWith(
       "dismiss-doc",
       expect.objectContaining({ peerId: "alice" }),
+      "remote",
     )
   })
 })

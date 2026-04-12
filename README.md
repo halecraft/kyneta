@@ -88,7 +88,7 @@ See the [`@kyneta/exchange` README](./packages/exchange/README.md) for the full 
 
 ## Packages
 
-5,313 tests across the monorepo.
+5,403 tests across the monorepo.
 
 ### Foundation
 
@@ -130,6 +130,12 @@ A plain JS substrate is built into `@kyneta/schema` — no external package need
 |---------|-------------|-------|
 | [`@kyneta/leveldb-store`](./packages/exchange/stores/leveldb) | LevelDB storage backend for `@kyneta/exchange`. Server-side persistent storage. | 24 |
 
+### Indexes
+
+| Package | Description | Tests |
+|---------|-------------|-------|
+| [`@kyneta/index`](./packages/index) | Catalog, secondary indexes, and reactive joins over document collections. | 90 |
+
 ### Bindings
 
 | Package | Description | Tests |
@@ -148,6 +154,8 @@ A plain JS substrate is built into `@kyneta/schema` — no external package need
             │
             ├──► @kyneta/compiler       (+ ts-morph)   ── experimental
             │        └──► @kyneta/cast  (+ unplugin)    ── experimental
+            │
+            ├──► @kyneta/index          (+ changefeed; optional peer-dep: exchange)
             │
             └──► @kyneta/exchange       (+ transport)
                     │

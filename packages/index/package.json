@@ -1,0 +1,55 @@
+{
+  "name": "@kyneta/index",
+  "version": "0.1.0",
+  "description": "Catalog, secondary indexes, and reactive joins over document collections",
+  "author": "Duane Johnson",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/halecraft/kyneta",
+    "directory": "packages/index"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./src": "./src/index.ts",
+    "./src/*": "./src/*"
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "verify logic",
+    "verify": "verify"
+  },
+  "dependencies": {
+    "@kyneta/changefeed": "workspace:^"
+  },
+  "peerDependencies": {
+    "@kyneta/schema": "^1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@kyneta/exchange": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@kyneta/schema": "workspace:^",
+    "@kyneta/exchange": "workspace:^",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.17"
+  }
+}

@@ -146,13 +146,13 @@ Six message types: two for channel establishment, four for document exchange.
 
 ### `present`
 
-Document presentation — assertion of document ownership with metadata. Sent after channel establishment to announce all known documents, filtered by the `route` predicate (§16). Each entry carries per-document metadata (`replicaType`, `mergeStrategy`, `schemaHash`) so the receiver can validate compatibility before any binary exchange.
+Document presentation — assertion of document ownership with metadata. Sent after channel establishment to announce all known documents, filtered by the `route` predicate (§17). Each entry carries per-document metadata (`replicaType`, `mergeStrategy`, `schemaHash`) so the receiver can validate compatibility before any binary exchange.
 
-The `present` metadata (`replicaType`, `mergeStrategy`, `schemaHash`) is validated against the Exchange's capability registries (§24). For known docs, all three fields are validated: `replicaType` compatibility via `replicaTypesCompatible()` (same name + same major version), `schemaHash` equality, and `mergeStrategy` equality (previously unchecked). A mismatch on any field skips the doc with a warning.
+The `present` metadata (`replicaType`, `mergeStrategy`, `schemaHash`) is validated against the Exchange's capability registries (§26). For known docs, all three fields are validated: `replicaType` compatibility via `replicaTypesCompatible()` (same name + same major version), `schemaHash` equality, and `mergeStrategy` equality (previously unchecked). A mismatch on any field skips the doc with a warning.
 
 When the receiver encounters a known doc and all three checks pass, it sends `interest`.
 
-When the receiver encounters an unknown doc ID, the `route` predicate is checked — if it returns `false` for the announcing peer, the doc is silently dropped. Otherwise, a `cmd/request-doc-creation` command is emitted (carrying `schemaHash` through). All unknown docs flow to `onDocCreationRequested` regardless of replica type. The Exchange first attempts schema auto-resolution from the `(schemaHash, replicaType, mergeStrategy)` triple (§24). If no schema matches and a `onUnresolvedDoc` callback is configured, it fires with the doc ID, the announcing peer's identity, `replicaType`, `mergeStrategy`, and `schemaHash`. The callback returns a disposition (`Interpret | Replicate | Defer | Reject`). If no `onUnresolvedDoc` callback matches (or none is configured), the Exchange applies a two-tiered default: supported `replicaType` → Defer; unsupported `replicaType` → Reject (silently). See §15 for details.
+When the receiver encounters an unknown doc ID, the `route` predicate is checked — if it returns `false` for the announcing peer, the doc is silently dropped. Otherwise, a `cmd/request-doc-creation` command is emitted (carrying `schemaHash` through). All unknown docs flow to `onDocCreationRequested` regardless of replica type. The Exchange first attempts schema auto-resolution from the `(schemaHash, replicaType, mergeStrategy)` triple (§26). If no schema matches and a `onUnresolvedDoc` callback is configured, it fires with the doc ID, the announcing peer's identity, `replicaType`, `mergeStrategy`, and `schemaHash`. The callback returns a disposition (`Interpret | Replicate | Defer | Reject`). If no `onUnresolvedDoc` callback matches (or none is configured), the Exchange applies a two-tiered default: supported `replicaType` → Defer; unsupported `replicaType` → Reject (silently). See §16 for details.
 
 ```ts
 type PresentMsg = {
@@ -210,7 +210,7 @@ type DismissMsg = {
 }
 ```
 
-The receiving exchange fires `onDocDismissed` if configured (§17). The handler also cleans up the dismissing peer's sync state (`docSyncStates`, `subscriptions`) for the document.
+The receiving exchange fires `onDocDismissed` if configured (§18). The handler also cleans up the dismissing peer's sync state (`docSyncStates`, `subscriptions`) for the document.
 
 ### Establishment messages
 
@@ -257,7 +257,7 @@ interface BoundReplica {
 }
 ```
 
-Every `BoundSchema` contains a `BoundReplica` by projection (derived from the `BoundSchema`'s `FactoryBuilder` → `SubstrateFactory` → `ReplicaFactory` and `strategy`). Schemas can be registered on the Exchange via `ExchangeParams.schemas` (at construction) or `exchange.registerSchema(bound)` (at runtime). The Exchange validates `exchange.get()` calls against the capability registries (§24) — the `BoundSchema`'s `replicaType` must be supported.
+Every `BoundSchema` contains a `BoundReplica` by projection (derived from the `BoundSchema`'s `FactoryBuilder` → `SubstrateFactory` → `ReplicaFactory` and `strategy`). Schemas can be registered on the Exchange via `ExchangeParams.schemas` (at construction) or `exchange.registerSchema(bound)` (at runtime). The Exchange validates `exchange.get()` calls against the capability registries (§26) — the `BoundSchema`'s `replicaType` must be supported.
 
 ### Factory Builder Lifecycle
 
@@ -401,7 +401,7 @@ const exchange = new Exchange({
 })
 ```
 
-See §18 for the `Store` interface and §19 for the hydration/persistence architecture.
+See §19 for the `Store` interface and §20 for the hydration/persistence architecture.
 
 ---
 
@@ -495,13 +495,70 @@ Notifications are accumulated across the entire dispatch cycle into typed sets. 
 1. **`#drainOutbound()`** — sends accumulated wire envelopes. Uses a shift-loop (the outbound queue may grow during sends).
 2. **`#drainReadyStateChanges()`** — emits only for docs in `#dirtyDocIds`. O(dirty × peers × listeners). Most dispatch cycles touch zero or one doc, so this is typically O(1) or O(P×L).
 3. **`#drainStateAdvanced()`** — emits only for docs in `#dirtyStateAdvanced`. Drives unified persistence via the Exchange's `onStateAdvanced` listener.
-4. **`#drainPeerEvents()`** — emits accumulated `PeerChange` events via the peer lifecycle changefeed (§21).
+4. **`#drainPeerEvents()`** — emits accumulated `PeerChange` events via the peer lifecycle changefeed (§22).
 
 All drain methods (except `#drainOutbound`, which uses a shift-loop) follow the **snapshot-then-clear** pattern: snapshot the pending set, reset the field to empty, then process the snapshot. This ensures the accumulation field is clean before any subscriber code runs — subscribers that trigger reentrant dispatch accumulate into a fresh set, not the one being drained.
 
 ---
 
-## 10. File Map
+## 10. Recent API Additions
+
+### `exchange.documentIds()`
+
+```ts
+exchange.documentIds(): ReadonlySet<DocId>
+```
+
+Returns all document IDs currently in the **interpreted** state. Complements `exchange.deferred` (§26) — together they cover the two "live" document populations. Useful for higher-level primitives (indexes, joins) that need to enumerate the local document set without reaching into the synchronizer model.
+
+### `exchange.getDocSchemaHash(docId)`
+
+```ts
+exchange.getDocSchemaHash(docId: DocId): string | undefined
+```
+
+Returns the `schemaHash` for a document, or `undefined` if the doc is not known. Enables external systems (indexes, admin UIs) to classify documents by schema without holding a reference to the `BoundSchema`.
+
+### `DocEventOrigin`
+
+```ts
+type DocEventOrigin = "local" | "remote" | "storage"
+```
+
+Renamed from `DocCreatedOrigin`. Shared between `OnDocCreated` and `OnDocDismissed` — both callbacks now receive an `origin` parameter indicating how the event was triggered:
+
+- `"local"` — the local peer called `exchange.get()` or `exchange.dismiss()`.
+- `"remote"` — a remote peer's `present` or `dismiss` message triggered the event.
+- `"storage"` — hydration from a `Store` created the document.
+
+### `OnDocDismissed` with `origin`
+
+```ts
+type OnDocDismissed = (docId: DocId, peer: PeerIdentityDetails, origin: DocEventOrigin) => void
+```
+
+`OnDocDismissed` now receives an `origin` parameter (same `DocEventOrigin` type as `OnDocCreated`). When the local peer calls `exchange.dismiss()`, scopes receive `origin: "local"`. When a remote peer sends a `dismiss` wire message, scopes receive `origin: "remote"`.
+
+### `exchange.dismiss()` fires `docDismissed` on local scopes
+
+`exchange.dismiss(docId)` now invokes `docDismissed` on all registered scopes with `origin: "local"` before broadcasting the wire `dismiss` message. Previously, `onDocDismissed` only fired for remote dismissals. This symmetry with `onDocCreated` (which fires for both local and remote origins) lets scopes clean up resources regardless of which peer initiated the dismissal.
+
+### `exchange.peers` type widened to `ReactiveMap`
+
+`exchange.peers` is now typed as `ReactiveMap<PeerId, PeerIdentityDetails, PeerChange>` (from `@kyneta/changefeed`). `ReactiveMap` extends `CallableChangefeed` with lifted collection accessors — `.get()`, `.has()`, `.keys()`, `.size`, and `[Symbol.iterator]()` — so existing code that treats it as a `CallableChangefeed` continues to work. The wider type avoids the need to unwrap `.current` for simple lookups:
+
+```ts
+exchange.peers.get("alice")   // PeerIdentityDetails | undefined
+exchange.peers.has("alice")   // boolean
+exchange.peers.size            // number
+for (const [id, info] of exchange.peers) { /* ... */ }
+```
+
+See `@kyneta/changefeed`'s `ReactiveMap` for the full interface.
+
+---
+
+## 11. File Map
 
 | File | Purpose |
 |------|---------|
@@ -538,7 +595,7 @@ Note: `MergeStrategy`, `BoundSchema`, `json.bind()`, `json.replica()`, `unwrap()
 
 ---
 
-## 11. Wire Format (`@kyneta/wire`)
+## 12. Wire Format (`@kyneta/wire`)
 
 The `@kyneta/wire` package provides serialization infrastructure for the exchange's six-message protocol (two establishment + four exchange). It sits between the exchange and transports in the dependency graph:
 
@@ -630,7 +687,7 @@ See `packages/exchange/wire/PROTOCOL.md` for the full wire protocol specificatio
 
 ---
 
-## 12. Websocket Network Adapter (`@kyneta/websocket-transport`)
+## 13. Websocket Network Adapter (`@kyneta/websocket-transport`)
 
 The first real transport. Framework-agnostic via the `Socket` interface, with platform-specific wrappers for browser, Node.js `ws`, and Bun. Inline encode/decode logic has been refactored to use the shared binary transport helpers (`encodeBinaryAndSend` / `decodeBinaryMessages`) from `@kyneta/wire`.
 
@@ -682,7 +739,7 @@ The `examples/todo-react` example demonstrates the full Yjs + WebSocket + React 
 
 ---
 
-## 13. Verified Properties
+## 14. Verified Properties
 
 1. **Sequential sync converges**: Two exchanges with `json.bind()`, peer A creates doc with seed, peer B syncs and reads same state. Mutations from A propagate to B after initial sync.
 
@@ -710,7 +767,7 @@ The `examples/todo-react` example demonstrates the full Yjs + WebSocket + React 
 
 ---
 
-## 14. SSE Network Adapter (`@kyneta/sse-transport`)
+## 15. SSE Network Adapter (`@kyneta/sse-transport`)
 
 The SSE adapter uses an **asymmetric transport** (POST for uplink, SSE for downlink) with **symmetric encoding** (text wire format in both directions).
 
@@ -788,7 +845,7 @@ The SSE adapter's functional core (`parseTextPostBody`, `SseConnection.send`) is
 
 ---
 
-## 15. Document Classification (`onUnresolvedDoc`)
+## 16. Document Classification (`onUnresolvedDoc`)
 
 ### Callback Signature
 
@@ -804,7 +861,7 @@ type OnUnresolvedDoc = (
 ) => Disposition
 ```
 
-The `onUnresolvedDoc` callback is an optional field on `ExchangeParams`. It fires when a peer announces (via `present`) a document the Exchange cannot auto-resolve from its capability registries (§24). Every code path must return an explicit disposition — there is no `undefined` return.
+The `onUnresolvedDoc` callback is an optional field on `ExchangeParams`. It fires when a peer announces (via `present`) a document the Exchange cannot auto-resolve from its capability registries (§26). Every code path must return an explicit disposition — there is no `undefined` return.
 
 ### Four Dispositions
 
@@ -869,7 +926,7 @@ When `handlePresent` encounters an unknown doc ID that passes the route check, t
 { type: "cmd/request-doc-creation", docId: DocId, peer: PeerIdentityDetails, replicaType: ReplicaType, mergeStrategy: MergeStrategy, schemaHash: string }
 ```
 
-The `Synchronizer` runtime executes this command by calling the `DocCreationCallback` provided by the Exchange. The callback first attempts schema auto-resolution (§24), then falls through to `onUnresolvedDoc` if no schema matches. The callback is fire-and-forget — if it calls `exchange.get()`, the resulting `registerDoc()` → `#dispatch(doc-ensure)` is queued in `#pendingMessages` (because `#dispatching` is true) and processed before quiescence.
+The `Synchronizer` runtime executes this command by calling the `DocCreationCallback` provided by the Exchange. The callback first attempts schema auto-resolution (§26), then falls through to `onUnresolvedDoc` if no schema matches. The callback is fire-and-forget — if it calls `exchange.get()`, the resulting `registerDoc()` → `#dispatch(doc-ensure)` is queued in `#pendingMessages` (because `#dispatching` is true) and processed before quiescence.
 
 ### Reentrancy Through the Dispatch Loop
 
@@ -900,7 +957,7 @@ The vendor (`@loro-extended/repo`) handles this in `handleSyncRequest` — when 
 
 1. **Trigger point**: `present` (not `interest`/`sync-request`), because kyneta's `interest` is only sent for docs the sender already has.
 2. **Capability gating**: The `supports` gate has been removed from the synchronizer — all unknown docs reach `onUnresolvedDoc`. The Exchange's two-tiered default uses `supportsReplicaType` to decide between Defer and Reject when no callback matches.
-3. **Route gating**: The `route` predicate (§16) is checked before `cmd/request-doc-creation` is emitted. If `route(docId, announcingPeer)` returns `false`, the unknown doc is silently dropped — `onUnresolvedDoc` never fires.
+3. **Route gating**: The `route` predicate (§17) is checked before `cmd/request-doc-creation` is emitted. If `route(docId, announcingPeer)` returns `false`, the unknown doc is silently dropped — `onUnresolvedDoc` never fires.
 4. **Auto-resolution**: Schema registry lookup happens before `onUnresolvedDoc` — most docs are resolved without any callback.
 5. **Gating mechanism**: a callback returning an explicit disposition (`Interpret | Replicate | Defer | Reject`), because the callback must provide the schema/factory/strategy — information a boolean predicate cannot supply.
 6. **No separate `creation` permission**: the callback subsumes the permission check. Returning `Reject()` is equivalent to denying creation.
@@ -932,11 +989,11 @@ const exchange = new Exchange({
 
 ---
 
-## 16. Route and Authorize — Information Flow Control
+## 17. Route and Authorize — Information Flow Control
 
 Two predicates on `ExchangeParams` control information flow through the sync protocol. They replace the vendor's four-predicate model (`visibility`, `mutability`, `creation`, `deletion`) with a cleaner two-axis decomposition: outbound flow (routing) and inbound flow (authority).
 
-The `ExchangeParams` fields (`route`, `authorize`) are syntactic sugar for the initial scope. For dynamic rule composition — where multiple independent concerns register and remove their own predicates at runtime — see §23 (Composable Scope Registration).
+The `ExchangeParams` fields (`route`, `authorize`) are syntactic sugar for the initial scope. For dynamic rule composition — where multiple independent concerns register and remove their own predicates at runtime — see §25 (Composable Scope Registration).
 
 ### Predicate Signatures
 
@@ -972,7 +1029,7 @@ When `authorize` rejects an offer, the peer's sync state is still updated to pre
 
 `authorize` implies `route`: if you accept mutations from a peer, that peer must be in the routing topology. The converse is not true — a read-only subscriber is routed but not authorized. The system does not enforce this formally. If a developer sets `authorize: () => true` but `route: () => false`, nothing breaks — inbound data never arrives because the outbound announcement was suppressed.
 
-With composable scopes (§23), the invariant holds *in aggregate* — the composed `authorize` returning `true` only matters if the composed `route` also returns `true` for that peer. Individual scopes can safely have `authorize` without `route` (or vice versa) because the composition evaluates all scopes independently per field. The synchronizer only reaches `authorize` evaluation if the message was already routed.
+With composable scopes (§25), the invariant holds *in aggregate* — the composed `authorize` returning `true` only matters if the composed `route` also returns `true` for that peer. Individual scopes can safely have `authorize` without `route` (or vice versa) because the composition evaluates all scopes independently per field. The synchronizer only reaches `authorize` evaluation if the message was already routed.
 
 ### Relationship to `onUnresolvedDoc`
 
@@ -996,7 +1053,7 @@ See `examples/bumper-cars/src/server.ts` for a concrete usage example — `route
 
 ---
 
-## 17. Dismiss — Leaving the Sync Graph
+## 18. Dismiss — Leaving the Sync Graph
 
 ### The `dismiss` Wire Message
 
@@ -1023,10 +1080,10 @@ For bulk teardown without per-doc notification, use `exchange.reset()` or `excha
 ### `onDocDismissed` Callback
 
 ```ts
-type OnDocDismissed = (docId: DocId, peer: PeerIdentityDetails) => void
+type OnDocDismissed = (docId: DocId, peer: PeerIdentityDetails, origin: DocEventOrigin) => void
 ```
 
-Optional field on `ExchangeParams`. Fires when a peer sends `dismiss` for a document. The callback handles the application-level response — it can call `exchange.dismiss(docId)` to also leave, archive the document, or do nothing.
+Optional field on `ExchangeParams` and `Scope`. Fires when a document is dismissed — either by a remote peer sending `dismiss`, or by the local peer calling `exchange.dismiss()`. The `origin` parameter (`DocEventOrigin` — see §10) distinguishes the two cases. The callback handles the application-level response — it can call `exchange.dismiss(docId)` to also leave, archive the document, or do nothing.
 
 ### Protocol Flow
 
@@ -1066,7 +1123,7 @@ Follows the same fire-and-forget pattern as `cmd/request-doc-creation`. The Sync
 
 ---
 
-## 18. Store — Direct Exchange Dependency
+## 19. Store — Direct Exchange Dependency
 
 The exchange supports persistent storage through the `Store` interface. Storage is a **direct Exchange dependency** — not an adapter, not a channel, not a participant in the sync protocol. The Exchange handles hydration (loading from storage on `get()`/`replicate()`) and persistence (saving on network imports and local changes) directly. The synchronizer remains purely network-focused.
 
@@ -1156,7 +1213,7 @@ const exchange2 = new Exchange({
 
 ---
 
-## 19. Storage Persistence Architecture
+## 20. Storage Persistence Architecture
 
 Storage is wired into the Exchange at two points: **hydration** (loading stored data into a fresh replica) and **persistence** (saving data as it changes). The synchronizer program is storage-free — keeping the FC/IS boundary clean. Persistence is unified through a single mechanism: the `notify/state-advanced` notification from the synchronizer program.
 
@@ -1259,7 +1316,7 @@ The Exchange guarantees sequential backend access per document via `#enqueueForD
 
 ---
 
-## 20. LevelDB Store
+## 21. LevelDB Store
 
 The `@kyneta/leveldb-store` package provides a server-side persistent `Store` using [classic-level](https://github.com/Level/classic-level). Located at `packages/exchange/storage-adapters/leveldb/`, imported via `@kyneta/leveldb-store/server`.
 
@@ -1319,9 +1376,9 @@ Both `InMemoryStore` and `LevelDBStore` pass the same suite. The suite covers lo
 
 ---
 
-## 21. Peer Lifecycle Feed
+## 22. Peer Lifecycle Feed
 
-The exchange exposes a reactive feed of peer presence via `exchange.peers` — a `CallableChangefeed<ReadonlyMap<PeerId, PeerIdentityDetails>, PeerChange>`. Peers join when their first channel completes the establish handshake; they leave when their last channel is removed.
+The exchange exposes a reactive feed of peer presence via `exchange.peers` — a `ReactiveMap<PeerId, PeerIdentityDetails, PeerChange>` (from `@kyneta/changefeed`). `ReactiveMap` extends `CallableChangefeed` with lifted collection accessors (`.get()`, `.has()`, `.keys()`, `.size`, iteration), so existing code that treats it as a `CallableChangefeed` continues to work unchanged. Peers join when their first channel completes the establish handshake; they leave when their last channel is removed.
 
 ### The `PeerChange` Type
 
@@ -1334,9 +1391,9 @@ interface PeerChange extends ChangeBase {
 
 `PeerChange` is defined in `src/types.ts` alongside the other core identity types. It extends `ChangeBase` from `@kyneta/changefeed`, making it compatible with the standard `Changeset<PeerChange>` envelope.
 
-### The `exchange.peers` Changefeed
+### The `exchange.peers` ReactiveMap
 
-`exchange.peers` is a `CallableChangefeed` — callable as a function, with `.current` and `.subscribe()`, and the `[CHANGEFEED]` marker for protocol detection:
+`exchange.peers` is a `ReactiveMap` — callable as a function, with `.current` and `.subscribe()`, the `[CHANGEFEED]` marker for protocol detection, and lifted collection accessors:
 
 ```ts
 // Read current peers (callable)
@@ -1357,7 +1414,7 @@ const unsub = exchange.peers.subscribe((changeset) => {
 hasChangefeed(exchange.peers) // true
 ```
 
-The feed is created lazily by `Synchronizer.createPeerFeed()`, which calls `createChangefeed()` with a snapshot function `() => this.#peerMap` and stores the emit callback for later use.
+The feed is created by `Synchronizer.createPeerFeed()`, which calls `createReactiveMap()` and stores the `ReactiveMapHandle` for mutation and emission.
 
 ### TEA Flow
 
@@ -1383,7 +1440,7 @@ The `#peerMap` is rebuilt from the model at quiescence rather than maintained in
 
 ### Relationship to `onDocDismissed`
 
-`onDocDismissed` (§17) and `peer-left` operate at different granularities:
+`onDocDismissed` (§18) and `peer-left` operate at different granularities:
 
 | | `onDocDismissed` | `peer-left` |
 |---|---|---|
@@ -1420,7 +1477,7 @@ This means `peer-joined` fires exactly once per peer identity regardless of how 
 
 ---
 
-## 22. WebRTC Transport (`@kyneta/webrtc-transport`)
+## 23. WebRTC Transport (`@kyneta/webrtc-transport`)
 
 BYODC (Bring Your Own Data Channel) transport for peer-to-peer document synchronization over WebRTC data channels. The application manages WebRTC connections (signaling, ICE, media streams); this transport attaches to already-established data channels for kyneta sync.
 
@@ -1478,13 +1535,13 @@ The message handler accepts both `ArrayBuffer` (native `RTCDataChannel` with `bi
 
 ### Relationship to Video Conference Example
 
-The examples roadmap plans a video-conference example that uses SSE for server-mediated sync and WebRTC for low-latency peer-to-peer sync (dual-transport). Signaling (offer/answer/ICE candidates) flows through the `Line` primitive (§25) — reliable ordered bidirectional messaging between peer pairs, with automatic ack-based pruning. This replaces the earlier ephemeral-document approach, which suffered from signal accumulation and broadcast inefficiency. The `fromSimplePeer()` bridge pattern demonstrated in the test suite shows how to connect `simple-peer` to the transport.
+The examples roadmap plans a video-conference example that uses SSE for server-mediated sync and WebRTC for low-latency peer-to-peer sync (dual-transport). Signaling (offer/answer/ICE candidates) flows through the `Line` primitive (§27) — reliable ordered bidirectional messaging between peer pairs, with automatic ack-based pruning. This replaces the earlier ephemeral-document approach, which suffered from signal accumulation and broadcast inefficiency. The `fromSimplePeer()` bridge pattern demonstrated in the test suite shows how to connect `simple-peer` to the transport.
 
 ---
 
-## 22. Unix Socket Transport (`@kyneta/unix-socket-transport`)
+## 24. Unix Socket Transport (`@kyneta/unix-socket-transport`)
 
-Stream-oriented server-to-server transport over Unix domain sockets (UDS). Designed for same-machine microservice topologies where TCP/WebSocket overhead is unnecessary. Uses the Stream pipeline (§11) — CBOR encoding with `StreamFrameParser` for byte-stream framing.
+Stream-oriented server-to-server transport over Unix domain sockets (UDS). Designed for same-machine microservice topologies where TCP/WebSocket overhead is unnecessary. Uses the Stream pipeline (§12) — CBOR encoding with `StreamFrameParser` for byte-stream framing.
 
 ### Stream vs Message Transport — Why It Matters
 
@@ -1656,7 +1713,7 @@ End-to-end tests in `transports/unix-socket/src/__tests__/` prove the full stack
 
 ---
 
-## 23. Composable Scope Registration
+## 25. Composable Scope Registration
 
 The Exchange accepts `route`, `authorize`, `onUnresolvedDoc`, and `onDocDismissed` as fixed functions in `ExchangeParams`. These work well when all document access rules are known at construction time. But higher-level primitives (Lines, rooms, game loops) need to register their own rules dynamically and remove them when done. The scope registration system generalizes the fixed predicates into a composable, dynamic model.
 
@@ -1782,7 +1839,7 @@ Both operations clear all scopes (including the initial one). After either, the 
 
 ---
 
-## 24. Capability Registries and Document Classification
+## 26. Capability Registries and Document Classification
 
 The Exchange maintains two capability registries that model what binary formats and schemas it can handle. These registries decouple **capability** (what I understand) from **policy** (what I choose to do), enabling auto-interpretation of known schemas and explicit classification of unknown docs.
 
@@ -1920,7 +1977,7 @@ The two registries create a two-tier trust model:
 
 This trust asymmetry is inherent: a relay cannot validate a schema it doesn't understand. The schema registry makes the trust boundary explicit — what's validated vs. what's forwarded is determined by which registry the doc was resolved from.
 
-## 25. Line — Reliable Bidirectional Messaging
+## 27. Line — Reliable Bidirectional Messaging
 
 The `Line` class provides reliable ordered bidirectional message streams between two Exchange peers. It composes two `json.bind` sequential documents — one per direction — with automatic sequence numbering and acknowledgement-based pruning.
 
@@ -2029,7 +2086,7 @@ The `Line<SendMsg, RecvMsg>` class is parameterized over concrete plain types (n
 
 ---
 
-## 26. Least Common Version and Compaction
+## 28. Least Common Version and Compaction
 
 <!-- Context: jj:ppztoono -->
 
@@ -2060,7 +2117,7 @@ The undershoot contract (see `@kyneta/schema` TECHNICAL.md, §Replica Base Versi
 
 ---
 
-## 27. Epoch Boundary Policy
+## 29. Epoch Boundary Policy
 
 <!-- Context: jj:ppztoono -->
 
@@ -2106,7 +2163,7 @@ On rejection, the entirety is silently discarded — local state is preserved an
 
 ---
 
-## 28. Synchronizer Fallback
+## 30. Synchronizer Fallback
 
 <!-- Context: jj:ppztoono -->
 

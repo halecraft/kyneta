@@ -21,7 +21,7 @@
 //   const doc = exchange.get("my-doc", TodoDoc)
 //   sync(doc).waitForSync()
 
-import type { CallableChangefeed } from "@kyneta/changefeed"
+import type { ReactiveMap } from "@kyneta/changefeed"
 import {
   type BoundReplica,
   type BoundSchema,
@@ -116,24 +116,26 @@ export type OnUnresolvedDoc = (
 ) => Disposition
 
 /**
- * Callback invoked when a peer sends a `dismiss` message for a document.
- * The peer is announcing it's leaving the sync graph for this document.
- *
- * The callback can take any application-level action: call
- * `exchange.dismiss(docId)` to also leave, archive the doc, etc.
+ * Callback invoked when a document is dismissed — either locally via
+ * `exchange.dismiss()` or remotely when a peer sends a `dismiss` message.
+ * Use `origin` to distinguish.
  *
  * @param docId - The document ID being dismissed
- * @param peer - Identity of the peer that sent the dismiss
+ * @param peer - For local origin, the exchange's own identity. For remote, the dismissing peer.
+ * @param origin - `"local"` (developer called `dismiss()`) or `"remote"` (peer sent dismiss)
  */
-export type OnDocDismissed = (docId: DocId, peer: PeerIdentityDetails) => void
+export type OnDocDismissed = (
+  docId: DocId,
+  peer: PeerIdentityDetails,
+  origin: DocEventOrigin,
+) => void
 
 /**
- * Provenance of a document creation event.
- * - `"local"` — the developer called `exchange.get()` or `exchange.replicate()`.
- * - `"remote"` — a peer announced the doc via `present` and the exchange created it
- *   (auto-resolve, `onUnresolvedDoc`, or deferred promotion triggered by `registerSchema`).
+ * Provenance of a document lifecycle event (creation or dismissal).
+ * - `"local"` — the developer triggered this (e.g. `exchange.get()`, `exchange.dismiss()`).
+ * - `"remote"` — a peer triggered this (e.g. `present` announcement, `dismiss` message).
  */
-export type DocCreatedOrigin = "local" | "remote"
+export type DocEventOrigin = "local" | "remote"
 
 /**
  * Callback invoked when a document is created in the exchange.
@@ -152,7 +154,7 @@ export type OnDocCreated = (
   docId: DocId,
   peer: PeerIdentityDetails,
   mode: "interpret" | "replicate",
-  origin: DocCreatedOrigin,
+  origin: DocEventOrigin,
 ) => void
 
 /**
@@ -236,15 +238,14 @@ export type ExchangeParams = {
   authorize?: AuthorizePredicate
 
   /**
-   * Called when a peer sends `dismiss` for a document, announcing
-   * it's leaving the sync graph. The callback handles the application
-   * response — it can call `exchange.dismiss(docId)` to also leave,
-   * or ignore the event.
+   * Called when a document is dismissed. Fires for both local
+   * `exchange.dismiss()` calls (`origin: "local"`) and remote peer
+   * dismiss messages (`origin: "remote"`).
    *
    * This field is syntactic sugar for the initial scope. For dynamic
    * rule composition, use {@link Exchange.register | exchange.register()}.
    *
-   * @default undefined (dismiss messages are no-ops)
+   * @default undefined (dismiss events are no-ops)
    */
   onDocDismissed?: OnDocDismissed
 
@@ -353,10 +354,7 @@ export class Exchange {
   readonly #scopes: ScopeRegistry
   readonly #capabilities: Capabilities
   readonly #synchronizer: Synchronizer
-  readonly peers: CallableChangefeed<
-    ReadonlyMap<PeerId, PeerIdentityDetails>,
-    PeerChange
-  >
+  readonly peers: ReactiveMap<PeerId, PeerIdentityDetails, PeerChange>
   readonly #docCache = new Map<DocId, DocCacheEntry>()
   readonly #stores: Store[]
 
@@ -578,7 +576,7 @@ export class Exchange {
     docId: DocId,
     bound: BoundSchema,
     peer: PeerIdentityDetails,
-    origin: DocCreatedOrigin,
+    origin: DocEventOrigin,
   ): any {
     const factory = bound.factory({ peerId: this.peerId })
     const replicaType = factory.replica.replicaType
@@ -656,7 +654,7 @@ export class Exchange {
     strategy: MergeStrategy,
     schemaHash: string,
     peer: PeerIdentityDetails,
-    origin: DocCreatedOrigin,
+    origin: DocEventOrigin,
   ): void {
     const replica = replicaFactory.createEmpty()
 
@@ -1140,6 +1138,36 @@ export class Exchange {
   }
 
   /**
+   * All document IDs currently in interpret mode.
+   *
+   * Returns a snapshot — the set is not live. Call again to get
+   * the current state.
+   */
+  documentIds(): ReadonlySet<DocId> {
+    const result = new Set<DocId>()
+    for (const [docId, entry] of this.#docCache) {
+      if (entry.mode === "interpret") result.add(docId)
+    }
+    return result
+  }
+
+  /**
+   * Schema hash for a document, if it exists.
+   *
+   * For interpreted docs, reads from the cached BoundSchema.
+   * For replicate/deferred docs, reads from the synchronizer model.
+   * Returns `undefined` if the document is not known.
+   */
+  getDocSchemaHash(docId: DocId): string | undefined {
+    const cached = this.#docCache.get(docId)
+    if (!cached) return undefined
+    if (cached.mode === "interpret") return cached.bound.schemaHash
+    // For replicate/deferred, the schema hash lives in the synchronizer model.
+    const metadata = this.#synchronizer.getDocMetadata(docId)
+    return metadata?.schemaHash
+  }
+
+  /**
    * Dismiss a document — remove it locally, broadcast `dismiss` to
    * all peers, and delete from stores.
    *
@@ -1154,6 +1182,10 @@ export class Exchange {
 
     // Delete from all stores
     this.#persistToStore(docId, backend => backend.delete(docId))
+
+    // Design invariant: docDismissed fires from dismiss() (local) and
+    // the synchronizer callback (remote). Symmetric with docCreated.
+    this.#scopes.docDismissed(docId, this.#identity, "local")
   }
 
   /**

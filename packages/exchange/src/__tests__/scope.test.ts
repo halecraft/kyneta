@@ -281,10 +281,25 @@ describe("ScopeRegistry", () => {
       registry.register({ onDocDismissed: handler1 })
       registry.register({ onDocDismissed: handler2 })
 
-      registry.docDismissed(doc, alice)
+      registry.docDismissed(doc, alice, "remote")
 
-      expect(handler1).toHaveBeenCalledWith(doc, alice)
-      expect(handler2).toHaveBeenCalledWith(doc, alice)
+      expect(handler1).toHaveBeenCalledWith(doc, alice, "remote")
+      expect(handler2).toHaveBeenCalledWith(doc, alice, "remote")
+    })
+
+    it("passes origin through to handlers", () => {
+      const registry = new ScopeRegistry()
+      const handler = vi.fn()
+
+      registry.register({ onDocDismissed: handler })
+
+      registry.docDismissed(doc, alice, "local")
+      expect(handler).toHaveBeenCalledWith(doc, alice, "local")
+
+      handler.mockClear()
+
+      registry.docDismissed(doc, alice, "remote")
+      expect(handler).toHaveBeenCalledWith(doc, alice, "remote")
     })
   })
 
