@@ -1,11 +1,11 @@
-import { describe, expect, it } from "vitest"
-import { json, Schema, createDoc, change } from "@kyneta/schema"
 import { hasChangefeed } from "@kyneta/changefeed"
-import { Source } from "../source.js"
+import { change, createDoc, json, Schema } from "@kyneta/schema"
+import { describe, expect, it } from "vitest"
 import { Collection } from "../collection.js"
+import type { IndexChange } from "../index-impl.js"
 import { by } from "../index-impl.js"
 import { field, keys } from "../key-spec.js"
-import type { IndexChange } from "../index-impl.js"
+import { Source } from "../source.js"
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -55,7 +55,10 @@ describe("Index.by with field (scalar FK)", () => {
     handle.set("item2", ref2)
 
     const coll = Collection.from(source)
-    const index = by(coll, field((ref: any) => ref.ownerId))
+    const index = by(
+      coll,
+      field((ref: any) => ref.ownerId),
+    )
 
     return { source, handle, ref1, ref2, coll, index }
   }
@@ -101,7 +104,9 @@ describe("Index.by with field (scalar FK)", () => {
     expect(group.size).toBe(0) // empty initially
 
     const changes: IndexChange[] = []
-    group.subscribe(cs => { changes.push(...cs.changes) })
+    group.subscribe(cs => {
+      changes.push(...cs.changes)
+    })
 
     const ref3 = makeItemRef()
     change(ref3, (d: any) => {
@@ -125,7 +130,9 @@ describe("Index.by with field (scalar FK)", () => {
 
     const group = index.get("user:alice")
     const changes: IndexChange[] = []
-    group.subscribe(cs => { changes.push(...cs.changes) })
+    group.subscribe(cs => {
+      changes.push(...cs.changes)
+    })
 
     handle.delete("item1")
 
@@ -145,8 +152,12 @@ describe("Index.by with field (scalar FK)", () => {
 
     const aliceChanges: IndexChange[] = []
     const bobChanges: IndexChange[] = []
-    aliceGroup.subscribe(cs => { aliceChanges.push(...cs.changes) })
-    bobGroup.subscribe(cs => { bobChanges.push(...cs.changes) })
+    aliceGroup.subscribe(cs => {
+      aliceChanges.push(...cs.changes)
+    })
+    bobGroup.subscribe(cs => {
+      bobChanges.push(...cs.changes)
+    })
 
     change(ref1, (d: any) => {
       d.ownerId.set("user:bob")
@@ -170,7 +181,9 @@ describe("Index.by with field (scalar FK)", () => {
 
     const aliceGroup = index.get("user:alice")
     const changes: IndexChange[] = []
-    aliceGroup.subscribe(cs => { changes.push(...cs.changes) })
+    aliceGroup.subscribe(cs => {
+      changes.push(...cs.changes)
+    })
 
     // Add to bob's group — should not affect alice's group
     const ref3 = makeItemRef()
@@ -201,7 +214,9 @@ describe("Index.by with field (scalar FK)", () => {
     const { ref1, index } = setup()
 
     const changes: IndexChange[] = []
-    index.subscribe(cs => { changes.push(...cs.changes) })
+    index.subscribe(cs => {
+      changes.push(...cs.changes)
+    })
 
     index.dispose()
 
@@ -242,7 +257,13 @@ describe("Index.by with field (compound key)", () => {
     handle.set("item1", ref1)
 
     const coll = Collection.from(source)
-    const index = by(coll, field((r: any) => r.ownerId, (r: any) => r.status))
+    const index = by(
+      coll,
+      field(
+        (r: any) => r.ownerId,
+        (r: any) => r.status,
+      ),
+    )
 
     expect(index.groupKeysFor("item1")).toEqual(["alice\0active"])
     const group = index.get("alice\0active")
@@ -262,10 +283,18 @@ describe("Index.by with field (compound key)", () => {
     handle.set("item1", ref1)
 
     const coll = Collection.from(source)
-    const index = by(coll, field((r: any) => r.ownerId, (r: any) => r.status))
+    const index = by(
+      coll,
+      field(
+        (r: any) => r.ownerId,
+        (r: any) => r.status,
+      ),
+    )
 
     const changes: IndexChange[] = []
-    index.subscribe(cs => { changes.push(...cs.changes) })
+    index.subscribe(cs => {
+      changes.push(...cs.changes)
+    })
 
     change(ref1, (d: any) => {
       d.status.set("archived")
@@ -294,7 +323,10 @@ describe("Index.by with keys (record fan-out)", () => {
     handle.set("entry1", ref1)
 
     const coll = Collection.from(source)
-    const index = by(coll, keys((ref: any) => ref.tags))
+    const index = by(
+      coll,
+      keys((ref: any) => ref.tags),
+    )
 
     return { source, handle, ref1, coll, index }
   }
@@ -313,7 +345,9 @@ describe("Index.by with keys (record fan-out)", () => {
     const { ref1, index } = setup()
 
     const changes: IndexChange[] = []
-    index.subscribe(cs => { changes.push(...cs.changes) })
+    index.subscribe(cs => {
+      changes.push(...cs.changes)
+    })
 
     change(ref1, (d: any) => {
       d.tags.set("tag3", { label: "Tag 3" })
@@ -329,7 +363,9 @@ describe("Index.by with keys (record fan-out)", () => {
     const { ref1, index } = setup()
 
     const changes: IndexChange[] = []
-    index.subscribe(cs => { changes.push(...cs.changes) })
+    index.subscribe(cs => {
+      changes.push(...cs.changes)
+    })
 
     change(ref1, (d: any) => {
       d.tags.delete("tag1")
@@ -345,7 +381,9 @@ describe("Index.by with keys (record fan-out)", () => {
     const { handle, index } = setup()
 
     const changes: IndexChange[] = []
-    index.subscribe(cs => { changes.push(...cs.changes) })
+    index.subscribe(cs => {
+      changes.push(...cs.changes)
+    })
 
     const ref2 = makeTaggedRef()
     change(ref2, (d: any) => {
@@ -369,7 +407,9 @@ describe("Index.by with keys (record fan-out)", () => {
     const { handle, index } = setup()
 
     const changes: IndexChange[] = []
-    index.subscribe(cs => { changes.push(...cs.changes) })
+    index.subscribe(cs => {
+      changes.push(...cs.changes)
+    })
 
     handle.delete("entry1")
 
@@ -386,7 +426,9 @@ describe("Index.by with keys (record fan-out)", () => {
     const { ref1, index } = setup()
 
     const changes: IndexChange[] = []
-    index.subscribe(cs => { changes.push(...cs.changes) })
+    index.subscribe(cs => {
+      changes.push(...cs.changes)
+    })
 
     index.dispose()
 
@@ -407,11 +449,15 @@ describe("Index.by (identity — no keySpec)", () => {
     const [source, handle] = Source.create<any>()
 
     const ref1 = makeSimpleRef()
-    change(ref1, (d: any) => { d.title.set("First") })
+    change(ref1, (d: any) => {
+      d.title.set("First")
+    })
     handle.set("item1", ref1)
 
     const ref2 = makeSimpleRef()
-    change(ref2, (d: any) => { d.title.set("Second") })
+    change(ref2, (d: any) => {
+      d.title.set("Second")
+    })
     handle.set("item2", ref2)
 
     const coll = Collection.from(source)
@@ -437,10 +483,14 @@ describe("Index.by (identity — no keySpec)", () => {
     const { handle, index } = setup()
 
     const changes: IndexChange[] = []
-    index.subscribe(cs => { changes.push(...cs.changes) })
+    index.subscribe(cs => {
+      changes.push(...cs.changes)
+    })
 
     const ref3 = makeSimpleRef()
-    change(ref3, (d: any) => { d.title.set("Third") })
+    change(ref3, (d: any) => {
+      d.title.set("Third")
+    })
     handle.set("item3", ref3)
 
     expect(changes).toEqual([
@@ -452,7 +502,9 @@ describe("Index.by (identity — no keySpec)", () => {
     const { handle, index } = setup()
 
     const changes: IndexChange[] = []
-    index.subscribe(cs => { changes.push(...cs.changes) })
+    index.subscribe(cs => {
+      changes.push(...cs.changes)
+    })
 
     handle.delete("item1")
 
@@ -465,7 +517,9 @@ describe("Index.by (identity — no keySpec)", () => {
     const { handle, index } = setup()
 
     const changes: IndexChange[] = []
-    index.subscribe(cs => { changes.push(...cs.changes) })
+    index.subscribe(cs => {
+      changes.push(...cs.changes)
+    })
 
     index.dispose()
 

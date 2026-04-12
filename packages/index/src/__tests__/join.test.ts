@@ -1,12 +1,12 @@
-import { describe, expect, it } from "vitest"
-import { json, Schema, createDoc, change } from "@kyneta/schema"
 import { hasChangefeed } from "@kyneta/changefeed"
-import { Source } from "../source.js"
+import { change, createDoc, json, Schema } from "@kyneta/schema"
+import { describe, expect, it } from "vitest"
 import { Collection } from "../collection.js"
-import { by } from "../index-impl.js"
 import type { IndexChange } from "../index-impl.js"
+import { by } from "../index-impl.js"
 import { join } from "../join.js"
 import { field, keys } from "../key-spec.js"
+import { Source } from "../source.js"
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -45,7 +45,9 @@ describe("JoinIndex — 1:N (conversations ↔ threads)", () => {
     const [threadSource, threadHandle] = Source.create<any>()
 
     const convRef = makeConvRef()
-    change(convRef, (d: any) => { d.title.set("General") })
+    change(convRef, (d: any) => {
+      d.title.set("General")
+    })
     convHandle.set("conv:abc", convRef)
 
     const t1Ref = makeThreadRef()
@@ -66,7 +68,10 @@ describe("JoinIndex — 1:N (conversations ↔ threads)", () => {
     const threadColl = Collection.from(threadSource)
 
     const leftIndex = by(convColl)
-    const rightIndex = by(threadColl, field((ref: any) => ref.conversationId))
+    const rightIndex = by(
+      threadColl,
+      field((ref: any) => ref.conversationId),
+    )
     const convThreads = join(leftIndex, rightIndex)
 
     return { convHandle, threadHandle, convRef, t1Ref, t2Ref, convThreads }
@@ -105,17 +110,24 @@ describe("JoinIndex — M:N (orgs ↔ users)", () => {
     orgHandle.set("org:acme", orgRef)
 
     const aliceRef = makeUserRef()
-    change(aliceRef, (d: any) => { d.name.set("Alice") })
+    change(aliceRef, (d: any) => {
+      d.name.set("Alice")
+    })
     userHandle.set("alice", aliceRef)
 
     const bobRef = makeUserRef()
-    change(bobRef, (d: any) => { d.name.set("Bob") })
+    change(bobRef, (d: any) => {
+      d.name.set("Bob")
+    })
     userHandle.set("bob", bobRef)
 
     const orgColl = Collection.from(orgSource)
     const userColl = Collection.from(userSource)
 
-    const leftIndex = by(orgColl, keys((ref: any) => ref.members))
+    const leftIndex = by(
+      orgColl,
+      keys((ref: any) => ref.members),
+    )
     const rightIndex = by(userColl)
     const orgUsers = join(leftIndex, rightIndex)
 
@@ -162,14 +174,19 @@ describe("JoinIndex — incremental updates", () => {
     const [threadSource, threadHandle] = Source.create<any>()
 
     const convRef = makeConvRef()
-    change(convRef, (d: any) => { d.title.set("General") })
+    change(convRef, (d: any) => {
+      d.title.set("General")
+    })
     convHandle.set("conv:abc", convRef)
 
     const convColl = Collection.from(convSource)
     const threadColl = Collection.from(threadSource)
 
     const leftIndex = by(convColl)
-    const rightIndex = by(threadColl, field((ref: any) => ref.conversationId))
+    const rightIndex = by(
+      threadColl,
+      field((ref: any) => ref.conversationId),
+    )
     const convThreads = join(leftIndex, rightIndex)
 
     const threads = convThreads.get("conv:abc")
@@ -191,7 +208,9 @@ describe("JoinIndex — incremental updates", () => {
     const [threadSource, threadHandle] = Source.create<any>()
 
     const convRef = makeConvRef()
-    change(convRef, (d: any) => { d.title.set("General") })
+    change(convRef, (d: any) => {
+      d.title.set("General")
+    })
     convHandle.set("conv:abc", convRef)
 
     const t1Ref = makeThreadRef()
@@ -205,7 +224,10 @@ describe("JoinIndex — incremental updates", () => {
     const threadColl = Collection.from(threadSource)
 
     const leftIndex = by(convColl)
-    const rightIndex = by(threadColl, field((ref: any) => ref.conversationId))
+    const rightIndex = by(
+      threadColl,
+      field((ref: any) => ref.conversationId),
+    )
     const convThreads = join(leftIndex, rightIndex)
 
     const threads = convThreads.get("conv:abc")
@@ -227,17 +249,24 @@ describe("JoinIndex — incremental updates", () => {
     orgHandle.set("org:acme", orgRef)
 
     const aliceRef = makeUserRef()
-    change(aliceRef, (d: any) => { d.name.set("Alice") })
+    change(aliceRef, (d: any) => {
+      d.name.set("Alice")
+    })
     userHandle.set("alice", aliceRef)
 
     const bobRef = makeUserRef()
-    change(bobRef, (d: any) => { d.name.set("Bob") })
+    change(bobRef, (d: any) => {
+      d.name.set("Bob")
+    })
     userHandle.set("bob", bobRef)
 
     const orgColl = Collection.from(orgSource)
     const userColl = Collection.from(userSource)
 
-    const leftIndex = by(orgColl, keys((ref: any) => ref.members))
+    const leftIndex = by(
+      orgColl,
+      keys((ref: any) => ref.members),
+    )
     const rightIndex = by(userColl)
     const orgUsers = join(leftIndex, rightIndex)
 
@@ -261,14 +290,21 @@ describe("JoinIndex — incremental updates", () => {
     const threadColl = Collection.from(threadSource)
 
     const leftIndex = by(convColl)
-    const rightIndex = by(threadColl, field((ref: any) => ref.conversationId))
+    const rightIndex = by(
+      threadColl,
+      field((ref: any) => ref.conversationId),
+    )
     const convThreads = join(leftIndex, rightIndex)
 
     const allChanges: IndexChange[] = []
-    convThreads.subscribe(cs => { allChanges.push(...cs.changes) })
+    convThreads.subscribe(cs => {
+      allChanges.push(...cs.changes)
+    })
 
     const convRef = makeConvRef()
-    change(convRef, (d: any) => { d.title.set("General") })
+    change(convRef, (d: any) => {
+      d.title.set("General")
+    })
     convHandle.set("conv:abc", convRef)
 
     expect(allChanges).toHaveLength(1)
@@ -304,11 +340,15 @@ describe("JoinIndex — FK mutation propagates through join", () => {
     const [threadSource, threadHandle] = Source.create<any>()
 
     const convRef = makeConvRef()
-    change(convRef, (d: any) => { d.title.set("Conv A") })
+    change(convRef, (d: any) => {
+      d.title.set("Conv A")
+    })
     convHandle.set("conv:a", convRef)
 
     const conv2Ref = makeConvRef()
-    change(conv2Ref, (d: any) => { d.title.set("Conv B") })
+    change(conv2Ref, (d: any) => {
+      d.title.set("Conv B")
+    })
     convHandle.set("conv:b", conv2Ref)
 
     const threadRef = makeThreadRef()
@@ -322,7 +362,10 @@ describe("JoinIndex — FK mutation propagates through join", () => {
     const threadColl = Collection.from(threadSource)
 
     const leftIndex = by(convColl)
-    const rightIndex = by(threadColl, field((ref: any) => ref.conversationId))
+    const rightIndex = by(
+      threadColl,
+      field((ref: any) => ref.conversationId),
+    )
     const convThreads = join(leftIndex, rightIndex)
 
     const threadsA = convThreads.get("conv:a")
@@ -355,7 +398,9 @@ describe("JoinIndex — dispose", () => {
     const [threadSource, threadHandle] = Source.create<any>()
 
     const convRef = makeConvRef()
-    change(convRef, (d: any) => { d.title.set("General") })
+    change(convRef, (d: any) => {
+      d.title.set("General")
+    })
     convHandle.set("conv:abc", convRef)
 
     const t1Ref = makeThreadRef()
@@ -369,11 +414,16 @@ describe("JoinIndex — dispose", () => {
     const threadColl = Collection.from(threadSource)
 
     const leftIndex = by(convColl)
-    const rightIndex = by(threadColl, field((ref: any) => ref.conversationId))
+    const rightIndex = by(
+      threadColl,
+      field((ref: any) => ref.conversationId),
+    )
     const convThreads = join(leftIndex, rightIndex)
 
     const allChanges: IndexChange[] = []
-    convThreads.subscribe(cs => { allChanges.push(...cs.changes) })
+    convThreads.subscribe(cs => {
+      allChanges.push(...cs.changes)
+    })
 
     convThreads.dispose()
 
@@ -385,7 +435,9 @@ describe("JoinIndex — dispose", () => {
     threadHandle.set("t2", t2Ref)
 
     const conv2Ref = makeConvRef()
-    change(conv2Ref, (d: any) => { d.title.set("Random") })
+    change(conv2Ref, (d: any) => {
+      d.title.set("Random")
+    })
     convHandle.set("conv:xyz", conv2Ref)
 
     expect(allChanges).toEqual([])

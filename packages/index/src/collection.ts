@@ -39,7 +39,7 @@ function from<V>(source: Source<V>): Collection<V> {
   }
 
   // Subscribe to source deltas
-  const unsub = source.subscribe((event) => {
+  const unsub = source.subscribe(event => {
     const changes: CollectionChange[] = []
 
     // Apply removals first (so that a paired remove+add for the same key works)

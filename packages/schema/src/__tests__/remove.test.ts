@@ -1,4 +1,3 @@
-import { CHANGEFEED } from "@kyneta/changefeed"
 import { describe, expect, it } from "vitest"
 import {
   applyChanges,
@@ -7,8 +6,8 @@ import {
   interpret,
   observation,
   plainContext,
-  readable,
   REMOVE,
+  readable,
   remove,
   Schema,
   subscribe,
@@ -100,9 +99,7 @@ function createMovableDoc(initialItems: Array<{ name: string }>) {
   return { doc, store }
 }
 
-function createNestedDoc(
-  groups: Array<{ items: Array<{ name: string }> }>,
-) {
+function createNestedDoc(groups: Array<{ items: Array<{ name: string }> }>) {
   const store = { groups }
   const ctx = plainContext(store)
   const doc = interpret(nestedSchema, ctx)

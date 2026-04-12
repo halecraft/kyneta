@@ -2,16 +2,18 @@
 
 Live, queryable views over document collections. Group by field, join across collections, subscribe to changes — views update automatically as data moves.
 
-## Group your documents
+## Index nested documents
 
-You have tasks in an exchange. You need them organized by owner.
+Your project documents each contain a task list. You need every task — across every project — indexed by owner.
 
 ```ts
 import { Source, Collection, Index, field } from "@kyneta/index"
 
-// Track every TaskDoc in the exchange — includes docs from all peers
-const [source] = Source.fromExchange(exchange, TaskDoc)
-const tasks = Collection.from(source)
+// Pull tasks out of every ProjectDoc in the exchange.
+// Documents arrive from all peers; tasks appear and disappear automatically.
+const tasks = Collection.from(
+  Source.of(exchange, ProjectDoc, doc => doc.tasks, item => item.id),
+)
 
 // Group by owner — one line
 const byOwner = Index.by(tasks, field(ref => ref.ownerId))
@@ -32,6 +34,8 @@ for (const [key, ref] of aliceTasks) {
 }
 ```
 
+`Source.of` is the primary on-ramp. It watches an exchange for documents matching a schema, reaches inside each document to extract nested entities, and produces a single flat `Source` — ready for `Collection.from`.
+
 ## It updates itself
 
 When a task's owner changes, the index reorganizes — no manual invalidation, no re-query:
@@ -44,7 +48,46 @@ aliceTasks.size              // 2 — task-1 is gone
 byOwner.get("bob").size      // 1 — task-1 appeared here
 ```
 
-When a new document syncs in from another peer, it lands in the right group automatically.
+When a new document syncs in from another peer, its tasks land in the right groups automatically. When a document is dismissed, its tasks retract.
+
+## Data from many documents
+
+There's nothing special about one project versus ten. `Source.of` tracks *every* document matching the schema across the entire exchange. Documents arrive and depart; tasks appear and disappear:
+
+```ts
+// Three ProjectDocs from three different peers — doesn't matter.
+// All their tasks are unified into one collection, one index.
+const tasks = Collection.from(
+  Source.of(exchange, ProjectDoc, doc => doc.tasks, item => item.id),
+)
+
+const byOwner = Index.by(tasks, field(ref => ref.ownerId))
+
+// Alice's tasks across ALL projects
+byOwner.get("alice").size  // 7
+```
+
+A new peer joins and syncs a fourth project? Its tasks appear. A project is dismissed? Its tasks retract. The index stays correct.
+
+## Compose across document types
+
+Tasks live in `ProjectDoc`. More tasks live in `SprintDoc`. You want one unified view:
+
+```ts
+const allTasks = Collection.from(
+  Source.union(
+    Source.of(exchange, ProjectDoc,  doc => doc.tasks, item => item.id),
+    Source.of(exchange, SprintDoc,   doc => doc.items, item => item.id),
+  ),
+)
+
+const byOwner = Index.by(allTasks, field(ref => ref.ownerId))
+
+// Alice's tasks from both schemas, one reactive map
+byOwner.get("alice")
+```
+
+`Source.of` returns a `Source` — a composable stream — so `union`, `filter`, and `map` all work before you ever materialize a `Collection`.
 
 ## Subscribe to changes
 
@@ -72,8 +115,8 @@ byOwner.subscribe(changeset => {
 Conversations and threads live in separate collections. You need to show threads grouped by conversation — without storing a reverse field.
 
 ```ts
-const convs    = Collection.from(Source.fromExchange(exchange, ConvDoc)[0])
-const threads  = Collection.from(Source.fromExchange(exchange, ThreadDoc)[0])
+const convs    = Collection.from(Source.of(exchange, ConvDoc))
+const threads  = Collection.from(Source.of(exchange, ThreadDoc))
 
 const convIndex    = Index.by(convs)  // identity — each conv is its own group
 const threadIndex  = Index.by(threads, field(ref => ref.conversationId))
@@ -92,17 +135,30 @@ Joins are live — add a thread, and it appears. Move a thread, and both sides u
 
 ## Your data can come from anywhere
 
-`Source` adapters connect different data shapes to the same pipeline:
+`Source.of` is the standard path — it handles document-level, list-level, and record-level extraction in one call:
 
 ```ts
-// From an exchange (most common — syncing documents)
-const [source] = Source.fromExchange(exchange, TaskDoc)
+// Document-level — each doc is an entry, keyed by docId
+Source.of(exchange, TaskDoc)
 
-// From a schema record ref (e.g. doc.members)
+// List-level — reach into each doc's list, extract entities by key
+Source.of(exchange, ProjectDoc, doc => doc.tasks, item => item.id)
+
+// Record-level — reach into each doc's record, entries keyed by record keys
+Source.of(exchange, TeamDoc, doc => doc.members)
+```
+
+For power users, raw adapters give you full control:
+
+```ts
+// From a schema record ref directly
 const source = Source.fromRecord(doc.members)
 
 // From a schema list ref with a key extractor
 const source = Source.fromList(doc.items, item => item.id)
+
+// From an exchange with handle access for dismiss control
+const [source, handle] = Source.fromExchange(exchange, TaskDoc)
 
 // Manual — you control what goes in
 const [source, handle] = Source.create()
@@ -150,6 +206,10 @@ Index.by(tasks)
 
 | | |
 |---|---|
+| `Source.of(exchange, bound)` | Document-level — each doc is an entry keyed by docId |
+| `Source.of(exchange, bound, accessor)` | Record-level — reach into each doc's record |
+| `Source.of(exchange, bound, accessor, keyFn)` | List-level — reach into each doc's list, extract entities by key |
+| `Source.flatMap(outer, fn, options?)` | For each outer entry, spawn an inner `Source`; flatten into one stream |
 | `Source.create()` | Manual source — returns `[source, handle]` |
 | `Source.fromExchange(exchange, bound, mapping?)` | Exchange-backed — returns `[source, handle]` |
 | `Source.fromRecord(recordRef)` | Record ref adapter |
@@ -198,4 +258,4 @@ Index.by(tasks)
 
 ## Under the hood
 
-All changes flow internally as **ℤ-sets** — weighted sets from the [DBSP paper](https://arxiv.org/abs/2203.16684) that form an abelian group under pointwise addition. This algebraic foundation guarantees that incremental view maintenance is correct by construction: filter, union, and grouping are linear operators (they work directly on deltas), while join uses the bilinear three-term formula. See [TECHNICAL.md](./TECHNICAL.md) for the full mathematical foundations.
+All changes flow internally as **ℤ-sets** — weighted sets from the [DBSP paper](https://arxiv.org/abs/2203.16684) that form an abelian group under pointwise addition. This algebraic foundation guarantees that incremental view maintenance is correct by construction: filter, union, and grouping are linear operators (they work directly on deltas), while join uses the bilinear three-term formula. `Source.of` is built on `Source.flatMap` — each document in the exchange becomes an outer entry whose inner source (via `fromList` or `fromRecord`) is dynamically managed. Documents arrive and depart; `flatMap` handles the lifecycle. See [TECHNICAL.md](./TECHNICAL.md) for the full mathematical foundations.

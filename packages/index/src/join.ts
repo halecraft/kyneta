@@ -6,9 +6,14 @@
 // `get(leftKey)` and `reverse(rightKey)` return ReactiveMap instances
 // that maintain themselves as underlying indexes change.
 
-import type { Changefeed, ChangefeedProtocol, Changeset, ReactiveMap } from "@kyneta/changefeed"
+import type {
+  Changefeed,
+  ChangefeedProtocol,
+  Changeset,
+  ReactiveMap,
+} from "@kyneta/changefeed"
 import { CHANGEFEED, createReactiveMap } from "@kyneta/changefeed"
-import type { SecondaryIndex, IndexChange } from "./index-impl.js"
+import type { IndexChange, SecondaryIndex } from "./index-impl.js"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -74,7 +79,11 @@ export function join<L, R>(
       for (const oldKey of oldKeys) {
         if (!newEntries.has(oldKey)) {
           mapHandle.delete(oldKey)
-          changes.push({ type: "group-removed", groupKey: key, entryKey: oldKey })
+          changes.push({
+            type: "group-removed",
+            groupKey: key,
+            entryKey: oldKey,
+          })
         }
       }
 
@@ -101,8 +110,12 @@ export function join<L, R>(
     }
 
     // Subscribe to both indexes — rebuild on any change that might affect us
-    const unsubFrom = fromIndex.subscribe(() => { rebuild() })
-    const unsubTo = toIndex.subscribe(() => { rebuild() })
+    const unsubFrom = fromIndex.subscribe(() => {
+      rebuild()
+    })
+    const unsubTo = toIndex.subscribe(() => {
+      rebuild()
+    })
 
     derivedUnsubs.add(unsubFrom)
     derivedUnsubs.add(unsubTo)
@@ -115,9 +128,13 @@ export function join<L, R>(
     get current(): null {
       return null
     },
-    subscribe(callback: (changeset: Changeset<IndexChange>) => void): () => void {
+    subscribe(
+      callback: (changeset: Changeset<IndexChange>) => void,
+    ): () => void {
       subscribers.add(callback)
-      return () => { subscribers.delete(callback) }
+      return () => {
+        subscribers.delete(callback)
+      }
     },
   }
 
@@ -130,7 +147,9 @@ export function join<L, R>(
 
     subscribe(cb: (changeset: Changeset<IndexChange>) => void): () => void {
       subscribers.add(cb)
-      return () => { subscribers.delete(cb) }
+      return () => {
+        subscribers.delete(cb)
+      }
     },
 
     get(leftKey: string): ReactiveMap<string, R, IndexChange> {

@@ -271,7 +271,11 @@ export class Synchronizer {
 
   // Peer lifecycle — event accumulation and changefeed
   #pendingPeerEvents: PeerChange[] = []
-  #peerHandle: ReactiveMapHandle<PeerId, PeerIdentityDetails, PeerChange> | null = null
+  #peerHandle: ReactiveMapHandle<
+    PeerId,
+    PeerIdentityDetails,
+    PeerChange
+  > | null = null
 
   // Event emitter for ready state changes
   readonly #readyStateListeners = new Set<

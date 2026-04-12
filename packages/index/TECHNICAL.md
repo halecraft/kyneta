@@ -22,6 +22,12 @@ The DBSP paper (Budiu, McSherry, Ryzhyk, Tannen) provides the mathematical frame
 ## 2. Architecture Overview
 
 ```
+                        ┌───────────────┐
+                        │   Source.of   │  High-level entry point
+                        │  (exchange +  │  (read-only convenience)
+                        │   flatMap)    │
+                        └───────┬───────┘
+                                │
 ┌─────────────────────────────────────────────────┐
 │  JoinIndex<L, R>                                │
 │  Bilinear composition — delegates to two         │
@@ -39,7 +45,7 @@ The DBSP paper (Budiu, McSherry, Ryzhyk, Tannen) provides the mathematical frame
 │  Consumer-stateless delta producer. NOT a        │
 │  Changefeed. Adapters: create, fromRecord,       │
 │  fromList, fromExchange. Composition: filter,    │
-│  union, map.                                     │
+│  union, map, flatMap.                            │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -98,6 +104,90 @@ The `delta` is the ℤ-set change. The `values` map carries actual `V` values fo
 - `Source.filter(source, pred)`: Predicate applied directly to delta entries. ΔFilter = Filter.
 - `Source.union(a, b)`: Merges events from both sides.
 - `Source.map(source, fn)`: Remaps keys. `fn` returning `null` filters out the entry.
+
+### 4.1 flatMap — Dynamic Union
+
+`Source.flatMap` is the first **stateful** combinator in the Source layer. Unlike `filter`, `union`, and `map` (which are stateless/linear), `flatMap` maintains a live map of inner sources keyed by outer entries.
+
+**Signature:**
+
+```ts
+Source.flatMap<Outer, Inner>(
+  outer: Source<Outer>,
+  fn: (key: string, value: Outer) => Source<Inner>,
+  options?: FlatMapOptions,
+): Source<Inner>
+```
+
+**Semantics.** For each entry `(outerKey, outerValue)` in the outer source, `fn` produces an inner `Source<Inner>`. The flat source is the dynamic union of all live inner sources, with keys namespaced to avoid collision.
+
+**Key namespacing.** Default: `outerKey + "\0" + innerKey` — the same `"\0"` separator used by `field()` for compound keys, ensuring consistent key structure throughout the system. A custom key function can be supplied via `FlatMapOptions.key`.
+
+**Inner source lifecycle:**
+
+| Outer event | Action |
+|---|---|
+| Arrival (weight > 0) | `fn(outerKey, outerValue)` creates an inner source. Subscribe to it, then emit its `snapshot()` as +1 deltas. |
+| Departure (weight < 0) | Snapshot the inner source at departure time (lazy retraction), emit all entries as −1 deltas, unsubscribe, dispose. |
+
+Inner sources are fully independent — an event from inner source A does not affect inner source B.
+
+**No intermediate state stored.** Per outer entry, flatMap keeps only `{ innerSource, innerUnsub }`. It does not cache inner snapshots; retraction at departure time uses a lazy `innerSource.snapshot()` call.
+
+**`remapEvent` — pure FC.** The key-remapping logic is extracted as a pure function:
+
+```ts
+function remapEvent<V>(
+  event: SourceEvent<V>,
+  outerKey: string,
+  keyFn: (outerKey: string, innerKey: string) => string,
+): SourceEvent<V>
+```
+
+This is the functional core of the imperative subscribe/snapshot shell, following the FC/IS decomposition used throughout the codebase.
+
+**`snapshot()` — lazy aggregation.** The flat source's `snapshot()` iterates all live inner sources and remaps keys on the fly. No materialized aggregate is maintained.
+
+**Bootstrap.** On construction, flatMap reads `outer.snapshot()` and creates inner sources for each existing outer entry. During bootstrap, inner sources are subscribed but their snapshots are not eagerly emitted — they are discovered lazily through `snapshot()`. Post-bootstrap, outer arrivals go through `addInner` which does emit inner snapshots as events.
+
+**Relationship to DBSP.** DBSP defines nested stream incrementalization for operators over streams-of-streams. Our `flatMap` is *not* that. It is a simpler construct: a **dynamic union** where each inner source is an independent stream, and the outer source controls which inner streams are active. There is no algebraic nesting — inner streams do not carry incremental structure relative to the outer stream. This is sufficient for our use case (exchange entity discovery) and avoids the complexity of DBSP's full nested incremental theory.
+
+### 4.2 Source.of — Exchange Entity Discovery
+
+`Source.of` is the high-level entry point for discovering and tracking entities across exchange documents. It composes `fromExchange`, `flatMap`, `fromRecord`, and `fromList` into a single convenience with three overloads discriminated by argument count.
+
+**Overloads:**
+
+```ts
+// Document-level (2 args)
+Source.of<V>(exchange, bound): Source<V>
+
+// Record-level (3 args)
+Source.of<V>(exchange, bound, accessor): Source<V>
+
+// List-level (4 args)
+Source.of<V>(exchange, bound, accessor, keyFn): Source<V>
+```
+
+**Document-level (2 args).** Each document matching `bound` is an entry keyed by `docId`. The value is the document ref itself.
+
+Implementation: `fromExchange(exchange, bound)` → discard `ExchangeSourceHandle` → return `Source<V>`.
+
+**Record-level (3 args).** Each document contains a record (map) ref accessed via `accessor(docRef)`. The entities are the record's keys, namespaced under the document.
+
+Implementation: `flatMap(fromExchange(...), (docId, docRef) => fromRecord(accessor(docRef)))`.
+
+Keys follow flatMap's default namespacing: `docId + "\0" + recordKey`.
+
+**List-level (4 args).** Each document contains a list ref accessed via `accessor(docRef)`. The entities are list items, keyed by `keyFn`, namespaced under the document.
+
+Implementation: `flatMap(fromExchange(...), (docId, docRef) => fromList(accessor(docRef), keyFn))`.
+
+Keys follow flatMap's default namespacing: `docId + "\0" + entityKey`.
+
+**Read-only by design.** All three overloads discard the `ExchangeSourceHandle` returned by `fromExchange`. Writes go through the exchange directly (document-level) or through schema ref mutation (entity-level). This is intentional — `Source.of` is a *discovery* mechanism, not a write API.
+
+**Returns `Source<V>`, not `Collection<V>`.** This preserves composability — the caller can apply `filter`, `union`, `map`, or feed the source into `Collection.from()` as needed.
 
 ---
 
@@ -174,6 +264,8 @@ Both methods return live reactive maps that update as the underlying indexes cha
 - `ExchangeSourceHandle.createDoc(key)` → `exchange.get(toDocId(key), bound)`
 - `ExchangeSourceHandle.delete(key)` → `exchange.dismiss(toDocId(key))` — symmetric with create
 
+`Source.of` (§4.2) composes `fromExchange` with `flatMap` to provide higher-level entity discovery without requiring the caller to manage `ExchangeSourceHandle` or inner source wiring.
+
 ---
 
 ## 10. TS2589 and `any`
@@ -198,7 +290,7 @@ Both methods return live reactive maps that update as the underlying indexes cha
 | File | Purpose |
 |---|---|
 | `src/zset.ts` | `ZSet` — abelian group type and operations |
-| `src/source.ts` | `Source<V>` — protocol, adapters, composition |
+| `src/source.ts` | `Source<V>` — protocol, adapters, composition, `flatMap`, `Source.of` |
 | `src/collection.ts` | `Collection<V>` — ℐ operator |
 | `src/key-spec.ts` | `KeySpec`, `field`, `keys` — key extraction helpers |
 | `src/index-impl.ts` | `SecondaryIndex<V>` — Gₚ operator with reactive `get()` |
@@ -206,6 +298,8 @@ Both methods return live reactive maps that update as the underlying indexes cha
 | `src/index.ts` | Barrel exports |
 | `src/__tests__/zset.test.ts` | ZSet group axioms and operations |
 | `src/__tests__/source.test.ts` | Source adapters and composition |
+| `src/__tests__/flatmap.test.ts` | `flatMap` — dynamic union lifecycle, key namespacing, composition |
+| `src/__tests__/source-of.test.ts` | `Source.of` — document/record/list-level discovery, dispose |
 | `src/__tests__/collection.test.ts` | Collection integration and changefeed |
 | `src/__tests__/key-spec.test.ts` | KeySpec helpers and watch behavior |
 | `src/__tests__/index.test.ts` | SecondaryIndex grouping scenarios |

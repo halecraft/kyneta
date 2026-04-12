@@ -58,8 +58,8 @@ import type {
   TreeSchema,
 } from "../schema.js"
 import type { HasNavigation } from "./bottom.js"
-import { hasTransact, REMOVE, TRANSACT } from "./writable.js"
 import type { WritableContext } from "./writable.js"
+import { hasTransact, REMOVE, TRANSACT } from "./writable.js"
 
 // ---------------------------------------------------------------------------
 // ADDRESS_TABLE symbol — discovery hook for withCaching (Phase 5)

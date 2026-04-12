@@ -184,11 +184,11 @@ describe("ZSet — abelian group", () => {
 
   // Multi-key add
   it("add merges two multi-key ℤ-sets correctly", () => {
-    const a = fromKeys(["x", "y"])       // x→1, y→1
-    const b = add(single("y", -1), single("z", 1))  // y→-1, z→1
+    const a = fromKeys(["x", "y"]) // x→1, y→1
+    const b = add(single("y", -1), single("z", 1)) // y→-1, z→1
     const result = add(a, b)
     expect(result.get("x")).toBe(1)
-    expect(result.has("y")).toBe(false)   // cancelled
+    expect(result.has("y")).toBe(false) // cancelled
     expect(result.get("z")).toBe(1)
     expect(result.size).toBe(2)
   })

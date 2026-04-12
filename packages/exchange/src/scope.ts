@@ -281,7 +281,11 @@ export class ScopeRegistry {
    * Composed onDocDismissed — invoke all scopes that have a handler.
    * Unlike predicates, dismiss is a notification, not a gate.
    */
-  docDismissed(docId: DocId, peer: PeerIdentityDetails, origin: "local" | "remote"): void {
+  docDismissed(
+    docId: DocId,
+    peer: PeerIdentityDetails,
+    origin: "local" | "remote",
+  ): void {
     for (const scope of this.#scopes) {
       if (!scope.onDocDismissed) continue
       scope.onDocDismissed(docId, peer, origin)

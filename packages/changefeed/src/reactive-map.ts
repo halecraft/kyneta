@@ -9,9 +9,9 @@
 // ReadonlyMap with convenience accessors" (used by exchange.peers,
 // Catalog, and future reactive collections) into a single combinator.
 
-import type { ChangeBase } from "./change.js"
 import type { CallableChangefeed } from "./callable.js"
-import type { Changefeed, ChangefeedProtocol, Changeset } from "./changefeed.js"
+import type { ChangeBase } from "./change.js"
+import type { ChangefeedProtocol, Changeset } from "./changefeed.js"
 import { CHANGEFEED, createChangefeed } from "./changefeed.js"
 
 // ---------------------------------------------------------------------------
@@ -87,11 +87,10 @@ export interface ReactiveMapHandle<K, V, C extends ChangeBase> {
  * peers.size       // 1
  * ```
  */
-export function createReactiveMap<
-  K,
-  V,
-  C extends ChangeBase = ChangeBase,
->(): [ReactiveMap<K, V, C>, ReactiveMapHandle<K, V, C>] {
+export function createReactiveMap<K, V, C extends ChangeBase = ChangeBase>(): [
+  ReactiveMap<K, V, C>,
+  ReactiveMapHandle<K, V, C>,
+] {
   const map = new Map<K, V>()
 
   // Create the base changefeed + emit pair.
@@ -141,7 +140,8 @@ export function createReactiveMap<
     configurable: false,
   })
 
-  callable[Symbol.iterator] = (): IterableIterator<[K, V]> => map[Symbol.iterator]()
+  callable[Symbol.iterator] = (): IterableIterator<[K, V]> =>
+    map[Symbol.iterator]()
 
   // ── Handle (producer side) ──
 

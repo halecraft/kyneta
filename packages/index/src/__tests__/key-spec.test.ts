@@ -1,5 +1,5 @@
+import { change, createDoc, json, Schema } from "@kyneta/schema"
 import { describe, expect, it, vi } from "vitest"
-import { json, Schema, createDoc, change } from "@kyneta/schema"
 import { field, keys } from "../key-spec.js"
 
 // ---------------------------------------------------------------------------
@@ -44,8 +44,10 @@ describe("field (scalar FK)", () => {
     })
 
     const spec = field<any>((r: any) => r.ownerId)
+    const { watch } = spec
+    if (!watch) throw new Error("expected watch")
     const callback = vi.fn()
-    const unsub = spec.watch!("item1", ref, callback)
+    const unsub = watch("item1", ref, callback)
 
     change(ref, (d: any) => {
       d.ownerId.set("user:bob")
@@ -64,8 +66,10 @@ describe("field (scalar FK)", () => {
     })
 
     const spec = field<any>((r: any) => r.ownerId)
+    const { watch } = spec
+    if (!watch) throw new Error("expected watch")
     const callback = vi.fn()
-    const unsub = spec.watch!("item1", ref, callback)
+    const unsub = watch("item1", ref, callback)
 
     // Mutate name, not ownerId
     change(ref, (d: any) => {
@@ -85,8 +89,10 @@ describe("field (scalar FK)", () => {
     })
 
     const spec = field<any>((r: any) => r.ownerId)
+    const { watch } = spec
+    if (!watch) throw new Error("expected watch")
     const callback = vi.fn()
-    const unsub = spec.watch!("item1", ref, callback)
+    const unsub = watch("item1", ref, callback)
     unsub()
 
     change(ref, (d: any) => {
@@ -110,7 +116,10 @@ describe("field (compound key)", () => {
       d.name.set("Item 1")
     })
 
-    const spec = field<any>((r: any) => r.ownerId, (r: any) => r.status)
+    const spec = field<any>(
+      (r: any) => r.ownerId,
+      (r: any) => r.status,
+    )
     expect(spec.groupKeys("item1", ref)).toEqual(["user:alice\0active"])
   })
 
@@ -122,9 +131,14 @@ describe("field (compound key)", () => {
       d.name.set("Item 1")
     })
 
-    const spec = field<any>((r: any) => r.ownerId, (r: any) => r.status)
+    const spec = field<any>(
+      (r: any) => r.ownerId,
+      (r: any) => r.status,
+    )
+    const { watch } = spec
+    if (!watch) throw new Error("expected watch")
     const callback = vi.fn()
-    const unsub = spec.watch!("item1", ref, callback)
+    const unsub = watch("item1", ref, callback)
 
     // Mutate ownerId
     change(ref, (d: any) => {
@@ -149,9 +163,14 @@ describe("field (compound key)", () => {
       d.name.set("Item 1")
     })
 
-    const spec = field<any>((r: any) => r.ownerId, (r: any) => r.status)
+    const spec = field<any>(
+      (r: any) => r.ownerId,
+      (r: any) => r.status,
+    )
+    const { watch } = spec
+    if (!watch) throw new Error("expected watch")
     const callback = vi.fn()
-    const unsub = spec.watch!("item1", ref, callback)
+    const unsub = watch("item1", ref, callback)
     unsub()
 
     change(ref, (d: any) => {
@@ -189,8 +208,10 @@ describe("keys (record fan-out)", () => {
     })
 
     const spec = keys<any>((r: any) => r.tags)
+    const { watch } = spec
+    if (!watch) throw new Error("expected watch")
     const callback = vi.fn()
-    const unsub = spec.watch!("entry1", ref, callback)
+    const unsub = watch("entry1", ref, callback)
 
     change(ref, (d: any) => {
       d.tags.set("new-tag", { label: "New" })
@@ -207,8 +228,10 @@ describe("keys (record fan-out)", () => {
     })
 
     const spec = keys<any>((r: any) => r.tags)
+    const { watch } = spec
+    if (!watch) throw new Error("expected watch")
     const callback = vi.fn()
-    const unsub = spec.watch!("entry1", ref, callback)
+    const unsub = watch("entry1", ref, callback)
 
     // Mutate value inside the record — should NOT fire
     change(ref, (d: any) => {
@@ -227,8 +250,10 @@ describe("keys (record fan-out)", () => {
     })
 
     const spec = keys<any>((r: any) => r.tags)
+    const { watch } = spec
+    if (!watch) throw new Error("expected watch")
     const callback = vi.fn()
-    const unsub = spec.watch!("entry1", ref, callback)
+    const unsub = watch("entry1", ref, callback)
 
     change(ref, (d: any) => {
       d.tags.delete("urgent")

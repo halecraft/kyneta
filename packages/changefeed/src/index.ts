@@ -3,9 +3,6 @@
 // This barrel re-exports everything from the three source modules
 // that make up the changefeed contract package.
 
-// ReactiveMap — callable changefeed over a mutable Map
-export type { ReactiveMap, ReactiveMapHandle } from "./reactive-map.js"
-export { createReactiveMap } from "./reactive-map.js"
 // Callable — the createCallable combinator
 export type { CallableChangefeed } from "./callable.js"
 export { createCallable } from "./callable.js"
@@ -25,3 +22,6 @@ export {
   hasChangefeed,
   staticChangefeed,
 } from "./changefeed.js"
+// ReactiveMap — callable changefeed over a mutable Map
+export type { ReactiveMap, ReactiveMapHandle } from "./reactive-map.js"
+export { createReactiveMap } from "./reactive-map.js"

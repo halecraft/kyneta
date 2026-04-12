@@ -9,22 +9,36 @@
 // the ℤ-set integration operator applied to a filtered stream of
 // group deltas. This is the primary API for accessing group contents.
 
-import type { Changefeed, ChangefeedProtocol, Changeset, ReactiveMap } from "@kyneta/changefeed"
+import type {
+  Changefeed,
+  ChangefeedProtocol,
+  Changeset,
+  ReactiveMap,
+} from "@kyneta/changefeed"
 import { CHANGEFEED, createReactiveMap } from "@kyneta/changefeed"
 import type { Collection, CollectionChange } from "./collection.js"
 import type { KeySpec } from "./key-spec.js"
-import { add, negate, fromKeys, isEmpty } from "./zset.js"
 import type { ZSet } from "./zset.js"
+import { add, fromKeys, isEmpty, negate } from "./zset.js"
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 export type IndexChange =
-  | { readonly type: "group-added"; readonly groupKey: string; readonly entryKey: string }
-  | { readonly type: "group-removed"; readonly groupKey: string; readonly entryKey: string }
+  | {
+      readonly type: "group-added"
+      readonly groupKey: string
+      readonly entryKey: string
+    }
+  | {
+      readonly type: "group-removed"
+      readonly groupKey: string
+      readonly entryKey: string
+    }
 
-export interface SecondaryIndex<V> extends Changefeed<ReadonlyMap<string, Set<string>>, IndexChange> {
+export interface SecondaryIndex<V>
+  extends Changefeed<ReadonlyMap<string, Set<string>>, IndexChange> {
   /** Reactive view of a single group. Returns a ReactiveMap that updates as entries join/leave. */
   get(groupKey: string): ReactiveMap<string, V, IndexChange>
   /** Which group keys an entry belongs to. */
@@ -49,7 +63,10 @@ function regroupDelta(oldKeys: string[], newKeys: string[]): ZSet {
 // Index.by — the single constructor
 // ---------------------------------------------------------------------------
 
-function by<V>(collection: Collection<V>, keySpec?: KeySpec<V>): SecondaryIndex<V> {
+function by<V>(
+  collection: Collection<V>,
+  keySpec?: KeySpec<V>,
+): SecondaryIndex<V> {
   // Default to identity grouping if no keySpec provided
   const spec: KeySpec<V> = keySpec ?? {
     groupKeys: (key: string, _value: V) => [key],
@@ -166,33 +183,42 @@ function by<V>(collection: Collection<V>, keySpec?: KeySpec<V>): SecondaryIndex<
   }
 
   // Subscribe to collection changefeed for added/removed events
-  const collectionUnsub = collection.subscribe((changeset: Changeset<CollectionChange>) => {
-    const indexChanges: IndexChange[] = []
+  const collectionUnsub = collection.subscribe(
+    (changeset: Changeset<CollectionChange>) => {
+      const indexChanges: IndexChange[] = []
 
-    for (const change of changeset.changes) {
-      if (change.type === "added") {
-        const value = (collection as any).get(change.key)
-        if (value !== undefined) {
-          indexChanges.push(...addEntry(change.key, value))
+      for (const change of changeset.changes) {
+        if (change.type === "added") {
+          const value = (collection as any).get(change.key)
+          if (value !== undefined) {
+            indexChanges.push(...addEntry(change.key, value))
+          }
+        } else if (change.type === "removed") {
+          indexChanges.push(...removeEntry(change.key))
         }
-      } else if (change.type === "removed") {
-        indexChanges.push(...removeEntry(change.key))
       }
-    }
 
-    if (indexChanges.length > 0) {
-      emit({ changes: indexChanges })
-    }
-  })
+      if (indexChanges.length > 0) {
+        emit({ changes: indexChanges })
+      }
+    },
+  )
 
   // Build the changefeed protocol for the index-level changefeed
-  const protocol: ChangefeedProtocol<ReadonlyMap<string, Set<string>>, IndexChange> = {
+  const protocol: ChangefeedProtocol<
+    ReadonlyMap<string, Set<string>>,
+    IndexChange
+  > = {
     get current(): ReadonlyMap<string, Set<string>> {
       return groups
     },
-    subscribe(callback: (changeset: Changeset<IndexChange>) => void): () => void {
+    subscribe(
+      callback: (changeset: Changeset<IndexChange>) => void,
+    ): () => void {
       subscribers.add(callback)
-      return () => { subscribers.delete(callback) }
+      return () => {
+        subscribers.delete(callback)
+      }
     },
   }
 
@@ -206,7 +232,9 @@ function by<V>(collection: Collection<V>, keySpec?: KeySpec<V>): SecondaryIndex<
 
     subscribe(cb: (changeset: Changeset<IndexChange>) => void): () => void {
       subscribers.add(cb)
-      return () => { subscribers.delete(cb) }
+      return () => {
+        subscribers.delete(cb)
+      }
     },
 
     get(groupKey: string): ReactiveMap<string, V, IndexChange> {

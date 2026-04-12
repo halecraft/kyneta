@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest"
 import { hasChangefeed } from "@kyneta/changefeed"
-import { Source } from "../source.js"
-import { Collection } from "../collection.js"
+import { describe, expect, it } from "vitest"
 import type { CollectionChange } from "../collection.js"
+import { Collection } from "../collection.js"
+import { Source } from "../source.js"
 
 describe("Collection.from", () => {
   it("bootstraps from source snapshot", () => {
@@ -133,8 +133,12 @@ describe("Collection.from", () => {
 
     const changes1: CollectionChange[] = []
     const changes2: CollectionChange[] = []
-    coll.subscribe(cs => { changes1.push(...cs.changes) })
-    coll.subscribe(cs => { changes2.push(...cs.changes) })
+    coll.subscribe(cs => {
+      changes1.push(...cs.changes)
+    })
+    coll.subscribe(cs => {
+      changes2.push(...cs.changes)
+    })
 
     handle.set("x", 1)
 

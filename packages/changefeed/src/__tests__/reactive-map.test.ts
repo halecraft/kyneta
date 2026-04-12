@@ -5,7 +5,6 @@ import {
   type CallableChangefeed,
   type ChangeBase,
   type Changeset,
-  type ReactiveMap,
   createReactiveMap,
   hasChangefeed,
 } from "../index.js"
@@ -234,7 +233,12 @@ describe("changefeed protocol", () => {
 
     handle.set("a", 1)
     handle.set("b", 2)
-    handle.emit({ changes: [{ type: "set", key: "a" }, { type: "set", key: "b" }] })
+    handle.emit({
+      changes: [
+        { type: "set", key: "a" },
+        { type: "set", key: "b" },
+      ],
+    })
 
     expect(snapshotSize).toBe(2)
   })
@@ -260,7 +264,10 @@ describe("backward compatibility", () => {
     const [map] = createReactiveMap<string, number, TestChange>()
 
     // Type-level test: assign to CallableChangefeed
-    const callable: CallableChangefeed<ReadonlyMap<string, number>, TestChange> = map
+    const callable: CallableChangefeed<
+      ReadonlyMap<string, number>,
+      TestChange
+    > = map
 
     // Runtime: callable still works
     expect(callable()).toBeInstanceOf(Map)
@@ -280,7 +287,12 @@ describe("wholesale rebuild pattern", () => {
     // Initial state
     handle.set("a", 1)
     handle.set("b", 2)
-    handle.emit({ changes: [{ type: "set", key: "a" }, { type: "set", key: "b" }] })
+    handle.emit({
+      changes: [
+        { type: "set", key: "a" },
+        { type: "set", key: "b" },
+      ],
+    })
 
     const received: Changeset<TestChange>[] = []
     map.subscribe(cs => received.push(cs))

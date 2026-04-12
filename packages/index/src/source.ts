@@ -12,7 +12,7 @@
 import type { BoundSchema } from "@kyneta/schema"
 import { subscribeNode } from "@kyneta/schema"
 import type { ZSet } from "./zset.js"
-import { zero, single, add, negate, isEmpty, fromKeys } from "./zset.js"
+import { add, isEmpty, single, zero } from "./zset.js"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -69,6 +69,14 @@ export interface ExchangeSourceHandle<V> {
   delete(key: string): boolean
 }
 
+/**
+ * Options for `Source.flatMap`.
+ */
+export interface FlatMapOptions {
+  /** Derive the flat key from outer and inner keys. Default: `outerKey + "\0" + innerKey`. */
+  key?: (outerKey: string, innerKey: string) => string
+}
+
 // ---------------------------------------------------------------------------
 // createSourceEvent — factory with invariant check
 // ---------------------------------------------------------------------------
@@ -89,29 +97,53 @@ function createSourceEvent<V>(
 }
 
 // ---------------------------------------------------------------------------
+// createSourceEmitter — shared subscriber management
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract the subscriber set + emit + subscribe + clear pattern shared by
+ * every Source adapter. Combinators (`filter`, `union`, `map`) delegate
+ * subscribe to upstreams and don't need this.
+ */
+function createSourceEmitter<V>(): {
+  emit: (event: SourceEvent<V>) => void
+  subscribe: (cb: (event: SourceEvent<V>) => void) => () => void
+  clear: () => void
+} {
+  const subscribers = new Set<(event: SourceEvent<V>) => void>()
+  return {
+    emit(event: SourceEvent<V>): void {
+      for (const cb of subscribers) {
+        cb(event)
+      }
+    },
+    subscribe(cb: (event: SourceEvent<V>) => void): () => void {
+      subscribers.add(cb)
+      return () => {
+        subscribers.delete(cb)
+      }
+    },
+    clear(): void {
+      subscribers.clear()
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Source.create — manual source
 // ---------------------------------------------------------------------------
 
 function create<V>(): [Source<V>, SourceHandle<V>] {
   const entries = new Map<string, V>()
-  const subscribers = new Set<(event: SourceEvent<V>) => void>()
-
-  function emit(event: SourceEvent<V>): void {
-    for (const cb of subscribers) {
-      cb(event)
-    }
-  }
+  const { emit, subscribe, clear } = createSourceEmitter<V>()
 
   const source: Source<V> = {
-    subscribe(cb: (event: SourceEvent<V>) => void): () => void {
-      subscribers.add(cb)
-      return () => { subscribers.delete(cb) }
-    },
+    subscribe,
     snapshot(): ReadonlyMap<string, V> {
       return new Map(entries)
     },
     dispose(): void {
-      subscribers.clear()
+      clear()
     },
   }
 
@@ -140,19 +172,13 @@ function create<V>(): [Source<V>, SourceHandle<V>] {
 // ---------------------------------------------------------------------------
 
 function fromRecord<V>(recordRef: any): Source<V> {
-  const subscribers = new Set<(event: SourceEvent<V>) => void>()
+  const { emit, subscribe, clear } = createSourceEmitter<V>()
   const knownKeys = new Set<string>()
 
   // Bootstrap known keys from current state
   const currentKeys: string[] = recordRef.keys()
   for (const key of currentKeys) {
     knownKeys.add(key)
-  }
-
-  function emit(event: SourceEvent<V>): void {
-    for (const cb of subscribers) {
-      cb(event)
-    }
   }
 
   // Subscribe to structural changes — subscribeNode, NOT subscribe (fixes granularity bug)
@@ -188,10 +214,7 @@ function fromRecord<V>(recordRef: any): Source<V> {
   })
 
   return {
-    subscribe(cb: (event: SourceEvent<V>) => void): () => void {
-      subscribers.add(cb)
-      return () => { subscribers.delete(cb) }
-    },
+    subscribe,
     snapshot(): ReadonlyMap<string, V> {
       const result = new Map<string, V>()
       for (const key of knownKeys) {
@@ -201,7 +224,7 @@ function fromRecord<V>(recordRef: any): Source<V> {
     },
     dispose(): void {
       unsub()
-      subscribers.clear()
+      clear()
     },
   }
 }
@@ -211,17 +234,11 @@ function fromRecord<V>(recordRef: any): Source<V> {
 // ---------------------------------------------------------------------------
 
 function fromList<V>(listRef: any, keyFn: (itemRef: V) => any): Source<V> {
-  const subscribers = new Set<(event: SourceEvent<V>) => void>()
+  const { emit, subscribe, clear } = createSourceEmitter<V>()
   // key → itemRef
   const keyToRef = new Map<string, V>()
   // key → unsubscribe for per-item key watcher
   const itemUnsubs = new Map<string, () => void>()
-
-  function emit(event: SourceEvent<V>): void {
-    for (const cb of subscribers) {
-      cb(event)
-    }
-  }
 
   // Subscribe to a single item's key ref for re-keying.
   function watchItemKey(itemRef: V, currentKey: string): void {
@@ -307,10 +324,7 @@ function fromList<V>(listRef: any, keyFn: (itemRef: V) => any): Source<V> {
   })
 
   return {
-    subscribe(cb: (event: SourceEvent<V>) => void): () => void {
-      subscribers.add(cb)
-      return () => { subscribers.delete(cb) }
-    },
+    subscribe,
     snapshot(): ReadonlyMap<string, V> {
       return new Map(keyToRef)
     },
@@ -320,7 +334,7 @@ function fromList<V>(listRef: any, keyFn: (itemRef: V) => any): Source<V> {
         unsub()
       }
       itemUnsubs.clear()
-      subscribers.clear()
+      clear()
     },
   }
 }
@@ -340,15 +354,9 @@ function fromExchange<V>(
   mapping?: SourceMapping,
 ): [Source<V>, ExchangeSourceHandle<V>] {
   const m = mapping ?? defaultMapping
-  const subscribers = new Set<(event: SourceEvent<V>) => void>()
+  const { emit, subscribe, clear } = createSourceEmitter<V>()
   const entries = new Map<string, V>()
   const schemaHash = bound.schemaHash
-
-  function emit(event: SourceEvent<V>): void {
-    for (const cb of subscribers) {
-      cb(event)
-    }
-  }
 
   function tryAdd(docId: string): void {
     const key = m.toKey(docId)
@@ -402,16 +410,13 @@ function fromExchange<V>(
   })
 
   const source: Source<V> = {
-    subscribe(cb: (event: SourceEvent<V>) => void): () => void {
-      subscribers.add(cb)
-      return () => { subscribers.delete(cb) }
-    },
+    subscribe,
     snapshot(): ReadonlyMap<string, V> {
       return new Map(entries)
     },
     dispose(): void {
       disposeScope()
-      subscribers.clear()
+      clear()
     },
   }
 
@@ -455,7 +460,7 @@ function filter<V>(
 ): Source<V> {
   return {
     subscribe(cb: (event: SourceEvent<V>) => void): () => void {
-      return source.subscribe((event) => {
+      return source.subscribe(event => {
         let delta = zero()
         const values = new Map<string, V>()
 
@@ -504,7 +509,10 @@ function union<V>(a: Source<V>, b: Source<V>): Source<V> {
     subscribe(cb: (event: SourceEvent<V>) => void): () => void {
       const unsubA = a.subscribe(cb)
       const unsubB = b.subscribe(cb)
-      return () => { unsubA(); unsubB() }
+      return () => {
+        unsubA()
+        unsubB()
+      }
     },
     snapshot(): ReadonlyMap<string, V> {
       const result = new Map(a.snapshot())
@@ -532,7 +540,7 @@ function map<V>(
 ): Source<V> {
   return {
     subscribe(cb: (event: SourceEvent<V>) => void): () => void {
-      return source.subscribe((event) => {
+      return source.subscribe(event => {
         let delta = zero()
         const values = new Map<string, V>()
 
@@ -569,6 +577,172 @@ function map<V>(
 }
 
 // ---------------------------------------------------------------------------
+// Source.flatMap — dynamic union combinator
+// ---------------------------------------------------------------------------
+
+// Pure functional core: remap an inner event's keys via the key function.
+function remapEvent<V>(
+  event: SourceEvent<V>,
+  outerKey: string,
+  keyFn: (outerKey: string, innerKey: string) => string,
+): SourceEvent<V> {
+  let delta = zero()
+  const values = new Map<string, V>()
+
+  for (const [innerKey, weight] of event.delta) {
+    const flatKey = keyFn(outerKey, innerKey)
+    delta = add(delta, single(flatKey, weight))
+    if (weight > 0) {
+      const value = event.values.get(innerKey)!
+      values.set(flatKey, value)
+    }
+  }
+
+  return createSourceEvent(delta, values)
+}
+
+const defaultFlatMapKey = (outerKey: string, innerKey: string): string =>
+  `${outerKey}\0${innerKey}`
+
+function flatMap<Outer, Inner>(
+  outer: Source<Outer>,
+  fn: (key: string, value: Outer) => Source<Inner>,
+  options?: FlatMapOptions,
+): Source<Inner> {
+  const keyFn = options?.key ?? defaultFlatMapKey
+  const { emit, subscribe, clear } = createSourceEmitter<Inner>()
+
+  // outerKey → { innerSource, innerUnsub }
+  const inners = new Map<
+    string,
+    { innerSource: Source<Inner>; innerUnsub: () => void }
+  >()
+
+  function addInner(outerKey: string, outerValue: Outer): void {
+    const innerSource = fn(outerKey, outerValue)
+
+    // Subscribe before snapshot to avoid missing events in the gap
+    const innerUnsub = innerSource.subscribe(event => {
+      emit(remapEvent(event, outerKey, keyFn))
+    })
+
+    inners.set(outerKey, { innerSource, innerUnsub })
+
+    // Emit inner snapshot as additions
+    const snap = innerSource.snapshot()
+    if (snap.size > 0) {
+      let delta = zero()
+      const values = new Map<string, Inner>()
+      for (const [innerKey, value] of snap) {
+        const flatKey = keyFn(outerKey, innerKey)
+        delta = add(delta, single(flatKey, 1))
+        values.set(flatKey, value)
+      }
+      emit(createSourceEvent(delta, values))
+    }
+  }
+
+  function removeInner(outerKey: string): void {
+    const entry = inners.get(outerKey)
+    if (!entry) return
+
+    // Snapshot inner source to discover current keys for retraction
+    const snap = entry.innerSource.snapshot()
+    if (snap.size > 0) {
+      let delta = zero()
+      for (const [innerKey] of snap) {
+        const flatKey = keyFn(outerKey, innerKey)
+        delta = add(delta, single(flatKey, -1))
+      }
+      emit(createSourceEvent(delta, new Map()))
+    }
+
+    entry.innerUnsub()
+    entry.innerSource.dispose()
+    inners.delete(outerKey)
+  }
+
+  // Bootstrap from outer snapshot
+  const outerSnap = outer.snapshot()
+  for (const [outerKey, outerValue] of outerSnap) {
+    // During bootstrap, create inner sources but don't emit — snapshot() handles it
+    const innerSource = fn(outerKey, outerValue)
+    const innerUnsub = innerSource.subscribe(event => {
+      emit(remapEvent(event, outerKey, keyFn))
+    })
+    inners.set(outerKey, { innerSource, innerUnsub })
+  }
+
+  // Subscribe to outer for dynamic lifecycle
+  const outerUnsub = outer.subscribe(event => {
+    for (const [outerKey, weight] of event.delta) {
+      if (weight > 0) {
+        const outerValue = event.values.get(outerKey)!
+        addInner(outerKey, outerValue)
+      } else if (weight < 0) {
+        removeInner(outerKey)
+      }
+    }
+  })
+
+  return {
+    subscribe,
+    snapshot(): ReadonlyMap<string, Inner> {
+      // Lazy: iterate all inner sources and remap keys on the fly
+      const result = new Map<string, Inner>()
+      for (const [outerKey, { innerSource }] of inners) {
+        const snap = innerSource.snapshot()
+        for (const [innerKey, value] of snap) {
+          result.set(keyFn(outerKey, innerKey), value)
+        }
+      }
+      return result
+    },
+    dispose(): void {
+      outerUnsub()
+      outer.dispose()
+      for (const { innerUnsub, innerSource } of inners.values()) {
+        innerUnsub()
+        innerSource.dispose()
+      }
+      inners.clear()
+      clear()
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Source.of — exchange entity discovery
+// ---------------------------------------------------------------------------
+
+function of<V>(
+  exchange: any,
+  bound: BoundSchema<any>,
+  accessor?: (docRef: any) => any,
+  keyFn?: (itemRef: V) => any,
+): Source<V> {
+  // Document-level (2 args): each doc is an entry keyed by docId
+  if (accessor === undefined) {
+    const [source] = fromExchange<V>(exchange, bound)
+    return source
+  }
+
+  // Record-level (3 args): accessor returns a record ref
+  if (keyFn === undefined) {
+    const [outerSource] = fromExchange<any>(exchange, bound)
+    return flatMap<any, V>(outerSource, (_docId, docRef) =>
+      fromRecord<V>(accessor(docRef)),
+    )
+  }
+
+  // List-level (4 args): accessor returns a list ref, keyFn extracts entity keys
+  const [outerSource] = fromExchange<any>(exchange, bound)
+  return flatMap<any, V>(outerSource, (_docId, docRef) =>
+    fromList<V>(accessor(docRef), keyFn),
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Source namespace — typed facade
 // ---------------------------------------------------------------------------
 
@@ -581,9 +755,29 @@ export interface SourceStatic {
     bound: BoundSchema<any>,
     mapping?: SourceMapping,
   ): [Source<V>, ExchangeSourceHandle<V>]
-  filter<V>(source: Source<V>, pred: (key: string, value: V) => boolean): Source<V>
+  filter<V>(
+    source: Source<V>,
+    pred: (key: string, value: V) => boolean,
+  ): Source<V>
   union<V>(a: Source<V>, b: Source<V>): Source<V>
   map<V>(source: Source<V>, fn: (key: string) => string | null): Source<V>
+  flatMap<Outer, Inner>(
+    outer: Source<Outer>,
+    fn: (key: string, value: Outer) => Source<Inner>,
+    options?: FlatMapOptions,
+  ): Source<Inner>
+  of<V>(exchange: any, bound: BoundSchema<any>): Source<V>
+  of<V>(
+    exchange: any,
+    bound: BoundSchema<any>,
+    accessor: (docRef: any) => any,
+  ): Source<V>
+  of<V>(
+    exchange: any,
+    bound: BoundSchema<any>,
+    accessor: (docRef: any) => any,
+    keyFn: (itemRef: V) => any,
+  ): Source<V>
 }
 
 export const Source: SourceStatic = {
@@ -594,4 +788,6 @@ export const Source: SourceStatic = {
   filter,
   union,
   map,
+  flatMap,
+  of,
 } as SourceStatic

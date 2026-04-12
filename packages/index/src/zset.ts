@@ -15,7 +15,9 @@ const EMPTY: ZSet = new Map()
 
 // Group operations — all pure functions
 
-export function zero(): ZSet { return EMPTY }
+export function zero(): ZSet {
+  return EMPTY
+}
 
 export function single(key: string, weight: number = 1): ZSet {
   if (weight === 0) return EMPTY

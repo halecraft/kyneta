@@ -222,7 +222,8 @@ export type SchemaRef<
           : // --- MovableSequence ---
             S extends MovableSequenceSchema<infer I>
             ? Wrap<
-                ReadableSequenceRef<Removable<SchemaRef<I, M, N>>, Plain<I>> & SequenceRef,
+                ReadableSequenceRef<Removable<SchemaRef<I, M, N>>, Plain<I>> &
+                  SequenceRef,
                 M,
                 N["movableList"]
               >
@@ -247,7 +248,10 @@ export type SchemaRef<
                 : // --- Sequence ---
                   S extends SequenceSchema<infer I>
                   ? Wrap<
-                      ReadableSequenceRef<Removable<SchemaRef<I, M, N>>, Plain<I>> &
+                      ReadableSequenceRef<
+                        Removable<SchemaRef<I, M, N>>,
+                        Plain<I>
+                      > &
                         SequenceRef,
                       M,
                       N["list"]
@@ -255,7 +259,10 @@ export type SchemaRef<
                   : // --- Map ---
                     S extends MapSchema<infer I>
                     ? Wrap<
-                        ReadableMapRef<Removable<SchemaRef<I, M, N>>, Plain<I>> &
+                        ReadableMapRef<
+                          Removable<SchemaRef<I, M, N>>,
+                          Plain<I>
+                        > &
                           WritableMapRef<Plain<I>>,
                         M,
                         N["map"]

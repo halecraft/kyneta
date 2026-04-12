@@ -9,12 +9,12 @@
 // ℤ-set deltas are projected into added/removed events compatible with
 // the Changeset<C> envelope.
 
-import type { SecondaryIndex } from "./index-impl.js"
-import type { JoinIndex } from "./join.js"
 import type { Collection } from "./collection.js"
-import type { KeySpec } from "./key-spec.js"
+import type { SecondaryIndex } from "./index-impl.js"
 import { by } from "./index-impl.js"
+import type { JoinIndex } from "./join.js"
 import { join } from "./join.js"
+import type { KeySpec } from "./key-spec.js"
 
 // ---------------------------------------------------------------------------
 // Index namespace — typed facade
@@ -36,50 +36,44 @@ export const Index: IndexStatic = { by, join } as IndexStatic
 // Re-exports
 // ---------------------------------------------------------------------------
 
-// ZSet — the abelian group
-export {
-  type ZSet,
-  zero,
-  single,
-  add,
-  negate,
-  isEmpty,
-  positive,
-  fromKeys,
-  entries,
-  toAdded,
-  toRemoved,
-} from "./zset.js"
-
-// Source — consumer-stateless delta producer
-export {
-  Source,
-  type SourceEvent,
-  type SourceHandle,
-  type SourceMapping,
-  type ExchangeSourceHandle,
-} from "./source.js"
-
 // Collection — the ℐ operator
 export {
   Collection,
   type CollectionChange,
 } from "./collection.js"
-
 // SecondaryIndex — the Gₚ (grouping) operator
-export {
-  type SecondaryIndex,
-  type IndexChange,
+export type {
+  IndexChange,
+  SecondaryIndex,
 } from "./index-impl.js"
-
 // JoinIndex — the bilinear operator
-export {
-  type JoinIndex,
-} from "./join.js"
-
+export type { JoinIndex } from "./join.js"
 // KeySpec — key extraction helpers
 export {
-  type KeySpec,
   field,
+  type KeySpec,
   keys,
 } from "./key-spec.js"
+// Source — consumer-stateless delta producer
+export {
+  type ExchangeSourceHandle,
+  type FlatMapOptions,
+  Source,
+  type SourceEvent,
+  type SourceHandle,
+  type SourceMapping,
+} from "./source.js"
+// ZSet — the abelian group
+export {
+  add,
+  entries,
+  fromKeys,
+  isEmpty,
+  negate,
+  positive,
+  single,
+  toAdded,
+  toRemoved,
+  type ZSet,
+  zero,
+} from "./zset.js"

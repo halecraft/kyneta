@@ -1,8 +1,8 @@
+import { change, createDoc, json, Schema } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
-import { json, Schema, createDoc, change } from "@kyneta/schema"
-import { Source } from "../source.js"
 import type { SourceEvent } from "../source.js"
-import { isEmpty, toAdded, toRemoved } from "../zset.js"
+import { Source } from "../source.js"
+import { toAdded, toRemoved } from "../zset.js"
 
 // ---------------------------------------------------------------------------
 // Source.create — manual source
@@ -286,7 +286,7 @@ describe("Source.fromList", () => {
 
     // Get the first item ref and change its key
     const itemRef = [...doc.items][0]
-    change(doc, (d: any) => {
+    change(doc, (_d: any) => {
       itemRef.id.set("new-key")
     })
 
@@ -309,7 +309,7 @@ describe("Source.fromList", () => {
 
     // Mutate name, not id — should not emit
     const itemRef = [...doc.items][0]
-    change(doc, (d: any) => {
+    change(doc, (_d: any) => {
       itemRef.name.set("Alicia")
     })
 
@@ -475,7 +475,7 @@ describe("Source.map", () => {
     handle.set("keep", 1)
     handle.set("drop", 2)
 
-    const mapped = Source.map(source, key => key === "drop" ? null : key)
+    const mapped = Source.map(source, key => (key === "drop" ? null : key))
     const snap = mapped.snapshot()
 
     expect(snap.size).toBe(1)
