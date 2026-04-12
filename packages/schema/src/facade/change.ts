@@ -15,10 +15,11 @@
 // discovery, error guard, delegation.
 
 import type { Op } from "../changefeed.js"
-import type { WritableContext } from "../interpreters/writable.js"
+import type { HasRemove, WritableContext } from "../interpreters/writable.js"
 import {
   executeBatch,
   hasTransact,
+  REMOVE,
   TRANSACT,
 } from "../interpreters/writable.js"
 
@@ -134,4 +135,30 @@ export function applyChanges(
 
   executeBatch(ctx, ops, options?.origin)
   return ops
+}
+
+// ---------------------------------------------------------------------------
+// remove — structural self-removal from parent container
+// ---------------------------------------------------------------------------
+
+/**
+ * Remove a ref from its parent container.
+ *
+ * The ref must be a child of a sequence, map, or set — i.e. obtained
+ * via `.at()` on a container ref. Dispatches the appropriate change
+ * (sequence delete or map key delete) at the parent path.
+ *
+ * This is the facade for `ref[REMOVE]()`. Equivalent to calling
+ * `ref[REMOVE]()` directly, but reads more naturally in application code.
+ *
+ * ```ts
+ * function TaskCard({ task }: { task: Ref<TaskSchema> }) {
+ *   return <button onClick={() => remove(task)}>Remove</button>
+ * }
+ * ```
+ *
+ * @throws If `ref` does not have a `[REMOVE]` symbol (e.g. product field, top-level doc).
+ */
+export function remove(ref: HasRemove): void {
+  ref[REMOVE]()
 }

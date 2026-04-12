@@ -107,6 +107,41 @@ export function hasTransact(value: unknown): value is HasTransact {
 }
 
 // ---------------------------------------------------------------------------
+// REMOVE — structural self-removal from parent container
+// ---------------------------------------------------------------------------
+
+/**
+ * Symbol attached to refs that support structural removal from their
+ * parent container (sequence element, map entry, set member).
+ *
+ * Calling `ref[REMOVE]()` dispatches the appropriate delete change
+ * at the parent path. Top-level document refs and product field refs
+ * do NOT carry this symbol — only "addressable children" of containers.
+ *
+ * Uses `Symbol.for` so multiple copies share the same identity.
+ */
+export const REMOVE: unique symbol = Symbol.for("kyneta:remove") as any
+
+/**
+ * An object that carries a `[REMOVE]` method for self-removal.
+ */
+export interface HasRemove {
+  [REMOVE](): void
+}
+
+/**
+ * Returns `true` if `value` has a `[REMOVE]` symbol property.
+ */
+export function hasRemove(value: unknown): value is HasRemove {
+  return (
+    value !== null &&
+    value !== undefined &&
+    (typeof value === "object" || typeof value === "function") &&
+    REMOVE in (value as object)
+  )
+}
+
+// ---------------------------------------------------------------------------
 // WritableContext — shared state flowing through the tree
 // ---------------------------------------------------------------------------
 

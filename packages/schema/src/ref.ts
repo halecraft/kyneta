@@ -48,6 +48,7 @@ import type {
 } from "./interpreters/readable.js"
 import type {
   CounterRef,
+  HasRemove,
   HasTransact,
   ProductRef,
   ScalarRef,
@@ -88,6 +89,21 @@ import type {
  * - `"rwc"` — read-write-changefeed: `HasTransact` + `HasChangefeed`
  */
 export type RefMode = "rw" | "rwc"
+
+// ---------------------------------------------------------------------------
+// Removable<T> — container-child ref wrapper
+// ---------------------------------------------------------------------------
+
+/**
+ * A ref that can remove itself from its parent container via `[REMOVE]()`.
+ *
+ * Produced by `.at()` on sequence, map, and set refs. Product field refs
+ * and top-level document refs are NOT `Removable`.
+ *
+ * At runtime, `withAddressing` attaches `[REMOVE]` on container-child refs
+ * via the `onRefCreated` hook (writable stacks only).
+ */
+export type Removable<T> = T & HasRemove
 
 // ---------------------------------------------------------------------------
 // Wrap<T, M, Native> — mode-dispatched cross-cutting concern wrapper
@@ -193,7 +209,7 @@ export type SchemaRef<
       : // --- Set (map-like shape) ---
         S extends SetSchema<infer I>
         ? Wrap<
-            ReadableMapRef<SchemaRef<I, M, N>, Plain<I>> &
+            ReadableMapRef<Removable<SchemaRef<I, M, N>>, Plain<I>> &
               WritableMapRef<Plain<I>>,
             M,
             N["set"]
@@ -206,7 +222,7 @@ export type SchemaRef<
           : // --- MovableSequence ---
             S extends MovableSequenceSchema<infer I>
             ? Wrap<
-                ReadableSequenceRef<SchemaRef<I, M, N>, Plain<I>> & SequenceRef,
+                ReadableSequenceRef<Removable<SchemaRef<I, M, N>>, Plain<I>> & SequenceRef,
                 M,
                 N["movableList"]
               >
@@ -231,7 +247,7 @@ export type SchemaRef<
                 : // --- Sequence ---
                   S extends SequenceSchema<infer I>
                   ? Wrap<
-                      ReadableSequenceRef<SchemaRef<I, M, N>, Plain<I>> &
+                      ReadableSequenceRef<Removable<SchemaRef<I, M, N>>, Plain<I>> &
                         SequenceRef,
                       M,
                       N["list"]
@@ -239,7 +255,7 @@ export type SchemaRef<
                   : // --- Map ---
                     S extends MapSchema<infer I>
                     ? Wrap<
-                        ReadableMapRef<SchemaRef<I, M, N>, Plain<I>> &
+                        ReadableMapRef<Removable<SchemaRef<I, M, N>>, Plain<I>> &
                           WritableMapRef<Plain<I>>,
                         M,
                         N["map"]

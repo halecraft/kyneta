@@ -52,6 +52,7 @@ Zero runtime dependencies.
 | **Transactions** | `change(doc, d => { ... })` → `Op[]` — atomic batching, returns captured ops |
 | **Sync** | `applyChanges(docB, ops)` — apply ops from another doc, network, or undo stack |
 | **Observation** | `subscribe(doc, cb)` for tree-level, `subscribeNode(ref, cb)` for leaf-level |
+| **Self-removal** | `remove(ref)` — a child ref removes itself from its parent container |
 | **Version tracking** | `version(doc)`, `delta(doc, fromVersion)`, `exportSnapshot(doc)` |
 | **Validation** | `validate(schema, data)` — same schema, no separate Zod/Yup definition |
 | **Template coercion** | `` `Count: ${doc.count}` `` works via `toPrimitive` — no `.()` needed |
@@ -109,6 +110,7 @@ doc.tasks.length           // current length
 doc.tasks.push({ ... })    // append
 doc.tasks.insert(0, item)  // insert at index
 doc.tasks.delete(1, 2)     // delete range
+remove(doc.tasks.at(0))    // item removes itself from parent
 for (const task of doc.tasks) { ... }  // iterate refs
 doc.tasks()                // convert tasks to plain JSON
 

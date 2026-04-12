@@ -83,7 +83,7 @@ export { createDoc, createRef } from "./create-doc.js"
 export { describe } from "./describe.js"
 export type { ApplyChangesOptions } from "./facade/change.js"
 // Facade — library-level change capture and declarative application
-export { applyChanges, change } from "./facade/change.js"
+export { applyChanges, change, remove } from "./facade/change.js"
 // Facade — library-level observation protocol
 export { subscribe, subscribeNode } from "./facade/observe.js"
 // Guards — shared type-narrowing utilities
@@ -172,6 +172,7 @@ export { withNavigation } from "./interpreters/with-navigation.js"
 export { withReadable } from "./interpreters/with-readable.js"
 export type {
   CounterRef,
+  HasRemove,
   HasTransact,
   ProductRef,
   ScalarRef,
@@ -184,7 +185,9 @@ export type {
 export {
   buildWritableContext,
   executeBatch,
+  hasRemove,
   hasTransact,
+  REMOVE,
   TRANSACT,
   withWritable,
 } from "./interpreters/writable.js"
@@ -235,6 +238,7 @@ export type {
   DocRef,
   Ref,
   RefMode,
+  Removable,
   RRef,
   RWRef,
   SchemaRef,

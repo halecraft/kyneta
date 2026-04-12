@@ -4,7 +4,16 @@
 // installs an AddressedPath root on the context (so all descendant
 // paths are identity-stable), hooks into the `prepare` pipeline for
 // eager index address advancement (sequences) and tombstoning (maps),
-// and attaches the `deleted` getter on refs via the `onRefCreated` hook.
+// attaches the `deleted` getter on refs via the `onRefCreated` hook,
+// and attaches `[REMOVE]` on container-child refs (writable stacks only).
+//
+// The `[REMOVE]` attachment introduces a dependency on `writable.ts`
+// (for `TRANSACT`, `hasTransact`, `REMOVE`, `WritableContext`). This
+// coupling is justified: `onRefCreated` is the only correct attachment
+// point for `[REMOVE]` because it owns child discrimination (index vs
+// key) and path structure (parent path derivation). The `[REMOVE]`
+// closure dispatches at the *parent* path — the sole exception to the
+// "every node dispatches at its own path" invariant.
 //
 // Composition ordering:
 //   withCaching(withAddressing(withReadable(withNavigation(bottom))))
@@ -23,6 +32,8 @@ import {
   isMapChange,
   isReplaceChange,
   isSequenceChange,
+  mapChange,
+  sequenceChange,
 } from "../change.js"
 import { isPropertyHost } from "../guards.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
@@ -47,6 +58,8 @@ import type {
   TreeSchema,
 } from "../schema.js"
 import type { HasNavigation } from "./bottom.js"
+import { hasTransact, REMOVE, TRANSACT } from "./writable.js"
+import type { WritableContext } from "./writable.js"
 
 // ---------------------------------------------------------------------------
 // ADDRESS_TABLE symbol — discovery hook for withCaching (Phase 5)
@@ -283,17 +296,69 @@ export function withAddressing<A extends HasNavigation>(
           })
         }
 
+        // Hoist parentPath — reused for table registration and [REMOVE] closure
+        const parentPath = addrPath.slice(0, addrPath.length - 1)
+
         // Register ref in the appropriate address table
         if (lastAddr.kind === "index") {
-          // Sequence item — find the parent path key
-          const parentKey = addrPath.slice(0, addrPath.length - 1).key
-          registry?.registerSequenceRef(parentKey, lastAddr, ref)
+          // Sequence item
+          registry?.registerSequenceRef(parentPath.key, lastAddr, ref)
         } else if (lastAddr.kind === "key") {
           // Map/product entry — register in the map table
-          const parentKey = addrPath.slice(0, addrPath.length - 1).key
           const childKey = lastAddr.key
-          registry?.ensureMapEntry(parentKey, childKey, lastAddr)
-          registry?.registerMapRef(parentKey, childKey, ref)
+          registry?.ensureMapEntry(parentPath.key, childKey, lastAddr)
+          registry?.registerMapRef(parentPath.key, childKey, ref)
+        }
+
+        // Attach [REMOVE] for container children on writable stacks.
+        // Only attach when: (1) ref has [TRANSACT] (writable stack),
+        // (2) ref is a property host, and (3) the child is part of a
+        // container (sequence/map/set/movable), not a product field.
+        //
+        // Container discrimination: the addressing handler map has an
+        // entry for every container parent (sequence, map, set, movable
+        // cases register handlers). Product parents do not register
+        // handlers. So handlers.has(parentPath.key) === true means
+        // "parent is a container."
+        if (isPropertyHost(ref) && hasTransact(ref)) {
+          const isContainerChild =
+            lastAddr.kind === "index" ||
+            (addressingContextState.get(ctx)?.handlers.has(parentPath.key) ??
+              false)
+
+          if (isContainerChild) {
+            Object.defineProperty(ref, REMOVE, {
+              value() {
+                if (lastAddr.dead) {
+                  const detail =
+                    lastAddr.kind === "index"
+                      ? "The item this ref pointed to has been removed."
+                      : `The entry "${lastAddr.key}" this ref pointed to has been removed.`
+                  throw new Error(`Cannot remove a dead ref. ${detail}`)
+                }
+                const wctx: WritableContext = (ref as any)[TRANSACT]
+                if (lastAddr.kind === "index") {
+                  const index = lastAddr.index
+                  wctx.dispatch(
+                    parentPath,
+                    sequenceChange([
+                      ...(index > 0 ? [{ retain: index }] : []),
+                      { delete: 1 },
+                    ]),
+                  )
+                } else {
+                  // key-based (map/set entry)
+                  wctx.dispatch(
+                    parentPath,
+                    mapChange(undefined, [lastAddr.key]),
+                  )
+                }
+              },
+              enumerable: false,
+              configurable: true,
+              writable: false,
+            })
+          }
         }
       }
     }

@@ -410,7 +410,7 @@ HasRead        HasCaching
 
 #### Symbol-Keyed Composability Hooks
 
-Cross-layer communication uses four well-known symbols:
+Cross-layer communication uses six well-known symbols:
 
 | Symbol | Module | Purpose |
 |---|---|---|
@@ -419,6 +419,7 @@ Cross-layer communication uses four well-known symbols:
 | `INVALIDATE` (`kyneta:invalidate`) | `with-caching.ts` | Change-driven cache invalidation — refs carry it for direct use; `prepare` pipeline fires it automatically |
 | `CHANGEFEED` (`kyneta:changefeed`) | `changefeed.ts` | Observation coalgebra — `withChangefeed` attaches it |
 | `TRANSACT` (`kyneta:transact`) | `writable.ts` | Context discovery — refs carry a reference to their `WritableContext` |
+| `REMOVE` (`kyneta:remove`) | `writable.ts` | Structural self-removal — container-child refs can remove themselves from their parent; `withAddressing` attaches it via `onRefCreated` |
 
 All use `Symbol.for()` so multiple copies of the module share identity.
 
@@ -466,6 +467,8 @@ An **Address** is the stable identity of an entity within a composite node. Thre
 **`ADDRESS_TABLE` symbol** (`Symbol.for("kyneta:addressTable")`): attached to sequence and map refs so `withCaching` can delegate its memoization to the address table rather than maintaining a separate cache. This is the bridge between addressing and caching — `withCaching` reads the address table to determine which cached children are still valid.
 
 **Composition ordering**: `withCaching(withAddressing(withReadable(withNavigation(bottom))))`. Addressing must come after `withReadable` (needs navigable refs to attach tables to) and before `withCaching` (caching consults address tables for invalidation).
+
+**`[REMOVE]` attachment.** On writable stacks, `withAddressing` attaches `[REMOVE]` to container-child refs (sequence items, map entries, set entries) via the `onRefCreated` hook. The `[REMOVE]()` closure constructs the appropriate change (`SequenceChange` for index-based children, `MapChange` for key-based children) and dispatches it at the *parent path* — the sole exception to the "every node dispatches at its own path" invariant. Product field refs do NOT receive `[REMOVE]`. Container/product discrimination uses the `addressingContextState` handler map: only containers (sequence, map, set, movable) register addressing handlers, so `handlers.has(parentPath.key)` returns `true` for containers and `false` for products. On read-only stacks (no `[TRANSACT]`), `[REMOVE]` is not attached. This introduces a dependency from `with-addressing.ts` to `writable.ts` (`TRANSACT`, `hasTransact`, `REMOVE`, `WritableContext`) — a coupling justified by `onRefCreated` being the only correct attachment point for `[REMOVE]` (it owns child discrimination and path structure).
 
 #### withReadable (`src/interpreters/with-readable.ts`)
 
@@ -541,7 +544,7 @@ Mutation methods simply construct the appropriate change and call `ctx.dispatch(
 
 #### Dispatch Model
 
-**Every node dispatches at its own path.** This is a universal invariant with no exceptions. Scalar `.set()` dispatches `ReplaceChange` at `["settings", "darkMode"]`, not `MapChange` at `["settings"]`. Product `.set()` dispatches `ReplaceChange` at `["settings"]`. Text `.insert()` dispatches `TextChange` at `["title"]`. The dispatch path always equals the node's path in the schema tree.
+**Every node dispatches at its own path.** This is a universal invariant. The sole exception is `[REMOVE]`, which dispatches at the *parent* path — a structural removal from the parent container rather than a mutation of the node itself. Scalar `.set()` dispatches `ReplaceChange` at `["settings", "darkMode"]`, not `MapChange` at `["settings"]`. Product `.set()` dispatches `ReplaceChange` at `["settings"]`. Text `.insert()` dispatches `TextChange` at `["title"]`. The dispatch path always equals the node's path in the schema tree.
 
 This design gives developers two mutation granularities:
 
@@ -579,6 +582,8 @@ interface WritableContext extends RefContext {
 
 **Invariant:** `executeBatch`, `prepare`, and `flush` must not be called during an active transaction. `executeBatch` throws if `ctx.inTransaction` is true — this prevents `applyChanges` from corrupting a half-built transaction.
 
+**Transaction stale-index characteristic.** `[REMOVE]` inside a transaction reads the address index at invocation time, not at commit time. Multiple `[REMOVE]` calls on siblings in the same transaction have the same stale-index characteristics as multiple positional `.delete()` calls — changes buffer until commit, and `prepare` (which advances addresses) runs at commit time, not dispatch time. This is inherent to the transaction buffering model.
+
 Layers like `withChangefeed` wrap `prepare` (to accumulate notification entries) and `flush` (to deliver `Changeset` batches). `withCaching` wraps `prepare` (to invalidate caches). Both use the `WeakMap` + idempotent wrapping pattern for per-context, exactly-once wiring.
 
 The `TRANSACT` symbol (`Symbol.for("kyneta:transact")`) and `HasTransact` interface enable context discovery from any ref — `change()` and `applyChanges()` find the `WritableContext` without a WeakMap or re-interpretation.
@@ -594,6 +599,7 @@ The library-level API for change capture, declarative application, and observati
 
 - **`change(ref, fn) → Op[]`** — imperative mutation capture. Runs `fn` inside a transaction, returns the captured changes. Aborts on error.
 - **`applyChanges(ref, ops, {origin?}) → Op[]`** — declarative application. Applies a list of changes via `executeBatch`, triggering the full prepare pipeline (cache invalidation + store mutation + notification accumulation) then flush (batched `Changeset` delivery). Empty ops is a no-op.
+- **`remove(ref)`** — structural self-removal. Calls `ref[REMOVE]()`, removing the ref from its parent container. Requires a container-child ref (obtained via `.at()` on a sequence, map, or set). Throws if the ref doesn't have `[REMOVE]` (product field, top-level doc) or if the ref is dead. This is the facade for the `[REMOVE]` symbol — equivalent to calling `ref[REMOVE]()` directly.
 - **`subscribe(ref, cb) → () => void`** — tree-level observation (the default). Callback receives `Changeset<Op>` with relative paths. Only works on composite refs (products, sequences, maps). A strict superset of `subscribeNode` — subscribers also see own-path changes with `path: []`. Delegates to `ref[CHANGEFEED].subscribeTree(cb)`.
 - **`subscribeNode(ref, cb) → () => void`** — node-level observation. Callback receives `Changeset`. For leaf refs, fires on any mutation. For composite refs, fires only on node-level changes (e.g. product `.set()`), not child mutations. Delegates to `ref[CHANGEFEED].subscribe(cb)`.
 
@@ -910,7 +916,9 @@ The type hierarchy for collections:
 - `NavigableSequenceRef<T>` / `NavigableMapRef<T>` — pure structural addressing (`.at()`, `.length`, `.keys()`)
 - `ReadableSequenceRef<T, V> extends NavigableSequenceRef<T>` — adds call signature `(): V[]` and `.get()`
 - `SequenceRef` — mutation only (`.push()`, `.insert()`, `.delete()`) — no `.at()`, no type parameter
-- `Ref<SequenceSchema<I>, N>` = `ReadableSequenceRef<Ref<I, N>, Plain<I>> & SequenceRef & HasTransact & HasChangefeed & HasNative<N["list"]>`
+- `Ref<SequenceSchema<I>, N>` = `ReadableSequenceRef<Removable<Ref<I, N>>, Plain<I>> & SequenceRef & HasTransact & HasChangefeed & HasNative<N["list"]>`
+
+**`Removable<T>`** — a wrapper type that adds `HasRemove` to a ref type. `Removable<T> = T & HasRemove`. In `SchemaRef`, container children (sequence items, map entries, set entries, movable list items) are wrapped: `ReadableSequenceRef<Removable<SchemaRef<I, M, N>>, Plain<I>>`. Product field refs and top-level document refs are NOT `Removable`. `Readable<S>` (the `RRef` tier) is also NOT `Removable` — it is a separate read-only recursive type with no mutation surface.
 
 `RRef<S>` is a naming alias for `Readable<S>` — it is not a `SchemaRef` mode because read-only refs have a fundamentally different structure (no mutation interfaces, no `HasTransact`, no `HasNative`). `Readable<S>` and `Writable<S>` remain for partial-stack scenarios (read-only documents, mutation-only code paths). All types account for constrained scalars.
 
