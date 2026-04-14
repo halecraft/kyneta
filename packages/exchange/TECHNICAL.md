@@ -627,6 +627,18 @@ Batching is **orthogonal to framing**. The frame layer does not distinguish sing
 
 The `BinaryCodec` operates on raw bytes (`encode`/`decode`/`encodeBatch`/`decodeBatch` with `Uint8Array`). The `TextCodec` operates on JSON-safe objects (`encode` returns `unknown`, `decode` accepts `unknown`).
 
+### Internal CBOR Codec (`cbor-encoding.ts`)
+
+The CBOR encoder/decoder is internal to `@kyneta/wire` — no external dependency. It implements RFC 8949 major types 0–5 and 7 (no tags). The module exports `encodeCBOR`, `decodeCBOR`, and the `CBORType` union type, but these are **not** re-exported from the package's public API. Only `cborCodec` (the `BinaryCodec` implementation) is public.
+
+Two correctness properties distinguish this from the former `@levischuck/tiny-cbor` dependency:
+
+1. **UTF-8–correct string encoding.** The CBOR text string header must encode the UTF-8 byte length (RFC 8949 §3.1). The `encodeString` function encodes the string to UTF-8 first via `TextEncoder`, then uses the resulting `byteLength` for the header. JavaScript's `String.length` returns UTF-16 code units, which diverges from UTF-8 byte length for any non-ASCII character — Latin (+1 byte/char), CJK (+2), emoji (+2). The former library used `.length`, silently corrupting any wire message containing non-ASCII strings.
+
+2. **`byteOffset`-correct `DataView` construction.** The decoder constructs `new DataView(data.buffer, data.byteOffset, data.byteLength)`, correctly handling `Uint8Array` views into shared `ArrayBuffer`s (e.g. Node.js pooled `Buffer` instances with non-zero `byteOffset`). The former library did `new DataView(data.buffer)` without offset, which would silently read from the wrong position.
+
+The `cborCodec` in `cbor.ts` bridges between kyneta's plain-object wire types and CBOR's `Map`-based type system via `objectToMap`/`mapToObject`. This bridge is intentional — CBOR maps are ordered and can have non-string keys, so `Map<string | number, CBORType>` is the correct CBOR-native representation.
+
 ### Three Pipelines
 
 ```

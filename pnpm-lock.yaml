@@ -526,10 +526,6 @@ importers:
         version: 4.1.4(@opentelemetry/api@1.9.0)(@types/node@22.19.17)(jsdom@26.1.0)(vite@7.3.2(@types/node@22.19.17)(tsx@4.21.0))
 
   packages/exchange/wire:
-    dependencies:
-      '@levischuck/tiny-cbor':
-        specifier: ^0.3.2
-        version: 0.3.2
     devDependencies:
       '@kyneta/schema':
         specifier: workspace:^
@@ -1712,9 +1708,6 @@ packages:
   '@koa/cors@5.0.0':
     resolution: {integrity: sha512-x/iUDjcS90W69PryLDIMgFyV21YLTnG9zOpPXS7Bkt2b8AsY3zZsIpOLBkYr9fBcF3HbkKaER5hOBZLfpLgYNw==}
     engines: {node: '>= 14.0.0'}
-
-  '@levischuck/tiny-cbor@0.3.2':
-    resolution: {integrity: sha512-v15eUU94R54eghlKZJtO/hwJmYC7w4ZIj/ybAJT2tMKdcrJNlXm7axCHS8xrQiC1wPlAQNemiwEpuBUaFGwJlQ==}
 
   '@manypkg/find-root@1.1.0':
     resolution: {integrity: sha512-mki5uBvhHzO8kYYix/WRy2WX8S3B5wdVSc9D6KcU5lQNglP2yt58/VfLuAK49glRXChosY8ap2oJ1qgma3GUVA==}
@@ -5349,8 +5342,6 @@ snapshots:
   '@koa/cors@5.0.0':
     dependencies:
       vary: 1.1.2
-
-  '@levischuck/tiny-cbor@0.3.2': {}
 
   '@manypkg/find-root@1.1.0':
     dependencies:

@@ -13,9 +13,9 @@ import type {
   OfferMsg,
   PresentMsg,
 } from "@kyneta/transport"
-import { type CBORType, encodeCBOR } from "@levischuck/tiny-cbor"
 import { describe, expect, it } from "vitest"
 import { cborCodec } from "../cbor.js"
+import { type CBORType, encodeCBOR } from "../cbor-encoding.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -386,5 +386,79 @@ describe("CBOR codec — error handling", () => {
     expect(() => cborCodec.decode(encoded)).toThrow(
       "Unknown wire payload encoding: 153",
     )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Multi-byte UTF-8 (the bug that prompted replacing tiny-cbor)
+// ---------------------------------------------------------------------------
+
+describe("CBOR codec — multi-byte UTF-8", () => {
+  it("round-trips offer with emoji in JSON payload", () => {
+    const msg: OfferMsg = {
+      type: "offer",
+      docId: "game:hand:player1",
+      payload: {
+        kind: "entirety",
+        encoding: "json",
+        data: JSON.stringify({ glyph: "🔥", name: "fire", tags: ["💧", "🪨"] }),
+      },
+      version: "1",
+    }
+    const decoded = roundTrip(msg)
+    expect(decoded).toEqual(msg)
+  })
+
+  it("round-trips offer with CJK characters in JSON payload", () => {
+    const msg: OfferMsg = {
+      type: "offer",
+      docId: "doc-i18n",
+      payload: {
+        kind: "entirety",
+        encoding: "json",
+        data: JSON.stringify({ title: "日本語テスト", count: 42 }),
+      },
+      version: "3",
+    }
+    const decoded = roundTrip(msg)
+    expect(decoded).toEqual(msg)
+  })
+
+  it("round-trips establish-request with non-ASCII peer name", () => {
+    const msg: EstablishRequestMsg = {
+      type: "establish-request",
+      identity: {
+        peerId: "peer-jp-1",
+        name: "日本語ユーザー",
+        type: "user",
+      },
+    }
+    const decoded = roundTrip(msg)
+    expect(decoded).toEqual(msg)
+  })
+
+  it("round-trips batch containing messages with non-ASCII fields", () => {
+    const msgs: ChannelMsg[] = [
+      {
+        type: "establish-request",
+        identity: { peerId: "p1", name: "André", type: "user" },
+      },
+      {
+        type: "offer",
+        docId: "doc-emoji",
+        payload: {
+          kind: "entirety",
+          encoding: "json",
+          data: JSON.stringify({ emoji: "🔥💧🪨💨🌀", café: true }),
+        },
+        version: "1",
+      },
+    ]
+
+    const encoded = cborCodec.encode(msgs)
+    const decoded = cborCodec.decode(encoded)
+    expect(decoded).toHaveLength(2)
+    expect(decoded[0]).toEqual(msgs[0])
+    expect(decoded[1]).toEqual(msgs[1])
   })
 })

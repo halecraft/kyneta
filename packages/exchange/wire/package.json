@@ -37,9 +37,7 @@
   "peerDependencies": {
     "@kyneta/transport": "^1.0.0"
   },
-  "dependencies": {
-    "@levischuck/tiny-cbor": "^0.3.2"
-  },
+
   "devDependencies": {
     "@kyneta/transport": "workspace:^",
     "@kyneta/schema": "workspace:^",

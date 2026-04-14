@@ -1,7 +1,8 @@
 // cbor — CBOR codec for encoding/decoding ChannelMsg types.
 //
-// Uses @levischuck/tiny-cbor for compact binary encoding. CBOR handles
-// Uint8Array natively as byte strings — no base64 overhead.
+// Uses an internal CBOR encoder/decoder (cbor-encoding.ts) for compact
+// binary encoding. CBOR handles Uint8Array natively as byte strings —
+// no base64 overhead.
 //
 // The codec converts between kyneta's ChannelMsg types and compact wire
 // objects with integer discriminators and short field names, then
@@ -16,7 +17,7 @@ import type {
   OfferMsg,
   PresentMsg,
 } from "@kyneta/transport"
-import { type CBORType, decodeCBOR, encodeCBOR } from "@levischuck/tiny-cbor"
+import { type CBORType, decodeCBOR, encodeCBOR } from "./cbor-encoding.js"
 import type { BinaryCodec } from "./codec.js"
 import {
   MergeStrategyWireToString,
@@ -41,10 +42,10 @@ import {
 /**
  * Convert a plain JS object to a Map for CBOR encoding.
  *
- * `@levischuck/tiny-cbor` works with CBOR's native type system where
- * objects are represented as `Map<string | number, CBORType>`.
- * Recursively handles nested objects and arrays. `Uint8Array` passes
- * through directly (CBOR has native byte string support).
+ * CBOR's native type system represents objects as
+ * `Map<string | number, CBORType>`. Recursively handles nested objects
+ * and arrays. `Uint8Array` passes through directly (CBOR has native
+ * byte string support).
  */
 function objectToMap(obj: unknown): CBORType {
   if (obj === null || obj === undefined) {
@@ -93,20 +94,6 @@ function mapToObject(value: CBORType): unknown {
     return value.map(mapToObject)
   }
   return value
-}
-
-/**
- * Normalize a Uint8Array subclass (like Buffer) to a plain Uint8Array.
- *
- * The `@levischuck/tiny-cbor` library performs strict prototype checks
- * and only accepts plain Uint8Array, not subclasses like Buffer.
- * Bun and Node.js Websocket implementations may return Buffer instances.
- */
-function normalizeUint8Array(data: Uint8Array): Uint8Array {
-  if (data.constructor === Uint8Array) {
-    return data
-  }
-  return new Uint8Array(data)
 }
 
 // ---------------------------------------------------------------------------
@@ -308,9 +295,8 @@ export const cborCodec: BinaryCodec = {
   },
 
   decode(data: Uint8Array): ChannelMsg[] {
-    const normalized = normalizeUint8Array(data)
     try {
-      const decoded = decodeCBOR(normalized)
+      const decoded = decodeCBOR(data)
       const obj = mapToObject(decoded)
 
       // Auto-detect: array = batch, object = single message
