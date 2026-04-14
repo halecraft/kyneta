@@ -10,21 +10,45 @@ Schema interpreter algebra — pure structure, pluggable interpretations.
 
 Defines a single recursive grammar (`Schema` namespace — five structural constructors plus five first-class CRDT types: `text`, `counter`, `set`, `tree`, `movable`) and a fluent `interpret()` builder that composes a six-layer interpreter stack: bottom → navigation → readable → addressing → caching → writable → changefeed. The `Interpreter` interface has 10 methods — one per `[KIND]` value. The output is a typed `Ref<S>` handle — a callable, navigable, writable, observable document reference. A `Substrate` interface abstracts state management and transfer semantics, enabling different backing stores (plain JS objects, CRDTs) behind the same interpreter stack. Backend packages (`@kyneta/loro-schema`, `@kyneta/yjs-schema`) use `Schema.*` directly via their bind functions (`loro.bind()`, `yjs.bind()`). Also provides shared version-vector algebra (`versionVectorMeet`, `versionVectorCompare`) and platform-agnostic base64 encoding helpers used by backend substrate implementations.
 
-Zero runtime dependencies. 1,447 tests.
+Dependencies: `@kyneta/changefeed`. 1,666 tests.
+
+### `@kyneta/changefeed`
+
+Universal reactive contract — a Moore machine identified by `[CHANGEFEED]`. Provides `Changefeed<T>`, `ReactiveMap<K,V>`, and the `Callable` protocol. Extracted from `@kyneta/schema` as the foundational reactive primitive that schema, exchange, and all consumer packages depend on.
+
+Zero runtime dependencies. 47 tests.
+
+### `@kyneta/machine`
+
+Universal Mealy machine algebra — pure state transitions with effect outputs. Provides `Machine<S,E>` and `Observable` for modeling stateful protocols. Used by `@kyneta/transport` and exchange transports for connection lifecycle management.
+
+Zero runtime dependencies. 45 tests.
 
 ### `@kyneta/loro-schema`
 
 Loro CRDT substrate for `@kyneta/schema`. Wraps a `LoroDoc` with schema-aware typed reads, `applyDiff`-based writes, and a persistent event bridge that observes all mutations regardless of source. Schemas are defined with `Schema.*` constructors and bound via `loro.bind(schema)`. `LoroCaps = "text" | "counter" | "movable" | "tree" | "json"`.
 
-134 tests.
+180 tests.
 
 ### `@kyneta/yjs-schema`
 
 Yjs CRDT substrate for `@kyneta/schema`. Wraps a `Y.Doc` with the same `Substrate` interface as the Loro backend — `exportSnapshot()`, `exportSince()`, `importDelta()`, `version()`. Deterministic `clientID` via FNV-1a hash of the exchange's string `peerId`.
 
-143 tests.
+188 tests.
 
-### `@kyneta/compiler`
+### `@kyneta/transport`
+
+Transport infrastructure for `@kyneta/exchange` — base class, channel types, message vocabulary, identity types, client utilities, and bridge transport. Defines the `Transport` abstract interface that all exchange transports implement.
+
+Peer dependencies: `@kyneta/machine`, `@kyneta/schema`. 8 tests.
+
+### `@kyneta/index`
+
+Live, queryable views over document collections. Group by field, join across collections, subscribe to changes — views update automatically as data moves. DBSP-grounded algebraic design with `ZSet`, `Source`, `Collection`, and `Index` primitives.
+
+Dependencies: `@kyneta/changefeed`. Peer: `@kyneta/schema`. 143 tests.
+
+### `@kyneta/compiler` (experimental)
 
 Target-agnostic incremental view maintenance compiler.
 
@@ -40,7 +64,7 @@ Key subsystems:
 
 547 tests.
 
-### `@kyneta/cast`
+### `@kyneta/cast` (experimental)
 
 Web rendering target — compiled delta-driven web framework.
 
@@ -52,30 +76,30 @@ Key subsystems:
 - **Unplugin** (`src/unplugin/`) — universal build plugin with adapters for Vite, Bun, Rollup, Rolldown, esbuild, Farm
 - **Reactive** (`src/reactive/`) — `state()` local reactive primitive (`LocalRef<T>`)
 
-634 tests.
+630 tests.
 
 ### `@kyneta/exchange`
 
 Transport-agnostic, substrate-agnostic, topology-flexible (p2p, server/client, etc) state exchange.
 
-Manages document lifecycle, coordinates adapters, and synchronizes state across peers. Three merge strategies (concurrent, sequential, ephemeral) dispatched by a TEA (The Elm Architecture) state machine over a six-message protocol: two handshake messages (establish-request, establish-response) and four sync messages (discover, interest, offer, dismiss). Hosts heterogeneous documents — Loro CRDTs, Yjs CRDTs, plain JS objects, ephemeral presence — in one sync network. Unified persistence via `notify/state-advanced`: both local mutations and network imports produce incremental `since` deltas via `exportSince(storeVersion)` → `append()`, replacing the previous split of `onDocImported` + changefeed-based `replace()`. Two-phase substrate construction (`createReplica` → hydrate → `upgrade`) ensures correct CRDT identity and structural initialization after storage hydration. Requires explicit `peerId` for `exchange.get()` to ensure continuity across restarts.
+Manages document lifecycle, coordinates adapters, and synchronizes state across peers. Three merge strategies (concurrent, sequential, ephemeral) dispatched by a TEA (The Elm Architecture) state machine over a six-message protocol: two handshake messages (establish-request, establish-response) and four sync messages (discover, interest, offer, dismiss). Hosts heterogeneous documents — Loro CRDTs, Yjs CRDTs, plain JS objects, ephemeral presence — in one sync network. Unified persistence via `notify/state-advanced`: both local mutations and network imports produce incremental `since` deltas via `exportSince(storeVersion)` → `append()`, replacing the previous split of `onDocImported` + changefeed-based `replace()`. Two-phase substrate construction (`createReplica` → hydrate → `upgrade`) ensures correct CRDT identity and structural initialization after storage hydration. Requires explicit `peerId` for `exchange.get()` to ensure continuity across restarts. Depends on `@kyneta/transport` for the `Transport` abstract interface.
 
 Sub-packages:
-- **`@kyneta/wire`** (`exchange/wire/`) — binary wire protocol. CBOR codec with compact field names, 6-byte binary frame headers, and a fragmentation protocol for cloud WebSocket gateways (AWS API Gateway 128KB limit, Cloudflare Workers 1MB limit). JSON codec for debugging. See `PROTOCOL.md` for the full specification. 187 tests.
-- **`@kyneta/websocket-network-adapter`** (`exchange/network-adapters/websocket/`) — WebSocket network adapters. Client adapter (browser `WebSocket`), server adapter (abstract), and Bun-specific handlers (`createBunWebsocketHandlers`). Handles connection lifecycle, keepalive pings, ready signaling, and reconnection. 41 tests.
-- **`@kyneta/sse-network-adapter`** (`exchange/network-adapters/sse/`) — SSE (Server-Sent Events) network adapter. Symmetric text encoding, asymmetric transport (SSE downstream, POST upstream). Client, server, and Express integration. Custom reconnection state machine with `sendFn` pattern for framework-agnostic server integration. 33 tests.
+- **`@kyneta/wire`** (`exchange/wire/`) — binary wire protocol. CBOR codec with compact field names, 6-byte binary frame headers, and a fragmentation protocol for cloud WebSocket gateways (AWS API Gateway 128KB limit, Cloudflare Workers 1MB limit). JSON codec for debugging. See `PROTOCOL.md` for the full specification. 231 tests.
+- **`@kyneta/websocket-transport`** (`exchange/transports/websocket/`) — WebSocket transport. Client adapter (browser `WebSocket`), server adapter (abstract), and Bun-specific handlers (`createBunWebsocketHandlers`). Handles connection lifecycle, keepalive pings, ready signaling, and reconnection. 46 tests.
+- **`@kyneta/sse-transport`** (`exchange/transports/sse/`) — SSE (Server-Sent Events) transport. Symmetric text encoding, asymmetric transport (SSE downstream, POST upstream). Client, server, and Express integration. Custom reconnection state machine with `sendFn` pattern for framework-agnostic server integration. 41 tests.
 - **`@kyneta/webrtc-transport`** (`exchange/transports/webrtc/`) — WebRTC data channel transport. BYODC (Bring Your Own Data Channel) with `DataChannelLike` minimal interface. Binary CBOR encoding with transport-level fragmentation. 27 tests.
-- **`@kyneta/unix-socket-transport`** (`exchange/transports/unix-socket/`) — Unix domain socket transport for server-to-server sync. Stream-oriented, backpressure-aware, no fragmentation. Client and server entry points with `StreamFrameParser` and reconnecting `ClientStateMachine`. Binary CBOR encoding via `@kyneta/wire`. 42 tests.
+- **`@kyneta/unix-socket-transport`** (`exchange/transports/unix-socket/`) — Unix domain socket transport for server-to-server sync. Stream-oriented, backpressure-aware, no fragmentation. Client and server entry points with `StreamFrameParser` and reconnecting `ClientStateMachine`. Binary CBOR encoding via `@kyneta/wire`. 74 tests.
 
-127 tests (+ 187 wire + 41 websocket + 33 sse + 27 webrtc + 42 unix-socket).
+724 tests (+ 231 wire + 46 websocket + 41 sse + 27 webrtc + 74 unix-socket).
 
 ### `@kyneta/react`
 
 Thin React bindings over `@kyneta/schema` + `@kyneta/exchange`. Bridges the `[CHANGEFEED]` reactive protocol to React's rendering cycle via `useSyncExternalStore`. Two pure store factory functions (`createChangefeedStore`, `createSyncStatusStore`) form the functional core; hooks (`useValue`, `useDocument`, `useSyncStatus`) and `ExchangeProvider` form the imperative shell. Mirrors Cast's `valueRegion` — both are pure adapters from `[CHANGEFEED]` to a consumer contract. Deep-by-default subscription strategy dispatches `subscribeTree` for composite refs and node-level subscription for scalars.
 
-29 tests.
+15 tests.
 
-### `@kyneta/perspective`
+### `@kyneta/perspective` (experimental)
 
 Convergent Constraint Systems — a constraint-based approach to CRDTs. Agents assert constraints, merge is set union, and a stratified Datalog evaluator derives shared reality. Includes an incremental pipeline based on DBSP for O(|Δ|) updates. Zero runtime dependencies. Independent of the core framework. (Private — not published to npm.)
 
@@ -84,36 +108,43 @@ Convergent Constraint Systems — a constraint-based approach to CRDTs. Agents a
 ## Cross-Package Dependencies
 
 ```
-@kyneta/schema                          (no runtime dependencies)
+@kyneta/changefeed                      (no deps — reactive foundation)
+@kyneta/machine                         (no deps — state machine algebra)
     │
-    ├──► @kyneta/loro-schema            (+ loro-crdt)
-    ├──► @kyneta/yjs-schema             (+ yjs)
-    │
-    ├──► @kyneta/compiler               (+ ts-morph)
+    ├──► @kyneta/schema                 (+ changefeed)
     │        │
-    │        └──► @kyneta/cast          (+ unplugin)
-    │
-    ├──► @kyneta/exchange
+    │        ├──► @kyneta/loro-schema   (+ loro-crdt)
+    │        ├──► @kyneta/yjs-schema    (+ yjs)
+    │        ├──► @kyneta/index         (+ changefeed)
     │        │
-    │        ├──► @kyneta/wire          (+ tiny-cbor)
+    │        ├──► @kyneta/compiler      (+ ts-morph) [experimental]
     │        │        │
-    │        │        ├──► @kyneta/websocket-network-adapter
-    │        │        ├──► @kyneta/sse-network-adapter
-    │        │        ├──► @kyneta/webrtc-transport
-    │        │        └──► @kyneta/unix-socket-transport
+    │        │        └──► @kyneta/cast (+ unplugin) [experimental]
     │        │
-    │        └──► @kyneta/react         (+ react)
+    │        └──► @kyneta/transport     (+ machine)
+    │                 │
+    │                 ├──► @kyneta/exchange
+    │                 │        │
+    │                 │        ├──► @kyneta/leveldb-store
+    │                 │        └──► @kyneta/react   (+ react)
+    │                 │
+    │                 └──► @kyneta/wire
+    │                          │
+    │                          ├──► @kyneta/websocket-transport
+    │                          ├──► @kyneta/sse-transport
+    │                          ├──► @kyneta/webrtc-transport
+    │                          └──► @kyneta/unix-socket-transport
     │
-    └──► @kyneta/perspective            (standalone, no @kyneta deps — private)
+    └──► @kyneta/perspective            (standalone — private) [experimental]
 ```
 
-`@kyneta/schema` is the foundation — it defines the CHANGEFEED protocol, delta types, the interpreter algebra, and the `Substrate` interface. `@kyneta/loro-schema` and `@kyneta/yjs-schema` are CRDT substrate backends that implement `Substrate` for Loro and Yjs respectively; each provides a bind function (`loro.bind()`, `yjs.bind()`) that accepts `Schema.*` trees. `@kyneta/compiler` is the intermediate layer — it produces target-agnostic annotated IR. `@kyneta/cast` is the web rendering target that consumes compiler IR and produces DOM/HTML output. `@kyneta/exchange` orchestrates sync via adapters and the synchronizer state machine; its sub-packages `@kyneta/wire` (binary encoding and framing), `@kyneta/websocket-network-adapter` (WebSocket adapter pair), `@kyneta/sse-network-adapter` (SSE adapter), `@kyneta/webrtc-transport` (WebRTC data channel transport), and `@kyneta/unix-socket-transport` (Unix domain socket transport for server-to-server sync) live under the exchange directory. `@kyneta/react` bridges the CHANGEFEED protocol to React's rendering cycle. The `/transforms` subpath (`@kyneta/compiler/transforms`) provides optional IR→IR pipeline transforms that rendering targets apply before codegen.
+`@kyneta/changefeed` and `@kyneta/machine` are the tier-0 foundation — changefeed defines the `[CHANGEFEED]` reactive protocol, `Changefeed<T>`, `ReactiveMap`, and the `Callable` contract; machine provides the Mealy machine algebra for stateful protocols. `@kyneta/schema` depends on changefeed and defines the interpreter algebra, delta types, and the `Substrate` interface. `@kyneta/loro-schema` and `@kyneta/yjs-schema` are CRDT substrate backends that implement `Substrate` for Loro and Yjs respectively; each provides a bind function (`loro.bind()`, `yjs.bind()`) that accepts `Schema.*` trees. `@kyneta/index` builds live queryable views over document collections, depending on changefeed and schema. `@kyneta/compiler` is the intermediate layer — it produces target-agnostic annotated IR. `@kyneta/cast` is the web rendering target that consumes compiler IR and produces DOM/HTML output. `@kyneta/transport` defines the abstract `Transport` interface, depending on machine and schema. `@kyneta/exchange` orchestrates sync via transports and the synchronizer state machine; its sub-packages `@kyneta/wire` (binary encoding with internal CBOR codec and framing), `@kyneta/websocket-transport` (WebSocket transport pair), `@kyneta/sse-transport` (SSE transport), `@kyneta/webrtc-transport` (WebRTC data channel transport), and `@kyneta/unix-socket-transport` (Unix domain socket transport for server-to-server sync) live under the exchange directory. `@kyneta/react` bridges the CHANGEFEED protocol to React's rendering cycle. The `/transforms` subpath (`@kyneta/compiler/transforms`) provides optional IR→IR pipeline transforms that rendering targets apply before codegen.
 
 The `examples/todo` app exercises the full vertical slice:
 
 ```
 @kyneta/schema → @kyneta/yjs-schema → @kyneta/exchange
-→ @kyneta/websocket-network-adapter → @kyneta/cast → running app
+→ @kyneta/websocket-transport → @kyneta/cast → running app
 ```
 
 ## Key Concepts
@@ -270,45 +301,60 @@ Each step depends on the previous: types won't run if format fails, logic won't 
 
 | Package | Tests | Notes |
 |---------|-------|-------|
-| `@kyneta/schema` | 1,447 | Interpreter algebra, changefeeds, substrates, zero, step, validate |
-| `@kyneta/loro-schema` | 134 | Loro substrate, change mapping, sync, event bridge |
-| `@kyneta/yjs-schema` | 143 | Yjs substrate, change mapping, sync, version |
+| `@kyneta/schema` | 1,666 | Interpreter algebra, changefeeds, substrates, zero, step, validate |
+| `@kyneta/changefeed` | 47 | Changefeed protocol, ReactiveMap, Callable |
+| `@kyneta/machine` | 45 | Mealy machine algebra, Observable |
+| `@kyneta/loro-schema` | 180 | Loro substrate, change mapping, sync, event bridge |
+| `@kyneta/yjs-schema` | 188 | Yjs substrate, change mapping, sync, version |
 | `@kyneta/compiler` | 547 | AST analysis, ExpressionIR, reactive detection, classification, transforms |
-| `@kyneta/cast` | 634 | Codegen, runtime regions, unplugin, integration tests |
-| `@kyneta/exchange` | 127 | Synchronizer state machine, three merge strategies, multi-hop relay |
-| `@kyneta/wire` | 187 | CBOR/JSON codecs, framing, fragmentation, reassembly |
-| `@kyneta/websocket-network-adapter` | 41 | Client/server adapters, Bun handlers, connection lifecycle |
-| `@kyneta/sse-network-adapter` | 33 | SSE client/server adapters, Express integration, reconnection |
+| `@kyneta/cast` | 630 | Codegen, runtime regions, unplugin, integration tests |
+| `@kyneta/exchange` | 724 | Synchronizer state machine, three merge strategies, multi-hop relay |
+| `@kyneta/transport` | 8 | Transport base class, channel types |
+| `@kyneta/wire` | 231 | CBOR/JSON codecs, framing, fragmentation, reassembly |
+| `@kyneta/websocket-transport` | 46 | Client/server adapters, Bun handlers, connection lifecycle |
+| `@kyneta/sse-transport` | 41 | SSE client/server adapters, Express integration, reconnection |
 | `@kyneta/webrtc-transport` | 27 | BYODC lifecycle, binary round-trips, fragmentation, simple-peer bridge |
-| `@kyneta/react` | 29 | Store factories, hooks, provider lifecycle, deep subscription |
+| `@kyneta/unix-socket-transport` | 74 | Stream framing, client/server, reconnection, backpressure |
+| `@kyneta/index` | 143 | ZSet, Source, Collection, Index, joins, flatMap |
+| `@kyneta/react` | 15 | Store factories, hooks, provider lifecycle, deep subscription |
 | `@kyneta/perspective` | 1,374 | CCS kernel, Datalog evaluator, incremental pipeline |
+| `@kyneta/leveldb-store` | 10 | LevelDB persistence |
 | `examples/bumper-cars` | 51 | Heterogeneous documents, physics, React bindings |
-| `tests/exchange-websocket` | — | End-to-end Exchange sync over real Bun WebSocket connections |
-| **Total** | **4,774** | |
+| `tests/exchange-websocket` | 9 | End-to-end Exchange sync over real Bun WebSocket connections |
+| **Total** | **~5,880** | |
 
 ### Workspace Structure
 
 ```
 kyneta/
 ├── packages/
+│   ├── changefeed/               @kyneta/changefeed
+│   ├── machine/                  @kyneta/machine
 │   ├── schema/                   @kyneta/schema
 │   │   └── backends/
 │   │       ├── loro/             @kyneta/loro-schema
 │   │       └── yjs/              @kyneta/yjs-schema
-│   ├── compiler/                 @kyneta/compiler
-│   ├── cast/                     @kyneta/cast
+│   ├── transport/                @kyneta/transport
+│   ├── index/                    @kyneta/index
 │   ├── exchange/                 @kyneta/exchange
 │   │   ├── wire/                 @kyneta/wire
-│   │   └── transports/
-│   │       ├── websocket/        @kyneta/websocket-transport
-│   │       ├── sse/              @kyneta/sse-transport
-│   │       └── webrtc/           @kyneta/webrtc-transport
-│   ├── react/                    @kyneta/react
+│   │   ├── transports/
+│   │   │   ├── websocket/        @kyneta/websocket-transport
+│   │   │   ├── sse/              @kyneta/sse-transport
+│   │   │   ├── webrtc/           @kyneta/webrtc-transport
+│   │   │   └── unix-socket/      @kyneta/unix-socket-transport
+│   │   └── stores/
+│   │       └── leveldb/          @kyneta/leveldb-store
+│   └── react/                    @kyneta/react
+├── experimental/
+│   ├── compiler/                 @kyneta/compiler
+│   ├── cast/                     @kyneta/cast
 │   └── perspective/              @kyneta/perspective (private)
 ├── examples/
 │   ├── todo/                     Collaborative todo (Cast + Exchange + Yjs)
 │   ├── todo-react/               Collaborative todo (React + Exchange + Yjs)
-│   └── bumper-cars/              Heterogeneous docs (React + Exchange + ephemeral)
+│   ├── bumper-cars/              Heterogeneous docs (React + Exchange + ephemeral)
+│   └── unix-socket-sync/         Server-to-server sync via Unix sockets
 ├── tests/
 │   └── exchange-websocket/       E2E Exchange sync over real WebSockets
 ├── .plans/                       Long-term architectural plans

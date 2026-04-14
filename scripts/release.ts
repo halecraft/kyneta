@@ -3,78 +3,37 @@
 /**
  * Release script for Kyneta monorepo.
  *
+ * All workspace topology is discovered at runtime from pnpm + package.json files.
+ * No hardcoded package lists — adding or moving a package requires zero changes here.
+ *
  * Usage:
- *   bun scripts/release.ts bump <version> [--group core|backends|transport|bindings|all]
+ *   bun scripts/release.ts bump <version> [--group core|backends|transport|stores|bindings|experimental|all]
  *   bun scripts/release.ts publish [--dry-run]
  *   bun scripts/release.ts status
  */
 
-import { readFileSync, writeFileSync, existsSync } from "node:fs"
+import { readFileSync, writeFileSync } from "node:fs"
 import { resolve, relative } from "node:path"
 import { execSync } from "node:child_process"
 
-// ── Version Groups ──────────────────────────────────────────────────────────
+// ── Types ───────────────────────────────────────────────────────────────────
 
-const GROUPS = {
-	core: [
-		"packages/schema",
-		"packages/compiler",
-		"packages/exchange",
-		"packages/cast",
-	],
-	backends: ["packages/schema/backends/loro", "packages/schema/backends/yjs"],
-	transport: [
-		"packages/exchange/wire",
-		"packages/exchange/transports/sse",
-		"packages/exchange/transports/websocket",
-	],
-	stores: ["packages/exchange/stores/leveldb"],
-	bindings: ["packages/react"],
-} as const
+type WorkspacePackage = {
+	name: string
+	version: string
+	path: string // relative to repo root, e.g. "packages/schema"
+	private: boolean
+	internalDeps: string[] // @kyneta/* names from dependencies ∪ peerDependencies
+	group: string // derived from directory convention
+}
 
-type GroupName = keyof typeof GROUPS
+type Workspace = {
+	all: WorkspacePackage[]
+	publishable: WorkspacePackage[]
+	groups: Map<string, WorkspacePackage[]>
+}
 
-const ALL_GROUP_NAMES = Object.keys(GROUPS) as GroupName[]
-
-// Publish tiers — dependency order (tier 0 first, tier 3 last)
-const PUBLISH_TIERS: string[][] = [
-	// Tier 0: leaf
-	["packages/schema"],
-	// Tier 1: depends on schema
-	[
-		"packages/compiler",
-		"packages/exchange",
-		"packages/schema/backends/loro",
-		"packages/schema/backends/yjs",
-	],
-	// Tier 2: depends on tier 1
-	[
-		"packages/cast",
-		"packages/exchange/wire",
-		"packages/exchange/stores/leveldb",
-		"packages/react",
-	],
-	// Tier 3: depends on tier 2
-	[
-		"packages/exchange/transports/sse",
-		"packages/exchange/transports/websocket",
-	],
-]
-
-// All publishable package directories (flattened from tiers)
-const ALL_PACKAGE_DIRS = PUBLISH_TIERS.flat()
-
-// All workspace package.json locations (including non-publishable like tests, examples)
-const ALL_WORKSPACE_JSONS = [
-	...ALL_PACKAGE_DIRS.map((d) => `${d}/package.json`),
-	"packages/perspective/package.json",
-	"tests/exchange-websocket/package.json",
-	"examples/todo/package.json",
-	"examples/todo-react/package.json",
-	"examples/bumper-cars/package.json",
-]
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────────────────
 
 const ROOT = resolve(import.meta.dirname, "..")
 
@@ -94,11 +53,6 @@ function isValidSemver(v: string): boolean {
 	return /^\d+\.\d+\.\d+(-[\w.]+)?$/.test(v)
 }
 
-function getPackageName(dir: string): string {
-	const pkg = readJson(`${dir}/package.json`)
-	return pkg.name as string
-}
-
 function run(cmd: string, opts?: { dryRun?: boolean; cwd?: string }): void {
 	if (opts?.dryRun) {
 		console.log(`  [dry-run] ${cmd}`)
@@ -108,41 +62,188 @@ function run(cmd: string, opts?: { dryRun?: boolean; cwd?: string }): void {
 	execSync(cmd, { cwd: opts?.cwd ?? ROOT, stdio: "inherit" })
 }
 
+// ── Workspace Discovery ─────────────────────────────────────────────────────
+
+/** Derive group from directory convention. Pure function of the relative path. */
+export function deriveGroup(relPath: string): string {
+	if (relPath.startsWith("experimental/")) return "experimental"
+	if (relPath.startsWith("packages/schema/backends/")) return "backends"
+	if (relPath.startsWith("packages/exchange/transports/")) return "transport"
+	if (relPath.startsWith("packages/exchange/stores/")) return "stores"
+	if (relPath === "packages/react") return "bindings"
+	if (relPath.startsWith("packages/")) return "core"
+	// Fallback for any future top-level directories
+	return relPath.split("/")[0]
+}
+
+type PnpmListEntry = {
+	name: string
+	version?: string
+	path: string
+	private?: boolean
+}
+
+function discoverWorkspace(): Workspace {
+	const raw = execSync("pnpm ls -r --depth -1 --json", {
+		cwd: ROOT,
+		encoding: "utf8",
+		stdio: ["pipe", "pipe", "pipe"],
+	})
+	const entries = JSON.parse(raw) as PnpmListEntry[]
+
+	const all: WorkspacePackage[] = []
+
+	for (const entry of entries) {
+		// Skip the root workspace package
+		if (resolve(entry.path) === ROOT) continue
+
+		const relPath = relative(ROOT, resolve(entry.path))
+		const pkgJson = readJson(`${relPath}/package.json`)
+
+		const deps = pkgJson.dependencies as Record<string, string> | undefined
+		const peerDeps = pkgJson.peerDependencies as
+			| Record<string, string>
+			| undefined
+		const internalDeps = [
+			...new Set([
+				...Object.keys(deps ?? {}).filter((k) => k.startsWith("@kyneta/")),
+				...Object.keys(peerDeps ?? {}).filter((k) =>
+					k.startsWith("@kyneta/"),
+				),
+			]),
+		].sort()
+
+		all.push({
+			name: entry.name,
+			version: (pkgJson.version as string) ?? "0.0.0",
+			path: relPath,
+			private: entry.private ?? false,
+			internalDeps,
+			group: deriveGroup(relPath),
+		})
+	}
+
+	const publishable = all.filter((p) => !p.private)
+
+	const groups = new Map<string, WorkspacePackage[]>()
+	for (const pkg of publishable) {
+		const existing = groups.get(pkg.group)
+		if (existing) {
+			existing.push(pkg)
+		} else {
+			groups.set(pkg.group, [pkg])
+		}
+	}
+	// Sort each group's packages by name for stable output
+	for (const pkgs of groups.values()) {
+		pkgs.sort((a, b) => a.name.localeCompare(b.name))
+	}
+
+	return { all, publishable, groups }
+}
+
+// ── Topological Sort ────────────────────────────────────────────────────────
+
+/**
+ * Compute publish tiers via Kahn's algorithm.
+ * Each tier contains packages whose dependencies are all in earlier tiers.
+ */
+export function computePublishTiers(
+	packages: WorkspacePackage[],
+): WorkspacePackage[][] {
+	const nameToPackage = new Map(packages.map((p) => [p.name, p]))
+	const inDegree = new Map(packages.map((p) => [p.name, 0]))
+	const dependents = new Map(packages.map((p) => [p.name, [] as string[]]))
+
+	for (const pkg of packages) {
+		for (const dep of pkg.internalDeps) {
+			if (nameToPackage.has(dep)) {
+				dependents.get(dep)!.push(pkg.name)
+				inDegree.set(pkg.name, inDegree.get(pkg.name)! + 1)
+			}
+		}
+	}
+
+	const tiers: WorkspacePackage[][] = []
+	let queue = packages
+		.filter((p) => inDegree.get(p.name) === 0)
+		.sort((a, b) => a.name.localeCompare(b.name))
+
+	while (queue.length > 0) {
+		tiers.push(queue)
+		const next: WorkspacePackage[] = []
+		for (const pkg of queue) {
+			for (const child of dependents.get(pkg.name)!) {
+				const newDegree = inDegree.get(child)! - 1
+				inDegree.set(child, newDegree)
+				if (newDegree === 0) {
+					next.push(nameToPackage.get(child)!)
+				}
+			}
+		}
+		queue = next.sort((a, b) => a.name.localeCompare(b.name))
+	}
+
+	// Cycle detection: if any package still has in-degree > 0, there's a cycle
+	const stuck = packages.filter((p) => inDegree.get(p.name)! > 0)
+	if (stuck.length > 0) {
+		const names = stuck.map((p) => p.name).join(", ")
+		throw new Error(`Dependency cycle detected among: ${names}`)
+	}
+
+	return tiers
+}
+
 // ── bump ────────────────────────────────────────────────────────────────────
 
-function bump(version: string, groupNames: GroupName[]): void {
+function bump(version: string, groupNames: string[]): void {
 	if (!isValidSemver(version)) {
 		console.error(`Invalid semver: ${version}`)
 		process.exit(1)
 	}
 
-	// Collect directories to bump
-	const dirs = groupNames.flatMap((g) => [...GROUPS[g]])
+	const workspace = discoverWorkspace()
+	const allGroupNames = [...workspace.groups.keys()].sort()
+
+	// Resolve group names to packages
+	const resolvedNames =
+		groupNames[0] === "all" ? allGroupNames : groupNames
+	const dirs: WorkspacePackage[] = []
+	for (const g of resolvedNames) {
+		const pkgs = workspace.groups.get(g)
+		if (!pkgs) {
+			console.error(
+				`Error: unknown group "${g}". Valid: ${allGroupNames.join(", ")}, all`,
+			)
+			process.exit(1)
+		}
+		dirs.push(...pkgs)
+	}
 
 	// Build name → version map for peer dependency updates
 	const nameVersionMap = new Map<string, string>()
-	for (const dir of dirs) {
-		nameVersionMap.set(getPackageName(dir), version)
+	for (const pkg of dirs) {
+		nameVersionMap.set(pkg.name, version)
 	}
 
 	// 1. Bump versions in target packages
 	console.log(`\nBumping to ${version}:\n`)
-	for (const dir of dirs) {
-		const pkgPath = `${dir}/package.json`
-		const pkg = readJson(pkgPath)
-		const oldVersion = pkg.version as string
-		pkg.version = version
-		writeJson(pkgPath, pkg)
+	for (const pkg of dirs) {
+		const pkgPath = `${pkg.path}/package.json`
+		const pkgJson = readJson(pkgPath)
+		const oldVersion = pkgJson.version as string
+		pkgJson.version = version
+		writeJson(pkgPath, pkgJson)
 		console.log(`  ${pkg.name}: ${oldVersion} → ${version}`)
 	}
 
 	// 2. Update peerDependency ranges across ALL workspace packages
 	console.log(`\nUpdating peer dependency ranges:\n`)
 	let peerUpdates = 0
-	for (const jsonPath of ALL_WORKSPACE_JSONS) {
-		if (!existsSync(rootPath(jsonPath))) continue
-		const pkg = readJson(jsonPath)
-		const peers = pkg.peerDependencies as
+	for (const wsPkg of workspace.all) {
+		const jsonPath = `${wsPkg.path}/package.json`
+		const pkgJson = readJson(jsonPath)
+		const peers = pkgJson.peerDependencies as
 			| Record<string, string>
 			| undefined
 		if (!peers) continue
@@ -155,7 +256,7 @@ function bump(version: string, groupNames: GroupName[]): void {
 				if (oldRange !== newRange) {
 					peers[name] = newRange
 					console.log(
-						`  ${relative(ROOT, rootPath(jsonPath))}: ${name} ${oldRange} → ${newRange}`,
+						`  ${wsPkg.path}/package.json: ${name} ${oldRange} → ${newRange}`,
 					)
 					changed = true
 					peerUpdates++
@@ -163,7 +264,7 @@ function bump(version: string, groupNames: GroupName[]): void {
 			}
 		}
 		if (changed) {
-			writeJson(jsonPath, pkg)
+			writeJson(jsonPath, pkgJson)
 		}
 	}
 
@@ -181,7 +282,10 @@ function bump(version: string, groupNames: GroupName[]): void {
 function checkNpmAuth(): void {
 	console.log("Checking npm authentication...\n")
 	try {
-		const user = execSync("npm whoami", { cwd: ROOT, encoding: "utf8" }).trim()
+		const user = execSync("npm whoami", {
+			cwd: ROOT,
+			encoding: "utf8",
+		}).trim()
 		console.log(`  Logged in as: ${user}\n`)
 	} catch {
 		console.error(
@@ -193,6 +297,9 @@ function checkNpmAuth(): void {
 
 function publish(dryRun: boolean): void {
 	console.log(`\n${dryRun ? "[DRY RUN] " : ""}Publishing Kyneta packages\n`)
+
+	const workspace = discoverWorkspace()
+	const tiers = computePublishTiers(workspace.publishable)
 
 	// 0. Preflight — verify npm auth
 	checkNpmAuth()
@@ -210,24 +317,23 @@ function publish(dryRun: boolean): void {
 	const published: string[] = []
 	const failed: string[] = []
 
-	for (let tier = 0; tier < PUBLISH_TIERS.length; tier++) {
-		const dirs = PUBLISH_TIERS[tier]
-		console.log(`\n── Tier ${tier} ──`)
-		for (const dir of dirs) {
-			const pkg = readJson(`${dir}/package.json`)
-			const name = pkg.name as string
-			const version = pkg.version as string
-			console.log(`\nPublishing ${name}@${version}...`)
+	for (let tier = 0; tier < tiers.length; tier++) {
+		const pkgs = tiers[tier]
+		console.log(`\n── Tier ${tier} (${pkgs.map((p) => p.name).join(", ")}) ──`)
+		for (const pkg of pkgs) {
+			console.log(`\nPublishing ${pkg.name}@${pkg.version}...`)
 			const dryRunFlag = dryRun ? " --dry-run" : ""
 			try {
 				run(
 					`pnpm publish --access public --no-git-checks${dryRunFlag}`,
-					{ cwd: rootPath(dir) },
+					{ cwd: rootPath(pkg.path) },
 				)
-				published.push(name)
+				published.push(pkg.name)
 			} catch {
-				console.error(`  ✗ Failed to publish ${name}@${version}`)
-				failed.push(name)
+				console.error(
+					`  ✗ Failed to publish ${pkg.name}@${pkg.version}`,
+				)
+				failed.push(pkg.name)
 			}
 		}
 	}
@@ -251,18 +357,17 @@ function publish(dryRun: boolean): void {
 async function status(): Promise<void> {
 	console.log("\nKyneta Package Status\n")
 
-	for (const groupName of ALL_GROUP_NAMES) {
-		const dirs = GROUPS[groupName]
-		console.log(`  ${groupName}:`)
-		for (const dir of dirs) {
-			const pkg = readJson(`${dir}/package.json`)
-			const name = pkg.name as string
-			const localVersion = pkg.version as string
+	const workspace = discoverWorkspace()
 
+	for (const [groupName, pkgs] of [...workspace.groups.entries()].sort(
+		([a], [b]) => a.localeCompare(b),
+	)) {
+		console.log(`  ${groupName}:`)
+		for (const pkg of pkgs) {
 			let registryVersion: string
 			try {
 				const resp = await fetch(
-					`https://registry.npmjs.org/${encodeURIComponent(name)}/latest`,
+					`https://registry.npmjs.org/${encodeURIComponent(pkg.name)}/latest`,
 				)
 				if (resp.ok) {
 					const data = (await resp.json()) as { version: string }
@@ -277,11 +382,11 @@ async function status(): Promise<void> {
 			const marker =
 				registryVersion === "not published"
 					? "○"
-					: localVersion === registryVersion
+					: pkg.version === registryVersion
 						? "✓"
 						: "↑"
 			console.log(
-				`    ${marker} ${name.padEnd(42)} local: ${localVersion.padEnd(10)} npm: ${registryVersion}`,
+				`    ${marker} ${pkg.name.padEnd(42)} local: ${pkg.version.padEnd(10)} npm: ${registryVersion}`,
 			)
 		}
 		console.log()
@@ -291,9 +396,18 @@ async function status(): Promise<void> {
 // ── CLI ─────────────────────────────────────────────────────────────────────
 
 function usage(): never {
+	// Discover available groups dynamically
+	let groupList: string
+	try {
+		const workspace = discoverWorkspace()
+		groupList = [...workspace.groups.keys()].sort().join("|")
+	} catch {
+		groupList = "<group>"
+	}
+
 	console.log(`
 Usage:
-  bun scripts/release.ts bump <version> [--group core|backends|transport|stores|bindings|all]
+  bun scripts/release.ts bump <version> [--group ${groupList}|all]
   bun scripts/release.ts publish [--dry-run]
   bun scripts/release.ts status
 
@@ -302,16 +416,21 @@ Commands:
   publish   Build, test, and publish all packages in dependency order.
   status    Show local vs. npm registry versions for all packages.
 
-Groups (for bump):
-  core       schema, compiler, exchange, cast (locked versions)
-  backends   loro-schema, yjs-schema
-  transport  wire, sse-transport, websocket-transport
-  stores     leveldb-store
-  bindings   react
-  all        all of the above (default)
+Groups are derived from directory convention:
+  core          packages/* (top-level packages)
+  backends      packages/schema/backends/*
+  transport     packages/exchange/transports/*
+  stores        packages/exchange/stores/*
+  bindings      packages/react
+  experimental  experimental/*
+  all           all of the above (default)
 `)
 	process.exit(1)
 }
+
+if (!import.meta.main) {
+	// Module imported as a library — skip CLI execution
+} else {
 
 const [command, ...rest] = process.argv.slice(2)
 
@@ -323,7 +442,7 @@ switch (command) {
 			usage()
 		}
 		const groupFlag = rest.find((a: string) => a.startsWith("--group"))
-		let groupNames: GroupName[] = ALL_GROUP_NAMES
+		let groupNames: string[] = ["all"]
 		if (groupFlag) {
 			// Support --group=core or --group core
 			let groupValue: string | undefined
@@ -337,16 +456,7 @@ switch (command) {
 				console.error("Error: --group requires a value")
 				usage()
 			}
-			if (groupValue === "all") {
-				groupNames = ALL_GROUP_NAMES
-			} else if (groupValue in GROUPS) {
-				groupNames = [groupValue as GroupName]
-			} else {
-				console.error(
-					`Error: unknown group "${groupValue}". Valid: ${ALL_GROUP_NAMES.join(", ")}, all`,
-				)
-				process.exit(1)
-			}
+			groupNames = [groupValue]
 		}
 		bump(version, groupNames)
 		break
@@ -364,3 +474,5 @@ switch (command) {
 		if (command) console.error(`Unknown command: ${command}\n`)
 		usage()
 }
+
+} // end import.meta.main guard
