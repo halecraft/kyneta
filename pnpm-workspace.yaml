@@ -1,5 +1,6 @@
 packages:
   - examples/*
+  - experimental/*
   - packages/*
   - packages/schema/backends/*
   - packages/exchange/wire
