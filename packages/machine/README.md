@@ -252,9 +252,21 @@ handle.dispose()
 
 **Fx parameterization.** The third type parameter `Fx` defaults to `Effect<Msg>` for the common closure case, but accepts any type. This single generic makes the same `Program` shape work for both `runtime()`-interpreted programs and programs with data effects that use a custom executor — no wrapper types, no separate interfaces.
 
+## Stale-Sibling-Effect Hazard
+
+When `update` returns multiple effects `[model, fx1, fx2, ...]`, all effects execute before any reentrant messages are processed. If `fx1` dispatches a message re-entrantly, that message is queued. `fx2` executes next, against the same model state. The queued message is processed only after all effects from this transition complete.
+
+**Consequence:** `fx2` may operate in a world that `fx1` has already changed at the application layer (outside the model). The model itself is consistent — but any external state mutated by `fx1`'s callback is invisible to `fx2`.
+
+**Mitigation:** Effects that create or mutate external state should be **idempotent** — check whether the target state already exists before acting. The `ensure-*` naming convention (used in `@kyneta/exchange`) communicates this requirement: an `ensure` effect declares that a state should exist, and is a no-op if it already does.
+
+This is not a bug in the algebra. The `Program` type is intentionally simple — effects from a single transition are co-products of that transition, planned against the same model snapshot. The hazard arises only when effects have cross-cutting side-effects on shared mutable state outside the model. Programs with pure data effects (no shared mutable state) are immune.
+
 ## Relationship to the Synchronizer
 
 The Synchronizer in `@kyneta/exchange` is a `Program<SynchronizerMessage, SynchronizerModel, Command>` where `Command` is a discriminated union of data effects (send message, build offer, apply snapshot, etc.). Its interpreter batches commands and executes them against live channels and substrates. The pure `update` function is tested exhaustively without any I/O.
+
+The Synchronizer's `cmd/ensure-doc` and `cmd/ensure-doc-dismissed` commands are the primary example of the idempotent-effect pattern described in "Stale-Sibling-Effect Hazard" above. When `handlePresent` batches multiple `cmd/ensure-doc` commands, the first command's callback may cascade-create state that the second command also targets. The `ensure-*` naming convention makes the idempotency contract explicit.
 
 ## Peer Dependencies
 

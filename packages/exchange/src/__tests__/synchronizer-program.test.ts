@@ -627,7 +627,7 @@ describe("synchronizer-program", () => {
       }
     })
 
-    it("receiving present for an unknown doc emits request-doc-creation", () => {
+    it("receiving present for an unknown doc emits ensure-doc", () => {
       const update = makeUpdate()
       const [model] = init(aliceIdentity)
 
@@ -656,14 +656,14 @@ describe("synchronizer-program", () => {
 
       const commands = flattenCommands(cmd)
       expect(commands).toHaveLength(1)
-      expect(commands[0].type).toBe("cmd/request-doc-creation")
-      if (commands[0].type === "cmd/request-doc-creation") {
+      expect(commands[0].type).toBe("cmd/ensure-doc")
+      if (commands[0].type === "cmd/ensure-doc") {
         expect(commands[0].docId).toBe("unknown-doc")
         expect(commands[0].peer.peerId).toBe("bob")
       }
     })
 
-    it("receiving present with mixed known/unknown docs emits both interest and request-doc-creation", () => {
+    it("receiving present with mixed known/unknown docs emits both interest and ensure-doc", () => {
       const update = makeUpdate()
       const [model] = init(aliceIdentity)
 
@@ -718,11 +718,9 @@ describe("synchronizer-program", () => {
       )
       expect(interestCmd).toBeDefined()
 
-      const creationCmd = commands.find(
-        c => c.type === "cmd/request-doc-creation",
-      )
+      const creationCmd = commands.find(c => c.type === "cmd/ensure-doc")
       expect(creationCmd).toBeDefined()
-      if (creationCmd && creationCmd.type === "cmd/request-doc-creation") {
+      if (creationCmd && creationCmd.type === "cmd/ensure-doc") {
         expect(creationCmd.docId).toBe("unknown-doc")
         expect(creationCmd.peer.peerId).toBe("bob")
       }
@@ -768,9 +766,7 @@ describe("synchronizer-program", () => {
       )
 
       const commands = flattenCommands(cmd)
-      const creationCmds = commands.filter(
-        c => c.type === "cmd/request-doc-creation",
-      )
+      const creationCmds = commands.filter(c => c.type === "cmd/ensure-doc")
       expect(creationCmds).toHaveLength(0)
       // Should still have the interest command
       expect(commands.length).toBeGreaterThanOrEqual(1)
@@ -960,7 +956,7 @@ describe("synchronizer-program", () => {
       expect(commands).toHaveLength(0)
     })
 
-    it("request-doc-creation carries replicaType and mergeStrategy from present", () => {
+    it("ensure-doc carries replicaType and mergeStrategy from present", () => {
       const update = makeUpdate()
       const [model] = init(aliceIdentity)
 
@@ -991,8 +987,8 @@ describe("synchronizer-program", () => {
       expect(commands).toHaveLength(1)
       const creation = commands.at(0)
       if (!creation) throw new Error("Expected at least one command")
-      expect(creation.type).toBe("cmd/request-doc-creation")
-      if (creation.type === "cmd/request-doc-creation") {
+      expect(creation.type).toBe("cmd/ensure-doc")
+      if (creation.type === "cmd/ensure-doc") {
         expect(creation.docId).toBe("new-doc")
         expect(creation.replicaType).toEqual(["loro", 1, 0])
         expect(creation.mergeStrategy).toBe("collaborative")
@@ -2012,7 +2008,7 @@ describe("synchronizer-program", () => {
       }
     })
 
-    it("handleDiscover checks route before request-doc-creation", () => {
+    it("handleDiscover checks route before ensure-doc", () => {
       // Route denies "forbidden" doc from bob
       const update = createSynchronizerUpdate({
         route: docId => docId !== "forbidden",
@@ -2044,9 +2040,7 @@ describe("synchronizer-program", () => {
       )
 
       const commands = flattenCommands(cmd)
-      const creationCmds = commands.filter(
-        c => c.type === "cmd/request-doc-creation",
-      )
+      const creationCmds = commands.filter(c => c.type === "cmd/ensure-doc")
       expect(creationCmds).toHaveLength(0)
     })
 
@@ -2199,7 +2193,7 @@ describe("synchronizer-program", () => {
   // =========================================================================
 
   describe("dismiss", () => {
-    it("handleDismiss emits notify-doc-dismissed", () => {
+    it("handleDismiss emits ensure-doc-dismissed", () => {
       const update = makeUpdate()
       const [model] = init(aliceIdentity)
 
@@ -2232,10 +2226,10 @@ describe("synchronizer-program", () => {
 
       const commands = flattenCommands(cmd)
       const dismissCmd = commands.find(
-        c => c.type === "cmd/notify-doc-dismissed",
+        c => c.type === "cmd/ensure-doc-dismissed",
       )
       expect(dismissCmd).toBeDefined()
-      if (dismissCmd && dismissCmd.type === "cmd/notify-doc-dismissed") {
+      if (dismissCmd && dismissCmd.type === "cmd/ensure-doc-dismissed") {
         expect(dismissCmd.docId).toBe("doc-1")
         expect(dismissCmd.peer.peerId).toBe("bob")
       }
@@ -2932,7 +2926,7 @@ describe("synchronizer-program", () => {
   })
 
   describe("capability gate and deferred documents", () => {
-    it("handlePresent for unknown doc emits request-doc-creation regardless of replicaType", () => {
+    it("handlePresent for unknown doc emits ensure-doc regardless of replicaType", () => {
       // No supports gate — all unknown docs flow through to creation request
       const update = createSynchronizerUpdate()
       const [model] = init(aliceIdentity)
@@ -2962,13 +2956,11 @@ describe("synchronizer-program", () => {
       )
 
       const commands = flattenCommands(cmd)
-      const creationCmds = commands.filter(
-        c => c.type === "cmd/request-doc-creation",
-      )
+      const creationCmds = commands.filter(c => c.type === "cmd/ensure-doc")
       // Should have a creation command — no gate to block it
       expect(creationCmds).toHaveLength(1)
       expect(creationCmds[0]).toMatchObject({
-        type: "cmd/request-doc-creation",
+        type: "cmd/ensure-doc",
         docId: "loro-doc",
         replicaType: ["loro", 1, 0],
         mergeStrategy: "collaborative",

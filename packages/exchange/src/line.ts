@@ -626,7 +626,7 @@ export class Line<SendMsg, RecvMsg> {
 
         // 3. Register schemas — puts them in the capabilities registry.
         //    Incoming Line docs whose schema hash matches will auto-resolve
-        //    in onDocCreationRequested step 1, bypassing onUnresolvedDoc.
+        //    in onEnsureDoc step 1, bypassing onUnresolvedDoc.
         //    If any deferred docs match, registerSchema auto-promotes them
         //    synchronously, firing onDocCreated into the scope above.
         //    Any Lines created here are buffered in pendingLines.

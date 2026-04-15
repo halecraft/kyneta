@@ -79,10 +79,14 @@ export type DocRuntime =
     })
 
 /**
- * Callback invoked when a peer discovers a document the local exchange
- * doesn't have. The Synchronizer fires this during command execution;
- * the Exchange wraps the user's `onDocDiscovered` callback to call
- * `exchange.get()` if a BoundSchema is returned.
+ * Callback invoked by `cmd/ensure-doc` — ensures a document exists locally.
+ *
+ * Fired during command execution when a peer announces an unknown doc.
+ * The Exchange auto-resolves schemas or delegates to `onUnresolvedDoc`.
+ *
+ * **Must be idempotent.** Batched ensure commands may fire for a doc that
+ * a sibling command's cascade has already created. Implementations must
+ * check for existing state and return early (first writer wins).
  */
 export type DocCreationCallback = (
   docId: DocId,
@@ -93,11 +97,12 @@ export type DocCreationCallback = (
 ) => void
 
 /**
- * Callback invoked when a document is dismissed.
- * The Exchange wraps the user's `onDocDismissed` callback.
+ * Callback invoked by `cmd/ensure-doc-dismissed` — ensures a dismissed
+ * doc is handled locally.
  *
- * @param origin - `"remote"` when a peer sends a dismiss message;
- *   `"local"` when the local exchange calls `dismiss()`.
+ * The Exchange's `onDocDismissed` scope callback handles cleanup.
+ *
+ * **Must be idempotent.** First writer wins.
  */
 export type DocDismissedCallback = (
   docId: DocId,
@@ -123,8 +128,8 @@ export type SynchronizerParams = {
   route: RoutePredicate
   authorize: AuthorizePredicate
   epochBoundary: EpochBoundaryPredicate
-  onDocCreationRequested?: DocCreationCallback
-  onDocDismissed?: DocDismissedCallback
+  onEnsureDoc?: DocCreationCallback
+  onEnsureDocDismissed?: DocDismissedCallback
 }
 
 // ---------------------------------------------------------------------------
@@ -299,15 +304,15 @@ export class Synchronizer {
     route,
     authorize,
     epochBoundary,
-    onDocCreationRequested,
-    onDocDismissed,
+    onEnsureDoc,
+    onEnsureDocDismissed,
   }: SynchronizerParams) {
     this.identity = identity
 
     this.#updateFn = createSynchronizerUpdate({ route, authorize })
     this.#epochBoundary = epochBoundary
-    this.#docCreationCallback = onDocCreationRequested
-    this.#docDismissedCallback = onDocDismissed
+    this.#docCreationCallback = onEnsureDoc
+    this.#docDismissedCallback = onEnsureDocDismissed
 
     // Initialize model
     const [initialModel, initialCommand] = init(this.identity)
@@ -806,10 +811,10 @@ export class Synchronizer {
         // No-op for now — the Exchange handles subscription wiring
         break
 
-      case "cmd/request-doc-creation":
-        // Fire-and-forget: if the callback calls exchange.get(), that
-        // triggers registerDoc() → #dispatch(doc-ensure), which is
-        // queued in #pendingMessages and processed before quiescence.
+      case "cmd/ensure-doc":
+        // Ensure semantics — callback must be idempotent (first writer wins).
+        // Reentrant dispatch from the callback (e.g. registerDoc → doc-ensure)
+        // is queued in #pendingMessages and processed before quiescence.
         this.#docCreationCallback?.(
           command.docId,
           command.peer,
@@ -819,9 +824,9 @@ export class Synchronizer {
         )
         break
 
-      case "cmd/notify-doc-dismissed":
-        // Fire-and-forget: the Exchange's onDocDismissed callback
-        // handles application-level cleanup (e.g. exchange.dismiss()).
+      case "cmd/ensure-doc-dismissed":
+        // Ensure semantics — callback must be idempotent (first writer wins).
+        // The Exchange's onDocDismissed scope callback handles cleanup.
         this.#docDismissedCallback?.(command.docId, command.peer, "remote")
         break
 

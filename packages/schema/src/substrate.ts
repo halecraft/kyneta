@@ -543,7 +543,7 @@ export type MergeStrategy = "collaborative" | "authoritative" | "ephemeral"
 /**
  * Per-document metadata — the replicaType + mergeStrategy pair.
  *
- * Used in StorageBackend, PresentMsg, DocEntry, cmd/request-doc-creation,
+ * Used in StorageBackend, PresentMsg, DocEntry, cmd/ensure-doc,
  * and onDocDiscovered. Named as a first-class type because it appears
  * across storage, wire protocol, synchronizer model, and public API.
  */

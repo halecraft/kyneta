@@ -13,8 +13,7 @@
 // memory. On reboot, the max seqNo for a doc is lazily discovered via a
 // single reverse-iterator seek on first append.
 
-import type { Store, StoreEntry } from "@kyneta/exchange/src/store/store.js"
-import type { DocId } from "@kyneta/exchange/src/types.js"
+import type { DocId, Store, StoreEntry } from "@kyneta/exchange"
 import type { DocMetadata } from "@kyneta/schema"
 import { ClassicLevel } from "classic-level"
 

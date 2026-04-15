@@ -51,8 +51,13 @@ function createExchange(
 }
 
 /** Fire-and-forget drain of a Line's async iterator into an array. */
-function collect<T>(line: { [Symbol.asyncIterator](): AsyncIterableIterator<T> }, into: T[]): void {
-  ;(async () => { for await (const msg of line) into.push(msg) })()
+function collect<T>(
+  line: { [Symbol.asyncIterator](): AsyncIterableIterator<T> },
+  into: T[],
+): void {
+  ;(async () => {
+    for await (const msg of line) into.push(msg)
+  })()
 }
 
 afterEach(async () => {
@@ -657,7 +662,10 @@ describe("protocol.listen", () => {
       capturedServerLine = line
       ;(async () => {
         for await (const msg of line) {
-          line.send({ result: `${(msg as any).method}:done`, id: (msg as any).id })
+          line.send({
+            result: `${(msg as any).method}:done`,
+            id: (msg as any).id,
+          })
         }
       })()
     })
@@ -942,7 +950,12 @@ describe("protocol.listen", () => {
     clientLine.send({ value: 4 })
     await drain()
 
-    expect(received).toEqual([{ value: 1 }, { value: 2 }, { value: 3 }, { value: 4 }])
+    expect(received).toEqual([
+      { value: 1 },
+      { value: 2 },
+      { value: 3 },
+      { value: 4 },
+    ])
 
     listener.dispose()
     clientLine.close()

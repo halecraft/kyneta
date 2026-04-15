@@ -268,7 +268,7 @@ export type ExchangeParams = {
    *
    * Sugar for calling `registerSchema()` at construction time. Each
    * `BoundSchema` is indexed by its `schemaHash` under the appropriate
-   * `ReplicaKey`, enabling automatic resolution in `onDocCreationRequested`.
+   * `ReplicaKey`, enabling automatic resolution in `onEnsureDoc`.
    */
   schemas?: BoundSchema[]
 
@@ -409,7 +409,7 @@ export class Exchange {
     this.#identity = fullIdentity
 
     // ── ScopeRegistry — must be initialized before the Synchronizer,
-    // because the Synchronizer may call onDocCreationRequested during
+    // because the Synchronizer may call onEnsureDoc during
     // _start() if a transport immediately discovers peers.
     this.#scopes = new ScopeRegistry()
 
@@ -451,8 +451,8 @@ export class Exchange {
       authorize: this.#scopes.authorize.bind(this.#scopes),
       epochBoundary: this.#scopes.epochBoundary.bind(this.#scopes),
 
-      onDocDismissed: this.#scopes.docDismissed.bind(this.#scopes),
-      onDocCreationRequested: (
+      onEnsureDocDismissed: this.#scopes.docDismissed.bind(this.#scopes),
+      onEnsureDoc: (
         docId,
         peer,
         replicaType,
@@ -569,7 +569,7 @@ export class Exchange {
    * registering the schema in the auto-resolve set.
    *
    * This is the single creation path for interpreted docs. Both the
-   * public `get()` and internal `onDocCreationRequested` paths delegate
+   * public `get()` and internal `onEnsureDoc` paths delegate
    * here. `onDocCreated` fires from within — callers never fire it.
    */
   #interpretDoc(
@@ -578,6 +578,14 @@ export class Exchange {
     peer: PeerIdentityDetails,
     origin: DocEventOrigin,
   ): any {
+    // Ensure semantics: if this doc already exists in interpret mode,
+    // return the existing ref. First writer wins.
+    // Context: jj:mumrnvlk (stale-batch race in cmd/ensure-doc)
+    const cached = this.#docCache.get(docId)
+    if (cached && cached.mode === "interpret") {
+      return cached.ref
+    }
+
     const factory = bound.factory({ peerId: this.peerId })
     const replicaType = factory.replica.replicaType
     if (!this.#capabilities.supportsReplicaType(replicaType)) {
@@ -645,7 +653,7 @@ export class Exchange {
    * Internal document replication — creates a headless replicated doc.
    *
    * This is the single creation path for replicated docs. Both the
-   * public `replicate()` and internal `onDocCreationRequested` paths
+   * public `replicate()` and internal `onEnsureDoc` paths
    * delegate here. `onDocCreated` fires from within.
    */
   #replicateDoc(
@@ -656,6 +664,11 @@ export class Exchange {
     peer: PeerIdentityDetails,
     origin: DocEventOrigin,
   ): void {
+    // Ensure semantics: if this doc already exists in replicate mode,
+    // it was created by a sibling command's cascade. First writer wins.
+    const cached = this.#docCache.get(docId)
+    if (cached && cached.mode === "replicate") return
+
     const replica = replicaFactory.createEmpty()
 
     this.#docCache.set(docId, { mode: "replicate" })
@@ -1193,7 +1206,7 @@ export class Exchange {
    *
    * Indexes the schema by its `schemaHash` under the appropriate
    * `ReplicaKey` in the capabilities registry. Future
-   * `onDocCreationRequested` calls with a matching `schemaHash` will
+   * `onEnsureDoc` calls with a matching `schemaHash` will
    * auto-resolve to this schema.
    *
    * @param bound - A BoundSchema to register

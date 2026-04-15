@@ -33,7 +33,7 @@ The pure update function `(msg, model) → [model, cmd?, notification?]` contain
 
 The return type is a **triple** — two orthogonal co-products of the state transition:
 
-- **Commands** change the world: send messages, import data, stop channels, fire callbacks that may trigger reentrant dispatch.
+- **Commands** change the world: send messages, import data, stop channels. `ensure-*` commands fire callbacks that may trigger reentrant dispatch — they are idempotent by contract (first writer wins; see §9).
 - **Notifications** declare what changed: which parts of the model were invalidated, so the shell can inform external listeners without brute-force diffing.
 
 This is analogous to `Op[]` in the schema changefeed: the changefeed declares what changed so subscribers don't poll; notifications declare what model state was invalidated so the shell doesn't scan.
@@ -152,7 +152,7 @@ The `present` metadata (`replicaType`, `mergeStrategy`, `schemaHash`) is validat
 
 When the receiver encounters a known doc and all three checks pass, it sends `interest`.
 
-When the receiver encounters an unknown doc ID, the `route` predicate is checked — if it returns `false` for the announcing peer, the doc is silently dropped. Otherwise, a `cmd/request-doc-creation` command is emitted (carrying `schemaHash` through). All unknown docs flow to `onDocCreationRequested` regardless of replica type. The Exchange first attempts schema auto-resolution from the `(schemaHash, replicaType, mergeStrategy)` triple (§26). If no schema matches and a `onUnresolvedDoc` callback is configured, it fires with the doc ID, the announcing peer's identity, `replicaType`, `mergeStrategy`, and `schemaHash`. The callback returns a disposition (`Interpret | Replicate | Defer | Reject`). If no `onUnresolvedDoc` callback matches (or none is configured), the Exchange applies a two-tiered default: supported `replicaType` → Defer; unsupported `replicaType` → Reject (silently). See §16 for details.
+When the receiver encounters an unknown doc ID, the `route` predicate is checked — if it returns `false` for the announcing peer, the doc is silently dropped. Otherwise, a `cmd/ensure-doc` command is emitted (carrying `schemaHash` through). All unknown docs flow to `onEnsureDoc` regardless of replica type. The Exchange first attempts schema auto-resolution from the `(schemaHash, replicaType, mergeStrategy)` triple (§26). If no schema matches and a `onUnresolvedDoc` callback is configured, it fires with the doc ID, the announcing peer's identity, `replicaType`, `mergeStrategy`, and `schemaHash`. The callback returns a disposition (`Interpret | Replicate | Defer | Reject`). If no `onUnresolvedDoc` callback matches (or none is configured), the Exchange applies a two-tiered default: supported `replicaType` → Defer; unsupported `replicaType` → Reject (silently). See §16 for details.
 
 ```ts
 type PresentMsg = {
@@ -490,6 +490,8 @@ The `Synchronizer` processes messages one at a time via a serialized dispatch lo
 
 Commands that produce new messages (e.g. `cmd/dispatch`) are pushed to `pendingMessages` and processed in the same dispatch cycle. Outbound messages are accumulated in a queue and flushed only at quiescence, ensuring consistent model state before any messages leave the exchange.
 
+**Open vs. closed commands.** Commands fall into two categories. Closed commands (`cmd/send-message`, `cmd/send-offer`, `cmd/import-doc-data`, `cmd/stop-channel`, `cmd/dispatch`) are self-contained — they don't call back into user code. Ensure commands (`cmd/ensure-doc`, `cmd/ensure-doc-dismissed`) cross the boundary into user code via callbacks that may trigger reentrant dispatch. When the pure program batches multiple ensure commands (e.g. `handlePresent` emitting N `cmd/ensure-doc` for N unknown docs), each command executes sequentially — but the batch was planned against a single model snapshot. Command₁'s callback may create state that command₂ will also try to create. The `ensure-*` naming convention communicates the invariant: these commands are idempotent by contract. Callback implementations must check for existing state and return early (first writer wins).
+
 Notifications are accumulated across the entire dispatch cycle into typed sets. At quiescence, four drain methods fire in order:
 
 1. **`#drainOutbound()`** — sends accumulated wire envelopes. Uses a shift-loop (the outbound queue may grow during sends).
@@ -583,7 +585,7 @@ Note: `MergeStrategy`, `BoundSchema`, `json.bind()`, `json.replica()`, `unwrap()
 | File | Coverage |
 |------|----------|
 | `src/__tests__/transport-manager.test.ts` | TransportManager lifecycle and message routing |
-| `src/__tests__/synchronizer-program.test.ts` | Pure TEA update function — all message types, merge strategies, `cmd/request-doc-creation`, replicate mode |
+| `src/__tests__/synchronizer-program.test.ts` | Pure TEA update function — all message types, merge strategies, `cmd/ensure-doc`, replicate mode |
 | `src/__tests__/store-hydration.test.ts` | Exchange-level storage hydration — get/replicate hydration, network import persistence, local change persistence, flush, round-trip restart |
 | `src/__tests__/store.test.ts` | InMemoryStore — conformance suite + InMemory-specific sharedData/getStorage tests |
 | `src/testing/store-conformance.ts` | Reusable Store contract suite: lookup, ensureDoc, append, loadAll, replace, delete, listDocIds, JSON + binary payload round-trips, StoreEntry shape |
@@ -907,7 +909,7 @@ Peer A (has doc)               Peer B (doesn't have doc)
      |                                | ① route(docId, peer)?
      |                                |   No → silently drop
      |                                |   Yes ↓
-     |                                | ② cmd/request-doc-creation
+     |                                | ② cmd/ensure-doc
      |                                | ③ schema auto-resolve:
      |                                |   resolveSchema(hash, type, strategy)
      |                                |   Match → exchange.get(docId, resolved)
@@ -930,21 +932,21 @@ Peer A (has doc)               Peer B (doesn't have doc)
 
 **Storage interaction**: When storage backends are configured, `exchange.get()` hydrates from storage before registering with the synchronizer. The synchronizer only learns about the doc after hydration, so `present`/`interest` messages carry the hydrated version — not an empty one.
 
-### The `cmd/request-doc-creation` Command
+### The `cmd/ensure-doc` Command
 
 When `handlePresent` encounters an unknown doc ID that passes the route check, the pure program emits:
 
 ```ts
-{ type: "cmd/request-doc-creation", docId: DocId, peer: PeerIdentityDetails, replicaType: ReplicaType, mergeStrategy: MergeStrategy, schemaHash: string }
+{ type: "cmd/ensure-doc", docId: DocId, peer: PeerIdentityDetails, replicaType: ReplicaType, mergeStrategy: MergeStrategy, schemaHash: string }
 ```
 
-The `Synchronizer` runtime executes this command by calling the `DocCreationCallback` provided by the Exchange. The callback first attempts schema auto-resolution (§26), then falls through to `onUnresolvedDoc` if no schema matches. The callback is fire-and-forget — if it calls `exchange.get()`, the resulting `registerDoc()` → `#dispatch(doc-ensure)` is queued in `#pendingMessages` (because `#dispatching` is true) and processed before quiescence.
+The `Synchronizer` runtime executes this command by calling the `onEnsureDoc` callback provided by the Exchange. The callback first attempts schema auto-resolution (§26), then falls through to `onUnresolvedDoc` if no schema matches. The callback is fire-and-forget — if it calls `exchange.get()`, the resulting `registerDoc()` → `#dispatch(doc-ensure)` is queued in `#pendingMessages` (because `#dispatching` is true) and processed before quiescence.
 
 ### Reentrancy Through the Dispatch Loop
 
 The reentrancy path is safe because of the serialized dispatch architecture (§9):
 
-1. `handlePresent` returns `[model, cmd/request-doc-creation]`
+1. `handlePresent` returns `[model, cmd/ensure-doc]`
 2. `#executeCommand` calls the callback
 3. Callback calls `exchange.get()` → `synchronizer.registerDoc()` → `#dispatch(doc-ensure)`
 4. `#dispatch` sees `#dispatching === true`, pushes `doc-ensure` to `#pendingMessages`, returns
@@ -953,6 +955,8 @@ The reentrancy path is safe because of the serialized dispatch architecture (§9
 7. At quiescence, all messages are flushed together
 
 The `Defer` path has its own reentrancy: callback → `synchronizer.deferDoc()` → `#dispatch(synchronizer/doc-defer)` → queued in `#pendingMessages` and processed before quiescence. The deferred doc is announced via `present` (routing participation) but no `interest` is sent.
+
+**Idempotency invariant:** When `handlePresent` returns a batch of multiple `cmd/ensure-doc` commands, each command's callback may trigger cascading doc creation that creates state the next command will also try to create. The `ensure` semantics guarantee safety: `#interpretDoc` and `#replicateDoc` check whether the doc already exists and return early (first writer wins). This is why the commands are named `ensure-*` — they declare that a state should exist, and are no-ops if it already does.
 
 ### `doc-ensure` Sends Both `present` and `interest`
 
@@ -969,7 +973,7 @@ The vendor (`@loro-extended/repo`) handles this in `handleSyncRequest` — when 
 
 1. **Trigger point**: `present` (not `interest`/`sync-request`), because kyneta's `interest` is only sent for docs the sender already has.
 2. **Capability gating**: The `supports` gate has been removed from the synchronizer — all unknown docs reach `onUnresolvedDoc`. The Exchange's two-tiered default uses `supportsReplicaType` to decide between Defer and Reject when no callback matches.
-3. **Route gating**: The `route` predicate (§17) is checked before `cmd/request-doc-creation` is emitted. If `route(docId, announcingPeer)` returns `false`, the unknown doc is silently dropped — `onUnresolvedDoc` never fires.
+3. **Route gating**: The `route` predicate (§17) is checked before `cmd/ensure-doc` is emitted. If `route(docId, announcingPeer)` returns `false`, the unknown doc is silently dropped — `onUnresolvedDoc` never fires.
 4. **Auto-resolution**: Schema registry lookup happens before `onUnresolvedDoc` — most docs are resolved without any callback.
 5. **Gating mechanism**: a callback returning an explicit disposition (`Interpret | Replicate | Defer | Reject`), because the callback must provide the schema/factory/strategy — information a boolean predicate cannot supply.
 6. **No separate `creation` permission**: the callback subsumes the permission check. Returning `Reject()` is equivalent to denying creation.
@@ -1025,7 +1029,7 @@ The `route` predicate gates all outbound messages. It answers: "should this peer
 | Initial present | `handleEstablishRequest` / `handleEstablishResponse` | Doc omitted from `present` message |
 | Doc-ensure broadcast | `handleDocEnsure` | Channel excluded from present+interest |
 | Push (local change + relay) | `buildPush` | Channel excluded from offer |
-| `onUnresolvedDoc` gating | `handlePresent` | `cmd/request-doc-creation` not emitted |
+| `onUnresolvedDoc` gating | `handlePresent` | `cmd/ensure-doc` not emitted |
 
 ### `authorize` — Inbound Flow Control
 
@@ -1113,7 +1117,7 @@ Peer A                            Peer B
   |── dismiss { docId: "doc-1" } ──>|
   |                                 | handleDismiss:
   |                                 |   clean up peer sync state
-  |                                 |   cmd/notify-doc-dismissed
+  |                                 |   cmd/ensure-doc-dismissed
   |                                 |   → onDocDismissed("doc-1", peerA)
   |                                 |
 ```
@@ -1125,13 +1129,13 @@ When `handleDismiss` processes a `dismiss` message from a peer, it removes the d
 - Future local changes for this doc are not pushed to the dismissed peer
 - The peer's ready state no longer appears in `sync(doc).readyStates`
 
-### The `cmd/notify-doc-dismissed` Command
+### The `cmd/ensure-doc-dismissed` Command
 
 ```ts
-{ type: "cmd/notify-doc-dismissed", docId: DocId, peer: PeerIdentityDetails }
+{ type: "cmd/ensure-doc-dismissed", docId: DocId, peer: PeerIdentityDetails }
 ```
 
-Follows the same fire-and-forget pattern as `cmd/request-doc-creation`. The Synchronizer runtime calls the `DocDismissedCallback`, which the Exchange wraps to invoke the user's `onDocDismissed` callback.
+Follows the same ensure-semantics pattern as `cmd/ensure-doc` — the callback must be idempotent (first writer wins). The Synchronizer runtime calls the `DocDismissedCallback`, which the Exchange wraps to invoke the user's `onDocDismissed` callback.
 
 ---
 
@@ -2044,7 +2048,7 @@ listener.onLine(line => {
 
 Internally, `listen()`:
 
-1. **Registers schemas** — calls `exchange.registerSchema()` for the client and server `BoundSchema` objects. Incoming Line docs whose schema hash matches will auto-resolve in `onDocCreationRequested`, bypassing `onUnresolvedDoc` entirely.
+1. **Registers schemas** — calls `exchange.registerSchema()` for the client and server `BoundSchema` objects. Incoming Line docs whose schema hash matches will auto-resolve in `onEnsureDoc`, bypassing `onUnresolvedDoc` entirely.
 
 2. **Registers a scope** with `onDocCreated` — when a Line doc is created, the handler parses the doc ID, checks that it matches the protocol's topic and is addressed to this exchange's peerId, guards against duplicates, then calls `Line.#create()` to construct the server-side Line and fires all `onLine` callbacks.
 

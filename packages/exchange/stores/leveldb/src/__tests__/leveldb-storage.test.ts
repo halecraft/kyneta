@@ -7,13 +7,13 @@
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import type { StoreEntry } from "@kyneta/exchange/src/store/store.js"
+import type { StoreEntry } from "@kyneta/exchange"
 import {
   collectAll,
   describeStore,
   makeEntry,
   plainMetadata,
-} from "@kyneta/exchange/src/testing/store-conformance.js"
+} from "@kyneta/exchange/testing"
 import { afterAll, describe, expect, it } from "vitest"
 import { decodeStoreEntry, encodeStoreEntry, LevelDBStore } from "../server.js"
 

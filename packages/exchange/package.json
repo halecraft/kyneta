@@ -30,9 +30,7 @@
       "types": "./dist/testing/index.d.ts",
       "import": "./dist/testing/index.js",
       "default": "./dist/testing/index.js"
-    },
-    "./src": "./src/index.ts",
-    "./src/*": "./src/*"
+    }
   },
   "scripts": {
     "build": "tsup",

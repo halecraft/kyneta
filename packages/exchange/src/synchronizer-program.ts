@@ -174,9 +174,21 @@ function batchAsNeeded(
  * Commands are side effects produced by the update function.
  * The synchronizer runtime executes them.
  *
- * Commands change the world: send messages, import data, stop channels,
- * fire callbacks that may trigger reentrant dispatch. They are the
- * effectful co-product of the state transition.
+ * Commands fall into two categories:
+ *
+ * **Closed commands** (`cmd/send-message`, `cmd/send-offer`, `cmd/import-doc-data`,
+ * `cmd/stop-channel`, `cmd/subscribe-doc`, `cmd/dispatch`) — self-contained effects
+ * that don't call back into user code.
+ *
+ * **Ensure commands** (`cmd/ensure-doc`, `cmd/ensure-doc-dismissed`) — idempotent
+ * effects that cross into user code via callbacks. These may trigger reentrant
+ * dispatch (e.g. the callback calls `exchange.get()` → `registerDoc()` →
+ * `#dispatch(doc-ensure)`). Because the pure program plans all commands against
+ * a single model snapshot, batched ensure commands may fire for state that a
+ * sibling command's cascade has already created.
+ *
+ * **Invariant:** ensure command callbacks must be idempotent — first writer wins.
+ * Implementations must check for existing state and return early.
  */
 export type Command =
   // Channel operations
@@ -196,7 +208,7 @@ export type Command =
   // Document operations
   | { type: "cmd/subscribe-doc"; docId: DocId }
   | {
-      type: "cmd/request-doc-creation"
+      type: "cmd/ensure-doc"
       docId: DocId
       peer: PeerIdentityDetails
       replicaType: ReplicaType
@@ -213,7 +225,7 @@ export type Command =
 
   // Lifecycle notifications
   | {
-      type: "cmd/notify-doc-dismissed"
+      type: "cmd/ensure-doc-dismissed"
       docId: DocId
       peer: PeerIdentityDetails
     }
@@ -970,7 +982,7 @@ function handleDismiss(
   peers.set(channel.peerId, { ...peerState, docSyncStates, subscriptions })
 
   const cmd: Command = {
-    type: "cmd/notify-doc-dismissed",
+    type: "cmd/ensure-doc-dismissed",
     docId: message.docId,
     peer: peerState.identity,
   }
@@ -1063,7 +1075,7 @@ function handlePresent(
       // Unknown doc — check route before requesting creation
       if (!route(docId, peerState.identity)) continue
       commands.push({
-        type: "cmd/request-doc-creation",
+        type: "cmd/ensure-doc",
         docId,
         peer: peerState.identity,
         replicaType,

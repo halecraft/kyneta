@@ -526,7 +526,7 @@ describe("onUnresolvedDoc (dynamic document creation)", () => {
       d.count.set(7)
     })
 
-    // Drain — present → request-doc-creation → callback → doc-ensure → present → interest → offer
+    // Drain — present → ensure-doc → callback → doc-ensure → present → interest → offer
     await drain(40)
 
     // Bob should now have the doc with Alice's content
@@ -1997,5 +1997,43 @@ describe("waitForSync semantics", () => {
     // Receiver-side waitForSync resolves even through a relay hop
     await sync(docB).waitForSync({ timeout: 5000 })
     expect(docB.title()).toBe("hello from alice")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// ensure-doc idempotency
+// ---------------------------------------------------------------------------
+
+describe("ensure-doc idempotency", () => {
+  it("exchange.get() is idempotent — second call returns same ref", () => {
+    const exchange = createExchange({ identity: { peerId: "alice" } })
+    const ref1 = exchange.get("doc-1", SequentialDoc)
+    const ref2 = exchange.get("doc-1", SequentialDoc)
+    expect(ref1).toBe(ref2)
+  })
+
+  it("duplicate present for replicated doc does not throw", async () => {
+    const bridge = new Bridge()
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+    })
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      schemas: [SequentialDoc],
+    })
+
+    // Alice creates a doc — Bob will auto-resolve it
+    const _ref = exchangeA.get("doc-1", SequentialDoc)
+
+    // Drain to sync — no errors should occur even if cmd/ensure-doc fires
+    // multiple times for the same doc via batched present
+    await drain(40)
+
+    expect(exchangeB.has("doc-1")).toBe(true)
+
+    await exchangeA.shutdown()
+    await exchangeB.shutdown()
   })
 })
