@@ -1997,6 +1997,74 @@ The `Line` class provides reliable ordered bidirectional message streams between
 
 WebRTC signaling, RPC interactions, and command streams are **reliable ordered messaging** — not state synchronization. Modeling messages as CRDT state (ephemeral presence, ephemeral docs) creates signal accumulation, broadcast inefficiency, and deduplication overhead. The Line primitive provides message-passing semantics on top of the Exchange's document sync infrastructure, inheriting reconnection, offline resilience, and unified routing for free.
 
+### Protocol Definition
+
+A Line protocol reifies the schema pair + topic that both sides must agree on to communicate. Created once at module scope and shared between `open()` and `listen()` calls:
+
+```typescript
+// Symmetric — same schema both directions
+const Chat = Line.protocol({ topic: "chat", schema: MessageSchema })
+
+// Asymmetric — client and server send different types
+const RPC = Line.protocol({
+  topic: "rpc",
+  client: RequestSchema,   // what the client sends
+  server: ResponseSchema,  // what the server sends
+})
+```
+
+The protocol object is small and pure — it holds the topic string and one or two `BoundSchema` references. It has no mutable state. For symmetric protocols, a single `BoundSchema` is shared for both directions; for asymmetric protocols, two distinct `BoundSchema` objects are created.
+
+### Client-side: `protocol.open()`
+
+`protocol.open(exchange, peerId)` opens a Line to a specific peer as the **client** role:
+
+```typescript
+const line = RPC.open(exchange, "server-peer-id")
+line.send({ method: "ping", id: 1 })
+```
+
+The client sends via the client schema and receives via the server schema. Internally, `open()` calls `Line._create()` which computes doc IDs, calls `exchange.get()` for both documents, registers a per-line authorization scope, and constructs the `Line` instance.
+
+### Server-side: `protocol.listen()`
+
+`protocol.listen(exchange)` returns a `LineListener` handle for reactive acceptance of incoming Lines:
+
+```typescript
+const listener = RPC.listen(exchange)
+listener.onLine(line => {
+  console.log(`New client: ${line.peer}`)
+  ;(async () => {
+    for await (const msg of line) {
+      line.send({ result: "ok", id: msg.id })
+    }
+  })()
+})
+```
+
+Internally, `listen()`:
+
+1. **Registers schemas** — calls `exchange.registerSchema()` for the client and server `BoundSchema` objects. Incoming Line docs whose schema hash matches will auto-resolve in `onDocCreationRequested`, bypassing `onUnresolvedDoc` entirely.
+
+2. **Registers a scope** with `onDocCreated` — when a Line doc is created, the handler parses the doc ID, checks that it matches the protocol's topic and is addressed to this exchange's peerId, guards against duplicates, then calls `Line.#create()` to construct the server-side Line and fires all `onLine` callbacks.
+
+The listener uses the doc ID structure as the fundamental discriminator — no `origin` filter is needed. A doc with `parsed.to === exchange.peerId` is the remote peer's outbox; the local exchange never creates docs addressed to itself. Since `onDocCreated` fires exactly once per doc ID, there is no double-fire risk.
+
+**Late listen**: If a client connects before `listen()` is called, the client's docs are deferred by the Exchange's two-tiered default. When `registerSchema()` runs inside `listen()`, deferred docs matching the schema are auto-promoted synchronously, firing `onDocCreated` into the listener's scope. Lines created during this promotion are buffered and replayed on the first `onLine` callback registration.
+
+### `LineListener` API
+
+```typescript
+interface LineListener<SendMsg, RecvMsg> {
+  readonly topic: string
+  onLine(cb: (line: Line<SendMsg, RecvMsg>) => void): () => void
+  dispose(): void
+}
+```
+
+- **`onLine(cb)`** — registers a callback that fires with a fully constructed `Line` when a remote peer opens a Line on the matching topic. Returns an unsubscribe function. Multiple callbacks coexist.
+- **`dispose()`** — unregisters the scope, stopping acceptance of new Lines. Does NOT close already-open Lines — each Line manages its own lifecycle via `line.close()`. Does NOT unregister schemas (the capabilities registry is append-only).
+
 ### Document Model
 
 Each Line creates two plain sequential documents:
@@ -2017,36 +2085,19 @@ doc {
 - `payload` — the application message, typed by the schema
 - `ack` — the highest `seq` processed from the *other* direction's document
 
-### Asymmetric Schemas
-
-Lines support different message types per direction via `{ send, recv }` options:
-
-```typescript
-const line = openLine(exchange, {
-  peer: "server",
-  topic: "rpc",
-  send: RequestSchema,
-  recv: ResponseSchema,
-})
-```
-
-The coordination constraint: peer A's `send` schema must match peer B's `recv` schema, and vice versa. Enforced by convention — both peers agree on the protocol.
-
 ### Consumer API
 
-Two complementary interfaces share one ack cursor:
+A Line has one send method and one receive interface — the async iterator:
 
-**Push-based callback:**
 ```typescript
-const unsub = line.onReceive(msg => { ... })  // msg is Plain<Recv>
-```
+// Send
+line.send(msg)  // msg is Plain<Send>
 
-**Pull-based async generator:**
-```typescript
+// Receive
 for await (const msg of line) { ... }  // msg is Plain<Recv>
 ```
 
-Both consumers see every message. The ack advances to the highest delivered seq. If both are active, `onReceive` fires eagerly while the generator yields on `next()`.
+The iterator yields all messages in order, including messages that arrived before the Line was constructed (enqueued by `#processInbox()` in the constructor). It completes when the Line is closed or the remote peer departs. The ack cursor advances as messages are processed, triggering pruning on the sender's side.
 
 ### Ack Protocol and Pruning
 
@@ -2054,22 +2105,25 @@ When the receiver processes messages (seq > lastProcessedSeq), it writes `ack: l
 
 ### Topics
 
-The `topic` field (optional, defaults to `"default"`) distinguishes multiple independent Lines between the same peers:
+The `topic` field distinguishes multiple independent Lines between the same peers:
 
 ```typescript
-const signaling = openLine(exchange, { peer: "bob", topic: "signaling", schema: S1 })
-const rpc = openLine(exchange, { peer: "bob", topic: "rpc", schema: S2 })
+const Signaling = Line.protocol({ topic: "signaling", schema: S1 })
+const RPC = Line.protocol({ topic: "rpc", schema: S2 })
+
+const sigLine = Signaling.open(exchange, "bob")
+const rpcLine = RPC.open(exchange, "bob")
 ```
 
 Each topic produces distinct doc IDs (`line:signaling:...` vs `line:rpc:...`), distinct scopes, and distinct registry entries. Opening a Line with the same peer + topic as an already-open Line throws — close first, then reopen.
 
 ### Scope Integration
 
-Line is a standalone class — it composes with the Exchange via public API only (`register()`, `get()`, `dismiss()`). No Exchange modification needed. `Line.open()` no longer needs to call `registerSchema()` explicitly because `exchange.get()` handles schema registration internally.
+Line is a standalone class — it composes with the Exchange via public API only (`register()`, `registerSchema()`, `get()`, `dismiss()`). No Exchange modification needed.
 
-**Infrastructure scope** (`__line-infrastructure`): Registered on the first `openLine()` call. Provides a `onUnresolvedDoc` handler that returns `Defer()` for Line doc IDs. This handles the early-arrival case — when a remote peer's outbox arrives before the local peer opens a Line. The deferred doc is auto-promoted when `openLine()` calls `get()` (which registers the schema internally).
+**Listener scope** (`__line-listen:${topic}`): Registered by `protocol.listen()`. Provides `onDocCreated` to detect incoming Line docs and construct server-side Lines. The scope has no `authorize` predicate — authorization is handled by the per-line scope.
 
-**Per-line scope** (`line:${topic}:${remotePeerId}`): Registered per `openLine()` call. Provides `authorize` — only the `from` peer can write to each doc. Routing is open by default. Applications that want endpoint-only routing register their own scope using the exported `routeLine` predicate.
+**Per-line scope** (`line:${topic}:${remotePeerId}`): Registered per `Line._create()` call (shared by both `open()` and `listen()` paths). Provides `authorize` — only the `from` peer can write to each doc. Routing is open by default. Applications that want endpoint-only routing register their own scope using the exported `routeLine` predicate.
 
 ### The Authorize Abstain Pattern
 
@@ -2085,8 +2139,9 @@ The Line scope's inbox `authorize` uses this pattern: `peer.peerId === remotePee
 ### Standalone Design
 
 The Line class has zero coupling to Exchange internals. It uses only:
-- `exchange.register()` — scope registration
-- `exchange.get()` — document creation (calls `registerSchema()` internally, expanding capabilities and auto-promoting deferred docs)
+- `exchange.register()` — scope registration (listener scope and per-line scope)
+- `exchange.registerSchema()` — schema registration for auto-resolve (listener path)
+- `exchange.get()` — document creation (also calls `registerSchema()` internally)
 - `exchange.dismiss()` — document removal on close
 - `exchange.peers` — peer lifecycle subscription
 
@@ -2094,7 +2149,9 @@ This validates the scope + capabilities architecture: higher-level primitives co
 
 ### Type Safety
 
-The `Line<SendMsg, RecvMsg>` class is parameterized over concrete plain types (not schema types) to avoid deep recursive `Plain<S>` expansion. The `openLine()` function provides the typed entry point — it accepts schema types and returns `Line<Plain<Send>, Plain<Recv>>` using an interface call signature pattern that defers type evaluation.
+The `Line<SendMsg, RecvMsg>` class is parameterized over concrete plain types (not schema types) to avoid deep recursive `Plain<S>` expansion. The `Line.protocol()` method provides the typed entry point — it accepts schema types and returns a `LineProtocol<Plain<Client>, Plain<Server>>` using an interface call signature pattern (`CreateProtocol`) that defers type evaluation, avoiding TS2589.
+
+Generic parameter ordering: `LineProtocol<ClientMsg, ServerMsg>` names the message types by who *sends* them. `open()` returns `Line<ClientMsg, ServerMsg>` (client sends ClientMsg, receives ServerMsg). `listen()` returns `LineListener<ServerMsg, ClientMsg>` (server sends ServerMsg, receives ClientMsg).
 
 ---
 

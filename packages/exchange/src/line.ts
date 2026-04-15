@@ -6,17 +6,23 @@
 // composes with the Exchange entirely through public API (register(),
 // registerSchema(), get(), dismiss()) — no Exchange modification needed.
 //
+// Protocol-first design: `Line.protocol(opts)` reifies the schema pair +
+// topic into a `LineProtocol` object. The protocol's `open()` method creates
+// a Line to a specific peer (client role), and `listen()` reactively accepts
+// incoming Lines (server role). Both share the same `BoundSchema` references,
+// eliminating reference equality conflicts in `exchange.get()`.
+//
 // Generic strategy: The Line class is parameterized over plain message
 // types (SendMsg, RecvMsg) — not schema types — to avoid deep recursive
-// expansion of Plain<S>. Schema types appear only in Line.open(), which
-// evaluates Plain<S> once and threads the result into the constructor.
+// expansion of Plain<S>. Schema types appear only in `Line.protocol()`,
+// which evaluates `Plain<S>` once via deferred conditional return types.
 //
 // Context: jj:slsoupsw
 
 import type { CallableChangefeed } from "@kyneta/changefeed"
+import type { BoundSchema } from "@kyneta/schema"
 import {
   change,
-  Defer,
   json,
   type Plain,
   Schema,
@@ -109,38 +115,77 @@ export function routeLine(
 }
 
 // ---------------------------------------------------------------------------
-// LineOptions — discriminated union for Line.open()
+// Protocol types
 // ---------------------------------------------------------------------------
 
-/** Symmetric Line options — same schema both directions. */
-type SymmetricLineOptions<S extends SchemaNode> = {
-  peer: string
-  topic?: string
+/** Symmetric protocol options — same schema both directions. */
+type SymmetricProtocolOptions<S extends SchemaNode> = {
+  topic: string
   schema: S
 }
 
-/** Asymmetric Line options — different schemas per direction. */
-type AsymmetricLineOptions<Send extends SchemaNode, Recv extends SchemaNode> = {
-  peer: string
-  topic?: string
-  send: Send
-  recv: Recv
+/** Asymmetric protocol options — client and server send different types. */
+type AsymmetricProtocolOptions<C extends SchemaNode, S extends SchemaNode> = {
+  topic: string
+  client: C // what the client sends (= what the server receives)
+  server: S // what the server sends (= what the client receives)
 }
 
-/** Options for `Line.open()`. */
-export type LineOptions<Send extends SchemaNode, Recv extends SchemaNode> =
-  | SymmetricLineOptions<Send & Recv>
-  | AsymmetricLineOptions<Send, Recv>
+/**
+ * A reified Line protocol — the schema pair + topic that both sides
+ * must agree on to communicate. Created once at module scope, shared
+ * between `open()` and `listen()`.
+ *
+ * Generic parameter ordering: `LineProtocol<ClientMsg, ServerMsg>` names
+ * the message types by who *sends* them. `open()` returns
+ * `Line<ClientMsg, ServerMsg>` (client sends ClientMsg, receives ServerMsg).
+ * `listen()` returns `LineListener<ServerMsg, ClientMsg>` (server sends
+ * ServerMsg, receives ClientMsg).
+ */
+export interface LineProtocol<ClientMsg, ServerMsg> {
+  readonly topic: string
+
+  /** Open a Line to a specific peer as the client role. */
+  open(exchange: Exchange, peer: string): Line<ClientMsg, ServerMsg>
+
+  /** Listen for incoming Lines as the server role. */
+  listen(exchange: Exchange): LineListener<ServerMsg, ClientMsg>
+}
+
+/**
+ * Handle for reactive acceptance of incoming Lines. Returned by
+ * `protocol.listen()`.
+ */
+export interface LineListener<SendMsg, RecvMsg> {
+  readonly topic: string
+  onLine(cb: (line: Line<SendMsg, RecvMsg>) => void): () => void
+  dispose(): void
+}
 
 // ---------------------------------------------------------------------------
-// Static state — registry and infrastructure scope tracking
+// CreateProtocol — typed entry point (avoids TS2589)
+// ---------------------------------------------------------------------------
+
+// Interface call signature defers Plain<S> evaluation to each call site,
+// avoiding TS2589 ("excessively deep") that occurs when Plain<S> appears
+// in a generic method return type with abstract S extends SchemaNode.
+// Same technique used by createDoc in @kyneta/schema/basic.
+interface CreateProtocol {
+  <C extends SchemaNode, S extends SchemaNode>(
+    opts: AsymmetricProtocolOptions<C, S>,
+  ): LineProtocol<Plain<C>, Plain<S>>
+
+  <S extends SchemaNode>(
+    opts: SymmetricProtocolOptions<S>,
+  ): LineProtocol<Plain<S>, Plain<S>>
+}
+
+// ---------------------------------------------------------------------------
+// Static state — registry
 // ---------------------------------------------------------------------------
 
 /** Open Lines, keyed by `${exchangePeerId}:${remotePeerId}:${topic}`. */
 const registry = new Map<string, Line<any, any>>()
-
-/** Exchanges that have the infrastructure scope registered. */
-const infrastructureScopes = new WeakSet<Exchange>()
 
 function registryKey(
   exchangePeerId: string,
@@ -157,11 +202,12 @@ function registryKey(
 /**
  * A reliable ordered bidirectional message stream between two Exchange peers.
  *
- * Use `Line.open(exchange, opts)` to create — do not construct directly.
+ * Use `Line.protocol(opts)` to create a protocol, then `protocol.open()`
+ * or `protocol.listen()` to create Lines — do not construct directly.
  *
  * Generic strategy: parameterized over plain message types (`SendMsg`,
  * `RecvMsg`) — not schema types — to avoid deep recursive expansion of
- * `Plain<S>`. `Line.open()` evaluates `Plain<S>` once via a deferred
+ * `Plain<S>`. `Line.protocol()` evaluates `Plain<S>` once via a deferred
  * conditional return type, and the Line class itself never references
  * `Plain<>`.
  *
@@ -177,7 +223,6 @@ export class Line<SendMsg, RecvMsg> {
   readonly #outbox: any // Ref — untyped to avoid complex generic threading
   readonly #inbox: any // Ref
   readonly #queue: AsyncQueue<RecvMsg>
-  readonly #onReceiveCallbacks = new Set<(msg: RecvMsg) => void>()
   readonly #disposeScope: () => void
   readonly #unsubscribeInbox: () => void
   readonly #unsubscribePeers: () => void
@@ -185,7 +230,7 @@ export class Line<SendMsg, RecvMsg> {
   #lastProcessedSeq = 0
   #closed = false
 
-  /** @internal — use `Line.open()` instead. */
+  /** @internal — use `Line.protocol()` instead. */
   constructor(
     exchange: Exchange,
     topic: string,
@@ -266,32 +311,15 @@ export class Line<SendMsg, RecvMsg> {
   }
 
   // -----------------------------------------------------------------------
-  // Receive — push-based callback
+  // Receive — async iterator
   // -----------------------------------------------------------------------
 
   /**
-   * Register a push-based callback for incoming messages.
-   * Returns an unsubscribe function.
+   * Async iterator yielding incoming messages in order.
    *
-   * Multiple callbacks can coexist. Each sees every message.
-   * Coexists with the async generator — both share one ack cursor.
-   */
-  onReceive(cb: (msg: RecvMsg) => void): () => void {
-    if (this.#closed) {
-      throw new Error("Cannot register onReceive on a closed Line")
-    }
-    this.#onReceiveCallbacks.add(cb)
-    return () => {
-      this.#onReceiveCallbacks.delete(cb)
-    }
-  }
-
-  // -----------------------------------------------------------------------
-  // Receive — pull-based async generator
-  // -----------------------------------------------------------------------
-
-  /**
-   * Async iterator yielding incoming messages.
+   * This is the sole receive API. All messages — including those that
+   * arrived before the Line was constructed (queued by `#processInbox()`
+   * in the constructor) — are available through the iterator.
    *
    * Completes (`{ done: true }`) when the Line is closed or the remote
    * peer departs.
@@ -308,17 +336,15 @@ export class Line<SendMsg, RecvMsg> {
    * Close the Line.
    *
    * 1. Marks closed.
-   * 2. Clears all `onReceive` callbacks.
-   * 3. Completes the async iterator.
-   * 4. Disposes the per-line scope.
-   * 5. Dismisses both underlying docs.
-   * 6. Removes from the static registry.
+   * 2. Completes the async iterator.
+   * 3. Disposes the per-line scope.
+   * 4. Dismisses both underlying docs.
+   * 5. Removes from the static registry.
    */
   close(): void {
     if (this.#closed) return
     this.#closed = true
 
-    this.#onReceiveCallbacks.clear()
     this.#queue.close()
     this.#unsubscribeInbox()
     this.#unsubscribePeers()
@@ -352,16 +378,6 @@ export class Line<SendMsg, RecvMsg> {
     for (const msg of messages) {
       if (msg.seq <= this.#lastProcessedSeq) continue
 
-      // Dispatch to onReceive callbacks
-      for (const cb of this.#onReceiveCallbacks) {
-        try {
-          cb(msg.payload)
-        } catch {
-          // Callback errors don't prevent ack advancement
-        }
-      }
-
-      // Enqueue for async iterator
       this.#queue.push(msg.payload)
 
       this.#lastProcessedSeq = msg.seq
@@ -404,35 +420,28 @@ export class Line<SendMsg, RecvMsg> {
   }
 
   // -----------------------------------------------------------------------
-  // Static factory
+  // Internal — shared Line construction
   // -----------------------------------------------------------------------
 
   /**
-   * Open a Line to a remote peer.
+   * Create a Line from pre-resolved BoundSchema references.
    *
-   * @param exchange - The Exchange instance to compose with.
-   * @param opts - Line options (peer, topic, schema or send/recv).
+   * Performs the core construction: duplicate check, doc ID computation,
+   * `exchange.get()`, per-line scope registration, instance construction,
+   * and registry insertion.
    *
-   * @example
-   * ```ts
-   * // Symmetric — same schema both directions
-   * const line = Line.open(exchange, { peer: "bob", schema: SignalSchema })
+   * Called by `protocol.open()` and `protocol.listen()` — never directly
+   * by external consumers.
    *
-   * // Asymmetric — different schemas per direction
-   * const line = Line.open(exchange, {
-   *   peer: "server",
-   *   topic: "rpc",
-   *   send: RequestSchema,
-   *   recv: ResponseSchema,
-   * })
-   * ```
-   *
-   * @throws If a Line with the same `peer` and `topic` is already open.
+   * @internal
    */
-  static open(exchange: Exchange, opts: LineOptions<any, any>): Line<any, any> {
-    const topic = opts.topic ?? "default"
-    const remotePeerId = opts.peer
-
+  static #create(
+    exchange: Exchange,
+    topic: string,
+    remotePeerId: string,
+    outboxBound: BoundSchema,
+    inboxBound: BoundSchema,
+  ): Line<any, any> {
     // 1. Check for duplicate
     const key = registryKey(exchange.peerId, remotePeerId, topic)
     if (registry.has(key)) {
@@ -442,44 +451,20 @@ export class Line<SendMsg, RecvMsg> {
       )
     }
 
-    // 2. Infrastructure scope (idempotent via named scope replacement)
-    if (!infrastructureScopes.has(exchange)) {
-      exchange.register({
-        name: "__line-infrastructure",
-        onUnresolvedDoc: (
-          docId: DocId,
-          _peer: PeerIdentityDetails,
-          _replicaType: any,
-          _mergeStrategy: any,
-          _schemaHash: string,
-        ) => {
-          return isLineDocId(docId) ? Defer() : undefined
-        },
-      })
-      infrastructureScopes.add(exchange)
-    }
-
-    // 3. Compute doc IDs
+    // 2. Compute doc IDs
     const outboxDocId = lineDocId(topic, exchange.peerId, remotePeerId)
     const inboxDocId = lineDocId(topic, remotePeerId, exchange.peerId)
 
-    // 4. Resolve schemas
-    const sendSchema =
-      "send" in opts ? opts.send : (opts as SymmetricLineOptions<any>).schema
-    const recvSchema =
-      "recv" in opts ? opts.recv : (opts as SymmetricLineOptions<any>).schema
-
-    const outboxBound = json.bind(createLineDocSchema(sendSchema))
-    const inboxBound = json.bind(createLineDocSchema(recvSchema))
-
-    // 5-6. Create docs via exchange.get()
-    // Registration happens inside get() — no separate registerSchema() needed.
+    // 3. Create docs via exchange.get()
+    // Registration happens inside get() — no separate registerSchema() needed
+    // for the open() path. For the listen() path, registerSchema() is called
+    // before #create() so auto-resolve works.
     // Cast to any — the Line class manages refs internally and doesn't
     // expose them. Avoids deep type expansion through Ref<DocSchema<...>>.
-    const outbox: any = exchange.get(outboxDocId, outboxBound)
-    const inbox: any = exchange.get(inboxDocId, inboxBound)
+    const outbox: any = (exchange as any).get(outboxDocId, outboxBound)
+    const inbox: any = (exchange as any).get(inboxDocId, inboxBound)
 
-    // 7. Register per-line named scope
+    // 4. Register per-line named scope
     const disposeScope = exchange.register({
       name: `line:${topic}:${remotePeerId}`,
       authorize: (
@@ -500,7 +485,7 @@ export class Line<SendMsg, RecvMsg> {
       },
     })
 
-    // 8. Construct and register
+    // 5. Construct and register
     const line = new Line(
       exchange,
       topic,
@@ -515,47 +500,172 @@ export class Line<SendMsg, RecvMsg> {
     registry.set(key, line)
     return line
   }
+
+  // -----------------------------------------------------------------------
+  // Static — protocol factory
+  // -----------------------------------------------------------------------
+
+  /**
+   * Create a Line protocol — a reified schema pair + topic.
+   *
+   * The protocol object is small and pure: it holds the topic string and
+   * one or two `BoundSchema` references. It has no mutable state. Create
+   * it at module scope and share between `open()` and `listen()` calls.
+   *
+   * @example
+   * ```ts
+   * // Symmetric — same schema both directions
+   * const Chat = Line.protocol({ topic: "chat", schema: MessageSchema })
+   *
+   * // Asymmetric — client and server send different types
+   * const RPC = Line.protocol({
+   *   topic: "rpc",
+   *   client: RequestSchema,
+   *   server: ResponseSchema,
+   * })
+   *
+   * // Client side
+   * const line = RPC.open(exchange, "server-peer-id")
+   * line.send({ method: "ping", id: 1 })
+   *
+   * // Server side
+   * const listener = RPC.listen(exchange)
+   * listener.onLine(line => {
+   *   ;(async () => {
+   *     for await (const msg of line) { ... }
+   *   })()
+   * })
+   * ```
+   */
+  static protocol = ((opts: any) => {
+    const topic = opts.topic
+
+    // Resolve schemas: symmetric uses one BoundSchema for both directions;
+    // asymmetric creates two distinct BoundSchema objects.
+    // For symmetric protocols, a single json.bind() call is essential —
+    // two calls produce distinct references with the same schemaHash, and
+    // the capabilities registry overwrites on duplicate hashes. Using the
+    // same reference ensures exchange.get() reference equality is satisfied.
+    let clientBound: BoundSchema
+    let serverBound: BoundSchema
+    if ("schema" in opts) {
+      const bound = json.bind(createLineDocSchema(opts.schema))
+      clientBound = bound
+      serverBound = bound
+    } else {
+      clientBound = json.bind(createLineDocSchema(opts.client))
+      serverBound = json.bind(createLineDocSchema(opts.server))
+    }
+
+    return {
+      topic,
+
+      open(exchange: Exchange, peer: string): Line<any, any> {
+        // Client role: sends clientBound, receives serverBound
+        return Line.#create(exchange, topic, peer, clientBound, serverBound)
+      },
+
+      listen(exchange: Exchange): LineListener<any, any> {
+        // 1. Callback management and pending buffer.
+        //    Lines created synchronously during registerSchema (step 3)
+        //    arrive before the caller has a chance to register onLine
+        //    callbacks. We buffer them and replay on the first onLine call.
+        const callbacks = new Set<(line: Line<any, any>) => void>()
+        let pendingLines: Line<any, any>[] | null = []
+
+        function notifyOrBuffer(line: Line<any, any>): void {
+          if (callbacks.size > 0) {
+            for (const cb of callbacks) {
+              try {
+                cb(line)
+              } catch {
+                // Callback errors don't prevent other callbacks
+              }
+            }
+          } else if (pendingLines) {
+            pendingLines.push(line)
+          }
+        }
+
+        // 2. Register a scope with onDocCreated — BEFORE registerSchema
+        //    so that deferred-then-promoted docs (client connected before
+        //    listen was called) fire into this handler immediately.
+        const disposeScope = exchange.register({
+          name: `__line-listen:${topic}`,
+          onDocCreated: (
+            docId: DocId,
+            _peer: PeerIdentityDetails,
+            _mode: "interpret" | "replicate",
+            _origin: "local" | "remote",
+          ): void => {
+            // Parse the doc ID — only react to Line docs
+            const parsed = parseLineDocId(docId)
+            if (!parsed) return
+
+            // Check: correct topic and addressed to us
+            if (parsed.topic !== topic) return
+            if (parsed.to !== exchange.peerId) return
+
+            // Duplicate guard: skip if a Line already exists
+            const key = registryKey(exchange.peerId, parsed.from, topic)
+            if (registry.has(key)) return
+
+            // Create the server-side Line: server sends serverBound,
+            // receives clientBound (the reverse of the client role)
+            const line = Line.#create(
+              exchange,
+              topic,
+              parsed.from,
+              serverBound,
+              clientBound,
+            )
+
+            notifyOrBuffer(line)
+          },
+        })
+
+        // 3. Register schemas — puts them in the capabilities registry.
+        //    Incoming Line docs whose schema hash matches will auto-resolve
+        //    in onDocCreationRequested step 1, bypassing onUnresolvedDoc.
+        //    If any deferred docs match, registerSchema auto-promotes them
+        //    synchronously, firing onDocCreated into the scope above.
+        //    Any Lines created here are buffered in pendingLines.
+        exchange.registerSchema(clientBound)
+        if (serverBound !== clientBound) {
+          exchange.registerSchema(serverBound)
+        }
+
+        // 4. Return the LineListener handle
+        return {
+          topic,
+
+          onLine(cb: (line: Line<any, any>) => void): () => void {
+            callbacks.add(cb)
+            // Replay any Lines that arrived during listen() setup
+            if (pendingLines && pendingLines.length > 0) {
+              const toReplay = pendingLines
+              pendingLines = null
+              for (const line of toReplay) {
+                try {
+                  cb(line)
+                } catch {
+                  // Callback errors don't prevent replay
+                }
+              }
+            } else {
+              pendingLines = null
+            }
+            return () => {
+              callbacks.delete(cb)
+            }
+          },
+
+          dispose(): void {
+            disposeScope()
+            callbacks.clear()
+          },
+        }
+      },
+    }
+  }) as any as CreateProtocol
 }
-
-// ---------------------------------------------------------------------------
-// openLine — typed entry point (avoids TS2589)
-// ---------------------------------------------------------------------------
-
-// Interface call signature defers Plain<S> evaluation to each call site,
-// avoiding TS2589 ("excessively deep") that occurs when Plain<S> appears
-// in a generic method return type with abstract S extends SchemaNode.
-// Same technique used by createDoc in @kyneta/schema/basic.
-interface OpenLine {
-  <Send extends SchemaNode, Recv extends SchemaNode>(
-    exchange: Exchange,
-    opts: AsymmetricLineOptions<Send, Recv>,
-  ): Line<Plain<Send>, Plain<Recv>>
-
-  <S extends SchemaNode>(
-    exchange: Exchange,
-    opts: SymmetricLineOptions<S>,
-  ): Line<Plain<S>, Plain<S>>
-}
-
-/**
- * Open a Line to a remote peer.
- *
- * This is the typed entry point — prefer this over `Line.open()` for
- * full `Plain<S>` type inference without TS2589 depth errors.
- *
- * @example
- * ```ts
- * // Symmetric
- * const line = openLine(exchange, { peer: "bob", schema: SignalSchema })
- *
- * // Asymmetric
- * const line = openLine(exchange, {
- *   peer: "server",
- *   topic: "rpc",
- *   send: RequestSchema,
- *   recv: ResponseSchema,
- * })
- * ```
- */
-export const openLine: OpenLine = ((exchange: Exchange, opts: any) =>
-  Line.open(exchange, opts)) as any as OpenLine

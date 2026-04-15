@@ -59,7 +59,8 @@ export {
 export type {
   DocId,
   ExchangeParams,
-  LineOptions,
+  LineListener,
+  LineProtocol,
   ReadyState,
   RulePredicate,
   Scope,
@@ -74,7 +75,6 @@ export {
   isLineDocId,
   Line,
   lineDocId,
-  openLine,
   parseLineDocId,
   routeLine,
   ScopeRegistry,

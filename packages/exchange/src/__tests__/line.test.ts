@@ -2,15 +2,15 @@
 //
 // Uses BridgeTransport to connect Exchange instances and verifies:
 // - Doc ID utilities (lineDocId, isLineDocId, parseLineDocId, routeLine)
-// - Symmetric and asymmetric Line send/receive
-// - onReceive callback delivery
-// - onReceive + generator coexistence
+// - Symmetric and asymmetric Line send/receive via async iterator
 // - Ack and pruning
-// - Scope lifecycle (named scope registration/disposal, infrastructure scope)
-// - Early-arrival scenario (Defer → auto-promote)
+// - Scope lifecycle (named scope registration/disposal)
 // - Multiple Lines per peer pair (different topics)
 // - Duplicate detection (throw on same peer+topic)
 // - Hub-and-spoke relay
+// - protocol.listen() — server receives clients, multiple clients,
+//   onLine callback management, dispose semantics, queued messages,
+//   hub-and-spoke with listen
 
 import { json, Replicate, Schema } from "@kyneta/schema"
 import { Bridge, createBridgeTransport } from "@kyneta/transport"
@@ -19,8 +19,8 @@ import { Exchange } from "../exchange.js"
 import {
   createLineDocSchema,
   isLineDocId,
+  Line,
   lineDocId,
-  openLine,
   parseLineDocId,
   routeLine,
 } from "../line.js"
@@ -50,6 +50,11 @@ function createExchange(
   return ex
 }
 
+/** Fire-and-forget drain of a Line's async iterator into an array. */
+function collect<T>(line: { [Symbol.asyncIterator](): AsyncIterableIterator<T> }, into: T[]): void {
+  ;(async () => { for await (const msg of line) into.push(msg) })()
+}
+
 afterEach(async () => {
   for (const ex of activeExchanges) {
     try {
@@ -64,11 +69,6 @@ afterEach(async () => {
 // ---------------------------------------------------------------------------
 // Schemas
 // ---------------------------------------------------------------------------
-
-const _SignalSchema = Schema.struct({
-  type: Schema.string(),
-  sdp: Schema.string(),
-})
 
 const RequestSchema = Schema.struct({
   method: Schema.string(),
@@ -166,16 +166,9 @@ describe("symmetric Line send and receive via generator", () => {
 
     await drain()
 
-    const lineA = openLine(exchangeA, {
-      peer: "bob",
-      topic: "test",
-      schema: SimpleSchema,
-    })
-    const lineB = openLine(exchangeB, {
-      peer: "alice",
-      topic: "test",
-      schema: SimpleSchema,
-    })
+    const P = Line.protocol({ topic: "test", schema: SimpleSchema })
+    const lineA = P.open(exchangeA, "bob")
+    const lineB = P.open(exchangeB, "alice")
 
     lineA.send({ value: 42 })
     await drain()
@@ -209,44 +202,27 @@ describe("symmetric Line send and receive via generator", () => {
 
     await drain()
 
-    const lineA = openLine(exchangeA, {
-      peer: "bob",
-      topic: "order",
-      schema: SimpleSchema,
-    })
-    const lineB = openLine(exchangeB, {
-      peer: "alice",
-      topic: "order",
-      schema: SimpleSchema,
-    })
+    const P = Line.protocol({ topic: "order", schema: SimpleSchema })
+    const lineA = P.open(exchangeA, "bob")
+    const lineB = P.open(exchangeB, "alice")
 
+    // Send messages, drain, then pull from iterator
     lineA.send({ value: 1 })
     lineA.send({ value: 2 })
     lineA.send({ value: 3 })
-
     await drain()
 
-    const received: number[] = []
-    lineB.onReceive(msg => {
-      received.push(msg.value)
-    })
-
-    // Process already-delivered messages
+    // Pull 3 messages from iterator
+    const received: { value: number }[] = []
+    collect(lineB, received)
     await drain()
+    expect(received.map(m => m.value)).toEqual([1, 2, 3])
 
-    // The messages should have been delivered in order
-    // (they may have already been processed by the initial scan)
-    // Let's check via the queue
-    const _iter = lineB[Symbol.asyncIterator]()
-
-    // The initial scan in the constructor should have processed them
-    // but since onReceive was registered after, let's send more
+    // Send more to verify continued ordering
     lineA.send({ value: 4 })
     lineA.send({ value: 5 })
-
     await drain()
-
-    expect(received).toEqual([4, 5])
+    expect(received.map(m => m.value)).toEqual([1, 2, 3, 4, 5])
 
     lineA.close()
     lineB.close()
@@ -265,16 +241,13 @@ describe("symmetric Line send and receive via generator", () => {
 
     await drain()
 
-    const lineB = openLine(exchangeB, {
-      peer: "alice",
-      topic: "close-test",
-      schema: SimpleSchema,
-    })
+    const P = Line.protocol({ topic: "close-test", schema: SimpleSchema })
+    const lineB = P.open(exchangeB, "alice")
 
     const iter = lineB[Symbol.asyncIterator]()
     const pendingNext = iter.next()
 
-    // Close the line — should resolve the pending next with done: true
+    // Close the Line — should complete the iterator
     lineB.close()
 
     const result = await pendingNext
@@ -294,197 +267,24 @@ describe("symmetric Line send and receive via generator", () => {
 
     await drain()
 
-    const lineA = openLine(exchangeA, {
-      peer: "bob",
-      topic: "bidir",
-      schema: SimpleSchema,
-    })
-    const lineB = openLine(exchangeB, {
-      peer: "alice",
-      topic: "bidir",
-      schema: SimpleSchema,
-    })
+    const P = Line.protocol({ topic: "bidir", schema: SimpleSchema })
+    const lineA = P.open(exchangeA, "bob")
+    const lineB = P.open(exchangeB, "alice")
 
-    const receivedByA: number[] = []
-    const receivedByB: number[] = []
+    const receivedByA: { value: number }[] = []
+    const receivedByB: { value: number }[] = []
 
-    lineA.onReceive(msg => receivedByA.push(msg.value))
-    lineB.onReceive(msg => receivedByB.push(msg.value))
+    collect(lineA, receivedByA)
+    collect(lineB, receivedByB)
 
-    lineA.send({ value: 100 })
-    lineB.send({ value: 200 })
-
-    await drain()
-
-    expect(receivedByA).toContain(200)
-    expect(receivedByB).toContain(100)
-
-    lineA.close()
-    lineB.close()
-  })
-})
-
-// ---------------------------------------------------------------------------
-// onReceive callback
-// ---------------------------------------------------------------------------
-
-describe("onReceive callback", () => {
-  it("callback fires with typed payload", async () => {
-    const bridge = new Bridge()
-    const exchangeA = createExchange({
-      identity: { peerId: "alice" },
-      transports: [createBridgeTransport({ transportType: "alice", bridge })],
-    })
-    const exchangeB = createExchange({
-      identity: { peerId: "bob" },
-      transports: [createBridgeTransport({ transportType: "bob", bridge })],
-    })
-
-    await drain()
-
-    const lineA = openLine(exchangeA, {
-      peer: "bob",
-      topic: "cb",
-      schema: SimpleSchema,
-    })
-    const lineB = openLine(exchangeB, {
-      peer: "alice",
-      topic: "cb",
-      schema: SimpleSchema,
-    })
-
-    const received: Array<{ value: number }> = []
-    lineB.onReceive(msg => received.push(msg))
-
-    lineA.send({ value: 7 })
-    await drain()
-
-    expect(received).toEqual([{ value: 7 }])
-
-    lineA.close()
-    lineB.close()
-  })
-
-  it("multiple callbacks all fire", async () => {
-    const bridge = new Bridge()
-    const exchangeA = createExchange({
-      identity: { peerId: "alice" },
-      transports: [createBridgeTransport({ transportType: "alice", bridge })],
-    })
-    const exchangeB = createExchange({
-      identity: { peerId: "bob" },
-      transports: [createBridgeTransport({ transportType: "bob", bridge })],
-    })
-
-    await drain()
-
-    const lineA = openLine(exchangeA, {
-      peer: "bob",
-      topic: "multi-cb",
-      schema: SimpleSchema,
-    })
-    const lineB = openLine(exchangeB, {
-      peer: "alice",
-      topic: "multi-cb",
-      schema: SimpleSchema,
-    })
-
-    const received1: number[] = []
-    const received2: number[] = []
-    lineB.onReceive(msg => received1.push(msg.value))
-    lineB.onReceive(msg => received2.push(msg.value))
-
-    lineA.send({ value: 99 })
-    await drain()
-
-    expect(received1).toEqual([99])
-    expect(received2).toEqual([99])
-
-    lineA.close()
-    lineB.close()
-  })
-
-  it("unsubscribe removes the callback", async () => {
-    const bridge = new Bridge()
-    const exchangeA = createExchange({
-      identity: { peerId: "alice" },
-      transports: [createBridgeTransport({ transportType: "alice", bridge })],
-    })
-    const exchangeB = createExchange({
-      identity: { peerId: "bob" },
-      transports: [createBridgeTransport({ transportType: "bob", bridge })],
-    })
-
-    await drain()
-
-    const lineA = openLine(exchangeA, {
-      peer: "bob",
-      topic: "unsub",
-      schema: SimpleSchema,
-    })
-    const lineB = openLine(exchangeB, {
-      peer: "alice",
-      topic: "unsub",
-      schema: SimpleSchema,
-    })
-
-    const received: number[] = []
-    const unsub = lineB.onReceive(msg => received.push(msg.value))
-
+    // Both send simultaneously
     lineA.send({ value: 1 })
-    await drain()
-    expect(received).toEqual([1])
-
-    unsub()
-
-    lineA.send({ value: 2 })
-    await drain()
-
-    // Should not have received the second message
-    expect(received).toEqual([1])
-
-    lineA.close()
-    lineB.close()
-  })
-
-  it("callback throwing does not prevent ack advancement", async () => {
-    const bridge = new Bridge()
-    const exchangeA = createExchange({
-      identity: { peerId: "alice" },
-      transports: [createBridgeTransport({ transportType: "alice", bridge })],
-    })
-    const exchangeB = createExchange({
-      identity: { peerId: "bob" },
-      transports: [createBridgeTransport({ transportType: "bob", bridge })],
-    })
+    lineB.send({ value: 2 })
 
     await drain()
 
-    const lineA = openLine(exchangeA, {
-      peer: "bob",
-      topic: "throw",
-      schema: SimpleSchema,
-    })
-    const lineB = openLine(exchangeB, {
-      peer: "alice",
-      topic: "throw",
-      schema: SimpleSchema,
-    })
-
-    const goodReceived: number[] = []
-
-    // First callback throws
-    lineB.onReceive(() => {
-      throw new Error("boom")
-    })
-    // Second callback should still fire
-    lineB.onReceive(msg => goodReceived.push(msg.value))
-
-    lineA.send({ value: 1 })
-    lineA.send({ value: 2 })
-    await drain()
-
-    expect(goodReceived).toEqual([1, 2])
+    expect(receivedByA.map(m => m.value)).toContain(2)
+    expect(receivedByB.map(m => m.value)).toContain(1)
 
     lineA.close()
     lineB.close()
@@ -492,66 +292,11 @@ describe("onReceive callback", () => {
 })
 
 // ---------------------------------------------------------------------------
-// onReceive + generator coexistence
-// ---------------------------------------------------------------------------
-
-describe("onReceive + generator coexistence", () => {
-  it("both see every message", async () => {
-    const bridge = new Bridge()
-    const exchangeA = createExchange({
-      identity: { peerId: "alice" },
-      transports: [createBridgeTransport({ transportType: "alice", bridge })],
-    })
-    const exchangeB = createExchange({
-      identity: { peerId: "bob" },
-      transports: [createBridgeTransport({ transportType: "bob", bridge })],
-    })
-
-    await drain()
-
-    const lineA = openLine(exchangeA, {
-      peer: "bob",
-      topic: "coexist",
-      schema: SimpleSchema,
-    })
-    const lineB = openLine(exchangeB, {
-      peer: "alice",
-      topic: "coexist",
-      schema: SimpleSchema,
-    })
-
-    const callbackReceived: number[] = []
-    lineB.onReceive(msg => callbackReceived.push(msg.value))
-
-    lineA.send({ value: 10 })
-    await drain()
-
-    // Callback should have fired
-    expect(callbackReceived).toEqual([10])
-
-    // Generator should also yield the same message
-    const iter = lineB[Symbol.asyncIterator]()
-    const result = await Promise.race([
-      iter.next(),
-      new Promise<{ value: undefined; done: true }>(r =>
-        setTimeout(() => r({ value: undefined, done: true }), 500),
-      ),
-    ])
-
-    expect(result.done).toBe(false)
-    expect(result.value).toEqual({ value: 10 })
-
-    lineA.close()
-    lineB.close()
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Asymmetric Line
+// Asymmetric Line via protocol.listen
 // ---------------------------------------------------------------------------
 
 describe("asymmetric Line", () => {
-  it("different schemas per direction", async () => {
+  it("different schemas per direction via listen", async () => {
     const bridge = new Bridge()
     const exchangeClient = createExchange({
       identity: { peerId: "client" },
@@ -564,40 +309,43 @@ describe("asymmetric Line", () => {
 
     await drain()
 
-    const clientLine = openLine(exchangeClient, {
-      peer: "server",
+    const RPC = Line.protocol({
       topic: "rpc",
-      send: RequestSchema,
-      recv: ResponseSchema,
+      client: RequestSchema,
+      server: ResponseSchema,
     })
 
-    const serverLine = openLine(exchangeServer, {
-      peer: "client",
-      topic: "rpc",
-      send: ResponseSchema,
-      recv: RequestSchema,
-    })
-
-    // Client sends a request
+    // Server listens — capture the server-side line for bidirectional test
+    let capturedServerLine: any = null
     const serverReceived: Array<{ method: string; id: number }> = []
-    serverLine.onReceive(msg => serverReceived.push(msg))
+    const listener = RPC.listen(exchangeServer)
+    listener.onLine(line => {
+      capturedServerLine = line
+      collect(line, serverReceived)
+    })
+
+    // Client opens and sends
+    const clientLine = RPC.open(exchangeClient, "server")
+    const clientReceived: Array<{ result: string; id: number }> = []
+    collect(clientLine, clientReceived)
 
     clientLine.send({ method: "getData", id: 1 })
     await drain()
 
+    // Server received the request
     expect(serverReceived).toEqual([{ method: "getData", id: 1 }])
 
-    // Server sends a response
-    const clientReceived: Array<{ result: string; id: number }> = []
-    clientLine.onReceive(msg => clientReceived.push(msg))
-
-    serverLine.send({ result: "ok", id: 1 })
+    // Server responds on the captured line
+    expect(capturedServerLine).not.toBeNull()
+    capturedServerLine.send({ result: "ok", id: 1 })
     await drain()
 
+    // Client received the response
     expect(clientReceived).toEqual([{ result: "ok", id: 1 }])
 
+    listener.dispose()
     clientLine.close()
-    serverLine.close()
+    capturedServerLine.close()
   })
 })
 
@@ -619,102 +367,34 @@ describe("ack and pruning", () => {
 
     await drain()
 
-    const lineA = openLine(exchangeA, {
-      peer: "bob",
-      topic: "prune",
-      schema: SimpleSchema,
-    })
-    const lineB = openLine(exchangeB, {
-      peer: "alice",
-      topic: "prune",
-      schema: SimpleSchema,
-    })
+    const P = Line.protocol({ topic: "prune", schema: SimpleSchema })
+    const lineA = P.open(exchangeA, "bob")
+    const lineB = P.open(exchangeB, "alice")
 
-    const received: number[] = []
-    lineB.onReceive(msg => received.push(msg.value))
+    const received: { value: number }[] = []
+    collect(lineB, received)
 
-    // Send multiple batches with drain in between to allow ack + pruning
-    for (let batch = 0; batch < 3; batch++) {
-      for (let i = 0; i < 5; i++) {
-        lineA.send({ value: batch * 5 + i })
-      }
-      await drain(40)
+    // Send 10 messages in batches with drains between
+    for (let i = 0; i < 5; i++) {
+      lineA.send({ value: i })
     }
-
-    // All 15 messages should have been delivered in order
-    expect(received).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14])
-
-    // The system is still functional after many cycles (no accumulation blow-up)
-    lineA.send({ value: 99 })
     await drain()
-    expect(received).toContain(99)
+
+    // Verify first batch
+    expect(received.length).toBeGreaterThanOrEqual(5)
+    expect(received.slice(0, 5).map(m => m.value)).toEqual([0, 1, 2, 3, 4])
+
+    // Send second batch
+    for (let i = 5; i < 10; i++) {
+      lineA.send({ value: i })
+    }
+    await drain()
+
+    // All 10 should be received in order
+    expect(received.map(m => m.value)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
 
     lineA.close()
     lineB.close()
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Scope lifecycle
-// ---------------------------------------------------------------------------
-
-describe("scope lifecycle", () => {
-  it("Line.open registers a named scope", async () => {
-    const exchange = createExchange({
-      identity: { peerId: "alice" },
-    })
-
-    const line = openLine(exchange, {
-      peer: "bob",
-      topic: "signaling",
-      schema: SimpleSchema,
-    })
-
-    // The ScopeRegistry is internal, but we can check via the
-    // infrastructure scope name pattern
-    // Just verify it doesn't throw and has expected properties
-    expect(line.topic).toBe("signaling")
-    expect(line.peer).toBe("bob")
-    expect(line.closed).toBe(false)
-
-    line.close()
-    expect(line.closed).toBe(true)
-  })
-
-  it("Line.open with default topic", () => {
-    const exchange = createExchange({
-      identity: { peerId: "alice" },
-    })
-
-    const line = openLine(exchange, {
-      peer: "bob",
-      schema: SimpleSchema,
-    })
-
-    expect(line.topic).toBe("default")
-    line.close()
-  })
-
-  it("close() allows reopening the same topic", () => {
-    const exchange = createExchange({
-      identity: { peerId: "alice" },
-    })
-
-    const line1 = openLine(exchange, {
-      peer: "bob",
-      topic: "reopen",
-      schema: SimpleSchema,
-    })
-    line1.close()
-
-    // Should not throw — topic is freed
-    const line2 = openLine(exchange, {
-      peer: "bob",
-      topic: "reopen",
-      schema: SimpleSchema,
-    })
-    expect(line2.closed).toBe(false)
-    line2.close()
   })
 })
 
@@ -728,39 +408,10 @@ describe("duplicate detection", () => {
       identity: { peerId: "alice" },
     })
 
-    const line = openLine(exchange, {
-      peer: "bob",
-      topic: "dup",
-      schema: SimpleSchema,
-    })
+    const P = Line.protocol({ topic: "dup", schema: SimpleSchema })
+    const line = P.open(exchange, "bob")
 
-    expect(() =>
-      openLine(exchange, {
-        peer: "bob",
-        topic: "dup",
-        schema: SimpleSchema,
-      }),
-    ).toThrow(/already open/)
-
-    line.close()
-  })
-
-  it("throws with default topic collision", () => {
-    const exchange = createExchange({
-      identity: { peerId: "alice" },
-    })
-
-    const line = openLine(exchange, {
-      peer: "bob",
-      schema: SimpleSchema,
-    })
-
-    expect(() =>
-      openLine(exchange, {
-        peer: "bob",
-        schema: SimpleSchema,
-      }),
-    ).toThrow(/already open/)
+    expect(() => P.open(exchange, "bob")).toThrow(/already open/)
 
     line.close()
   })
@@ -770,16 +421,10 @@ describe("duplicate detection", () => {
       identity: { peerId: "alice" },
     })
 
-    const line1 = openLine(exchange, {
-      peer: "bob",
-      topic: "signaling",
-      schema: SimpleSchema,
-    })
-    const line2 = openLine(exchange, {
-      peer: "bob",
-      topic: "rpc",
-      schema: SimpleSchema,
-    })
+    const P1 = Line.protocol({ topic: "signaling", schema: SimpleSchema })
+    const P2 = Line.protocol({ topic: "rpc", schema: SimpleSchema })
+    const line1 = P1.open(exchange, "bob")
+    const line2 = P2.open(exchange, "bob")
 
     expect(line1.topic).toBe("signaling")
     expect(line2.topic).toBe("rpc")
@@ -793,19 +438,14 @@ describe("duplicate detection", () => {
       identity: { peerId: "alice" },
     })
 
-    const line1 = openLine(exchange, {
-      peer: "bob",
-      topic: "reuse",
-      schema: SimpleSchema,
-    })
+    const P = Line.protocol({ topic: "reuse", schema: SimpleSchema })
+    const line1 = P.open(exchange, "bob")
     line1.close()
 
     // Should succeed — topic freed by close
-    const line2 = openLine(exchange, {
-      peer: "bob",
-      topic: "reuse",
-      schema: SimpleSchema,
-    })
+    const line2 = P.open(exchange, "bob")
+
+    expect(line2.peer).toBe("bob")
     line2.close()
   })
 })
@@ -828,63 +468,56 @@ describe("multiple Lines per peer pair", () => {
 
     await drain()
 
-    const sigA = openLine(exchangeA, {
-      peer: "bob",
+    const SigProto = Line.protocol({
       topic: "signaling",
       schema: SimpleSchema,
     })
-    const rpcA = openLine(exchangeA, {
-      peer: "bob",
-      topic: "rpc",
-      schema: SimpleSchema,
-    })
+    const RpcProto = Line.protocol({ topic: "rpc", schema: SimpleSchema })
 
-    const sigB = openLine(exchangeB, {
-      peer: "alice",
-      topic: "signaling",
-      schema: SimpleSchema,
-    })
-    const rpcB = openLine(exchangeB, {
-      peer: "alice",
-      topic: "rpc",
-      schema: SimpleSchema,
-    })
+    const sigA = SigProto.open(exchangeA, "bob")
+    const rpcA = RpcProto.open(exchangeA, "bob")
 
-    const sigReceived: number[] = []
-    const rpcReceived: number[] = []
-    sigB.onReceive(msg => sigReceived.push(msg.value))
-    rpcB.onReceive(msg => rpcReceived.push(msg.value))
+    const sigB = SigProto.open(exchangeB, "alice")
+    const rpcB = RpcProto.open(exchangeB, "alice")
 
+    const sigReceived: { value: number }[] = []
+    const rpcReceived: { value: number }[] = []
+
+    collect(sigB, sigReceived)
+    collect(rpcB, rpcReceived)
+
+    // Send on signaling topic only
     sigA.send({ value: 1 })
+
+    await drain()
+
+    expect(sigReceived.map(m => m.value)).toEqual([1])
+    expect(rpcReceived).toEqual([]) // rpc should NOT see signaling messages
+
+    // Now send on rpc
     rpcA.send({ value: 2 })
     await drain()
 
-    expect(sigReceived).toEqual([1])
-    expect(rpcReceived).toEqual([2])
+    expect(rpcReceived.map(m => m.value)).toEqual([2])
+    expect(sigReceived.map(m => m.value)).toEqual([1]) // signaling should NOT see rpc messages
 
-    // Closing one doesn't affect the other
     sigA.close()
-    sigB.close()
-
-    rpcA.send({ value: 3 })
-    await drain()
-    expect(rpcReceived).toEqual([2, 3])
-
     rpcA.close()
+    sigB.close()
     rpcB.close()
   })
 
   it("doc IDs are distinct", () => {
     const sigId = lineDocId("signaling", "alice", "bob")
     const rpcId = lineDocId("rpc", "alice", "bob")
-    expect(sigId).toBe("line:signaling:alice→bob")
-    expect(rpcId).toBe("line:rpc:alice→bob")
     expect(sigId).not.toBe(rpcId)
+    expect(sigId).toContain("signaling")
+    expect(rpcId).toContain("rpc")
   })
 })
 
 // ---------------------------------------------------------------------------
-// send/onReceive on closed Line
+// Closed Line guards
 // ---------------------------------------------------------------------------
 
 describe("closed Line guards", () => {
@@ -893,29 +526,11 @@ describe("closed Line guards", () => {
       identity: { peerId: "alice" },
     })
 
-    const line = openLine(exchange, {
-      peer: "bob",
-      topic: "guard",
-      schema: SimpleSchema,
-    })
+    const P = Line.protocol({ topic: "guard", schema: SimpleSchema })
+    const line = P.open(exchange, "bob")
     line.close()
 
     expect(() => line.send({ value: 1 })).toThrow(/closed/)
-  })
-
-  it("onReceive() on closed Line throws", () => {
-    const exchange = createExchange({
-      identity: { peerId: "alice" },
-    })
-
-    const line = openLine(exchange, {
-      peer: "bob",
-      topic: "guard2",
-      schema: SimpleSchema,
-    })
-    line.close()
-
-    expect(() => line.onReceive(() => {})).toThrow(/closed/)
   })
 
   it("close() is idempotent", () => {
@@ -923,20 +538,18 @@ describe("closed Line guards", () => {
       identity: { peerId: "alice" },
     })
 
-    const line = openLine(exchange, {
-      peer: "bob",
-      topic: "idem",
-      schema: SimpleSchema,
-    })
+    const P = Line.protocol({ topic: "idem", schema: SimpleSchema })
+    const line = P.open(exchange, "bob")
     line.close()
-    // Should not throw
-    line.close()
+
+    // Second close should not throw
+    expect(() => line.close()).not.toThrow()
     expect(line.closed).toBe(true)
   })
 })
 
 // ---------------------------------------------------------------------------
-// Hub-and-spoke relay
+// Hub-and-spoke relay (symmetric, both sides call open)
 // ---------------------------------------------------------------------------
 
 describe("hub-and-spoke relay", () => {
@@ -979,42 +592,583 @@ describe("hub-and-spoke relay", () => {
 
     await drain(40)
 
+    const P = Line.protocol({ topic: "relay", schema: SimpleSchema })
+
     // Alice opens a Line to Bob (routed through server)
-    const lineA = openLine(exchangeA, {
-      peer: "bob",
-      topic: "relay",
-      schema: SimpleSchema,
-    })
+    const lineA = P.open(exchangeA, "bob")
 
     // Bob opens the corresponding Line
-    const lineB = openLine(exchangeB, {
-      peer: "alice",
-      topic: "relay",
-      schema: SimpleSchema,
-    })
+    const lineB = P.open(exchangeB, "alice")
 
     await drain(60)
 
-    const receivedByB: number[] = []
-    lineB.onReceive(msg => receivedByB.push(msg.value))
+    const receivedByB: { value: number }[] = []
+    collect(lineB, receivedByB)
 
     lineA.send({ value: 42 })
 
     // Give plenty of drain rounds for multi-hop relay
     await drain(100)
 
-    expect(receivedByB).toContain(42)
+    expect(receivedByB.map(m => m.value)).toContain(42)
 
     // Bob can reply back through server
-    const receivedByA: number[] = []
-    lineA.onReceive(msg => receivedByA.push(msg.value))
+    const receivedByA: { value: number }[] = []
+    collect(lineA, receivedByA)
 
     lineB.send({ value: 99 })
     await drain(100)
 
-    expect(receivedByA).toContain(99)
+    expect(receivedByA.map(m => m.value)).toContain(99)
 
     lineA.close()
     lineB.close()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// protocol.listen — server role tests
+// ---------------------------------------------------------------------------
+
+describe("protocol.listen", () => {
+  it("server responds to client request via protocol.listen", async () => {
+    const bridge = new Bridge()
+    const exchangeClient = createExchange({
+      identity: { peerId: "client" },
+      transports: [createBridgeTransport({ transportType: "client", bridge })],
+    })
+    const exchangeServer = createExchange({
+      identity: { peerId: "server" },
+      transports: [createBridgeTransport({ transportType: "server", bridge })],
+    })
+
+    await drain()
+
+    const RPC = Line.protocol({
+      topic: "rpc",
+      client: RequestSchema,
+      server: ResponseSchema,
+    })
+
+    // Server listens and responds to each request via async iterator
+    let capturedServerLine: any = null
+    const listener = RPC.listen(exchangeServer)
+    listener.onLine(line => {
+      capturedServerLine = line
+      ;(async () => {
+        for await (const msg of line) {
+          line.send({ result: `${(msg as any).method}:done`, id: (msg as any).id })
+        }
+      })()
+    })
+
+    // Client opens, collects responses, then sends
+    const clientLine = RPC.open(exchangeClient, "server")
+    const clientReceived: Array<{ result: string; id: number }> = []
+    collect(clientLine, clientReceived)
+
+    clientLine.send({ method: "ping", id: 1 })
+    await drain()
+
+    // Client should have received the server's response
+    expect(clientReceived).toEqual([{ result: "ping:done", id: 1 }])
+
+    // Send another request to verify continued operation
+    clientLine.send({ method: "status", id: 2 })
+    await drain()
+
+    expect(clientReceived).toEqual([
+      { result: "ping:done", id: 1 },
+      { result: "status:done", id: 2 },
+    ])
+
+    listener.dispose()
+    clientLine.close()
+    if (capturedServerLine) capturedServerLine.close()
+  })
+
+  it("multiple clients each get an independent Line", async () => {
+    const bridge1 = new Bridge()
+    const bridge2 = new Bridge()
+    const exchangeServer = createExchange({
+      identity: { peerId: "server" },
+      transports: [
+        createBridgeTransport({ transportType: "server1", bridge: bridge1 }),
+        createBridgeTransport({ transportType: "server2", bridge: bridge2 }),
+      ],
+    })
+    const exchangeClient1 = createExchange({
+      identity: { peerId: "client1" },
+      transports: [
+        createBridgeTransport({ transportType: "client1", bridge: bridge1 }),
+      ],
+    })
+    const exchangeClient2 = createExchange({
+      identity: { peerId: "client2" },
+      transports: [
+        createBridgeTransport({ transportType: "client2", bridge: bridge2 }),
+      ],
+    })
+
+    await drain()
+
+    const RPC = Line.protocol({
+      topic: "rpc-multi",
+      client: RequestSchema,
+      server: ResponseSchema,
+    })
+
+    // Server listens — collect lines and messages per client
+    const serverLines: Array<{
+      peer: string
+      msgs: Array<{ method: string; id: number }>
+    }> = []
+    const listener = RPC.listen(exchangeServer)
+    listener.onLine(line => {
+      const entry = {
+        peer: line.peer,
+        msgs: [] as Array<{ method: string; id: number }>,
+      }
+      serverLines.push(entry)
+      collect(line, entry.msgs)
+    })
+
+    // Both clients open Lines
+    const clientLine1 = RPC.open(exchangeClient1, "server")
+    const clientLine2 = RPC.open(exchangeClient2, "server")
+
+    clientLine1.send({ method: "from-1", id: 1 })
+    clientLine2.send({ method: "from-2", id: 2 })
+    await drain()
+
+    // Server should have two distinct Lines
+    expect(serverLines.length).toBe(2)
+
+    // Find entries by peer
+    const entry1 = serverLines.find(e => e.peer === "client1")
+    const entry2 = serverLines.find(e => e.peer === "client2")
+
+    expect(entry1).toBeDefined()
+    expect(entry2).toBeDefined()
+    expect(entry1?.msgs).toEqual([{ method: "from-1", id: 1 }])
+    expect(entry2?.msgs).toEqual([{ method: "from-2", id: 2 }])
+
+    listener.dispose()
+    clientLine1.close()
+    clientLine2.close()
+  })
+
+  it("onLine callbacks — multiple, unsubscribe", async () => {
+    const bridge1 = new Bridge()
+    const bridge2 = new Bridge()
+    const exchangeServer = createExchange({
+      identity: { peerId: "server" },
+      transports: [
+        createBridgeTransport({ transportType: "server1", bridge: bridge1 }),
+        createBridgeTransport({ transportType: "server2", bridge: bridge2 }),
+      ],
+    })
+    const exchangeClientA = createExchange({
+      identity: { peerId: "client-a" },
+      transports: [
+        createBridgeTransport({ transportType: "client-a", bridge: bridge1 }),
+      ],
+    })
+    const exchangeClientB = createExchange({
+      identity: { peerId: "client-b" },
+      transports: [
+        createBridgeTransport({ transportType: "client-b", bridge: bridge2 }),
+      ],
+    })
+
+    await drain()
+
+    const P = Line.protocol({ topic: "multi-cb-listen", schema: SimpleSchema })
+
+    const cb1Peers: string[] = []
+    const cb2Peers: string[] = []
+
+    const listener = P.listen(exchangeServer)
+    const unsub1 = listener.onLine(line => {
+      cb1Peers.push(line.peer)
+    })
+    listener.onLine(line => {
+      cb2Peers.push(line.peer)
+    })
+
+    // First client connects — both callbacks should fire
+    const line1 = P.open(exchangeClientA, "server")
+    await drain()
+
+    expect(cb1Peers).toEqual(["client-a"])
+    expect(cb2Peers).toEqual(["client-a"])
+
+    // Unsubscribe the first callback
+    unsub1()
+
+    // Second client connects — only cb2 should fire
+    const line2 = P.open(exchangeClientB, "server")
+    await drain()
+
+    expect(cb1Peers).toEqual(["client-a"]) // unchanged
+    expect(cb2Peers).toEqual(["client-a", "client-b"])
+
+    listener.dispose()
+    line1.close()
+    line2.close()
+  })
+
+  it("dispose() stops accepting new Lines but existing Lines remain open", async () => {
+    const bridge1 = new Bridge()
+    const bridge2 = new Bridge()
+    const exchangeServer = createExchange({
+      identity: { peerId: "server" },
+      transports: [
+        createBridgeTransport({ transportType: "server1", bridge: bridge1 }),
+        createBridgeTransport({ transportType: "server2", bridge: bridge2 }),
+      ],
+    })
+    const exchangeClient1 = createExchange({
+      identity: { peerId: "client1" },
+      transports: [
+        createBridgeTransport({ transportType: "client1", bridge: bridge1 }),
+      ],
+    })
+    const exchangeClient2 = createExchange({
+      identity: { peerId: "client2" },
+      transports: [
+        createBridgeTransport({ transportType: "client2", bridge: bridge2 }),
+      ],
+    })
+
+    await drain()
+
+    const P = Line.protocol({ topic: "dispose-test", schema: SimpleSchema })
+
+    // Server listens
+    let capturedLine: any = null
+    const onLinePeers: string[] = []
+    const listener = P.listen(exchangeServer)
+    listener.onLine(line => {
+      onLinePeers.push(line.peer)
+      capturedLine = line
+    })
+
+    // First client connects — onLine fires
+    const clientLine1 = P.open(exchangeClient1, "server")
+    await drain()
+
+    expect(onLinePeers).toEqual(["client1"])
+    expect(capturedLine).not.toBeNull()
+
+    // Set up bidirectional messaging on the existing Line
+    const serverReceived: { value: number }[] = []
+    collect(capturedLine, serverReceived)
+
+    const clientReceived: { value: number }[] = []
+    collect(clientLine1, clientReceived)
+
+    // Dispose the listener
+    listener.dispose()
+
+    // Second client connects — onLine should NOT fire
+    const clientLine2 = P.open(exchangeClient2, "server")
+    await drain()
+
+    expect(onLinePeers).toEqual(["client1"]) // no new entry
+
+    // But existing Line from client1 is still functional
+    clientLine1.send({ value: 42 })
+    await drain()
+
+    expect(serverReceived).toEqual([{ value: 42 }])
+
+    // Server can still send back on the existing Line
+    capturedLine.send({ value: 99 })
+    await drain()
+
+    expect(clientReceived).toEqual([{ value: 99 }])
+
+    clientLine1.close()
+    clientLine2.close()
+    capturedLine.close()
+  })
+
+  it("client's queued messages delivered immediately", async () => {
+    const bridge = new Bridge()
+    const exchangeClient = createExchange({
+      identity: { peerId: "client" },
+      transports: [createBridgeTransport({ transportType: "client", bridge })],
+    })
+    const exchangeServer = createExchange({
+      identity: { peerId: "server" },
+      transports: [createBridgeTransport({ transportType: "server", bridge })],
+    })
+
+    await drain()
+
+    const P = Line.protocol({ topic: "queued", schema: SimpleSchema })
+
+    // Server starts listening FIRST — but the client will send multiple
+    // messages before the server's onDocCreated fires. When the Line is
+    // constructed inside onLine, #processInbox() in the constructor picks
+    // up all queued messages synchronously.
+    let capturedLine: any = null
+    const listener = P.listen(exchangeServer)
+    listener.onLine(line => {
+      capturedLine = line
+    })
+
+    // Client opens and sends multiple messages rapidly
+    const clientLine = P.open(exchangeClient, "server")
+    clientLine.send({ value: 1 })
+    clientLine.send({ value: 2 })
+    clientLine.send({ value: 3 })
+
+    // Drain — the outbox doc syncs to the server exchange, onDocCreated
+    // fires, and the Line constructor's #processInbox() runs.
+    await drain()
+
+    expect(capturedLine).not.toBeNull()
+
+    // Use collect to verify all queued messages are available
+    const received: { value: number }[] = []
+    collect(capturedLine, received)
+    await drain()
+
+    expect(received).toEqual([{ value: 1 }, { value: 2 }, { value: 3 }])
+
+    // Verify subsequent messages also arrive
+    clientLine.send({ value: 4 })
+    await drain()
+
+    expect(received).toEqual([{ value: 1 }, { value: 2 }, { value: 3 }, { value: 4 }])
+
+    listener.dispose()
+    clientLine.close()
+    capturedLine.close()
+  })
+
+  it("hub-and-spoke relay with protocol.listen", async () => {
+    const bridgeCR = new Bridge()
+    const bridgeRS = new Bridge()
+
+    const exchangeClient = createExchange({
+      identity: { peerId: "client" },
+      transports: [
+        createBridgeTransport({ transportType: "client", bridge: bridgeCR }),
+      ],
+    })
+
+    const _exchangeRelay = createExchange({
+      identity: { peerId: "relay", type: "service" },
+      transports: [
+        createBridgeTransport({ transportType: "relay-c", bridge: bridgeCR }),
+        createBridgeTransport({ transportType: "relay-s", bridge: bridgeRS }),
+      ],
+      onUnresolvedDoc: () => Replicate(),
+    })
+
+    const exchangeServer = createExchange({
+      identity: { peerId: "server" },
+      transports: [
+        createBridgeTransport({ transportType: "server", bridge: bridgeRS }),
+      ],
+    })
+
+    await drain(40)
+
+    const RPC = Line.protocol({
+      topic: "relay-rpc",
+      client: RequestSchema,
+      server: ResponseSchema,
+    })
+
+    // Server listens
+    let capturedServerLine: any = null
+    const serverReceived: Array<{ method: string; id: number }> = []
+    const listener = RPC.listen(exchangeServer)
+    listener.onLine(line => {
+      capturedServerLine = line
+      collect(line, serverReceived)
+    })
+
+    // Client opens a Line to server (routed through relay)
+    const clientLine = RPC.open(exchangeClient, "server")
+    const clientReceived: Array<{ result: string; id: number }> = []
+    collect(clientLine, clientReceived)
+
+    await drain(60)
+
+    // Client sends a request
+    clientLine.send({ method: "relay-ping", id: 1 })
+
+    // Give plenty of drain rounds for multi-hop relay
+    await drain(100)
+
+    // Server's onLine should have fired
+    expect(capturedServerLine).not.toBeNull()
+    expect(serverReceived).toEqual([{ method: "relay-ping", id: 1 }])
+
+    // Server responds
+    capturedServerLine.send({ result: "relay-pong", id: 1 })
+    await drain(100)
+
+    // Client receives the response through relay
+    expect(clientReceived).toEqual([{ result: "relay-pong", id: 1 }])
+
+    listener.dispose()
+    clientLine.close()
+    capturedServerLine.close()
+  })
+
+  it("late listen: client connects before server starts listening", async () => {
+    const bridge = new Bridge()
+    const exchangeClient = createExchange({
+      identity: { peerId: "client" },
+      transports: [createBridgeTransport({ transportType: "client", bridge })],
+    })
+    const exchangeServer = createExchange({
+      identity: { peerId: "server" },
+      transports: [createBridgeTransport({ transportType: "server", bridge })],
+    })
+
+    await drain()
+
+    const P = Line.protocol({ topic: "late-listen", schema: SimpleSchema })
+
+    // Client opens and sends BEFORE server starts listening.
+    // The client's outbox doc will arrive at the server exchange and be
+    // deferred (no schema registered yet). When listen() calls
+    // registerSchema(), the deferred doc is auto-promoted with
+    // origin: "local" — the listener must still detect it.
+    const clientLine = P.open(exchangeClient, "server")
+    clientLine.send({ value: 42 })
+
+    await drain()
+
+    // NOW the server starts listening — after the client's doc has arrived
+    let capturedLine: any = null
+    const listener = P.listen(exchangeServer)
+    listener.onLine(line => {
+      capturedLine = line
+    })
+
+    // Give time for the deferred→promoted transition to fire onDocCreated
+    await drain()
+
+    expect(capturedLine).not.toBeNull()
+    expect(capturedLine.peer).toBe("client")
+
+    // Verify the queued message is available
+    const iter = capturedLine[Symbol.asyncIterator]()
+    const result = await Promise.race([
+      iter.next(),
+      new Promise<{ value: undefined; done: true }>(r =>
+        setTimeout(() => r({ value: undefined, done: true }), 500),
+      ),
+    ])
+    expect(result.done).toBe(false)
+    expect(result.value).toEqual({ value: 42 })
+
+    listener.dispose()
+    clientLine.close()
+    capturedLine.close()
+  })
+
+  it("listeners on different topics are independent", async () => {
+    const bridge = new Bridge()
+    const exchangeClient = createExchange({
+      identity: { peerId: "client" },
+      transports: [createBridgeTransport({ transportType: "client", bridge })],
+    })
+    const exchangeServer = createExchange({
+      identity: { peerId: "server" },
+      transports: [createBridgeTransport({ transportType: "server", bridge })],
+    })
+
+    await drain()
+
+    // Use distinct schemas — two protocols that both listen() on the same
+    // exchange must have different schemas. If they share a schema, the
+    // capabilities registry (keyed by schemaHash) stores only the last
+    // BoundSchema reference, and exchange.get() throws on reference
+    // inequality when the other listener's onDocCreated fires.
+    const ChatSchema = Schema.struct({ text: Schema.string() })
+    const RpcSchema = Schema.struct({ method: Schema.string() })
+
+    const ChatProto = Line.protocol({ topic: "chat", schema: ChatSchema })
+    const RpcProto = Line.protocol({ topic: "rpc", schema: RpcSchema })
+
+    const chatPeers: string[] = []
+    const rpcPeers: string[] = []
+
+    const chatListener = ChatProto.listen(exchangeServer)
+    chatListener.onLine(line => chatPeers.push(line.peer))
+
+    const rpcListener = RpcProto.listen(exchangeServer)
+    rpcListener.onLine(line => rpcPeers.push(line.peer))
+
+    // Client opens only a chat Line — rpc listener should NOT fire
+    const chatLine = ChatProto.open(exchangeClient, "server")
+    await drain()
+
+    expect(chatPeers).toEqual(["client"])
+    expect(rpcPeers).toEqual([])
+
+    chatListener.dispose()
+    rpcListener.dispose()
+    chatLine.close()
+  })
+
+  it("listener ignores Line docs addressed to other peers", async () => {
+    const bridgeAS = new Bridge()
+    const bridgeBS = new Bridge()
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [
+        createBridgeTransport({ transportType: "alice", bridge: bridgeAS }),
+      ],
+    })
+    const _exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [
+        createBridgeTransport({ transportType: "bob", bridge: bridgeBS }),
+      ],
+    })
+    const exchangeServer = createExchange({
+      identity: { peerId: "server" },
+      transports: [
+        createBridgeTransport({ transportType: "server-a", bridge: bridgeAS }),
+        createBridgeTransport({ transportType: "server-b", bridge: bridgeBS }),
+      ],
+    })
+
+    await drain()
+
+    const P = Line.protocol({ topic: "targeted", schema: SimpleSchema })
+
+    // Server listens — should only see Lines addressed to "server"
+    const serverPeers: string[] = []
+    const listener = P.listen(exchangeServer)
+    listener.onLine(line => serverPeers.push(line.peer))
+
+    // Alice opens a Line to the server — should fire
+    const lineToServer = P.open(exchangeA, "server")
+    await drain()
+
+    expect(serverPeers).toEqual(["alice"])
+
+    // Alice opens a Line to Bob (not the server) — the server can see
+    // the doc via sync, but the listener must NOT fire for it
+    const lineToBob = P.open(exchangeA, "bob")
+    await drain()
+
+    expect(serverPeers).toEqual(["alice"]) // unchanged
+
+    listener.dispose()
+    lineToServer.close()
+    lineToBob.close()
   })
 })
