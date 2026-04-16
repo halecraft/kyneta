@@ -100,7 +100,7 @@ export const TodoDoc = yjs.bind(TodoSchema)
 
 ```tsx
 import { ExchangeProvider } from "@kyneta/react"
-import { WebsocketClientTransport } from "@kyneta/websocket-transport/client"
+import { WebsocketClientTransport } from "@kyneta/websocket-transport/browser"
 
 const wsAdapter = new WebsocketClientTransport({
   url: `ws://${location.host}/ws`,
@@ -180,7 +180,7 @@ A React developer needs two import sources:
 import { ExchangeProvider, useDocument, useValue, change } from "@kyneta/react"
 
 // The transport adapter (one per transport type)
-import { WebsocketClientTransport } from "@kyneta/websocket-transport/client"
+import { WebsocketClientTransport } from "@kyneta/websocket-transport/browser"
 ```
 
 `@kyneta/react` re-exports `Exchange`, `change`, `Schema`, `subscribe`, and other commonly needed APIs from `@kyneta/schema` and `@kyneta/exchange`, so most application code only imports from one package.

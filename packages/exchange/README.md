@@ -4,7 +4,7 @@ Define your data's shape. Get sync, persistence, and presence — across any num
 
 ```ts
 import { Exchange, sync } from "@kyneta/exchange"
-import { createWebsocketClient } from "@kyneta/websocket-transport/client"
+import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
 import { loro } from "@kyneta/loro-schema"
 import { Schema, change } from "@kyneta/schema"
 
@@ -20,7 +20,7 @@ const TodoDoc = loro.bind(Schema.struct({
 
 const exchange = new Exchange({
   identity: { peerId: "alice" },
-  transports: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
+  transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
 })
 
 const doc = exchange.get("my-todos", TodoDoc)

@@ -16,7 +16,7 @@
 
 /// <reference types="bun-types" />
 
-import { rm, exists } from "node:fs/promises"
+import { rm } from "node:fs/promises"
 
 const DIST = "./dist"
 
@@ -26,9 +26,7 @@ const DIST = "./dist"
 
 export async function buildClient() {
   // Clean dist/
-  if (await exists(DIST)) {
-    await rm(DIST, { recursive: true })
-  }
+  await rm(DIST, { recursive: true, force: true })
 
   // Build — Bun handles React JSX natively via tsconfig.json
   const result = await Bun.build({

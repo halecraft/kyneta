@@ -1,14 +1,14 @@
-# @kyneta/websocket-network-adapter
+# @kyneta/websocket-transport
 
-Websocket adapter for `@kyneta/exchange` — client, server, and Bun integration. Provides bidirectional real-time sync over Websockets using the `@kyneta/wire` binary protocol (CBOR codec + framing + fragmentation).
+Websocket transport for `@kyneta/exchange` — browser, server, and Bun integration. Provides bidirectional real-time sync over Websockets using the `@kyneta/wire` binary protocol (CBOR codec + framing + fragmentation).
 
 ## Subpath Exports
 
 | Export | Entry point | Environment |
 |--------|-------------|-------------|
-| `@kyneta/websocket-network-adapter/client` | `./dist/client.js` | Browser, Bun, Node.js |
-| `@kyneta/websocket-network-adapter/server` | `./dist/server.js` | Bun, Node.js |
-| `@kyneta/websocket-network-adapter/bun` | `./dist/bun.js` | Bun only |
+| `@kyneta/websocket-transport/browser` | `./dist/browser.js` | Browser, Bun, Node.js |
+| `@kyneta/websocket-transport/server` | `./dist/server.js` | Bun, Node.js |
+| `@kyneta/websocket-transport/bun` | `./dist/bun.js` | Bun only |
 
 ## Server Setup
 
@@ -18,8 +18,8 @@ Use `createBunWebsocketHandlers` for zero-boilerplate integration with `Bun.serv
 
 ```/dev/null/bun-server.ts#L1-18
 import { Exchange } from "@kyneta/exchange"
-import { WebsocketServerAdapter } from "@kyneta/websocket-network-adapter/server"
-import { createBunWebsocketHandlers, type BunWebsocketData } from "@kyneta/websocket-network-adapter/bun"
+import { WebsocketServerAdapter } from "@kyneta/websocket-transport/server"
+import { createBunWebsocketHandlers, type BunWebsocketData } from "@kyneta/websocket-transport/bun"
 
 const serverAdapter = new WebsocketServerAdapter()
 
@@ -40,7 +40,7 @@ Bun.serve<BunWebsocketData>({
 For more control, use `wrapBunWebsocket` directly:
 
 ```/dev/null/bun-server-manual.ts#L1-17
-import { wrapBunWebsocket, type BunWebsocketData } from "@kyneta/websocket-network-adapter/bun"
+import { wrapBunWebsocket, type BunWebsocketData } from "@kyneta/websocket-transport/bun"
 
 Bun.serve<BunWebsocketData>({
   fetch(req, server) {
@@ -69,7 +69,7 @@ Use `wrapNodeWebsocket` to adapt the `ws` library's `WebSocket` to the framework
 
 ```/dev/null/node-server.ts#L1-16
 import { WebSocketServer } from "ws"
-import { WebsocketServerAdapter, wrapNodeWebsocket } from "@kyneta/websocket-network-adapter/server"
+import { WebsocketServerAdapter, wrapNodeWebsocket } from "@kyneta/websocket-transport/server"
 
 const serverAdapter = new WebsocketServerAdapter()
 
@@ -92,12 +92,13 @@ wss.on("connection", (ws) => {
 
 Use `createWebsocketClient` for browser-to-server connections:
 
-```/dev/null/browser-client.ts#L1-12
+```/dev/null/browser-client.ts#L1-13
 import { Exchange } from "@kyneta/exchange"
-import { createWebsocketClient } from "@kyneta/websocket-network-adapter/client"
+import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
 
 const adapter = createWebsocketClient({
   url: "ws://localhost:3000/ws",
+  WebSocket,
   reconnect: { enabled: true },
 })
 
@@ -112,7 +113,7 @@ const exchange = new Exchange({
 Use `createServiceWebsocketClient` for backend connections that need authentication headers during the Websocket upgrade. Headers are a Bun/Node-specific extension — the browser `WebSocket` API does not support custom headers.
 
 ```/dev/null/service-client.ts#L1-13
-import { createServiceWebsocketClient } from "@kyneta/websocket-network-adapter/client"
+import { createServiceWebsocketClient } from "@kyneta/websocket-transport/server"
 
 const adapter = createServiceWebsocketClient({
   url: "ws://primary-server:3000/ws",
@@ -180,7 +181,7 @@ The server may send `"ready"` before the client's `open` event fires (server-rea
 The public observation API is powered by `createObservableProgram` from `@kyneta/machine`:
 
 ```/dev/null/observe-state.ts#L1-18
-import { createWebsocketClient } from "@kyneta/websocket-network-adapter/client"
+import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
 
 const adapter = createWebsocketClient({
   url: "ws://localhost:3000/ws",
@@ -207,7 +208,7 @@ await adapter.waitForStatus("ready", { timeoutMs: 5000 })
 
 | Wrapper | Input | Export |
 |---------|-------|--------|
-| `wrapStandardWebsocket(ws)` | Browser `WebSocket` | `./client`, `./server` |
+| `wrapStandardWebsocket(ws)` | Browser `WebSocket` | `./server` |
 | `wrapNodeWebsocket(ws)` | Node.js `ws` library | `./server` |
 | `wrapBunWebsocket(ws)` | Bun `ServerWebSocket` | `./bun` |
 
@@ -229,7 +230,7 @@ interface Socket {
 | Option | Default | Description |
 |--------|---------|-------------|
 | `url` | — | Websocket URL. String or `(peerId) => string` function. |
-| `WebSocket` | `globalThis.WebSocket` | Custom WebSocket constructor (for Node.js or testing). |
+| `WebSocket` | — | WebSocket constructor (**required**). In browsers, pass `WebSocket`. In Node.js, pass `ws`'s `WebSocket`. |
 | `reconnect.enabled` | `true` | Enable automatic reconnection. |
 | `reconnect.maxAttempts` | `10` | Maximum reconnection attempts before giving up. |
 | `reconnect.baseDelay` | `1000` | Base delay in ms for exponential backoff. |
@@ -255,6 +256,18 @@ interface Socket {
 ### Keepalive
 
 The client sends text `"ping"` frames at the configured interval. The server responds with text `"pong"`. This keeps connections alive through proxies and load balancers that terminate idle connections.
+
+## Runtime Agnosticism
+
+Every entry point (`./browser`, `./server`, `./bun`) is safe to import in any JavaScript runtime — no top-level side effects, no `globalThis` probes. The transport package has zero runtime dependencies; callers provide all implementations:
+
+| Entry Point | Purpose | Caller Provides |
+|-------------|---------|----------------|
+| `./browser` | Browser-to-server connections | `WebSocket` constructor (the global `WebSocket` in browsers) |
+| `./server` | Server transport + service-to-service client | `Socket` wrapper via `wrapNodeWebsocket()` or `wrapStandardWebsocket()` |
+| `./bun` | Bun-optimized server handlers | `ServerWebSocket` from Bun's callback API |
+
+This follows the same structural-typing principle used throughout: `wrapNodeWebsocket` takes a `NodeWebsocketLike` — it never imports `ws`. `wrapBunWebsocket` takes a Bun `ServerWebSocket` — it never imports Bun APIs at the top level.
 
 ## Peer Dependencies
 

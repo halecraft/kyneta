@@ -19,7 +19,7 @@
 
 /// <reference types="bun-types" />
 
-import { Exchange, type DocCreatedOrigin } from "@kyneta/exchange"
+import { Exchange, type DocEventOrigin } from "@kyneta/exchange"
 import { WebsocketServerTransport } from "@kyneta/websocket-transport/server"
 import {
   createBunWebsocketHandlers,
@@ -94,7 +94,7 @@ const exchange = new Exchange({
   // doc creation regardless of how it was resolved — auto-resolve, callback,
   // or local get(). We filter on origin: "remote" to react only to
   // peer-announced docs.
-  onDocCreated(docId, _peer, _mode, origin: DocCreatedOrigin) {
+  onDocCreated(docId, _peer, _mode, origin: DocEventOrigin) {
     if (origin !== "remote") return
     if (!docId.startsWith("input:")) return
 

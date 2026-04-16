@@ -1,7 +1,10 @@
-// client — barrel export for @kyneta/websocket-network-adapter/client.
+// browser — barrel export for @kyneta/websocket-transport/browser.
 //
-// This is the client-side entry point. It exports everything needed
-// to create a Websocket client adapter for browser or service connections.
+// This is the browser-side entry point. It exports everything needed
+// to create a Websocket client transport for browser-to-server connections.
+//
+// Service-to-service connections (with headers) are in `./server`.
+// The `wrapStandardWebsocket` wrapper is a server-side concern — use `./server`.
 
 // ---------------------------------------------------------------------------
 // Client program (pure Mealy machine)
@@ -15,19 +18,14 @@ export {
 } from "./client-program.js"
 
 // ---------------------------------------------------------------------------
-// Client transport + factory functions
+// Client transport + factory function
 // ---------------------------------------------------------------------------
 
 export {
-  createServiceWebsocketClient,
   createWebsocketClient,
   DEFAULT_FRAGMENT_THRESHOLD,
-  type DisconnectReason,
-  type ServiceWebsocketClientOptions,
   type WebsocketClientLifecycleEvents,
   type WebsocketClientOptions,
-  type WebsocketClientState,
-  type WebsocketClientStateTransition,
   WebsocketClientTransport,
 } from "./client-transport.js"
 
@@ -36,9 +34,16 @@ export {
 // ---------------------------------------------------------------------------
 
 export type {
+  DisconnectReason,
   Socket,
   SocketReadyState,
+  WebsocketClientState,
+  WebsocketClientStateTransition,
   TransitionListener,
+  WebSocketCloseEvent,
+  WebSocketConstructor,
+  WebSocketLike,
+  WebSocketMessageEvent,
 } from "./types.js"
 
-export { wrapStandardWebsocket } from "./types.js"
+export { READY_STATE } from "./types.js"

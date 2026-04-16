@@ -43,10 +43,10 @@ export interface ExchangeProviderProps {
  * unmounting.
  *
  * ```tsx
- * import { createWebsocketClient } from "@kyneta/websocket-transport/client"
+ * import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
  *
  * const config = {
- *   transports: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
+ *   transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
  * }
  *
  * <ExchangeProvider config={config}>

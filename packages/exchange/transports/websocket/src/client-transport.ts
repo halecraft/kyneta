@@ -31,6 +31,13 @@ import {
   type WsClientEffect,
   type WsClientMsg,
 } from "./client-program.js"
+import {
+  READY_STATE,
+  type WebSocketCloseEvent,
+  type WebSocketConstructor,
+  type WebSocketLike,
+  type WebSocketMessageEvent,
+} from "./types.js"
 import type {
   DisconnectReason,
   WebsocketClientState,
@@ -61,8 +68,23 @@ export interface WebsocketClientOptions {
   /** Websocket URL to connect to. Can be a string or a function of peerId. */
   url: string | ((peerId: PeerId) => string)
 
-  /** Optional custom WebSocket implementation (for Node.js or testing). */
-  WebSocket?: typeof globalThis.WebSocket
+  /**
+   * WebSocket constructor — caller must provide explicitly.
+   *
+   * In browsers, pass the global `WebSocket`. In Node.js, pass `ws`'s
+   * `WebSocket`. In Bun, pass `globalThis.WebSocket`. The transport
+   * never probes `globalThis` on its own.
+   */
+  WebSocket: WebSocketConstructor
+
+  /**
+   * Headers to send during Websocket upgrade.
+   * Used for authentication in service-to-service communication.
+   *
+   * Note: Headers are a Bun/Node-specific extension. The browser WebSocket
+   * API does not support custom headers per the WHATWG spec.
+   */
+  headers?: Record<string, string>
 
   /** Reconnection options. */
   reconnect?: {
@@ -106,21 +128,6 @@ export interface WebsocketClientLifecycleEvents {
   onReady?: () => void
 }
 
-/**
- * Options for service-to-service Websocket connections.
- * Extends WebsocketClientOptions with header support for authentication.
- *
- * Note: Headers are a Bun/Node-specific extension. The browser WebSocket API
- * does not support custom headers per the WHATWG spec.
- */
-export interface ServiceWebsocketClientOptions extends WebsocketClientOptions {
-  /**
-   * Headers to send during Websocket upgrade.
-   * Used for authentication in service-to-service communication.
-   */
-  headers?: Record<string, string>
-}
-
 // ---------------------------------------------------------------------------
 // WebsocketClientTransport
 // ---------------------------------------------------------------------------
@@ -136,19 +143,19 @@ export interface ServiceWebsocketClientOptions extends WebsocketClientOptions {
  * This class is the imperative shell that interprets data effects as I/O.
  *
  * Prefer the factory functions for construction:
- * - `createWebsocketClient()` — browser-to-server
- * - `createServiceWebsocketClient()` — service-to-service (with headers)
+ * - `createWebsocketClient()` — browser-to-server (from `./browser`)
+ * - `createServiceWebsocketClient()` — service-to-service with headers (from `./server`)
  */
 export class WebsocketClientTransport extends Transport<void> {
   #peerId?: PeerId
-  #options: ServiceWebsocketClientOptions
-  #WebSocketImpl: typeof globalThis.WebSocket
+  #options: WebsocketClientOptions
+  #WebSocketImpl: WebSocketConstructor
 
   // Observable program handle — created in constructor, drives all state
   #handle: ObservableHandle<WsClientMsg, WebsocketClientState>
 
   // Executor-local I/O state — not in the program model
-  #socket?: WebSocket
+  #socket?: WebSocketLike
   #serverChannel?: Channel
   #keepaliveTimer?: ReturnType<typeof setInterval>
   #reconnectTimer?: ReturnType<typeof setTimeout>
@@ -157,10 +164,10 @@ export class WebsocketClientTransport extends Transport<void> {
   readonly #fragmentThreshold: number
   readonly #reassembler: FragmentReassembler
 
-  constructor(options: ServiceWebsocketClientOptions) {
+  constructor(options: WebsocketClientOptions) {
     super({ transportType: "websocket-client" })
     this.#options = options
-    this.#WebSocketImpl = options.WebSocket ?? globalThis.WebSocket
+    this.#WebSocketImpl = options.WebSocket
     this.#fragmentThreshold =
       options.fragmentThreshold ?? DEFAULT_FRAGMENT_THRESHOLD
     this.#reassembler = new FragmentReassembler({
@@ -279,18 +286,14 @@ export class WebsocketClientTransport extends Transport<void> {
         : this.#options.url
 
     try {
-      // Create WebSocket with optional headers (Bun-specific extension)
+      // Create WebSocket — pass headers as second arg when present.
+      // The structural WebSocketConstructor's `...rest: any[]` absorbs
+      // both the browser's protocols arg and backend's { headers } arg.
       if (
         this.#options.headers &&
         Object.keys(this.#options.headers).length > 0
       ) {
-        type BunWebSocketConstructor = new (
-          url: string,
-          options: { headers: Record<string, string> },
-        ) => WebSocket
-        const BunWebSocket = this
-          .#WebSocketImpl as unknown as BunWebSocketConstructor
-        this.#socket = new BunWebSocket(url, {
+        this.#socket = new this.#WebSocketImpl(url, {
           headers: this.#options.headers,
         })
       } else {
@@ -302,7 +305,7 @@ export class WebsocketClientTransport extends Transport<void> {
 
       // Set up message handler IMMEDIATELY to handle the "ready" race condition.
       // The server may send "ready" before the open event fires.
-      socket.addEventListener("message", (event: MessageEvent) => {
+      socket.addEventListener("message", (event: WebSocketMessageEvent) => {
         this.#handleMessage(event, dispatch)
       })
 
@@ -315,7 +318,7 @@ export class WebsocketClientTransport extends Transport<void> {
         dispatch({ type: "socket-opened" })
 
         // After open, set up permanent close handler for post-connection closes
-        socket.addEventListener("close", (event: CloseEvent) => {
+        socket.addEventListener("close", (event: WebSocketCloseEvent) => {
           dispatch({
             type: "socket-closed",
             code: event.code,
@@ -372,7 +375,7 @@ export class WebsocketClientTransport extends Transport<void> {
    * Binary frames carry CBOR-encoded ChannelMsg.
    */
   #handleMessage(
-    event: MessageEvent,
+    event: WebSocketMessageEvent,
     dispatch: (msg: WsClientMsg) => void,
   ): void {
     const data = event.data
@@ -426,7 +429,7 @@ export class WebsocketClientTransport extends Transport<void> {
     const interval = this.#options.keepaliveInterval ?? 30_000
 
     this.#keepaliveTimer = setInterval(() => {
-      if (this.#socket?.readyState === WebSocket.OPEN) {
+      if (this.#socket?.readyState === READY_STATE.OPEN) {
         this.#socket.send("ping")
       }
     }, interval)
@@ -536,7 +539,7 @@ export class WebsocketClientTransport extends Transport<void> {
       transportType: this.transportType,
       send: (msg: ChannelMsg) => {
         const socket = this.#socket
-        if (!socket || socket.readyState !== WebSocket.OPEN) {
+        if (!socket || socket.readyState !== READY_STATE.OPEN) {
           return
         }
 
@@ -581,11 +584,12 @@ export class WebsocketClientTransport extends Transport<void> {
  *
  * @example
  * ```typescript
- * import { createWebsocketClient } from "@kyneta/websocket-transport/client"
+ * import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
  *
  * const exchange = new Exchange({
  *   transports: [createWebsocketClient({
  *     url: "ws://localhost:3000/ws",
+ *     WebSocket,
  *     reconnect: { enabled: true },
  *   })],
  * })
@@ -597,31 +601,3 @@ export function createWebsocketClient(
   return () => new WebsocketClientTransport(options)
 }
 
-/**
- * Create a Websocket client transport for service-to-service connections.
- *
- * This factory is for backend environments (Bun, Node.js) where you need
- * to pass authentication headers during the Websocket upgrade.
- *
- * Note: Headers are a Bun/Node-specific extension. The browser WebSocket API
- * does not support custom headers. For browser clients, use
- * `createWebsocketClient()` and authenticate via URL query parameters.
- *
- * @example
- * ```typescript
- * import { createServiceWebsocketClient } from "@kyneta/websocket-transport/client"
- *
- * const exchange = new Exchange({
- *   transports: [createServiceWebsocketClient({
- *     url: "ws://primary-server:3000/ws",
- *     headers: { Authorization: "Bearer token" },
- *     reconnect: { enabled: true },
- *   })],
- * })
- * ```
- */
-export function createServiceWebsocketClient(
-  options: ServiceWebsocketClientOptions,
-): TransportFactory {
-  return () => new WebsocketClientTransport(options)
-}

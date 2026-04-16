@@ -7,14 +7,16 @@
     "verify": "verify"
   },
   "devDependencies": {
-    "@kyneta/websocket-transport": "workspace:^",
     "@kyneta/exchange": "workspace:^",
-    "@kyneta/schema": "workspace:^",
     "@kyneta/loro-schema": "workspace:^",
+    "@kyneta/schema": "workspace:^",
+    "@kyneta/websocket-transport": "workspace:^",
     "@kyneta/wire": "workspace:^",
+    "@types/ws": "^8.18.1",
     "bun-types": "latest",
     "loro-crdt": "^1.10.0",
     "typescript": "^5.9.2",
-    "vitest": "^4.0.17"
+    "vitest": "^4.0.17",
+    "ws": "^8.20.0"
   }
 }

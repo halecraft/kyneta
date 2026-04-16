@@ -161,11 +161,11 @@ Without factories (passing adapter instances directly), step 3 would reuse the s
 The recommended pattern:
 
 ```tsx
-import { createWebsocketClient } from "@kyneta/websocket-network-adapter/client"
+import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
 
 // Stable config — factory closures, not instances
 const config = {
-  adapters: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
+  transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
 }
 
 <ExchangeProvider config={config}>

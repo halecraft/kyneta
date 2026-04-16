@@ -1,10 +1,11 @@
-// server — barrel export for @kyneta/websocket-network-adapter/server.
+// server — barrel export for @kyneta/websocket-transport/server.
 //
 // This is the server-side entry point. It exports everything needed
-// to create a Websocket server adapter with any framework.
+// to create a Websocket server transport with any framework, plus
+// the service-to-service client factory for backend connections.
 
 // ---------------------------------------------------------------------------
-// Server adapter
+// Server transport
 // ---------------------------------------------------------------------------
 
 export {
@@ -23,6 +24,15 @@ export {
 } from "./connection.js"
 
 // ---------------------------------------------------------------------------
+// Service-to-service client (backend connections with headers)
+// ---------------------------------------------------------------------------
+
+export {
+  createServiceWebsocketClient,
+  type ServiceWebsocketClientOptions,
+} from "./service-client.js"
+
+// ---------------------------------------------------------------------------
 // Shared types + wrappers
 // ---------------------------------------------------------------------------
 
@@ -31,9 +41,13 @@ export type {
   NodeWebsocketLike,
   Socket,
   SocketReadyState,
+  WebSocketCloseEvent,
+  WebSocketConstructor,
+  WebSocketLike,
+  WebSocketMessageEvent,
   WebsocketConnectionHandle,
   WebsocketConnectionOptions,
   WebsocketConnectionResult,
 } from "./types.js"
 
-export { wrapNodeWebsocket, wrapStandardWebsocket } from "./types.js"
+export { READY_STATE, wrapNodeWebsocket, wrapStandardWebsocket } from "./types.js"

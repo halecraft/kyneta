@@ -16,7 +16,7 @@
 
 /// <reference types="bun-types" />
 
-import { rm, exists } from "node:fs/promises"
+import { rm } from "node:fs/promises"
 import kyneta from "@kyneta/cast/unplugin/bun"
 
 const DIST = "./dist"
@@ -27,9 +27,7 @@ const DIST = "./dist"
 
 export async function buildClient() {
   // Clean dist/
-  if (await exists(DIST)) {
-    await rm(DIST, { recursive: true })
-  }
+  await rm(DIST, { recursive: true, force: true })
 
   // Build
   const result = await Bun.build({

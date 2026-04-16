@@ -14,7 +14,7 @@
 import { createRoot } from "react-dom/client"
 import { ExchangeProvider } from "@kyneta/react"
 import { persistentPeerId } from "@kyneta/exchange"
-import { createWebsocketClient } from "@kyneta/websocket-transport/client"
+import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
 import { App } from "./app.js"
 import "../style.css"
 
@@ -26,7 +26,7 @@ createRoot(document.getElementById("root")!).render(
   <ExchangeProvider
     config={{
       identity: { peerId: persistentPeerId("todo-react-peer-id") },
-      transports: [createWebsocketClient({ url: `ws://${location.host}/ws` })],
+      transports: [createWebsocketClient({ url: `ws://${location.host}/ws`, WebSocket })],
     }}
   >
     <App />

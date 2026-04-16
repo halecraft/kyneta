@@ -13,7 +13,7 @@
 import { createRoot } from "react-dom/client"
 import { ExchangeProvider } from "@kyneta/react"
 import { persistentPeerId } from "@kyneta/exchange"
-import { createWebsocketClient } from "@kyneta/websocket-transport/client"
+import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
 import BumperCarsApp from "./client/bumper-cars-app.js"
 import "./index.css"
 
@@ -44,7 +44,7 @@ const initialColor = localStorage.getItem(COLOR_KEY)
 
 const config = {
   identity: { peerId, name: initialName, type: "user" as const },
-  transports: [createWebsocketClient({ url: `ws://${location.host}/ws` })],
+  transports: [createWebsocketClient({ url: `ws://${location.host}/ws`, WebSocket })],
 }
 
 createRoot(document.getElementById("root")!).render(

@@ -8,7 +8,7 @@ Schema-first, local-first. Define your data once — sync, reactivity, validatio
 import { Schema, change } from "@kyneta/schema"
 import { Exchange, sync } from "@kyneta/exchange"
 import { loro } from "@kyneta/loro-schema"
-import { createWebsocketClient } from "@kyneta/websocket-transport/client"
+import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
 
 // 1. Define your data
 const TodoDoc = loro.bind(
@@ -26,7 +26,7 @@ const TodoDoc = loro.bind(
 // 2. Create an exchange, one per peer (or server/client)
 const exchange = new Exchange({
   identity: { peerId: "alice" },
-  transports: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
+  transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
 })
 
 // 3. Get a document — syncs automatically

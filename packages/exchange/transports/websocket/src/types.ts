@@ -1,4 +1,4 @@
-// types — framework-agnostic Websocket abstractions for @kyneta/websocket-network-adapter.
+// types — framework-agnostic Websocket abstractions for @kyneta/websocket-transport.
 //
 // The `Socket` interface decouples the adapter from any specific Websocket
 // library (browser WebSocket, Node `ws`, Bun ServerWebSocket). Platform-
@@ -15,7 +15,75 @@ import type {
 } from "@kyneta/transport"
 
 // ---------------------------------------------------------------------------
-// Socket ready states
+// WebSocket readyState constants (spec values, no global dependency)
+// ---------------------------------------------------------------------------
+
+/**
+ * WebSocket readyState constants per the WHATWG WebSocket spec.
+ * Replaces references to `WebSocket.CONNECTING`, `WebSocket.OPEN`, etc.
+ * so that shared code never depends on the browser global.
+ */
+export const READY_STATE = {
+  CONNECTING: 0,
+  OPEN: 1,
+  CLOSING: 2,
+  CLOSED: 3,
+} as const
+
+// ---------------------------------------------------------------------------
+// Structural event types (replace DOM MessageEvent / CloseEvent)
+// ---------------------------------------------------------------------------
+
+/** Minimal message event — only the fields the transport accesses. */
+export interface WebSocketMessageEvent {
+  readonly data: string | ArrayBuffer
+}
+
+/** Minimal close event — only the fields the transport accesses. */
+export interface WebSocketCloseEvent {
+  readonly code: number
+  readonly reason: string
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket instance and constructor structural types
+// ---------------------------------------------------------------------------
+
+/**
+ * Structural type for a constructed WebSocket instance.
+ *
+ * Covers the browser's `WebSocket`, the `ws` library's `WebSocket`,
+ * and Bun's client `WebSocket` — all satisfy this interface without casting.
+ *
+ * The client transport uses `addEventListener`/`removeEventListener` for
+ * one-shot connection handlers with explicit cleanup during the connect
+ * phase. This is why `WebSocketLike` exists alongside the server-side
+ * `Socket` interface (which uses single-callback registration).
+ */
+export interface WebSocketLike {
+  readonly readyState: number
+  binaryType: string
+  send(data: string | ArrayBufferLike | Uint8Array): void
+  close(code?: number, reason?: string): void
+  addEventListener(type: string, listener: (event: any) => void): void
+  removeEventListener(type: string, listener: (event: any) => void): void
+}
+
+/**
+ * Structural type for a WebSocket constructor.
+ *
+ * Type safety for constructor arguments is intentionally at the options
+ * layer (`WebsocketClientOptions.headers`), not here. The `...rest: any[]`
+ * absorbs both the browser's `protocols` arg and backend's `{ headers }`
+ * arg without requiring the transport to know which runtime it's in.
+ */
+export type WebSocketConstructor = new (
+  url: string,
+  ...rest: any[]
+) => WebSocketLike
+
+// ---------------------------------------------------------------------------
+// Socket ready states (string enum for server-side Socket interface)
 // ---------------------------------------------------------------------------
 
 /**
@@ -205,13 +273,13 @@ export function wrapStandardWebsocket(ws: WebSocket): Socket {
 
     get readyState(): SocketReadyState {
       switch (ws.readyState) {
-        case WebSocket.CONNECTING:
+        case READY_STATE.CONNECTING:
           return "connecting"
-        case WebSocket.OPEN:
+        case READY_STATE.OPEN:
           return "open"
-        case WebSocket.CLOSING:
+        case READY_STATE.CLOSING:
           return "closing"
-        case WebSocket.CLOSED:
+        case READY_STATE.CLOSED:
           return "closed"
         default:
           return "closed"

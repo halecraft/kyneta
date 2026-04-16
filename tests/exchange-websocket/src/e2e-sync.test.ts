@@ -32,7 +32,7 @@ import {
   type BunWebsocketData,
   createBunWebsocketHandlers,
 } from "@kyneta/websocket-transport/bun"
-import { WebsocketClientTransport } from "@kyneta/websocket-transport/client"
+import { WebsocketClientTransport } from "@kyneta/websocket-transport/browser"
 import { WebsocketServerTransport } from "@kyneta/websocket-transport/server"
 import { afterEach, describe, expect, it } from "vitest"
 
@@ -191,6 +191,7 @@ async function createConnectedPair(opts?: {
 
   const clientTransport = new WebsocketClientTransport({
     url: testServer.url,
+    WebSocket,
     reconnect: { enabled: false },
     fragmentThreshold,
   })

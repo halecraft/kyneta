@@ -28,10 +28,10 @@ export type AnyTransport = Transport<any>
  *
  * Use the `create*` helper functions for low-friction configuration:
  * ```typescript
- * import { createWebsocketClient } from "@kyneta/websocket-network-adapter/client"
+ * import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
  *
  * const exchange = new Exchange({
- *   transports: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
+ *   transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
  * })
  * ```
  */

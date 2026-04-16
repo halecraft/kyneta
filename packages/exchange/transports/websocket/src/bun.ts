@@ -1,4 +1,4 @@
-// bun — barrel export for @kyneta/websocket-network-adapter/bun.
+// bun — barrel export for @kyneta/websocket-transport/bun.
 //
 // This is the Bun-specific entry point. It exports everything needed
 // to integrate WebsocketServerTransport with Bun's WebSocket API.

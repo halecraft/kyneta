@@ -344,16 +344,16 @@ This follows the same principle as `BoundSchema.factory` (called per-exchange to
 Each transport package exports a `create*` helper that captures options and returns an `TransportFactory`:
 
 ```typescript
-import { createWebsocketClient } from "@kyneta/websocket-transport/client"
+import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
 
 const exchange = new Exchange({
-  transports: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
+  transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
 })
 ```
 
 Available helpers:
-- `createWebsocketClient(options)` — browser-to-server WebSocket
-- `createServiceWebsocketClient(options)` — service-to-service WebSocket (with headers)
+- `createWebsocketClient(options)` — browser-to-server WebSocket (`./browser`)
+- `createServiceWebsocketClient(options)` — service-to-service WebSocket with headers (`./server`)
 - `createSseClient(options)` — SSE client (EventSource + POST)
 - `createBridgeTransport(params)` — in-process testing adapter
 
@@ -707,13 +707,15 @@ The first real transport. Framework-agnostic via the `Socket` interface, with pl
 
 ### Package Structure
 
-Three subpath exports (no combined `"."` entry) to keep client/server/bun code tree-shakeable:
+Three subpath exports (no combined `"."` entry) to keep browser/server/bun code tree-shakeable:
 
 | Subpath | Entry | Key Exports |
 |---------|-------|-------------|
-| `./client` | `src/client.ts` | `WebsocketClientTransport`, `createWebsocketClient`, `createServiceWebsocketClient`, `WebsocketClientStateMachine` |
-| `./server` | `src/server.ts` | `WebsocketServerTransport`, `WebsocketConnection`, `wrapNodeWebsocket`, `wrapStandardWebsocket` |
+| `./browser` | `src/browser.ts` | `WebsocketClientTransport`, `createWebsocketClient`, `WebsocketClientStateMachine` |
+| `./server` | `src/server.ts` | `WebsocketServerTransport`, `WebsocketConnection`, `wrapNodeWebsocket`, `wrapStandardWebsocket`, `createServiceWebsocketClient` |
 | `./bun` | `src/bun.ts` | `BunWebsocketData`, `wrapBunWebsocket`, `createBunWebsocketHandlers` |
+
+The transport package has zero runtime dependencies — callers provide all WebSocket implementations via structural types (`WebSocketConstructor`, `WebSocketLike`, `NodeWebsocketLike`). The SSE transport and unix-socket transport have analogous `globalThis` dependencies (`EventSource`, `Bun.connect`/`Bun.listen`) that are known inconsistencies — future work.
 
 ### Connection Handshake
 
