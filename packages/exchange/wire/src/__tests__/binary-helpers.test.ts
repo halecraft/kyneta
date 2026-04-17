@@ -17,7 +17,7 @@ import {
 // ---------------------------------------------------------------------------
 
 const SMALL_MSG: ChannelMsg = {
-  type: "establish-request",
+  type: "establish",
   identity: { peerId: "test", name: "Test", type: "user" },
 }
 
@@ -85,7 +85,7 @@ describe("decodeBinaryMessages", () => {
     expect(result).toHaveLength(1)
     const msg0 = result.at(0)
     if (!msg0) throw new Error("expected at least one decoded message")
-    expect(msg0.type).toBe("establish-request")
+    expect(msg0.type).toBe("establish")
     expect((msg0 as { identity: { peerId: string } }).identity.peerId).toBe(
       "test",
     )

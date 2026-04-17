@@ -63,7 +63,7 @@ export interface WebSocketCloseEvent {
 export interface WebSocketLike {
   readonly readyState: number
   binaryType: string
-  send(data: string | ArrayBufferLike | Uint8Array): void
+  send(data: string | ArrayBuffer): void
   close(code?: number, reason?: string): void
   addEventListener(type: string, listener: (event: any) => void): void
   removeEventListener(type: string, listener: (event: any) => void): void

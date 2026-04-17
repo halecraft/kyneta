@@ -10,13 +10,12 @@
 // as-is (the data is already a string).
 //
 // Human-readable — uses the ChannelMsg type strings directly
-// ("establish-request", "present", etc.) without integer discriminators.
+// ("establish", "depart", "present", etc.) without integer discriminators.
 
 import type {
   ChannelMsg,
   DismissMsg,
-  EstablishRequestMsg,
-  EstablishResponseMsg,
+  EstablishMsg,
   InterestMsg,
   OfferMsg,
   PresentMsg,
@@ -139,11 +138,11 @@ function fromJsonSafe(obj: unknown): ChannelMsg {
   const type = record.type as string
 
   switch (type) {
-    case "establish-request":
-      return record as unknown as EstablishRequestMsg
+    case "establish":
+      return record as unknown as EstablishMsg
 
-    case "establish-response":
-      return record as unknown as EstablishResponseMsg
+    case "depart":
+      return { type: "depart" }
 
     case "present":
       return record as unknown as PresentMsg

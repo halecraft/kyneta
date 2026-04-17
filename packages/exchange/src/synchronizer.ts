@@ -1,14 +1,19 @@
-// synchronizer — runtime that wires the TEA state machine to adapters and substrates.
+// synchronizer — runtime that wires the TEA state machines to adapters and substrates.
 //
-// The Synchronizer is the imperative shell around the pure TEA update function.
+// The Synchronizer is the imperative shell around two pure TEA update functions:
+// - Session program: manages channel topology, establish handshake, peer
+//   identity, and the connection/disconnection/departure lifecycle.
+// - Sync program: manages document convergence — present, interest, offer,
+//   dismiss — and per-peer document sync states.
+//
+// Neither program calls the other. The shell orchestrates by forwarding
+// `sync-event` effects from the session program into the sync program.
+//
 // It manages:
-// - Dispatching messages to the update function
-// - Executing commands (side effects) produced by the update function
+// - Dispatching inputs to both update functions
+// - Executing effects (side effects) produced by the update functions
 // - Adapter lifecycle and message routing
-// - Substrate interactions (export, import) on behalf of the pure model
-//
-// Ported from @loro-extended/repo's Synchronizer with Loro-specific types
-// replaced by substrate-agnostic equivalents.
+// - Substrate interactions (export, import) on behalf of the pure models
 
 import type { ReactiveMap, ReactiveMapHandle } from "@kyneta/changefeed"
 import { createReactiveMap } from "@kyneta/changefeed"
@@ -32,16 +37,29 @@ import type {
   DocId,
   PeerId,
   PeerIdentityDetails,
+  SyncMsg,
 } from "@kyneta/transport"
+import { isLifecycleMsg } from "@kyneta/transport"
 import type { AuthorizePredicate, RoutePredicate } from "./exchange.js"
 import {
-  type Command,
-  createSynchronizerUpdate,
-  init,
-  type Notification,
-  type SynchronizerMessage,
-  type SynchronizerModel,
-} from "./synchronizer-program.js"
+  createSessionUpdate,
+  initSession,
+  type SessionEffect,
+  type SessionInput,
+  type SessionModel,
+  type SessionNotification,
+  type SessionUpdate,
+} from "./session-program.js"
+import {
+  createSyncUpdate,
+  type DocEntry,
+  initSync,
+  type SyncEffect,
+  type SyncInput,
+  type SyncModel,
+  type SyncNotification,
+  type SyncUpdate,
+} from "./sync-program.js"
 import { TransportManager } from "./transport/transport-manager.js"
 import type { PeerChange, ReadyState } from "./types.js"
 
@@ -51,7 +69,7 @@ import type { PeerChange, ReadyState } from "./types.js"
 
 /**
  * Fields shared by both document modes — the uniform surface that
- * `#executeSendOffer`, `#executeImportDocData`, `registerDoc`, and
+ * `#executeSendOfferToPeer`, `#executeImportDocData`, `registerDoc`, and
  * `notifyLocalChange` operate on without mode branching.
  */
 type DocRuntimeBase = {
@@ -79,13 +97,13 @@ export type DocRuntime =
     })
 
 /**
- * Callback invoked by `cmd/ensure-doc` — ensures a document exists locally.
+ * Callback invoked by `ensure-doc` — ensures a document exists locally.
  *
- * Fired during command execution when a peer announces an unknown doc.
+ * Fired during effect execution when a peer announces an unknown doc.
  * The Exchange auto-resolves schemas or delegates to `onUnresolvedDoc`.
  *
- * **Must be idempotent.** Batched ensure commands may fire for a doc that
- * a sibling command's cascade has already created. Implementations must
+ * **Must be idempotent.** Batched ensure effects may fire for a doc that
+ * a sibling effect's cascade has already created. Implementations must
  * check for existing state and return early (first writer wins).
  */
 export type DocCreationCallback = (
@@ -97,7 +115,7 @@ export type DocCreationCallback = (
 ) => void
 
 /**
- * Callback invoked by `cmd/ensure-doc-dismissed` — ensures a dismissed
+ * Callback invoked by `ensure-doc-dismissed` — ensures a dismissed
  * doc is handled locally.
  *
  * The Exchange's `onDocDismissed` scope callback handles cleanup.
@@ -130,6 +148,7 @@ export type SynchronizerParams = {
   epochBoundary: EpochBoundaryPredicate
   onEnsureDoc?: DocCreationCallback
   onEnsureDocDismissed?: DocDismissedCallback
+  departureTimeout?: number
 }
 
 // ---------------------------------------------------------------------------
@@ -236,7 +255,8 @@ export class Synchronizer {
   readonly identity: PeerIdentityDetails
   readonly transports: TransportManager
 
-  readonly #updateFn: ReturnType<typeof createSynchronizerUpdate>
+  readonly #sessionUpdate: SessionUpdate
+  readonly #syncUpdate: SyncUpdate
   readonly #docRuntimes = new Map<DocId, DocRuntime>()
   readonly #docCreationCallback?: DocCreationCallback
   readonly #docDismissedCallback?: DocDismissedCallback
@@ -266,13 +286,17 @@ export class Synchronizer {
 
   /**
    * Work queue for serialized async dispatch.
-   * Ensures messages are processed one at a time and outbound messages
+   * Ensures inputs are processed one at a time and outbound messages
    * are flushed at quiescence (after all pending dispatches complete).
    */
   #dispatching = false
-  readonly #pendingMessages: SynchronizerMessage[] = []
+  #pendingInputs: (SessionInput | SyncInput)[] = []
 
-  model: SynchronizerModel
+  #sessionModel: SessionModel
+  #syncModel: SyncModel
+
+  // Departure timers — shell-managed side effects from session program
+  #departureTimers = new Map<PeerId, ReturnType<typeof setTimeout>>()
 
   // Peer lifecycle — event accumulation and changefeed
   #pendingPeerEvents: PeerChange[] = []
@@ -298,6 +322,17 @@ export class Synchronizer {
 
   readonly #epochBoundary: EpochBoundaryPredicate
 
+  /**
+   * Backward-compat getter — exposes `documents` and `peers` from the
+   * sync model for test access via `synchronizer.model.documents`.
+   */
+  get model(): { documents: Map<DocId, DocEntry>; peers: Map<PeerId, any> } {
+    return {
+      documents: this.#syncModel.documents,
+      peers: this.#syncModel.peers,
+    }
+  }
+
   constructor({
     identity,
     transports = [],
@@ -306,17 +341,19 @@ export class Synchronizer {
     epochBoundary,
     onEnsureDoc,
     onEnsureDocDismissed,
+    departureTimeout,
   }: SynchronizerParams) {
     this.identity = identity
 
-    this.#updateFn = createSynchronizerUpdate({ route, authorize })
+    this.#sessionUpdate = createSessionUpdate()
+    this.#syncUpdate = createSyncUpdate({ route, authorize })
     this.#epochBoundary = epochBoundary
     this.#docCreationCallback = onEnsureDoc
     this.#docDismissedCallback = onEnsureDocDismissed
 
-    // Initialize model
-    const [initialModel, initialCommand] = init(this.identity)
-    this.model = initialModel
+    // Initialize models
+    this.#sessionModel = initSession(this.identity, departureTimeout ?? 30_000)
+    this.#syncModel = initSync(this.identity)
 
     // Create adapter context
     const transportContext = {
@@ -338,11 +375,6 @@ export class Synchronizer {
       },
     })
 
-    // Execute initial command
-    if (initialCommand) {
-      this.#executeCommand(initialCommand)
-    }
-
     // Start all adapters
     this.transports.startAll()
   }
@@ -361,8 +393,8 @@ export class Synchronizer {
   registerDoc(runtime: DocRuntime): void {
     this.#docRuntimes.set(runtime.docId, runtime)
 
-    this.#dispatch({
-      type: "synchronizer/doc-ensure",
+    this.#dispatchSync({
+      type: "sync/doc-ensure",
       docId: runtime.docId,
       mode: runtime.mode,
       version: runtime.replica.version().serialize(),
@@ -385,8 +417,8 @@ export class Synchronizer {
     mergeStrategy: MergeStrategy,
     schemaHash: string,
   ): void {
-    this.#dispatch({
-      type: "synchronizer/doc-defer",
+    this.#dispatchSync({
+      type: "sync/doc-defer",
       docId,
       replicaType,
       mergeStrategy,
@@ -402,7 +434,7 @@ export class Synchronizer {
    * promotion.
    */
   getDocMetadata(docId: DocId): DocMetadata | undefined {
-    const entry = this.model.documents.get(docId)
+    const entry = this.#syncModel.documents.get(docId)
     if (!entry) return undefined
     return {
       replicaType: entry.replicaType,
@@ -426,8 +458,8 @@ export class Synchronizer {
     const runtime = this.#docRuntimes.get(docId)
     if (!runtime) return
 
-    this.#dispatch({
-      type: "synchronizer/local-doc-change",
+    this.#dispatchSync({
+      type: "sync/local-doc-change",
       docId,
       version: runtime.replica.version().serialize(),
     })
@@ -459,7 +491,7 @@ export class Synchronizer {
 
     let lcv: Version | null = null
 
-    for (const [, peerState] of this.model.peers) {
+    for (const [, peerState] of this.#syncModel.peers) {
       const docSync = peerState.docSyncStates.get(docId)
       if (!docSync || docSync.status !== "synced") continue
 
@@ -492,8 +524,8 @@ export class Synchronizer {
    */
   async removeDocument(docId: DocId): Promise<void> {
     this.#docRuntimes.delete(docId)
-    this.#dispatch({
-      type: "synchronizer/doc-delete",
+    this.#dispatchSync({
+      type: "sync/doc-delete",
       docId,
     })
   }
@@ -503,8 +535,8 @@ export class Synchronizer {
    */
   dismissDocument(docId: DocId): void {
     this.#docRuntimes.delete(docId)
-    this.#dispatch({
-      type: "synchronizer/doc-dismiss",
+    this.#dispatchSync({
+      type: "sync/doc-dismiss",
       docId,
     })
   }
@@ -519,7 +551,7 @@ export class Synchronizer {
   getReadyStates(docId: DocId): ReadyState[] {
     const states: ReadyState[] = []
 
-    for (const [_peerId, peerState] of this.model.peers) {
+    for (const [_peerId, peerState] of this.#syncModel.peers) {
       const docSync = peerState.docSyncStates.get(docId)
       if (docSync) {
         states.push({
@@ -576,15 +608,12 @@ export class Synchronizer {
   }
 
   /**
-   * Subscribe to ready state changes.
-   */
-  /**
    * Subscribe to state-advanced events.
    *
    * The callback fires once per docId at quiescence when the document's
    * state has advanced — either from a local mutation (changefeed →
    * notifyLocalChange → handleLocalDocChange) or a network import
-   * (handleOffer → cmd/import-doc-data → handleDocImported).
+   * (handleOffer → import-doc-data → handleDocImported).
    *
    * Returns an unsubscribe function.
    *
@@ -605,13 +634,14 @@ export class Synchronizer {
   }
 
   #isReady(docId: DocId): boolean {
-    for (const [_peerId, peerState] of this.model.peers) {
+    for (const [peerId, peerState] of this.#syncModel.peers) {
       const docSync = peerState.docSyncStates.get(docId)
       if (!docSync) continue
 
       if (docSync.status === "synced" || docSync.status === "absent") {
-        // At least one peer has completed sync for this doc
-        if (peerState.channels.size > 0) {
+        // Check if peer is connected (has channels in session model)
+        const sessionPeer = this.#sessionModel.peers.get(peerId)
+        if (sessionPeer && sessionPeer.channels.size > 0) {
           return true
         }
       }
@@ -648,18 +678,29 @@ export class Synchronizer {
   }
 
   reset(): void {
-    this.#emitSyntheticPeerLeftEvents()
+    this.#emitSyntheticDepartedEvents()
+    this.#clearDepartureTimers()
     this.#docRuntimes.clear()
-    const [initialModel] = init(this.identity)
-    this.model = initialModel
+    this.#sessionModel = initSession(
+      this.identity,
+      this.#sessionModel.departureTimeout,
+    )
+    this.#syncModel = initSync(this.identity)
     this.transports.reset()
   }
 
   async shutdown(): Promise<void> {
-    await this.transports.flush()
-    this.#emitSyntheticPeerLeftEvents()
-    const [initialModel] = init(this.identity)
-    this.model = initialModel
+    // Send depart to all connected peers
+    this.#sendDepartToAllPeers()
+    this.#drainOutbound() // Flush depart messages to transports
+    await this.transports.flush() // Wait for transports to deliver
+    this.#emitSyntheticDepartedEvents()
+    this.#clearDepartureTimers()
+    this.#sessionModel = initSession(
+      this.identity,
+      this.#sessionModel.departureTimeout,
+    )
+    this.#syncModel = initSync(this.identity)
     await this.transports.shutdown()
   }
 
@@ -678,48 +719,73 @@ export class Synchronizer {
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
   channelAdded(channel: ConnectedChannel): void {
-    this.#dispatch({
-      type: "synchronizer/channel-added",
-      channel,
+    this.#dispatchSession({
+      type: "sess/channel-added",
+      channelId: channel.channelId,
+      transportType: channel.transportType,
     })
   }
 
   channelEstablish(channel: ConnectedChannel): void {
-    this.#dispatch({
-      type: "synchronizer/establish-channel",
+    this.#dispatchSession({
+      type: "sess/channel-establish",
       channelId: channel.channelId,
     })
   }
 
   channelReceive(channelId: ChannelId, message: ChannelMsg): void {
-    this.#dispatch({
-      type: "synchronizer/channel-receive-message",
-      envelope: { fromChannelId: channelId, message },
-    })
+    if (isLifecycleMsg(message)) {
+      this.#dispatchSession({
+        type: "sess/message-received",
+        fromChannelId: channelId,
+        message,
+      })
+    } else {
+      // Sync message — resolve channel → peer
+      const entry = this.#sessionModel.channels.get(channelId)
+      if (!entry?.remoteIdentity) return // not established, drop
+      this.#dispatchSync({
+        type: "sync/message-received",
+        from: entry.remoteIdentity.peerId,
+        message,
+      })
+    }
   }
 
   channelRemoved(channel: Channel): void {
-    this.#dispatch({
-      type: "synchronizer/channel-removed",
-      channel,
+    this.#dispatchSession({
+      type: "sess/channel-removed",
+      channelId: channel.channelId,
     })
   }
 
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-  // DISPATCH — serialized message processing with quiescence flush
+  // DISPATCH — serialized input processing with quiescence flush
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
-  #dispatch(msg: SynchronizerMessage): void {
-    this.#pendingMessages.push(msg)
+  #dispatchSession(input: SessionInput): void {
+    this.#pendingInputs.push(input)
+    this.#drainPending()
+  }
 
+  #dispatchSync(input: SyncInput): void {
+    this.#pendingInputs.push(input)
+    this.#drainPending()
+  }
+
+  #drainPending(): void {
     if (this.#dispatching) return
 
     this.#dispatching = true
     try {
-      while (this.#pendingMessages.length > 0) {
-        const nextMsg = this.#pendingMessages.shift()
-        if (!nextMsg) break
-        this.#dispatchInternal(nextMsg)
+      while (this.#pendingInputs.length > 0) {
+        const input = this.#pendingInputs.shift()
+        if (!input) break
+        if (input.type.startsWith("sess/")) {
+          this.#processSessionInput(input as SessionInput)
+        } else {
+          this.#processSyncInput(input as SyncInput)
+        }
       }
 
       // Quiescence — drain all accumulators. Each drain snapshots its
@@ -733,24 +799,68 @@ export class Synchronizer {
     }
   }
 
-  #dispatchInternal(msg: SynchronizerMessage): void {
-    const [newModel, command, notification] = this.#updateFn(msg, this.model)
-    this.model = newModel
+  #processSessionInput(input: SessionInput): void {
+    const [newModel, effect, notification] = this.#sessionUpdate(
+      input,
+      this.#sessionModel,
+    )
+    this.#sessionModel = newModel
+    if (notification) this.#accumulateSessionNotification(notification)
+    if (effect) this.#executeSessionEffect(effect)
+  }
 
-    if (notification) {
-      this.#accumulateNotification(notification)
-    }
+  #processSyncInput(input: SyncInput): void {
+    const [newModel, effect, notification] = this.#syncUpdate(
+      input,
+      this.#syncModel,
+    )
+    this.#syncModel = newModel
+    if (notification) this.#accumulateSyncNotification(notification)
+    if (effect) this.#executeSyncEffect(effect)
+  }
 
-    if (command) {
-      this.#executeCommand(command)
+  // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+  // NOTIFICATION ACCUMULATION
+  // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+  #accumulateSessionNotification(notification: SessionNotification): void {
+    switch (notification.type) {
+      case "notify/peer-established":
+        this.#pendingPeerEvents.push({
+          type: "peer-established",
+          peer: notification.peer,
+        })
+        break
+      case "notify/peer-disconnected":
+        this.#pendingPeerEvents.push({
+          type: "peer-disconnected",
+          peer: notification.peer,
+        })
+        break
+      case "notify/peer-reconnected":
+        this.#pendingPeerEvents.push({
+          type: "peer-reconnected",
+          peer: notification.peer,
+        })
+        break
+      case "notify/peer-departed":
+        this.#pendingPeerEvents.push({
+          type: "peer-departed",
+          peer: notification.peer,
+        })
+        break
+      case "notify/warning":
+        console.warn(notification.message)
+        break
+      case "notify/batch":
+        for (const sub of notification.notifications) {
+          this.#accumulateSessionNotification(sub)
+        }
+        break
     }
   }
 
-  /**
-   * Accumulate a notification into the dirty set for this dispatch cycle.
-   * Recursively flattens batch notifications.
-   */
-  #accumulateNotification(notification: Notification): void {
+  #accumulateSyncNotification(notification: SyncNotification): void {
     switch (notification.type) {
       case "notify/ready-state-changed":
         for (const docId of notification.docIds) {
@@ -762,88 +872,155 @@ export class Synchronizer {
           this.#dirtyStateAdvanced.add(docId)
         }
         break
-      case "notify/peer-joined":
-        this.#pendingPeerEvents.push({
-          type: "peer-joined",
-          peer: notification.peer,
-        })
-        break
-      case "notify/peer-left":
-        this.#pendingPeerEvents.push({
-          type: "peer-left",
-          peer: notification.peer,
-        })
-        break
       case "notify/warning":
         console.warn(notification.message)
         break
       case "notify/batch":
         for (const sub of notification.notifications) {
-          this.#accumulateNotification(sub)
+          this.#accumulateSyncNotification(sub)
         }
         break
     }
   }
 
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-  // COMMAND EXECUTION — side effects
+  // SESSION EFFECT EXECUTION
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
-  #executeCommand(command: Command): void {
-    switch (command.type) {
-      case "cmd/send-message":
-        this.#outboundQueue.push(command.envelope)
+  #executeSessionEffect(effect: SessionEffect): void {
+    switch (effect.type) {
+      case "send": {
+        // Send lifecycle message to a specific channel via the outbound queue
+        this.#outboundQueue.push({
+          toChannelIds: [effect.to],
+          message: effect.message,
+        })
         break
-
-      case "cmd/send-offer":
-        this.#executeSendOffer(command)
+      }
+      case "start-departure-timer": {
+        // Clear any existing timer for this peer
+        const existing = this.#departureTimers.get(effect.peerId)
+        if (existing) clearTimeout(existing)
+        const timer = setTimeout(() => {
+          this.#departureTimers.delete(effect.peerId)
+          this.#dispatchSession({
+            type: "sess/departure-timer-expired",
+            peerId: effect.peerId,
+          })
+        }, effect.delayMs)
+        this.#departureTimers.set(effect.peerId, timer)
         break
-
-      case "cmd/import-doc-data":
-        this.#executeImportDocData(command)
+      }
+      case "cancel-departure-timer": {
+        const timer = this.#departureTimers.get(effect.peerId)
+        if (timer) {
+          clearTimeout(timer)
+          this.#departureTimers.delete(effect.peerId)
+        }
         break
-
-      case "cmd/stop-channel":
-        command.channel.stop()
+      }
+      case "sync-event":
+        // Forward to sync program — enqueue so it's processed in the current drain
+        this.#pendingInputs.push(effect.event)
         break
-
-      case "cmd/subscribe-doc":
-        // No-op for now — the Exchange handles subscription wiring
+      case "batch":
+        for (const sub of effect.effects) {
+          this.#executeSessionEffect(sub)
+        }
         break
+    }
+  }
 
-      case "cmd/ensure-doc":
-        // Ensure semantics — callback must be idempotent (first writer wins).
-        // Reentrant dispatch from the callback (e.g. registerDoc → doc-ensure)
-        // is queued in #pendingMessages and processed before quiescence.
-        this.#docCreationCallback?.(
-          command.docId,
-          command.peer,
-          command.replicaType,
-          command.mergeStrategy,
-          command.schemaHash,
+  // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+  // SYNC EFFECT EXECUTION
+  // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+  #executeSyncEffect(effect: SyncEffect): void {
+    switch (effect.type) {
+      case "send-to-peer": {
+        this.#sendToPeer(effect.to, effect.message)
+        break
+      }
+      case "send-to-peers": {
+        for (const peerId of effect.to) {
+          this.#sendToPeer(peerId, effect.message)
+        }
+        break
+      }
+      case "send-offer": {
+        this.#executeSendOfferToPeer(
+          effect.to,
+          effect.docId,
+          effect.sinceVersion,
+          effect.reciprocate,
         )
         break
-
-      case "cmd/ensure-doc-dismissed":
+      }
+      case "send-offers": {
+        for (const peerId of effect.to) {
+          this.#executeSendOfferToPeer(
+            peerId,
+            effect.docId,
+            effect.sinceVersion,
+            effect.reciprocate,
+          )
+        }
+        break
+      }
+      case "import-doc-data":
+        this.#executeImportDocData(effect)
+        break
+      case "ensure-doc":
+        // Ensure semantics — callback must be idempotent (first writer wins).
+        // Reentrant dispatch from the callback (e.g. registerDoc → doc-ensure)
+        // is queued in #pendingInputs and processed before quiescence.
+        this.#docCreationCallback?.(
+          effect.docId,
+          effect.peer,
+          effect.replicaType,
+          effect.mergeStrategy,
+          effect.schemaHash,
+        )
+        break
+      case "ensure-doc-dismissed":
         // Ensure semantics — callback must be idempotent (first writer wins).
         // The Exchange's onDocDismissed scope callback handles cleanup.
-        this.#docDismissedCallback?.(command.docId, command.peer, "remote")
+        this.#docDismissedCallback?.(effect.docId, effect.peer, "remote")
         break
-
-      case "cmd/dispatch":
-        this.#dispatch(command.dispatch)
-        break
-
-      case "cmd/batch":
-        for (const subcmd of command.commands) {
-          this.#executeCommand(subcmd)
+      case "batch":
+        for (const sub of effect.effects) {
+          this.#executeSyncEffect(sub)
         }
         break
     }
   }
 
+  // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+  // PEER→CHANNEL RESOLUTION
+  // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
   /**
-   * Build and queue an outbound offer for a document.
+   * Resolve a PeerId to channel IDs via the session model and enqueue
+   * a sync message for delivery.
+   */
+  #sendToPeer(peerId: PeerId, message: SyncMsg): void {
+    const peer = this.#sessionModel.peers.get(peerId)
+    if (!peer || peer.channels.size === 0) return // disconnected, drop
+
+    const toChannelIds: ChannelId[] = Array.from(peer.channels)
+
+    this.#outboundQueue.push({
+      toChannelIds,
+      message,
+    })
+  }
+
+  // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+  // SEND OFFER — build and queue outbound offer for a document
+  // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+  /**
+   * Build and queue an outbound offer for a document to a specific peer.
    *
    * Version-gap planning happens via `resolveOutboundVersionGap()`.
    * Effect execution stays here in the shell: warnings, payload export,
@@ -853,47 +1030,48 @@ export class Synchronizer {
    * For interpreted docs, `runtime.replica` is the `Substrate` itself
    * (since `Substrate extends Replica`).
    */
-  #executeSendOffer(command: {
-    type: "cmd/send-offer"
-    docId: DocId
-    toChannelIds: ChannelId[]
-    sinceVersion?: string
-    reciprocate?: boolean
-  }): void {
-    const runtime = this.#docRuntimes.get(command.docId)
+  #executeSendOfferToPeer(
+    peerId: PeerId,
+    docId: DocId,
+    sinceVersion?: string,
+    reciprocate?: boolean,
+  ): void {
+    const peer = this.#sessionModel.peers.get(peerId)
+    if (!peer || peer.channels.size === 0) return
+
+    const runtime = this.#docRuntimes.get(docId)
     if (!runtime) {
-      console.warn(
-        `[exchange] doc runtime not found, offer not sent: ${command.docId}`,
-      )
+      console.warn(`[exchange] doc runtime not found, offer not sent: ${docId}`)
       return
     }
 
+    const toChannelIds = Array.from(peer.channels)
+
     const enqueueOffer = (payload: SubstratePayload): void => {
       const version = runtime.replica.version().serialize()
-
       this.#outboundQueue.push({
-        toChannelIds: command.toChannelIds,
+        toChannelIds,
         message: {
           type: "offer",
-          docId: command.docId,
+          docId,
           payload,
           version,
-          reciprocate: command.reciprocate,
+          reciprocate,
         },
       })
     }
 
-    if (command.sinceVersion) {
+    if (sinceVersion) {
       const gap = resolveOutboundVersionGap(
         runtime.replica,
         runtime.replicaFactory,
-        command.sinceVersion,
+        sinceVersion,
       )
 
       switch (gap.kind) {
         case "parse-error":
           console.warn(
-            `[exchange] version parse failed for doc '${command.docId}':`,
+            `[exchange] version parse failed for doc '${docId}':`,
             gap.error,
           )
           return
@@ -920,6 +1098,10 @@ export class Synchronizer {
     enqueueOffer(runtime.replica.exportEntirety())
   }
 
+  // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+  // IMPORT DOC DATA — merge inbound data and notify model on success
+  // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
   /**
    * Import document data from a peer and notify the model on success.
    *
@@ -927,26 +1109,26 @@ export class Synchronizer {
    * Effect execution stays here in the shell: warnings, merge, and
    * follow-up dispatch.
    */
-  #executeImportDocData(command: {
-    type: "cmd/import-doc-data"
+  #executeImportDocData(effect: {
+    type: "import-doc-data"
     docId: DocId
     payload: SubstratePayload
     version: string
     fromPeerId: PeerId
   }): void {
-    const runtime = this.#docRuntimes.get(command.docId)
+    const runtime = this.#docRuntimes.get(effect.docId)
     if (!runtime) return
 
     const gap = resolveInboundVersionGap(
       runtime.replica,
       runtime.replicaFactory,
-      command.version,
+      effect.version,
     )
 
     switch (gap.kind) {
       case "parse-error":
         console.warn(
-          `[exchange] version parse failed for doc '${command.docId}':`,
+          `[exchange] version parse failed for doc '${effect.docId}':`,
           gap.error,
         )
         return
@@ -969,10 +1151,10 @@ export class Synchronizer {
     // Initial sync (first entirety from any peer) skips the policy —
     // the existing merge path handles it correctly. Subsequent entirety
     // payloads after the doc has been synced trigger the policy.
-    const isEntirety = command.payload.kind === "entirety"
+    const isEntirety = effect.payload.kind === "entirety"
     const hasEverSynced = (() => {
-      for (const [, peerState] of this.model.peers) {
-        const docSync = peerState.docSyncStates.get(command.docId)
+      for (const [, peerState] of this.#syncModel.peers) {
+        const docSync = peerState.docSyncStates.get(effect.docId)
         if (docSync && docSync.status === "synced") return true
       }
       return false
@@ -980,13 +1162,13 @@ export class Synchronizer {
 
     if (isEntirety && hasEverSynced) {
       // Look up the peer identity for the policy predicate.
-      const peerState = this.model.peers.get(command.fromPeerId)
+      const peerState = this.#syncModel.peers.get(effect.fromPeerId)
       const peerIdentity = peerState?.identity ?? {
-        peerId: command.fromPeerId,
+        peerId: effect.fromPeerId,
       }
 
       const accept = this.#epochBoundary(
-        command.docId,
+        effect.docId,
         peerIdentity as PeerIdentityDetails,
         runtime.strategy,
       )
@@ -1004,21 +1186,21 @@ export class Synchronizer {
       if (runtime.mode === "replicate") {
         // Headless replica — replace with a fresh one from the entirety.
         try {
-          runtime.replica = runtime.replicaFactory.fromEntirety(command.payload)
+          runtime.replica = runtime.replicaFactory.fromEntirety(effect.payload)
         } catch (err) {
           console.warn(
-            `[exchange] epoch boundary reset failed for doc '${command.docId}'.`,
+            `[exchange] epoch boundary reset failed for doc '${effect.docId}'.`,
             err,
           )
           return
         }
 
         const newVersion = runtime.replica.version().serialize()
-        this.#dispatch({
-          type: "synchronizer/doc-imported",
-          docId: command.docId,
+        this.#dispatchSync({
+          type: "sync/doc-imported",
+          docId: effect.docId,
           version: newVersion,
-          fromPeerId: command.fromPeerId,
+          fromPeerId: effect.fromPeerId,
         })
         return
       }
@@ -1027,13 +1209,13 @@ export class Synchronizer {
     }
 
     try {
-      runtime.replica.merge(command.payload, "sync")
+      runtime.replica.merge(effect.payload, "sync")
     } catch (err) {
       // Import failed — log and continue. A common cause is replica type
       // mismatch: e.g. Loro binary data fed to a Yjs decoder after switching
       // CRDT backends. Check for stale clients sending incompatible data.
       console.warn(
-        `[exchange] import failed for doc '${command.docId}'. ` +
+        `[exchange] import failed for doc '${effect.docId}'. ` +
           `If you recently switched CRDT backends, stale clients may be sending incompatible data.`,
         err,
       )
@@ -1042,11 +1224,11 @@ export class Synchronizer {
 
     // Notify the model of successful import
     const newVersion = runtime.replica.version().serialize()
-    this.#dispatch({
-      type: "synchronizer/doc-imported",
-      docId: command.docId,
+    this.#dispatchSync({
+      type: "sync/doc-imported",
+      docId: effect.docId,
       version: newVersion,
-      fromPeerId: command.fromPeerId,
+      fromPeerId: effect.fromPeerId,
     })
   }
 
@@ -1081,28 +1263,55 @@ export class Synchronizer {
 
     if (events.length === 0) return
 
-    // Rebuild peer map from model (single source of truth at quiescence)
-    this.#peerHandle!.clear()
-    for (const [peerId, peerState] of this.model.peers) {
-      this.#peerHandle!.set(peerId, peerState.identity)
+    // Rebuild peer map from session model (source of truth for presence)
+    if (!this.#peerHandle) return
+    this.#peerHandle.clear()
+    for (const [peerId, sessionPeer] of this.#sessionModel.peers) {
+      this.#peerHandle.set(peerId, sessionPeer.identity)
     }
 
     // Emit to subscribers
-    this.#peerHandle!.emit({ changes: events })
+    this.#peerHandle.emit({ changes: events })
   }
 
-  #emitSyntheticPeerLeftEvents(): void {
-    if (this.model.peers.size === 0 || !this.#peerHandle) return
+  #emitSyntheticDepartedEvents(): void {
+    if (this.#sessionModel.peers.size === 0 || !this.#peerHandle) return
 
-    const events: PeerChange[] = Array.from(this.model.peers.values()).map(
-      peerState => ({ type: "peer-left" as const, peer: peerState.identity }),
-    )
+    const events: PeerChange[] = Array.from(
+      this.#sessionModel.peers.values(),
+    ).map(peer => ({ type: "peer-departed" as const, peer: peer.identity }))
 
     // Clear peer map (consistent with the about-to-be-wiped model)
     this.#peerHandle.clear()
 
     this.#peerHandle.emit({ changes: events })
   }
+
+  // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+  // SHUTDOWN HELPERS
+  // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+  #sendDepartToAllPeers(): void {
+    for (const [_peerId, peer] of this.#sessionModel.peers) {
+      for (const channelId of peer.channels) {
+        this.#outboundQueue.push({
+          toChannelIds: [channelId],
+          message: { type: "depart" },
+        })
+      }
+    }
+  }
+
+  #clearDepartureTimers(): void {
+    for (const timer of this.#departureTimers.values()) {
+      clearTimeout(timer)
+    }
+    this.#departureTimers.clear()
+  }
+
+  // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+  // STATE ADVANCED — emit persistence events after quiescence
+  // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
   /**
    * Emit state-advanced events for docs touched this dispatch cycle.

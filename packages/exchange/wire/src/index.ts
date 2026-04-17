@@ -4,8 +4,8 @@
 // carries a version, optional hash, and content (Complete or Fragment).
 // Binary: Frame<Uint8Array>. Text: Frame<string>.
 //
-// Two pipelines for @kyneta/transport's 5-message protocol
-// (establish-request, establish-response, discover, interest, offer):
+// Two pipelines for @kyneta/transport's 6-message protocol
+// (establish, depart, present, interest, offer, dismiss):
 //
 // Binary pipeline (WebSocket, WebRTC):
 //   BinaryCodec (CBOR) → binary frame (7B header) → binary fragmentation → FragmentReassembler

@@ -24,7 +24,7 @@
 // The connection handshake:
 // 1. Client creates EventSource, waits for open
 // 2. EventSource.onopen fires → client creates channel + calls establishChannel()
-// 3. Synchronizer exchanges establish-request / establish-response via POST + SSE
+// 3. Synchronizer exchanges establish messages via POST + SSE
 //
 // On EventSource.onerror, the adapter closes the EventSource immediately and
 // takes over reconnection via the program's backoff logic, rather than

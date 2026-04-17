@@ -28,11 +28,11 @@
 import { Exchange } from "@kyneta/exchange"
 import { loro } from "@kyneta/loro-schema"
 import { change, json, Schema } from "@kyneta/schema"
+import { WebsocketClientTransport } from "@kyneta/websocket-transport/browser"
 import {
   type BunWebsocketData,
   createBunWebsocketHandlers,
 } from "@kyneta/websocket-transport/bun"
-import { WebsocketClientTransport } from "@kyneta/websocket-transport/browser"
 import { WebsocketServerTransport } from "@kyneta/websocket-transport/server"
 import { afterEach, describe, expect, it } from "vitest"
 

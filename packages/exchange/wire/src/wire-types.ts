@@ -5,8 +5,8 @@
 // strings directly and doesn't need these mappings.
 //
 // Wire type ranges:
-//   0x01–0x0F: Connection establishment
-//   0x10–0x1F: Exchange messages (present, interest, offer)
+//   0x01–0x0F: Lifecycle messages (establish, depart)
+//   0x10–0x1F: Sync messages (present, interest, offer, dismiss)
 
 // ---------------------------------------------------------------------------
 // Message type discriminators
@@ -18,8 +18,8 @@
  * These are used as the `t` field in compact wire objects for CBOR encoding.
  */
 export const MessageType = {
-  EstablishRequest: 0x01,
-  EstablishResponse: 0x02,
+  Establish: 0x01,
+  Depart: 0x02,
   Present: 0x10,
   Interest: 0x11,
   Offer: 0x12,
@@ -32,8 +32,8 @@ export type MessageTypeValue = (typeof MessageType)[keyof typeof MessageType]
  * Reverse lookup: integer discriminator → ChannelMsg type string.
  */
 export const MessageTypeToString: Record<MessageTypeValue, string> = {
-  [MessageType.EstablishRequest]: "establish-request",
-  [MessageType.EstablishResponse]: "establish-response",
+  [MessageType.Establish]: "establish",
+  [MessageType.Depart]: "depart",
   [MessageType.Present]: "present",
   [MessageType.Interest]: "interest",
   [MessageType.Offer]: "offer",
@@ -44,8 +44,8 @@ export const MessageTypeToString: Record<MessageTypeValue, string> = {
  * Forward lookup: ChannelMsg type string → integer discriminator.
  */
 export const StringToMessageType: Record<string, MessageTypeValue> = {
-  "establish-request": MessageType.EstablishRequest,
-  "establish-response": MessageType.EstablishResponse,
+  establish: MessageType.Establish,
+  depart: MessageType.Depart,
   present: MessageType.Present,
   interest: MessageType.Interest,
   offer: MessageType.Offer,
@@ -180,12 +180,17 @@ export const StringToMergeStrategyWire: Record<string, MergeStrategyWireValue> =
  *   pe  — payload encoding (PayloadEncodingValue)
  */
 
-/** Compact wire format for establish-request / establish-response. */
+/** Compact wire format for establish. */
 export type WireEstablishMsg = {
-  t: typeof MessageType.EstablishRequest | typeof MessageType.EstablishResponse
+  t: typeof MessageType.Establish
   id: string
   n?: string
   y: "user" | "bot" | "service"
+}
+
+/** Compact wire format for depart. */
+export type WireDepartMsg = {
+  t: typeof MessageType.Depart
 }
 
 /** Compact wire format for present. */
@@ -227,6 +232,7 @@ export type WireDismissMsg = {
 /** Union of all compact wire message types. */
 export type WireMessage =
   | WireEstablishMsg
+  | WireDepartMsg
   | WirePresentMsg
   | WireInterestMsg
   | WireOfferMsg

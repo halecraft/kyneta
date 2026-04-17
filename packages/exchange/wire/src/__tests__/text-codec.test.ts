@@ -1,4 +1,4 @@
-// Text codec tests — round-trip all 6 message types.
+// Text codec tests — round-trip all message types.
 //
 // Verifies that every ChannelMsg variant survives encode → decode
 // through the textCodec. Special attention to SubstratePayload
@@ -9,9 +9,9 @@
 
 import type {
   ChannelMsg,
+  DepartMsg,
   DismissMsg,
-  EstablishRequestMsg,
-  EstablishResponseMsg,
+  EstablishMsg,
   InterestMsg,
   OfferMsg,
   PresentMsg,
@@ -35,13 +35,13 @@ function roundTrip(msg: ChannelMsg): ChannelMsg {
 }
 
 // ---------------------------------------------------------------------------
-// Establishment messages
+// Lifecycle messages
 // ---------------------------------------------------------------------------
 
-describe("Text codec — establishment messages", () => {
-  it("round-trips establish-request with full identity", () => {
-    const msg: EstablishRequestMsg = {
-      type: "establish-request",
+describe("Text codec — lifecycle messages", () => {
+  it("round-trips establish with full identity", () => {
+    const msg: EstablishMsg = {
+      type: "establish",
       identity: {
         peerId: "peer-alice-123",
         name: "Alice",
@@ -52,48 +52,43 @@ describe("Text codec — establishment messages", () => {
     expect(decoded).toEqual(msg)
   })
 
-  it("round-trips establish-request without optional name", () => {
-    const msg: EstablishRequestMsg = {
-      type: "establish-request",
+  it("round-trips establish without optional name", () => {
+    const msg: EstablishMsg = {
+      type: "establish",
       identity: {
         peerId: "bot-42",
         type: "bot",
       },
     }
     const decoded = roundTrip(msg)
-    expect(decoded.type).toBe("establish-request")
-    const identity = (decoded as EstablishRequestMsg).identity
+    expect(decoded.type).toBe("establish")
+    const identity = (decoded as EstablishMsg).identity
     expect(identity.peerId).toBe("bot-42")
     expect(identity.type).toBe("bot")
     // JSON serialization drops undefined fields entirely
     expect("name" in identity).toBe(false)
   })
 
-  it("round-trips establish-response", () => {
-    const msg: EstablishResponseMsg = {
-      type: "establish-response",
-      identity: {
-        peerId: "service-backend",
-        name: "Backend Service",
-        type: "service",
-      },
+  it("round-trips depart", () => {
+    const msg: DepartMsg = {
+      type: "depart",
     }
     const decoded = roundTrip(msg)
     expect(decoded).toEqual(msg)
   })
 
   it("uses human-readable type strings (not integer discriminators)", () => {
-    const msg: EstablishRequestMsg = {
-      type: "establish-request",
+    const msg: EstablishMsg = {
+      type: "establish",
       identity: { peerId: "p1", type: "user" },
     }
     const encoded = textCodec.encode(msg) as Record<string, unknown>
-    expect(encoded.type).toBe("establish-request")
+    expect(encoded.type).toBe("establish")
   })
 })
 
 // ---------------------------------------------------------------------------
-// Exchange messages
+// Sync messages
 // ---------------------------------------------------------------------------
 
 describe("Text codec — present", () => {
@@ -318,8 +313,11 @@ describe("Text codec — batch", () => {
   it("round-trips a batch of mixed message types", () => {
     const msgs: ChannelMsg[] = [
       {
-        type: "establish-request",
+        type: "establish",
         identity: { peerId: "p1", name: "Peer One", type: "user" },
+      },
+      {
+        type: "depart",
       },
       {
         type: "present",
@@ -364,15 +362,16 @@ describe("Text codec — batch", () => {
     const encoded = textCodec.encode(msgs)
 
     const decoded = textCodec.decode(encoded)
-    expect(decoded).toHaveLength(5)
-    expect(decoded[0]?.type).toBe("establish-request")
-    expect(decoded[1]?.type).toBe("present")
-    expect(decoded[2]?.type).toBe("interest")
-    expect(decoded[3]?.type).toBe("offer")
-    expect(decoded[4]?.type).toBe("dismiss")
+    expect(decoded).toHaveLength(6)
+    expect(decoded[0]?.type).toBe("establish")
+    expect(decoded[1]?.type).toBe("depart")
+    expect(decoded[2]?.type).toBe("present")
+    expect(decoded[3]?.type).toBe("interest")
+    expect(decoded[4]?.type).toBe("offer")
+    expect(decoded[5]?.type).toBe("dismiss")
 
     // Verify the offer's binary payload survived
-    const decodedOffer = decoded[3] as OfferMsg
+    const decodedOffer = decoded[4] as OfferMsg
     expect(decodedOffer.payload.data).toBeInstanceOf(Uint8Array)
     expect(decodedOffer.payload.data).toEqual(new Uint8Array([1, 2, 3]))
   })

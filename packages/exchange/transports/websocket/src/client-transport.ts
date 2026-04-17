@@ -31,17 +31,17 @@ import {
   type WsClientEffect,
   type WsClientMsg,
 } from "./client-program.js"
+import type {
+  DisconnectReason,
+  WebsocketClientState,
+  WebsocketClientStateTransition,
+} from "./types.js"
 import {
   READY_STATE,
   type WebSocketCloseEvent,
   type WebSocketConstructor,
   type WebSocketLike,
   type WebSocketMessageEvent,
-} from "./types.js"
-import type {
-  DisconnectReason,
-  WebsocketClientState,
-  WebsocketClientStateTransition,
 } from "./types.js"
 
 // Re-export state types for convenience
@@ -600,4 +600,3 @@ export function createWebsocketClient(
 ): TransportFactory {
   return () => new WebsocketClientTransport(options)
 }
-

@@ -21,8 +21,8 @@ describe("@kyneta/exchange re-exports from @kyneta/transport", () => {
     "computeBackoffDelay",
     "DEFAULT_RECONNECT",
     "isEstablished",
-    "isEstablishmentMsg",
-    "isExchangeMsg",
+    "isLifecycleMsg",
+    "isSyncMsg",
   ] as const
 
   for (const name of sharedValues) {

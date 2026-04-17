@@ -21,7 +21,7 @@ import type { ChannelMsg } from "@kyneta/transport"
  * Encode/decode `ChannelMsg` types for binary wire transport.
  *
  * Implementations handle the full message vocabulary
- * (establish-request, establish-response, discover, interest, offer).
+ * (establish, depart, present, interest, offer, dismiss).
  *
  * The codec operates on raw bytes. Framing and fragmentation are
  * separate concerns handled by the frame and fragment modules.

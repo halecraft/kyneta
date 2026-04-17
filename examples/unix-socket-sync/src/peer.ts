@@ -76,7 +76,7 @@ subscribe(doc, () => rerender())
 // Subscribe to exchange.peers for cleanup
 exchange.peers.subscribe((changeset) => {
   for (const peerChange of changeset.changes) {
-    if (peerChange.type === "peer-left") {
+    if (peerChange.type === "peer-departed") {
       // Remove departed peer from the document's peers record
       change(doc, (d: any) => {
         d.peers.delete(peerChange.peer.peerId)

@@ -45,9 +45,9 @@ async function initializeTransport(
   return ctx
 }
 
-/** A minimal establish-request message for send/receive tests. */
+/** A minimal establish message for send/receive tests. */
 const TEST_MSG: ChannelMsg = {
-  type: "establish-request",
+  type: "establish",
   identity: { peerId: "remote", name: "R", type: "user" },
 }
 
@@ -210,7 +210,7 @@ describe("Receive", () => {
     if (!callArgs)
       throw new Error("expected onChannelReceive to have been called")
     const [, receivedMsg] = callArgs
-    expect(receivedMsg.type).toBe("establish-request")
+    expect(receivedMsg.type).toBe("establish")
     expect((receivedMsg as any).identity.peerId).toBe("remote")
   })
 
@@ -229,7 +229,7 @@ describe("Receive", () => {
     if (!callArgs)
       throw new Error("expected onChannelReceive to have been called")
     const [, receivedMsg] = callArgs
-    expect(receivedMsg.type).toBe("establish-request")
+    expect(receivedMsg.type).toBe("establish")
     expect((receivedMsg as any).identity.peerId).toBe("remote")
   })
 
@@ -303,7 +303,7 @@ describe("Fragmentation", () => {
     // binary frame may exceed it if the CBOR encoding + frame header is large enough.
     // Use a message with enough payload to guarantee fragmentation.
     const largeMsg: ChannelMsg = {
-      type: "establish-request",
+      type: "establish",
       identity: {
         peerId: `a]very-long-peer-id-${"x".repeat(200)}`,
         name: `A Long Name ${"y".repeat(200)}`,
@@ -326,7 +326,7 @@ describe("Fragmentation", () => {
 
     // Build a message large enough to guarantee multiple fragments at chunk size 50
     const largeMsg: ChannelMsg = {
-      type: "establish-request",
+      type: "establish",
       identity: {
         peerId: `peer-${"z".repeat(200)}`,
         name: `Name-${"w".repeat(200)}`,
@@ -364,7 +364,7 @@ describe("Fragmentation", () => {
     if (!callArgs)
       throw new Error("expected onChannelReceive to have been called")
     const [, receivedMsg] = callArgs
-    expect(receivedMsg.type).toBe("establish-request")
+    expect(receivedMsg.type).toBe("establish")
     expect((receivedMsg as any).identity.peerId).toBe(`peer-${"z".repeat(200)}`)
   })
 })

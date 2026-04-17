@@ -142,7 +142,32 @@ These are genuinely different protocols matched to the mathematical properties o
 
 ## 3. Sync Protocol
 
-Six message types: two for channel establishment, four for document exchange.
+Seven message types in two categories: two lifecycle messages for peer presence, five sync messages for document exchange.
+
+### Lifecycle messages
+
+### `establish`
+
+Symmetric identity announcement — both peers send `establish` on connect. There is no request/response asymmetry; each side independently sends its identity when the channel opens. A channel is established once both sides have received the other's `establish`.
+
+```ts
+type EstablishMsg = {
+  type: "establish"
+  identity: PeerIdentityDetails
+}
+```
+
+### `depart`
+
+Intentional departure announcement — a peer sends `depart` before voluntarily leaving. This is a one-way message with no response. When the session program receives `depart`, it marks the peer as departed and skips the disconnection grace period (no departure timer). If a peer vanishes without sending `depart`, the session program treats the channel loss as an involuntary disconnection and starts the departure timer (§9.1).
+
+```ts
+type DepartMsg = {
+  type: "depart"
+}
+```
+
+### Sync messages
 
 ### `present`
 
@@ -211,15 +236,6 @@ type DismissMsg = {
 ```
 
 The receiving exchange fires `onDocDismissed` if configured (§18). The handler also cleans up the dismissing peer's sync state (`docSyncStates`, `subscriptions`) for the document.
-
-### Establishment messages
-
-Two additional messages handle channel handshake:
-
-```ts
-type EstablishRequestMsg = { type: "establish-request"; identity: PeerIdentityDetails }
-type EstablishResponseMsg = { type: "establish-response"; identity: PeerIdentityDetails }
-```
 
 ---
 
@@ -299,7 +315,7 @@ The per-substrate `loro.unwrap()` and `yjs.unwrap()` functions have been removed
 
 ## 5. Channel and Transport Abstraction
 
-> **Note:** `Transport<G>`, channel types (`Channel`, `ConnectedChannel`, `EstablishedChannel`, `GeneratedChannel`), `ChannelDirectory`, and the message vocabulary (`ChannelMsg`, etc.) are defined in `@kyneta/transport`. `@kyneta/exchange` re-exports them for backwards compatibility.
+> **Note:** `Transport<G>`, channel types (`Channel`, `ConnectedChannel`, `EstablishedChannel`, `GeneratedChannel`), `ChannelDirectory`, and the message vocabulary (`ChannelMsg`, `LifecycleMsg`, `SyncMsg`, etc.) are defined in `@kyneta/transport`. `@kyneta/exchange` re-exports them for convenience.
 
 ### Channel Lifecycle
 
@@ -312,7 +328,9 @@ GeneratedChannel → ConnectedChannel → EstablishedChannel
 - **ConnectedChannel**: registered with the synchronizer. Has `channelId`, `onReceive`.
 - **EstablishedChannel**: completed the establish handshake. Has `peerId` of the remote peer.
 
-At establishment time, the synchronizer checks for two identity issues and emits `notify/warning` notifications (not direct `console.warn` — the pure program produces data, the imperative shell handles I/O):
+Incoming messages are discriminated by `isLifecycleMsg()`: `LifecycleMsg` (`establish`, `depart`) routes to the session program; `SyncMsg` (`present`, `interest`, `offer`, `dismiss`) routes to the sync program (see §9.1).
+
+At establishment time, the session program checks for two identity issues and emits `notify/warning` notifications (not direct `console.warn` — the pure program produces data, the imperative shell handles I/O):
 
 - **Duplicate peerId:** The remote peer's identity already has active channels from a different connection. This indicates two participants sharing the same peerId, which corrupts CRDT state.
 - **Self-connection:** The remote peer's peerId matches the local exchange's identity. Syncing with yourself is always a misconfiguration.
@@ -465,32 +483,39 @@ There is no decorator, no wrapper object, and no `context()` gotcha. Each epheme
 
 > **Historical note:** This section previously documented `ClientStateMachine<S>` and `createReconnectScheduler` as shared infrastructure for transport client reconnection. These have been replaced by `Program`-based transports using `createObservableProgram` from `@kyneta/machine` (see §5 "Transport Client Programs"). The validated transition map is superseded by each program's `update` function (which only produces valid states by construction), and the reconnect scheduler is superseded by reconnection logic in each program's `update` + timer effects.
 
-The `Synchronizer` processes messages one at a time via a serialized dispatch loop:
+The `Synchronizer` orchestrates two pure TEA programs through a unified serialized dispatch loop. Inputs are tagged by program: `sess/*` inputs go to the session program, `sync/*` inputs go to the sync program. Both share a single pending-input queue, ensuring total ordering across both programs within a dispatch cycle.
 
 ```
-#dispatch(msg):
-  pendingMessages.push(msg)
+#drainPending():
   if already dispatching: return
 
   dispatching = true
-  while pendingMessages.length > 0:
-    msg = pendingMessages.shift()
-    [newModel, cmd, notification] = updateFn(msg, model)
-    model = newModel
-    if notification: accumulateNotification(notification)  // collect into typed sets
-    if cmd: executeCommand(cmd)                            // may push more messages
+  while pendingInputs.length > 0:
+    input = pendingInputs.shift()
+    if input is sess/*:
+      [newSessionModel, effect, notification] = sessionUpdate(input, sessionModel)
+      sessionModel = newSessionModel
+      accumulateSessionNotification(notification)
+      executeSessionEffect(effect)        // may enqueue sync/* inputs via sync-event
+    else:  // sync/*
+      [newSyncModel, effect, notification] = syncUpdate(input, syncModel)
+      syncModel = newSyncModel
+      accumulateSyncNotification(notification)
+      executeSyncEffect(effect)            // may enqueue more inputs
 
-  // Quiescence — all messages processed
+  // Quiescence — all inputs from both programs processed
   #drainOutbound()                  // send accumulated envelopes
   #drainReadyStateChanges()         // emit only for dirtyDocIds
   #drainStateAdvanced()             // emit only for dirtyStateAdvanced
-  #drainPeerEvents()                // emit accumulated peer-joined/peer-left
+  #drainPeerEvents()                // emit accumulated peer events
   dispatching = false
 ```
 
-Commands that produce new messages (e.g. `cmd/dispatch`) are pushed to `pendingMessages` and processed in the same dispatch cycle. Outbound messages are accumulated in a queue and flushed only at quiescence, ensuring consistent model state before any messages leave the exchange.
+**Two-program orchestration.** The session program handles peer lifecycle (`sess/*` inputs): channel add/remove, establish handshake, departure detection, departure timers. The sync program handles document convergence (`sync/*` inputs): present, interest, offer, dismiss, and per-peer document sync state. Neither program calls the other directly. The shell (Synchronizer) interprets session effects — when the session program emits a `sync-event` effect, the shell enqueues the corresponding `sync/*` input into the shared pending queue, where it will be processed in the same dispatch cycle. This preserves the effect interpretation chain: session → shell → sync → shell → transports.
 
-**Open vs. closed commands.** Commands fall into two categories. Closed commands (`cmd/send-message`, `cmd/send-offer`, `cmd/import-doc-data`, `cmd/stop-channel`, `cmd/dispatch`) are self-contained — they don't call back into user code. Ensure commands (`cmd/ensure-doc`, `cmd/ensure-doc-dismissed`) cross the boundary into user code via callbacks that may trigger reentrant dispatch. When the pure program batches multiple ensure commands (e.g. `handlePresent` emitting N `cmd/ensure-doc` for N unknown docs), each command executes sequentially — but the batch was planned against a single model snapshot. Command₁'s callback may create state that command₂ will also try to create. The `ensure-*` naming convention communicates the invariant: these commands are idempotent by contract. Callback implementations must check for existing state and return early (first writer wins).
+Effects from the sync program that require network I/O (e.g. `send-to-peer`) are interpreted by the shell, which resolves peer IDs to channels via the session model and sends on the appropriate channel.
+
+**Open vs. closed effects.** Effects fall into two categories. Closed effects (`send`, `send-to-peer`, `send-to-peers`, `start-departure-timer`, `cancel-departure-timer`, `sync-event`) are self-contained — they don't call back into user code. Ensure effects (`ensure-doc`, `ensure-doc-dismissed`) cross the boundary into user code via callbacks that may trigger reentrant dispatch. When the pure program batches multiple ensure effects (e.g. `handlePresent` emitting N `ensure-doc` for N unknown docs), each effect executes sequentially — but the batch was planned against a single model snapshot. Effect₁'s callback may create state that effect₂ will also try to create. The `ensure-*` naming convention communicates the invariant: these effects are idempotent by contract. Callback implementations must check for existing state and return early (first writer wins).
 
 Notifications are accumulated across the entire dispatch cycle into typed sets. At quiescence, four drain methods fire in order:
 
@@ -500,6 +525,40 @@ Notifications are accumulated across the entire dispatch cycle into typed sets. 
 4. **`#drainPeerEvents()`** — emits accumulated `PeerChange` events via the peer lifecycle changefeed (§22).
 
 All drain methods (except `#drainOutbound`, which uses a shift-loop) follow the **snapshot-then-clear** pattern: snapshot the pending set, reset the field to empty, then process the snapshot. This ensures the accumulation field is clean before any subscriber code runs — subscribers that trigger reentrant dispatch accumulate into a fresh set, not the one being drained.
+
+### 9.1 Session/Sync Separation
+
+> **Architectural principle:** Connection is not presence.
+
+A peer's transport channel can drop and reconnect without the peer having "left" — the collaborative session should survive transient network disruptions. This insight drives the separation of *session* (channel topology, peer identity, lifecycle) from *sync* (document convergence).
+
+**Two-program design.** The session program (`session-program.ts`) and sync program (`sync-program.ts`) are independent TEA state machines with no shared state:
+
+| | Session Program | Sync Program |
+|---|---|---|
+| **Model** | `SessionModel` — channels, peers, departure timers | `SyncModel` — doc entries, peer sync states, subscriptions |
+| **Inputs** | `sess/*` — channel-added, channel-removed, channel-establish, message-received (LifecycleMsg), departure-timer-expired | `sync/*` — doc-ensure, doc-dismiss, message-received (SyncMsg), peer-available, peer-unavailable, peer-departed, local-doc-change |
+| **Effects** | `send` (LifecycleMsg to channel), `start-departure-timer`, `cancel-departure-timer`, `sync-event` (forwarded to sync program) | `send-to-peer` / `send-to-peers` (SyncMsg to peer), `ensure-doc`, `ensure-doc-dismissed`, `import-doc-data` |
+| **Notifications** | `notify/peer-established`, `notify/peer-disconnected`, `notify/peer-reconnected`, `notify/peer-departed`, `notify/warning` | `notify/ready-state-changed`, `notify/state-advanced`, `notify/warning` |
+
+**The interpreter pattern.** Session effects are data — the pure session program never performs I/O. The shell interprets each effect type:
+
+- `send` → write `LifecycleMsg` to the physical channel
+- `start-departure-timer` / `cancel-departure-timer` → manage `setTimeout`/`clearTimeout`
+- `sync-event` → enqueue the wrapped `SyncInput` into the shared pending queue
+- `batch` → recursively interpret each sub-effect
+
+This means the session program can trigger sync program activity (e.g. "peer established → tell sync program a peer is available") without any direct coupling.
+
+**Departure timeout.** When a peer's last channel is removed without a preceding `depart` message, the session program does not immediately emit `peer-departed`. Instead, it transitions the peer to `"disconnected"` status, emits `notify/peer-disconnected`, and produces a `start-departure-timer` effect with a configurable delay (`departureTimeout`, default 30 seconds). If the peer reconnects before the timer fires, the timer is cancelled and `notify/peer-reconnected` is emitted. If the timer expires, the peer is removed and `notify/peer-departed` is emitted. Setting `departureTimeout` to `0` skips the grace period — disconnection immediately becomes departure.
+
+**Effect interpretation chain.** The full chain for a session-initiated sync event:
+
+```
+channel event → sess/* input → session update → sync-event effect
+  → shell enqueues sync/* input → sync update → send-to-peer effect
+    → shell resolves peerId → channel → transport send
+```
 
 ---
 
@@ -567,8 +626,9 @@ See `@kyneta/changefeed`'s `ReactiveMap` for the full interface.
 | `src/types.ts` | Sync-specific types (PeerState, ReadyState, PeerChange) — re-exports transport identity types from `@kyneta/transport` |
 | `src/transport/transport-manager.ts` | `TransportManager` — transport lifecycle and message routing |
 | `src/utils.ts` | PeerId generation and validation |
-| `src/synchronizer-program.ts` | TEA state machine — model, messages, commands, sync algorithms |
-| `src/synchronizer.ts` | Synchronizer runtime — dispatch, command execution, substrate interaction |
+| `src/session-program.ts` | Session TEA state machine — channel topology, establish handshake, peer lifecycle, departure timers |
+| `src/sync-program.ts` | Sync TEA state machine — document convergence, present/interest/offer/dismiss, per-peer sync state |
+| `src/synchronizer.ts` | Synchronizer runtime — two-program dispatch, effect interpretation, substrate interaction |
 | `src/exchange.ts` | `Exchange` class — public API, `RoutePredicate`, `AuthorizePredicate`, `OnDocDismissed` types |
 | `src/sync.ts` | `sync()` function and `SyncRef` — sync capabilities access |
 | `src/store/store.ts` | `Store` interface and `StoreEntry` type |
@@ -585,7 +645,8 @@ Note: `MergeStrategy`, `BoundSchema`, `json.bind()`, `json.replica()`, `unwrap()
 | File | Coverage |
 |------|----------|
 | `src/__tests__/transport-manager.test.ts` | TransportManager lifecycle and message routing |
-| `src/__tests__/synchronizer-program.test.ts` | Pure TEA update function — all message types, merge strategies, `cmd/ensure-doc`, replicate mode |
+| `src/__tests__/session-program.test.ts` | Session TEA update function — establish handshake, peer lifecycle (joined/disconnected/reconnected/departed), departure timers, multi-channel deduplication |
+| `src/__tests__/sync-program.test.ts` | Sync TEA update function — all sync message types, merge strategies, `ensure-doc`, replicate mode, per-peer sync state |
 | `src/__tests__/store-hydration.test.ts` | Exchange-level storage hydration — get/replicate hydration, network import persistence, local change persistence, flush, round-trip restart |
 | `src/__tests__/store.test.ts` | InMemoryStore — conformance suite + InMemory-specific sharedData/getStorage tests |
 | `src/testing/store-conformance.ts` | Reusable Store contract suite: lookup, ensureDoc, append, loadAll, replace, delete, listDocIds, JSON + binary payload round-trips, StoreEntry shape |
@@ -593,13 +654,13 @@ Note: `MergeStrategy`, `BoundSchema`, `json.bind()`, `json.replica()`, `unwrap()
 | `src/__tests__/exchange.test.ts` | Exchange class — get, cache, sync, lifecycle, factory builder lifecycle |
 | `src/__tests__/integration.test.ts` | Two-peer sync for sequential, concurrent, ephemeral, heterogeneous, and `onUnresolvedDoc` dynamic creation |
 | `src/__tests__/sync-invariants.test.ts` | Regression tests: empty-delta fallback, ref identity, ephemeral stale rejection, concurrent deltas |
-| `src/__tests__/client-state-machine.test.ts` | ClientStateMachine — transitions, subscriptions, waitForState, reset |
+
 
 ---
 
 ## 12. Wire Format (`@kyneta/wire`)
 
-The `@kyneta/wire` package provides serialization infrastructure for the exchange's six-message protocol (two establishment + four exchange). It sits between the exchange and transports in the dependency graph:
+The `@kyneta/wire` package provides serialization infrastructure for the exchange's seven-message protocol (two lifecycle + five sync). It sits between the exchange and transports in the dependency graph:
 
 ```
 @kyneta/changefeed   @kyneta/schema
@@ -684,8 +745,8 @@ Both WebSocket and WebRTC transports use these helpers instead of inline encode/
 
 | Message | Discriminator | Compact Fields |
 |---------|--------------|----------------|
-| `establish-request` | `0x01` | `t`, `id`, `n?`, `y` |
-| `establish-response` | `0x02` | `t`, `id`, `n?`, `y` |
+| `establish` | `0x01` | `t`, `id`, `n?`, `y` |
+| `depart` | `0x02` | `t` |
 | `present` | `0x10` | `t`, `docs` (array of `{ d, rt, ms }`) |
 | `interest` | `0x11` | `t`, `doc`, `v?`, `r?` |
 | `offer` | `0x12` | `t`, `doc`, `pk`, `pe`, `d`, `v`, `r?` |
@@ -722,10 +783,10 @@ The transport package has zero runtime dependencies — callers provide all WebS
 The Websocket connection handshake is two-phase to avoid race conditions:
 
 1. **Transport-level**: Server sends text `"ready"` signal after Websocket opens
-2. **Protocol-level**: Client creates channel + sends `establish-request` after receiving `"ready"`
-3. Server's Synchronizer processes the `establish-request` and responds with `establish-response`
+2. **Protocol-level**: Client creates channel + sends `establish` after receiving `"ready"`
+3. Server's Synchronizer processes the `establish` and sends its own `establish` back
 
-The server does NOT call `establishChannel()` — it waits for the client's establish-request. This prevents a race condition where the server's binary establish-request could arrive before the client has processed `"ready"` and created its channel.
+The server does NOT call `establishChannel()` — it waits for the client's `establish`. This prevents a race condition where the server's binary `establish` could arrive before the client has processed `"ready"` and created its channel.
 
 ### Client Program (`createWsClientProgram`)
 
@@ -1028,7 +1089,7 @@ The `route` predicate gates all outbound messages. It answers: "should this peer
 
 | Gate | Handler | What `route: false` does |
 |------|---------|--------------------------|
-| Initial present | `handleEstablishRequest` / `handleEstablishResponse` | Doc omitted from `present` message |
+| Initial present | `handlePeerAvailable` | Doc omitted from `present` message |
 | Doc-ensure broadcast | `handleDocEnsure` | Channel excluded from present+interest |
 | Push (local change + relay) | `buildPush` | Channel excluded from offer |
 | `onUnresolvedDoc` gating | `handlePresent` | `cmd/ensure-doc` not emitted |
@@ -1396,16 +1457,27 @@ Both `InMemoryStore` and `LevelDBStore` pass the same suite. The suite covers lo
 
 ## 22. Peer Lifecycle Feed
 
-The exchange exposes a reactive feed of peer presence via `exchange.peers` — a `ReactiveMap<PeerId, PeerIdentityDetails, PeerChange>` (from `@kyneta/changefeed`). `ReactiveMap` extends `CallableChangefeed` with lifted collection accessors (`.get()`, `.has()`, `.keys()`, `.size`, iteration), so existing code that treats it as a `CallableChangefeed` continues to work unchanged. Peers join when their first channel completes the establish handshake; they leave when their last channel is removed.
+The exchange exposes a reactive feed of peer presence via `exchange.peers` — a `ReactiveMap<PeerId, PeerIdentityDetails, PeerChange>` (from `@kyneta/changefeed`). `ReactiveMap` extends `CallableChangefeed` with lifted collection accessors (`.get()`, `.has()`, `.keys()`, `.size`, iteration), so existing code that treats it as a `CallableChangefeed` continues to work unchanged. Peer lifecycle is a four-state machine managed by the session program (§9.1).
 
 ### The `PeerChange` Type
 
 ```ts
 interface PeerChange extends ChangeBase {
-  readonly type: "peer-joined" | "peer-left"
+  readonly type: "peer-established" | "peer-disconnected" | "peer-reconnected" | "peer-departed"
   readonly peer: PeerIdentityDetails
 }
 ```
+
+Four event types model the full peer lifecycle:
+
+| Event | Trigger | Terminal? |
+|---|---|---|
+| `peer-established` | First `establish` received for a new peerId | No |
+| `peer-disconnected` | Last channel removed, no `depart` received (involuntary) | No — departure timer starts |
+| `peer-reconnected` | New channel established for a previously-disconnected peer | No — departure timer cancelled |
+| `peer-departed` | `depart` message received, or departure timer expired | Yes — peer removed from model |
+
+The distinction between `peer-disconnected` and `peer-departed` reflects the architectural principle that **connection is not presence** (§9.1). A disconnected peer may reconnect; a departed peer is gone.
 
 `PeerChange` is defined in `src/types.ts` alongside the other core identity types. It extends `ChangeBase` from `@kyneta/changefeed`, making it compatible with the standard `Changeset<PeerChange>` envelope.
 
@@ -1423,8 +1495,12 @@ const peers = exchange.peers.current
 // Subscribe to changes
 const unsub = exchange.peers.subscribe((changeset) => {
   for (const change of changeset.changes) {
-    if (change.type === "peer-joined") { /* ... */ }
-    else { /* peer-left */ }
+    switch (change.type) {
+      case "peer-established":       /* new peer */           break
+      case "peer-disconnected": /* lost connection */    break
+      case "peer-reconnected":  /* back online */        break
+      case "peer-departed":     /* gone for good */      break
+    }
   }
 })
 
@@ -1436,15 +1512,22 @@ The feed is created by `Synchronizer.createPeerFeed()`, which calls `createReact
 
 ### TEA Flow
 
-Peer lifecycle notifications flow through the standard TEA pipeline:
+Peer lifecycle notifications flow through the session program's TEA pipeline:
 
 ```
-upgradeChannel()          handleChannelRemoved()
-  → first channel for        → last channel for
-    a new peer                  a departing peer
-  → notify/peer-joined       → notify/peer-left
-          ↓                           ↓
-    #accumulateNotification()
+sess/channel-establish        sess/channel-removed           sess/departure-timer-expired
+  → first channel for           → last channel for             → grace period elapsed
+    a new peer                    a peer (no depart)
+  → notify/peer-established          → notify/peer-disconnected     → notify/peer-departed
+                                  + start-departure-timer
+                                                               sess/message-received (depart)
+sess/channel-establish                                           → notify/peer-departed
+  → new channel for a
+    disconnected peer
+  → notify/peer-reconnected
+    + cancel-departure-timer
+          ↓
+    #accumulateSessionNotification()
       → push PeerChange to #pendingPeerEvents
           ↓
     (at quiescence)
@@ -1454,20 +1537,20 @@ upgradeChannel()          handleChannelRemoved()
       → emit Changeset<PeerChange> via the changefeed
 ```
 
-The `#peerMap` is rebuilt from the model at quiescence rather than maintained incrementally. This ensures the map is always consistent with the model — even if multiple join/leave events occurred within a single dispatch cycle.
+The `#peerMap` is rebuilt from the model at quiescence rather than maintained incrementally. This ensures the map is always consistent with the model — even if multiple lifecycle events occurred within a single dispatch cycle.
 
 ### Relationship to `onDocDismissed`
 
-`onDocDismissed` (§18) and `peer-left` operate at different granularities:
+`onDocDismissed` (§18) and `peer-departed` operate at different granularities:
 
-| | `onDocDismissed` | `peer-left` |
+| | `onDocDismissed` | `peer-departed` |
 |---|---|---|
 | **Scope** | Per-document | Per-exchange |
-| **Trigger** | Peer sends an explicit `dismiss` message for a specific document | All channels for a peer are removed (disconnect, shutdown, etc.) |
-| **Requires peer cooperation** | Yes — the remote peer must send `dismiss` | No — fires on any channel loss |
+| **Trigger** | Peer sends an explicit `dismiss` message for a specific document | `depart` received, or departure timer expired after disconnection |
+| **Requires peer cooperation** | Yes — the remote peer must send `dismiss` | Partially — `depart` is cooperative, but timer-based departure is automatic |
 | **Use case** | React to a peer voluntarily leaving a document's sync graph | Track peer presence for UI, cleanup, etc. |
 
-A peer can `dismiss` a document while remaining connected to the exchange (other documents still syncing). Conversely, a peer can vanish (network failure, crash) without sending any `dismiss` — `peer-left` fires but `onDocDismissed` does not.
+A peer can `dismiss` a document while remaining connected to the exchange (other documents still syncing). Conversely, a peer can vanish (network failure, crash) without sending any `dismiss` — `peer-disconnected` fires immediately, followed by `peer-departed` when the departure timer expires. The intervening window allows the peer to reconnect without document-level disruption.
 
 ### Cast Integration
 
@@ -1475,23 +1558,27 @@ Because `exchange.peers` carries the `[CHANGEFEED]` marker, Cast's automatic cha
 
 ### Reset and Shutdown — Synthetic Emission
 
-Both `exchange.reset()` and `exchange.shutdown()` call `#emitSyntheticPeerLeftEvents()` before wiping the model. This method:
+`exchange.shutdown()` sends a `depart` message on all active channels before tearing down, giving remote peers a clean signal of intentional departure. It then calls `#emitSyntheticPeerDepartedEvents()` before wiping the model.
+
+`exchange.reset()` does not send `depart` (it is a local-only operation). It calls `#emitSyntheticPeerDepartedEvents()` to emit synthetic `peer-departed` for all peers.
+
+`#emitSyntheticPeerDepartedEvents()`:
 
 1. Returns immediately if there are no peers or no emit callback.
-2. Builds a `PeerChange[]` array with `type: "peer-left"` for every peer in `model.peers`.
+2. Builds a `PeerChange[]` array with `type: "peer-departed"` for every peer in `model.peers`.
 3. Clears `#peerMap` to an empty map (consistent with the about-to-be-wiped model).
 4. Emits the full array as a single `Changeset<PeerChange>`.
 
-This guarantees that subscribers always observe a balanced join/leave lifecycle — every `peer-joined` is eventually paired with a `peer-left`, even during teardown. The synthetic events bypass the normal quiescence drain because `reset()` is synchronous and `shutdown()` needs to emit before the model is cleared.
+This guarantees that subscribers always observe a balanced lifecycle — every `peer-established` is eventually paired with a `peer-departed`, even during teardown. The synthetic events bypass the normal quiescence drain because `reset()` is synchronous and `shutdown()` needs to emit before the model is cleared.
 
 ### Multi-Transport Deduplication
 
-A single peer may connect through multiple transports (e.g. both WebSocket and SSE). The model tracks a `channels: Set<ChannelId>` per peer in `model.peers`. The deduplication is straightforward:
+A single peer may connect through multiple transports (e.g. both WebSocket and SSE). The session model tracks a `channels: Set<ChannelId>` per peer in `model.peers`. The deduplication is straightforward:
 
-- **Join:** `upgradeChannel()` adds the channel to the peer's channel set. If `!existingPeer` (this is the first channel), it emits `notify/peer-joined`. Otherwise, the channel is simply added to the existing set — no notification.
-- **Leave:** `handleChannelRemoved()` removes the channel from the set. If `newChannels.size === 0` (last channel gone), it deletes the peer from `model.peers` and emits `notify/peer-left`. Otherwise, only `notify/ready-state-changed` fires for affected docs (the peer lost a transport but is still present).
+- **Join:** The session program adds the channel to the peer's channel set. If this is the first channel for a new peer, it emits `notify/peer-established`. If the peer was in `"disconnected"` status, it emits `notify/peer-reconnected` and cancels the departure timer. Otherwise, the channel is simply added to the existing set — no notification.
+- **Leave:** The session program removes the channel from the set. If `newChannels.size === 0` (last channel gone) and no `depart` was received, the peer transitions to `"disconnected"` and `notify/peer-disconnected` is emitted. Otherwise, only `notify/ready-state-changed` fires for affected docs (the peer lost a transport but is still present).
 
-This means `peer-joined` fires exactly once per peer identity regardless of how many channels connect, and `peer-left` fires only when the peer is truly unreachable.
+This means `peer-established` fires exactly once per peer identity regardless of how many channels connect, and `peer-departed` fires only when the peer is truly gone (either voluntarily via `depart`, or involuntarily after the departure timer expires).
 
 ---
 
@@ -1845,7 +1932,7 @@ The difference: previously, `route: () => true` was the only predicate. Now it's
 
 ### Synchronizer Integration
 
-The `ScopeRegistry` is transparent to the synchronizer layer. The Exchange passes `this.#scopes.route.bind(this.#scopes)` and `this.#scopes.authorize.bind(this.#scopes)` to the Synchronizer constructor. The synchronizer-program's `createSynchronizerUpdate()` closes over these functions and calls them on every message — the handlers don't know or care that the predicate is composed. Dynamic scope registration and disposal are visible through the bound closures without recreating the update function.
+The `ScopeRegistry` is transparent to the synchronizer layer. The Exchange passes `this.#scopes.route.bind(this.#scopes)` and `this.#scopes.authorize.bind(this.#scopes)` to the Synchronizer constructor. The sync program's `createSyncUpdate()` closes over these functions and calls them on every message — the handlers don't know or care that the predicate is composed. Dynamic scope registration and disposal are visible through the bound closures without recreating the update function.
 
 ### Performance
 

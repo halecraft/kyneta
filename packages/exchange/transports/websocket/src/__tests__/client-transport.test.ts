@@ -6,9 +6,8 @@
 //   2. When `headers` are provided, they're passed as `{ headers }` in the
 //      second argument. When absent, the constructor is called with just the URL.
 
+import type { PeerIdentityDetails, TransportContext } from "@kyneta/transport"
 import { describe, expect, it, vi } from "vitest"
-import type { TransportContext } from "@kyneta/transport"
-import type { PeerIdentityDetails } from "@kyneta/transport"
 import { WebsocketClientTransport } from "../client-transport.js"
 import type { WebSocketConstructor, WebSocketLike } from "../types.js"
 
@@ -102,7 +101,7 @@ describe("WebsocketClientTransport — constructor injection", () => {
     const { MockWebSocket, calls } = createMockWebSocketClass()
 
     const transport = new WebsocketClientTransport({
-      url: (peerId) => `ws://localhost:9999/ws/${peerId}`,
+      url: peerId => `ws://localhost:9999/ws/${peerId}`,
       WebSocket: MockWebSocket,
       reconnect: { enabled: false },
     })

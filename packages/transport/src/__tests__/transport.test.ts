@@ -135,7 +135,7 @@ describe("Transport lifecycle", () => {
     const channelId = channels[0]?.channelId
 
     const msg: ChannelMsg = {
-      type: "establish-request",
+      type: "establish",
       identity: testIdentity,
     }
 
@@ -150,7 +150,7 @@ describe("Transport lifecycle", () => {
     await adapter._start()
 
     const msg: ChannelMsg = {
-      type: "establish-request",
+      type: "establish",
       identity: testIdentity,
     }
 

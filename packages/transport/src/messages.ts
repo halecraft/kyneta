@@ -1,13 +1,14 @@
-// messages — substrate-agnostic message types for the exchange protocol.
+// messages — substrate-agnostic message types for the sync protocol.
 //
-// Three core message types form the sync vocabulary:
+// Four sync messages form the document-exchange vocabulary:
 // - `present` — "I have these documents, here are their properties."
 // - `interest` — "I want document X. Here's my version."
 // - `offer` — "Here is state for document X."
+// - `dismiss` — "I'm leaving the sync graph for this document."
 //
-// Plus two establishment messages for channel handshake:
-// - `establish-request` — initiate channel establishment
-// - `establish-response` — acknowledge channel establishment
+// Two lifecycle messages manage channel presence:
+// - `establish` — symmetric handshake; both peers send on connect
+// - `depart` — intentional departure; peer is leaving the channel
 //
 // These are uniform across all merge strategies. The sync algorithm
 // determines *when* and *how* they are sent, not their shape.
@@ -20,27 +21,26 @@ import type {
 import type { DocId, PeerIdentityDetails } from "./types.js"
 
 // ---------------------------------------------------------------------------
-// Establishment messages — channel handshake
+// Lifecycle messages — channel presence
 // ---------------------------------------------------------------------------
 
 /**
- * Initiate channel establishment. Sent by the connecting peer.
+ * Symmetric handshake. Both peers send this upon connecting.
  */
-export type EstablishRequestMsg = {
-  type: "establish-request"
+export type EstablishMsg = {
+  type: "establish"
   identity: PeerIdentityDetails
 }
 
 /**
- * Acknowledge channel establishment. Sent by the receiving peer.
+ * Intentional departure. Sent by a peer that is leaving the channel.
  */
-export type EstablishResponseMsg = {
-  type: "establish-response"
-  identity: PeerIdentityDetails
+export type DepartMsg = {
+  type: "depart"
 }
 
 // ---------------------------------------------------------------------------
-// Exchange messages — the three-message sync vocabulary
+// Sync messages — the four-message document-exchange vocabulary
 // ---------------------------------------------------------------------------
 
 /**
@@ -123,27 +123,27 @@ export type DismissMsg = {
 // Message unions
 // ---------------------------------------------------------------------------
 
-/** Messages valid during the establishment phase. */
-export type EstablishmentMsg = EstablishRequestMsg | EstablishResponseMsg
+/** Lifecycle messages — channel presence management. */
+export type LifecycleMsg = EstablishMsg | DepartMsg
 
-/** Messages valid after establishment is complete. */
-export type ExchangeMsg = PresentMsg | InterestMsg | OfferMsg | DismissMsg
+/** Sync messages — document-exchange vocabulary. */
+export type SyncMsg = PresentMsg | InterestMsg | OfferMsg | DismissMsg
 
 /** All channel messages. */
-export type ChannelMsg = EstablishmentMsg | ExchangeMsg
+export type ChannelMsg = LifecycleMsg | SyncMsg
 
 // ---------------------------------------------------------------------------
 // Type guards
 // ---------------------------------------------------------------------------
 
-/** Type predicate for establishment-phase messages. */
-export function isEstablishmentMsg(msg: ChannelMsg): msg is EstablishmentMsg {
-  return msg.type === "establish-request" || msg.type === "establish-response"
+/** Type predicate for lifecycle messages. */
+export function isLifecycleMsg(msg: ChannelMsg): msg is LifecycleMsg {
+  return msg.type === "establish" || msg.type === "depart"
 }
 
-/** Type predicate for post-establishment exchange messages. */
-export function isExchangeMsg(msg: ChannelMsg): msg is ExchangeMsg {
-  return !isEstablishmentMsg(msg)
+/** Type predicate for sync messages. */
+export function isSyncMsg(msg: ChannelMsg): msg is SyncMsg {
+  return !isLifecycleMsg(msg)
 }
 
 // ---------------------------------------------------------------------------

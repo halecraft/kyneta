@@ -133,7 +133,7 @@ export class WebsocketConnection {
    *
    * This is a transport-level text message that tells the client the
    * server is ready to receive protocol messages. The client creates
-   * its channel and sends establish-request after receiving this.
+   * its channel and sends establish after receiving this.
    */
   sendReady(): void {
     if (this.#socket.readyState !== "open") {

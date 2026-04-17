@@ -298,6 +298,19 @@ export type ExchangeParams = {
    * rule composition, use {@link Exchange.register | exchange.register()}.
    */
   onUnresolvedDoc?: OnUnresolvedDoc
+
+  /**
+   * How long (in ms) a disconnected peer is preserved before being
+   * declared departed. During this window the peer remains in
+   * `exchange.peers()` and emits `peer-disconnected` / `peer-reconnected`
+   * events instead of `peer-departed`.
+   *
+   * - `0` — immediate departure on last channel loss (no grace period).
+   * - `Infinity` — disconnected peers are never auto-departed.
+   *
+   * @default 30_000
+   */
+  departureTimeout?: number
 }
 
 // ---------------------------------------------------------------------------
@@ -392,6 +405,7 @@ export class Exchange {
     schemas = [],
     replicas = DEFAULT_REPLICAS,
     onUnresolvedDoc,
+    departureTimeout,
   }: ExchangeParams = {}) {
     // Resolve peer identity
     const peerId = identity.peerId ?? generatePeerId()
@@ -450,6 +464,7 @@ export class Exchange {
       route: this.#scopes.route.bind(this.#scopes),
       authorize: this.#scopes.authorize.bind(this.#scopes),
       epochBoundary: this.#scopes.epochBoundary.bind(this.#scopes),
+      departureTimeout,
 
       onEnsureDocDismissed: this.#scopes.docDismissed.bind(this.#scopes),
       onEnsureDoc: (

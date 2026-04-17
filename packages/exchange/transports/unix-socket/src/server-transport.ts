@@ -170,9 +170,9 @@ export class UnixSocketServerTransport extends Transport<PeerId> {
     // Start processing messages
     connection.start()
 
-    // No "ready" handshake — the client will send establish-request
+    // No "ready" handshake — the client will send establish
     // directly after connect. Our channel gets established when the
-    // Synchronizer receives and processes that establish-request.
+    // Synchronizer receives and processes that establish message.
   }
 
   /**

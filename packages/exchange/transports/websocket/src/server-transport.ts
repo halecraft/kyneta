@@ -88,12 +88,12 @@ function generatePeerId(): PeerId {
  *
  * The connection handshake follows a two-phase protocol:
  * 1. Server sends text `"ready"` signal (transport-level)
- * 2. Client sends `establish-request` (protocol-level)
- * 3. Server responds with `establish-response` (handled by Synchronizer)
+ * 2. Client sends `establish` (protocol-level)
+ * 3. Server upgrades channel and sends present (handled by Synchronizer)
  *
  * The server does NOT call `establishChannel()` — it waits for the
- * client's establish-request to avoid a race condition where the binary
- * establish-request could arrive before the client has processed "ready".
+ * client's establish to avoid a race condition where the binary
+ * establish could arrive before the client has processed "ready".
  */
 export class WebsocketServerTransport extends Transport<PeerId> {
   #connections = new Map<PeerId, WebsocketConnection>()
@@ -219,11 +219,11 @@ export class WebsocketServerTransport extends Transport<PeerId> {
         connection.sendReady()
 
         // NOTE: We do NOT call establishChannel() here.
-        // The client will send establish-request after receiving "ready".
+        // The client will send establish after receiving "ready".
         // Our channel gets established when the Synchronizer receives
-        // and processes that establish-request.
+        // and processes that establish message.
         //
-        // This prevents a race condition where our binary establish-request
+        // This prevents a race condition where our binary establish
         // could arrive before the client has processed "ready" and created
         // its channel.
       },

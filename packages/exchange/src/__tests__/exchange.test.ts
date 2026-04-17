@@ -15,6 +15,7 @@ import {
 } from "@kyneta/schema"
 import {
   Bridge,
+  BridgeTransport,
   createBridgeTransport,
   type PeerIdentityDetails,
 } from "@kyneta/transport"
@@ -388,7 +389,7 @@ describe("Exchange", () => {
       expect(hasChangefeed(exchange.peers)).toBe(true)
     })
 
-    it("peer-joined fires when a remote peer connects via Bridge", async () => {
+    it("peer-established fires when a remote peer connects via Bridge", async () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
         identity: { peerId: "alice" },
@@ -414,13 +415,13 @@ describe("Exchange", () => {
       expect(bobIdentity?.peerId).toBe("bob")
       expect(bobIdentity?.name).toBe("Bob")
 
-      // Should have received a peer-joined change
+      // Should have received a peer-established change
       expect(changes.length).toBe(1)
-      expect(changes[0].type).toBe("peer-joined")
+      expect(changes[0].type).toBe("peer-established")
       expect(changes[0].peer.peerId).toBe("bob")
     })
 
-    it("peer-left fires when a remote peer disconnects", async () => {
+    it("peer-departed fires when a remote peer disconnects", async () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
         identity: { peerId: "alice" },
@@ -447,9 +448,9 @@ describe("Exchange", () => {
       // Alice should see no peers
       expect(exchange1.peers().size).toBe(0)
 
-      // Should have received a peer-left change
+      // Should have received a peer-departed change
       expect(changes.length).toBe(1)
-      expect(changes[0].type).toBe("peer-left")
+      expect(changes[0].type).toBe("peer-departed")
       expect(changes[0].peer.peerId).toBe("bob")
     })
 
@@ -479,7 +480,7 @@ describe("Exchange", () => {
       expect(peersDuringCallback?.has("bob")).toBe(true)
     })
 
-    it("multi-transport: one peer-joined on first bridge, no second on second bridge", async () => {
+    it("multi-transport: one peer-established on first bridge, no second on second bridge", async () => {
       const bridge1 = new Bridge()
       const bridge2 = new Bridge()
       const exchange1 = createExchange({
@@ -504,14 +505,14 @@ describe("Exchange", () => {
 
       await drain()
 
-      // Only one peer-joined, even though two bridges connect the same peer
+      // Only one peer-established, even though two bridges connect the same peer
       expect(exchange1.peers().size).toBe(1)
-      const joinedChanges = changes.filter(c => c.type === "peer-joined")
+      const joinedChanges = changes.filter(c => c.type === "peer-established")
       expect(joinedChanges.length).toBe(1)
       expect(joinedChanges[0].peer.peerId).toBe("bob")
     })
 
-    it("shutdown emits peer-left for all connected peers", async () => {
+    it("shutdown emits peer-departed for all connected peers", async () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
         identity: { peerId: "alice" },
@@ -530,16 +531,16 @@ describe("Exchange", () => {
         changes.push(...cs.changes)
       })
 
-      // Shutdown alice's own exchange — should emit peer-left for bob
+      // Shutdown alice's own exchange — should emit peer-departed for bob
       await exchange1.shutdown()
 
       expect(changes.length).toBe(1)
-      expect(changes[0].type).toBe("peer-left")
+      expect(changes[0].type).toBe("peer-departed")
       expect(changes[0].peer.peerId).toBe("bob")
       expect(exchange1.peers().size).toBe(0)
     })
 
-    it("reset() emits peer-left for all connected peers", async () => {
+    it("reset() emits peer-departed for all connected peers", async () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
         identity: { peerId: "alice" },
@@ -558,13 +559,285 @@ describe("Exchange", () => {
         changes.push(...cs.changes)
       })
 
-      // Reset is synchronous — should emit peer-left for bob
+      // Reset is synchronous — should emit peer-departed for bob
       exchange1.reset()
 
       expect(changes.length).toBe(1)
-      expect(changes[0].type).toBe("peer-left")
+      expect(changes[0].type).toBe("peer-departed")
       expect(changes[0].peer.peerId).toBe("bob")
       expect(exchange1.peers().size).toBe(0)
+    })
+
+    // -----------------------------------------------------------------------
+    // Involuntary disconnect — transport removed without depart
+    // -----------------------------------------------------------------------
+
+    it("involuntary disconnect: peer-disconnected fires, peer preserved in peers()", async () => {
+      const bridge = new Bridge()
+      const exchange1 = createExchange({
+        identity: { peerId: "alice" },
+        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      })
+      const _exchange2 = createExchange({
+        identity: { peerId: "bob" },
+        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      })
+
+      await drain()
+      expect(exchange1.peers().size).toBe(1)
+
+      const changes: PeerChange[] = []
+      exchange1.peers.subscribe(cs => {
+        changes.push(...cs.changes)
+      })
+
+      // Remove bob's transport — simulates network failure (no depart sent)
+      await _exchange2.removeTransport("bob")
+      await drain()
+
+      // Alice should see peer-disconnected (not peer-departed)
+      expect(changes.length).toBe(1)
+      expect(changes[0].type).toBe("peer-disconnected")
+      expect(changes[0].peer.peerId).toBe("bob")
+
+      // Bob is still in alice's peer map — connection is not presence
+      expect(exchange1.peers().size).toBe(1)
+      expect(exchange1.peers().has("bob")).toBe(true)
+    })
+
+    it("involuntary disconnect then shutdown: peer-departed fires", async () => {
+      const bridge = new Bridge()
+      const exchange1 = createExchange({
+        identity: { peerId: "alice" },
+        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      })
+      const exchange2 = createExchange({
+        identity: { peerId: "bob" },
+        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      })
+
+      await drain()
+
+      // Involuntary disconnect — remove bob's transport (no depart)
+      await exchange2.removeTransport("bob")
+      await drain()
+
+      const changes: PeerChange[] = []
+      exchange1.peers.subscribe(cs => {
+        changes.push(...cs.changes)
+      })
+
+      // Alice shuts down — should emit peer-departed for the disconnected bob
+      await exchange1.shutdown()
+
+      const departed = changes.filter(c => c.type === "peer-departed")
+      expect(departed.length).toBe(1)
+      expect(departed[0].peer.peerId).toBe("bob")
+      expect(exchange1.peers().size).toBe(0)
+    })
+
+    it("reconnection after involuntary disconnect: peer-reconnected fires", async () => {
+      const bridge = new Bridge()
+      const exchange1 = createExchange({
+        identity: { peerId: "alice" },
+        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      })
+      const exchange2 = createExchange({
+        identity: { peerId: "bob" },
+        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      })
+
+      await drain()
+      expect(exchange1.peers().size).toBe(1)
+
+      // Involuntary disconnect
+      await exchange2.removeTransport("bob")
+      await drain()
+
+      const changes: PeerChange[] = []
+      exchange1.peers.subscribe(cs => {
+        changes.push(...cs.changes)
+      })
+
+      // Reconnect — add a new transport on the same bridge
+      await exchange2.addTransport(
+        new BridgeTransport({ transportType: "bob", bridge }),
+      )
+      await drain()
+
+      // Alice should see peer-reconnected
+      const reconnected = changes.filter(c => c.type === "peer-reconnected")
+      expect(reconnected.length).toBe(1)
+      expect(reconnected[0].peer.peerId).toBe("bob")
+
+      // Peer still in map (continuously present)
+      expect(exchange1.peers().size).toBe(1)
+      expect(exchange1.peers().has("bob")).toBe(true)
+    })
+
+    it("sync resumes after reconnection", async () => {
+      const bridge = new Bridge()
+      const exchange1 = createExchange({
+        identity: { peerId: "alice" },
+        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      })
+      const exchange2 = createExchange({
+        identity: { peerId: "bob" },
+        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      })
+
+      // Alice creates a doc
+      const doc1 = exchange1.get("doc-1", TestDoc)
+      change(doc1, d => {
+        d.title.set("hello")
+        d.count.set(1)
+      })
+      await drain()
+
+      // Bob should have the doc
+      const doc2 = exchange2.get("doc-1", TestDoc)
+      await sync(doc2).waitForSync()
+      expect(doc2.title()).toBe("hello")
+
+      // Involuntary disconnect
+      await exchange2.removeTransport("bob")
+      await drain()
+
+      // Alice mutates while bob is disconnected
+      change(doc1, d => d.count.set(42))
+      await drain()
+
+      // Reconnect
+      await exchange2.addTransport(
+        new BridgeTransport({ transportType: "bob", bridge }),
+      )
+      await drain()
+
+      // Bob should receive the mutation made during disconnect
+      await sync(doc2).waitForSync()
+      expect(doc2.count()).toBe(42)
+    })
+
+    // -----------------------------------------------------------------------
+    // Departure timeout — configurable grace period
+    // -----------------------------------------------------------------------
+
+    it("departureTimeout: 0 — involuntary disconnect triggers immediate peer-departed", async () => {
+      const bridge = new Bridge()
+      const exchange1 = createExchange({
+        identity: { peerId: "alice" },
+        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+        departureTimeout: 0,
+      })
+      const exchange2 = createExchange({
+        identity: { peerId: "bob" },
+        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      })
+
+      await drain()
+      expect(exchange1.peers().size).toBe(1)
+
+      const changes: PeerChange[] = []
+      exchange1.peers.subscribe(cs => {
+        changes.push(...cs.changes)
+      })
+
+      // Involuntary disconnect — no depart sent
+      await exchange2.removeTransport("bob")
+      await drain()
+
+      // With timeout=0, alice skips peer-disconnected and goes straight to peer-departed
+      expect(changes.length).toBe(1)
+      expect(changes[0].type).toBe("peer-departed")
+      expect(changes[0].peer.peerId).toBe("bob")
+      expect(exchange1.peers().size).toBe(0)
+    })
+
+    it("departure timer fires after grace period", async () => {
+      const bridge = new Bridge()
+      const exchange1 = createExchange({
+        identity: { peerId: "alice" },
+        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+        departureTimeout: 50,
+      })
+      const exchange2 = createExchange({
+        identity: { peerId: "bob" },
+        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      })
+
+      await drain()
+
+      const changes: PeerChange[] = []
+      exchange1.peers.subscribe(cs => {
+        changes.push(...cs.changes)
+      })
+
+      // Involuntary disconnect
+      await exchange2.removeTransport("bob")
+      await drain()
+
+      // Immediately after: peer-disconnected, peer still in map
+      expect(changes).toEqual([
+        {
+          type: "peer-disconnected",
+          peer: expect.objectContaining({ peerId: "bob" }),
+        },
+      ])
+      expect(exchange1.peers().size).toBe(1)
+
+      // Wait for the departure timer to fire
+      await new Promise<void>(r => setTimeout(r, 100))
+      await drain()
+
+      // Now peer-departed should have fired
+      const departed = changes.filter(c => c.type === "peer-departed")
+      expect(departed.length).toBe(1)
+      expect(departed[0].peer.peerId).toBe("bob")
+      expect(exchange1.peers().size).toBe(0)
+    })
+
+    it("reconnection before departure timer cancels the timer", async () => {
+      const bridge = new Bridge()
+      const exchange1 = createExchange({
+        identity: { peerId: "alice" },
+        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+        departureTimeout: 50,
+      })
+      const exchange2 = createExchange({
+        identity: { peerId: "bob" },
+        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      })
+
+      await drain()
+
+      const changes: PeerChange[] = []
+      exchange1.peers.subscribe(cs => {
+        changes.push(...cs.changes)
+      })
+
+      // Involuntary disconnect
+      await exchange2.removeTransport("bob")
+      await drain()
+
+      expect(changes.at(-1)?.type).toBe("peer-disconnected")
+
+      // Reconnect before the 50ms timer fires
+      await exchange2.addTransport(
+        new BridgeTransport({ transportType: "bob", bridge }),
+      )
+      await drain()
+
+      expect(changes.at(-1)?.type).toBe("peer-reconnected")
+
+      // Wait past the original departure timeout
+      await new Promise<void>(r => setTimeout(r, 100))
+      await drain()
+
+      // No peer-departed should have fired — timer was cancelled
+      const departed = changes.filter(c => c.type === "peer-departed")
+      expect(departed.length).toBe(0)
+      expect(exchange1.peers().size).toBe(1)
+      expect(exchange1.peers().has("bob")).toBe(true)
     })
   })
 

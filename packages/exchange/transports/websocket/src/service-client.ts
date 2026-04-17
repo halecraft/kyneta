@@ -7,8 +7,8 @@
 
 import type { TransportFactory } from "@kyneta/transport"
 import {
-  WebsocketClientTransport,
   type WebsocketClientOptions,
+  WebsocketClientTransport,
 } from "./client-transport.js"
 
 /**

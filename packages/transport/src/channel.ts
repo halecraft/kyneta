@@ -10,7 +10,7 @@
 // ConnectedChannel: registered with the synchronizer, has a channelId.
 // EstablishedChannel: completed the establish handshake, knows the remote peer.
 
-import type { ChannelMsg, EstablishmentMsg, ExchangeMsg } from "./messages.js"
+import type { ChannelMsg, LifecycleMsg, SyncMsg } from "./messages.js"
 import type { ChannelId, PeerId, TransportType } from "./types.js"
 
 export type { ChannelId } from "./types.js"
@@ -49,7 +49,7 @@ export type GeneratedChannel = ChannelMeta & ChannelActions
  * A `ConnectedChannel` is registered with the synchronizer and can
  * send/receive messages. It has a channelId and an onReceive handler.
  *
- * Only establishment messages can be sent before the channel is established.
+ * Only lifecycle messages can be sent before the channel is established.
  */
 export type ConnectedChannel = GeneratedChannel & {
   type: "connected"
@@ -62,16 +62,16 @@ export type ConnectedChannel = GeneratedChannel & {
   onReceive: (msg: ChannelMsg) => void
 
   /**
-   * Type-safe send for establishment phase messages.
+   * Type-safe send for lifecycle messages.
    */
-  send: (msg: EstablishmentMsg) => void
+  send: (msg: LifecycleMsg) => void
 }
 
 /**
  * An `EstablishedChannel` has completed the establish handshake and
  * knows which peer it's connected to.
  *
- * Only exchange messages (present, interest, offer, dismiss) can be sent
+ * Only sync messages (present, interest, offer, dismiss) can be sent
  * after establishment.
  */
 export type EstablishedChannel = GeneratedChannel & {
@@ -85,9 +85,9 @@ export type EstablishedChannel = GeneratedChannel & {
   onReceive: (msg: ChannelMsg) => void
 
   /**
-   * Type-safe send for established channel messages.
+   * Type-safe send for sync messages.
    */
-  send: (msg: ExchangeMsg) => void
+  send: (msg: SyncMsg) => void
 }
 
 /**

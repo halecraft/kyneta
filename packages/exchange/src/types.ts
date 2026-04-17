@@ -62,16 +62,24 @@ export type PeerState = {
 // ---------------------------------------------------------------------------
 
 /**
- * A change in the peer lifecycle — a peer joining or leaving the
- * sync graph. Delivered through `exchange.peers.subscribe()` as
- * part of a `Changeset<PeerChange>`.
+ * A change in the peer lifecycle — delivered through
+ * `exchange.peers.subscribe()` as part of a `Changeset<PeerChange>`.
  *
- * - `peer-joined`: a remote peer's first channel completed the
+ * - `peer-established`: a remote peer's first channel completed the
  *   establish handshake.
- * - `peer-left`: a remote peer's last channel was removed (graceful
- *   departure, crash, transport stop, or exchange shutdown).
+ * - `peer-disconnected`: all channels for a peer were removed, but the
+ *   peer may reconnect within the departure timeout window.
+ * - `peer-reconnected`: a previously disconnected peer re-established
+ *   a channel before the departure timer expired.
+ * - `peer-departed`: the peer is definitively gone — either a `depart`
+ *   message was received, the departure timer expired, or the exchange
+ *   was shut down / reset.
  */
 export interface PeerChange extends ChangeBase {
-  readonly type: "peer-joined" | "peer-left"
+  readonly type:
+    | "peer-established"
+    | "peer-disconnected"
+    | "peer-reconnected"
+    | "peer-departed"
   readonly peer: PeerIdentityDetails
 }

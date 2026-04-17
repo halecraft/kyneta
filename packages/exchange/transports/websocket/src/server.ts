@@ -50,4 +50,8 @@ export type {
   WebsocketConnectionResult,
 } from "./types.js"
 
-export { READY_STATE, wrapNodeWebsocket, wrapStandardWebsocket } from "./types.js"
+export {
+  READY_STATE,
+  wrapNodeWebsocket,
+  wrapStandardWebsocket,
+} from "./types.js"

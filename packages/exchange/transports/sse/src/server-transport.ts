@@ -75,11 +75,11 @@ function generatePeerId(): PeerId {
  * The connection handshake:
  * 1. Client opens EventSource (GET /events)
  * 2. Server calls `registerConnection(peerId)` → creates channel
- * 3. Client's EventSource.onopen fires → client sends establish-request (POST)
- * 4. Server receives establish-request → Synchronizer responds with establish-response (SSE)
+ * 3. Client's EventSource.onopen fires → client sends establish (POST)
+ * 4. Server receives establish → Synchronizer upgrades channel and sends present (SSE)
  *
  * The server does NOT call `establishChannel()` — it waits for the client's
- * establish-request, which arrives via POST after the EventSource is open.
+ * establish message, which arrives via POST after the EventSource is open.
  */
 export class SseServerTransport extends Transport<PeerId> {
   #connections = new Map<PeerId, SseConnection>()

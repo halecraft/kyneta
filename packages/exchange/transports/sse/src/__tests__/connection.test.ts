@@ -50,7 +50,7 @@ const presentMsg: ChannelMsg = {
 }
 
 const establishMsg: ChannelMsg = {
-  type: "establish-request",
+  type: "establish",
   identity: { peerId: "peer-1", name: "Peer 1", type: "user" },
 }
 
@@ -80,7 +80,7 @@ describe("SseConnection — send", () => {
     expect(decoded[0]).toEqual(presentMsg)
   })
 
-  it("round-trips establish-request with identity", () => {
+  it("round-trips establish with identity", () => {
     const conn = createConnection()
     const sent: string[] = []
     conn.setSendFunction(textFrame => sent.push(textFrame))

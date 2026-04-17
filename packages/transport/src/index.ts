@@ -22,17 +22,17 @@ export type {
 export type {
   AddressedEnvelope,
   ChannelMsg,
+  DepartMsg,
   DismissMsg,
-  EstablishmentMsg,
-  EstablishRequestMsg,
-  EstablishResponseMsg,
-  ExchangeMsg,
+  EstablishMsg,
   InterestMsg,
+  LifecycleMsg,
   OfferMsg,
   PresentMsg,
   ReturnEnvelope,
+  SyncMsg,
 } from "./messages.js"
-export { isEstablishmentMsg, isExchangeMsg } from "./messages.js"
+export { isLifecycleMsg, isSyncMsg } from "./messages.js"
 
 // ---------------------------------------------------------------------------
 // Channel types and lifecycle

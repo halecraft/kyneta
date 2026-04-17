@@ -37,13 +37,13 @@ export type {
   DisconnectReason,
   Socket,
   SocketReadyState,
-  WebsocketClientState,
-  WebsocketClientStateTransition,
   TransitionListener,
   WebSocketCloseEvent,
   WebSocketConstructor,
   WebSocketLike,
   WebSocketMessageEvent,
+  WebsocketClientState,
+  WebsocketClientStateTransition,
 } from "./types.js"
 
 export { READY_STATE } from "./types.js"

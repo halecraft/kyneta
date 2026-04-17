@@ -158,9 +158,9 @@ describe("Binary frame — complete", () => {
     expect(decoded[0]).toEqual(msg)
   })
 
-  it("round-trips establish-request", () => {
+  it("round-trips establish", () => {
     const msg: ChannelMsg = {
-      type: "establish-request",
+      type: "establish",
       identity: { peerId: "peer-1", name: "Alice", type: "user" },
     }
     const encoded = encodeComplete(cborCodec, msg)
@@ -171,17 +171,16 @@ describe("Binary frame — complete", () => {
     expect(decoded[0]).toEqual(msg)
   })
 
-  it("round-trips establish-response", () => {
+  it("round-trips depart", () => {
     const msg: ChannelMsg = {
-      type: "establish-response",
-      identity: { peerId: "peer-2", type: "service" },
+      type: "depart",
     }
     const encoded = encodeComplete(cborCodec, msg)
     const frame = decodeBinaryFrame(encoded)
     const decoded = cborCodec.decode(frame.content.payload)
 
     expect(decoded).toHaveLength(1)
-    expect(decoded[0]?.type).toBe("establish-response")
+    expect(decoded[0]?.type).toBe("depart")
   })
 })
 
@@ -216,7 +215,7 @@ describe("Binary frame — batch (via complete frame)", () => {
   it("round-trips a batch of mixed messages", () => {
     const msgs: ChannelMsg[] = [
       {
-        type: "establish-request",
+        type: "establish",
         identity: { peerId: "p1", name: "One", type: "user" },
       },
       {
@@ -256,7 +255,7 @@ describe("Binary frame — batch (via complete frame)", () => {
     const decoded = cborCodec.decode(frame.content.payload)
 
     expect(decoded).toHaveLength(4)
-    expect(decoded[0]?.type).toBe("establish-request")
+    expect(decoded[0]?.type).toBe("establish")
     expect(decoded[1]?.type).toBe("present")
     expect(decoded[2]?.type).toBe("interest")
     expect(decoded[3]?.type).toBe("offer")

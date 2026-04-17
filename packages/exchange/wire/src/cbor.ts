@@ -11,8 +11,7 @@
 import type {
   ChannelMsg,
   DismissMsg,
-  EstablishRequestMsg,
-  EstablishResponseMsg,
+  EstablishMsg,
   InterestMsg,
   OfferMsg,
   PresentMsg,
@@ -27,6 +26,7 @@ import {
   StringToMergeStrategyWire,
   StringToPayloadEncoding,
   StringToPayloadKind,
+  type WireDepartMsg,
   type WireDismissMsg,
   type WireEstablishMsg,
   type WireInterestMsg,
@@ -105,21 +105,18 @@ function mapToObject(value: CBORType): unknown {
  */
 function toWireFormat(msg: ChannelMsg): WireMessage {
   switch (msg.type) {
-    case "establish-request":
+    case "establish":
       return {
-        t: MessageType.EstablishRequest,
+        t: MessageType.Establish,
         id: msg.identity.peerId,
         n: msg.identity.name,
         y: msg.identity.type,
       } satisfies WireEstablishMsg
 
-    case "establish-response":
+    case "depart":
       return {
-        t: MessageType.EstablishResponse,
-        id: msg.identity.peerId,
-        n: msg.identity.name,
-        y: msg.identity.type,
-      } satisfies WireEstablishMsg
+        t: MessageType.Depart,
+      } satisfies WireDepartMsg
 
     case "present":
       return {
@@ -186,25 +183,18 @@ function toWireFormat(msg: ChannelMsg): WireMessage {
  */
 function fromWireFormat(wire: WireMessage): ChannelMsg {
   switch (wire.t) {
-    case MessageType.EstablishRequest:
+    case MessageType.Establish:
       return {
-        type: "establish-request",
+        type: "establish",
         identity: {
           peerId: wire.id,
           name: wire.n,
           type: wire.y,
         },
-      } satisfies EstablishRequestMsg
+      } satisfies EstablishMsg
 
-    case MessageType.EstablishResponse:
-      return {
-        type: "establish-response",
-        identity: {
-          peerId: wire.id,
-          name: wire.n,
-          type: wire.y,
-        },
-      } satisfies EstablishResponseMsg
+    case MessageType.Depart:
+      return { type: "depart" }
 
     case MessageType.Present: {
       const presentWire = wire as WirePresentMsg

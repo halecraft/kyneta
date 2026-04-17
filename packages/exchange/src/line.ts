@@ -265,7 +265,7 @@ export class Line<SendMsg, RecvMsg> {
       exchange.peers as CallableChangefeed<any, PeerChange>
     ).subscribe((cs: any) => {
       for (const c of cs.changes) {
-        if (c.type === "peer-left" && c.peer.peerId === remotePeerId) {
+        if (c.type === "peer-departed" && c.peer.peerId === remotePeerId) {
           this.close()
           return
         }

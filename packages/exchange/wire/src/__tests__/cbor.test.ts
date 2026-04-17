@@ -1,4 +1,4 @@
-// CBOR codec tests — round-trip all 6 message types.
+// CBOR codec tests — round-trip all message types.
 //
 // Verifies that every ChannelMsg variant survives encode → decode
 // through the CBOR codec, including OfferMsg with both "json" and
@@ -6,9 +6,9 @@
 
 import type {
   ChannelMsg,
+  DepartMsg,
   DismissMsg,
-  EstablishRequestMsg,
-  EstablishResponseMsg,
+  EstablishMsg,
   InterestMsg,
   OfferMsg,
   PresentMsg,
@@ -33,13 +33,13 @@ function roundTrip(msg: ChannelMsg): ChannelMsg {
 }
 
 // ---------------------------------------------------------------------------
-// Establishment messages
+// Lifecycle messages
 // ---------------------------------------------------------------------------
 
-describe("CBOR codec — establishment messages", () => {
-  it("round-trips establish-request with full identity", () => {
-    const msg: EstablishRequestMsg = {
-      type: "establish-request",
+describe("CBOR codec — lifecycle messages", () => {
+  it("round-trips establish with full identity", () => {
+    const msg: EstablishMsg = {
+      type: "establish",
       identity: {
         peerId: "peer-alice-123",
         name: "Alice",
@@ -50,26 +50,26 @@ describe("CBOR codec — establishment messages", () => {
     expect(decoded).toEqual(msg)
   })
 
-  it("round-trips establish-request without optional name", () => {
-    const msg: EstablishRequestMsg = {
-      type: "establish-request",
+  it("round-trips establish without optional name", () => {
+    const msg: EstablishMsg = {
+      type: "establish",
       identity: {
         peerId: "bot-42",
         type: "bot",
       },
     }
     const decoded = roundTrip(msg)
-    expect(decoded.type).toBe("establish-request")
-    const identity = (decoded as EstablishRequestMsg).identity
+    expect(decoded.type).toBe("establish")
+    const identity = (decoded as EstablishMsg).identity
     expect(identity.peerId).toBe("bot-42")
     expect(identity.type).toBe("bot")
     // name should be absent (undefined), not null or empty string
     expect(identity.name).toBeUndefined()
   })
 
-  it("round-trips establish-response", () => {
-    const msg: EstablishResponseMsg = {
-      type: "establish-response",
+  it("round-trips establish with service identity", () => {
+    const msg: EstablishMsg = {
+      type: "establish",
       identity: {
         peerId: "service-backend",
         name: "Backend Service",
@@ -79,10 +79,18 @@ describe("CBOR codec — establishment messages", () => {
     const decoded = roundTrip(msg)
     expect(decoded).toEqual(msg)
   })
+
+  it("round-trips depart", () => {
+    const msg: DepartMsg = {
+      type: "depart",
+    }
+    const decoded = roundTrip(msg)
+    expect(decoded).toEqual(msg)
+  })
 })
 
 // ---------------------------------------------------------------------------
-// Exchange messages
+// Sync messages
 // ---------------------------------------------------------------------------
 
 describe("CBOR codec — present", () => {
@@ -263,7 +271,7 @@ describe("CBOR codec — batch", () => {
   it("round-trips a batch of mixed message types", () => {
     const msgs: ChannelMsg[] = [
       {
-        type: "establish-request",
+        type: "establish",
         identity: { peerId: "p1", name: "Peer One", type: "user" },
       },
       {
@@ -304,18 +312,22 @@ describe("CBOR codec — batch", () => {
         type: "dismiss",
         docId: "d1",
       },
+      {
+        type: "depart",
+      },
     ]
 
     const encoded = cborCodec.encode(msgs)
     expect(encoded).toBeInstanceOf(Uint8Array)
 
     const decoded = cborCodec.decode(encoded)
-    expect(decoded).toHaveLength(5)
-    expect(decoded[0]?.type).toBe("establish-request")
+    expect(decoded).toHaveLength(6)
+    expect(decoded[0]?.type).toBe("establish")
     expect(decoded[1]?.type).toBe("present")
     expect(decoded[2]?.type).toBe("interest")
     expect(decoded[3]?.type).toBe("offer")
     expect(decoded[4]?.type).toBe("dismiss")
+    expect(decoded[5]?.type).toBe("depart")
 
     // Verify deep equality
     expect(decoded[0]).toEqual(msgs[0])
@@ -424,9 +436,9 @@ describe("CBOR codec — multi-byte UTF-8", () => {
     expect(decoded).toEqual(msg)
   })
 
-  it("round-trips establish-request with non-ASCII peer name", () => {
-    const msg: EstablishRequestMsg = {
-      type: "establish-request",
+  it("round-trips establish with non-ASCII peer name", () => {
+    const msg: EstablishMsg = {
+      type: "establish",
       identity: {
         peerId: "peer-jp-1",
         name: "日本語ユーザー",
@@ -440,7 +452,7 @@ describe("CBOR codec — multi-byte UTF-8", () => {
   it("round-trips batch containing messages with non-ASCII fields", () => {
     const msgs: ChannelMsg[] = [
       {
-        type: "establish-request",
+        type: "establish",
         identity: { peerId: "p1", name: "André", type: "user" },
       },
       {

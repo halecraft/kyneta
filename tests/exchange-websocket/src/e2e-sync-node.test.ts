@@ -9,17 +9,17 @@
 
 import http from "node:http"
 import { Exchange } from "@kyneta/exchange"
-import { json, Schema, change } from "@kyneta/schema"
+import { change, json, Schema } from "@kyneta/schema"
 import {
-  WebsocketClientTransport,
   type WebSocketConstructor,
+  WebsocketClientTransport,
 } from "@kyneta/websocket-transport/browser"
 import {
   WebsocketServerTransport,
   wrapNodeWebsocket,
 } from "@kyneta/websocket-transport/server"
-import { WebSocketServer, WebSocket } from "ws"
 import { afterEach, describe, expect, it } from "vitest"
+import { WebSocket, WebSocketServer } from "ws"
 
 // ---------------------------------------------------------------------------
 // Test infrastructure
@@ -39,7 +39,7 @@ function createNodeTestServer(
   const httpServer = http.createServer()
   const wss = new WebSocketServer({ noServer: true })
 
-  wss.on("connection", (ws) => {
+  wss.on("connection", ws => {
     const { start } = serverTransport.handleConnection({
       socket: wrapNodeWebsocket(ws),
     })
@@ -47,7 +47,7 @@ function createNodeTestServer(
   })
 
   httpServer.on("upgrade", (req, socket, head) => {
-    wss.handleUpgrade(req, socket, head, (ws) => {
+    wss.handleUpgrade(req, socket, head, ws => {
       wss.emit("connection", ws, req)
     })
   })
@@ -73,8 +73,8 @@ function createNodeTestServer(
  */
 async function drain(rounds = 40): Promise<void> {
   for (let i = 0; i < rounds; i++) {
-    await new Promise<void>((r) => queueMicrotask(r))
-    await new Promise<void>((r) => setTimeout(r, 2))
+    await new Promise<void>(r => queueMicrotask(r))
+    await new Promise<void>(r => setTimeout(r, 2))
   }
 }
 

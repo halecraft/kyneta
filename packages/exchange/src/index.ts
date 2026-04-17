@@ -55,17 +55,17 @@ export { TimestampVersion } from "@kyneta/schema"
 export type {
   AddressedEnvelope,
   ChannelMsg,
+  DepartMsg,
   DismissMsg,
-  EstablishmentMsg,
-  EstablishRequestMsg,
-  EstablishResponseMsg,
-  ExchangeMsg,
+  EstablishMsg,
   InterestMsg,
+  LifecycleMsg,
   OfferMsg,
   PresentMsg,
   ReturnEnvelope,
+  SyncMsg,
 } from "@kyneta/transport"
-export { isEstablishmentMsg, isExchangeMsg } from "@kyneta/transport"
+export { isLifecycleMsg, isSyncMsg } from "@kyneta/transport"
 
 // ---------------------------------------------------------------------------
 // Channel — re-exported from @kyneta/transport
@@ -112,16 +112,34 @@ export {
 } from "@kyneta/transport"
 
 // ---------------------------------------------------------------------------
-// Synchronizer — TEA state machine
+// Session program — peer lifecycle TEA state machine
 // ---------------------------------------------------------------------------
 
 export type {
-  Command,
-  Notification,
-  SynchronizerMessage,
-  SynchronizerModel,
-} from "./synchronizer-program.js"
-export { createSynchronizerUpdate, init } from "./synchronizer-program.js"
+  ChannelEntry,
+  SessionEffect,
+  SessionInput,
+  SessionModel,
+  SessionNotification,
+  SessionPeer,
+  SessionUpdate,
+} from "./session-program.js"
+export { createSessionUpdate, initSession } from "./session-program.js"
+
+// ---------------------------------------------------------------------------
+// Sync program — document convergence TEA state machine
+// ---------------------------------------------------------------------------
+
+export type {
+  DocEntry,
+  SyncEffect,
+  SyncInput,
+  SyncModel,
+  SyncNotification,
+  SyncPeerState,
+  SyncUpdate,
+} from "./sync-program.js"
+export { createSyncUpdate, initSync } from "./sync-program.js"
 
 // ---------------------------------------------------------------------------
 // Synchronizer runtime
