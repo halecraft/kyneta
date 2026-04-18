@@ -50,8 +50,8 @@ import type {
 } from "@kyneta/transport"
 import type { Capabilities } from "./capabilities.js"
 import { createCapabilities, DEFAULT_REPLICAS } from "./capabilities.js"
-import type { DocPolicy } from "./doc-governance.js"
-import { DocGovernance } from "./doc-governance.js"
+import type { Policy } from "./governance.js"
+import { Governance } from "./governance.js"
 import type { Store } from "./store/store.js"
 import { registerSync } from "./sync.js"
 import { type DocRuntime, Synchronizer } from "./synchronizer.js"
@@ -63,99 +63,9 @@ import { generatePeerId, validatePeerId } from "./utils.js"
 // ---------------------------------------------------------------------------
 
 /**
- * Outbound flow control: should this peer participate in the sync graph
- * for this document? Checked at every outbound gate (present, push,
- * relay).
- *
- * @returns `true` to include the peer, `false` to exclude.
- */
-export type RoutePredicate = (
-  docId: DocId,
-  peer: PeerIdentityDetails,
-) => boolean
-
-/**
- * Inbound flow control: should mutations from this peer be accepted
- * for this document? Checked before importing offers.
- *
- * @returns `true` to accept, `false` to reject silently.
- */
-export type AuthorizePredicate = (
-  docId: DocId,
-  peer: PeerIdentityDetails,
-) => boolean
-
-/**
  * The four possible dispositions when classifying a discovered document.
  */
 export type Disposition = Interpret | Replicate | Defer | Reject
-
-/**
- * Callback invoked when a peer announces a document the local exchange
- * doesn't have. Return a disposition to determine how the document
- * participates in the sync graph:
- *
- * - `Interpret(bound)` — full interpretation with schema, ref, changefeed.
- * - `Replicate(replicaFactory, strategy)` — headless replication (relay, storage).
- * - `Defer()` — skip for now, re-evaluate later.
- * - `Reject()` — explicitly refuse to track this document.
- *
- * @param docId - The document ID announced by the peer
- * @param peer - Identity of the peer that announced the document
- * @param replicaType - The replica type the remote peer uses for this document
- * @param mergeStrategy - The merge strategy the remote peer uses for this document
- * @param schemaHash - The schema hash the remote peer uses for this document
- * @returns A disposition (`Interpret | Replicate | Defer | Reject`)
- */
-export type OnUnresolvedDoc = (
-  docId: DocId,
-  peer: PeerIdentityDetails,
-  replicaType: ReplicaType,
-  mergeStrategy: MergeStrategy,
-  schemaHash: string,
-) => Disposition
-
-/**
- * Callback invoked when a document is dismissed — either locally via
- * `exchange.dismiss()` or remotely when a peer sends a `dismiss` message.
- * Use `origin` to distinguish.
- *
- * @param docId - The document ID being dismissed
- * @param peer - For local origin, the exchange's own identity. For remote, the dismissing peer.
- * @param origin - `"local"` (developer called `dismiss()`) or `"remote"` (peer sent dismiss)
- */
-export type OnDocDismissed = (
-  docId: DocId,
-  peer: PeerIdentityDetails,
-  origin: DocEventOrigin,
-) => void
-
-/**
- * Provenance of a document lifecycle event (creation or dismissal).
- * - `"local"` — the developer triggered this (e.g. `exchange.get()`, `exchange.dismiss()`).
- * - `"remote"` — a peer triggered this (e.g. `present` announcement, `dismiss` message).
- */
-export type DocEventOrigin = "local" | "remote"
-
-/**
- * Callback invoked when a document is created in the exchange.
- *
- * Fires exactly once per doc when it enters the exchange as `"interpret"`
- * or `"replicate"` — not for deferred or rejected docs. Fires for ALL
- * creation pathways: local `get()`, local `replicate()`, remote auto-resolve,
- * remote `onUnresolvedDoc`, and deferred-then-promoted transitions.
- *
- * @param docId - The document ID
- * @param peer - For local origin, the exchange's own identity. For remote origin, the announcing peer.
- * @param mode - `"interpret"` (full schema) or `"replicate"` (headless)
- * @param origin - `"local"` (developer triggered) or `"remote"` (peer triggered)
- */
-export type OnDocCreated = (
-  docId: DocId,
-  peer: PeerIdentityDetails,
-  mode: "interpret" | "replicate",
-  origin: DocEventOrigin,
-) => void
 
 /**
  * Options for creating an Exchange.
@@ -212,58 +122,6 @@ export type ExchangeParams = {
   stores?: Store[]
 
   /**
-   * Outbound flow control. Determines which peers participate in the
-   * sync graph for each document. Checked at every outbound gate:
-   * initial present, doc-ensure broadcast, relay push, local change push.
-   *
-   * Also gates `onUnresolvedDoc`: if `route` returns `false` for
-   * the announcing peer, the onUnresolvedDoc callback never fires.
-   *
-   * This field is syntactic sugar for the initial policy. For dynamic
-   * rule composition, use {@link Exchange.register | exchange.register()}.
-   *
-   * @default () => true (open routing)
-   */
-  route?: RoutePredicate
-
-  /**
-   * Inbound flow control. Determines whose mutations are accepted.
-   * Checked before importing offers from network peers.
-   *
-   * This field is syntactic sugar for the initial policy. For dynamic
-   * rule composition, use {@link Exchange.register | exchange.register()}.
-   *
-   * @default () => true (accept all)
-   */
-  authorize?: AuthorizePredicate
-
-  /**
-   * Called when a document is dismissed. Fires for both local
-   * `exchange.dismiss()` calls (`origin: "local"`) and remote peer
-   * dismiss messages (`origin: "remote"`).
-   *
-   * This field is syntactic sugar for the initial policy. For dynamic
-   * rule composition, use {@link Exchange.register | exchange.register()}.
-   *
-   * @default undefined (dismiss events are no-ops)
-   */
-  onDocDismissed?: OnDocDismissed
-
-  /**
-   * Called when a document is created in the exchange.
-   *
-   * Fires for every creation — local `get()`, local `replicate()`,
-   * remote auto-resolve, remote `onUnresolvedDoc`, and deferred
-   * promotions. Use `origin` to distinguish local from remote triggers.
-   *
-   * This field is syntactic sugar for the initial policy. For dynamic
-   * rule composition, use {@link Exchange.register | exchange.register()}.
-   *
-   * @default undefined (no notification)
-   */
-  onDocCreated?: OnDocCreated
-
-  /**
    * Declares document types this Exchange can interpret.
    *
    * Sugar for calling `registerSchema()` at construction time. Each
@@ -285,21 +143,6 @@ export type ExchangeParams = {
   replicas?: readonly BoundReplica[]
 
   /**
-   * Policy gate for docs not auto-resolved by the registries.
-   *
-   * Called when a peer announces a document whose `schemaHash` doesn't
-   * match any registered `BoundSchema`. Return a disposition:
-   * - `Interpret(bound)` — full interpretation (client apps, game servers).
-   * - `Replicate()` — headless replication (relay, storage).
-   * - `Defer()` — track for routing but don't replicate yet.
-   * - `Reject()` — explicitly refuse to track this document.
-   *
-   * This field is syntactic sugar for the initial policy. For dynamic
-   * rule composition, use {@link Exchange.register | exchange.register()}.
-   */
-  onUnresolvedDoc?: OnUnresolvedDoc
-
-  /**
    * How long (in ms) a disconnected peer is preserved before being
    * declared departed. During this window the peer remains in
    * `exchange.peers()` and emits `peer-disconnected` / `peer-reconnected`
@@ -311,15 +154,15 @@ export type ExchangeParams = {
    * @default 30_000
    */
   departureTimeout?: number
-}
+} & Policy
 
 // ---------------------------------------------------------------------------
 // Doc cache entry
 // ---------------------------------------------------------------------------
 
 type DocCacheEntry =
-  | { mode: "interpret"; ref: any; bound: BoundSchema }
-  | { mode: "replicate" }
+  | { mode: "interpret"; ref: any; bound: BoundSchema; suspended?: boolean }
+  | { mode: "replicate"; suspended?: boolean }
   | { mode: "deferred" }
 
 // ---------------------------------------------------------------------------
@@ -372,9 +215,8 @@ function rethrowErrors(errors: unknown[]): void {
 export class Exchange {
   readonly peerId: string
   readonly #peerIdIsExplicit: boolean
-  readonly #identity: PeerIdentityDetails
 
-  readonly #governance: DocGovernance
+  readonly #governance: Governance
   readonly #capabilities: Capabilities
   readonly #synchronizer: Synchronizer
   readonly peers: ReactiveMap<PeerId, PeerIdentityDetails, PeerChange>
@@ -409,14 +251,10 @@ export class Exchange {
     identity = {},
     transports = [],
     stores = [],
-    route,
-    authorize,
-    onDocDismissed,
-    onDocCreated,
     schemas = [],
     replicas = DEFAULT_REPLICAS,
-    onUnresolvedDoc,
     departureTimeout,
+    ...policyFields
   }: ExchangeParams = {}) {
     // Resolve peer identity
     const peerId = identity.peerId ?? generatePeerId()
@@ -431,30 +269,17 @@ export class Exchange {
       name: identity.name,
       type: identity.type ?? "user",
     }
-    this.#identity = fullIdentity
-
-    // ── DocGovernance — must be initialized before the Synchronizer,
+    // ── Governance — must be initialized before the Synchronizer,
     // because the Synchronizer may call onEnsureDoc during
     // _start() if a transport immediately discovers peers.
-    this.#governance = new DocGovernance()
+    this.#governance = new Governance()
 
-    // Register the initial policy from ExchangeParams (syntactic sugar).
-    // Only include fields that were actually provided — omitted fields
-    // let the DocGovernance defaults take effect.
-    const initialPolicy: DocPolicy = {}
-    if (route) initialPolicy.route = route
-    if (authorize) initialPolicy.authorize = authorize
-    if (onUnresolvedDoc) initialPolicy.onUnresolvedDoc = onUnresolvedDoc
-    if (onDocCreated) initialPolicy.onDocCreated = onDocCreated
-    if (onDocDismissed) initialPolicy.onDocDismissed = onDocDismissed
-    if (
-      route ||
-      authorize ||
-      onUnresolvedDoc ||
-      onDocCreated ||
-      onDocDismissed
-    ) {
-      this.#governance.register(initialPolicy)
+    // Register the initial policy from ExchangeParams. Because
+    // ExchangeParams intersects Policy, the spread contains all
+    // Policy fields the caller provided. Register if any gate is set.
+    const { canShare, canAccept, canReset, canConnect, resolve } = policyFields
+    if (canShare || canAccept || canReset || canConnect || resolve) {
+      this.#governance.register(policyFields)
     }
 
     // Build the capabilities registry from declared schemas and replicas.
@@ -466,20 +291,18 @@ export class Exchange {
     })
 
     // Create synchronizer — call each factory to produce fresh adapter instances.
-    // The route and authorize predicates delegate to the live DocGovernance,
+    // The canShare and canAccept predicates delegate to the live Governance,
     // so dynamically registered policies are visible without recreating the
     // synchronizer's update function.
     this.#synchronizer = new Synchronizer({
       identity: fullIdentity,
       transports: transports.map(factory => factory()),
-      route: this.#governance.route.bind(this.#governance),
-      authorize: this.#governance.authorize.bind(this.#governance),
-      epochBoundary: this.#governance.epochBoundary.bind(this.#governance),
+      canShare: this.#governance.canShare.bind(this.#governance),
+      canAccept: this.#governance.canAccept.bind(this.#governance),
+      canConnect: this.#governance.canConnect.bind(this.#governance),
+      canReset: this.#governance.canReset.bind(this.#governance),
       departureTimeout,
 
-      onEnsureDocDismissed: this.#governance.docDismissed.bind(
-        this.#governance,
-      ),
       onEnsureDoc: (
         docId,
         peer,
@@ -494,12 +317,12 @@ export class Exchange {
           mergeStrategy,
         )
         if (resolvedBound) {
-          this.#interpretDoc(docId, resolvedBound, peer, "remote")
+          this.#interpretDoc(docId, resolvedBound)
           return
         }
 
-        // 2. OnUnresolvedDoc callback
-        const result = this.#governance.onUnresolvedDoc(
+        // 2. Resolve callback
+        const result = this.#governance.resolve(
           docId,
           peer,
           replicaType,
@@ -522,7 +345,7 @@ export class Exchange {
 
         switch (result.kind) {
           case "interpret":
-            this.#interpretDoc(docId, result.bound, peer, "remote")
+            this.#interpretDoc(docId, result.bound)
             break
           case "replicate": {
             const boundReplica = this.#capabilities.resolveReplica(
@@ -531,7 +354,7 @@ export class Exchange {
             )
             if (!boundReplica) {
               console.warn(
-                `[exchange] onUnresolvedDoc returned Replicate() for doc "${docId}" but no BoundReplica ` +
+                `[exchange] resolve returned Replicate() for doc "${docId}" but no BoundReplica ` +
                   `is registered for replicaType [${replicaType}] with strategy "${mergeStrategy}". ` +
                   `Add the appropriate BoundReplica to ExchangeParams.replicas.`,
               )
@@ -542,8 +365,6 @@ export class Exchange {
               boundReplica.factory,
               mergeStrategy,
               schemaHash,
-              peer,
-              "remote",
             )
             break
           }
@@ -598,15 +419,9 @@ export class Exchange {
    * registering the schema in the auto-resolve set.
    *
    * This is the single creation path for interpreted docs. Both the
-   * public `get()` and internal `onEnsureDoc` paths delegate
-   * here. `onDocCreated` fires from within — callers never fire it.
+   * public `get()` and internal `onEnsureDoc` paths delegate here.
    */
-  #interpretDoc(
-    docId: DocId,
-    bound: BoundSchema,
-    peer: PeerIdentityDetails,
-    origin: DocEventOrigin,
-  ): any {
+  #interpretDoc(docId: DocId, bound: BoundSchema): any {
     // Ensure semantics: if this doc already exists in interpret mode,
     // return the existing ref. First writer wins.
     // Context: jj:mumrnvlk (stale-batch race in cmd/ensure-doc)
@@ -672,9 +487,6 @@ export class Exchange {
       })
     }
 
-    // Design invariant: onDocCreated fires only from #interpretDoc and #replicateDoc.
-    this.#governance.docCreated(docId, peer, "interpret", origin)
-
     return ref
   }
 
@@ -682,16 +494,13 @@ export class Exchange {
    * Internal document replication — creates a headless replicated doc.
    *
    * This is the single creation path for replicated docs. Both the
-   * public `replicate()` and internal `onEnsureDoc` paths
-   * delegate here. `onDocCreated` fires from within.
+   * public `replicate()` and internal `onEnsureDoc` paths delegate here.
    */
   #replicateDoc(
     docId: DocId,
     replicaFactory: ReplicaFactory<any>,
     strategy: MergeStrategy,
     schemaHash: string,
-    peer: PeerIdentityDetails,
-    origin: DocEventOrigin,
   ): void {
     // Ensure semantics: if this doc already exists in replicate mode,
     // it was created by a sibling command's cascade. First writer wins.
@@ -722,9 +531,6 @@ export class Exchange {
         schemaHash,
       })
     }
-
-    // Design invariant: onDocCreated fires only from #interpretDoc and #replicateDoc.
-    this.#governance.docCreated(docId, peer, "replicate", origin)
   }
 
   /**
@@ -958,6 +764,12 @@ export class Exchange {
     const cached = this.#docCache.get(docId)
 
     if (cached) {
+      if (cached.mode !== "deferred" && cached.suspended) {
+        throw new Error(
+          `Document '${docId}' is suspended. Call exchange.resume('${docId}') to re-enter the sync graph.`,
+        )
+      }
+
       if (cached.mode === "replicate") {
         throw new Error(
           `Document '${docId}' is registered in replicate mode. ` +
@@ -1002,7 +814,7 @@ export class Exchange {
     // no infinite recursion or cache corruption.
     this.registerSchema(bound)
 
-    return this.#interpretDoc(docId, bound, this.#identity, "local") as Ref<S>
+    return this.#interpretDoc(docId, bound) as Ref<S>
   }
 
   /**
@@ -1088,14 +900,7 @@ export class Exchange {
       )
     }
 
-    this.#replicateDoc(
-      docId,
-      replicaFactory,
-      strategy,
-      schemaHash,
-      this.#identity,
-      "local",
-    )
+    this.#replicateDoc(docId, replicaFactory, strategy, schemaHash)
   }
 
   /**
@@ -1210,24 +1015,70 @@ export class Exchange {
   }
 
   /**
-   * Dismiss a document — remove it locally, broadcast `dismiss` to
+   * Destroy a document — remove it locally, broadcast `dismiss` to
    * all peers, and delete from stores.
    *
    * This is the single public API for document removal. For bulk
    * teardown without per-doc notification, use `reset()` or `shutdown()`.
    *
-   * @param docId - The ID of the document to dismiss
+   * @param docId - The ID of the document to destroy
    */
-  dismiss(docId: DocId): void {
+  destroy(docId: DocId): void {
     this.#docCache.delete(docId)
     this.#synchronizer.dismissDocument(docId)
 
     // Delete from all stores
     this.#persistToStore(docId, backend => backend.delete(docId))
+  }
 
-    // Design invariant: docDismissed fires from dismiss() (local) and
-    // the synchronizer callback (remote). Symmetric with docCreated.
-    this.#governance.docDismissed(docId, this.#identity, "local")
+  /**
+   * Suspend a document — leave the sync graph but keep all local state.
+   *
+   * The document remains in `#docCache` and stores, and `exchange.has()`
+   * still returns `true`. The sync model removes the document and
+   * broadcasts a wire `dismiss` message to peers. Call `resume()` to
+   * re-enter the sync graph.
+   *
+   * Cannot suspend deferred docs (they have no sync participation).
+   *
+   * @param docId - The ID of the document to suspend
+   */
+  suspend(docId: DocId): void {
+    const cached = this.#docCache.get(docId)
+    if (!cached) {
+      throw new Error(`Document '${docId}' does not exist.`)
+    }
+    if (cached.mode === "deferred") {
+      throw new Error(`Cannot suspend deferred document '${docId}'.`)
+    }
+    if (cached.suspended) {
+      return // Already suspended — idempotent
+    }
+    cached.suspended = true
+    this.#synchronizer.suspendDocument(docId)
+  }
+
+  /**
+   * Resume a suspended document — re-enter the sync graph.
+   *
+   * The surviving replica's current version is used to re-announce to
+   * peers. Peers receive `present` + `interest` messages and delta-sync
+   * from the suspended version.
+   *
+   * @param docId - The ID of the document to resume
+   */
+  resume(docId: DocId): void {
+    const cached = this.#docCache.get(docId)
+    if (!cached) {
+      throw new Error(`Document '${docId}' does not exist.`)
+    }
+    if (cached.mode === "deferred" || !cached.suspended) {
+      throw new Error(
+        `Document '${docId}' is not suspended. Call suspend() first.`,
+      )
+    }
+    cached.suspended = false
+    this.#synchronizer.resumeDocument(docId)
   }
 
   /**
@@ -1262,7 +1113,7 @@ export class Exchange {
         // Safe to mutate Map during iteration per ES spec.
         // Delete the deferred entry, then #interpretDoc inserts the new one.
         this.#docCache.delete(docId)
-        this.#interpretDoc(docId, bound, this.#identity, "local")
+        this.#interpretDoc(docId, bound)
       }
     }
   }
@@ -1367,18 +1218,18 @@ export class Exchange {
    * Register a doc policy. Returns a dispose function that removes the
    * policy from all compositions.
    *
-   * A DocPolicy bundles predicates and handlers governing a region of
+   * A Policy bundles predicates and handlers governing a region of
    * the document space. Multiple policies compose via three-valued logic:
    * - `false` from any policy → deny (short-circuit)
    * - `true` from at least one policy, no `false` → allow
-   * - all `undefined` → default (open for both route and authorize)
+   * - all `undefined` → default (open for both canShare and canAccept)
    *
-   * Policies may include a `onUnresolvedDoc` handler for policy-gating documents
-   * not auto-resolved by the capabilities registry. Multiple onUnresolvedDoc
+   * Policies may include a `resolve` handler for policy-gating documents
+   * not auto-resolved by the capabilities registry. Multiple resolve
    * handlers are evaluated in registration order — first non-`undefined`
    * disposition wins.
    */
-  register(policy: DocPolicy): () => void {
+  register(policy: Policy): () => void {
     return this.#governance.register(policy)
   }
 

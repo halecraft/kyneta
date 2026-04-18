@@ -20,7 +20,6 @@ import type {
   PeerIdentityDetails,
   SyncMsg,
 } from "@kyneta/transport"
-import type { AuthorizePredicate, RoutePredicate } from "./exchange.js"
 import { collapse, type Transition } from "./program-types.js"
 import type { PeerDocSyncState } from "./types.js"
 
@@ -225,19 +224,19 @@ function stateAdvanced(...docIds: DocId[]): SyncNotification {
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
 /**
- * Filter peer IDs by the route predicate. Peers whose identity cannot
+ * Filter peer IDs by the share predicate. Peers whose identity cannot
  * be resolved are dropped.
  */
-function filterPeersByRoute(
+function filterPeersByShare(
   model: SyncModel,
   peerIds: PeerId[],
   docId: DocId,
-  route: RoutePredicate,
+  canShare: SyncPredicate,
 ): PeerId[] {
   return peerIds.filter(id => {
     const peer = model.peers.get(id)
     if (!peer) return false
-    return route(docId, peer.identity)
+    return canShare(docId, peer.identity)
   })
 }
 
@@ -290,14 +289,14 @@ function buildPush(
   docId: DocId,
   docEntry: DocEntry,
   model: SyncModel,
-  route: RoutePredicate,
+  canShare: SyncPredicate,
   excludePeerId?: PeerId,
 ): SyncEffect | undefined {
   switch (docEntry.mergeStrategy) {
     case "collaborative":
     case "authoritative": {
       const raw = getSyncedPeers(model, docId, excludePeerId)
-      const peerIds = filterPeersByRoute(model, raw, docId, route)
+      const peerIds = filterPeersByShare(model, raw, docId, canShare)
       if (peerIds.length === 0) return undefined
       return {
         type: "send-offers",
@@ -309,7 +308,7 @@ function buildPush(
 
     case "ephemeral": {
       const raw = getAvailablePeers(model, excludePeerId)
-      const peerIds = filterPeersByRoute(model, raw, docId, route)
+      const peerIds = filterPeersByShare(model, raw, docId, canShare)
       if (peerIds.length === 0) return undefined
       return { type: "send-offers", to: peerIds, docId }
     }
@@ -326,10 +325,10 @@ function announceDoc(
   mergeStrategy: MergeStrategy,
   schemaHash: string,
   model: SyncModel,
-  route: RoutePredicate,
+  canShare: SyncPredicate,
 ): { peerIds: PeerId[]; present: SyncEffect | undefined } {
   const allPeers = getAvailablePeers(model)
-  const peerIds = filterPeersByRoute(model, allPeers, docId, route)
+  const peerIds = filterPeersByShare(model, allPeers, docId, canShare)
   if (peerIds.length === 0) return { peerIds, present: undefined }
   const present: SyncEffect = {
     type: "send-to-peers",
@@ -464,33 +463,40 @@ export function initSync(identity: PeerIdentityDetails): SyncModel {
 // FACTORY
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
+type SyncPredicate = (docId: DocId, peer: PeerIdentityDetails) => boolean
+
 type CreateSyncUpdateParams = {
-  route: RoutePredicate
-  authorize: AuthorizePredicate
+  canShare: SyncPredicate
+  canAccept: SyncPredicate
 }
 
 const defaultParams: CreateSyncUpdateParams = {
-  route: () => true,
-  authorize: () => true,
+  canShare: () => true,
+  canAccept: () => true,
 }
 
 /**
  * Creates the sync update function.
  *
  * The returned function is the pure TEA update: (input, model) → [model, effect?, notification?].
- * The `route` and `authorize` predicates control information flow:
- * - `route`: gates all outbound messages (present, push, relay)
- * - `authorize`: gates inbound data import (offers)
+ * The `canShare` and `canAccept` predicates control information flow:
+ * - `canShare`: gates all outbound messages (present, push, relay)
+ * - `canAccept`: gates inbound data import (offers)
  */
 export function createSyncUpdate(
   params: Partial<CreateSyncUpdateParams> = {},
 ): SyncUpdate {
-  const { route, authorize } = { ...defaultParams, ...params }
+  const { canShare, canAccept } = { ...defaultParams, ...params }
 
   return function update(input: SyncInput, model: SyncModel): SyncTransition {
     switch (input.type) {
       case "sync/peer-available":
-        return handlePeerAvailable(input.peerId, input.identity, model, route)
+        return handlePeerAvailable(
+          input.peerId,
+          input.identity,
+          model,
+          canShare,
+        )
       case "sync/peer-unavailable":
         return handlePeerUnavailable(input.peerId, model)
       case "sync/peer-departed":
@@ -500,21 +506,21 @@ export function createSyncUpdate(
           input.from,
           input.message,
           model,
-          route,
-          authorize,
+          canShare,
+          canAccept,
         )
       case "sync/doc-ensure":
-        return handleDocEnsure(input, model, route)
+        return handleDocEnsure(input, model, canShare)
       case "sync/doc-defer":
-        return handleDocDefer(input, model, route)
+        return handleDocDefer(input, model, canShare)
       case "sync/local-doc-change":
-        return handleLocalDocChange(input, model, route)
+        return handleLocalDocChange(input, model, canShare)
       case "sync/doc-delete":
         return handleDocDelete(input, model)
       case "sync/doc-dismiss":
-        return handleDocDismiss(input, model, route)
+        return handleDocDismiss(input, model, canShare)
       case "sync/doc-imported":
-        return handleDocImported(input, model, route)
+        return handleDocImported(input, model, canShare)
     }
   }
 }
@@ -527,16 +533,16 @@ function handleMessageReceived(
   from: PeerId,
   message: SyncMsg,
   model: SyncModel,
-  route: RoutePredicate,
-  authorize: AuthorizePredicate,
+  canShare: SyncPredicate,
+  canAccept: SyncPredicate,
 ): SyncTransition {
   switch (message.type) {
     case "present":
-      return handlePresent(from, message, model, route)
+      return handlePresent(from, message, model, canShare)
     case "interest":
       return handleInterest(from, message, model)
     case "offer":
-      return handleOffer(from, message, model, authorize)
+      return handleOffer(from, message, model, canAccept)
     case "dismiss":
       return handleDismiss(from, message, model)
   }
@@ -555,7 +561,7 @@ function handlePeerAvailable(
   peerId: PeerId,
   identity: PeerIdentityDetails,
   model: SyncModel,
-  route: RoutePredicate,
+  canShare: SyncPredicate,
 ): SyncTransition {
   const peers = new Map(model.peers)
   const existingPeer = peers.get(peerId)
@@ -568,9 +574,9 @@ function handlePeerAvailable(
 
   const updatedModel: SyncModel = { ...model, peers }
 
-  // Filter docs by route — only announce docs this peer is allowed to see
+  // Filter docs by canShare — only announce docs this peer is allowed to see
   const docIds = Array.from(model.documents.keys()).filter(id =>
-    route(id, identity),
+    canShare(id, identity),
   )
 
   const present = buildPresent(docIds, peerId, updatedModel)
@@ -634,7 +640,7 @@ function handleDocEnsure(
     schemaHash: string
   },
   model: SyncModel,
-  route: RoutePredicate,
+  canShare: SyncPredicate,
 ): SyncTransition {
   const existing = model.documents.get(msg.docId)
   if (existing) {
@@ -665,7 +671,7 @@ function handleDocEnsure(
     msg.mergeStrategy,
     msg.schemaHash,
     updatedModel,
-    route,
+    canShare,
   )
   if (peerIds.length === 0) {
     return [updatedModel]
@@ -695,7 +701,7 @@ function handleDocDefer(
     schemaHash: string
   },
   model: SyncModel,
-  route: RoutePredicate,
+  canShare: SyncPredicate,
 ): SyncTransition {
   if (model.documents.has(msg.docId)) return [model]
 
@@ -716,7 +722,7 @@ function handleDocDefer(
     msg.mergeStrategy,
     msg.schemaHash,
     updatedModel,
-    route,
+    canShare,
   )
 
   return [updatedModel, present]
@@ -725,7 +731,7 @@ function handleDocDefer(
 function handleLocalDocChange(
   msg: { type: "sync/local-doc-change"; docId: DocId; version: string },
   model: SyncModel,
-  route: RoutePredicate,
+  canShare: SyncPredicate,
 ): SyncTransition {
   const docEntry = model.documents.get(msg.docId)
   if (!docEntry) return [model]
@@ -735,7 +741,7 @@ function handleLocalDocChange(
   documents.set(msg.docId, { ...docEntry, version: msg.version })
 
   // Push to synced peers based on merge strategy
-  const effect = buildPush(msg.docId, docEntry, model, route)
+  const effect = buildPush(msg.docId, docEntry, model, canShare)
 
   return [{ ...model, documents }, effect, stateAdvanced(msg.docId)]
 }
@@ -752,14 +758,14 @@ function handleDocDelete(
 function handleDocDismiss(
   msg: { type: "sync/doc-dismiss"; docId: DocId },
   model: SyncModel,
-  route: RoutePredicate,
+  canShare: SyncPredicate,
 ): SyncTransition {
   const documents = new Map(model.documents)
   documents.delete(msg.docId)
 
-  // Broadcast dismiss to all available peers (filtered by route)
+  // Broadcast dismiss to all available peers (filtered by canShare)
   const allPeers = getAvailablePeers(model)
-  const peerIds = filterPeersByRoute(model, allPeers, msg.docId, route)
+  const peerIds = filterPeersByShare(model, allPeers, msg.docId, canShare)
 
   const effect: SyncEffect | undefined =
     peerIds.length > 0
@@ -781,7 +787,7 @@ function handleDocImported(
     fromPeerId: PeerId
   },
   model: SyncModel,
-  route: RoutePredicate,
+  canShare: SyncPredicate,
 ): SyncTransition {
   const docEntry = model.documents.get(msg.docId)
   if (!docEntry) return [model]
@@ -789,7 +795,7 @@ function handleDocImported(
   // Relay to other peers (multi-hop propagation).
   // Must read docEntry.version BEFORE updating — this is the "since" version
   // for delta export, so peers receive exactly the imported ops.
-  const effect = buildPush(msg.docId, docEntry, model, route, msg.fromPeerId)
+  const effect = buildPush(msg.docId, docEntry, model, canShare, msg.fromPeerId)
 
   // Update version
   const documents = new Map(model.documents)
@@ -834,7 +840,7 @@ function handlePresent(
     }>
   },
   model: SyncModel,
-  route: RoutePredicate,
+  canShare: SyncPredicate,
 ): SyncTransition {
   const peerState = model.peers.get(from)
   if (!peerState) return [model]
@@ -897,8 +903,8 @@ function handlePresent(
         },
       })
     } else {
-      // Unknown doc — check route before requesting creation
-      if (!route(docId, peerState.identity)) continue
+      // Unknown doc — check canShare before requesting creation
+      if (!canShare(docId, peerState.identity)) continue
       effects.push({
         type: "ensure-doc",
         docId,
@@ -988,7 +994,7 @@ function handleOffer(
     reciprocate?: boolean
   },
   model: SyncModel,
-  authorize: AuthorizePredicate,
+  canAccept: SyncPredicate,
 ): SyncTransition {
   const peerState = model.peers.get(from)
   if (!peerState) return [model]
@@ -999,10 +1005,10 @@ function handleOffer(
 
   const effects: SyncEffect[] = []
 
-  // Check authorize — reject silently if the peer isn't allowed.
+  // Check canAccept — reject silently if the peer isn't allowed.
   // Even when rejected, we still process reciprocation and update peer
   // state so we don't re-request from this peer.
-  const authorized = authorize(message.docId, peerState.identity)
+  const authorized = canAccept(message.docId, peerState.identity)
 
   if (authorized) {
     // Import the payload — the runtime calls replica.merge(payload)

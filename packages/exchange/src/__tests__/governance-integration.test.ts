@@ -1,17 +1,17 @@
 // Integration tests — dynamic policy registration via exchange.register().
 //
-// These tests prove that the DocPolicy system correctly composes routing
-// and authorization rules at runtime, including dynamic registration
+// These tests prove that the Policy system correctly composes sharing
+// and acceptance rules at runtime, including dynamic registration
 // and disposal of policies across Exchange instances connected via
 // BridgeTransport.
 //
-// Backward compatibility (ExchangeParams.route/authorize) is already
+// Backward compatibility (ExchangeParams.canShare/canAccept) is already
 // covered by the 204 pre-existing integration tests — no need to
 // duplicate that coverage here.
 
 import { change, Interpret, json, Reject, Schema } from "@kyneta/schema"
 import { Bridge, createBridgeTransport } from "@kyneta/transport"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
 import { Exchange } from "../exchange.js"
 
 // ---------------------------------------------------------------------------
@@ -66,11 +66,11 @@ const SequentialDoc = json.bind(
 )
 
 // ---------------------------------------------------------------------------
-// Route composition and dispose
+// canShare composition and dispose
 // ---------------------------------------------------------------------------
 
-describe("dynamic policy route", () => {
-  it("blocks routing while registered; disposing lifts the restriction", async () => {
+describe("dynamic policy canShare", () => {
+  it("blocks sharing while registered; disposing lifts the restriction", async () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
@@ -81,20 +81,18 @@ describe("dynamic policy route", () => {
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
-      onUnresolvedDoc: () => Interpret(SequentialDoc),
+      resolve: () => Interpret(SequentialDoc),
     })
 
     // Register a policy that blocks docs starting with "secret-"
     const dispose = exchangeA.register({
-      route: docId =>
+      canShare: docId =>
         (docId as string).startsWith("secret-") ? false : undefined,
     })
 
     // Public doc — should sync
     const openDoc = exchangeA.get("open-doc", SequentialDoc)
-    change(openDoc, (d: any) => {
-      d.title.set("visible")
-    })
+    openDoc.title.set("visible")
 
     // Secret doc — should NOT sync
     exchangeA.get("secret-alpha", SequentialDoc)
@@ -109,7 +107,7 @@ describe("dynamic policy route", () => {
     dispose()
 
     const freedDoc = exchangeA.get("secret-beta", SequentialDoc)
-    change(freedDoc, (d: any) => d.title.set("now visible"))
+    freedDoc.title.set("now visible")
 
     await drain(40)
 
@@ -130,21 +128,21 @@ describe("dynamic policy route", () => {
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
-      onUnresolvedDoc: () => Interpret(SequentialDoc),
+      resolve: () => Interpret(SequentialDoc),
     })
 
     const dispose1 = exchangeA.register({
-      route: docId => (docId === "blocked-by-1" ? false : undefined),
+      canShare: docId => (docId === "blocked-by-1" ? false : undefined),
     })
 
     const dispose2 = exchangeA.register({
-      route: docId => (docId === "blocked-by-2" ? false : undefined),
+      canShare: docId => (docId === "blocked-by-2" ? false : undefined),
     })
 
     exchangeA.get("blocked-by-1", SequentialDoc)
     exchangeA.get("blocked-by-2", SequentialDoc)
     const open = exchangeA.get("open", SequentialDoc)
-    change(open, (d: any) => d.title.set("ok"))
+    open.title.set("ok")
 
     await drain(40)
 
@@ -156,7 +154,7 @@ describe("dynamic policy route", () => {
     dispose1()
 
     const freed = exchangeA.get("was-blocked-by-1", SequentialDoc)
-    change(freed, (d: any) => d.title.set("freed"))
+    freed.title.set("freed")
     exchangeA.get("still-blocked-by-2", SequentialDoc)
 
     await drain(40)
@@ -174,23 +172,23 @@ describe("dynamic policy route", () => {
     const exchangeA = createExchange({
       identity: { peerId: "alice" },
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
-      route: docId => docId !== "params-blocked",
+      canShare: docId => docId !== "params-blocked",
     })
 
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
-      onUnresolvedDoc: () => Interpret(SequentialDoc),
+      resolve: () => Interpret(SequentialDoc),
     })
 
     const dispose = exchangeA.register({
-      route: docId => (docId === "dynamic-blocked" ? false : undefined),
+      canShare: docId => (docId === "dynamic-blocked" ? false : undefined),
     })
 
     exchangeA.get("params-blocked", SequentialDoc)
     exchangeA.get("dynamic-blocked", SequentialDoc)
     const ok = exchangeA.get("allowed", SequentialDoc)
-    change(ok, (d: any) => d.title.set("ok"))
+    ok.title.set("ok")
 
     await drain(40)
 
@@ -202,7 +200,7 @@ describe("dynamic policy route", () => {
     dispose()
 
     const freed = exchangeA.get("dynamic-now-free", SequentialDoc)
-    change(freed, (d: any) => d.title.set("freed"))
+    freed.title.set("freed")
 
     await drain(40)
 
@@ -211,10 +209,10 @@ describe("dynamic policy route", () => {
 })
 
 // ---------------------------------------------------------------------------
-// Authorize composition
+// canAccept composition
 // ---------------------------------------------------------------------------
 
-describe("dynamic policy authorize", () => {
+describe("dynamic policy canAccept", () => {
   it("blocks inbound mutations while registered; disposing re-enables them", async () => {
     const bridge = new Bridge()
 
@@ -230,14 +228,14 @@ describe("dynamic policy authorize", () => {
 
     // Bob blocks all mutations from alice
     const dispose = exchangeB.register({
-      authorize: (_docId, peer) =>
+      canAccept: (_docId, peer) =>
         peer.peerId === "alice" ? false : undefined,
     })
 
     const docA = exchangeA.get("shared", SequentialDoc)
     const docB = exchangeB.get("shared", SequentialDoc)
 
-    change(docA, (d: any) => d.title.set("V1"))
+    docA.title.set("V1")
     await drain(40)
 
     // Bob should NOT have Alice's mutation
@@ -246,7 +244,7 @@ describe("dynamic policy authorize", () => {
     // Dispose — Alice's future mutations should sync
     dispose()
 
-    change(docA, (d: any) => d.title.set("V2"))
+    docA.title.set("V2")
     await drain(40)
 
     expect(docB.title()).toBe("V2")
@@ -254,10 +252,10 @@ describe("dynamic policy authorize", () => {
 })
 
 // ---------------------------------------------------------------------------
-// onUnresolvedDoc via dynamic policy
+// resolve via dynamic policy
 // ---------------------------------------------------------------------------
 
-describe("dynamic policy onUnresolvedDoc", () => {
+describe("dynamic policy resolve", () => {
   it("dynamically registered handler materializes peer-announced docs", async () => {
     const bridge = new Bridge()
 
@@ -271,9 +269,9 @@ describe("dynamic policy onUnresolvedDoc", () => {
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
-    // Register onUnresolvedDoc dynamically via policy
+    // Register resolve dynamically via policy
     const dispose = exchangeB.register({
-      onUnresolvedDoc: docId => {
+      resolve: docId => {
         if (docId === "discovered") return Interpret(SequentialDoc)
         return Reject()
       },
@@ -297,43 +295,6 @@ describe("dynamic policy onUnresolvedDoc", () => {
 })
 
 // ---------------------------------------------------------------------------
-// onDocDismissed via dynamic policy
-// ---------------------------------------------------------------------------
-
-describe("dynamic policy onDocDismissed", () => {
-  it("fires when a peer dismisses a document", async () => {
-    const bridge = new Bridge()
-    const dismissSpy = vi.fn()
-
-    const exchangeA = createExchange({
-      identity: { peerId: "alice" },
-      transports: [createBridgeTransport({ transportType: "alice", bridge })],
-    })
-
-    const exchangeB = createExchange({
-      identity: { peerId: "bob" },
-      transports: [createBridgeTransport({ transportType: "bob", bridge })],
-    })
-
-    exchangeB.register({ onDocDismissed: dismissSpy })
-
-    exchangeA.get("dismiss-doc", SequentialDoc)
-    exchangeB.get("dismiss-doc", SequentialDoc)
-
-    await drain(40)
-
-    exchangeA.dismiss("dismiss-doc")
-    await drain(40)
-
-    expect(dismissSpy).toHaveBeenCalledWith(
-      "dismiss-doc",
-      expect.objectContaining({ peerId: "alice" }),
-      "remote",
-    )
-  })
-})
-
-// ---------------------------------------------------------------------------
 // Named policy replacement (integration-level)
 // ---------------------------------------------------------------------------
 
@@ -349,13 +310,13 @@ describe("named policy replacement", () => {
     const exchangeB = createExchange({
       identity: { peerId: "bob" },
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
-      onUnresolvedDoc: () => Interpret(SequentialDoc),
+      resolve: () => Interpret(SequentialDoc),
     })
 
     // Named policy blocks everything
     exchangeA.register({
       name: "policy",
-      route: () => false,
+      canShare: () => false,
     })
 
     exchangeA.get("doc-v1", SequentialDoc)
@@ -365,11 +326,11 @@ describe("named policy replacement", () => {
     // Replace with permissive policy
     const dispose = exchangeA.register({
       name: "policy",
-      route: () => true,
+      canShare: () => true,
     })
 
     const doc = exchangeA.get("doc-v2", SequentialDoc)
-    change(doc, (d: any) => d.title.set("allowed"))
+    doc.title.set("allowed")
     await drain(40)
 
     expect(exchangeB.has("doc-v2")).toBe(true)
@@ -401,7 +362,7 @@ describe("relay topology", () => {
         createBridgeTransport({ transportType: "hub-a", bridge: bridgeAH }),
         createBridgeTransport({ transportType: "hub-b", bridge: bridgeHB }),
       ],
-      onUnresolvedDoc: () => Interpret(SequentialDoc),
+      resolve: () => Interpret(SequentialDoc),
     })
 
     const exchangeB = createExchange({
@@ -409,19 +370,19 @@ describe("relay topology", () => {
       transports: [
         createBridgeTransport({ transportType: "bob", bridge: bridgeHB }),
       ],
-      onUnresolvedDoc: () => Interpret(SequentialDoc),
+      resolve: () => Interpret(SequentialDoc),
     })
 
     // Hub blocks relay of "private" to bob
     const dispose = exchangeHub.register({
-      route: (docId, peer) => {
+      canShare: (docId, peer) => {
         if (docId === "private" && peer.peerId === "bob") return false
         return undefined
       },
     })
 
     const docA = exchangeA.get("private", SequentialDoc)
-    change(docA, (d: any) => d.title.set("secret"))
+    docA.title.set("secret")
 
     await drain(40)
 
@@ -436,7 +397,7 @@ describe("relay topology", () => {
     dispose()
 
     const docA2 = exchangeA.get("public", SequentialDoc)
-    change(docA2, (d: any) => d.title.set("open"))
+    docA2.title.set("open")
 
     await drain(40)
 

@@ -74,6 +74,7 @@ export type SessionInput =
 
 export type SessionEffect =
   | { type: "send"; to: ChannelId; message: LifecycleMsg }
+  | { type: "reject-channel"; channelId: ChannelId }
   | { type: "start-departure-timer"; peerId: PeerId; delayMs: number }
   | { type: "cancel-departure-timer"; peerId: PeerId }
   | { type: "sync-event"; event: SyncInput }
@@ -328,9 +329,16 @@ function handleEstablishReceived(
   fromChannelId: ChannelId,
   message: { type: "establish"; identity: PeerIdentityDetails },
   model: SessionModel,
+  canConnect?: (peer: PeerIdentityDetails) => boolean,
 ): SessionTransition {
   const entry = model.channels.get(fromChannelId)
   if (!entry) return [model]
+
+  // Gate: reject connection if canConnect returns false.
+  // Check BEFORE echoing establish — do not leak our identity to rejected peers.
+  if (canConnect && !canConnect(message.identity)) {
+    return [model, { type: "reject-channel", channelId: fromChannelId }]
+  }
 
   // Guard: if channel is already fully established, return unchanged
   // (prevents infinite ping-pong)
@@ -487,10 +495,16 @@ function handleMessageReceived(
     message: LifecycleMsg
   },
   model: SessionModel,
+  canConnect?: (peer: PeerIdentityDetails) => boolean,
 ): SessionTransition {
   switch (input.message.type) {
     case "establish":
-      return handleEstablishReceived(input.fromChannelId, input.message, model)
+      return handleEstablishReceived(
+        input.fromChannelId,
+        input.message,
+        model,
+        canConnect,
+      )
     case "depart":
       return handleDepartReceived(input.fromChannelId, model)
   }
@@ -500,7 +514,15 @@ function handleMessageReceived(
 // FACTORY
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
-export function createSessionUpdate(): SessionUpdate {
+type CreateSessionUpdateParams = {
+  canConnect?: (peer: PeerIdentityDetails) => boolean
+}
+
+export function createSessionUpdate(
+  params: CreateSessionUpdateParams = {},
+): SessionUpdate {
+  const { canConnect } = params
+
   return function update(
     input: SessionInput,
     model: SessionModel,
@@ -513,7 +535,7 @@ export function createSessionUpdate(): SessionUpdate {
       case "sess/channel-removed":
         return handleChannelRemoved(input, model)
       case "sess/message-received":
-        return handleMessageReceived(input, model)
+        return handleMessageReceived(input, model, canConnect)
       case "sess/departure-timer-expired":
         return handleDepartureTimerExpired(input, model)
     }

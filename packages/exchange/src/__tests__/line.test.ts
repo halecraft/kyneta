@@ -560,9 +560,9 @@ describe("hub-and-spoke relay", () => {
   //    calls step()/applyChange() on merge, so nested structures don't
   //    crash. Init ops enter the log and advance the version, breaking
   //    the sync deadlock.
-  // 2. Line authorize abstain: the per-line policy now returns `undefined`
+  // 2. Line canAccept abstain: the per-line policy now returns `undefined`
   //    (abstain) for unknown peers instead of `false` (hard veto), so
-  //    relay-forwarded offers are accepted by the exchange-level authorize.
+  //    relay-forwarded offers are accepted by the exchange-level canAccept.
   it("messages flow Alice → Server → Bob via relay", async () => {
     const bridgeAS = new Bridge()
     const bridgeSB = new Bridge()
@@ -582,7 +582,7 @@ describe("hub-and-spoke relay", () => {
         createBridgeTransport({ transportType: "server-a", bridge: bridgeAS }),
         createBridgeTransport({ transportType: "server-b", bridge: bridgeSB }),
       ],
-      onUnresolvedDoc: () => Replicate(),
+      resolve: () => Replicate(),
     })
 
     const exchangeB = createExchange({
@@ -915,7 +915,7 @@ describe("protocol.listen", () => {
     const P = Line.protocol({ topic: "queued", schema: SimpleSchema })
 
     // Server starts listening FIRST — but the client will send multiple
-    // messages before the server's onDocCreated fires. When the Line is
+    // messages before the server's doc-created event fires. When the Line is
     // constructed inside onLine, #processInbox() in the constructor picks
     // up all queued messages synchronously.
     let capturedLine: any = null
@@ -930,7 +930,7 @@ describe("protocol.listen", () => {
     clientLine.send({ value: 2 })
     clientLine.send({ value: 3 })
 
-    // Drain — the outbox doc syncs to the server exchange, onDocCreated
+    // Drain — the outbox doc syncs to the server exchange, doc-created
     // fires, and the Line constructor's #processInbox() runs.
     await drain()
 
@@ -976,7 +976,7 @@ describe("protocol.listen", () => {
         createBridgeTransport({ transportType: "relay-c", bridge: bridgeCR }),
         createBridgeTransport({ transportType: "relay-s", bridge: bridgeRS }),
       ],
-      onUnresolvedDoc: () => Replicate(),
+      resolve: () => Replicate(),
     })
 
     const exchangeServer = createExchange({
@@ -1064,7 +1064,7 @@ describe("protocol.listen", () => {
       capturedLine = line
     })
 
-    // Give time for the deferred→promoted transition to fire onDocCreated
+    // Give time for the deferred→promoted transition to fire doc-created
     await drain()
 
     expect(capturedLine).not.toBeNull()
@@ -1103,7 +1103,7 @@ describe("protocol.listen", () => {
     // exchange must have different schemas. If they share a schema, the
     // capabilities registry (keyed by schemaHash) stores only the last
     // BoundSchema reference, and exchange.get() throws on reference
-    // inequality when the other listener's onDocCreated fires.
+    // inequality when the other listener's doc-created event fires.
     const ChatSchema = Schema.struct({ text: Schema.string() })
     const RpcSchema = Schema.struct({ method: Schema.string() })
 

@@ -2,9 +2,8 @@
 //
 // Verifies the `ReactiveMap<DocId, DocInfo, DocChange>` surface exposed
 // via `exchange.documents`, including snapshot access, subscription events,
-// quiescence batching, reset/shutdown, and two-peer integration.
+// reset/shutdown, and two-peer integration.
 
-import type { Changeset } from "@kyneta/changefeed"
 import { hasChangefeed } from "@kyneta/changefeed"
 import { loro } from "@kyneta/loro-schema"
 import { Defer, json, plainReplicaFactory, Schema } from "@kyneta/schema"
@@ -97,7 +96,10 @@ describe("exchange.documents", () => {
       // The doc feed updates at quiescence — the synchronizer's
       // registerDoc fires during get() which triggers a dispatch cycle.
       expect(exchange.documents.has("doc-1")).toBe(true)
-      expect(exchange.documents.get("doc-1")).toEqual({ mode: "interpret" })
+      expect(exchange.documents.get("doc-1")).toEqual({
+        mode: "interpret",
+        suspended: false,
+      })
     })
 
     it("after replicate(): documents.get() returns { mode: 'replicate' }", () => {
@@ -113,10 +115,13 @@ describe("exchange.documents", () => {
       )
 
       expect(exchange.documents.has("rep-1")).toBe(true)
-      expect(exchange.documents.get("rep-1")).toEqual({ mode: "replicate" })
+      expect(exchange.documents.get("rep-1")).toEqual({
+        mode: "replicate",
+        suspended: false,
+      })
     })
 
-    it("after dismiss(): documents.has() is false", () => {
+    it("after destroy(): documents.has() is false", () => {
       const exchange = createExchange({
         identity: { peerId: "alice" },
       })
@@ -124,7 +129,7 @@ describe("exchange.documents", () => {
       exchange.get("doc-1", TestDoc)
       expect(exchange.documents.has("doc-1")).toBe(true)
 
-      exchange.dismiss("doc-1")
+      exchange.destroy("doc-1")
 
       expect(exchange.documents.has("doc-1")).toBe(false)
     })
@@ -141,7 +146,7 @@ describe("exchange.documents", () => {
 
       expect(exchange.documents.size).toBe(2)
 
-      exchange.dismiss("doc-1")
+      exchange.destroy("doc-1")
 
       expect(exchange.documents.size).toBe(1)
     })
@@ -174,8 +179,14 @@ describe("exchange.documents", () => {
       )
 
       const entries = new Map(exchange.documents)
-      expect(entries.get("doc-1")).toEqual({ mode: "interpret" })
-      expect(entries.get("rep-1")).toEqual({ mode: "replicate" })
+      expect(entries.get("doc-1")).toEqual({
+        mode: "interpret",
+        suspended: false,
+      })
+      expect(entries.get("rep-1")).toEqual({
+        mode: "replicate",
+        suspended: false,
+      })
     })
   })
 
@@ -223,7 +234,7 @@ describe("exchange.documents", () => {
       expect(changes[0].docId).toBe("rep-1")
     })
 
-    it("subscribe receives doc-removed on dismiss", () => {
+    it("subscribe receives doc-removed on destroy", () => {
       const exchange = createExchange({
         identity: { peerId: "alice" },
       })
@@ -235,14 +246,14 @@ describe("exchange.documents", () => {
         changes.push(...cs.changes)
       })
 
-      exchange.dismiss("doc-1")
+      exchange.destroy("doc-1")
 
       expect(changes.length).toBe(1)
       expect(changes[0].type).toBe("doc-removed")
       expect(changes[0].docId).toBe("doc-1")
     })
 
-    it("subscribe receives doc-deferred for deferred docs via onUnresolvedDoc → Defer()", async () => {
+    it("subscribe receives doc-deferred for deferred docs via resolve → Defer()", async () => {
       const bridge = new Bridge()
 
       const exchangeA = createExchange({
@@ -255,7 +266,7 @@ describe("exchange.documents", () => {
       const exchangeB = createExchange({
         identity: { peerId: "bob" },
         transports: [createBridgeTransport({ transportType: "bob", bridge })],
-        onUnresolvedDoc: () => Defer(),
+        resolve: () => Defer(),
       })
 
       exchangeB.documents.subscribe(cs => {
@@ -272,6 +283,7 @@ describe("exchange.documents", () => {
       expect(deferredEvents[0].docId).toBe("deferred-doc")
       expect(exchangeB.documents.get("deferred-doc")).toEqual({
         mode: "deferred",
+        suspended: false,
       })
     })
 
@@ -286,7 +298,7 @@ describe("exchange.documents", () => {
       const exchangeB = createExchange({
         identity: { peerId: "bob" },
         transports: [createBridgeTransport({ transportType: "bob", bridge })],
-        onUnresolvedDoc: () => Defer(),
+        resolve: () => Defer(),
       })
 
       // Alice creates a doc — Bob defers it
@@ -308,6 +320,7 @@ describe("exchange.documents", () => {
       expect(promotedEvents[0].docId).toBe("promote-doc")
       expect(exchangeB.documents.get("promote-doc")).toEqual({
         mode: "interpret",
+        suspended: false,
       })
     })
 
@@ -380,7 +393,7 @@ describe("exchange.documents", () => {
       const exchangeB = createExchange({
         identity: { peerId: "bob" },
         transports: [createBridgeTransport({ transportType: "bob", bridge })],
-        onUnresolvedDoc: () => Defer(),
+        resolve: () => Defer(),
       })
 
       exchangeA.get("deferred-1", TestDoc)
@@ -418,56 +431,6 @@ describe("exchange.documents", () => {
 
       const feedIds = new Set(exchange.documents.keys())
       expect(feedIds).toEqual(docCacheIds)
-    })
-  })
-
-  // -------------------------------------------------------------------------
-  // Quiescence batching
-  // -------------------------------------------------------------------------
-
-  describe("quiescence batching", () => {
-    it("multiple doc creations in one dispatch cycle produce a single changeset", async () => {
-      const bridge = new Bridge()
-
-      const exchangeA = createExchange({
-        identity: { peerId: "alice" },
-        transports: [createBridgeTransport({ transportType: "alice", bridge })],
-        schemas: [TestDoc],
-      })
-
-      const exchangeB = createExchange({
-        identity: { peerId: "bob" },
-        transports: [createBridgeTransport({ transportType: "bob", bridge })],
-        schemas: [TestDoc],
-      })
-
-      await drain()
-
-      const changesets: Changeset<DocChange>[] = []
-      exchangeB.documents.subscribe(cs => {
-        changesets.push(cs)
-      })
-
-      // Alice creates multiple docs — Bob auto-resolves them in a single
-      // dispatch cycle (batched present messages)
-      exchangeA.get("batch-1", TestDoc)
-      exchangeA.get("batch-2", TestDoc)
-      exchangeA.get("batch-3", TestDoc)
-
-      await drain()
-
-      // Bob should have received the doc events, but we verify that
-      // batching occurred — at least one changeset should have multiple changes
-      const totalChanges = changesets.reduce(
-        (sum, cs) => sum + cs.changes.length,
-        0,
-      )
-      expect(totalChanges).toBeGreaterThanOrEqual(3)
-
-      // All three docs should be tracked
-      expect(exchangeB.documents.has("batch-1")).toBe(true)
-      expect(exchangeB.documents.has("batch-2")).toBe(true)
-      expect(exchangeB.documents.has("batch-3")).toBe(true)
     })
   })
 
@@ -542,7 +505,7 @@ describe("exchange.documents", () => {
       const exchangeB = createExchange({
         identity: { peerId: "bob" },
         transports: [createBridgeTransport({ transportType: "bob", bridge })],
-        onUnresolvedDoc: () => Defer(),
+        resolve: () => Defer(),
       })
 
       exchangeA.get("deferred-doc", TestDoc)
@@ -551,6 +514,7 @@ describe("exchange.documents", () => {
       expect(exchangeB.documents.has("deferred-doc")).toBe(true)
       expect(exchangeB.documents.get("deferred-doc")).toEqual({
         mode: "deferred",
+        suspended: false,
       })
 
       const changes: DocChange[] = []
@@ -630,10 +594,11 @@ describe("exchange.documents", () => {
       expect(created.length).toBe(1)
       expect(exchangeB.documents.get("collab-doc")).toEqual({
         mode: "interpret",
+        suspended: false,
       })
     })
 
-    it("local dismiss emits doc-removed on the dismissing peer's feed", async () => {
+    it("local destroy emits doc-removed on the destroying peer's feed", async () => {
       const bridge = new Bridge()
 
       const exchangeA = createExchange({
@@ -647,10 +612,10 @@ describe("exchange.documents", () => {
         schemas: [TestDoc],
       })
 
-      exchangeA.get("dismiss-doc", TestDoc)
+      exchangeA.get("destroy-doc", TestDoc)
       await drain()
 
-      expect(exchangeB.documents.has("dismiss-doc")).toBe(true)
+      expect(exchangeB.documents.has("destroy-doc")).toBe(true)
 
       // Subscribe to Alice's feed — she dismisses locally
       const aliceChanges: DocChange[] = []
@@ -658,54 +623,13 @@ describe("exchange.documents", () => {
         aliceChanges.push(...cs.changes)
       })
 
-      exchangeA.dismiss("dismiss-doc")
+      exchangeA.destroy("destroy-doc")
 
       const removed = aliceChanges.filter(
-        c => c.type === "doc-removed" && c.docId === "dismiss-doc",
+        c => c.type === "doc-removed" && c.docId === "destroy-doc",
       )
       expect(removed.length).toBe(1)
-      expect(exchangeA.documents.has("dismiss-doc")).toBe(false)
-    })
-
-    it("remote dismiss triggers onDocDismissed; manual dismiss emits doc-removed on receiver", async () => {
-      const bridge = new Bridge()
-
-      const exchangeA = createExchange({
-        identity: { peerId: "alice" },
-        transports: [createBridgeTransport({ transportType: "alice", bridge })],
-      })
-
-      // Bob auto-dismisses when he receives a dismiss from Alice
-      const exchangeB = createExchange({
-        identity: { peerId: "bob" },
-        transports: [createBridgeTransport({ transportType: "bob", bridge })],
-        schemas: [TestDoc],
-        onDocDismissed: (docId, _peer, origin) => {
-          if (origin === "remote") {
-            exchangeB.dismiss(docId)
-          }
-        },
-      })
-
-      exchangeA.get("dismiss-doc", TestDoc)
-      await drain(40)
-
-      expect(exchangeB.documents.has("dismiss-doc")).toBe(true)
-
-      const bobChanges: DocChange[] = []
-      exchangeB.documents.subscribe(cs => {
-        bobChanges.push(...cs.changes)
-      })
-
-      // Alice dismisses — Bob's onDocDismissed fires and calls dismiss()
-      exchangeA.dismiss("dismiss-doc")
-      await drain(40)
-
-      const removed = bobChanges.filter(
-        c => c.type === "doc-removed" && c.docId === "dismiss-doc",
-      )
-      expect(removed.length).toBeGreaterThanOrEqual(1)
-      expect(exchangeB.documents.has("dismiss-doc")).toBe(false)
+      expect(exchangeA.documents.has("destroy-doc")).toBe(false)
     })
 
     it("exchange.documents() reflects correct state during subscriber callback", () => {
@@ -722,7 +646,10 @@ describe("exchange.documents", () => {
 
       expect(docsDuringCallback).toBeDefined()
       expect(docsDuringCallback?.has("doc-1")).toBe(true)
-      expect(docsDuringCallback?.get("doc-1")).toEqual({ mode: "interpret" })
+      expect(docsDuringCallback?.get("doc-1")).toEqual({
+        mode: "interpret",
+        suspended: false,
+      })
     })
   })
 

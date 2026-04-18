@@ -1,6 +1,6 @@
 # @kyneta/exchange — Technical Reference
 
-Substrate-agnostic state exchange for `@kyneta/schema`. Provides sync infrastructure for any substrate type through a unified four-message protocol (`present`, `interest`, `offer`, `dismiss`) dispatched by merge strategy.
+Substrate-agnostic state exchange for `@kyneta/schema`. Provides sync infrastructure for any substrate type through a unified four-message protocol (`present`, `interest`, `offer`, `dismiss`) dispatched by merge strategy. Documents support a three-intention lifecycle: `suspend()` (leave sync graph, keep local state), `resume()` (rejoin sync graph), and `destroy()` (permanent removal).
 
 ---
 
@@ -62,7 +62,7 @@ type Notification =
   | { type: "notify/batch"; notifications: Notification[] }
 ```
 
-Four handlers emit `notify/ready-state-changed`: `handleDocImported` (peer synced), `handleInterestForKnownDoc` (peer pending), `handleDismiss` (peer departed), and `handleChannelRemoved` (peer disconnected — all its docs affected). All other handlers return `undefined` for the notification element.
+Four handlers emit `notify/ready-state-changed`: `handleDocImported` (peer synced), `handleInterestForKnownDoc` (peer pending), `handleDismiss` (peer left doc), and `handleChannelRemoved` (peer disconnected — all its docs affected). All other handlers return `undefined` for the notification element.
 
 ### Changefeed ↔ Synchronizer Wiring
 
@@ -171,13 +171,13 @@ type DepartMsg = {
 
 ### `present`
 
-Document presentation — assertion of document ownership with metadata. Sent after channel establishment to announce all known documents, filtered by the `route` predicate (§17). Each entry carries per-document metadata (`replicaType`, `mergeStrategy`, `schemaHash`) so the receiver can validate compatibility before any binary exchange.
+Document presentation — assertion of document ownership with metadata. Sent after channel establishment to announce all known documents, filtered by the `canShare` predicate (§17). Each entry carries per-document metadata (`replicaType`, `mergeStrategy`, `schemaHash`) so the receiver can validate compatibility before any binary exchange.
 
 The `present` metadata (`replicaType`, `mergeStrategy`, `schemaHash`) is validated against the Exchange's capability registries (§26). For known docs, all three fields are validated: `replicaType` compatibility via `replicaTypesCompatible()` (same name + same major version), `schemaHash` equality, and `mergeStrategy` equality (previously unchecked). A mismatch on any field skips the doc with a warning.
 
 When the receiver encounters a known doc and all three checks pass, it sends `interest`.
 
-When the receiver encounters an unknown doc ID, the `route` predicate is checked — if it returns `false` for the announcing peer, the doc is silently dropped. Otherwise, a `cmd/ensure-doc` command is emitted (carrying `schemaHash` through). All unknown docs flow to `onEnsureDoc` regardless of replica type. The Exchange first attempts schema auto-resolution from the `(schemaHash, replicaType, mergeStrategy)` triple (§26). If no schema matches and a `onUnresolvedDoc` callback is configured, it fires with the doc ID, the announcing peer's identity, `replicaType`, `mergeStrategy`, and `schemaHash`. The callback returns a disposition (`Interpret | Replicate | Defer | Reject`). If no `onUnresolvedDoc` callback matches (or none is configured), the Exchange applies a two-tiered default: supported `replicaType` → Defer; unsupported `replicaType` → Reject (silently). See §16 for details.
+When the receiver encounters an unknown doc ID, the `canShare` predicate is checked — if it returns `false` for the announcing peer, the doc is silently dropped. Otherwise, a `cmd/ensure-doc` command is emitted (carrying `schemaHash` through). All unknown docs flow to `onEnsureDoc` regardless of replica type. The Exchange first attempts schema auto-resolution from the `(schemaHash, replicaType, mergeStrategy)` triple (§26). If no schema matches and a `resolve` callback is configured, it fires with the doc ID, the announcing peer's identity, `replicaType`, `mergeStrategy`, and `schemaHash`. The callback returns a disposition (`Interpret | Replicate | Defer | Reject`). If no `resolve` callback matches (or none is configured), the Exchange applies a two-tiered default: supported `replicaType` → Defer; unsupported `replicaType` → Reject (silently). See §16 for details.
 
 ```ts
 type PresentMsg = {
@@ -235,7 +235,7 @@ type DismissMsg = {
 }
 ```
 
-The receiving exchange fires `onDocDismissed` if configured (§18). The handler also cleans up the dismissing peer's sync state (`docSyncStates`, `subscriptions`) for the document.
+The receiving exchange cleans up the dismissing peer's sync state (`docSyncStates`, `subscriptions`) for the document. Applications observe document lifecycle changes via `exchange.documents` (§22.1).
 
 ---
 
@@ -328,7 +328,7 @@ GeneratedChannel → ConnectedChannel → EstablishedChannel
 - **ConnectedChannel**: registered with the synchronizer. Has `channelId`, `onReceive`.
 - **EstablishedChannel**: completed the establish handshake. Has `peerId` of the remote peer.
 
-Incoming messages are discriminated by `isLifecycleMsg()`: `LifecycleMsg` (`establish`, `depart`) routes to the session program; `SyncMsg` (`present`, `interest`, `offer`, `dismiss`) routes to the sync program (see §9.1).
+Incoming messages are discriminated by `isLifecycleMsg()`: `LifecycleMsg` (`establish`, `depart`) routes to the session program; `SyncMsg` (`present`, `interest`, `offer`, `dismiss`) routes to the sync program (see §9.1). Note: the `dismiss` wire message is the transport-level mechanism; the application-level API uses `destroy()` (permanent removal) and `suspend()` (leave sync graph, keep local state).
 
 At establishment time, the session program checks for two identity issues and emits `notify/warning` notifications (not direct `console.warn` — the pure program produces data, the imperative shell handles I/O):
 
@@ -511,11 +511,11 @@ The `Synchronizer` orchestrates two pure TEA programs through a unified serializ
   dispatching = false
 ```
 
-**Two-program orchestration.** The session program handles peer lifecycle (`sess/*` inputs): channel add/remove, establish handshake, departure detection, departure timers. The sync program handles document convergence (`sync/*` inputs): present, interest, offer, dismiss, and per-peer document sync state. Neither program calls the other directly. The shell (Synchronizer) interprets session effects — when the session program emits a `sync-event` effect, the shell enqueues the corresponding `sync/*` input into the shared pending queue, where it will be processed in the same dispatch cycle. This preserves the effect interpretation chain: session → shell → sync → shell → transports.
+**Two-program orchestration.** The session program handles peer lifecycle (`sess/*` inputs): channel add/remove, establish handshake, departure detection, departure timers. The sync program handles document convergence (`sync/*` inputs): present, interest, offer, dismiss, suspend, and per-peer document sync state. Neither program calls the other directly. The shell (Synchronizer) interprets session effects — when the session program emits a `sync-event` effect, the shell enqueues the corresponding `sync/*` input into the shared pending queue, where it will be processed in the same dispatch cycle. This preserves the effect interpretation chain: session → shell → sync → shell → transports.
 
 Effects from the sync program that require network I/O (e.g. `send-to-peer`) are interpreted by the shell, which resolves peer IDs to channels via the session model and sends on the appropriate channel.
 
-**Open vs. closed effects.** Effects fall into two categories. Closed effects (`send`, `send-to-peer`, `send-to-peers`, `start-departure-timer`, `cancel-departure-timer`, `sync-event`) are self-contained — they don't call back into user code. Ensure effects (`ensure-doc`, `ensure-doc-dismissed`) cross the boundary into user code via callbacks that may trigger reentrant dispatch. When the pure program batches multiple ensure effects (e.g. `handlePresent` emitting N `ensure-doc` for N unknown docs), each effect executes sequentially — but the batch was planned against a single model snapshot. Effect₁'s callback may create state that effect₂ will also try to create. The `ensure-*` naming convention communicates the invariant: these effects are idempotent by contract. Callback implementations must check for existing state and return early (first writer wins).
+**Open vs. closed effects.** Effects fall into two categories. Closed effects (`send`, `send-to-peer`, `send-to-peers`, `start-departure-timer`, `cancel-departure-timer`, `sync-event`) are self-contained — they don't call back into user code. Ensure effects (`ensure-doc`) cross the boundary into user code via callbacks that may trigger reentrant dispatch. When the pure program batches multiple ensure effects (e.g. `handlePresent` emitting N `ensure-doc` for N unknown docs), each effect executes sequentially — but the batch was planned against a single model snapshot. Effect₁'s callback may create state that effect₂ will also try to create. The `ensure-*` naming convention communicates the invariant: these effects are idempotent by contract. Callback implementations must check for existing state and return early (first writer wins).
 
 Notifications are accumulated across the entire dispatch cycle into typed sets. At quiescence, four drain methods fire in order:
 
@@ -537,8 +537,8 @@ A peer's transport channel can drop and reconnect without the peer having "left"
 | | Session Program | Sync Program |
 |---|---|---|
 | **Model** | `SessionModel` — channels, peers, departure timers | `SyncModel` — doc entries, peer sync states, subscriptions |
-| **Inputs** | `sess/*` — channel-added, channel-removed, channel-establish, message-received (LifecycleMsg), departure-timer-expired | `sync/*` — doc-ensure, doc-dismiss, message-received (SyncMsg), peer-available, peer-unavailable, peer-departed, local-doc-change |
-| **Effects** | `send` (LifecycleMsg to channel), `start-departure-timer`, `cancel-departure-timer`, `sync-event` (forwarded to sync program) | `send-to-peer` / `send-to-peers` (SyncMsg to peer), `ensure-doc`, `ensure-doc-dismissed`, `import-doc-data` |
+| **Inputs** | `sess/*` — channel-added, channel-removed, channel-establish, message-received (LifecycleMsg), departure-timer-expired | `sync/*` — doc-ensure, doc-destroy, doc-suspend, doc-resume, message-received (SyncMsg), peer-available, peer-unavailable, peer-departed, local-doc-change |
+| **Effects** | `send` (LifecycleMsg to channel), `start-departure-timer`, `cancel-departure-timer`, `sync-event` (forwarded to sync program) | `send-to-peer` / `send-to-peers` (SyncMsg to peer), `ensure-doc`, `import-doc-data` |
 | **Notifications** | `notify/peer-established`, `notify/peer-disconnected`, `notify/peer-reconnected`, `notify/peer-departed`, `notify/warning` | `notify/ready-state-changed`, `notify/state-advanced`, `notify/warning` |
 
 **The interpreter pattern.** Session effects are data — the pure session program never performs I/O. The shell interprets each effect type:
@@ -580,29 +580,29 @@ exchange.getDocSchemaHash(docId: DocId): string | undefined
 
 Returns the `schemaHash` for a document, or `undefined` if the doc is not known. Enables external systems (indexes, admin UIs) to classify documents by schema without holding a reference to the `BoundSchema`.
 
-### `DocEventOrigin`
+### `exchange.destroy(docId)`
 
 ```ts
-type DocEventOrigin = "local" | "remote" | "storage"
+exchange.destroy(docId: DocId): void
 ```
 
-Renamed from `DocCreatedOrigin`. Shared between `OnDocCreated` and `OnDocDismissed` — both callbacks now receive an `origin` parameter indicating how the event was triggered:
+Permanent document removal — the renamed successor to the former `exchange.dismiss()`. Clears the doc from `#docCache`, removes local state, and broadcasts a `dismiss` wire message to all peers. The document is gone; to work with it again, call `exchange.get()`. Emits `doc-destroyed` on `exchange.documents`.
 
-- `"local"` — the local peer called `exchange.get()` or `exchange.dismiss()`.
-- `"remote"` — a remote peer's `present` or `dismiss` message triggered the event.
-- `"storage"` — hydration from a `Store` created the document.
-
-### `OnDocDismissed` with `origin`
+### `exchange.suspend(docId)`
 
 ```ts
-type OnDocDismissed = (docId: DocId, peer: PeerIdentityDetails, origin: DocEventOrigin) => void
+exchange.suspend(docId: DocId): void
 ```
 
-`OnDocDismissed` now receives an `origin` parameter (same `DocEventOrigin` type as `OnDocCreated`). When the local peer calls `exchange.dismiss()`, scopes receive `origin: "local"`. When a remote peer sends a `dismiss` wire message, scopes receive `origin: "remote"`.
+Leaves the sync graph but **keeps local state** (replica, substrate, changefeed subscriptions). Broadcasts a `dismiss` wire message to peers (they see this peer leave the doc's sync graph), but the local `#docCache` entry transitions to `suspended: true`. While suspended, no `present`/`interest`/`offer` messages are sent for this doc. Emits `doc-suspended` on `exchange.documents`.
 
-### `exchange.dismiss()` fires `docDismissed` on local scopes
+### `exchange.resume(docId)`
 
-`exchange.dismiss(docId)` now invokes `docDismissed` on all registered scopes with `origin: "local"` before broadcasting the wire `dismiss` message. Previously, `onDocDismissed` only fired for remote dismissals. This symmetry with `onDocCreated` (which fires for both local and remote origins) lets scopes clean up resources regardless of which peer initiated the dismissal.
+```ts
+exchange.resume(docId: DocId): void
+```
+
+Rejoins the sync graph for a suspended document. Broadcasts `present` and `interest` to established peers (filtered by `canShare`), transitioning the doc back to active sync participation. Emits `doc-resumed` on `exchange.documents`. Throws if the doc is not currently suspended.
 
 ### `exchange.peers` type widened to `ReactiveMap`
 
@@ -622,22 +622,24 @@ See `@kyneta/changefeed`'s `ReactiveMap` for the full interface.
 `exchange.documents` is a `ReactiveMap<DocId, DocInfo, DocChange>` — the document-level counterpart to `exchange.peers`. It provides snapshot access, reactive subscription, and the `[CHANGEFEED]` protocol marker for framework integration (`useValue(exchange.documents)`).
 
 ```ts
-type DocInfo = { mode: "interpret" | "replicate" | "deferred" }
+type DocInfo = { mode: "interpret" | "replicate" | "deferred"; suspended: boolean }
 
 interface DocChange extends ChangeBase {
-  readonly type: "doc-created" | "doc-removed" | "doc-deferred" | "doc-promoted"
+  readonly type: "doc-created" | "doc-destroyed" | "doc-deferred" | "doc-promoted" | "doc-suspended" | "doc-resumed"
   readonly docId: DocId
 }
 ```
 
-Four event types model the document lifecycle:
+Six event types model the document lifecycle:
 
 | Event | Trigger |
 |---|---|
 | `doc-created` | Document registered via `get()` (interpret) or `replicate()` — local or remote auto-resolve |
-| `doc-removed` | Document dismissed (`dismiss()`) or deleted from the sync graph |
+| `doc-destroyed` | Document permanently removed via `destroy()` or deleted from the sync graph |
 | `doc-deferred` | Document tracked in deferred mode (routing only, no local replica) |
 | `doc-promoted` | Deferred document promoted to interpret/replicate (e.g. `get()` on a deferred doc) |
+| `doc-suspended` | Document suspended via `suspend()` — left sync graph, local state retained |
+| `doc-resumed` | Suspended document resumed via `resume()` — rejoined sync graph |
 
 Usage:
 
@@ -645,17 +647,19 @@ Usage:
 // Snapshot access
 const docs = exchange.documents()      // ReadonlyMap<DocId, DocInfo>
 exchange.documents.has("my-doc")       // boolean
-exchange.documents.get("my-doc")       // { mode: "interpret" } | undefined
+exchange.documents.get("my-doc")       // { mode: "interpret", suspended: false } | undefined
 exchange.documents.size                // number
 
 // Reactive subscription
 const unsub = exchange.documents.subscribe((changeset) => {
   for (const change of changeset.changes) {
     switch (change.type) {
-      case "doc-created":  /* new doc */            break
-      case "doc-removed":  /* doc dismissed */      break
-      case "doc-deferred": /* deferred tracking */  break
-      case "doc-promoted": /* deferred → active */  break
+      case "doc-created":   /* new doc */                    break
+      case "doc-destroyed": /* permanently removed */        break
+      case "doc-deferred":  /* deferred tracking */          break
+      case "doc-promoted":  /* deferred → active */          break
+      case "doc-suspended": /* left sync graph */            break
+      case "doc-resumed":   /* rejoined sync graph */        break
     }
   }
 })
@@ -680,7 +684,7 @@ The feed is owned by the Synchronizer (symmetric with `exchange.peers`) and drai
 | `src/session-program.ts` | Session TEA state machine — channel topology, establish handshake, peer lifecycle, departure timers |
 | `src/sync-program.ts` | Sync TEA state machine — document convergence, present/interest/offer/dismiss, per-peer sync state |
 | `src/synchronizer.ts` | Synchronizer runtime — two-program dispatch, effect interpretation, substrate interaction |
-| `src/exchange.ts` | `Exchange` class — public API, `RoutePredicate`, `AuthorizePredicate`, `OnDocDismissed` types |
+| `src/exchange.ts` | `Exchange` class — public API, `GatePredicate` type |
 | `src/sync.ts` | `sync()` function and `SyncRef` — sync capabilities access |
 | `src/store/store.ts` | `Store` interface and `StoreEntry` type |
 | `src/store/in-memory-store.ts` | `InMemoryStore` + `createInMemoryStore()` factory |
@@ -701,9 +705,9 @@ Note: `MergeStrategy`, `BoundSchema`, `json.bind()`, `json.replica()`, `unwrap()
 | `src/__tests__/store-hydration.test.ts` | Exchange-level storage hydration — get/replicate hydration, network import persistence, local change persistence, flush, round-trip restart |
 | `src/__tests__/store.test.ts` | InMemoryStore — conformance suite + InMemory-specific sharedData/getStorage tests |
 | `src/testing/store-conformance.ts` | Reusable Store contract suite: lookup, ensureDoc, append, loadAll, replace, delete, listDocIds, JSON + binary payload round-trips, StoreEntry shape |
-| `src/__tests__/store-integration.test.ts` | End-to-end storage: persist+hydrate for sequential/concurrent/ephemeral, replicate mode, dismiss+delete, onUnresolvedDoc+storage |
+| `src/__tests__/store-integration.test.ts` | End-to-end storage: persist+hydrate for sequential/concurrent/ephemeral, replicate mode, destroy+delete, resolve+storage |
 | `src/__tests__/exchange.test.ts` | Exchange class — get, cache, sync, lifecycle, factory builder lifecycle |
-| `src/__tests__/integration.test.ts` | Two-peer sync for sequential, concurrent, ephemeral, heterogeneous, and `onUnresolvedDoc` dynamic creation |
+| `src/__tests__/integration.test.ts` | Two-peer sync for sequential, concurrent, ephemeral, heterogeneous, and `resolve` dynamic creation |
 | `src/__tests__/sync-invariants.test.ts` | Regression tests: empty-delta fallback, ref identity, ephemeral stale rejection, concurrent deltas |
 
 
@@ -891,7 +895,7 @@ The `examples/todo-react` example demonstrates the full Yjs + WebSocket + React 
 
 11. **End-to-end in a real app**: The `examples/todo/` app proves the full managed sync path in a running application: `Schema` → `loro.bind()` → `Exchange` → `WebsocketServerTransport`/`WebsocketClientTransport` → Cast compiled view → collaborative real-time sync between browser tabs. No hand-rolled WebSocket code — `change(doc, fn)` on any client automatically propagates to all peers via the changefeed → synchronizer → adapter pipeline.
 
-12. **Dynamic document creation via `onUnresolvedDoc`**: Peer A creates a document unknown to peer B. B's `onUnresolvedDoc` callback materializes the document with the correct `BoundSchema`. After sync, B has A's content. Works for sequential (PlainSubstrate) and ephemeral (`json.bind(schema, "ephemeral")` / `TimestampVersion`) strategies. Callback returning `Reject()` correctly suppresses creation. When no callback is configured, the Exchange applies a two-tiered default: supported replica type → Defer; unsupported → Reject.
+12. **Dynamic document creation via `resolve`**: Peer A creates a document unknown to peer B. B's `resolve` callback materializes the document with the correct `BoundSchema`. After sync, B has A's content. Works for sequential (PlainSubstrate) and ephemeral (`json.bind(schema, "ephemeral")` / `TimestampVersion`) strategies. Callback returning `Reject()` correctly suppresses creation. When no callback is configured, the Exchange applies a two-tiered default: supported replica type → Defer; unsupported → Reject.
 
 ---
 
@@ -973,14 +977,14 @@ The SSE adapter's functional core (`parseTextPostBody`, `SseConnection.send`) is
 
 ---
 
-## 16. Document Classification (`onUnresolvedDoc`)
+## 16. Document Classification (`resolve`)
 
 ### Callback Signature
 
 ```ts
 type Disposition = Interpret | Replicate | Defer | Reject
 
-type OnUnresolvedDoc = (
+type Resolve = (
   docId: DocId,
   peer: PeerIdentityDetails,
   replicaType: ReplicaType,
@@ -989,22 +993,22 @@ type OnUnresolvedDoc = (
 ) => Disposition
 ```
 
-The `onUnresolvedDoc` callback is an optional field on `ExchangeParams`. It fires when a peer announces (via `present`) a document the Exchange cannot auto-resolve from its capability registries (§26). Every code path must return an explicit disposition — there is no `undefined` return.
+The `resolve` callback is an optional field on `ExchangeParams`. It fires when a peer announces (via `present`) a document the Exchange cannot auto-resolve from its capability registries (§26). Every code path must return an explicit disposition — there is no `undefined` return.
 
 ### Four Dispositions
 
-- **`Interpret(bound)`** — full interpretation with schema, ref, changefeed. The `bound` parameter is required — `onUnresolvedDoc` only fires for docs the registry can't resolve, so the caller must supply the `BoundSchema`.
+- **`Interpret(bound)`** — full interpretation with schema, ref, changefeed. The `bound` parameter is required — `resolve` only fires for docs the registry can't resolve, so the caller must supply the `BoundSchema`.
 - **`Replicate()`** — parameterless headless replication. The Exchange resolves the `ReplicaFactory` from its replica registry using the `(replicaType, mergeStrategy)` pair from the `present` message. If no matching `BoundReplica` is registered, the Exchange emits a warning and rejects the doc.
 - **`Defer()`** — track the document for routing (included in `present` messages to other peers) but do not create a local representation. The doc can be promoted later via `exchange.get(docId, bound)`, `exchange.replicate(docId)`, or auto-promotion when `exchange.registerSchema(bound)` registers a matching schema.
 - **`Reject()`** — explicit rejection. The document is dropped and not tracked. Replaces the old `undefined` return.
 
-When no `onUnresolvedDoc` callback matches (or none is configured), the Exchange applies a two-tiered default: if the `replicaType` is supported by the capability set, the doc is **deferred** (promotion is plausible via a later `exchange.get()` or `registerSchema()`); otherwise the doc is **rejected** silently (no evidence the exchange will ever handle this format).
+When no `resolve` callback matches (or none is configured), the Exchange applies a two-tiered default: if the `replicaType` is supported by the capability set, the doc is **deferred** (promotion is plausible via a later `exchange.get()` or `registerSchema()`); otherwise the doc is **rejected** silently (no evidence the exchange will ever handle this format).
 
 ### Auto-Interpretation
 
-When schemas are registered via `ExchangeParams.schemas` or `exchange.registerSchema(bound)`, the Exchange auto-resolves matching docs from `present` metadata — the `(schemaHash, replicaType, mergeStrategy)` triple is looked up in the schema registry. **`onUnresolvedDoc` never fires for auto-resolved docs.** The developer declares schemas once; the Exchange handles discovery automatically.
+When schemas are registered via `ExchangeParams.schemas` or `exchange.registerSchema(bound)`, the Exchange auto-resolves matching docs from `present` metadata — the `(schemaHash, replicaType, mergeStrategy)` triple is looked up in the schema registry. **`resolve` never fires for auto-resolved docs.** The developer declares schemas once; the Exchange handles discovery automatically.
 
-This means `onUnresolvedDoc` is only needed for:
+This means `resolve` is only needed for:
 - Docs whose schema is not (yet) registered — return `Interpret(bound)` with an ad-hoc schema, `Defer()` to wait, or `Reject()`.
 - Docs that should be headlessly replicated — return `Replicate()`.
 - Dynamic policy decisions based on `docId` or `peer` that go beyond schema matching.
@@ -1020,7 +1024,7 @@ Peer A (has doc)               Peer B (doesn't have doc)
      |     mergeStrategy: "collaborative",|
      |     schemaHash: "00abc..." }]  |
      |                                | handlePresent: unknown doc
-     |                                | ① route(docId, peer)?
+     |                                | ① canShare(docId, peer)?
      |                                |   No → silently drop
      |                                |   Yes ↓
      |                                | ② cmd/ensure-doc
@@ -1028,7 +1032,7 @@ Peer A (has doc)               Peer B (doesn't have doc)
      |                                |   resolveSchema(hash, type, strategy)
      |                                |   Match → exchange.get(docId, resolved)
      |                                |   No match ↓
-     |                                | ④ onUnresolvedDoc("input:alice", peerA, ...)
+     |                                | ④ resolve("input:alice", peerA, ...)
      |                                |   → returns Interpret(PlayerInputDoc)
      |                                |   (no callback? two-tiered default:
      |                                |    supported type → Defer,
@@ -1048,13 +1052,13 @@ Peer A (has doc)               Peer B (doesn't have doc)
 
 ### The `cmd/ensure-doc` Command
 
-When `handlePresent` encounters an unknown doc ID that passes the route check, the pure program emits:
+When `handlePresent` encounters an unknown doc ID that passes the canShare check, the pure program emits:
 
 ```ts
 { type: "cmd/ensure-doc", docId: DocId, peer: PeerIdentityDetails, replicaType: ReplicaType, mergeStrategy: MergeStrategy, schemaHash: string }
 ```
 
-The `Synchronizer` runtime executes this command by calling the `onEnsureDoc` callback provided by the Exchange. The callback first attempts schema auto-resolution (§26), then falls through to `onUnresolvedDoc` if no schema matches. The callback is fire-and-forget — if it calls `exchange.get()`, the resulting `registerDoc()` → `#dispatch(doc-ensure)` is queued in `#pendingMessages` (because `#dispatching` is true) and processed before quiescence.
+The `Synchronizer` runtime executes this command by calling the `onEnsureDoc` callback provided by the Exchange. The callback first attempts schema auto-resolution (§26), then falls through to `resolve` if no schema matches. The callback is fire-and-forget — if it calls `exchange.get()`, the resulting `registerDoc()` → `#dispatch(doc-ensure)` is queued in `#pendingMessages` (because `#dispatching` is true) and processed before quiescence.
 
 ### Reentrancy Through the Dispatch Loop
 
@@ -1076,7 +1080,7 @@ The `Defer` path has its own reentrancy: callback → `synchronizer.deferDoc()` 
 
 When a document is registered after channels are established (the dynamic creation case), `handleDocEnsure` sends **both** `present` and `interest` to all established channels:
 
-- **`present`**: announces the doc to peers (they may create it via their own `onUnresolvedDoc`)
+- **`present`**: announces the doc to peers (they may create it via their own `resolve`)
 - **`interest`**: requests data from peers who already have the doc (essential for pulling content into the newly created empty doc)
 
 When `handleDocEnsure` fires for a doc already in `model.documents` with `mode: "deferred"`, it promotes the entry: updates mode to `"interpret"` or `"replicate"`, sets the version, and sends both `present` and `interest`.
@@ -1086,23 +1090,23 @@ When `handleDocEnsure` fires for a doc already in `model.documents` with `mode: 
 The vendor (`@loro-extended/repo`) handles this in `handleSyncRequest` — when a `sync-request` arrives for an unknown doc, the doc is auto-created, gated by `permissions.creation`. Kyneta's approach differs:
 
 1. **Trigger point**: `present` (not `interest`/`sync-request`), because kyneta's `interest` is only sent for docs the sender already has.
-2. **Capability gating**: The `supports` gate has been removed from the synchronizer — all unknown docs reach `onUnresolvedDoc`. The Exchange's two-tiered default uses `supportsReplicaType` to decide between Defer and Reject when no callback matches.
-3. **Route gating**: The `route` predicate (§17) is checked before `cmd/ensure-doc` is emitted. If `route(docId, announcingPeer)` returns `false`, the unknown doc is silently dropped — `onUnresolvedDoc` never fires.
-4. **Auto-resolution**: Schema registry lookup happens before `onUnresolvedDoc` — most docs are resolved without any callback.
+2. **Capability gating**: The `supports` gate has been removed from the synchronizer — all unknown docs reach `resolve`. The Exchange's two-tiered default uses `supportsReplicaType` to decide between Defer and Reject when no callback matches.
+3. **canShare gating**: The `canShare` predicate (§17) is checked before `cmd/ensure-doc` is emitted. If `canShare(docId, announcingPeer)` returns `false`, the unknown doc is silently dropped — `resolve` never fires.
+4. **Auto-resolution**: Schema registry lookup happens before `resolve` — most docs are resolved without any callback.
 5. **Gating mechanism**: a callback returning an explicit disposition (`Interpret | Replicate | Defer | Reject`), because the callback must provide the schema/factory/strategy — information a boolean predicate cannot supply.
 6. **No separate `creation` permission**: the callback subsumes the permission check. Returning `Reject()` is equivalent to denying creation.
 
-> **Note**: `onUnresolvedDoc` fires for all unresolved docs regardless of replica type — the developer has full control when a callback is provided. The two-tiered default (Defer vs. Reject based on `supportsReplicaType`) only applies when no callback matches.
+> **Note**: `resolve` fires for all unresolved docs regardless of replica type — the developer has full control when a callback is provided. The two-tiered default (Defer vs. Reject based on `supportsReplicaType`) only applies when no callback matches.
 
 ### Code Example
 
 ```ts
 const exchange = new Exchange({
-  // Declare known schemas — auto-resolved, onUnresolvedDoc never fires for these
+  // Declare known schemas — auto-resolved, resolve never fires for these
   schemas: [PlayerInputDoc, GameStateDoc],
 
   // Policy for docs not matched by the schema registry
-  onUnresolvedDoc: (docId, peer, replicaType, mergeStrategy, schemaHash) => {
+  resolve: (docId, peer, replicaType, mergeStrategy, schemaHash) => {
     // Ad-hoc interpretation with an unregistered schema
     if (docId.startsWith("debug:")) return Interpret(DebugDoc)
     // Headless replication — Exchange resolves factory from registry
@@ -1115,79 +1119,80 @@ const exchange = new Exchange({
 })
 ```
 
-`onDocCreated` fires after every successful doc creation regardless of resolution pathway — auto-resolve, `onUnresolvedDoc`, deferred promotion, or local `get()`/`replicate()`. The distinction: `onUnresolvedDoc` is a **policy gate** (decides what to do with an unresolved doc), while `onDocCreated` is a **lifecycle notification** (observes that a doc was created, with provenance via `origin: "local" | "remote"`). Applications that need to react to every new doc (e.g. registering a player, updating an admin dashboard) should use `onDocCreated`, not `onUnresolvedDoc`.
+`doc-created` fires (via `exchange.documents`) after every successful doc creation regardless of resolution pathway — auto-resolve, `resolve`, deferred promotion, or local `get()`/`replicate()`. The distinction: `resolve` is a **policy gate** (decides what to do with an unresolved doc), while the `doc-created` changefeed event is a **lifecycle notification** (observes that a doc was created). Applications that need to react to every new doc (e.g. registering a player, updating an admin dashboard) should subscribe to `exchange.documents`, not use `resolve`.
 
 ---
 
-## 17. Route and Authorize — Information Flow Control
+## 17. canShare and canAccept — Information Flow Control
 
-Two predicates on `ExchangeParams` control information flow through the sync protocol. They replace the vendor's four-predicate model (`visibility`, `mutability`, `creation`, `deletion`) with a cleaner two-axis decomposition: outbound flow (routing) and inbound flow (authority).
+Two predicates on `ExchangeParams` control information flow through the sync protocol. They replace the vendor's four-predicate model (`visibility`, `mutability`, `creation`, `deletion`) with a cleaner two-axis decomposition: outbound flow (sharing) and inbound flow (acceptance).
 
-The `ExchangeParams` fields (`route`, `authorize`) are syntactic sugar for the initial scope. For dynamic rule composition — where multiple independent concerns register and remove their own predicates at runtime — see §25 (Composable Scope Registration).
+`ExchangeParams` intersects `Policy`, so all gate fields (`canShare`, `canAccept`, `canReset`, `canConnect`, `resolve`) are directly available at construction. For dynamic rule composition — where multiple independent concerns register and remove their own predicates at runtime — see §25 (Composable Policy Registration).
 
 ### Predicate Signatures
 
 ```ts
-type RoutePredicate = (docId: DocId, peer: PeerIdentityDetails) => boolean
-type AuthorizePredicate = (docId: DocId, peer: PeerIdentityDetails) => boolean
+type GatePredicate = (docId: DocId, peer: PeerIdentityDetails) => boolean
 ```
 
-Both default to `() => true` (open access).
+Both `canShare` and `canAccept` use the same `GatePredicate` type. Both default to `() => true` (open access).
 
-### `route` — Outbound Flow Control
+### `canShare` — Outbound Flow Control
 
-The `route` predicate gates all outbound messages. It answers: "should this peer participate in the sync graph for this document?"
+The `canShare` predicate gates all outbound messages. It answers: "should this peer participate in the sync graph for this document?"
 
-| Gate | Handler | What `route: false` does |
+| Gate | Handler | What `canShare: false` does |
 |------|---------|--------------------------|
 | Initial present | `handlePeerAvailable` | Doc omitted from `present` message |
 | Doc-ensure broadcast | `handleDocEnsure` | Channel excluded from present+interest |
 | Push (local change + relay) | `buildPush` | Channel excluded from offer |
-| `onUnresolvedDoc` gating | `handlePresent` | `cmd/ensure-doc` not emitted |
+| `resolve` gating | `handlePresent` | `cmd/ensure-doc` not emitted |
 
-### `authorize` — Inbound Flow Control
+### `canAccept` — Inbound Flow Control
 
-The `authorize` predicate gates inbound data import. It answers: "should this peer's mutations be accepted for this document?"
+The `canAccept` predicate gates inbound data import. It answers: "should this peer's mutations be accepted for this document?"
 
-| Gate | Handler | What `authorize: false` does |
+| Gate | Handler | What `canAccept: false` does |
 |------|---------|-------------------------------|
 | Offer import | `handleOffer` | `cmd/import-doc-data` not emitted; peer sync state still updated |
 
-When `authorize` rejects an offer, the peer's sync state is still updated to prevent re-requesting. Only the data import is suppressed.
+When `canAccept` rejects an offer, the peer's sync state is still updated to prevent re-requesting. Only the data import is suppressed.
 
-### The `route` → `authorize` Invariant
+### The `canShare` → `canAccept` Invariant
 
-`authorize` implies `route`: if you accept mutations from a peer, that peer must be in the routing topology. The converse is not true — a read-only subscriber is routed but not authorized. The system does not enforce this formally. If a developer sets `authorize: () => true` but `route: () => false`, nothing breaks — inbound data never arrives because the outbound announcement was suppressed.
+`canAccept` implies `canShare`: if you accept mutations from a peer, that peer must be in the sharing topology. The converse is not true — a read-only subscriber is shared but not accepted. The system does not enforce this formally. If a developer sets `canAccept: () => true` but `canShare: () => false`, nothing breaks — inbound data never arrives because the outbound announcement was suppressed.
 
-With composable scopes (§25), the invariant holds *in aggregate* — the composed `authorize` returning `true` only matters if the composed `route` also returns `true` for that peer. Individual scopes can safely have `authorize` without `route` (or vice versa) because the composition evaluates all scopes independently per field. The synchronizer only reaches `authorize` evaluation if the message was already routed.
+With composable policies (§25), the invariant holds *in aggregate* — the composed `canAccept` returning `true` only matters if the composed `canShare` also returns `true` for that peer. Individual policies can safely have `canAccept` without `canShare` (or vice versa) because the composition evaluates all policies independently per field. The synchronizer only reaches `canAccept` evaluation if the message was already shared.
 
-### Relationship to `onUnresolvedDoc`
+### Relationship to `resolve`
 
 Gates are evaluated in order when a peer announces an unknown doc in `handlePresent`:
 
-1. **`route`** — if `route(docId, announcingPeer)` returns `false`, silently drop. `onUnresolvedDoc` never fires.
-2. **Schema auto-resolve** — if the `(schemaHash, replicaType, mergeStrategy)` triple matches a registered schema, auto-interpret. `onUnresolvedDoc` never fires.
-3. **`onUnresolvedDoc`** — fires for all unresolved docs regardless of replica type. Returns an explicit disposition.
-4. **Two-tiered default** — if no `onUnresolvedDoc` callback matches (or none is configured): supported `replicaType` → Defer; unsupported `replicaType` → Reject (silently).
+1. **`canShare`** — if `canShare(docId, announcingPeer)` returns `false`, silently drop. `resolve` never fires.
+2. **Schema auto-resolve** — if the `(schemaHash, replicaType, mergeStrategy)` triple matches a registered schema, auto-interpret. `resolve` never fires.
+3. **`resolve`** — fires for all unresolved docs regardless of replica type. Returns an explicit disposition.
+4. **Two-tiered default** — if no `resolve` callback matches (or none is configured): supported `replicaType` → Defer; unsupported `replicaType` → Reject (silently).
 
-After `onUnresolvedDoc` (or the two-tiered default) returns:
+After `resolve` (or the two-tiered default) returns:
 - `Interpret(bound)` → `exchange.get()` creates the doc
 - `Replicate()` → `exchange.replicate()` creates the doc (factory from registry)
 - `Defer()` → doc tracked for routing, no local representation
 - `Reject()` → doc dropped
-- Subsequent present/interest/offer flow is subject to `route` normally
+- Subsequent present/interest/offer flow is subject to `canShare` normally
 
-This means `onUnresolvedDoc` can assume: the announcing peer already passed the route check and no registered schema matched. The `replicaType` may or may not be supported — the callback has full control regardless.
+This means `resolve` can assume: the announcing peer already passed the canShare check and no registered schema matched. The `replicaType` may or may not be supported — the callback has full control regardless.
 
-See `examples/bumper-cars/src/server.ts` for a concrete usage example — `route` restricts input doc visibility to the owning peer, and `authorize` enforces server-only writes to game state.
+See `examples/bumper-cars/src/server.ts` for a concrete usage example — `canShare` restricts input doc visibility to the owning peer, and `canAccept` enforces server-only writes to game state.
 
 ---
 
-## 18. Dismiss — Leaving the Sync Graph
+## 18. Document Lifecycle — suspend, resume, destroy
+
+The former `exchange.dismiss()` has been decomposed into two distinct intentions: **suspend** (leave sync graph, keep local state) and **destroy** (permanent removal). This two-intention model replaces the single `dismiss` operation and the `onDocDismissed` callback.
 
 ### The `dismiss` Wire Message
 
-`dismiss` is the dual of `present`: present announces "I have this doc," dismiss announces "I'm leaving this doc." It is a one-way announcement with no response needed.
+`dismiss` is the dual of `present`: present announces "I have this doc," dismiss announces "I'm leaving this doc." It is a one-way announcement with no response needed. Both `suspend()` and `destroy()` send a `dismiss` wire message — the remote peer sees the same thing (this peer left the doc's sync graph). The distinction is local-only.
 
 ```ts
 type DismissMsg = { type: "dismiss"; docId: DocId }
@@ -1195,44 +1200,87 @@ type DismissMsg = { type: "dismiss"; docId: DocId }
 
 Wire encoding: `Dismiss: 0x13` in the CBOR codec (next after `Offer: 0x12`). Compact wire format: `{ t: 0x13, doc: string }`.
 
-### `exchange.dismiss(docId)`
+### `exchange.destroy(docId)`
 
-The single public API for document removal. Replaces the former `exchange.delete(docId)`.
-
-```ts
-exchange.dismiss("my-doc")
-```
-
-Internally: clears the doc from `#docCache`, then calls `synchronizer.dismissDocument(docId)`, which dispatches `synchronizer/doc-dismiss` to the TEA program. The program removes the doc from `model.documents` and broadcasts `dismiss` to all established channels (filtered by `route`).
-
-For bulk teardown without per-doc notification, use `exchange.reset()` or `exchange.shutdown()`.
-
-### `onDocDismissed` Callback
+Permanent document removal.
 
 ```ts
-type OnDocDismissed = (docId: DocId, peer: PeerIdentityDetails, origin: DocEventOrigin) => void
+exchange.destroy("my-doc")
 ```
 
-Optional field on `ExchangeParams` and `Scope`. Fires when a document is dismissed — either by a remote peer sending `dismiss`, or by the local peer calling `exchange.dismiss()`. The `origin` parameter (`DocEventOrigin` — see §10) distinguishes the two cases. The callback handles the application-level response — it can call `exchange.dismiss(docId)` to also leave, archive the document, or do nothing.
+Internally: clears the doc from `#docCache`, destroys the local replica, then calls `synchronizer.destroyDocument(docId)`, which dispatches `synchronizer/doc-destroy` to the TEA program. The program removes the doc from `model.documents` and broadcasts `dismiss` to all established channels (filtered by `canShare`). Emits `doc-destroyed` on `exchange.documents`.
 
-### Protocol Flow
+### `exchange.suspend(docId)`
+
+Leave the sync graph while retaining local state.
+
+```ts
+exchange.suspend("my-doc")
+```
+
+Internally: marks the doc as `suspended: true` in `#docCache`, then calls `synchronizer.suspendDocument(docId)`, which dispatches `synchronizer/doc-suspend` to the TEA program. The program sets `model.documents[docId].suspended = true` and broadcasts `dismiss` to all established channels (filtered by `canShare`). While suspended, `handleDocEnsure` and `buildPush` skip the doc. Emits `doc-suspended` on `exchange.documents`.
+
+### `exchange.resume(docId)`
+
+Rejoin the sync graph for a suspended document.
+
+```ts
+exchange.resume("my-doc")
+```
+
+Internally: clears the `suspended` flag in `#docCache`, then calls `synchronizer.resumeDocument(docId)`, which dispatches `synchronizer/doc-resume` to the TEA program. The program clears `model.documents[docId].suspended` and broadcasts `present` + `interest` to all established channels (filtered by `canShare`). Emits `doc-resumed` on `exchange.documents`. Throws if the doc is not currently suspended.
+
+### Protocol Flow — destroy
 
 ```
 Peer A                            Peer B
   |                                 |
-  | exchange.dismiss("doc-1")       |
+  | exchange.destroy("doc-1")       |
   | → #docCache.delete("doc-1")    |
-  | → synchronizer.dismissDocument  |
-  | → dispatch doc-dismiss          |
-  | → handleDocDismiss:             |
+  | → synchronizer.destroyDocument  |
+  | → dispatch doc-destroy          |
+  | → handleDocDestroy:             |
   |   model.documents.delete        |
   |   cmd/send-message: dismiss     |
   |                                 |
   |── dismiss { docId: "doc-1" } ──>|
   |                                 | handleDismiss:
   |                                 |   clean up peer sync state
-  |                                 |   cmd/ensure-doc-dismissed
-  |                                 |   → onDocDismissed("doc-1", peerA)
+  |                                 |
+```
+
+### Protocol Flow — suspend / resume
+
+```
+Peer A                            Peer B
+  |                                 |
+  | exchange.suspend("doc-1")       |
+  | → #docCache[doc-1].suspended    |
+  | → synchronizer.suspendDocument  |
+  | → dispatch doc-suspend          |
+  | → handleDocSuspend:             |
+  |   model.documents[doc-1]        |
+  |     .suspended = true           |
+  |   cmd/send-message: dismiss     |
+  |                                 |
+  |── dismiss { docId: "doc-1" } ──>|
+  |                                 | handleDismiss:
+  |                                 |   clean up peer sync state
+  |                                 |
+  | exchange.resume("doc-1")        |
+  | → #docCache[doc-1].suspended    |
+  |     = false                     |
+  | → synchronizer.resumeDocument   |
+  | → dispatch doc-resume           |
+  | → handleDocResume:              |
+  |   model.documents[doc-1]        |
+  |     .suspended = false          |
+  |   cmd/send-message: present     |
+  |   cmd/send-message: interest    |
+  |                                 |
+  |── present ["doc-1"] ──────────>|
+  |── interest { version } ───────>|
+  |                                 | handlePresent / handleInterest
   |                                 |
 ```
 
@@ -1240,16 +1288,14 @@ Peer A                            Peer B
 
 When `handleDismiss` processes a `dismiss` message from a peer, it removes the document from the peer's `docSyncStates` and `subscriptions`. This ensures:
 
-- Future local changes for this doc are not pushed to the dismissed peer
+- Future local changes for this doc are not pushed to the peer that left
 - The peer's ready state no longer appears in `sync(doc).readyStates`
 
-### The `cmd/ensure-doc-dismissed` Command
+### Observing Lifecycle Changes
 
-```ts
-{ type: "cmd/ensure-doc-dismissed", docId: DocId, peer: PeerIdentityDetails }
-```
+Applications observe document lifecycle changes via `exchange.documents` (§22.1). The `doc-destroyed`, `doc-suspended`, and `doc-resumed` event types on `DocChange` replace the former `onDocDismissed` callback. This is consistent with the changefeed-first architecture — lifecycle events flow through reactive feeds, not imperative callbacks.
 
-Follows the same ensure-semantics pattern as `cmd/ensure-doc` — the callback must be idempotent (first writer wins). The Synchronizer runtime calls the `DocDismissedCallback`, which the Exchange wraps to invoke the user's `onDocDismissed` callback.
+For bulk teardown without per-doc notification, use `exchange.reset()` or `exchange.shutdown()`.
 
 ---
 
@@ -1590,18 +1636,18 @@ sess/channel-establish                                           → notify/peer
 
 The `#peerMap` is rebuilt from the model at quiescence rather than maintained incrementally. This ensures the map is always consistent with the model — even if multiple lifecycle events occurred within a single dispatch cycle.
 
-### Relationship to `onDocDismissed`
+### Relationship to `exchange.documents`
 
-`onDocDismissed` (§18) and `peer-departed` operate at different granularities:
+`exchange.documents` (§22.1) and `exchange.peers` operate at different granularities:
 
-| | `onDocDismissed` | `peer-departed` |
+| | `exchange.documents` | `exchange.peers` |
 |---|---|---|
 | **Scope** | Per-document | Per-exchange |
-| **Trigger** | Peer sends an explicit `dismiss` message for a specific document | `depart` received, or departure timer expired after disconnection |
-| **Requires peer cooperation** | Yes — the remote peer must send `dismiss` | Partially — `depart` is cooperative, but timer-based departure is automatic |
-| **Use case** | React to a peer voluntarily leaving a document's sync graph | Track peer presence for UI, cleanup, etc. |
+| **Events** | `doc-created`, `doc-destroyed`, `doc-suspended`, `doc-resumed`, `doc-deferred`, `doc-promoted` | `peer-established`, `peer-disconnected`, `peer-reconnected`, `peer-departed` |
+| **Trigger** | Local API calls (`get`, `destroy`, `suspend`, `resume`) or remote `present`/`dismiss` | Channel lifecycle and `establish`/`depart` messages |
+| **Use case** | Track document membership, react to suspend/resume/destroy | Track peer presence for UI, cleanup, etc. |
 
-A peer can `dismiss` a document while remaining connected to the exchange (other documents still syncing). Conversely, a peer can vanish (network failure, crash) without sending any `dismiss` — `peer-disconnected` fires immediately, followed by `peer-departed` when the departure timer expires. The intervening window allows the peer to reconnect without document-level disruption.
+A peer can destroy or suspend a document while remaining connected to the exchange (other documents still syncing). Conversely, a peer can vanish (network failure, crash) without sending any `dismiss` — `peer-disconnected` fires immediately, followed by `peer-departed` when the departure timer expires. The intervening window allows the peer to reconnect without document-level disruption.
 
 ### Cast Integration
 
@@ -1642,28 +1688,31 @@ The exchange exposes a reactive feed of document presence via `exchange.document
 ```ts
 type DocInfo = {
   mode: "interpret" | "replicate" | "deferred"
+  suspended: boolean
 }
 ```
 
-Deliberately minimal — metadata about the document's sync participation, not its application-level content. The application-level ref is obtained via `exchange.get()`. Mirrors `PeerIdentityDetails` (metadata about the peer, not the peer's full connection state).
+Deliberately minimal — metadata about the document's sync participation, not its application-level content. The `suspended` field is `true` when the document has been suspended via `exchange.suspend()` — the local state is retained but the doc is not participating in the sync graph. The application-level ref is obtained via `exchange.get()`. Mirrors `PeerIdentityDetails` (metadata about the peer, not the peer's full connection state).
 
 ### The `DocChange` Type
 
 ```ts
 interface DocChange extends ChangeBase {
-  readonly type: "doc-created" | "doc-removed" | "doc-deferred" | "doc-promoted"
+  readonly type: "doc-created" | "doc-destroyed" | "doc-deferred" | "doc-promoted" | "doc-suspended" | "doc-resumed"
   readonly docId: DocId
 }
 ```
 
-Four event types model the document lifecycle:
+Six event types model the document lifecycle:
 
 | Event | Trigger | Terminal? |
 |---|---|---|
 | `doc-created` | Document registered via `get()` (interpret) or `replicate()` — local or remote auto-resolve | No |
-| `doc-removed` | Document dismissed (`dismiss()`) or deleted from the sync graph | Yes — document removed from model |
-| `doc-deferred` | Document tracked in deferred mode via `onUnresolvedDoc → Defer()` (routing only, no local replica) | No |
+| `doc-destroyed` | Document permanently removed via `destroy()` or deleted from the sync graph | Yes — document removed from model |
+| `doc-deferred` | Document tracked in deferred mode via `resolve → Defer()` (routing only, no local replica) | No |
 | `doc-promoted` | Deferred document promoted to interpret or replicate mode (e.g. `get()` on a deferred doc) | No |
+| `doc-suspended` | Document suspended via `suspend()` — left sync graph, local state retained | No |
+| `doc-resumed` | Suspended document resumed via `resume()` — rejoined sync graph | No |
 
 `DocChange` is defined in `src/types.ts` alongside `PeerChange`. It extends `ChangeBase` from `@kyneta/changefeed`, making it compatible with the standard `Changeset<DocChange>` envelope.
 
@@ -1682,10 +1731,12 @@ const docs = exchange.documents.current
 const unsub = exchange.documents.subscribe((changeset) => {
   for (const change of changeset.changes) {
     switch (change.type) {
-      case "doc-created":  /* new doc */            break
-      case "doc-removed":  /* doc dismissed */      break
-      case "doc-deferred": /* deferred tracking */  break
-      case "doc-promoted": /* deferred → active */  break
+      case "doc-created":   /* new doc */                    break
+      case "doc-destroyed": /* permanently removed */        break
+      case "doc-deferred":  /* deferred tracking */          break
+      case "doc-promoted":  /* deferred → active */          break
+      case "doc-suspended": /* left sync graph */            break
+      case "doc-resumed":   /* rejoined sync graph */        break
     }
   }
 })
@@ -1705,22 +1756,24 @@ Document events accumulate in `#pendingDocEvents` when the Synchronizer's public
 | `registerDoc(runtime)` | `doc-created` | `!#docRuntimes.has(docId)` (first registration) |
 | `registerDoc(runtime)` | `doc-promoted` | `#syncModel.documents.get(docId)?.mode === "deferred"` |
 | `deferDoc(docId, ...)` | `doc-deferred` | `!#syncModel.documents.has(docId)` |
-| `dismissDocument(docId)` | `doc-removed` | `#docRuntimes.has(docId) \|\| #syncModel.documents.has(docId)` |
-| `removeDocument(docId)` | `doc-removed` | `#docRuntimes.has(docId) \|\| #syncModel.documents.has(docId)` |
+| `destroyDocument(docId)` | `doc-destroyed` | `#docRuntimes.has(docId) \|\| #syncModel.documents.has(docId)` |
+| `removeDocument(docId)` | `doc-destroyed` | `#docRuntimes.has(docId) \|\| #syncModel.documents.has(docId)` |
+| `suspendDocument(docId)` | `doc-suspended` | `#docRuntimes.has(docId) && !suspended` |
+| `resumeDocument(docId)` | `doc-resumed` | `#docRuntimes.has(docId) && suspended` |
 
 Guards ensure events only accumulate when state actually changes — idempotent calls (first-writer-wins) do not produce duplicate events.
 
 At quiescence, `#drainDocEvents()` follows the same snapshot-then-clear pattern as `#drainPeerEvents()`:
 
 ```
-registerDoc / deferDoc / dismissDocument
+registerDoc / deferDoc / destroyDocument / suspendDocument / resumeDocument
   → push DocChange to #pendingDocEvents
         ↓
   (at quiescence)
   #drainDocEvents()
     → snapshot #pendingDocEvents, clear field
     → rebuild doc map from two sources of truth:
-        1. #docRuntimes (interpret + replicate docs)
+        1. #docRuntimes (interpret + replicate docs, with suspended flag)
         2. syncModel.documents where mode === "deferred"
     → emit Changeset<DocChange> via the changefeed
 ```
@@ -1749,14 +1802,14 @@ Unlike the peer feed (single source: `sessionModel.peers`), the document feed me
 
 Symmetric with peer synthetic events (§22):
 
-`exchange.reset()` and `exchange.shutdown()` call `#emitSyntheticDocRemovedEvents()` before clearing `#docRuntimes` and `#syncModel`:
+`exchange.reset()` and `exchange.shutdown()` call `#emitSyntheticDocDestroyedEvents()` before clearing `#docRuntimes` and `#syncModel`:
 
 1. Collect all doc IDs from both `#docRuntimes` and deferred entries in `syncModel.documents`.
-2. Build a `DocChange[]` with `type: "doc-removed"` for every tracked doc.
+2. Build a `DocChange[]` with `type: "doc-destroyed"` for every tracked doc.
 3. Clear the doc map.
 4. Emit the full array as a single `Changeset<DocChange>`.
 
-This guarantees subscribers observe a balanced lifecycle — every `doc-created` or `doc-deferred` is eventually paired with a `doc-removed`, even during teardown. Synthetic doc events fire before synthetic peer events in both `reset()` and `shutdown()`.
+This guarantees subscribers observe a balanced lifecycle — every `doc-created` or `doc-deferred` is eventually paired with a `doc-destroyed`, even during teardown. Synthetic doc events fire before synthetic peer events in both `reset()` and `shutdown()`.
 
 ---
 
@@ -1996,49 +2049,48 @@ End-to-end tests in `transports/unix-socket/src/__tests__/` prove the full stack
 
 ---
 
-## 25. Doc Governance — Composable Policy Registration
+## 25. Governance — Composable Policy Registration
 
-The Exchange accepts `route`, `authorize`, `onUnresolvedDoc`, and `onDocDismissed` as fixed functions in `ExchangeParams`. These work well when all document access rules are known at construction time. But higher-level primitives (Lines, rooms, game loops) need to register their own rules dynamically and remove them when done. The doc governance system generalizes the fixed predicates into a composable, dynamic model.
+The Exchange accepts `canShare`, `canAccept`, and `resolve` as fixed functions in `ExchangeParams`. These work well when all document access rules are known at construction time. But higher-level primitives (Lines, rooms, game loops) need to register their own rules dynamically and remove them when done. The governance system generalizes the fixed predicates into a composable, dynamic model.
 
-### The DocPolicy Type
+### The Policy Type
 
-A **DocPolicy** is a bundle of predicates and handlers governing a region of the document space:
+A **Policy** is a bundle of gate predicates governing a region of the document space:
 
 ```ts
-interface DocPolicy {
+interface Policy {
   name?: string
-  route?: RulePredicate
-  authorize?: RulePredicate
-  onEpochBoundary?: EpochBoundaryPredicate
-  onUnresolvedDoc?: OnUnresolvedDoc
-  onDocCreated?: OnDocCreated
-  onDocDismissed?: OnDocDismissed
+  canShare?: GatePredicate
+  canAccept?: GatePredicate
+  canConnect?: GatePredicate
+  canReset?: EpochBoundaryPredicate
+  resolve?: Resolve
   dispose?: () => void
 }
 ```
 
-All fields are optional — a policy only provides the predicates it cares about.
+All fields are optional — a policy only provides the gates it cares about. The `canConnect` gate controls whether a peer connection is accepted at the transport level. Lifecycle events (`onDocCreated`, `onDocDismissed`) have been removed — applications observe lifecycle changes via the `exchange.documents` and `exchange.peers` changefeeds (§22, §22.1).
 
-### `RulePredicate` — Three-Valued Logic
+### `GatePredicate` — Three-Valued Logic
 
 ```ts
-type RulePredicate = (docId: DocId, peer: PeerIdentityDetails) => boolean | undefined
+type GatePredicate = (docId: DocId, peer: PeerIdentityDetails) => boolean | undefined
 ```
 
 - `true` — this policy explicitly allows the operation.
 - `false` — this policy explicitly denies the operation (short-circuits evaluation).
 - `undefined` — this policy has no opinion (the doc is outside its concern).
 
-The existing `RoutePredicate` and `AuthorizePredicate` types return `boolean`, which is a subtype of `boolean | undefined`. No adapter or wrapper is needed — existing predicates work as policy fields directly.
+The `ExchangeParams` `canShare` and `canAccept` fields accept `(docId, peer) => boolean`, which is a subtype of `GatePredicate`. No adapter or wrapper is needed — existing predicates work as policy fields directly.
 
-### `composeRule` — Pure Functional Core
+### `composeGate` — Pure Functional Core
 
-A single pure function handles three-valued predicate composition for both `route` and `authorize`:
+A single pure function handles three-valued predicate composition for `canShare`, `canAccept`, `canConnect`, and `canReset`:
 
 ```ts
-function composeRule(
-  policies: readonly DocPolicy[],
-  field: "route" | "authorize",
+function composeGate(
+  policies: readonly Policy[],
+  field: "canShare" | "canAccept" | "canConnect" | "canReset",
   docId: DocId,
   peer: PeerIdentityDetails,
   defaultWhenAllUndefined: boolean,
@@ -2051,16 +2103,16 @@ Evaluation semantics (with short-circuit):
 2. If at least one policy returns `true` and none return `false` → return `true`.
 3. If all policies return `undefined` → return `defaultWhenAllUndefined`.
 
-### `DocGovernance` — Imperative Shell
+### `Governance` — Imperative Shell
 
-The `DocGovernance` manages the mutable policy list and delegates composition to `composeRule`:
+The `Governance` manages the mutable policy list and delegates composition to `composeGate`:
 
 - **`register(policy): () => void`** — adds a policy, returns a dispose function.
-- **`route(docId, peer): boolean`** — composed route, defaults to open (`true`).
-- **`authorize(docId, peer): boolean`** — composed authorize, defaults to open (`true`).
-- **`onUnresolvedDoc(...): Disposition | undefined`** — first non-`undefined` wins (registration order).
-- **`docCreated(docId, peer, mode, origin): void`** — all handlers invoked (broadcast, not gate).
-- **`docDismissed(docId, peer): void`** — all handlers invoked (broadcast, not gate).
+- **`canShare(docId, peer): boolean`** — composed canShare, defaults to open (`true`).
+- **`canAccept(docId, peer): boolean`** — composed canAccept, defaults to open (`true`).
+- **`canConnect(docId, peer): boolean`** — composed canConnect, defaults to open (`true`).
+- **`canReset(docId, peer): boolean`** — composed canReset, defaults to strategy-aware (§29).
+- **`resolve(...): Disposition | undefined`** — first non-`undefined` wins (registration order).
 - **`clear(): unknown[]`** — invokes each policy's `dispose` callback (if present), then removes all policies. Returns an array of collected errors from any disposer that threw. Called during `reset()` and `shutdown()`.
 - **`get names: readonly string[]`** — names of all named policies, in registration order.
 
@@ -2069,34 +2121,33 @@ The `DocGovernance` manages the mutable policy list and delegates composition to
 ```ts
 const dispose = exchange.register({
   name: "line:bob",
-  route: (docId, peer) => docId.startsWith("line:bob:") ? peer.peerId === "bob" : undefined,
-  authorize: (docId, peer) => docId.startsWith("line:bob:") ? peer.peerId === "bob" : undefined,
-  onUnresolvedDoc: (docId) => docId.startsWith("line:bob:") ? Defer() : undefined,
+  canShare: (docId, peer) => docId.startsWith("line:bob:") ? peer.peerId === "bob" : undefined,
+  canAccept: (docId, peer) => docId.startsWith("line:bob:") ? peer.peerId === "bob" : undefined,
+  resolve: (docId) => docId.startsWith("line:bob:") ? Defer() : undefined,
 })
 
 // Later, when the line is no longer needed:
 dispose()
 ```
 
-The dispose function removes the policy from all compositions. After disposal, the composed predicates no longer include that policy's rules.
+The dispose function removes the policy from all compositions. After disposal, the composed predicates no longer include that policy's gates.
 
 ### Composition Semantics by Field
 
 | Field | Composition | Default (all `undefined`) |
 |-------|------------|--------------------------|
-| `route` | Deny wins, short-circuit | `true` (open) |
-| `authorize` | Deny wins, short-circuit | `true` (open) |
-| `onEpochBoundary` | Deny wins, short-circuit | Strategy-aware default (see §29) |
-| `onUnresolvedDoc` | First non-`undefined` wins (registration order) | `undefined` (reject with warning) |
-| `onDocCreated` | All handlers invoked (broadcast) | no-op |
-| `onDocDismissed` | All handlers invoked (broadcast) | no-op |
+| `canShare` | Deny wins, short-circuit | `true` (open) |
+| `canAccept` | Deny wins, short-circuit | `true` (open) |
+| `canConnect` | Deny wins, short-circuit | `true` (open) |
+| `canReset` | Deny wins, short-circuit | Strategy-aware default (see §29) |
+| `resolve` | First non-`undefined` wins (registration order) | `undefined` (reject with warning) |
 | `dispose` | Each handler invoked (broadcast) | no-op |
 
 ### Default Values — Both Open
 
-Both `route` and `authorize` default to `true` (open) when all policies return `undefined`. This matches the current Exchange behavior where both default to `() => true`. Dynamic policies that want to restrict access return `false` for specific docs; the open default preserves backward compatibility.
+Both `canShare` and `canAccept` default to `true` (open) when all policies return `undefined`. This matches the current Exchange behavior where both default to `() => true`. Dynamic policies that want to restrict access return `false` for specific docs; the open default preserves backward compatibility.
 
-If a future use case requires closed-by-default authorize, register a base policy with `authorize: () => false` and then register permissive policies for specific docs. The infrastructure supports both patterns; the default matches the existing Exchange contract.
+If a future use case requires closed-by-default canAccept, register a base policy with `canAccept: () => false` and then register permissive policies for specific docs. The infrastructure supports both patterns; the default matches the existing Exchange contract.
 
 ### Named Policies
 
@@ -2108,17 +2159,17 @@ If a policy has a `name`:
 
 ### Relationship to `ExchangeParams`
 
-The constructor fields (`route`, `authorize`, `onUnresolvedDoc`, `onDocDismissed`) are syntactic sugar for the initial policy. At construction time, if any are provided, they are bundled into a `DocPolicy` and registered with the `DocGovernance`. This is backward compatible — existing code that passes these params works identically.
+`ExchangeParams` intersects `Policy` (`ExchangeParams & Policy`), so all policy fields are directly available at construction — no indirection or wrapping. At construction time, if any gate fields are provided, they are extracted into a `Policy` and registered with the `Governance` as the initial policy.
 
-The difference: previously, `route: () => true` was the only predicate. Now it's one policy among potentially many. A later `exchange.register({ route: ... })` adds a second policy whose `route` participates in the composition.
+The difference: previously, `canShare: () => true` was the only predicate. Now it's one policy among potentially many. A later `exchange.register({ canShare: ... })` adds a second policy whose `canShare` participates in the composition.
 
 ### Synchronizer Integration
 
-The `DocGovernance` is transparent to the synchronizer layer. The Exchange passes `this.#governance.route.bind(this.#governance)` and `this.#governance.authorize.bind(this.#governance)` to the Synchronizer constructor. The sync program's `createSyncUpdate()` closes over these functions and calls them on every message — the handlers don't know or care that the predicate is composed. Dynamic policy registration and disposal are visible through the bound closures without recreating the update function.
+The `Governance` is transparent to the synchronizer layer. The Exchange passes `this.#governance.canShare.bind(this.#governance)` and `this.#governance.canAccept.bind(this.#governance)` to the Synchronizer constructor. The sync program's `createSyncUpdate()` closes over these functions and calls them on every message — the handlers don't know or care that the predicate is composed. Dynamic policy registration and disposal are visible through the bound closures without recreating the update function.
 
 ### Performance
 
-Policies scale with the number of *concerns* (typically single digits to low tens), not the number of *documents*. Short-circuit evaluation on the first `false` bounds the per-message cost. The `composeRule` function iterates the policy array once per evaluation — no allocations, no closures created at evaluation time.
+Policies scale with the number of *concerns* (typically single digits to low tens), not the number of *documents*. Short-circuit evaluation on the first `false` bounds the per-message cost. The `composeGate` function iterates the policy array once per evaluation — no allocations, no closures created at evaluation time.
 
 ### `reset()` and `shutdown()`
 
@@ -2201,7 +2252,7 @@ Registers a `BoundSchema` at runtime. The Exchange:
 
 This is the mechanism that enables higher-level primitives (e.g. Lines) to register their envelope schemas when they're constructed, not when the Exchange is constructed. A deferred doc whose schema didn't exist at discovery time is automatically promoted when the schema becomes available — no manual `exchange.get()` per doc required.
 
-`exchange.get()` calls `registerSchema(bound)` internally, so `ExchangeParams.schemas` is sugar for upfront registration but not required. The role distinction: `schemas:` ensures readiness at construction time (handles the `present`-before-`get()` race — a peer may announce a doc before the local code calls `get()`, and without prior registration the doc would be deferred or rejected rather than auto-interpreted); `get()` expands capabilities at use time.
+`exchange.get()` calls `registerSchema(bound)` internally, so `ExchangeParams.schemas` is shorthand for upfront registration but not required. The role distinction: `schemas:` ensures readiness at construction time (handles the `present`-before-`get()` race — a peer may announce a doc before the local code calls `get()`, and without prior registration the doc would be deferred or rejected rather than auto-interpreted); `get()` expands capabilities at use time.
 
 ### The Document Lifecycle State Machine
 
@@ -2212,7 +2263,7 @@ This is the mechanism that enables higher-level primitives (e.g. Lines) to regis
 | **Replicated** | Yes (`mode: "replicate"`) | Yes (headless) | Yes | Yes |
 | **Interpreted** | Yes (`mode: "interpret"`) | Yes (`Substrate`) | Yes | Yes |
 
-- **Rejected**: `onUnresolvedDoc` returned `Reject()`, or no callback and unsupported replica type (two-tiered default).
+- **Rejected**: `resolve` returned `Reject()`, or no callback and unsupported replica type (two-tiered default).
 - **Deferred**: Acknowledged for routing. No local representation. Awaiting schema registration or explicit promotion. Also the default when no callback matches and the replica type is supported (two-tiered default).
 - **Replicated** / **Interpreted**: Full participation, as today.
 
@@ -2220,16 +2271,16 @@ Transitions:
 
 | From | To | Trigger |
 |------|----|---------|
-| — | Rejected | `onUnresolvedDoc` returns `Reject()`, or no callback and unsupported replica type |
-| — | Deferred | `onUnresolvedDoc` returns `Defer()`, or no callback and supported replica type |
-| — | Replicated | `onUnresolvedDoc` returns `Replicate()`, or `exchange.replicate()` |
-| — | Interpreted | Schema auto-resolve, `onUnresolvedDoc` returns `Interpret(bound)`, or `exchange.get()` |
+| — | Rejected | `resolve` returns `Reject()`, or no callback and unsupported replica type |
+| — | Deferred | `resolve` returns `Defer()`, or no callback and supported replica type |
+| — | Replicated | `resolve` returns `Replicate()`, or `exchange.replicate()` |
+| — | Interpreted | Schema auto-resolve, `resolve` returns `Interpret(bound)`, or `exchange.get()` |
 | Deferred | Interpreted | `exchange.get(docId, bound)`, or auto-promoted when `exchange.registerSchema(bound)` matches |
 | Deferred | Replicated | `exchange.replicate(docId)` |
 
 Deferred docs participate in routing (`present` is sent) but do not receive data (`interest` is not sent, `handleOffer` and `handleInterest` return early for deferred entries).
 
-> **`onDocCreated` fires on transitions to Interpreted and Replicated states** (not Deferred, not Rejected). Deferred docs have no local representation yet — `onDocCreated` fires only when a doc gains a `Replica` or `Substrate`. If a deferred doc is later promoted via `exchange.get()` or `exchange.replicate()`, `onDocCreated` fires at promotion time.
+> **`doc-created` fires on transitions to Interpreted and Replicated states** (not Deferred, not Rejected). Deferred docs have no local representation yet — `doc-created` fires only when a doc gains a `Replica` or `Substrate`. If a deferred doc is later promoted via `exchange.get()` or `exchange.replicate()`, `doc-created` fires at promotion time.
 
 ### Validation Model
 
@@ -2239,8 +2290,8 @@ When a peer sends `present` with `{ replicaType, mergeStrategy, schemaHash }`:
 
 | Scenario | `replicaType` | `mergeStrategy` | `schemaHash` | Result |
 |----------|--------------|-----------------|-------------|--------|
-| Triple matches a `schemas` entry | ✅ validated | ✅ validated | ✅ validated (lookup key) | Auto-interpreted; `onUnresolvedDoc` does not fire |
-| No schema match, `onUnresolvedDoc` configured | ✅ or ⚠ | ⚠ trusted | ⚠ trusted | `onUnresolvedDoc` fires (regardless of replica type support) |
+| Triple matches a `schemas` entry | ✅ validated | ✅ validated | ✅ validated (lookup key) | Auto-interpreted; `resolve` does not fire |
+| No schema match, `resolve` configured | ✅ or ⚠ | ⚠ trusted | ⚠ trusted | `resolve` fires (regardless of replica type support) |
 | No schema match, no callback, supported type | ✅ validated | ⚠ trusted | ⚠ trusted | Deferred (two-tiered default) |
 | No schema match, no callback, unsupported type | — | — | — | Rejected (two-tiered default) |
 
@@ -2319,13 +2370,13 @@ listener.onLine(line => {
 
 Internally, `listen()`:
 
-1. **Registers schemas** — calls `exchange.registerSchema()` for the client and server `BoundSchema` objects. Incoming Line docs whose schema hash matches will auto-resolve in `onEnsureDoc`, bypassing `onUnresolvedDoc` entirely.
+1. **Registers schemas** — calls `exchange.registerSchema()` for the client and server `BoundSchema` objects. Incoming Line docs whose schema hash matches will auto-resolve in `onEnsureDoc`, bypassing `resolve` entirely.
 
-2. **Registers a policy** with `onDocCreated` — when a Line doc is created, the handler parses the doc ID, checks that it matches the protocol's topic and is addressed to this exchange's peerId, guards against duplicates, then calls `Line.#create()` to construct the server-side Line and fires all `onLine` callbacks.
+2. **Subscribes to `exchange.documents`** — when a `doc-created` event fires for a Line doc, the handler parses the doc ID, checks that it matches the protocol's topic and is addressed to this exchange's peerId, guards against duplicates, then calls `Line.#create()` to construct the server-side Line and fires all `onLine` callbacks.
 
-The listener uses the doc ID structure as the fundamental discriminator — no `origin` filter is needed. A doc with `parsed.to === exchange.peerId` is the remote peer's outbox; the local exchange never creates docs addressed to itself. Since `onDocCreated` fires exactly once per doc ID, there is no double-fire risk.
+The listener uses the doc ID structure as the fundamental discriminator. A doc with `parsed.to === exchange.peerId` is the remote peer's outbox; the local exchange never creates docs addressed to itself. Since `doc-created` fires exactly once per doc ID, there is no double-fire risk.
 
-**Late listen**: If a client connects before `listen()` is called, the client's docs are deferred by the Exchange's two-tiered default. When `registerSchema()` runs inside `listen()`, deferred docs matching the schema are auto-promoted synchronously, firing `onDocCreated` into the listener's policy. Lines created during this promotion are buffered and replayed on the first `onLine` callback registration.
+**Late listen**: If a client connects before `listen()` is called, the client's docs are deferred by the Exchange's two-tiered default. When `registerSchema()` runs inside `listen()`, deferred docs matching the schema are auto-promoted synchronously, emitting `doc-created` on `exchange.documents`. Lines created during this promotion are buffered and replayed on the first `onLine` callback registration.
 
 ### `LineListener` API
 
@@ -2394,32 +2445,33 @@ Each topic produces distinct doc IDs (`line:signaling:...` vs `line:rpc:...`), d
 
 ### Policy Integration
 
-Line is a standalone class — it composes with the Exchange via public API only (`register()`, `registerSchema()`, `get()`, `dismiss()`). No Exchange modification needed.
+Line is a standalone class — it composes with the Exchange via public API only (`register()`, `registerSchema()`, `get()`, `destroy()`). No Exchange modification needed.
 
-**Listener policy** (`__line-listen:${topic}`): Registered by `protocol.listen()`. Provides `onDocCreated` to detect incoming Line docs and construct server-side Lines. The policy has no `authorize` predicate — authorization is handled by the per-line policy.
+**Listener policy** (`__line-listen:${topic}`): Registered by `protocol.listen()`. Subscribes to `exchange.documents` to detect incoming Line docs via `doc-created` events and construct server-side Lines. The policy has no `canAccept` predicate — acceptance is handled by the per-line policy.
 
-**Per-line policy** (`line:${topic}:${remotePeerId}`): Registered per `Line._create()` call (shared by both `open()` and `listen()` paths). Provides `authorize` — only the `from` peer can write to each doc. Routing is open by default. Applications that want endpoint-only routing register their own policy using the exported `routeLine` predicate.
+**Per-line policy** (`line:${topic}:${remotePeerId}`): Registered per `Line._create()` call (shared by both `open()` and `listen()` paths). Provides `canAccept` — only the `from` peer can write to each doc. Sharing is open by default. Applications that want endpoint-only sharing register their own policy using the exported `shareLine` predicate.
 
-`exchange.shutdown()` closes all open Lines and disposes all active listeners via policy teardown — each Line and listener registers a `dispose` callback in its policy, and `DocGovernance.clear()` invokes all disposers during shutdown.
+`exchange.shutdown()` closes all open Lines and disposes all active listeners via policy teardown — each Line and listener registers a `dispose` callback in its policy, and `Governance.clear()` invokes all disposers during shutdown.
 
-### The Authorize Abstain Pattern
+### The Abstain Pattern
 
 <!-- Context: jj:oyouvrss -->
 
 Policies should return `undefined` (abstain) for unknown peers, not `false` (hard veto). This distinction is critical for relay topologies:
 
-- **Hard veto (`false`)** blocks relay-forwarded offers because the relay server's `peerId` doesn't match the expected peer. The `composeRule` function short-circuits on `false` from any policy — one veto overrules all other policies.
-- **Abstain (`undefined`)** lets the exchange-level authorize decide. The policy declares "this doc is not my concern" rather than "this peer is forbidden."
+- **Hard veto (`false`)** blocks relay-forwarded offers because the relay server's `peerId` doesn't match the expected peer. The `composeGate` function short-circuits on `false` from any policy — one veto overrules all other policies.
+- **Abstain (`undefined`)** lets the exchange-level canAccept decide. The policy declares "this doc is not my concern" rather than "this peer is forbidden."
 
-The Line policy's inbox `authorize` uses this pattern: `peer.peerId === remotePeerId ? true : undefined`. If the peer matches, explicitly allow; if not, abstain and let other policies or the exchange default handle it. This ensures a relay server forwarding offers on behalf of the expected peer is not incorrectly blocked.
+The Line policy's inbox `canAccept` uses this pattern: `peer.peerId === remotePeerId ? true : undefined`. If the peer matches, explicitly allow; if not, abstain and let other policies or the exchange default handle it. This ensures a relay server forwarding offers on behalf of the expected peer is not incorrectly blocked.
 
 ### Standalone Design
 
 The Line class has zero coupling to Exchange internals. It uses only:
-- `exchange.register()` — policy registration (listener policy and per-line policy)
+- `exchange.register()` — policy registration (per-line policy)
 - `exchange.registerSchema()` — schema registration for auto-resolve (listener path)
+- `exchange.documents` — reactive document feed for detecting incoming Line docs (listener path)
 - `exchange.get()` — document creation (also calls `registerSchema()` internally)
-- `exchange.dismiss()` — document removal on close
+- `exchange.destroy()` — document removal on close
 - `exchange.peers` — peer lifecycle subscription
 
 This validates the policy + capabilities architecture: higher-level primitives compose cleanly as external consumers of the Exchange's public API.
@@ -2473,7 +2525,7 @@ When the synchronizer receives an entirety payload for a document that has previ
 
 The synchronizer distinguishes initial sync from compaction reset by checking whether **any** peer has reached `"synced"` status for the document. First-ever entirety payloads (initial sync) skip the policy entirely — the existing merge path handles them correctly. Only subsequent entirety payloads after the doc has been synced trigger the policy check.
 
-### `onEpochBoundary` Predicate on Policies
+### `canReset` Predicate on Policies
 
 ```ts
 type EpochBoundaryPredicate = (
@@ -2482,7 +2534,7 @@ type EpochBoundaryPredicate = (
 ) => boolean | undefined
 ```
 
-Three-valued composition via the doc governance (same semantics as `route`/`authorize`):
+Three-valued composition via the governance (same semantics as `canShare`/`canAccept`):
 
 - Any policy returning `false` → **reject** (veto wins, short-circuit)
 - At least one `true` and no `false` → **accept**
@@ -2507,7 +2559,7 @@ On acceptance:
 
 On rejection, the entirety is silently discarded — local state is preserved and the node diverges from compacted peers.
 
-The `onEpochBoundary` field on `DocPolicy` is documented in the Composition Semantics table (§25) — it follows deny-wins short-circuit composition, falling back to strategy-aware defaults when all policies abstain.
+The `canReset` field on `Policy` is documented in the Composition Semantics table (§25) — it follows deny-wins short-circuit composition, falling back to strategy-aware defaults when all policies abstain.
 
 ---
 

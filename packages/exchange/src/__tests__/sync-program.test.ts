@@ -25,8 +25,8 @@ const bob = { peerId: "bob", type: "user" as const }
 const carol = { peerId: "carol", type: "user" as const }
 
 function makeUpdate(params?: {
-  route?: (docId: string, peer: any) => boolean
-  authorize?: (docId: string, peer: any) => boolean
+  canShare?: (docId: string, peer: any) => boolean
+  canAccept?: (docId: string, peer: any) => boolean
 }): SyncUpdate {
   return createSyncUpdate(params)
 }
@@ -185,9 +185,9 @@ describe("sync-program", () => {
       expect(docIds).toContain("doc-2")
     })
 
-    it("filters documents by route predicate", () => {
+    it("filters documents by canShare predicate", () => {
       const update = makeUpdate({
-        route: (docId, _peer) => docId !== "secret-doc",
+        canShare: (docId, _peer) => docId !== "secret-doc",
       })
       let model = initSync(alice)
       ;[model] = ensureDoc(update, model, "public-doc")
@@ -584,9 +584,9 @@ describe("sync-program", () => {
       expect(defined(ensureEffects[0]).peer).toBe(bob)
     })
 
-    it("unknown doc filtered by route: no ensure-doc", () => {
+    it("unknown doc filtered by canShare: no ensure-doc", () => {
       const update = makeUpdate({
-        route: docId => docId !== "blocked-doc",
+        canShare: docId => docId !== "blocked-doc",
       })
       let model = initSync(alice)
       ;[model] = addPeer(update, model, "bob", bob)
@@ -889,7 +889,7 @@ describe("sync-program", () => {
 
     it("unauthorized peer: no import effect", () => {
       const update = makeUpdate({
-        authorize: (_docId, peer) => peer.peerId !== "bob",
+        canAccept: (_docId, peer) => peer.peerId !== "bob",
       })
       let model = initSync(alice)
       ;[model] = addPeer(update, model, "bob", bob)
@@ -1297,12 +1297,12 @@ describe("sync-program", () => {
   })
 
   // -----------------------------------------------------------------------
-  // route predicate
+  // canShare predicate
   // -----------------------------------------------------------------------
-  describe("route predicate", () => {
+  describe("canShare predicate", () => {
     it("filters peers for doc-ensure announcements", () => {
       const update = makeUpdate({
-        route: (docId, peer) => {
+        canShare: (docId, peer) => {
           // Only allow bob to see "doc-1"
           if (docId === "doc-1" && peer.peerId === "carol") return false
           return true
@@ -1324,7 +1324,7 @@ describe("sync-program", () => {
 
     it("filters peers for local-doc-change pushes", () => {
       const update = makeUpdate({
-        route: (docId, peer) => {
+        canShare: (docId, peer) => {
           if (docId === "doc-1" && peer.peerId === "carol") return false
           return true
         },
@@ -1351,7 +1351,7 @@ describe("sync-program", () => {
 
     it("filters peers for present → ensure-doc", () => {
       const update = makeUpdate({
-        route: docId => docId !== "private-doc",
+        canShare: docId => docId !== "private-doc",
       })
       let model = initSync(alice)
       ;[model] = addPeer(update, model, "bob", bob)
@@ -1382,12 +1382,12 @@ describe("sync-program", () => {
   })
 
   // -----------------------------------------------------------------------
-  // authorize predicate
+  // canAccept predicate
   // -----------------------------------------------------------------------
-  describe("authorize predicate", () => {
+  describe("canAccept predicate", () => {
     it("blocks offer import from unauthorized peer", () => {
       const update = makeUpdate({
-        authorize: (_docId, peer) => peer.peerId !== "bob",
+        canAccept: (_docId, peer) => peer.peerId !== "bob",
       })
       let model = initSync(alice)
       ;[model] = addPeer(update, model, "bob", bob)
@@ -1411,7 +1411,7 @@ describe("sync-program", () => {
 
     it("allows offer import from authorized peer", () => {
       const update = makeUpdate({
-        authorize: (_docId, peer) => peer.peerId === "bob",
+        canAccept: (_docId, peer) => peer.peerId === "bob",
       })
       let model = initSync(alice)
       ;[model] = addPeer(update, model, "bob", bob)

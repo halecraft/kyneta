@@ -5,13 +5,14 @@
 //   Single entry point that:
 //   1. Builds the client app via Bun.build()
 //   2. Creates a server-side Exchange with:
-//      - route:           input docs only visible to owner
-//      - authorize:       clients can only write their own input doc
+//      - canShare:        input docs only visible to owner
+//      - canAccept:       clients can only write their own input doc
 //      - schemas:         declares PlayerInputDoc for auto-resolve
-//      - onDocCreated:    registers players with game loop on doc creation
-//      - onDocDismissed:  cleans up when players disconnect
-//   3. Runs the game loop at 60fps
-//   4. Serves static files from dist/ and upgrades /ws to WebSocket
+//   3. Subscribes to reactive feeds:
+//      - exchange.documents.subscribe(): registers players on doc creation
+//      - exchange.peers.subscribe():     cleans up on peer departure
+//   4. Runs the game loop at 60fps
+//   5. Serves static files from dist/ and upgrades /ws to WebSocket
 //
 //   Run with:  bun src/server.ts
 //
@@ -19,7 +20,7 @@
 
 /// <reference types="bun-types" />
 
-import { Exchange, type DocEventOrigin } from "@kyneta/exchange"
+import { Exchange } from "@kyneta/exchange"
 import { WebsocketServerTransport } from "@kyneta/websocket-transport/server"
 import {
   createBunWebsocketHandlers,
@@ -56,13 +57,13 @@ const exchange = new Exchange({
   transports: [() => serverTransport],
   schemas: [PlayerInputDoc],
 
-  // ── route ────────────────────────────────────────────────────────
+  // ── canShare ─────────────────────────────────────────────────────
   // Outbound flow control: which peers see which documents?
   //
   // • game-state: visible to everyone (all clients render it)
   // • input:*:    only visible to the owning peer
   //               (the server reads them locally, not via sync)
-  route(docId, peer) {
+  canShare(docId, peer) {
     if (docId.startsWith("input:")) {
       const owner = docId.slice("input:".length)
       return peer.peerId === owner
@@ -70,12 +71,12 @@ const exchange = new Exchange({
     return true
   },
 
-  // ── authorize ────────────────────────────────────────────────────
+  // ── canAccept ────────────────────────────────────────────────────
   // Inbound flow control: whose mutations are accepted?
   //
   // • game-state: reject all remote writes (server is the single writer)
   // • input:*:    accept only from the owning peer
-  authorize(docId, peer) {
+  canAccept(docId, peer) {
     if (docId === "game-state") {
       return false
     }
@@ -85,18 +86,15 @@ const exchange = new Exchange({
     }
     return false
   },
+})
 
-  // ── onDocCreated ─────────────────────────────────────────────────────
-  // Lifecycle notification: a doc was created in this exchange.
-  // For remote input:${peerId} docs, register the player with the game loop.
-  //
-  // Unlike onUnresolvedDoc (a policy gate), onDocCreated fires for every
-  // doc creation regardless of how it was resolved — auto-resolve, callback,
-  // or local get(). We filter on origin: "remote" to react only to
-  // peer-announced docs.
-  onDocCreated(docId, _peer, _mode, origin: DocEventOrigin) {
-    if (origin !== "remote") return
-    if (!docId.startsWith("input:")) return
+// React to document creation via the reactive documents feed.
+// When a remote peer's input doc is created, register the player.
+exchange.documents.subscribe(changeset => {
+  for (const change of changeset.changes) {
+    if (change.type !== "doc-created") continue
+    const docId = change.docId
+    if (!docId.startsWith("input:")) continue
 
     const peerId = docId.slice("input:".length)
 
@@ -106,17 +104,23 @@ const exchange = new Exchange({
         gameLoop.addPlayer(peerId, inputDoc)
       }
     })
-  },
+  }
+})
 
-  // ── onDocDismissed ───────────────────────────────────────────────
-  // A client disconnected — remove their car and dismiss the doc.
-  onDocDismissed(docId, _peer) {
-    if (!docId.startsWith("input:")) return
-
-    const peerId = docId.slice("input:".length)
+// React to peer departures — clean up players when peers disconnect.
+// This replaces the old onDocDismissed proxy, which failed on ungraceful
+// disconnect (no dismiss wire message when a browser tab closes).
+exchange.peers.subscribe(changeset => {
+  for (const change of changeset.changes) {
+    if (change.type !== "peer-departed") continue
+    const peerId = change.peer.peerId
     gameLoop.removePlayer(peerId)
-    exchange.dismiss(docId)
-  },
+    // Destroy the input doc if it exists
+    const inputDocId = `input:${peerId}`
+    if (exchange.has(inputDocId)) {
+      exchange.destroy(inputDocId)
+    }
+  }
 })
 
 // Register the game state document — the server holds the authoritative copy.

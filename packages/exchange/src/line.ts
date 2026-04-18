@@ -4,7 +4,7 @@
 // with automatic sequence numbering, acknowledgement-based pruning, and
 // policy-based routing/authorization. The Line class is standalone: it
 // composes with the Exchange entirely through public API (register(),
-// registerSchema(), get(), dismiss()) — no Exchange modification needed.
+// registerSchema(), get(), destroy()) — no Exchange modification needed.
 //
 // Protocol-first design: `Line.protocol(opts)` reifies the schema pair +
 // topic into a `LineProtocol` object. The protocol's `open()` method creates
@@ -357,15 +357,15 @@ export class Line<SendMsg, RecvMsg> {
   /**
    * Destroy the Line — permanent teardown.
    *
-   * Calls `close()` (if not already closed) and then dismisses both
+   * Calls `close()` (if not already closed) and then destroys both
    * underlying documents from the Exchange and any configured stores.
    * After `destroy()`, the Line cannot be resumed — `open()` would
    * create a fresh Line starting at `seq: 1`.
    */
   destroy(): void {
     this.close()
-    this.#exchange.dismiss(this.#outboxDocId)
-    this.#exchange.dismiss(this.#inboxDocId)
+    this.#exchange.destroy(this.#outboxDocId)
+    this.#exchange.destroy(this.#inboxDocId)
   }
 
   // -----------------------------------------------------------------------
@@ -493,7 +493,7 @@ export class Line<SendMsg, RecvMsg> {
     const cell = { line: null as Line<any, any> | null }
     const disposePolicy = exchange.register({
       name: `line:${topic}:${remotePeerId}`,
-      authorize: (
+      canAccept: (
         docId: DocId,
         peer: PeerIdentityDetails,
       ): boolean | undefined => {
@@ -502,9 +502,9 @@ export class Line<SendMsg, RecvMsg> {
         // Inbox: affirm the remote peer, abstain for unknowns.
         // Abstain (undefined) instead of veto (false) so that relay
         // topologies work — the relay server's peerId won't match
-        // remotePeerId, but the exchange-level authorize can still
+        // remotePeerId, but the exchange-level canAccept can still
         // accept it. Hard veto would block all relay offers.
-        // Context: jj:oyouvrss (Phase 4 — authorize gap workaround)
+        // Context: jj:oyouvrss (Phase 4 — canAccept gap workaround)
         if (docId === inboxDocId)
           return peer.peerId === remotePeerId ? true : undefined
         return undefined
@@ -604,14 +604,15 @@ export class Line<SendMsg, RecvMsg> {
         let pendingLines: Line<any, any>[] | null = []
         let listenerDisposed = false
 
-        // Unified cleanup — shared by policy dispose hook and manual
+        // Unified cleanup — shared by subscription unsubscribe and manual
         // listener.dispose(). Whoever calls first wins; subsequent
         // calls are no-ops via the listenerDisposed guard.
+        let unsubscribeDocs: (() => void) | null = null
         function disposeListener(): void {
           if (listenerDisposed) return
           listenerDisposed = true
           callbacks.clear()
-          disposePolicy()
+          unsubscribeDocs?.()
         }
 
         function notifyOrBuffer(line: Line<any, any>): void {
@@ -628,31 +629,33 @@ export class Line<SendMsg, RecvMsg> {
           }
         }
 
-        // 2. Register a policy with onDocCreated — BEFORE registerSchema
-        //    so that deferred-then-promoted docs (client connected before
-        //    listen was called) fire into this handler immediately.
-        const disposePolicy = exchange.register({
-          name: `__line-listen:${topic}`,
-          onDocCreated: (
-            docId: DocId,
-            _peer: PeerIdentityDetails,
-            _mode: "interpret" | "replicate",
-            _origin: "local" | "remote",
-          ): void => {
+        // 2. Subscribe to the documents feed to detect newly created docs.
+        //    When a doc is created (local get(), remote auto-resolve, or
+        //    deferred-then-promoted), we check if it's a Line doc addressed
+        //    to us and create the server-side Line.
+        //
+        //    This replaces the old onDocCreated policy callback which was
+        //    removed in the governance reform. The documents feed emits
+        //    doc-created events from the same registerDoc() code path.
+        unsubscribeDocs = exchange.documents.subscribe(changeset => {
+          for (const change of changeset.changes) {
+            if (change.type !== "doc-created") continue
+            const docId = change.docId
+
             // After dispose, stop accepting new Lines
             if (listenerDisposed) return
 
             // Parse the doc ID — only react to Line docs
             const parsed = parseLineDocId(docId)
-            if (!parsed) return
+            if (!parsed) continue
 
             // Check: correct topic and addressed to us
-            if (parsed.topic !== topic) return
-            if (parsed.to !== exchange.peerId) return
+            if (parsed.topic !== topic) continue
+            if (parsed.to !== exchange.peerId) continue
 
             // Duplicate guard: skip if a Line already exists
             const key = registryKey(parsed.from, topic)
-            if (getRegistry(exchange).has(key)) return
+            if (getRegistry(exchange).has(key)) continue
 
             // Create the server-side Line: server sends serverBound,
             // receives clientBound (the reverse of the client role)
@@ -665,21 +668,46 @@ export class Line<SendMsg, RecvMsg> {
             )
 
             notifyOrBuffer(line)
-          },
-          dispose: () => {
-            disposeListener()
-          },
+          }
         })
 
         // 3. Register schemas — puts them in the capabilities registry.
         //    Incoming Line docs whose schema hash matches will auto-resolve
-        //    in onEnsureDoc step 1, bypassing onUnresolvedDoc.
+        //    in onEnsureDoc step 1, bypassing resolve.
         //    If any deferred docs match, registerSchema auto-promotes them
-        //    synchronously, firing onDocCreated into the policy above.
-        //    Any Lines created here are buffered in pendingLines.
+        //    synchronously (adds to #docCache), but the documents feed
+        //    fires at quiescence — so the subscription above won't see
+        //    them yet. Step 3b scans existing docs to catch them.
         exchange.registerSchema(clientBound)
         if (serverBound !== clientBound) {
           exchange.registerSchema(serverBound)
+        }
+
+        // 3b. Scan existing documents to catch docs that were promoted
+        //     synchronously by registerSchema above. The documents feed
+        //     subscription (step 2) fires at quiescence, so it misses
+        //     docs created during the synchronous registerSchema call.
+        //     This two-phase pattern (subscribe + scan) mirrors Source.of.
+        for (const [docId] of exchange.documents()) {
+          if (listenerDisposed) break
+
+          const parsed = parseLineDocId(docId)
+          if (!parsed) continue
+          if (parsed.topic !== topic) continue
+          if (parsed.to !== exchange.peerId) continue
+
+          const key = registryKey(parsed.from, topic)
+          if (getRegistry(exchange).has(key)) continue
+
+          const line = Line.#create(
+            exchange,
+            topic,
+            parsed.from,
+            serverBound,
+            clientBound,
+          )
+
+          notifyOrBuffer(line)
         }
 
         // 4. Return the LineListener handle

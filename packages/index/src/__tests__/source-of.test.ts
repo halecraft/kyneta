@@ -36,20 +36,27 @@ const TeamDoc = json.bind(teamSchema)
 
 function createMockExchange() {
   const docs = new Map<string, { ref: any; schemaHash: string }>()
-  const policies: Array<{
-    onDocCreated?: (...args: any[]) => void
-    onDocDismissed?: (...args: any[]) => void
-  }> = []
   const schemas = new Map<string, any>()
+  const docSubscribers = new Set<(cs: any) => void>()
+
+  // Build a documents reactive-map-like object
+  const docsMap = new Map<string, { mode: string; suspended: boolean }>()
+
+  const documentsCallable: any = () => docsMap
+  documentsCallable.subscribe = (cb: (cs: any) => void): (() => void) => {
+    docSubscribers.add(cb)
+    return () => docSubscribers.delete(cb)
+  }
+  documentsCallable.has = (docId: string) => docsMap.has(docId)
+  documentsCallable.get = (docId: string) => docsMap.get(docId)
+  documentsCallable.current = docsMap
 
   return {
     registerSchema(bound: any) {
       schemas.set(bound.schemaHash, bound)
     },
 
-    documentIds(): ReadonlySet<string> {
-      return new Set(docs.keys())
-    },
+    documents: documentsCallable,
 
     getDocSchemaHash(docId: string): string | undefined {
       return docs.get(docId)?.schemaHash
@@ -59,32 +66,27 @@ function createMockExchange() {
       if (docs.has(docId)) return docs.get(docId)?.ref
       const doc = (createDoc as any)(bound)
       docs.set(docId, { ref: doc, schemaHash: bound.schemaHash })
+      docsMap.set(docId, { mode: "interpret", suspended: false })
       return doc
     },
 
-    register(policy: any): () => void {
-      policies.push(policy)
-      return () => {
-        const idx = policies.indexOf(policy)
-        if (idx !== -1) policies.splice(idx, 1)
-      }
-    },
-
-    dismiss(docId: string) {
+    destroy(docId: string) {
       docs.delete(docId)
-      const peer = {} as any
-      for (const policy of [...policies]) {
-        policy.onDocDismissed?.(docId, peer, "local")
+      docsMap.delete(docId)
+      // Emit doc-removed to subscribers
+      for (const cb of docSubscribers) {
+        cb({ changes: [{ type: "doc-removed", docId }] })
       }
     },
 
-    // Test helper: simulate a doc being created (triggers onDocCreated)
+    // Test helper: simulate a doc being created (triggers doc-created event)
     simulateDocCreated(docId: string, bound: any): any {
       const doc = (createDoc as any)(bound)
       docs.set(docId, { ref: doc, schemaHash: bound.schemaHash })
-      const peer = {} as any
-      for (const policy of [...policies]) {
-        policy.onDocCreated?.(docId, peer, "interpret", "local")
+      docsMap.set(docId, { mode: "interpret", suspended: false })
+      // Emit doc-created to subscribers
+      for (const cb of docSubscribers) {
+        cb({ changes: [{ type: "doc-created", docId }] })
       }
       return doc
     },
@@ -139,7 +141,7 @@ describe("Source.of", () => {
       source.dispose()
     })
 
-    it("doc dismissed emits -1 delta", () => {
+    it("doc destroyed emits -1 delta", () => {
       const exchange = createMockExchange()
       exchange.get("proj-1", ProjectDoc)
 
@@ -147,7 +149,7 @@ describe("Source.of", () => {
       const events: SourceEvent<any>[] = []
       source.subscribe(e => events.push(e))
 
-      exchange.dismiss("proj-1")
+      exchange.destroy("proj-1")
 
       expect(events.length).toBeGreaterThanOrEqual(1)
       const allRemoved = events.flatMap(e => toRemoved(e.delta))
@@ -269,7 +271,7 @@ describe("Source.of", () => {
       source.dispose()
     })
 
-    it("doc dismissed → its list entities retracted", () => {
+    it("doc destroyed → its list entities retracted", () => {
       const exchange = createMockExchange()
       const docRef = exchange.get("proj-1", ProjectDoc)
       change(docRef, (d: any) => {
@@ -286,7 +288,7 @@ describe("Source.of", () => {
       const events: SourceEvent<any>[] = []
       source.subscribe(e => events.push(e))
 
-      exchange.dismiss("proj-1")
+      exchange.destroy("proj-1")
 
       const allRemoved = events.flatMap(e => toRemoved(e.delta))
       expect(allRemoved).toContain("proj-1\0t1")

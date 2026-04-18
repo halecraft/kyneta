@@ -72,6 +72,7 @@ export type PeerState = {
  */
 export type DocInfo = {
   mode: "interpret" | "replicate" | "deferred"
+  suspended: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -89,9 +90,19 @@ export type DocInfo = {
  *   participation only, no local replica).
  * - `doc-promoted`: a deferred document was promoted to interpret or
  *   replicate mode (e.g. via `exchange.get()` on a deferred doc).
+ * - `doc-suspended`: a document left the sync graph but its runtime
+ *   was preserved for later resumption.
+ * - `doc-resumed`: a previously suspended document re-entered the
+ *   sync graph with its surviving runtime.
  */
 export interface DocChange extends ChangeBase {
-  readonly type: "doc-created" | "doc-removed" | "doc-deferred" | "doc-promoted"
+  readonly type:
+    | "doc-created"
+    | "doc-removed"
+    | "doc-deferred"
+    | "doc-promoted"
+    | "doc-suspended"
+    | "doc-resumed"
   readonly docId: DocId
 }
 

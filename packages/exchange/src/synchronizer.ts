@@ -40,7 +40,7 @@ import type {
   SyncMsg,
 } from "@kyneta/transport"
 import { isLifecycleMsg } from "@kyneta/transport"
-import type { AuthorizePredicate, RoutePredicate } from "./exchange.js"
+
 import {
   createSessionUpdate,
   initSession,
@@ -100,7 +100,7 @@ export type DocRuntime =
  * Callback invoked by `ensure-doc` — ensures a document exists locally.
  *
  * Fired during effect execution when a peer announces an unknown doc.
- * The Exchange auto-resolves schemas or delegates to `onUnresolvedDoc`.
+ * The Exchange auto-resolves schemas or delegates to `resolve`.
  *
  * **Must be idempotent.** Batched ensure effects may fire for a doc that
  * a sibling effect's cascade has already created. Implementations must
@@ -118,7 +118,7 @@ export type DocCreationCallback = (
  * Callback invoked by `ensure-doc-dismissed` — ensures a dismissed
  * doc is handled locally.
  *
- * The Exchange's `onDocDismissed` policy callback handles cleanup.
+ * The Exchange handles cleanup via dismiss().
  *
  * **Must be idempotent.** First writer wins.
  */
@@ -143,9 +143,10 @@ export type EpochBoundaryPredicate = (
 export type SynchronizerParams = {
   identity: PeerIdentityDetails
   transports?: AnyTransport[]
-  route: RoutePredicate
-  authorize: AuthorizePredicate
-  epochBoundary: EpochBoundaryPredicate
+  canShare: (docId: DocId, peer: PeerIdentityDetails) => boolean
+  canAccept: (docId: DocId, peer: PeerIdentityDetails) => boolean
+  canConnect?: (peer: PeerIdentityDetails) => boolean
+  canReset: EpochBoundaryPredicate
   onEnsureDoc?: DocCreationCallback
   onEnsureDocDismissed?: DocDismissedCallback
   departureTimeout?: number
@@ -324,7 +325,7 @@ export class Synchronizer {
    */
   readonly #stateAdvancedListeners = new Set<(docId: DocId) => void>()
 
-  readonly #epochBoundary: EpochBoundaryPredicate
+  readonly #canReset: EpochBoundaryPredicate
 
   /**
    * Backward-compat getter — exposes `documents` and `peers` from the
@@ -340,18 +341,19 @@ export class Synchronizer {
   constructor({
     identity,
     transports = [],
-    route,
-    authorize,
-    epochBoundary,
+    canShare,
+    canAccept,
+    canConnect,
+    canReset,
     onEnsureDoc,
     onEnsureDocDismissed,
     departureTimeout,
   }: SynchronizerParams) {
     this.identity = identity
 
-    this.#sessionUpdate = createSessionUpdate()
-    this.#syncUpdate = createSyncUpdate({ route, authorize })
-    this.#epochBoundary = epochBoundary
+    this.#sessionUpdate = createSessionUpdate({ canConnect })
+    this.#syncUpdate = createSyncUpdate({ canShare, canAccept })
+    this.#canReset = canReset
     this.#docCreationCallback = onEnsureDoc
     this.#docDismissedCallback = onEnsureDocDismissed
 
@@ -570,6 +572,50 @@ export class Synchronizer {
     this.#dispatchSync({
       type: "sync/doc-dismiss",
       docId,
+    })
+  }
+
+  /**
+   * Suspend a document — leave the sync graph but keep the runtime.
+   *
+   * Dispatches `sync/doc-dismiss` (removes from model, broadcasts wire
+   * dismiss) but does NOT delete from `#docRuntimes`. The runtime survives
+   * so `resumeDocument()` can re-register with the current version.
+   */
+  suspendDocument(docId: DocId): void {
+    if (this.#docRuntimes.has(docId) || this.#syncModel.documents.has(docId)) {
+      this.#pendingDocEvents.push({ type: "doc-suspended", docId })
+    }
+    this.#dispatchSync({
+      type: "sync/doc-dismiss",
+      docId,
+    })
+  }
+
+  /**
+   * Resume a suspended document — re-enter the sync graph.
+   *
+   * Reads the surviving `DocRuntime` from `#docRuntimes` and re-dispatches
+   * `sync/doc-ensure` with the current version. Peers receive `present` +
+   * `interest` and delta-sync from the suspended version.
+   */
+  resumeDocument(docId: DocId): void {
+    const runtime = this.#docRuntimes.get(docId)
+    if (!runtime) {
+      throw new Error(
+        `Cannot resume document '${docId}': no runtime found. ` +
+          `The document may have been destroyed.`,
+      )
+    }
+    this.#pendingDocEvents.push({ type: "doc-resumed", docId })
+    this.#dispatchSync({
+      type: "sync/doc-ensure",
+      docId: runtime.docId,
+      mode: runtime.mode,
+      version: runtime.replica.version().serialize(),
+      replicaType: runtime.replicaFactory.replicaType,
+      mergeStrategy: runtime.strategy,
+      schemaHash: runtime.schemaHash,
     })
   }
 
@@ -938,6 +984,15 @@ export class Synchronizer {
         })
         break
       }
+      case "reject-channel":
+        // Reject the connection by dispatching channel-removed to clean up
+        // the session model. The transport channel is not explicitly closed
+        // — it will time out or be cleaned up by the transport layer.
+        this.#pendingInputs.push({
+          type: "sess/channel-removed",
+          channelId: effect.channelId,
+        })
+        break
       case "start-departure-timer": {
         // Clear any existing timer for this peer
         const existing = this.#departureTimers.get(effect.peerId)
@@ -1025,7 +1080,7 @@ export class Synchronizer {
         break
       case "ensure-doc-dismissed":
         // Ensure semantics — callback must be idempotent (first writer wins).
-        // The Exchange's onDocDismissed policy callback handles cleanup.
+        // The Exchange handles cleanup via dismiss().
         this.#docDismissedCallback?.(effect.docId, effect.peer, "remote")
         break
       case "batch":
@@ -1208,7 +1263,7 @@ export class Synchronizer {
         peerId: effect.fromPeerId,
       }
 
-      const accept = this.#epochBoundary(
+      const accept = this.#canReset(
         effect.docId,
         peerIdentity as PeerIdentityDetails,
         runtime.strategy,
@@ -1334,13 +1389,14 @@ export class Synchronizer {
 
     // Rebuild from #docRuntimes (interpret + replicate docs)
     for (const [docId, runtime] of this.#docRuntimes) {
-      this.#docHandle.set(docId, { mode: runtime.mode })
+      const suspended = !this.#syncModel.documents.has(docId)
+      this.#docHandle.set(docId, { mode: runtime.mode, suspended })
     }
 
     // Merge deferred docs from syncModel (no runtime, only model entry)
     for (const [docId, entry] of this.#syncModel.documents) {
       if (entry.mode === "deferred") {
-        this.#docHandle.set(docId, { mode: "deferred" })
+        this.#docHandle.set(docId, { mode: "deferred", suspended: false })
       }
     }
 

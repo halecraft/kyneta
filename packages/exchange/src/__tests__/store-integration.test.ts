@@ -206,7 +206,7 @@ describe("Storage + network sync", () => {
         createBridgeTransport({ transportType: "server-side", bridge }),
       ],
       stores: [createInMemoryStore({ sharedData })],
-      onUnresolvedDoc: () => Replicate(),
+      resolve: () => Replicate(),
     })
 
     const peerA = createExchange({
@@ -245,7 +245,7 @@ describe("Storage + network sync", () => {
         }),
       ],
       stores: [createInMemoryStore({ sharedData })],
-      onUnresolvedDoc: () => Replicate(),
+      resolve: () => Replicate(),
     })
 
     const peerB = createExchange({
@@ -256,7 +256,7 @@ describe("Storage + network sync", () => {
           bridge: bridge2,
         }),
       ],
-      onUnresolvedDoc: () => Interpret(SequentialDoc),
+      resolve: () => Interpret(SequentialDoc),
     })
 
     // Wait for server hydration + peer B sync
@@ -282,7 +282,7 @@ describe("Storage + network sync", () => {
         createBridgeTransport({ transportType: "server-side", bridge }),
       ],
       stores: [backend],
-      onUnresolvedDoc: () => Replicate(),
+      resolve: () => Replicate(),
     })
 
     const client = createExchange({
@@ -330,7 +330,7 @@ describe("Storage + replicated doc", () => {
         createBridgeTransport({ transportType: "relay-side", bridge: bridge1 }),
       ],
       stores: [createInMemoryStore({ sharedData })],
-      onUnresolvedDoc: () => Replicate(),
+      resolve: () => Replicate(),
     })
 
     const peerA = createExchange({
@@ -374,7 +374,7 @@ describe("Storage + replicated doc", () => {
         createBridgeTransport({ transportType: "relay-side", bridge: bridge2 }),
       ],
       stores: [createInMemoryStore({ sharedData })],
-      onUnresolvedDoc: () => Replicate(),
+      resolve: () => Replicate(),
     })
 
     const peerB = createExchange({
@@ -385,7 +385,7 @@ describe("Storage + replicated doc", () => {
           bridge: bridge2,
         }),
       ],
-      onUnresolvedDoc: () => Interpret(SequentialDoc),
+      resolve: () => Interpret(SequentialDoc),
     })
 
     await drain(300)
@@ -401,11 +401,11 @@ describe("Storage + replicated doc", () => {
 })
 
 // ===========================================================================
-// Storage + dismiss
+// Storage + destroy
 // ===========================================================================
 
-describe("Storage + dismiss", () => {
-  it("dismiss() removes doc from storage", async () => {
+describe("Storage + destroy", () => {
+  it("destroy() removes doc from storage", async () => {
     const backend = new InMemoryStore()
 
     const exchange = createExchange({
@@ -416,12 +416,12 @@ describe("Storage + dismiss", () => {
     const doc = exchange.get("doc-1", SequentialDoc)
     await exchange.flush()
 
-    change(doc, d => d.title.set("will be dismissed"))
+    change(doc, d => d.title.set("will be destroyed"))
     await exchange.flush()
 
     expect(await backend.lookup("doc-1")).not.toBeNull()
 
-    exchange.dismiss("doc-1")
+    exchange.destroy("doc-1")
     await exchange.flush()
 
     expect(await backend.lookup("doc-1")).toBeNull()
@@ -444,7 +444,7 @@ describe("No storage (baseline)", () => {
     const exchangeB = createExchange({
       identity: { peerId: "peer-b" },
       transports: [createBridgeTransport({ transportType: "side-b", bridge })],
-      onUnresolvedDoc: () => Interpret(SequentialDoc),
+      resolve: () => Interpret(SequentialDoc),
     })
 
     const docA = exchangeA.get("doc-1", SequentialDoc)

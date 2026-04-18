@@ -153,23 +153,18 @@ export { Synchronizer } from "./synchronizer.js"
 // Doc Governance — composable policy registration
 // ---------------------------------------------------------------------------
 
-export type { DocPolicy, RulePredicate } from "./doc-governance.js"
-export { composeRule, DocGovernance } from "./doc-governance.js"
+export type {
+  EpochBoundaryPredicate,
+  GatePredicate,
+  Policy,
+} from "./governance.js"
+export { composeGate, Governance } from "./governance.js"
 
 // ---------------------------------------------------------------------------
 // Exchange — the public API
 // ---------------------------------------------------------------------------
 
-export type {
-  AuthorizePredicate,
-  Disposition,
-  DocEventOrigin,
-  ExchangeParams,
-  OnDocCreated,
-  OnDocDismissed,
-  OnUnresolvedDoc,
-  RoutePredicate,
-} from "./exchange.js"
+export type { Disposition, ExchangeParams } from "./exchange.js"
 export { Exchange } from "./exchange.js"
 
 // ---------------------------------------------------------------------------

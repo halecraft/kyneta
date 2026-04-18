@@ -1029,4 +1029,80 @@ describe("session-program", () => {
       expect(channelsBefore.has(2)).toBe(false)
     })
   })
+
+  // =========================================================================
+  // canConnect gate
+  // =========================================================================
+
+  describe("canConnect gate", () => {
+    it("handleEstablishReceived with denied peer produces reject-channel effect and no peer", () => {
+      const update = createSessionUpdate({
+        canConnect: () => false,
+      })
+
+      let model = initSession(alice)
+
+      // Step 1: channel-added
+      ;[model] = update(
+        { type: "sess/channel-added", channelId: 1, transportType: "ws" },
+        model,
+      )
+
+      // Step 2: channel-establish (local side sends)
+      ;[model] = update({ type: "sess/channel-establish", channelId: 1 }, model)
+
+      // Step 3: receive establish from remote — should be rejected
+      const [model4, effect] = update(
+        {
+          type: "sess/message-received",
+          fromChannelId: 1,
+          message: { type: "establish", identity: bob },
+        },
+        model,
+      )
+
+      // Should produce a reject-channel effect
+      expect(effect).toBeDefined()
+      const effects = flattenEffects(effect)
+      const rejectEffects = effects.filter(e => e.type === "reject-channel")
+      expect(rejectEffects.length).toBe(1)
+
+      // The peer was NOT added to the model
+      expect(model4.peers.size).toBe(0)
+    })
+
+    it("canConnect returning true allows normal establishment", () => {
+      const update = createSessionUpdate({
+        canConnect: () => true,
+      })
+
+      const model = initSession(alice)
+      const [m, _effects, notifications] = establishChannel(
+        update,
+        model,
+        1,
+        bob,
+      )
+
+      // Peer was added
+      expect(m.peers.size).toBe(1)
+      expect(m.peers.has("bob")).toBe(true)
+
+      // peer-established notification fired
+      const established = notifications.filter(
+        n => n.type === "notify/peer-established",
+      )
+      expect(established.length).toBe(1)
+    })
+
+    it("canConnect not provided (undefined) allows normal establishment", () => {
+      const update = createSessionUpdate()
+
+      const model = initSession(alice)
+      const [m] = establishChannel(update, model, 1, bob)
+
+      expect(m.peers.size).toBe(1)
+      expect(m.peers.has("bob")).toBe(true)
+    })
+  })
 })

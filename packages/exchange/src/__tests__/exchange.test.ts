@@ -5,6 +5,7 @@ import { loro } from "@kyneta/loro-schema"
 import {
   bind,
   change,
+  Defer,
   json,
   plainReplicaFactory,
   plainSubstrateFactory,
@@ -226,14 +227,14 @@ describe("Exchange", () => {
     })
   })
 
-  describe("dismiss()", () => {
+  describe("destroy()", () => {
     it("removes a document", () => {
       const exchange = new Exchange({ identity: { peerId: "test" } })
 
       exchange.get("doc-1", TestDoc)
       expect(exchange.has("doc-1")).toBe(true)
 
-      exchange.dismiss("doc-1")
+      exchange.destroy("doc-1")
       expect(exchange.has("doc-1")).toBe(false)
     })
   })
@@ -899,7 +900,7 @@ describe("Exchange", () => {
       expect(() => exchange.get("doc-1", TestDoc)).toThrow(/replicate mode/)
     })
 
-    it("dismiss() works for replicated docs", () => {
+    it("destroy() works for replicated docs", () => {
       const exchange = createExchange()
       exchange.replicate(
         "rep-doc",
@@ -908,7 +909,7 @@ describe("Exchange", () => {
         "00test",
       )
       expect(exchange.has("rep-doc")).toBe(true)
-      exchange.dismiss("rep-doc")
+      exchange.destroy("rep-doc")
       expect(exchange.has("rep-doc")).toBe(false)
     })
 
@@ -924,6 +925,176 @@ describe("Exchange", () => {
       expect(exchange.has("int-doc")).toBe(true)
       expect(exchange.has("rep-doc")).toBe(true)
       expect(exchange.has("unknown")).toBe(false)
+    })
+  })
+
+  // =========================================================================
+  // suspend / resume
+  // =========================================================================
+
+  describe("suspend / resume", () => {
+    it("suspend() keeps doc in cache but removes from sync model", () => {
+      const exchange = createExchange()
+      exchange.get("doc-1", TestDoc)
+      expect(exchange.has("doc-1")).toBe(true)
+
+      exchange.suspend("doc-1")
+
+      // Doc still exists in cache
+      expect(exchange.has("doc-1")).toBe(true)
+      // But is suspended in documents feed
+      expect(exchange.documents.get("doc-1")?.suspended).toBe(true)
+    })
+
+    it("exchange.documents emits doc-suspended on suspend", () => {
+      const exchange = createExchange()
+      exchange.get("doc-1", TestDoc)
+
+      const changes: any[] = []
+      exchange.documents.subscribe(cs => changes.push(...cs.changes))
+
+      exchange.suspend("doc-1")
+
+      const suspended = changes.filter((c: any) => c.type === "doc-suspended")
+      expect(suspended.length).toBe(1)
+      expect(suspended[0].docId).toBe("doc-1")
+    })
+
+    it("resume() re-enters sync graph", () => {
+      const exchange = createExchange()
+      exchange.get("doc-1", TestDoc)
+      exchange.suspend("doc-1")
+
+      expect(exchange.documents.get("doc-1")?.suspended).toBe(true)
+
+      exchange.resume("doc-1")
+
+      expect(exchange.documents.get("doc-1")?.suspended).toBe(false)
+    })
+
+    it("exchange.documents emits doc-resumed on resume", () => {
+      const exchange = createExchange()
+      exchange.get("doc-1", TestDoc)
+      exchange.suspend("doc-1")
+
+      const changes: any[] = []
+      exchange.documents.subscribe(cs => changes.push(...cs.changes))
+
+      exchange.resume("doc-1")
+
+      const resumed = changes.filter((c: any) => c.type === "doc-resumed")
+      expect(resumed.length).toBe(1)
+      expect(resumed[0].docId).toBe("doc-1")
+    })
+
+    it("destroy() after suspend purges all local state", () => {
+      const exchange = createExchange()
+      exchange.get("doc-1", TestDoc)
+      exchange.suspend("doc-1")
+
+      expect(exchange.has("doc-1")).toBe(true)
+
+      exchange.destroy("doc-1")
+
+      expect(exchange.has("doc-1")).toBe(false)
+      expect(exchange.documents.has("doc-1")).toBe(false)
+    })
+
+    it("get() on suspended doc throws with guidance to call resume()", () => {
+      const exchange = createExchange()
+      exchange.get("doc-1", TestDoc)
+      exchange.suspend("doc-1")
+
+      expect(() => exchange.get("doc-1", TestDoc)).toThrow(/suspended/)
+      expect(() => exchange.get("doc-1", TestDoc)).toThrow(/resume/)
+    })
+
+    it("suspend() is idempotent", () => {
+      const exchange = createExchange()
+      exchange.get("doc-1", TestDoc)
+      exchange.suspend("doc-1")
+
+      // Second suspend should not throw
+      exchange.suspend("doc-1")
+
+      expect(exchange.documents.get("doc-1")?.suspended).toBe(true)
+    })
+
+    it("resume() on non-suspended doc throws", () => {
+      const exchange = createExchange()
+      exchange.get("doc-1", TestDoc)
+
+      expect(() => exchange.resume("doc-1")).toThrow(/not suspended/)
+    })
+
+    it("suspend() on deferred doc throws", async () => {
+      const bridge = new Bridge()
+      const exchangeA = createExchange({
+        identity: { peerId: "alice" },
+        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      })
+      const exchangeB = createExchange({
+        identity: { peerId: "bob" },
+        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+        resolve: () => Defer(),
+      })
+
+      exchangeA.get("deferred-doc", TestDoc)
+      await drain()
+
+      expect(exchangeB.deferred.has("deferred-doc")).toBe(true)
+      expect(() => exchangeB.suspend("deferred-doc")).toThrow(/deferred/)
+    })
+  })
+
+  // =========================================================================
+  // canConnect
+  // =========================================================================
+
+  describe("canConnect", () => {
+    it("canConnect returning false prevents peer establishment", async () => {
+      const bridge = new Bridge()
+
+      const _exchange1 = createExchange({
+        identity: { peerId: "alice" },
+        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      })
+
+      // Bob rejects all connections
+      const exchange2 = createExchange({
+        identity: { peerId: "bob" },
+        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      })
+      exchange2.register({
+        canConnect: () => false,
+      })
+
+      await drain()
+
+      // Alice should NOT see bob as a peer (bob rejected the connection)
+      expect(exchange2.peers().size).toBe(0)
+    })
+
+    it("canConnect returning undefined defers (default open)", async () => {
+      const bridge = new Bridge()
+
+      const _exchange1 = createExchange({
+        identity: { peerId: "alice" },
+        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      })
+
+      const exchange2 = createExchange({
+        identity: { peerId: "bob" },
+        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      })
+      exchange2.register({
+        canConnect: () => undefined,
+      })
+
+      await drain()
+
+      // Undefined = no opinion, default is open
+      expect(exchange2.peers().size).toBe(1)
     })
   })
 })

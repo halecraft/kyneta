@@ -1,18 +1,13 @@
-// doc-governance — unit tests for three-valued predicate composition and DocGovernance.
+// governance — unit tests for three-valued predicate composition and Governance.
 //
-// Architecture mirrors doc-governance.ts: pure function tests first (composeRule),
-// then imperative shell tests (DocGovernance).
+// Architecture mirrors governance.ts: pure function tests first (composeGate),
+// then imperative shell tests (Governance).
 
 import { Interpret, json, Schema } from "@kyneta/schema"
 import type { PeerIdentityDetails } from "@kyneta/transport"
 import { describe, expect, it, vi } from "vitest"
-import {
-  composeRule,
-  DocGovernance,
-  type DocPolicy,
-} from "../doc-governance.js"
-import type { OnUnresolvedDoc } from "../exchange.js"
 import { Exchange } from "../exchange.js"
+import { composeGate, Governance } from "../governance.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -27,135 +22,127 @@ const doc = "doc:test"
 const alice = peer("alice")
 
 // ---------------------------------------------------------------------------
-// Pure function: composeRule
+// Pure function: composeGate
 // ---------------------------------------------------------------------------
 
-describe("composeRule", () => {
+describe("composeGate", () => {
   describe("defaultWhenAllUndefined: true (open by default)", () => {
-    const compose = (policies: DocPolicy[]) =>
-      composeRule(policies, "route", doc, alice, true)
+    const compose = (results: Iterable<boolean | undefined>) =>
+      composeGate(results, true)
 
-    it("single policy returning true → true", () => {
-      expect(compose([{ route: () => true }])).toBe(true)
+    it("single true → true", () => {
+      expect(compose([true])).toBe(true)
     })
 
-    it("single policy returning false → false", () => {
-      expect(compose([{ route: () => false }])).toBe(false)
+    it("single false → false", () => {
+      expect(compose([false])).toBe(false)
     })
 
-    it("single policy returning undefined → true (default open)", () => {
-      expect(compose([{ route: () => undefined }])).toBe(true)
+    it("single undefined → true (default open)", () => {
+      expect(compose([undefined])).toBe(true)
     })
 
     it("deny wins regardless of order", () => {
-      expect(compose([{ route: () => true }, { route: () => false }])).toBe(
-        false,
-      )
-      expect(compose([{ route: () => false }, { route: () => true }])).toBe(
-        false,
-      )
+      expect(compose([true, false])).toBe(false)
+      expect(compose([false, true])).toBe(false)
     })
 
     it("true and undefined → true", () => {
-      expect(compose([{ route: () => undefined }, { route: () => true }])).toBe(
-        true,
-      )
+      expect(compose([undefined, true])).toBe(true)
     })
 
     it("all undefined → default", () => {
-      expect(
-        compose([{ route: () => undefined }, { route: () => undefined }]),
-      ).toBe(true)
+      expect(compose([undefined, undefined])).toBe(true)
     })
 
-    it("short-circuits on false — subsequent policies not evaluated", () => {
-      const second = vi.fn(() => true as boolean | undefined)
-      compose([{ route: () => false }, { route: second }])
-      expect(second).not.toHaveBeenCalled()
+    it("short-circuits on false — generator yields stop early", () => {
+      let secondEvaluated = false
+      function* gen(): Iterable<boolean | undefined> {
+        yield false
+        secondEvaluated = true
+        yield true
+      }
+      compose(gen())
+      expect(secondEvaluated).toBe(false)
     })
 
-    it("policies without the evaluated field are transparent", () => {
-      // A policy with only `authorize` should not affect `route` composition
-      expect(compose([{ authorize: () => false }])).toBe(true)
+    it("empty iterable → default", () => {
+      expect(compose([])).toBe(true)
     })
   })
 
   describe("defaultWhenAllUndefined: false (closed by default)", () => {
-    const compose = (policies: DocPolicy[]) =>
-      composeRule(policies, "route", doc, alice, false)
+    const compose = (results: Iterable<boolean | undefined>) =>
+      composeGate(results, false)
 
     it("all undefined → false", () => {
-      expect(
-        compose([{ route: () => undefined }, { route: () => undefined }]),
-      ).toBe(false)
+      expect(compose([undefined, undefined])).toBe(false)
     })
 
     it("single true overrides closed default", () => {
-      expect(compose([{ route: () => true }, { route: () => undefined }])).toBe(
-        true,
-      )
+      expect(compose([true, undefined])).toBe(true)
     })
   })
 
-  it("empty policies array → defaultWhenAllUndefined", () => {
-    expect(composeRule([], "route", doc, alice, true)).toBe(true)
-    expect(composeRule([], "route", doc, alice, false)).toBe(false)
+  it("empty iterable → defaultWhenAllUndefined", () => {
+    expect(composeGate([], true)).toBe(true)
+    expect(composeGate([], false)).toBe(false)
   })
 })
 
 // ---------------------------------------------------------------------------
-// Imperative shell: DocGovernance
+// Imperative shell: Governance
 // ---------------------------------------------------------------------------
 
-describe("DocGovernance", () => {
+describe("Governance", () => {
   // -----------------------------------------------------------------------
   // Lifecycle: register, dispose, clear
   // -----------------------------------------------------------------------
 
   describe("lifecycle", () => {
     it("register → compose reflects policy; dispose → reverts to default", () => {
-      const registry = new DocGovernance()
-      const dispose = registry.register({ route: () => false })
-      expect(registry.route(doc, alice)).toBe(false)
+      const registry = new Governance()
+      const dispose = registry.register({ canShare: () => false })
+      expect(registry.canShare(doc, alice)).toBe(false)
       dispose()
-      expect(registry.route(doc, alice)).toBe(true)
+      expect(registry.canShare(doc, alice)).toBe(true)
     })
 
     it("dispose is idempotent", () => {
-      const registry = new DocGovernance()
-      const dispose = registry.register({ route: () => false })
+      const registry = new Governance()
+      const dispose = registry.register({ canShare: () => false })
       dispose()
       dispose() // must not throw or corrupt state
-      expect(registry.route(doc, alice)).toBe(true)
+      expect(registry.canShare(doc, alice)).toBe(true)
     })
 
     it("clear() removes all policies and resets named policy map", () => {
-      const registry = new DocGovernance()
-      registry.register({ name: "a", route: () => false })
-      registry.register({ authorize: () => false })
+      const registry = new Governance()
+      registry.register({ name: "a", canShare: () => false })
+      registry.register({ canAccept: () => false })
       registry.clear()
 
-      expect(registry.route(doc, alice)).toBe(true)
-      expect(registry.authorize(doc, alice)).toBe(true)
+      expect(registry.canShare(doc, alice)).toBe(true)
+      expect(registry.canAccept(doc, alice)).toBe(true)
       expect(registry.names).toEqual([])
 
       // Re-registering a name after clear should work fresh (not hit
       // the replacement path with a stale reference)
-      registry.register({ name: "a", route: () => false })
-      expect(registry.route(doc, alice)).toBe(false)
+      registry.register({ name: "a", canShare: () => false })
+      expect(registry.canShare(doc, alice)).toBe(false)
       expect(registry.names).toEqual(["a"])
     })
 
     it("adding a policy after initial registration affects live composition", () => {
-      const registry = new DocGovernance()
-      registry.register({ route: () => true })
-      expect(registry.route(doc, alice)).toBe(true)
+      const registry = new Governance()
+      registry.register({ canShare: () => true })
+      expect(registry.canShare(doc, alice)).toBe(true)
 
-      const dispose = registry.register({ route: () => false })
-      expect(registry.route(doc, alice)).toBe(false)
+      const dispose = registry.register({ canShare: () => false })
+      expect(registry.canShare(doc, alice)).toBe(false)
 
       dispose()
-      expect(registry.route(doc, alice)).toBe(true)
+      expect(registry.canShare(doc, alice)).toBe(true)
     })
   })
 
@@ -165,27 +152,27 @@ describe("DocGovernance", () => {
 
   describe("named policies", () => {
     it("names reflects registered named policies in order", () => {
-      const registry = new DocGovernance()
-      registry.register({ route: () => true }) // unnamed
-      registry.register({ name: "b", route: () => true })
-      registry.register({ name: "a", route: () => true })
+      const registry = new Governance()
+      registry.register({ canShare: () => true }) // unnamed
+      registry.register({ name: "b", canShare: () => true })
+      registry.register({ name: "a", canShare: () => true })
       expect(registry.names).toEqual(["b", "a"])
     })
 
     it("same-name registration replaces in-place, preserving evaluation order", () => {
-      const registry = new DocGovernance()
+      const registry = new Governance()
       const order: string[] = []
 
       registry.register({
         name: "first",
-        route: () => {
+        canShare: () => {
           order.push("first")
           return undefined
         },
       })
       registry.register({
         name: "second",
-        route: () => {
+        canShare: () => {
           order.push("second")
           return undefined
         },
@@ -194,13 +181,13 @@ describe("DocGovernance", () => {
       // Replace "first" — it should keep its position (index 0)
       registry.register({
         name: "first",
-        route: () => {
+        canShare: () => {
           order.push("first-v2")
           return undefined
         },
       })
 
-      registry.route(doc, alice)
+      registry.canShare(doc, alice)
       expect(order).toEqual(["first-v2", "second"])
     })
 
@@ -208,21 +195,21 @@ describe("DocGovernance", () => {
       // This is the most subtle invariant in the named policy system.
       // Policy A with name "x" is registered, then policy B with name "x"
       // replaces it. Disposing A must NOT remove B.
-      const registry = new DocGovernance()
-      const disposeA = registry.register({ name: "x", route: () => false })
-      registry.register({ name: "x", route: () => true })
+      const registry = new Governance()
+      const disposeA = registry.register({ name: "x", canShare: () => false })
+      registry.register({ name: "x", canShare: () => true })
 
       // disposeA targets the old policy object, which is no longer in #policies
       // (it was replaced in-place). Disposing it should be a no-op.
       disposeA()
 
       // B must still be in effect
-      expect(registry.route(doc, alice)).toBe(true)
+      expect(registry.canShare(doc, alice)).toBe(true)
       expect(registry.names).toEqual(["x"])
     })
 
     it("dispose of the current named policy removes it from names", () => {
-      const registry = new DocGovernance()
+      const registry = new Governance()
       const dispose = registry.register({ name: "room" })
       expect(registry.names).toContain("room")
       dispose()
@@ -236,7 +223,7 @@ describe("DocGovernance", () => {
 
   describe("dispose hook", () => {
     it("clear() calls dispose on all registered policies and returns []", () => {
-      const registry = new DocGovernance()
+      const registry = new Governance()
       const dispose1 = vi.fn()
       const dispose2 = vi.fn()
 
@@ -251,7 +238,7 @@ describe("DocGovernance", () => {
     })
 
     it("clear() collects errors from dispose callbacks without stopping", () => {
-      const registry = new DocGovernance()
+      const registry = new Governance()
       const error1 = new Error("fail-1")
       const error2 = new Error("fail-2")
       const dispose3 = vi.fn()
@@ -275,7 +262,7 @@ describe("DocGovernance", () => {
     })
 
     it("individual policy disposal calls dispose once", () => {
-      const registry = new DocGovernance()
+      const registry = new Governance()
       const disposeFn = vi.fn()
 
       const dispose = registry.register({ dispose: disposeFn })
@@ -285,7 +272,7 @@ describe("DocGovernance", () => {
     })
 
     it("dispose is called at most once even if both individual disposal and clear() run", () => {
-      const registry = new DocGovernance()
+      const registry = new Governance()
       const disposeFn = vi.fn()
 
       const dispose = registry.register({ dispose: disposeFn })
@@ -296,7 +283,7 @@ describe("DocGovernance", () => {
     })
 
     it("named policy replacement calls dispose on the old policy", () => {
-      const registry = new DocGovernance()
+      const registry = new Governance()
       const oldDispose = vi.fn()
       const newDispose = vi.fn()
 
@@ -308,7 +295,7 @@ describe("DocGovernance", () => {
     })
 
     it("after clear(), re-registering a policy with dispose works fresh", () => {
-      const registry = new DocGovernance()
+      const registry = new Governance()
       const disposeFn = vi.fn()
 
       registry.register({ name: "a", dispose: disposeFn })
@@ -326,7 +313,7 @@ describe("DocGovernance", () => {
     })
 
     it("disposer that calls register() during clear() does not corrupt the sweep", () => {
-      const registry = new DocGovernance()
+      const registry = new Governance()
       const latecomer = vi.fn()
 
       registry.register({
@@ -354,22 +341,30 @@ describe("DocGovernance", () => {
   })
 
   // -----------------------------------------------------------------------
-  // onUnresolvedDoc: first-wins, short-circuit
+  // resolve: first-wins, short-circuit
   // -----------------------------------------------------------------------
 
-  describe("onUnresolvedDoc composition", () => {
+  describe("resolve composition", () => {
     const bound = json.bind(Schema.struct({ value: Schema.string() }))
 
     it("first non-undefined result wins; later policies not called", () => {
-      const registry = new DocGovernance()
+      const registry = new Governance()
       const disposition = Interpret(bound)
-      const second = vi.fn((): ReturnType<OnUnresolvedDoc> => Interpret(bound))
+      const second = vi.fn(
+        (
+          _docId: unknown,
+          _peer: unknown,
+          _replicaType: unknown,
+          _mergeStrategy: unknown,
+          _schemaHash: unknown,
+        ) => Interpret(bound),
+      )
 
-      registry.register({ onUnresolvedDoc: () => undefined })
-      registry.register({ onUnresolvedDoc: () => disposition })
-      registry.register({ onUnresolvedDoc: second })
+      registry.register({ resolve: () => undefined })
+      registry.register({ resolve: () => disposition })
+      registry.register({ resolve: second })
 
-      const result = registry.onUnresolvedDoc(
+      const result = registry.resolve(
         doc,
         alice,
         ["plain", 1, 0],
@@ -381,10 +376,10 @@ describe("DocGovernance", () => {
     })
 
     it("all undefined → undefined", () => {
-      const registry = new DocGovernance()
-      registry.register({ onUnresolvedDoc: () => undefined })
+      const registry = new Governance()
+      registry.register({ resolve: () => undefined })
 
-      const result = registry.onUnresolvedDoc(
+      const result = registry.resolve(
         doc,
         alice,
         ["plain", 1, 0],
@@ -396,60 +391,28 @@ describe("DocGovernance", () => {
   })
 
   // -----------------------------------------------------------------------
-  // onDocDismissed: broadcast (all handlers called)
+  // canReset: three-valued gate composition for epoch boundaries
   // -----------------------------------------------------------------------
 
-  describe("onDocDismissed composition", () => {
-    it("all handlers are invoked (broadcast, not gate)", () => {
-      const registry = new DocGovernance()
-      const handler1 = vi.fn()
-      const handler2 = vi.fn()
-
-      registry.register({ route: () => true }) // no onDocDismissed — must not throw
-      registry.register({ onDocDismissed: handler1 })
-      registry.register({ onDocDismissed: handler2 })
-
-      registry.docDismissed(doc, alice, "remote")
-
-      expect(handler1).toHaveBeenCalledWith(doc, alice, "remote")
-      expect(handler2).toHaveBeenCalledWith(doc, alice, "remote")
+  describe("canReset composition", () => {
+    it("defaults to true when all policies return undefined", () => {
+      const registry = new Governance()
+      registry.register({ canReset: () => undefined })
+      expect(registry.canReset(doc, alice, "collaborative")).toBe(true)
     })
 
-    it("passes origin through to handlers", () => {
-      const registry = new DocGovernance()
-      const handler = vi.fn()
-
-      registry.register({ onDocDismissed: handler })
-
-      registry.docDismissed(doc, alice, "local")
-      expect(handler).toHaveBeenCalledWith(doc, alice, "local")
-
-      handler.mockClear()
-
-      registry.docDismissed(doc, alice, "remote")
-      expect(handler).toHaveBeenCalledWith(doc, alice, "remote")
+    it("false from any policy vetoes the reset", () => {
+      const registry = new Governance()
+      registry.register({ canReset: () => true })
+      registry.register({ canReset: () => false })
+      expect(registry.canReset(doc, alice, "collaborative")).toBe(false)
     })
-  })
 
-  // -----------------------------------------------------------------------
-  // onDocCreated: broadcast (all handlers called)
-  // -----------------------------------------------------------------------
-
-  describe("onDocCreated composition", () => {
-    it("all handlers are invoked (broadcast, not gate)", () => {
-      const registry = new DocGovernance()
-      const handler1 = vi.fn()
-      const handler2 = vi.fn()
-
-      registry.register({ route: () => true }) // no onDocCreated — must not throw
-      registry.register({ onDocCreated: handler1 })
-      registry.register({ onDocCreated: handler2 })
-
-      registry.docCreated(doc, alice, "interpret", "local")
-
-      expect(handler1).toHaveBeenCalledOnce()
-      expect(handler2).toHaveBeenCalledOnce()
-      expect(handler1).toHaveBeenCalledWith(doc, alice, "interpret", "local")
+    it("true from at least one policy permits the reset", () => {
+      const registry = new Governance()
+      registry.register({ canReset: () => undefined })
+      registry.register({ canReset: () => true })
+      expect(registry.canReset(doc, alice, "collaborative")).toBe(true)
     })
   })
 })

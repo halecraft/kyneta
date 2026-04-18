@@ -82,7 +82,9 @@ Key subsystems:
 
 Transport-agnostic, substrate-agnostic, topology-flexible (p2p, server/client, etc) state exchange.
 
-Manages document lifecycle, coordinates adapters, and synchronizes state across peers. Three merge strategies (concurrent, sequential, ephemeral) dispatched by a TEA (The Elm Architecture) state machine over a six-message protocol: two handshake messages (establish-request, establish-response) and four sync messages (discover, interest, offer, dismiss). Hosts heterogeneous documents — Loro CRDTs, Yjs CRDTs, plain JS objects, ephemeral presence — in one sync network. Two reactive collections — `exchange.peers` (`ReactiveMap<PeerId, PeerIdentityDetails, PeerChange>`) and `exchange.documents` (`ReactiveMap<DocId, DocInfo, DocChange>`) — provide snapshot access and subscription-based observation of peer and document lifecycle, both draining at quiescence with batched changesets. Unified persistence via `notify/state-advanced`: both local mutations and network imports produce incremental `since` deltas via `exportSince(storeVersion)` → `append()`, replacing the previous split of `onDocImported` + changefeed-based `replace()`. Two-phase substrate construction (`createReplica` → hydrate → `upgrade`) ensures correct CRDT identity and structural initialization after storage hydration. Requires explicit `peerId` for `exchange.get()` to ensure continuity across restarts. Depends on `@kyneta/transport` for the `Transport` abstract interface.
+Manages document lifecycle, coordinates adapters, and synchronizes state across peers. Three merge strategies (concurrent, sequential, ephemeral) dispatched by a TEA (The Elm Architecture) state machine over a six-message protocol: two handshake messages (establish-request, establish-response) and four sync messages (present, interest, offer, destroy). Hosts heterogeneous documents — Loro CRDTs, Yjs CRDTs, plain JS objects, ephemeral presence — in one sync network. Two reactive collections — `exchange.peers` (`ReactiveMap<PeerId, PeerIdentityDetails, PeerChange>`) and `exchange.documents` (`ReactiveMap<DocId, DocInfo, DocChange>`) — provide snapshot access and subscription-based observation of peer and document lifecycle, both draining at quiescence with batched changesets. Unified persistence via `notify/state-advanced`: both local mutations and network imports produce incremental `since` deltas via `exportSince(storeVersion)` → `append()`, replacing the previous split of `onDocImported` + changefeed-based `replace()`. Two-phase substrate construction (`createReplica` → hydrate → `upgrade`) ensures correct CRDT identity and structural initialization after storage hydration. Requires explicit `peerId` for `exchange.get()` to ensure continuity across restarts. Depends on `@kyneta/transport` for the `Transport` abstract interface.
+
+Document governance is layered via `Policy` (per-document rules: `canShare`, `canAccept`, `resolve`) and `Governance` (exchange-wide coordination: `canConnect` gate, policy dispatch). ExchangeParams fields: `canShare` (whether to share a doc with a peer), `canAccept` (whether to accept a doc from a peer), `resolve` (lazily construct a doc on first encounter). Document lifecycle distinguishes `suspend()` (detach from sync, retain state for later resumption) from `destroy()` (permanent removal from the sync graph).
 
 Sub-packages:
 - **`@kyneta/wire`** (`exchange/wire/`) — binary wire protocol. CBOR codec with compact field names, 6-byte binary frame headers, and a fragmentation protocol for cloud WebSocket gateways (AWS API Gateway 128KB limit, Cloudflare Workers 1MB limit). JSON codec for debugging. See `PROTOCOL.md` for the full specification. 231 tests.
@@ -227,10 +229,10 @@ interpret(schema, substrate.context())
 The Exchange coordinates sync between peers via a six-message protocol — two handshake messages and four sync messages:
 
 1. **establish-request / establish-response** — peer identity handshake
-2. **discover** — announce document IDs available for sync
+2. **present** — announce document IDs available for sync
 3. **interest** — request a specific document's state (with optional version for delta)
 4. **offer** — deliver document state (snapshot or delta payload)
-5. **dismiss** — leave the sync graph for a document (triggers `onDocDismissed`)
+5. **destroy** — permanently remove a document from the sync graph; `suspend()` detaches without destroying, allowing later resumption
 
 The synchronizer is a TEA state machine — pure model updates, command outputs. Three sync algorithms are dispatched by the `BoundSchema`'s merge strategy:
 - **Concurrent**: bidirectional exchange, concurrent versions possible (Loro, Yjs)

@@ -112,7 +112,8 @@ export type OfferMsg = {
  *
  * The dual of `present`: present announces presence, dismiss announces
  * departure. One-way announcement with no response needed. The receiving
- * exchange fires `onDocDismissed` if configured.
+ * exchange reflects the change in `exchange.documents` (changefeed) and
+ * `exchange.peers` (per-peer document sets) for observation.
  */
 export type DismissMsg = {
   type: "dismiss"

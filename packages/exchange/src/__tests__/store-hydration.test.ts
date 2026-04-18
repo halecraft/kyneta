@@ -394,7 +394,7 @@ describe("Exchange storage persistence", () => {
       identity: { peerId: "peer-b" },
       transports: [createBridgeTransport({ transportType: "side-b", bridge })],
       stores: [backend],
-      onUnresolvedDoc: () => Interpret(TestDoc),
+      resolve: () => Interpret(TestDoc),
     })
 
     // Wait for sync
@@ -413,7 +413,7 @@ describe("Exchange storage persistence", () => {
     await exchangeB.shutdown()
   })
 
-  it("dismiss() deletes from storage", async () => {
+  it("destroy() deletes from storage", async () => {
     const backend = new InMemoryStore()
 
     const exchange = createExchange({
@@ -430,8 +430,8 @@ describe("Exchange storage persistence", () => {
     // Verify storage has data
     expect(await backend.lookup("doc-1")).not.toBeNull()
 
-    // Dismiss
-    exchange.dismiss("doc-1")
+    // Destroy
+    exchange.destroy("doc-1")
     await exchange.flush()
 
     // Storage should be cleaned up

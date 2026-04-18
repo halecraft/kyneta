@@ -420,7 +420,7 @@ describe("plain replica snapshot import falls back to replicaFactory.fromSnapsho
       transports: [
         createBridgeTransport({ transportType: "relay-a", bridge: bridgeAR }),
       ],
-      onUnresolvedDoc: () => Replicate(),
+      resolve: () => Replicate(),
     })
 
     // Alice writes data
@@ -447,7 +447,7 @@ describe("plain replica snapshot import falls back to replicaFactory.fromSnapsho
       transports: [
         createBridgeTransport({ transportType: "bob", bridge: bridgeRB }),
       ],
-      onUnresolvedDoc: docId => {
+      resolve: docId => {
         if (docId === "config") return Interpret(SequentialDoc)
         return Reject()
       },
@@ -552,7 +552,7 @@ describe("schema hash compatibility", () => {
         createBridgeTransport({ transportType: "relay-c", bridge: bridgeRC }),
       ],
       replicas: [loro.replica()],
-      onUnresolvedDoc: () => Replicate(),
+      resolve: () => Replicate(),
     })
 
     // Peer C — interpret mode with same schema
@@ -562,7 +562,7 @@ describe("schema hash compatibility", () => {
         createBridgeTransport({ transportType: "charlie", bridge: bridgeRC }),
       ],
       schemas: [TodoDoc],
-      onUnresolvedDoc: () => Interpret(TodoDoc),
+      resolve: () => Interpret(TodoDoc),
     })
 
     // A creates and writes

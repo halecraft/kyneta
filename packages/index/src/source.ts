@@ -65,7 +65,7 @@ export interface SourceMapping {
 export interface ExchangeSourceHandle<V> {
   /** Create a new document under the given key. Returns the ref. */
   createDoc(key: string): V
-  /** Dismiss the document from the exchange. Returns true if key was present. */
+  /** Destroy the document from the exchange. Returns true if key was present. */
   delete(key: string): boolean
 }
 
@@ -386,9 +386,25 @@ function fromExchange<V>(
   // Register the BoundSchema so matching remote docs are auto-resolved
   exchange.registerSchema(bound)
 
-  // Scan existing docs to catch docs created before the source
-  const existingIds: ReadonlySet<string> = exchange.documentIds()
-  for (const docId of existingIds) {
+  // Subscribe to the documents changefeed — BEFORE scanning existing docs
+  // so we don't miss docs created between scan and subscribe.
+  const unsubscribeDocs: () => void = exchange.documents.subscribe(
+    (cs: any) => {
+      for (const change of cs.changes) {
+        if (change.type === "doc-created") {
+          tryAdd(change.docId)
+        } else if (change.type === "doc-removed") {
+          tryRemove(change.docId)
+        }
+      }
+    },
+  )
+
+  // Scan existing documents to catch docs created before the subscription.
+  // Filter on mode === "interpret" (Source.of only tracks interpreted docs).
+  for (const [docId, info] of exchange.documents()) {
+    if (info.mode !== "interpret") continue
+    if (info.suspended) continue
     const key = m.toKey(docId)
     if (key === null) continue
     const docHash = exchange.getDocSchemaHash(docId)
@@ -398,24 +414,13 @@ function fromExchange<V>(
     entries.set(key, ref)
   }
 
-  // Register a policy for lifecycle tracking
-  const disposePolicy: () => void = exchange.register({
-    onDocCreated(docId: string, _peer: any, mode: string, _origin: string) {
-      if (mode !== "interpret") return
-      tryAdd(docId)
-    },
-    onDocDismissed(docId: string, _peer: any, _origin: string) {
-      tryRemove(docId)
-    },
-  })
-
   const source: Source<V> = {
     subscribe,
     snapshot(): ReadonlyMap<string, V> {
       return new Map(entries)
     },
     dispose(): void {
-      disposePolicy()
+      unsubscribeDocs()
       clear()
     },
   }
@@ -439,9 +444,9 @@ function fromExchange<V>(
     delete(key: string): boolean {
       if (!entries.has(key)) return false
       entries.delete(key)
-      // Symmetric with createDoc: dismiss from the exchange
+      // Symmetric with createDoc: destroy from the exchange
       const docId = m.toDocId(key)
-      exchange.dismiss(docId)
+      exchange.destroy(docId)
       emit(createSourceEvent(single(key, -1), new Map()))
       return true
     },
