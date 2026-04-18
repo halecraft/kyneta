@@ -4,7 +4,7 @@
 // - Doc ID utilities (lineDocId, isLineDocId, parseLineDocId, routeLine)
 // - Symmetric and asymmetric Line send/receive via async iterator
 // - Ack and pruning
-// - Scope lifecycle (named scope registration/disposal)
+// - Policy lifecycle (named policy registration/disposal)
 // - Multiple Lines per peer pair (different topics)
 // - Duplicate detection (throw on same peer+topic)
 // - Hub-and-spoke relay
@@ -556,7 +556,7 @@ describe("hub-and-spoke relay", () => {
   //    calls step()/applyChange() on merge, so nested structures don't
   //    crash. Init ops enter the log and advance the version, breaking
   //    the sync deadlock.
-  // 2. Line authorize abstain: the per-line scope now returns `undefined`
+  // 2. Line authorize abstain: the per-line policy now returns `undefined`
   //    (abstain) for unknown peers instead of `false` (hard veto), so
   //    relay-forwarded offers are accepted by the exchange-level authorize.
   it("messages flow Alice → Server → Bob via relay", async () => {
@@ -1693,5 +1693,185 @@ describe("durable Line: storage stays bounded", () => {
 
     lineA.close()
     lineB.close()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Per-Exchange Line Registry
+// ---------------------------------------------------------------------------
+
+describe("per-Exchange Line registry", () => {
+  it("two Exchange instances with the same peerId can each open a Line", () => {
+    const P = Line.protocol({ topic: "registry", schema: SimpleSchema })
+
+    const ex1 = createExchange({ identity: { peerId: "alice" } })
+    const ex2 = createExchange({ identity: { peerId: "alice" } })
+
+    const line1 = P.open(ex1, "bob")
+    const line2 = P.open(ex2, "bob")
+
+    expect(line1.peer).toBe("bob")
+    expect(line2.peer).toBe("bob")
+
+    line1.close()
+    line2.close()
+  })
+
+  it("shutting down one Exchange does not affect the other's open Lines", async () => {
+    const P = Line.protocol({ topic: "isolation", schema: SimpleSchema })
+
+    const ex1 = createExchange({ identity: { peerId: "alice" } })
+    const ex2 = createExchange({ identity: { peerId: "alice" } })
+
+    const line1 = P.open(ex1, "bob")
+    const line2 = P.open(ex2, "bob")
+
+    await ex1.shutdown()
+    // Remove from activeExchanges so afterEach doesn't double-shutdown
+    const idx = activeExchanges.indexOf(ex1)
+    if (idx !== -1) activeExchanges.splice(idx, 1)
+
+    expect(line1.closed).toBe(true)
+    expect(line2.closed).toBe(false)
+
+    line2.close()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Line Policy Teardown
+// ---------------------------------------------------------------------------
+
+describe("Line policy teardown", () => {
+  it("exchange.shutdown() closes all open Lines", async () => {
+    const bridge = new Bridge()
+    const P = Line.protocol({ topic: "teardown", schema: SimpleSchema })
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+    })
+
+    const listener = P.listen(exchangeB)
+    const serverLines: Line<any, any>[] = []
+    listener.onLine(line => serverLines.push(line))
+
+    const clientLine = P.open(exchangeA, "bob")
+    clientLine.send({ value: 1 })
+
+    await drain()
+
+    expect(serverLines.length).toBe(1)
+
+    // Shutdown both — should close all lines via policy teardown
+    await exchangeA.shutdown()
+    await exchangeB.shutdown()
+
+    // Remove from activeExchanges
+    activeExchanges.length = 0
+
+    expect(clientLine.closed).toBe(true)
+    expect(serverLines[0].closed).toBe(true)
+  })
+
+  it("exchange.reset() closes all open Lines", () => {
+    const P = Line.protocol({ topic: "reset-teardown", schema: SimpleSchema })
+    const exchange = createExchange({ identity: { peerId: "alice" } })
+
+    const line = P.open(exchange, "bob")
+    expect(line.closed).toBe(false)
+
+    exchange.reset()
+
+    expect(line.closed).toBe(true)
+  })
+
+  it("exchange.shutdown() disposes all active listeners", async () => {
+    const bridge = new Bridge()
+    const P = Line.protocol({ topic: "listener-teardown", schema: SimpleSchema })
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+    })
+
+    const listener = P.listen(exchangeB)
+    const serverLines: Line<any, any>[] = []
+    listener.onLine(line => serverLines.push(line))
+
+    // First client connects
+    const client1 = P.open(exchangeA, "bob")
+    await drain()
+    expect(serverLines.length).toBe(1)
+
+    // Shutdown exchangeB — disposes listener
+    await exchangeB.shutdown()
+    const idx = activeExchanges.indexOf(exchangeB)
+    if (idx !== -1) activeExchanges.splice(idx, 1)
+
+    // Create a new exchangeB and new client — listener should NOT fire
+    const exchangeB2 = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob2", bridge })],
+    })
+
+    // Register a NEW listener on the new exchange to prove the old one is dead
+    const listener2 = P.listen(exchangeB2)
+    const serverLines2: Line<any, any>[] = []
+    listener2.onLine(line => serverLines2.push(line))
+
+    // serverLines should still be 1 — old listener was disposed
+    expect(serverLines.length).toBe(1)
+
+    client1.close()
+    listener2.dispose()
+  })
+
+  it("after shutdown + new Exchange, protocol.open() succeeds", async () => {
+    const P = Line.protocol({ topic: "reopen", schema: SimpleSchema })
+
+    const ex1 = createExchange({ identity: { peerId: "alice" } })
+    const line1 = P.open(ex1, "bob")
+    expect(line1.closed).toBe(false)
+
+    await ex1.shutdown()
+    const idx = activeExchanges.indexOf(ex1)
+    if (idx !== -1) activeExchanges.splice(idx, 1)
+
+    expect(line1.closed).toBe(true)
+
+    const ex2 = createExchange({ identity: { peerId: "alice" } })
+    const line2 = P.open(ex2, "bob")
+    expect(line2.closed).toBe(false)
+    expect(line2.peer).toBe("bob")
+
+    line2.close()
+  })
+
+  it("manual close() followed by shutdown() is safe — no double-fire", async () => {
+    const P = Line.protocol({ topic: "double-safe", schema: SimpleSchema })
+    const exchange = createExchange({ identity: { peerId: "alice" } })
+
+    const line = P.open(exchange, "bob")
+    line.close()
+    expect(line.closed).toBe(true)
+
+    // Shutdown should not throw — dispose callback calls close() again,
+    // which is idempotent
+    await exchange.shutdown()
+    const idx = activeExchanges.indexOf(exchange)
+    if (idx !== -1) activeExchanges.splice(idx, 1)
+
+    expect(line.closed).toBe(true)
   })
 })

@@ -36,7 +36,7 @@ const TeamDoc = json.bind(teamSchema)
 
 function createMockExchange() {
   const docs = new Map<string, { ref: any; schemaHash: string }>()
-  const scopes: Array<{
+  const policies: Array<{
     onDocCreated?: (...args: any[]) => void
     onDocDismissed?: (...args: any[]) => void
   }> = []
@@ -62,19 +62,19 @@ function createMockExchange() {
       return doc
     },
 
-    register(scope: any): () => void {
-      scopes.push(scope)
+    register(policy: any): () => void {
+      policies.push(policy)
       return () => {
-        const idx = scopes.indexOf(scope)
-        if (idx !== -1) scopes.splice(idx, 1)
+        const idx = policies.indexOf(policy)
+        if (idx !== -1) policies.splice(idx, 1)
       }
     },
 
     dismiss(docId: string) {
       docs.delete(docId)
       const peer = {} as any
-      for (const scope of [...scopes]) {
-        scope.onDocDismissed?.(docId, peer, "local")
+      for (const policy of [...policies]) {
+        policy.onDocDismissed?.(docId, peer, "local")
       }
     },
 
@@ -83,8 +83,8 @@ function createMockExchange() {
       const doc = (createDoc as any)(bound)
       docs.set(docId, { ref: doc, schemaHash: bound.schemaHash })
       const peer = {} as any
-      for (const scope of [...scopes]) {
-        scope.onDocCreated?.(docId, peer, "interpret", "local")
+      for (const policy of [...policies]) {
+        policy.onDocCreated?.(docId, peer, "interpret", "local")
       }
       return doc
     },

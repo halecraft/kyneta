@@ -148,11 +148,11 @@ export { createSyncUpdate, initSync } from "./sync-program.js"
 export { Synchronizer } from "./synchronizer.js"
 
 // ---------------------------------------------------------------------------
-// Scope — composable rule registration
+// Doc Governance — composable policy registration
 // ---------------------------------------------------------------------------
 
-export type { RulePredicate, Scope } from "./scope.js"
-export { composeRule, ScopeRegistry } from "./scope.js"
+export type { RulePredicate, DocPolicy } from "./doc-governance.js"
+export { composeRule, DocGovernance } from "./doc-governance.js"
 
 // ---------------------------------------------------------------------------
 // Exchange — the public API

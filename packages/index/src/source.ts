@@ -398,8 +398,8 @@ function fromExchange<V>(
     entries.set(key, ref)
   }
 
-  // Register a scope for lifecycle tracking
-  const disposeScope: () => void = exchange.register({
+  // Register a policy for lifecycle tracking
+  const disposePolicy: () => void = exchange.register({
     onDocCreated(docId: string, _peer: any, mode: string, _origin: string) {
       if (mode !== "interpret") return
       tryAdd(docId)
@@ -415,7 +415,7 @@ function fromExchange<V>(
       return new Map(entries)
     },
     dispose(): void {
-      disposeScope()
+      disposePolicy()
       clear()
     },
   }

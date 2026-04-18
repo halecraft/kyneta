@@ -63,7 +63,7 @@ export type {
   LineProtocol,
   ReadyState,
   RulePredicate,
-  Scope,
+  DocPolicy,
   SyncRef,
   TransportFactory,
 } from "@kyneta/exchange"
@@ -77,6 +77,6 @@ export {
   lineDocId,
   parseLineDocId,
   routeLine,
-  ScopeRegistry,
+  DocGovernance,
   sync,
 } from "@kyneta/exchange"

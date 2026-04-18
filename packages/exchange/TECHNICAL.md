@@ -1818,26 +1818,28 @@ End-to-end tests in `transports/unix-socket/src/__tests__/` prove the full stack
 
 ---
 
-## 25. Composable Scope Registration
+## 25. Doc Governance — Composable Policy Registration
 
-The Exchange accepts `route`, `authorize`, `onUnresolvedDoc`, and `onDocDismissed` as fixed functions in `ExchangeParams`. These work well when all document access rules are known at construction time. But higher-level primitives (Lines, rooms, game loops) need to register their own rules dynamically and remove them when done. The scope registration system generalizes the fixed predicates into a composable, dynamic model.
+The Exchange accepts `route`, `authorize`, `onUnresolvedDoc`, and `onDocDismissed` as fixed functions in `ExchangeParams`. These work well when all document access rules are known at construction time. But higher-level primitives (Lines, rooms, game loops) need to register their own rules dynamically and remove them when done. The doc governance system generalizes the fixed predicates into a composable, dynamic model.
 
-### The Scope Type
+### The DocPolicy Type
 
-A **Scope** is a bundle of predicates and handlers governing a region of the document space:
+A **DocPolicy** is a bundle of predicates and handlers governing a region of the document space:
 
 ```ts
-interface Scope {
+interface DocPolicy {
   name?: string
   route?: RulePredicate
   authorize?: RulePredicate
+  onEpochBoundary?: EpochBoundaryPredicate
   onUnresolvedDoc?: OnUnresolvedDoc
   onDocCreated?: OnDocCreated
   onDocDismissed?: OnDocDismissed
+  dispose?: () => void
 }
 ```
 
-All fields are optional — a scope only provides the predicates it cares about.
+All fields are optional — a policy only provides the predicates it cares about.
 
 ### `RulePredicate` — Three-Valued Logic
 
@@ -1845,11 +1847,11 @@ All fields are optional — a scope only provides the predicates it cares about.
 type RulePredicate = (docId: DocId, peer: PeerIdentityDetails) => boolean | undefined
 ```
 
-- `true` — this scope explicitly allows the operation.
-- `false` — this scope explicitly denies the operation (short-circuits evaluation).
-- `undefined` — this scope has no opinion (the doc is outside its concern).
+- `true` — this policy explicitly allows the operation.
+- `false` — this policy explicitly denies the operation (short-circuits evaluation).
+- `undefined` — this policy has no opinion (the doc is outside its concern).
 
-The existing `RoutePredicate` and `AuthorizePredicate` types return `boolean`, which is a subtype of `boolean | undefined`. No adapter or wrapper is needed — existing predicates work as scope fields directly.
+The existing `RoutePredicate` and `AuthorizePredicate` types return `boolean`, which is a subtype of `boolean | undefined`. No adapter or wrapper is needed — existing predicates work as policy fields directly.
 
 ### `composeRule` — Pure Functional Core
 
@@ -1857,7 +1859,7 @@ A single pure function handles three-valued predicate composition for both `rout
 
 ```ts
 function composeRule(
-  scopes: readonly Scope[],
+  policies: readonly DocPolicy[],
   field: "route" | "authorize",
   docId: DocId,
   peer: PeerIdentityDetails,
@@ -1867,24 +1869,24 @@ function composeRule(
 
 Evaluation semantics (with short-circuit):
 
-1. If any scope returns `false` → return `false` immediately (deny wins).
-2. If at least one scope returns `true` and none return `false` → return `true`.
-3. If all scopes return `undefined` → return `defaultWhenAllUndefined`.
+1. If any policy returns `false` → return `false` immediately (deny wins).
+2. If at least one policy returns `true` and none return `false` → return `true`.
+3. If all policies return `undefined` → return `defaultWhenAllUndefined`.
 
-### `ScopeRegistry` — Imperative Shell
+### `DocGovernance` — Imperative Shell
 
-The `ScopeRegistry` manages the mutable scope list and delegates composition to `composeRule`:
+The `DocGovernance` manages the mutable policy list and delegates composition to `composeRule`:
 
-- **`register(scope): () => void`** — adds a scope, returns a dispose function.
+- **`register(policy): () => void`** — adds a policy, returns a dispose function.
 - **`route(docId, peer): boolean`** — composed route, defaults to open (`true`).
 - **`authorize(docId, peer): boolean`** — composed authorize, defaults to open (`true`).
 - **`onUnresolvedDoc(...): Disposition | undefined`** — first non-`undefined` wins (registration order).
 - **`docCreated(docId, peer, mode, origin): void`** — all handlers invoked (broadcast, not gate).
 - **`docDismissed(docId, peer): void`** — all handlers invoked (broadcast, not gate).
-- **`clear(): void`** — removes all scopes. Called during `reset()` and `shutdown()`.
-- **`get names: readonly string[]`** — names of all named scopes, in registration order.
+- **`clear(): unknown[]`** — invokes each policy's `dispose` callback (if present), then removes all policies. Returns an array of collected errors from any disposer that threw. Called during `reset()` and `shutdown()`.
+- **`get names: readonly string[]`** — names of all named policies, in registration order.
 
-### `exchange.register(scope)` — Public API
+### `exchange.register(policy)` — Public API
 
 ```ts
 const dispose = exchange.register({
@@ -1898,7 +1900,7 @@ const dispose = exchange.register({
 dispose()
 ```
 
-The dispose function removes the scope from all compositions. After disposal, the composed predicates no longer include that scope's rules.
+The dispose function removes the policy from all compositions. After disposal, the composed predicates no longer include that policy's rules.
 
 ### Composition Semantics by Field
 
@@ -1906,41 +1908,43 @@ The dispose function removes the scope from all compositions. After disposal, th
 |-------|------------|--------------------------|
 | `route` | Deny wins, short-circuit | `true` (open) |
 | `authorize` | Deny wins, short-circuit | `true` (open) |
+| `onEpochBoundary` | Deny wins, short-circuit | Strategy-aware default (see §29) |
 | `onUnresolvedDoc` | First non-`undefined` wins (registration order) | `undefined` (reject with warning) |
 | `onDocCreated` | All handlers invoked (broadcast) | no-op |
 | `onDocDismissed` | All handlers invoked (broadcast) | no-op |
+| `dispose` | Each handler invoked (broadcast) | no-op |
 
 ### Default Values — Both Open
 
-Both `route` and `authorize` default to `true` (open) when all scopes return `undefined`. This matches the current Exchange behavior where both default to `() => true`. Dynamic scopes that want to restrict access return `false` for specific docs; the open default preserves backward compatibility.
+Both `route` and `authorize` default to `true` (open) when all policies return `undefined`. This matches the current Exchange behavior where both default to `() => true`. Dynamic policies that want to restrict access return `false` for specific docs; the open default preserves backward compatibility.
 
-If a future use case requires closed-by-default authorize, register a base scope with `authorize: () => false` and then register permissive scopes for specific docs. The infrastructure supports both patterns; the default matches the existing Exchange contract.
+If a future use case requires closed-by-default authorize, register a base policy with `authorize: () => false` and then register permissive policies for specific docs. The infrastructure supports both patterns; the default matches the existing Exchange contract.
 
-### Named Scopes
+### Named Policies
 
-If a scope has a `name`:
+If a policy has a `name`:
 
-- **Debuggability**: the Exchange can log which named scope was responsible for a denial.
-- **Introspection**: `registry.names` returns the list of registered scope names.
-- **Replacement**: registering a scope with a name that already exists replaces the previous scope in-place (preserving its position in the evaluation order). This enables hot-reload patterns where a module re-registers its rules without accumulating stale scopes.
+- **Debuggability**: the Exchange can log which named policy was responsible for a denial.
+- **Introspection**: `governance.names` returns the list of registered policy names.
+- **Replacement**: registering a policy with a name that already exists replaces the previous policy in-place (preserving its position in the evaluation order). This enables hot-reload patterns where a module re-registers its rules without accumulating stale policies.
 
 ### Relationship to `ExchangeParams`
 
-The constructor fields (`route`, `authorize`, `onUnresolvedDoc`, `onDocDismissed`) are syntactic sugar for the initial scope. At construction time, if any are provided, they are bundled into a `Scope` and registered with the `ScopeRegistry`. This is backward compatible — existing code that passes these params works identically.
+The constructor fields (`route`, `authorize`, `onUnresolvedDoc`, `onDocDismissed`) are syntactic sugar for the initial policy. At construction time, if any are provided, they are bundled into a `DocPolicy` and registered with the `DocGovernance`. This is backward compatible — existing code that passes these params works identically.
 
-The difference: previously, `route: () => true` was the only predicate. Now it's one scope among potentially many. A later `exchange.register({ route: ... })` adds a second scope whose `route` participates in the composition.
+The difference: previously, `route: () => true` was the only predicate. Now it's one policy among potentially many. A later `exchange.register({ route: ... })` adds a second policy whose `route` participates in the composition.
 
 ### Synchronizer Integration
 
-The `ScopeRegistry` is transparent to the synchronizer layer. The Exchange passes `this.#scopes.route.bind(this.#scopes)` and `this.#scopes.authorize.bind(this.#scopes)` to the Synchronizer constructor. The sync program's `createSyncUpdate()` closes over these functions and calls them on every message — the handlers don't know or care that the predicate is composed. Dynamic scope registration and disposal are visible through the bound closures without recreating the update function.
+The `DocGovernance` is transparent to the synchronizer layer. The Exchange passes `this.#governance.route.bind(this.#governance)` and `this.#governance.authorize.bind(this.#governance)` to the Synchronizer constructor. The sync program's `createSyncUpdate()` closes over these functions and calls them on every message — the handlers don't know or care that the predicate is composed. Dynamic policy registration and disposal are visible through the bound closures without recreating the update function.
 
 ### Performance
 
-Scopes scale with the number of *concerns* (typically single digits to low tens), not the number of *documents*. Short-circuit evaluation on the first `false` bounds the per-message cost. The `composeRule` function iterates the scope array once per evaluation — no allocations, no closures created at evaluation time.
+Policies scale with the number of *concerns* (typically single digits to low tens), not the number of *documents*. Short-circuit evaluation on the first `false` bounds the per-message cost. The `composeRule` function iterates the policy array once per evaluation — no allocations, no closures created at evaluation time.
 
 ### `reset()` and `shutdown()`
 
-Both operations clear all scopes (including the initial one). After either, the Exchange is inert — all scopes are cleared, all transports are torn down, and the Exchange should not be reused.
+Both operations call `clear()`, which invokes each policy's `dispose` callback before removing all policies (including the initial one). Errors thrown by disposers are collected and returned, not rethrown. After either operation, the Exchange is inert — all policies are cleared, all transports are torn down, and the Exchange should not be reused.
 
 ---
 
@@ -2092,7 +2096,7 @@ WebRTC signaling, RPC interactions, and command streams are **reliable ordered m
 
 ### Protocol Definition
 
-A Line protocol reifies the schema pair + topic that both sides must agree on to communicate. Created once at module scope and shared between `open()` and `listen()` calls:
+A Line protocol reifies the schema pair + topic that both sides must agree on to communicate. Created once at module level and shared between `open()` and `listen()` calls:
 
 ```typescript
 // Symmetric — same schema both directions
@@ -2117,7 +2121,7 @@ const line = RPC.open(exchange, "server-peer-id")
 line.send({ method: "ping", id: 1 })
 ```
 
-The client sends via the client schema and receives via the server schema. Internally, `open()` calls `Line._create()` which computes doc IDs, calls `exchange.get()` for both documents, registers a per-line authorization scope, and constructs the `Line` instance.
+The client sends via the client schema and receives via the server schema. Internally, `open()` calls `Line._create()` which computes doc IDs, calls `exchange.get()` for both documents, registers a per-line authorization policy, and constructs the `Line` instance.
 
 ### Server-side: `protocol.listen()`
 
@@ -2139,11 +2143,11 @@ Internally, `listen()`:
 
 1. **Registers schemas** — calls `exchange.registerSchema()` for the client and server `BoundSchema` objects. Incoming Line docs whose schema hash matches will auto-resolve in `onEnsureDoc`, bypassing `onUnresolvedDoc` entirely.
 
-2. **Registers a scope** with `onDocCreated` — when a Line doc is created, the handler parses the doc ID, checks that it matches the protocol's topic and is addressed to this exchange's peerId, guards against duplicates, then calls `Line.#create()` to construct the server-side Line and fires all `onLine` callbacks.
+2. **Registers a policy** with `onDocCreated` — when a Line doc is created, the handler parses the doc ID, checks that it matches the protocol's topic and is addressed to this exchange's peerId, guards against duplicates, then calls `Line.#create()` to construct the server-side Line and fires all `onLine` callbacks.
 
 The listener uses the doc ID structure as the fundamental discriminator — no `origin` filter is needed. A doc with `parsed.to === exchange.peerId` is the remote peer's outbox; the local exchange never creates docs addressed to itself. Since `onDocCreated` fires exactly once per doc ID, there is no double-fire risk.
 
-**Late listen**: If a client connects before `listen()` is called, the client's docs are deferred by the Exchange's two-tiered default. When `registerSchema()` runs inside `listen()`, deferred docs matching the schema are auto-promoted synchronously, firing `onDocCreated` into the listener's scope. Lines created during this promotion are buffered and replayed on the first `onLine` callback registration.
+**Late listen**: If a client connects before `listen()` is called, the client's docs are deferred by the Exchange's two-tiered default. When `registerSchema()` runs inside `listen()`, deferred docs matching the schema are auto-promoted synchronously, firing `onDocCreated` into the listener's policy. Lines created during this promotion are buffered and replayed on the first `onLine` callback registration.
 
 ### `LineListener` API
 
@@ -2156,7 +2160,7 @@ interface LineListener<SendMsg, RecvMsg> {
 ```
 
 - **`onLine(cb)`** — registers a callback that fires with a fully constructed `Line` when a remote peer opens a Line on the matching topic. Returns an unsubscribe function. Multiple callbacks coexist.
-- **`dispose()`** — unregisters the scope, stopping acceptance of new Lines. Does NOT close already-open Lines — each Line manages its own lifecycle via `line.close()`. Does NOT unregister schemas (the capabilities registry is append-only).
+- **`dispose()`** — unregisters the policy, stopping acceptance of new Lines. Does NOT close already-open Lines — each Line manages its own lifecycle via `line.close()`. Does NOT unregister schemas (the capabilities registry is append-only).
 
 ### Document Model
 
@@ -2208,37 +2212,39 @@ const sigLine = Signaling.open(exchange, "bob")
 const rpcLine = RPC.open(exchange, "bob")
 ```
 
-Each topic produces distinct doc IDs (`line:signaling:...` vs `line:rpc:...`), distinct scopes, and distinct registry entries. Opening a Line with the same peer + topic as an already-open Line throws — close first, then reopen.
+Each topic produces distinct doc IDs (`line:signaling:...` vs `line:rpc:...`), distinct policies, and distinct registry entries. The Line duplicate registry is per-Exchange (stored in a WeakMap keyed by Exchange instance), not module-global — multiple Exchange instances in the same process maintain independent Line registries. Opening a Line with the same peer + topic as an already-open Line throws — close first, then reopen.
 
-### Scope Integration
+### Policy Integration
 
 Line is a standalone class — it composes with the Exchange via public API only (`register()`, `registerSchema()`, `get()`, `dismiss()`). No Exchange modification needed.
 
-**Listener scope** (`__line-listen:${topic}`): Registered by `protocol.listen()`. Provides `onDocCreated` to detect incoming Line docs and construct server-side Lines. The scope has no `authorize` predicate — authorization is handled by the per-line scope.
+**Listener policy** (`__line-listen:${topic}`): Registered by `protocol.listen()`. Provides `onDocCreated` to detect incoming Line docs and construct server-side Lines. The policy has no `authorize` predicate — authorization is handled by the per-line policy.
 
-**Per-line scope** (`line:${topic}:${remotePeerId}`): Registered per `Line._create()` call (shared by both `open()` and `listen()` paths). Provides `authorize` — only the `from` peer can write to each doc. Routing is open by default. Applications that want endpoint-only routing register their own scope using the exported `routeLine` predicate.
+**Per-line policy** (`line:${topic}:${remotePeerId}`): Registered per `Line._create()` call (shared by both `open()` and `listen()` paths). Provides `authorize` — only the `from` peer can write to each doc. Routing is open by default. Applications that want endpoint-only routing register their own policy using the exported `routeLine` predicate.
+
+`exchange.shutdown()` closes all open Lines and disposes all active listeners via policy teardown — each Line and listener registers a `dispose` callback in its policy, and `DocGovernance.clear()` invokes all disposers during shutdown.
 
 ### The Authorize Abstain Pattern
 
 <!-- Context: jj:oyouvrss -->
 
-Scopes should return `undefined` (abstain) for unknown peers, not `false` (hard veto). This distinction is critical for relay topologies:
+Policies should return `undefined` (abstain) for unknown peers, not `false` (hard veto). This distinction is critical for relay topologies:
 
-- **Hard veto (`false`)** blocks relay-forwarded offers because the relay server's `peerId` doesn't match the expected peer. The `composeRule` function short-circuits on `false` from any scope — one veto overrules all other scopes.
-- **Abstain (`undefined`)** lets the exchange-level authorize decide. The scope declares "this doc is not my concern" rather than "this peer is forbidden."
+- **Hard veto (`false`)** blocks relay-forwarded offers because the relay server's `peerId` doesn't match the expected peer. The `composeRule` function short-circuits on `false` from any policy — one veto overrules all other policies.
+- **Abstain (`undefined`)** lets the exchange-level authorize decide. The policy declares "this doc is not my concern" rather than "this peer is forbidden."
 
-The Line scope's inbox `authorize` uses this pattern: `peer.peerId === remotePeerId ? true : undefined`. If the peer matches, explicitly allow; if not, abstain and let other scopes or the exchange default handle it. This ensures a relay server forwarding offers on behalf of the expected peer is not incorrectly blocked.
+The Line policy's inbox `authorize` uses this pattern: `peer.peerId === remotePeerId ? true : undefined`. If the peer matches, explicitly allow; if not, abstain and let other policies or the exchange default handle it. This ensures a relay server forwarding offers on behalf of the expected peer is not incorrectly blocked.
 
 ### Standalone Design
 
 The Line class has zero coupling to Exchange internals. It uses only:
-- `exchange.register()` — scope registration (listener scope and per-line scope)
+- `exchange.register()` — policy registration (listener policy and per-line policy)
 - `exchange.registerSchema()` — schema registration for auto-resolve (listener path)
 - `exchange.get()` — document creation (also calls `registerSchema()` internally)
 - `exchange.dismiss()` — document removal on close
 - `exchange.peers` — peer lifecycle subscription
 
-This validates the scope + capabilities architecture: higher-level primitives compose cleanly as external consumers of the Exchange's public API.
+This validates the policy + capabilities architecture: higher-level primitives compose cleanly as external consumers of the Exchange's public API.
 
 ### Type Safety
 
@@ -2289,7 +2295,7 @@ When the synchronizer receives an entirety payload for a document that has previ
 
 The synchronizer distinguishes initial sync from compaction reset by checking whether **any** peer has reached `"synced"` status for the document. First-ever entirety payloads (initial sync) skip the policy entirely — the existing merge path handles them correctly. Only subsequent entirety payloads after the doc has been synced trigger the policy check.
 
-### `onEpochBoundary` Predicate on Scopes
+### `onEpochBoundary` Predicate on Policies
 
 ```ts
 type EpochBoundaryPredicate = (
@@ -2298,21 +2304,21 @@ type EpochBoundaryPredicate = (
 ) => boolean | undefined
 ```
 
-Three-valued composition via the scope registry (same semantics as `route`/`authorize`):
+Three-valued composition via the doc governance (same semantics as `route`/`authorize`):
 
-- Any scope returning `false` → **reject** (veto wins, short-circuit)
+- Any policy returning `false` → **reject** (veto wins, short-circuit)
 - At least one `true` and no `false` → **accept**
 - All `undefined` → fall back to strategy-aware defaults
 
 ### Strategy-Aware Defaults
 
-When no scope provides an opinion:
+When no policy provides an opinion:
 
 | Strategy | Default | Rationale |
 |---|---|---|
 | `"authoritative"` | Accept | Followers don't write — reset is safe |
 | `"ephemeral"` | Accept | No history semantics — latest state is all that matters |
-| `"collaborative"` | Accept | Safe default; developer can override via scope |
+| `"collaborative"` | Accept | Safe default; developer can override via policy |
 
 ### Reset Mechanics
 
@@ -2322,6 +2328,8 @@ On acceptance:
 - **Interpreted (substrate) docs:** Fall through to normal `merge()`. Plain substrates handle entirety correctly via `executeBatch` (decomposes to `ReplaceChange` ops, preserving ref identity and changefeed subscriptions).
 
 On rejection, the entirety is silently discarded — local state is preserved and the node diverges from compacted peers.
+
+The `onEpochBoundary` field on `DocPolicy` is documented in the Composition Semantics table (§25) — it follows deny-wins short-circuit composition, falling back to strategy-aware defaults when all policies abstain.
 
 ---
 

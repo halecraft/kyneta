@@ -118,7 +118,7 @@ export type DocCreationCallback = (
  * Callback invoked by `ensure-doc-dismissed` — ensures a dismissed
  * doc is handled locally.
  *
- * The Exchange's `onDocDismissed` scope callback handles cleanup.
+ * The Exchange's `onDocDismissed` policy callback handles cleanup.
  *
  * **Must be idempotent.** First writer wins.
  */
@@ -984,7 +984,7 @@ export class Synchronizer {
         break
       case "ensure-doc-dismissed":
         // Ensure semantics — callback must be idempotent (first writer wins).
-        // The Exchange's onDocDismissed scope callback handles cleanup.
+        // The Exchange's onDocDismissed policy callback handles cleanup.
         this.#docDismissedCallback?.(effect.docId, effect.peer, "remote")
         break
       case "batch":

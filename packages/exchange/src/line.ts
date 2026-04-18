@@ -2,7 +2,7 @@
 //
 // A Line composes two `json.bind()` authoritative documents — one per direction —
 // with automatic sequence numbering, acknowledgement-based pruning, and
-// scope-based routing/authorization. The Line class is standalone: it
+// policy-based routing/authorization. The Line class is standalone: it
 // composes with the Exchange entirely through public API (register(),
 // registerSchema(), get(), dismiss()) — no Exchange modification needed.
 //
@@ -101,8 +101,8 @@ export function parseLineDocId(
  * `undefined` for non-Line docs.
  *
  * Exported for advanced consumers (e.g. relay servers) who want to
- * implement custom Line routing in their own scopes. Not the primary
- * mechanism — the per-line scope handles authorization automatically.
+ * implement custom Line routing in their own policies. Not the primary
+ * mechanism — the per-line policy handles authorization automatically.
  */
 export function routeLine(
   docId: DocId,
@@ -180,18 +180,23 @@ interface CreateProtocol {
 }
 
 // ---------------------------------------------------------------------------
-// Static state — registry
+// Static state — per-Exchange registry (WeakMap so GC reclaims on dispose)
 // ---------------------------------------------------------------------------
 
-/** Open Lines, keyed by `${exchangePeerId}:${remotePeerId}:${topic}`. */
-const registry = new Map<string, Line<any, any>>()
+/** Open Lines, keyed per-Exchange by `${remotePeerId}:${topic}`. */
+const registries = new WeakMap<Exchange, Map<string, Line<any, any>>>()
 
-function registryKey(
-  exchangePeerId: string,
-  remotePeerId: string,
-  topic: string,
-): string {
-  return `${exchangePeerId}:${remotePeerId}:${topic}`
+function getRegistry(exchange: Exchange): Map<string, Line<any, any>> {
+  let reg = registries.get(exchange)
+  if (!reg) {
+    reg = new Map()
+    registries.set(exchange, reg)
+  }
+  return reg
+}
+
+function registryKey(remotePeerId: string, topic: string): string {
+  return `${remotePeerId}:${topic}`
 }
 
 // ---------------------------------------------------------------------------
@@ -222,7 +227,7 @@ export class Line<SendMsg, RecvMsg> {
   readonly #outbox: any // Ref — untyped to avoid complex generic threading
   readonly #inbox: any // Ref
   readonly #queue: AsyncQueue<RecvMsg>
-  readonly #disposeScope: () => void
+  readonly #disposePolicy: () => void
   readonly #unsubscribeInbox: () => void
   #nextSeq = 1
   #lastProcessedSeq = 0
@@ -237,7 +242,7 @@ export class Line<SendMsg, RecvMsg> {
     inboxDocId: DocId,
     outbox: any,
     inbox: any,
-    disposeScope: () => void,
+    disposePolicy: () => void,
   ) {
     this.#exchange = exchange
     this.#topic = topic
@@ -246,7 +251,7 @@ export class Line<SendMsg, RecvMsg> {
     this.#inboxDocId = inboxDocId
     this.#outbox = outbox
     this.#inbox = inbox
-    this.#disposeScope = disposeScope
+    this.#disposePolicy = disposePolicy
     this.#queue = new AsyncQueue<RecvMsg>()
 
     // Resume persisted protocol state from the outbox document.
@@ -328,7 +333,7 @@ export class Line<SendMsg, RecvMsg> {
   /**
    * Close the Line — local-only teardown.
    *
-   * Releases local resources (iterator, subscriptions, scope, registry)
+   * Releases local resources (iterator, subscriptions, policy, registry)
    * without mutating or deleting the underlying documents. The outbox
    * and inbox documents remain in the Exchange, untouched and available
    * for future resumption via `protocol.open()`.
@@ -342,15 +347,11 @@ export class Line<SendMsg, RecvMsg> {
 
     this.#queue.close()
     this.#unsubscribeInbox()
-    this.#disposeScope()
+    this.#disposePolicy()
 
     // Remove from registry — allows re-opening the same peer+topic
-    const key = registryKey(
-      this.#exchange.peerId,
-      this.#remotePeerId,
-      this.#topic,
-    )
-    registry.delete(key)
+    const key = registryKey(this.#remotePeerId, this.#topic)
+    getRegistry(this.#exchange).delete(key)
   }
 
   /**
@@ -447,7 +448,7 @@ export class Line<SendMsg, RecvMsg> {
    * Create a Line from pre-resolved BoundSchema references.
    *
    * Performs the core construction: duplicate check, doc ID computation,
-   * `exchange.get()`, per-line scope registration, instance construction,
+   * `exchange.get()`, per-line policy registration, instance construction,
    * and registry insertion.
    *
    * Called by `protocol.open()` and `protocol.listen()` — never directly
@@ -463,8 +464,8 @@ export class Line<SendMsg, RecvMsg> {
     inboxBound: BoundSchema,
   ): Line<any, any> {
     // 1. Check for duplicate
-    const key = registryKey(exchange.peerId, remotePeerId, topic)
-    if (registry.has(key)) {
+    const key = registryKey(remotePeerId, topic)
+    if (getRegistry(exchange).has(key)) {
       throw new Error(
         `Line already open for peer "${remotePeerId}" on topic "${topic}". ` +
           `Close the existing Line before opening a new one.`,
@@ -484,8 +485,13 @@ export class Line<SendMsg, RecvMsg> {
     const outbox: any = (exchange as any).get(outboxDocId, outboxBound)
     const inbox: any = (exchange as any).get(inboxDocId, inboxBound)
 
-    // 4. Register per-line named scope
-    const disposeScope = exchange.register({
+    // 4. Register per-line named policy with dispose hook.
+    //    The mutable cell lets the dispose callback reference the Line
+    //    without reordering construction (policy is registered before
+    //    the Line instance exists). The ?.close() guard handles the
+    //    impossible-in-practice case where dispose fires mid-#create().
+    const cell = { line: null as Line<any, any> | null }
+    const disposePolicy = exchange.register({
       name: `line:${topic}:${remotePeerId}`,
       authorize: (
         docId: DocId,
@@ -503,6 +509,7 @@ export class Line<SendMsg, RecvMsg> {
           return peer.peerId === remotePeerId ? true : undefined
         return undefined
       },
+      dispose: () => { cell.line?.close() },
     })
 
     // 5. Construct and register
@@ -514,10 +521,11 @@ export class Line<SendMsg, RecvMsg> {
       inboxDocId,
       outbox,
       inbox,
-      disposeScope,
+      disposePolicy,
     )
 
-    registry.set(key, line)
+    cell.line = line
+    getRegistry(exchange).set(key, line)
     return line
   }
 
@@ -592,6 +600,17 @@ export class Line<SendMsg, RecvMsg> {
         //    callbacks. We buffer them and replay on the first onLine call.
         const callbacks = new Set<(line: Line<any, any>) => void>()
         let pendingLines: Line<any, any>[] | null = []
+        let listenerDisposed = false
+
+        // Unified cleanup — shared by policy dispose hook and manual
+        // listener.dispose(). Whoever calls first wins; subsequent
+        // calls are no-ops via the listenerDisposed guard.
+        function disposeListener(): void {
+          if (listenerDisposed) return
+          listenerDisposed = true
+          callbacks.clear()
+          disposePolicy()
+        }
 
         function notifyOrBuffer(line: Line<any, any>): void {
           if (callbacks.size > 0) {
@@ -607,10 +626,10 @@ export class Line<SendMsg, RecvMsg> {
           }
         }
 
-        // 2. Register a scope with onDocCreated — BEFORE registerSchema
+        // 2. Register a policy with onDocCreated — BEFORE registerSchema
         //    so that deferred-then-promoted docs (client connected before
         //    listen was called) fire into this handler immediately.
-        const disposeScope = exchange.register({
+        const disposePolicy = exchange.register({
           name: `__line-listen:${topic}`,
           onDocCreated: (
             docId: DocId,
@@ -618,6 +637,9 @@ export class Line<SendMsg, RecvMsg> {
             _mode: "interpret" | "replicate",
             _origin: "local" | "remote",
           ): void => {
+            // After dispose, stop accepting new Lines
+            if (listenerDisposed) return
+
             // Parse the doc ID — only react to Line docs
             const parsed = parseLineDocId(docId)
             if (!parsed) return
@@ -627,8 +649,8 @@ export class Line<SendMsg, RecvMsg> {
             if (parsed.to !== exchange.peerId) return
 
             // Duplicate guard: skip if a Line already exists
-            const key = registryKey(exchange.peerId, parsed.from, topic)
-            if (registry.has(key)) return
+            const key = registryKey(parsed.from, topic)
+            if (getRegistry(exchange).has(key)) return
 
             // Create the server-side Line: server sends serverBound,
             // receives clientBound (the reverse of the client role)
@@ -642,13 +664,14 @@ export class Line<SendMsg, RecvMsg> {
 
             notifyOrBuffer(line)
           },
+          dispose: () => { disposeListener() },
         })
 
         // 3. Register schemas — puts them in the capabilities registry.
         //    Incoming Line docs whose schema hash matches will auto-resolve
         //    in onEnsureDoc step 1, bypassing onUnresolvedDoc.
         //    If any deferred docs match, registerSchema auto-promotes them
-        //    synchronously, firing onDocCreated into the scope above.
+        //    synchronously, firing onDocCreated into the policy above.
         //    Any Lines created here are buffered in pendingLines.
         exchange.registerSchema(clientBound)
         if (serverBound !== clientBound) {
@@ -681,8 +704,7 @@ export class Line<SendMsg, RecvMsg> {
           },
 
           dispose(): void {
-            disposeScope()
-            callbacks.clear()
+            disposeListener()
           },
         }
       },

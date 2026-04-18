@@ -1,8 +1,8 @@
-// Integration tests — dynamic scope registration via exchange.register().
+// Integration tests — dynamic policy registration via exchange.register().
 //
-// These tests prove that the Scope system correctly composes routing
+// These tests prove that the DocPolicy system correctly composes routing
 // and authorization rules at runtime, including dynamic registration
-// and disposal of scopes across Exchange instances connected via
+// and disposal of policies across Exchange instances connected via
 // BridgeTransport.
 //
 // Backward compatibility (ExchangeParams.route/authorize) is already
@@ -69,7 +69,7 @@ const SequentialDoc = json.bind(
 // Route composition and dispose
 // ---------------------------------------------------------------------------
 
-describe("dynamic scope route", () => {
+describe("dynamic policy route", () => {
   it("blocks routing while registered; disposing lifts the restriction", async () => {
     const bridge = new Bridge()
 
@@ -84,7 +84,7 @@ describe("dynamic scope route", () => {
       onUnresolvedDoc: () => Interpret(SequentialDoc),
     })
 
-    // Register a scope that blocks docs starting with "secret-"
+    // Register a policy that blocks docs starting with "secret-"
     const dispose = exchangeA.register({
       route: docId =>
         (docId as string).startsWith("secret-") ? false : undefined,
@@ -119,7 +119,7 @@ describe("dynamic scope route", () => {
     )
   })
 
-  it("multiple scopes compose — false from any scope denies", async () => {
+  it("multiple policies compose — false from any policy denies", async () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
@@ -152,7 +152,7 @@ describe("dynamic scope route", () => {
     expect(exchangeB.has("blocked-by-2")).toBe(false)
     expect(exchangeB.has("open")).toBe(true)
 
-    // Dispose scope 1 — scope 2 still blocks its doc
+    // Dispose policy 1 — policy 2 still blocks its doc
     dispose1()
 
     const freed = exchangeA.get("was-blocked-by-1", SequentialDoc)
@@ -162,13 +162,13 @@ describe("dynamic scope route", () => {
     await drain(40)
 
     expect(exchangeB.has("was-blocked-by-1")).toBe(true)
-    // scope2 blocks exact match "blocked-by-2", not "still-blocked-by-2"
-    // so this one goes through — the test above already proved scope2 blocks
+    // policy2 blocks exact match "blocked-by-2", not "still-blocked-by-2"
+    // so this one goes through — the test above already proved policy2 blocks
 
     dispose2()
   })
 
-  it("initial ExchangeParams scope and dynamic scope compose together", async () => {
+  it("initial ExchangeParams policy and dynamic policy compose together", async () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
@@ -198,7 +198,7 @@ describe("dynamic scope route", () => {
     expect(exchangeB.has("dynamic-blocked")).toBe(false)
     expect(exchangeB.has("allowed")).toBe(true)
 
-    // Dispose dynamic scope — params scope still blocks its doc
+    // Dispose dynamic policy — params policy still blocks its doc
     dispose()
 
     const freed = exchangeA.get("dynamic-now-free", SequentialDoc)
@@ -214,7 +214,7 @@ describe("dynamic scope route", () => {
 // Authorize composition
 // ---------------------------------------------------------------------------
 
-describe("dynamic scope authorize", () => {
+describe("dynamic policy authorize", () => {
   it("blocks inbound mutations while registered; disposing re-enables them", async () => {
     const bridge = new Bridge()
 
@@ -254,10 +254,10 @@ describe("dynamic scope authorize", () => {
 })
 
 // ---------------------------------------------------------------------------
-// onUnresolvedDoc via dynamic scope
+// onUnresolvedDoc via dynamic policy
 // ---------------------------------------------------------------------------
 
-describe("dynamic scope onUnresolvedDoc", () => {
+describe("dynamic policy onUnresolvedDoc", () => {
   it("dynamically registered handler materializes peer-announced docs", async () => {
     const bridge = new Bridge()
 
@@ -271,7 +271,7 @@ describe("dynamic scope onUnresolvedDoc", () => {
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
-    // Register onUnresolvedDoc dynamically via scope
+    // Register onUnresolvedDoc dynamically via policy
     const dispose = exchangeB.register({
       onUnresolvedDoc: docId => {
         if (docId === "discovered") return Interpret(SequentialDoc)
@@ -297,10 +297,10 @@ describe("dynamic scope onUnresolvedDoc", () => {
 })
 
 // ---------------------------------------------------------------------------
-// onDocDismissed via dynamic scope
+// onDocDismissed via dynamic policy
 // ---------------------------------------------------------------------------
 
-describe("dynamic scope onDocDismissed", () => {
+describe("dynamic policy onDocDismissed", () => {
   it("fires when a peer dismisses a document", async () => {
     const bridge = new Bridge()
     const dismissSpy = vi.fn()
@@ -334,11 +334,11 @@ describe("dynamic scope onDocDismissed", () => {
 })
 
 // ---------------------------------------------------------------------------
-// Named scope replacement (integration-level)
+// Named policy replacement (integration-level)
 // ---------------------------------------------------------------------------
 
-describe("named scope replacement", () => {
-  it("re-registering a name replaces the old scope's rules", async () => {
+describe("named policy replacement", () => {
+  it("re-registering a name replaces the old policy's rules", async () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
@@ -352,7 +352,7 @@ describe("named scope replacement", () => {
       onUnresolvedDoc: () => Interpret(SequentialDoc),
     })
 
-    // Named scope blocks everything
+    // Named policy blocks everything
     exchangeA.register({
       name: "policy",
       route: () => false,
@@ -362,7 +362,7 @@ describe("named scope replacement", () => {
     await drain(40)
     expect(exchangeB.has("doc-v1")).toBe(false)
 
-    // Replace with permissive scope
+    // Replace with permissive policy
     const dispose = exchangeA.register({
       name: "policy",
       route: () => true,
@@ -384,7 +384,7 @@ describe("named scope replacement", () => {
 // ---------------------------------------------------------------------------
 
 describe("relay topology", () => {
-  it("scope on hub blocks relay to a specific peer", async () => {
+  it("policy on hub blocks relay to a specific peer", async () => {
     const bridgeAH = new Bridge()
     const bridgeHB = new Bridge()
 
@@ -429,7 +429,7 @@ describe("relay topology", () => {
     expect(exchangeHub.has("private")).toBe(true)
     expect(exchangeHub.get("private", SequentialDoc).title()).toBe("secret")
 
-    // Bob does NOT have it (hub's scope blocked relay)
+    // Bob does NOT have it (hub's policy blocked relay)
     expect(exchangeB.has("private")).toBe(false)
 
     // Dispose — new docs relay freely

@@ -50,8 +50,8 @@ import type {
 } from "@kyneta/transport"
 import type { Capabilities } from "./capabilities.js"
 import { createCapabilities, DEFAULT_REPLICAS } from "./capabilities.js"
-import type { Scope } from "./scope.js"
-import { ScopeRegistry } from "./scope.js"
+import type { DocPolicy } from "./doc-governance.js"
+import { DocGovernance } from "./doc-governance.js"
 import type { Store } from "./store/store.js"
 import { registerSync } from "./sync.js"
 import { type DocRuntime, Synchronizer } from "./synchronizer.js"
@@ -219,7 +219,7 @@ export type ExchangeParams = {
    * Also gates `onUnresolvedDoc`: if `route` returns `false` for
    * the announcing peer, the onUnresolvedDoc callback never fires.
    *
-   * This field is syntactic sugar for the initial scope. For dynamic
+   * This field is syntactic sugar for the initial policy. For dynamic
    * rule composition, use {@link Exchange.register | exchange.register()}.
    *
    * @default () => true (open routing)
@@ -230,7 +230,7 @@ export type ExchangeParams = {
    * Inbound flow control. Determines whose mutations are accepted.
    * Checked before importing offers from network peers.
    *
-   * This field is syntactic sugar for the initial scope. For dynamic
+   * This field is syntactic sugar for the initial policy. For dynamic
    * rule composition, use {@link Exchange.register | exchange.register()}.
    *
    * @default () => true (accept all)
@@ -242,7 +242,7 @@ export type ExchangeParams = {
    * `exchange.dismiss()` calls (`origin: "local"`) and remote peer
    * dismiss messages (`origin: "remote"`).
    *
-   * This field is syntactic sugar for the initial scope. For dynamic
+   * This field is syntactic sugar for the initial policy. For dynamic
    * rule composition, use {@link Exchange.register | exchange.register()}.
    *
    * @default undefined (dismiss events are no-ops)
@@ -256,7 +256,7 @@ export type ExchangeParams = {
    * remote auto-resolve, remote `onUnresolvedDoc`, and deferred
    * promotions. Use `origin` to distinguish local from remote triggers.
    *
-   * This field is syntactic sugar for the initial scope. For dynamic
+   * This field is syntactic sugar for the initial policy. For dynamic
    * rule composition, use {@link Exchange.register | exchange.register()}.
    *
    * @default undefined (no notification)
@@ -294,7 +294,7 @@ export type ExchangeParams = {
    * - `Defer()` — track for routing but don't replicate yet.
    * - `Reject()` — explicitly refuse to track this document.
    *
-   * This field is syntactic sugar for the initial scope. For dynamic
+   * This field is syntactic sugar for the initial policy. For dynamic
    * rule composition, use {@link Exchange.register | exchange.register()}.
    */
   onUnresolvedDoc?: OnUnresolvedDoc
@@ -359,12 +359,19 @@ type DocCacheEntry =
  * await sync(doc).waitForSync()  // sync
  * ```
  */
+function rethrowErrors(errors: unknown[]): void {
+  if (errors.length === 1) throw errors[0]
+  if (errors.length > 1) {
+    throw new AggregateError(errors, `${errors.length} policy dispose callbacks threw`)
+  }
+}
+
 export class Exchange {
   readonly peerId: string
   readonly #peerIdIsExplicit: boolean
   readonly #identity: PeerIdentityDetails
 
-  readonly #scopes: ScopeRegistry
+  readonly #governance: DocGovernance
   readonly #capabilities: Capabilities
   readonly #synchronizer: Synchronizer
   readonly peers: ReactiveMap<PeerId, PeerIdentityDetails, PeerChange>
@@ -422,20 +429,20 @@ export class Exchange {
     }
     this.#identity = fullIdentity
 
-    // ── ScopeRegistry — must be initialized before the Synchronizer,
+    // ── DocGovernance — must be initialized before the Synchronizer,
     // because the Synchronizer may call onEnsureDoc during
     // _start() if a transport immediately discovers peers.
-    this.#scopes = new ScopeRegistry()
+    this.#governance = new DocGovernance()
 
-    // Register the initial scope from ExchangeParams (syntactic sugar).
+    // Register the initial policy from ExchangeParams (syntactic sugar).
     // Only include fields that were actually provided — omitted fields
-    // let the ScopeRegistry defaults take effect.
-    const initialScope: Scope = {}
-    if (route) initialScope.route = route
-    if (authorize) initialScope.authorize = authorize
-    if (onUnresolvedDoc) initialScope.onUnresolvedDoc = onUnresolvedDoc
-    if (onDocCreated) initialScope.onDocCreated = onDocCreated
-    if (onDocDismissed) initialScope.onDocDismissed = onDocDismissed
+    // let the DocGovernance defaults take effect.
+    const initialPolicy: DocPolicy = {}
+    if (route) initialPolicy.route = route
+    if (authorize) initialPolicy.authorize = authorize
+    if (onUnresolvedDoc) initialPolicy.onUnresolvedDoc = onUnresolvedDoc
+    if (onDocCreated) initialPolicy.onDocCreated = onDocCreated
+    if (onDocDismissed) initialPolicy.onDocDismissed = onDocDismissed
     if (
       route ||
       authorize ||
@@ -443,7 +450,7 @@ export class Exchange {
       onDocCreated ||
       onDocDismissed
     ) {
-      this.#scopes.register(initialScope)
+      this.#governance.register(initialPolicy)
     }
 
     // Build the capabilities registry from declared schemas and replicas.
@@ -455,18 +462,18 @@ export class Exchange {
     })
 
     // Create synchronizer — call each factory to produce fresh adapter instances.
-    // The route and authorize predicates delegate to the live ScopeRegistry,
-    // so dynamically registered scopes are visible without recreating the
+    // The route and authorize predicates delegate to the live DocGovernance,
+    // so dynamically registered policies are visible without recreating the
     // synchronizer's update function.
     this.#synchronizer = new Synchronizer({
       identity: fullIdentity,
       transports: transports.map(factory => factory()),
-      route: this.#scopes.route.bind(this.#scopes),
-      authorize: this.#scopes.authorize.bind(this.#scopes),
-      epochBoundary: this.#scopes.epochBoundary.bind(this.#scopes),
+      route: this.#governance.route.bind(this.#governance),
+      authorize: this.#governance.authorize.bind(this.#governance),
+      epochBoundary: this.#governance.epochBoundary.bind(this.#governance),
       departureTimeout,
 
-      onEnsureDocDismissed: this.#scopes.docDismissed.bind(this.#scopes),
+      onEnsureDocDismissed: this.#governance.docDismissed.bind(this.#governance),
       onEnsureDoc: (
         docId,
         peer,
@@ -486,7 +493,7 @@ export class Exchange {
         }
 
         // 2. OnUnresolvedDoc callback
-        const result = this.#scopes.onUnresolvedDoc(
+        const result = this.#governance.onUnresolvedDoc(
           docId,
           peer,
           replicaType,
@@ -659,7 +666,7 @@ export class Exchange {
     }
 
     // Design invariant: onDocCreated fires only from #interpretDoc and #replicateDoc.
-    this.#scopes.docCreated(docId, peer, "interpret", origin)
+    this.#governance.docCreated(docId, peer, "interpret", origin)
 
     return ref
   }
@@ -710,7 +717,7 @@ export class Exchange {
     }
 
     // Design invariant: onDocCreated fires only from #interpretDoc and #replicateDoc.
-    this.#scopes.docCreated(docId, peer, "replicate", origin)
+    this.#governance.docCreated(docId, peer, "replicate", origin)
   }
 
   /**
@@ -1213,7 +1220,7 @@ export class Exchange {
 
     // Design invariant: docDismissed fires from dismiss() (local) and
     // the synchronizer callback (remote). Symmetric with docCreated.
-    this.#scopes.docDismissed(docId, this.#identity, "local")
+    this.#governance.docDismissed(docId, this.#identity, "local")
   }
 
   /**
@@ -1320,9 +1327,10 @@ export class Exchange {
    * {@link shutdown} instead.
    */
   reset(): void {
-    this.#scopes.clear()
+    const disposeErrors = this.#governance.clear()
     this.#docCache.clear()
     this.#synchronizer.reset()
+    rethrowErrors(disposeErrors)
   }
 
   /**
@@ -1334,13 +1342,14 @@ export class Exchange {
    */
   async shutdown(): Promise<void> {
     await this.#flushStores()
-    this.#scopes.clear()
+    const disposeErrors = this.#governance.clear()
     this.#docCache.clear()
     await this.#synchronizer.shutdown()
     // Close stores that hold native handles
     for (const backend of this.#stores) {
       if (backend.close) await backend.close()
     }
+    rethrowErrors(disposeErrors)
   }
 
   // =========================================================================
@@ -1348,22 +1357,22 @@ export class Exchange {
   // =========================================================================
 
   /**
-   * Register a scope. Returns a dispose function that removes the
-   * scope from all compositions.
+   * Register a doc policy. Returns a dispose function that removes the
+   * policy from all compositions.
    *
-   * A Scope bundles predicates and handlers governing a region of
-   * the document space. Multiple scopes compose via three-valued logic:
-   * - `false` from any scope → deny (short-circuit)
-   * - `true` from at least one scope, no `false` → allow
+   * A DocPolicy bundles predicates and handlers governing a region of
+   * the document space. Multiple policies compose via three-valued logic:
+   * - `false` from any policy → deny (short-circuit)
+   * - `true` from at least one policy, no `false` → allow
    * - all `undefined` → default (open for both route and authorize)
    *
-   * Scopes may include a `onUnresolvedDoc` handler for policy-gating documents
+   * Policies may include a `onUnresolvedDoc` handler for policy-gating documents
    * not auto-resolved by the capabilities registry. Multiple onUnresolvedDoc
    * handlers are evaluated in registration order — first non-`undefined`
    * disposition wins.
    */
-  register(scope: Scope): () => void {
-    return this.#scopes.register(scope)
+  register(policy: DocPolicy): () => void {
+    return this.#governance.register(policy)
   }
 
   /** @internal */
