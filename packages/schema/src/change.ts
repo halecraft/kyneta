@@ -363,6 +363,81 @@ export function advanceIndex(
 }
 
 // ---------------------------------------------------------------------------
+// transformIndex — sticky-side-aware gap position tracking
+// ---------------------------------------------------------------------------
+
+/**
+ * Sticky-side-aware index transform through a delta.
+ *
+ * Tracks a *gap position* (between items) through a set of instructions,
+ * as opposed to `advanceIndex` which tracks *item positions*.
+ *
+ * Key differences from `advanceIndex`:
+ * - Gaps survive deletion (returns the collapsed target position, never `null`).
+ * - When an insert occurs at exactly the gap index, sticky side determines
+ *   the result: `"left"` stays before the insertion, `"right"` shifts past it.
+ * - Threads source/target through the accumulator to avoid the trailing-retain
+ *   double-walk present in `advanceIndex`.
+ *
+ * @param index - The gap position in the source (pre-image) index space.
+ * @param side - Sticky side: `"left"` stays before inserts at the gap,
+ *   `"right"` shifts past them.
+ * @param instructions - The instruction sequence (retain/insert/delete).
+ * @returns The transformed index in the target (post-image) index space.
+ */
+export function transformIndex(
+  index: number,
+  side: "left" | "right",
+  instructions: readonly Instruction[],
+): number {
+  interface State {
+    result: number | undefined
+    source: number
+    target: number
+  }
+
+  const final = foldInstructions<State>(
+    instructions,
+    { result: undefined, source: 0, target: 0 },
+    {
+      onRetain(_acc, count, source, target) {
+        if (index >= source && index < source + count) {
+          return {
+            done: {
+              result: target + (index - source),
+              source: source + count,
+              target: target + count,
+            },
+          }
+        }
+        return { result: undefined, source: source + count, target: target + count }
+      },
+      onInsert(_acc, length, source, target) {
+        if (source === index && side === "left") {
+          // Left-sticky: position stays before the insertion
+          return { done: { result: target, source, target: target + length } }
+        }
+        // Right-sticky or insert not at gap position: let target accumulate
+        return { result: undefined, source, target: target + length }
+      },
+      onDelete(_acc, count, source, target) {
+        if (index >= source && index < source + count) {
+          // Gap within deleted range collapses to target
+          return {
+            done: { result: target, source: source + count, target },
+          }
+        }
+        return { result: undefined, source: source + count, target }
+      },
+    },
+  )
+
+  if (final.result !== undefined) return final.result
+  // Trailing retain: index is past all explicit ops
+  return final.target + (index - final.source)
+}
+
+// ---------------------------------------------------------------------------
 // advanceAddresses — imperative shell for bulk address advancement
 // ---------------------------------------------------------------------------
 
@@ -437,4 +512,52 @@ export function advanceAddresses(
   }
 
   return dead
+}
+
+// ---------------------------------------------------------------------------
+// textInstructionsToPatches — cursor-based → offset-based instruction conversion
+// ---------------------------------------------------------------------------
+
+/**
+ * Offset-based patch operation for DOM-friendly text application.
+ *
+ * These operations use absolute offsets and can be applied directly via
+ * `Text.insertData()`/`Text.deleteData()` or `HTMLInputElement.setRangeText()`.
+ */
+export type TextPatch =
+  | { kind: "insert"; offset: number; text: string }
+  | { kind: "delete"; offset: number; count: number }
+
+/**
+ * Convert cursor-based text instructions to offset-based patch operations.
+ *
+ * Text instructions use a cursor model (retain/insert/delete applied
+ * left-to-right). This function converts to absolute-offset operations
+ * suitable for direct DOM application.
+ *
+ * Critical detail: **delete does not advance the cursor** — subsequent
+ * operations apply at the same position (the deleted range collapses).
+ *
+ * @param instructions - Cursor-based text instructions.
+ * @returns Offset-based patch operations.
+ */
+export function textInstructionsToPatches(
+  instructions: readonly TextInstruction[],
+): TextPatch[] {
+  const result: TextPatch[] = []
+  let cursor = 0
+
+  for (const op of instructions) {
+    if ("retain" in op) {
+      cursor += op.retain
+    } else if ("insert" in op) {
+      result.push({ kind: "insert", offset: cursor, text: op.insert })
+      cursor += op.insert.length
+    } else if ("delete" in op) {
+      result.push({ kind: "delete", offset: cursor, count: op.delete })
+      // Cursor does NOT advance on delete — subsequent ops apply at same position
+    }
+  }
+
+  return result
 }

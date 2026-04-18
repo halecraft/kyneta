@@ -1,8 +1,9 @@
 /**
  * Tests for text-patch.ts — surgical text patching and subscription-aware DOM updates.
  *
- * Covers planTextPatch (pure), patchText/patchInputValue (imperative),
- * and textRegion/inputTextRegion (subscription-aware).
+ * Covers textInstructionsToPatches (pure, from @kyneta/schema),
+ * patchText/patchInputValue (imperative), and textRegion/inputTextRegion
+ * (subscription-aware).
  */
 
 import {
@@ -11,7 +12,11 @@ import {
   type ChangefeedProtocol,
   type Changeset,
 } from "@kyneta/changefeed"
-import type { TextChange, TextInstruction } from "@kyneta/schema"
+import {
+  textInstructionsToPatches,
+  type TextChange,
+  type TextInstruction,
+} from "@kyneta/schema"
 import { JSDOM } from "jsdom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { resetScopeIdCounter, Scope } from "./scope.js"
@@ -24,7 +29,6 @@ import {
   inputTextRegion,
   patchInputValue,
   patchText,
-  planTextPatch,
   textRegion,
 } from "./text-patch.js"
 
@@ -85,24 +89,24 @@ function createMockTextRef(initialValue: string): {
 // planTextPatch Tests
 // =============================================================================
 
-describe("planTextPatch", () => {
+describe("textInstructionsToPatches", () => {
   it("converts retain + insert to offset-based insert op", () => {
     const ops: TextInstruction[] = [{ retain: 5 }, { insert: "X" }]
-    const result = planTextPatch(ops)
+    const result = textInstructionsToPatches(ops)
     expect(result).toHaveLength(1)
     expect(result[0]).toEqual({ kind: "insert", offset: 5, text: "X" })
   })
 
   it("converts retain + delete to offset-based delete op", () => {
     const ops: TextInstruction[] = [{ retain: 2 }, { delete: 3 }]
-    const result = planTextPatch(ops)
+    const result = textInstructionsToPatches(ops)
     expect(result).toHaveLength(1)
     expect(result[0]).toEqual({ kind: "delete", offset: 2, count: 3 })
   })
 
   it("handles insert at start (no retain)", () => {
     const ops: TextInstruction[] = [{ insert: "Hello" }]
-    const result = planTextPatch(ops)
+    const result = textInstructionsToPatches(ops)
     expect(result).toHaveLength(1)
     expect(result[0]).toEqual({ kind: "insert", offset: 0, text: "Hello" })
   })
@@ -116,7 +120,7 @@ describe("planTextPatch", () => {
       { delete: 1 },
       { insert: "!" },
     ]
-    const result = planTextPatch(ops)
+    const result = textInstructionsToPatches(ops)
     expect(result).toHaveLength(2)
     // delete doesn't advance cursor
     expect(result[0]).toEqual({ kind: "delete", offset: 5, count: 1 })
@@ -125,7 +129,7 @@ describe("planTextPatch", () => {
 
   it("handles empty ops", () => {
     const ops: TextInstruction[] = []
-    const result = planTextPatch(ops)
+    const result = textInstructionsToPatches(ops)
     expect(result).toHaveLength(0)
   })
 
@@ -135,14 +139,14 @@ describe("planTextPatch", () => {
       { retain: 2 },
       { insert: "X" },
     ]
-    const result = planTextPatch(ops)
+    const result = textInstructionsToPatches(ops)
     expect(result).toHaveLength(1)
     expect(result[0]).toEqual({ kind: "insert", offset: 5, text: "X" })
   })
 
   it("handles consecutive inserts", () => {
     const ops: TextInstruction[] = [{ insert: "AB" }, { insert: "CD" }]
-    const result = planTextPatch(ops)
+    const result = textInstructionsToPatches(ops)
     expect(result).toHaveLength(2)
     // First insert at 0, cursor advances to 2
     // Second insert at 2, cursor advances to 4
@@ -157,7 +161,7 @@ describe("planTextPatch", () => {
       { delete: 2 },
       { insert: "XY" },
     ]
-    const result = planTextPatch(ops)
+    const result = textInstructionsToPatches(ops)
     expect(result).toHaveLength(2)
     // delete at offset 1, cursor stays at 1
     expect(result[0]).toEqual({ kind: "delete", offset: 1, count: 2 })
@@ -167,7 +171,7 @@ describe("planTextPatch", () => {
 
   it("handles retain-only ops (no-op)", () => {
     const ops: TextInstruction[] = [{ retain: 10 }]
-    const result = planTextPatch(ops)
+    const result = textInstructionsToPatches(ops)
     expect(result).toHaveLength(0)
   })
 })

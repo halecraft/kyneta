@@ -17,9 +17,11 @@ import {
   executeBatch,
   KIND,
   type Path,
+  type PositionCapable,
   type Replica,
   type ReplicaFactory,
   type Schema as SchemaNode,
+  type Side,
   type Substrate,
   type SubstrateFactory,
   type SubstratePayload,
@@ -32,9 +34,10 @@ import type {
   JsonDiff,
   LoroDoc as LoroDocType,
 } from "loro-crdt"
-import { LoroDoc } from "loro-crdt"
+import { Cursor, LoroDoc } from "loro-crdt"
 import { batchToOps, changeToDiff } from "./change-mapping.js"
 import { PROPS_KEY, resolveContainer } from "./loro-resolve.js"
+import { LoroPosition, toLoroSide } from "./position.js"
 import { loroReader } from "./reader.js"
 import { LoroVersion } from "./version.js"
 
@@ -247,6 +250,43 @@ export function createLoroSubstrate(
           if (nodeSchema[KIND] === "scalar" || nodeSchema[KIND] === "sum")
             return undefined
           return resolveContainer(doc, schema, path as any)
+        }
+        // Attach positionResolver — used to create and decode LoroPositions
+        // backed by Loro Cursors. Resolves the schema path to a LoroText
+        // container, then delegates to Cursor-based anchoring.
+        ;(cachedCtx as any).positionResolver = (
+          _nodeSchema: unknown,
+          path: { segments: readonly unknown[] },
+        ) => {
+          return {
+            createPosition(index: number, side: Side) {
+              // Resolve path to the LoroText container
+              const container = resolveContainer(doc, schema, path as any)
+              if (
+                !container ||
+                typeof (container as any).getCursor !== "function"
+              ) {
+                throw new Error(
+                  `positionResolver: path does not resolve to a LoroText`,
+                )
+              }
+              const loroSide = toLoroSide(side)
+              const cursor = (container as any).getCursor(
+                index,
+                loroSide,
+              ) as Cursor | undefined
+              if (!cursor) {
+                throw new Error(
+                  `positionResolver: getCursor returned undefined at index ${index}`,
+                )
+              }
+              return new LoroPosition(cursor, doc)
+            },
+            decodePosition(bytes: Uint8Array) {
+              const cursor = Cursor.decode(bytes)
+              return new LoroPosition(cursor, doc)
+            },
+          } satisfies PositionCapable
         }
       }
       return cachedCtx

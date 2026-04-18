@@ -56,6 +56,8 @@ export {
   yjsReplicaFactory,
   yjsSubstrateFactory,
 } from "./substrate.js"
+// Position conformance
+export { YjsPosition, toYjsAssoc, fromYjsAssoc } from "./position.js"
 // Version
 export { YjsVersion } from "./version.js"
 // Container resolution

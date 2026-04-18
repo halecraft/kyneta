@@ -34,6 +34,7 @@
 // Context: jj:wmyomqzw (Phase 0), jj:wqoqzzpp (Phase 2), jj:umtmlpvn (version strategy extraction)
 // Context: jj:oyouvrss (Phase 1 — append-log replica, init ops, batched wire format)
 
+import { PlainPosition, decodePlainPosition, type PositionCapable, type Side } from "../position.js"
 import type { ChangeBase } from "../change.js"
 import { replaceChange } from "../change.js"
 import type { Op } from "../changefeed.js"
@@ -203,6 +204,19 @@ export function createPlainSubstrate<V extends Version>(
           path: { segments: readonly unknown[] },
         ) => {
           return path.segments.length === 0 ? doc : undefined
+        }
+        ;(cachedCtx as any).positionResolver = (
+          _schema: unknown,
+          _path: { segments: readonly unknown[] },
+        ) => {
+          return {
+            createPosition(index: number, side: Side): PlainPosition {
+              return new PlainPosition(index, side)
+            },
+            decodePosition(bytes: Uint8Array): PlainPosition {
+              return decodePlainPosition(bytes)
+            },
+          } satisfies PositionCapable
         }
       }
       return cachedCtx

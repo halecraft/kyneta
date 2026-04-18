@@ -13,10 +13,12 @@
 import type {
   ChangeBase,
   Path,
+  PositionCapable,
   Reader,
   Replica,
   ReplicaFactory,
   Schema as SchemaNode,
+  Side,
   Substrate,
   SubstrateFactory,
   SubstratePayload,
@@ -33,6 +35,7 @@ import { applyChangeToYjs, eventsToOps } from "./change-mapping.js"
 import { ensureContainers } from "./populate.js"
 import { yjsReader } from "./reader.js"
 import { YjsVersion } from "./version.js"
+import { YjsPosition, toYjsAssoc } from "./position.js"
 import { resolveYjsType } from "./yjs-resolve.js"
 
 // ---------------------------------------------------------------------------
@@ -140,6 +143,29 @@ export function createYjsSubstrate(
           if (nodeSchema[KIND] === "scalar" || nodeSchema[KIND] === "sum")
             return undefined
           return resolveYjsType(rootMap, schema, path as any)
+        }
+        ;(cachedCtx as any).positionResolver = (
+          _nodeSchema: unknown,
+          path: { segments: readonly unknown[] },
+        ) => {
+          return {
+            createPosition(index: number, side: Side) {
+              // Resolve path to the Y.Text shared type
+              const ytype = resolveYjsType(rootMap, schema, path as any)
+              if (!(ytype instanceof Y.Text)) {
+                throw new Error(
+                  `positionResolver: path does not resolve to a Y.Text`,
+                )
+              }
+              const assoc = toYjsAssoc(side)
+              const rpos = Y.createRelativePositionFromTypeIndex(ytype, index, assoc)
+              return new YjsPosition(rpos, doc)
+            },
+            decodePosition(bytes: Uint8Array) {
+              const rpos = Y.decodeRelativePosition(bytes)
+              return new YjsPosition(rpos, doc)
+            },
+          } satisfies PositionCapable
         }
       }
       return cachedCtx

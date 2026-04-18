@@ -10,6 +10,7 @@
 // and Plain<S> lived in writable.ts (forcing readable.ts to duplicate it as ReadablePlain<S>).
 
 import type { Path } from "./path.js"
+import type { PositionCapable } from "./position.js"
 import type { Reader } from "./reader.js"
 import type {
   CounterSchema,
@@ -71,6 +72,18 @@ export interface RefContext {
    * is not attached.
    */
   readonly nativeResolver?: (schema: Schema, path: Path) => unknown
+  /**
+   * Resolve the position capability for a text node at a schema position.
+   *
+   * Provided by the substrate (via monkey-patch on the cached WritableContext).
+   * Returns a `PositionCapable` that can create and decode `Position` values
+   * for text refs at the given path.
+   *
+   * Used by `interpretImpl` to attach `[POSITION]` on text refs during
+   * interpretation. When absent (e.g. bare readable-only stacks), `[POSITION]`
+   * is not attached.
+   */
+  readonly positionResolver?: (schema: TextSchema, path: Path) => PositionCapable
 }
 
 // ---------------------------------------------------------------------------

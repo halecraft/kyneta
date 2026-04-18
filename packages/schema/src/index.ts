@@ -42,6 +42,7 @@ export type {
   SequenceInstruction,
   TextChange,
   TextInstruction,
+  TextPatch,
   TreeChange,
   TreeInstruction,
 } from "./change.js"
@@ -50,6 +51,8 @@ export {
   advanceIndex,
   foldInstructions,
   incrementChange,
+  textInstructionsToPatches,
+  transformIndex,
   isIncrementChange,
   isMapChange,
   isReplaceChange,
@@ -64,6 +67,19 @@ export {
   textChange,
   treeChange,
 } from "./change.js"
+// Position algebra — substrate-agnostic cursor stability
+export type {
+  HasPosition,
+  Position,
+  PositionCapable,
+  Side,
+} from "./position.js"
+export {
+  decodePlainPosition,
+  hasPosition,
+  PlainPosition,
+  POSITION,
+} from "./position.js"
 export type {
   ComposedChangefeedProtocol,
   HasComposedChangefeed,
@@ -81,7 +97,7 @@ export { firstDefined, overlay, product } from "./combinators.js"
 // Create-doc — generic document construction for any substrate
 export { createDoc, createRef } from "./create-doc.js"
 export { describe } from "./describe.js"
-export type { ApplyChangesOptions } from "./facade/change.js"
+export type { CommitOptions } from "./facade/change.js"
 // Facade — library-level change capture and declarative application
 export { applyChanges, change, remove } from "./facade/change.js"
 // Facade — library-level observation protocol

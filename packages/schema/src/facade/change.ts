@@ -24,13 +24,14 @@ import {
 } from "../interpreters/writable.js"
 
 // ---------------------------------------------------------------------------
-// ApplyChangesOptions
+// CommitOptions
 // ---------------------------------------------------------------------------
 
 /**
- * Options for `applyChanges`.
+ * Extensible metadata surface for all mutation entry points
+ * (`change`, `applyChanges`, and future variants).
  */
-export interface ApplyChangesOptions {
+export interface CommitOptions {
   /**
    * Provenance tag attached to the emitted `Changeset`.
    *
@@ -59,10 +60,14 @@ export interface ApplyChangesOptions {
  * // ops is Op[] — can be sent to another doc via applyChanges
  * ```
  *
+ * @param ref - Any ref with a `[TRANSACT]` symbol (from `withWritable`).
+ * @param fn - Mutation function receiving the draft proxy.
+ * @param options - Optional metadata (e.g. `{ origin: "undo" }`).
+ *
  * @throws If `ref` does not have a `[TRANSACT]` symbol.
  * @throws If a transaction is already active on this context.
  */
-export function change<D extends object>(ref: D, fn: (draft: D) => void): Op[] {
+export function change<D extends object>(ref: D, fn: (draft: D) => void, options?: CommitOptions): Op[] {
   if (!hasTransact(ref)) {
     throw new Error(
       "change() requires a ref with [TRANSACT]. " +
@@ -73,7 +78,7 @@ export function change<D extends object>(ref: D, fn: (draft: D) => void): Op[] {
   ctx.beginTransaction()
   try {
     fn(ref)
-    return ctx.commit()
+    return ctx.commit(options?.origin)
   } catch (e) {
     if (ctx.inTransaction) ctx.abort()
     throw e
@@ -120,7 +125,7 @@ export function change<D extends object>(ref: D, fn: (draft: D) => void): Op[] {
 export function applyChanges(
   ref: object,
   ops: ReadonlyArray<Op>,
-  options?: ApplyChangesOptions,
+  options?: CommitOptions,
 ): ReadonlyArray<Op> {
   if (!hasTransact(ref)) {
     throw new Error(

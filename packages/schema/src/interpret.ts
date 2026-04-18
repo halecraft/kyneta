@@ -22,6 +22,7 @@ import type { HasRead } from "./interpreters/bottom.js"
 import { bottomInterpreter } from "./interpreters/bottom.js"
 import type { HasTransact } from "./interpreters/writable.js"
 import { NATIVE } from "./native.js"
+import { POSITION } from "./position.js"
 import type { Path } from "./path.js"
 import { RawPath } from "./path.js"
 import type { Ref, RRef, RWRef } from "./ref.js"
@@ -545,6 +546,34 @@ function attachNative(
   }
 }
 
+/**
+ * Attach the `[POSITION]` capability to a text ref.
+ *
+ * Reads `ctx.positionResolver` — a function set by each substrate in its
+ * `context()` method. If present, calls it with the text schema and path,
+ * then defines `[POSITION]` as a non-enumerable property on the result.
+ *
+ * Only called for text nodes (unlike `attachNative` which is called for all).
+ */
+function attachPosition(
+  result: unknown,
+  ctx: unknown,
+  schema: Schema,
+  path: Path,
+): void {
+  const resolver = (ctx as any)?.positionResolver as
+    | ((schema: Schema, path: Path) => unknown)
+    | undefined
+  if (resolver && isPropertyHost(result)) {
+    Object.defineProperty(result, POSITION, {
+      value: resolver(schema, path),
+      enumerable: false,
+      writable: false,
+      configurable: false,
+    })
+  }
+}
+
 function interpretImpl<Ctx, A>(
   schema: Schema,
   interp: Interpreter<Ctx, A>,
@@ -674,6 +703,7 @@ function interpretImpl<Ctx, A>(
     case "text": {
       const textResult = interp.text(ctx, resolvedPath, schema)
       attachNative(textResult, ctx, schema, resolvedPath)
+      attachPosition(textResult, ctx, schema, resolvedPath)
       return textResult
     }
 

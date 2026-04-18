@@ -57,5 +57,7 @@ export {
   loroReplicaFactory,
   loroSubstrateFactory,
 } from "./substrate.js"
+// Position conformance
+export { fromLoroSide, LoroPosition, toLoroSide } from "./position.js"
 // Version
 export { LoroVersion } from "./version.js"

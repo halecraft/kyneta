@@ -35,22 +35,23 @@
     "verify": "verify"
   },
   "peerDependencies": {
-    "react": ">=18",
     "@kyneta/changefeed": "^1.3.1",
+    "@kyneta/exchange": "^1.3.1",
     "@kyneta/schema": "^1.3.1",
-    "@kyneta/exchange": "^1.3.1"
+    "react": ">=18"
   },
   "devDependencies": {
-    "react": "^19.1.0",
-    "@types/react": "^19.1.8",
     "@kyneta/changefeed": "workspace:^",
-    "@kyneta/schema": "workspace:^",
     "@kyneta/exchange": "workspace:^",
     "@kyneta/loro-schema": "workspace:^",
+    "@kyneta/schema": "workspace:^",
+    "@kyneta/transport": "workspace:^",
     "@testing-library/react": "^16.3.0",
-    "vitest": "^4.0.17",
+    "@types/react": "^19.1.8",
     "jsdom": "^26.1.0",
+    "react": "^19.1.0",
     "tsup": "^8.5.0",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.17"
   }
 }

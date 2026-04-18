@@ -22,8 +22,13 @@ export {
   createNullishStore,
   createSyncStore,
 } from "./store.js"
+// Text adapter (framework-agnostic textarea ↔ TextRef binding)
+export type { AttachOptions, TextRefLike } from "./text-adapter.js"
+export { attach, diffText, transformSelection } from "./text-adapter.js"
 export { useDocument } from "./use-document.js"
 export { useSyncStatus } from "./use-sync-status.js"
+export type { UseTextOptions } from "./use-text.js"
+export { useText } from "./use-text.js"
 export { useValue } from "./use-value.js"
 
 // ---------------------------------------------------------------------------
@@ -39,6 +44,7 @@ export { CHANGEFEED } from "@kyneta/changefeed"
 
 export type {
   BoundSchema,
+  CommitOptions,
   Op,
   Plain,
   Ref,
