@@ -10,6 +10,8 @@
 // ---------------------------------------------------------------------------
 
 export type {
+  DocChange,
+  DocInfo,
   PeerChange,
   PeerDocSyncState,
   PeerState,
@@ -151,7 +153,7 @@ export { Synchronizer } from "./synchronizer.js"
 // Doc Governance — composable policy registration
 // ---------------------------------------------------------------------------
 
-export type { RulePredicate, DocPolicy } from "./doc-governance.js"
+export type { DocPolicy, RulePredicate } from "./doc-governance.js"
 export { composeRule, DocGovernance } from "./doc-governance.js"
 
 // ---------------------------------------------------------------------------

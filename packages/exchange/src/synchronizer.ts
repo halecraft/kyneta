@@ -61,7 +61,7 @@ import {
   type SyncUpdate,
 } from "./sync-program.js"
 import { TransportManager } from "./transport/transport-manager.js"
-import type { PeerChange, ReadyState } from "./types.js"
+import type { DocChange, DocInfo, PeerChange, ReadyState } from "./types.js"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -306,6 +306,10 @@ export class Synchronizer {
     PeerChange
   > | null = null
 
+  // Document lifecycle — event accumulation and changefeed
+  #pendingDocEvents: DocChange[] = []
+  #docHandle: ReactiveMapHandle<DocId, DocInfo, DocChange> | null = null
+
   // Event emitter for ready state changes
   readonly #readyStateListeners = new Set<
     (docId: DocId, readyStates: ReadyState[]) => void
@@ -391,6 +395,22 @@ export class Synchronizer {
    * dispatches doc-ensure to begin sync.
    */
   registerDoc(runtime: DocRuntime): void {
+    // Accumulate doc event — detect promotion (deferred → interpret/replicate)
+    // vs first-time creation. Check model before dispatching sync/doc-ensure,
+    // which will update the model.
+    const existing = this.#syncModel.documents.get(runtime.docId)
+    if (existing?.mode === "deferred") {
+      this.#pendingDocEvents.push({
+        type: "doc-promoted",
+        docId: runtime.docId,
+      })
+    } else if (!this.#docRuntimes.has(runtime.docId)) {
+      this.#pendingDocEvents.push({
+        type: "doc-created",
+        docId: runtime.docId,
+      })
+    }
+
     this.#docRuntimes.set(runtime.docId, runtime)
 
     this.#dispatchSync({
@@ -417,6 +437,12 @@ export class Synchronizer {
     mergeStrategy: MergeStrategy,
     schemaHash: string,
   ): void {
+    // Only accumulate if the doc doesn't already exist in the model —
+    // handleDocDefer no-ops when the doc is already tracked.
+    if (!this.#syncModel.documents.has(docId)) {
+      this.#pendingDocEvents.push({ type: "doc-deferred", docId })
+    }
+
     this.#dispatchSync({
       type: "sync/doc-defer",
       docId,
@@ -523,6 +549,9 @@ export class Synchronizer {
    * Remove a document from the synchronizer (internal, no peer notification).
    */
   async removeDocument(docId: DocId): Promise<void> {
+    if (this.#docRuntimes.has(docId) || this.#syncModel.documents.has(docId)) {
+      this.#pendingDocEvents.push({ type: "doc-removed", docId })
+    }
     this.#docRuntimes.delete(docId)
     this.#dispatchSync({
       type: "sync/doc-delete",
@@ -534,6 +563,9 @@ export class Synchronizer {
    * Dismiss a document — remove locally and broadcast `dismiss` to peers.
    */
   dismissDocument(docId: DocId): void {
+    if (this.#docRuntimes.has(docId) || this.#syncModel.documents.has(docId)) {
+      this.#pendingDocEvents.push({ type: "doc-removed", docId })
+    }
     this.#docRuntimes.delete(docId)
     this.#dispatchSync({
       type: "sync/doc-dismiss",
@@ -678,6 +710,7 @@ export class Synchronizer {
   }
 
   reset(): void {
+    this.#emitSyntheticDocRemovedEvents()
     this.#emitSyntheticDepartedEvents()
     this.#clearDepartureTimers()
     this.#docRuntimes.clear()
@@ -694,6 +727,7 @@ export class Synchronizer {
     this.#sendDepartToAllPeers()
     this.#drainOutbound() // Flush depart messages to transports
     await this.transports.flush() // Wait for transports to deliver
+    this.#emitSyntheticDocRemovedEvents()
     this.#emitSyntheticDepartedEvents()
     this.#clearDepartureTimers()
     this.#sessionModel = initSession(
@@ -711,6 +745,12 @@ export class Synchronizer {
       PeerChange
     >()
     this.#peerHandle = handle
+    return feed
+  }
+
+  createDocFeed(): ReactiveMap<DocId, DocInfo, DocChange> {
+    const [feed, handle] = createReactiveMap<DocId, DocInfo, DocChange>()
+    this.#docHandle = handle
     return feed
   }
 
@@ -794,6 +834,7 @@ export class Synchronizer {
       this.#drainReadyStateChanges()
       this.#drainStateAdvanced()
       this.#drainPeerEvents()
+      this.#drainDocEvents()
     } finally {
       this.#dispatching = false
     }
@@ -1272,6 +1313,66 @@ export class Synchronizer {
 
     // Emit to subscribers
     this.#peerHandle.emit({ changes: events })
+  }
+
+  /**
+   * Drain accumulated document lifecycle events at quiescence.
+   *
+   * Follows the same snapshot-then-clear pattern as `#drainPeerEvents()`:
+   * snapshot pending events, reset the field, rebuild the doc map from
+   * the two sources of truth (`#docRuntimes` + deferred entries in
+   * `syncModel.documents`), then emit.
+   */
+  #drainDocEvents(): void {
+    const events = this.#pendingDocEvents
+    this.#pendingDocEvents = []
+
+    if (events.length === 0) return
+
+    if (!this.#docHandle) return
+    this.#docHandle.clear()
+
+    // Rebuild from #docRuntimes (interpret + replicate docs)
+    for (const [docId, runtime] of this.#docRuntimes) {
+      this.#docHandle.set(docId, { mode: runtime.mode })
+    }
+
+    // Merge deferred docs from syncModel (no runtime, only model entry)
+    for (const [docId, entry] of this.#syncModel.documents) {
+      if (entry.mode === "deferred") {
+        this.#docHandle.set(docId, { mode: "deferred" })
+      }
+    }
+
+    // Emit to subscribers
+    this.#docHandle.emit({ changes: events })
+  }
+
+  /**
+   * Emit synthetic `doc-removed` events for all tracked documents.
+   * Called during `reset()` and `shutdown()` — symmetric with
+   * `#emitSyntheticDepartedEvents()`.
+   */
+  #emitSyntheticDocRemovedEvents(): void {
+    if (!this.#docHandle) return
+
+    const docIds = new Set<DocId>()
+    for (const docId of this.#docRuntimes.keys()) {
+      docIds.add(docId)
+    }
+    for (const [docId, entry] of this.#syncModel.documents) {
+      if (entry.mode === "deferred") docIds.add(docId)
+    }
+
+    if (docIds.size === 0) return
+
+    const events: DocChange[] = Array.from(docIds).map(docId => ({
+      type: "doc-removed" as const,
+      docId,
+    }))
+
+    this.#docHandle.clear()
+    this.#docHandle.emit({ changes: events })
   }
 
   #emitSyntheticDepartedEvents(): void {

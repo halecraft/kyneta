@@ -617,6 +617,57 @@ for (const [id, info] of exchange.peers) { /* ... */ }
 
 See `@kyneta/changefeed`'s `ReactiveMap` for the full interface.
 
+### `exchange.documents` — reactive document collection
+
+`exchange.documents` is a `ReactiveMap<DocId, DocInfo, DocChange>` — the document-level counterpart to `exchange.peers`. It provides snapshot access, reactive subscription, and the `[CHANGEFEED]` protocol marker for framework integration (`useValue(exchange.documents)`).
+
+```ts
+type DocInfo = { mode: "interpret" | "replicate" | "deferred" }
+
+interface DocChange extends ChangeBase {
+  readonly type: "doc-created" | "doc-removed" | "doc-deferred" | "doc-promoted"
+  readonly docId: DocId
+}
+```
+
+Four event types model the document lifecycle:
+
+| Event | Trigger |
+|---|---|
+| `doc-created` | Document registered via `get()` (interpret) or `replicate()` — local or remote auto-resolve |
+| `doc-removed` | Document dismissed (`dismiss()`) or deleted from the sync graph |
+| `doc-deferred` | Document tracked in deferred mode (routing only, no local replica) |
+| `doc-promoted` | Deferred document promoted to interpret/replicate (e.g. `get()` on a deferred doc) |
+
+Usage:
+
+```ts
+// Snapshot access
+const docs = exchange.documents()      // ReadonlyMap<DocId, DocInfo>
+exchange.documents.has("my-doc")       // boolean
+exchange.documents.get("my-doc")       // { mode: "interpret" } | undefined
+exchange.documents.size                // number
+
+// Reactive subscription
+const unsub = exchange.documents.subscribe((changeset) => {
+  for (const change of changeset.changes) {
+    switch (change.type) {
+      case "doc-created":  /* new doc */            break
+      case "doc-removed":  /* doc dismissed */      break
+      case "doc-deferred": /* deferred tracking */  break
+      case "doc-promoted": /* deferred → active */  break
+    }
+  }
+})
+
+// Protocol detection
+hasChangefeed(exchange.documents) // true
+```
+
+The feed is owned by the Synchronizer (symmetric with `exchange.peers`) and drains at quiescence — same timing guarantees, same batching behavior as peer events. See §22.1 for the full architecture.
+
+**Relationship to existing APIs:** `exchange.documentIds()`, `exchange.deferred`, and `exchange.has()` continue to read from the Exchange's `#docCache` (synchronous, application-level view). `exchange.documents` is the sync-level view — they converge at quiescence but `#docCache` may reflect state earlier during hydration.
+
 ---
 
 ## 11. File Map
@@ -1579,6 +1630,133 @@ A single peer may connect through multiple transports (e.g. both WebSocket and S
 - **Leave:** The session program removes the channel from the set. If `newChannels.size === 0` (last channel gone) and no `depart` was received, the peer transitions to `"disconnected"` and `notify/peer-disconnected` is emitted. Otherwise, only `notify/ready-state-changed` fires for affected docs (the peer lost a transport but is still present).
 
 This means `peer-established` fires exactly once per peer identity regardless of how many channels connect, and `peer-departed` fires only when the peer is truly gone (either voluntarily via `depart`, or involuntarily after the departure timer expires).
+
+---
+
+## 22.1. Document Lifecycle Feed
+
+The exchange exposes a reactive feed of document presence via `exchange.documents` — a `ReactiveMap<DocId, DocInfo, DocChange>` (from `@kyneta/changefeed`). This is the document-level counterpart to `exchange.peers` (§22), created and owned by the Synchronizer with the same quiescence-drain semantics.
+
+### The `DocInfo` Type
+
+```ts
+type DocInfo = {
+  mode: "interpret" | "replicate" | "deferred"
+}
+```
+
+Deliberately minimal — metadata about the document's sync participation, not its application-level content. The application-level ref is obtained via `exchange.get()`. Mirrors `PeerIdentityDetails` (metadata about the peer, not the peer's full connection state).
+
+### The `DocChange` Type
+
+```ts
+interface DocChange extends ChangeBase {
+  readonly type: "doc-created" | "doc-removed" | "doc-deferred" | "doc-promoted"
+  readonly docId: DocId
+}
+```
+
+Four event types model the document lifecycle:
+
+| Event | Trigger | Terminal? |
+|---|---|---|
+| `doc-created` | Document registered via `get()` (interpret) or `replicate()` — local or remote auto-resolve | No |
+| `doc-removed` | Document dismissed (`dismiss()`) or deleted from the sync graph | Yes — document removed from model |
+| `doc-deferred` | Document tracked in deferred mode via `onUnresolvedDoc → Defer()` (routing only, no local replica) | No |
+| `doc-promoted` | Deferred document promoted to interpret or replicate mode (e.g. `get()` on a deferred doc) | No |
+
+`DocChange` is defined in `src/types.ts` alongside `PeerChange`. It extends `ChangeBase` from `@kyneta/changefeed`, making it compatible with the standard `Changeset<DocChange>` envelope.
+
+### The `exchange.documents` ReactiveMap
+
+`exchange.documents` is a `ReactiveMap` — callable as a function, with `.current` and `.subscribe()`, the `[CHANGEFEED]` marker for protocol detection, and lifted collection accessors:
+
+```ts
+// Read current documents (callable)
+const docs = exchange.documents()  // ReadonlyMap<DocId, DocInfo>
+
+// Read current documents (property)
+const docs = exchange.documents.current
+
+// Subscribe to changes
+const unsub = exchange.documents.subscribe((changeset) => {
+  for (const change of changeset.changes) {
+    switch (change.type) {
+      case "doc-created":  /* new doc */            break
+      case "doc-removed":  /* doc dismissed */      break
+      case "doc-deferred": /* deferred tracking */  break
+      case "doc-promoted": /* deferred → active */  break
+    }
+  }
+})
+
+// Protocol detection
+hasChangefeed(exchange.documents) // true
+```
+
+The feed is created by `Synchronizer.createDocFeed()`, which calls `createReactiveMap()` and stores the `ReactiveMapHandle` for mutation and emission — symmetric with `createPeerFeed()`.
+
+### Accumulation and Drain
+
+Document events accumulate in `#pendingDocEvents` when the Synchronizer's public methods are called:
+
+| Method | Event | Guard |
+|---|---|---|
+| `registerDoc(runtime)` | `doc-created` | `!#docRuntimes.has(docId)` (first registration) |
+| `registerDoc(runtime)` | `doc-promoted` | `#syncModel.documents.get(docId)?.mode === "deferred"` |
+| `deferDoc(docId, ...)` | `doc-deferred` | `!#syncModel.documents.has(docId)` |
+| `dismissDocument(docId)` | `doc-removed` | `#docRuntimes.has(docId) \|\| #syncModel.documents.has(docId)` |
+| `removeDocument(docId)` | `doc-removed` | `#docRuntimes.has(docId) \|\| #syncModel.documents.has(docId)` |
+
+Guards ensure events only accumulate when state actually changes — idempotent calls (first-writer-wins) do not produce duplicate events.
+
+At quiescence, `#drainDocEvents()` follows the same snapshot-then-clear pattern as `#drainPeerEvents()`:
+
+```
+registerDoc / deferDoc / dismissDocument
+  → push DocChange to #pendingDocEvents
+        ↓
+  (at quiescence)
+  #drainDocEvents()
+    → snapshot #pendingDocEvents, clear field
+    → rebuild doc map from two sources of truth:
+        1. #docRuntimes (interpret + replicate docs)
+        2. syncModel.documents where mode === "deferred"
+    → emit Changeset<DocChange> via the changefeed
+```
+
+The map is rebuilt from the model at quiescence rather than maintained incrementally — same principle as the peer feed. This ensures the map is always consistent with the model even when multiple doc events occur in a single dispatch cycle.
+
+### Source of Truth: Two-Map Merge
+
+Unlike the peer feed (single source: `sessionModel.peers`), the document feed merges two sources:
+
+- **`#docRuntimes`** — interpret and replicate docs. Each `DocRuntime` carries a `mode` field.
+- **`syncModel.documents`** entries with `mode === "deferred"` — deferred docs have no `DocRuntime` (no replica), but they are documents the exchange knows about and participates in routing for.
+
+### Relationship to `#docCache` and Existing APIs
+
+`exchange.documentIds()`, `exchange.deferred`, and `exchange.has(docId)` continue to read from the Exchange's `#docCache`. The reactive map is the sync-level view; `#docCache` is the application-level view. They converge at quiescence but differ during hydration:
+
+| | `#docCache` | `exchange.documents` |
+|---|---|---|
+| **Set by** | Exchange (`#interpretDoc`, `#replicateDoc`, `#deferDoc`) | Synchronizer (`registerDoc`, `deferDoc`) |
+| **Timing** | Synchronous — set before hydration | After `registerDoc` — may be async (post-hydration for store-backed docs) |
+| **Contains** | Application state (`ref`, `BoundSchema`) | Sync metadata only (`mode`) |
+| **Use case** | `exchange.has()`, `exchange.documentIds()`, `exchange.deferred` | Reactive subscription, framework integration |
+
+### Reset and Shutdown — Synthetic Emission
+
+Symmetric with peer synthetic events (§22):
+
+`exchange.reset()` and `exchange.shutdown()` call `#emitSyntheticDocRemovedEvents()` before clearing `#docRuntimes` and `#syncModel`:
+
+1. Collect all doc IDs from both `#docRuntimes` and deferred entries in `syncModel.documents`.
+2. Build a `DocChange[]` with `type: "doc-removed"` for every tracked doc.
+3. Clear the doc map.
+4. Emit the full array as a single `Changeset<DocChange>`.
+
+This guarantees subscribers observe a balanced lifecycle — every `doc-created` or `doc-deferred` is eventually paired with a `doc-removed`, even during teardown. Synthetic doc events fire before synthetic peer events in both `reset()` and `shutdown()`.
 
 ---
 

@@ -13,11 +13,14 @@
 //   hub-and-spoke with listen
 
 import { json, Replicate, Schema } from "@kyneta/schema"
-import { Bridge, BridgeTransport, createBridgeTransport } from "@kyneta/transport"
 import type { DocId } from "@kyneta/transport"
+import {
+  Bridge,
+  BridgeTransport,
+  createBridgeTransport,
+} from "@kyneta/transport"
 import { afterEach, describe, expect, it } from "vitest"
 import { Exchange } from "../exchange.js"
-import { InMemoryStore } from "../store/in-memory-store.js"
 import {
   createLineDocSchema,
   isLineDocId,
@@ -26,6 +29,7 @@ import {
   parseLineDocId,
   routeLine,
 } from "../line.js"
+import { InMemoryStore } from "../store/in-memory-store.js"
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -1211,7 +1215,10 @@ describe("durable Line: close() vs destroy()", () => {
       identity: { peerId: "alice" },
     })
 
-    const P = Line.protocol({ topic: "destroy-after-close", schema: SimpleSchema })
+    const P = Line.protocol({
+      topic: "destroy-after-close",
+      schema: SimpleSchema,
+    })
     const line = P.open(exchange, "bob")
     line.close()
     expect(() => line.destroy()).not.toThrow()
@@ -1793,7 +1800,10 @@ describe("Line policy teardown", () => {
 
   it("exchange.shutdown() disposes all active listeners", async () => {
     const bridge = new Bridge()
-    const P = Line.protocol({ topic: "listener-teardown", schema: SimpleSchema })
+    const P = Line.protocol({
+      topic: "listener-teardown",
+      schema: SimpleSchema,
+    })
 
     const exchangeA = createExchange({
       identity: { peerId: "alice" },

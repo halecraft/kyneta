@@ -55,7 +55,7 @@ import { DocGovernance } from "./doc-governance.js"
 import type { Store } from "./store/store.js"
 import { registerSync } from "./sync.js"
 import { type DocRuntime, Synchronizer } from "./synchronizer.js"
-import type { PeerChange } from "./types.js"
+import type { DocChange, DocInfo, PeerChange } from "./types.js"
 import { generatePeerId, validatePeerId } from "./utils.js"
 
 // ---------------------------------------------------------------------------
@@ -362,7 +362,10 @@ type DocCacheEntry =
 function rethrowErrors(errors: unknown[]): void {
   if (errors.length === 1) throw errors[0]
   if (errors.length > 1) {
-    throw new AggregateError(errors, `${errors.length} policy dispose callbacks threw`)
+    throw new AggregateError(
+      errors,
+      `${errors.length} policy dispose callbacks threw`,
+    )
   }
 }
 
@@ -375,6 +378,7 @@ export class Exchange {
   readonly #capabilities: Capabilities
   readonly #synchronizer: Synchronizer
   readonly peers: ReactiveMap<PeerId, PeerIdentityDetails, PeerChange>
+  readonly documents: ReactiveMap<DocId, DocInfo, DocChange>
   readonly #docCache = new Map<DocId, DocCacheEntry>()
   readonly #stores: Store[]
 
@@ -473,7 +477,9 @@ export class Exchange {
       epochBoundary: this.#governance.epochBoundary.bind(this.#governance),
       departureTimeout,
 
-      onEnsureDocDismissed: this.#governance.docDismissed.bind(this.#governance),
+      onEnsureDocDismissed: this.#governance.docDismissed.bind(
+        this.#governance,
+      ),
       onEnsureDoc: (
         docId,
         peer,
@@ -551,6 +557,7 @@ export class Exchange {
       },
     })
     this.peers = this.#synchronizer.createPeerFeed()
+    this.documents = this.#synchronizer.createDocFeed()
 
     // ── Unified persistence via onStateAdvanced ──
     // Subscribe to state-advanced events from the synchronizer. This fires

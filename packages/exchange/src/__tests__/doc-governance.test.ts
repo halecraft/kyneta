@@ -6,9 +6,13 @@
 import { Interpret, json, Schema } from "@kyneta/schema"
 import type { PeerIdentityDetails } from "@kyneta/transport"
 import { describe, expect, it, vi } from "vitest"
+import {
+  composeRule,
+  DocGovernance,
+  type DocPolicy,
+} from "../doc-governance.js"
 import type { OnUnresolvedDoc } from "../exchange.js"
 import { Exchange } from "../exchange.js"
-import { composeRule, type DocPolicy, DocGovernance } from "../doc-governance.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -252,8 +256,16 @@ describe("DocGovernance", () => {
       const error2 = new Error("fail-2")
       const dispose3 = vi.fn()
 
-      registry.register({ dispose: () => { throw error1 } })
-      registry.register({ dispose: () => { throw error2 } })
+      registry.register({
+        dispose: () => {
+          throw error1
+        },
+      })
+      registry.register({
+        dispose: () => {
+          throw error2
+        },
+      })
       registry.register({ dispose: dispose3 })
 
       const errors = registry.clear()
@@ -450,34 +462,58 @@ describe("rethrowErrors (via Exchange shutdown/reset)", () => {
   it("shutdown rethrows a single dispose error after completing cleanup", async () => {
     const exchange = new Exchange()
     const error = new Error("dispose-fail")
-    exchange.register({ dispose: () => { throw error } })
+    exchange.register({
+      dispose: () => {
+        throw error
+      },
+    })
     await expect(exchange.shutdown()).rejects.toThrow(error)
   })
 
   it("shutdown wraps multiple dispose errors in AggregateError", async () => {
     const exchange = new Exchange()
-    exchange.register({ dispose: () => { throw new Error("a") } })
-    exchange.register({ dispose: () => { throw new Error("b") } })
+    exchange.register({
+      dispose: () => {
+        throw new Error("a")
+      },
+    })
+    exchange.register({
+      dispose: () => {
+        throw new Error("b")
+      },
+    })
     await expect(exchange.shutdown()).rejects.toThrow(AggregateError)
   })
 
   it("reset rethrows a single dispose error after completing cleanup", () => {
     const exchange = new Exchange()
     const error = new Error("dispose-fail")
-    exchange.register({ dispose: () => { throw error } })
+    exchange.register({
+      dispose: () => {
+        throw error
+      },
+    })
     expect(() => exchange.reset()).toThrow(error)
   })
 
   it("shutdown completes all cleanup steps even when dispose throws", async () => {
     const exchange = new Exchange({ identity: { peerId: "test" } })
-    exchange.register({ dispose: () => { throw new Error("boom") } })
+    exchange.register({
+      dispose: () => {
+        throw new Error("boom")
+      },
+    })
 
     // Create a doc so the cache is non-empty
     const bound = json.bind(Schema.struct({ v: Schema.string() }))
     exchange.get("test-doc", bound)
     expect(exchange.has("test-doc")).toBe(true)
 
-    try { await exchange.shutdown() } catch { /* expected */ }
+    try {
+      await exchange.shutdown()
+    } catch {
+      /* expected */
+    }
 
     // Doc cache was cleared despite the dispose error — Exchange is inert.
     // If rethrowErrors fired before cache/synchronizer cleanup, this would

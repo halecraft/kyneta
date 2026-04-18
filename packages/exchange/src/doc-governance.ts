@@ -150,9 +150,9 @@ export class DocGovernance {
       const existing = this.#namedPolicies.get(policy.name)
       if (existing) {
         const idx = this.#policies.indexOf(existing)
-        if (idx !== -1) this.#policies[idx] = policy  // replace in-place
-        this.#namedPolicies.set(policy.name, policy)    // point name to new policy
-        this.#disposers.get(existing)?.()           // dispose old (no-op removal, fires callback)
+        if (idx !== -1) this.#policies[idx] = policy // replace in-place
+        this.#namedPolicies.set(policy.name, policy) // point name to new policy
+        this.#disposers.get(existing)?.() // dispose old (no-op removal, fires callback)
         return this.#createDispose(policy)
       }
       this.#namedPolicies.set(policy.name, policy)
@@ -309,7 +309,11 @@ export class DocGovernance {
     this.#disposers.clear()
     const errors: unknown[] = []
     for (const dispose of snapshot) {
-      try { dispose() } catch (e) { errors.push(e) }
+      try {
+        dispose()
+      } catch (e) {
+        errors.push(e)
+      }
     }
     return errors
   }

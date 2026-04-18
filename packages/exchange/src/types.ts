@@ -58,6 +58,44 @@ export type PeerState = {
 }
 
 // ---------------------------------------------------------------------------
+// Document info — metadata for the reactive document collection
+// ---------------------------------------------------------------------------
+
+/**
+ * Metadata about a document's sync participation — the value type for
+ * `exchange.documents: ReactiveMap<DocId, DocInfo, DocChange>`.
+ *
+ * Deliberately minimal: this is sync-level metadata, not application
+ * content. The application-level ref is obtained via `exchange.get()`.
+ * Mirrors `PeerIdentityDetails` (metadata about the peer, not the
+ * peer's full connection state).
+ */
+export type DocInfo = {
+  mode: "interpret" | "replicate" | "deferred"
+}
+
+// ---------------------------------------------------------------------------
+// Document lifecycle changes
+// ---------------------------------------------------------------------------
+
+/**
+ * A change in the document lifecycle — delivered through
+ * `exchange.documents.subscribe()` as part of a `Changeset<DocChange>`.
+ *
+ * - `doc-created`: a document was registered for interpret or replicate
+ *   mode (local `get()`/`replicate()`, or remote auto-resolve).
+ * - `doc-removed`: a document was dismissed or deleted from the sync graph.
+ * - `doc-deferred`: a document was tracked in deferred mode (routing
+ *   participation only, no local replica).
+ * - `doc-promoted`: a deferred document was promoted to interpret or
+ *   replicate mode (e.g. via `exchange.get()` on a deferred doc).
+ */
+export interface DocChange extends ChangeBase {
+  readonly type: "doc-created" | "doc-removed" | "doc-deferred" | "doc-promoted"
+  readonly docId: DocId
+}
+
+// ---------------------------------------------------------------------------
 // Peer lifecycle changes
 // ---------------------------------------------------------------------------
 

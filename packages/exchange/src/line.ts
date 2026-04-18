@@ -509,7 +509,9 @@ export class Line<SendMsg, RecvMsg> {
           return peer.peerId === remotePeerId ? true : undefined
         return undefined
       },
-      dispose: () => { cell.line?.close() },
+      dispose: () => {
+        cell.line?.close()
+      },
     })
 
     // 5. Construct and register
@@ -664,7 +666,9 @@ export class Line<SendMsg, RecvMsg> {
 
             notifyOrBuffer(line)
           },
-          dispose: () => { disposeListener() },
+          dispose: () => {
+            disposeListener()
+          },
         })
 
         // 3. Register schemas — puts them in the capabilities registry.

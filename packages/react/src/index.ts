@@ -57,19 +57,22 @@ export {
 // ---------------------------------------------------------------------------
 
 export type {
+  DocChange,
   DocId,
+  DocInfo,
+  DocPolicy,
   ExchangeParams,
   LineListener,
   LineProtocol,
   ReadyState,
   RulePredicate,
-  DocPolicy,
   SyncRef,
   TransportFactory,
 } from "@kyneta/exchange"
 export {
   AsyncQueue,
   createLineDocSchema,
+  DocGovernance,
   Exchange,
   hasSync,
   isLineDocId,
@@ -77,6 +80,5 @@ export {
   lineDocId,
   parseLineDocId,
   routeLine,
-  DocGovernance,
   sync,
 } from "@kyneta/exchange"
