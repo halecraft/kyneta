@@ -13,9 +13,11 @@
 //   hub-and-spoke with listen
 
 import { json, Replicate, Schema } from "@kyneta/schema"
-import { Bridge, createBridgeTransport } from "@kyneta/transport"
+import { Bridge, BridgeTransport, createBridgeTransport } from "@kyneta/transport"
+import type { DocId } from "@kyneta/transport"
 import { afterEach, describe, expect, it } from "vitest"
 import { Exchange } from "../exchange.js"
+import { InMemoryStore } from "../store/in-memory-store.js"
 import {
   createLineDocSchema,
   isLineDocId,
@@ -234,26 +236,17 @@ describe("symmetric Line send and receive via generator", () => {
   })
 
   it("iterator completes when Line is closed", async () => {
-    const bridge = new Bridge()
-    const _exchangeA = createExchange({
+    const exchange = createExchange({
       identity: { peerId: "alice" },
-      transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
-    const exchangeB = createExchange({
-      identity: { peerId: "bob" },
-      transports: [createBridgeTransport({ transportType: "bob", bridge })],
-    })
-
-    await drain()
 
     const P = Line.protocol({ topic: "close-test", schema: SimpleSchema })
-    const lineB = P.open(exchangeB, "alice")
+    const line = P.open(exchange, "bob")
 
-    const iter = lineB[Symbol.asyncIterator]()
+    const iter = line[Symbol.asyncIterator]()
     const pendingNext = iter.next()
 
-    // Close the Line — should complete the iterator
-    lineB.close()
+    line.close()
 
     const result = await pendingNext
     expect(result.done).toBe(true)
@@ -1183,5 +1176,522 @@ describe("protocol.listen", () => {
     listener.dispose()
     lineToServer.close()
     lineToBob.close()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Durable Line tests
+// ---------------------------------------------------------------------------
+
+describe("durable Line: close() vs destroy()", () => {
+  it("close() preserves documents — destroy() removes them", () => {
+    const exchange = createExchange({
+      identity: { peerId: "alice" },
+    })
+
+    const P = Line.protocol({ topic: "close-vs-destroy", schema: SimpleSchema })
+    const outboxDocId = lineDocId("close-vs-destroy", "alice", "bob")
+    const inboxDocId = lineDocId("close-vs-destroy", "bob", "alice")
+
+    // close() — docs remain
+    const line1 = P.open(exchange, "bob")
+    line1.close()
+    expect(exchange.has(outboxDocId)).toBe(true)
+    expect(exchange.has(inboxDocId)).toBe(true)
+
+    // destroy() — docs removed
+    const line2 = P.open(exchange, "bob")
+    line2.destroy()
+    expect(exchange.has(outboxDocId)).toBe(false)
+    expect(exchange.has(inboxDocId)).toBe(false)
+  })
+
+  it("destroy() after close() is safe", () => {
+    const exchange = createExchange({
+      identity: { peerId: "alice" },
+    })
+
+    const P = Line.protocol({ topic: "destroy-after-close", schema: SimpleSchema })
+    const line = P.open(exchange, "bob")
+    line.close()
+    expect(() => line.destroy()).not.toThrow()
+  })
+
+  it("destroy() resets state — reopen starts fresh at seq 1", async () => {
+    const bridge = new Bridge()
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+    })
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+    })
+    await drain()
+
+    const P = Line.protocol({ topic: "destroy-reset", schema: SimpleSchema })
+
+    // Session 1: send messages, let acks flow
+    const lineA1 = P.open(exchangeA, "bob")
+    const lineB1 = P.open(exchangeB, "alice")
+    const received1: any[] = []
+    collect(lineB1, received1)
+
+    lineA1.send({ value: 10 })
+    lineA1.send({ value: 20 })
+    await drain()
+    expect(received1.length).toBe(2)
+
+    // Destroy both sides — documents deleted, state gone
+    lineA1.destroy()
+    lineB1.destroy()
+
+    // Session 2: reopen — should be a fresh Line (seq starts at 1)
+    const lineA2 = P.open(exchangeA, "bob")
+    const lineB2 = P.open(exchangeB, "alice")
+    const received2: any[] = []
+    collect(lineB2, received2)
+
+    lineA2.send({ value: 30 })
+    await drain()
+
+    // Message arrives — seq numbering restarted from 1 so
+    // Bob's fresh lastProcessedSeq=0 accepts seq=1.
+    expect(received2.length).toBe(1)
+    expect(received2[0]).toEqual({ value: 30 })
+
+    lineA2.close()
+    lineB2.close()
+  })
+})
+
+describe("durable Line: nextSeq persistence", () => {
+  it("nextSeq survives prune — close+reopen after prune still resumes", async () => {
+    const bridge = new Bridge()
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+    })
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+    })
+    await drain()
+
+    const P = Line.protocol({ topic: "seq-prune", schema: SimpleSchema })
+    const lineA1 = P.open(exchangeA, "bob")
+    const lineB1 = P.open(exchangeB, "alice")
+
+    // Send 3 messages from Alice, let Bob ack and prune
+    const received1: any[] = []
+    collect(lineB1, received1)
+
+    lineA1.send({ value: 1 })
+    lineA1.send({ value: 2 })
+    lineA1.send({ value: 3 })
+    await drain()
+
+    expect(received1.length).toBe(3)
+
+    // Close both sides — prune has already happened
+    lineA1.close()
+    lineB1.close()
+
+    // Reopen — nextSeq must be 4 even though outbox messages were pruned
+    const lineA2 = P.open(exchangeA, "bob")
+    const lineB2 = P.open(exchangeB, "alice")
+    const received2: any[] = []
+    collect(lineB2, received2)
+
+    lineA2.send({ value: 4 })
+    await drain()
+
+    // Bob should receive message 4 (not skipped due to duplicate seq)
+    expect(received2.length).toBe(1)
+    expect(received2[0]).toEqual({ value: 4 })
+
+    lineA2.close()
+    lineB2.close()
+  })
+})
+
+describe("durable Line: peer lifecycle decoupling", () => {
+  it("Line remains open and functional after remote peer departs", async () => {
+    const bridge = new Bridge()
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      departureTimeout: 0, // immediate departure
+    })
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+    })
+    await drain()
+
+    const P = Line.protocol({ topic: "no-depart", schema: SimpleSchema })
+    const lineA = P.open(exchangeA, "bob")
+    await drain()
+
+    // Remove Bob's transport — triggers peer-departed on Alice (timeout=0)
+    await exchangeB.shutdown()
+    await drain()
+
+    // Line should NOT be closed — decoupled from peer lifecycle
+    expect(lineA.closed).toBe(false)
+    // send() should still work — messages queue in outbox
+    expect(() => lineA.send({ value: 42 })).not.toThrow()
+
+    lineA.close()
+  })
+})
+
+describe("durable Line: close then reopen resumes state", () => {
+  it("close+reopen delivers new messages without replaying old ones", async () => {
+    const bridge = new Bridge()
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+    })
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+    })
+    await drain()
+
+    const P = Line.protocol({ topic: "resume", schema: SimpleSchema })
+
+    // Session 1: send messages, let acks flow, close
+    const lineA1 = P.open(exchangeA, "bob")
+    const lineB1 = P.open(exchangeB, "alice")
+    const received1: any[] = []
+    collect(lineB1, received1)
+
+    lineA1.send({ value: 1 })
+    lineA1.send({ value: 2 })
+    lineA1.send({ value: 3 })
+    await drain()
+    expect(received1.length).toBe(3)
+
+    lineA1.close()
+    lineB1.close()
+
+    // Session 2: re-open and send another message
+    const lineA2 = P.open(exchangeA, "bob")
+    const lineB2 = P.open(exchangeB, "alice")
+    const received2: any[] = []
+    collect(lineB2, received2)
+    await drain()
+
+    // No replayed messages from session 1
+    expect(received2.length).toBe(0)
+
+    lineA2.send({ value: 99 })
+    await drain()
+
+    // New message arrives — seq continued from persisted nextSeq,
+    // so Bob's persisted lastProcessedSeq doesn't skip it.
+    expect(received2.length).toBe(1)
+    expect(received2[0]).toEqual({ value: 99 })
+
+    lineA2.close()
+    lineB2.close()
+  })
+})
+
+describe("durable Line: disconnect/reconnect", () => {
+  it("messages sent during disconnect are delivered on reconnect", async () => {
+    const bridge = new Bridge()
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+    })
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+    })
+    await drain()
+
+    const P = Line.protocol({ topic: "disconnect", schema: SimpleSchema })
+    const lineA = P.open(exchangeA, "bob")
+    const lineB = P.open(exchangeB, "alice")
+    const received: any[] = []
+    collect(lineB, received)
+
+    // Send 3 messages while connected
+    lineA.send({ value: 1 })
+    lineA.send({ value: 2 })
+    lineA.send({ value: 3 })
+    await drain()
+    expect(received.length).toBe(3)
+
+    // Disconnect Bob
+    await exchangeB.removeTransport("bob")
+    await drain()
+
+    // Send 2 more messages while disconnected
+    lineA.send({ value: 4 })
+    lineA.send({ value: 5 })
+    await drain()
+
+    // Bob should not have received the new messages yet
+    expect(received.length).toBe(3)
+
+    // Reconnect Bob
+    await exchangeB.addTransport(
+      new BridgeTransport({ transportType: "bob", bridge }),
+    )
+    await drain()
+
+    // Bob should now have all 5 messages in order
+    expect(received.map(m => m.value)).toEqual([1, 2, 3, 4, 5])
+
+    lineA.close()
+    lineB.close()
+  })
+
+  it("bidirectional sends during disconnect — both sides receive all", async () => {
+    const bridge = new Bridge()
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+    })
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+    })
+    await drain()
+
+    const P = Line.protocol({ topic: "bidi-disconnect", schema: SimpleSchema })
+    const lineA = P.open(exchangeA, "bob")
+    const lineB = P.open(exchangeB, "alice")
+    const receivedByA: any[] = []
+    const receivedByB: any[] = []
+    collect(lineA, receivedByA)
+    collect(lineB, receivedByB)
+
+    // Initial exchange
+    lineA.send({ value: 1 })
+    lineB.send({ value: 100 })
+    await drain()
+
+    // Disconnect
+    await exchangeB.removeTransport("bob")
+    await drain()
+
+    // Both sides send during disconnect
+    lineA.send({ value: 2 })
+    lineA.send({ value: 3 })
+    lineB.send({ value: 200 })
+    lineB.send({ value: 300 })
+    await drain()
+
+    // Reconnect
+    await exchangeB.addTransport(
+      new BridgeTransport({ transportType: "bob", bridge }),
+    )
+    await drain()
+
+    // Both sides should have received all messages
+    expect(receivedByB.map(m => m.value)).toEqual([1, 2, 3])
+    expect(receivedByA.map(m => m.value)).toEqual([100, 200, 300])
+
+    lineA.close()
+    lineB.close()
+  })
+})
+
+describe("durable Line: survives peer departure", () => {
+  it("queued messages are delivered when peer returns after departure", async () => {
+    const bridge = new Bridge()
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      departureTimeout: 0,
+    })
+    let exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+    })
+    await drain()
+
+    const P = Line.protocol({ topic: "survive-depart", schema: SimpleSchema })
+    const lineA = P.open(exchangeA, "bob")
+
+    // Send initial messages while Bob is connected
+    lineA.send({ value: 1 })
+    lineA.send({ value: 2 })
+    await drain()
+
+    // Shut down Bob — triggers peer-departed (timeout=0)
+    await exchangeB.shutdown()
+    await drain()
+
+    // Alice's Line should still be open
+    expect(lineA.closed).toBe(false)
+
+    // Alice queues more messages while Bob is gone
+    lineA.send({ value: 3 })
+    lineA.send({ value: 4 })
+    await drain()
+
+    // Bob returns — new Exchange instance, same peerId
+    exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+    })
+    await drain()
+
+    // Bob listens and receives all queued messages
+    const listener = P.listen(exchangeB)
+    const received: any[] = []
+    let capturedLine: Line<any, any> | null = null
+    listener.onLine((line: Line<any, any>) => {
+      capturedLine = line
+      collect(line, received)
+    })
+    await drain()
+
+    // Bob should receive messages 1-4 (messages sent before and after departure)
+    // Note: messages 1-2 may have been pruned if acks flowed before departure.
+    // At minimum, messages 3-4 must arrive.
+    expect(received.length).toBeGreaterThanOrEqual(2)
+    expect(received.map(m => m.value)).toContain(3)
+    expect(received.map(m => m.value)).toContain(4)
+
+    lineA.close()
+    if (capturedLine) (capturedLine as Line<any, any>).close()
+    listener.dispose()
+  })
+})
+
+describe("durable Line: bidirectional close/reopen", () => {
+  it("bidirectional close/reopen cycle preserves seq on both sides", async () => {
+    const bridge = new Bridge()
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+    })
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+    })
+    await drain()
+
+    const P = Line.protocol({ topic: "bidi-reopen", schema: SimpleSchema })
+
+    // Session 1: bidirectional exchange
+    const lineA1 = P.open(exchangeA, "bob")
+    const lineB1 = P.open(exchangeB, "alice")
+    const recvA1: any[] = []
+    const recvB1: any[] = []
+    collect(lineA1, recvA1)
+    collect(lineB1, recvB1)
+
+    lineA1.send({ value: 1 })
+    lineB1.send({ value: 100 })
+    await drain()
+
+    expect(recvA1.length).toBe(1)
+    expect(recvB1.length).toBe(1)
+
+    // Both sides close
+    lineA1.close()
+    lineB1.close()
+
+    // Session 2: both sides reopen
+    const lineA2 = P.open(exchangeA, "bob")
+    const lineB2 = P.open(exchangeB, "alice")
+    const recvA2: any[] = []
+    const recvB2: any[] = []
+    collect(lineA2, recvA2)
+    collect(lineB2, recvB2)
+
+    lineA2.send({ value: 2 })
+    lineB2.send({ value: 200 })
+    await drain()
+
+    // Both sides should receive the session-2 messages (not dropped as duplicates)
+    expect(recvA2.map(m => m.value)).toEqual([200])
+    expect(recvB2.map(m => m.value)).toEqual([2])
+
+    lineA2.close()
+    lineB2.close()
+  })
+})
+
+describe("durable Line: storage stays bounded", () => {
+  async function countEntries(
+    store: InMemoryStore,
+    docId: DocId,
+  ): Promise<number> {
+    let n = 0
+    for await (const _ of store.loadAll(docId)) n++
+    return n
+  }
+
+  it("unidirectional: sender's store stays bounded even when receiver never sends", async () => {
+    const storeA = new InMemoryStore()
+    const storeB = new InMemoryStore()
+    const bridge = new Bridge()
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      stores: [storeA],
+    })
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      stores: [storeB],
+    })
+
+    // Flush hydration before opening Lines
+    await exchangeA.flush()
+    await exchangeB.flush()
+    await drain()
+
+    const P = Line.protocol({ topic: "bounded", schema: SimpleSchema })
+    const lineA = P.open(exchangeA, "bob")
+    const lineB = P.open(exchangeB, "alice")
+
+    // Flush line doc hydration
+    await exchangeA.flush()
+    await exchangeB.flush()
+    await drain()
+
+    const received: any[] = []
+    collect(lineB, received)
+
+    const MESSAGE_COUNT = 20
+
+    // Unidirectional: only Alice sends, Bob only receives.
+    // Bob's ack syncs back to Alice's inbox — prune must still
+    // fire even though no messages flow from Bob to Alice.
+    for (let i = 0; i < MESSAGE_COUNT; i++) {
+      lineA.send({ value: i })
+      await drain(60)
+    }
+
+    // Let final ack/prune/compact settle
+    await drain(120)
+    await exchangeA.flush()
+    await exchangeB.flush()
+    await drain(60)
+
+    expect(received.length).toBe(MESSAGE_COUNT)
+
+    // Storage: Alice's outbox should be compacted down to O(1) entries.
+    // Without prune firing on ack-only inbox changes, this would be
+    // ~MESSAGE_COUNT entries (unbounded growth).
+    const outboxA = lineDocId("bounded", "alice", "bob") as DocId
+    const entriesA = await countEntries(storeA, outboxA)
+
+    // Compaction replaces all entries with 1. A small number (≤ 3)
+    // accounts for a trailing delta that arrived after the last compact.
+    expect(entriesA).toBeLessThanOrEqual(3)
+
+    lineA.close()
+    lineB.close()
   })
 })

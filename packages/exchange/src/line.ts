@@ -19,7 +19,6 @@
 //
 // Context: jj:slsoupsw
 
-import type { CallableChangefeed } from "@kyneta/changefeed"
 import type { BoundSchema } from "@kyneta/schema"
 import {
   change,
@@ -32,7 +31,6 @@ import {
 import type { DocId, PeerIdentityDetails } from "@kyneta/transport"
 import { AsyncQueue } from "./async-queue.js"
 import type { Exchange } from "./exchange.js"
-import type { PeerChange } from "./types.js"
 
 // ---------------------------------------------------------------------------
 // Line doc schema factory
@@ -55,6 +53,7 @@ export function createLineDocSchema<S extends SchemaNode>(messageSchema: S) {
       }),
     ),
     ack: Schema.number(),
+    nextSeq: Schema.number(),
   })
 }
 
@@ -225,7 +224,6 @@ export class Line<SendMsg, RecvMsg> {
   readonly #queue: AsyncQueue<RecvMsg>
   readonly #disposeScope: () => void
   readonly #unsubscribeInbox: () => void
-  readonly #unsubscribePeers: () => void
   #nextSeq = 1
   #lastProcessedSeq = 0
   #closed = false
@@ -251,6 +249,13 @@ export class Line<SendMsg, RecvMsg> {
     this.#disposeScope = disposeScope
     this.#queue = new AsyncQueue<RecvMsg>()
 
+    // Resume persisted protocol state from the outbox document.
+    // Zero.structural defaults: Schema.number() → 0.
+    // nextSeq 0 means the Line has never sent — start at 1.
+    const persistedNextSeq = outbox.nextSeq() as number
+    this.#nextSeq = persistedNextSeq || 1
+    this.#lastProcessedSeq = outbox.ack() as number
+
     // Scan for any existing messages (handles reconnection / late open)
     this.#processInbox()
 
@@ -258,18 +263,6 @@ export class Line<SendMsg, RecvMsg> {
     this.#unsubscribeInbox = subscribe(inbox, (changeset: any) => {
       if (changeset.origin === "local") return // skip our own ack writes
       this.#processInbox()
-    })
-
-    // Subscribe to peer lifecycle — complete on remote peer departure
-    this.#unsubscribePeers = (
-      exchange.peers as CallableChangefeed<any, PeerChange>
-    ).subscribe((cs: any) => {
-      for (const c of cs.changes) {
-        if (c.type === "peer-departed" && c.peer.peerId === remotePeerId) {
-          this.close()
-          return
-        }
-      }
     })
   }
 
@@ -307,6 +300,7 @@ export class Line<SendMsg, RecvMsg> {
     const seq = this.#nextSeq++
     change(this.#outbox, (d: any) => {
       d.messages.push({ seq, payload: msg })
+      d.nextSeq.set(this.#nextSeq)
     })
   }
 
@@ -321,25 +315,26 @@ export class Line<SendMsg, RecvMsg> {
    * arrived before the Line was constructed (queued by `#processInbox()`
    * in the constructor) — are available through the iterator.
    *
-   * Completes (`{ done: true }`) when the Line is closed or the remote
-   * peer departs.
+   * Completes (`{ done: true }`) when the Line is closed.
    */
   [Symbol.asyncIterator](): AsyncIterableIterator<RecvMsg> {
     return this.#queue[Symbol.asyncIterator]()
   }
 
   // -----------------------------------------------------------------------
-  // Close
+  // Close / Destroy
   // -----------------------------------------------------------------------
 
   /**
-   * Close the Line.
+   * Close the Line — local-only teardown.
    *
-   * 1. Marks closed.
-   * 2. Completes the async iterator.
-   * 3. Disposes the per-line scope.
-   * 4. Dismisses both underlying docs.
-   * 5. Removes from the static registry.
+   * Releases local resources (iterator, subscriptions, scope, registry)
+   * without mutating or deleting the underlying documents. The outbox
+   * and inbox documents remain in the Exchange, untouched and available
+   * for future resumption via `protocol.open()`.
+   *
+   * Safe to call at any time — during shutdown, error handling, cleanup.
+   * Never poisons the Line's documents for future use.
    */
   close(): void {
     if (this.#closed) return
@@ -347,20 +342,29 @@ export class Line<SendMsg, RecvMsg> {
 
     this.#queue.close()
     this.#unsubscribeInbox()
-    this.#unsubscribePeers()
     this.#disposeScope()
 
-    // Dismiss underlying docs
-    this.#exchange.dismiss(this.#outboxDocId)
-    this.#exchange.dismiss(this.#inboxDocId)
-
-    // Remove from registry
+    // Remove from registry — allows re-opening the same peer+topic
     const key = registryKey(
       this.#exchange.peerId,
       this.#remotePeerId,
       this.#topic,
     )
     registry.delete(key)
+  }
+
+  /**
+   * Destroy the Line — permanent teardown.
+   *
+   * Calls `close()` (if not already closed) and then dismisses both
+   * underlying documents from the Exchange and any configured stores.
+   * After `destroy()`, the Line cannot be resumed — `open()` would
+   * create a fresh Line starting at `seq: 1`.
+   */
+  destroy(): void {
+    this.close()
+    this.#exchange.dismiss(this.#outboxDocId)
+    this.#exchange.dismiss(this.#inboxDocId)
   }
 
   // -----------------------------------------------------------------------
@@ -372,27 +376,31 @@ export class Line<SendMsg, RecvMsg> {
 
     // Read all messages from inbox — inbox is any-typed, so messages are any[]
     const messages: any[] = this.#inbox.messages()
-    if (!messages || messages.length === 0) return
 
     let advanced = false
-    for (const msg of messages) {
-      if (msg.seq <= this.#lastProcessedSeq) continue
+    if (messages && messages.length > 0) {
+      for (const msg of messages) {
+        if (msg.seq <= this.#lastProcessedSeq) continue
 
-      this.#queue.push(msg.payload)
+        this.#queue.push(msg.payload)
 
-      this.#lastProcessedSeq = msg.seq
-      advanced = true
+        this.#lastProcessedSeq = msg.seq
+        advanced = true
+      }
+
+      if (advanced) {
+        // Write ack to outbox
+        change(this.#outbox, (d: any) => {
+          d.ack.set(this.#lastProcessedSeq)
+        })
+      }
     }
 
-    if (advanced) {
-      // Write ack to outbox
-      change(this.#outbox, (d: any) => {
-        d.ack.set(this.#lastProcessedSeq)
-      })
-
-      // Check for pruning opportunity — read remote ack from inbox
-      this.#pruneOutbox()
-    }
+    // Always check for pruning — the inbox ack field may have advanced
+    // even when no new messages arrived (e.g. unidirectional flow where
+    // the remote only acks, never sends). Without this, the sender's
+    // outbox grows without bound.
+    this.#pruneOutbox()
   }
 
   #pruneOutbox(): void {
@@ -416,6 +424,18 @@ export class Line<SendMsg, RecvMsg> {
       change(this.#outbox, (d: any) => {
         d.messages.delete(0, pruneCount)
       })
+
+      // Compact at quiescence — when the outbox is fully drained.
+      // This avoids compacting on every ack in high-throughput scenarios.
+      // Safety: compact() internally uses leastCommonVersion() as the trim
+      // boundary. If no peers are synced, it does full projection — the
+      // entirety fallback (§30) ensures reconnecting peers get the full
+      // state via exportEntirety(), accepted by the epoch boundary policy
+      // (§29, default: accept for authoritative strategy).
+      // Fire-and-forget: compaction failure is non-fatal.
+      if (this.#outbox.messages().length === 0) {
+        this.#exchange.compact(this.#outboxDocId).catch(() => {})
+      }
     }
   }
 
