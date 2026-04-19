@@ -13,9 +13,9 @@ import {
   type Changeset,
 } from "@kyneta/changefeed"
 import {
-  textInstructionsToPatches,
   type TextChange,
   type TextInstruction,
+  textInstructionsToPatches,
 } from "@kyneta/schema"
 import { JSDOM } from "jsdom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"

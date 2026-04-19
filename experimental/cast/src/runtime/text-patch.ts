@@ -22,9 +22,9 @@
 import type { ChangeBase, HasChangefeed } from "@kyneta/changefeed"
 import {
   isTextChange,
-  textInstructionsToPatches,
   type TextInstruction,
   type TextPatch,
+  textInstructionsToPatches,
 } from "@kyneta/schema"
 import type { Scope } from "./scope.js"
 import { read, subscribe } from "./subscribe.js"
