@@ -67,7 +67,11 @@ export interface CommitOptions {
  * @throws If `ref` does not have a `[TRANSACT]` symbol.
  * @throws If a transaction is already active on this context.
  */
-export function change<D extends object>(ref: D, fn: (draft: D) => void, options?: CommitOptions): Op[] {
+export function change<D extends object>(
+  ref: D,
+  fn: (draft: D) => void,
+  options?: CommitOptions,
+): Op[] {
   if (!hasTransact(ref)) {
     throw new Error(
       "change() requires a ref with [TRANSACT]. " +

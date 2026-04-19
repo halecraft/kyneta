@@ -133,7 +133,6 @@ describe("useText", () => {
 
       expect(textarea.value).toBe("abc") // unchanged by remote
     })
-
   })
 
   describe("basic render with initial value", () => {

@@ -9,7 +9,7 @@
 // the text value reactively (e.g. character count), use useValue(textRef).
 
 import { useCallback, useRef } from "react"
-import { attach, type AttachOptions, type TextRefLike } from "./text-adapter.js"
+import { attach, type TextRefLike } from "./text-adapter.js"
 
 // ---------------------------------------------------------------------------
 // UseTextOptions

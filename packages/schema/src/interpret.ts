@@ -22,9 +22,9 @@ import type { HasRead } from "./interpreters/bottom.js"
 import { bottomInterpreter } from "./interpreters/bottom.js"
 import type { HasTransact } from "./interpreters/writable.js"
 import { NATIVE } from "./native.js"
-import { POSITION } from "./position.js"
 import type { Path } from "./path.js"
 import { RawPath } from "./path.js"
+import { POSITION } from "./position.js"
 import type { Ref, RRef, RWRef } from "./ref.js"
 import {
   type CounterSchema,

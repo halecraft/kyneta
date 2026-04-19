@@ -1,31 +1,11 @@
-// text-adapter.test.ts — Functional Core + Imperative Shell tests.
-//
-// FC tests: diffText, transformSelection — pure functions, no jsdom needed.
-// IS tests: attach — requires jsdom (configured in vitest.config.ts).
-//
-// IS tests use a real plain-substrate doc ref from @kyneta/schema/basic,
-// giving us the full protocol stack (CHANGEFEED, TRANSACT) for free.
-
-import { CHANGEFEED, type Changeset } from "@kyneta/changefeed"
-import {
-  change,
-  createDoc,
-  Schema,
-  subscribe,
-  subscribeNode,
-} from "@kyneta/schema/basic"
-import {
-  isTextChange,
-  textChange,
-  type TextChange,
-  type TextInstruction,
-} from "@kyneta/schema"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { textChange } from "@kyneta/schema"
+import { change, createDoc, Schema } from "@kyneta/schema/basic"
+import { describe, expect, it, vi } from "vitest"
 import {
   attach,
   diffText,
-  transformSelection,
   type TextRefLike,
+  transformSelection,
 } from "../text-adapter.js"
 
 // ===========================================================================
@@ -106,9 +86,7 @@ describe("diffText", () => {
       textChange([{ retain: 3 }, { insert: "b" }]),
     )
     // Cursor at 0 → insert at position 0
-    expect(diffText("bbb", "bbbb", 0)).toEqual(
-      textChange([{ insert: "b" }]),
-    )
+    expect(diffText("bbb", "bbbb", 0)).toEqual(textChange([{ insert: "b" }]))
   })
 
   it("handles deletion within repeated characters with cursor hint", () => {
@@ -128,10 +106,7 @@ describe("transformSelection", () => {
   it("rebase through insert before selection", () => {
     // Insert "XX" (length 2) at position 0, then retain 10.
     // Selection [3,5] → [5,7] because both endpoints shift right by 2.
-    const result = transformSelection(3, 5, [
-      { insert: "XX" },
-      { retain: 10 },
-    ])
+    const result = transformSelection(3, 5, [{ insert: "XX" }, { retain: 10 }])
     expect(result).toEqual({ start: 5, end: 7 })
   })
 
@@ -150,18 +125,12 @@ describe("transformSelection", () => {
   it("insert at selection start shifts both endpoints (right affinity)", () => {
     // Insert at position 3, selection is [3,5].
     // Right affinity means cursor at position 3 shifts past the insert.
-    const result = transformSelection(3, 5, [
-      { retain: 3 },
-      { insert: "X" },
-    ])
+    const result = transformSelection(3, 5, [{ retain: 3 }, { insert: "X" }])
     expect(result).toEqual({ start: 4, end: 6 })
   })
 
   it("insert after selection does not affect it", () => {
-    const result = transformSelection(1, 3, [
-      { retain: 5 },
-      { insert: "ZZ" },
-    ])
+    const result = transformSelection(1, 3, [{ retain: 5 }, { insert: "ZZ" }])
     expect(result).toEqual({ start: 1, end: 3 })
   })
 
@@ -172,10 +141,7 @@ describe("transformSelection", () => {
   })
 
   it("collapsed cursor (start === end) transforms as a single point", () => {
-    const result = transformSelection(3, 3, [
-      { insert: "AB" },
-      { retain: 10 },
-    ])
+    const result = transformSelection(3, 3, [{ insert: "AB" }, { retain: 10 }])
     expect(result).toEqual({ start: 5, end: 5 })
   })
 })
@@ -531,7 +497,9 @@ describe("attach", () => {
       input.selectionEnd = 11
 
       // Remote inserts "XX" at position 0
-      change(doc, d => { d.title.insert(0, "XX") })
+      change(doc, d => {
+        d.title.insert(0, "XX")
+      })
 
       // Selection should shift right by 2, preserving the range
       expect(input.selectionStart).toBe(8)

@@ -83,7 +83,10 @@ export interface RefContext {
    * interpretation. When absent (e.g. bare readable-only stacks), `[POSITION]`
    * is not attached.
    */
-  readonly positionResolver?: (schema: TextSchema, path: Path) => PositionCapable
+  readonly positionResolver?: (
+    schema: TextSchema,
+    path: Path,
+  ) => PositionCapable
 }
 
 // ---------------------------------------------------------------------------

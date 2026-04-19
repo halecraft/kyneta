@@ -24,8 +24,8 @@
 //     Tests that assert left-sticky same-peer divergence are skipped for this model.
 
 import { describe, expect, it } from "vitest"
-import { transformIndex } from "../change.js"
 import type { Instruction } from "../change.js"
+import { transformIndex } from "../change.js"
 import type { PositionCapable, Side } from "../position.js"
 
 // ---------------------------------------------------------------------------
@@ -43,7 +43,9 @@ export interface PositionTestEnv {
   currentText(): string
 }
 
-export type PositionConformanceFactory = (initialText: string) => PositionTestEnv
+export type PositionConformanceFactory = (
+  initialText: string,
+) => PositionTestEnv
 
 // ---------------------------------------------------------------------------
 // Options
@@ -153,18 +155,21 @@ export function positionConformance(
     // across concurrent peers in that model.
     // =========================================================================
 
-    itLeftSticky("sticky-side: left-sticky stays before insertion at gap", () => {
-      const env = factory("abc")
-      const pos = env.positions.createPosition(1, "left")
+    itLeftSticky(
+      "sticky-side: left-sticky stays before insertion at gap",
+      () => {
+        const env = factory("abc")
+        const pos = env.positions.createPosition(1, "left")
 
-      // Insert at exactly index 1
-      const ins = env.insert(1, "X")
-      pos.transform(ins)
+        // Insert at exactly index 1
+        const ins = env.insert(1, "X")
+        pos.transform(ins)
 
-      // Left-sticky: stays at 1 (before the insertion)
-      expect(pos.resolve()).toBe(1)
-      expect(env.currentText()).toBe("aXbc")
-    })
+        // Left-sticky: stays at 1 (before the insertion)
+        expect(pos.resolve()).toBe(1)
+        expect(env.currentText()).toBe("aXbc")
+      },
+    )
 
     it("sticky-side: right-sticky shifts past insertion at gap", () => {
       const env = factory("abc")

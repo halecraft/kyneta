@@ -1,9 +1,8 @@
 # Collaborative Todo (React)
 
-The same collaborative todo app as [`examples/todo`](../todo/), rebuilt with React — proving the sync layer is framework-agnostic.
+A collaborative todo app where **every todo item's text is a CRDT** — two users can edit the same todo simultaneously and both changes merge at the character level.
 
-**Same schema. Same Exchange. Same sync protocol.**
-**React instead of Cast. Yjs instead of Loro. Vite instead of Bun.build. Node instead of Bun.**
+Built with React, Yjs, and `useText` — kyneta's hook for binding a CRDT text field to an `<input>` or `<textarea>`.
 
 ## Quick Start
 
@@ -16,69 +15,48 @@ cd examples/todo-react
 pnpm run dev
 ```
 
-Open http://localhost:5173 in two browser tabs and watch todos sync in real-time!
+Open http://localhost:5173 in two browser tabs. Add a todo in one tab, then **edit its text in both tabs at the same time** — edits merge without conflict.
 
 > **Note:** This example uses port 5173 (Vite's default), the same port as the Cast todo. Stop one before starting the other.
+
+## What Makes This Different
+
+Most todo apps use `Schema.string()` for the todo text — last-writer-wins. If two users edit the same todo simultaneously, one edit is lost.
+
+This example uses `Schema.text()` — a character-level CRDT. Each todo's text field is bound to an `<input>` via `useText`, which handles:
+
+- **Local edits** → diffed against the CRDT and applied as insert/delete operations
+- **Remote edits** → surgically patched into the `<input>` via `setRangeText`, preserving the local user's cursor position
+- **Concurrent edits** → merged by the CRDT engine (Yjs) at the character level
+- **IME composition** → safely deferred until the composition commits
+- **Echo suppression** → local mutations don't bounce back through the changefeed
+
+```tsx
+// The key pattern: useText returns a ref callback for the <input>
+function TodoItem({ todoRef }) {
+  const textInputRef = useText(todoRef.text)
+  return <input ref={textInputRef} type="text" />
+}
+```
 
 ## What's Here
 
 ```
 todo-react/
-├── index.html         # 13  lines — HTML shell
-├── vite.config.ts     #  6  lines — @vitejs/plugin-react, nothing else
+├── index.html         # HTML shell
+├── vite.config.ts     # @vitejs/plugin-react
 ├── src/
-│   ├── schema.ts      # 27  lines — @kyneta/schema + yjs.bind
-│   ├── app.tsx        # 122 lines — React component + @kyneta/react hooks
-│   ├── main.tsx       # 39  lines — Client (ExchangeProvider + mount)
-│   └── server.ts      # 102 lines — Server (Vite middleware + Exchange + ws)
-├── style.css          # 78  lines — Minimal styling
+│   ├── schema.ts      # Schema.text() + yjs.bind
+│   ├── app.tsx        # React components with useText
+│   ├── main.tsx       # Client (ExchangeProvider + mount)
+│   └── server.ts      # Server (Vite middleware + Exchange + ws)
+├── style.css
 ├── package.json
 ├── tsconfig.json
 └── README.md
 ```
 
-## What Changed From the Cast Todo
-
-| Concern | Cast todo | React todo |
-|---------|-----------|------------|
-| **UI framework** | `@kyneta/cast` (compiled builder syntax) | `react` + `@kyneta/react` hooks |
-| **CRDT substrate** | Loro (WASM, ~753 KB) | Yjs (pure JS, ~58 KB) |
-| **Build system** | `Bun.build` + Cast unplugin | Vite + `@vitejs/plugin-react` |
-| **Runtime** | Bun | Node (via `tsx`) |
-| **Server** | `Bun.serve()` + `createBunWebsocketHandlers` | `node:http` + Vite middleware + `ws` + `wrapNodeWebsocket` |
-| **HMR** | None (rebuild + reload) | Vite React Fast Refresh |
-
-| Concern | Cast todo | React todo |
-|---------|-----------|------------|
-| **Schema** | `Schema.struct({ todos: ... })` | Identical |
-| **Binding** | `loro.bind(TodoSchema)` | `yjs.bind(TodoSchema)` |
-| **Exchange** | `new Exchange({ transports: [...] })` | Identical |
-| **Transport** | WebSocket | Identical |
-| **Sync protocol** | discover → interest → offer | Identical |
-
-The entire sync layer is unchanged. Only the UI framework, the CRDT substrate, and the server shell differ.
-
-## The One-Line Substrate Swap
-
-The Cast todo uses Loro:
-
-```ts
-import { loro } from "@kyneta/loro-schema"
-export const TodoDoc = loro.bind(TodoSchema)
-```
-
-This example uses Yjs:
-
-```ts
-import { yjs } from "@kyneta/yjs-schema"
-export const TodoDoc = yjs.bind(TodoSchema)
-```
-
-Same schema. Same `exchange.get("todos", TodoDoc)`. Same three-message sync protocol. The Exchange doesn't know or care which CRDT engine is underneath.
-
-## The Core Pattern (React)
-
-### 1. Define a Schema
+## The Schema
 
 ```ts
 import { Schema } from "@kyneta/schema"
@@ -87,7 +65,7 @@ import { yjs } from "@kyneta/yjs-schema"
 export const TodoSchema = Schema.struct({
   todos: Schema.list(
     Schema.struct({
-      text: Schema.string(),
+      text: Schema.text(),    // ← CRDT text, not Schema.string()
       done: Schema.boolean(),
     }),
   ),
@@ -96,101 +74,106 @@ export const TodoSchema = Schema.struct({
 export const TodoDoc = yjs.bind(TodoSchema)
 ```
 
-### 2. Provide an Exchange
+## The Component
 
 ```tsx
-import { ExchangeProvider } from "@kyneta/react"
-import { WebsocketClientTransport } from "@kyneta/websocket-transport/browser"
+import { useDocument, useValue, useText, change } from "@kyneta/react"
 
-const wsAdapter = new WebsocketClientTransport({
-  url: `ws://${location.host}/ws`,
-})
+function TodoItem({ todoRef, onToggle, onRemove }) {
+  const done = useValue(todoRef.done)
+  const textInputRef = useText(todoRef.text)
 
-createRoot(document.getElementById("root")!).render(
-  <ExchangeProvider config={{ transports: [wsAdapter] }}>
-    <App />
-  </ExchangeProvider>,
-)
-```
-
-### 3. Use Hooks
-
-```tsx
-import { useDocument, useValue, useSyncStatus, change } from "@kyneta/react"
+  return (
+    <li>
+      <input type="checkbox" checked={done} onChange={onToggle} />
+      <input ref={textInputRef} type="text" className={done ? "done" : ""} />
+      <button onClick={onRemove}>×</button>
+    </li>
+  )
+}
 
 function App() {
   const doc = useDocument("todos", TodoDoc)
   const { todos } = useValue(doc)
 
-  const addTodo = (text: string) => {
-    change(doc, (d) => {
-      d.todos.push({ text, done: false })
-    })
-  }
-
   return (
     <ul>
-      {todos.map((todo, i) => (
-        <li key={i}>{todo.text}</li>
+      {todos.map((_, index) => (
+        <TodoItem
+          key={index}
+          todoRef={doc.todos.at(index)}
+          onToggle={() => change(doc, d => {
+            const todo = d.todos.at(index)
+            if (todo) todo.done.set(!todo.done())
+          })}
+          onRemove={() => doc.todos.delete(index, 1)}
+        />
       ))}
     </ul>
   )
 }
 ```
 
-## Architecture: Single-Process Vite Middleware
+Key details:
 
-The server combines Vite and WebSocket sync in one process on one port:
+- `useText(todoRef.text)` returns a React ref callback — pass it as `ref` on the `<input>`
+- The `<input>` is **uncontrolled** — `useText` manages its value imperatively, not through React state
+- `useValue(todoRef.done)` subscribes only to the `done` field — text changes don't re-render
+- Adding a todo pushes `{ text: "", done: false }` — the user types into the CRDT-bound input
+
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│                  node:http server                │
-│                                                  │
-│  ┌──────────────────┐  ┌──────────────────────┐  │
-│  │  Vite middleware  │  │  ws WebSocketServer  │  │
-│  │  (HMR, modules,  │  │  (path: /ws)         │  │
-│  │   index.html)    │  │                      │  │
-│  └──────────────────┘  └──────────┬───────────┘  │
-│                                   │              │
-│                        ┌──────────┴───────────┐  │
-│                        │  WebsocketServer     │  │
-│                        │  Adapter             │  │
-│                        │  (wrapNodeWebsocket) │  │
-│                        └──────────┬───────────┘  │
-│                                   │              │
-│                        ┌──────────┴───────────┐  │
-│                        │  Exchange            │  │
-│                        │  (sync hub)          │  │
-│                        └──────────────────────┘  │
-└─────────────────────────────────────────────────┘
+Browser Tab A                          Browser Tab B
+┌─────────────────────┐                ┌─────────────────────┐
+│  <input>            │                │  <input>            │
+│    ↕ useText()      │                │    ↕ useText()      │
+│  Yjs Y.Text         │                │  Yjs Y.Text         │
+│    ↕ changefeed     │                │    ↕ changefeed     │
+│  Exchange           │                │  Exchange           │
+│    ↕ WebSocket      │                │    ↕ WebSocket      │
+└─────────┬───────────┘                └─────────┬───────────┘
+          │                                      │
+          └──────────┐    ┌──────────────────────┘
+                     ↓    ↓
+              ┌──────────────────┐
+              │  Server Exchange │
+              │  (sync hub)     │
+              └──────────────────┘
 ```
 
-`createViteServer()` is awaited before `httpServer.listen()`, so the server is fully ready before accepting any connections. No queuing or readiness checks needed.
+When Alice types in Tab A:
+1. `input` event fires → `diffText` computes the delta → `change(ref, fn, { origin: "local" })` applies it to Yjs
+2. Yjs changefeed fires with `origin: "local"` → `attach()` skips it (echo suppression)
+3. Exchange sends the Yjs update to the server via WebSocket
+4. Server relays to Tab B's Exchange
+5. Tab B's Yjs applies the remote update → changefeed fires (no origin)
+6. `attach()` applies surgical `setRangeText` patches → Bob's cursor stays in place
 
-### Why Node (not Bun)?
+## What Changed From `Schema.string()`
 
-Vite's dev server internals use Node's `http`, `net`, and `stream` modules. The `tsx` runner provides TypeScript execution on Node. This is intentional — the Cast todo uses Bun, this example uses Node, demonstrating runtime agnosticism.
+| Concern | `Schema.string()` (LWW) | `Schema.text()` (CRDT) |
+|---------|--------------------------|------------------------|
+| **Concurrent edits** | Last write wins — one edit is lost | Character-level merge — both edits preserved |
+| **UI binding** | Controlled input with `value` + `onChange` | Uncontrolled input with `useText` ref callback |
+| **Re-renders** | Every keystroke triggers React re-render | Zero re-renders — `useText` is imperative |
+| **Cursor** | React re-render can reset cursor position | Cursor preserved through remote edits via `transformIndex` |
+| **IME** | Must handle carefully in controlled inputs | Built-in composition handling in `useText` |
 
-## The Import Story
+## The One-Line Substrate Swap
 
-A React developer needs two import sources:
+This example uses Yjs:
 
 ```ts
-// Everything React-related: hooks, context, re-exported schema/exchange APIs
-import { ExchangeProvider, useDocument, useValue, change } from "@kyneta/react"
-
-// The transport adapter (one per transport type)
-import { WebsocketClientTransport } from "@kyneta/websocket-transport/browser"
+import { yjs } from "@kyneta/yjs-schema"
+export const TodoDoc = yjs.bind(TodoSchema)
 ```
 
-`@kyneta/react` re-exports `Exchange`, `change`, `Schema`, `subscribe`, and other commonly needed APIs from `@kyneta/schema` and `@kyneta/exchange`, so most application code only imports from one package.
+Swap to Loro:
 
-## What's NOT Here (Intentionally)
+```ts
+import { loro } from "@kyneta/loro-schema"
+export const TodoDoc = loro.bind(TodoSchema)
+```
 
-This example focuses on the essentials. For more advanced patterns, see the other examples:
-
-- ❌ Persistence — in-memory only; restart clears all todos
-- ❌ Authentication — no auth; all clients share one document
-- ❌ SSE transport — see the chat example
-- ❌ Cast — see the [todo](../todo/) example (shares this schema + server pattern)
-- ❌ Loro — see the [todo](../todo/) example (one-line swap: `loro.bind` ↔ `yjs.bind`)
+Same schema. Same `useText`. Same sync protocol. The Exchange doesn't know or care which CRDT engine is underneath.

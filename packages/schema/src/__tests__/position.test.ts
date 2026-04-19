@@ -8,10 +8,10 @@
 
 import { describe, expect, it } from "vitest"
 import {
-  textInstructionsToPatches,
-  transformIndex,
   type Instruction,
   type TextInstruction,
+  textInstructionsToPatches,
+  transformIndex,
 } from "../change.js"
 import { createRef } from "../create-doc.js"
 import { change } from "../facade/change.js"
@@ -26,8 +26,8 @@ import {
 import { Schema } from "../schema.js"
 import { plainSubstrateFactory } from "../substrates/plain.js"
 import {
-  positionConformance,
   type PositionTestEnv,
+  positionConformance,
 } from "./position-conformance.js"
 
 // ===========================================================================
@@ -71,21 +71,15 @@ describe("transformIndex", () => {
 
   it("delete spanning gap: collapses to boundary", () => {
     // Position 3. Delete range [1, 4) = retain 1, delete 3.
-    expect(
-      transformIndex(3, "right", [{ retain: 1 }, { delete: 3 }]),
-    ).toBe(1)
+    expect(transformIndex(3, "right", [{ retain: 1 }, { delete: 3 }])).toBe(1)
   })
 
   it("delete before gap: shifts left", () => {
-    expect(
-      transformIndex(3, "right", [{ delete: 2 }, { retain: 3 }]),
-    ).toBe(1)
+    expect(transformIndex(3, "right", [{ delete: 2 }, { retain: 3 }])).toBe(1)
   })
 
   it("delete after gap: no shift", () => {
-    expect(
-      transformIndex(3, "right", [{ retain: 5 }, { delete: 2 }]),
-    ).toBe(3)
+    expect(transformIndex(3, "right", [{ retain: 5 }, { delete: 2 }])).toBe(3)
   })
 
   it("empty instructions: identity", () => {
@@ -342,7 +336,10 @@ positionConformance(createPlainEnv)
 // ===========================================================================
 
 describe("hasPosition on real refs", () => {
-  const DocSchema = Schema.struct({ title: Schema.text(), count: Schema.counter() })
+  const DocSchema = Schema.struct({
+    title: Schema.text(),
+    count: Schema.counter(),
+  })
 
   it("text ref from plain substrate has [POSITION] capability", () => {
     const doc = createRef(DocSchema, plainSubstrateFactory.create(DocSchema))
@@ -363,7 +360,9 @@ describe("hasPosition on real refs", () => {
 
   it("[POSITION].createPosition produces a working PlainPosition", () => {
     const doc = createRef(DocSchema, plainSubstrateFactory.create(DocSchema))
-    change(doc, (d: any) => { d.title.insert(0, "hello") })
+    change(doc, (d: any) => {
+      d.title.insert(0, "hello")
+    })
 
     const textRef = doc.title as any
     const cap = textRef[POSITION] as PositionCapable

@@ -51,8 +51,6 @@ export {
   advanceIndex,
   foldInstructions,
   incrementChange,
-  textInstructionsToPatches,
-  transformIndex,
   isIncrementChange,
   isMapChange,
   isReplaceChange,
@@ -65,21 +63,10 @@ export {
   sequenceChange,
   // Constructors
   textChange,
+  textInstructionsToPatches,
+  transformIndex,
   treeChange,
 } from "./change.js"
-// Position algebra — substrate-agnostic cursor stability
-export type {
-  HasPosition,
-  Position,
-  PositionCapable,
-  Side,
-} from "./position.js"
-export {
-  decodePlainPosition,
-  hasPosition,
-  PlainPosition,
-  POSITION,
-} from "./position.js"
 export type {
   ComposedChangefeedProtocol,
   HasComposedChangefeed,
@@ -242,6 +229,19 @@ export {
   resetAddressIdCounter,
   resolveToAddressed,
 } from "./path.js"
+// Position algebra — substrate-agnostic cursor stability
+export type {
+  HasPosition,
+  Position,
+  PositionCapable,
+  Side,
+} from "./position.js"
+export {
+  decodePlainPosition,
+  hasPosition,
+  PlainPosition,
+  POSITION,
+} from "./position.js"
 export type { PlainState, Reader } from "./reader.js"
 // Reader — shared utilities for reading/writing plain state objects
 export {

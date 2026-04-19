@@ -7,12 +7,11 @@
 // This is the integration test that no unit test can replace: it exercises
 // the wiring between layers, not the layers themselves.
 
+import { Exchange } from "@kyneta/exchange"
 import { loro } from "@kyneta/loro-schema"
 import { change, Schema } from "@kyneta/schema"
 import { Bridge, createBridgeTransport } from "@kyneta/transport"
 import { afterEach, describe, expect, it } from "vitest"
-
-import { Exchange } from "@kyneta/exchange"
 import { attach, type TextRefLike } from "../text-adapter.js"
 
 // ---------------------------------------------------------------------------

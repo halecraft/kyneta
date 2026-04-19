@@ -23,11 +23,11 @@ import { CHANGEFEED, type Changeset } from "@kyneta/changefeed"
 import {
   change,
   isTextChange,
+  type TextChange,
+  type TextInstruction,
   textChange,
   textInstructionsToPatches,
   transformIndex,
-  type TextChange,
-  type TextInstruction,
 } from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------

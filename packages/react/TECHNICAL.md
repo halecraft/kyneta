@@ -191,17 +191,110 @@ The predecessor `@loro-extended/react` used a `hooks-core` package with `Framewo
 
 1. **The shared logic was trivial.** The predecessor's `createSyncStore` utility (~30 lines) is replaced by the direct `CHANGEFEED` → `useSyncExternalStore` bridge (~15 lines per store function).
 
+## useText — Collaborative Plain-Text Binding
+
+`useText` binds a CRDT text field (`Schema.text()`) to an `<input>` or `<textarea>` for real-time collaborative editing. It follows the same FC/IS split as the rest of the package, but operates **imperatively** — the element is uncontrolled by React.
+
+### Architecture
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  React Component                                         │
+│                                                          │
+│  const ref = useText(doc.title)                          │
+│  return <textarea ref={ref} />                           │
+└────────────────┬─────────────────────────────────────────┘
+                 │  React ref callback (mount/unmount)
+                 │
+    useText (src/use-text.ts) — useCallback + useRef
+                 │  attach(element, textRef, options)
+═════════════════╪═════════════════════════════════════════
+                 │
+┌────────────────┴─────────────────────────────────────────┐
+│  Functional Core (src/text-adapter.ts)                   │
+│                                                          │
+│  diffText(old, new, cursor) → TextChange                 │
+│    Single contiguous edit detection with cursor-hint     │
+│    disambiguation for ambiguous diffs in repeated chars. │
+│                                                          │
+│  transformSelection(start, end, instructions) → {s, e}   │
+│    Wraps transformIndex with right-affinity for both     │
+│    endpoints — cursor shifts past remote insertions.     │
+├──────────────────────────────────────────────────────────┤
+│  Imperative Shell (src/text-adapter.ts)                  │
+│                                                          │
+│  attach(element, textRef, options?) → detach             │
+│    Bidirectional binding:                                │
+│    Local → CRDT: input event → diffText → change()       │
+│    CRDT → Element: changefeed → setRangeText patches     │
+│    IME: compositionstart/end state machine               │
+│    Undo: keydown + beforeinput interception              │
+└──────────────────────────────────────────────────────────┘
+```
+
+### Key Design Decisions
+
+**Uncontrolled element.** The textarea's value is managed imperatively by `attach()`, not via React state. This means:
+- Zero React re-renders on text changes (no `useState` / `onChange` cycle)
+- Remote edits are applied surgically via `setRangeText` — no full-value replacement
+- The user's cursor position is preserved through remote edits via `transformSelection`
+- For reactive reads (e.g. character count), use `useValue(textRef)` separately
+
+**Echo suppression via `CommitOptions`.** Local edits are applied with `change(textRef, fn, { origin: "local" })`. The changefeed subscriber skips changesets with `origin === "local"` to prevent the local edit from round-tripping back through the changefeed and double-applying to the DOM.
+
+**`diffText` cursor-hint disambiguation.** When the old and new strings differ within a run of identical characters (e.g. inserting `"a"` into `"aaa"`), the common prefix/suffix algorithm can't determine where the edit occurred. The `cursorHint` parameter (from `element.selectionStart`) bounds the prefix scan so the edit is placed at the cursor position.
+
+**IME composition handling.** A `composing` flag gates `onInput` — intermediate IME input events are suppressed. The final committed text is captured on `compositionend` by calling `onInput()` after clearing the flag.
+
+**Undo interception.** Two layers for robustness:
+1. `keydown` — catches Cmd/Ctrl+Z (undo) and Shift+Cmd/Ctrl+Z (redo) via `(metaKey || ctrlKey) && (key === "z" || key === "Z")`
+2. `beforeinput` — catches `historyUndo` / `historyRedo` input types as a fallback
+
+Both layers are disabled when `options.undo === "browser"`.
+
+### Relationship to Cast's text-patch.ts
+
+Cast's `inputTextRegion` and kyneta's `attach()` solve the same problem — binding a CRDT text field to an input element. They share `textInstructionsToPatches` (lifted from Cast into `@kyneta/schema` as a pure function). The imperative shells differ:
+
+| Concern | Cast `inputTextRegion` | React `attach()` |
+|---|---|---|
+| Local edit capture | Not handled (Cast is display-only) | `input` event → `diffText` → `change()` |
+| Remote edit application | `patchInputValue` with origin-driven selectMode | `setRangeText` patches + `transformSelection` |
+| IME | Not handled | `compositionstart`/`compositionend` state machine |
+| Undo | Not handled | Keydown + beforeinput interception |
+| Lifecycle | `Scope`-based cleanup | Detach function returned by `attach()` |
+
 ## File Map
 
-| File | Purpose | |---|---| | `src/store.ts` | Pure store factories: `createChangefeedStore`, `createSyncStore`, `createNullishStore` | | `src/exchange-context.tsx` | `ExchangeProvider` component, `useExchange` hook | | `src/use-document.ts` | `useDocument` hook | | `src/use-value.ts` | `useValue` hook | | `src/use-sync-status.ts` | `useSyncStatus` hook | | `src/index.ts` | Barrel exports + thin re-exports from schema/exchange |
+| File | Purpose |
+|---|---|
+| `src/store.ts` | Pure store factories: `createChangefeedStore`, `createSyncStore`, `createNullishStore` |
+| `src/text-adapter.ts` | Text binding FC (`diffText`, `transformSelection`) + IS (`attach`) — framework-agnostic |
+| `src/use-text.ts` | `useText` hook — React ref-callback wrapper over `attach` |
+| `src/exchange-context.tsx` | `ExchangeProvider` component, `useExchange` hook |
+| `src/use-document.ts` | `useDocument` hook |
+| `src/use-value.ts` | `useValue` hook |
+| `src/use-sync-status.ts` | `useSyncStatus` hook |
+| `src/index.ts` | Barrel exports + thin re-exports from schema/exchange |
 
 ### Test Files
 
-| File | Tier | Environment | |---|---|---| | `src/__tests__/store.test.ts` | Tier 1 — pure | Node (no jsdom) | | `src/__tests__/use-value.test.tsx` | Tier 2 — React | jsdom | | `src/__tests__/exchange-context.test.tsx` | Tier 2 — React | jsdom | | `src/__tests__/use-document.test.tsx` | Tier 2 — React | jsdom |
+| File | Tier | Environment |
+|---|---|---|
+| `src/__tests__/store.test.ts` | Tier 1 — pure | Node (no jsdom) |
+| `src/__tests__/text-adapter.test.ts` | Tier 1 (FC) + Tier 2 (IS) | jsdom |
+| `src/__tests__/use-text.test.tsx` | Tier 2 — React | jsdom |
+| `src/__tests__/collaborative-text.test.ts` | Integration — two Exchange peers | jsdom |
+| `src/__tests__/use-value.test.tsx` | Tier 2 — React | jsdom |
+| `src/__tests__/exchange-context.test.tsx` | Tier 2 — React | jsdom |
+| `src/__tests__/use-document.test.tsx` | Tier 2 — React | jsdom |
 
 ## Verified Properties
 
 1. **Snapshot memoization:** `getSnapshot() === getSnapshot()` between changes (Tier 1 test: "snapshot is referentially stable between getSnapshot calls").
+1. **Text adapter FC:** `diffText` produces correct `TextChange` for insert, delete, replace, no-op, and ambiguous diffs within repeated characters. `transformSelection` rebases collapsed and non-collapsed selections through inserts and deletes.
+1. **Text adapter IS:** Initial value projection, local edit capture via `input` event, remote surgical patching via `setRangeText`, echo suppression, IME composition deferral, undo/redo interception (Cmd+Z, Ctrl+Z, Shift+Cmd+Z), detach cleanup.
+1. **Collaborative text e2e:** Two Exchange peers with `attach()`-bound textareas converge on inserts, deletes, concurrent edits, and multi-round alternating edits. Cursor position preserved through remote edits. Echo suppression prevents double-application.
 1. **Deep subscription:** Composite ref store fires on nested field change (Tier 1 test: "deep subscription on composite ref fires on nested field change").
 1. **Shallow isolation:** Leaf ref store does NOT fire when a sibling changes (Tier 1 test: "leaf subscription does not fire when a sibling field changes").
 1. **Unsubscribe correctness:** After unsubscribe, mutations do not update the cache (Tier 1 test: "unsubscribe stops snapshot updates").

@@ -34,7 +34,6 @@
 // Context: jj:wmyomqzw (Phase 0), jj:wqoqzzpp (Phase 2), jj:umtmlpvn (version strategy extraction)
 // Context: jj:oyouvrss (Phase 1 — append-log replica, init ops, batched wire format)
 
-import { PlainPosition, decodePlainPosition, type PositionCapable, type Side } from "../position.js"
 import type { ChangeBase } from "../change.js"
 import { replaceChange } from "../change.js"
 import type { Op } from "../changefeed.js"
@@ -42,6 +41,12 @@ import type { Path } from "../interpret.js"
 import type { WritableContext } from "../interpreters/writable.js"
 import { buildWritableContext, executeBatch } from "../interpreters/writable.js"
 import { RawPath } from "../path.js"
+import {
+  decodePlainPosition,
+  PlainPosition,
+  type PositionCapable,
+  type Side,
+} from "../position.js"
 import { applyChange, type PlainState, plainReader } from "../reader.js"
 import type { Schema as SchemaNode } from "../schema.js"
 import type {

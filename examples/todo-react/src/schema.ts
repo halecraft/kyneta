@@ -2,12 +2,18 @@
 //
 //   Todo React — Schema
 //
-//   Same collaborative todo schema as the Cast-based todo example,
-//   but bound to Yjs instead of Loro — proving substrate agnosticism.
+//   Collaborative todo list with CRDT text fields.
 //
-//   One-line swap:
-//     Cast todo:  import { loro } from "@kyneta/loro-schema"
-//     React todo: import { yjs }  from "@kyneta/yjs-schema"
+//   Each todo's `text` is Schema.text() — a character-level CRDT that
+//   merges concurrent edits from multiple users. Two people can edit
+//   the same todo item simultaneously and both changes are preserved.
+//
+//   Contrast with Schema.string(), which is last-writer-wins: if two
+//   users edit the same string at the same time, one edit is lost.
+//
+//   Bound to Yjs — one-line swap to Loro:
+//     import { loro } from "@kyneta/loro-schema"
+//     export const TodoDoc = loro.bind(TodoSchema)
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -17,11 +23,11 @@ import { yjs } from "@kyneta/yjs-schema"
 export const TodoSchema = Schema.struct({
   todos: Schema.list(
     Schema.struct({
-      text: Schema.string(),
+      text: Schema.text(),
       done: Schema.boolean(),
     }),
   ),
 })
 
-/** Use Yjs for collaborative, realtime, shared state (pure JS, ~300kb) */
+/** Use Yjs for collaborative, realtime, shared state */
 export const TodoDoc = yjs.bind(TodoSchema)

@@ -1,30 +1,38 @@
-/* Minimal styles for the collaborative todo example */
+/* Collaborative Todo — styles for inline CRDT text editing */
 
 body {
   font-family: system-ui, -apple-system, sans-serif;
-  max-width: 400px;
+  max-width: 480px;
   margin: 40px auto;
   padding: 0 20px;
+  color: #222;
 }
 
 h1 {
   margin-bottom: 20px;
+  font-size: 1.4em;
 }
 
-form {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 20px;
+/* ── Add bar ─────────────────────────────────────────────────────────── */
+
+.add-bar {
+  margin-bottom: 16px;
 }
 
-form input[type="text"] {
-  flex: 1;
-  padding: 8px;
-}
-
-form button {
+.add-bar button {
   padding: 8px 16px;
+  cursor: pointer;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #fafafa;
+  font-size: 14px;
 }
+
+.add-bar button:hover {
+  background: #f0f0f0;
+}
+
+/* ── Todo list ───────────────────────────────────────────────────────── */
 
 ul {
   list-style: none;
@@ -35,31 +43,67 @@ ul {
 li {
   display: flex;
   align-items: center;
-  padding: 8px 0;
+  padding: 4px 0;
   border-bottom: 1px solid #eee;
-  gap: 12px;
+  gap: 8px;
 }
 
-li span {
+li input[type="checkbox"] {
+  flex-shrink: 0;
+}
+
+/* ── Collaborative text input ────────────────────────────────────────── */
+/*
+   Each todo's text is bound to a CRDT via useText(). The <input> is
+   uncontrolled — the adapter manages its value imperatively. We style
+   it to look like inline text, not a form field.
+*/
+
+.todo-text {
   flex: 1;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  font: inherit;
+  font-size: 14px;
+  background: transparent;
+  outline: none;
+  min-width: 0;
 }
 
-li span.done {
+.todo-text:focus {
+  border-color: #acd;
+  background: #f8fbff;
+}
+
+.todo-text::placeholder {
+  color: #aaa;
+  font-style: italic;
+}
+
+.todo-text.done {
   text-decoration: line-through;
   color: #888;
 }
 
+/* ── Remove button ───────────────────────────────────────────────────── */
+
 li button {
+  flex-shrink: 0;
   background: none;
   border: none;
   cursor: pointer;
   font-size: 18px;
-  color: #888;
+  color: #bbb;
+  padding: 0 4px;
+  line-height: 1;
 }
 
 li button:hover {
   color: #c00;
 }
+
+/* ── Empty state & hints ─────────────────────────────────────────────── */
 
 .empty-state {
   color: #888;

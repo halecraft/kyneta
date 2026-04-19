@@ -410,7 +410,11 @@ export function transformIndex(
             },
           }
         }
-        return { result: undefined, source: source + count, target: target + count }
+        return {
+          result: undefined,
+          source: source + count,
+          target: target + count,
+        }
       },
       onInsert(_acc, length, source, target) {
         if (source === index && side === "left") {
