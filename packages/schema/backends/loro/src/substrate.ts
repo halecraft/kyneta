@@ -271,10 +271,9 @@ export function createLoroSubstrate(
                 )
               }
               const loroSide = toLoroSide(side)
-              const cursor = (container as any).getCursor(
-                index,
-                loroSide,
-              ) as Cursor | undefined
+              const cursor = (container as any).getCursor(index, loroSide) as
+                | Cursor
+                | undefined
               if (!cursor) {
                 throw new Error(
                   `positionResolver: getCursor returned undefined at index ${index}`,

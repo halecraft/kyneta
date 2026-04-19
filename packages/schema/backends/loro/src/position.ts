@@ -4,9 +4,12 @@
 // Cursors bind to specific character IDs in the Loro operation log, making
 // resolve() a stateless query — transform() is a no-op.
 
-import type { Instruction } from "@kyneta/schema"
-import type { Position, Side } from "@kyneta/schema"
-import type { Cursor, LoroDoc as LoroDocType, Side as LoroSide } from "loro-crdt"
+import type { Instruction, Position, Side } from "@kyneta/schema"
+import type {
+  Cursor,
+  LoroDoc as LoroDocType,
+  Side as LoroSide,
+} from "loro-crdt"
 
 // ---------------------------------------------------------------------------
 // Side conversion

@@ -49,6 +49,8 @@ export { hasKind, isLoroContainer, isLoroDoc } from "./loro-guards.js"
 export { resolveContainer, stepIntoLoro } from "./loro-resolve.js"
 // NativeMap — the Loro functor
 export type { LoroNativeMap } from "./native-map.js"
+// Position conformance
+export { fromLoroSide, LoroPosition, toLoroSide } from "./position.js"
 // Reader
 export { loroReader } from "./reader.js"
 // Substrate
@@ -57,7 +59,5 @@ export {
   loroReplicaFactory,
   loroSubstrateFactory,
 } from "./substrate.js"
-// Position conformance
-export { fromLoroSide, LoroPosition, toLoroSide } from "./position.js"
 // Version
 export { LoroVersion } from "./version.js"

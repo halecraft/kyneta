@@ -10,15 +10,15 @@ import {
   change,
   createRef,
   hasPosition,
+  type Instruction,
   isTextChange,
   POSITION,
-  Schema,
-  type Instruction,
   type PositionCapable,
+  Schema,
 } from "@kyneta/schema"
 import {
-  positionConformance,
   type PositionTestEnv,
+  positionConformance,
 } from "@kyneta/schema/src/__tests__/position-conformance.js"
 import { LoroDoc } from "loro-crdt"
 import { describe, expect, it } from "vitest"
@@ -71,7 +71,7 @@ function createLoroEnv(initialText: string): PositionTestEnv {
       const ops = change(ref, (d: any) => {
         d.title.insert(index, text)
       })
-      const textOp = ops.find((op) => isTextChange(op.change))
+      const textOp = ops.find(op => isTextChange(op.change))
       if (!textOp || !isTextChange(textOp.change)) {
         throw new Error("insert did not produce a TextChange op")
       }
@@ -82,7 +82,7 @@ function createLoroEnv(initialText: string): PositionTestEnv {
       const ops = change(ref, (d: any) => {
         d.title.delete(index, count)
       })
-      const textOp = ops.find((op) => isTextChange(op.change))
+      const textOp = ops.find(op => isTextChange(op.change))
       if (!textOp || !isTextChange(textOp.change)) {
         throw new Error("delete did not produce a TextChange op")
       }
