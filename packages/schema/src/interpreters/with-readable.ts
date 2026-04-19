@@ -39,6 +39,8 @@ import type {
 
 import type { HasNavigation, HasRead } from "./bottom.js"
 import { CALL } from "./bottom.js"
+import { wireSequenceReadable } from "./sequence-helpers.js"
+import { wireKeyedReadable } from "./keyed-helpers.js"
 
 // ---------------------------------------------------------------------------
 // withReadable — the reading transformer
@@ -121,37 +123,9 @@ export function withReadable<A extends HasNavigation>(
       schema: SequenceSchema,
       item: (index: number) => A & HasRead,
     ): A & HasRead {
-      // Downcast for base
       const baseItem = item as (index: number) => A
       const result = base.sequence(ctx, path, schema, baseItem) as any
-
-      // Fill CALL slot — fold child values to produce a fresh array
-      // snapshot. Uses result.at(i) to go through the caching/addressing
-      // layer, preserving ref identity in the address table. Without this,
-      // calling ref() (e.g. in conditionalRegion) would bypass withCaching
-      // and create fresh carriers that overwrite address table entries.
-      result[CALL] = () => {
-        const len = ctx.reader.arrayLength(path)
-        const snapshot: unknown[] = []
-        for (let i = 0; i < len; i++) {
-          const child: unknown = result.at(i)
-          snapshot.push(
-            typeof child === "function" ? (child as () => unknown)() : child,
-          )
-        }
-        return snapshot
-      }
-
-      // .get(i) — returns plain value (not a ref)
-      Object.defineProperty(result, "get", {
-        value: (index: number): unknown => {
-          const child = result.at(index)
-          return child !== undefined ? child() : undefined
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
+      wireSequenceReadable(result, ctx, path)
       return result as A & HasRead
     },
 
@@ -162,36 +136,9 @@ export function withReadable<A extends HasNavigation>(
       schema: MapSchema,
       item: (key: string) => A & HasRead,
     ): A & HasRead {
-      // Downcast for base
       const baseItem = item as (key: string) => A
       const result = base.map(ctx, path, schema, baseItem) as any
-
-      // Fill CALL slot — fold child values to produce a fresh record
-      // snapshot. Uses result.at(key) to go through the caching/addressing
-      // layer, preserving ref identity in the address table. Without this,
-      // calling ref() would bypass withCaching and create fresh carriers
-      // that overwrite address table entries.
-      result[CALL] = () => {
-        const keys = ctx.reader.keys(path)
-        const snapshot: Record<string, unknown> = {}
-        for (const key of keys) {
-          const child: unknown = result.at(key)
-          snapshot[key] =
-            typeof child === "function" ? (child as () => unknown)() : child
-        }
-        return snapshot
-      }
-
-      // .get(key) — returns plain value
-      Object.defineProperty(result, "get", {
-        value: (key: string): unknown => {
-          const child = result.at(key)
-          return child !== undefined ? child() : undefined
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
+      wireKeyedReadable(result, ctx, path)
       return result as A & HasRead
     },
 
@@ -237,39 +184,15 @@ export function withReadable<A extends HasNavigation>(
     },
 
     // --- Set -------------------------------------------------------------------
-    // Delegate like map — fill CALL slot to produce a fresh record snapshot.
     set(
       ctx: RefContext,
       path: Path,
       schema: SetSchema,
       item: (key: string) => A & HasRead,
     ): A & HasRead {
-      // Downcast for base
       const baseItem = item as (key: string) => A
       const result = base.set(ctx, path, schema, baseItem) as any
-
-      // Fill CALL slot — fold child values to produce a fresh record snapshot.
-      result[CALL] = () => {
-        const keys = ctx.reader.keys(path)
-        const snapshot: Record<string, unknown> = {}
-        for (const key of keys) {
-          const child: unknown = result.at(key)
-          snapshot[key] =
-            typeof child === "function" ? (child as () => unknown)() : child
-        }
-        return snapshot
-      }
-
-      // .get(key) — returns plain value
-      Object.defineProperty(result, "get", {
-        value: (key: string): unknown => {
-          const child = result.at(key)
-          return child !== undefined ? child() : undefined
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
+      wireKeyedReadable(result, ctx, path)
       return result as A & HasRead
     },
 
@@ -287,40 +210,15 @@ export function withReadable<A extends HasNavigation>(
     },
 
     // --- Movable ---------------------------------------------------------------
-    // Delegate like sequence — fill CALL slot for array snapshot.
     movable(
       ctx: RefContext,
       path: Path,
       schema: MovableSequenceSchema,
       item: (index: number) => A & HasRead,
     ): A & HasRead {
-      // Downcast for base
       const baseItem = item as (index: number) => A
       const result = base.movable(ctx, path, schema, baseItem) as any
-
-      // Fill CALL slot — fold child values to produce a fresh array snapshot.
-      result[CALL] = () => {
-        const len = ctx.reader.arrayLength(path)
-        const snapshot: unknown[] = []
-        for (let i = 0; i < len; i++) {
-          const child: unknown = result.at(i)
-          snapshot.push(
-            typeof child === "function" ? (child as () => unknown)() : child,
-          )
-        }
-        return snapshot
-      }
-
-      // .get(i) — returns plain value (not a ref)
-      Object.defineProperty(result, "get", {
-        value: (index: number): unknown => {
-          const child = result.at(index)
-          return child !== undefined ? child() : undefined
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
+      wireSequenceReadable(result, ctx, path)
       return result as A & HasRead
     },
   }

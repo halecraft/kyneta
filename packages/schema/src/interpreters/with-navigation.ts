@@ -17,6 +17,8 @@
 // See .plans/navigation-layer.md §Phase 2, Task 2.1.
 
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
+import { wireSequenceNavigation } from "./sequence-helpers.js"
+import { wireKeyedNavigation } from "./keyed-helpers.js"
 import { dispatchSum } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
 import type {
@@ -127,39 +129,9 @@ export function withNavigation<A extends HasCall>(
       schema: SequenceSchema,
       item: (index: number) => A & HasNavigation,
     ): A & HasNavigation {
-      // Downcast for base
       const baseItem = item as (index: number) => A
       const result = base.sequence(ctx, path, schema, baseItem) as any
-
-      // .at(i) — NO caching. Calls item(i) fresh each time.
-      // Bounds checking: negative or out-of-bounds returns undefined.
-      Object.defineProperty(result, "at", {
-        value: (index: number): unknown => {
-          const len = ctx.reader.arrayLength(path)
-          if (index < 0 || index >= len) return undefined
-          return item(index)
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
-      // .length — live from store
-      Object.defineProperty(result, "length", {
-        get() {
-          return ctx.reader.arrayLength(path)
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
-      // [Symbol.iterator] — yields child refs
-      result[Symbol.iterator] = function* () {
-        const len = ctx.reader.arrayLength(path)
-        for (let i = 0; i < len; i++) {
-          yield result.at(i)
-        }
-      }
-
+      wireSequenceNavigation(result, ctx, path, item)
       return result as A & HasNavigation
     },
 
@@ -172,81 +144,9 @@ export function withNavigation<A extends HasCall>(
       schema: MapSchema,
       item: (key: string) => A & HasNavigation,
     ): A & HasNavigation {
-      // Downcast for base
       const baseItem = item as (key: string) => A
       const result = base.map(ctx, path, schema, baseItem) as any
-
-      // .at(key) — NO caching. Calls item(key) fresh each time.
-      // Returns undefined for missing keys.
-      Object.defineProperty(result, "at", {
-        value: (key: string): unknown => {
-          if (!ctx.reader.hasKey(path, key)) {
-            return undefined
-          }
-          return item(key)
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
-      // .has(key)
-      Object.defineProperty(result, "has", {
-        value: (key: string): boolean => {
-          return ctx.reader.hasKey(path, key)
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
-      // .keys()
-      Object.defineProperty(result, "keys", {
-        value: (): string[] => ctx.reader.keys(path),
-        enumerable: false,
-        configurable: true,
-      })
-
-      // .size
-      Object.defineProperty(result, "size", {
-        get(): number {
-          return ctx.reader.keys(path).length
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
-      // .entries()
-      Object.defineProperty(result, "entries", {
-        value: function* (): IterableIterator<[string, unknown]> {
-          for (const key of ctx.reader.keys(path)) {
-            yield [key, result.at(key)]
-          }
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
-      // .values()
-      Object.defineProperty(result, "values", {
-        value: function* (): IterableIterator<unknown> {
-          for (const key of ctx.reader.keys(path)) {
-            yield result.at(key)
-          }
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
-      // [Symbol.iterator]
-      Object.defineProperty(result, Symbol.iterator, {
-        value: function* (): IterableIterator<[string, unknown]> {
-          for (const key of ctx.reader.keys(path)) {
-            yield [key, result.at(key)]
-          }
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
+      wireKeyedNavigation(result, ctx, path, item)
       return result as A & HasNavigation
     },
 
@@ -295,81 +195,9 @@ export function withNavigation<A extends HasCall>(
       schema: SetSchema,
       item: (key: string) => A & HasNavigation,
     ): A & HasNavigation {
-      // Downcast for base
       const baseItem = item as (key: string) => A
       const result = base.set(ctx, path, schema, baseItem) as any
-
-      // .at(key) — NO caching. Calls item(key) fresh each time.
-      // Returns undefined for missing keys.
-      Object.defineProperty(result, "at", {
-        value: (key: string): unknown => {
-          if (!ctx.reader.hasKey(path, key)) {
-            return undefined
-          }
-          return item(key)
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
-      // .has(key)
-      Object.defineProperty(result, "has", {
-        value: (key: string): boolean => {
-          return ctx.reader.hasKey(path, key)
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
-      // .keys()
-      Object.defineProperty(result, "keys", {
-        value: (): string[] => ctx.reader.keys(path),
-        enumerable: false,
-        configurable: true,
-      })
-
-      // .size
-      Object.defineProperty(result, "size", {
-        get(): number {
-          return ctx.reader.keys(path).length
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
-      // .entries()
-      Object.defineProperty(result, "entries", {
-        value: function* (): IterableIterator<[string, unknown]> {
-          for (const key of ctx.reader.keys(path)) {
-            yield [key, result.at(key)]
-          }
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
-      // .values()
-      Object.defineProperty(result, "values", {
-        value: function* (): IterableIterator<unknown> {
-          for (const key of ctx.reader.keys(path)) {
-            yield result.at(key)
-          }
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
-      // [Symbol.iterator]
-      Object.defineProperty(result, Symbol.iterator, {
-        value: function* (): IterableIterator<[string, unknown]> {
-          for (const key of ctx.reader.keys(path)) {
-            yield [key, result.at(key)]
-          }
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
+      wireKeyedNavigation(result, ctx, path, item)
       return result as A & HasNavigation
     },
 
@@ -398,39 +226,9 @@ export function withNavigation<A extends HasCall>(
       schema: MovableSequenceSchema,
       item: (index: number) => A & HasNavigation,
     ): A & HasNavigation {
-      // Downcast for base
       const baseItem = item as (index: number) => A
       const result = base.movable(ctx, path, schema, baseItem) as any
-
-      // .at(i) — NO caching. Calls item(i) fresh each time.
-      // Bounds checking: negative or out-of-bounds returns undefined.
-      Object.defineProperty(result, "at", {
-        value: (index: number): unknown => {
-          const len = ctx.reader.arrayLength(path)
-          if (index < 0 || index >= len) return undefined
-          return item(index)
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
-      // .length — live from store
-      Object.defineProperty(result, "length", {
-        get() {
-          return ctx.reader.arrayLength(path)
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
-      // [Symbol.iterator] — yields child refs
-      result[Symbol.iterator] = function* () {
-        const len = ctx.reader.arrayLength(path)
-        for (let i = 0; i < len; i++) {
-          yield result.at(i)
-        }
-      }
-
+      wireSequenceNavigation(result, ctx, path, item)
       return result as A & HasNavigation
     },
   }

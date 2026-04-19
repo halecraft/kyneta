@@ -27,11 +27,10 @@ export type { Op }
 import type { ChangeBase } from "../change.js"
 import {
   incrementChange,
-  mapChange,
   replaceChange,
-  sequenceChange,
-  textChange,
 } from "../change.js"
+import { wireTextWriteOps, wireListWriteOps } from "./sequence-helpers.js"
+import { wireKeyedWriteOps } from "./keyed-helpers.js"
 import type { Plain, RefContext } from "../interpreter-types.js"
 import type {
   CounterSchema,
@@ -571,7 +570,6 @@ export function withWritable<A>(
     },
 
     // --- Sequence -------------------------------------------------------------
-    // Add .push(), .insert(), .delete() to the base sequence ref.
 
     sequence(
       ctx: WritableContext,
@@ -580,35 +578,12 @@ export function withWritable<A>(
       item: (index: number) => A,
     ): A & HasTransact {
       const result = base.sequence(ctx, path, schema, item) as any
-
-      result.push = (...items: unknown[]): void => {
-        const length = ctx.reader.arrayLength(path)
-        const change = sequenceChange([{ retain: length }, { insert: items }])
-        ctx.dispatch(path, change)
-      }
-
-      result.insert = (index: number, ...items: unknown[]): void => {
-        const change = sequenceChange([
-          ...(index > 0 ? [{ retain: index }] : []),
-          { insert: items },
-        ])
-        ctx.dispatch(path, change)
-      }
-
-      result.delete = (index: number, count: number = 1): void => {
-        const change = sequenceChange([
-          ...(index > 0 ? [{ retain: index }] : []),
-          { delete: count },
-        ])
-        ctx.dispatch(path, change)
-      }
-
+      wireListWriteOps(result, ctx, path)
       attachTransact(result, ctx)
       return result
     },
 
     // --- Map ------------------------------------------------------------------
-    // Attach .set(), .delete(), .clear() directly to the base map ref.
 
     map(
       ctx: WritableContext,
@@ -617,37 +592,7 @@ export function withWritable<A>(
       item: (key: string) => A,
     ): A & HasTransact {
       const result = base.map(ctx, path, schema, item) as any
-
-      Object.defineProperty(result, "set", {
-        value: (key: string, value: unknown): void => {
-          const change = mapChange({ [key]: value })
-          ctx.dispatch(path, change)
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
-      Object.defineProperty(result, "delete", {
-        value: (key: string): void => {
-          const change = mapChange(undefined, [key])
-          ctx.dispatch(path, change)
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
-      Object.defineProperty(result, "clear", {
-        value: (): void => {
-          const allKeys = ctx.reader.keys(path)
-          if (allKeys.length > 0) {
-            const change = mapChange(undefined, allKeys)
-            ctx.dispatch(path, change)
-          }
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
+      wireKeyedWriteOps(result, ctx, path)
       attachTransact(result, ctx)
       return result
     },
@@ -669,7 +614,6 @@ export function withWritable<A>(
     },
 
     // --- Text -----------------------------------------------------------------
-    // Add insert/delete/update mutation methods.
 
     text(
       ctx: WritableContext,
@@ -677,41 +621,7 @@ export function withWritable<A>(
       schema: TextSchema,
     ): A & HasTransact {
       const result = base.text(ctx, path, schema) as any
-
-      result.insert = (index: number, content: string): void => {
-        ctx.dispatch(
-          path,
-          textChange([
-            ...(index > 0 ? [{ retain: index }] : []),
-            { insert: content },
-          ]),
-        )
-      }
-
-      result.delete = (index: number, length: number): void => {
-        ctx.dispatch(
-          path,
-          textChange([
-            ...(index > 0 ? [{ retain: index }] : []),
-            { delete: length },
-          ]),
-        )
-      }
-
-      result.update = (content: string): void => {
-        // Read current text length via store inspection (not carrier call)
-        // so navigate+write stacks work without a reading layer.
-        const current = ctx.reader.read(path)
-        const currentLength = typeof current === "string" ? current.length : 0
-        ctx.dispatch(
-          path,
-          textChange([
-            ...(currentLength > 0 ? [{ delete: currentLength }] : []),
-            { insert: content },
-          ]),
-        )
-      }
-
+      wireTextWriteOps(result, ctx, path)
       attachTransact(result, ctx)
       return result
     },
@@ -739,7 +649,7 @@ export function withWritable<A>(
     },
 
     // --- Set ------------------------------------------------------------------
-    // Delegate like map — attach .set(), .delete(), .clear().
+    // Delegate like map.
 
     set(
       ctx: WritableContext,
@@ -748,37 +658,7 @@ export function withWritable<A>(
       item: (key: string) => A,
     ): A & HasTransact {
       const result = base.set(ctx, path, schema, item) as any
-
-      Object.defineProperty(result, "set", {
-        value: (key: string, value: unknown): void => {
-          const change = mapChange({ [key]: value })
-          ctx.dispatch(path, change)
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
-      Object.defineProperty(result, "delete", {
-        value: (key: string): void => {
-          const change = mapChange(undefined, [key])
-          ctx.dispatch(path, change)
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
-      Object.defineProperty(result, "clear", {
-        value: (): void => {
-          const allKeys = ctx.reader.keys(path)
-          if (allKeys.length > 0) {
-            const change = mapChange(undefined, allKeys)
-            ctx.dispatch(path, change)
-          }
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
+      wireKeyedWriteOps(result, ctx, path)
       attachTransact(result, ctx)
       return result
     },
@@ -799,7 +679,7 @@ export function withWritable<A>(
     },
 
     // --- Movable --------------------------------------------------------------
-    // Delegate like sequence — add .push(), .insert(), .delete().
+    // Delegate like sequence.
 
     movable(
       ctx: WritableContext,
@@ -808,29 +688,7 @@ export function withWritable<A>(
       item: (index: number) => A,
     ): A & HasTransact {
       const result = base.movable(ctx, path, schema, item) as any
-
-      result.push = (...items: unknown[]): void => {
-        const length = ctx.reader.arrayLength(path)
-        const change = sequenceChange([{ retain: length }, { insert: items }])
-        ctx.dispatch(path, change)
-      }
-
-      result.insert = (index: number, ...items: unknown[]): void => {
-        const change = sequenceChange([
-          ...(index > 0 ? [{ retain: index }] : []),
-          { insert: items },
-        ])
-        ctx.dispatch(path, change)
-      }
-
-      result.delete = (index: number, count: number = 1): void => {
-        const change = sequenceChange([
-          ...(index > 0 ? [{ retain: index }] : []),
-          { delete: count },
-        ])
-        ctx.dispatch(path, change)
-      }
-
+      wireListWriteOps(result, ctx, path)
       attachTransact(result, ctx)
       return result
     },

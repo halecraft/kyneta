@@ -1062,6 +1062,42 @@ function createMapChangefeed(
  * ```
  */
 
+// ---------------------------------------------------------------------------
+// wireChangefeed — shared boilerplate for all changefeed cases
+// ---------------------------------------------------------------------------
+
+/**
+ * Wire a changefeed onto a ref. Handles isPropertyHost guard, prepare wiring,
+ * changefeed attachment, and isPopulated attachment. The `createCf` closure
+ * receives prepare listeners AND path (avoiding double-capture) and returns
+ * the kind-specific changefeed protocol.
+ *
+ * If `result` is not a property host (e.g. a primitive), this is a no-op —
+ * the caller still casts the return type, matching existing behavior.
+ */
+function wireChangefeed(
+  result: unknown,
+  ctx: RefContext,
+  path: Path,
+  createCf: (
+    listeners: Map<string, Set<(changeset: Changeset<ChangeBase>) => void>>,
+    path: Path,
+  ) => ChangefeedProtocol<unknown, ChangeBase> | ComposedChangefeedProtocol<unknown, ChangeBase>,
+): void {
+  if (isPropertyHost(result)) {
+    const listeners = ensurePrepareWiring(ctx)
+    const cf = createCf(listeners, path)
+    attachChangefeed(result as object, cf)
+    const ps = getPopulatedState(ctx)
+    attachIsPopulated(
+      result as object,
+      path,
+      ps.populated,
+      ps.populatedListeners,
+    )
+  }
+}
+
 export function withChangefeed<A extends HasRead>(
   base: Interpreter<RefContext, A>,
 ): Interpreter<RefContext, A & HasChangefeed> {
@@ -1073,23 +1109,9 @@ export function withChangefeed<A extends HasRead>(
       schema: ScalarSchema,
     ): A & HasChangefeed {
       const result = base.scalar(ctx, path, schema)
-
-      if (isPropertyHost(result)) {
-        const listeners = ensurePrepareWiring(ctx)
-        const cf = createLeafChangefeed(listeners, path, () =>
-          (result as any)[CALL](),
-        )
-        attachChangefeed(result as object, cf)
-        const ps = getPopulatedState(ctx)
-        attachIsPopulated(
-          result as object,
-          path,
-          ps.populated,
-          ps.populatedListeners,
-        )
-        return result as A & HasChangefeed
-      }
-
+      wireChangefeed(result, ctx, path, (listeners, p) =>
+        createLeafChangefeed(listeners, p, () => (result as any)[CALL]()),
+      )
       return result as A & HasChangefeed
     },
 
@@ -1101,30 +1123,18 @@ export function withChangefeed<A extends HasRead>(
       fields: Readonly<Record<string, () => A>>,
     ): A & HasChangefeed {
       const result = base.product(ctx, path, schema, fields)
-
-      if (isPropertyHost(result)) {
-        const listeners = ensurePrepareWiring(ctx)
-        const cf = createProductChangefeed(
+      wireChangefeed(result, ctx, path, (listeners, p) =>
+        createProductChangefeed(
           listeners,
-          path,
+          p,
           () => (result as any)[CALL](),
           // Pass the product ref so wireChildren accesses fields through
           // withCaching's memoized getters, not raw thunks. Raw thunks
           // create new carriers that overwrite address table entries.
           result as object,
           Object.keys(fields),
-        )
-        attachChangefeed(result as object, cf)
-        const ps = getPopulatedState(ctx)
-        attachIsPopulated(
-          result as object,
-          path,
-          ps.populated,
-          ps.populatedListeners,
-        )
-        return result as A & HasChangefeed
-      }
-
+        ),
+      )
       return result as A & HasChangefeed
     },
 
@@ -1136,18 +1146,12 @@ export function withChangefeed<A extends HasRead>(
       item: (index: number) => A,
     ): A & HasChangefeed {
       const result = base.sequence(ctx, path, schema, item)
-
-      if (isPropertyHost(result)) {
-        const listeners = ensurePrepareWiring(ctx)
+      wireChangefeed(result, ctx, path, (listeners, p) => {
         const resultAny = result as any
-
-        const cf = createSequenceChangefeed(
+        return createSequenceChangefeed(
           listeners,
-          path,
+          p,
           () => (result as any)[CALL](),
-          // Use the result's .at() method to get child refs —
-          // this goes through the caching layer, so refs have
-          // stable identity and [CHANGEFEED] attached.
           (index: number) => {
             if (typeof resultAny.at === "function") {
               return resultAny.at(index)
@@ -1157,19 +1161,9 @@ export function withChangefeed<A extends HasRead>(
                 "Ensure withNavigation is in the interpreter stack.",
             )
           },
-          () => ctx.reader.arrayLength(path),
+          () => ctx.reader.arrayLength(p),
         )
-        attachChangefeed(result as object, cf)
-        const ps = getPopulatedState(ctx)
-        attachIsPopulated(
-          result as object,
-          path,
-          ps.populated,
-          ps.populatedListeners,
-        )
-        return result as A & HasChangefeed
-      }
-
+      })
       return result as A & HasChangefeed
     },
 
@@ -1181,14 +1175,11 @@ export function withChangefeed<A extends HasRead>(
       item: (key: string) => A,
     ): A & HasChangefeed {
       const result = base.map(ctx, path, schema, item)
-
-      if (isPropertyHost(result)) {
-        const listeners = ensurePrepareWiring(ctx)
+      wireChangefeed(result, ctx, path, (listeners, p) => {
         const resultAny = result as any
-
-        const cf = createMapChangefeed(
+        return createMapChangefeed(
           listeners,
-          path,
+          p,
           () => (result as any)[CALL](),
           (key: string) => {
             if (typeof resultAny.at === "function") {
@@ -1199,19 +1190,9 @@ export function withChangefeed<A extends HasRead>(
                 "Ensure withNavigation is in the interpreter stack.",
             )
           },
-          () => ctx.reader.keys(path),
+          () => ctx.reader.keys(p),
         )
-        attachChangefeed(result as object, cf)
-        const ps = getPopulatedState(ctx)
-        attachIsPopulated(
-          result as object,
-          path,
-          ps.populated,
-          ps.populatedListeners,
-        )
-        return result as A & HasChangefeed
-      }
-
+      })
       return result as A & HasChangefeed
     },
 
@@ -1235,23 +1216,9 @@ export function withChangefeed<A extends HasRead>(
     // Leaf type — attach a leaf changefeed + isPopulated.
     text(ctx: RefContext, path: Path, schema: TextSchema): A & HasChangefeed {
       const result = base.text(ctx, path, schema)
-
-      if (isPropertyHost(result)) {
-        const listeners = ensurePrepareWiring(ctx)
-        const cf = createLeafChangefeed(listeners, path, () =>
-          (result as any)[CALL](),
-        )
-        attachChangefeed(result as object, cf)
-        const ps = getPopulatedState(ctx)
-        attachIsPopulated(
-          result as object,
-          path,
-          ps.populated,
-          ps.populatedListeners,
-        )
-        return result as A & HasChangefeed
-      }
-
+      wireChangefeed(result, ctx, path, (listeners, p) =>
+        createLeafChangefeed(listeners, p, () => (result as any)[CALL]()),
+      )
       return result as A & HasChangefeed
     },
 
@@ -1263,23 +1230,9 @@ export function withChangefeed<A extends HasRead>(
       schema: CounterSchema,
     ): A & HasChangefeed {
       const result = base.counter(ctx, path, schema)
-
-      if (isPropertyHost(result)) {
-        const listeners = ensurePrepareWiring(ctx)
-        const cf = createLeafChangefeed(listeners, path, () =>
-          (result as any)[CALL](),
-        )
-        attachChangefeed(result as object, cf)
-        const ps = getPopulatedState(ctx)
-        attachIsPopulated(
-          result as object,
-          path,
-          ps.populated,
-          ps.populatedListeners,
-        )
-        return result as A & HasChangefeed
-      }
-
+      wireChangefeed(result, ctx, path, (listeners, p) =>
+        createLeafChangefeed(listeners, p, () => (result as any)[CALL]()),
+      )
       return result as A & HasChangefeed
     },
 
@@ -1292,14 +1245,11 @@ export function withChangefeed<A extends HasRead>(
       item: (key: string) => A,
     ): A & HasChangefeed {
       const result = base.set(ctx, path, schema, item)
-
-      if (isPropertyHost(result)) {
-        const listeners = ensurePrepareWiring(ctx)
+      wireChangefeed(result, ctx, path, (listeners, p) => {
         const resultAny = result as any
-
-        const cf = createMapChangefeed(
+        return createMapChangefeed(
           listeners,
-          path,
+          p,
           () => (result as any)[CALL](),
           (key: string) => {
             if (typeof resultAny.at === "function") {
@@ -1310,19 +1260,9 @@ export function withChangefeed<A extends HasRead>(
                 "Ensure withNavigation is in the interpreter stack.",
             )
           },
-          () => ctx.reader.keys(path),
+          () => ctx.reader.keys(p),
         )
-        attachChangefeed(result as object, cf)
-        const ps = getPopulatedState(ctx)
-        attachIsPopulated(
-          result as object,
-          path,
-          ps.populated,
-          ps.populatedListeners,
-        )
-        return result as A & HasChangefeed
-      }
-
+      })
       return result as A & HasChangefeed
     },
 
@@ -1350,14 +1290,11 @@ export function withChangefeed<A extends HasRead>(
       item: (index: number) => A,
     ): A & HasChangefeed {
       const result = base.movable(ctx, path, schema, item)
-
-      if (isPropertyHost(result)) {
-        const listeners = ensurePrepareWiring(ctx)
+      wireChangefeed(result, ctx, path, (listeners, p) => {
         const resultAny = result as any
-
-        const cf = createSequenceChangefeed(
+        return createSequenceChangefeed(
           listeners,
-          path,
+          p,
           () => (result as any)[CALL](),
           (index: number) => {
             if (typeof resultAny.at === "function") {
@@ -1368,19 +1305,9 @@ export function withChangefeed<A extends HasRead>(
                 "Ensure withNavigation is in the interpreter stack.",
             )
           },
-          () => ctx.reader.arrayLength(path),
+          () => ctx.reader.arrayLength(p),
         )
-        attachChangefeed(result as object, cf)
-        const ps = getPopulatedState(ctx)
-        attachIsPopulated(
-          result as object,
-          path,
-          ps.populated,
-          ps.populatedListeners,
-        )
-        return result as A & HasChangefeed
-      }
-
+      })
       return result as A & HasChangefeed
     },
   }

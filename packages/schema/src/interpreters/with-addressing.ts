@@ -60,6 +60,8 @@ import type {
 import type { HasNavigation } from "./bottom.js"
 import type { WritableContext } from "./writable.js"
 import { hasTransact, REMOVE, TRANSACT } from "./writable.js"
+import { wireSequenceAddressing } from "./sequence-helpers.js"
+import { wireKeyedAddressing } from "./keyed-helpers.js"
 
 // ---------------------------------------------------------------------------
 // ADDRESS_TABLE symbol — discovery hook for withCaching (Phase 5)
@@ -396,27 +398,12 @@ export function withAddressing<A extends HasNavigation>(
       const registry = getOrCreateRegistry(ctx)
       const result = base.sequence(ctx, path, schema, item)
       const seqPathKey = path.key
-
-      // Attach the address table as a lazy getter — the table may not
-      // exist yet (items are accessed lazily via .at()), so we resolve
-      // it on first access rather than eagerly at interpretation time.
-      if (isPropertyHost(result)) {
-        Object.defineProperty(result, ADDRESS_TABLE, {
-          get() {
-            return registry.getSequenceTable(seqPathKey)
-          },
-          enumerable: false,
-          configurable: true,
-        })
-      }
-
-      // Register prepare handler for address advancement
-      const handlers = ensureAddressingWiring(ctx)
-      registerAddressingHandler(handlers, path, (change: ChangeBase) => {
-        const t = registry.getSequenceTable(path.key)
-        if (t) handleSequenceChange(t, change)
-      })
-
+      wireSequenceAddressing(
+        result, path, ADDRESS_TABLE,
+        () => registry.getSequenceTable(seqPathKey),
+        (p, handler) => registerAddressingHandler(ensureAddressingWiring(ctx), p, handler),
+        handleSequenceChange as (table: unknown, change: unknown) => void,
+      )
       return result
     },
 
@@ -431,27 +418,12 @@ export function withAddressing<A extends HasNavigation>(
       const registry = getOrCreateRegistry(ctx)
       const result = base.map(ctx, path, schema, item)
       const mapPathKey = path.key
-
-      // Attach the address table as a lazy getter — the table may not
-      // exist yet (entries are accessed lazily via .at()), so we resolve
-      // it on first access rather than eagerly at interpretation time.
-      if (isPropertyHost(result)) {
-        Object.defineProperty(result, ADDRESS_TABLE, {
-          get() {
-            return registry.getMapTable(mapPathKey)
-          },
-          enumerable: false,
-          configurable: true,
-        })
-      }
-
-      // Register prepare handler for tombstoning
-      const handlers = ensureAddressingWiring(ctx)
-      registerAddressingHandler(handlers, path, (change: ChangeBase) => {
-        const t = registry.getMapTable(path.key)
-        if (t) handleMapChange(t, change)
-      })
-
+      wireKeyedAddressing(
+        result, path, ADDRESS_TABLE,
+        () => registry.getMapTable(mapPathKey),
+        (p, handler) => registerAddressingHandler(ensureAddressingWiring(ctx), p, handler),
+        handleMapChange as (table: unknown, change: unknown) => void,
+      )
       return result
     },
 
@@ -489,23 +461,12 @@ export function withAddressing<A extends HasNavigation>(
       const registry = getOrCreateRegistry(ctx)
       const result = base.set(ctx, path, schema, item)
       const mapPathKey = path.key
-
-      if (isPropertyHost(result)) {
-        Object.defineProperty(result, ADDRESS_TABLE, {
-          get() {
-            return registry.getMapTable(mapPathKey)
-          },
-          enumerable: false,
-          configurable: true,
-        })
-      }
-
-      const handlers = ensureAddressingWiring(ctx)
-      registerAddressingHandler(handlers, path, (change: ChangeBase) => {
-        const t = registry.getMapTable(path.key)
-        if (t) handleMapChange(t, change)
-      })
-
+      wireKeyedAddressing(
+        result, path, ADDRESS_TABLE,
+        () => registry.getMapTable(mapPathKey),
+        (p, handler) => registerAddressingHandler(ensureAddressingWiring(ctx), p, handler),
+        handleMapChange as (table: unknown, change: unknown) => void,
+      )
       return result
     },
 
@@ -531,23 +492,12 @@ export function withAddressing<A extends HasNavigation>(
       const registry = getOrCreateRegistry(ctx)
       const result = base.movable(ctx, path, schema, item)
       const seqPathKey = path.key
-
-      if (isPropertyHost(result)) {
-        Object.defineProperty(result, ADDRESS_TABLE, {
-          get() {
-            return registry.getSequenceTable(seqPathKey)
-          },
-          enumerable: false,
-          configurable: true,
-        })
-      }
-
-      const handlers = ensureAddressingWiring(ctx)
-      registerAddressingHandler(handlers, path, (change: ChangeBase) => {
-        const t = registry.getSequenceTable(path.key)
-        if (t) handleSequenceChange(t, change)
-      })
-
+      wireSequenceAddressing(
+        result, path, ADDRESS_TABLE,
+        () => registry.getSequenceTable(seqPathKey),
+        (p, handler) => registerAddressingHandler(ensureAddressingWiring(ctx), p, handler),
+        handleSequenceChange as (table: unknown, change: unknown) => void,
+      )
       return result
     },
   }

@@ -42,6 +42,8 @@ import type {
 } from "../schema.js"
 
 import type { HasCaching, HasNavigation } from "./bottom.js"
+import { wireSequenceCaching } from "./sequence-helpers.js"
+import { wireKeyedCaching } from "./keyed-helpers.js"
 
 // ---------------------------------------------------------------------------
 // INVALIDATE symbol — composability hook for cache coordination
@@ -275,59 +277,12 @@ export function withCaching<A extends HasNavigation>(
       schema: SequenceSchema,
       item: (index: number) => A & HasCaching,
     ): A & HasCaching {
-      // Downcast for base
       const baseItem = item as (index: number) => A
       const result = base.sequence(ctx, path, schema, baseItem) as any
-
-      // Capture the base .at() — withReadable/withNavigation installed it
-      const baseAt = result.at as (index: number) => unknown
-
-      // Override .at() with address-table-backed lookup
-      Object.defineProperty(result, "at", {
-        value: (index: number): unknown => {
-          // Discover the address table (lazy getter from withAddressing)
-          const addressTable = (result as any)[ADDRESS_TABLE_SYM] as
-            | {
-                byIndex: Map<number, any>
-                byId: Map<number, { address: any; ref: unknown }>
-              }
-            | undefined
-
-          if (addressTable) {
-            const addr = addressTable.byIndex.get(index)
-            if (addr && addr.kind === "index") {
-              const entry = addressTable.byId.get(addr.id)
-              if (entry?.ref !== undefined) {
-                return entry.ref
-              }
-            }
-          }
-
-          // Cache miss or no address table — delegate to base.
-          // With addressing: baseAt triggers interpretImpl → onRefCreated
-          // which registers the ref in the address table for next time.
-          // Without addressing: fresh ref each time (no memoization).
-          return baseAt.call(result, index)
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
-      // INVALIDATE handler: no-op for sequence changes.
-      // Address advancement is handled by withAddressing in the prepare
-      // pipeline. For ReplaceChange, withAddressing marks all addresses
-      // dead and clears the table — no cache action needed here.
-      const invalidateSequence = (_change: ChangeBase): void => {
-        // Intentionally empty — addressing layer handles all cases.
-      }
-
-      // Attach [INVALIDATE] on the ref (public API, direct use)
-      result[INVALIDATE] = invalidateSequence
-
-      // Register in the prepare pipeline (writable stacks only)
-      const handlers = ensureCacheWiring(ctx)
-      registerCacheHandler(handlers, path, invalidateSequence)
-
+      wireSequenceCaching(
+        result, path, ADDRESS_TABLE_SYM, INVALIDATE,
+        (p, handler) => registerCacheHandler(ensureCacheWiring(ctx), p, handler),
+      )
       return result as A & HasCaching
     },
 
@@ -339,48 +294,12 @@ export function withCaching<A extends HasNavigation>(
       schema: MapSchema,
       item: (key: string) => A & HasCaching,
     ): A & HasCaching {
-      // Downcast for base
       const baseItem = item as (key: string) => A
       const result = base.map(ctx, path, schema, baseItem) as any
-
-      // Capture the base .at() — withReadable/withNavigation installed it
-      const baseAt = result.at as (key: string) => unknown
-
-      // Override .at() with address-table-backed lookup
-      Object.defineProperty(result, "at", {
-        value: (key: string): unknown => {
-          // Discover the map address table (lazy getter from withAddressing)
-          const addressTable = (result as any)[ADDRESS_TABLE_SYM] as
-            | { byKey: Map<string, { address: any; ref: unknown }> }
-            | undefined
-
-          if (addressTable) {
-            const entry = addressTable.byKey.get(key)
-            if (entry?.ref !== undefined && !entry.address.dead) {
-              return entry.ref
-            }
-          }
-
-          // Cache miss or no address table — delegate to base.
-          return baseAt.call(result, key)
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
-      // INVALIDATE handler: no-op for map changes.
-      // Tombstoning is handled by withAddressing in the prepare pipeline.
-      const invalidateMap = (_change: ChangeBase): void => {
-        // Intentionally empty — addressing layer handles all cases.
-      }
-
-      // Attach [INVALIDATE] on the ref (public API, direct use)
-      result[INVALIDATE] = invalidateMap
-
-      // Register in the prepare pipeline (writable stacks only)
-      const handlers = ensureCacheWiring(ctx)
-      registerCacheHandler(handlers, path, invalidateMap)
-
+      wireKeyedCaching(
+        result, path, ADDRESS_TABLE_SYM, INVALIDATE,
+        (p, handler) => registerCacheHandler(ensureCacheWiring(ctx), p, handler),
+      )
       return result as A & HasCaching
     },
 
@@ -420,48 +339,12 @@ export function withCaching<A extends HasNavigation>(
       schema: SetSchema,
       item: (key: string) => A & HasCaching,
     ): A & HasCaching {
-      // Downcast for base
       const baseItem = item as (key: string) => A
       const result = base.set(ctx, path, schema, baseItem) as any
-
-      // Capture the base .at() — withReadable/withNavigation installed it
-      const baseAt = result.at as (key: string) => unknown
-
-      // Override .at() with address-table-backed lookup
-      Object.defineProperty(result, "at", {
-        value: (key: string): unknown => {
-          // Discover the map address table (lazy getter from withAddressing)
-          const addressTable = (result as any)[ADDRESS_TABLE_SYM] as
-            | { byKey: Map<string, { address: any; ref: unknown }> }
-            | undefined
-
-          if (addressTable) {
-            const entry = addressTable.byKey.get(key)
-            if (entry?.ref !== undefined && !entry.address.dead) {
-              return entry.ref
-            }
-          }
-
-          // Cache miss or no address table — delegate to base.
-          return baseAt.call(result, key)
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
-      // INVALIDATE handler: no-op for set changes.
-      // Tombstoning is handled by withAddressing in the prepare pipeline.
-      const invalidateSet = (_change: ChangeBase): void => {
-        // Intentionally empty — addressing layer handles all cases.
-      }
-
-      // Attach [INVALIDATE] on the ref (public API, direct use)
-      result[INVALIDATE] = invalidateSet
-
-      // Register in the prepare pipeline (writable stacks only)
-      const handlers = ensureCacheWiring(ctx)
-      registerCacheHandler(handlers, path, invalidateSet)
-
+      wireKeyedCaching(
+        result, path, ADDRESS_TABLE_SYM, INVALIDATE,
+        (p, handler) => registerCacheHandler(ensureCacheWiring(ctx), p, handler),
+      )
       return result as A & HasCaching
     },
 
@@ -487,55 +370,12 @@ export function withCaching<A extends HasNavigation>(
       schema: MovableSequenceSchema,
       item: (index: number) => A & HasCaching,
     ): A & HasCaching {
-      // Downcast for base
       const baseItem = item as (index: number) => A
       const result = base.movable(ctx, path, schema, baseItem) as any
-
-      // Capture the base .at() — withReadable/withNavigation installed it
-      const baseAt = result.at as (index: number) => unknown
-
-      // Override .at() with address-table-backed lookup
-      Object.defineProperty(result, "at", {
-        value: (index: number): unknown => {
-          // Discover the address table (lazy getter from withAddressing)
-          const addressTable = (result as any)[ADDRESS_TABLE_SYM] as
-            | {
-                byIndex: Map<number, any>
-                byId: Map<number, { address: any; ref: unknown }>
-              }
-            | undefined
-
-          if (addressTable) {
-            const addr = addressTable.byIndex.get(index)
-            if (addr && addr.kind === "index") {
-              const entry = addressTable.byId.get(addr.id)
-              if (entry?.ref !== undefined) {
-                return entry.ref
-              }
-            }
-          }
-
-          // Cache miss or no address table — delegate to base.
-          return baseAt.call(result, index)
-        },
-        enumerable: false,
-        configurable: true,
-      })
-
-      // INVALIDATE handler: no-op for movable changes.
-      // Address advancement is handled by withAddressing in the prepare
-      // pipeline.
-      const invalidateMovable = (_change: ChangeBase): void => {
-        // Intentionally empty — addressing layer handles all cases.
-      }
-
-      // Attach [INVALIDATE] on the ref (public API, direct use)
-      result[INVALIDATE] = invalidateMovable
-
-      // Register in the prepare pipeline (writable stacks only)
-      const handlers = ensureCacheWiring(ctx)
-      registerCacheHandler(handlers, path, invalidateMovable)
-
+      wireSequenceCaching(
+        result, path, ADDRESS_TABLE_SYM, INVALIDATE,
+        (p, handler) => registerCacheHandler(ensureCacheWiring(ctx), p, handler),
+      )
       return result as A & HasCaching
     },
   }

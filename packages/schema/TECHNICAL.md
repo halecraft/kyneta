@@ -360,6 +360,21 @@ Used internally to combine capability-specific interpreters into composed layers
 - **Not layered dynamically.** Layers compose at the type level. Once `.done()` is called, the stack is fixed.
 - **Not framework-aware.** No React, no DOM. The `Ref<S>` the stack produces is a pure object with a `[CHANGEFEED]` surface; framework bindings (`@kyneta/react`, `@kyneta/cast`) adapt it.
 
+### Interpreter duplication families
+
+The 10 interpreter cases fall into four structural categories. The first three are **duplication families** — groups of cases that share identical logic across every transformer, captured by shared helper modules. The fourth has unique per-case logic.
+
+| Family | Cases | Shared helpers | Shared algebra |
+|--------|-------|---------------|----------------|
+| **Indexed** (positional) | `text`, `sequence`, `movable` | `sequence-helpers.ts` — `at()`, `wireTextWriteOps`, `wireListWriteOps`, `wireSequenceReadable`, `wireSequenceNavigation`, `wireSequenceAddressing`, `wireSequenceCaching` | `Instruction`, `foldInstructions`, `transformIndex`, `advanceAddresses` |
+| **Keyed** (named) | `map`, `set` | `keyed-helpers.ts` — `wireKeyedWriteOps`, `wireKeyedReadable`, `wireKeyedNavigation`, `wireKeyedAddressing`, `wireKeyedCaching` | `MapChange`, keyed addressing/tombstoning |
+| **Leaf** (terminal) | `scalar`, `text`, `counter` | `wireChangefeed` in `with-changefeed.ts` unifies changefeed boilerplate across all leaf and composite cases | `createLeafChangefeed` |
+| **Structural** (unique) | `product`, `sum`, `tree` | None — each has unique per-case logic | Product: schema-driven fields + discriminant. Sum: store-based variant dispatch. Tree: thin pass-through. |
+
+**`text` straddles two families.** It is indexed for writable (shares `at()` and the retain/insert/delete instruction stream with sequence/movable) but leaf for readable, navigation, and changefeed (returns `string` directly, not a fold over children). Characters are not independently addressable refs.
+
+The `Interpreter` interface retains separate cases per kind — the sharing is internal to the built-in transformers. Substrate authors implement one case per kind; they never see the shared helpers.
+
 ### `NativeMap` and the escape hatch
 
 `NativeMap<S>` is a type-level mapping from schema kinds to substrate-native types. `ref[NATIVE]` returns the underlying container — `LoroText` for a `text` on Loro, `Y.Map` for a `product` on Yjs, a plain object for the plain substrate. `unwrap(ref)` (`src/unwrap.ts`) is the typed escape hatch that returns `NativeMap<S>`.
@@ -564,6 +579,8 @@ Every mutation flows through a `Change` — a discriminated union identified by 
 | `"replace"` | `{ value: unknown }` — overwrite this node | Scalars, plain JSON sub-trees |
 | `"increment"` | `{ delta: number }` — counter increment | Counters |
 
+Note: `TextChange` and `SequenceChange` are parameterizations of the same positional algebra, unified by the `Instruction` type. Both use `retain`/`insert`/`delete` cursor instructions; the only difference is the content type (`string` vs `T[]`). The shared algebra is captured by `foldInstructions`, `transformIndex`, and `advanceAddresses`, which operate on `Instruction` generically.
+
 `ChangeBase` is re-exported from `@kyneta/changefeed` — the open protocol base. Third-party backends may extend with additional `type` values; the exchange and interpreters treat unknown types as opaque, passing them through.
 
 ### `Change` flows both ways
@@ -697,12 +714,14 @@ Selection of the most-used types. Full list in [Canonical symbols](#canonical-sy
 | `src/change.ts` | ~600 | Change vocabulary, constructors, guards, `transformIndex`, `textInstructionsToPatches`, `advanceAddresses`. |
 | `src/interpret.ts` | ~400 | `interpret`, `Interpreter`, `InterpretBuilder`, `InterpreterLayer`, `dispatchSum`, `RawPath`. |
 | `src/interpreters/bottom.ts` | ~200 | Bottom layer: `[CHANGEFEED]`, `[NATIVE]`, `[SUBSTRATE]`, `[CALL]`. |
-| `src/interpreters/with-navigation.ts` | ~200 | Structural descent. |
-| `src/interpreters/with-readable.ts` | ~200 | `.current`, `()`, read-by-path. |
-| `src/interpreters/with-addressing.ts` | ~150 | Address-table layer. |
-| `src/interpreters/with-caching.ts` | ~200 | Identity-preserving memoization + `INVALIDATE`. |
-| `src/interpreters/writable.ts` | ~500 | Mutation primitives + `REMOVE` + `TRANSACT` + `executeBatch`. |
-| `src/interpreters/with-changefeed.ts` | ~400 | Observation layer + `planNotifications` + `deliverNotifications`. |
+| `src/interpreters/sequence-helpers.ts` | ~280 | Shared indexed-coalgebra helpers: `at()`, `wireTextWriteOps`, `wireListWriteOps`, `wireSequenceReadable`, `wireSequenceNavigation`, `wireSequenceAddressing`, `wireSequenceCaching`. |
+| `src/interpreters/keyed-helpers.ts` | ~235 | Shared keyed-coalgebra helpers: `wireKeyedWriteOps`, `wireKeyedReadable`, `wireKeyedNavigation`, `wireKeyedAddressing`, `wireKeyedCaching`. |
+| `src/interpreters/with-navigation.ts` | ~235 | Structural descent. Sequence/movable and map/set cases delegate to shared helpers. |
+| `src/interpreters/with-readable.ts` | ~225 | `.current`, `()`, read-by-path. Sequence/movable and map/set cases delegate to shared helpers. |
+| `src/interpreters/with-addressing.ts` | ~500 | Address-table layer. Sequence/movable and map/set cases delegate to shared helpers. |
+| `src/interpreters/with-caching.ts` | ~380 | Identity-preserving memoization + `INVALIDATE`. Sequence/movable and map/set cases delegate to shared helpers. |
+| `src/interpreters/writable.ts` | ~700 | Mutation primitives + `REMOVE` + `TRANSACT` + `executeBatch`. Text/sequence/movable/map/set cases delegate to shared helpers. |
+| `src/interpreters/with-changefeed.ts` | ~1300 | Observation layer + `planNotifications` + `deliverNotifications` + `wireChangefeed`. All cases use `wireChangefeed` to unify changefeed boilerplate. |
 | `src/interpreters/validate.ts` | ~200 | Validation interpreter. |
 | `src/interpreters/plain.ts` | ~100 | Plain-state interpreter (reader + canonical shape). |
 | `src/interpreters/navigable.ts`, `readable.ts` | ~100 each | Type-interface modules. |
