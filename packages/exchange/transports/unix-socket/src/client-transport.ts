@@ -90,7 +90,7 @@ export type UnixSocketClientStateTransition =
  * import { createUnixSocketClient } from "@kyneta/unix-socket-transport"
  *
  * const exchange = new Exchange({
- *   identity: { peerId: "service-a", name: "Service A" },
+ *   id: { peerId: "service-a", name: "Service A" },
  *   transports: [
  *     createUnixSocketClient({ path: "/tmp/kyneta.sock" }),
  *   ],
@@ -327,7 +327,7 @@ export class UnixSocketClientTransport extends Transport<void> {
  * import { createUnixSocketClient } from "@kyneta/unix-socket-transport"
  *
  * const exchange = new Exchange({
- *   identity: { peerId: "service-a", name: "Service A" },
+ *   id: { peerId: "service-a", name: "Service A" },
  *   transports: [
  *     createUnixSocketClient({ path: "/tmp/kyneta.sock" }),
  *   ],

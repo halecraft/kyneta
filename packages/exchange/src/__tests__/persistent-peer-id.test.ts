@@ -24,9 +24,13 @@ function createStorageShim(backing: Map<string, string>): Storage {
   return {
     getItem: (key: string) => backing.get(key) ?? null,
     setItem: (key: string, value: string) => backing.set(key, value),
-    removeItem: (key: string) => { backing.delete(key) },
+    removeItem: (key: string) => {
+      backing.delete(key)
+    },
     clear: () => backing.clear(),
-    get length() { return backing.size },
+    get length() {
+      return backing.size
+    },
     key: (_index: number) => null,
   }
 }
@@ -47,7 +51,10 @@ Object.defineProperty(globalThis, "sessionStorage", {
 
 const pagehideListeners: EventListener[] = []
 
-globalThis.addEventListener = ((type: string, listener: EventListenerOrEventListenerObject) => {
+globalThis.addEventListener = ((
+  type: string,
+  listener: EventListenerOrEventListenerObject,
+) => {
   if (type === "pagehide") {
     pagehideListeners.push(listener as EventListener)
   }

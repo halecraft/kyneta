@@ -15,7 +15,7 @@ import { ExchangeProvider, useExchange } from "../exchange-context.js"
 
 describe("useExchange", () => {
   it("returns the Exchange from the provider", () => {
-    const config = {}
+    const config = { id: "test" }
     const wrapper = ({ children }: { children: ReactNode }) => (
       <ExchangeProvider config={config}>{children}</ExchangeProvider>
     )
@@ -44,7 +44,7 @@ describe("ExchangeProvider", () => {
   it("calls exchange.reset() on unmount", () => {
     const resetSpy = vi.spyOn(Exchange.prototype, "reset")
 
-    const config = {}
+    const config = { id: "test" }
     const wrapper = ({ children }: { children: ReactNode }) => (
       <ExchangeProvider config={config}>{children}</ExchangeProvider>
     )

@@ -25,7 +25,7 @@
 
 /// <reference types="bun-types" />
 
-import { Exchange } from "@kyneta/exchange"
+import { Exchange, type ExchangeParams } from "@kyneta/exchange"
 import { loro } from "@kyneta/loro-schema"
 import { change, json, Schema } from "@kyneta/schema"
 import { WebsocketClientTransport } from "@kyneta/websocket-transport/browser"
@@ -105,9 +105,7 @@ async function waitForReady(
 const activeExchanges: Exchange[] = []
 const activeServers: { shutdown: () => void }[] = []
 
-function createExchange(
-  params: ConstructorParameters<typeof Exchange>[0] = {},
-): Exchange {
+function createExchange(params: ExchangeParams): Exchange {
   const ex = new Exchange(params)
   activeExchanges.push(ex)
   return ex
@@ -185,7 +183,7 @@ async function createConnectedPair(opts?: {
   activeServers.push(testServer)
 
   const serverExchange = createExchange({
-    identity: { peerId: serverPeerId },
+    id: serverPeerId,
     transports: [() => serverTransport],
   })
 
@@ -197,7 +195,7 @@ async function createConnectedPair(opts?: {
   })
 
   const clientExchange = createExchange({
-    identity: { peerId: clientPeerId },
+    id: clientPeerId,
     transports: [() => clientTransport],
   })
 

@@ -423,7 +423,7 @@ describe("Governance", () => {
 
 describe("rethrowErrors (via Exchange shutdown/reset)", () => {
   it("shutdown rethrows a single dispose error after completing cleanup", async () => {
-    const exchange = new Exchange()
+    const exchange = new Exchange({ id: "test" })
     const error = new Error("dispose-fail")
     exchange.register({
       dispose: () => {
@@ -434,7 +434,7 @@ describe("rethrowErrors (via Exchange shutdown/reset)", () => {
   })
 
   it("shutdown wraps multiple dispose errors in AggregateError", async () => {
-    const exchange = new Exchange()
+    const exchange = new Exchange({ id: "test" })
     exchange.register({
       dispose: () => {
         throw new Error("a")
@@ -449,7 +449,7 @@ describe("rethrowErrors (via Exchange shutdown/reset)", () => {
   })
 
   it("reset rethrows a single dispose error after completing cleanup", () => {
-    const exchange = new Exchange()
+    const exchange = new Exchange({ id: "test" })
     const error = new Error("dispose-fail")
     exchange.register({
       dispose: () => {
@@ -460,7 +460,7 @@ describe("rethrowErrors (via Exchange shutdown/reset)", () => {
   })
 
   it("shutdown completes all cleanup steps even when dispose throws", async () => {
-    const exchange = new Exchange({ identity: { peerId: "test" } })
+    const exchange = new Exchange({ id: "test" })
     exchange.register({
       dispose: () => {
         throw new Error("boom")

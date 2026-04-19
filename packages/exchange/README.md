@@ -19,7 +19,7 @@ const TodoDoc = loro.bind(Schema.struct({
 }))
 
 const exchange = new Exchange({
-  identity: { peerId: "alice" },
+  id: "alice",
   transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
 })
 
@@ -53,7 +53,7 @@ One protocol handles all three. The difference is a single line of configuration
 
 ```ts
 const exchange = new Exchange({
-  identity: { peerId: "alice" },
+  id: "alice",
   transports: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
 })
 
@@ -69,7 +69,7 @@ subscribe(doc, changeset => { /* reactive */ })
 import { loro } from "@kyneta/loro-schema"
 
 const relay = new Exchange({
-  identity: { peerId: "relay", type: "service" },
+  id: { peerId: "relay", type: "service" },
   transports: [
     createWebsocketClient({ url: "ws://upstream:3000/ws" }),
     createWebsocketClient({ url: "ws://downstream:3001/ws" }),
@@ -85,7 +85,7 @@ const relay = new Exchange({
 
 ```ts
 const server = new Exchange({
-  identity: { peerId: "game-server" },
+  id: "game-server",
   transports: [serverTransport],
   onUnresolvedDoc: (docId, peer) => {
     if (docId.startsWith("input:")) return Interpret(PlayerInputDoc)
@@ -128,7 +128,7 @@ const ConfigDoc = json.bind(Schema.struct({ theme: Schema.string() }))
 
 // Peer A — creates the document and writes
 const exchangeA = new Exchange({
-  identity: { peerId: "alice" },
+  id: "alice",
   transports: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
 })
 const docA = exchangeA.get("config", ConfigDoc)
@@ -136,7 +136,7 @@ docA.theme.set("dark")
 
 // Peer B — opens the same document and waits for data to arrive
 const exchangeB = new Exchange({
-  identity: { peerId: "bob" },
+  id: "bob",
   transports: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
 })
 const docB = exchangeB.get("config", ConfigDoc)
@@ -163,7 +163,7 @@ doc.theme()  // same API, now backed by a CRDT
 
 ```ts
 const exchange = new Exchange({
-  identity: { peerId: "server" },
+  id: "server",
   transports: [serverTransport],
   stores: [createLevelDBStore("./data/exchange-db")],  // ← new
 })
@@ -190,7 +190,7 @@ const presence = exchange.get("my-presence", PresenceDoc) // ephemeral broadcast
 
 ```ts
 const exchange = new Exchange({
-  identity: { peerId: "server" },
+  id: "server",
   transports: [serverTransport],
   route: (docId, peer) => {  // ← new: outbound flow control
     if (docId.startsWith("input:")) return peer.peerId === docId.slice(6)
@@ -209,7 +209,7 @@ const exchange = new Exchange({
 // The relay has zero knowledge of your schemas.
 // Plain and ephemeral replicas are built-in; add CRDT replicas if relaying Loro/Yjs docs.
 const relay = new Exchange({
-  identity: { peerId: "relay", type: "service" },
+  id: { peerId: "relay", type: "service" },
   transports: [
     createWebsocketClient({ url: "ws://upstream:3000/ws" }),
     createWebsocketClient({ url: "ws://downstream:3001/ws" }),
@@ -333,7 +333,7 @@ The `Exchange` class is the central orchestrator. It manages document lifecycle,
 
 ```ts
 const exchange = new Exchange({
-  identity: { peerId: "alice", name: "Alice", type: "user" },
+  id: { peerId: "alice", name: "Alice", type: "user" },
   transports: [networkTransport],
   stores: [createInMemoryStore()],
   route: (docId, peer) => {
@@ -349,7 +349,7 @@ const exchange = new Exchange({
 })
 ```
 
-> **Peer identity:** `peerId` identifies this exchange as a participant in causal history and must be stable across restarts for correct CRDT operation. For browser clients, use `persistentPeerId(storageKey)` — it provides a per-tab unique peerId via a localStorage CAS lease protocol, stable across reloads within the same tab. Call `releasePeerId(storageKey)` for explicit cleanup.
+> **Peer identity:** `id` identifies the exchange as a participant in causal history. For browser clients, use `persistentPeerId(storageKey)` as the `id` value — it provides a per-tab unique peerId stable across reloads. For servers, pass an explicit string.
 
 ### Heterogeneous Documents
 
@@ -379,7 +379,7 @@ Two predicates control information flow:
 import { Interpret, Replicate, Defer, Reject } from "@kyneta/schema"
 
 const gameExchange = new Exchange({
-  identity: { peerId: "game-server" },
+  id: "game-server",
   transports: [serverTransport],
   onUnresolvedDoc: (docId, peer, replicaType, mergeStrategy, schemaHash) => {
     if (docId.startsWith("input:")) return Interpret(PlayerInputDoc)
@@ -395,7 +395,7 @@ The callback receives the full metadata from the peer's `present` message — so
 
 ```ts
 const exchange = new Exchange({
-  identity: { peerId: "alice" },
+  id: "alice",
   schemas: [TodoDoc, ConfigDoc],  // auto-interpret when peers announce these
 })
 ```
@@ -404,7 +404,7 @@ const exchange = new Exchange({
 
 ```ts
 const exchange = new Exchange({
-  identity: { peerId: "server" },
+  id: "server",
   schemas: [PlayerInputDoc],
   onDocCreated(docId, peer, mode, origin) {
     if (origin === "remote" && docId.startsWith("input:")) {
@@ -425,7 +425,7 @@ Stores are a first-class constructor parameter, separate from transports. Docume
 import { createLevelDBStore } from "@kyneta/leveldb-store/server"
 
 const exchange = new Exchange({
-  identity: { peerId: "server" },
+  id: "server",
   stores: [createLevelDBStore("./data/exchange-db")],
   transports: [networkTransport],
 })
@@ -440,7 +440,7 @@ For testing, use `createInMemoryStore()` with shared state to simulate persist �
 const sharedData: InMemoryStoreData = { entries: new Map(), metadata: new Map() }
 
 const exchange1 = new Exchange({
-  identity: { peerId: "server" },
+  id: "server",
   stores: [createInMemoryStore({ sharedData })],
 })
 const doc = exchange1.get("my-doc", TodoDoc)
@@ -448,7 +448,7 @@ doc.title.set("Saved")
 await exchange1.shutdown()
 
 const exchange2 = new Exchange({
-  identity: { peerId: "server" },
+  id: "server",
   stores: [createInMemoryStore({ sharedData })],
   onUnresolvedDoc: () => Interpret(TodoDoc),
 })
@@ -554,7 +554,7 @@ You only engage the next level when you need it. Each level is additive — it d
 
 | Option | Description |
 |--------|-------------|
-| `identity` | `{ peerId, name?, type? }` — peer identity. `peerId` required for `get()`. |
+| `id` | `string \| { peerId, name?, type? }` — peer identity. A plain string is shorthand for `{ peerId: string }`. Required for `get()`. |
 | `transports` | `TransportFactory[]` — network connectivity. |
 | `stores` | `Store[]` — persistent storage backends. |
 | `schemas` | `BoundSchema[]` — upfront schema registration for auto-resolution. |

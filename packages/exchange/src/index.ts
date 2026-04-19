@@ -164,7 +164,11 @@ export { composeGate, Governance } from "./governance.js"
 // Exchange — the public API
 // ---------------------------------------------------------------------------
 
-export type { Disposition, ExchangeParams } from "./exchange.js"
+export type {
+  Disposition,
+  ExchangeParams,
+  PeerIdentityInput,
+} from "./exchange.js"
 export { Exchange } from "./exchange.js"
 
 // ---------------------------------------------------------------------------

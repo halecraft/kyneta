@@ -12,7 +12,11 @@
 import { change, Interpret, json, Reject, Schema } from "@kyneta/schema"
 import { Bridge, createBridgeTransport } from "@kyneta/transport"
 import { afterEach, describe, expect, it } from "vitest"
-import { Exchange } from "../exchange.js"
+import {
+  Exchange,
+  type ExchangeParams,
+  type PeerIdentityInput,
+} from "../exchange.js"
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -31,14 +35,9 @@ async function drain(rounds = 20): Promise<void> {
 /** Active exchanges that need cleanup */
 const activeExchanges: Exchange[] = []
 
-function createExchange(
-  params: ConstructorParameters<typeof Exchange>[0] = {},
-): Exchange {
-  const merged = {
-    ...params,
-    identity: { peerId: "test", ...params?.identity },
-  }
-  const ex = new Exchange(merged)
+function createExchange(params: Partial<ExchangeParams> = {}): Exchange {
+  const merged = { id: "test" as string | PeerIdentityInput, ...params }
+  const ex = new Exchange(merged as ExchangeParams)
   activeExchanges.push(ex)
   return ex
 }
@@ -74,12 +73,12 @@ describe("dynamic policy canShare", () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
       resolve: () => Interpret(SequentialDoc),
     })
@@ -121,12 +120,12 @@ describe("dynamic policy canShare", () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
       resolve: () => Interpret(SequentialDoc),
     })
@@ -170,13 +169,13 @@ describe("dynamic policy canShare", () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
       canShare: docId => docId !== "params-blocked",
     })
 
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
       resolve: () => Interpret(SequentialDoc),
     })
@@ -217,12 +216,12 @@ describe("dynamic policy canAccept", () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
@@ -260,12 +259,12 @@ describe("dynamic policy resolve", () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
@@ -303,12 +302,12 @@ describe("named policy replacement", () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
       resolve: () => Interpret(SequentialDoc),
     })
@@ -350,14 +349,14 @@ describe("relay topology", () => {
     const bridgeHB = new Bridge()
 
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [
         createBridgeTransport({ transportType: "alice", bridge: bridgeAH }),
       ],
     })
 
     const exchangeHub = createExchange({
-      identity: { peerId: "hub" },
+      id: "hub",
       transports: [
         createBridgeTransport({ transportType: "hub-a", bridge: bridgeAH }),
         createBridgeTransport({ transportType: "hub-b", bridge: bridgeHB }),
@@ -366,7 +365,7 @@ describe("relay topology", () => {
     })
 
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [
         createBridgeTransport({ transportType: "bob", bridge: bridgeHB }),
       ],

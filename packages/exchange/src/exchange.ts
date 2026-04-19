@@ -12,7 +12,7 @@
 //
 // Usage:
 //   const exchange = new Exchange({
-//     identity: { name: "alice" },
+//     id: "alice",
 //     transports: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
 //     stores: [createInMemoryStore()],
 //   })
@@ -56,7 +56,7 @@ import type { Store } from "./store/store.js"
 import { registerSync } from "./sync.js"
 import { type DocRuntime, Synchronizer } from "./synchronizer.js"
 import type { DocChange, DocInfo, PeerChange } from "./types.js"
-import { randomPeerId, validatePeerId } from "./utils.js"
+import { validatePeerId } from "./utils.js"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -68,13 +68,33 @@ import { randomPeerId, validatePeerId } from "./utils.js"
 export type Disposition = Interpret | Replicate | Defer | Reject
 
 /**
+ * Peer identity input — the *input* shape for Exchange construction.
+ *
+ * Like `PeerIdentityDetails` from `@kyneta/transport`, but with `type`
+ * optional (defaults to `"user"` in the Exchange constructor).
+ */
+export type PeerIdentityInput = {
+  peerId: string
+  name?: string
+  type?: "user" | "bot" | "service"
+}
+
+/**
  * Options for creating an Exchange.
  */
 export type ExchangeParams = {
   /**
-   * Peer identity. If `peerId` is omitted, one is auto-generated.
+   * Peer identity — either a plain peerId string or a full identity object.
    *
-   * The `peerId` must satisfy two invariants:
+   * ```ts
+   * // Simple — just a peerId string (90% case)
+   * new Exchange({ id: "alice" })
+   *
+   * // Full — with display name and/or type
+   * new Exchange({ id: { peerId: "alice", name: "Alice", type: "service" } })
+   * ```
+   *
+   * The peerId must satisfy two invariants:
    *
    * - **Stability:** The same participant must use the same peerId across
    *   restarts. Without stability, each boot fragments the CRDT version
@@ -83,16 +103,15 @@ export type ExchangeParams = {
    * - **Uniqueness:** Different participants must use different peerIds.
    *   Two peers sharing a peerId will silently corrupt CRDT state —
    *   the version vector conflates their operations and `exportSince`
-   *   produces wrong deltas. The synchronizer warns at channel
-   *   establishment when a duplicate peerId is detected.
+   *   produces wrong deltas.
    *
    * For browser clients, use `persistentPeerId(storageKey)` from
-   * `@kyneta/exchange` — it generates a random peerId on first visit
-   * and caches it in `localStorage` for stability across reloads.
+   * `@kyneta/exchange` — it provides a per-tab unique peerId via a
+   * localStorage CAS lease protocol, stable across reloads.
    *
    * For servers, use an explicit string (e.g. `"my-server"`).
    */
-  identity?: Partial<PeerIdentityDetails>
+  id: string | PeerIdentityInput
 
   /**
    * Adapter factories for network connectivity.
@@ -187,7 +206,7 @@ type DocCacheEntry =
  * import { loro } from "@kyneta/loro-schema"
  *
  * const exchange = new Exchange({
- *   identity: { name: "alice" },
+ *   id: "alice",
  *   transports: [createBridgeTransport({ transportType: "peer-a", bridge })],
  *   stores: [createInMemoryStore()],
  * })
@@ -214,7 +233,6 @@ function rethrowErrors(errors: unknown[]): void {
 
 export class Exchange {
   readonly peerId: string
-  readonly #peerIdIsExplicit: boolean
 
   readonly #governance: Governance
   readonly #capabilities: Capabilities
@@ -248,27 +266,25 @@ export class Exchange {
   readonly #docQueues: Map<DocId, Promise<void>> = new Map()
 
   constructor({
-    identity = {},
+    id,
     transports = [],
     stores = [],
     schemas = [],
     replicas = DEFAULT_REPLICAS,
     departureTimeout,
     ...policyFields
-  }: ExchangeParams = {}) {
-    // Resolve peer identity
-    const peerId = identity.peerId ?? randomPeerId()
+  }: ExchangeParams) {
+    // Resolve peer identity from id: string | PeerIdentityInput
+    const peerId = typeof id === "string" ? id : id.peerId
     validatePeerId(peerId)
     this.peerId = peerId
-    this.#peerIdIsExplicit = identity.peerId !== undefined
 
     this.#stores = stores
 
-    const fullIdentity: PeerIdentityDetails = {
-      peerId,
-      name: identity.name,
-      type: identity.type ?? "user",
-    }
+    const fullIdentity: PeerIdentityDetails =
+      typeof id === "string"
+        ? { peerId, type: "user" }
+        : { type: "user", ...id }
     // ── Governance — must be initialized before the Synchronizer,
     // because the Synchronizer may call onEnsureDoc during
     // _start() if a transport immediately discovers peers.
@@ -747,19 +763,6 @@ export class Exchange {
    * ```
    */
   get<S extends SchemaNode>(docId: DocId, bound: BoundSchema<S>): Ref<S> {
-    // Require explicit peerId for interpret mode — the peerId identifies
-    // this exchange as a participant in causal history and must be stable
-    // across restarts for correct CRDT operation.
-    // Context: jj:smmulzkm (two-phase substrate construction)
-    if (!this.#peerIdIsExplicit) {
-      throw new Error(
-        `exchange.get() requires an explicit peerId. ` +
-          `Provide identity: { peerId: "..." } in ExchangeParams. ` +
-          `The peerId identifies this exchange as a participant in causal history — ` +
-          `it must be stable across restarts for correct CRDT operation.`,
-      )
-    }
-
     // Check cache first
     const cached = this.#docCache.get(docId)
 

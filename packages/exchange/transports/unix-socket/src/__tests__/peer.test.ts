@@ -68,7 +68,7 @@ describe("createUnixSocketPeer — integration", () => {
   it("first peer becomes listener, second becomes connector", async () => {
     const socketPath = tmpSocketPath()
 
-    const exchange1 = new Exchange({ identity: { peerId: "peer-1" } })
+    const exchange1 = new Exchange({ id: "peer-1" })
     exchanges.push(exchange1)
     const peer1 = createUnixSocketPeer(exchange1, { path: socketPath })
     peers.push(peer1)
@@ -77,7 +77,7 @@ describe("createUnixSocketPeer — integration", () => {
     await waitFor(() => peer1.role === "listener")
     expect(peer1.role).toBe("listener")
 
-    const exchange2 = new Exchange({ identity: { peerId: "peer-2" } })
+    const exchange2 = new Exchange({ id: "peer-2" })
     exchanges.push(exchange2)
     const peer2 = createUnixSocketPeer(exchange2, { path: socketPath })
     peers.push(peer2)
@@ -97,7 +97,7 @@ describe("createUnixSocketPeer — integration", () => {
   it("dispose removes transport and cleans up socket file", async () => {
     const socketPath = tmpSocketPath()
 
-    const exchange = new Exchange({ identity: { peerId: "peer-1" } })
+    const exchange = new Exchange({ id: "peer-1" })
     exchanges.push(exchange)
     const peer = createUnixSocketPeer(exchange, { path: socketPath })
     // Don't push to peers — we dispose manually
@@ -117,7 +117,7 @@ describe("createUnixSocketPeer — integration", () => {
   it("dispose during negotiation exits cleanly", async () => {
     const socketPath = tmpSocketPath()
 
-    const exchange = new Exchange({ identity: { peerId: "peer-1" } })
+    const exchange = new Exchange({ id: "peer-1" })
     exchanges.push(exchange)
     const peer = createUnixSocketPeer(exchange, { path: socketPath })
 

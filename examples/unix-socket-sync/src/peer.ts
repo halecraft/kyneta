@@ -25,7 +25,7 @@ const peerId = `peer-${Math.random().toString(36).slice(2, 8)}`
 // ---------------------------------------------------------------------------
 
 const exchange = new Exchange({
-  identity: { peerId, name: peerId },
+  id: { peerId, name: peerId },
 })
 
 const doc = exchange.get("config", ConfigDoc)

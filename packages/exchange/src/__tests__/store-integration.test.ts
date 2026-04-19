@@ -11,7 +11,11 @@ import { loro } from "@kyneta/loro-schema"
 import { change, Interpret, json, Replicate, Schema } from "@kyneta/schema"
 import { Bridge, createBridgeTransport } from "@kyneta/transport"
 import { afterEach, describe, expect, it } from "vitest"
-import { Exchange } from "../exchange.js"
+import {
+  Exchange,
+  type ExchangeParams,
+  type PeerIdentityInput,
+} from "../exchange.js"
 import {
   createInMemoryStore,
   InMemoryStore,
@@ -33,14 +37,9 @@ async function drain(ms = 100): Promise<void> {
 /** Active exchanges that need cleanup */
 const activeExchanges: Exchange[] = []
 
-function createExchange(
-  params: ConstructorParameters<typeof Exchange>[0] = {},
-): Exchange {
-  const merged = {
-    ...params,
-    identity: { peerId: "test", ...params?.identity },
-  }
-  const ex = new Exchange(merged)
+function createExchange(params: Partial<ExchangeParams> = {}): Exchange {
+  const merged = { id: "test" as string | PeerIdentityInput, ...params }
+  const ex = new Exchange(merged as ExchangeParams)
   activeExchanges.push(ex)
   return ex
 }
@@ -94,7 +93,7 @@ describe("Storage persist + hydrate", () => {
 
     // Phase 1: create doc, mutate, persist
     const exchange1 = createExchange({
-      identity: { peerId: "server" },
+      id: "server",
       stores: [createInMemoryStore({ sharedData })],
     })
 
@@ -109,7 +108,7 @@ describe("Storage persist + hydrate", () => {
 
     // Phase 2: new exchange with same storage → hydrate
     const exchange2 = createExchange({
-      identity: { peerId: "server" },
+      id: "server",
       stores: [createInMemoryStore({ sharedData })],
     })
 
@@ -127,7 +126,7 @@ describe("Storage persist + hydrate", () => {
     }
 
     const exchange1 = createExchange({
-      identity: { peerId: "server" },
+      id: "server",
       stores: [createInMemoryStore({ sharedData })],
       schemas: [CausalDoc],
     })
@@ -141,7 +140,7 @@ describe("Storage persist + hydrate", () => {
     await exchange1.shutdown()
 
     const exchange2 = createExchange({
-      identity: { peerId: "server" },
+      id: "server",
       stores: [createInMemoryStore({ sharedData })],
       schemas: [CausalDoc],
     })
@@ -159,7 +158,7 @@ describe("Storage persist + hydrate", () => {
     }
 
     const exchange1 = createExchange({
-      identity: { peerId: "server" },
+      id: "server",
       stores: [createInMemoryStore({ sharedData })],
     })
 
@@ -174,7 +173,7 @@ describe("Storage persist + hydrate", () => {
     await exchange1.shutdown()
 
     const exchange2 = createExchange({
-      identity: { peerId: "server" },
+      id: "server",
       stores: [createInMemoryStore({ sharedData })],
     })
 
@@ -201,7 +200,7 @@ describe("Storage + network sync", () => {
     const bridge = new Bridge()
 
     const server = createExchange({
-      identity: { peerId: "server", type: "service" },
+      id: { peerId: "server", type: "service" },
       transports: [
         createBridgeTransport({ transportType: "server-side", bridge }),
       ],
@@ -210,7 +209,7 @@ describe("Storage + network sync", () => {
     })
 
     const peerA = createExchange({
-      identity: { peerId: "peer-a" },
+      id: "peer-a",
       transports: [
         createBridgeTransport({ transportType: "peer-a-side", bridge }),
       ],
@@ -237,7 +236,7 @@ describe("Storage + network sync", () => {
     const bridge2 = new Bridge()
 
     const server2 = createExchange({
-      identity: { peerId: "server", type: "service" },
+      id: { peerId: "server", type: "service" },
       transports: [
         createBridgeTransport({
           transportType: "server-side",
@@ -249,7 +248,7 @@ describe("Storage + network sync", () => {
     })
 
     const peerB = createExchange({
-      identity: { peerId: "peer-b" },
+      id: "peer-b",
       transports: [
         createBridgeTransport({
           transportType: "peer-b-side",
@@ -277,7 +276,7 @@ describe("Storage + network sync", () => {
     const bridge = new Bridge()
 
     const server = createExchange({
-      identity: { peerId: "server", type: "service" },
+      id: { peerId: "server", type: "service" },
       transports: [
         createBridgeTransport({ transportType: "server-side", bridge }),
       ],
@@ -286,7 +285,7 @@ describe("Storage + network sync", () => {
     })
 
     const client = createExchange({
-      identity: { peerId: "client" },
+      id: "client",
       transports: [
         createBridgeTransport({ transportType: "client-side", bridge }),
       ],
@@ -325,7 +324,7 @@ describe("Storage + replicated doc", () => {
 
     // Relay 1: replicate mode + storage
     const relay1 = createExchange({
-      identity: { peerId: "relay-1", type: "service" },
+      id: { peerId: "relay-1", type: "service" },
       transports: [
         createBridgeTransport({ transportType: "relay-side", bridge: bridge1 }),
       ],
@@ -334,7 +333,7 @@ describe("Storage + replicated doc", () => {
     })
 
     const peerA = createExchange({
-      identity: { peerId: "peer-a" },
+      id: "peer-a",
       transports: [
         createBridgeTransport({
           transportType: "peer-a-side",
@@ -369,7 +368,7 @@ describe("Storage + replicated doc", () => {
     const bridge2 = new Bridge()
 
     const relay2 = createExchange({
-      identity: { peerId: "relay-2", type: "service" },
+      id: { peerId: "relay-2", type: "service" },
       transports: [
         createBridgeTransport({ transportType: "relay-side", bridge: bridge2 }),
       ],
@@ -378,7 +377,7 @@ describe("Storage + replicated doc", () => {
     })
 
     const peerB = createExchange({
-      identity: { peerId: "peer-b" },
+      id: "peer-b",
       transports: [
         createBridgeTransport({
           transportType: "peer-b-side",
@@ -409,7 +408,7 @@ describe("Storage + destroy", () => {
     const backend = new InMemoryStore()
 
     const exchange = createExchange({
-      identity: { peerId: "server" },
+      id: "server",
       stores: [backend],
     })
 
@@ -437,12 +436,12 @@ describe("No storage (baseline)", () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
-      identity: { peerId: "peer-a" },
+      id: "peer-a",
       transports: [createBridgeTransport({ transportType: "side-a", bridge })],
     })
 
     const exchangeB = createExchange({
-      identity: { peerId: "peer-b" },
+      id: "peer-b",
       transports: [createBridgeTransport({ transportType: "side-b", bridge })],
       resolve: () => Interpret(SequentialDoc),
     })

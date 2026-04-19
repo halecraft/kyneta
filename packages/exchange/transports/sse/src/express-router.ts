@@ -83,7 +83,7 @@ export interface SseExpressRouterOptions {
  *
  * const serverAdapter = new SseServerTransport()
  * const exchange = new Exchange({
- *   identity: { peerId: "server", name: "server", type: "service" },
+ *   id: { peerId: "server", name: "server", type: "service" },
  *   transports: [() => serverAdapter],
  * })
  *

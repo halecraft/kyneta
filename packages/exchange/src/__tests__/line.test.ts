@@ -20,7 +20,11 @@ import {
   createBridgeTransport,
 } from "@kyneta/transport"
 import { afterEach, describe, expect, it } from "vitest"
-import { Exchange } from "../exchange.js"
+import {
+  Exchange,
+  type ExchangeParams,
+  type PeerIdentityInput,
+} from "../exchange.js"
 import {
   createLineDocSchema,
   isLineDocId,
@@ -44,14 +48,9 @@ async function drain(rounds = 30): Promise<void> {
 
 const activeExchanges: Exchange[] = []
 
-function createExchange(
-  params: ConstructorParameters<typeof Exchange>[0] = {},
-): Exchange {
-  const merged = {
-    ...params,
-    identity: { peerId: "test", ...params?.identity },
-  }
-  const ex = new Exchange(merged)
+function createExchange(params: Partial<ExchangeParams> = {}): Exchange {
+  const merged = { id: "test" as string | PeerIdentityInput, ...params }
+  const ex = new Exchange(merged as ExchangeParams)
   activeExchanges.push(ex)
   return ex
 }
@@ -167,11 +166,11 @@ describe("symmetric Line send and receive via generator", () => {
   it("Alice sends a message, Bob receives it via async iterator", async () => {
     const bridge = new Bridge()
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
@@ -203,11 +202,11 @@ describe("symmetric Line send and receive via generator", () => {
   it("messages arrive in order", async () => {
     const bridge = new Bridge()
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
@@ -241,7 +240,7 @@ describe("symmetric Line send and receive via generator", () => {
 
   it("iterator completes when Line is closed", async () => {
     const exchange = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
     })
 
     const P = Line.protocol({ topic: "close-test", schema: SimpleSchema })
@@ -259,11 +258,11 @@ describe("symmetric Line send and receive via generator", () => {
   it("concurrent sends from both sides", async () => {
     const bridge = new Bridge()
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
@@ -301,11 +300,11 @@ describe("asymmetric Line", () => {
   it("different schemas per direction via listen", async () => {
     const bridge = new Bridge()
     const exchangeClient = createExchange({
-      identity: { peerId: "client" },
+      id: "client",
       transports: [createBridgeTransport({ transportType: "client", bridge })],
     })
     const exchangeServer = createExchange({
-      identity: { peerId: "server" },
+      id: "server",
       transports: [createBridgeTransport({ transportType: "server", bridge })],
     })
 
@@ -359,11 +358,11 @@ describe("ack and pruning", () => {
   it("messages are delivered reliably after many send/receive cycles", async () => {
     const bridge = new Bridge()
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
@@ -407,7 +406,7 @@ describe("ack and pruning", () => {
 describe("duplicate detection", () => {
   it("throws when opening same peer+topic twice", () => {
     const exchange = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
     })
 
     const P = Line.protocol({ topic: "dup", schema: SimpleSchema })
@@ -420,7 +419,7 @@ describe("duplicate detection", () => {
 
   it("different topics succeed", () => {
     const exchange = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
     })
 
     const P1 = Line.protocol({ topic: "signaling", schema: SimpleSchema })
@@ -437,7 +436,7 @@ describe("duplicate detection", () => {
 
   it("close then reopen succeeds", () => {
     const exchange = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
     })
 
     const P = Line.protocol({ topic: "reuse", schema: SimpleSchema })
@@ -460,11 +459,11 @@ describe("multiple Lines per peer pair", () => {
   it("two Lines with different topics are independent", async () => {
     const bridge = new Bridge()
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
@@ -525,7 +524,7 @@ describe("multiple Lines per peer pair", () => {
 describe("closed Line guards", () => {
   it("send() on closed Line throws", () => {
     const exchange = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
     })
 
     const P = Line.protocol({ topic: "guard", schema: SimpleSchema })
@@ -537,7 +536,7 @@ describe("closed Line guards", () => {
 
   it("close() is idempotent", () => {
     const exchange = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
     })
 
     const P = Line.protocol({ topic: "idem", schema: SimpleSchema })
@@ -570,14 +569,14 @@ describe("hub-and-spoke relay", () => {
     // The server is a schema-free relay — it uses Replicate() for all
     // docs, same pattern as the existing authoritative relay integration test.
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [
         createBridgeTransport({ transportType: "alice", bridge: bridgeAS }),
       ],
     })
 
     const _exchangeServer = createExchange({
-      identity: { peerId: "server", type: "service" },
+      id: { peerId: "server", type: "service" },
       transports: [
         createBridgeTransport({ transportType: "server-a", bridge: bridgeAS }),
         createBridgeTransport({ transportType: "server-b", bridge: bridgeSB }),
@@ -586,7 +585,7 @@ describe("hub-and-spoke relay", () => {
     })
 
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [
         createBridgeTransport({ transportType: "bob", bridge: bridgeSB }),
       ],
@@ -636,11 +635,11 @@ describe("protocol.listen", () => {
   it("server responds to client request via protocol.listen", async () => {
     const bridge = new Bridge()
     const exchangeClient = createExchange({
-      identity: { peerId: "client" },
+      id: "client",
       transports: [createBridgeTransport({ transportType: "client", bridge })],
     })
     const exchangeServer = createExchange({
-      identity: { peerId: "server" },
+      id: "server",
       transports: [createBridgeTransport({ transportType: "server", bridge })],
     })
 
@@ -696,20 +695,20 @@ describe("protocol.listen", () => {
     const bridge1 = new Bridge()
     const bridge2 = new Bridge()
     const exchangeServer = createExchange({
-      identity: { peerId: "server" },
+      id: "server",
       transports: [
         createBridgeTransport({ transportType: "server1", bridge: bridge1 }),
         createBridgeTransport({ transportType: "server2", bridge: bridge2 }),
       ],
     })
     const exchangeClient1 = createExchange({
-      identity: { peerId: "client1" },
+      id: "client1",
       transports: [
         createBridgeTransport({ transportType: "client1", bridge: bridge1 }),
       ],
     })
     const exchangeClient2 = createExchange({
-      identity: { peerId: "client2" },
+      id: "client2",
       transports: [
         createBridgeTransport({ transportType: "client2", bridge: bridge2 }),
       ],
@@ -767,20 +766,20 @@ describe("protocol.listen", () => {
     const bridge1 = new Bridge()
     const bridge2 = new Bridge()
     const exchangeServer = createExchange({
-      identity: { peerId: "server" },
+      id: "server",
       transports: [
         createBridgeTransport({ transportType: "server1", bridge: bridge1 }),
         createBridgeTransport({ transportType: "server2", bridge: bridge2 }),
       ],
     })
     const exchangeClientA = createExchange({
-      identity: { peerId: "client-a" },
+      id: "client-a",
       transports: [
         createBridgeTransport({ transportType: "client-a", bridge: bridge1 }),
       ],
     })
     const exchangeClientB = createExchange({
-      identity: { peerId: "client-b" },
+      id: "client-b",
       transports: [
         createBridgeTransport({ transportType: "client-b", bridge: bridge2 }),
       ],
@@ -827,20 +826,20 @@ describe("protocol.listen", () => {
     const bridge1 = new Bridge()
     const bridge2 = new Bridge()
     const exchangeServer = createExchange({
-      identity: { peerId: "server" },
+      id: "server",
       transports: [
         createBridgeTransport({ transportType: "server1", bridge: bridge1 }),
         createBridgeTransport({ transportType: "server2", bridge: bridge2 }),
       ],
     })
     const exchangeClient1 = createExchange({
-      identity: { peerId: "client1" },
+      id: "client1",
       transports: [
         createBridgeTransport({ transportType: "client1", bridge: bridge1 }),
       ],
     })
     const exchangeClient2 = createExchange({
-      identity: { peerId: "client2" },
+      id: "client2",
       transports: [
         createBridgeTransport({ transportType: "client2", bridge: bridge2 }),
       ],
@@ -902,11 +901,11 @@ describe("protocol.listen", () => {
   it("client's queued messages delivered immediately", async () => {
     const bridge = new Bridge()
     const exchangeClient = createExchange({
-      identity: { peerId: "client" },
+      id: "client",
       transports: [createBridgeTransport({ transportType: "client", bridge })],
     })
     const exchangeServer = createExchange({
-      identity: { peerId: "server" },
+      id: "server",
       transports: [createBridgeTransport({ transportType: "server", bridge })],
     })
 
@@ -964,14 +963,14 @@ describe("protocol.listen", () => {
     const bridgeRS = new Bridge()
 
     const exchangeClient = createExchange({
-      identity: { peerId: "client" },
+      id: "client",
       transports: [
         createBridgeTransport({ transportType: "client", bridge: bridgeCR }),
       ],
     })
 
     const _exchangeRelay = createExchange({
-      identity: { peerId: "relay", type: "service" },
+      id: { peerId: "relay", type: "service" },
       transports: [
         createBridgeTransport({ transportType: "relay-c", bridge: bridgeCR }),
         createBridgeTransport({ transportType: "relay-s", bridge: bridgeRS }),
@@ -980,7 +979,7 @@ describe("protocol.listen", () => {
     })
 
     const exchangeServer = createExchange({
-      identity: { peerId: "server" },
+      id: "server",
       transports: [
         createBridgeTransport({ transportType: "server", bridge: bridgeRS }),
       ],
@@ -1035,11 +1034,11 @@ describe("protocol.listen", () => {
   it("late listen: client connects before server starts listening", async () => {
     const bridge = new Bridge()
     const exchangeClient = createExchange({
-      identity: { peerId: "client" },
+      id: "client",
       transports: [createBridgeTransport({ transportType: "client", bridge })],
     })
     const exchangeServer = createExchange({
-      identity: { peerId: "server" },
+      id: "server",
       transports: [createBridgeTransport({ transportType: "server", bridge })],
     })
 
@@ -1089,11 +1088,11 @@ describe("protocol.listen", () => {
   it("listeners on different topics are independent", async () => {
     const bridge = new Bridge()
     const exchangeClient = createExchange({
-      identity: { peerId: "client" },
+      id: "client",
       transports: [createBridgeTransport({ transportType: "client", bridge })],
     })
     const exchangeServer = createExchange({
-      identity: { peerId: "server" },
+      id: "server",
       transports: [createBridgeTransport({ transportType: "server", bridge })],
     })
 
@@ -1136,19 +1135,19 @@ describe("protocol.listen", () => {
     const bridgeBS = new Bridge()
 
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [
         createBridgeTransport({ transportType: "alice", bridge: bridgeAS }),
       ],
     })
     const _exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [
         createBridgeTransport({ transportType: "bob", bridge: bridgeBS }),
       ],
     })
     const exchangeServer = createExchange({
-      identity: { peerId: "server" },
+      id: "server",
       transports: [
         createBridgeTransport({ transportType: "server-a", bridge: bridgeAS }),
         createBridgeTransport({ transportType: "server-b", bridge: bridgeBS }),
@@ -1190,7 +1189,7 @@ describe("protocol.listen", () => {
 describe("durable Line: close() vs destroy()", () => {
   it("close() preserves documents — destroy() removes them", () => {
     const exchange = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
     })
 
     const P = Line.protocol({ topic: "close-vs-destroy", schema: SimpleSchema })
@@ -1212,7 +1211,7 @@ describe("durable Line: close() vs destroy()", () => {
 
   it("destroy() after close() is safe", () => {
     const exchange = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
     })
 
     const P = Line.protocol({
@@ -1227,11 +1226,11 @@ describe("durable Line: close() vs destroy()", () => {
   it("destroy() resets state — reopen starts fresh at seq 1", async () => {
     const bridge = new Bridge()
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
     await drain()
@@ -1276,11 +1275,11 @@ describe("durable Line: nextSeq persistence", () => {
   it("nextSeq survives prune — close+reopen after prune still resumes", async () => {
     const bridge = new Bridge()
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
     await drain()
@@ -1326,12 +1325,11 @@ describe("durable Line: peer lifecycle decoupling", () => {
   it("Line remains open and functional after remote peer departs", async () => {
     const bridge = new Bridge()
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
-      departureTimeout: 0, // immediate departure
     })
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
     await drain()
@@ -1357,11 +1355,11 @@ describe("durable Line: close then reopen resumes state", () => {
   it("close+reopen delivers new messages without replaying old ones", async () => {
     const bridge = new Bridge()
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
     await drain()
@@ -1410,11 +1408,11 @@ describe("durable Line: disconnect/reconnect", () => {
   it("messages sent during disconnect are delivered on reconnect", async () => {
     const bridge = new Bridge()
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
     await drain()
@@ -1460,11 +1458,11 @@ describe("durable Line: disconnect/reconnect", () => {
   it("bidirectional sends during disconnect — both sides receive all", async () => {
     const bridge = new Bridge()
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
     await drain()
@@ -1512,12 +1510,12 @@ describe("durable Line: survives peer departure", () => {
   it("queued messages are delivered when peer returns after departure", async () => {
     const bridge = new Bridge()
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
       departureTimeout: 0,
     })
     let exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
     await drain()
@@ -1544,7 +1542,7 @@ describe("durable Line: survives peer departure", () => {
 
     // Bob returns — new Exchange instance, same peerId
     exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
     await drain()
@@ -1576,11 +1574,12 @@ describe("durable Line: bidirectional close/reopen", () => {
   it("bidirectional close/reopen cycle preserves seq on both sides", async () => {
     const bridge = new Bridge()
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      departureTimeout: 0,
     })
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
     await drain()
@@ -1643,12 +1642,12 @@ describe("durable Line: storage stays bounded", () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
       stores: [storeA],
     })
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
       stores: [storeB],
     })
@@ -1711,8 +1710,8 @@ describe("per-Exchange Line registry", () => {
   it("two Exchange instances with the same peerId can each open a Line", () => {
     const P = Line.protocol({ topic: "registry", schema: SimpleSchema })
 
-    const ex1 = createExchange({ identity: { peerId: "alice" } })
-    const ex2 = createExchange({ identity: { peerId: "alice" } })
+    const ex1 = createExchange({ id: "alice" })
+    const ex2 = createExchange({ id: "alice" })
 
     const line1 = P.open(ex1, "bob")
     const line2 = P.open(ex2, "bob")
@@ -1727,8 +1726,8 @@ describe("per-Exchange Line registry", () => {
   it("shutting down one Exchange does not affect the other's open Lines", async () => {
     const P = Line.protocol({ topic: "isolation", schema: SimpleSchema })
 
-    const ex1 = createExchange({ identity: { peerId: "alice" } })
-    const ex2 = createExchange({ identity: { peerId: "alice" } })
+    const ex1 = createExchange({ id: "alice" })
+    const ex2 = createExchange({ id: "alice" })
 
     const line1 = P.open(ex1, "bob")
     const line2 = P.open(ex2, "bob")
@@ -1755,12 +1754,11 @@ describe("Line policy teardown", () => {
     const P = Line.protocol({ topic: "teardown", schema: SimpleSchema })
 
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
-
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
@@ -1788,7 +1786,7 @@ describe("Line policy teardown", () => {
 
   it("exchange.reset() closes all open Lines", () => {
     const P = Line.protocol({ topic: "reset-teardown", schema: SimpleSchema })
-    const exchange = createExchange({ identity: { peerId: "alice" } })
+    const exchange = createExchange({ id: "alice" })
 
     const line = P.open(exchange, "bob")
     expect(line.closed).toBe(false)
@@ -1806,12 +1804,11 @@ describe("Line policy teardown", () => {
     })
 
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
-
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
@@ -1831,8 +1828,8 @@ describe("Line policy teardown", () => {
 
     // Create a new exchangeB and new client — listener should NOT fire
     const exchangeB2 = createExchange({
-      identity: { peerId: "bob" },
-      transports: [createBridgeTransport({ transportType: "bob2", bridge })],
+      id: "bob",
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
     // Register a NEW listener on the new exchange to prove the old one is dead
@@ -1850,7 +1847,7 @@ describe("Line policy teardown", () => {
   it("after shutdown + new Exchange, protocol.open() succeeds", async () => {
     const P = Line.protocol({ topic: "reopen", schema: SimpleSchema })
 
-    const ex1 = createExchange({ identity: { peerId: "alice" } })
+    const ex1 = createExchange({ id: "alice" })
     const line1 = P.open(ex1, "bob")
     expect(line1.closed).toBe(false)
 
@@ -1860,7 +1857,7 @@ describe("Line policy teardown", () => {
 
     expect(line1.closed).toBe(true)
 
-    const ex2 = createExchange({ identity: { peerId: "alice" } })
+    const ex2 = createExchange({ id: "alice" })
     const line2 = P.open(ex2, "bob")
     expect(line2.closed).toBe(false)
     expect(line2.peer).toBe("bob")
@@ -1870,7 +1867,7 @@ describe("Line policy teardown", () => {
 
   it("manual close() followed by shutdown() is safe — no double-fire", async () => {
     const P = Line.protocol({ topic: "double-safe", schema: SimpleSchema })
-    const exchange = createExchange({ identity: { peerId: "alice" } })
+    const exchange = createExchange({ id: "alice" })
 
     const line = P.open(exchange, "bob")
     line.close()

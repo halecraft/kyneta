@@ -8,7 +8,7 @@
 // This proves the transport works end-to-end on Node.js — no Bun APIs needed.
 
 import http from "node:http"
-import { Exchange } from "@kyneta/exchange"
+import { Exchange, type ExchangeParams } from "@kyneta/exchange"
 import { change, json, Schema } from "@kyneta/schema"
 import {
   type WebSocketConstructor,
@@ -95,9 +95,7 @@ async function waitForReady(
 const activeExchanges: Exchange[] = []
 const activeServers: TestServer[] = []
 
-function createExchange(
-  params: ConstructorParameters<typeof Exchange>[0] = {},
-): Exchange {
+function createExchange(params: ExchangeParams): Exchange {
   const ex = new Exchange(params)
   activeExchanges.push(ex)
   return ex
@@ -160,7 +158,7 @@ async function createConnectedPair(opts?: {
   activeServers.push(testServer)
 
   const serverExchange = createExchange({
-    identity: { peerId: serverPeerId },
+    id: serverPeerId,
     transports: [() => serverTransport],
   })
 
@@ -172,7 +170,7 @@ async function createConnectedPair(opts?: {
   })
 
   const clientExchange = createExchange({
-    identity: { peerId: clientPeerId },
+    id: clientPeerId,
     transports: [() => clientTransport],
   })
 

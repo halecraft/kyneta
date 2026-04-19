@@ -31,7 +31,7 @@ import { buildClient } from "./build.js"
 const serverTransport = new WebsocketServerTransport()
 
 const exchange = new Exchange({
-  identity: { peerId: "todo-server", name: "server" },
+  id: { peerId: "todo-server", name: "server" },
   transports: [() => serverTransport],
 })
 

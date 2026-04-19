@@ -40,7 +40,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const serverTransport = new WebsocketServerTransport()
 
 const exchange = new Exchange({
-  identity: { peerId: "todo-react-server", name: "server" },
+  id: { peerId: "todo-react-server", name: "server" },
   transports: [() => serverTransport],
 
   /** Uncomment to add local storage persistence via LevelDB */

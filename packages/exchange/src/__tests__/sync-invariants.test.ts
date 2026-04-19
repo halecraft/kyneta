@@ -14,14 +14,17 @@ import {
   Interpret,
   json,
   PlainVersion,
-  Reject,
   Replicate,
   Schema,
   TimestampVersion,
 } from "@kyneta/schema"
 import { Bridge, createBridgeTransport } from "@kyneta/transport"
 import { afterEach, describe, expect, it } from "vitest"
-import { Exchange } from "../exchange.js"
+import {
+  Exchange,
+  type ExchangeParams,
+  type PeerIdentityInput,
+} from "../exchange.js"
 import { sync } from "../sync.js"
 
 // ---------------------------------------------------------------------------
@@ -37,14 +40,9 @@ async function drain(rounds = 20): Promise<void> {
 
 const activeExchanges: Exchange[] = []
 
-function createExchange(
-  params: ConstructorParameters<typeof Exchange>[0] = {},
-): Exchange {
-  const merged = {
-    ...params,
-    identity: { peerId: "test", ...params?.identity },
-  }
-  const ex = new Exchange(merged)
+function createExchange(params: Partial<ExchangeParams> = {}): Exchange {
+  const merged = { id: "test" as string | PeerIdentityInput, ...params }
+  const ex = new Exchange(merged as ExchangeParams)
   activeExchanges.push(ex)
   return ex
 }
@@ -105,11 +103,11 @@ describe("initial content via change() syncs to peers", () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
@@ -146,11 +144,11 @@ describe("snapshot import preserves ref identity", () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
@@ -175,11 +173,11 @@ describe("snapshot import preserves ref identity", () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
@@ -208,11 +206,11 @@ describe("ephemeral stale rejection", () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
@@ -281,12 +279,12 @@ describe("collaborative sync uses deltas when sender is ahead", () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
       schemas: [LoroDoc],
     })
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
       schemas: [LoroDoc],
     })
@@ -329,11 +327,11 @@ describe("universal version comparison rejects stale offers for all strategies",
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
     })
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
     })
 
@@ -408,15 +406,14 @@ describe("plain replica snapshot import falls back to replicaFactory.fromSnapsho
 
     // Alice — full interpreter with plain/authoritative substrate
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [
         createBridgeTransport({ transportType: "alice", bridge: bridgeAR }),
       ],
     })
 
-    // Relay — plain replica (no schema)
     const relay = createExchange({
-      identity: { peerId: "relay" },
+      id: "relay",
       transports: [
         createBridgeTransport({ transportType: "relay-a", bridge: bridgeAR }),
       ],
@@ -443,13 +440,13 @@ describe("plain replica snapshot import falls back to replicaFactory.fromSnapsho
     )
 
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [
         createBridgeTransport({ transportType: "bob", bridge: bridgeRB }),
       ],
-      resolve: docId => {
+      resolve: (docId: string) => {
         if (docId === "config") return Interpret(SequentialDoc)
-        return Reject()
+        return undefined
       },
     })
 
@@ -494,13 +491,12 @@ describe("schema hash compatibility", () => {
     )
 
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
       schemas: [SchemaA],
     })
-
     const exchangeB = createExchange({
-      identity: { peerId: "bob" },
+      id: "bob",
       transports: [createBridgeTransport({ transportType: "bob", bridge })],
       schemas: [SchemaB],
     })
@@ -537,16 +533,15 @@ describe("schema hash compatibility", () => {
     )
 
     const exchangeA = createExchange({
-      identity: { peerId: "alice" },
+      id: "alice",
       transports: [
         createBridgeTransport({ transportType: "alice", bridge: bridgeAR }),
       ],
       schemas: [TodoDoc],
     })
 
-    // Relay — replicate mode, forwards schemaHash faithfully
     const relay = createExchange({
-      identity: { peerId: "relay" },
+      id: "relay",
       transports: [
         createBridgeTransport({ transportType: "relay-a", bridge: bridgeAR }),
         createBridgeTransport({ transportType: "relay-c", bridge: bridgeRC }),
@@ -555,9 +550,8 @@ describe("schema hash compatibility", () => {
       resolve: () => Replicate(),
     })
 
-    // Peer C — interpret mode with same schema
     const exchangeC = createExchange({
-      identity: { peerId: "charlie" },
+      id: "charlie",
       transports: [
         createBridgeTransport({ transportType: "charlie", bridge: bridgeRC }),
       ],

@@ -21,7 +21,11 @@ import {
   type PeerIdentityDetails,
 } from "@kyneta/transport"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { Exchange } from "../exchange.js"
+import {
+  Exchange,
+  type ExchangeParams,
+  type PeerIdentityInput,
+} from "../exchange.js"
 import { hasSync, sync } from "../sync.js"
 import type { PeerChange } from "../types.js"
 
@@ -56,14 +60,9 @@ async function drain(rounds = 20): Promise<void> {
 
 const activeExchanges: Exchange[] = []
 
-function createExchange(
-  params: ConstructorParameters<typeof Exchange>[0] = {},
-): Exchange {
-  const merged = {
-    ...params,
-    identity: { peerId: "test", ...params?.identity },
-  }
-  const ex = new Exchange(merged)
+function createExchange(params: Partial<ExchangeParams> = {}): Exchange {
+  const merged = { id: "test" as string | PeerIdentityInput, ...params }
+  const ex = new Exchange(merged as ExchangeParams)
   activeExchanges.push(ex)
   return ex
 }
@@ -83,17 +82,9 @@ afterEach(async () => {
 
 describe("Exchange", () => {
   describe("constructor", () => {
-    it("creates with auto-generated peerId", () => {
-      const exchange = new Exchange()
-
-      expect(exchange.peerId).toBeDefined()
-      expect(typeof exchange.peerId).toBe("string")
-      expect(exchange.peerId.length).toBeGreaterThan(0)
-    })
-
     it("creates with explicit peerId", () => {
       const exchange = new Exchange({
-        identity: { peerId: "my-peer" },
+        id: "my-peer",
       })
 
       expect(exchange.peerId).toBe("my-peer")
@@ -102,7 +93,7 @@ describe("Exchange", () => {
 
   describe("get()", () => {
     it("returns a Ref<S> that can be read", () => {
-      const exchange = new Exchange({ identity: { peerId: "test" } })
+      const exchange = new Exchange({ id: "test" })
       const doc = exchange.get("doc-1", TestDoc)
 
       // The ref should be callable (returns plain value)
@@ -111,7 +102,7 @@ describe("Exchange", () => {
     })
 
     it("returns a Ref<S> with navigation and change()-applied values", () => {
-      const exchange = new Exchange({ identity: { peerId: "test" } })
+      const exchange = new Exchange({ id: "test" })
       const doc = exchange.get("doc-1", TestDoc)
       change(doc, (d: any) => {
         d.title.set("Hello")
@@ -123,7 +114,7 @@ describe("Exchange", () => {
     })
 
     it("same docId returns same instance", () => {
-      const exchange = new Exchange({ identity: { peerId: "test" } })
+      const exchange = new Exchange({ id: "test" })
 
       const doc1 = exchange.get("doc-1", TestDoc)
       const doc2 = exchange.get("doc-1", TestDoc)
@@ -132,7 +123,7 @@ describe("Exchange", () => {
     })
 
     it("different BoundSchema for same docId throws", () => {
-      const exchange = new Exchange({ identity: { peerId: "test" } })
+      const exchange = new Exchange({ id: "test" })
 
       exchange.get("doc-1", TestDoc)
       expect(() => exchange.get("doc-1", OtherDoc)).toThrow(
@@ -141,7 +132,7 @@ describe("Exchange", () => {
     })
 
     it("change() values are applied", () => {
-      const exchange = new Exchange({ identity: { peerId: "test" } })
+      const exchange = new Exchange({ id: "test" })
       const doc = exchange.get("doc-1", TestDoc)
       change(doc, (d: any) => {
         d.title.set("Changed")
@@ -162,7 +153,7 @@ describe("Exchange", () => {
         strategy: "authoritative",
       })
 
-      const exchange = new Exchange({ identity: { peerId: "alice-123" } })
+      const exchange = new Exchange({ id: "alice-123" })
       exchange.get("doc-1", Doc)
 
       expect(builder).toHaveBeenCalledWith({ peerId: "alice-123" })
@@ -176,7 +167,7 @@ describe("Exchange", () => {
         strategy: "authoritative",
       })
 
-      const exchange = new Exchange({ identity: { peerId: "test" } })
+      const exchange = new Exchange({ id: "test" })
       exchange.get("doc-1", DocA)
 
       // Builder is invoked at each use site: registerSchema (capabilities +
@@ -200,8 +191,8 @@ describe("Exchange", () => {
         strategy: "authoritative",
       })
 
-      const exchangeA = new Exchange({ identity: { peerId: "alice" } })
-      const exchangeB = new Exchange({ identity: { peerId: "bob" } })
+      const exchangeA = new Exchange({ id: "alice" })
+      const exchangeB = new Exchange({ id: "bob" })
 
       exchangeA.get("doc-1", Doc)
       exchangeB.get("doc-1", Doc)
@@ -216,12 +207,12 @@ describe("Exchange", () => {
 
   describe("has()", () => {
     it("returns false for unknown doc", () => {
-      const exchange = new Exchange()
+      const exchange = new Exchange({ id: "test" })
       expect(exchange.has("nonexistent")).toBe(false)
     })
 
     it("returns true after get()", () => {
-      const exchange = new Exchange({ identity: { peerId: "test" } })
+      const exchange = new Exchange({ id: "test" })
       exchange.get("doc-1", TestDoc)
       expect(exchange.has("doc-1")).toBe(true)
     })
@@ -229,7 +220,7 @@ describe("Exchange", () => {
 
   describe("destroy()", () => {
     it("removes a document", () => {
-      const exchange = new Exchange({ identity: { peerId: "test" } })
+      const exchange = new Exchange({ id: "test" })
 
       exchange.get("doc-1", TestDoc)
       expect(exchange.has("doc-1")).toBe(true)
@@ -241,7 +232,7 @@ describe("Exchange", () => {
 
   describe("sync()", () => {
     it("returns a SyncRef with peerId and docId", () => {
-      const exchange = new Exchange({ identity: { peerId: "alice" } })
+      const exchange = new Exchange({ id: "alice" })
       const doc = exchange.get("doc-1", TestDoc)
       const s = sync(doc)
 
@@ -250,7 +241,7 @@ describe("Exchange", () => {
     })
 
     it("hasSync returns true for exchange docs", () => {
-      const exchange = new Exchange({ identity: { peerId: "test" } })
+      const exchange = new Exchange({ id: "test" })
       const doc = exchange.get("doc-1", TestDoc)
       expect(hasSync(doc)).toBe(true)
     })
@@ -264,7 +255,7 @@ describe("Exchange", () => {
     })
 
     it("readyStates is initially empty", () => {
-      const exchange = new Exchange({ identity: { peerId: "test" } })
+      const exchange = new Exchange({ id: "test" })
       const doc = exchange.get("doc-1", TestDoc)
       expect(sync(doc).readyStates).toEqual([])
     })
@@ -272,7 +263,7 @@ describe("Exchange", () => {
 
   describe("lifecycle", () => {
     it("reset() clears doc cache", () => {
-      const exchange = new Exchange({ identity: { peerId: "test" } })
+      const exchange = new Exchange({ id: "test" })
 
       exchange.get("doc-1", TestDoc)
       expect(exchange.has("doc-1")).toBe(true)
@@ -282,7 +273,7 @@ describe("Exchange", () => {
     })
 
     it("shutdown() clears doc cache", async () => {
-      const exchange = new Exchange({ identity: { peerId: "test" } })
+      const exchange = new Exchange({ id: "test" })
 
       exchange.get("doc-1", TestDoc)
       await exchange.shutdown()
@@ -291,7 +282,7 @@ describe("Exchange", () => {
 
     describe("escape hatches", () => {
       it("ref[SUBSTRATE] returns the substrate for an exchange-created doc", () => {
-        const exchange = new Exchange({ identity: { peerId: "test" } })
+        const exchange = new Exchange({ id: "test" })
         const doc = exchange.get("doc-1", TestDoc)
         change(doc, (d: any) => {
           d.title.set("Hi")
@@ -312,7 +303,7 @@ describe("Exchange", () => {
       it("unwrap(ref) returns the LoroDoc for a Loro-backed exchange doc", () => {
         const LoroDoc = loro.bind(Schema.struct({ title: Schema.text() }))
         const exchange = new Exchange({
-          identity: { peerId: "test" },
+          id: "test",
           schemas: [LoroDoc],
         })
         const doc = exchange.get("doc-1", LoroDoc)
@@ -323,7 +314,7 @@ describe("Exchange", () => {
       })
 
       it("unwrap(ref) returns non-LoroDoc native for a plain-backed exchange doc", () => {
-        const exchange = new Exchange({ identity: { peerId: "test" } })
+        const exchange = new Exchange({ id: "test" })
         const doc = exchange.get("doc-1", TestDoc)
 
         const native = unwrap(doc as any)
@@ -337,14 +328,14 @@ describe("Exchange", () => {
       it("change() auto-notifies synchronizer — no manual notifyLocalChange needed", async () => {
         const bridge = new Bridge()
 
-        const exchangeA = createExchange({
-          identity: { peerId: "alice" },
+        const exchangeA = new Exchange({
+          id: "alice",
           transports: [
             createBridgeTransport({ transportType: "alice", bridge }),
           ],
         })
-        const exchangeB = createExchange({
-          identity: { peerId: "bob" },
+        const exchangeB = new Exchange({
+          id: "bob",
           transports: [createBridgeTransport({ transportType: "bob", bridge })],
         })
 
@@ -393,11 +384,11 @@ describe("Exchange", () => {
     it("peer-established fires when a remote peer connects via Bridge", async () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
-        identity: { peerId: "alice" },
+        id: "alice",
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
       })
       const _exchange2 = createExchange({
-        identity: { peerId: "bob", name: "Bob" },
+        id: { peerId: "bob", name: "Bob" },
         transports: [createBridgeTransport({ transportType: "bob", bridge })],
       })
 
@@ -425,11 +416,11 @@ describe("Exchange", () => {
     it("peer-departed fires when a remote peer disconnects", async () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
-        identity: { peerId: "alice" },
+        id: "alice",
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
       })
       const exchange2 = createExchange({
-        identity: { peerId: "bob" },
+        id: "bob",
         transports: [createBridgeTransport({ transportType: "bob", bridge })],
       })
 
@@ -458,11 +449,11 @@ describe("Exchange", () => {
     it("exchange.peers() reflects correct state during subscriber callback", async () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
-        identity: { peerId: "alice" },
+        id: "alice",
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
       })
       const _exchange2 = createExchange({
-        identity: { peerId: "bob" },
+        id: "bob",
         transports: [createBridgeTransport({ transportType: "bob", bridge })],
       })
 
@@ -485,17 +476,17 @@ describe("Exchange", () => {
       const bridge1 = new Bridge()
       const bridge2 = new Bridge()
       const exchange1 = createExchange({
-        identity: { peerId: "alice" },
+        id: "alice",
         transports: [
-          createBridgeTransport({ transportType: "alice", bridge: bridge1 }),
-          createBridgeTransport({ transportType: "alice", bridge: bridge2 }),
+          createBridgeTransport({ transportType: "alice-1", bridge: bridge1 }),
+          createBridgeTransport({ transportType: "alice-2", bridge: bridge2 }),
         ],
       })
       const _exchange2 = createExchange({
-        identity: { peerId: "bob" },
+        id: "bob",
         transports: [
-          createBridgeTransport({ transportType: "bob", bridge: bridge1 }),
-          createBridgeTransport({ transportType: "bob", bridge: bridge2 }),
+          createBridgeTransport({ transportType: "bob-1", bridge: bridge1 }),
+          createBridgeTransport({ transportType: "bob-2", bridge: bridge2 }),
         ],
       })
 
@@ -516,11 +507,11 @@ describe("Exchange", () => {
     it("shutdown emits peer-departed for all connected peers", async () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
-        identity: { peerId: "alice" },
+        id: "alice",
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
       })
       const _exchange2 = createExchange({
-        identity: { peerId: "bob" },
+        id: "bob",
         transports: [createBridgeTransport({ transportType: "bob", bridge })],
       })
 
@@ -544,11 +535,11 @@ describe("Exchange", () => {
     it("reset() emits peer-departed for all connected peers", async () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
-        identity: { peerId: "alice" },
+        id: "alice",
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
       })
       const _exchange2 = createExchange({
-        identity: { peerId: "bob" },
+        id: "bob",
         transports: [createBridgeTransport({ transportType: "bob", bridge })],
       })
 
@@ -576,11 +567,11 @@ describe("Exchange", () => {
     it("involuntary disconnect: peer-disconnected fires, peer preserved in peers()", async () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
-        identity: { peerId: "alice" },
+        id: "alice",
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
       })
       const _exchange2 = createExchange({
-        identity: { peerId: "bob" },
+        id: "bob",
         transports: [createBridgeTransport({ transportType: "bob", bridge })],
       })
 
@@ -609,11 +600,11 @@ describe("Exchange", () => {
     it("involuntary disconnect then shutdown: peer-departed fires", async () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
-        identity: { peerId: "alice" },
+        id: "alice",
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
       })
       const exchange2 = createExchange({
-        identity: { peerId: "bob" },
+        id: "bob",
         transports: [createBridgeTransport({ transportType: "bob", bridge })],
       })
 
@@ -640,11 +631,11 @@ describe("Exchange", () => {
     it("reconnection after involuntary disconnect: peer-reconnected fires", async () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
-        identity: { peerId: "alice" },
+        id: "alice",
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
       })
       const exchange2 = createExchange({
-        identity: { peerId: "bob" },
+        id: "bob",
         transports: [createBridgeTransport({ transportType: "bob", bridge })],
       })
 
@@ -679,11 +670,11 @@ describe("Exchange", () => {
     it("sync resumes after reconnection", async () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
-        identity: { peerId: "alice" },
+        id: "alice",
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
       })
       const exchange2 = createExchange({
-        identity: { peerId: "bob" },
+        id: "bob",
         transports: [createBridgeTransport({ transportType: "bob", bridge })],
       })
 
@@ -726,12 +717,12 @@ describe("Exchange", () => {
     it("departureTimeout: 0 — involuntary disconnect triggers immediate peer-departed", async () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
-        identity: { peerId: "alice" },
+        id: "alice",
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
         departureTimeout: 0,
       })
       const exchange2 = createExchange({
-        identity: { peerId: "bob" },
+        id: "bob",
         transports: [createBridgeTransport({ transportType: "bob", bridge })],
       })
 
@@ -757,12 +748,12 @@ describe("Exchange", () => {
     it("departure timer fires after grace period", async () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
-        identity: { peerId: "alice" },
+        id: "alice",
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
         departureTimeout: 50,
       })
       const exchange2 = createExchange({
-        identity: { peerId: "bob" },
+        id: "bob",
         transports: [createBridgeTransport({ transportType: "bob", bridge })],
       })
 
@@ -800,12 +791,12 @@ describe("Exchange", () => {
     it("reconnection before departure timer cancels the timer", async () => {
       const bridge = new Bridge()
       const exchange1 = createExchange({
-        identity: { peerId: "alice" },
+        id: "alice",
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
         departureTimeout: 50,
       })
       const exchange2 = createExchange({
-        identity: { peerId: "bob" },
+        id: "bob",
         transports: [createBridgeTransport({ transportType: "bob", bridge })],
       })
 
@@ -1030,11 +1021,11 @@ describe("Exchange", () => {
     it("suspend() on deferred doc throws", async () => {
       const bridge = new Bridge()
       const exchangeA = createExchange({
-        identity: { peerId: "alice" },
+        id: "alice",
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
       })
       const exchangeB = createExchange({
-        identity: { peerId: "bob" },
+        id: "bob",
         transports: [createBridgeTransport({ transportType: "bob", bridge })],
         resolve: () => Defer(),
       })
@@ -1056,13 +1047,12 @@ describe("Exchange", () => {
       const bridge = new Bridge()
 
       const _exchange1 = createExchange({
-        identity: { peerId: "alice" },
+        id: "alice",
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
       })
 
-      // Bob rejects all connections
       const exchange2 = createExchange({
-        identity: { peerId: "bob" },
+        id: "bob",
         transports: [createBridgeTransport({ transportType: "bob", bridge })],
       })
       exchange2.register({
@@ -1079,12 +1069,12 @@ describe("Exchange", () => {
       const bridge = new Bridge()
 
       const _exchange1 = createExchange({
-        identity: { peerId: "alice" },
+        id: "alice",
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
       })
 
       const exchange2 = createExchange({
-        identity: { peerId: "bob" },
+        id: "bob",
         transports: [createBridgeTransport({ transportType: "bob", bridge })],
       })
       exchange2.register({

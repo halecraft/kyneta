@@ -25,7 +25,7 @@ import "../style.css"
 createRoot(document.getElementById("root")!).render(
   <ExchangeProvider
     config={{
-      identity: { peerId: persistentPeerId("todo-react-peer-id") },
+      id: persistentPeerId("todo-react-peer-id"),
       transports: [createWebsocketClient({ url: `ws://${location.host}/ws`, WebSocket })],
     }}
   >

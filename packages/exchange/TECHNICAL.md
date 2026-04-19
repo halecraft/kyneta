@@ -1397,13 +1397,15 @@ Storage is wired into the Exchange at two points: **hydration** (loading stored 
 
 The `peerId` in `ExchangeParams.identity` must satisfy two invariants:
 
-1. **Stability:** The same participant must use the same peerId across restarts. Without stability, each boot produces a different clientID/PeerID, the version vector grows unboundedly, and there is no causal continuity across restarts. `exchange.get()` requires an explicit peerId for this reason.
+1. **Stability:** The same participant must use the same peerId across restarts. Without stability, each boot produces a different clientID/PeerID, the version vector grows unboundedly, and there is no causal continuity across restarts.
 
 2. **Uniqueness:** Different participants must use different peerIds. Two peers sharing a peerId will silently corrupt CRDT state — the version vector conflates their operations and `exportSince` produces wrong deltas (missing ops, duplicate ops, or cross-client references). There is no error, no exception — just silent data loss.
 
 **Duplicate detection:** The synchronizer detects duplicate peerIds at channel establishment time. When a second channel establishes with a peerId that already has active channels from a different connection, the synchronizer emits a `notify/warning` notification (surfaced as `console.warn` by the imperative shell). This catches the most common case — two browser tabs hitting the same server with the same peerId. The warning is not a rejection: legitimate reconnection (where the old channel hasn't timed out yet) may trigger it transiently.
 
 **Self-connection detection:** When a peer connects to itself (remote peerId matches `model.identity.peerId`), the synchronizer emits a `notify/warning`. This is always a misconfiguration — syncing with yourself produces no useful result.
+
+**`id` is required.** `ExchangeParams.id` is a required field — either a plain string (the peerId) or a `PeerIdentityInput` object with `peerId`, optional `name`, and optional `type` (defaults to `"user"`). There is no auto-generation fallback. Browser clients use `persistentPeerId(storageKey)` as the `id` value; servers use an explicit string.
 
 #### Multi-Tab Behavior
 
@@ -1430,7 +1432,7 @@ The `peerId` in `ExchangeParams.identity` must satisfy two invariants:
 
 **Servers:** Use an explicit string (e.g. `"my-server"`). Servers don't need generation helpers.
 
-`exchange.replicate()` does NOT require a stable peerId — replicate mode has no local writes and needs no stable identity.
+`exchange.replicate()` does NOT require a stable peerId — replicate mode has no local writes and needs no stable identity. Relay-only peers must still provide an `id` — it can be any unique string.
 
 ### Hydration Flow — Single Substrate with Structural Merge
 

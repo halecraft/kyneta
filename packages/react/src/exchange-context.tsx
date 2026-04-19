@@ -46,6 +46,7 @@ export interface ExchangeProviderProps {
  * import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
  *
  * const config = {
+ *   id: "my-peer",
  *   transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
  * }
  *

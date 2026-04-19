@@ -27,7 +27,7 @@ const TestDoc = json.bind(TestSchema)
 // ---------------------------------------------------------------------------
 
 function createWrapper() {
-  const config = { identity: { peerId: "test" } }
+  const config = { id: "test" }
   return ({ children }: { children: ReactNode }) => (
     <ExchangeProvider config={config}>{children}</ExchangeProvider>
   )

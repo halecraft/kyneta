@@ -43,7 +43,7 @@ const initialColor = localStorage.getItem(COLOR_KEY)
 // ─────────────────────────────────────────────────────────────────────────
 
 const config = {
-  identity: { peerId, name: initialName, type: "user" as const },
+  id: { peerId, name: initialName, type: "user" },
   transports: [createWebsocketClient({ url: `ws://${location.host}/ws`, WebSocket })],
 }
 

@@ -6,15 +6,19 @@
 
 import {
   change,
-  Interpret,
   json,
   plainReplicaFactory,
+  Replicate,
   Schema,
 } from "@kyneta/schema"
 import { Bridge, createBridgeTransport } from "@kyneta/transport"
 import { yjs } from "@kyneta/yjs-schema"
 import { describe, expect, it } from "vitest"
-import { Exchange } from "../exchange.js"
+import {
+  Exchange,
+  type ExchangeParams,
+  type PeerIdentityInput,
+} from "../exchange.js"
 import {
   createInMemoryStore,
   InMemoryStore,
@@ -41,13 +45,9 @@ async function drain(ms = 50): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, ms))
 }
 
-function createExchange(
-  options: ConstructorParameters<typeof Exchange>[0] = {},
-): Exchange {
-  return new Exchange({
-    ...options,
-    identity: { peerId: "test", ...options?.identity },
-  })
+function createExchange(options: Partial<ExchangeParams> = {}): Exchange {
+  const merged = { id: "test" as string | PeerIdentityInput, ...options }
+  return new Exchange(merged as ExchangeParams)
 }
 
 // ===========================================================================
@@ -243,7 +243,7 @@ describe("Exchange storage hydration", () => {
     })
 
     const exchange = createExchange({
-      identity: { peerId: "test" },
+      id: "peer-1",
       stores: [createInMemoryStore({ sharedData })],
     })
 
@@ -261,7 +261,7 @@ describe("Exchange storage hydration", () => {
 
   it("exchange.get() returns ref synchronously even with storage", () => {
     const exchange = createExchange({
-      identity: { peerId: "test" },
+      id: "peer-1",
       stores: [createInMemoryStore()],
     })
 
@@ -296,7 +296,7 @@ describe("Exchange storage hydration", () => {
     })
 
     const exchange = createExchange({
-      identity: { peerId: "test" },
+      id: "peer-1",
       stores: [createInMemoryStore({ sharedData })],
     })
 
@@ -325,7 +325,7 @@ describe("Exchange storage persistence", () => {
     const backend = new InMemoryStore()
 
     const exchange = createExchange({
-      identity: { peerId: "test" },
+      id: "test",
       stores: [backend],
     })
 
@@ -380,7 +380,7 @@ describe("Exchange storage persistence", () => {
 
     // Exchange A (source) — has the doc
     const exchangeA = createExchange({
-      identity: { peerId: "peer-a" },
+      id: "peer-a",
       transports: [createBridgeTransport({ transportType: "side-a", bridge })],
     })
     const docA = exchangeA.get("doc-1", TestDoc)
@@ -391,10 +391,10 @@ describe("Exchange storage persistence", () => {
 
     // Exchange B (sink) — has storage, discovers doc from A
     const exchangeB = createExchange({
-      identity: { peerId: "peer-b" },
+      id: "peer-b",
       transports: [createBridgeTransport({ transportType: "side-b", bridge })],
       stores: [backend],
-      resolve: () => Interpret(TestDoc),
+      resolve: () => Replicate(),
     })
 
     // Wait for sync
@@ -417,7 +417,7 @@ describe("Exchange storage persistence", () => {
     const backend = new InMemoryStore()
 
     const exchange = createExchange({
-      identity: { peerId: "test" },
+      id: "test",
       stores: [backend],
     })
 
@@ -444,7 +444,7 @@ describe("Exchange storage persistence", () => {
     const backend = new InMemoryStore()
 
     const exchange = createExchange({
-      identity: { peerId: "test" },
+      id: "test",
       stores: [backend],
     })
 
@@ -476,7 +476,7 @@ describe("Storage round-trip (persist → restart → hydrate)", () => {
 
     // First exchange: create doc, write data, shut down
     const exchange1 = createExchange({
-      identity: { peerId: "server" },
+      id: "peer-1",
       stores: [createInMemoryStore({ sharedData })],
     })
 
@@ -491,7 +491,7 @@ describe("Storage round-trip (persist → restart → hydrate)", () => {
 
     // Second exchange: should hydrate from storage
     const exchange2 = createExchange({
-      identity: { peerId: "server" },
+      id: "peer-1",
       stores: [createInMemoryStore({ sharedData })],
     })
 
@@ -514,7 +514,7 @@ describe("Synchronizer purification", () => {
     // This is tested indirectly: an exchange without the doc simply
     // ignores interests. We verify the model has no sentinel entries.
     const exchange = createExchange({
-      identity: { peerId: "test" },
+      id: "peer-1",
     })
 
     // The synchronizer model should have no documents
@@ -527,7 +527,7 @@ describe("Synchronizer purification", () => {
 
   it("no DocEntry has sentinel version ''", async () => {
     const exchange = createExchange({
-      identity: { peerId: "test" },
+      id: "peer-1",
       stores: [createInMemoryStore()],
     })
 
@@ -543,7 +543,7 @@ describe("Synchronizer purification", () => {
 
   it("DocEntry has no pendingStorageChannels or pendingInterests fields", async () => {
     const exchange = createExchange({
-      identity: { peerId: "test" },
+      id: "peer-1",
       stores: [createInMemoryStore()],
     })
 
@@ -556,30 +556,6 @@ describe("Synchronizer purification", () => {
     }
 
     await exchange.shutdown()
-  })
-})
-
-// ===========================================================================
-// exchange.get() without explicit peerId
-// ===========================================================================
-
-describe("exchange.get() without explicit peerId", () => {
-  it("throws when no peerId is provided", () => {
-    // Exchange created without identity.peerId — gets an auto-generated one,
-    // but #peerIdIsExplicit is false → get() must throw.
-    const exchange = new Exchange()
-
-    const Doc = json.bind(
-      Schema.struct({
-        title: Schema.string(),
-      }),
-    )
-
-    expect(() => exchange.get("doc-1", Doc)).toThrow(
-      /exchange\.get\(\) requires an explicit peerId/,
-    )
-
-    exchange.reset()
   })
 })
 
@@ -603,7 +579,7 @@ describe("Yjs storage round-trip", () => {
 
     // First exchange: create doc, write data, shut down
     const exchange1 = createExchange({
-      identity: { peerId: "yjs-peer" },
+      id: "peer-1",
       stores: [createInMemoryStore({ sharedData })],
       schemas: [YjsDoc],
     })
@@ -621,7 +597,7 @@ describe("Yjs storage round-trip", () => {
 
     // Second exchange: should hydrate from storage
     const exchange2 = createExchange({
-      identity: { peerId: "yjs-peer" },
+      id: "peer-1",
       stores: [createInMemoryStore({ sharedData })],
       schemas: [YjsDoc],
     })

@@ -147,7 +147,7 @@ export type SseClientStateTransition = StateTransition<SseClientState>
  * import { createSseClient } from "@kyneta/sse-transport/client"
  *
  * const exchange = new Exchange({
- *   identity: { peerId: "browser-client" },
+ *   id: "browser-client",
  *   transports: [createSseClient({
  *     postUrl: "/sync",
  *     eventSourceUrl: (peerId) => `/events?peerId=${peerId}`,

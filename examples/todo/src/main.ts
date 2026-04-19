@@ -18,7 +18,7 @@ import { TodoDoc } from "./schema.js"
 // ─────────────────────────────────────────────────────────────────────────
 
 const exchange = new Exchange({
-  identity: { peerId: persistentPeerId("todo-peer-id") },
+  id: persistentPeerId("todo-peer-id"),
   transports: [createWebsocketClient({ url: `ws://${location.host}/ws`, WebSocket })],
 })
 
