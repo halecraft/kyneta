@@ -511,6 +511,68 @@ Two pure helpers used by `PlainPosition` and by `@kyneta/react`'s `text-adapter`
 
 ---
 
+## Tree-position algebra
+
+Source: `packages/schema/src/tree-position.ts`.
+
+Rich text editors (ProseMirror, CodeMirror, Slate, Lexical) address positions in a document tree using a single flat integer. The tree-position algebra bridges between these flat integers and kyneta's `(path, offset)` pairs in the schema tree — pure functions that require only a `Reader` and a `Schema`, no interpreter stack, no substrate-specific code.
+
+### Counting convention
+
+Follows ProseMirror's de facto standard:
+
+| Schema kind | Position contribution |
+|-------------|----------------------|
+| `text` | 1 per character (no open/close boundaries) |
+| `scalar`, `counter` | 1 (non-text leaf) |
+| `product`, `sequence`, `movable`, `map` | 2 (open + close) + content size |
+| `sum` | transparent — size of the active variant (resolved via `dispatchSum`) |
+| `set`, `tree` | unsupported (throws) |
+
+The root node does NOT count its own open/close — flat positions are relative to root content, matching ProseMirror's `doc.resolve(pos)` semantics.
+
+### Core functions
+
+```
+function nodeSize(reader: Reader, schema: Schema, path: Path): number
+function contentSize(reader: Reader, schema: Schema, path: Path): number
+function isLeaf(schema: Schema): boolean
+```
+
+`nodeSize` computes the flat position size of a schema node at a path — the recursive building block. `contentSize` is `nodeSize` minus the open/close boundaries for composites (equals `nodeSize` for leaves). `isLeaf` identifies PM-leaf kinds: `text`, `scalar`, `counter`.
+
+```
+function resolveTreePosition(reader: Reader, schema: Schema, flatPos: number): ResolvedTreePosition | null
+function flattenTreePosition(reader: Reader, schema: Schema, path: Path, offset: number): number
+```
+
+`resolveTreePosition` converts a flat integer to `{ path, offset, schema }` — the innermost node and the local offset within it. `flattenTreePosition` is the inverse: given a path and offset, compute the flat integer.
+
+**Round-trip invariant:** `flattenTreePosition(r, s, ...resolveTreePosition(r, s, pos)) === pos` for all valid positions.
+
+### Relationship to `Position`
+
+Tree-position and `Position` operate at different layers:
+
+1. **Tree-position** finds the structural location: "flat position 7 is at `items[1].content`, character offset 2."
+2. **`Position`** creates a stable cursor: `ref[POSITION].createPosition(2, "right")` at the ref for `items[1].content`.
+
+The caller composes: `resolveTreePosition` → navigate to the ref at the resolved path → `ref[POSITION].createPosition(offset, side)`. This separation preserves composability — tree-position needs only `Reader`, while `Position` needs the full interpreter stack.
+
+### Ordering contracts
+
+- **Product fields:** walked in `Object.keys(schema.fields)` insertion order. Deterministic because all peers construct schemas from the same source code.
+- **Map entries:** walked in lexicographic key order (`keys.sort()`). Required because `reader.keys()` returns insertion order which may differ across peers.
+- **Sequence/movable items:** walked in index order `0..length-1`.
+
+### What tree-position is NOT
+
+- **Not a DOM position.** No node references, no selection ranges. Pure algebra over `Reader` + `Schema`.
+- **Not substrate-aware.** Works identically with plain, Loro, and Yjs substrates — any `Reader` implementation.
+- **Not cached.** `nodeSize` is O(n) per call (walks the subtree). Caching can be added behind the same API if profiling shows a need.
+
+---
+
 ## Migration and identity
 
 Source: `packages/schema/src/migration.ts`.
@@ -728,6 +790,7 @@ Selection of the most-used types. Full list in [Canonical symbols](#canonical-sy
 | `src/layers.ts` | ~100 | Pre-built `navigation`, `readable`, `addressing`, `writable`, `observation` layer values. |
 | `src/ref.ts` | ~150 | `Ref<S>`, `RRef<S>`, `RWRef<S>`, `DocRef<S>`, `Wrap`, `RefMode`. |
 | `src/position.ts` | ~300 | `Position`, `Side`, `POSITION`, `HasPosition`, `PlainPosition`, `decodePlainPosition`. |
+| `src/tree-position.ts` | ~620 | Tree-position algebra: `nodeSize`, `contentSize`, `isLeaf`, `resolveTreePosition`, `flattenTreePosition`, `ResolvedTreePosition`. Pure functions over `Reader` + `Schema` for flat↔tree position mapping (ProseMirror convention). |
 | `src/changefeed.ts` | ~150 | `Op`, `ComposedChangefeedProtocol`, `HasComposedChangefeed`, `expandMapOpsToLeaves`. |
 | `src/facade/change.ts` | ~250 | `change(ref, fn)`, `applyChanges`, `remove`, `CommitOptions`. |
 | `src/facade/observe.ts` | ~100 | `subscribe`, `subscribeNode`. |
@@ -756,4 +819,4 @@ Every test in this package is pure. Substrates-under-test are the plain substrat
 
 The full suite serves as the specification of the `Substrate<V>` contract: `@kyneta/loro-schema` and `@kyneta/yjs-schema` run this same suite (adapted) against their substrates via the shared conformance harness in `src/basic/index.ts`.
 
-**Tests**: 1,832 passed, 8 skipped across 56 files. Run with `cd packages/schema && pnpm exec vitest run`.
+**Tests**: 1,903 passed, 8 skipped across 58 files. Run with `cd packages/schema && pnpm exec vitest run`.

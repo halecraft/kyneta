@@ -274,6 +274,15 @@ export {
   PlainPosition,
   POSITION,
 } from "./position.js"
+// Tree-position algebra — flat↔tree position mapping for editor bindings
+export type { ResolvedTreePosition } from "./tree-position.js"
+export {
+  contentSize,
+  flattenTreePosition,
+  isLeaf,
+  nodeSize,
+  resolveTreePosition,
+} from "./tree-position.js"
 export type { PlainState, Reader } from "./reader.js"
 // Reader — shared utilities for reading/writing plain state objects
 export {
