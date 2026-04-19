@@ -47,7 +47,7 @@ The interpreter dispatch is on `[KIND]` — each first-class type has its own ki
 
 Even with a unified grammar, some backends impose validity rules (e.g. Loro can't nest a CRDT container inside a plain value blob). These are **well-formedness rules** — context-sensitive constraints layered on the context-free grammar. The solution: the internal `Schema` type is unconstrained; constructors like `Schema.struct.json()` use TypeScript's type system to enforce constraints at build time.
 
-**`PlainSchema` — the LWW-compatible subset.** The grammar defines `PlainSchema` in `schema.ts`, a recursive type that includes the five structural kinds (`ScalarSchema`, `ProductSchema`, `SequenceSchema`, `MapSchema`, `SumSchema`) but excludes all first-class CRDT types (`TextSchema`, `CounterSchema`, `SetSchema`, `TreeSchema`, `MovableSequenceSchema`). Each structural kind has a `Plain*` counterpart (`PlainProductSchema`, `PlainSequenceSchema`, etc.) where the recursive position is narrowed from `Schema` to `PlainSchema`. These types are exported from `@kyneta/schema` for use by any backend's composition constraints.
+**`PlainSchema` — the LWW-compatible subset.** The grammar defines `PlainSchema` in `schema.ts`, a recursive type that includes the five structural kinds (`ScalarSchema`, `ProductSchema`, `SequenceSchema`, `MapSchema`, `SumSchema`) but excludes all first-class CRDT types (`TextSchema`, `CounterSchema`, `SetSchema`, `TreeSchema`, `MovableSequenceSchema`). Each structural kind has a `Plain*` counterpart (`PlainProductSchema`, `PlainSequenceSchema`, etc.) that uses explicit `extends` inheritance from its base interface (e.g. `PlainProductSchema extends ProductSchema`) with the recursive position narrowed from `Schema` to `PlainSchema`. This means Plain variants are proper subtypes — not structurally separate duplicates — so all operations that accept `ProductSchema` also accept `PlainProductSchema`. These types are exported from `@kyneta/schema` for use by any backend's composition constraints.
 
 `PlainSchema` is the input constraint for two contexts:
 - **`.json()` modifier** — merge boundary on `struct`, `list`, `record`. Everything below is an inert JSON blob; no child capabilities propagated.
@@ -757,8 +757,15 @@ interface BoundSchema<S extends Schema, N extends NativeMap = UnknownNativeMap> 
   readonly factory: FactoryBuilder<any>
   readonly strategy: MergeStrategy
   readonly schemaHash: string
+  readonly identityBinding: SchemaBinding
+  readonly migrationChain: MigrationChain | null
+  readonly supportedHashes: ReadonlySet<string>
 }
 ```
+
+- **`identityBinding`** — a `SchemaBinding` mapping schema paths to `NodeIdentity` hashes and back. For schemas with no `.migrated()` calls, this is a trivial binding where every path maps to `deriveIdentity(path, 1)`. Substrate factories receive the binding via `FactoryBuilder` context so they can key CRDT containers by identity instead of field name.
+- **`migrationChain`** — the `MigrationChain` attached to the root `ProductSchema` via `[MIGRATION_CHAIN]`, or `null` for schemas with no `.migrated()` calls.
+- **`supportedHashes`** — the set of schema hashes reachable via T0/T1a (non-breaking) migrations. At minimum contains the current `schemaHash`. Used by the sync protocol for capability negotiation — peers with overlapping `supportedHashes` can sync; disjoint sets are rejected.
 
 **`MergeStrategy`** is a string union declaring the sync algorithm:
 
@@ -768,7 +775,7 @@ interface BoundSchema<S extends Schema, N extends NativeMap = UnknownNativeMap> 
 | `"authoritative"` | Request/response, total order | Never `"concurrent"` | `exportSince()` or `exportEntirety()` |
 | `"ephemeral"` | Unidirectional push/broadcast | Timestamp-based | Always `exportEntirety()` |
 
-**`FactoryBuilder<V>`** is `(context: { peerId: string }) => SubstrateFactory<V>` — a deferred factory constructor. The exchange calls it lazily on first use, passing its peer identity. Each exchange instance gets a fresh factory. Factories that don't need peer identity ignore the context: `() => plainSubstrateFactory`.
+**`FactoryBuilder<V>`** is `(context: { peerId: string; binding: SchemaBinding }) => SubstrateFactory<V>` — a deferred factory constructor. The exchange calls it lazily on first use, passing its peer identity and the schema's identity binding. Substrates use the binding to key CRDT containers by identity hash instead of field name, enabling heterogeneous peers (at different schema versions connected by T0/T1a migrations) to address the same physical CRDT state. Each exchange instance gets a fresh factory. Factories that don't need peer identity or binding ignore the context: `() => plainSubstrateFactory`.
 
 **Convenience wrappers:**
 
@@ -1072,18 +1079,32 @@ The hash is computed once at bind time and cached on `BoundSchema.schemaHash`. I
 
 The hash is stable across releases for the same schema definition. It depends only on the schema's structural content, not on runtime artifacts like object identity or definition order.
 
-### Schema Evolution
+### Schema Evolution and Migrations
 
-Adding fields to a schema extends the structural op sequence. The `ensureContainers` / `ensureLoroContainers` functions are **conditional** — after hydration from stored state, they skip fields whose containers already exist and create containers only for new fields.
+Schema evolution is supported via identity-stable migrations. The `Migration` namespace provides 14 primitives classified into four tiers:
 
-This means schema evolution follows a simple protocol:
+| Tier | Coordination | Primitives | API |
+|------|-------------|------------|-----|
+| **T0** (Additive) | None | `add`, `addVariant`, `widenConstraint`, `addNullable` | `.migrated(...)` |
+| **T1a** (Rename) | None | `rename`, `move`, `renameVariant`, `renameDiscriminant` | `.migrated(...)` |
+| **T2** (Lossy) | None (local choice) | `remove`, `removeVariant`, `narrowConstraint`, `dropNullable` | `.migrated(... .drop())` |
+| **T3** (Epoch) | Full reset | `retype`, `transform` | `.epoch(...)` |
 
-1. A new schema version adds fields.
-2. On hydration, existing containers are preserved (no re-creation, no duplicate ops).
-3. New containers are created at the end of the structural clock, continuing from where the previous schema left off.
-4. The canonical alphabetical sort ensures the new containers are created in a consistent order across all peers, even if they upgrade at different times.
+The migration chain is attached to `ProductSchema` values via a `[MIGRATION_CHAIN]` symbol, invisible to `canonicalizeSchema` and the interpreter stack.
 
-The structural merge protocol guarantees convergence: a peer running schema v2 and a peer still on v1 will agree on all v1 containers. When the v1 peer upgrades, its `ensureContainers` call produces identical ops for the new fields — same identity, same order, same result.
+**Identity derivation:** Each schema field has a `NodeIdentity` — a 128-bit FNV-1a hash of `originPath + ":" + generation`. The `deriveManifest` function replays the migration chain to compute an `IdentityManifest` mapping current paths to origins. The `deriveSchemaBinding` function produces a `SchemaBinding` (forward: path→identity, inverse: identity→path) used by substrates to key CRDT containers.
+
+**Identity-keyed containers:** Substrates use identity hashes instead of field names as container keys. This enables heterogeneous peers (at different schema versions connected by T0/T1a migrations) to address the same physical CRDT state.
+
+- **Loro:** Root containers keyed by identity (`doc.getText(identity)`, `doc.getMap(identity)`). Root scalar/sum fields remain in the `_props` LoroMap but with identity-keyed entries. Nested `LoroMap` children also use identity keys at every product-field boundary.
+- **Yjs:** All levels use identity keys — root `Y.Map` entries and recursive nested `Y.Map` structures.
+- **Plain:** No identity-keying needed (authoritative sync, no concurrent merge).
+
+**Capability negotiation:** The sync program's `handlePresent` uses set-intersection over `supportedHashes` (the set of schema hashes reachable via T0/T1a migrations) instead of exact hash equality. Peers with overlapping supported hashes can sync; disjoint sets are rejected.
+
+**Pruning:** `snapshotManifest(schema)` collapses the migration chain into an `IdentityManifest`. Developers replace `.migrated()` chains with `.migrationBase(manifest)` to prune history. `validateChain` (dev-mode only) detects path collisions and missing references.
+
+**Additive container creation:** Adding fields to a schema extends the structural op sequence. The `ensureContainers` / `ensureLoroContainers` functions are **conditional** — after hydration from stored state, they skip fields whose containers already exist and create containers only for new fields. The canonical alphabetical sort (now over identity keys) ensures new containers are created in a consistent order across all peers, even if they upgrade at different times.
 
 ## Version Vector Algebra
 
@@ -1262,6 +1283,8 @@ packages/schema/
 │   ├── sync.ts                  # version, exportEntirety, exportSince, merge — generic sync via [SUBSTRATE]
 │   ├── unwrap.ts                # unwrap(ref) — typed escape hatch reading ref[NATIVE]
 │   ├── substrate.ts             # BACKING_DOC (internal), SubstratePrepare, Version, SubstratePayload, Substrate<V>, SubstrateFactory<V>
+│   ├── hash.ts                  # FNV-1a-128 hashing and computeSchemaHash. Extracted from substrate.ts so migration.ts can depend on hashing without importing the full substrate surface.
+│   ├── migration.ts             # Migration primitives, Migration namespace, identity derivation (deriveIdentity, deriveManifest, deriveSchemaBinding), chain validation (validateChain, snapshotManifest), and migrationMethods mixin for ProductSchema.
 │   ├── base64.ts                # uint8ArrayToBase64, base64ToUint8Array — platform-agnostic encoding (used by Loro + Yjs version implementations)
 │   ├── version-vector.ts        # versionVectorMeet, versionVectorCompare — shared version vector algebra (used by Loro + Yjs)
 │   ├── reader.ts                 # PlainState type, Reader, plainReader, readByPath, writeByPath, applyChange, pathKey
@@ -1309,7 +1332,8 @@ packages/schema/
 │   │   ├── timestamp-version.test.ts  # TimestampVersion: serialize, parse, compare
 │   │   ├── bind.test.ts         # BoundSchema<S, N>, json.bind, json.replica, namespace API
 │   │   ├── unwrap.test.ts       # unwrap(ref) — reads ref[NATIVE]
-│   │   └── advance-schema.test.ts  # advanceSchema — pure schema descent
+│   │   ├── advance-schema.test.ts  # advanceSchema — pure schema descent
+│   │   └── migration.test.ts    # Migration primitives, identity derivation, chain validation, snapshotManifest
 │   └── index.ts                 # Barrel export (Layer 1 — the full toolkit)
 ├── example/
 │   ├── README.md                # Index pointing to basic/ and advanced/

@@ -100,7 +100,10 @@ export interface Capabilities {
    */
   registerSchema(
     bound: BoundSchema,
-    resolveFactory: (builder: FactoryBuilder) => SubstrateFactory,
+    resolveFactory: (
+      builder: FactoryBuilder,
+      bound: BoundSchema,
+    ) => SubstrateFactory,
   ): void
 
   /**
@@ -168,7 +171,10 @@ function replicaSupportKey(rt: ReplicaType): string {
 export function createCapabilities(params: {
   schemas: BoundSchema[]
   replicas: BoundReplica[]
-  resolveFactory: (builder: FactoryBuilder) => SubstrateFactory
+  resolveFactory: (
+    builder: FactoryBuilder,
+    bound: BoundSchema,
+  ) => SubstrateFactory
 }): Capabilities {
   const registry = new Map<ReplicaKey, ReplicaEntry>()
   const supportSet = new Set<string>()
@@ -187,9 +193,9 @@ export function createCapabilities(params: {
 
   function addSchema(
     bound: BoundSchema,
-    resolve: (builder: FactoryBuilder) => SubstrateFactory,
+    resolve: (builder: FactoryBuilder, bound: BoundSchema) => SubstrateFactory,
   ): void {
-    const substrateFactory = resolve(bound.factory)
+    const substrateFactory = resolve(bound.factory, bound)
     const replicaFactory: ReplicaFactory = substrateFactory.replica
     const br = BoundReplica(replicaFactory, bound.strategy)
     const key = replicaKey(replicaFactory.replicaType, bound.strategy)
@@ -233,7 +239,10 @@ export function createCapabilities(params: {
   return {
     registerSchema(
       bound: BoundSchema,
-      resolveFactory: (builder: FactoryBuilder) => SubstrateFactory,
+      resolveFactory: (
+        builder: FactoryBuilder,
+        bound: BoundSchema,
+      ) => SubstrateFactory,
     ): void {
       addSchema(bound, resolveFactory)
     },
@@ -244,7 +253,16 @@ export function createCapabilities(params: {
       mergeStrategy: MergeStrategy,
     ): BoundSchema | undefined {
       const key = replicaKey(replicaType, mergeStrategy)
-      return registry.get(key)?.schemas.get(schemaHash)
+      const entry = registry.get(key)
+      if (!entry) return undefined
+      // Try exact match first
+      const exact = entry.schemas.get(schemaHash)
+      if (exact) return exact
+      // Try any schema whose supportedHashes includes the requested hash
+      for (const bound of entry.schemas.values()) {
+        if (bound.supportedHashes.has(schemaHash)) return bound
+      }
+      return undefined
     },
 
     resolveReplica(

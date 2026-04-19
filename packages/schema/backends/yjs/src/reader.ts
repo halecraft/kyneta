@@ -7,8 +7,16 @@
 //
 // Y.Text → .toJSON() (string), Y.Map → .toJSON() (plain object),
 // Y.Array → .toJSON() (plain array), plain values → as-is.
+//
+// Identity-keying: when a SchemaBinding is provided, resolveYjsType
+// navigates Y.Map children using identity hashes instead of field names.
 
-import type { Path, Reader, Schema as SchemaNode } from "@kyneta/schema"
+import type {
+  Path,
+  Reader,
+  SchemaBinding,
+  Schema as SchemaNode,
+} from "@kyneta/schema"
 import * as Y from "yjs"
 import { resolveYjsType } from "./yjs-resolve.js"
 
@@ -55,8 +63,13 @@ function extractValue(resolved: unknown): unknown {
  *
  * @param doc - The Y.Doc to read from.
  * @param schema - The root schema for the document.
+ * @param binding - Optional SchemaBinding for identity-keyed navigation.
  */
-export function yjsReader(doc: Y.Doc, schema: SchemaNode): Reader {
+export function yjsReader(
+  doc: Y.Doc,
+  schema: SchemaNode,
+  binding?: SchemaBinding,
+): Reader {
   const rootMap = doc.getMap("root")
 
   return {
@@ -65,12 +78,12 @@ export function yjsReader(doc: Y.Doc, schema: SchemaNode): Reader {
         // Root read — return the full root map as JSON
         return rootMap.toJSON()
       }
-      const resolved = resolveYjsType(rootMap, schema, path)
+      const resolved = resolveYjsType(rootMap, schema, path, binding)
       return extractValue(resolved)
     },
 
     arrayLength(path: Path): number {
-      const resolved = resolveYjsType(rootMap, schema, path)
+      const resolved = resolveYjsType(rootMap, schema, path, binding)
       if (resolved instanceof Y.Array) {
         return resolved.length
       }
@@ -82,7 +95,7 @@ export function yjsReader(doc: Y.Doc, schema: SchemaNode): Reader {
     },
 
     keys(path: Path): string[] {
-      const resolved = resolveYjsType(rootMap, schema, path)
+      const resolved = resolveYjsType(rootMap, schema, path, binding)
       if (resolved instanceof Y.Map) {
         return Array.from(resolved.keys())
       }
@@ -99,7 +112,7 @@ export function yjsReader(doc: Y.Doc, schema: SchemaNode): Reader {
     },
 
     hasKey(path: Path, key: string): boolean {
-      const resolved = resolveYjsType(rootMap, schema, path)
+      const resolved = resolveYjsType(rootMap, schema, path, binding)
       if (resolved instanceof Y.Map) {
         return resolved.has(key)
       }

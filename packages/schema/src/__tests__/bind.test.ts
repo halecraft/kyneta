@@ -42,8 +42,14 @@ describe("bind()", () => {
       strategy: "authoritative",
     })
 
-    const result = bound.factory({ peerId: "test-peer-123" })
-    expect(factory).toHaveBeenCalledWith({ peerId: "test-peer-123" })
+    const result = bound.factory({
+      peerId: "test-peer-123",
+      binding: bound.identityBinding,
+    })
+    expect(factory).toHaveBeenCalledWith({
+      peerId: "test-peer-123",
+      binding: bound.identityBinding,
+    })
     expect(typeof result.create).toBe("function")
     expect(typeof result.fromEntirety).toBe("function")
     expect(typeof result.parseVersion).toBe("function")
@@ -134,7 +140,10 @@ describe("json.bind(ephemeral)", () => {
 
   it("factory produces a substrate with TimestampVersion", () => {
     const bound = json.bind(testSchema, "ephemeral")
-    const factory = bound.factory({ peerId: "test-peer" })
+    const factory = bound.factory({
+      peerId: "test-peer",
+      binding: bound.identityBinding,
+    })
     const substrate = factory.create(testSchema)
 
     expect(substrate.version()).toBeInstanceOf(TimestampVersion)
@@ -142,7 +151,10 @@ describe("json.bind(ephemeral)", () => {
 
   it("substrate bumps TimestampVersion on flush", () => {
     const bound = json.bind(testSchema, "ephemeral")
-    const factory = bound.factory({ peerId: "test-peer" })
+    const factory = bound.factory({
+      peerId: "test-peer",
+      binding: bound.identityBinding,
+    })
     const substrate = factory.create(testSchema)
 
     const versionBefore = substrate.version()
@@ -161,7 +173,10 @@ describe("json.bind(ephemeral)", () => {
 
   it("each mutation advances the timestamp (monotonic wall clock)", () => {
     const bound = json.bind(testSchema, "ephemeral")
-    const factory = bound.factory({ peerId: "test-peer" })
+    const factory = bound.factory({
+      peerId: "test-peer",
+      binding: bound.identityBinding,
+    })
     const substrate = factory.create(testSchema)
 
     const ts0 = (substrate.version() as TimestampVersion).timestamp
@@ -184,7 +199,10 @@ describe("json.bind(ephemeral)", () => {
 
   it("fromEntirety starts with a current timestamp (not zero)", () => {
     const bound = json.bind(testSchema, "ephemeral")
-    const factory = bound.factory({ peerId: "test-peer" })
+    const factory = bound.factory({
+      peerId: "test-peer",
+      binding: bound.identityBinding,
+    })
 
     // Create a substrate and export its snapshot
     const source = factory.create(testSchema)
@@ -202,7 +220,10 @@ describe("json.bind(ephemeral)", () => {
 
   it("merge with entirety payload absorbs state and bumps timestamp", () => {
     const bound = json.bind(testSchema, "ephemeral")
-    const factory = bound.factory({ peerId: "test-peer" })
+    const factory = bound.factory({
+      peerId: "test-peer",
+      binding: bound.identityBinding,
+    })
     const substrate = factory.create(testSchema)
 
     expect((substrate.version() as TimestampVersion).timestamp).toBe(0)
@@ -225,7 +246,10 @@ describe("json.bind(ephemeral)", () => {
 
   it("merge with since payload applies ops and bumps timestamp", () => {
     const bound = json.bind(testSchema, "ephemeral")
-    const factory = bound.factory({ peerId: "test-peer" })
+    const factory = bound.factory({
+      peerId: "test-peer",
+      binding: bound.identityBinding,
+    })
 
     // Create source substrate, mutate, export delta
     const source = factory.create(testSchema)

@@ -28,7 +28,10 @@ describe("loro.bind()", () => {
 
   it("factory builder produces a working SubstrateFactory", () => {
     const bound = loro.bind(testSchema)
-    const factory = bound.factory({ peerId: "test-peer-abc" })
+    const factory = bound.factory({
+      peerId: "test-peer-abc",
+      binding: bound.identityBinding,
+    })
 
     // Create a substrate and verify it works
     const substrate = factory.create(testSchema)
@@ -40,8 +43,14 @@ describe("loro.bind()", () => {
     const bound = loro.bind(testSchema)
 
     // Create two factories from the same peerId
-    const factory1 = bound.factory({ peerId: "alice-laptop-7f3a" })
-    const factory2 = bound.factory({ peerId: "alice-laptop-7f3a" })
+    const factory1 = bound.factory({
+      peerId: "alice-laptop-7f3a",
+      binding: bound.identityBinding,
+    })
+    const factory2 = bound.factory({
+      peerId: "alice-laptop-7f3a",
+      binding: bound.identityBinding,
+    })
 
     // Create docs and check their peerIdStr matches
     const sub1 = factory1.create(testSchema)
@@ -58,7 +67,10 @@ describe("loro.bind()", () => {
     expect(doc1.peerIdStr).toBe(doc2.peerIdStr)
 
     // And different peerId → different PeerID
-    const factory3 = bound.factory({ peerId: "bob-desktop-9c2d" })
+    const factory3 = bound.factory({
+      peerId: "bob-desktop-9c2d",
+      binding: bound.identityBinding,
+    })
     const sub3 = factory3.create(testSchema)
     const ref3 = createRef(testSchema, sub3)
     const doc3 = unwrap(ref3)

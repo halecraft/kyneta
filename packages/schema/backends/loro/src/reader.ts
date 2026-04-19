@@ -8,7 +8,12 @@
 // LoroText → .toString(), LoroCounter → .value, plain values as-is.
 // Collections: LoroList/LoroMovableList → .length, LoroMap → .keys().
 
-import type { Path, Reader, Schema as SchemaNode } from "@kyneta/schema"
+import type {
+  Path,
+  Reader,
+  SchemaBinding,
+  Schema as SchemaNode,
+} from "@kyneta/schema"
 import type { LoroDoc } from "loro-crdt"
 import { hasKind } from "./loro-guards.js"
 import { resolveContainer } from "./loro-resolve.js"
@@ -63,19 +68,23 @@ function extractValue(resolved: unknown): unknown {
  * @param doc - The LoroDoc to read from.
  * @param schema - The root schema for the document.
  */
-export function loroReader(doc: LoroDoc, schema: SchemaNode): Reader {
+export function loroReader(
+  doc: LoroDoc,
+  schema: SchemaNode,
+  binding?: SchemaBinding,
+): Reader {
   return {
     read(path: Path): unknown {
       if (path.length === 0) {
         // Root read — return the full doc as JSON
         return (doc as any).toJSON()
       }
-      const resolved = resolveContainer(doc, schema, path)
+      const resolved = resolveContainer(doc, schema, path, binding)
       return extractValue(resolved)
     },
 
     arrayLength(path: Path): number {
-      const resolved = resolveContainer(doc, schema, path)
+      const resolved = resolveContainer(doc, schema, path, binding)
       if (!hasKind(resolved)) {
         // Plain array value (unlikely in Loro context, but handle gracefully)
         return Array.isArray(resolved) ? resolved.length : 0
@@ -88,7 +97,7 @@ export function loroReader(doc: LoroDoc, schema: SchemaNode): Reader {
     },
 
     keys(path: Path): string[] {
-      const resolved = resolveContainer(doc, schema, path)
+      const resolved = resolveContainer(doc, schema, path, binding)
       if (!hasKind(resolved)) {
         // Plain object value
         if (
@@ -108,7 +117,7 @@ export function loroReader(doc: LoroDoc, schema: SchemaNode): Reader {
     },
 
     hasKey(path: Path, key: string): boolean {
-      const resolved = resolveContainer(doc, schema, path)
+      const resolved = resolveContainer(doc, schema, path, binding)
       if (!hasKind(resolved)) {
         // Plain object value
         if (

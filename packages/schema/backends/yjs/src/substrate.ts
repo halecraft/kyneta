@@ -9,14 +9,20 @@
 // means subscribing to the kyneta doc observes ALL mutations to the
 // underlying Y.Doc, regardless of source (local kyneta writes,
 // merge, external Y.applyUpdate, external raw Yjs API mutations).
+//
+// Identity-keying: when a SchemaBinding is provided, all Y.Map key
+// lookups and writes use the identity hash instead of the field name.
+// The binding is threaded to the reader, event bridge, and write path.
 
 import type {
   ChangeBase,
   Path,
   PositionCapable,
+  ProductSchema,
   Reader,
   Replica,
   ReplicaFactory,
+  SchemaBinding,
   Schema as SchemaNode,
   Side,
   Substrate,
@@ -27,6 +33,7 @@ import type {
 import {
   BACKING_DOC,
   buildWritableContext,
+  deriveSchemaBinding,
   executeBatch,
   KIND,
 } from "@kyneta/schema"
@@ -65,10 +72,12 @@ const KYNETA_ORIGIN = "kyneta-prepare"
  * @param doc - The Y.Doc to wrap. The substrate does NOT own the doc;
  *   the caller is responsible for its lifecycle.
  * @param schema - The root schema for the document.
+ * @param binding - Optional SchemaBinding for identity-keyed containers.
  */
 export function createYjsSubstrate(
   doc: Y.Doc,
   schema: SchemaNode,
+  binding?: SchemaBinding,
 ): Substrate<YjsVersion> {
   // --- Closure-scoped state ---
 
@@ -99,7 +108,7 @@ export function createYjsSubstrate(
   const rootMap = doc.getMap("root")
 
   // The Reader — live view over the Yjs shared type tree.
-  const reader: Reader = yjsReader(doc, schema)
+  const reader: Reader = yjsReader(doc, schema, binding)
 
   // --- Substrate object ---
 
@@ -126,7 +135,7 @@ export function createYjsSubstrate(
         try {
           doc.transact(() => {
             for (const { path, change } of pendingChanges) {
-              applyChangeToYjs(rootMap, schema, path, change)
+              applyChangeToYjs(rootMap, schema, path, change, binding)
             }
           }, KYNETA_ORIGIN)
           pendingChanges.length = 0
@@ -150,7 +159,7 @@ export function createYjsSubstrate(
           if (path.segments.length === 0) return doc
           if (nodeSchema[KIND] === "scalar" || nodeSchema[KIND] === "sum")
             return undefined
-          return resolveYjsType(rootMap, schema, path as any)
+          return resolveYjsType(rootMap, schema, path as any, binding)
         }
         ;(cachedCtx as any).positionResolver = (
           _nodeSchema: unknown,
@@ -159,7 +168,12 @@ export function createYjsSubstrate(
           return {
             createPosition(index: number, side: Side) {
               // Resolve path to the Y.Text shared type
-              const ytype = resolveYjsType(rootMap, schema, path as any)
+              const ytype = resolveYjsType(
+                rootMap,
+                schema,
+                path as any,
+                binding,
+              )
               if (!(ytype instanceof Y.Text)) {
                 throw new Error(
                   `positionResolver: path does not resolve to a Y.Text`,
@@ -247,7 +261,7 @@ export function createYjsSubstrate(
     }
 
     // Convert Yjs events → kyneta Ops
-    const ops = eventsToOps(events, schema)
+    const ops = eventsToOps(events, schema, binding)
     if (ops.length === 0) {
       return
     }
@@ -308,7 +322,21 @@ export function createYjsSubstrate(
  * - `fromEntirety(payload, schema)` — creates a Y.Doc from an entirety
  *   payload, returns a substrate.
  * - `parseVersion(serialized)` — deserializes a YjsVersion.
+ *
+ * Uses trivialBinding for identity-keying: every path maps to
+ * `deriveIdentity(path, 1)` (generation 1, no renames).
  */
+
+/**
+ * Compute a trivial SchemaBinding for a schema with no migration history.
+ * Every product field maps to `deriveIdentity(path, 1)`.
+ */
+function trivialBinding(schema: SchemaNode): SchemaBinding {
+  if (schema[KIND] === "product") {
+    return deriveSchemaBinding(schema as ProductSchema, {})
+  }
+  return { forward: new Map(), inverse: new Map() }
+}
 // ---------------------------------------------------------------------------
 // yjsReplicaFactory — ReplicaFactory<YjsVersion>
 // ---------------------------------------------------------------------------
@@ -439,18 +467,20 @@ export const yjsSubstrateFactory: SubstrateFactory<YjsVersion> = {
     schema: SchemaNode,
   ): Substrate<YjsVersion> {
     const doc = (replica as any)[BACKING_DOC] as Y.Doc
+    const binding = trivialBinding(schema)
     // No identity injection for the standalone factory (no peerId).
     // Conditional ensureContainers: skip fields that already exist
     // from hydrated state.
-    ensureContainers(doc, schema, true)
-    return createYjsSubstrate(doc, schema)
+    ensureContainers(doc, schema, true, binding)
+    return createYjsSubstrate(doc, schema, binding)
   },
 
   create(schema: SchemaNode): Substrate<YjsVersion> {
     // Fresh doc — unconditional ensureContainers (nothing to conflict with).
     const doc = new Y.Doc()
-    ensureContainers(doc, schema)
-    return createYjsSubstrate(doc, schema)
+    const binding = trivialBinding(schema)
+    ensureContainers(doc, schema, false, binding)
+    return createYjsSubstrate(doc, schema, binding)
   },
 
   fromEntirety(

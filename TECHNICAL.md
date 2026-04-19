@@ -10,7 +10,9 @@ Schema interpreter algebra — pure structure, pluggable interpretations.
 
 Defines a single recursive grammar (`Schema` namespace — five structural constructors plus five first-class CRDT types: `text`, `counter`, `set`, `tree`, `movable`) and a fluent `interpret()` builder that composes a six-layer interpreter stack: bottom → navigation → readable → addressing → caching → writable → changefeed. The `Interpreter` interface has 10 methods — one per `[KIND]` value. The output is a typed `Ref<S>` handle — a callable, navigable, writable, observable document reference. A `Substrate` interface abstracts state management and transfer semantics, enabling different backing stores (plain JS objects, CRDTs) behind the same interpreter stack. Backend packages (`@kyneta/loro-schema`, `@kyneta/yjs-schema`) use `Schema.*` directly via their bind functions (`loro.bind()`, `yjs.bind()`). Also provides shared version-vector algebra (`versionVectorMeet`, `versionVectorCompare`) and platform-agnostic base64 encoding helpers used by backend substrate implementations.
 
-Dependencies: `@kyneta/changefeed`. 1,666 tests.
+Also provides identity-stable schema migrations (`Migration` namespace — 14 primitives in four tiers) with identity-keyed CRDT containers for heterogeneous-version sync.
+
+Dependencies: `@kyneta/changefeed`. 1,832 tests.
 
 ### `@kyneta/changefeed`
 
@@ -162,16 +164,18 @@ Schema-interpreted refs, `LocalRef<T>` from `state()`, and any custom reactive t
 
 ### BoundSchema and Substrate Swapping
 
-A `BoundSchema<S>` captures three choices that define a document type:
+A `BoundSchema<S>` captures three choices that define a document type, plus migration-derived metadata:
 
 1. **Schema** — what shape is the data? (`Schema.struct({ ... })`)
 2. **Factory** — how is the data stored and versioned? (`SubstrateFactory`)
-3. **Strategy** — how does the exchange sync it? (`"concurrent"` | `"sequential"` | `"ephemeral"`)
+3. **Strategy** — how does the exchange sync it? (`"collaborative"` | `"authoritative"` | `"ephemeral"`)
+
+Additionally, `BoundSchema` carries migration-derived metadata: `identityBinding` (a `SchemaBinding` mapping paths to stable identity hashes), `migrationChain` (the chain of migration primitives, or `null`), and `supportedHashes` (the set of schema hashes reachable via non-breaking T0/T1a migrations, used for capability negotiation during sync).
 
 Convenience wrappers make this a one-liner:
-- `loro.bind(schema)` — Loro CRDT substrate, concurrent merge
-- `yjs.bind(schema)` — Yjs CRDT substrate, concurrent merge
-- `json.bind(schema)` — plain JS substrate, sequential merge
+- `loro.bind(schema)` — Loro CRDT substrate, collaborative merge
+- `yjs.bind(schema)` — Yjs CRDT substrate, collaborative merge
+- `json.bind(schema)` — plain JS substrate, authoritative merge
 - `json.bind(schema, "ephemeral")` — ephemeral substrate (TimestampVersion), ephemeral/presence state
 
 `bind()` validates capability compatibility at compile time via the `[CAPS]` phantom brand. Each substrate declares a closed set of supported capabilities: `LoroCaps = "text" | "counter" | "movable" | "tree" | "json"`, `YjsCaps = "text" | "json"`. Schema nodes carry a `[CAPS]` brand accumulating all capability requirements bottom-up via `ExtractCaps<S>`. `yjs.bind()` accepts only schemas where `ExtractCaps<S>` is within `YjsCaps` — passing a schema containing `Schema.counter()` or `Schema.movableList()` is a compile error. `loro.bind()` accepts all capabilities in `LoroCaps`. `json.bind()` accepts all capabilities (`AllowedCaps = string`).
@@ -229,15 +233,17 @@ interpret(schema, substrate.context())
 The Exchange coordinates sync between peers via a six-message protocol — two handshake messages and four sync messages:
 
 1. **establish-request / establish-response** — peer identity handshake
-2. **present** — announce document IDs available for sync
+2. **present** — announce document IDs available for sync (includes `schemaHash` and `supportedHashes`)
 3. **interest** — request a specific document's state (with optional version for delta)
 4. **offer** — deliver document state (snapshot or delta payload)
 5. **destroy** — permanently remove a document from the sync graph; `suspend()` detaches without destroying, allowing later resumption
 
 The synchronizer is a TEA state machine — pure model updates, command outputs. Three sync algorithms are dispatched by the `BoundSchema`'s merge strategy:
-- **Concurrent**: bidirectional exchange, concurrent versions possible (Loro, Yjs)
-- **Sequential**: request/response, total order (JSON)
+- **Collaborative**: bidirectional exchange, concurrent versions possible (Loro, Yjs)
+- **Authoritative**: request/response, total order (JSON)
 - **Ephemeral**: unidirectional push/broadcast, timestamp-based (ephemeral/presence)
+
+**Schema compatibility:** The `present` message includes the document's `supportedHashes` — the set of schema hashes reachable via T0/T1a (non-breaking) migrations. `handlePresent` uses set-intersection over `supportedHashes` instead of exact hash equality, so peers at different schema versions (connected by additive or rename migrations) can sync without coordination. Disjoint hash sets are rejected.
 
 Multi-hop relay: when the synchronizer imports a delta from peer A, it relays to all other synced peers (excluding A) via `buildRelayPush`.
 

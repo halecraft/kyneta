@@ -8,6 +8,12 @@
 // This grammar is backend-agnostic. Substrates declare closed capability
 // sets via `[CAPS]` and enforce them at `bind()` time.
 
+import type {
+  IdentityManifest,
+  MigrationInput,
+  MigrationPrimitive,
+} from "./migration.js"
+import { migrationMethods } from "./migration.js"
 import type { Segment } from "./path.js"
 
 // ---------------------------------------------------------------------------
@@ -123,6 +129,16 @@ export interface ProductSchema<
   readonly fields: Readonly<F>
   readonly discriminantKey?: string
   readonly [CAPS]?: Caps
+
+  // -- Migration methods (mixed in by product() via Object.assign) ----------
+
+  /** Append a migration step. Accepts non-T2 primitives directly,
+   *  or T2 primitives wrapped via `.drop()`. */
+  migrated(...inputs: MigrationInput[]): ProductSchema<F, Caps>
+  /** Append an epoch boundary (T3 or bare reset). */
+  epoch(...primitives: MigrationPrimitive[]): ProductSchema<F, Caps>
+  /** Set the base identity manifest (must precede migrated/epoch). */
+  migrationBase(manifest: IdentityManifest): ProductSchema<F, Caps>
 }
 
 // --- Sequence ----------------------------------------------------------------
@@ -311,12 +327,7 @@ export type PlainSchema =
 export interface PlainProductSchema<
   F extends Record<string, PlainSchema> = Record<string, PlainSchema>,
   Caps extends string = string,
-> {
-  readonly [KIND]: "product"
-  readonly fields: Readonly<F>
-  readonly discriminantKey?: string
-  readonly [CAPS]?: Caps
-}
+> extends ProductSchema<F, Caps> {}
 
 /**
  * Sequence (ordered collection) constrained to plain children.
@@ -324,11 +335,7 @@ export interface PlainProductSchema<
 export interface PlainSequenceSchema<
   I extends PlainSchema = PlainSchema,
   Caps extends string = string,
-> {
-  readonly [KIND]: "sequence"
-  readonly item: I
-  readonly [CAPS]?: Caps
-}
+> extends SequenceSchema<I, Caps> {}
 
 /**
  * Map (dynamic-key collection) constrained to plain children.
@@ -336,11 +343,7 @@ export interface PlainSequenceSchema<
 export interface PlainMapSchema<
   I extends PlainSchema = PlainSchema,
   Caps extends string = string,
-> {
-  readonly [KIND]: "map"
-  readonly item: I
-  readonly [CAPS]?: Caps
-}
+> extends MapSchema<I, Caps> {}
 
 /**
  * Positional sum constrained to plain variants.
@@ -348,12 +351,7 @@ export interface PlainMapSchema<
 export interface PlainPositionalSumSchema<
   V extends readonly PlainSchema[] = readonly PlainSchema[],
   Caps extends string = string,
-> {
-  readonly [KIND]: "sum"
-  readonly variants: V
-  readonly discriminant?: undefined
-  readonly [CAPS]?: Caps
-}
+> extends PositionalSumSchema<V, Caps> {}
 
 /**
  * Discriminated sum constrained to plain variants.
@@ -362,13 +360,7 @@ export interface PlainDiscriminatedSumSchema<
   D extends string = string,
   V extends readonly PlainProductSchema[] = readonly PlainProductSchema[],
   Caps extends string = string,
-> {
-  readonly [KIND]: "sum"
-  readonly discriminant: D
-  readonly variants: V
-  readonly variantMap: Readonly<Record<string, PlainProductSchema>>
-  readonly [CAPS]?: Caps
-}
+> extends DiscriminatedSumSchema<D, V, Caps> {}
 
 // ---------------------------------------------------------------------------
 // ExtractCaps — single-level indexed access for capability extraction
@@ -418,7 +410,7 @@ function scalar<K extends ScalarKind, V extends ScalarPlain<K>>(
 function product<F extends Record<string, Schema>>(
   fields: F,
 ): ProductSchema<F, ExtractCaps<F[keyof F]>> {
-  return { [KIND]: "product", fields } as any
+  return Object.assign({ [KIND]: "product", fields }, migrationMethods) as any
 }
 
 function sequence<I extends Schema>(
@@ -454,7 +446,8 @@ export function buildVariantMap<D extends string>(
 ): Record<string, PlainProductSchema> {
   const map: Record<string, PlainProductSchema> = {}
   for (let i = 0; i < variants.length; i++) {
-    const variant = variants[i]!
+    const variant = variants[i]
+    if (!variant) continue
     const fieldSchema = variant.fields[discriminant]
     if (!fieldSchema) {
       throw new Error(
@@ -568,7 +561,7 @@ function struct<F extends Record<string, Schema>>(
 struct.json = function structJson<F extends Record<string, PlainSchema>>(
   fields: F,
 ): ProductSchema<F, "json"> {
-  return { [KIND]: "product", fields } as any
+  return product(fields) as any
 }
 
 /**

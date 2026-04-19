@@ -156,7 +156,9 @@ describe("Exchange", () => {
       const exchange = new Exchange({ id: "alice-123" })
       exchange.get("doc-1", Doc)
 
-      expect(builder).toHaveBeenCalledWith({ peerId: "alice-123" })
+      expect(builder).toHaveBeenCalledWith(
+        expect.objectContaining({ peerId: "alice-123" }),
+      )
     })
 
     it("factory builder is called per use site (no caching)", () => {
@@ -175,7 +177,7 @@ describe("Exchange", () => {
       for (const call of builder.mock.calls as unknown as Array<
         [{ peerId: string }]
       >) {
-        expect(call[0]).toEqual({ peerId: "test" })
+        expect(call[0]).toEqual(expect.objectContaining({ peerId: "test" }))
       }
     })
 
@@ -198,8 +200,12 @@ describe("Exchange", () => {
       exchangeB.get("doc-1", Doc)
 
       // Each exchange passes its own peerId to every builder invocation
-      expect(builder).toHaveBeenCalledWith({ peerId: "alice" })
-      expect(builder).toHaveBeenCalledWith({ peerId: "bob" })
+      expect(builder).toHaveBeenCalledWith(
+        expect.objectContaining({ peerId: "alice" }),
+      )
+      expect(builder).toHaveBeenCalledWith(
+        expect.objectContaining({ peerId: "bob" }),
+      )
       expect(peerIds).toContain("alice")
       expect(peerIds).toContain("bob")
     })

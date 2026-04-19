@@ -2,6 +2,7 @@
 
 import { loro } from "@kyneta/loro-schema"
 import {
+  type BoundSchema,
   type FactoryBuilder,
   json,
   plainReplicaFactory,
@@ -18,8 +19,11 @@ import { createCapabilities, DEFAULT_REPLICAS } from "../capabilities.js"
 /**
  * Minimal resolveFactory for tests: calls the builder with a fixed peerId.
  */
-const resolveFactory = (builder: FactoryBuilder): SubstrateFactory =>
-  builder({ peerId: "test" })
+const resolveFactory = (
+  builder: FactoryBuilder,
+  bound: BoundSchema,
+): SubstrateFactory =>
+  builder({ peerId: "test", binding: bound.identityBinding })
 
 // ---------------------------------------------------------------------------
 // Tests

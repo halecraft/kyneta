@@ -16,11 +16,16 @@
 // Root scalar fields (non-container types like Schema.string()) are
 // stored in a single root LoroMap named PROPS_KEY ("_props"). This
 // avoids creating a separate root container per scalar field.
+//
+// Identity-keying: every product-field boundary uses the identity hash
+// (from SchemaBinding) instead of the field name as the Loro container
+// key. The binding is threaded through resolveContainer and stepIntoLoro.
 
 import {
   advanceSchema,
   KIND,
   type Path,
+  type SchemaBinding,
   type Schema as SchemaNode,
   type Segment,
 } from "@kyneta/schema"
@@ -50,6 +55,8 @@ export const PROPS_KEY = "_props"
  * Container fields are accessed via `doc.getText(key)`, `doc.getMap(key)`,
  * etc. Non-container fields (scalars, sums) are stored in the shared
  * `_props` LoroMap and read via `doc.getMap(PROPS_KEY).get(key)`.
+ *
+ * After identity-keying, `key` is the identity hash (not the field name).
  */
 function stepFromDoc(
   doc: LoroDoc,
@@ -91,8 +98,16 @@ function stepFromDoc(
 /**
  * Step into a child of a Loro container using the segment and runtime
  * container kind discrimination.
+ *
+ * For Map kind, uses the identity hash (if provided) instead of the
+ * segment's resolved field name. Lists and MovableLists use integer
+ * indices — unchanged.
  */
-function stepFromContainer(container: unknown, segment: Segment): unknown {
+function stepFromContainer(
+  container: unknown,
+  segment: Segment,
+  identity?: string,
+): unknown {
   if (!hasKind(container)) {
     // Plain value or unknown — cannot step further
     return undefined
@@ -103,7 +118,7 @@ function stepFromContainer(container: unknown, segment: Segment): unknown {
 
   switch (kind) {
     case "Map":
-      return (container as LoroMap).get(resolved as string)
+      return (container as LoroMap).get(identity ?? (resolved as string))
 
     case "List":
       return (container as LoroList).get(resolved as number)
@@ -127,26 +142,34 @@ function stepFromContainer(container: unknown, segment: Segment): unknown {
  *
  * If `current` is a LoroDoc (root), dispatches via the typed root
  * container accessors using the schema to determine the container type.
+ * The key used is the identity hash when provided.
  *
  * If `current` is a Loro container, dispatches via `.get()` using
- * `.kind()` for runtime type discrimination.
+ * `.kind()` for runtime type discrimination. For Maps, uses the
+ * identity hash when provided.
  *
  * @param current - The current position (LoroDoc or a container)
  * @param _currentSchema - The schema at the current position (used for root dispatch)
  * @param nextSchema - The schema of the child being navigated to
  * @param segment - The path segment to follow
+ * @param identity - Optional identity hash to use instead of the segment's resolved value
  */
 export function stepIntoLoro(
   current: unknown,
   _currentSchema: SchemaNode,
   nextSchema: SchemaNode,
   segment: Segment,
+  identity?: string,
 ): unknown {
   if (isLoroDoc(current)) {
-    return stepFromDoc(current, nextSchema, segment.resolve() as string)
+    return stepFromDoc(
+      current,
+      nextSchema,
+      identity ?? (segment.resolve() as string),
+    )
   }
 
-  return stepFromContainer(current, segment)
+  return stepFromContainer(current, segment, identity)
 }
 
 // ---------------------------------------------------------------------------
@@ -159,6 +182,11 @@ export function stepIntoLoro(
  * Left-folds over path segments using `advanceSchema` for pure schema
  * descent and `stepIntoLoro` for Loro-specific container navigation.
  *
+ * When a `binding` is provided, each step computes the absolute schema
+ * path and looks up the identity hash from `binding.forward`. This
+ * identity hash is used instead of the field name at every product-field
+ * boundary (root and nested).
+ *
  * Returns the Loro container or scalar value at the terminal position.
  * For an empty path, returns the doc itself.
  */
@@ -166,12 +194,27 @@ export function resolveContainer(
   doc: LoroDoc,
   rootSchema: SchemaNode,
   path: Path,
+  binding?: SchemaBinding,
 ): unknown {
   let current: unknown = doc
   let schema = rootSchema
+  // Track the accumulated absolute schema path for identity lookup.
+  // Only string (key) segments contribute — index segments are structural
+  // and don't participate in identity-keying.
+  let absPath = ""
   for (const seg of path.segments) {
     const nextSchema = advanceSchema(schema, seg)
-    current = stepIntoLoro(current, schema, nextSchema, seg)
+
+    // Compute identity for this step if binding is provided and the
+    // segment is a key (field name at a product boundary).
+    let identity: string | undefined
+    if (binding && seg.role === "key") {
+      const segStr = seg.resolve() as string
+      absPath = absPath ? `${absPath}.${segStr}` : segStr
+      identity = binding.forward.get(absPath) as string | undefined
+    }
+
+    current = stepIntoLoro(current, schema, nextSchema, seg, identity)
     schema = nextSchema
   }
   return current

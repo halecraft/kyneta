@@ -201,6 +201,7 @@ export type WirePresentMsg = {
     rt: [string, number, number]
     ms: MergeStrategyWireValue
     sh: string
+    shs?: string[]
   }>
 }
 

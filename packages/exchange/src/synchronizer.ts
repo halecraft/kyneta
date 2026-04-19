@@ -112,6 +112,7 @@ export type DocCreationCallback = (
   replicaType: ReplicaType,
   mergeStrategy: MergeStrategy,
   schemaHash: string,
+  supportedHashes?: readonly string[],
 ) => void
 
 /**
@@ -1076,6 +1077,7 @@ export class Synchronizer {
           effect.replicaType,
           effect.mergeStrategy,
           effect.schemaHash,
+          effect.supportedHashes,
         )
         break
       case "ensure-doc-dismissed":

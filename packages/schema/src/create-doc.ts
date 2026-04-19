@@ -97,7 +97,10 @@ export const createDoc: CreateDoc = ((
   bound: BoundSchema<any, any>,
   payload?: SubstratePayload,
 ): any => {
-  const factory = bound.factory({ peerId: crypto.randomUUID() })
+  const factory = bound.factory({
+    peerId: crypto.randomUUID(),
+    binding: bound.identityBinding,
+  })
   const substrate = payload
     ? factory.fromEntirety(payload, bound.schema)
     : factory.create(bound.schema)

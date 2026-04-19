@@ -202,6 +202,38 @@ export {
   readable,
   writable,
 } from "./layers.js"
+// Migration — schema migration primitives and identity derivation
+export type {
+  Droppable,
+  DroppedPrimitive,
+  EpochStep,
+  IdentityManifest,
+  IdentityOrigin,
+  MigrationChain,
+  MigrationChainEntry,
+  MigrationInput,
+  MigrationPrimitive,
+  MigrationStep,
+  MigrationTier,
+  NodeIdentity,
+  NonT2Primitive,
+  SchemaBinding,
+  T2Primitive,
+  TransformProof,
+} from "./migration.js"
+export {
+  deriveIdentity,
+  deriveManifest,
+  deriveSchemaBinding,
+  deriveStepTier,
+  deriveTier,
+  getMigrationChain,
+  MIGRATION_CHAIN,
+  Migration,
+  migrationMethods,
+  snapshotManifest,
+  validateChain,
+} from "./migration.js"
 // Native — NativeMap functor, NATIVE/SUBSTRATE symbols, HasNative
 export type {
   HasNative,
@@ -328,6 +360,7 @@ export type {
 export {
   BACKING_DOC,
   computeSchemaHash,
+  fnv1a128,
   replicaTypesCompatible,
   STRUCTURAL_YJS_CLIENT_ID,
 } from "./substrate.js"

@@ -53,6 +53,9 @@ export type DocEntry = {
 
   /** A deterministic hash representing the document's schema */
   schemaHash: string
+
+  /** All schema hashes this peer supports for this doc (enables heterogeneous-version sync). */
+  supportedHashes?: readonly string[]
 }
 
 export type SyncPeerState = {
@@ -101,6 +104,7 @@ export type SyncInput =
       replicaType: ReplicaType
       mergeStrategy: MergeStrategy
       schemaHash: string
+      supportedHashes?: readonly string[]
     }
   | {
       type: "sync/doc-defer"
@@ -108,6 +112,7 @@ export type SyncInput =
       replicaType: ReplicaType
       mergeStrategy: MergeStrategy
       schemaHash: string
+      supportedHashes?: readonly string[]
     }
   | { type: "sync/local-doc-change"; docId: DocId; version: string }
   | { type: "sync/doc-delete"; docId: DocId }
@@ -158,6 +163,7 @@ export type SyncEffect =
       replicaType: ReplicaType
       mergeStrategy: MergeStrategy
       schemaHash: string
+      supportedHashes?: readonly string[]
     }
   | {
       type: "ensure-doc-dismissed"
@@ -326,16 +332,33 @@ function announceDoc(
   schemaHash: string,
   model: SyncModel,
   canShare: SyncPredicate,
+  supportedHashes?: readonly string[],
 ): { peerIds: PeerId[]; present: SyncEffect | undefined } {
   const allPeers = getAvailablePeers(model)
   const peerIds = filterPeersByShare(model, allPeers, docId, canShare)
   if (peerIds.length === 0) return { peerIds, present: undefined }
+  const docEntry: {
+    docId: DocId
+    replicaType: ReplicaType
+    mergeStrategy: MergeStrategy
+    schemaHash: string
+    supportedHashes?: readonly string[]
+  } = {
+    docId,
+    replicaType,
+    mergeStrategy,
+    schemaHash,
+  }
+  // Only include supportedHashes if it carries more info than the primary hash alone
+  if (supportedHashes && supportedHashes.length > 1) {
+    docEntry.supportedHashes = supportedHashes
+  }
   const present: SyncEffect = {
     type: "send-to-peers",
     to: peerIds,
     message: {
       type: "present",
-      docs: [{ docId, replicaType, mergeStrategy, schemaHash }],
+      docs: [docEntry],
     },
   }
   return { peerIds, present }
@@ -356,12 +379,23 @@ function buildPresent(
     .map(docId => {
       const entry = model.documents.get(docId)
       if (!entry) return null
-      return {
+      const doc: {
+        docId: DocId
+        replicaType: ReplicaType
+        mergeStrategy: MergeStrategy
+        schemaHash: string
+        supportedHashes?: readonly string[]
+      } = {
         docId,
         replicaType: entry.replicaType,
         mergeStrategy: entry.mergeStrategy,
         schemaHash: entry.schemaHash,
       }
+      // Only include supportedHashes if it carries more info than the primary hash alone
+      if (entry.supportedHashes && entry.supportedHashes.length > 1) {
+        doc.supportedHashes = entry.supportedHashes
+      }
+      return doc
     })
     .filter((d): d is NonNullable<typeof d> => d !== null)
   if (docs.length === 0) return undefined
@@ -638,6 +672,7 @@ function handleDocEnsure(
     replicaType: ReplicaType
     mergeStrategy: MergeStrategy
     schemaHash: string
+    supportedHashes?: readonly string[]
   },
   model: SyncModel,
   canShare: SyncPredicate,
@@ -650,15 +685,18 @@ function handleDocEnsure(
     // which will overwrite the entry with the new mode/version
   }
 
-  const documents = new Map(model.documents)
-  documents.set(msg.docId, {
+  const entry: DocEntry = {
     docId: msg.docId,
     mode: msg.mode,
     version: msg.version,
     replicaType: msg.replicaType,
     mergeStrategy: msg.mergeStrategy,
     schemaHash: msg.schemaHash,
-  })
+  }
+  if (msg.supportedHashes) entry.supportedHashes = msg.supportedHashes
+
+  const documents = new Map(model.documents)
+  documents.set(msg.docId, entry)
 
   // Announce new doc and request sync from all available peers.
   // We send both present (so peers learn we have the doc) and interest
@@ -672,6 +710,7 @@ function handleDocEnsure(
     msg.schemaHash,
     updatedModel,
     canShare,
+    msg.supportedHashes,
   )
   if (peerIds.length === 0) {
     return [updatedModel]
@@ -699,21 +738,25 @@ function handleDocDefer(
     replicaType: ReplicaType
     mergeStrategy: MergeStrategy
     schemaHash: string
+    supportedHashes?: readonly string[]
   },
   model: SyncModel,
   canShare: SyncPredicate,
 ): SyncTransition {
   if (model.documents.has(msg.docId)) return [model]
 
-  const documents = new Map(model.documents)
-  documents.set(msg.docId, {
+  const entry: DocEntry = {
     docId: msg.docId,
     mode: "deferred",
     version: "",
     replicaType: msg.replicaType,
     mergeStrategy: msg.mergeStrategy,
     schemaHash: msg.schemaHash,
-  })
+  }
+  if (msg.supportedHashes) entry.supportedHashes = msg.supportedHashes
+
+  const documents = new Map(model.documents)
+  documents.set(msg.docId, entry)
 
   const updatedModel: SyncModel = { ...model, documents }
   const { present } = announceDoc(
@@ -723,6 +766,7 @@ function handleDocDefer(
     msg.schemaHash,
     updatedModel,
     canShare,
+    msg.supportedHashes,
   )
 
   return [updatedModel, present]
@@ -837,6 +881,7 @@ function handlePresent(
       replicaType: ReplicaType
       mergeStrategy: MergeStrategy
       schemaHash: string
+      supportedHashes?: readonly string[]
     }>
   },
   model: SyncModel,
@@ -853,6 +898,7 @@ function handlePresent(
     replicaType,
     mergeStrategy,
     schemaHash,
+    supportedHashes: remoteSupportedHashes,
   } of message.docs) {
     const docEntry = model.documents.get(docId)
     if (docEntry) {
@@ -866,8 +912,21 @@ function handlePresent(
         })
         continue
       }
-      // Check schema hash compatibility
-      if (docEntry.schemaHash !== schemaHash) {
+      // Check schema hash compatibility via set-intersection.
+      // Legacy peers that don't send supportedHashes are assumed to
+      // support only their primary hash.
+      const localHashes = new Set(
+        docEntry.supportedHashes ?? [docEntry.schemaHash],
+      )
+      const remoteHashes = new Set(remoteSupportedHashes ?? [schemaHash])
+      let compatible = false
+      for (const h of localHashes) {
+        if (remoteHashes.has(h)) {
+          compatible = true
+          break
+        }
+      }
+      if (!compatible) {
         warnings.push({
           type: "notify/warning",
           message:
@@ -912,6 +971,7 @@ function handlePresent(
         replicaType,
         mergeStrategy,
         schemaHash,
+        supportedHashes: remoteSupportedHashes,
       })
     }
   }

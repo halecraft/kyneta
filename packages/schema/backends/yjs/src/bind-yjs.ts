@@ -21,6 +21,7 @@
 import type {
   CrdtStrategy,
   Replica,
+  SchemaBinding,
   Schema as SchemaNode,
   Substrate,
   SubstrateFactory,
@@ -79,7 +80,10 @@ function hashPeerId(peerId: string): number {
  * on every new Y.Doc with a deterministic uint32 clientID derived
  * from the exchange's string peerId.
  */
-function createYjsFactory(peerId: string): SubstrateFactory<YjsVersion> {
+function createYjsFactory(
+  peerId: string,
+  binding: SchemaBinding,
+): SubstrateFactory<YjsVersion> {
   const numericClientId = hashPeerId(peerId)
 
   return {
@@ -101,16 +105,16 @@ function createYjsFactory(peerId: string): SubstrateFactory<YjsVersion> {
       doc.clientID = numericClientId
       // Conditional ensureContainers: skip fields that already exist
       // from hydrated state (each set() is a CRDT write).
-      ensureContainers(doc, schema, true)
-      return createYjsSubstrate(doc, schema)
+      ensureContainers(doc, schema, true, binding)
+      return createYjsSubstrate(doc, schema, binding)
     },
 
     create(schema: SchemaNode): Substrate<YjsVersion> {
       // Fresh doc — set identity immediately, unconditional containers.
       const doc = new Y.Doc()
       doc.clientID = numericClientId
-      ensureContainers(doc, schema)
-      return createYjsSubstrate(doc, schema)
+      ensureContainers(doc, schema, false, binding)
+      return createYjsSubstrate(doc, schema, binding)
     },
 
     fromEntirety(
@@ -155,11 +159,11 @@ export const yjs: SubstrateNamespace<CrdtStrategy, YjsCaps, YjsNativeMap> =
   createSubstrateNamespace<CrdtStrategy, YjsCaps, YjsNativeMap>({
     strategies: {
       collaborative: {
-        factory: ctx => createYjsFactory(ctx.peerId),
+        factory: ctx => createYjsFactory(ctx.peerId, ctx.binding),
         replicaFactory: yjsReplicaFactory,
       },
       ephemeral: {
-        factory: ctx => createYjsFactory(ctx.peerId),
+        factory: ctx => createYjsFactory(ctx.peerId, ctx.binding),
         replicaFactory: yjsReplicaFactory,
       },
     },

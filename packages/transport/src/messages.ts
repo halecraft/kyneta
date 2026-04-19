@@ -60,6 +60,7 @@ export type PresentMsg = {
     replicaType: ReplicaType
     mergeStrategy: MergeStrategy
     schemaHash: string
+    supportedHashes?: readonly string[]
   }>
 }
 

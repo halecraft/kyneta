@@ -69,6 +69,8 @@ function ensureDoc(
     mode?: "interpret" | "replicate"
     mergeStrategy?: "collaborative" | "authoritative" | "ephemeral"
     version?: string
+    schemaHash?: string
+    supportedHashes?: readonly string[]
   },
 ): [SyncModel, SyncEffect[], SyncNotification[]] {
   const [m, e, n] = update(
@@ -79,7 +81,8 @@ function ensureDoc(
       version: opts?.version ?? "v1",
       replicaType: ["test", 0, 0],
       mergeStrategy: opts?.mergeStrategy ?? "collaborative",
-      schemaHash: "abc123",
+      schemaHash: opts?.schemaHash ?? "abc123",
+      supportedHashes: opts?.supportedHashes,
     },
     model,
   )
@@ -673,6 +676,100 @@ describe("sync-program", () => {
             replicaType: ["test", 0, 0],
             mergeStrategy: "collaborative",
             schemaHash: "different-hash",
+          },
+        ],
+      })
+
+      const warnings = notificationsOfType(notifications, "notify/warning")
+      expect(warnings.length).toBe(1)
+      expect(defined(warnings[0]).message).toContain("schema hash mismatch")
+
+      const sends = effectsOfType(effects, "send-to-peer")
+      expect(sends.length).toBe(0)
+    })
+
+    it("peers with overlapping supportedHashes proceed to sync despite different primary hashes", () => {
+      const update = makeUpdate()
+      let model = initSync(alice)
+      ;[model] = addPeer(update, model, "bob", bob)
+      // Local doc has hash "v2" but supports both "v1" and "v2"
+      ;[model] = ensureDoc(update, model, "doc-1", {
+        schemaHash: "v2",
+        supportedHashes: ["v1", "v2"],
+      })
+
+      // Remote peer has hash "v1" but supports "v1"
+      const [, effects, notifications] = receiveMessage(update, model, "bob", {
+        type: "present",
+        docs: [
+          {
+            docId: "doc-1",
+            replicaType: ["test", 0, 0],
+            mergeStrategy: "collaborative",
+            schemaHash: "v1",
+            supportedHashes: ["v1"],
+          },
+        ],
+      })
+
+      // Should NOT produce warnings — hashes overlap at "v1"
+      const warnings = notificationsOfType(notifications, "notify/warning")
+      expect(warnings.length).toBe(0)
+
+      // Should send interest (sync proceeds)
+      const sends = effectsOfType(effects, "send-to-peer")
+      expect(sends.length).toBe(1)
+      expect(defined(sends[0]).message.type).toBe("interest")
+    })
+
+    it("legacy peer without supportedHashes falls back to exact primary hash match", () => {
+      const update = makeUpdate()
+      let model = initSync(alice)
+      ;[model] = addPeer(update, model, "bob", bob)
+      ;[model] = ensureDoc(update, model, "doc-1")
+
+      // Remote peer sends same schemaHash, no supportedHashes field
+      const [, effects, notifications] = receiveMessage(update, model, "bob", {
+        type: "present",
+        docs: [
+          {
+            docId: "doc-1",
+            replicaType: ["test", 0, 0],
+            mergeStrategy: "collaborative",
+            schemaHash: "abc123",
+            // NO supportedHashes — legacy peer
+          },
+        ],
+      })
+
+      // Should proceed (exact match on primary hash)
+      const warnings = notificationsOfType(notifications, "notify/warning")
+      expect(warnings.length).toBe(0)
+
+      const sends = effectsOfType(effects, "send-to-peer")
+      expect(sends.length).toBe(1)
+      expect(defined(sends[0]).message.type).toBe("interest")
+    })
+
+    it("disjoint supportedHashes reject sync", () => {
+      const update = makeUpdate()
+      let model = initSync(alice)
+      ;[model] = addPeer(update, model, "bob", bob)
+      ;[model] = ensureDoc(update, model, "doc-1", {
+        schemaHash: "v3",
+        supportedHashes: ["v2", "v3"],
+      })
+
+      // Remote peer supports only v1 — no overlap with local [v2, v3]
+      const [, effects, notifications] = receiveMessage(update, model, "bob", {
+        type: "present",
+        docs: [
+          {
+            docId: "doc-1",
+            replicaType: ["test", 0, 0],
+            mergeStrategy: "collaborative",
+            schemaHash: "v1",
+            supportedHashes: ["v1"],
           },
         ],
       })

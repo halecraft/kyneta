@@ -13,8 +13,13 @@
 // Root container strategy: All schema fields are children of a single
 // root `Y.Map` obtained via `doc.getMap("root")`. This root map holds
 // shared types (Y.Text, Y.Array, Y.Map) and plain value slots uniformly.
+//
+// Identity-keying: when a SchemaBinding is provided, every product-field
+// boundary uses the identity hash (from binding.forward) instead of the
+// field name as the Y.Map key. The binding is threaded through all three
+// functions: ensureContainers, ensureRootField, ensureMapContainers.
 
-import type { Schema as SchemaNode } from "@kyneta/schema"
+import type { SchemaBinding, Schema as SchemaNode } from "@kyneta/schema"
 import { KIND, STRUCTURAL_YJS_CLIENT_ID, Zero } from "@kyneta/schema"
 import * as Y from "yjs"
 
@@ -44,15 +49,22 @@ import * as Y from "yjs"
  * then restores the caller's clientID. This produces byte-identical
  * structural ops across all peers, enabling Yjs deduplication on merge.
  *
+ * **Identity-keying:** When a `binding` is provided, each root field's
+ * key in the root Y.Map is the identity hash from `binding.forward`
+ * instead of the field name. Nested product fields are similarly keyed
+ * via `ensureMapContainers`.
+ *
  * @param doc - The Y.Doc to prepare
  * @param schema - The root document schema (a ProductSchema)
  * @param conditional - If true, skip fields that already exist in the root map.
  *   Context: jj:smmulzkm (two-phase substrate construction)
+ * @param binding - Optional SchemaBinding for identity-keyed containers.
  */
 export function ensureContainers(
   doc: Y.Doc,
   schema: SchemaNode,
   conditional = false,
+  binding?: SchemaBinding,
 ): void {
   const rootMap = doc.getMap("root")
 
@@ -70,8 +82,16 @@ export function ensureContainers(
       for (const [key, fieldSchema] of Object.entries(schema.fields).sort(
         ([a], [b]) => a.localeCompare(b),
       )) {
-        if (conditional && rootMap.has(key)) continue
-        ensureRootField(rootMap, key, fieldSchema as SchemaNode)
+        const identity = binding?.forward.get(key) as string | undefined
+        const mapKey = identity ?? key
+        if (conditional && rootMap.has(mapKey)) continue
+        ensureRootField(
+          rootMap,
+          mapKey,
+          fieldSchema as SchemaNode,
+          binding,
+          key,
+        )
       }
     })
   } finally {
@@ -94,11 +114,19 @@ export function ensureContainers(
  * - `"map"` → empty Y.Map
  * - `"scalar"` / `"sum"` → Zero.structural default
  * - `"counter"` / `"set"` / `"tree"` / `"movable"` → throw (not supported by Yjs)
+ *
+ * @param rootMap - The root Y.Map to set the field on.
+ * @param key - The key to use in the root map (identity hash or field name).
+ * @param fieldSchema - The schema for this field.
+ * @param binding - Optional SchemaBinding for nested identity-keying.
+ * @param prefix - The absolute schema path prefix for this field (used for nested lookups).
  */
 function ensureRootField(
   rootMap: Y.Map<unknown>,
   key: string,
   fieldSchema: SchemaNode,
+  binding?: SchemaBinding,
+  prefix?: string,
 ): void {
   switch (fieldSchema[KIND]) {
     case "text":
@@ -106,7 +134,7 @@ function ensureRootField(
       return
 
     case "product":
-      rootMap.set(key, ensureMapContainers(fieldSchema))
+      rootMap.set(key, ensureMapContainers(fieldSchema, binding, prefix))
       return
 
     case "sequence":
@@ -152,8 +180,21 @@ function ensureRootField(
  * Only creates containers for fields that require Yjs shared types
  * (text → Y.Text, product → Y.Map, sequence → Y.Array, map → Y.Map).
  * Scalar and sum fields are set to their structural zero defaults.
+ *
+ * **Identity-keying:** When a `binding` is provided, computes the
+ * absolute schema path for each nested field (`prefix.fieldName`) and
+ * looks up the identity hash from `binding.forward`. The identity hash
+ * is used as the Y.Map entry key instead of the field name.
+ *
+ * @param schema - The product schema for this nested map.
+ * @param binding - Optional SchemaBinding for identity-keyed containers.
+ * @param prefix - The absolute schema path prefix (e.g. "meta" for fields under meta).
  */
-function ensureMapContainers(schema: SchemaNode): Y.Map<unknown> {
+function ensureMapContainers(
+  schema: SchemaNode,
+  binding?: SchemaBinding,
+  prefix?: string,
+): Y.Map<unknown> {
   const map = new Y.Map()
 
   if (schema[KIND] !== "product") return map
@@ -161,28 +202,32 @@ function ensureMapContainers(schema: SchemaNode): Y.Map<unknown> {
   for (const [key, fieldSchema] of Object.entries(
     schema.fields as Record<string, SchemaNode>,
   ).sort(([a], [b]) => a.localeCompare(b))) {
+    const absPath = prefix ? `${prefix}.${key}` : key
+    const identity = binding?.forward.get(absPath) as string | undefined
+    const mapKey = identity ?? key
+
     switch (fieldSchema[KIND]) {
       case "text":
-        map.set(key, new Y.Text())
+        map.set(mapKey, new Y.Text())
         break
 
       case "product":
-        map.set(key, ensureMapContainers(fieldSchema))
+        map.set(mapKey, ensureMapContainers(fieldSchema, binding, absPath))
         break
 
       case "sequence":
-        map.set(key, new Y.Array())
+        map.set(mapKey, new Y.Array())
         break
 
       case "map":
-        map.set(key, new Y.Map())
+        map.set(mapKey, new Y.Map())
         break
 
       case "scalar":
       case "sum": {
         const zero = Zero.structural(fieldSchema)
         if (zero !== undefined) {
-          map.set(key, zero)
+          map.set(mapKey, zero)
         }
         break
       }

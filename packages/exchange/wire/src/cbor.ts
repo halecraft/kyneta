@@ -126,12 +126,17 @@ function toWireFormat(msg: ChannelMsg): WireMessage {
           if (ms === undefined) {
             throw new Error(`Unknown merge strategy: ${d.mergeStrategy}`)
           }
-          return {
+          const entry: WirePresentMsg["docs"][number] = {
             d: d.docId,
             rt: [...d.replicaType] as [string, number, number],
             ms,
             sh: d.schemaHash,
           }
+          // Only include supportedHashes when it carries more than the primary hash
+          if (d.supportedHashes && d.supportedHashes.length > 1) {
+            entry.shs = [...d.supportedHashes]
+          }
+          return entry
         }),
       } satisfies WirePresentMsg
 
@@ -205,12 +210,16 @@ function fromWireFormat(wire: WireMessage): ChannelMsg {
           if (!mergeStrategy) {
             throw new Error(`Unknown wire merge strategy: ${d.ms}`)
           }
-          return {
+          const entry: PresentMsg["docs"][number] = {
             docId: d.d,
             replicaType: d.rt as readonly [string, number, number],
             mergeStrategy,
             schemaHash: d.sh,
           }
+          if (d.shs) {
+            entry.supportedHashes = d.shs
+          }
+          return entry
         }),
       } satisfies PresentMsg
     }

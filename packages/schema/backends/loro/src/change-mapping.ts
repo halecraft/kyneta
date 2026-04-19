@@ -19,6 +19,7 @@ import type {
   Op,
   Path,
   ReplaceChange,
+  SchemaBinding,
   Schema as SchemaNode,
   SequenceChange,
   SequenceInstruction,
@@ -103,16 +104,23 @@ export function changeToDiff(
   change: ChangeBase,
   schema: SchemaNode,
   doc: LoroDoc,
+  binding?: SchemaBinding,
 ): [ContainerID, Diff | JsonDiff][] {
   // ReplaceChange handles its own parent resolution (it targets the
   // parent container, not the scalar value itself). Dispatch early
   // before attempting target CID resolution.
   if (change.type === "replace") {
-    return replaceChangeToDiff(path, change as ReplaceChange, schema, doc)
+    return replaceChangeToDiff(
+      path,
+      change as ReplaceChange,
+      schema,
+      doc,
+      binding,
+    )
   }
 
   // Resolve the target container
-  const resolved = resolveContainer(doc, schema, path)
+  const resolved = resolveContainer(doc, schema, path, binding)
 
   // Get the ContainerID
   let targetCID: ContainerID
@@ -125,7 +133,7 @@ export function changeToDiff(
       throw new Error("changeToDiff: cannot create diff for root-level scalar")
     }
     const parentPath = path.slice(0, -1)
-    const parentResolved = resolveContainer(doc, schema, parentPath)
+    const parentResolved = resolveContainer(doc, schema, parentPath, binding)
     if (!isLoroContainer(parentResolved)) {
       // Parent is the LoroDoc (root level) — use the _props map
       const propsMap = (parentResolved as any).getMap(PROPS_KEY)
@@ -312,14 +320,16 @@ function replaceChangeToDiff(
   change: ReplaceChange,
   schema: SchemaNode,
   doc: LoroDoc,
+  binding?: SchemaBinding,
 ): [ContainerID, Diff | JsonDiff][] {
   if (path.segments.length === 0) {
     throw new Error("replaceChangeToDiff: cannot replace at root")
   }
 
-  const lastSeg = path.segments[path.segments.length - 1]!
+  const lastSeg = path.segments[path.segments.length - 1]
+  if (!lastSeg) throw new Error("replaceChangeToDiff: empty path")
   const parentPath = path.slice(0, -1)
-  const parentResolved = resolveContainer(doc, schema, parentPath)
+  const parentResolved = resolveContainer(doc, schema, parentPath, binding)
 
   // If the parent is the LoroDoc itself (root-level field), the target
   // depends on the field type. For scalars/sums, they're stored in the
@@ -328,7 +338,9 @@ function replaceChangeToDiff(
     // Parent is the LoroDoc — this is a root-level replace.
     // Scalars at root are stored in _props.
     if (lastSeg.role === "key") {
-      const key = lastSeg.resolve() as string
+      const fieldName = lastSeg.resolve() as string
+      const identity = binding?.forward.get(fieldName) as string | undefined
+      const key = identity ?? fieldName
       const propsMap = (parentResolved as any).getMap(PROPS_KEY)
       const propsCID = propsMap.id as ContainerID
       const updated: Record<string, Value | undefined> = {
@@ -345,8 +357,16 @@ function replaceChangeToDiff(
   const resolved = lastSeg.resolve()
 
   if (lastSeg.role === "key") {
+    // Compute the absolute schema path for nested identity lookup.
+    // Collect all key segments to form the absolute path.
+    const absPath = path.segments
+      .filter(s => s.role === "key")
+      .map(s => s.resolve() as string)
+      .join(".")
+    const identity = binding?.forward.get(absPath) as string | undefined
+    const key = identity ?? (resolved as string)
     const updated: Record<string, Value | undefined> = {
-      [resolved as string]: change.value as Value,
+      [key]: change.value as Value,
     }
     return [[parentCID, { type: "map", updated } as MapDiff]]
   }
@@ -617,12 +637,16 @@ function materializeCIDForSchema(schema: SchemaNode): ContainerID {
  * @param batch - The Loro event batch from doc.subscribe()
  * @param schema - The root document schema (used for leaf expansion)
  */
-export function batchToOps(batch: LoroEventBatch, schema: SchemaNode): Op[] {
+export function batchToOps(
+  batch: LoroEventBatch,
+  schema: SchemaNode,
+  binding?: SchemaBinding,
+): Op[] {
   const ops: Op[] = []
 
   for (const event of batch.events) {
-    const kynetaPath = loroPathToKynetaPath(event.path)
-    const change = diffToChange(event.diff)
+    const kynetaPath = loroPathToKynetaPath(event.path, binding)
+    const change = diffToChange(event.diff, binding)
     if (change) {
       ops.push({ path: kynetaPath, change })
     }
@@ -648,6 +672,7 @@ export function batchToOps(batch: LoroEventBatch, schema: SchemaNode): Op[] {
  */
 function loroPathToKynetaPath(
   loroPath: (string | number | unknown)[],
+  binding?: SchemaBinding,
 ): RawPath {
   // Strip _props prefix — root scalars live in _props but their
   // kyneta paths are direct children of the root product.
@@ -657,7 +682,17 @@ function loroPathToKynetaPath(
   for (let i = startIndex; i < loroPath.length; i++) {
     const segment = loroPath[i]
     if (typeof segment === "string") {
-      path = path.field(segment)
+      // Reverse-map identity hash → absolute schema path → leaf field name.
+      // Loro events emit identity-keyed strings; we need to recover the
+      // original field name for kyneta schema paths.
+      const absPath = binding?.inverse.get(segment as any)
+      if (absPath) {
+        const lastDot = absPath.lastIndexOf(".")
+        const leaf = lastDot >= 0 ? absPath.slice(lastDot + 1) : absPath
+        path = path.field(leaf)
+      } else {
+        path = path.field(segment)
+      }
     } else if (typeof segment === "number") {
       path = path.item(segment)
     }
@@ -675,14 +710,14 @@ function loroPathToKynetaPath(
  * Returns null for diff types we can't map (shouldn't happen for
  * supported container types).
  */
-function diffToChange(diff: Diff): ChangeBase | null {
+function diffToChange(diff: Diff, binding?: SchemaBinding): ChangeBase | null {
   switch (diff.type) {
     case "text":
       return textDiffToChange(diff as TextDiff)
     case "list":
       return listDiffToChange(diff as ListDiff)
     case "map":
-      return mapDiffToChange(diff as MapDiff)
+      return mapDiffToChange(diff as MapDiff, binding)
     case "counter":
       return counterDiffToChange(diff as CounterDiff)
     case "tree":
@@ -751,11 +786,22 @@ function listDiffToChange(diff: ListDiff): SequenceChange {
  * Updated entries with `undefined` values become deletes.
  * Container values are converted to their plain JSON representation.
  */
-function mapDiffToChange(diff: MapDiff): MapChange {
+function mapDiffToChange(diff: MapDiff, binding?: SchemaBinding): MapChange {
   const set: Record<string, unknown> = {}
   const deleteKeys: string[] = []
 
-  for (const [key, value] of Object.entries(diff.updated)) {
+  for (const [loroKey, value] of Object.entries(diff.updated)) {
+    // Reverse-map identity hash → absolute schema path → leaf field name.
+    // Loro map diffs use identity-keyed keys; kyneta Changes use field names.
+    let key = loroKey
+    if (binding) {
+      const absPath = binding.inverse.get(loroKey as any)
+      if (absPath) {
+        const lastDot = absPath.lastIndexOf(".")
+        key = lastDot >= 0 ? absPath.slice(lastDot + 1) : absPath
+      }
+    }
+
     if (value === undefined) {
       deleteKeys.push(key)
     } else if (hasKind(value)) {

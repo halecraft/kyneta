@@ -6,12 +6,35 @@
 //
 // Context: jj:ptyzqoul (structural merge protocol)
 
-import { Schema } from "@kyneta/schema"
+import {
+  deriveIdentity,
+  deriveSchemaBinding,
+  KIND,
+  type ProductSchema,
+  Schema,
+  type SchemaBinding,
+} from "@kyneta/schema"
 import { LoroDoc } from "loro-crdt"
 import { describe, expect, it } from "vitest"
 import { loro } from "../bind-loro.js"
 import { PROPS_KEY } from "../loro-resolve.js"
 import { ensureLoroContainers, loroSubstrateFactory } from "../substrate.js"
+
+// ===========================================================================
+// Helpers
+// ===========================================================================
+
+function trivialBinding(schema: any): SchemaBinding {
+  if (schema[KIND] === "product") {
+    return deriveSchemaBinding(schema as ProductSchema, {})
+  }
+  return { forward: new Map(), inverse: new Map() }
+}
+
+/** Shortcut to get identity hash for a field name (trivial binding, generation 1) */
+function id(fieldName: string): string {
+  return deriveIdentity(fieldName, 1)
+}
 
 // ===========================================================================
 // Schemas used across tests
@@ -31,55 +54,61 @@ describe("structural merge protocol (Loro)", () => {
   // ── Container creation is idempotent ──
 
   it("two peers independently create same schema — containers are identical", () => {
+    const binding = trivialBinding(TestSchema)
+
     const docA = new LoroDoc()
-    ensureLoroContainers(docA, TestSchema, false)
+    ensureLoroContainers(docA, TestSchema, false, binding)
     docA.commit()
 
     const docB = new LoroDoc()
-    ensureLoroContainers(docB, TestSchema, false)
+    ensureLoroContainers(docB, TestSchema, false, binding)
     docB.commit()
 
-    // Both should produce the same containers — text, list
-    expect(docA.getText("title")).toBeDefined()
-    expect(docB.getText("title")).toBeDefined()
-    expect(docA.getList("items")).toBeDefined()
-    expect(docB.getList("items")).toBeDefined()
+    // Both should produce the same containers — text, list (identity-keyed)
+    expect(docA.getText(id("title"))).toBeDefined()
+    expect(docB.getText(id("title"))).toBeDefined()
+    expect(docA.getList(id("items"))).toBeDefined()
+    expect(docB.getList(id("items"))).toBeDefined()
 
-    // Scalar defaults via _props
+    // Scalar defaults via _props (identity-keyed entries)
     const propsA = docA.getMap(PROPS_KEY)
     const propsB = docB.getMap(PROPS_KEY)
-    expect(propsA.get("count")).toBe(0) // Zero.structural for number
-    expect(propsB.get("count")).toBe(0)
+    expect(propsA.get(id("count"))).toBe(0) // Zero.structural for number
+    expect(propsB.get(id("count"))).toBe(0)
   })
 
   it("container creation is idempotent — calling twice doesn't conflict", () => {
+    const binding = trivialBinding(TestSchema)
+
     const doc = new LoroDoc()
-    ensureLoroContainers(doc, TestSchema, false)
+    ensureLoroContainers(doc, TestSchema, false, binding)
     doc.commit()
 
     // Second call — should be a no-op for containers
-    ensureLoroContainers(doc, TestSchema, false)
+    ensureLoroContainers(doc, TestSchema, false, binding)
     doc.commit()
 
-    // Still works correctly
-    expect(doc.getText("title")).toBeDefined()
-    expect(doc.getList("items")).toBeDefined()
+    // Still works correctly (identity-keyed)
+    expect(doc.getText(id("title"))).toBeDefined()
+    expect(doc.getList(id("items"))).toBeDefined()
   })
 
   // ── Conditional mode preserves hydrated state ──
 
   it("conditional mode skips scalar defaults for existing keys", () => {
+    const binding = trivialBinding(TestSchema)
+
     const doc = new LoroDoc()
-    // Set a non-default value first
+    // Set a non-default value first (using identity-keyed key)
     const propsMap = doc.getMap(PROPS_KEY)
-    propsMap.set("count", 42)
+    propsMap.set(id("count"), 42)
     doc.commit()
 
     // Conditional ensureLoroContainers should NOT overwrite count
-    ensureLoroContainers(doc, TestSchema, true)
+    ensureLoroContainers(doc, TestSchema, true, binding)
     doc.commit()
 
-    expect(propsMap.get("count")).toBe(42)
+    expect(propsMap.get(id("count"))).toBe(42)
   })
 
   // ── Alphabetical sort ──
@@ -99,32 +128,37 @@ describe("structural merge protocol (Loro)", () => {
     fields.beta = Schema.number()
     const schemaB = Schema.struct(fields)
 
+    const bindingA = trivialBinding(schemaA)
+    const bindingB = trivialBinding(schemaB)
+
     const docA = new LoroDoc()
-    ensureLoroContainers(docA, schemaA, false)
+    ensureLoroContainers(docA, schemaA, false, bindingA)
     docA.commit()
 
     const docB = new LoroDoc()
-    ensureLoroContainers(docB, schemaB, false)
+    ensureLoroContainers(docB, schemaB, false, bindingB)
     docB.commit()
 
-    // Both have the same containers and defaults
-    expect(docA.getText("gamma")).toBeDefined()
-    expect(docB.getText("gamma")).toBeDefined()
+    // Both have the same containers and defaults (identity-keyed)
+    expect(docA.getText(id("gamma"))).toBeDefined()
+    expect(docB.getText(id("gamma"))).toBeDefined()
     const propsA = docA.getMap(PROPS_KEY)
     const propsB = docB.getMap(PROPS_KEY)
-    expect(propsA.get("alpha")).toBe("") // Zero.structural for string
-    expect(propsB.get("alpha")).toBe("")
-    expect(propsA.get("beta")).toBe(0) // Zero.structural for number
-    expect(propsB.get("beta")).toBe(0)
+    expect(propsA.get(id("alpha"))).toBe("") // Zero.structural for string
+    expect(propsB.get(id("alpha"))).toBe("")
+    expect(propsA.get(id("beta"))).toBe(0) // Zero.structural for number
+    expect(propsB.get(id("beta"))).toBe(0)
   })
 
   // ── Persistence round-trip ──
 
   it("persist → hydrate → data preserved", () => {
+    const binding = trivialBinding(TestSchema)
+
     const doc1 = new LoroDoc()
-    ensureLoroContainers(doc1, TestSchema, false)
-    doc1.getText("title").insert(0, "Hello Loro")
-    doc1.getMap(PROPS_KEY).set("count", 7)
+    ensureLoroContainers(doc1, TestSchema, false, binding)
+    doc1.getText(id("title")).insert(0, "Hello Loro")
+    doc1.getMap(PROPS_KEY).set(id("count"), 7)
     doc1.commit()
 
     // Export snapshot
@@ -133,10 +167,10 @@ describe("structural merge protocol (Loro)", () => {
     // Hydrate into fresh doc
     const doc2 = new LoroDoc()
     doc2.import(snapshot)
-    ensureLoroContainers(doc2, TestSchema, true) // conditional
+    ensureLoroContainers(doc2, TestSchema, true, binding) // conditional
 
-    expect(doc2.getText("title").toString()).toBe("Hello Loro")
-    expect(doc2.getMap(PROPS_KEY).get("count")).toBe(7)
+    expect(doc2.getText(id("title")).toString()).toBe("Hello Loro")
+    expect(doc2.getMap(PROPS_KEY).get(id("count"))).toBe(7)
   })
 
   // ── Factory integration ──
@@ -157,8 +191,14 @@ describe("structural merge protocol (Loro)", () => {
   it("loro.bind() factory produces merge-compatible substrates", () => {
     const bound = loro.bind(TestSchema)
 
-    const factoryA = bound.factory({ peerId: "alice" })
-    const factoryB = bound.factory({ peerId: "bob" })
+    const factoryA = bound.factory({
+      peerId: "alice",
+      binding: bound.identityBinding,
+    })
+    const factoryB = bound.factory({
+      peerId: "bob",
+      binding: bound.identityBinding,
+    })
 
     const subA = factoryA.create(TestSchema)
     const subB = factoryB.create(TestSchema)

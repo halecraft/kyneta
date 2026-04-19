@@ -14,12 +14,15 @@ import {
   BACKING_DOC,
   buildWritableContext,
   type ChangeBase,
+  deriveSchemaBinding,
   executeBatch,
   KIND,
   type Path,
   type PositionCapable,
+  type ProductSchema,
   type Replica,
   type ReplicaFactory,
+  type SchemaBinding,
   type Schema as SchemaNode,
   type Side,
   type Substrate,
@@ -147,6 +150,7 @@ function hasJsonContainerRef(diff: Diff | JsonDiff): boolean {
 export function createLoroSubstrate(
   doc: LoroDocType,
   schema: SchemaNode,
+  binding?: SchemaBinding,
 ): Substrate<LoroVersion> {
   // --- Closure-scoped state ---
 
@@ -174,7 +178,7 @@ export function createLoroSubstrate(
   let cachedCtx: WritableContext | undefined
 
   // The Reader — live view over the Loro container tree.
-  const reader = loroReader(doc, schema)
+  const reader = loroReader(doc, schema, binding)
 
   // --- Substrate object ---
 
@@ -200,7 +204,7 @@ export function createLoroSubstrate(
         // No Loro side effects — mutations happen at flush time.
         // Each group must be applied as a single applyDiff() call to
         // preserve JsonContainerID (🦜:) cross-references.
-        const group = changeToDiff(path, change, schema, doc)
+        const group = changeToDiff(path, change, schema, doc, binding)
         if (group.length > 0) {
           pendingGroups.push(group)
         }
@@ -249,7 +253,7 @@ export function createLoroSubstrate(
           if (path.segments.length === 0) return doc
           if (nodeSchema[KIND] === "scalar" || nodeSchema[KIND] === "sum")
             return undefined
-          return resolveContainer(doc, schema, path as any)
+          return resolveContainer(doc, schema, path as any, binding)
         }
         // Attach positionResolver — used to create and decode LoroPositions
         // backed by Loro Cursors. Resolves the schema path to a LoroText
@@ -261,7 +265,12 @@ export function createLoroSubstrate(
           return {
             createPosition(index: number, side: Side) {
               // Resolve path to the LoroText container
-              const container = resolveContainer(doc, schema, path as any)
+              const container = resolveContainer(
+                doc,
+                schema,
+                path as any,
+                binding,
+              )
               if (
                 !container ||
                 typeof (container as any).getCursor !== "function"
@@ -348,7 +357,7 @@ export function createLoroSubstrate(
     }
 
     // Map Loro events → kyneta Ops
-    const ops = batchToOps(batch, schema)
+    const ops = batchToOps(batch, schema, binding)
     if (ops.length === 0) {
       return
     }
@@ -500,6 +509,18 @@ export const loroReplicaFactory: ReplicaFactory<LoroVersion> = {
  *   payload, returns a substrate.
  * - `parseVersion(serialized)` — deserializes a LoroVersion.
  */
+/**
+ * Compute a trivial SchemaBinding for a schema (no migration chain).
+ * For product schemas, derives identity from field names at generation 1.
+ * For non-product schemas, returns empty maps.
+ */
+function trivialBinding(schema: SchemaNode): SchemaBinding {
+  if (schema[KIND] === "product") {
+    return deriveSchemaBinding(schema as ProductSchema, {})
+  }
+  return { forward: new Map(), inverse: new Map() }
+}
+
 export const loroSubstrateFactory: SubstrateFactory<LoroVersion> = {
   replica: loroReplicaFactory,
 
@@ -513,19 +534,21 @@ export const loroSubstrateFactory: SubstrateFactory<LoroVersion> = {
     schema: SchemaNode,
   ): Substrate<LoroVersion> {
     const doc = (replica as any)[BACKING_DOC] as LoroDocType
+    const binding = trivialBinding(schema)
     // No identity injection for the standalone factory (no peerId).
     // Conditional ensureRootContainer: skip scalar defaults that
     // already exist from hydrated state.
-    ensureLoroContainers(doc, schema, true)
-    return createLoroSubstrate(doc, schema)
+    ensureLoroContainers(doc, schema, true, binding)
+    return createLoroSubstrate(doc, schema, binding)
   },
 
   create(schema: SchemaNode): Substrate<LoroVersion> {
     const doc = new LoroDoc()
+    const binding = trivialBinding(schema)
     // Fresh doc — unconditional container creation.
-    ensureLoroContainers(doc, schema, false)
+    ensureLoroContainers(doc, schema, false, binding)
     doc.commit()
-    return createLoroSubstrate(doc, schema)
+    return createLoroSubstrate(doc, schema, binding)
   },
 
   fromEntirety(
@@ -566,13 +589,20 @@ export function ensureLoroContainers(
   doc: LoroDocType,
   schema: SchemaNode,
   conditional: boolean,
+  binding?: SchemaBinding,
 ): void {
   // The schema is now directly a ProductSchema (no annotation wrapper)
   if (schema[KIND] === "product") {
     for (const [key, fieldSchema] of Object.entries(schema.fields).sort(
       ([a], [b]) => a.localeCompare(b),
     )) {
-      ensureRootContainer(doc, key, fieldSchema as SchemaNode, conditional)
+      const identity = binding?.forward.get(key) as string | undefined
+      ensureRootContainer(
+        doc,
+        identity ?? key,
+        fieldSchema as SchemaNode,
+        conditional,
+      )
     }
   }
 }

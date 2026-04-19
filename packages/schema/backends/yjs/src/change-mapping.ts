@@ -23,6 +23,7 @@ import type {
   Op,
   Path,
   ReplaceChange,
+  SchemaBinding,
   Schema as SchemaNode,
   SequenceChange,
   SequenceInstruction,
@@ -59,22 +60,35 @@ export function applyChangeToYjs(
   rootSchema: SchemaNode,
   path: Path,
   change: ChangeBase,
+  binding?: SchemaBinding,
 ): void {
   switch (change.type) {
     case "text":
-      applyTextChange(rootMap, rootSchema, path, change as TextChange)
+      applyTextChange(rootMap, rootSchema, path, change as TextChange, binding)
       return
 
     case "sequence":
-      applySequenceChange(rootMap, rootSchema, path, change as SequenceChange)
+      applySequenceChange(
+        rootMap,
+        rootSchema,
+        path,
+        change as SequenceChange,
+        binding,
+      )
       return
 
     case "map":
-      applyMapChange(rootMap, rootSchema, path, change as MapChange)
+      applyMapChange(rootMap, rootSchema, path, change as MapChange, binding)
       return
 
     case "replace":
-      applyReplaceChange(rootMap, rootSchema, path, change as ReplaceChange)
+      applyReplaceChange(
+        rootMap,
+        rootSchema,
+        path,
+        change as ReplaceChange,
+        binding,
+      )
       return
 
     case "increment":
@@ -107,8 +121,9 @@ function applyTextChange(
   rootSchema: SchemaNode,
   path: Path,
   change: TextChange,
+  binding?: SchemaBinding,
 ): void {
-  const resolved = resolveYjsType(rootMap, rootSchema, path)
+  const resolved = resolveYjsType(rootMap, rootSchema, path, binding)
   if (!(resolved instanceof Y.Text)) {
     throw new Error(
       `applyChangeToYjs: TextChange target at path [${pathToString(path)}] is not a Y.Text`,
@@ -129,8 +144,9 @@ function applySequenceChange(
   rootSchema: SchemaNode,
   path: Path,
   change: SequenceChange,
+  binding?: SchemaBinding,
 ): void {
-  const resolved = resolveYjsType(rootMap, rootSchema, path)
+  const resolved = resolveYjsType(rootMap, rootSchema, path, binding)
   if (!(resolved instanceof Y.Array)) {
     throw new Error(
       `applyChangeToYjs: SequenceChange target at path [${pathToString(path)}] is not a Y.Array`,
@@ -168,8 +184,9 @@ function applyMapChange(
   rootSchema: SchemaNode,
   path: Path,
   change: MapChange,
+  binding?: SchemaBinding,
 ): void {
-  const resolved = resolveYjsType(rootMap, rootSchema, path)
+  const resolved = resolveYjsType(rootMap, rootSchema, path, binding)
   if (!(resolved instanceof Y.Map)) {
     throw new Error(
       `applyChangeToYjs: MapChange target at path [${pathToString(path)}] is not a Y.Map`,
@@ -191,7 +208,20 @@ function applyMapChange(
     for (const [key, value] of Object.entries(change.set)) {
       const fieldSchema = getFieldSchema(targetSchema, key)
       const yjsValue = maybeCreateSharedType(value, fieldSchema)
-      resolved.set(key, yjsValue)
+      // For product schemas (structs), use the identity hash as the map key.
+      // For map schemas (records), use the key as-is (no identity-keying).
+      let mapKey = key
+      if (binding && targetSchema[KIND] === "product") {
+        // Compute absolute schema path for this field.
+        const parentAbsPath = path.segments
+          .filter(s => s.role === "key")
+          .map(s => s.resolve() as string)
+          .join(".")
+        const absPath = parentAbsPath ? `${parentAbsPath}.${key}` : key
+        const identity = binding.forward.get(absPath) as string | undefined
+        if (identity) mapKey = identity
+      }
+      resolved.set(mapKey, yjsValue)
     }
   }
 }
@@ -205,6 +235,7 @@ function applyReplaceChange(
   rootSchema: SchemaNode,
   path: Path,
   change: ReplaceChange,
+  binding?: SchemaBinding,
 ): void {
   if (path.length === 0) {
     throw new Error(
@@ -214,16 +245,27 @@ function applyReplaceChange(
 
   // Target the parent container, using the last segment to identify
   // which child to replace.
-  const lastSeg = path.segments[path.segments.length - 1]!
+  const lastSeg = path.segments.at(-1)
+  if (!lastSeg) throw new Error("replaceChangeToDiff: empty path")
   const parentPath = path.slice(0, -1)
-  const parent = resolveYjsType(rootMap, rootSchema, parentPath)
+  const parent = resolveYjsType(rootMap, rootSchema, parentPath, binding)
 
   const resolved = lastSeg.resolve()
   if (parent instanceof Y.Map && lastSeg.role === "key") {
     // Resolve schema for the target field for structured value detection
     const targetSchema = resolveSchemaAtPath(rootSchema, path)
     const yjsValue = maybeCreateSharedType(change.value, targetSchema)
-    parent.set(resolved as string, yjsValue)
+    // Use identity hash for product-field boundaries.
+    let mapKey = resolved as string
+    if (binding) {
+      const absPath = path.segments
+        .filter(s => s.role === "key")
+        .map(s => s.resolve() as string)
+        .join(".")
+      const identity = binding.forward.get(absPath) as string | undefined
+      if (identity) mapKey = identity
+    }
+    parent.set(mapKey, yjsValue)
   } else if (parent instanceof Y.Array && lastSeg.role === "index") {
     const targetSchema = resolveSchemaAtPath(rootSchema, path)
     const yjsValue = maybeCreateSharedType(change.value, targetSchema)
@@ -384,12 +426,16 @@ function createStructuredMap(
  *
  * @param events - The events from the `observeDeep` callback
  */
-export function eventsToOps(events: Y.YEvent<any>[], schema: SchemaNode): Op[] {
+export function eventsToOps(
+  events: Y.YEvent<any>[],
+  schema: SchemaNode,
+  binding?: SchemaBinding,
+): Op[] {
   const ops: Op[] = []
 
   for (const event of events) {
-    const kynetaPath = yjsPathToKynetaPath(event.path)
-    const change = eventToChange(event)
+    const kynetaPath = yjsPathToKynetaPath(event.path, binding)
+    const change = eventToChange(event, binding)
     if (change) {
       ops.push({ path: kynetaPath, change })
     }
@@ -408,11 +454,24 @@ export function eventsToOps(events: Y.YEvent<any>[], schema: SchemaNode): Op[] {
  * `event.path` from `observeDeep` is relative to the observed type.
  * Strings become key segments, numbers become index segments.
  */
-function yjsPathToKynetaPath(yjsPath: (string | number)[]): RawPath {
+function yjsPathToKynetaPath(
+  yjsPath: (string | number)[],
+  binding?: SchemaBinding,
+): RawPath {
   let path = RawPath.empty
   for (const segment of yjsPath) {
     if (typeof segment === "string") {
-      path = path.field(segment)
+      // Reverse-map identity hash → absolute schema path → leaf field name.
+      // Yjs events emit identity-keyed strings at product-field positions;
+      // we need to recover the original field name for kyneta schema paths.
+      const absPath = binding?.inverse.get(segment as any)
+      if (absPath) {
+        const lastDot = absPath.lastIndexOf(".")
+        const leaf = lastDot >= 0 ? absPath.slice(lastDot + 1) : absPath
+        path = path.field(leaf)
+      } else {
+        path = path.field(segment)
+      }
     } else if (typeof segment === "number") {
       path = path.item(segment)
     }
@@ -428,7 +487,10 @@ function yjsPathToKynetaPath(yjsPath: (string | number)[]): RawPath {
  * Convert a single Yjs event into a kyneta Change.
  * Returns null for event types we can't map.
  */
-function eventToChange(event: Y.YEvent<any>): ChangeBase | null {
+function eventToChange(
+  event: Y.YEvent<any>,
+  binding?: SchemaBinding,
+): ChangeBase | null {
   if (event.target instanceof Y.Text) {
     return textEventToChange(event)
   }
@@ -436,7 +498,7 @@ function eventToChange(event: Y.YEvent<any>): ChangeBase | null {
     return arrayEventToChange(event)
   }
   if (event.target instanceof Y.Map) {
-    return mapEventToChange(event)
+    return mapEventToChange(event, binding)
   }
   return null
 }
@@ -497,7 +559,10 @@ function arrayEventToChange(event: Y.YEvent<any>): SequenceChange {
  * - `action: 'add'|'update'` → `set[key] = map.get(key)`
  * - `action: 'delete'` → `delete.push(key)`
  */
-function mapEventToChange(event: Y.YEvent<any>): MapChange | null {
+function mapEventToChange(
+  event: Y.YEvent<any>,
+  binding?: SchemaBinding,
+): MapChange | null {
   const set: Record<string, unknown> = {}
   const deleteKeys: string[] = []
   let hasSet = false
@@ -506,12 +571,20 @@ function mapEventToChange(event: Y.YEvent<any>): MapChange | null {
   const target = event.target as Y.Map<any>
 
   event.changes.keys.forEach((change: { action: string }, key: string) => {
+    // Reverse-map identity hash → absolute schema path → leaf field name.
+    const absPath = binding?.inverse.get(key as any)
+    const fieldName = absPath
+      ? absPath.lastIndexOf(".") >= 0
+        ? absPath.slice(absPath.lastIndexOf(".") + 1)
+        : absPath
+      : key
+
     if (change.action === "add" || change.action === "update") {
       const value = target.get(key)
-      set[key] = extractEventValue(value)
+      set[fieldName] = extractEventValue(value)
       hasSet = true
     } else if (change.action === "delete") {
-      deleteKeys.push(key)
+      deleteKeys.push(fieldName)
       hasDelete = true
     }
   })

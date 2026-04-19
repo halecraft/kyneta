@@ -19,6 +19,7 @@
 import type {
   CrdtStrategy,
   Replica,
+  SchemaBinding,
   Schema as SchemaNode,
   Substrate,
   SubstrateFactory,
@@ -75,7 +76,10 @@ function hashPeerId(peerId: string): PeerID {
  * on every new LoroDoc with a deterministic numeric PeerID derived
  * from the exchange's string peerId.
  */
-function createLoroFactory(peerId: string): SubstrateFactory<LoroVersion> {
+function createLoroFactory(
+  peerId: string,
+  binding: SchemaBinding,
+): SubstrateFactory<LoroVersion> {
   const numericPeerId = hashPeerId(peerId)
 
   return {
@@ -98,18 +102,18 @@ function createLoroFactory(peerId: string): SubstrateFactory<LoroVersion> {
       // Conditional ensureRootContainer: container-type getXxx() calls
       // are idempotent in Loro, but scalar propsMap.set() produces ops.
       // Skip scalar defaults for keys already present from hydration.
-      ensureLoroContainers(doc, schema, true)
+      ensureLoroContainers(doc, schema, true, binding)
       doc.commit()
-      return createLoroSubstrate(doc, schema)
+      return createLoroSubstrate(doc, schema, binding)
     },
 
     create(schema: SchemaNode): Substrate<LoroVersion> {
       // Fresh doc — set identity immediately, unconditional containers.
       const doc = new LoroDoc()
       doc.setPeerId(numericPeerId)
-      ensureLoroContainers(doc, schema, false)
+      ensureLoroContainers(doc, schema, false, binding)
       doc.commit()
-      return createLoroSubstrate(doc, schema)
+      return createLoroSubstrate(doc, schema, binding)
     },
 
     fromEntirety(
@@ -158,11 +162,11 @@ export const loro: SubstrateNamespace<CrdtStrategy, LoroCaps, LoroNativeMap> =
   createSubstrateNamespace<CrdtStrategy, LoroCaps, LoroNativeMap>({
     strategies: {
       collaborative: {
-        factory: ctx => createLoroFactory(ctx.peerId),
+        factory: ctx => createLoroFactory(ctx.peerId, ctx.binding),
         replicaFactory: loroReplicaFactory,
       },
       ephemeral: {
-        factory: ctx => createLoroFactory(ctx.peerId),
+        factory: ctx => createLoroFactory(ctx.peerId, ctx.binding),
         replicaFactory: loroReplicaFactory,
       },
     },

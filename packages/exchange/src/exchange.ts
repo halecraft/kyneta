@@ -302,8 +302,8 @@ export class Exchange {
     this.#capabilities = createCapabilities({
       schemas,
       replicas: [...replicas],
-      resolveFactory: (builder: FactoryBuilder<any>) =>
-        builder({ peerId: this.peerId }),
+      resolveFactory: (builder: FactoryBuilder<any>, bound: BoundSchema) =>
+        builder({ peerId: this.peerId, binding: bound.identityBinding }),
     })
 
     // Create synchronizer — call each factory to produce fresh adapter instances.
@@ -325,6 +325,7 @@ export class Exchange {
         replicaType,
         mergeStrategy,
         schemaHash,
+        _supportedHashes,
       ): void => {
         // 1. Schema auto-resolve
         const resolvedBound = this.#capabilities.resolveSchema(
@@ -446,7 +447,10 @@ export class Exchange {
       return cached.ref
     }
 
-    const factory = bound.factory({ peerId: this.peerId })
+    const factory = bound.factory({
+      peerId: this.peerId,
+      binding: bound.identityBinding,
+    })
     const replicaType = factory.replica.replicaType
     if (!this.#capabilities.supportsReplicaType(replicaType)) {
       throw new Error(
@@ -1095,12 +1099,15 @@ export class Exchange {
    * @param bound - A BoundSchema to register
    */
   registerSchema(bound: BoundSchema): void {
-    this.#capabilities.registerSchema(bound, builder =>
-      builder({ peerId: this.peerId }),
+    this.#capabilities.registerSchema(bound, (builder, b) =>
+      builder({ peerId: this.peerId, binding: b.identityBinding }),
     )
 
     // Auto-promote deferred docs that match the newly registered schema
-    const factory = bound.factory({ peerId: this.peerId })
+    const factory = bound.factory({
+      peerId: this.peerId,
+      binding: bound.identityBinding,
+    })
     const replicaType = factory.replica.replicaType
     for (const [docId, entry] of this.#docCache) {
       if (entry.mode !== "deferred") continue

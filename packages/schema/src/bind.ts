@@ -6,11 +6,11 @@
 // runtime via exchange.get(docId, boundSchema).
 //
 // The factory is always a builder function:
-//   (context: { peerId: string }) => SubstrateFactory<V>
+//   (context: { peerId: string; binding: SchemaBinding }) => SubstrateFactory<V>
 //
 // This ensures each exchange gets a fresh factory instance with the
-// correct peer identity. Factories that don't need peer identity
-// (e.g. plain) simply ignore the context: () => plainSubstrateFactory.
+// correct peer identity and schema binding. Factories that don't need
+// these simply ignore the context: () => plainSubstrateFactory.
 // For LWW/ephemeral, the builder returns lwwSubstrateFactory (which wraps
 // plain with TimestampVersion for cross-peer stale rejection).
 //
@@ -20,12 +20,24 @@
 // - "authoritative": request/response, total order (Plain)
 // - "ephemeral": unidirectional broadcast, timestamp-based (Ephemeral)
 
+import type {
+  IdentityManifest,
+  MigrationChain,
+  SchemaBinding,
+} from "./migration.js"
+import {
+  deriveManifest,
+  deriveSchemaBinding,
+  getMigrationChain,
+  validateChain,
+} from "./migration.js"
 import type { NativeMap, PlainNativeMap, UnknownNativeMap } from "./native.js"
 import type {
   ExtractCaps,
   ProductSchema,
   Schema as SchemaNode,
 } from "./schema.js"
+import { KIND } from "./schema.js"
 import type {
   MergeStrategy,
   ReplicaFactory,
@@ -49,16 +61,19 @@ export type { MergeStrategy } from "./substrate.js"
 /**
  * A function that produces a `SubstrateFactory` given an exchange context.
  *
- * The exchange calls this lazily on first use, passing its peer identity.
- * Each exchange instance gets a fresh factory. Factories that don't need
- * peer identity simply ignore the context: `() => plainSubstrateFactory`.
+ * The exchange calls this lazily on first use, passing its peer identity
+ * and the schema's identity binding. Each exchange instance gets a fresh
+ * factory. Factories that don't need the context simply ignore it:
+ * `() => plainSubstrateFactory`.
  *
  * For Loro substrates, the builder hashes the peerId to a deterministic
  * numeric Loro PeerID and returns a factory that calls `doc.setPeerId()`
- * on every new LoroDoc.
+ * on every new LoroDoc. The binding will be used in a later phase to
+ * key CRDT containers by identity instead of field name.
  */
 export type FactoryBuilder<V extends Version = Version> = (context: {
   peerId: string
+  binding: SchemaBinding
 }) => SubstrateFactory<V>
 
 // ---------------------------------------------------------------------------
@@ -91,6 +106,33 @@ export interface BoundSchema<
   readonly factory: FactoryBuilder<any>
   readonly strategy: MergeStrategy
   readonly schemaHash: string
+
+  /**
+   * Identity binding: maps schema paths to node identities and back.
+   *
+   * For schemas with no `.migrated()` calls, this is a trivial binding
+   * where every path maps to `deriveIdentity(path, 1)`.
+   *
+   * Used by substrate factories (via FactoryBuilder context) to key
+   * CRDT containers by identity instead of field name.
+   */
+  readonly identityBinding: SchemaBinding
+
+  /**
+   * The migration chain from the schema, if present.
+   * Null for schemas with no `.migrated()` calls.
+   */
+  readonly migrationChain: MigrationChain | null
+
+  /**
+   * The set of schema hashes this peer supports for sync compatibility.
+   *
+   * Contains at minimum the current schema's hash. For schemas with
+   * T0/T1a migration chains, includes hashes of all intermediate schema
+   * versions reachable without epoch boundaries — enabling heterogeneous
+   * peers to sync without coordination.
+   */
+  readonly supportedHashes: ReadonlySet<string>
 }
 
 // ---------------------------------------------------------------------------
@@ -253,12 +295,58 @@ export function bind<S extends SchemaNode>(config: {
   factory: FactoryBuilder<any>
   strategy: MergeStrategy
 }): BoundSchema<S> {
+  const schemaHash = computeSchemaHash(config.schema)
+
+  // Derive identity binding from the migration chain (if present).
+  const chain = getMigrationChain(config.schema)
+  let identityBinding: SchemaBinding
+  let manifest: IdentityManifest | undefined
+
+  if (chain && config.schema[KIND] === "product") {
+    manifest = deriveManifest(config.schema as unknown as ProductSchema, chain)
+    identityBinding = deriveSchemaBinding(
+      config.schema as unknown as ProductSchema,
+      manifest,
+    )
+  } else if (config.schema[KIND] === "product") {
+    // No migration chain — derive trivial binding from the schema.
+    identityBinding = deriveSchemaBinding(
+      config.schema as unknown as ProductSchema,
+      {}, // empty manifest → trivial origins
+    )
+  } else {
+    // Non-product schema — empty binding.
+    identityBinding = {
+      forward: new Map(),
+      inverse: new Map(),
+    }
+  }
+
+  // Development-only chain validation — O(migrations × nodes).
+  // Validates path consistency, detects collisions and missing references.
+  if ((globalThis as any).process?.env?.NODE_ENV !== "production" && chain) {
+    const result = validateChain(config.schema as unknown as ProductSchema)
+    if (!result.valid) {
+      throw new Error(
+        `Migration chain validation failed:\n${result.errors.join("\n")}`,
+      )
+    }
+  }
+
+  // Compute supported hashes. The current hash is always supported.
+  // Additional hashes from T0/T1a migration history are computed by
+  // walking the chain — deferred to Phase 4 implementation.
+  const supportedHashes: Set<string> = new Set([schemaHash])
+
   return {
     _brand: "BoundSchema",
     schema: config.schema,
     factory: config.factory,
     strategy: config.strategy,
-    schemaHash: computeSchemaHash(config.schema),
+    schemaHash,
+    identityBinding,
+    migrationChain: chain,
+    supportedHashes,
   }
 }
 

@@ -6,12 +6,36 @@
 //
 // Context: jj:ptyzqoul (structural merge protocol)
 
-import { BACKING_DOC, Schema, STRUCTURAL_YJS_CLIENT_ID } from "@kyneta/schema"
+import {
+  BACKING_DOC,
+  deriveIdentity,
+  deriveSchemaBinding,
+  KIND,
+  type ProductSchema,
+  Schema,
+  type SchemaBinding,
+  STRUCTURAL_YJS_CLIENT_ID,
+} from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
 import { yjs } from "../bind-yjs.js"
 import { ensureContainers } from "../populate.js"
 import { yjsSubstrateFactory } from "../substrate.js"
+
+// ===========================================================================
+// Identity-keying helpers
+// ===========================================================================
+
+function trivialBinding(schema: any): SchemaBinding {
+  if (schema[KIND] === "product") {
+    return deriveSchemaBinding(schema as ProductSchema, {})
+  }
+  return { forward: new Map(), inverse: new Map() }
+}
+
+function id(fieldName: string): string {
+  return deriveIdentity(fieldName, 1)
+}
 
 // ===========================================================================
 // Schemas used across tests
@@ -31,24 +55,26 @@ describe("structural merge protocol (Yjs)", () => {
   // ── Core invariant: two peers independently create, sync, no data loss ──
 
   it("two peers independently create same schema, sync, data preserved", () => {
+    const binding = trivialBinding(TestSchema)
+
     // Peer A creates doc and writes text
     const docA = new Y.Doc()
     docA.clientID = 100
-    ensureContainers(docA, TestSchema)
+    ensureContainers(docA, TestSchema, false, binding)
     docA.transact(() => {
       const root = docA.getMap("root")
-      ;(root.get("title") as Y.Text).insert(0, "Hello from A")
-      root.set("count", 42)
+      ;(root.get(id("title")) as Y.Text).insert(0, "Hello from A")
+      root.set(id("count"), 42)
     })
 
     // Peer B independently creates same doc and writes different text
     const docB = new Y.Doc()
     docB.clientID = 200
-    ensureContainers(docB, TestSchema)
+    ensureContainers(docB, TestSchema, false, binding)
     docB.transact(() => {
       const root = docB.getMap("root")
-      ;(root.get("title") as Y.Text).insert(0, "Hello from B")
-      root.set("count", 99)
+      ;(root.get(id("title")) as Y.Text).insert(0, "Hello from B")
+      root.set(id("count"), 99)
     })
 
     // Sync bidirectionally
@@ -62,25 +88,27 @@ describe("structural merge protocol (Yjs)", () => {
     const rootB = docB.getMap("root")
 
     // Text should contain content from both peers (no orphaned containers)
-    const titleA = (rootA.get("title") as Y.Text).toString()
-    const titleB = (rootB.get("title") as Y.Text).toString()
+    const titleA = (rootA.get(id("title")) as Y.Text).toString()
+    const titleB = (rootB.get(id("title")) as Y.Text).toString()
     expect(titleA).toBe(titleB)
     // Both texts should be present (merged, not lost)
     expect(titleA).toContain("Hello from A")
     expect(titleA).toContain("Hello from B")
 
     // Count: last writer wins — both converge to the same value
-    expect(rootA.get("count")).toBe(rootB.get("count"))
+    expect(rootA.get(id("count"))).toBe(rootB.get(id("count")))
   })
 
   it("three peers independently create, sync, all converge", () => {
-    const docs = [100, 200, 300].map(id => {
+    const binding = trivialBinding(TestSchema)
+
+    const docs = [100, 200, 300].map(cid => {
       const doc = new Y.Doc()
-      doc.clientID = id
-      ensureContainers(doc, TestSchema)
+      doc.clientID = cid
+      ensureContainers(doc, TestSchema, false, binding)
       doc.transact(() => {
         const root = doc.getMap("root")
-        ;(root.get("title") as Y.Text).insert(0, `Peer${id}`)
+        ;(root.get(id("title")) as Y.Text).insert(0, `Peer${cid}`)
       })
       return doc
     })
@@ -89,14 +117,17 @@ describe("structural merge protocol (Yjs)", () => {
     for (let i = 0; i < docs.length; i++) {
       for (let j = 0; j < docs.length; j++) {
         if (i !== j) {
-          Y.applyUpdate(docs[j]!, Y.encodeStateAsUpdate(docs[i]!))
+          const target = docs[j]
+          const source = docs[i]
+          if (target && source)
+            Y.applyUpdate(target, Y.encodeStateAsUpdate(source))
         }
       }
     }
 
     // All three converge to the same text
     const texts = docs.map(d =>
-      (d.getMap("root").get("title") as Y.Text).toString(),
+      (d.getMap("root").get(id("title")) as Y.Text).toString(),
     )
     expect(texts[0]).toBe(texts[1])
     expect(texts[1]).toBe(texts[2])
@@ -109,14 +140,16 @@ describe("structural merge protocol (Yjs)", () => {
   // ── Persistence round-trip ──
 
   it("persist → hydrate → data preserved", () => {
+    const binding = trivialBinding(TestSchema)
+
     // Create and write
     const doc1 = new Y.Doc()
     doc1.clientID = 42
-    ensureContainers(doc1, TestSchema)
+    ensureContainers(doc1, TestSchema, false, binding)
     doc1.transact(() => {
       const root = doc1.getMap("root")
-      ;(root.get("title") as Y.Text).insert(0, "Persistent")
-      root.set("count", 7)
+      ;(root.get(id("title")) as Y.Text).insert(0, "Persistent")
+      root.set(id("count"), 7)
     })
 
     // Export
@@ -126,12 +159,12 @@ describe("structural merge protocol (Yjs)", () => {
     const doc2 = new Y.Doc()
     doc2.clientID = 42
     Y.applyUpdate(doc2, snapshot)
-    ensureContainers(doc2, TestSchema, true) // conditional
+    ensureContainers(doc2, TestSchema, true, binding) // conditional
 
     // Data preserved
     const root2 = doc2.getMap("root")
-    expect((root2.get("title") as Y.Text).toString()).toBe("Persistent")
-    expect(root2.get("count")).toBe(7)
+    expect((root2.get(id("title")) as Y.Text).toString()).toBe("Persistent")
+    expect(root2.get(id("count"))).toBe(7)
   })
 
   // ── Determinism: alphabetical sort ──
@@ -153,11 +186,14 @@ describe("structural merge protocol (Yjs)", () => {
     fields.beta = Schema.number()
     const schemaB = Schema.struct(fields)
 
+    const bindingA = trivialBinding(schemaA)
+    const bindingB = trivialBinding(schemaB)
+
     const docA = new Y.Doc()
-    ensureContainers(docA, schemaA)
+    ensureContainers(docA, schemaA, false, bindingA)
 
     const docB = new Y.Doc()
-    ensureContainers(docB, schemaB)
+    ensureContainers(docB, schemaB, false, bindingB)
 
     // Both should produce byte-identical structural state
     const stateA = Y.encodeStateAsUpdate(docA)
@@ -179,14 +215,17 @@ describe("structural merge protocol (Yjs)", () => {
       title: Schema.text(),
     })
 
+    const v1Binding = trivialBinding(v1Schema)
+    const v2Binding = trivialBinding(v2Schema)
+
     // Peer A: create v1, write data, export
     const docA = new Y.Doc()
     docA.clientID = 100
-    ensureContainers(docA, v1Schema)
+    ensureContainers(docA, v1Schema, false, v1Binding)
     docA.transact(() => {
       const root = docA.getMap("root")
-      ;(root.get("title") as Y.Text).insert(0, "Title")
-      root.set("count", 5)
+      ;(root.get(id("title")) as Y.Text).insert(0, "Title")
+      root.set(id("count"), 5)
     })
     const v1State = Y.encodeStateAsUpdate(docA)
 
@@ -194,13 +233,13 @@ describe("structural merge protocol (Yjs)", () => {
     const docB = new Y.Doc()
     docB.clientID = 200
     Y.applyUpdate(docB, v1State)
-    ensureContainers(docB, v2Schema, true) // conditional — only creates "notes"
+    ensureContainers(docB, v2Schema, true, v2Binding) // conditional — only creates "notes"
 
     // Another peer C: same thing independently
     const docC = new Y.Doc()
     docC.clientID = 300
     Y.applyUpdate(docC, v1State)
-    ensureContainers(docC, v2Schema, true)
+    ensureContainers(docC, v2Schema, true, v2Binding)
 
     // B and C's structural ops for "notes" should be identical (both at clientID 0)
     const stateB = Y.encodeStateAsUpdate(docB)
@@ -214,22 +253,24 @@ describe("structural merge protocol (Yjs)", () => {
     const rootC = docC.getMap("root")
 
     // Original data preserved
-    expect((rootB.get("title") as Y.Text).toString()).toBe("Title")
-    expect(rootB.get("count")).toBe(5)
-    expect((rootC.get("title") as Y.Text).toString()).toBe("Title")
-    expect(rootC.get("count")).toBe(5)
+    expect((rootB.get(id("title")) as Y.Text).toString()).toBe("Title")
+    expect(rootB.get(id("count"))).toBe(5)
+    expect((rootC.get(id("title")) as Y.Text).toString()).toBe("Title")
+    expect(rootC.get(id("count"))).toBe(5)
 
     // New field exists on both
-    expect(rootB.get("notes")).toBeInstanceOf(Y.Text)
-    expect(rootC.get("notes")).toBeInstanceOf(Y.Text)
+    expect(rootB.get(id("notes"))).toBeInstanceOf(Y.Text)
+    expect(rootC.get(id("notes"))).toBeInstanceOf(Y.Text)
   })
 
   // ── Structural identity is clientID 0 ──
 
   it("ensureContainers uses clientID 0 for structural ops", () => {
+    const binding = trivialBinding(TestSchema)
+
     const doc = new Y.Doc()
     doc.clientID = 999
-    ensureContainers(doc, TestSchema)
+    ensureContainers(doc, TestSchema, false, binding)
 
     // clientID should be restored
     expect(doc.clientID).toBe(999)
@@ -240,9 +281,11 @@ describe("structural merge protocol (Yjs)", () => {
   })
 
   it("ensureContainers does not leak caller clientID into structural ops", () => {
+    const binding = trivialBinding(TestSchema)
+
     const doc = new Y.Doc()
     doc.clientID = 777
-    ensureContainers(doc, TestSchema)
+    ensureContainers(doc, TestSchema, false, binding)
 
     // The state vector should NOT contain the caller's clientID —
     // only STRUCTURAL_YJS_CLIENT_ID (0) should have produced ops.
@@ -269,8 +312,8 @@ describe("structural merge protocol (Yjs)", () => {
     const doc1 = (sub1 as any)[BACKING_DOC] as Y.Doc
     doc1.transact(() => {
       const root = doc1.getMap("root")
-      ;(root.get("title") as Y.Text).insert(0, "Round-trip")
-      root.set("count", 123)
+      ;(root.get(id("title")) as Y.Text).insert(0, "Round-trip")
+      root.set(id("count"), 123)
     })
 
     const payload = sub1.exportEntirety()
@@ -278,8 +321,8 @@ describe("structural merge protocol (Yjs)", () => {
     const doc2 = (sub2 as any)[BACKING_DOC] as Y.Doc
     const root2 = doc2.getMap("root")
 
-    expect((root2.get("title") as Y.Text).toString()).toBe("Round-trip")
-    expect(root2.get("count")).toBe(123)
+    expect((root2.get(id("title")) as Y.Text).toString()).toBe("Round-trip")
+    expect(root2.get(id("count"))).toBe(123)
   })
 
   // ── yjs.bind integration ──
@@ -287,8 +330,14 @@ describe("structural merge protocol (Yjs)", () => {
   it("yjs.bind factory produces deterministic structural ops across peers", () => {
     const bound = yjs.bind(TestSchema)
 
-    const factoryA = bound.factory({ peerId: "alice" })
-    const factoryB = bound.factory({ peerId: "bob" })
+    const factoryA = bound.factory({
+      peerId: "alice",
+      binding: bound.identityBinding,
+    })
+    const factoryB = bound.factory({
+      peerId: "bob",
+      binding: bound.identityBinding,
+    })
 
     const subA = factoryA.create(TestSchema)
     const subB = factoryB.create(TestSchema)
@@ -304,8 +353,14 @@ describe("structural merge protocol (Yjs)", () => {
   it("yjs.bind peers merge without structural conflict", () => {
     const bound = yjs.bind(TestSchema)
 
-    const factoryA = bound.factory({ peerId: "alice" })
-    const factoryB = bound.factory({ peerId: "bob" })
+    const factoryA = bound.factory({
+      peerId: "alice",
+      binding: bound.identityBinding,
+    })
+    const factoryB = bound.factory({
+      peerId: "bob",
+      binding: bound.identityBinding,
+    })
 
     const subA = factoryA.create(TestSchema)
     const subB = factoryB.create(TestSchema)
@@ -314,15 +369,15 @@ describe("structural merge protocol (Yjs)", () => {
     const docA = (subA as any)[BACKING_DOC] as Y.Doc
     docA.transact(() => {
       const root = docA.getMap("root")
-      ;(root.get("title") as Y.Text).insert(0, "Alice's text")
-      root.set("count", 10)
+      ;(root.get(id("title")) as Y.Text).insert(0, "Alice's text")
+      root.set(id("count"), 10)
     })
 
     const docB = (subB as any)[BACKING_DOC] as Y.Doc
     docB.transact(() => {
       const root = docB.getMap("root")
-      ;(root.get("title") as Y.Text).insert(0, "Bob's text")
-      root.set("count", 20)
+      ;(root.get(id("title")) as Y.Text).insert(0, "Bob's text")
+      root.set(id("count"), 20)
     })
 
     // Bidirectional merge — should not throw
@@ -335,26 +390,28 @@ describe("structural merge protocol (Yjs)", () => {
     const rootA = docA.getMap("root")
     const rootB = docB.getMap("root")
 
-    const titleA = (rootA.get("title") as Y.Text).toString()
-    const titleB = (rootB.get("title") as Y.Text).toString()
+    const titleA = (rootA.get(id("title")) as Y.Text).toString()
+    const titleB = (rootB.get(id("title")) as Y.Text).toString()
     expect(titleA).toBe(titleB)
     expect(titleA).toContain("Alice's text")
     expect(titleA).toContain("Bob's text")
 
-    expect(rootA.get("count")).toBe(rootB.get("count"))
+    expect(rootA.get(id("count"))).toBe(rootB.get(id("count")))
   })
 
   // ── Conditional ensureContainers is idempotent ──
 
   it("conditional ensureContainers is idempotent on hydrated doc", () => {
+    const binding = trivialBinding(TestSchema)
+
     const doc = new Y.Doc()
     doc.clientID = 50
-    ensureContainers(doc, TestSchema)
+    ensureContainers(doc, TestSchema, false, binding)
 
     const stateBefore = Y.encodeStateAsUpdate(doc)
 
     // Conditional call should not create new ops (everything already exists)
-    ensureContainers(doc, TestSchema, true)
+    ensureContainers(doc, TestSchema, true, binding)
 
     const stateAfter = Y.encodeStateAsUpdate(doc)
     expect(stateAfter).toEqual(stateBefore)

@@ -1,6 +1,7 @@
 import {
   change,
   createRef,
+  deriveIdentity,
   exportEntirety,
   RawPath,
   Schema,
@@ -9,6 +10,14 @@ import {
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
 import { yjs } from "../bind-yjs.js"
+
+// ===========================================================================
+// Identity-keying helpers
+// ===========================================================================
+
+function id(fieldName: string): string {
+  return deriveIdentity(fieldName, 1)
+}
 
 // ===========================================================================
 // Helper — createDoc using the generic API
@@ -70,7 +79,10 @@ describe("yjs.bind", () => {
   describe("factory builder", () => {
     it("produces a working SubstrateFactory", () => {
       const bound = yjs.bind(SimpleSchema)
-      const factory = bound.factory({ peerId: "peer-1" })
+      const factory = bound.factory({
+        peerId: "peer-1",
+        binding: bound.identityBinding,
+      })
 
       const _substrate = factory.create(SimpleSchema)
 
@@ -87,7 +99,10 @@ describe("yjs.bind", () => {
 
     it("factory supports fromEntirety", () => {
       const bound = yjs.bind(SimpleSchema)
-      const factory = bound.factory({ peerId: "peer-1" })
+      const factory = bound.factory({
+        peerId: "peer-1",
+        binding: bound.identityBinding,
+      })
 
       // Create and populate
       const doc1 = createYjsDocFromFactory(factory, SimpleSchema)
@@ -105,7 +120,10 @@ describe("yjs.bind", () => {
 
     it("factory supports parseVersion", () => {
       const bound = yjs.bind(SimpleSchema)
-      const factory = bound.factory({ peerId: "peer-1" })
+      const factory = bound.factory({
+        peerId: "peer-1",
+        binding: bound.identityBinding,
+      })
 
       const substrate = factory.create(SimpleSchema)
       const v = substrate.version()
@@ -122,7 +140,10 @@ describe("yjs.bind", () => {
   describe("deterministic clientID", () => {
     it("same peerId produces same clientID across multiple factory calls", () => {
       const bound = yjs.bind(SimpleSchema)
-      const factory = bound.factory({ peerId: "stable-peer-id" })
+      const factory = bound.factory({
+        peerId: "stable-peer-id",
+        binding: bound.identityBinding,
+      })
 
       const _s1 = factory.create(SimpleSchema)
       const _s2 = factory.create(SimpleSchema)
@@ -140,8 +161,14 @@ describe("yjs.bind", () => {
 
     it("different peerIds produce different clientIDs", () => {
       const bound = yjs.bind(SimpleSchema)
-      const factory1 = bound.factory({ peerId: "peer-alpha" })
-      const factory2 = bound.factory({ peerId: "peer-beta" })
+      const factory1 = bound.factory({
+        peerId: "peer-alpha",
+        binding: bound.identityBinding,
+      })
+      const factory2 = bound.factory({
+        peerId: "peer-beta",
+        binding: bound.identityBinding,
+      })
 
       const doc1 = unwrap(
         createYjsDocFromFactory(factory1, SimpleSchema),
@@ -155,7 +182,10 @@ describe("yjs.bind", () => {
 
     it("clientID is a valid uint32", () => {
       const bound = yjs.bind(SimpleSchema)
-      const factory = bound.factory({ peerId: "test-peer-id-12345" })
+      const factory = bound.factory({
+        peerId: "test-peer-id-12345",
+        binding: bound.identityBinding,
+      })
       const doc = unwrap(
         createYjsDocFromFactory(factory, SimpleSchema),
       ) as Y.Doc
@@ -171,13 +201,19 @@ describe("yjs.bind", () => {
 
       // Simulate two separate "sessions" — both should hash to the same value
       const bound1 = yjs.bind(SimpleSchema)
-      const factory1 = bound1.factory({ peerId })
+      const factory1 = bound1.factory({
+        peerId,
+        binding: bound1.identityBinding,
+      })
       const doc1 = unwrap(
         createYjsDocFromFactory(factory1, SimpleSchema),
       ) as Y.Doc
 
       const bound2 = yjs.bind(SimpleSchema)
-      const factory2 = bound2.factory({ peerId })
+      const factory2 = bound2.factory({
+        peerId,
+        binding: bound2.identityBinding,
+      })
       const doc2 = unwrap(
         createYjsDocFromFactory(factory2, SimpleSchema),
       ) as Y.Doc
@@ -200,7 +236,7 @@ describe("yjs.bind", () => {
       const yjsDoc = unwrap(doc) as Y.Doc
 
       expect(yjsDoc).toBeInstanceOf(Y.Doc)
-      expect(yjsDoc.getMap("root").get("count")).toBe(0)
+      expect(yjsDoc.getMap("root").get(id("count"))).toBe(0)
     })
 
     it("returns a Y.Doc with the correct root map state", () => {
@@ -212,8 +248,8 @@ describe("yjs.bind", () => {
       const yjsDoc = unwrap(doc) as Y.Doc
       const rootMap = yjsDoc.getMap("root")
 
-      expect((rootMap.get("title") as Y.Text).toJSON()).toBe("Hello")
-      expect(rootMap.get("count")).toBe(42)
+      expect((rootMap.get(id("title")) as Y.Text).toJSON()).toBe("Hello")
+      expect(rootMap.get(id("count"))).toBe(42)
     })
 
     it("returns undefined for non-refs (plain object)", () => {
@@ -238,7 +274,7 @@ describe("yjs.bind", () => {
       const yjsDoc = unwrap(doc) as Y.Doc
 
       // Mutate via raw Yjs
-      yjsDoc.getMap("root").set("count", 99)
+      yjsDoc.getMap("root").set(id("count"), 99)
       expect(doc.count()).toBe(99)
     })
 
@@ -249,7 +285,7 @@ describe("yjs.bind", () => {
       })
       const yjsDoc = unwrap(doc) as Y.Doc
 
-      const text = yjsDoc.getMap("root").get("title") as Y.Text
+      const text = yjsDoc.getMap("root").get(id("title")) as Y.Text
       text.insert(5, " World")
       expect(doc.title()).toBe("Hello World")
     })
