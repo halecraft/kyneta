@@ -134,28 +134,67 @@ Yjs's `transaction.origin` carries the tag set by `doc.transact(fn, origin)`, el
 
 ## Version Semantics
 
-`YjsVersion` wraps a Yjs state vector (`Y.encodeStateVector(doc)` → `Uint8Array`).
+`YjsVersion` wraps a Yjs **snapshot** (state vector + delete set), not just a state vector.
 
-Yjs does not export a state vector comparison function. We implement standard version-vector partial-order comparison:
+### Why snapshots, not state vectors
+
+Yjs's state vector (`Map<clientID, clock>`) only counts *inserted* items. It does **not** advance when items are deleted (tombstoned). A version based on the state vector alone cannot detect delete-only changes — the sync protocol would see `"equal"` and skip pushing deletes to peers.
+
+The Yjs `Snapshot` is the correct complete version: `(stateVector, deleteSet)`. Two documents are in the same state only when both their inserts and deletes match.
+
+### Data model
+
+`YjsVersion` carries two fields:
+
+- **`sv: Uint8Array`** — encoded state vector, used by `exportSince()` to compute the minimal update payload via `Y.encodeStateAsUpdate(doc, sv)`.
+- **`snapshotBytes: Uint8Array`** — encoded Yjs snapshot (state vector + delete set), used for equality comparison.
+
+### Comparison
 
 ```
-Y.decodeStateVector(encoded) → Map<clientID, clock>
-
-For each clientID in the union of both maps:
-  thisClock = this.get(id) ?? 0
-  otherClock = other.get(id) ?? 0
-
-  if thisClock < otherClock → hasLess = true
-  if thisClock > otherClock → hasGreater = true
-
-Result:
-  hasLess && !hasGreater → "behind"
-  hasGreater && !hasLess → "ahead"
-  !hasLess && !hasGreater → "equal"
-  hasLess && hasGreater   → "concurrent"
+compare(other):
+  svResult = versionVectorCompare(this.sv, other.sv)
+  if svResult !== "equal": return svResult    // behind/ahead/concurrent on inserts
+  if snapshotBytes are identical: return "equal"
+  return "concurrent"                          // same inserts, divergent deletes
 ```
 
-Serialization uses base64 encoding for text-safe embedding (matching the Loro pattern).
+"concurrent" when SVs match but delete sets differ correctly triggers the sync protocol to push — `encodeStateAsUpdate` includes delete-set diffs in its output.
+
+### Incremental delete set tracking
+
+The full delete set is derived from the struct store (`Y.createDeleteSetFromStructStore(doc.store)`) — an O(n) walk. To avoid this on every `version()` call, the substrate maintains `accumulatedDs` incrementally:
+
+1. Initialized once from the struct store at construction time (O(n)).
+2. Updated by merging `transaction.deleteSet` on each transaction:
+   - In the `observeDeep` handler (remote mutations) — before `executeBatch`.
+   - In an `afterTransaction` listener (local mutations) — before `onFlush` returns.
+3. `version()` encodes the SV + `accumulatedDs` into snapshot bytes — no struct-store walk per keystroke.
+
+### Serialization
+
+Format: `base64(sv) + "." + base64(snapshotBytes)`.
+
+Legacy format (no `.`): base64(sv) only. Parsed as SV-only — when compared against a new-format version with matching SVs, the differing snapshot bytes yield `"concurrent"`, triggering a redundant but safe sync push.
+
+### Meet
+
+`meet(other)` computes the component-wise minimum of the state vectors. The resulting version uses only the meet SV as its snapshot (no delete-set info) — a conservative lower bound. This is safe because `meet()` feeds into `advance()`, which Yjs doesn't support.
+
+## Position Conformance
+
+`YjsPosition` wraps Yjs's `RelativePosition` to implement `@kyneta/schema`'s `Position` interface.
+
+| kyneta `Side` | Yjs `assoc` |
+|---|---|
+| `"left"` | `-1` (left-sticky) |
+| `"right"` | `0` (right-sticky, default) |
+
+- `resolve()` → `Y.createAbsolutePositionFromRelativePosition(rpos, doc)` — stateless query against the document's item graph.
+- `encode()` → `Y.encodeRelativePosition(rpos)`.
+- `transform()` → no-op. Yjs relative positions resolve statelessly; explicit transform is only needed by `PlainPosition`.
+
+The `positionResolver` on the Yjs substrate's `WritableContext` resolves paths to `Y.Text` shared types via `resolveYjsType`, then creates positions via `Y.createRelativePositionFromTypeIndex`.
 
 ## Diff ↔ Change Type Mapping
 
@@ -236,6 +275,7 @@ packages/schema/yjs/
     ├── index.ts          # Barrel export + text() convenience
     ├── native-map.ts     # YjsNativeMap — NativeMap functor mapping schema kinds to Yjs types
     ├── version.ts        # YjsVersion (state vector comparison)
+    ├── position.ts       # YjsPosition (relative position wrapping)
     ├── yjs-resolve.ts    # stepIntoYjs + resolveYjsType (path resolution)
     ├── reader.ts         # yjsStoreReader (StoreReader implementation)
     ├── change-mapping.ts # applyChangeToYjs + eventsToOps (bidirectional)
@@ -268,3 +308,7 @@ Tests cover:
 12. **Escape hatch**: `unwrap(ref)` returns the typed substrate-native container via `ref[NATIVE]`; works at any depth (root → `Y.Doc`, child text → `Y.Text`, etc.)
 13. **NativeMap typing**: `DocRef<S, YjsNativeMap>` provides correct `[NATIVE]` types at every node
 14. **Full workflow**: create → mutate → sync → observe → bidirectional convergence
+15. **Version: delete detection**: version changes after a delete-only mutation (snapshot-based comparison detects delete set divergence even when state vector is unchanged)
+16. **Position conformance**: shared conformance suite passes for `YjsPosition` — stability, sticky-side, deletion resolution, encode/decode round-trip, sequential agreement
+17. **Position: concurrent edits**: positions resolve correctly after multi-peer sync with concurrent inserts/deletes
+18. **Delete sync**: text deletes propagate through Exchange to remote peers (Yjs-specific regression test)

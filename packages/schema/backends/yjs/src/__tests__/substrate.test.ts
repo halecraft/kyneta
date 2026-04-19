@@ -182,6 +182,24 @@ describe("YjsSubstrate", () => {
       const parsed = YjsVersion.parse(serialized)
       expect(parsed.compare(v)).toBe("equal")
     })
+
+    it("version changes after a delete-only mutation", () => {
+      const doc = createDoc(yjs.bind(SimpleSchema))
+      change(doc, (d: any) => {
+        d.title.insert(0, "hello")
+      })
+      const vAfterInsert = version(doc)
+
+      change(doc, (d: any) => {
+        d.title.delete(1, 1)
+      })
+      const vAfterDelete = version(doc)
+
+      // The version must change after a delete — even though Yjs's state
+      // vector does not advance on delete. The snapshot-based YjsVersion
+      // detects the delete set change and returns "concurrent" (not "equal").
+      expect(vAfterInsert.compare(vAfterDelete)).not.toBe("equal")
+    })
   })
 
   // -------------------------------------------------------------------------

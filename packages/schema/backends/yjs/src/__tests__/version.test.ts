@@ -1,3 +1,4 @@
+import { uint8ArrayToBase64 } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
 import { YjsVersion } from "../version.js"
@@ -192,6 +193,92 @@ describe("YjsVersion", () => {
       expect(() => v.compare(fake)).toThrow(
         "YjsVersion can only be compared with another YjsVersion",
       )
+    })
+  })
+
+  // ===========================================================================
+  // Snapshot-aware comparison (delete detection)
+  // ===========================================================================
+
+  describe("YjsVersion: snapshot-aware comparison (delete detection)", () => {
+    it("compare returns 'concurrent' when SVs match but delete sets differ", () => {
+      const doc = new Y.Doc()
+      doc.getText("body").insert(0, "hello")
+      const sv1 = Y.encodeStateVector(doc)
+      const snap1 = Y.encodeSnapshot(Y.snapshot(doc))
+      const v1 = new YjsVersion(sv1, snap1)
+
+      doc.getText("body").delete(1, 1)
+      const sv2 = Y.encodeStateVector(doc)
+      const snap2 = Y.encodeSnapshot(Y.snapshot(doc))
+      const v2 = new YjsVersion(sv2, snap2)
+
+      // SVs are identical (Yjs doesn't advance SV on delete)
+      expect(v1.compare(v2)).toBe("concurrent")
+      expect(v2.compare(v1)).toBe("concurrent")
+    })
+
+    it("compare returns 'equal' when both SV and delete set match", () => {
+      const doc = new Y.Doc()
+      doc.getText("body").insert(0, "hello")
+      doc.getText("body").delete(1, 1)
+      const sv = Y.encodeStateVector(doc)
+      const snap = Y.encodeSnapshot(Y.snapshot(doc))
+
+      const v1 = new YjsVersion(sv, snap)
+      const v2 = new YjsVersion(sv, snap)
+      expect(v1.compare(v2)).toBe("equal")
+    })
+
+    it("serialize/parse round-trips snapshot bytes", () => {
+      const doc = new Y.Doc()
+      doc.getText("body").insert(0, "hello")
+      doc.getText("body").delete(1, 1)
+      const sv = Y.encodeStateVector(doc)
+      const snap = Y.encodeSnapshot(Y.snapshot(doc))
+      const v = new YjsVersion(sv, snap)
+
+      const parsed = YjsVersion.parse(v.serialize())
+      expect(parsed.compare(v)).toBe("equal")
+      // Snapshot bytes preserved through round-trip
+      expect(parsed.snapshotBytes.length).toBe(snap.length)
+    })
+
+    it("SV-ahead still returns 'ahead' even with different snapshots", () => {
+      const doc = new Y.Doc()
+      doc.getText("body").insert(0, "hello")
+      const sv1 = Y.encodeStateVector(doc)
+      const snap1 = Y.encodeSnapshot(Y.snapshot(doc))
+      const v1 = new YjsVersion(sv1, snap1)
+
+      doc.getText("body").insert(5, " world")
+      doc.getText("body").delete(0, 1)
+      const sv2 = Y.encodeStateVector(doc)
+      const snap2 = Y.encodeSnapshot(Y.snapshot(doc))
+      const v2 = new YjsVersion(sv2, snap2)
+
+      // v2 has more inserts (SV advanced), snapshot check is moot
+      expect(v2.compare(v1)).toBe("ahead")
+      expect(v1.compare(v2)).toBe("behind")
+    })
+
+    it("legacy parse (no dot) treats SV bytes as snapshot", () => {
+      // Legacy serialized format: just base64(sv), no "."
+      const doc = new Y.Doc()
+      doc.getText("body").insert(0, "hello")
+      const sv = Y.encodeStateVector(doc)
+
+      const legacy = new YjsVersion(sv) // no snapshot arg
+      const serialized = legacy.serialize()
+      // Should have a "." separator in new format
+      expect(serialized).toContain(".")
+
+      // But parsing old-format strings without "." should work
+      const oldFormat = uint8ArrayToBase64(sv) // no dot
+      const parsed = YjsVersion.parse(oldFormat)
+      // snapshotBytes defaults to sv bytes
+      expect(parsed.sv.length).toBe(sv.length)
+      expect(parsed.snapshotBytes.length).toBe(sv.length)
     })
   })
 

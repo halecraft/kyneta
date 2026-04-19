@@ -28,7 +28,10 @@ export class YjsPosition implements Position {
   }
 
   resolve(): number | null {
-    const abs = Y.createAbsolutePositionFromRelativePosition(this.rpos, this.doc)
+    const abs = Y.createAbsolutePositionFromRelativePosition(
+      this.rpos,
+      this.doc,
+    )
     return abs ? abs.index : null
   }
 

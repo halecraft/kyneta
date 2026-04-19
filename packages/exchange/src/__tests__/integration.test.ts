@@ -18,6 +18,7 @@ import {
   Schema,
 } from "@kyneta/schema"
 import { Bridge, createBridgeTransport } from "@kyneta/transport"
+import { yjs } from "@kyneta/yjs-schema"
 import { afterEach, describe, expect, it } from "vitest"
 
 import { Exchange } from "../exchange.js"
@@ -90,6 +91,11 @@ const presenceSchema = Schema.struct({
   name: Schema.string(),
 })
 const PresenceDoc = json.bind(presenceSchema, "ephemeral")
+
+const yjsTextSchema = Schema.struct({
+  title: Schema.text(),
+})
+const YjsDoc = yjs.bind(yjsTextSchema)
 
 // ---------------------------------------------------------------------------
 // Authoritative (PlainSubstrate) — two-peer sync
@@ -246,6 +252,87 @@ describe("Collaborative sync (LoroSubstrate)", () => {
     // Both "Alice" and "Bob" should appear in the merged text
     expect(valueA).toContain("Alice")
     expect(valueA).toContain("Bob")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Collaborative (YjsSubstrate) — delete sync regression
+// ---------------------------------------------------------------------------
+
+describe("Collaborative sync: Yjs delete propagation", () => {
+  it("text delete syncs from peer A to peer B", async () => {
+    const bridge = new Bridge()
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      schemas: [YjsDoc],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      schemas: [YjsDoc],
+    })
+
+    const docA = exchangeA.get("doc-1", YjsDoc)
+    const docB = exchangeB.get("doc-1", YjsDoc)
+
+    // Seed text and sync
+    change(docA, (d: any) => {
+      d.title.insert(0, "hello")
+    })
+    await drain()
+    expect(docB.title()).toBe("hello")
+
+    // Delete a character — this must sync to peer B.
+    // Before the fix, Yjs's state vector did not advance on delete,
+    // so the sync protocol saw "no gap" and skipped the push.
+    change(docA, (d: any) => {
+      d.title.delete(1, 1)
+    })
+    await drain()
+
+    expect(docA.title()).toBe("hllo")
+    expect(docB.title()).toBe("hllo")
+  })
+
+  it("bidirectional deletes converge", async () => {
+    const bridge = new Bridge()
+
+    const exchangeA = createExchange({
+      identity: { peerId: "alice" },
+      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      schemas: [YjsDoc],
+    })
+
+    const exchangeB = createExchange({
+      identity: { peerId: "bob" },
+      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      schemas: [YjsDoc],
+    })
+
+    const docA = exchangeA.get("doc-1", YjsDoc)
+    const docB = exchangeB.get("doc-1", YjsDoc)
+
+    change(docA, (d: any) => {
+      d.title.insert(0, "abcd")
+    })
+    await drain()
+    expect(docB.title()).toBe("abcd")
+
+    // Alice deletes first char, Bob deletes last char — concurrently
+    change(docA, (d: any) => {
+      d.title.delete(0, 1)
+    })
+    change(docB, (d: any) => {
+      d.title.delete(3, 1)
+    })
+    await drain()
+
+    // Both should converge to "bc"
+    expect(docA.title()).toBe(docB.title())
+    expect(docA.title()).toBe("bc")
   })
 })
 

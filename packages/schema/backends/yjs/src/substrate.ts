@@ -33,9 +33,9 @@ import {
 import * as Y from "yjs"
 import { applyChangeToYjs, eventsToOps } from "./change-mapping.js"
 import { ensureContainers } from "./populate.js"
+import { toYjsAssoc, YjsPosition } from "./position.js"
 import { yjsReader } from "./reader.js"
 import { YjsVersion } from "./version.js"
-import { YjsPosition, toYjsAssoc } from "./position.js"
 import { resolveYjsType } from "./yjs-resolve.js"
 
 // ---------------------------------------------------------------------------
@@ -86,6 +86,14 @@ export function createYjsSubstrate(
 
   // Lazy-built WritableContext (same pattern as PlainSubstrate / LoroSubstrate).
   let cachedCtx: WritableContext | undefined
+
+  // Incremental delete set tracking.
+  // Initialized once from the struct store (O(n)), then maintained
+  // incrementally by merging each transaction's deleteSet (O(delta)).
+  // Note: DeleteSet class isn't exported from yjs's public entry point,
+  // so we infer the type from createDeleteSet's return type.
+  let accumulatedDs: ReturnType<typeof Y.createDeleteSet> =
+    Y.createDeleteSetFromStructStore(doc.store)
 
   // The root Y.Map — all schema fields are children of this single map.
   const rootMap = doc.getMap("root")
@@ -158,7 +166,11 @@ export function createYjsSubstrate(
                 )
               }
               const assoc = toYjsAssoc(side)
-              const rpos = Y.createRelativePositionFromTypeIndex(ytype, index, assoc)
+              const rpos = Y.createRelativePositionFromTypeIndex(
+                ytype,
+                index,
+                assoc,
+              )
               return new YjsPosition(rpos, doc)
             },
             decodePosition(bytes: Uint8Array) {
@@ -172,7 +184,7 @@ export function createYjsSubstrate(
     },
 
     version(): YjsVersion {
-      return new YjsVersion(Y.encodeStateVector(doc))
+      return YjsVersion.fromDeleteSet(doc, accumulatedDs)
     },
 
     baseVersion(): YjsVersion {
@@ -240,6 +252,12 @@ export function createYjsSubstrate(
       return
     }
 
+    // Update accumulated delete set BEFORE executeBatch, so version()
+    // reflects deletes when notifyLocalChange fires from the changefeed.
+    if (transaction.deleteSet.clients.size > 0) {
+      accumulatedDs = Y.mergeDeleteSets([accumulatedDs, transaction.deleteSet])
+    }
+
     // Determine origin: prefer stashed kyneta origin (from merge),
     // fall back to the transaction's origin if it's a string.
     const origin =
@@ -257,6 +275,20 @@ export function createYjsSubstrate(
       executeBatch(ctx, ops, origin)
     } finally {
       inOurTransaction = false
+    }
+  })
+
+  // For local mutations (KYNETA_ORIGIN): the observeDeep handler returns
+  // early, so we merge the delete set via afterTransaction instead.
+  // afterTransaction fires inside doc.transact() — before onFlush returns
+  // — so accumulatedDs is up to date when the changefeed's
+  // deliverNotifications → notifyLocalChange → version() fires.
+  doc.on("afterTransaction", (transaction: Y.Transaction) => {
+    if (
+      transaction.origin === KYNETA_ORIGIN &&
+      transaction.deleteSet.clients.size > 0
+    ) {
+      accumulatedDs = Y.mergeDeleteSets([accumulatedDs, transaction.deleteSet])
     }
   })
 
@@ -303,7 +335,7 @@ export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
     },
 
     version(): YjsVersion {
-      return new YjsVersion(Y.encodeStateVector(currentDoc))
+      return YjsVersion.fromDoc(currentDoc)
     },
 
     baseVersion(): YjsVersion {
@@ -329,7 +361,7 @@ export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
       const newDoc = new Y.Doc()
       Y.applyUpdate(newDoc, update)
       currentDoc = newDoc
-      currentBase = new YjsVersion(Y.encodeStateVector(currentDoc))
+      currentBase = YjsVersion.fromDoc(currentDoc)
     },
 
     exportEntirety(): SubstratePayload {

@@ -48,6 +48,8 @@ export { applyChangeToYjs, eventsToOps } from "./change-mapping.js"
 export type { YjsNativeMap } from "./native-map.js"
 // Container creation
 export { ensureContainers } from "./populate.js"
+// Position conformance
+export { fromYjsAssoc, toYjsAssoc, YjsPosition } from "./position.js"
 // Reader
 export { yjsReader } from "./reader.js"
 // Substrate
@@ -56,8 +58,6 @@ export {
   yjsReplicaFactory,
   yjsSubstrateFactory,
 } from "./substrate.js"
-// Position conformance
-export { YjsPosition, toYjsAssoc, fromYjsAssoc } from "./position.js"
 // Version
 export { YjsVersion } from "./version.js"
 // Container resolution
