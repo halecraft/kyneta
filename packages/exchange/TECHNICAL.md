@@ -1,2604 +1,623 @@
 # @kyneta/exchange — Technical Reference
 
-Substrate-agnostic state exchange for `@kyneta/schema`. Provides sync infrastructure for any substrate type through a unified four-message protocol (`present`, `interest`, `offer`, `dismiss`) dispatched by merge strategy. Documents support a three-intention lifecycle: `suspend()` (leave sync graph, keep local state), `resume()` (rejoin sync graph), and `destroy()` (permanent removal).
+> **Package**: `@kyneta/exchange`
+> **Role**: Substrate-agnostic document sync runtime. Orchestrates channel topology, document convergence, and persistence above any transport and any `@kyneta/schema` substrate — via two pure TEA programs (session + sync), a Synchronizer shell that owns the serialized dispatch queue, and an Exchange façade that adds storage, governance, capability negotiation, and reactive peer/document collections.
+> **Depends on**: `@kyneta/schema` (peer), `@kyneta/changefeed` (peer), `@kyneta/transport` (direct)
+> **Depended on by**: `@kyneta/react` (peer), `@kyneta/leveldb-store`, application code, every transport package (dev)
+> **Canonical symbols**: `Exchange`, `ExchangeParams`, `Synchronizer`, `DocRuntime`, `SessionModel`, `SessionInput`, `SessionEffect`, `SyncModel`, `SyncInput`, `SyncEffect`, `updateSession`, `updateSync`, `Governance`, `Policy`, `composeGate`, `GatePredicate`, `EpochBoundaryPredicate`, `Line`, `LineProtocol`, `Capabilities`, `ReplicaKey`, `DEFAULT_REPLICAS`, `Interpret`, `Replicate`, `Defer`, `Reject`, `Disposition`, `PeerIdentityInput`, `PeerChange`, `DocChange`, `DocInfo`, `PeerState`, `ReadyState`, `PeerDocSyncState`, `Store`, `StoreEntry`, `DocMetadata`, `persistentPeerId`, `releasePeerId`, `resolveLease`, `LeaseState`, `sync` (helper)
+> **Key invariant(s)**:
+> 1. The exchange never inspects `SubstratePayload` contents. Payloads are opaque blobs carried by `offer` messages; only the substrate produces and consumes them.
+> 2. The session program never sees documents. The sync program never sees channels, transports, or connection state. They share a single dispatch queue and communicate exclusively through `sync-event` effects the shell forwards.
+> 3. Every reactive output — `exchange.peers`, `exchange.documents`, per-doc ready state — drains at quiescence in snapshot-then-clear order.
+
+A document-sync runtime for arbitrary substrates. Hands back an `Exchange` instance that accepts a schema binding (`Todo = loro.bind(...)`), returns typed document refs (`exchange.get("doc1", Todo)`), routes their changes over any registered transport, and exposes `ReactiveMap`s of peers and documents for observation.
+
+Imported by applications to construct the top-level sync graph; by `@kyneta/react` to bind refs into hooks; by `@kyneta/leveldb-store` to implement persistence. Internally consumes `@kyneta/transport` for transport abstractions and message vocabulary, and `@kyneta/schema` for substrate/replica contracts.
 
 ---
 
-## 1. Architecture Overview
+## Questions this document answers
 
-The exchange operates at the boundary between three algebras defined by `@kyneta/schema`:
+- What is the difference between session and sync, and why are they split? → [Two programs, one shell](#two-programs-one-shell)
+- How does a local mutation become a wire `offer`? → [The local-write path](#the-local-write-path)
+- What does `exchange.get(docId, bound)` actually do? → [`exchange.get` — the four-case classifier](#exchangeget--the-four-case-classifier)
+- What does the `resolve` callback decide? → [Document classification on `present`](#document-classification-on-present)
+- How do departure and reconnection interact? → [Departure, grace, reconnection](#departure-grace-reconnection)
+- How does the exchange hand merge decisions back to the application? → [`Policy` and `Governance`](#policy-and-governance)
+- What is a `Line` and when should I use it? → [`Line` — reliable message streams](#line--reliable-message-streams)
+- How does compaction interact with sync? → [Compaction and epoch boundaries](#compaction-and-epoch-boundaries)
+- What does `peerId` continuity buy me? → [Peer-ID continuity](#peer-id-continuity)
+- How do reactive `peers` / `documents` collections behave? → [Reactive collections](#reactive-collections)
 
-| Algebra | Domain | Currency |
-|---------|--------|----------|
-| **Application** (CHANGEFEED) | Reactive UI, compiler regions | `Op`, `Changeset` |
-| **State** (Substrate) | State management, merge semantics | Substrate-native |
-| **Replication** (Exchange) | Peer-to-peer data transfer | `SubstratePayload`, `Version` |
+## Vocabulary
 
-> **Package split:** Transport infrastructure (`Transport<G>`, channel types, message vocabulary, identity types, client state machine, reconnection utilities) lives in `@kyneta/transport`. The sync runtime (`Synchronizer`, `Exchange`, `TransportManager`) lives in `@kyneta/exchange`. Transport implementations peer-depend on `@kyneta/transport`, not `@kyneta/exchange`.
-
-The exchange is the active sync algebra. The substrate is the passive state algebra. They compose at the boundary defined by five substrate methods: `version()`, `exportEntirety()`, `exportSince()`, `merge()`, and `context()`.
-
-**Key invariant:** The exchange never inspects `SubstratePayload` contents. It treats payloads as opaque blobs with an encoding hint (`"json" | "binary"`). Only the substrate knows how to produce and consume them.
-
-### The Elm Architecture (TEA)
-
-The synchronizer follows TEA:
-
-- **Model** (`SynchronizerModel`): immutable state — documents, channels, peers
-- **Messages** (`SynchronizerMessage`): inputs — channel lifecycle, document lifecycle, received messages
-- **Commands** (`Command`): effectful co-product — side effects the runtime executes
-- **Notifications** (`Notification`): invalidation co-product — observations about model transitions
-
-The pure update function `(msg, model) → [model, cmd?, notification?]` contains all sync logic. The `Synchronizer` class is the imperative shell that dispatches messages, executes commands, accumulates notifications, and interacts with substrates.
-
-The return type is a **triple** — two orthogonal co-products of the state transition:
-
-- **Commands** change the world: send messages, import data, stop channels. `ensure-*` commands fire callbacks that may trigger reentrant dispatch — they are idempotent by contract (first writer wins; see §9).
-- **Notifications** declare what changed: which parts of the model were invalidated, so the shell can inform external listeners without brute-force diffing.
-
-This is analogous to `Op[]` in the schema changefeed: the changefeed declares what changed so subscribers don't poll; notifications declare what model state was invalidated so the shell doesn't scan.
-
-```
-Message → update(msg, model) → [newModel, Command?, Notification?]
-                                       ↓                ↓
-                               #executeCommand()   #accumulateNotification()
-                                       ↓                ↓
-                        ┌──────────────┼──────┐    #dirtyDocIds
-                        ↓              ↓      ↓         ↓
-                   send message   import   build    (at quiescence)
-                   (via adapter)  data     offer    #drainReadyStateChanges()
-                                                    → targeted emission
-```
-
-The TEA algebra is formalized in `@kyneta/machine` as `Program<Msg, Model, Fx>` — a universal Mealy machine with parameterized effect type. The Synchronizer's `update` function conforms to the `Program` shape with `Fx = Command | Notification` and a custom batched interpreter that accumulates notifications and drains at quiescence. The `runtime()` function in `@kyneta/machine` provides a simpler interpreter for programs with closure effects (`Effect<Msg>`) — synchronous dispatch, immediate effect execution, no batching. Programs with data effects (like the peer negotiator) use a custom executor that maps data to I/O, following the free monad interpreter pattern.
-
-The three client transports (WebSocket, SSE, Unix Socket) also use `Program<Msg, Model, Fx>` for their connection lifecycle. Each client transport has a pure Mealy machine program (`client-program.ts`) that produces **data effects** — the transport class interprets these as I/O via `createObservableProgram` from `@kyneta/machine`. This gives every transport observable state, `subscribeToTransitions`, `waitForState`/`waitForStatus`, and deterministic testability (assert on data, no sockets, no timing).
-
-Currently one notification variant exists:
-
-```ts
-type Notification =
-  | { type: "notify/ready-state-changed"; docIds: ReadonlySet<DocId> }
-  | { type: "notify/batch"; notifications: Notification[] }
-```
-
-Four handlers emit `notify/ready-state-changed`: `handleDocImported` (peer synced), `handleInterestForKnownDoc` (peer pending), `handleDismiss` (peer left doc), and `handleChannelRemoved` (peer disconnected — all its docs affected). All other handlers return `undefined` for the notification element.
-
-### Changefeed ↔ Synchronizer Wiring
-
-The exchange bridges the Application algebra (CHANGEFEED) and the Replication algebra (Synchronizer) bidirectionally:
-
-```
-LOCAL MUTATION                              REMOTE MUTATION
-─────────────                               ───────────────
-change(doc, fn)                             adapter receives offer
-  → wrappedFlush()                            → Synchronizer.#executeImportDocData()
-    → originalFlush() [substrate committed]     → replica.merge(payload, "sync")
-    → deliverNotifications()                      → changefeed fires with origin: "sync"
-      → Exchange's subscriber fires                 → UI subscribers see update
-        → origin !== "sync" ✓
-        → synchronizer.notifyLocalChange(docId)
-          → TEA dispatch: local-doc-change
-            → cmd/send-offer
-              → adapter sends to peers
-```
-
-**Echo prevention:** Remote imports arrive through `merge(payload, "sync")`, which propagates `"sync"` as the origin through `executeBatch` → `wrappedFlush` → `deliverNotifications`. The Exchange's changefeed subscriber checks `changeset.origin === "sync"` and skips the `notifyLocalChange` call, preventing a feedback loop where received data would be re-broadcast.
-
-**Timing:** The changefeed fires synchronously within `change()`. By the time the subscriber executes, `originalFlush` has already committed to the substrate, so `substrate.version()` reflects the new state — exactly what `notifyLocalChange` reads.
-
-**`notifyLocalChange` remains public** for edge cases where the substrate is mutated directly via `unwrap(ref)` (bypassing the changefeed). For standard `change()` usage, it is called automatically.
+| Term | Means | Not to be confused with |
+|------|-------|-------------------------|
+| `Exchange` | The top-level class. One per participant. Owns transports, stores, governance, capabilities, the `Synchronizer`, and the `ReactiveMap`s of peers/documents. | A message bus, a pub-sub hub, a database |
+| `Synchronizer` | The imperative shell that runs the session and sync programs, owns the serialized dispatch queue, executes effects (sends, persistence, callbacks), and drains notifications at quiescence. | The session/sync programs themselves — those are pure data; `Synchronizer` is the runtime |
+| Session program | Pure `Program<SessionInput, SessionModel, SessionEffect>` in `src/session-program.ts`. Models channel topology, establish handshake, peer identity, departure. | Sync program |
+| Sync program | Pure `Program<SyncInput, SyncModel, SyncEffect>` in `src/sync-program.ts`. Models document convergence: `present`, `interest`, `offer`, `dismiss`, ready states, merge-strategy dispatch. | Session program |
+| `sync-event` effect | A `SessionEffect` whose payload is a `SyncInput`. The shell drains it into the sync program's pending-input queue in the same dispatch cycle. The one cross-program channel. | A wire message |
+| Dispatch cycle | One inbound input → update → effects executed → (possibly) more inputs queued from `sync-event` effects → update again → … → quiescence. Notifications accumulate throughout, deliver once on drain. | An event-loop tick |
+| Quiescence | The state after one dispatch cycle completes: session queue empty, sync queue empty, no pending `sync-event`s. Notifications drain here. | Async settlement |
+| `DocRuntime` | Per-doc bundle: `Ref<S>`, the substrate instance, the schema binding, the mode (`interpret \| replicate \| deferred`), the changefeed subscription, and echo-prevention state. Held by the Synchronizer, not by the programs. | A document — a `DocRuntime` *manages* a document |
+| `ReactiveMap<K, V, C>` | From `@kyneta/changefeed` — a callable changefeed over a `ReadonlyMap<K, V>` with lifted accessors. | A plain `Map` — this fires the changefeed |
+| `Policy` | Interface with gate predicates (`canShare`, `canAccept`, `canConnect`, `canReset`) and document handlers (`resolve`). Multiple policies register into one `Governance`. | An HTTP middleware, an authorization system |
+| `Governance` | The composer. Exposes `composeGate` (pure) + the registry (imperative). Every gate evaluates three-valued logic: `false` vetoes, `true` permits, all-`undefined` falls back to default. | `Policy` — `Governance` *composes* policies |
+| `composeGate` | Pure function. Takes an iterable of `boolean \| undefined` results and a default. Returns `false` if any is `false`; `true` if any is `true`; otherwise the default. | A synchronous reducer |
+| `Capabilities` | Registry of supported `ReplicaType × MergeStrategy` pairs and their bound schemas, keyed by `ReplicaKey`. Conduit participants register only replicas; interpreters register schemas too. | A schema registry |
+| `ReplicaKey` | `${replicaName}:${major}:${mergeStrategy}` — composite string key into `Capabilities`. | A doc ID |
+| `DEFAULT_REPLICAS` | The default replica-factory bundle: plain (authoritative), plain+LWW (ephemeral). Applications extend with Loro / Yjs replica factories as needed. | A per-doc factory |
+| `Disposition` | `Interpret \| Replicate \| Defer \| Reject` — the four outcomes of classifying an unknown doc on `present`. | An HTTP status |
+| `resolve` callback | Application-supplied function on `ExchangeParams`. Receives a peer + doc metadata; returns a `Disposition`. Runs only when auto-resolution (via `Capabilities`) fails. | A React ref, an async resolver |
+| `Interpret(bound)` | Decision: run the full interpreter stack for this doc against `bound`. | `Replicate(replicaBound)` — no schema, no interpreter |
+| `Replicate(replicaBound)` | Decision: persist and forward without interpretation. For relays / stores. | `Interpret(bound)` |
+| `Defer()` | Decision: accept `present`, don't sync yet. The doc is known but inactive; the app can promote it later. | `Reject()` — defer keeps the peer-doc relationship |
+| `Reject()` | Decision: refuse the doc. The peer's `present` for this doc is silently dropped. | `Defer()` |
+| `MergeStrategy` | `"collaborative" \| "authoritative" \| "ephemeral"` from `@kyneta/schema`. Drives protocol shape: reciprocate or not, entirety-only or deltas, etc. | A CRDT algorithm |
+| `ReadyState` | Per-doc flag visible via `subscribe(exchange.documents)` — whether the local state has converged with at least one peer since the doc was opened. | A HTTP readyState |
+| `present` / `interest` / `offer` / `dismiss` | The four sync messages from `@kyneta/transport`. | Lifecycle messages (`establish`, `depart`) |
+| Departure | A peer leaving the sync graph. Explicit (`depart` message), channel-drop + expired grace timer, or `destroy()` on a local doc. | Disconnection — channel drop without grace-timer expiry is *disconnection*, not departure |
+| Epoch boundary | A merge that discards local state and adopts an incoming entirety — triggered when a remote peer advances past our version via `advance(to)` / compaction. Gated by `Policy.canReset`. | `reset` on a durable log |
+| `Line` | A reliable bidirectional message stream between two peers, implemented as two `json.bind()` authoritative documents (one per direction) with automatic seqno + ack pruning. | A socket, a channel, a queue |
+| `LineProtocol` | The reified schema pair + topic from `Line.protocol(opts)`. Exposes `open(peerId)` (client) and `listen(onLine)` (server). | `Line` — `LineProtocol` *creates* `Line`s |
+| `persistentPeerId` | Browser-only helper: assigns each tab a unique `peerId` that survives reload, via a `localStorage` CAS-based lease protocol. | A cookie, a UUID generator |
+| `Store` | The persistence interface from this package. Methods: `lookup`, `ensureDoc`, `append`, `loadAll`, `replace`, `delete`, `listDocIds`, `close`. | A reactive store — this is an append/replace log |
+| `StoreEntry` | `{ payload: SubstratePayload, version: string }` — one durably-persisted piece of doc state. | A `ChannelMsg` |
 
 ---
 
-## 2. Merge Strategy as Dispatch Key
+## Architecture
 
-<!-- Context: jj:oyouvrss -->
+**Thesis**: split the problem along the axis of orthogonal failure modes. Connection topology fails one way (channels drop, peers come and go); document convergence fails another (merges conflict, versions diverge, storage is behind). Solve each with its own pure program, hold both in one shell that owns dispatch ordering, and let the shell — not the programs — know about transports, storage, refs, and callbacks.
 
-Each `BoundSchema` declares a `MergeStrategy`:
+Four layers:
 
-```ts
-type MergeStrategy = "collaborative" | "authoritative" | "ephemeral"
-```
+| Layer | Kind | Source | Role |
+|-------|------|--------|------|
+| `Exchange` | Class (façade) | `src/exchange.ts` | Public API: `get`, `remove`, `destroy`, `suspend`, `resume`, `addTransport`, `removeTransport`, `peers`, `documents`. Owns `Synchronizer`, `Governance`, `Capabilities`, `Store[]`, `AnyTransport[]`. |
+| `Synchronizer` | Class (shell) | `src/synchronizer.ts` | The imperative shell. Owns the dispatch queue, the `DocRuntime` map, the transport adapters, the reactive-collection handles. Runs both programs, interprets effects. |
+| Session program | Pure `Program` | `src/session-program.ts` | Channel topology + peer identity + departure. No document knowledge. |
+| Sync program | Pure `Program` | `src/sync-program.ts` | Document convergence + merge-strategy dispatch + ready state. No channel knowledge. |
 
-The names describe the **developer's contract**, not the mechanism:
+Plus cross-cutting facilities:
 
-- **`"collaborative"`** (formerly `"concurrent"`) — multiple writers, automatic convergence (CRDT). The substrate handles conflict resolution opaquely.
-- **`"authoritative"`** (formerly `"sequential"`) — single writer, linear history, total order. If two peers both write, they silently diverge. The name makes the single-writer contract visible.
-- **`"ephemeral"`** — current value only, no history. Unchanged.
+| Facility | Source | Role |
+|----------|--------|------|
+| Governance | `src/governance.ts` | Composable policies (`canShare` / `canAccept` / `canConnect` / `canReset` / `resolve`). |
+| Capabilities | `src/capabilities.ts` | Replica-type + schema registry keyed by `ReplicaKey`. |
+| Line | `src/line.ts` | Reliable bidirectional message stream built above `exchange.get`. |
+| Persistent peer ID | `src/persistent-peer-id.ts` | Browser-only lease protocol for per-tab unique, reload-stable `peerId`. |
+| Storage | `src/store/*.ts` | `Store` interface + in-memory implementation; `@kyneta/leveldb-store` is a production impl. |
 
-These are genuinely different protocols matched to the mathematical properties of the substrate, not transport optimizations:
+### What the exchange is NOT
 
-| Property | Collaborative | Authoritative | Ephemeral |
-|----------|---------------|---------------|-----------|
-| `compare()` results | `"concurrent"` possible | Never `"concurrent"` | Never `"concurrent"` |
-| Sync direction | Bidirectional | Unidirectional per cycle | Unidirectional push |
-| `exportSince()` used | Yes (primary) | Yes (when ahead) | Never |
-| `exportEntirety()` used | Fallback | Fallback or primary | Always |
-| On local change | Push delta to synced peers | Push delta to synced peers | Broadcast entirety to all peers |
-| `interest.reciprocate` | `true` (bidirectional) | `false` | N/A (no interest needed after initial) |
+- **Not a message bus.** Applications do not publish/subscribe to arbitrary topics. The only multicast is the document-sync protocol itself; for application-level messaging, use `Line`.
+- **Not pub/sub.** There is no broker, no ordering guarantee across unrelated docs, no multi-party fan-out primitive. One doc's sync is one doc's sync.
+- **Not a database.** It persists via the `Store` interface, but it is not a store. It writes what the substrate exports; it reads what the substrate can interpret.
+- **Not a transport.** Transports are injected (`transports: [...]`) — the exchange does not open sockets.
+- **Not thread-safe across processes.** One `Exchange` instance per process. Multiple tabs coordinate via `persistentPeerId`; multiple processes coordinate via distinct peer IDs and a shared transport.
 
-### Protocol Shapes
+### What the Synchronizer is NOT
 
-**Collaborative (Loro):**
-1. A sends `interest { docId, version, reciprocate: true }` to B
-2. B sends `offer { docId, payload, version }` to A
-3. B sends `interest { docId, version, reciprocate: false }` to A (reciprocation)
-4. A sends `offer { docId, payload, version }` to B
-5. Both converged via CRDT merge.
-
-**Authoritative (Plain):**
-1. A sends `interest { docId, version }` to B
-2. B compares versions → if ahead, sends `offer { docId, payload, version }` to A
-3. If B was behind, B would have sent its own interest.
-
-**Ephemeral:**
-1. On connection: both sides send `interest` (version may be absent)
-2. Both respond with `offer { docId, payload, version: timestamp }`
-3. On local change: broadcast `offer` to all peers (no interest needed)
-4. Receiver compares timestamps and discards stale arrivals.
+- **Not a thread synchronizer.** JavaScript is single-threaded. The name reflects *document synchronization*, not concurrency primitives.
+- **Not a barrier or lock.** The dispatch queue is a queue, not a mutex. Re-entrant dispatches enqueue rather than recurse.
+- **Not a protocol translator.** It runs the sync protocol by interpreting program effects; it does not adapt between protocols.
 
 ---
 
-## 3. Sync Protocol
+## Two programs, one shell
 
-Seven message types in two categories: two lifecycle messages for peer presence, five sync messages for document exchange.
+Source: `src/session-program.ts`, `src/sync-program.ts`, `src/synchronizer.ts`.
 
-### Lifecycle messages
+The session and sync programs are pure values of type `Program<Input, Model, Effect>` from `@kyneta/machine`. Each owns its own state and its own message vocabulary.
 
-### `establish`
+```
+Session program                              Sync program
+───────────────                              ────────────
+SessionModel                                 SyncModel
+├─ identity: PeerIdentityDetails             ├─ identity: PeerIdentityDetails
+├─ channels: Map<ChannelId, ChannelEntry>    ├─ documents: Map<DocId, DocEntry>
+├─ peers: Map<PeerId, SessionPeer>           ├─ peers: Map<PeerId, SyncPeerState>
+└─ departureTimeout: number                  └─ subscriptions: …
 
-Symmetric identity announcement — both peers send `establish` on connect. There is no request/response asymmetry; each side independently sends its identity when the channel opens. A channel is established once both sides have received the other's `establish`.
+SessionInput                                 SyncInput
+├─ sess/channel-added                        ├─ sync/doc-ensure
+├─ sess/channel-establish                    ├─ sync/doc-destroy
+├─ sess/channel-removed                      ├─ sync/doc-suspend / resume
+├─ sess/message-received (LifecycleMsg)      ├─ sync/peer-available / unavailable / departed
+└─ sess/departure-timer-expired              ├─ sync/message-received (SyncMsg)
+                                             └─ sync/local-doc-change
 
-```ts
-type EstablishMsg = {
-  type: "establish"
-  identity: PeerIdentityDetails
-}
+SessionEffect                                SyncEffect
+├─ send (LifecycleMsg)                       ├─ send-to-peer (SyncMsg)
+├─ reject-channel                            ├─ send-to-peers (SyncMsg × Peer[])
+├─ start-departure-timer                     ├─ ensure-doc (callback)
+├─ cancel-departure-timer                    └─ import-doc-data (payload → substrate)
+└─ sync-event (SyncInput)  ─────────────────►┘ drained into sync program's queue
 ```
 
-### `depart`
+Neither program calls the other. Neither program imports the other. The *only* coupling is the `sync-event` effect: when the session program needs the sync program to hear about a topology change (peer available, peer unavailable, peer departed), it emits a `sync-event` effect whose payload is a `SyncInput`. The shell drains pending `sync-event` effects into the sync program's pending-input queue in the **same dispatch cycle** — so topology changes and the sync state they imply are always co-applied, not interleaved.
 
-Intentional departure announcement — a peer sends `depart` before voluntarily leaving. This is a one-way message with no response. When the session program receives `depart`, it marks the peer as departed and skips the disconnection grace period (no departure timer). If a peer vanishes without sending `depart`, the session program treats the channel loss as an involuntary disconnection and starts the departure timer (§9.1).
+### Serialized dispatch
 
-```ts
-type DepartMsg = {
-  type: "depart"
-}
-```
+The Synchronizer owns **one** pending-input queue containing items tagged `session` or `sync`. Inbound inputs — channel events from transports, local doc mutations, wire messages — all enter this queue. The dispatch loop pulls items one at a time, routes to the appropriate program, executes the returned effects, and continues until the queue is empty.
+
+This serialization is the reason there are no lock primitives anywhere in the package. A user callback fired from an `ensure-doc` effect may call `exchange.get(...)` or `doc.title.insert(...)` — those calls enqueue inputs rather than recurse, so even re-entrant paths converge. Re-entrancy ordering matches dispatch ordering, which matches the order the queue received inputs.
+
+### Quiescence drain
+
+Notifications accumulate during dispatch. Four drain methods fire in order at quiescence:
+
+| Drain | Scope | Pattern |
+|-------|-------|---------|
+| `#drainOutbound()` | Outbound wire envelopes | Shift-loop — the queue can grow during sends if a transport synchronously receives |
+| `#drainReadyStateChanges()` | Docs whose ready state flipped this cycle | Snapshot-then-clear |
+| `#drainStateAdvanced()` | Docs whose state advanced (drives persistence) | Snapshot-then-clear |
+| `#drainPeerEvents()` | `PeerChange` emissions to the peers `ReactiveMap` | Snapshot-then-clear |
+
+Snapshot-then-clear: copy the pending set, reset the field to empty, then iterate the copy. If a subscriber's handler re-enqueues dispatch and produces more changes, they accumulate into a fresh empty set — and run on the *next* quiescence, not this one.
+
+### What the programs are NOT
+
+- **Not aware of each other.** Neither can import the other's types without crossing a layer. The `sync-event` effect's payload is `SyncInput` because that's how its union is declared in `session-program.ts`, but the session program does not call the sync program's `update` function.
+- **Not aware of substrates.** Neither program imports from `@kyneta/schema`'s substrate module beyond type re-exports. The substrate's `exportSince` / `merge` are called by the shell on behalf of the sync program's effects.
+- **Not asynchronous.** `update` is synchronous and pure. All I/O happens in the shell's effect interpretation.
+
+---
+
+## The sync protocol
+
+Source: `src/sync-program.ts` message handlers. The six messages from `@kyneta/transport/messages.ts` split into two lifecycle (`establish`, `depart` — session) and four sync (`present`, `interest`, `offer`, `dismiss` — sync).
 
 ### Sync messages
 
-### `present`
+| Message | Category | Direction | Payload | Semantic |
+|---------|----------|-----------|---------|----------|
+| `establish` | Lifecycle | Symmetric | `{ identity: PeerIdentityDetails }` | Peer identity exchange on connection. Both peers send. |
+| `depart` | Lifecycle | One-way | `{}` | Explicit departure — the receiver skips the grace timer. |
+| `present` | Sync | One-way | `{ docs: Array<{ docId, replicaType, mergeStrategy, schemaHash, supportedHashes? }> }` | "I have these documents." Filtered by `canShare`. |
+| `interest` | Sync | One-way | `{ docId, version?, reciprocate? }` | "I want this doc. Here's my version." `reciprocate` asks for the symmetric interest. |
+| `offer` | Sync | One-way | `{ docId, payload: SubstratePayload, version, reciprocate? }` | State transfer. `payload.kind` (`"entirety" \| "since"`) is substrate-internal. |
+| `dismiss` | Sync | One-way | `{ docId }` | "I am leaving the sync graph for this doc." Dual of `present`. |
 
-Document presentation — assertion of document ownership with metadata. Sent after channel establishment to announce all known documents, filtered by the `canShare` predicate (§17). Each entry carries per-document metadata (`replicaType`, `mergeStrategy`, `schemaHash`) so the receiver can validate compatibility before any binary exchange.
+The six are defined once in `@kyneta/transport`; the wire encoding is defined once in `@kyneta/wire`. This package implements the *semantics*.
 
-The `present` metadata (`replicaType`, `mergeStrategy`, `schemaHash`) is validated against the Exchange's capability registries (§26). For known docs, all three fields are validated: `replicaType` compatibility via `replicaTypesCompatible()` (same name + same major version), `schemaHash` equality, and `mergeStrategy` equality (previously unchecked). A mismatch on any field skips the doc with a warning.
+### Merge-strategy dispatch
 
-When the receiver encounters a known doc and all three checks pass, it sends `interest`.
+Each `BoundSchema` declares one of three merge strategies. The sync program's message handlers branch on it:
 
-When the receiver encounters an unknown doc ID, the `canShare` predicate is checked — if it returns `false` for the announcing peer, the doc is silently dropped. Otherwise, a `cmd/ensure-doc` command is emitted (carrying `schemaHash` through). All unknown docs flow to `onEnsureDoc` regardless of replica type. The Exchange first attempts schema auto-resolution from the `(schemaHash, replicaType, mergeStrategy)` triple (§26). If no schema matches and a `resolve` callback is configured, it fires with the doc ID, the announcing peer's identity, `replicaType`, `mergeStrategy`, and `schemaHash`. The callback returns a disposition (`Interpret | Replicate | Defer | Reject`). If no `resolve` callback matches (or none is configured), the Exchange applies a two-tiered default: supported `replicaType` → Defer; unsupported `replicaType` → Reject (silently). See §16 for details.
+| Strategy | `interest.reciprocate` on first? | On local change | Primary export |
+|----------|----------------------------------|-----------------|----------------|
+| `collaborative` | `true` (bidirectional exchange) | Push delta to all synced peers | `exportSince(peerVersion)` |
+| `authoritative` | `false` (request/response) | Push delta to synced peers | `exportSince(peerVersion)` falling back to `exportEntirety()` |
+| `ephemeral` | N/A | Broadcast entirety to all subscribers | `exportEntirety()` always |
 
-```ts
-type PresentMsg = {
-  type: "present"
-  docs: Array<{
-    docId: DocId
-    replicaType: ReplicaType      // [name, major, minor]
-    mergeStrategy: MergeStrategy  // "collaborative" | "authoritative" | "ephemeral"
-    schemaHash: string            // schema fingerprint for compatibility check
-  }>
-}
-```
+`collaborative` is for CRDTs with concurrent writes (Loro, Yjs). `authoritative` is for single-writer-per-doc state (plain JSON). `ephemeral` is for last-writer-wins broadcast (presence, cursors, typing indicators). The strategy is a property of the document, not the substrate — a Loro substrate can host ephemeral docs via `loro.bind(schema, "ephemeral")`.
 
-### `interest`
+### Document classification on `present`
 
-A declaration of sync interest. Carries the sender's current version (serialized string) so the receiver can compute a delta. For ephemeral substrates, `version` may be absent on initial connection.
+Source: `src/sync-program.ts` → `handlePresent`, `src/exchange.ts` → `classifyDoc`.
 
-```ts
-type InterestMsg = {
-  type: "interest"
-  docId: DocId
-  version?: string        // serialized Version, absent for ephemeral initial
-  reciprocate?: boolean   // ask for bidirectional exchange (concurrent)
-}
-```
+When a peer announces an unknown doc, four checks run in order:
 
-### `offer`
+1. **`canShare` / `canAccept` governance check.** `canAccept(peer, docMeta)` → `false` silently drops the `present`. `resolve` never fires.
+2. **Schema-hash auto-resolve via `Capabilities`.** If `(schemaHash, replicaType, mergeStrategy)` matches a registered `BoundSchema`, the triple auto-classifies as `Interpret(bound)`. `resolve` never fires.
+3. **`resolve` callback.** The application's `resolve(peer, docMeta)` runs. It returns one of the four dispositions.
+4. **Two-tiered default (no `resolve` callback).** If `replicaType` is supported (present in `Capabilities` as a replica-only entry), default is `Defer()`. Otherwise `Reject()`.
 
-State transfer. Carries an opaque `SubstratePayload` and the sender's version.
-
-```ts
-type OfferMsg = {
-  type: "offer"
-  docId: DocId
-  payload: SubstratePayload  // carries its own `kind` discriminant
-  version: string            // serialized Version of sender's state
-  reciprocate?: boolean      // ask receiver to send interest back
-}
-```
-
-The payload's `kind` discriminant (`"entirety"` or `"since"`) is the single source of truth for how the data was produced:
-- **`"entirety"`**: full state — produced by `exportEntirety()`
-- **`"since"`**: incremental — produced by `exportSince(peerVersion)`
-
-The receiver calls `replica.merge(payload, "sync")`, which dispatches internally on `payload.kind`. The exchange never inspects payload contents — only the substrate knows how to produce and consume them.
-
-### `dismiss`
-
-Document departure announcement — the dual of `present`. A peer sends `dismiss` when it's leaving the sync graph for a document. One-way announcement with no response needed.
-
-```ts
-type DismissMsg = {
-  type: "dismiss"
-  docId: DocId
-}
-```
-
-The receiving exchange cleans up the dismissing peer's sync state (`docSyncStates`, `subscriptions`) for the document. Applications observe document lifecycle changes via `exchange.documents` (§22.1).
+For *known* docs (already in `DocRuntime`), all three metadata fields — `replicaType`, `mergeStrategy`, `schemaHash` — are validated against the local entry. Any mismatch skips sync with a console warning. `supportedHashes` admits heterogeneous-schema sync: two peers with different migrated schema versions can sync if their `supportedHashes` sets overlap.
 
 ---
 
-## 4. BoundSchema and Factory Builders
+## `exchange.get` — the four-case classifier
 
-### The Three Choices
+Source: `src/exchange.ts` → `Exchange.get`.
 
-A `BoundSchema<S>` captures three explicit choices that define a document type:
-
-1. **Schema** — what shape is the data? (a `SchemaNode` from `@kyneta/schema`)
-2. **Factory builder** — how to construct the substrate? (a function `(ctx: { peerId }) => SubstrateFactory`)
-3. **Merge strategy** — how does the exchange sync it? (`"collaborative"`, `"authoritative"`, or `"ephemeral"`)
-
-```ts
-interface BoundSchema<S extends SchemaNode = SchemaNode, N extends NativeMap = UnknownNativeMap> {
-  readonly _brand: "BoundSchema"
-  readonly schema: S
-  readonly factory: FactoryBuilder<any>
-  readonly strategy: MergeStrategy
-  readonly schemaHash: string
-}
-
-type FactoryBuilder<V extends Version> = (context: { peerId: string }) => SubstrateFactory<V>
-type MergeStrategy = "collaborative" | "authoritative" | "ephemeral"
+```
+exchange.get<S>(docId: DocId, bound: BoundSchema<S>): Ref<S>
 ```
 
-BoundSchemas are static declarations created at module scope via `json.bind(schema)`, `json.bind(schema, "ephemeral")`, `loro.bind(schema)`, or `yjs.bind(schema)`. They are consumed at runtime by `exchange.get(docId, boundSchema)`.
+Four cases, in order:
 
-A `BoundReplica` is the replication binding — a projection of `BoundSchema` that captures the pair needed for headless replication without schema knowledge:
+| Case | Condition | Effect |
+|------|-----------|--------|
+| 1. Already interpreted with compatible schema | `DocRuntime.mode === "interpret"` and schema hash compatible | Return existing `Ref<S>`. No substrate reconstruction. |
+| 2. Currently replicated (headless) | `DocRuntime.mode === "replicate"` | Upgrade to interpret: construct substrate via `bound.factoryBuilder`, replay stored entries, attach `Ref<S>`. `ready` transitions. |
+| 3. Deferred from `present` | `DocRuntime.mode === "deferred"` | Upgrade to interpret; send `interest` to the peer that presented; run sync. |
+| 4. New doc | No entry | Create `DocRuntime`, register with `Store[]`, broadcast `present`, return fresh `Ref<S>`. |
 
-```ts
-interface BoundReplica {
-  readonly factory: ReplicaFactory
-  readonly strategy: MergeStrategy
-}
-```
+The return is always a `Ref<S>` — a typed, callable, navigable, observable, writable reference from the interpreter stack. Application code reads `doc.title()`, writes `change(doc, d => d.title("new"))`, subscribes `subscribe(doc, changeset => …)`. Everything downstream of `get` is identical regardless of which case fired.
 
-Every `BoundSchema` contains a `BoundReplica` by projection (derived from the `BoundSchema`'s `FactoryBuilder` → `SubstrateFactory` → `ReplicaFactory` and `strategy`). Schemas can be registered on the Exchange via `ExchangeParams.schemas` (at construction) or `exchange.registerSchema(bound)` (at runtime). The Exchange validates `exchange.get()` calls against the capability registries (§26) — the `BoundSchema`'s `replicaType` must be supported.
+### Suspend vs destroy
 
-### Factory Builder Lifecycle
+| Intention | API | Behaviour |
+|-----------|-----|-----------|
+| Leave sync graph, keep local state | `exchange.suspend(docId)` | Sends `dismiss`. Removes from `exchange.documents`. State remains in `Store`. `exchange.get(docId)` re-hydrates. |
+| Permanent removal | `exchange.destroy(docId)` | Sends `dismiss`. Removes from `exchange.documents`, from `Store`, from all peers' views. Fresh `get` constructs a new doc. |
+| Temporary local removal | `exchange.remove(docId)` | Removes from `exchange.documents` and local `DocRuntime`. Does not send `dismiss`. State remains in `Store`. |
 
-The factory is always a **builder function**, not a static instance. This solves the identity injection problem:
+The three exist because "I'm done with this doc" has three distinct flavours — intent to resume (`suspend`), intent to erase (`destroy`), memory pressure / local detach (`remove`). They differ in what leaves the `Store` and whether the peer graph is notified.
 
-1. **`BoundSchema` is defined at module scope** — it's a static, shareable declaration.
-2. **The exchange calls the builder lazily** on first `get()` that uses a given BoundSchema, passing `{ peerId: this.peerId }`.
-3. **Each exchange gets a fresh factory** — two exchanges sharing the same BoundSchema produce independent factory instances with their own peer identity.
-4. **Factories are cached per-exchange** — a `WeakMap<FactoryBuilder, SubstrateFactory>` ensures the builder is called at most once per exchange.
+### What `suspend` is NOT
 
-For Loro substrates, the builder hashes the string peerId to a deterministic numeric Loro PeerID and returns a factory that calls `doc.setPeerId()` on every new LoroDoc. For plain/sequential substrates, the builder ignores the context: `() => plainSubstrateFactory`. For ephemeral substrates, the builder returns the ephemeral substrate factory (internal to the `json` namespace), which uses the same plain substrate constructors parameterized with `timestampVersionStrategy`.
-
-### Convenience Wrappers
-
-| Function | Package | Factory | Strategy |
-|----------|---------|---------|----------|
-| `json.bind(schema)` | `@kyneta/schema` | `() => plainSubstrateFactory` | `"authoritative"` |
-| `json.bind(schema, "ephemeral")` | `@kyneta/schema` | `() => ephemeralSubstrateFactory` | `"ephemeral"` |
-| `loro.bind(schema)` | `@kyneta/loro-schema` | `(ctx) => createLoroFactory(ctx.peerId)` | `"collaborative"` |
-| `yjs.bind(schema)` | `@kyneta/yjs-schema` | `(ctx) => createYjsFactory(ctx.peerId)` | `"collaborative"` |
-
-### Why Not `ExchangeSubstrateFactory`?
-
-The previous design used `ExchangeSubstrateFactory` — a `SubstrateFactory` extended with `mergeStrategy` and `_initialize()`. This was replaced by `BoundSchema` because:
-
-1. **Merge strategy was on the wrong entity.** The same `plainSubstrateFactory` can be used with `"authoritative"` or `"ephemeral"`. The strategy is a property of *how the exchange uses the factory*, not the factory itself.
-2. **`_initialize()` didn't compose.** If a factory was shared across exchanges, it would be initialized with the first exchange's peerId. The builder function pattern produces a fresh factory per exchange.
-3. **Boilerplate.** Every usage required wrapping a `SubstrateFactory` to add `mergeStrategy` and `_initialize` — ~10 lines of wrapping per factory.
-
-### Escape Hatch
-
-A single generic escape hatch provides access to substrate-native containers:
-
-- **`unwrap(ref)`** in `@kyneta/schema` — reads `ref[NATIVE]`, fully typed via the `NativeMap` functor. Works at any depth: `unwrap(doc)` returns `LoroDoc` (root), `unwrap(doc.title)` returns `LoroText` (child). No WeakMaps — the `[NATIVE]` symbol property is set during interpretation by the `nativeResolver` protocol.
-
-The per-substrate `loro.unwrap()` and `yjs.unwrap()` functions have been removed. The generic `unwrap()` replaces them entirely, with stronger typing (return type is inferred from the ref's `HasNative<T>` mixin).
+- **Not a disconnect.** Other docs in the same exchange continue syncing.
+- **Not destructive.** Local state is preserved. `resume` or `get` restores it.
+- **Not idempotent with `destroy`.** Suspending a destroyed doc is a no-op; destroying a suspended doc completes the destruction.
 
 ---
 
-## 5. Channel and Transport Abstraction
+## Peer-ID continuity
 
-> **Note:** `Transport<G>`, channel types (`Channel`, `ConnectedChannel`, `EstablishedChannel`, `GeneratedChannel`), `ChannelDirectory`, and the message vocabulary (`ChannelMsg`, `LifecycleMsg`, `SyncMsg`, etc.) are defined in `@kyneta/transport`. `@kyneta/exchange` re-exports them for convenience.
+Source: `src/exchange.ts` → `validatePeerId`, `src/persistent-peer-id.ts`.
 
-### Channel Lifecycle
+The `peerId` in `ExchangeParams.id` is **required** (enforced by the type: `string` or `{ peerId: string, … }`) and must be:
+
+| Invariant | Why |
+|-----------|-----|
+| Stable across restarts | A CRDT's version vector is indexed by peer. Changing the peer across boot fragments history — the new peer has no relationship with the old peer's ops, so sync starts from scratch and the merged doc "forks" relative to other peers. |
+| Unique across concurrent peers | Two peers with the same ID will merge each other's ops as their own, producing incorrect causality. |
+
+The stability requirement is why `new Exchange({ id })` takes a value rather than generating one. The library does not know what counts as "the same participant" across boots — it could be a device, a user, a browser tab, a service replica. The caller decides.
+
+### Browser tabs: `persistentPeerId`
+
+The multi-tab browser case is subtle enough to deserve its own helper. A tab wants a peer ID that:
+
+- Survives reload in this tab.
+- Is unique against other concurrent tabs.
+- Reuses the stable "device" ID when no other tab is active (so a single-tab user's peer ID is stable across browser sessions).
+
+`persistentPeerId(key)` implements this via a `localStorage` **compare-and-swap** lease, factored as FC/IS:
 
 ```
-GeneratedChannel → ConnectedChannel → EstablishedChannel
-     (adapter)       (synchronizer)      (after handshake)
+resolveLease(state)        // pure decision: cached | primary | fresh
+persistentPeerId(key)      // imperative: gather → plan → execute
+releasePeerId(key)         // clears the lease holder (pagehide, testing)
 ```
 
-- **GeneratedChannel**: created by `Transport.generate()`. Has `send`, `stop`, `transportType`.
-- **ConnectedChannel**: registered with the synchronizer. Has `channelId`, `onReceive`.
-- **EstablishedChannel**: completed the establish handshake. Has `peerId` of the remote peer.
+The `resolveLease` pure core is independently tested. Storage keys (`key`, `key + ":held"`, sessionStorage equivalents) are documented at the top of `src/persistent-peer-id.ts`.
 
-Incoming messages are discriminated by `isLifecycleMsg()`: `LifecycleMsg` (`establish`, `depart`) routes to the session program; `SyncMsg` (`present`, `interest`, `offer`, `dismiss`) routes to the sync program (see §9.1). Note: the `dismiss` wire message is the transport-level mechanism; the application-level API uses `destroy()` (permanent removal) and `suspend()` (leave sync graph, keep local state).
+### What `persistentPeerId` is NOT
 
-At establishment time, the session program checks for two identity issues and emits `notify/warning` notifications (not direct `console.warn` — the pure program produces data, the imperative shell handles I/O):
-
-- **Duplicate peerId:** The remote peer's identity already has active channels from a different connection. This indicates two participants sharing the same peerId, which corrupts CRDT state.
-- **Self-connection:** The remote peer's peerId matches the local exchange's identity. Syncing with yourself is always a misconfiguration.
-
-### Transport Base Class
-
-Adapters follow a linear lifecycle: **create → initialize → start → stop → discard**. They cannot be restarted after `_stop()` — internal resources (`readonly` reassemblers, state machines) are disposed and not recreated. If you need a new adapter, create a new instance.
-
-1. **`_initialize(context)`**: receives identity and callbacks (onChannelAdded, onChannelRemoved, onChannelReceive, onChannelEstablish)
-2. **`_start()`**: begins operation — subclasses create initial channels here
-3. **`_stop()`**: cleans up — all channels are removed, reassemblers disposed
-
-Subclasses implement `generate(context)`, `onStart()`, and `onStop()`.
-
-### TransportFactory — Configuration as Description
-
-`ExchangeParams.transports` accepts `TransportFactory[]` — an array of zero-argument functions that each create a fresh adapter instance:
-
-```typescript
-type TransportFactory = () => AnyTransport
-```
-
-The Exchange calls each factory once during construction. On `reset()`, the adapter instances are stopped and discarded. A new Exchange with the same factories creates fresh instances — no shared mutable state across lifecycles.
-
-This follows the same principle as `BoundSchema.factory` (called per-exchange to produce a fresh `SubstrateFactory`) and React elements (descriptions of what to render, not the rendered thing).
-
-#### The `create*` Helper Convention
-
-Each transport package exports a `create*` helper that captures options and returns an `TransportFactory`:
-
-```typescript
-import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
-
-const exchange = new Exchange({
-  transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
-})
-```
-
-Available helpers:
-- `createWebsocketClient(options)` — browser-to-server WebSocket (`./browser`)
-- `createServiceWebsocketClient(options)` — service-to-service WebSocket with headers (`./server`)
-- `createSseClient(options)` — SSE client (EventSource + POST)
-- `createBridgeTransport(params)` — in-process testing adapter
-
-The transport classes (`WebsocketClientTransport`, `SseClientTransport`, etc.) remain exported for advanced use cases that need a handle to the instance (e.g. `subscribeToTransitions`, `waitForStatus`).
-
-#### Server Transport Pattern
-
-Server adapters are referenced by HTTP framework integration code (`handleConnection`, `registerConnection`, Express routers, Bun handlers). They use a "pre-created with single-use factory wrapper" pattern:
-
-```typescript
-const serverAdapter = new WebsocketServerTransport()
-const exchange = new Exchange({
-  transports: [() => serverAdapter],
-})
-// serverAdapter is now available for framework wiring:
-// wss.on("connection", ws => serverAdapter.handleConnection({ socket: wrapNodeWebsocket(ws) }))
-```
-
-This is safe because server-side Exchanges are typically created once and never reset. The factory returns the same pre-created instance — the Exchange calls it once during construction.
-
-### Transport Client Programs
-
-Each client transport's connection lifecycle is a `Program<Msg, Model, Fx>` from `@kyneta/machine`, instantiated via `createObservableProgram`. The program's `update` function is the single source of truth for valid state transitions — no separate transition map is needed because `update` only produces valid states by construction. The observable handle provides `subscribeToTransitions`, `waitForState`/`waitForStatus`, `getState()`, and `dispose()`.
-
-- **WebSocket** (`createWsClientProgram`) — 5 states (disconnected, connecting, connected, ready, reconnecting)
-- **SSE** (`createSseClientProgram`) — 4 states (disconnected, connecting, connected, reconnecting)
-- **Unix Socket** (`createUnixSocketClientProgram`) — 4 states (disconnected, connecting, connected, reconnecting)
-
-Reconnection logic (exponential backoff with jitter, max attempts) lives inside each program's `update` function via a `tryReconnect` helper, producing `start-reconnect-timer` and `reconnect-timer-fired` effects/messages. The imperative shell maps timer effects to `setTimeout` calls that dispatch back into the program.
-
-### BridgeTransport
-
-In-process adapter for testing. Messages are delivered asynchronously via `queueMicrotask()` to simulate real network behavior. Two-phase initialization avoids double-establishment:
-
-1. **Phase 1**: Create channels to all existing peers (no establishment)
-2. **Phase 2**: Only the joining adapter initiates establishment
-
-### Storage
-
-Storage is a **direct Exchange dependency** — not an adapter, not a channel, not a participant in the sync protocol. The Exchange handles hydration (loading from storage on `get()`/`replicate()`) and persistence (saving on network imports and local changes) directly.
-
-```ts
-const exchange = new Exchange({
-  stores: [createInMemoryStore()],
-})
-```
-
-See §19 for the `Store` interface and §20 for the hydration/persistence architecture.
+- **Not a UUID generator.** The fresh-tab peer is a `randomPeerId()`, but the primary case returns a *stable* device-level ID.
+- **Not cross-domain.** `localStorage` is origin-scoped. Different domains mean different devices.
+- **Not a server-side helper.** Server processes should pass explicit `peerId` strings; the lease protocol assumes `localStorage` / `sessionStorage`.
 
 ---
 
-## 6. TimestampVersion
+## The local-write path
 
-`TimestampVersion` implements `Version` using wall-clock timestamps (milliseconds since epoch) for ephemeral semantics. It is defined in `@kyneta/schema` (in `src/substrates/timestamp-version.ts`) alongside the other version types and re-exported by `@kyneta/exchange` for convenience.
+Source: `src/synchronizer.ts` → `#wireLocalChanges`, `src/exchange.ts` → changefeed subscription.
 
-```ts
-class TimestampVersion implements Version {
-  readonly timestamp: number
-  serialize(): string           // decimal string
-  compare(other): "behind" | "equal" | "ahead"  // never "concurrent"
-  static now(): TimestampVersion
-  static parse(s: string): TimestampVersion
-}
+Every local mutation — `change(doc, fn)`, direct writes on a ref, `applyChanges` — flows through the substrate's changefeed. The Synchronizer subscribes once per `DocRuntime` and filters by `origin`:
+
+```
+change(doc, d => d.title.insert(0, "hi"))
+  │
+  ├─ substrate.prepare → applyChangeToYjs / applyDiff / etc.
+  │  onFlush → changefeed emits Changeset with origin: "local"
+  │
+  ├─ Synchronizer's subscriber checks origin:
+  │    if (origin === "sync") return   // echo from remote import; skip
+  │    else dispatch sync/local-doc-change
+  │
+  ├─ sync program update:
+  │    emits send-to-peers { docId, payload: exportSince(peerVersion), version }
+  │
+  ├─ shell interprets: for each peer in synced set,
+  │    envelope to that peer's channel, queue outbound
+  │
+  └─ drain-outbound fires at quiescence:
+       transport.send(envelope)
 ```
 
-The ephemeral algorithm depends on honest, time-synchronized senders. The timestamp serves dual purpose:
-1. **Out-of-order filtering**: receiver discards arrivals with older timestamps
-2. **Compare-once semantics**: no coordination needed — just compare timestamps at destination
+### Echo prevention
 
-### Version on the History Spectrum
+Remote `offer` messages go through `substrate.merge(payload, "sync")`. The substrate propagates `"sync"` as the `origin` on every `Changeset` emitted during that merge. The Synchronizer's subscriber checks `changeset.origin === "sync"` and **skips** `notifyLocalChange(docId)`. Without this skip, every incoming `offer` would re-emit a local `offer` back to all peers — an infinite feedback loop.
 
-Three Version implementations span the full spectrum from causal history to pure present:
+The origin propagation is the substrate's responsibility (every substrate in `@kyneta/schema` correctly threads it through `executeBatch` and `deliverNotifications`). The sync-side check is *this* package's responsibility.
 
-| Version Type | Substrate | Order | History |
-|---|---|---|---|
-| `LoroVersion` (VersionVector) | Loro CRDT | Partial | Full causal oplog |
-| `PlainVersion` (monotonic counter) | Plain JS | Total (single-writer) | Limited op log |
-| `TimestampVersion` (wall clock) | Ephemeral | Total (by convention) | None — latest value only |
+### What the local-write path is NOT
+
+- **Not synchronous with send.** `change(doc, fn)` returns as soon as the substrate's `onFlush` completes. The wire `offer` fires in the next quiescence drain, which may be the same tick or later depending on re-entrant dispatch.
+- **Not per-mutation.** A transaction containing N mutations emits one changefeed entry, which produces one `sync/local-doc-change` input, which produces one `exportSince` call (one payload) per synced peer.
+- **Not guaranteed-delivery.** The payload is queued on the transport; delivery depends on the transport.
 
 ---
 
-## 7. Merge Dispatch
+## Departure, grace, reconnection
 
-The synchronizer calls `replica.merge(payload, "sync")`. The substrate dispatches internally on `payload.kind`:
+Source: `src/session-program.ts` → departure handlers, `src/exchange.ts` → `departureTimeout` default.
 
-- **Oplog substrates** (Loro): both `"since"` and `"entirety"` payloads are handled identically — Loro's `doc.import()` accepts updates and snapshots uniformly via oplog merge.
-- **State-image substrates** (Plain):
-  - `"since"` payloads apply ops incrementally (Op[] format, path + change pairs).
-  - `"entirety"` payloads decompose to `ReplaceChange` ops through `executeBatch` (preserving ref identity and firing the changefeed). This ensures the interpreter stack, caches, and changefeed subscriptions remain intact.
+Channel drop and peer departure are different. A peer can be temporarily disconnected (flaky network, tab backgrounded) and return with the same identity; treating every channel drop as a full departure would thrash document state. The session program distinguishes:
 
-`exportSince()` returns `null` when there is nothing to export (e.g. the target version equals or exceeds the current version). The synchronizer treats `null` from `exportSince()` as a no-op: it logs a warning and sends nothing, since the version comparison should have caught this case first. The only path to `exportEntirety()` is when `sinceVersion` is absent (ephemeral pushes, or a peer that has no version to offer).
+| Event | Session-model update | Emitted `sync-event` |
+|-------|----------------------|----------------------|
+| All channels to peer removed | Peer stays in session map with `channels.size === 0`. A `start-departure-timer` effect fires (default `departureTimeout = 30000` ms). | `sync/peer-unavailable` |
+| Reconnection before timer expires | Peer transitions back to `channels.size > 0`. `cancel-departure-timer` effect. | `sync/peer-available` (re-sync begins) |
+| Timer expires with no reconnection | Peer is deleted from session map. | `sync/peer-departed` |
+| Explicit `depart` message received | Peer is deleted from session map. No grace timer. | `sync/peer-departed` |
 
----
+Setting `departureTimeout: 0` in `ExchangeParams` disables the grace period — useful for tests where "disconnected" and "departed" are the same thing.
 
-## 8. Ephemeral Substrate Pattern
+### What departure is NOT
 
-The ephemeral substrate pattern is implemented internally within the `json` namespace in `@kyneta/schema` (`src/substrates/lww.ts`), consumed by `json.bind(schema, "ephemeral")`. Ephemeral substrates are plain substrates parameterized with `timestampVersionStrategy` — same state management, same construction functions, different version algebra:
-
-- **State management**: shared with `plainSubstrateFactory` — same `Reader`, `applyChange`, interpreter stack, op log. The `createPlainSubstrate<V>` and `createPlainReplica<V>` constructors accept a `VersionStrategy<V>` parameter; ephemeral passes `timestampVersionStrategy`.
-- **Version tracking**: `TimestampVersion` produced by `strategy.current(flushCount)`. Returns `TimestampVersion(0)` when no flushes have occurred, `TimestampVersion.now()` after the first flush. The flush count parameter is ignored — ephemeral versions are wall-clock timestamps, not counters.
-- **Export**: `strategy.logOffset()` returns `null` (timestamps have no relationship to the op log array index), so the replication core falls back to `exportEntirety()`. The synchronizer never sets `sinceVersion` for ephemeral docs, so this fallback is unreachable in practice.
-- **Import**: same as plain — `merge()` dispatches on `payload.kind` and applies through `executeBatch` (substrate) or `applyChange` (replica).
-
-There is no decorator, no wrapper object, and no `context()` gotcha. Each ephemeral substrate is a single object produced by a single `createPlainSubstrate(storeObj, timestampVersionStrategy)` call. The `VersionStrategy<V>` interface has three pure members: `zero`, `current(flushCount)`, and `logOffset(since)`.
+- **Not the end of a document.** Other peers' copies survive. The local exchange's doc refs are unaffected unless the app calls `destroy`.
+- **Not the same as disconnection.** Disconnection is `channels.size === 0` within the grace window; departure is after.
+- **Not acknowledged.** A sender of `depart` doesn't wait for a receiver ack. The message is one-way and best-effort.
 
 ---
 
-## 9. Serialized Dispatch with Quiescence Drain
+## `Policy` and `Governance`
 
-> **Historical note:** This section previously documented `ClientStateMachine<S>` and `createReconnectScheduler` as shared infrastructure for transport client reconnection. These have been replaced by `Program`-based transports using `createObservableProgram` from `@kyneta/machine` (see §5 "Transport Client Programs"). The validated transition map is superseded by each program's `update` function (which only produces valid states by construction), and the reconnect scheduler is superseded by reconnection logic in each program's `update` + timer effects.
+Source: `src/governance.ts`.
 
-The `Synchronizer` orchestrates two pure TEA programs through a unified serialized dispatch loop. Inputs are tagged by program: `sess/*` inputs go to the session program, `sync/*` inputs go to the sync program. Both share a single pending-input queue, ensuring total ordering across both programs within a dispatch cycle.
-
-```
-#drainPending():
-  if already dispatching: return
-
-  dispatching = true
-  while pendingInputs.length > 0:
-    input = pendingInputs.shift()
-    if input is sess/*:
-      [newSessionModel, effect, notification] = sessionUpdate(input, sessionModel)
-      sessionModel = newSessionModel
-      accumulateSessionNotification(notification)
-      executeSessionEffect(effect)        // may enqueue sync/* inputs via sync-event
-    else:  // sync/*
-      [newSyncModel, effect, notification] = syncUpdate(input, syncModel)
-      syncModel = newSyncModel
-      accumulateSyncNotification(notification)
-      executeSyncEffect(effect)            // may enqueue more inputs
-
-  // Quiescence — all inputs from both programs processed
-  #drainOutbound()                  // send accumulated envelopes
-  #drainReadyStateChanges()         // emit only for dirtyDocIds
-  #drainStateAdvanced()             // emit only for dirtyStateAdvanced
-  #drainPeerEvents()                // emit accumulated peer events
-  dispatching = false
-```
-
-**Two-program orchestration.** The session program handles peer lifecycle (`sess/*` inputs): channel add/remove, establish handshake, departure detection, departure timers. The sync program handles document convergence (`sync/*` inputs): present, interest, offer, dismiss, suspend, and per-peer document sync state. Neither program calls the other directly. The shell (Synchronizer) interprets session effects — when the session program emits a `sync-event` effect, the shell enqueues the corresponding `sync/*` input into the shared pending queue, where it will be processed in the same dispatch cycle. This preserves the effect interpretation chain: session → shell → sync → shell → transports.
-
-Effects from the sync program that require network I/O (e.g. `send-to-peer`) are interpreted by the shell, which resolves peer IDs to channels via the session model and sends on the appropriate channel.
-
-**Open vs. closed effects.** Effects fall into two categories. Closed effects (`send`, `send-to-peer`, `send-to-peers`, `start-departure-timer`, `cancel-departure-timer`, `sync-event`) are self-contained — they don't call back into user code. Ensure effects (`ensure-doc`) cross the boundary into user code via callbacks that may trigger reentrant dispatch. When the pure program batches multiple ensure effects (e.g. `handlePresent` emitting N `ensure-doc` for N unknown docs), each effect executes sequentially — but the batch was planned against a single model snapshot. Effect₁'s callback may create state that effect₂ will also try to create. The `ensure-*` naming convention communicates the invariant: these effects are idempotent by contract. Callback implementations must check for existing state and return early (first writer wins).
-
-Notifications are accumulated across the entire dispatch cycle into typed sets. At quiescence, four drain methods fire in order:
-
-1. **`#drainOutbound()`** — sends accumulated wire envelopes. Uses a shift-loop (the outbound queue may grow during sends).
-2. **`#drainReadyStateChanges()`** — emits only for docs in `#dirtyDocIds`. O(dirty × peers × listeners). Most dispatch cycles touch zero or one doc, so this is typically O(1) or O(P×L).
-3. **`#drainStateAdvanced()`** — emits only for docs in `#dirtyStateAdvanced`. Drives unified persistence via the Exchange's `onStateAdvanced` listener.
-4. **`#drainPeerEvents()`** — emits accumulated `PeerChange` events via the peer lifecycle changefeed (§22).
-
-All drain methods (except `#drainOutbound`, which uses a shift-loop) follow the **snapshot-then-clear** pattern: snapshot the pending set, reset the field to empty, then process the snapshot. This ensures the accumulation field is clean before any subscriber code runs — subscribers that trigger reentrant dispatch accumulate into a fresh set, not the one being drained.
-
-### 9.1 Session/Sync Separation
-
-> **Architectural principle:** Connection is not presence.
-
-A peer's transport channel can drop and reconnect without the peer having "left" — the collaborative session should survive transient network disruptions. This insight drives the separation of *session* (channel topology, peer identity, lifecycle) from *sync* (document convergence).
-
-**Two-program design.** The session program (`session-program.ts`) and sync program (`sync-program.ts`) are independent TEA state machines with no shared state:
-
-| | Session Program | Sync Program |
-|---|---|---|
-| **Model** | `SessionModel` — channels, peers, departure timers | `SyncModel` — doc entries, peer sync states, subscriptions |
-| **Inputs** | `sess/*` — channel-added, channel-removed, channel-establish, message-received (LifecycleMsg), departure-timer-expired | `sync/*` — doc-ensure, doc-destroy, doc-suspend, doc-resume, message-received (SyncMsg), peer-available, peer-unavailable, peer-departed, local-doc-change |
-| **Effects** | `send` (LifecycleMsg to channel), `start-departure-timer`, `cancel-departure-timer`, `sync-event` (forwarded to sync program) | `send-to-peer` / `send-to-peers` (SyncMsg to peer), `ensure-doc`, `import-doc-data` |
-| **Notifications** | `notify/peer-established`, `notify/peer-disconnected`, `notify/peer-reconnected`, `notify/peer-departed`, `notify/warning` | `notify/ready-state-changed`, `notify/state-advanced`, `notify/warning` |
-
-**The interpreter pattern.** Session effects are data — the pure session program never performs I/O. The shell interprets each effect type:
-
-- `send` → write `LifecycleMsg` to the physical channel
-- `start-departure-timer` / `cancel-departure-timer` → manage `setTimeout`/`clearTimeout`
-- `sync-event` → enqueue the wrapped `SyncInput` into the shared pending queue
-- `batch` → recursively interpret each sub-effect
-
-This means the session program can trigger sync program activity (e.g. "peer established → tell sync program a peer is available") without any direct coupling.
-
-**Departure timeout.** When a peer's last channel is removed without a preceding `depart` message, the session program does not immediately emit `peer-departed`. Instead, it transitions the peer to `"disconnected"` status, emits `notify/peer-disconnected`, and produces a `start-departure-timer` effect with a configurable delay (`departureTimeout`, default 30 seconds). If the peer reconnects before the timer fires, the timer is cancelled and `notify/peer-reconnected` is emitted. If the timer expires, the peer is removed and `notify/peer-departed` is emitted. Setting `departureTimeout` to `0` skips the grace period — disconnection immediately becomes departure.
-
-**Effect interpretation chain.** The full chain for a session-initiated sync event:
-
-```
-channel event → sess/* input → session update → sync-event effect
-  → shell enqueues sync/* input → sync update → send-to-peer effect
-    → shell resolves peerId → channel → transport send
-```
-
----
-
-## 10. Recent API Additions
-
-### `exchange.documentIds()`
-
-```ts
-exchange.documentIds(): ReadonlySet<DocId>
-```
-
-Returns all document IDs currently in the **interpreted** state. Complements `exchange.deferred` (§26) — together they cover the two "live" document populations. Useful for higher-level primitives (indexes, joins) that need to enumerate the local document set without reaching into the synchronizer model.
-
-### `exchange.getDocSchemaHash(docId)`
-
-```ts
-exchange.getDocSchemaHash(docId: DocId): string | undefined
-```
-
-Returns the `schemaHash` for a document, or `undefined` if the doc is not known. Enables external systems (indexes, admin UIs) to classify documents by schema without holding a reference to the `BoundSchema`.
-
-### `exchange.destroy(docId)`
-
-```ts
-exchange.destroy(docId: DocId): void
-```
-
-Permanent document removal — the renamed successor to the former `exchange.dismiss()`. Clears the doc from `#docCache`, removes local state, and broadcasts a `dismiss` wire message to all peers. The document is gone; to work with it again, call `exchange.get()`. Emits `doc-destroyed` on `exchange.documents`.
-
-### `exchange.suspend(docId)`
-
-```ts
-exchange.suspend(docId: DocId): void
-```
-
-Leaves the sync graph but **keeps local state** (replica, substrate, changefeed subscriptions). Broadcasts a `dismiss` wire message to peers (they see this peer leave the doc's sync graph), but the local `#docCache` entry transitions to `suspended: true`. While suspended, no `present`/`interest`/`offer` messages are sent for this doc. Emits `doc-suspended` on `exchange.documents`.
-
-### `exchange.resume(docId)`
-
-```ts
-exchange.resume(docId: DocId): void
-```
-
-Rejoins the sync graph for a suspended document. Broadcasts `present` and `interest` to established peers (filtered by `canShare`), transitioning the doc back to active sync participation. Emits `doc-resumed` on `exchange.documents`. Throws if the doc is not currently suspended.
-
-### `exchange.peers` type widened to `ReactiveMap`
-
-`exchange.peers` is now typed as `ReactiveMap<PeerId, PeerIdentityDetails, PeerChange>` (from `@kyneta/changefeed`). `ReactiveMap` extends `CallableChangefeed` with lifted collection accessors — `.get()`, `.has()`, `.keys()`, `.size`, and `[Symbol.iterator]()` — so existing code that treats it as a `CallableChangefeed` continues to work. The wider type avoids the need to unwrap `.current` for simple lookups:
-
-```ts
-exchange.peers.get("alice")   // PeerIdentityDetails | undefined
-exchange.peers.has("alice")   // boolean
-exchange.peers.size            // number
-for (const [id, info] of exchange.peers) { /* ... */ }
-```
-
-See `@kyneta/changefeed`'s `ReactiveMap` for the full interface.
-
-### `exchange.documents` — reactive document collection
-
-`exchange.documents` is a `ReactiveMap<DocId, DocInfo, DocChange>` — the document-level counterpart to `exchange.peers`. It provides snapshot access, reactive subscription, and the `[CHANGEFEED]` protocol marker for framework integration (`useValue(exchange.documents)`).
-
-```ts
-type DocInfo = { mode: "interpret" | "replicate" | "deferred"; suspended: boolean }
-
-interface DocChange extends ChangeBase {
-  readonly type: "doc-created" | "doc-destroyed" | "doc-deferred" | "doc-promoted" | "doc-suspended" | "doc-resumed"
-  readonly docId: DocId
-}
-```
-
-Six event types model the document lifecycle:
-
-| Event | Trigger |
-|---|---|
-| `doc-created` | Document registered via `get()` (interpret) or `replicate()` — local or remote auto-resolve |
-| `doc-destroyed` | Document permanently removed via `destroy()` or deleted from the sync graph |
-| `doc-deferred` | Document tracked in deferred mode (routing only, no local replica) |
-| `doc-promoted` | Deferred document promoted to interpret/replicate (e.g. `get()` on a deferred doc) |
-| `doc-suspended` | Document suspended via `suspend()` — left sync graph, local state retained |
-| `doc-resumed` | Suspended document resumed via `resume()` — rejoined sync graph |
-
-Usage:
-
-```ts
-// Snapshot access
-const docs = exchange.documents()      // ReadonlyMap<DocId, DocInfo>
-exchange.documents.has("my-doc")       // boolean
-exchange.documents.get("my-doc")       // { mode: "interpret", suspended: false } | undefined
-exchange.documents.size                // number
-
-// Reactive subscription
-const unsub = exchange.documents.subscribe((changeset) => {
-  for (const change of changeset.changes) {
-    switch (change.type) {
-      case "doc-created":   /* new doc */                    break
-      case "doc-destroyed": /* permanently removed */        break
-      case "doc-deferred":  /* deferred tracking */          break
-      case "doc-promoted":  /* deferred → active */          break
-      case "doc-suspended": /* left sync graph */            break
-      case "doc-resumed":   /* rejoined sync graph */        break
-    }
-  }
-})
-
-// Protocol detection
-hasChangefeed(exchange.documents) // true
-```
-
-The feed is owned by the Synchronizer (symmetric with `exchange.peers`) and drains at quiescence — same timing guarantees, same batching behavior as peer events. See §22.1 for the full architecture.
-
-**Relationship to existing APIs:** `exchange.documentIds()`, `exchange.deferred`, and `exchange.has()` continue to read from the Exchange's `#docCache` (synchronous, application-level view). `exchange.documents` is the sync-level view — they converge at quiescence but `#docCache` may reflect state earlier during hydration.
-
----
-
-## 11. File Map
-
-| File | Purpose |
-|------|---------|
-| `src/types.ts` | Sync-specific types (PeerState, ReadyState, PeerChange) — re-exports transport identity types from `@kyneta/transport` |
-| `src/transport/transport-manager.ts` | `TransportManager` — transport lifecycle and message routing |
-| `src/utils.ts` | PeerId generation and validation |
-| `src/session-program.ts` | Session TEA state machine — channel topology, establish handshake, peer lifecycle, departure timers |
-| `src/sync-program.ts` | Sync TEA state machine — document convergence, present/interest/offer/dismiss, per-peer sync state |
-| `src/synchronizer.ts` | Synchronizer runtime — two-program dispatch, effect interpretation, substrate interaction |
-| `src/exchange.ts` | `Exchange` class — public API, `GatePredicate` type |
-| `src/sync.ts` | `sync()` function and `SyncRef` — sync capabilities access |
-| `src/store/store.ts` | `Store` interface and `StoreEntry` type |
-| `src/store/in-memory-store.ts` | `InMemoryStore` + `createInMemoryStore()` factory |
-| `src/store/index.ts` | Storage module barrel export |
-| `src/testing/store-conformance.ts` | Reusable `describeStore()` conformance suite (exported via `@kyneta/exchange/testing`) |
-| `src/testing/index.ts` | Testing module barrel export |
-| `src/index.ts` | Barrel export — re-exports from `@kyneta/transport` and `@kyneta/schema` |
-
-Note: `MergeStrategy`, `BoundSchema`, `json.bind()`, `json.replica()`, `unwrap()`, `registerSubstrate()`, and `TimestampVersion` are defined in `@kyneta/schema` and re-exported from `@kyneta/exchange` for convenience. `loro.bind()` is defined in `@kyneta/loro-schema`. `yjs.bind()` is defined in `@kyneta/yjs-schema`.
-
-### Test Files
-
-| File | Coverage |
-|------|----------|
-| `src/__tests__/transport-manager.test.ts` | TransportManager lifecycle and message routing |
-| `src/__tests__/session-program.test.ts` | Session TEA update function — establish handshake, peer lifecycle (joined/disconnected/reconnected/departed), departure timers, multi-channel deduplication |
-| `src/__tests__/sync-program.test.ts` | Sync TEA update function — all sync message types, merge strategies, `ensure-doc`, replicate mode, per-peer sync state |
-| `src/__tests__/store-hydration.test.ts` | Exchange-level storage hydration — get/replicate hydration, network import persistence, local change persistence, flush, round-trip restart |
-| `src/__tests__/store.test.ts` | InMemoryStore — conformance suite + InMemory-specific sharedData/getStorage tests |
-| `src/testing/store-conformance.ts` | Reusable Store contract suite: lookup, ensureDoc, append, loadAll, replace, delete, listDocIds, JSON + binary payload round-trips, StoreEntry shape |
-| `src/__tests__/store-integration.test.ts` | End-to-end storage: persist+hydrate for sequential/concurrent/ephemeral, replicate mode, destroy+delete, resolve+storage |
-| `src/__tests__/exchange.test.ts` | Exchange class — get, cache, sync, lifecycle, factory builder lifecycle |
-| `src/__tests__/integration.test.ts` | Two-peer sync for sequential, concurrent, ephemeral, heterogeneous, and `resolve` dynamic creation |
-| `src/__tests__/sync-invariants.test.ts` | Regression tests: empty-delta fallback, ref identity, ephemeral stale rejection, concurrent deltas |
-
-
----
-
-## 12. Wire Format (`@kyneta/wire`)
-
-The `@kyneta/wire` package provides serialization infrastructure for the exchange's seven-message protocol (two lifecycle + five sync). It sits between the exchange and transports in the dependency graph:
-
-```
-@kyneta/changefeed   @kyneta/schema
-   (contract)           (grammar)
-        ↑                   ↑
-        └───────┬───────────┘
-                ↓
-@kyneta/exchange  →  @kyneta/wire  →  @kyneta/websocket-transport
-   (messages)         (codecs)          (transport)
-                                        @kyneta/sse-transport
-                                        @kyneta/webrtc-transport
-                                        @kyneta/unix-socket-transport
-```
-
-### Frame<T> — Universal Abstraction
-
-Every message is wrapped in a `Frame<T>`. A frame carries a protocol version, an optional content hash (reserved for future SHA-256), and content that is either **complete** (the full payload) or a **fragment** (one piece of a larger payload). Binary pipeline: `Frame<Uint8Array>`. Text pipeline: `Frame<string>`.
-
-Batching is **orthogonal to framing**. The frame layer does not distinguish single messages from batches — the payload's own structure (CBOR array vs map, JSON array vs object) determines singular vs plural.
-
-### Two Codec Interfaces
-
-| Interface | Type `T` | Implementation | Transport | Binary Payload |
-|-----------|----------|----------------|-----------|----------------|
-| **BinaryCodec** | `Uint8Array` | `cborCodec` | WebSocket, WebRTC | Native CBOR byte strings |
-| **TextCodec** | JSON-safe objects | `textCodec` | SSE, HTTP | Base64-encoded in JSON |
-
-The `BinaryCodec` operates on raw bytes (`encode`/`decode`/`encodeBatch`/`decodeBatch` with `Uint8Array`). The `TextCodec` operates on JSON-safe objects (`encode` returns `unknown`, `decode` accepts `unknown`).
-
-### Internal CBOR Codec (`cbor-encoding.ts`)
-
-The CBOR encoder/decoder is internal to `@kyneta/wire` — no external dependency. It implements RFC 8949 major types 0–5 and 7 (no tags). The module exports `encodeCBOR`, `decodeCBOR`, and the `CBORType` union type, but these are **not** re-exported from the package's public API. Only `cborCodec` (the `BinaryCodec` implementation) is public.
-
-Two correctness properties distinguish this from the former `@levischuck/tiny-cbor` dependency:
-
-1. **UTF-8–correct string encoding.** The CBOR text string header must encode the UTF-8 byte length (RFC 8949 §3.1). The `encodeString` function encodes the string to UTF-8 first via `TextEncoder`, then uses the resulting `byteLength` for the header. JavaScript's `String.length` returns UTF-16 code units, which diverges from UTF-8 byte length for any non-ASCII character — Latin (+1 byte/char), CJK (+2), emoji (+2). The former library used `.length`, silently corrupting any wire message containing non-ASCII strings.
-
-2. **`byteOffset`-correct `DataView` construction.** The decoder constructs `new DataView(data.buffer, data.byteOffset, data.byteLength)`, correctly handling `Uint8Array` views into shared `ArrayBuffer`s (e.g. Node.js pooled `Buffer` instances with non-zero `byteOffset`). The former library did `new DataView(data.buffer)` without offset, which would silently read from the wrong position.
-
-The `cborCodec` in `cbor.ts` bridges between kyneta's plain-object wire types and CBOR's `Map`-based type system via `objectToMap`/`mapToObject`. This bridge is intentional — CBOR maps are ordered and can have non-string keys, so `Map<string | number, CBORType>` is the correct CBOR-native representation.
-
-### Three Pipelines
-
-```
-Binary: BinaryCodec (CBOR) → binary frame (7B header) → binary fragmentation → FragmentReassembler
-                                                                                 └→ FragmentCollector<Uint8Array>
-
-Text:   TextCodec (JSON)   → text frame ("Vx" prefix) → text fragmentation   → TextReassembler
-                                                                                 └→ FragmentCollector<string>
-
-Stream: BinaryCodec (CBOR) → binary frame (7B header) → StreamFrameParser (byte stream → frames)
-```
-
-The **Binary** and **Text** pipelines serve message-oriented transports (WebSocket, WebRTC, SSE) where the transport delivers discrete messages with inherent boundaries. The **Stream** pipeline serves stream-oriented transports (Unix domain sockets) where the transport delivers a continuous byte stream with no message boundaries. The `StreamFrameParser` replaces both the fragmentation layer and the `FragmentCollector` — stream transports have no message size limits, so fragmentation is unnecessary. The 7-byte header's payload length field provides all the framing needed to extract messages from the byte stream.
-
-### Binary Frame Format
-
-7-byte header: version (1B, `0x00`) + type (1B, `0x00`=complete / `0x01`=fragment) + hash algorithm (1B, `0x00`=none) + payload length (4B BE). Fragment frames add 20 bytes of metadata (frameId 8B + index 4B + total 4B + totalSize 4B) before the payload. Two transport prefixes: `0x00` (complete) and `0x01` (fragment).
-
-### Text Frame Format
-
-JSON array with a 2-character prefix: position 0 is the version (`'0'`), position 1 encodes type + hash via case (`'c'`=complete, `'C'`=complete+hash, `'f'`=fragment, `'F'`=fragment+hash). Complete frames embed the payload as a native JSON value. Fragment frames carry `frameId`, `index`, `total`, `totalSize`, and a JSON substring chunk.
-
-### FragmentCollector<T>
-
-Generic stateful fragment collector parameterized on chunk type `T`. Uses a pure decision function (`decideFragment`) as the functional core and the `FragmentCollector` class as the imperative shell. Both `FragmentReassembler` (binary) and `TextReassembler` (text) are thin wrappers (~80–100 lines) that handle format-specific parsing and delegate collection to the generic collector.
-
-Fragments are fully self-describing — no separate "fragment header" message. The collector auto-creates tracking state on first contact with a new frame ID. Configurable timeouts (default 10s), max concurrent frames (32), max total size (50MB), and oldest-first eviction.
-
-### Binary Transport Helpers
-
-Two shared helpers eliminate encode/decode duplication across binary transports:
-
-- `encodeBinaryAndSend(msg, fragmentThreshold, sendFn)` — Encode a `ChannelMsg`, optionally fragment, and call `sendFn` for each piece. The FC/IS boundary: pure planning (what bytes to produce) with an injected `sendFn` (the transport-specific effectful operation).
-- `decodeBinaryMessages(bytes, reassembler)` — Feed raw transport bytes through the reassembler and decode to `ChannelMsg[]`. Returns the decoded messages, `null` if pending fragments, or throws on error.
-
-Both WebSocket and WebRTC transports use these helpers instead of inline encode/decode logic. Located in `binary-transport.ts`.
-
-### Wire Type Discriminators (CBOR)
-
-`OfferMsg` no longer carries an `offerType` field — the payload's `kind` discriminant (`PayloadKind`) is the single source of truth. On the wire, `pk` (PayloadKind) replaces the former `ot` (OfferType).
-
-| Message | Discriminator | Compact Fields |
-|---------|--------------|----------------|
-| `establish` | `0x01` | `t`, `id`, `n?`, `y` |
-| `depart` | `0x02` | `t` |
-| `present` | `0x10` | `t`, `docs` (array of `{ d, rt, ms }`) |
-| `interest` | `0x11` | `t`, `doc`, `v?`, `r?` |
-| `offer` | `0x12` | `t`, `doc`, `pk`, `pe`, `d`, `v`, `r?` |
-| `dismiss` | `0x13` | `t`, `doc` |
-
-`PayloadKind` values: `0x00` = `"entirety"`, `0x01` = `"since"`.
-`PayloadEncoding` values: `0x00` = `"json"`, `0x01` = `"binary"`.
-`MergeStrategyWire` values: `0x00` = `"collaborative"`, `0x01` = `"authoritative"`, `0x02` = `"ephemeral"`.
-
-`present` entries carry `rt` (ReplicaType as `[string, number, number]`) and `ms` (MergeStrategyWire integer) per document.
-
-See `packages/exchange/wire/PROTOCOL.md` for the full wire protocol specification.
-
----
-
-## 13. Websocket Network Adapter (`@kyneta/websocket-transport`)
-
-The first real transport. Framework-agnostic via the `Socket` interface, with platform-specific wrappers for browser, Node.js `ws`, and Bun. Inline encode/decode logic has been refactored to use the shared binary transport helpers (`encodeBinaryAndSend` / `decodeBinaryMessages`) from `@kyneta/wire`.
-
-### Package Structure
-
-Three subpath exports (no combined `"."` entry) to keep browser/server/bun code tree-shakeable:
-
-| Subpath | Entry | Key Exports |
-|---------|-------|-------------|
-| `./browser` | `src/browser.ts` | `WebsocketClientTransport`, `createWebsocketClient`, `WebsocketClientStateMachine` |
-| `./server` | `src/server.ts` | `WebsocketServerTransport`, `WebsocketConnection`, `wrapNodeWebsocket`, `wrapStandardWebsocket`, `createServiceWebsocketClient` |
-| `./bun` | `src/bun.ts` | `BunWebsocketData`, `wrapBunWebsocket`, `createBunWebsocketHandlers` |
-
-The transport package has zero runtime dependencies — callers provide all WebSocket implementations via structural types (`WebSocketConstructor`, `WebSocketLike`, `NodeWebsocketLike`). The SSE transport and unix-socket transport have analogous `globalThis` dependencies (`EventSource`, `Bun.connect`/`Bun.listen`) that are known inconsistencies — future work.
-
-### Connection Handshake
-
-The Websocket connection handshake is two-phase to avoid race conditions:
-
-1. **Transport-level**: Server sends text `"ready"` signal after Websocket opens
-2. **Protocol-level**: Client creates channel + sends `establish` after receiving `"ready"`
-3. Server's Synchronizer processes the `establish` and sends its own `establish` back
-
-The server does NOT call `establishChannel()` — it waits for the client's `establish`. This prevents a race condition where the server's binary `establish` could arrive before the client has processed `"ready"` and created its channel.
-
-### Client Program (`createWsClientProgram`)
-
-The WebSocket client lifecycle is a pure Mealy machine: `Program<WsClientMsg, WebsocketClientState, WsClientEffect>`. The transport class instantiates it via `createObservableProgram` and interprets data effects as I/O.
-
-**5-state lifecycle** (unique among the three client transports — SSE and Unix Socket have 4 states):
-
-```
-disconnected → connecting → connected → ready
-                   ↓            ↓         ↓
-              reconnecting ← ─ ┴ ─ ─ ─ ─ ┘
-```
-
-The extra `ready` state exists because the server sends a text `"ready"` signal after the WebSocket opens, and only then does the client create a channel and start the establishment handshake.
-
-**Ready race condition:** The server may send `"ready"` before the client's `open` event fires (server-ready while still connecting). The program handles this by transitioning directly from `connecting` → `ready`, skipping the `connected` state entirely — both `start-keepalive` and `add-channel-and-establish` effects are produced in a single transition.
-
-**Lifecycle event forwarding:** The transport class subscribes to the program's transitions via `subscribeToTransitions` and forwards them to user-provided callbacks (`onStateChange`, `onDisconnect`, `onReconnecting`, `onReconnected`, `onReady`). The `wasConnectedBefore` flag — used to distinguish initial connection from reconnection — is **observer-local state** (a closure variable in the transition listener), not part of the program model. This keeps the pure program free of presentation concerns.
-
-Reconnection uses exponential backoff with jitter, computed by the pure `tryReconnect` helper inside the program's `update` function.
-
-### Integration Tests
-
-End-to-end tests in `tests/exchange-websocket/` prove the full stack over real Websocket connections for all three merge strategies (sequential, concurrent, ephemeral), heterogeneous documents, and large payload fragmentation. These use Bun's built-in Websocket server on random ports.
-
-The `examples/todo-react` example demonstrates the full Yjs + WebSocket + React stack over Vite middleware mode (Node runtime), proving substrate and runtime agnosticism alongside the Loro + Bun-based `examples/todo`.
-
----
-
-## 14. Verified Properties
-
-1. **Sequential sync converges**: Two exchanges with `json.bind()`, peer A creates doc with seed, peer B syncs and reads same state. Mutations from A propagate to B after initial sync.
-
-2. **Concurrent sync converges**: Two exchanges with `loro.bind()`, concurrent edits from both peers produce identical final state on both sides (CRDT merge).
-
-3. **Ephemeral broadcast works**: Peer A sets presence via `change()`, peer B receives snapshot via ephemeral broadcast, state matches. Updates propagate via subsequent broadcasts.
-
-4. **Heterogeneous documents**: Single exchange hosts both Loro-backed (`loro.bind()`) and plain-backed (`json.bind()`) documents. Both sync correctly to a peer through the same adapter infrastructure.
-
-5. **Factory builder isolation**: Two exchanges sharing the same `BoundSchema` get independent factory instances, each with the correct peer identity.
-
-6. **Escape hatches work**: `unwrap(ref)` returns the substrate; `loro.unwrap(ref)` returns the LoroDoc. Both compose via the `WeakMap` chain (ref → substrate → LoroDoc).
-
-7. **Existing tests unaffected**: `@kyneta/schema` tests (1110) and `@kyneta/loro-schema` tests (92) pass, including new `json.bind`/`unwrap`/`loro.bind`/`loro.unwrap` tests. The `SubstrateFactory`, `Substrate`, and `Version` interfaces are unchanged.
-
-8. **Wire codec round-trip**: All 5 message types survive encode → decode through both CBOR and JSON codecs, including `OfferMsg` with binary `SubstratePayload` (38 codec tests, 31 frame tests, 54 fragment tests).
-
-9. **Websocket transport sync**: Sequential, concurrent, and ephemeral sync all work over real Websocket connections (Bun server + client adapter). Heterogeneous documents and fragmented large payloads sync correctly (8 integration tests).
-
-10. **Local mutations auto-trigger sync**: `change(doc, fn)` automatically notifies the synchronizer via the changefeed → `notifyLocalChange` wiring. No manual `synchronizer.notifyLocalChange()` call is needed. Echo is prevented by filtering `origin === "sync"` in the changefeed subscriber.
-
-11. **End-to-end in a real app**: The `examples/todo/` app proves the full managed sync path in a running application: `Schema` → `loro.bind()` → `Exchange` → `WebsocketServerTransport`/`WebsocketClientTransport` → Cast compiled view → collaborative real-time sync between browser tabs. No hand-rolled WebSocket code — `change(doc, fn)` on any client automatically propagates to all peers via the changefeed → synchronizer → adapter pipeline.
-
-12. **Dynamic document creation via `resolve`**: Peer A creates a document unknown to peer B. B's `resolve` callback materializes the document with the correct `BoundSchema`. After sync, B has A's content. Works for sequential (PlainSubstrate) and ephemeral (`json.bind(schema, "ephemeral")` / `TimestampVersion`) strategies. Callback returning `Reject()` correctly suppresses creation. When no callback is configured, the Exchange applies a two-tiered default: supported replica type → Defer; unsupported → Reject.
-
----
-
-## 15. SSE Network Adapter (`@kyneta/sse-transport`)
-
-The SSE adapter uses an **asymmetric transport** (POST for uplink, SSE for downlink) with **symmetric encoding** (text wire format in both directions).
-
-### Package Structure
-
-Three subpath exports (no combined `"."` entry) to keep client/server/express code tree-shakeable:
-
-| Subpath | Entry | Key Exports |
-|---------|-------|-------------|
-| `./client` | `src/client.ts` | `SseClientTransport`, `createSseClient`, `SseClientStateMachine` |
-| `./server` | `src/server.ts` | `SseServerTransport`, `SseConnection` |
-| `./express` | `src/express.ts` | `createSseExpressRouter`, `parseTextPostBody`, `SseServerTransport` (re-export) |
-
-### Architecture: Symmetric Encoding, Asymmetric Transport
-
-Unlike the old `@loro-extended/adapter-sse` which used binary CBOR for POST and ad-hoc JSON for SSE, the kyneta SSE adapter uses the **text wire format** (`textCodec` + text framing) in both directions:
-
-```
-Client → Server (POST):  encodeTextComplete(textCodec, msg) → text frame string → fetch(url, { body: textFrame })
-Server → Client (SSE):   encodeTextComplete(textCodec, msg) → text frame string → sendFn(textFrame) → res.write(`data: ${textFrame}\n\n`)
-```
-
-Benefits: single encode/decode path, human-readable debugging, no `express.raw()` needed, text fragmentation works in both directions.
-
-### Why No "Ready" Signal (Unlike WebSocket)
-
-The WebSocket adapter has a two-phase handshake: server sends text `"ready"` → client creates channel. This is necessary because the WebSocket `open` event fires when the TCP connection is established, but the server's message handler may not be fully wired up yet.
-
-SSE doesn't need this. The `EventSource.onopen` event fires only after the server has sent the HTTP response headers, which means the server's route handler is already executing and the connection is registered. The client transitions directly from `connecting` → `connected` and immediately creates its channel.
-
-### Client Program (`createSseClientProgram`) and Custom Reconnection
-
-The SSE client lifecycle is a pure Mealy machine: `Program<SseClientMsg, SseClientState, SseClientEffect>`. The transport class instantiates it via `createObservableProgram` and interprets data effects as I/O.
-
-**4-state lifecycle** (no `ready` state — SSE's `EventSource.onopen` fires only after the server has sent HTTP response headers, so the connection is immediately usable):
-
-```
-disconnected → connecting → connected
-                   ↓            ↓
-              reconnecting ← ─ ─┘
-```
-
-The browser's native `EventSource` has built-in reconnection. The adapter **closes the EventSource immediately** on `onerror` and lets the program handle reconnection via its `tryReconnect` logic. This prevents two reconnection systems from fighting and gives full control over:
-
-- Exponential backoff timing with jitter
-- Attempt counting and max attempts
-- Channel lifecycle (preserve vs. recreate)
-- Observable state transitions for UI feedback
-
-On `event-source-error`, the program produces `close-event-source`, `remove-channel`, and `abort-pending-posts` effects (if connected), then transitions to `reconnecting` with a timer effect — the imperative shell never decides reconnection policy.
-
-### The `sendFn` Pattern
-
-`SseConnection.send(msg)` owns encoding and fragmentation. It encodes the `ChannelMsg` to a text frame string, optionally fragments it, and calls `sendFn(textFrame)` for each piece. The injected `sendFn: (textFrame: string) => void` is a pure transport concern:
-
-```
-Express: connection.setSendFunction((tf) => res.write(`data: ${tf}\n\n`))
-Hono:    connection.setSendFunction((tf) => stream.writeSSE({ data: tf }))
-```
-
-This is cleaner than the old pattern where the framework integration had to call `serializeChannelMsg()`.
-
-### Two-Step Decode in `parseTextPostBody`
-
-POST bodies are text wire frame strings. Decoding requires two steps:
-
-1. `TextReassembler.receive(body)` → `Frame<string>` (handles both complete and fragment frames)
-2. `JSON.parse(frame.content.payload)` → `textCodec.decode(parsed)` → `ChannelMsg[]`
-
-The `parseTextPostBody` function (functional core) returns a discriminated union result. The framework integration (imperative shell) executes side effects based on the result type (`messages` → deliver, `pending` → 202, `error` → 400).
-
-### Integration Tests
-
-The SSE adapter's functional core (`parseTextPostBody`, `SseConnection.send`) is tested via unit tests that verify text frame round-trips and fragmentation. End-to-end integration tests over real HTTP connections are deferred to the chat example.
-
----
-
-## 16. Document Classification (`resolve`)
-
-### Callback Signature
-
-```ts
-type Disposition = Interpret | Replicate | Defer | Reject
-
-type Resolve = (
-  docId: DocId,
-  peer: PeerIdentityDetails,
-  replicaType: ReplicaType,
-  mergeStrategy: MergeStrategy,
-  schemaHash: string,
-) => Disposition
-```
-
-The `resolve` callback is an optional field on `ExchangeParams`. It fires when a peer announces (via `present`) a document the Exchange cannot auto-resolve from its capability registries (§26). Every code path must return an explicit disposition — there is no `undefined` return.
-
-### Four Dispositions
-
-- **`Interpret(bound)`** — full interpretation with schema, ref, changefeed. The `bound` parameter is required — `resolve` only fires for docs the registry can't resolve, so the caller must supply the `BoundSchema`.
-- **`Replicate()`** — parameterless headless replication. The Exchange resolves the `ReplicaFactory` from its replica registry using the `(replicaType, mergeStrategy)` pair from the `present` message. If no matching `BoundReplica` is registered, the Exchange emits a warning and rejects the doc.
-- **`Defer()`** — track the document for routing (included in `present` messages to other peers) but do not create a local representation. The doc can be promoted later via `exchange.get(docId, bound)`, `exchange.replicate(docId)`, or auto-promotion when `exchange.registerSchema(bound)` registers a matching schema.
-- **`Reject()`** — explicit rejection. The document is dropped and not tracked. Replaces the old `undefined` return.
-
-When no `resolve` callback matches (or none is configured), the Exchange applies a two-tiered default: if the `replicaType` is supported by the capability set, the doc is **deferred** (promotion is plausible via a later `exchange.get()` or `registerSchema()`); otherwise the doc is **rejected** silently (no evidence the exchange will ever handle this format).
-
-### Auto-Interpretation
-
-When schemas are registered via `ExchangeParams.schemas` or `exchange.registerSchema(bound)`, the Exchange auto-resolves matching docs from `present` metadata — the `(schemaHash, replicaType, mergeStrategy)` triple is looked up in the schema registry. **`resolve` never fires for auto-resolved docs.** The developer declares schemas once; the Exchange handles discovery automatically.
-
-This means `resolve` is only needed for:
-- Docs whose schema is not (yet) registered — return `Interpret(bound)` with an ad-hoc schema, `Defer()` to wait, or `Reject()`.
-- Docs that should be headlessly replicated — return `Replicate()`.
-- Dynamic policy decisions based on `docId` or `peer` that go beyond schema matching.
-
-### Protocol Flow
-
-```
-Peer A (has doc)               Peer B (doesn't have doc)
-     |                                |
-     |── present [{ docId:           >|
-     |     "input:alice",             |
-     |     replicaType: ["loro",1,0], |
-     |     mergeStrategy: "collaborative",|
-     |     schemaHash: "00abc..." }]  |
-     |                                | handlePresent: unknown doc
-     |                                | ① canShare(docId, peer)?
-     |                                |   No → silently drop
-     |                                |   Yes ↓
-     |                                | ② cmd/ensure-doc
-     |                                | ③ schema auto-resolve:
-     |                                |   resolveSchema(hash, type, strategy)
-     |                                |   Match → exchange.get(docId, resolved)
-     |                                |   No match ↓
-     |                                | ④ resolve("input:alice", peerA, ...)
-     |                                |   → returns Interpret(PlayerInputDoc)
-     |                                |   (no callback? two-tiered default:
-     |                                |    supported type → Defer,
-     |                                |    unsupported type → Reject silently)
-     |                                |   → exchange.get("input:alice", PlayerInputDoc)
-     |                                |   → storage hydration (if configured)
-     |                                |   → registerDoc → doc-ensure dispatched
-     |                                |
-     | <── present ["input:alice"] ───| doc-ensure: announce + interest
-     | <── interest { version: "0" } ─|
-     |                                |
-     |── offer { payload, version } ─>| handleOffer: import A's state
-     |                                |
-```
-
-**Storage interaction**: When storage backends are configured, `exchange.get()` hydrates from storage before registering with the synchronizer. The synchronizer only learns about the doc after hydration, so `present`/`interest` messages carry the hydrated version — not an empty one.
-
-### The `cmd/ensure-doc` Command
-
-When `handlePresent` encounters an unknown doc ID that passes the canShare check, the pure program emits:
-
-```ts
-{ type: "cmd/ensure-doc", docId: DocId, peer: PeerIdentityDetails, replicaType: ReplicaType, mergeStrategy: MergeStrategy, schemaHash: string }
-```
-
-The `Synchronizer` runtime executes this command by calling the `onEnsureDoc` callback provided by the Exchange. The callback first attempts schema auto-resolution (§26), then falls through to `resolve` if no schema matches. The callback is fire-and-forget — if it calls `exchange.get()`, the resulting `registerDoc()` → `#dispatch(doc-ensure)` is queued in `#pendingMessages` (because `#dispatching` is true) and processed before quiescence.
-
-### Reentrancy Through the Dispatch Loop
-
-The reentrancy path is safe because of the serialized dispatch architecture (§9):
-
-1. `handlePresent` returns `[model, cmd/ensure-doc]`
-2. `#executeCommand` calls the callback
-3. Callback calls `exchange.get()` → `synchronizer.registerDoc()` → `#dispatch(doc-ensure)`
-4. `#dispatch` sees `#dispatching === true`, pushes `doc-ensure` to `#pendingMessages`, returns
-5. Control returns to the dispatch loop, which processes `doc-ensure` next
-6. `doc-ensure` emits `present` + `interest` messages, accumulated in the outbound queue
-7. At quiescence, all messages are flushed together
-
-The `Defer` path has its own reentrancy: callback → `synchronizer.deferDoc()` → `#dispatch(synchronizer/doc-defer)` → queued in `#pendingMessages` and processed before quiescence. The deferred doc is announced via `present` (routing participation) but no `interest` is sent.
-
-**Idempotency invariant:** When `handlePresent` returns a batch of multiple `cmd/ensure-doc` commands, each command's callback may trigger cascading doc creation that creates state the next command will also try to create. The `ensure` semantics guarantee safety: `#interpretDoc` and `#replicateDoc` check whether the doc already exists and return early (first writer wins). This is why the commands are named `ensure-*` — they declare that a state should exist, and are no-ops if it already does.
-
-### `doc-ensure` Sends Both `present` and `interest`
-
-When a document is registered after channels are established (the dynamic creation case), `handleDocEnsure` sends **both** `present` and `interest` to all established channels:
-
-- **`present`**: announces the doc to peers (they may create it via their own `resolve`)
-- **`interest`**: requests data from peers who already have the doc (essential for pulling content into the newly created empty doc)
-
-When `handleDocEnsure` fires for a doc already in `model.documents` with `mode: "deferred"`, it promotes the entry: updates mode to `"interpret"` or `"replicate"`, sets the version, and sends both `present` and `interest`.
-
-### Relationship to the Vendor Pattern
-
-The vendor (`@loro-extended/repo`) handles this in `handleSyncRequest` — when a `sync-request` arrives for an unknown doc, the doc is auto-created, gated by `permissions.creation`. Kyneta's approach differs:
-
-1. **Trigger point**: `present` (not `interest`/`sync-request`), because kyneta's `interest` is only sent for docs the sender already has.
-2. **Capability gating**: The `supports` gate has been removed from the synchronizer — all unknown docs reach `resolve`. The Exchange's two-tiered default uses `supportsReplicaType` to decide between Defer and Reject when no callback matches.
-3. **canShare gating**: The `canShare` predicate (§17) is checked before `cmd/ensure-doc` is emitted. If `canShare(docId, announcingPeer)` returns `false`, the unknown doc is silently dropped — `resolve` never fires.
-4. **Auto-resolution**: Schema registry lookup happens before `resolve` — most docs are resolved without any callback.
-5. **Gating mechanism**: a callback returning an explicit disposition (`Interpret | Replicate | Defer | Reject`), because the callback must provide the schema/factory/strategy — information a boolean predicate cannot supply.
-6. **No separate `creation` permission**: the callback subsumes the permission check. Returning `Reject()` is equivalent to denying creation.
-
-> **Note**: `resolve` fires for all unresolved docs regardless of replica type — the developer has full control when a callback is provided. The two-tiered default (Defer vs. Reject based on `supportsReplicaType`) only applies when no callback matches.
-
-### Code Example
-
-```ts
-const exchange = new Exchange({
-  // Declare known schemas — auto-resolved, resolve never fires for these
-  schemas: [PlayerInputDoc, GameStateDoc],
-
-  // Policy for docs not matched by the schema registry
-  resolve: (docId, peer, replicaType, mergeStrategy, schemaHash) => {
-    // Ad-hoc interpretation with an unregistered schema
-    if (docId.startsWith("debug:")) return Interpret(DebugDoc)
-    // Headless replication — Exchange resolves factory from registry
-    if (docId.startsWith("relay:")) return Replicate()
-    // Track for later promotion
-    if (docId.startsWith("line:")) return Defer()
-    // Explicit rejection
-    return Reject()
-  },
-})
-```
-
-`doc-created` fires (via `exchange.documents`) after every successful doc creation regardless of resolution pathway — auto-resolve, `resolve`, deferred promotion, or local `get()`/`replicate()`. The distinction: `resolve` is a **policy gate** (decides what to do with an unresolved doc), while the `doc-created` changefeed event is a **lifecycle notification** (observes that a doc was created). Applications that need to react to every new doc (e.g. registering a player, updating an admin dashboard) should subscribe to `exchange.documents`, not use `resolve`.
-
----
-
-## 17. canShare and canAccept — Information Flow Control
-
-Two predicates on `ExchangeParams` control information flow through the sync protocol. They replace the vendor's four-predicate model (`visibility`, `mutability`, `creation`, `deletion`) with a cleaner two-axis decomposition: outbound flow (sharing) and inbound flow (acceptance).
-
-`ExchangeParams` intersects `Policy`, so all gate fields (`canShare`, `canAccept`, `canReset`, `canConnect`, `resolve`) are directly available at construction. For dynamic rule composition — where multiple independent concerns register and remove their own predicates at runtime — see §25 (Composable Policy Registration).
-
-### Predicate Signatures
-
-```ts
-type GatePredicate = (docId: DocId, peer: PeerIdentityDetails) => boolean
-```
-
-Both `canShare` and `canAccept` use the same `GatePredicate` type. Both default to `() => true` (open access).
-
-### `canShare` — Outbound Flow Control
-
-The `canShare` predicate gates all outbound messages. It answers: "should this peer participate in the sync graph for this document?"
-
-| Gate | Handler | What `canShare: false` does |
-|------|---------|--------------------------|
-| Initial present | `handlePeerAvailable` | Doc omitted from `present` message |
-| Doc-ensure broadcast | `handleDocEnsure` | Channel excluded from present+interest |
-| Push (local change + relay) | `buildPush` | Channel excluded from offer |
-| `resolve` gating | `handlePresent` | `cmd/ensure-doc` not emitted |
-
-### `canAccept` — Inbound Flow Control
-
-The `canAccept` predicate gates inbound data import. It answers: "should this peer's mutations be accepted for this document?"
-
-| Gate | Handler | What `canAccept: false` does |
-|------|---------|-------------------------------|
-| Offer import | `handleOffer` | `cmd/import-doc-data` not emitted; peer sync state still updated |
-
-When `canAccept` rejects an offer, the peer's sync state is still updated to prevent re-requesting. Only the data import is suppressed.
-
-### The `canShare` → `canAccept` Invariant
-
-`canAccept` implies `canShare`: if you accept mutations from a peer, that peer must be in the sharing topology. The converse is not true — a read-only subscriber is shared but not accepted. The system does not enforce this formally. If a developer sets `canAccept: () => true` but `canShare: () => false`, nothing breaks — inbound data never arrives because the outbound announcement was suppressed.
-
-With composable policies (§25), the invariant holds *in aggregate* — the composed `canAccept` returning `true` only matters if the composed `canShare` also returns `true` for that peer. Individual policies can safely have `canAccept` without `canShare` (or vice versa) because the composition evaluates all policies independently per field. The synchronizer only reaches `canAccept` evaluation if the message was already shared.
-
-### Relationship to `resolve`
-
-Gates are evaluated in order when a peer announces an unknown doc in `handlePresent`:
-
-1. **`canShare`** — if `canShare(docId, announcingPeer)` returns `false`, silently drop. `resolve` never fires.
-2. **Schema auto-resolve** — if the `(schemaHash, replicaType, mergeStrategy)` triple matches a registered schema, auto-interpret. `resolve` never fires.
-3. **`resolve`** — fires for all unresolved docs regardless of replica type. Returns an explicit disposition.
-4. **Two-tiered default** — if no `resolve` callback matches (or none is configured): supported `replicaType` → Defer; unsupported `replicaType` → Reject (silently).
-
-After `resolve` (or the two-tiered default) returns:
-- `Interpret(bound)` → `exchange.get()` creates the doc
-- `Replicate()` → `exchange.replicate()` creates the doc (factory from registry)
-- `Defer()` → doc tracked for routing, no local representation
-- `Reject()` → doc dropped
-- Subsequent present/interest/offer flow is subject to `canShare` normally
-
-This means `resolve` can assume: the announcing peer already passed the canShare check and no registered schema matched. The `replicaType` may or may not be supported — the callback has full control regardless.
-
-See `examples/bumper-cars/src/server.ts` for a concrete usage example — `canShare` restricts input doc visibility to the owning peer, and `canAccept` enforces server-only writes to game state.
-
----
-
-## 18. Document Lifecycle — suspend, resume, destroy
-
-The former `exchange.dismiss()` has been decomposed into two distinct intentions: **suspend** (leave sync graph, keep local state) and **destroy** (permanent removal). This two-intention model replaces the single `dismiss` operation and the `onDocDismissed` callback.
-
-### The `dismiss` Wire Message
-
-`dismiss` is the dual of `present`: present announces "I have this doc," dismiss announces "I'm leaving this doc." It is a one-way announcement with no response needed. Both `suspend()` and `destroy()` send a `dismiss` wire message — the remote peer sees the same thing (this peer left the doc's sync graph). The distinction is local-only.
-
-```ts
-type DismissMsg = { type: "dismiss"; docId: DocId }
-```
-
-Wire encoding: `Dismiss: 0x13` in the CBOR codec (next after `Offer: 0x12`). Compact wire format: `{ t: 0x13, doc: string }`.
-
-### `exchange.destroy(docId)`
-
-Permanent document removal.
-
-```ts
-exchange.destroy("my-doc")
-```
-
-Internally: clears the doc from `#docCache`, destroys the local replica, then calls `synchronizer.destroyDocument(docId)`, which dispatches `synchronizer/doc-destroy` to the TEA program. The program removes the doc from `model.documents` and broadcasts `dismiss` to all established channels (filtered by `canShare`). Emits `doc-destroyed` on `exchange.documents`.
-
-### `exchange.suspend(docId)`
-
-Leave the sync graph while retaining local state.
-
-```ts
-exchange.suspend("my-doc")
-```
-
-Internally: marks the doc as `suspended: true` in `#docCache`, then calls `synchronizer.suspendDocument(docId)`, which dispatches `synchronizer/doc-suspend` to the TEA program. The program sets `model.documents[docId].suspended = true` and broadcasts `dismiss` to all established channels (filtered by `canShare`). While suspended, `handleDocEnsure` and `buildPush` skip the doc. Emits `doc-suspended` on `exchange.documents`.
-
-### `exchange.resume(docId)`
-
-Rejoin the sync graph for a suspended document.
-
-```ts
-exchange.resume("my-doc")
-```
-
-Internally: clears the `suspended` flag in `#docCache`, then calls `synchronizer.resumeDocument(docId)`, which dispatches `synchronizer/doc-resume` to the TEA program. The program clears `model.documents[docId].suspended` and broadcasts `present` + `interest` to all established channels (filtered by `canShare`). Emits `doc-resumed` on `exchange.documents`. Throws if the doc is not currently suspended.
-
-### Protocol Flow — destroy
-
-```
-Peer A                            Peer B
-  |                                 |
-  | exchange.destroy("doc-1")       |
-  | → #docCache.delete("doc-1")    |
-  | → synchronizer.destroyDocument  |
-  | → dispatch doc-destroy          |
-  | → handleDocDestroy:             |
-  |   model.documents.delete        |
-  |   cmd/send-message: dismiss     |
-  |                                 |
-  |── dismiss { docId: "doc-1" } ──>|
-  |                                 | handleDismiss:
-  |                                 |   clean up peer sync state
-  |                                 |
-```
-
-### Protocol Flow — suspend / resume
-
-```
-Peer A                            Peer B
-  |                                 |
-  | exchange.suspend("doc-1")       |
-  | → #docCache[doc-1].suspended    |
-  | → synchronizer.suspendDocument  |
-  | → dispatch doc-suspend          |
-  | → handleDocSuspend:             |
-  |   model.documents[doc-1]        |
-  |     .suspended = true           |
-  |   cmd/send-message: dismiss     |
-  |                                 |
-  |── dismiss { docId: "doc-1" } ──>|
-  |                                 | handleDismiss:
-  |                                 |   clean up peer sync state
-  |                                 |
-  | exchange.resume("doc-1")        |
-  | → #docCache[doc-1].suspended    |
-  |     = false                     |
-  | → synchronizer.resumeDocument   |
-  | → dispatch doc-resume           |
-  | → handleDocResume:              |
-  |   model.documents[doc-1]        |
-  |     .suspended = false          |
-  |   cmd/send-message: present     |
-  |   cmd/send-message: interest    |
-  |                                 |
-  |── present ["doc-1"] ──────────>|
-  |── interest { version } ───────>|
-  |                                 | handlePresent / handleInterest
-  |                                 |
-```
-
-### Peer State Cleanup
-
-When `handleDismiss` processes a `dismiss` message from a peer, it removes the document from the peer's `docSyncStates` and `subscriptions`. This ensures:
-
-- Future local changes for this doc are not pushed to the peer that left
-- The peer's ready state no longer appears in `sync(doc).readyStates`
-
-### Observing Lifecycle Changes
-
-Applications observe document lifecycle changes via `exchange.documents` (§22.1). The `doc-destroyed`, `doc-suspended`, and `doc-resumed` event types on `DocChange` replace the former `onDocDismissed` callback. This is consistent with the changefeed-first architecture — lifecycle events flow through reactive feeds, not imperative callbacks.
-
-For bulk teardown without per-doc notification, use `exchange.reset()` or `exchange.shutdown()`.
-
----
-
-## 19. Store — Direct Exchange Dependency
-
-The exchange supports persistent storage through the `Store` interface. Storage is a **direct Exchange dependency** — not an adapter, not a channel, not a participant in the sync protocol. The Exchange handles hydration (loading from storage on `get()`/`replicate()`) and persistence (saving on network imports and local changes) directly. The synchronizer remains purely network-focused.
-
-### StoreEntry
-
-The unit of persistence:
-
-```ts
-type StoreEntry = {
-  readonly payload: SubstratePayload
-  readonly version: string
-}
-```
-
-The `payload` carries its own `kind` discriminant (`"entirety"` or `"since"`), so no separate `entryType` field is needed. The `version` string is round-tripped faithfully from the original offer — storage never interprets it.
-
-### DocMetadata
-
-Per-document metadata registered alongside entries:
-
-```ts
-type DocMetadata = {
-  readonly replicaType: ReplicaType
-  readonly mergeStrategy: MergeStrategy
-  readonly schemaHash: string
-}
-```
-
-Registered via `ensureDoc()` before the first `append()`. Returned by `lookup()` for existence + metadata checks. The `schemaHash` field records the schema fingerprint at registration time — used by the synchronizer to validate compatibility on incoming `present` messages (§3).
-
-### Store Interface
-
-Seven document-level operations plus an optional lifecycle hook. Backends need no knowledge of the sync protocol, substrates, or schemas:
-
-```ts
-interface Store {
-  lookup(docId: DocId): Promise<DocMetadata | null>
-  ensureDoc(docId: DocId, metadata: DocMetadata): Promise<void>
-  append(docId: DocId, entry: StoreEntry): Promise<void>
-  loadAll(docId: DocId): AsyncIterable<StoreEntry>
-  replace(docId: DocId, entry: StoreEntry): Promise<void>
-  delete(docId: DocId): Promise<void>
-  listDocIds(): AsyncIterable<DocId>
-  close?(): Promise<void>
-}
-```
-
-**Design decisions:**
-
-- **`lookup()` replaces `has()`.** Returns `DocMetadata | null` — subsumes the existence check (`lookup(docId) !== null`) and provides metadata for free. This avoids a separate `has()` call followed by a metadata fetch.
-
-- **`ensureDoc()` for metadata registration.** Called once before the first `append()`. Idempotent — calling again with the same metadata is a no-op. For `InMemoryStore`, this is a `Map<DocId, DocMetadata>`. For real backends (Postgres, IndexedDB), it's a single metadata row per document.
-
-- **Document-level, not chunk-level.** The vendor uses `StorageKey = string[]` with `[docId, "update", timestamp]` key-space. This was rejected because timestamp-based keys cause collisions in multi-pod deployments and `removeRange` is unsafe under concurrent writes. The document-level interface operates at the natural granularity.
-
-- **`AsyncIterable` for pagination.** `loadAll` and `listDocIds` return `AsyncIterable` rather than arrays. This supports million-doc stores (S3, Postgres) without loading everything into memory. In-memory backends trivially `yield*` from arrays.
-
-- **Atomic `replace`.** Required for safe compaction. A concurrent reader must never observe an empty intermediate state. Achievable on all target backends: Postgres (transaction), LevelDB (batch), IndexedDB (transaction), Redis (MULTI/EXEC), in-memory (synchronous swap), S3 (write-before-delete).
-
-- **Per-doc serialization.** The Exchange guarantees sequential operations per docId via promise chains (`#enqueueForDoc`) — backends assume single-writer-per-document semantics. Cross-document operations remain concurrent for throughput.
-
-- **Optional `close()`.** Backends with native handles (LevelDB file descriptors, Postgres connections) implement `close()` to release resources. `Exchange.shutdown()` calls `close()` on all storage backends after flushing pending operations. In-memory backends omit it — no ceremony for backends that don't need it.
-
-### InMemoryStore
-
-A `Map<DocId, StoreEntry[]>`-backed implementation for testing. Uses `Map<DocId, DocMetadata>` for per-document metadata. Supports a `sharedData` constructor argument so multiple instances can share the same underlying Maps — useful for simulating persist → restart → hydrate:
-
-```ts
-const sharedData: InMemoryStorageData = {
-  entries: new Map(),
-  metadata: new Map(),
-}
-
-// Exchange 1: persist data
-const exchange1 = new Exchange({
-  stores: [createInMemoryStore({ sharedData })],
-})
-// ... mutations happen, storage persists ...
-await exchange1.shutdown()
-
-// Exchange 2: hydrate from storage
-const exchange2 = new Exchange({
-  stores: [createInMemoryStore({ sharedData })],
-})
-// Documents are restored from the shared storage
-```
-
----
-
-## 20. Storage Persistence Architecture
-
-Storage is wired into the Exchange at two points: **hydration** (loading stored data into a fresh replica) and **persistence** (saving data as it changes). The synchronizer program is storage-free — keeping the FC/IS boundary clean. Persistence is unified through a single mechanism: the `notify/state-advanced` notification from the synchronizer program.
-
-### Peer Identity Requirements
-
-The `peerId` in `ExchangeParams.identity` must satisfy two invariants:
-
-1. **Stability:** The same participant must use the same peerId across restarts. Without stability, each boot produces a different clientID/PeerID, the version vector grows unboundedly, and there is no causal continuity across restarts.
-
-2. **Uniqueness:** Different participants must use different peerIds. Two peers sharing a peerId will silently corrupt CRDT state — the version vector conflates their operations and `exportSince` produces wrong deltas (missing ops, duplicate ops, or cross-client references). There is no error, no exception — just silent data loss.
-
-**Duplicate detection:** The synchronizer detects duplicate peerIds at channel establishment time. When a second channel establishes with a peerId that already has active channels from a different connection, the synchronizer emits a `notify/warning` notification (surfaced as `console.warn` by the imperative shell). This catches the most common case — two browser tabs hitting the same server with the same peerId. The warning is not a rejection: legitimate reconnection (where the old channel hasn't timed out yet) may trigger it transiently.
-
-**Self-connection detection:** When a peer connects to itself (remote peerId matches `model.identity.peerId`), the synchronizer emits a `notify/warning`. This is always a misconfiguration — syncing with yourself produces no useful result.
-
-**`id` is required.** `ExchangeParams.id` is a required field — either a plain string (the peerId) or a `PeerIdentityInput` object with `peerId`, optional `name`, and optional `type` (defaults to `"user"`). There is no auto-generation fallback. Browser clients use `persistentPeerId(storageKey)` as the `id` value; servers use an explicit string.
-
-#### Multi-Tab Behavior
-
-`persistentPeerId(storageKey)` from `@kyneta/exchange` uses a **localStorage CAS lease protocol** to elect a primary tab per browser profile. The implementation follows the FC/IS boundary: `resolveLease(state)` is a pure decision function (given current storage state, return `{ peerId, writes }`) and `persistentPeerId(key)` is the imperative shell (reads storage, calls `resolveLease`, applies writes, registers lifecycle hooks).
-
-**Storage keys** (for a given `key`):
-
-| Key | Storage | Purpose |
-|-----|---------|---------|
-| `localStorage[key]` | persistent | The device peerId (random 16-char hex, created on first visit) |
-| `localStorage[key + ":held"]` | persistent | The holder token — identifies which tab currently holds the lease |
-| `sessionStorage[key]` | per-tab | Cached peerId for this tab (survives reloads within the same tab) |
-| `sessionStorage[key + ":tk"]` | per-tab | This tab's session token (compared against the holder token) |
-
-**Primary election:** The first tab to call `persistentPeerId(key)` finds no holder token in `localStorage[key + ":held"]`. It generates a session token, writes it as the holder token (CAS: compare-and-swap — only claim if still unclaimed), and claims the device peerId from `localStorage[key]`. Subsequent tabs find the holder token already set (and not matching their own session token), so they generate a fresh `randomPeerId()` instead. Each tab caches its resolved peerId in `sessionStorage[key]`.
-
-**Reload stability:** `sessionStorage` survives page reloads within the same tab. On reload, `persistentPeerId` finds the cached peerId in `sessionStorage[key]` and returns it immediately — no lease negotiation needed. This satisfies the stability invariant across reloads.
-
-**`pagehide` release:** When a tab closes, navigates away, or is evicted from bfcache, `releasePeerId(key)` is called via the `pagehide` event. This clears only `localStorage[key + ":held"]` (the holder token). It does NOT touch `sessionStorage` — if the tab is restored from bfcache, it will re-acquire the lease or get a fresh peerId on next call. It does NOT touch `localStorage[key]` — the device peerId is permanent.
-
-**Orphaned lease graceful degradation:** If a tab crashes (no `pagehide` fires), the holder token in `localStorage[key + ":held"]` is orphaned. Subsequent tabs see a holder token that doesn't match their session token and fall through to generating fresh peerIds. The orphaned lease is effectively harmless: the device peerId goes unclaimed until the user closes all tabs and opens a fresh one (which finds no holder and claims it). The cost of orphaned leases is one extra version vector entry per tab that couldn't claim the device peerId — negligible compared to the silent corruption that would result from two tabs sharing a peerId.
-
-**Each tab IS a distinct CRDT actor.** The multi-tab design intentionally gives non-primary tabs their own peerIds. The cost is one version vector entry per concurrent tab — a small, bounded overhead. This is the correct tradeoff: sharing a peerId across tabs would violate the uniqueness invariant and cause silent data corruption.
-
-**Servers:** Use an explicit string (e.g. `"my-server"`). Servers don't need generation helpers.
-
-`exchange.replicate()` does NOT require a stable peerId — replicate mode has no local writes and needs no stable identity. Relay-only peers must still provide an `id` — it can be any unique string.
-
-### Hydration Flow — Single Substrate with Structural Merge
-
-When `exchange.get()` is called with storage backends configured, the exchange store path uses a single substrate — no temp/bare replica split. With structural clientID 0 (jj:ptyzqoul), `factory.create(schema)` produces structural ops at `(0, 0..N)` — identical to the structural ops in any stored state. Merging stored entries into this substrate deduplicates structural ops via CRDT semantics and applies application ops into the shared containers.
-
-```
-exchange.get(docId, bound)
-  → factory.create(schema) — live substrate (structural ops at clientID 0)
-  → build interpreter stack from substrate
-  → cache ref in #docCache (returned synchronously)
-  → async #hydrateAndRegister(docId, substrate, factory, bound):
-      1. ensureDoc(docId, metadata) on all backends
-      2. loadAll(docId) → merge entries into the live substrate (changefeed fires)
-      3. if first boot: append entirety base entry to store
-      4. record storeVersion for incremental persistence
-      5. registerDoc with synchronizer (version reflects hydrated state)
-      6. wire changefeed → synchronizer (sync-only, no persistence)
-```
-
-The single-substrate design is enabled by the structural merge protocol (jj:ptyzqoul):
-- **Deterministic structural ops:** `factory.create(schema)` with clientID 0 produces ops at `(0, 0), (0, 1), ...` — the same ops present in any stored state that was also created from the same schema. Merging stored data into this substrate is a no-op for structural ops and additive for application ops.
-- **No identity conflict:** ClientID 0 is a reserved structural identity. The exchange sets the real peerId-derived clientID after hydration — structural ops remain at 0 regardless.
-- **No upgrade step:** The old `#hydrateUpgradeAndRegister` two-phase flow (`createReplica` → hydrate bare → `upgrade` → merge into temp) is replaced by the unified `#hydrateAndRegister`. One substrate, one merge, no intermediate replica.
-
-For `exchange.replicate()`, the flow is similar — no schema or interpreter stack, but the same single-substrate hydration via `#hydrateAndRegister`.
-
-### Persistence — Unified via `notify/state-advanced`
-
-All persistence flows through a single mechanism: the `notify/state-advanced` notification emitted by the synchronizer program at quiescence.
-
-The Exchange subscribes to `synchronizer.onStateAdvanced(docId => ...)` in its constructor. The listener:
-
-```
-onStateAdvanced(docId):
-  1. Look up storeVersion from #storeVersions
-  2. If not found → return (doc still hydrating)
-  3. Get runtime from synchronizer.getDocRuntime(docId)
-  4. delta = runtime.replica.exportSince(storeVersion)
-  5. If delta is null → return (version didn't advance)
-  6. newVersion = runtime.replica.version()
-  7. #storeVersions.set(docId, newVersion)
-  8. #persistToStore(docId, backend.append(docId, { payload: delta, version }))
-```
-
-This handles **both** local mutations and network imports:
-
-- **Local mutation:** `change(doc, fn)` → changefeed fires → `notifyLocalChange(docId)` → `handleLocalDocChange` → `notify/state-advanced` → `onStateAdvanced` → `exportSince(storeVersion)` → `append(since delta)`
-- **Network import:** adapter receives offer → `#executeImportDocData` → `replica.merge(payload)` → `handleDocImported` → `notify/state-advanced` → `onStateAdvanced` → `exportSince(storeVersion)` → `append(since delta)`
-
-Both paths produce small incremental `since` deltas via `append()` — not full `exportEntirety()` snapshots via `replace()`. The `replace()` operation is reserved for future compaction (collapsing accumulated deltas into a single entirety).
-
-The changefeed subscriber is sync-only — it notifies the synchronizer but performs no persistence:
-
-```ts
-subscribe(ref, changeset => {
-  if (changeset.origin === "sync") return
-  this.#synchronizer.notifyLocalChange(docId)
-})
-```
-
-### storeVersion Lifecycle
-
-Each document tracks its last-persisted version in `#storeVersions: Map<DocId, Version>`. This is set:
-- After hydration completes (to the replica's version post-hydration)
-- After each successful `append()` (to the new version from `exportSince`)
-
-The `storeVersion` enables incremental persistence: `exportSince(storeVersion)` produces only the operations not yet stored. Multiple state transitions in one dispatch cycle are batched — the notification fires once at quiescence, and the single `exportSince` covers all transitions.
-
-### Flush Tracking
-
-Every async storage operation is tracked in `#pendingStorageOps: Set<Promise<void>>`. The `flush()` method awaits all pending operations (looping to handle operations that spawn new ones). `shutdown()` flushes storage before disconnecting adapters.
-
-### Per-Doc Sequential Access
-
-The Exchange guarantees sequential backend access per document via `#enqueueForDoc()` — a promise-chain pattern where each new operation for a docId awaits the previous one. Cross-document operations remain concurrent for throughput.
-
-### Backend Lifecycle
-
-`Exchange.shutdown()` calls `backend.close()` on all storage backends (if implemented) after flushing pending operations and disconnecting adapters. This ensures native handles (LevelDB file descriptors, database connections) are released cleanly.
-
----
-
-## 21. LevelDB Store
-
-The `@kyneta/leveldb-store` package provides a server-side persistent `Store` using [classic-level](https://github.com/Level/classic-level). Located at `packages/exchange/storage-adapters/leveldb/`, imported via `@kyneta/leveldb-store/server`.
-
-```ts
-import { createLevelDBStore } from "@kyneta/leveldb-store/server"
-
-const exchange = new Exchange({
-  stores: [createLevelDBStore("./data/exchange-db")],
-})
-```
-
-### Key-Space Design
-
-LevelDB keys use `\x00` (null byte) as the separator — following the FoundationDB tuple-layer convention. Since null bytes cannot appear in valid UTF-8 strings, no docId validation is needed; the key-space imposes zero constraints on callers.
-
-| Prefix | Key format | Value |
-|--------|-----------|-------|
-| `meta` | `meta\x00{docId}` | JSON-encoded `DocMetadata` |
-| `entry` | `entry\x00{docId}\x00{seqNo}` | Binary-encoded `StoreEntry` |
-
-`seqNo` is a zero-padded 10-digit monotonic counter per doc, tracked in an in-memory `Map<DocId, number>`. After a reboot, the max seqNo for a doc is lazily discovered via a single reverse-iterator seek on the first `append()` call — one LevelDB seek per doc, O(log N) in SSTables.
-
-Prefix scans use the `\xff` sentinel pattern: `{ gte: "entry\x00docId\x00", lt: "entry\x00docId\x00\xff" }`.
-
-### Binary Envelope Serialization
-
-`StoreEntry` values are serialized as a compact binary envelope to avoid base64 inflation on binary payloads (Loro/Yjs documents are entirely binary):
-
-1. **1 byte**: flags — bit 0 = kind (0=entirety, 1=since), bit 1 = encoding (0=json, 1=binary), bit 2 = data type (0=string, 1=Uint8Array)
-2. **4 bytes**: version string length (uint32 big-endian)
-3. **N bytes**: version string (UTF-8)
-4. **remaining bytes**: payload data (raw bytes)
-
-`encodeStoreEntry()` and `decodeStoreEntry()` are pure functions with no dependencies — trivially unit-testable.
-
-### Atomicity
-
-`replace()` uses `db.batch()` to atomically delete all existing entry keys and write the single replacement. A concurrent reader never observes an empty intermediate state.
-
-`delete()` similarly uses `db.batch()` to atomically remove both the metadata key and all entry keys.
-
-### Conformance Testing
-
-The `Store` contract is validated by a reusable conformance test suite, available via `@kyneta/exchange/testing`:
-
-```ts
-import { describeStore } from "@kyneta/exchange/testing"
-
-describeStore(
-  "MyBackend",
-  () => new MyBackend(),
-  async (backend) => { if (backend.close) await backend.close() },
-)
-```
-
-Both `InMemoryStore` and `LevelDBStore` pass the same suite. The suite covers lookup, ensureDoc, append, loadAll, replace, delete, listDocIds, and both JSON string and binary `Uint8Array` payload round-trips.
-
----
-
-## 22. Peer Lifecycle Feed
-
-The exchange exposes a reactive feed of peer presence via `exchange.peers` — a `ReactiveMap<PeerId, PeerIdentityDetails, PeerChange>` (from `@kyneta/changefeed`). `ReactiveMap` extends `CallableChangefeed` with lifted collection accessors (`.get()`, `.has()`, `.keys()`, `.size`, iteration), so existing code that treats it as a `CallableChangefeed` continues to work unchanged. Peer lifecycle is a four-state machine managed by the session program (§9.1).
-
-### The `PeerChange` Type
-
-```ts
-interface PeerChange extends ChangeBase {
-  readonly type: "peer-established" | "peer-disconnected" | "peer-reconnected" | "peer-departed"
-  readonly peer: PeerIdentityDetails
-}
-```
-
-Four event types model the full peer lifecycle:
-
-| Event | Trigger | Terminal? |
-|---|---|---|
-| `peer-established` | First `establish` received for a new peerId | No |
-| `peer-disconnected` | Last channel removed, no `depart` received (involuntary) | No — departure timer starts |
-| `peer-reconnected` | New channel established for a previously-disconnected peer | No — departure timer cancelled |
-| `peer-departed` | `depart` message received, or departure timer expired | Yes — peer removed from model |
-
-The distinction between `peer-disconnected` and `peer-departed` reflects the architectural principle that **connection is not presence** (§9.1). A disconnected peer may reconnect; a departed peer is gone.
-
-`PeerChange` is defined in `src/types.ts` alongside the other core identity types. It extends `ChangeBase` from `@kyneta/changefeed`, making it compatible with the standard `Changeset<PeerChange>` envelope.
-
-### The `exchange.peers` ReactiveMap
-
-`exchange.peers` is a `ReactiveMap` — callable as a function, with `.current` and `.subscribe()`, the `[CHANGEFEED]` marker for protocol detection, and lifted collection accessors:
-
-```ts
-// Read current peers (callable)
-const peers = exchange.peers()  // ReadonlyMap<PeerId, PeerIdentityDetails>
-
-// Read current peers (property)
-const peers = exchange.peers.current
-
-// Subscribe to changes
-const unsub = exchange.peers.subscribe((changeset) => {
-  for (const change of changeset.changes) {
-    switch (change.type) {
-      case "peer-established":       /* new peer */           break
-      case "peer-disconnected": /* lost connection */    break
-      case "peer-reconnected":  /* back online */        break
-      case "peer-departed":     /* gone for good */      break
-    }
-  }
-})
-
-// Protocol detection
-hasChangefeed(exchange.peers) // true
-```
-
-The feed is created by `Synchronizer.createPeerFeed()`, which calls `createReactiveMap()` and stores the `ReactiveMapHandle` for mutation and emission.
-
-### TEA Flow
-
-Peer lifecycle notifications flow through the session program's TEA pipeline:
-
-```
-sess/channel-establish        sess/channel-removed           sess/departure-timer-expired
-  → first channel for           → last channel for             → grace period elapsed
-    a new peer                    a peer (no depart)
-  → notify/peer-established          → notify/peer-disconnected     → notify/peer-departed
-                                  + start-departure-timer
-                                                               sess/message-received (depart)
-sess/channel-establish                                           → notify/peer-departed
-  → new channel for a
-    disconnected peer
-  → notify/peer-reconnected
-    + cancel-departure-timer
-          ↓
-    #accumulateSessionNotification()
-      → push PeerChange to #pendingPeerEvents
-          ↓
-    (at quiescence)
-    #drainPeerEvents()
-      → snapshot #pendingPeerEvents, clear field
-      → rebuild #peerMap from model.peers (single source of truth)
-      → emit Changeset<PeerChange> via the changefeed
-```
-
-The `#peerMap` is rebuilt from the model at quiescence rather than maintained incrementally. This ensures the map is always consistent with the model — even if multiple lifecycle events occurred within a single dispatch cycle.
-
-### Relationship to `exchange.documents`
-
-`exchange.documents` (§22.1) and `exchange.peers` operate at different granularities:
-
-| | `exchange.documents` | `exchange.peers` |
-|---|---|---|
-| **Scope** | Per-document | Per-exchange |
-| **Events** | `doc-created`, `doc-destroyed`, `doc-suspended`, `doc-resumed`, `doc-deferred`, `doc-promoted` | `peer-established`, `peer-disconnected`, `peer-reconnected`, `peer-departed` |
-| **Trigger** | Local API calls (`get`, `destroy`, `suspend`, `resume`) or remote `present`/`dismiss` | Channel lifecycle and `establish`/`depart` messages |
-| **Use case** | Track document membership, react to suspend/resume/destroy | Track peer presence for UI, cleanup, etc. |
-
-A peer can destroy or suspend a document while remaining connected to the exchange (other documents still syncing). Conversely, a peer can vanish (network failure, crash) without sending any `dismiss` — `peer-disconnected` fires immediately, followed by `peer-departed` when the departure timer expires. The intervening window allows the peer to reconnect without document-level disruption.
-
-### Cast Integration
-
-Because `exchange.peers` carries the `[CHANGEFEED]` marker, Cast's automatic changefeed detection wires it into compiled views without explicit configuration. The delta kind falls back to `"replace"` — each changeset triggers a full re-read of the `ReadonlyMap`. This is appropriate because the peer map is small (typically single-digit entries) and changes infrequently.
-
-### Reset and Shutdown — Synthetic Emission
-
-`exchange.shutdown()` sends a `depart` message on all active channels before tearing down, giving remote peers a clean signal of intentional departure. It then calls `#emitSyntheticPeerDepartedEvents()` before wiping the model.
-
-`exchange.reset()` does not send `depart` (it is a local-only operation). It calls `#emitSyntheticPeerDepartedEvents()` to emit synthetic `peer-departed` for all peers.
-
-`#emitSyntheticPeerDepartedEvents()`:
-
-1. Returns immediately if there are no peers or no emit callback.
-2. Builds a `PeerChange[]` array with `type: "peer-departed"` for every peer in `model.peers`.
-3. Clears `#peerMap` to an empty map (consistent with the about-to-be-wiped model).
-4. Emits the full array as a single `Changeset<PeerChange>`.
-
-This guarantees that subscribers always observe a balanced lifecycle — every `peer-established` is eventually paired with a `peer-departed`, even during teardown. The synthetic events bypass the normal quiescence drain because `reset()` is synchronous and `shutdown()` needs to emit before the model is cleared.
-
-### Multi-Transport Deduplication
-
-A single peer may connect through multiple transports (e.g. both WebSocket and SSE). The session model tracks a `channels: Set<ChannelId>` per peer in `model.peers`. The deduplication is straightforward:
-
-- **Join:** The session program adds the channel to the peer's channel set. If this is the first channel for a new peer, it emits `notify/peer-established`. If the peer was in `"disconnected"` status, it emits `notify/peer-reconnected` and cancels the departure timer. Otherwise, the channel is simply added to the existing set — no notification.
-- **Leave:** The session program removes the channel from the set. If `newChannels.size === 0` (last channel gone) and no `depart` was received, the peer transitions to `"disconnected"` and `notify/peer-disconnected` is emitted. Otherwise, only `notify/ready-state-changed` fires for affected docs (the peer lost a transport but is still present).
-
-This means `peer-established` fires exactly once per peer identity regardless of how many channels connect, and `peer-departed` fires only when the peer is truly gone (either voluntarily via `depart`, or involuntarily after the departure timer expires).
-
----
-
-## 22.1. Document Lifecycle Feed
-
-The exchange exposes a reactive feed of document presence via `exchange.documents` — a `ReactiveMap<DocId, DocInfo, DocChange>` (from `@kyneta/changefeed`). This is the document-level counterpart to `exchange.peers` (§22), created and owned by the Synchronizer with the same quiescence-drain semantics.
-
-### The `DocInfo` Type
-
-```ts
-type DocInfo = {
-  mode: "interpret" | "replicate" | "deferred"
-  suspended: boolean
-}
-```
-
-Deliberately minimal — metadata about the document's sync participation, not its application-level content. The `suspended` field is `true` when the document has been suspended via `exchange.suspend()` — the local state is retained but the doc is not participating in the sync graph. The application-level ref is obtained via `exchange.get()`. Mirrors `PeerIdentityDetails` (metadata about the peer, not the peer's full connection state).
-
-### The `DocChange` Type
-
-```ts
-interface DocChange extends ChangeBase {
-  readonly type: "doc-created" | "doc-destroyed" | "doc-deferred" | "doc-promoted" | "doc-suspended" | "doc-resumed"
-  readonly docId: DocId
-}
-```
-
-Six event types model the document lifecycle:
-
-| Event | Trigger | Terminal? |
-|---|---|---|
-| `doc-created` | Document registered via `get()` (interpret) or `replicate()` — local or remote auto-resolve | No |
-| `doc-destroyed` | Document permanently removed via `destroy()` or deleted from the sync graph | Yes — document removed from model |
-| `doc-deferred` | Document tracked in deferred mode via `resolve → Defer()` (routing only, no local replica) | No |
-| `doc-promoted` | Deferred document promoted to interpret or replicate mode (e.g. `get()` on a deferred doc) | No |
-| `doc-suspended` | Document suspended via `suspend()` — left sync graph, local state retained | No |
-| `doc-resumed` | Suspended document resumed via `resume()` — rejoined sync graph | No |
-
-`DocChange` is defined in `src/types.ts` alongside `PeerChange`. It extends `ChangeBase` from `@kyneta/changefeed`, making it compatible with the standard `Changeset<DocChange>` envelope.
-
-### The `exchange.documents` ReactiveMap
-
-`exchange.documents` is a `ReactiveMap` — callable as a function, with `.current` and `.subscribe()`, the `[CHANGEFEED]` marker for protocol detection, and lifted collection accessors:
-
-```ts
-// Read current documents (callable)
-const docs = exchange.documents()  // ReadonlyMap<DocId, DocInfo>
-
-// Read current documents (property)
-const docs = exchange.documents.current
-
-// Subscribe to changes
-const unsub = exchange.documents.subscribe((changeset) => {
-  for (const change of changeset.changes) {
-    switch (change.type) {
-      case "doc-created":   /* new doc */                    break
-      case "doc-destroyed": /* permanently removed */        break
-      case "doc-deferred":  /* deferred tracking */          break
-      case "doc-promoted":  /* deferred → active */          break
-      case "doc-suspended": /* left sync graph */            break
-      case "doc-resumed":   /* rejoined sync graph */        break
-    }
-  }
-})
-
-// Protocol detection
-hasChangefeed(exchange.documents) // true
-```
-
-The feed is created by `Synchronizer.createDocFeed()`, which calls `createReactiveMap()` and stores the `ReactiveMapHandle` for mutation and emission — symmetric with `createPeerFeed()`.
-
-### Accumulation and Drain
-
-Document events accumulate in `#pendingDocEvents` when the Synchronizer's public methods are called:
-
-| Method | Event | Guard |
-|---|---|---|
-| `registerDoc(runtime)` | `doc-created` | `!#docRuntimes.has(docId)` (first registration) |
-| `registerDoc(runtime)` | `doc-promoted` | `#syncModel.documents.get(docId)?.mode === "deferred"` |
-| `deferDoc(docId, ...)` | `doc-deferred` | `!#syncModel.documents.has(docId)` |
-| `destroyDocument(docId)` | `doc-destroyed` | `#docRuntimes.has(docId) \|\| #syncModel.documents.has(docId)` |
-| `removeDocument(docId)` | `doc-destroyed` | `#docRuntimes.has(docId) \|\| #syncModel.documents.has(docId)` |
-| `suspendDocument(docId)` | `doc-suspended` | `#docRuntimes.has(docId) && !suspended` |
-| `resumeDocument(docId)` | `doc-resumed` | `#docRuntimes.has(docId) && suspended` |
-
-Guards ensure events only accumulate when state actually changes — idempotent calls (first-writer-wins) do not produce duplicate events.
-
-At quiescence, `#drainDocEvents()` follows the same snapshot-then-clear pattern as `#drainPeerEvents()`:
-
-```
-registerDoc / deferDoc / destroyDocument / suspendDocument / resumeDocument
-  → push DocChange to #pendingDocEvents
-        ↓
-  (at quiescence)
-  #drainDocEvents()
-    → snapshot #pendingDocEvents, clear field
-    → rebuild doc map from two sources of truth:
-        1. #docRuntimes (interpret + replicate docs, with suspended flag)
-        2. syncModel.documents where mode === "deferred"
-    → emit Changeset<DocChange> via the changefeed
-```
-
-The map is rebuilt from the model at quiescence rather than maintained incrementally — same principle as the peer feed. This ensures the map is always consistent with the model even when multiple doc events occur in a single dispatch cycle.
-
-### Source of Truth: Two-Map Merge
-
-Unlike the peer feed (single source: `sessionModel.peers`), the document feed merges two sources:
-
-- **`#docRuntimes`** — interpret and replicate docs. Each `DocRuntime` carries a `mode` field.
-- **`syncModel.documents`** entries with `mode === "deferred"` — deferred docs have no `DocRuntime` (no replica), but they are documents the exchange knows about and participates in routing for.
-
-### Relationship to `#docCache` and Existing APIs
-
-`exchange.documentIds()`, `exchange.deferred`, and `exchange.has(docId)` continue to read from the Exchange's `#docCache`. The reactive map is the sync-level view; `#docCache` is the application-level view. They converge at quiescence but differ during hydration:
-
-| | `#docCache` | `exchange.documents` |
-|---|---|---|
-| **Set by** | Exchange (`#interpretDoc`, `#replicateDoc`, `#deferDoc`) | Synchronizer (`registerDoc`, `deferDoc`) |
-| **Timing** | Synchronous — set before hydration | After `registerDoc` — may be async (post-hydration for store-backed docs) |
-| **Contains** | Application state (`ref`, `BoundSchema`) | Sync metadata only (`mode`) |
-| **Use case** | `exchange.has()`, `exchange.documentIds()`, `exchange.deferred` | Reactive subscription, framework integration |
-
-### Reset and Shutdown — Synthetic Emission
-
-Symmetric with peer synthetic events (§22):
-
-`exchange.reset()` and `exchange.shutdown()` call `#emitSyntheticDocDestroyedEvents()` before clearing `#docRuntimes` and `#syncModel`:
-
-1. Collect all doc IDs from both `#docRuntimes` and deferred entries in `syncModel.documents`.
-2. Build a `DocChange[]` with `type: "doc-destroyed"` for every tracked doc.
-3. Clear the doc map.
-4. Emit the full array as a single `Changeset<DocChange>`.
-
-This guarantees subscribers observe a balanced lifecycle — every `doc-created` or `doc-deferred` is eventually paired with a `doc-destroyed`, even during teardown. Synthetic doc events fire before synthetic peer events in both `reset()` and `shutdown()`.
-
----
-
-## 23. WebRTC Transport (`@kyneta/webrtc-transport`)
-
-BYODC (Bring Your Own Data Channel) transport for peer-to-peer document synchronization over WebRTC data channels. The application manages WebRTC connections (signaling, ICE, media streams); this transport attaches to already-established data channels for kyneta sync.
-
-### Package Structure
-
-Single `"."` export — WebRTC data channels are symmetric (no client/server distinction):
-
-| Export | Key Exports |
-|--------|-------------|
-| `"."` | `WebrtcTransport`, `createWebrtcTransport`, `DataChannelLike`, `WebrtcTransportOptions` |
-
-### `DataChannelLike` — Minimal Interface, Not DOM Type
-
-The vendor adapter (`@loro-extended/adapter-webrtc`) types `attachDataChannel` as `(peerId, channel: RTCDataChannel)`. This forces library-specific wrappers to implement `Partial<RTCDataChannel>` (~30 members) and cast via `as unknown as RTCDataChannel`. Analysis of the vendor video-conference example revealed several friction points:
-
-1. **`binaryType` write is silently lost** — the adapter writes `"arraybuffer"` but wrappers often lack this property
-2. **`instanceof ArrayBuffer` check fails for `Uint8Array`/`Buffer` data** — simple-peer delivers `Buffer` (a `Uint8Array` subclass) which doesn't pass `instanceof ArrayBuffer`
-3. **Single-listener-per-type** — the wrapper's `addEventListener` overwrites previous listeners
-4. **~160-line wrapper class** required for simple-peer integration
-
-`DataChannelLike` captures the exact surface the transport uses — 5 members:
-
-| Member | Usage |
-|--------|-------|
-| `readyState: string` | Read — check `=== "open"` before sending |
-| `binaryType: string` | Write — best-effort hint, not a correctness requirement |
-| `send(data: Uint8Array)` | Call — deliver encoded wire frames |
-| `addEventListener(type, listener)` | Call — register for `"open"`, `"close"`, `"error"`, `"message"` |
-| `removeEventListener(type, listener)` | Call — clean up on detach |
-
-Native `RTCDataChannel` satisfies this structurally (no wrapper needed). Libraries like simple-peer can bridge in ~20 lines via a factory function that maps EventEmitter events to `addEventListener` calls.
-
-### `addEventListener` vs `onMessage` Design Asymmetry
-
-The WebSocket transport defines an internal `Socket` interface with `onMessage(handler)` — callback registration. `DataChannelLike` uses `addEventListener` / `removeEventListener` (DOM EventTarget pattern). The difference is intentional:
-
-- `Socket` is an **internal** interface wrapping things the transport creates and owns. Single callback is fine.
-- `DataChannelLike` is a **user-provided** interface wrapping things the application creates. The transport needs `removeEventListener` to clean up on detach — something the `onMessage` pattern doesn't support. And native `RTCDataChannel` uses `addEventListener`, so conformance is structural.
-
-### Binary Pipeline
-
-Uses the same shared binary pipeline as the WebSocket transport via `encodeBinaryAndSend` and `decodeBinaryMessages` from `@kyneta/wire`. Zero code duplication.
-
-### Fragment Threshold
-
-Default: 200KB (SCTP's ~256KB message limit). This differs from WebSocket's 100KB default which targets AWS API Gateway's 128KB limit. WebRTC has no such gateway.
-
-### Ownership Contract
-
-The transport does NOT own the data channel. `detachDataChannel()` removes the sync channel and event listeners but does NOT close the data channel or the peer connection. The application manages the WebRTC connection lifecycle independently.
-
-### Robustness: `ArrayBuffer | Uint8Array`
-
-The message handler accepts both `ArrayBuffer` (native `RTCDataChannel` with `binaryType: "arraybuffer"`) and `Uint8Array` (simple-peer and other wrappers). The `binaryType` write on attach is a best-effort hint — the handler does not depend on it being respected.
-
-### Relationship to Video Conference Example
-
-The examples roadmap plans a video-conference example that uses SSE for server-mediated sync and WebRTC for low-latency peer-to-peer sync (dual-transport). Signaling (offer/answer/ICE candidates) flows through the `Line` primitive (§27) — reliable ordered bidirectional messaging between peer pairs, with automatic ack-based pruning. This replaces the earlier ephemeral-document approach, which suffered from signal accumulation and broadcast inefficiency. The `fromSimplePeer()` bridge pattern demonstrated in the test suite shows how to connect `simple-peer` to the transport.
-
----
-
-## 24. Unix Socket Transport (`@kyneta/unix-socket-transport`)
-
-Stream-oriented server-to-server transport over Unix domain sockets (UDS). Designed for same-machine microservice topologies where TCP/WebSocket overhead is unnecessary. Uses the Stream pipeline (§12) — CBOR encoding with `StreamFrameParser` for byte-stream framing.
-
-### Stream vs Message Transport — Why It Matters
-
-WebSocket, WebRTC, and SSE are **message-oriented** transports: each `send()` delivers a discrete message with inherent boundaries. Unix domain sockets are **stream-oriented**: the kernel coalesces writes and delivers bytes in arbitrary chunks. A single `read()` may contain half of one message, three complete messages, or one and a half messages.
-
-This distinction determines the entire framing strategy. Message-oriented transports need fragmentation (splitting large messages to fit transport limits) and reassembly. Stream transports need the opposite — a parser that extracts message boundaries from a continuous byte stream. Fragmentation is unnecessary because UDS has no message size limits, and the `FragmentCollector` is unnecessary because there are no fragments to collect. The 7-byte binary frame header's payload length field is sufficient: read the header, read that many payload bytes, emit the frame.
-
-### `StreamFrameParser` — FC/IS Design (Pure Step Function `feedBytes`)
-
-The `StreamFrameParser` is implemented as a pure step function in `@kyneta/wire`:
-
-```
-feedBytes(state: StreamParserState, chunk: Uint8Array) → { state: StreamParserState, frames: Uint8Array[] }
-```
-
-`StreamParserState` is a discriminated union with two phases:
-
-| Phase | Accumulating | Transitions When |
-|-------|-------------|-----------------|
-| `"header"` | Bytes 0–6 of the next frame | 7 header bytes accumulated → read payload length → enter `"payload"` |
-| `"payload"` | Payload bytes (length from header) | All payload bytes accumulated → emit complete frame → enter `"header"` |
-
-The FC/IS boundary is clean:
-
-- **Functional core** (`feedBytes`): pure, no side effects, no mutation of inputs. Accepts the current state and a new chunk, returns the next state and zero or more complete frames. Handles all chunk-boundary scenarios: partial headers, partial payloads, write coalescing (multiple frames in one chunk), empty chunks, byte-at-a-time delivery.
-- **Imperative shell** (`UnixSocketConnection.#handleData`): calls `feedBytes` on each socket `data` event, then decodes each emitted frame via `decodeBinaryFrame` + `cborCodec.decode` and delivers the resulting `ChannelMsg` to the channel.
-
-The parser's state is carried explicitly — no closures, no mutable parser object. Each `feedBytes` call returns a fresh state value, making the parser trivially testable and composable.
-
-### No Fragmentation, No Transport Prefixes, No "Ready" Handshake
-
-Three simplifications relative to the WebSocket and WebRTC transports, each with a specific justification:
-
-| Omission | WebSocket/WebRTC Has It Because | UDS Doesn't Need It Because |
-|----------|--------------------------------|----------------------------|
-| **Fragmentation** | AWS API Gateway: 128KB limit (WS). SCTP: ~256KB limit (WebRTC). | UDS has no message size limits. The kernel handles arbitrarily large writes. |
-| **Transport prefix bytes** (`0x00`/`0x01`) | Distinguishes complete vs fragment frames at the transport level, before parsing. | No fragments exist. Every frame is complete. The 7-byte header is the only framing. |
-| **"Ready" handshake** | WebSocket's `open` event fires on TCP connect, but the server's message handler may not be wired up yet. The text `"ready"` signal prevents the race. | UDS connections are bidirectionally ready immediately. `connect()` resolves only when the server's `accept()` completes, so both sides are wired up. |
-
-The result is the simplest binary pipeline in the transport family: `encodeComplete(cborCodec, msg)` produces a complete binary frame (7-byte header + CBOR payload), `socket.write()` sends it, `feedBytes` extracts it on the other side.
-
-### `UnixSocket` Interface (Parallel to WebSocket's `Socket` Interface)
-
-The WebSocket transport defines an internal `Socket` interface (message-oriented: `send`, `onMessage`). The unix socket transport defines an analogous `UnixSocket` interface (stream-oriented: `write`, `onData`, `onDrain`):
-
-| Member | Type | Purpose |
-|--------|------|---------|
-| `write(data: Uint8Array)` | `→ boolean` | Write bytes. Returns `false` when the kernel buffer is full (backpressure). |
-| `end()` | `→ void` | Signal end-of-stream and close gracefully. |
-| `onData(handler)` | callback | Register handler for incoming byte chunks. |
-| `onClose(handler)` | callback | Register handler for connection close. |
-| `onError(handler)` | callback | Register handler for errors. |
-| `onDrain(handler)` | callback | Register handler for backpressure drain (buffer available again). |
-
-The key difference from `Socket` is the `write` return value and `onDrain` — stream sockets expose kernel buffer pressure, which message-oriented WebSocket APIs abstract away. Platform-specific wrappers (`wrapNodeUnixSocket`, `wrapBunUnixSocket`) adapt concrete implementations to this interface.
-
-### Backpressure Handling (Write Queue + Drain)
-
-`UnixSocketConnection` maintains a write queue for backpressure:
-
-1. `send(msg)` encodes the message to a binary frame and calls `socket.write(frameBytes)`.
-2. If `write()` returns `false`, the connection enters **draining mode**. Subsequent `send()` calls queue frames instead of writing.
-3. When the kernel buffer drains, the socket emits a `drain` event. The connection's `#flushWriteQueue()` writes queued frames in order until either the queue is empty (exit draining mode) or `write()` returns `false` again (remain in draining mode, wait for next drain).
-
-This is the standard Node.js/Bun backpressure pattern. The write queue is imperative state; encoding is pure. The FC/IS boundary holds: `encodeComplete` (pure) produces bytes, the write queue + drain handler (imperative) manages delivery timing.
-
-### Socket Path Lifecycle (Stale Cleanup, Permissions)
-
-The server transport manages the socket file through its full lifecycle:
-
-- **`onStart()`**: If `cleanup: true` (the default), checks whether a socket file already exists at the configured path. If it does and `stat()` confirms it's a socket, removes it before calling `listen()`. This handles `EADDRINUSE` from a previous process that crashed without cleanup. If the file doesn't exist (`ENOENT`), the cleanup is a no-op.
-- **`onStop()`**: Closes all active connections, stops the listener, and `unlink()`s the socket file. Errors during unlink are logged but do not throw — stop should be as graceful as possible.
-- **Permissions**: Socket file permissions are inherited from the process `umask`. The transport does not set explicit permissions — the deployer controls access via `umask` or filesystem ACLs.
-
-Client-side, `connect()` failures surface specific `errno` codes (`ENOENT` = no socket file, `ECONNREFUSED` = file exists but no listener, `EACCES` = permission denied) via the `DisconnectReason` discriminated union's `errno` field.
-
-### Node vs Bun API Differences and the Wrapper Pattern
-
-Both the client `connect()` and server `listen()` functions use runtime detection (`typeof globalThis.Bun !== "undefined"`) to select between two implementations:
-
-| Concern | Node.js (`net` module) | Bun (`Bun.connect` / `Bun.listen`) |
-|---------|----------------------|-----------------------------------|
-| **Socket creation** | `net.createConnection(path)` — returns a `net.Socket` | `Bun.connect({ unix: path, socket: { ... } })` — callbacks in options |
-| **Event model** | EventEmitter: `socket.on("data", handler)` | Callback-based: handlers passed at creation time |
-| **Backpressure signal** | `socket.write()` returns `boolean` | `socket.write()` returns `number` (bytes written; 0 = full) |
-| **Incoming data type** | `Buffer` (a `Uint8Array` subclass) | `Uint8Array` |
-
-The `wrapNodeUnixSocket` wrapper is thin — it maps `socket.on(event, handler)` to the `UnixSocket` interface and wraps `Buffer` → `Uint8Array` on incoming data. The `wrapBunUnixSocket` wrapper is structurally different: because Bun's socket API is callback-based (handlers must be provided at creation time, not registered after), it returns both a `UnixSocket` and a `BunSocketHandlers` object. The caller wires the handlers into Bun's callback structure by storing them on the socket's `data` property.
-
-This dual-wrapper pattern avoids importing either `node:net` or Bun types at the module level — both paths use dynamic `import()` and structural typing (`NodeUnixSocketLike`, `BunUnixSocketLike`) instead of concrete runtime types.
-
-### Package Structure
-
-Single `"."` export — everything available from `@kyneta/unix-socket-transport`:
-
-| Export | Entry | Key Exports |
-|--------|-------|-------------|
-| `.` | `src/index.ts` | `createUnixSocketPeer`, `UnixSocketPeer`, `UnixSocketServerTransport`, `UnixSocketClientTransport`, `createUnixSocketClient`, `UnixSocketConnection`, `connect`, `listen`, `UnixSocket`, `wrapNodeUnixSocket`, `wrapBunUnixSocket` |
-
-The top-level barrel re-exports server, client, peer negotiation, connection, platform wrappers, and all shared types.
-
-### `createUnixSocketPeer` — Leaderless Topology Negotiation
-
-`createUnixSocketPeer(exchange, { path })` encapsulates the connect-or-listen-then-heal pattern as a `Program<PeerMsg, PeerModel, PeerEffect>` from `@kyneta/machine`. The pure program (`peer-program.ts`) encodes every state transition and effect as data; the imperative shell (`peer.ts`) interprets effects as I/O.
-
-**Pure program (functional core):**
-
-The peer program defines:
-- `PeerModel`: `{ role: "negotiating" | "listener" | "connector" | "disposed", transportId: string | undefined }`
-- `PeerMsg`: `probe-result`, `transport-added`, `listen-failed`, `transport-disconnected`, `dispose`
-- `PeerEffect`: `probe`, `start-listener`, `start-connector`, `remove-transport`, `delay-then-probe`
-
-Every state × event transition is a pure function returning `[PeerModel, ...PeerEffect[]]`. The decision logic formerly in `decideRole` is inlined into the `update` function.
-
-**Effect executor (imperative shell):**
-
-The executor in `peer.ts` pattern-matches each `PeerEffect` and performs I/O:
-- `probe` → test-connect to the socket path, dispatch `probe-result`
-- `start-listener` → create `UnixSocketServerTransport`, add to Exchange, dispatch `transport-added`
-- `start-connector` → create `UnixSocketClientTransport`, subscribe to transitions, add to Exchange, dispatch `transport-added`
-- `remove-transport` → `exchange.removeTransport()`
-- `delay-then-probe` → `setTimeout` + probe
-
-This follows the same FC/IS split as the Synchronizer's `#executeCommand`. The program uses data effects (not closure effects) because data is inspectable in tests — `expect(effects).toEqual([{ type: "probe", path: "/tmp/test.sock" }])`.
-
-**Negotiation flow:**
-
-1. Init → `{ role: "negotiating" }` + `probe` effect
-2. `probe-result "connected"` → `start-connector` effect
-3. `probe-result "enoent"/"econnrefused"` → `start-listener` effect
-4. `probe-result "eaddrinuse"` → `delay-then-probe` effect (retry)
-5. `transport-disconnected` (connector) → `remove-transport` + `probe` (healing)
-6. `dispose` → `{ role: "disposed" }` + optional `remove-transport`
-
-The returned `UnixSocketPeer` exposes `role` (reactive `"listener" | "connector" | "negotiating" | "disposed"`) and `dispose()` for cleanup.
-
-### Client Program (`createUnixSocketClientProgram`)
-
-The Unix Socket client lifecycle is a pure Mealy machine: `Program<UnixSocketClientMsg, UnixSocketClientState, UnixSocketClientEffect>`. The transport class instantiates it via `createObservableProgram` and interprets data effects as I/O.
-
-**4-state lifecycle** — identical to SSE, no "ready" phase (UDS connections are bidirectionally ready immediately — `connect()` resolves only when the server's `accept()` completes):
-
-```
-disconnected → connecting → connected
-                   ↓            ↓
-              reconnecting ← ─ ─┘
-                   ↓
-              connecting (retry)
-                   ↓
-              disconnected (max retries)
-```
-
-Reconnection uses exponential backoff with jitter, computed by the pure `tryReconnect` helper inside the program's `update` function. The `DisconnectReason` discriminated union carries socket-specific `errno` codes (`ENOENT`, `ECONNREFUSED`, `EADDRINUSE`, `EACCES`), enabling callers to distinguish socket-specific failures from generic errors. The `connection-error` message includes an optional `errno` field that the imperative shell extracts from the underlying socket error.
-
-### Benchmarks
-
-Measured on the same-machine path (loopback) comparing unix socket transport to WebSocket transport over `ws://localhost`:
-
-| Message Size | WebSocket (msg/s) | Unix Socket (msg/s) | Speedup |
-|-------------|-------------------|---------------------|---------|
-| 256 B | baseline | 3.8× | **3.8×** |
-| 1 KB | baseline | 1.8× | **1.8×** |
-
-The speedup comes from three sources: (1) no TCP/HTTP upgrade overhead — UDS `connect()` is a single syscall, (2) no per-message WebSocket framing (masking, opcode, extended length) — just the 7-byte binary frame header, and (3) no fragmentation/reassembly overhead. The advantage narrows at larger message sizes because the payload dominates the per-message overhead. For same-machine service-to-service communication, the unix socket transport is the preferred choice.
-
-### Integration Tests
-
-End-to-end tests in `transports/unix-socket/src/__tests__/` prove the full stack over real unix sockets: channel establishment, client reconnection after server restart, stale socket cleanup, `ENOENT` handling (no server), socket file cleanup on shutdown, and multiple simultaneous clients. Tests use `os.tmpdir()` with random suffixes for socket paths to avoid collisions.
-
----
-
-## 25. Governance — Composable Policy Registration
-
-The Exchange accepts `canShare`, `canAccept`, and `resolve` as fixed functions in `ExchangeParams`. These work well when all document access rules are known at construction time. But higher-level primitives (Lines, rooms, game loops) need to register their own rules dynamically and remove them when done. The governance system generalizes the fixed predicates into a composable, dynamic model.
-
-### The Policy Type
-
-A **Policy** is a bundle of gate predicates governing a region of the document space:
+A `Policy` is an interface with **optional** gate predicates and handlers. Any field that's absent is treated as "no opinion" for that operation.
 
 ```ts
 interface Policy {
-  name?: string
-  canShare?: GatePredicate
-  canAccept?: GatePredicate
-  canConnect?: GatePredicate
-  canReset?: EpochBoundaryPredicate
-  resolve?: Resolve
-  dispose?: () => void
+  canShare?: GatePredicate       // Should we include this doc in our `present`?
+  canAccept?: GatePredicate       // Should we accept a peer's `present` for this doc?
+  canConnect?: (peer) => boolean | undefined   // Should we accept this peer at all?
+  canReset?: EpochBoundaryPredicate     // Accept compaction-induced state discard?
+  resolve?: (peer, docMeta) => Disposition      // Classify an unknown doc
 }
 ```
 
-All fields are optional — a policy only provides the gates it cares about. The `canConnect` gate controls whether a peer connection is accepted at the transport level. Lifecycle events (`onDocCreated`, `onDocDismissed`) have been removed — applications observe lifecycle changes via the `exchange.documents` and `exchange.peers` changefeeds (§22, §22.1).
+The `Governance` class holds an ordered list of policies and composes their gates via the pure `composeGate` function:
 
-### `GatePredicate` — Three-Valued Logic
-
-```ts
-type GatePredicate = (docId: DocId, peer: PeerIdentityDetails) => boolean | undefined
+```
+composeGate([pred1(...), pred2(...), ...], default)
+  → false if any result is false     (short-circuit veto)
+  → true  if any result is true      (with no vetoes)
+  → default otherwise                (all undefined)
 ```
 
-- `true` — this policy explicitly allows the operation.
-- `false` — this policy explicitly denies the operation (short-circuits evaluation).
-- `undefined` — this policy has no opinion (the doc is outside its concern).
+The default differs per gate:
 
-The `ExchangeParams` `canShare` and `canAccept` fields accept `(docId, peer) => boolean`, which is a subtype of `GatePredicate`. No adapter or wrapper is needed — existing predicates work as policy fields directly.
+| Gate | All-`undefined` default |
+|------|------------------------|
+| `canShare` / `canAccept` / `canConnect` | `true` (open) |
+| `canReset` | Strategy-aware — `false` for `collaborative` (preserve causal history), `true` for `authoritative` / `ephemeral` |
 
-### `composeGate` — Pure Functional Core
+Three-valued logic is the composition mechanism. One `false` vetoes; one `true` permits (with no vetoes); all-undefined falls through to default. This lets a feature (a `Line`, a room, a game loop, a user-supplied policy) register its own gates without coordinating with the rest of the system — policies are independent concerns that unify cleanly.
 
-A single pure function handles three-valued predicate composition for `canShare`, `canAccept`, `canConnect`, and `canReset`:
+### What `Policy` / `Governance` is NOT
 
-```ts
-function composeGate(
-  policies: readonly Policy[],
-  field: "canShare" | "canAccept" | "canConnect" | "canReset",
-  docId: DocId,
-  peer: PeerIdentityDetails,
-  defaultWhenAllUndefined: boolean,
-): boolean
-```
-
-Evaluation semantics (with short-circuit):
-
-1. If any policy returns `false` → return `false` immediately (deny wins).
-2. If at least one policy returns `true` and none return `false` → return `true`.
-3. If all policies return `undefined` → return `defaultWhenAllUndefined`.
-
-### `Governance` — Imperative Shell
-
-The `Governance` manages the mutable policy list and delegates composition to `composeGate`:
-
-- **`register(policy): () => void`** — adds a policy, returns a dispose function.
-- **`canShare(docId, peer): boolean`** — composed canShare, defaults to open (`true`).
-- **`canAccept(docId, peer): boolean`** — composed canAccept, defaults to open (`true`).
-- **`canConnect(docId, peer): boolean`** — composed canConnect, defaults to open (`true`).
-- **`canReset(docId, peer): boolean`** — composed canReset, defaults to strategy-aware (§29).
-- **`resolve(...): Disposition | undefined`** — first non-`undefined` wins (registration order).
-- **`clear(): unknown[]`** — invokes each policy's `dispose` callback (if present), then removes all policies. Returns an array of collected errors from any disposer that threw. Called during `reset()` and `shutdown()`.
-- **`get names: readonly string[]`** — names of all named policies, in registration order.
-
-### `exchange.register(policy)` — Public API
-
-```ts
-const dispose = exchange.register({
-  name: "line:bob",
-  canShare: (docId, peer) => docId.startsWith("line:bob:") ? peer.peerId === "bob" : undefined,
-  canAccept: (docId, peer) => docId.startsWith("line:bob:") ? peer.peerId === "bob" : undefined,
-  resolve: (docId) => docId.startsWith("line:bob:") ? Defer() : undefined,
-})
-
-// Later, when the line is no longer needed:
-dispose()
-```
-
-The dispose function removes the policy from all compositions. After disposal, the composed predicates no longer include that policy's gates.
-
-### Composition Semantics by Field
-
-| Field | Composition | Default (all `undefined`) |
-|-------|------------|--------------------------|
-| `canShare` | Deny wins, short-circuit | `true` (open) |
-| `canAccept` | Deny wins, short-circuit | `true` (open) |
-| `canConnect` | Deny wins, short-circuit | `true` (open) |
-| `canReset` | Deny wins, short-circuit | Strategy-aware default (see §29) |
-| `resolve` | First non-`undefined` wins (registration order) | `undefined` (reject with warning) |
-| `dispose` | Each handler invoked (broadcast) | no-op |
-
-### Default Values — Both Open
-
-Both `canShare` and `canAccept` default to `true` (open) when all policies return `undefined`. This matches the current Exchange behavior where both default to `() => true`. Dynamic policies that want to restrict access return `false` for specific docs; the open default preserves backward compatibility.
-
-If a future use case requires closed-by-default canAccept, register a base policy with `canAccept: () => false` and then register permissive policies for specific docs. The infrastructure supports both patterns; the default matches the existing Exchange contract.
-
-### Named Policies
-
-If a policy has a `name`:
-
-- **Debuggability**: the Exchange can log which named policy was responsible for a denial.
-- **Introspection**: `governance.names` returns the list of registered policy names.
-- **Replacement**: registering a policy with a name that already exists replaces the previous policy in-place (preserving its position in the evaluation order). This enables hot-reload patterns where a module re-registers its rules without accumulating stale policies.
-
-### Relationship to `ExchangeParams`
-
-`ExchangeParams` intersects `Policy` (`ExchangeParams & Policy`), so all policy fields are directly available at construction — no indirection or wrapping. At construction time, if any gate fields are provided, they are extracted into a `Policy` and registered with the `Governance` as the initial policy.
-
-The difference: previously, `canShare: () => true` was the only predicate. Now it's one policy among potentially many. A later `exchange.register({ canShare: ... })` adds a second policy whose `canShare` participates in the composition.
-
-### Synchronizer Integration
-
-The `Governance` is transparent to the synchronizer layer. The Exchange passes `this.#governance.canShare.bind(this.#governance)` and `this.#governance.canAccept.bind(this.#governance)` to the Synchronizer constructor. The sync program's `createSyncUpdate()` closes over these functions and calls them on every message — the handlers don't know or care that the predicate is composed. Dynamic policy registration and disposal are visible through the bound closures without recreating the update function.
-
-### Performance
-
-Policies scale with the number of *concerns* (typically single digits to low tens), not the number of *documents*. Short-circuit evaluation on the first `false` bounds the per-message cost. The `composeGate` function iterates the policy array once per evaluation — no allocations, no closures created at evaluation time.
-
-### `reset()` and `shutdown()`
-
-Both operations call `clear()`, which invokes each policy's `dispose` callback before removing all policies (including the initial one). Errors thrown by disposers are collected and returned, not rethrown. After either operation, the Exchange is inert — all policies are cleared, all transports are torn down, and the Exchange should not be reused.
+- **Not authorization middleware.** These gates run at protocol points (pre-send, pre-accept), not at application API points.
+- **Not synchronous with remote peers.** A policy denying `canShare` silently omits the doc from `present`; no error is sent.
+- **Not hierarchical.** Every registered policy is peer to every other. There is no "super-policy" that overrides the rest.
+- **Not persistent.** Policies live in memory. Add / remove at runtime.
 
 ---
 
-## 26. Capability Registries and Document Classification
+## Reactive collections
 
-The Exchange maintains two capability registries that model what binary formats and schemas it can handle. These registries decouple **capability** (what I understand) from **policy** (what I choose to do), enabling auto-interpretation of known schemas and explicit classification of unknown docs.
+Source: `src/exchange.ts` → `createReactiveMap` wiring.
 
-### Three Semantic Layers
+The `Exchange` exposes two `ReactiveMap` instances:
 
-Document identity decomposes into three layers, each refining the previous:
+| Collection | Element | Change type | When it fires |
+|------------|---------|-------------|---------------|
+| `exchange.peers` | `ReactiveMap<PeerId, PeerIdentityDetails, PeerChange>` | `PeerChange = { type: "joined" \| "left" \| "updated" \| … }` | `sync/peer-available`, `sync/peer-unavailable`, `sync/peer-departed`, identity changes |
+| `exchange.documents` | `ReactiveMap<DocId, DocInfo, DocChange>` | `DocChange = { type: "added" \| "removed" \| "mode-changed" \| "ready-state-changed" }` | Doc lifecycle transitions |
 
-| Layer | Components | Where it lives | Who needs it |
-|-------|-----------|----------------|-------------|
-| **Wire metadata** (`DocMetadata`) | `replicaType + mergeStrategy + schemaHash` | `present` messages, `DocEntry` | Everyone — the document's public identity |
-| **Replication binding** (`BoundReplica`) | `ReplicaFactory + MergeStrategy` | `ExchangeParams.replicas`, capabilities registry | Relays, storage, any headless participant |
-| **Schema binding** (`BoundSchema`) | `schema + FactoryBuilder + strategy + schemaHash` | Module-scope declarations, `ExchangeParams.schemas` | Interpreting participants (clients, app servers) |
+Both drain at quiescence with batched changesets (one `Changeset` per dispatch cycle per subscription point, not one per individual change). Subscriptions use the standard `@kyneta/changefeed` API: `subscribe(exchange.peers, changeset => { … })`. Calling the map itself returns the current `ReadonlyMap`: `exchange.peers().get("alice")`.
 
-`BoundSchema` refines `BoundReplica` with schema knowledge. `BoundReplica` refines wire metadata with a resolved factory. Every `BoundSchema` contains a `BoundReplica` by projection.
+### Ready state
 
-`BoundReplica` captures the pair that fully determines headless replication behavior: the `ReplicaFactory` (wire format + version algebra + construction) and the `MergeStrategy` (sync protocol dispatch). This pair must be consistent — the plain replica factory (internal to the `json` namespace) uses `PlainVersion` (monotonic counter, log-offset-based deltas) while the ephemeral replica factory (also internal to `json`) uses `TimestampVersion` (wall clock, entirety-only export). They share the same wire format `["plain", 1, 0]` but differ in version algebra, so `replicaType` alone is not sufficient to identify a replication binding.
+`ReadyState` is a per-doc boolean that flips to `true` the first time the doc's local state has converged with at least one peer since being opened. Before that, the doc is "loading." After, it is "ready."
 
-### Two Registries
+Observable via `subscribe(exchange.documents, cs => cs.changes.forEach(c => c.type === "ready-state-changed" && …))` or direct `DocInfo.ready` inspection.
 
-The `Capabilities` object holds both registries in a single nested `Map`:
+This is the reactive surface for `@kyneta/react`'s `useSyncStatus` and similar hooks.
 
-1. **`schemas`** — indexed by `(schemaHash, replicaType[name, major], mergeStrategy)`. Registers document types the Exchange can interpret. Each `BoundSchema` carries a `schemaHash`, a `FactoryBuilder` (which produces a `ReplicaFactory` with a `replicaType`), and a `MergeStrategy`.
+---
 
-2. **`replicas`** — indexed by `(replicaType[name, major], mergeStrategy)`. Registers replication modes for headless participation. A `schemas` entry implies replica capability — registering `loro.bind(S)` auto-derives the corresponding `BoundReplica`. The reverse is not true.
+## Storage
 
-The internal data structure is a single `Map<ReplicaKey, ReplicaEntry>`:
+Source: `src/store/*.ts`, `src/synchronizer.ts` → `#drainStateAdvanced`.
+
+A `Store` is a persistence interface this package defines:
 
 ```ts
-type ReplicaKey = string  // `${replicaTypeName}:${replicaTypeMajor}:${mergeStrategy}`
-type ReplicaEntry = {
-  replica: BoundReplica
-  schemas: Map<string /* schemaHash */, BoundSchema>
+interface Store {
+  lookup(docId): Promise<DocMetadata | null>
+  ensureDoc(docId, metadata): Promise<void>           // idempotent register
+  append(docId, entry: StoreEntry): Promise<void>     // incremental since-delta
+  loadAll(docId): AsyncIterable<StoreEntry>            // replay on hydration
+  replace(docId, entry): Promise<void>                 // compaction or full reset
+  delete(docId): Promise<void>
+  listDocIds(): AsyncIterable<DocId>
+  close(): Promise<void>
+}
+
+interface StoreEntry {
+  payload: SubstratePayload
+  version: string
 }
 ```
 
-Schema lookup is a two-level operation: outer map by `ReplicaKey`, inner map by `schemaHash`. This nesting makes the containment relationship `BoundSchema ⊃ BoundReplica` structurally explicit — a schema entry cannot exist without a corresponding replica entry.
+Applications pass zero or more stores in `ExchangeParams.stores`. Writes fan out to all; reads query sequentially until one returns the doc (or all miss). `@kyneta/leveldb-store` is the primary production implementation; the in-memory store in `src/store/memory.ts` is used for tests and browser-ephemeral cases.
 
-```
-Map<ReplicaKey, ReplicaEntry>
-  "plain:1:sequential"  → { replica: json.replica(),              schemas: {} }
-  "plain:1:ephemeral"   → { replica: json.replica("ephemeral"),   schemas: {} }
-  "loro:1:concurrent"   → { replica: loro.replica(),              schemas: { "00abc..." → loro.bind(S) } }
-```
+### Unified persistence via `state-advanced`
 
-Lookup paths:
-- **`resolveSchema(schemaHash, replicaType, mergeStrategy)`** — compute `ReplicaKey`, look up outer entry, then `schemaHash` in `entry.schemas`. Two O(1) lookups.
-- **`resolveReplica(replicaType, mergeStrategy)`** — compute `ReplicaKey`, look up outer entry, return `entry.replica`. One O(1) lookup.
-- **`supportsReplicaType(replicaType)`** — O(1) via a parallel `Set<string>` of `${name}:${major}` values (hot path, called per-doc in `handlePresent`).
+Every local mutation and every remote `offer` merge drives the same persistence path. When `substrate.merge(payload)` completes (whether on `"local"` or `"sync"` origin), the Synchronizer registers the doc as pending in `#dirtyForPersistence`. At quiescence, `#drainStateAdvanced`:
 
-### Default Replicas
+1. Snapshots the pending set.
+2. For each doc, calls `substrate.exportSince(lastPersistedVersion)` → `StoreEntry`.
+3. `store.append(docId, entry)` on each registered store.
+4. Records the new version as `lastPersistedVersion`.
 
-```ts
-const DEFAULT_REPLICAS: readonly BoundReplica[] = [
-  json.replica(),
-  json.replica("ephemeral"),
-]
-```
+This collapses what was formerly two pipelines (local writes → `append`; remote imports → `replace` via `onDocImported`) into one. The substrate's `exportSince` returns entirety or delta as appropriate; the store's `append` semantic handles both.
 
-An Exchange with no explicit configuration can replicate sequential documents (via `json.replica()`) and ephemeral documents (via `json.replica("ephemeral")`). Both use the `["plain", 1, 0]` wire format but with the correct version algebra for each strategy. Loro documents are registered automatically when `exchange.get()` is called with a Loro `BoundSchema` (which calls `registerSchema()` internally). Explicit upfront registration via `schemas: [loro.bind(S)]` or `replicas: [loro.replica()]` is still valuable for the `present`-before-`get()` race — it ensures the Exchange can auto-resolve or defer remote Loro docs before the application calls `get()`.
+### What `Store` is NOT
 
-### Dynamic Schema Registration
+- **Not a sync primitive.** Stores do not announce themselves on `present`, receive `offer`, or emit `interest`. They are local to the exchange instance.
+- **Not a cache.** Every entry is durable on return.
+- **Not reactive.** No `subscribe`; reactivity lives at the `Ref<S>` / `ReactiveMap` layer.
 
-```ts
-exchange.registerSchema(bound: BoundSchema): void
-```
+---
 
-Registers a `BoundSchema` at runtime. The Exchange:
+## `Capabilities`
 
-1. Adds it to the `Capabilities` registry (schema map + auto-derived replica capability).
-2. Scans deferred docs in `model.documents` for triple matches.
-3. For each match, auto-promotes: internally calls `exchange.get(docId, matchedBound)`.
+Source: `src/capabilities.ts`.
 
-This is the mechanism that enables higher-level primitives (e.g. Lines) to register their envelope schemas when they're constructed, not when the Exchange is constructed. A deferred doc whose schema didn't exist at discovery time is automatically promoted when the schema becomes available — no manual `exchange.get()` per doc required.
-
-`exchange.get()` calls `registerSchema(bound)` internally, so `ExchangeParams.schemas` is shorthand for upfront registration but not required. The role distinction: `schemas:` ensures readiness at construction time (handles the `present`-before-`get()` race — a peer may announce a doc before the local code calls `get()`, and without prior registration the doc would be deferred or rejected rather than auto-interpreted); `get()` expands capabilities at use time.
-
-### The Document Lifecycle State Machine
-
-| State | In `model.documents`? | Has `Replica`? | Sends `present`? | Sends `interest`? |
-|-------|----------------------|----------------|-------------------|-------------------|
-| **Rejected** | No | No | No | No |
-| **Deferred** | Yes (`mode: "deferred"`) | No | Yes (routing) | No |
-| **Replicated** | Yes (`mode: "replicate"`) | Yes (headless) | Yes | Yes |
-| **Interpreted** | Yes (`mode: "interpret"`) | Yes (`Substrate`) | Yes | Yes |
-
-- **Rejected**: `resolve` returned `Reject()`, or no callback and unsupported replica type (two-tiered default).
-- **Deferred**: Acknowledged for routing. No local representation. Awaiting schema registration or explicit promotion. Also the default when no callback matches and the replica type is supported (two-tiered default).
-- **Replicated** / **Interpreted**: Full participation, as today.
-
-Transitions:
-
-| From | To | Trigger |
-|------|----|---------|
-| — | Rejected | `resolve` returns `Reject()`, or no callback and unsupported replica type |
-| — | Deferred | `resolve` returns `Defer()`, or no callback and supported replica type |
-| — | Replicated | `resolve` returns `Replicate()`, or `exchange.replicate()` |
-| — | Interpreted | Schema auto-resolve, `resolve` returns `Interpret(bound)`, or `exchange.get()` |
-| Deferred | Interpreted | `exchange.get(docId, bound)`, or auto-promoted when `exchange.registerSchema(bound)` matches |
-| Deferred | Replicated | `exchange.replicate(docId)` |
-
-Deferred docs participate in routing (`present` is sent) but do not receive data (`interest` is not sent, `handleOffer` and `handleInterest` return early for deferred entries).
-
-> **`doc-created` fires on transitions to Interpreted and Replicated states** (not Deferred, not Rejected). Deferred docs have no local representation yet — `doc-created` fires only when a doc gains a `Replica` or `Substrate`. If a deferred doc is later promoted via `exchange.get()` or `exchange.replicate()`, `doc-created` fires at promotion time.
-
-### Validation Model
-
-When a peer sends `present` with `{ replicaType, mergeStrategy, schemaHash }`:
-
-**Unknown docs:**
-
-| Scenario | `replicaType` | `mergeStrategy` | `schemaHash` | Result |
-|----------|--------------|-----------------|-------------|--------|
-| Triple matches a `schemas` entry | ✅ validated | ✅ validated | ✅ validated (lookup key) | Auto-interpreted; `resolve` does not fire |
-| No schema match, `resolve` configured | ✅ or ⚠ | ⚠ trusted | ⚠ trusted | `resolve` fires (regardless of replica type support) |
-| No schema match, no callback, supported type | ✅ validated | ⚠ trusted | ⚠ trusted | Deferred (two-tiered default) |
-| No schema match, no callback, unsupported type | — | — | — | Rejected (two-tiered default) |
-
-**Known docs** (already in `model.documents`): all three fields are validated against the local doc entry — `replicaType` via `replicaTypesCompatible()`, `schemaHash` via equality, and `mergeStrategy` via equality. A mismatch on any field skips sync with a warning.
-
-### `exchange.deferred`
+The `Capabilities` registry maps `ReplicaKey` (`${name}:${major}:${strategy}`) to `ReplicaEntry`:
 
 ```ts
-get deferred(): ReadonlySet<DocId>
+interface ReplicaEntry {
+  replica: BoundReplica              // the replica-only factory bundle
+  schemas: Map<string /* schemaHash */, BoundSchema>   // interpreter-mode schemas
+}
 ```
 
-Returns the set of doc IDs currently in the deferred state. Derived from `#docCache` entries with `mode: "deferred"`. Useful for diagnostic inspection and for higher-level primitives that need to know which docs are awaiting schema registration.
+Registration happens in three places:
 
-### Trust Model
+| Who | What | When |
+|-----|------|------|
+| Exchange constructor | `DEFAULT_REPLICAS` → plain + LWW | Always |
+| `exchange.registerReplica(replicaBound)` | Additional replica types | App startup (Loro/Yjs on the server tier, for instance) |
+| `exchange.get(docId, bound)` | Auto-registers `bound.schemaHash → bound` | On first use |
 
-The two registries create a two-tier trust model:
+On incoming `present`, the sync program's `handlePresent` queries `Capabilities.findSchema(replicaType, mergeStrategy, schemaHash)`. If found, the doc auto-resolves to `Interpret(bound)`. If only the replica is registered (not this specific schema hash), the doc qualifies as `Replicate` — the conduit tier. If neither, the exchange consults `resolve` or defaults.
 
-- **Interpreted docs**: The schema registry provides **local truth**. The `BoundSchema`'s `schemaHash`, `replicaType`, and `mergeStrategy` are computed locally. Peer claims are validated against this local truth. A mismatch means the peers disagree on document structure — sync is skipped.
+This is how a routing server with `DEFAULT_REPLICAS + loroReplicaFactory` can relay Loro documents for any schema without ever *interpreting* one: all it needs is the replica factory, not the schema.
 
-- **Replicated docs**: The Exchange **trusts peer claims** for `mergeStrategy` and `schemaHash`. The `replicaType` is validated (it must match a registered replica), but the Exchange has no local source of truth for the other fields. A relay forwards `schemaHash` faithfully so interpreting peers on the far side can validate it against their own schemas.
+---
 
-This trust asymmetry is inherent: a relay cannot validate a schema it doesn't understand. The schema registry makes the trust boundary explicit — what's validated vs. what's forwarded is determined by which registry the doc was resolved from.
+## `Line` — reliable message streams
 
-## 27. Line — Reliable Bidirectional Messaging
+Source: `src/line.ts`.
 
-The `Line` class provides reliable ordered bidirectional message streams between two Exchange peers. It composes two `json.bind` sequential documents — one per direction — with automatic sequence numbering and acknowledgement-based pruning.
+`Line` provides a reliable, ordered, bidirectional message stream between two specific peers. Under the hood it composes **two authoritative JSON documents** — one per direction — with an envelope schema that carries `seq`, `ack`, and `payload`. Ack-driven pruning keeps the documents bounded.
 
-### Motivation
+```ts
+const chatLine = Line.protocol({
+  topic: "chat",
+  send: ChatMessage,                // BoundSchema<S_send>
+  recv: ChatMessage,                 // BoundSchema<S_recv>
+})
 
-WebRTC signaling, RPC interactions, and command streams are **reliable ordered messaging** — not state synchronization. Modeling messages as CRDT state (ephemeral presence, ephemeral docs) creates signal accumulation, broadcast inefficiency, and deduplication overhead. The Line primitive provides message-passing semantics on top of the Exchange's document sync infrastructure, inheriting reconnection, offline resilience, and unified routing for free.
+// Client
+const line = chatLine.open(exchange, peerId)
+await line.send({ text: "hello" })
+for await (const msg of line) {
+  console.log(msg)
+}
 
-### Protocol Definition
-
-A Line protocol reifies the schema pair + topic that both sides must agree on to communicate. Created once at module level and shared between `open()` and `listen()` calls:
-
-```typescript
-// Symmetric — same schema both directions
-const Chat = Line.protocol({ topic: "chat", schema: MessageSchema })
-
-// Asymmetric — client and server send different types
-const RPC = Line.protocol({
-  topic: "rpc",
-  client: RequestSchema,   // what the client sends
-  server: ResponseSchema,  // what the server sends
+// Server
+chatLine.listen(exchange, async (incomingLine, peer) => {
+  for await (const msg of incomingLine) {
+    await incomingLine.send({ text: `echo: ${msg.text}` })
+  }
 })
 ```
 
-The protocol object is small and pure — it holds the topic string and one or two `BoundSchema` references. It has no mutable state. For symmetric protocols, a single `BoundSchema` is shared for both directions; for asymmetric protocols, two distinct `BoundSchema` objects are created.
+Properties:
 
-### Client-side: `protocol.open()`
+| Property | Mechanism |
+|----------|-----------|
+| Reliability | Built on authoritative docs — missed messages replay from the persisted log. |
+| Order | Monotone `seq` within a direction; reader consumes in `seq` order. |
+| Bounded storage | Receiver's `ack` triggers sender's pruning of acked messages. |
+| Multiple peers | Each peer-pair gets its own Line doc; `LineProtocol` creates + tears down as peers come and go. |
+| Application payload | User supplies `send` / `recv` schemas. The envelope (`seq`, `ack`, `nextSeq`) is this package's concern. |
 
-`protocol.open(exchange, peerId)` opens a Line to a specific peer as the **client** role:
+### `LineProtocol`: reified protocol objects
 
-```typescript
-const line = RPC.open(exchange, "server-peer-id")
-line.send({ method: "ping", id: 1 })
-```
+Before the protocol-first refactor, each side built its own `Line` instances from raw schemas. Reference-equality conflicts in `exchange.get` (different `bind()` calls yielding distinct `BoundSchema` values with the same hash) caused docs to be interpreted twice. `Line.protocol(opts)` captures the `BoundSchema` pair + topic in one `LineProtocol` object; `open` and `listen` both use those same references, eliminating the conflict.
 
-The client sends via the client schema and receives via the server schema. Internally, `open()` calls `Line._create()` which computes doc IDs, calls `exchange.get()` for both documents, registers a per-line authorization policy, and constructs the `Line` instance.
+### What a `Line` is NOT
 
-### Server-side: `protocol.listen()`
-
-`protocol.listen(exchange)` returns a `LineListener` handle for reactive acceptance of incoming Lines:
-
-```typescript
-const listener = RPC.listen(exchange)
-listener.onLine(line => {
-  console.log(`New client: ${line.peer}`)
-  ;(async () => {
-    for await (const msg of line) {
-      line.send({ result: "ok", id: msg.id })
-    }
-  })()
-})
-```
-
-Internally, `listen()`:
-
-1. **Registers schemas** — calls `exchange.registerSchema()` for the client and server `BoundSchema` objects. Incoming Line docs whose schema hash matches will auto-resolve in `onEnsureDoc`, bypassing `resolve` entirely.
-
-2. **Subscribes to `exchange.documents`** — when a `doc-created` event fires for a Line doc, the handler parses the doc ID, checks that it matches the protocol's topic and is addressed to this exchange's peerId, guards against duplicates, then calls `Line.#create()` to construct the server-side Line and fires all `onLine` callbacks.
-
-The listener uses the doc ID structure as the fundamental discriminator. A doc with `parsed.to === exchange.peerId` is the remote peer's outbox; the local exchange never creates docs addressed to itself. Since `doc-created` fires exactly once per doc ID, there is no double-fire risk.
-
-**Late listen**: If a client connects before `listen()` is called, the client's docs are deferred by the Exchange's two-tiered default. When `registerSchema()` runs inside `listen()`, deferred docs matching the schema are auto-promoted synchronously, emitting `doc-created` on `exchange.documents`. Lines created during this promotion are buffered and replayed on the first `onLine` callback registration.
-
-### `LineListener` API
-
-```typescript
-interface LineListener<SendMsg, RecvMsg> {
-  readonly topic: string
-  onLine(cb: (line: Line<SendMsg, RecvMsg>) => void): () => void
-  dispose(): void
-}
-```
-
-- **`onLine(cb)`** — registers a callback that fires with a fully constructed `Line` when a remote peer opens a Line on the matching topic. Returns an unsubscribe function. Multiple callbacks coexist.
-- **`dispose()`** — unregisters the policy, stopping acceptance of new Lines. Does NOT close already-open Lines — each Line manages its own lifecycle via `line.close()`. Does NOT unregister schemas (the capabilities registry is append-only).
-
-### Document Model
-
-Each Line creates two plain sequential documents:
-
-- `line:${topic}:${a}→${b}` — peer A's outbox (A writes, B reads)
-- `line:${topic}:${b}→${a}` — peer B's outbox (B writes, A reads)
-
-Each document has an invariant envelope schema built by `createLineDocSchema(payloadSchema)`:
-
-```
-doc {
-  messages: list(struct({ seq: number, payload: <application schema> }))
-  ack: number
-}
-```
-
-- `seq` — monotonically increasing per direction, assigned by the sender at `send()` time
-- `payload` — the application message, typed by the schema
-- `ack` — the highest `seq` processed from the *other* direction's document
-
-### Consumer API
-
-A Line has one send method and one receive interface — the async iterator:
-
-```typescript
-// Send
-line.send(msg)  // msg is Plain<Send>
-
-// Receive
-for await (const msg of line) { ... }  // msg is Plain<Recv>
-```
-
-The iterator yields all messages in order, including messages that arrived before the Line was constructed (enqueued by `#processInbox()` in the constructor). It completes when the Line is closed or the remote peer departs. The ack cursor advances as messages are processed, triggering pruning on the sender's side.
-
-### Ack Protocol and Pruning
-
-When the receiver processes messages (seq > lastProcessedSeq), it writes `ack: lastProcessedSeq` to its own outbox. The sender reads this ack from the inbox changefeed and prunes all outbox messages with `seq <= ack`. In steady state, each document holds 0–1 messages.
-
-### Topics
-
-The `topic` field distinguishes multiple independent Lines between the same peers:
-
-```typescript
-const Signaling = Line.protocol({ topic: "signaling", schema: S1 })
-const RPC = Line.protocol({ topic: "rpc", schema: S2 })
-
-const sigLine = Signaling.open(exchange, "bob")
-const rpcLine = RPC.open(exchange, "bob")
-```
-
-Each topic produces distinct doc IDs (`line:signaling:...` vs `line:rpc:...`), distinct policies, and distinct registry entries. The Line duplicate registry is per-Exchange (stored in a WeakMap keyed by Exchange instance), not module-global — multiple Exchange instances in the same process maintain independent Line registries. Opening a Line with the same peer + topic as an already-open Line throws — close first, then reopen.
-
-### Policy Integration
-
-Line is a standalone class — it composes with the Exchange via public API only (`register()`, `registerSchema()`, `get()`, `destroy()`). No Exchange modification needed.
-
-**Listener policy** (`__line-listen:${topic}`): Registered by `protocol.listen()`. Subscribes to `exchange.documents` to detect incoming Line docs via `doc-created` events and construct server-side Lines. The policy has no `canAccept` predicate — acceptance is handled by the per-line policy.
-
-**Per-line policy** (`line:${topic}:${remotePeerId}`): Registered per `Line._create()` call (shared by both `open()` and `listen()` paths). Provides `canAccept` — only the `from` peer can write to each doc. Sharing is open by default. Applications that want endpoint-only sharing register their own policy using the exported `shareLine` predicate.
-
-`exchange.shutdown()` closes all open Lines and disposes all active listeners via policy teardown — each Line and listener registers a `dispose` callback in its policy, and `Governance.clear()` invokes all disposers during shutdown.
-
-### The Abstain Pattern
-
-<!-- Context: jj:oyouvrss -->
-
-Policies should return `undefined` (abstain) for unknown peers, not `false` (hard veto). This distinction is critical for relay topologies:
-
-- **Hard veto (`false`)** blocks relay-forwarded offers because the relay server's `peerId` doesn't match the expected peer. The `composeGate` function short-circuits on `false` from any policy — one veto overrules all other policies.
-- **Abstain (`undefined`)** lets the exchange-level canAccept decide. The policy declares "this doc is not my concern" rather than "this peer is forbidden."
-
-The Line policy's inbox `canAccept` uses this pattern: `peer.peerId === remotePeerId ? true : undefined`. If the peer matches, explicitly allow; if not, abstain and let other policies or the exchange default handle it. This ensures a relay server forwarding offers on behalf of the expected peer is not incorrectly blocked.
-
-### Standalone Design
-
-The Line class has zero coupling to Exchange internals. It uses only:
-- `exchange.register()` — policy registration (per-line policy)
-- `exchange.registerSchema()` — schema registration for auto-resolve (listener path)
-- `exchange.documents` — reactive document feed for detecting incoming Line docs (listener path)
-- `exchange.get()` — document creation (also calls `registerSchema()` internally)
-- `exchange.destroy()` — document removal on close
-- `exchange.peers` — peer lifecycle subscription
-
-This validates the policy + capabilities architecture: higher-level primitives compose cleanly as external consumers of the Exchange's public API.
-
-### Type Safety
-
-The `Line<SendMsg, RecvMsg>` class is parameterized over concrete plain types (not schema types) to avoid deep recursive `Plain<S>` expansion. The `Line.protocol()` method provides the typed entry point — it accepts schema types and returns a `LineProtocol<Plain<Client>, Plain<Server>>` using an interface call signature pattern (`CreateProtocol`) that defers type evaluation, avoiding TS2589.
-
-Generic parameter ordering: `LineProtocol<ClientMsg, ServerMsg>` names the message types by who *sends* them. `open()` returns `Line<ClientMsg, ServerMsg>` (client sends ClientMsg, receives ServerMsg). `listen()` returns `LineListener<ServerMsg, ClientMsg>` (server sends ServerMsg, receives ClientMsg).
+- **Not a socket.** The underlying transport is the exchange's sync channel; a `Line` rides above it.
+- **Not a topic.** A `topic` is a routing hint inside a `LineProtocol`; a `Line` is an open connection to one specific peer.
+- **Not a queue.** No broker. The pruning is based on the receiver's `ack`, not a central state.
+- **Not broadcast-capable.** Each `Line` is peer-to-peer. Broadcast semantics should use standard doc sync.
 
 ---
 
-## 28. Least Common Version and Compaction
+## Compaction and epoch boundaries
 
-<!-- Context: jj:ppztoono -->
+Source: `src/sync-program.ts` → `handleOffer`, `governance.ts` → `canReset`.
 
-The Exchange provides two methods for history management: `leastCommonVersion(docId)` computes the safe trim point, and `compact(docId)` executes the full compaction pipeline.
+CRDT state grows monotonically. Eventually peers compact — discarding history ops and snapshotting current state. A post-compaction `exportSince(oldVersion)` may return an entirety payload rather than a delta, because the substrate no longer retains the history needed to compute the delta.
 
-### `exchange.leastCommonVersion(docId)`
+When the receiver encounters an entirety for a doc that already has local state, two things can happen:
 
-Computes the Least Common Version (LCV) across all synced peers for a document — the greatest version that is ≤ every synced peer's last known version. This is the safe frontier for `advance()`: trimming to the LCV guarantees every peer can still receive incremental deltas.
+1. **Accept the reset.** Discard local state, adopt the incoming entirety. This is safe if the receiver's state was already ahead of compaction (all its ops are already in the sender's snapshot).
+2. **Reject the reset.** Keep local state. Sync will diverge from peers that compacted.
 
-**Algorithm:** fold `Version.meet()` across all peers in `"synced"` status for the document. The fold starts with the first peer's version and accumulates via `meet` (greatest lower bound). Peers with unparseable versions are skipped defensively.
+`Policy.canReset(docId, peer)` is the gate. Its default varies:
 
-**Key design decisions:**
+| Merge strategy | Default |
+|----------------|---------|
+| `collaborative` | `false` — preserve causal history by default |
+| `authoritative` | `true` — total order, resets are fine |
+| `ephemeral` | `true` — no history anyway |
 
-- **Returns `null`** if no peers are synced (nothing to trim against) or the doc doesn't exist.
-- **Excludes the local version.** The LCV represents "what all remote participants have." Including the local version would raise the LCV incorrectly when the local node has advanced past what it's pushed to peers.
+The decision is per-doc per-peer, consulted at the sync-program level. Applications can register a custom `canReset` policy for nuanced cases (e.g., "accept reset iff I've been offline for less than 1 hour").
 
-### `exchange.compact(docId)`
+### What an epoch boundary is NOT
 
-Convenience method composing the full compaction pipeline:
-
-1. Compute `lcv = leastCommonVersion(docId)`
-2. If no peers synced, use `replica.version()` as the target (full projection — all history discarded)
-3. `replica.advance(target)` — trim history (undershoot contract ensures safety)
-4. `replica.exportEntirety()` — export the trimmed document
-5. `store.replace(docId, entry)` — persist the compacted representation
-
-The undershoot contract (see `@kyneta/schema` TECHNICAL.md, §Replica Base Version and Advance) ensures the base never exceeds the LCV. If Loro undershoots to a critical version slightly before the LCV, that's safe — peers can still receive deltas from the actual `baseVersion()`.
+- **Not a protocol message.** There is no `reset` opcode. The decision is derived from `offer { payload: { kind: "entirety" } }` + existing local state.
+- **Not a synchronization point.** Accepting a reset discards ops that haven't made it to peers; those peers will see the reset when they next sync.
+- **Not a rollback.** Local state is replaced, not reverted; there is no undo.
 
 ---
 
-## 29. Epoch Boundary Policy
+## Key Types
 
-<!-- Context: jj:ppztoono -->
+| Type | File | Role |
+|------|------|------|
+| `Exchange` | `src/exchange.ts` | Public façade. Constructor, `get`, `remove`, `destroy`, `suspend`, `resume`, `addTransport`, `removeTransport`, `peers`, `documents`, `registerReplica`, `registerPolicy`. |
+| `ExchangeParams` | `src/exchange.ts` | Constructor options: `id`, `transports`, `stores`, `governance`, `policies`, `resolve`, `canShare`, `canAccept`, `departureTimeout`, `replicas`. |
+| `PeerIdentityInput` | `src/exchange.ts` | Input variant of `PeerIdentityDetails` with optional `type`. |
+| `Disposition` | `src/exchange.ts` | `Interpret \| Replicate \| Defer \| Reject`. |
+| `Synchronizer` | `src/synchronizer.ts` | Shell class. Public only for `@kyneta/react`'s internal use; applications never construct one. |
+| `DocRuntime` | `src/synchronizer.ts` | Per-doc runtime bundle. Internal. |
+| `SessionModel` / `SessionInput` / `SessionEffect` | `src/session-program.ts` | Session-program state + algebra. |
+| `updateSession` | `src/session-program.ts` | Pure `(input, model) → [model, ...effects]`. |
+| `SyncModel` / `SyncInput` / `SyncEffect` / `DocEntry` / `SyncPeerState` / `PeerDocSyncState` | `src/sync-program.ts` | Sync-program state + algebra. |
+| `updateSync` | `src/sync-program.ts` | Pure `(input, model) → [model, ...effects]`. |
+| `Policy` / `GatePredicate` / `EpochBoundaryPredicate` | `src/governance.ts` | Policy interface and predicate shapes. |
+| `Governance` / `composeGate` | `src/governance.ts` | Composer class + pure composition function. |
+| `Capabilities` / `ReplicaKey` / `DEFAULT_REPLICAS` / `createCapabilities` | `src/capabilities.ts` | Replica + schema registry. |
+| `Line` / `LineProtocol` / `createLineDocSchema` | `src/line.ts` | Reliable message-stream primitive. |
+| `persistentPeerId` / `releasePeerId` / `resolveLease` / `LeaseState` | `src/persistent-peer-id.ts` | Browser-tab peer-ID lease helper + pure core. |
+| `Store` / `StoreEntry` / `DocMetadata` | `src/store/store.ts` | Persistence interface. |
+| `PeerChange` / `DocChange` / `DocInfo` / `PeerState` / `ReadyState` | `src/types.ts` | Reactive-collection change types and snapshot shapes. |
+| `sync(doc)` | `src/sync.ts` | Helper: returns `{ waitForSync }` for imperative test synchronization. |
+| `AsyncQueue` | `src/async-queue.ts` | Bounded async producer/consumer queue used inside `Line`. |
 
-When the synchronizer receives an entirety payload for a document that has previously synced (i.e., at least one peer has reached `"synced"` status), it may be a compaction-induced reset — the sender trimmed history past our version. The epoch boundary policy decides whether to accept or reject the reset.
+## File Map
 
-### Detection
+| File | Lines | Role |
+|------|-------|------|
+| `src/index.ts` | 228 | Public barrel. Re-exports `bind` / `json` / `MergeStrategy` from `@kyneta/schema`; exports exchange-specific types. |
+| `src/exchange.ts` | 1250 | `Exchange` class, `ExchangeParams`, disposition types, `classifyDoc`, `peerId` validation, `registerReplica`, `registerPolicy`, reactive-collection wiring. |
+| `src/synchronizer.ts` | 1517 | Shell. Dispatch queue, `DocRuntime` map, effect interpreter, drain methods (`#drainOutbound`, `#drainReadyStateChanges`, `#drainStateAdvanced`, `#drainPeerEvents`), local-change subscription, transport integration, storage integration. |
+| `src/session-program.ts` | 543 | Pure session program: `SessionModel`, inputs, effects, `updateSession`, transition collapse. |
+| `src/sync-program.ts` | 1127 | Pure sync program: `SyncModel`, `DocEntry`, inputs, effects, `updateSync`, per-message handlers. |
+| `src/program-types.ts` | 48 | Shared `Transition` and `collapse` helper for both programs. |
+| `src/governance.ts` | 282 | `Policy`, `GatePredicate`, `EpochBoundaryPredicate`, `Governance`, `composeGate`. |
+| `src/capabilities.ts` | 284 | `Capabilities`, `ReplicaKey`, `ReplicaEntry`, `DEFAULT_REPLICAS`, `createCapabilities`. |
+| `src/line.ts` | 745 | `Line`, `LineProtocol`, envelope schema, ack-based pruning. |
+| `src/async-queue.ts` | 69 | Bounded async queue used by `Line`. |
+| `src/persistent-peer-id.ts` | 216 | Browser-tab peer-ID lease; FC/IS split. |
+| `src/sync.ts` | 195 | `sync(doc)` helper + `registerSync`. |
+| `src/types.ts` | 134 | `DocChange`, `DocInfo`, `PeerChange`, `PeerDocSyncState`, `PeerState`, `ReadyState`. |
+| `src/utils.ts` | 50 | `validatePeerId`, `randomPeerId`, `randomToken`. |
+| `src/store/` | — | `Store` interface + in-memory implementation. |
+| `src/transport/` | — | Transport-manager glue. |
+| `src/testing/` | — | Test-only helpers exported from `@kyneta/exchange/testing`. |
+| `src/__tests__/` | 17 files | Full dispatch-loop, governance, capabilities, line, persistent-peer-id, storage, compaction, classification, and end-to-end tests. |
 
-The synchronizer distinguishes initial sync from compaction reset by checking whether **any** peer has reached `"synced"` status for the document. First-ever entirety payloads (initial sync) skip the policy entirely — the existing merge path handles them correctly. Only subsequent entirety payloads after the doc has been synced trigger the policy check.
+## Testing
 
-### `canReset` Predicate on Policies
+Tests use real `BridgeTransport` pairs from `@kyneta/transport` for multi-peer scenarios and in-memory stores for persistence. There are no mocks — the `@kyneta/machine` runtime interprets pure programs against real effects. Per-test exchanges are fully torn down via `await exchange.close()`.
 
-```ts
-type EpochBoundaryPredicate = (
-  docId: DocId,
-  peer: PeerIdentityDetails,
-) => boolean | undefined
-```
+The `line.test.ts` file alone runs ~50 scenarios including relay topology, hub-and-spoke, and one-way flow — validating that `Line`'s durability surface works end-to-end through real transports.
 
-Three-valued composition via the governance (same semantics as `canShare`/`canAccept`):
-
-- Any policy returning `false` → **reject** (veto wins, short-circuit)
-- At least one `true` and no `false` → **accept**
-- All `undefined` → fall back to strategy-aware defaults
-
-### Strategy-Aware Defaults
-
-When no policy provides an opinion:
-
-| Strategy | Default | Rationale |
-|---|---|---|
-| `"authoritative"` | Accept | Followers don't write — reset is safe |
-| `"ephemeral"` | Accept | No history semantics — latest state is all that matters |
-| `"collaborative"` | Accept | Safe default; developer can override via policy |
-
-### Reset Mechanics
-
-On acceptance:
-
-- **Replicated (headless) docs:** The replica is replaced entirely via `replicaFactory.fromEntirety(payload)`. This creates a fresh replica — not `doc.import()` which would merge and preserve local ops that reference trimmed causal anchors.
-- **Interpreted (substrate) docs:** Fall through to normal `merge()`. Plain substrates handle entirety correctly via `executeBatch` (decomposes to `ReplaceChange` ops, preserving ref identity and changefeed subscriptions).
-
-On rejection, the entirety is silently discarded — local state is preserved and the node diverges from compacted peers.
-
-The `canReset` field on `Policy` is documented in the Composition Semantics table (§25) — it follows deny-wins short-circuit composition, falling back to strategy-aware defaults when all policies abstain.
-
----
-
-## 30. Synchronizer Fallback
-
-<!-- Context: jj:ppztoono -->
-
-When `exportSince(peerVersion)` returns `null` — because the peer's version is behind the replica's `baseVersion()` (history was trimmed via `advance()`) — the synchronizer falls back to `exportEntirety()`.
-
-**Protocol flow:**
-
-1. Synchronizer resolves the version gap: peer has version `V_peer`, local replica has `version()` = `V_head`.
-2. Calls `replica.exportSince(V_peer)`.
-3. If `V_peer < baseVersion()`, `exportSince` returns `null` (the ops are gone).
-4. Synchronizer enqueues `exportEntirety()` instead — the peer receives the full trimmed document.
-5. The peer's synchronizer detects an entirety payload for a previously-synced doc → epoch boundary policy fires.
-6. If accepted, the peer resets its local state to the received entirety.
-
-This fallback ensures that compaction does not strand peers — any peer that falls behind the trim frontier receives a complete state transfer and can resume incremental sync from the new base.
+**Tests**: 420 passed, 0 skipped across 17 files (notable files: `line.test.ts` at 50 tests, full doc lifecycle and governance suites). Run with `cd packages/exchange && pnpm exec vitest run`.

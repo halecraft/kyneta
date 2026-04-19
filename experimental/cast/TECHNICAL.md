@@ -1,1638 +1,573 @@
-# Kyneta Technical Documentation
+# @kyneta/cast — Technical Reference
 
-This document provides technical details about the Kyneta compiler architecture, intermediate representation (IR), and code generation strategies.
+> **Package**: `@kyneta/cast`
+> **Role**: Web rendering target for `@kyneta/compiler` — a compiled delta-driven UI framework. Consumes classified IR, emits code that calls a tiny runtime (`mount`, `hydrate`, `scope`, `subscribe`, `regions`) to produce O(k) DOM/HTML updates from `[CHANGEFEED]` deltas. Ships with a universal build plugin (`unplugin`) and a local reactive primitive (`state()`).
+> **Depends on**: `@kyneta/compiler`, `@kyneta/schema`, `@kyneta/changefeed`, `ts-morph`, `unplugin`, `js-beautify` (build only)
+> **Depended on by**: Application code that renders Kyneta documents to the web.
+> **Canonical symbols**: `mount`, `hydrate`, `MountOptions`, `MountResult`, `Scope`, `ScopeInterface`, `setRootScope`, `subscribe`, `state`, `LocalRef`, `isLocalRef`, `transformKynetaSource`, `shouldTransform`, `kyneta` (unplugin factory), `vite` (Vite adapter), `listRegion`, `filteredListRegion`, `conditionalRegion`, `textRegion`, `valueRegion`, `inputTextRegion`, `patchInputValue`, `diffText`, `ListRegionHandlers`, `ListRegionOp`, `FilteredListRegionHandlers`, `ConditionalRegionHandlers`, `Slot`, `KineticError`, `KineticErrorCode` (all error types re-exported under Kyneta prefix as canonical), `HydrationMismatchError`, `InvalidMountTargetError`, `ScopeDisposedError`, `BindingError`, `CompilerError`
+> **Key invariant(s)**:
+> 1. **The cast runtime never traverses the DOM as a VDOM.** Every update is an O(k) operation on a delta, where k is the number of items in the change (one `SequenceInstruction`, one `TextInstruction`, etc.). There is no reconciliation pass.
+> 2. **Every subscription is owned by a `Scope`.** A scope is disposed by its parent on cleanup — subscription lifetime is structural, not reference-counted.
+> 3. **The compiled output is target-specific code, not a general-purpose wrapper.** Cast's codegen emits direct runtime calls (`listRegion(...)`, `textRegion(...)`) with inlined closures; there is no dispatch table or framework runtime beyond those regions.
 
-## Architecture Overview
+A compile-to-runtime web framework for Kyneta. Application code writes builder-pattern TypeScript (`div(() => { h1("hi"); for (const todo of doc.todos) li(todo.text) })`). Cast's build plugin runs `@kyneta/compiler` over the source, then generates JS that calls `mount` / `hydrate` / region functions. At runtime, changes to any `[CHANGEFEED]`-carrying value trigger exactly the DOM/HTML operations needed — no VDOM, no dirty checking.
 
-Kyneta follows a **Functional Core / Imperative Shell** architecture via an Intermediate Representation (IR):
+Consumed by application code at build and runtime. Depends on `@kyneta/compiler` for IR. Does not import `@kyneta/exchange` directly — applications that want sync integrate `@kyneta/cast` + `@kyneta/exchange` separately.
+
+---
+
+## Questions this document answers
+
+- How does source → compiled output work end-to-end? → [Build-time pipeline](#build-time-pipeline)
+- What does the runtime do? Why is there one at all? → [Runtime — the five primitives](#runtime--the-five-primitives)
+- Why "delta regions" instead of VDOM? → [Delta regions — O(k) not O(N)](#delta-regions--ok-not-on)
+- What is `Scope` and how does disposal work? → [`Scope` — structural subscription lifetime](#scope--structural-subscription-lifetime)
+- How does `mount` differ from `hydrate`? → [Mount vs hydrate](#mount-vs-hydrate)
+- What is `state()` and how does it relate to schema refs? → [`LocalRef` — the local reactive primitive](#localref--the-local-reactive-primitive)
+- How does the build plugin integrate with Vite, Bun, Rollup, etc.? → [The universal plugin](#the-universal-plugin)
+- How does `inputTextRegion` rebase selection during remote edits? → [`inputTextRegion` — selection-stable text patching](#inputtextregion--selection-stable-text-patching)
+- Why doesn't SSR hydration re-render on mount? → [Hydration — claim, don't rebuild](#hydration--claim-dont-rebuild)
+
+## Vocabulary
+
+| Term | Means | Not to be confused with |
+|------|-------|-------------------------|
+| Cast | This package — the web rendering target for Kyneta. | The TV casting protocol; the verb "to cast" |
+| Builder pattern | Source-level idiom: `div(() => { h1("x"); for (...) li(...) })`. Cast's compiler recognises and transforms these. | The GoF builder pattern |
+| Element factory | A runtime function like `div`, `h1`, `li` that produces DOM or HTML. Compile-time: the symbol cast's compiler pattern-matches. | A factory *function* in general |
+| Delta region | A runtime object that maps a `[CHANGEFEED]` delta to O(k) DOM/HTML ops. Five kinds: list, filtered-list, conditional, text, value. | A React component, a virtual DOM node |
+| `listRegion` | Delta region for sequences. Handles `SequenceChange` incrementally. | A React list |
+| `filteredListRegion` | Delta region for filtered sequences. Combines per-item + external subscriptions from `FilterMetadata`. | A filter function that returns a new array |
+| `conditionalRegion` | Delta region for `if/else`. Swaps branches atomically. | A ternary expression |
+| `textRegion` | Delta region for `TextRef` children. Applies `TextInstruction[]` via surgical `insertData` / `deleteData`. | A text node |
+| `valueRegion` | Delta region for scalar reactive content (numbers, strings, booleans in content position). | A primitive |
+| `inputTextRegion` | Attaches a `TextRef` to an `<input>` / `<textarea>`. Selection-stable across remote edits. | A React controlled input — `inputTextRegion` is uncontrolled |
+| `Scope` | Structural subscription lifetime. Every `mount` creates a root scope; every nested region creates a child scope. Disposal cascades. | A JavaScript lexical scope |
+| `ScopeInterface` | The public scope contract: `register(unsubscribe)`, `child()`, `dispose()`, `disposed`. | `Scope` — the class implementing it |
+| `Element` | The type `(scope: ScopeInterface) => Node`. What cast's compiler emits from a builder call. | A DOM element |
+| `mount(element, container, options?)` | Insert a cast `Element` into a DOM container, register for reactive updates, return `{ dispose, root }`. | `document.appendChild` |
+| `hydrate(element, container)` | Claim an existing SSR-produced DOM subtree without re-rendering; attach subscriptions. | `mount` — hydrate reuses existing nodes |
+| `HydrationMismatchError` | Thrown when the DOM doesn't match the `element`'s expected shape during hydration. | A schema validation error |
+| `state<T>(initial)` | Create a `LocalRef<T>` — a local reactive primitive satisfying `[CHANGEFEED]`. | `React.useState` |
+| `LocalRef<T>` | A callable ref carrying `[CHANGEFEED]`. `ref()` reads; `ref.set(v)` writes. Emits `ReplaceChange<T>`. | A schema `Ref<S>` — `LocalRef` has no persistence, no sync |
+| `isLocalRef` | Type guard via brand symbol. | `hasChangefeed` (broader) |
+| `transformKynetaSource(source, id)` | Pure function: source text + filename → transformed source text with compiled region calls. | A Vite transform hook |
+| `shouldTransform(id, extensions)` | Pure predicate: does this file need transformation? | Cast's `hasBuilderCalls` from `@kyneta/compiler` — `shouldTransform` is plugin-level, `hasBuilderCalls` is source-level |
+| `kyneta(options)` | The unplugin factory. Produces a plugin object consumable by Vite, Rollup, esbuild, Bun, Farm, webpack. | A Vite plugin directly |
+| `vite(options)` | The `./vite` entry that wraps `kyneta(options).vite`. Convenience re-export. | A Vite adapter |
+| Binding time | `"literal" \| "render" \| "reactive"` — from `@kyneta/compiler`. Drives whether the codegen emits a constant, a once-computed expression, or a subscribe block. | Build-time, runtime |
+| SSR | Server-Side Rendering — compile-time mode that emits HTML strings. | "SSR" as a general web concept; cast's SSR is specifically `html`-label-block output + codegen |
+
+---
+
+## Architecture
+
+**Thesis**: solve rendering at two layers. The compiler (a separate package) understands reactivity; the target (this package) emits code that calls a small set of runtime primitives at the O(k) delta granularity. No VDOM, no reconciliation, no framework runtime beyond the primitives.
+
+Three top-level sub-systems:
+
+| Sub-system | Source | Runs at |
+|------------|--------|---------|
+| Codegen | `src/compiler/` | Build time. IR → JS source. |
+| Runtime | `src/runtime/`, `src/reactive/` | Runtime. Five region primitives, scope, subscribe, mount, hydrate, local ref. |
+| Build plugin | `src/unplugin/`, `src/vite/` | Build time. Orchestrates parse → compile → codegen → output. |
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│ analyze.ts      │    │ IR Types        │    │ codegen/*.ts    │
-│ (AST → IR)      │ →  │ (Data)          │ →  │ (IR → Code)     │
-│ Pure Functions  │    │ Serializable    │    │ Pure Functions  │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
+source.ts (builder patterns)
+     │
+     ▼
+┌──────────────────────────┐
+│ @kyneta/compiler         │  Parse + classify → IR
+│ analyze / walk / classify│
+└──────────┬───────────────┘
+           │ IR
+           ▼
+┌──────────────────────────┐
+│ src/compiler/transform.ts│  Orchestrate: choose label (client/server),
+│ transformKynetaSource    │  run IR→IR transforms, dispatch codegen
+└──────────┬───────────────┘
+           │
+           ├─► src/compiler/codegen/dom.ts    (client / DOM)
+           └─► src/compiler/codegen/html.ts   (server / SSR)
+           │
+           ▼
+        Transformed source text (JS with runtime calls)
+           │
+           ▼  at bundle time
+     bundled JS
+           │
+           ▼  at runtime
+┌──────────────────────────┐
+│ src/runtime/             │  Mount, scope, region, subscribe
+│ mount / regions / scope  │  textRegion, listRegion, …
+└──────────┬───────────────┘
+           │
+           ▼
+        DOM updates (O(k) per delta)
 ```
 
-- **Analysis** (`analyze.ts`): Transforms TypeScript AST into IR nodes
-- **IR** (`ir.ts`): Serializable data structures representing the UI
-- **Codegen** (`codegen/dom.ts`, `codegen/html.ts`): Transforms IR into JavaScript code
+### What this package is NOT
 
-## DOM Algebra: Applicative/Monadic Decomposition
+- **Not a VDOM framework.** No virtual tree, no reconciliation, no diffing of rendered output.
+- **Not React.** No JSX (the compiler recognises builder-pattern calls, not JSX elements). No hooks. No component tree in the React sense.
+- **Not a template engine.** Templates (from `@kyneta/compiler`) are an optional optimisation; the primary path is direct element factory calls.
+- **Not sync-aware.** Cast renders whatever `Ref<S>` it's given. Sync integration happens in `@kyneta/exchange`; applications compose the two.
+- **Not a state library.** `state()` is a single local-reactive primitive with one method (`.set`). For CRDT state, applications use `@kyneta/schema` + a substrate.
 
-Kyneta's compilation pipeline performs **partial evaluation** at three stages, decomposing UI code into Applicative (static structure) and Monadic (dynamic structure) layers.
+---
 
-### Binding-Time Analysis
+## Build-time pipeline
 
-The compiler classifies values by **when they become known**:
-
-```typescript
-type BindingTime = "literal" | "render" | "reactive"
-```
-
-- **literal**: Value known at compile time (string literals like `"Hello"`)
-- **render**: Value known at render time (static expressions like `42`, `someVar`)
-- **reactive**: Value varies at runtime (reactive expressions like `doc.count`)
-
-This classification enables **binding-time promotion**: when branches diverge only in values, literals and render-time values can be promoted to reactive with ternary expressions.
-
-### Delta Kind: An Orthogonal Property
-
-For reactive dependencies, the compiler also tracks **delta kind** — what kind of structured change information the source provides. Named change types are defined in `@kyneta/schema`:
-
-```typescript
-type DeltaKind = "replace" | "text" | "sequence" | "map" | "tree" | "increment"
-
-// Named change types (each is one member of the BuiltinChange union)
-type ReplaceChange<T> = { type: "replace"; value: T }
-type TextChange = { type: "text"; instructions: TextInstruction[] }
-type SequenceChange<T> = { type: "sequence"; instructions: SequenceInstruction<T>[] }
-type MapChange = { type: "map"; set?: Record<string, unknown>; delete?: string[] }
-type TreeChange = { type: "tree"; instructions: TreeInstruction[] }
-type IncrementChange = { type: "increment"; amount: number }
-```
-
-Delta kind is **orthogonal to binding time**, not a fourth level. All reactive values change at runtime (same *when*), but they differ in *how much structural information* accompanies the notification:
+Source: `src/compiler/transform.ts` → `transformKynetaSource`; `src/compiler/codegen/dom.ts`, `codegen/html.ts`.
 
 ```
-literal  <  render  <  reactive
-                         ├── replace (re-read + replace)
-                         ├── text (character-level patch)
-                         ├── sequence (structural sequence ops)
-                         ├── map (key-level patch)
-                         ├── tree (hierarchical ops)
-                         └── increment (counter delta)
+transformKynetaSource(source, id):
+  1. parseSource(source) ──► ts-morph SourceFile
+  2. hasBuilderCalls(source) ──► quick reject if no builder pattern
+  3. analyzeAllBuilders(sourceFile) ──► [{ callExpr, ir }]
+  4. For each builder:
+       a. filterTargetBlocks(ir, target)   // "dom" or "html"
+       b. dissolveConditionals(ir)
+       c. emit(ir) ──► codegen (dom.ts or html.ts)
+       d. replaceSource(callExpr, emitted)
+  5. Return transformed source text
 ```
 
-Each reactive dependency is represented as:
+### `src/compiler/transform.ts`
 
-```typescript
-interface Dependency {
-  source: string      // e.g., "doc.title", "doc.items"
-  deltaKind: DeltaKind
-}
-```
+The orchestrator. Reads compilation options (target `"dom"` vs `"html"`), walks the source file via `@kyneta/compiler`'s `parseSource` + `findBuilderCalls`, applies IR→IR transforms from `@kyneta/compiler/transforms`, dispatches to the appropriate codegen, and splices the emitted JS back into the source.
 
-The `deltaKind` is an **optimization hint** that codegen can dispatch on. When the expression is a "direct read" and the delta kind is rich (text, sequence, etc.), codegen can emit specialized patch code. Otherwise it falls back to replace semantics. The fallback is always safe.
+### `src/compiler/codegen/dom.ts`
 
-### ContentValue: Unified Content Representation
+Emits client-side code. For each IR node:
+- `ElementNode` → `document.createElement("tag")` + attributes + children + append.
+- `ContentNode` with reactive `ExpressionIR` → `textRegion(scope, parent, () => expr())` or `valueRegion(...)` depending on classification.
+- `LoopNode` → `listRegion(scope, parent, iterable, itemHandler)`.
+- `LoopNode` with `filter` metadata → `filteredListRegion(scope, parent, iterable, predicate, externalRefs, itemRefs, itemHandler)`.
+- `ConditionalNode` → `conditionalRegion(scope, parent, condition, branches)`.
 
-All content (text, attribute values, etc.) is represented by a single type:
+The emitted code closes over references the builder's caller passed in (`doc`, local `state()` refs) — no framework-provided context.
 
-```typescript
-interface ContentValue {
-  kind: "content"
-  source: string              // JSON string for literals, JS expression otherwise
-  bindingTime: BindingTime
-  dependencies: Dependency[]  // Reactive deps with delta kind
-  span: SourceSpan
-}
-```
+### `src/compiler/codegen/html.ts`
 
-This replaces the previous `TextNode | ExpressionNode` union, making binding-time explicit and eliminating cross-product complexity in tree merge logic. Each dependency now carries both the source expression and its delta kind, enabling codegen to make optimization decisions.
+Emits server-side SSR code. Similar structure but produces HTML strings. Reactive content becomes placeholder markers (`<!--k:42-->` pairs) for later hydration; the initial HTML carries the first-render value of every expression, and hydration attaches subscriptions in place.
 
-### Slots: Trackable DOM Handles
+### Label-specific output
 
-A **Slot** is a runtime handle to DOM content that can be removed:
+`filterTargetBlocks(ir, target)` from `@kyneta/compiler/transforms` strips branches not belonging to the current compilation target. Authoring:
 
-```typescript
-type Slot =
-  | { kind: "single"; node: Node }
-  | { kind: "range"; startMarker: Comment; endMarker: Comment }
-```
-
-**SlotKind** is computed at compile time from IR body structure:
-
-```typescript
-type SlotKind = "single" | "range"
-
-function computeSlotKind(body: ChildNode[]): SlotKind {
-  // Returns "single" if body produces exactly one DOM node
-  // Returns "range" otherwise (zero, multiple, or regions)
-}
-```
-
-The SlotKind flows from IR → codegen → runtime, enabling optimization:
-- When `slotKind: "single"` is provided, `claimSlot()` avoids runtime `nodeType` inspection
-- Handler objects include optional `slotKind` field
-- Runtime dispatches on compile-time knowledge instead of runtime checks
-
-### Tree Merge and Conditional Dissolution
-
-**Tree merge** recursively compares conditional branches to detect structural equivalence:
-
-```typescript
-function mergeConditionalBodies(
-  branches: ConditionalBranch[]
-): MergeResult<ChildNode[]>
-```
-
-When branches have identical structure but different values:
-1. Literals/render-time values are promoted to reactive with ternaries
-2. The conditional is **dissolved** into pure Applicative code
-3. No `__conditionalRegion` call, no marker, no handlers
-
-**Example dissolution:**
-
-```typescript
-// Source:
-if (doc.count() > 0) {
-  p("Yes")
-} else {
-  p("No")
-}
-
-// Dissolved output:
-const _p0 = document.createElement("p")
-const _text1 = document.createTextNode("")
-_p0.appendChild(_text1)
-valueRegion([doc.count], () => read(doc.count) > 0 ? "Yes" : "No", (v) => {
-  _text1.textContent = String(v)
-}, scope)
-```
-
-**Mergeability rules:**
-- Same element tags ✓
-- Same attribute names (different values OK) ✓
-- Same child counts ✓
-- Identical event handlers ✓
-- Different tags ✗
-- Reactive content with different dependencies ✗
-- No else branch ✗
-
-**N-branch support:** For `if/else-if/else` chains, nested ternaries are synthesized: `a ? X : (b ? Y : Z)`
-
-**IR-level transform:** Dissolution runs as a pure IR→IR transform (`dissolveConditionals`) in the same pipeline slot as `filterTargetBlocks` — after analysis, before codegen. This means the walker, template extraction, and all codegen paths (both template cloning and `createElement`) never see dissolvable conditionals. They see regular elements and content nodes with ternary reactive values. This eliminates the need for dissolution logic in codegen functions and ensures both the template cloning path and the non-cloning path produce identical dissolved output.
-
-### Optimization Levels
-
-1. **Direct-return optimization**: Single-element bodies return element directly (no fragment)
-2. **Conditional dissolution**: Structurally identical branches dissolved into ternaries
-3. **Partial hoisting** (future): Shared prefix hoisted, residual remains as reduced conditional
-
-## Intermediate Representation (IR)
-
-### Core Node Types
-
-#### `ContentValue`
-All value-producing content (text, attribute values).
-
-```typescript
-interface ContentValue {
-  kind: "content"
-  source: string
-  bindingTime: "literal" | "render" | "reactive"
-  dependencies: string[]
-  span: SourceSpan
-}
-```
-
-#### `ElementNode`
-Represents an HTML element with attributes, event handlers, and children.
-
-```typescript
-interface ElementNode {
-  kind: "element"
-  tag: string                    // e.g., "div", "p", "input"
-  attributes: AttributeNode[]    // Static and reactive attributes
-  eventHandlers: EventHandlerNode[]
-  children: ChildNode[]
-  bindings: ElementBinding[]     // Two-way bindings (bind())
-  isReactive: boolean           // Whether any content is reactive
-}
-```
-
-
-
-### Control Flow Nodes
-
-Control flow nodes are **parameterized by binding time** — a single type handles both render-time and reactive cases, with codegen dispatching on the binding-time field. This mirrors the `ContentValue` pattern where `bindingTime` determines behavior.
-
-#### `LoopNode`
-Unified loop representation for both render-time and reactive iteration.
-
-```typescript
-interface LoopNode {
-  kind: "loop"
-  iterableSource: string              // e.g., "doc.todos", "[1, 2, 3]"
-  iterableBindingTime: BindingTime    // "render" or "reactive"
-  itemVariable: string                // e.g., "item"
-  indexVariable: string | null        // e.g., "i" (optional)
-  body: ChildNode[]                   // Template for each item
-  hasReactiveItems: boolean           // Computed at IR creation
-  bodySlotKind: SlotKind              // Computed at IR creation
-  dependencies: string[]              // Empty for render-time
-}
-```
-
-**Codegen dispatch:**
-- `iterableBindingTime === "render"` → inline `for...of` loop
-- `iterableBindingTime === "reactive"` → `__listRegion()` with delta handlers
-
-#### `ConditionalNode`
-Unified conditional representation for both render-time and reactive branches.
-
-```typescript
-interface ConditionalNode {
-  kind: "conditional"
-  branches: ConditionalBranch[]       // Flat array (else-if chains not nested)
-  subscriptionTarget: string | null   // null = render-time, string = reactive
-}
-
-interface ConditionalBranch {
-  condition: ContentValue | null      // null = else branch
-  body: ChildNode[]
-  slotKind: SlotKind                  // Computed at IR creation
-  span: SourceSpan
-}
-```
-
-**Codegen dispatch:**
-- `subscriptionTarget === null` → inline `if/else-if/else` chain
-- `subscriptionTarget !== null` → attempt tree-merge dissolution, fallback to `__conditionalRegion()`
-
-**Note:** Else-if chains always produce flat `branches` arrays, not nested conditionals. The analysis phase flattens AST nesting into the branches array.
-
-### Statement Preservation Nodes
-
-These nodes support arbitrary TypeScript statements in builder functions.
-
-#### `StatementNode`
-Preserves arbitrary TypeScript statements that aren't UI constructs.
-
-```typescript
-interface StatementNode {
-  kind: "statement"
-  source: string  // Original source text, emitted verbatim
-}
-```
-
-**Examples of captured statements:**
-- Variable declarations: `const item = itemRef.get()`
-- Expression statements: `console.log("debug")`
-- Function calls: `doSomething()`
-
-**Not captured as statements:**
-- Element factory calls → `ElementNode`
-- `for...of` loops → `LoopNode`
-- `if` statements → `ConditionalNode`
-- `client:` / `server:` labeled blocks → `TargetBlockNode`
-- Block statements → recursively analyzed
-- Return statements → compile-time error
-- Unknown labeled blocks → captured verbatim as `StatementNode`
-
-**Statement preservation works everywhere:**
-- Top-level builder body
-- Nested element children (e.g., `header(() => { const x = 1; h1(x) })`)
-- Loop bodies
-- Conditional branches
-- Inside `client:` / `server:` target blocks
-
-#### `TargetBlockNode`
-A labeled block that targets a specific compilation target.
-
-```typescript
-interface TargetBlockNode {
-  kind: "target-block"
-  target: "dom" | "html"  // Which compilation target this block is for
-  children: ChildNode[]   // Recursively analyzed contents
-}
-```
-
-Used for `client: { ... }` and `server: { ... }` blocks inside builder
-functions. See [Target Labels](#target-labels-client--server-blocks) below
-for the full architecture.
-
-### Target Labels: `client:` / `server:` Blocks
-
-Kyneta uses TypeScript's labeled statement syntax to mark code as client-only
-or server-only inside builder functions.
-
-#### Syntax
-
-- `client: { ... }` — contents compile to DOM target only, stripped from HTML (SSR) output
-- `server: { ... }` — contents compile to HTML target only, stripped from DOM (client) output
-- Unlabeled code — compiles to both targets
-
-```typescript
+```ts
 div(() => {
-  const count = state(0)
-
-  client: {
-    // Only runs in the browser — stripped from SSR output
-    requestAnimationFrame(() => count.set(count() + 1))
-  }
-
-  server: {
-    // Only runs during SSR — stripped from client bundle
-    console.log("Rendered at", new Date().toISOString())
-  }
-
-  h1(`${count}`)  // both targets
+  client: { interactiveButton(doc) }
+  server: { staticMarker("bot-view") }
 })
 ```
 
-#### IR Representation
+Compiled for `target: "dom"`: only the `client:` block survives. For `target: "html"`: only `server:`.
 
-The `target` field maps label names to compilation targets:
-- `client` → `"dom"` (the DOM codegen target)
-- `server` → `"html"` (the HTML/SSR codegen target)
+### What the codegen is NOT
 
-Unknown labels (e.g., `myLabel: { ... }`) are **not** recognized as target
-blocks — they are captured verbatim as `StatementNode`.
+- **Not producing a VDOM.** Direct runtime calls. One region function per delta kind.
+- **Not producing React hooks.** No hook registry, no dependency arrays visible in output.
+- **Not template-literal strings.** The codegen writes TypeScript (or JavaScript, depending on the source), which the bundler handles further. The output is readable JS, not a compressed template.
 
-#### Filter-Before-Codegen Architecture
+---
 
-Target blocks are resolved **before** codegen via a pure filter function:
+## The universal plugin
 
-```typescript
-filterTargetBlocks(node: BuilderNode, target: CompileTarget): BuilderNode
-```
+Source: `src/unplugin/index.ts`, `src/unplugin/transform.ts`, `src/unplugin/filter.ts`, `src/vite/plugin.ts`.
 
-This function recursively walks the IR tree:
-- **Strips** `TargetBlockNode` whose target doesn't match (removes entirely)
-- **Unwraps** `TargetBlockNode` whose target matches (splices children in place)
+```ts
+import { kyneta } from "@kyneta/cast/unplugin"
 
-After filtering, the IR tree contains no `TargetBlockNode` nodes. Codegens,
-`walk.ts`, `template.ts`, `computeSlotKind`, and all other downstream consumers
-never encounter `TargetBlockNode` — they remain unchanged.
-
-This follows the Functional Core / Imperative Shell principle: the filter is a
-pure function that produces a new tree, trivially testable in isolation.
-
-**Dependency collection**: `createBuilder`'s `collectDependencies` recurses into
-target block children regardless of target. Dependencies from both `client:` and
-`server:` blocks are collected — they inform subscription setup even if one
-target's code is stripped later.
-
-#### Scope
-
-Target labels are recognized **only inside builder function bodies** — the same
-scope where the dual-compilation (DOM vs HTML) occurs. File-level `client:` /
-`server:` labels are not recognized by the compiler (they're outside the builder
-analysis scope).
-
-For client-only module imports, use dynamic `import()` inside a `client:` block.
-
-### Union Type
-
-All child nodes are unified under `ChildNode` (7 members in 3 categories):
-
-```typescript
-type ChildNode =
-  | ElementNode       // Applicative: fixed structure
-  | ContentValue      // Applicative: fixed structure
-  | LoopNode          // Monadic: dynamic structure (binding-time parameterized)
-  | ConditionalNode   // Monadic: dynamic structure (binding-time parameterized)
-  | BindingNode       // Effects: side effects
-  | StatementNode     // Effects: side effects
-  | TargetBlockNode   // Meta: target-conditional wrapper (filtered before codegen)
-```
-
-The taxonomy reflects the algebraic structure:
-- **Applicative** nodes have fixed DOM structure at compile time
-- **Monadic** nodes have dynamic structure determined by runtime values
-- **Effects** nodes produce side effects without DOM structure
-- **Meta** nodes are structural wrappers resolved before codegen
-
-## Code Generation
-
-### DOM Codegen (`codegen/dom.ts`)
-
-Generates imperative JavaScript that creates and manipulates DOM nodes.
-
-**Output pattern:**
-```javascript
-(scope) => {
-  const _div0 = document.createElement("div")
-  const _p1 = document.createElement("p")
-  _p1.textContent = "Hello"
-  _div0.appendChild(_p1)
-  return _div0
+// Vite
+import vitePlugin from "@kyneta/cast/vite"
+export default {
+  plugins: [vitePlugin({ extensions: [".ts", ".tsx"] })]
 }
 ```
 
-**Statement handling:** Statements are emitted verbatim with proper indentation.
+`kyneta(options)` is an `unplugin` factory. `unplugin` normalises plugin surfaces across Vite, Rollup, Rolldown, esbuild, Bun, Farm, and webpack. `kyneta` returns a single plugin definition that works on all of them.
 
-```javascript
-// Input: for (const x of [1,2,3]) { const doubled = x * 2; li(doubled) }
-// Output:
-for (const x of [1, 2, 3]) {
-  const doubled = x * 2
-  const _li0 = document.createElement("li")
-  _li0.textContent = String(doubled)
-  _div0.appendChild(_li0)
+### `enforce: "pre"`
+
+The cast compiler must run **before TypeScript type-stripping** because reactive detection inspects TypeScript type annotations (`[CHANGEFEED]` on a ref's type). By the time type-stripping completes, the type has become `unknown` and reactive classification fails.
+
+Cast sets `enforce: "pre"` which Vite honours natively. Farm maps it to `priority: 102`. Bun's `onLoad` intercepts source before any other transformer. Other bundlers follow their own conventions via unplugin.
+
+### `shouldTransform` filter
+
+Before invoking `transformKynetaSource`, the plugin checks `shouldTransform(id, extensions)`:
+- File extension matches (`.ts`, `.tsx` by default).
+- `hasBuilderCalls(source)` from `@kyneta/compiler` — cheap regex pre-scan.
+
+Files without builder calls pass through untransformed. This makes the plugin nearly free on non-cast code.
+
+### What the plugin is NOT
+
+- **Not a bundler replacement.** It runs inside the host bundler. Vite / Rollup / etc. still do resolution, bundling, minification.
+- **Not an HMR system.** HMR is the bundler's concern. Cast's compiled output is re-emitted on source change; the runtime's scope system disposes the old mount and the new one starts fresh. Per-region HMR is a future concern.
+
+---
+
+## Runtime — the five primitives
+
+Source: `src/runtime/`.
+
+The entire cast runtime is five region functions plus mount, hydrate, scope, and subscribe. Region functions are plain imperative DOM builders parameterised by the scope and a reactive value.
+
+| Primitive | File | Role |
+|-----------|------|------|
+| `mount` | `src/runtime/mount.ts` | Insert an `Element` into a container, manage root scope, return `dispose`. |
+| `hydrate` | `src/runtime/hydrate.ts` | Claim an existing SSR-rendered DOM subtree; attach subscriptions without rebuilding nodes. |
+| `Scope` | `src/runtime/scope.ts` | Structural subscription lifetime; parent disposes children. |
+| `subscribe` | `src/runtime/subscribe.ts` | Standard `[CHANGEFEED]` subscription with automatic scope registration. |
+| `listRegion` | `src/runtime/regions.ts` | Reactive list with incremental item add/remove/move. |
+| `filteredListRegion` | `src/runtime/regions.ts` | Reactive list with per-item + external filter predicates. |
+| `conditionalRegion` | `src/runtime/regions.ts` | Reactive `if/else` branches. |
+| `textRegion` | `src/runtime/regions.ts` | Reactive text binding (character-level insert/delete via `TextInstruction`). |
+| `valueRegion` | `src/runtime/regions.ts` | Reactive scalar in content position (numbers, strings, booleans). |
+| `inputTextRegion` | `src/runtime/regions.ts` | Uncontrolled `<input>` / `<textarea>` bound to a `TextRef` with selection rebasing. |
+
+Plus:
+
+| Helper | File | Role |
+|--------|------|------|
+| `patchInputValue` | `src/runtime/text-patch.ts` | Apply a `TextChange` to an input element's value, rebasing selection. |
+| `diffText` | `src/runtime/text-patch.ts` | Pure: produce a `TextChange` from `oldValue + newValue + cursorHint`. |
+
+### What the runtime is NOT
+
+- **Not a render loop.** No microtask queue managed by cast, no request-animation-frame scheduling. Every delta is applied synchronously during the changefeed subscriber's execution.
+- **Not a component model.** Builder-pattern authored code *resembles* components structurally (nested functions that produce DOM), but there is no `Component` abstraction, no props system, no children.
+- **Not a state manager.** State lives in the `Ref<S>` / `LocalRef<T>` it subscribes to. Cast doesn't own any state between renders.
+
+---
+
+## Delta regions — O(k) not O(N)
+
+Source: `src/runtime/regions.ts`.
+
+A **delta region** owns a contiguous slice of DOM corresponding to one reactive expression or iteration. When the expression's `[CHANGEFEED]` emits, the region applies the delta directly — not by re-rendering from scratch.
+
+### `listRegion`
+
+```ts
+listRegion(scope, parent, listRef, itemHandler)
+```
+
+Handles `SequenceChange` with instruction-level precision. On `insert(i, items)` it creates new DOM for each inserted item and splices them into the parent at index `i`. On `delete(i, count)` it removes the corresponding nodes. On `move(from, to)` it reparents without re-rendering the moved items.
+
+Cost: O(k) where `k` is the number of instructions in the change. A list of 10,000 items with one insert produces one DOM operation, not 10,000.
+
+### `filteredListRegion`
+
+```ts
+filteredListRegion(scope, parent, listRef, predicate, externalRefs, itemRefs, itemHandler)
+```
+
+Produced when `@kyneta/compiler` detects a filter pattern (`for (x of xs) if (pred(x)) ...`). Carries two dependency kinds:
+- `itemRefs` — refs derived from the loop variable (per-item subscriptions).
+- `externalRefs` — refs shared across iterations (single subscription; re-evaluates every item on fire).
+
+On structural change (item added/removed), filter the incoming item. On external change (e.g., filter text), re-evaluate every item's predicate and add/remove DOM nodes as membership flips.
+
+### `conditionalRegion`
+
+```ts
+conditionalRegion(scope, parent, condition, branches)
+```
+
+Reactive `if/else`. On condition change, dispose the current branch's scope, call the new branch's element factory, mount into place. No DOM diffing within branches — each branch is a complete factory.
+
+### `textRegion`
+
+```ts
+textRegion(scope, parent, textRef)
+```
+
+Owns a `Text` node. On `TextChange` emission, applies the instructions with surgical `CharacterData.insertData(offset, data)` / `deleteData(offset, count)`. A 10,000-character string with one inserted character performs one `insertData` call, not a text node replacement.
+
+### `valueRegion`
+
+```ts
+valueRegion(scope, parent, reactiveExpr)
+```
+
+For reactive content that isn't a `TextRef` — scalars, computed expressions, counters rendered as numbers. Emits `ReplaceChange` semantics; updates a `Text` node via assignment. Cheaper than `textRegion` because it doesn't need instruction-level diffing.
+
+### `inputTextRegion` — selection-stable text patching
+
+Source: `src/runtime/regions.ts` (`inputTextRegion`) + `src/runtime/text-patch.ts` (`patchInputValue`, `diffText`).
+
+Attaches a `TextRef` to an `<input>` or `<textarea>`. Bidirectional:
+- Local keystrokes (`input` event) → `diffText(oldValue, newValue, selectionStart)` → `TextChange` → write to ref.
+- Remote edits (ref emits `TextChange` with non-local origin) → `patchInputValue(element, change)` — surgical `setRangeText` + selection rebase via `transformSelection`.
+
+The element is **uncontrolled**: cast never sets `element.value` from the reactive value on every render. The DOM and the ref are kept in sync incrementally. Cursor position survives remote edits.
+
+This parallels `@kyneta/react`'s `useText`: same pure `diffText` / `transformSelection` logic (lifted into `@kyneta/schema` as shared primitives), different imperative shells.
+
+### What a delta region is NOT
+
+- **Not a React-style re-render.** A region doesn't compute a new VDOM and diff; it applies a specific instruction to specific DOM nodes.
+- **Not a virtual boundary.** Regions are marked by DOM comment markers for SSR hydration purposes only; at runtime the DOM is flat.
+- **Not independent of the changefeed.** Every region carries a `subscribe` call in its construction; disposing the scope unsubscribes.
+
+---
+
+## `Scope` — structural subscription lifetime
+
+Source: `src/runtime/scope.ts`.
+
+```ts
+class Scope implements ScopeInterface {
+  register(unsubscribe: () => void): void
+  child(): Scope
+  dispose(): void
+  get disposed(): boolean
 }
 ```
 
-### HTML Codegen (`codegen/html.ts`)
+Every `mount` creates a root scope. Every nested region (list item, conditional branch, child element) creates a child scope via `rootScope.child()`. When a parent scope disposes, it disposes all children first, which in turn dispose all their children, ...
 
-Generates JavaScript that produces HTML strings via accumulation into a `_html` variable.
+Subscriptions register themselves on their enclosing scope via `scope.register(unsubscribe)`. On dispose, every registered unsubscribe fires in LIFO order.
 
-**Unified calling convention:** All codegen functions return `string[]` (code lines).
-There is one generator per IR construct, not two. Statements are lines interleaved with
-`_html +=` lines. This mirrors the DOM codegen architecture.
+### The `setRootScope` global
 
-**Output pattern:**
-```javascript
-() => {
-  let _html = ""
-  _html += `<div class="app">`
-  _html += `<h1>${__escapeHtml(String(title))}</h1>`
-  _html += `</div>`
-  return _html
-}
+`mount` calls `setRootScope(rootScope)` so that element factories called *outside* of an explicit scope (at module load, for test setup) can locate a sensible default. Production code running through the compiler always passes `scope` explicitly; `setRootScope` is a compatibility hatch.
+
+### `ScopeDisposedError`
+
+Operating on a disposed scope throws `ScopeDisposedError`. Catches bugs where a handler fires after the region it belongs to has been torn down. Common under list reorderings: a subscription fires just as the item moves; the error surfaces rather than corrupting DOM.
+
+### What `Scope` is NOT
+
+- **Not a React hook scope.** No dependency arrays, no cleanup hooks at the language level. Just a `register` / `dispose` tree.
+- **Not reference-counted.** Disposal is explicit. No ref counts, no automatic GC of subscriptions.
+- **Not an effect system.** It doesn't track inputs. It only tracks *what must be undone* when a region is destroyed.
+
+---
+
+## Mount vs hydrate
+
+Source: `src/runtime/mount.ts`, `src/runtime/hydrate.ts`.
+
+### `mount`
+
+```ts
+mount(element, container, options?) → { dispose, root }
 ```
 
-**Statement handling:** Statements are emitted as lines interleaved with `_html +=` lines.
-This works at every level — top-level builder body, nested element children, loop bodies,
-and conditional branches.
+1. Validate `container` is an `Element`.
+2. Create a root `Scope`. `setRootScope(rootScope)`.
+3. Clear `container` (if `options.clear !== false`).
+4. Call `element(rootScope)` → returns a `Node`.
+5. Append the node to `container`.
+6. Return `{ dispose: () => rootScope.dispose(), root: node }`.
 
-```javascript
-// Input: div(() => { const x = 1; h1(String(x)) })
-// Output:
-() => {
-  let _html = ""
-  _html += `<div>`
-  const x = 1
-  _html += `<h1>${__escapeHtml(String(x))}</h1>`
-  _html += `</div>`
-  return _html
-}
+Standard client-side rendering.
+
+### `hydrate`
+
+```ts
+hydrate(element, container) → { dispose, root }
 ```
 
-**Loop generation (both reactive and render-time):**
-```javascript
-_html += `<ul>`
-_html += `<!--kyneta:list:0-->`
-for (const itemRef of [...items]) {
-  const item = itemRef.get()
-  _html += `<li>${__escapeHtml(String(item))}</li>`
-}
-_html += `<!--/kyneta:list-->`
-_html += `</ul>`
+1. Validate `container`.
+2. Create a root `Scope`.
+3. Walk the existing DOM subtree under `container` in lockstep with the element factory, *claiming* existing nodes instead of creating new ones.
+4. Attach subscriptions via the regions' `subscribe` calls; do not regenerate content.
+5. If the DOM doesn't match the expected shape, throw `HydrationMismatchError`.
+
+SSR-produced HTML is preserved byte-for-byte on the client. The reactive subscriptions activate; the first interactive update produces the first DOM mutation.
+
+### Why a separate `hydrate`
+
+Re-rendering on mount would:
+- Duplicate work: both SSR and client produce the same initial content.
+- Break focus, selection, and scroll state of the already-rendered DOM.
+- Flash the user's view as the DOM is destroyed and rebuilt.
+
+`hydrate` claims instead of rebuilds. 461 tests in `hydrate.test.ts` exercise every IR shape's hydration path.
+
+### `HydrationMismatchError`
+
+Thrown when the live DOM differs from what the compiled element factory expects. Contains enough context (node path, expected/actual) to diagnose SSR drift. Typical causes: server and client computed different values (clock skew, environment differences); the compilation targets diverged; the HTML was modified between SSR and hydrate.
+
+### What hydrate is NOT
+
+- **Not a re-render.** The DOM produced by SSR is the DOM that the user sees. Hydrate doesn't touch visible content unless a reactive update fires.
+- **Not suspense-aware.** No async boundaries in cast. Data fetching happens before mount/hydrate.
+- **Not progressive.** Every region attaches at once. Partial / streaming hydration is a future concern.
+
+---
+
+## `LocalRef` — the local reactive primitive
+
+Source: `src/reactive/local-ref.ts`.
+
+```ts
+const count = state(0)
+count()         // 0           (call to read)
+count.set(1)    // emits ReplaceChange<number>
+count()         // 1
+
+count[CHANGEFEED].subscribe(changeset => { /* ... */ })
 ```
 
-Reactive loops include hydration markers; render-time loops omit them.
-Reactive loops use spread syntax `[...items]` to preserve ref objects.
+`state<T>(initial)` returns a `LocalRef<T>`:
+- Callable: `ref()` returns the current value.
+- `.set(value)` writes and emits `ReplaceChange<T>` via the changefeed.
+- `[CHANGEFEED]` participates in the universal reactive protocol.
+- `isLocalRef(x)` type guard via an internal brand symbol.
 
-**Conditional generation (both reactive and render-time):**
-```javascript
-_html += `<!--kyneta:if:0-->`
-if (condition) {
-  _html += `<p>yes</p>`
-} else {
-  _html += `<p>no</p>`
-}
-_html += `<!--/kyneta:if-->`
+### Why a local-only primitive
+
+Application UI often needs reactive state that isn't part of the synced document model: a text input's draft value, a modal's open/close flag, a form's validation state. `Ref<S>` from `@kyneta/schema` would be overkill — it requires a substrate and a `BoundSchema`. `state()` is a one-line alternative for ephemeral UI state.
+
+The price of that simplicity: no persistence, no sync, no undo, no history. For anything that must survive a reload or peer into other peers' state, use a schema-backed ref.
+
+### Integration with the runtime
+
+Any region (list, conditional, text, value) can subscribe to a `LocalRef` identically to a schema ref — both carry `[CHANGEFEED]`. The runtime doesn't distinguish.
+
+### What `LocalRef` is NOT
+
+- **Not a substrate.** No merge, no version, no sync. Pure in-memory state.
+- **Not schema-aware.** No validation, no typed children, no navigation beyond reading the value.
+- **Not a signal in the SolidJS sense.** No auto-tracked dependencies; application code subscribes explicitly.
+- **Not React's `useState`.** No re-render lifecycle, no stale-closure gotchas. A `LocalRef` held in a module variable is a singleton; one held in a function call is that call's local state.
+
+---
+
+## SSR, the `html:` label, and the `counting-dom` test harness
+
+Cast compiles both client code (target `"dom"`) and server code (target `"html"`). The `html:` / `client:` label blocks let a single source file emit different output for each:
+
+```ts
+div(() => {
+  client: { interactiveCounter(doc) }
+  server: { staticFallback() }
+})
 ```
 
-The code structure is identical for reactive and render-time — only the marker comments differ.
+The compiler's `filterTargetBlocks` strips the non-matching block before codegen. Cast's DOM codegen runs with `target: "dom"` and sees only `client:` branches; its HTML codegen sees only `server:` branches.
 
-## Reactive Detection
+### `counting-dom` — testing without a real DOM
 
-The compiler detects reactive types by checking whether a candidate type has a property keyed by the `CHANGEFEED` unique symbol from `@kyneta/schema`:
+Source: `src/testing/counting-dom.ts`.
 
-```typescript
-// @kyneta/schema
-export const CHANGEFEED = Symbol.for("kyneta:changefeed")
-export interface ChangefeedProtocol<S = unknown, C extends ChangeBase = ChangeBase> {
-  readonly current: S
-  subscribe(callback: (changeset: Changeset<C>) => void): () => void
-}
-export interface HasChangefeed<S = unknown, C extends ChangeBase = ChangeBase> {
-  readonly [CHANGEFEED]: ChangefeedProtocol<S, C>
-}
+A minimal DOM implementation that counts operations without performing them. Used in tests to assert runtime behaviour:
+
+```ts
+const dom = new CountingDOM()
+listRegion(scope, dom.body, listRef, itemHandler)
+listRef.push(newItem)
+expect(dom.opCount("createElement")).toBe(1)
+expect(dom.opCount("removeChild")).toBe(0)
 ```
 
-### Symbol Detection (`isWellKnownSymbolProperty`)
+Ensures that a single item append is an O(1) DOM operation, not O(N). 197 tests use this.
+
+---
+
+## Error types
+
+Source: `src/errors.ts`.
+
+| Type | Thrown when |
+|------|-------------|
+| `InvalidMountTargetError` | `mount(element, null)` or `mount(element, nonElement)` |
+| `ScopeDisposedError` | Operating on a scope after `.dispose()` |
+| `HydrationMismatchError` | DOM doesn't match element during `hydrate` |
+| `BindingError` | Reactive binding misconfiguration detected at runtime |
+| `CompilerError` | Used by the compiler to surface diagnostics via the unplugin |
+| `KineticError` / `KineticErrorCode` | Deprecated aliases; kept for back-compat (will be removed) |
+| `KynetaError` / `KynetaErrorCode` | Canonical aliases |
+
+All inherit from `Error` with a `code` field (typed as `KynetaErrorCode`) and an optional `location: SourceLocation`.
+
+### What the error types are NOT
+
+- **Not a warning system.** Cast throws. Applications that want soft failures wrap in `try`/`catch` at the mount boundary.
+- **Not localised.** Messages are English, suitable for developer diagnostics.
+
+---
+
+## Key Types
+
+| Type | File | Role |
+|------|------|------|
+| `MountOptions`, `MountResult` | `src/types.ts` | `mount` inputs and outputs. |
+| `ScopeInterface` | `src/types.ts` | Public scope contract. |
+| `Element` | `src/types.ts` | `(scope: ScopeInterface) => Node`. |
+| `Slot` | `src/types.ts` | Content-slot type used by region handlers. |
+| `ListRegionOp<T>` | `src/types.ts` | Discriminated union of list operations. |
+| `ListRegionHandlers` | `src/types.ts` | `{ create, update?, destroy? }` hooks passed to `listRegion`. |
+| `FilteredListRegionHandlers` | `src/types.ts` | Handlers for `filteredListRegion`, with predicate + item-refs + external-refs. |
+| `FilterUpdateOp` | `src/types.ts` | Filter-specific op (add/remove due to filter flip). |
+| `ConditionalRegionHandlers`, `ConditionalRegionOp` | `src/types.ts` | Branch handlers. |
+| `Scope` | `src/runtime/scope.ts` | Concrete implementation of `ScopeInterface`. |
+| `mount`, `hydrate` | `src/runtime/mount.ts`, `src/runtime/hydrate.ts` | Entry points. |
+| `subscribe` | `src/runtime/subscribe.ts` | `[CHANGEFEED]` subscription with scope registration. |
+| `listRegion`, `filteredListRegion`, `conditionalRegion`, `textRegion`, `valueRegion`, `inputTextRegion` | `src/runtime/regions.ts` | Delta regions. |
+| `patchInputValue`, `diffText` | `src/runtime/text-patch.ts` | Text-patching primitives. |
+| `LocalRef<T>`, `state`, `isLocalRef` | `src/reactive/local-ref.ts` | Local reactive primitive. |
+| `transformKynetaSource` | `src/unplugin/transform.ts` | Pure compilation function. |
+| `shouldTransform` | `src/unplugin/filter.ts` | File-filter predicate. |
+| `kyneta` | `src/unplugin/index.ts` | Universal unplugin factory. |
+| `vite` | `src/vite/plugin.ts` | Vite-flavoured wrapper. |
+| `HydrationMismatchError`, `InvalidMountTargetError`, `ScopeDisposedError`, `BindingError`, `CompilerError`, `KineticError`, `KineticErrorCode`, `KynetaError`, `KynetaErrorCode`, `SourceLocation` | `src/errors.ts` | Error types. |
+| `CountingDOM` | `src/testing/counting-dom.ts` | Test-only DOM mock. |
+
+## File Map
+
+| File | Lines | Role |
+|------|-------|------|
+| `src/index.ts` | — | Public barrel. Re-exports mount, hydrate, regions, scope, subscribe, state, types, errors. |
+| `src/errors.ts` | — | Error types (Kyneta-prefixed canonical + Kinetic-prefixed deprecated aliases). |
+| `src/types.ts` | — | Public type declarations: `MountOptions`, `MountResult`, `Scope`, handlers, ops. |
+| `src/types/elements.d.ts` | 206 | Ambient element-factory declarations (`div`, `h1`, `li`, …). |
+| `src/types/reactive-view.d.ts` | 75 | Ambient reactive-view type declarations. |
+| `src/runtime/mount.ts` | 111 | `mount(element, container, options?)`. |
+| `src/runtime/hydrate.ts` | 597 | `hydrate(element, container)` — claim existing DOM. |
+| `src/runtime/scope.ts` | 236 | `Scope` class, `setRootScope`. |
+| `src/runtime/subscribe.ts` | 222 | Scope-registered `[CHANGEFEED]` subscription. |
+| `src/runtime/regions.ts` | 1401 | All five region functions + `inputTextRegion`. |
+| `src/runtime/text-patch.ts` | 226 | `patchInputValue`, `diffText` — selection-stable text patching. |
+| `src/runtime/index.ts` | 53 | Runtime barrel. |
+| `src/reactive/local-ref.ts` | 215 | `state`, `LocalRef<T>`, `isLocalRef`. |
+| `src/reactive/index.ts` | 12 | Reactive barrel. |
+| `src/compiler/transform.ts` | 591 | Compilation orchestrator. |
+| `src/compiler/codegen/dom.ts` | — | Client-side (DOM) codegen. |
+| `src/compiler/codegen/html.ts` | — | Server-side (HTML / SSR) codegen. |
+| `src/compiler/transform.test.ts` | — | 69 tests — end-to-end compilation. |
+| `src/compiler/integration/reactive.test.ts` | — | Reactive-content compilation tests. |
+| `src/compiler/integration/statements.test.ts` | — | Statement-node integration tests (20 tests). |
+| `src/unplugin/index.ts` | 164 | Universal plugin factory. |
+| `src/unplugin/transform.ts` | 73 | Thin wrapper over `transformKynetaSource`. |
+| `src/unplugin/filter.ts` | 56 | `shouldTransform` predicate. |
+| `src/vite/plugin.ts` | 21 | Vite adapter (`kyneta(...).vite`). |
+| `src/vite/plugin.test.ts` | 337 | 14 tests — Vite-specific transform behaviour. |
+| `src/testing/counting-dom.ts` | 245 | Minimal DOM mock with op counters. |
+| `src/testing/counting-dom.test.ts` | 197 | Tests for `counting-dom` itself. |
+| `src/testing/runtime.ts` | 39 | Test-runtime utilities. |
+| `src/testing/index.ts` | 58 | Testing barrel. |
+| `src/runtime/mount.test.ts` | 328 | Mount lifecycle, dispose, error handling. |
+| `src/runtime/hydrate.test.ts` | 461 | Hydration for every IR shape. |
+| `src/runtime/scope.test.ts` | 333 | Scope creation, child dispose order, `ScopeDisposedError`. |
+| `src/runtime/regions.test.ts` | 2226 | Exhaustive region coverage — every delta shape. |
+| `src/runtime/subscribe.test.ts` | 406 | Subscription lifecycle + scope integration. |
+| `src/runtime/text-patch.test.ts` | 966 | `diffText` / `patchInputValue` — edit detection, selection rebasing. |
+| `src/reactive/local-ref.test.ts` | 311 | `state` / `LocalRef` / brand detection. |
+| `src/types/reactive-view.test.ts` | 250 | Ambient declaration behaviour. |
+| `src/errors.test.ts` | — | Error-type round-trips, code mapping. |
+
+## Testing
+
+Tests run both with `jsdom` (for DOM-dependent region and mount tests) and with `CountingDOM` (for performance-invariant assertions — "this update is O(k), not O(N)"). The compilation tests drive the full pipeline: source → `@kyneta/compiler` IR → cast codegen → assert on the emitted JavaScript string. The Vite-plugin tests spin up a Vite instance with the cast plugin and verify end-to-end transform behaviour, including `enforce: "pre"` ordering with other plugins.
+
+The `regions.test.ts` file alone is 2,226 lines, exercising every combination of delta kind × region type × edge case (empty input, single-item lists, filter flips, hydration boundaries).
 
-Detection is implemented in `reactive-detection.ts` using a three-layer strategy. The core function `isWellKnownSymbolProperty(compilerSymbol, symbolForKey, declarationName, mangledPrefix)` checks for the `CHANGEFEED` symbol:
-
-| Parameter | Value |
-|-----------|-------|
-| `symbolForKey` | `"kyneta:changefeed"` |
-| `declarationName` | `"CHANGEFEED"` |
-| `mangledPrefix` | `"__@CHANGEFEED@"` |
-
-The three layers, from most to least robust:
-
-1. **Symbol.for() tracing** — When the symbol's declaration has an initializer (source files), walk the AST to verify it's `Symbol.for(symbolForKey)`. This is the most robust check.
-2. **Symbol declaration name** — In `.d.ts` files the initializer is erased, but the `unique symbol` type still carries a reference back to the variable that declared it. Check that variable's `escapedName` matches `declarationName`.
-3. **Property escaped name** — As a last-resort fallback, check the property's own mangled name starts with `mangledPrefix`.
-
-All three layers are necessary. Layer 1 works in source `.ts` files, layer 2 in `.d.ts` (built packages), and layer 3 handles edge cases where the type system loses the symbol reference chain. The mock `.d.ts` files in `analyze.test.ts` exercise layer 2 specifically.
-
-The delegate function:
-- `isChangefeedSymbolProperty(sym)` → `isWellKnownSymbolProperty(sym, "kyneta:changefeed", "CHANGEFEED", "__@CHANGEFEED@")`
-
-Additionally: exclude `any`/`unknown`, check union branches individually.
-
-This approach replaced an earlier `isTypeAssignableTo(candidate, Reactive)` strategy. That broke when the reactive interface gained a generic parameter — TypeScript's `getType()` on a generic interface returns a type with an unresolved type parameter, which fails assignability checks. The property-level approach is immune to changes in the interface's generic signature.
-
-### Type Detection Functions
-
-| Function | Checks For | Used By |
-|----------|-----------|---------|
-| `isChangefeedType(type)` | `[CHANGEFEED]` property | `expressionIsReactive`, `extractDependencies`, `analyzeExpression` |
-| `getDeltaKind(type)` | Delta kind from `ChangefeedProtocol<S, C>`'s `C` type parameter | Codegen optimization dispatch |
-
-`isChangefeedType` excludes `any`/`unknown`, handles union types (checks each branch), and uses property-level detection via `isChangefeedSymbolProperty`.
-
-### Module Resolution
-
-The compiler uses `skipFileDependencyResolution: true` for fast project creation, then manually resolves `@kyneta/schema` via `ts.resolveModuleName()` and `project.addSourceFileAtPath()`. This avoids the ~500ms overhead of `tsConfigFilePath` while still enabling full type analysis of external packages.
-
-### Delta Kind Extraction (`getDeltaKind`)
-
-Once a type is confirmed as a Changefeed, the compiler extracts its **delta kind** via `getDeltaKind()` in `reactive-detection.ts`. This determines what optimizations codegen can apply.
-
-**Primary path (3 hops via TypeReference):**
-
-1. `[CHANGEFEED]` property → property type (`ChangefeedProtocol<S, C>`)
-2. → `getTypeArguments()` → second type argument `C`
-3. → `.type` property → string literal value
-
-This works because the `[CHANGEFEED]` property type is a `TypeReference` — an instantiation of the generic interface `ChangefeedProtocol<S, C>`. TypeScript preserves concrete type arguments through interface inheritance, so `extends HasChangefeed<S, C>` alone is sufficient — no explicit `readonly [CHANGEFEED]` declaration is needed on each ref type:
-
-```typescript
-// HasChangefeed<string, TextChange> is sufficient — getDeltaKind returns "text"
-interface TextRef extends HasChangefeed<string, TextChange> {
-  // No need to redeclare [CHANGEFEED]; the TypeReference extraction
-  // resolves ChangefeedProtocol<string, TextChange> from the inherited property.
-}
-```
-
-**Structural fallback path (9 hops via `getDeltaKindStructural()`):**
-
-Used when the property type is NOT a TypeReference (e.g., inline object literal types in tests). Walks the subscribe callback structurally:
-
-1. `[CHANGEFEED]` property type
-2. → `.subscribe` method
-3. → call signature
-4. → callback parameter type `(changeset: Changeset<C>) => void`
-5. → callback's call signature
-6. → changeset parameter type `Changeset<C>`
-7. → `.changes` property → `readonly C[]`
-8. → array element type → `C`
-9. → `.type` property → string literal value
-
-Both paths share `extractDeltaKindFromChangeType()` for the final step: reading the `.type` string literal from the change type `C`. If `C` defaults to `ChangeBase`, the `type` property resolves to `string` (not a literal) and extraction returns `undefined`, causing a fallback to `"replace"`.
-
-### Caveats
-
-- **`any` is assignable to everything.** Undeclared identifiers are `any` and must be explicitly excluded.
-- **Union types need branch-level checking.** `LocalRef<T> | null` doesn't itself have a `[CHANGEFEED]` property, but the `LocalRef<T>` branch does.
-- **`links.nameType` is a TypeScript internal.** It has been stable across TS 4.x–6.x and is fundamental to computed property name handling, but layers 2 and 3 serve as fallbacks if it ever changes.
-- **Types are resolved from `dist/`, not source files.** `transformSource` uses `useInMemoryFileSystem: false` and resolves `@kyneta/schema` via `ts.resolveModuleName()`, which follows `package.json` exports to the built `dist/index.d.ts`. After changing type declarations (e.g., adding a `[CHANGEFEED]` property), you must rebuild `@kyneta/schema` (`pnpm run build`) before compiler tests will see the changes.
-- **`toContain` on generated code can give false positives.** Generated code includes import statements listing all runtime functions. `expect(code).toContain("valueRegion")` will match the import `import { valueRegion, textRegion } from ...` even when `valueRegion` is never called. Use more specific patterns like `toContain("textRegion(")` or `not.toMatch(/valueRegion\(/)`.
-
-### ExpressionIR and Auto-Read Insertion
-
-The compiler represents reactive expressions as typed `ExpressionIR` trees (see `@kyneta/compiler` TECHNICAL.md for the full tree model). This enables three key capabilities in the codegen layer:
-
-1. **Auto-read insertion**: `RefReadNode` renders as `source()` — the observation morphism. The developer writes `recipe.name.toLowerCase()` and the compiler emits `recipe.name().toLowerCase()`.
-2. **Binding expansion**: `BindingRefNode` carries a binding's full expression tree. In reactive closures (getter functions for `valueRegion`, `conditionalRegion`), the codegen renders with `expandBindings: true`, producing self-contained closures that re-evaluate from live refs. This solves the stale-binding problem.
-3. **Dependency derivation**: `extractDeps` is a fold over the tree — no separate heuristic walk.
-
-**The `()` snapshot convention**: The developer can write `recipe.name()` to explicitly read a ref (producing a `SnapshotNode`). This renders identically to auto-read but is semantically distinct — the developer chose this. It's the opt-out from bare-ref style when needed (e.g., passing a value to a non-reactive prop).
-
-**Reactive view type augmentations** (`@kyneta/cast/types/reactive-view`): Module augmentations that widen schema ref types so they expose value-type methods:
-- `TextRef extends String` — gives `.toLowerCase()`, `.includes()`, `.trim()`, etc.
-- `CounterRef extends Number` — gives `.toFixed()`, `.toString()`, etc.
-- `LocalRef<T> = Widen<T> & LocalRefBase<T>` — intersection gives `T`'s methods
-
-These are compile-time illusions. At runtime, refs don't have these methods — the compiler inserts `()` reads at the ref/value boundary before the code runs. Opt-in via `/// <reference types="@kyneta/cast/types/reactive-view" />`.
-
-**DOM codegen rendering contexts**: Two `RenderContext` constants control binding expansion:
-- `INITIAL_RENDER = { expandBindings: false }` — `BindingRefNode` emits the binding name (the `const` is in scope)
-- `REACTIVE_CLOSURE = { expandBindings: true }` — `BindingRefNode` recursively renders its expression tree
-
-`getReactiveSource(node)` and `getReactiveDeps(node)` are helpers that render from `ExpressionIR` when available (with binding expansion for closures), falling back to `.source`/`.dependencies` when not.
-
-**Bare changefeed in content position**: When a bare changefeed appears as the entire expression (e.g., `h1(doc.title)` or `span(doc.favorites)`), the compiler wraps it in a `RefReadNode` and produces `directReadSource` for surgical delta dispatch. A bare `TextRef` in content position → `textRegion` (surgical O(k)). An explicit `doc.title()` snapshot → `valueRegion` (replace).
-
-| Developer writes | ExpressionIR | Rendered source | Region type |
-|---|---|---|---|
-| `doc.title` (bare TextRef in content) | `RefRead(PropertyAccess(...))` | `doc.title()` | `textRegion` (surgical) |
-| `doc.title()` (explicit snapshot) | `Snapshot(PropertyAccess(...))` | `doc.title()` | `valueRegion` (replace) |
-| `recipe.name.toLowerCase()` | `MethodCall(RefRead(...), "toLowerCase")` | `recipe.name().toLowerCase()` | `valueRegion` |
-| `!veggieOnly` | `Unary("!", RefRead(Identifier))` | `!veggieOnly()` | `conditionalRegion` |
-| `nameMatch && veggieMatch` (bindings) | `Binary(BindingRef, "&&", BindingRef)` | expanded expression in closure | `conditionalRegion` |
-
-### Dependency Extraction
-
-Dependency extraction is now a fold over the `ExpressionIR` tree via `extractDeps(expr)`. The function collects all `RefReadNode` and `SnapshotNode` entries as `Dependency` objects with `source` (the ref path) and `deltaKind`.
-
-**Transitive expansion**: `BindingRefNode` contributes its binding's expression tree's deps (not the binding name itself). This enables the compound filter pattern: `nameMatch && veggieMatch` expands to all leaf deps from both bindings.
-
-**Subsumption**: When a child dependency exists (e.g., `"doc.title"`), any parent dependency whose source is a strict prefix at a dot boundary (e.g., `"doc"`) is removed. This prevents redundant subscriptions and preserves the `isTextRegionContent` single-dep check for `textRegion` dispatch.
-
-### Binding-Time Classification
-
-When a Changefeed type is detected:
-- Expressions become `ContentValue` with `bindingTime: "reactive"`
-- Loops over reactive iterables become `LoopNode` with `iterableBindingTime: "reactive"`
-- Conditionals with reactive conditions become `ConditionalNode` with `subscriptionTarget: string`
-
-Non-reactive equivalents:
-- Literal expressions: `bindingTime: "literal"`
-- Render-time expressions: `bindingTime: "render"`
-- Render-time loops: `LoopNode` with `iterableBindingTime: "render"`
-- Render-time conditionals: `ConditionalNode` with `subscriptionTarget: null`
-
-## Design Decisions
-
-### Shared Predicate Functions
-
-Codegen dispatch predicates — `isTextRegionContent()` and `isInputTextRegionAttribute()` — live in `ir.ts` as the single source of truth. These predicates gate both codegen dispatch (which runtime function to emit) and import collection (which runtime imports are needed). Having them in one place prevents the subtle divergence that occurs when the same condition is copy-pasted across `codegen/dom.ts` and `transform.ts`.
-
-Both predicates are pure functions of their IR node arguments, with no codegen state dependency. This makes them testable in isolation (`ir.test.ts`) and safe to call from any compilation phase.
-
-### IR-Level Dissolution
-
-Conditional dissolution is implemented as a pure IR→IR transform (`dissolveConditionals` in `ir.ts`) rather than inline logic in codegen functions. This follows the precedent set by `filterTargetBlocks`, which also transforms the IR before codegen sees it.
-
-The key correctness argument: the walker (`walk.ts`) and template extraction (`template.ts`) consume post-dissolution IR. Dissolvable conditionals are replaced by their merged children (elements/content with ternary values) before any downstream consumer runs. This means:
-
-- The walker never emits `regionPlaceholder` events for dissolved conditionals
-- Template extraction never generates `<!--kyneta:if:N-->` comment markers for them
-- The walk plan's child-index assumptions are never violated by dissolution
-- Codegen (both `generateConditional` and `generateConditionalWithMarker`) only sees non-dissolvable `ConditionalNode` instances
-
-The alternative — dissolution inside codegen — worked for the non-cloning path (`generateConditional`) but was abandoned on the template cloning path (`generateConditionalWithMarker`) because the template HTML and walk plan had already been computed with region markers in place. Moving dissolution upstream eliminates this problem entirely.
-
-### Explicit Scope Passing
-
-`Element = (scope: ScopeInterface) => Node` is the universal shape for compiled DOM output. The compiler transforms builder calls like `div(() => { h1("Hello") })` into `(scope) => { ... return _div0 }`, where `scope` is load-bearing: reactive subscriptions use it to register cleanup handlers and manage lifecycle. `mount()` creates a root scope and passes it to the element factory; components receive child scopes via `scope.createChild()`.
-
-SSR render functions have a separate type (`SSRRenderFunction = (ctx: SSRContext) => string`) because server-side rendering doesn't need scope — there are no subscriptions to manage, no cleanup to track. The HTML codegen produces `() => string` (zero parameters). This is a deliberate divergence, not an oversight: the two targets have fundamentally different lifecycle requirements.
-
-### Unified Accumulation-Line Architecture in HTML Codegen
-
-We always use block body (`() => { ... }`) instead of expression body (`() => x`) in HTML codegen, even when there are no statements. Benefits:
-
-1. Single code path (no conditional logic)
-2. Preserves interleaving for side effects
-3. Consistent with DOM codegen
-4. Negligible runtime overhead
-
-### Statement Capture Scope
-
-Only "leaf" statements become `StatementNode`:
-- Variable declarations ✓
-- Expression statements (non-element) ✓
-- Block statements → recursively analyzed (not captured)
-- Return statements → compile-time error
-
-### Return Statement Error
-
-Builder functions have a contract: they produce DOM nodes or HTML strings. Early `return` breaks this contract. We emit a compile-time error with line number rather than generating broken code:
-
-```
-Kyneta Compiler Error: Return statement not supported in builder function at line 5.
-Builder functions must produce DOM elements, not return early.
-```
-
-### Binding-Time Parameterization
-
-The compiler uses **binding time** as the universal parameterization axis for all value-producing and control-flow constructs:
-
-| Construct | Binding-Time Field | Render-Time | Reactive |
-|-----------|-------------------|-------------|----------|
-| `ContentValue` | `bindingTime` | `"literal"` or `"render"` | `"reactive"` |
-| `LoopNode` | `iterableBindingTime` | `"render"` | `"reactive"` |
-| `ConditionalNode` | `subscriptionTarget` | `null` | `string` (ref path) |
-
-Users don't need to know this distinction — both "just work" with natural TypeScript syntax. The compiler analyzes expressions using TypeScript's type system to determine binding time, then generates appropriate code:
-
-- **Render-time**: Inline control flow (`for`, `if/else`), evaluates once
-- **Reactive**: Runtime region management (`__listRegion`, `__conditionalRegion`), delta-driven updates
-
-## File Structure
-
-`@kyneta/cast` is a web rendering target that consumes compiler IR — it does not produce IR. Analysis, IR types, reactive detection, walker, template extraction, binding scope, dependency classification, and pattern recognition all live in `@kyneta/compiler`. IR→IR pipeline transforms (`dissolveConditionals`, `filterTargetBlocks`) are provided by `@kyneta/compiler/transforms`.
-
-```
-packages/cast/src/compiler/
-├── transform.ts             # Orchestrates analysis + codegen + import collection
-├── transform.test.ts        # Transform pipeline tests
-├── codegen/
-│   ├── dom.ts               # DOM code generation (template cloning + createElement)
-│   ├── dom.test.ts          # DOM codegen tests
-│   ├── html.ts              # HTML code generation (SSR)
-│   └── html.test.ts         # HTML codegen tests
-└── integration/
-    ├── helpers.ts            # JSDOM setup, compile-and-execute utilities
-    ├── combined.test.ts      # Combined feature integration tests
-    ├── components.test.ts    # Component model integration tests
-    ├── conditional.test.ts   # Conditional region integration tests
-    ├── list.test.ts          # List region integration tests
-    ├── reactive.test.ts      # Reactive subscription integration tests
-    ├── schema-ssr.test.ts    # Schema-driven SSR integration tests
-    ├── statements.test.ts    # Statement preservation integration tests
-    ├── static.test.ts        # Static rendering integration tests
-    └── text.test.ts          # Text region integration tests
-```
-
-### Child Type
-
-The `Child` type union in `types.ts` accepts `HasChangefeed`, enabling bare reactive refs in content position (e.g., `p(doc.title)` where `doc.title` has `[CHANGEFEED]`). This is safe because the Kyneta compiler intercepts the call and synthesizes `read()` in the IR before codegen — the raw ref never reaches `textContent`. The `Child` type exists only for TypeScript's authoring-time benefit.
-
-### Cross-Package Dependencies
-
-```
-@kyneta/schema       # CHANGEFEED protocol, delta types
-    ↑
-@kyneta/compiler     # AST → IR analysis, IR transforms (/transforms)
-    ↑
-@kyneta/cast         # IR → DOM/HTML codegen, runtime, build plugins
-```
-
-## Runtime Dependencies
-
-> **`CHANGEFEED` Protocol in the Runtime:** Both `textRegion` and `inputTextRegion` read initial state via the `read()` helper (`ref[CHANGEFEED].current`). The `subscribe()` function gates on the presence of `[CHANGEFEED]` at runtime. `listRegion` is the exception — it uses `ListRefLike<T>` because the functional-core planning functions need `{ length, at(i) }`.
-
-
-Generated code imports runtime functions from `@kyneta/cast/runtime`:
-
-- `subscribe(ref, handler, scope)` — CHANGEFEED-based subscription (delta-aware, Changeset-unwrapping)
-- `valueRegion(refs, getValue, onValue, scope)` — Replace-semantic updates for any Changefeed(s)
-- `listRegion(parent, list, handlers, scope)` — Delta-driven list rendering
-- `conditionalRegion(marker, conditionRefs, condition, handlers, scope)` — Reactive conditionals (subscribes to all refs in the array)
-- `textRegion(textNode, ref, scope)` — Surgical text patching for direct text Changefeed reads
-- `inputTextRegion(input, ref, scope)` — Surgical `<input>`/`<textarea>` value patching via `setRangeText`
-- `read(ref)` — Universal value accessor: `ref[CHANGEFEED].current`
-
-All runtime functions accept a `scope` parameter for cleanup tracking.
-
-### Delta-Aware Subscription
-
-The core `subscribe` function uses the `CHANGEFEED` symbol from `@kyneta/schema`. The changefeed protocol delivers `Changeset` batches (one or more changes with optional provenance metadata), not individual changes. Core's `subscribe` **unwraps** these batches so handlers receive individual `ChangeBase` objects with the batch's `origin` propagated as a second argument:
-
-```typescript
-function subscribe(
-  ref: unknown,
-  handler: (change: ChangeBase, origin?: string) => void,
-  scope: Scope,
-): SubscriptionId {
-  if (!hasChangefeed(ref)) {
-    throw new Error("subscribe called with non-reactive value")
-  }
-  // Changefeed delivers Changeset batches; unwrap into individual changes
-  const unsubscribeFn = ref[CHANGEFEED].subscribe((changeset: Changeset) => {
-    for (const change of changeset.changes) {
-      handler(change, changeset.origin)
-    }
-  })
-  scope.onDispose(() => unsubscribeFn())
-  return id
-}
-```
-
-This unwrapping is why core's `subscribe` differs from schema's facade `subscribeNode` (which passes the raw `Changeset` to the callback). Core handlers receive individual `ChangeBase` objects, which enables pattern-matching on `change.type`:
-
-- **Sequence regions**: Extract `change.instructions` for O(k) DOM updates
-- **Text regions**: Use `insertData`/`deleteData` for O(k) surgical text updates
-- **Fallback**: For `"replace"` changes or complex expressions, re-read the entire value
-
-The `origin` field propagates from `Changeset.origin` to the handler's second argument. Most handlers ignore it; `inputTextRegion` uses it for cursor-mode dispatch (see below).
-
-### Backend-Agnostic Core Runtime
-
-The core runtime (`@kyneta/cast/runtime`) depends only on `@kyneta/schema` for the `CHANGEFEED` symbol and change types. It has no backend-specific imports. This enables:
-
-1. **Custom reactive types** — `LocalRef` and user-defined Changefeeds work without any specific CRDT backend
-2. **Future extensibility** — Any CRDT library or state management system can provide Changefeed-compatible refs
-3. **Clear dependency graph** — Core runtime is minimal and portable
-
-### List Region Architecture
-
-The `listRegion` runtime follows **Functional Core / Imperative Shell** pattern:
-
-**Functional Core** (pure, testable):
-- `planInitialRender(listRef)` → `ListRegionOp<T>[]`
-- `planDeltaOps(listRef, deltaOps: SequenceInstruction<T>[])` → `ListRegionOp<T>[]`
-
-**Imperative Shell** (DOM manipulation):
-- `executeOp(parent, state, handlers, op)` — applies single operation
-
-The `listRegion` subscribe callback receives a change and dispatches:
-
-```typescript
-subscribe(listRef, (change: ChangeBase) => {
-  if (change.type === "sequence") {
-    // O(k) update where k = number of changed items
-    const ops = planDeltaOps(state.listRef, change.instructions)
-    executeOps(parent, state, handlers, ops)
-  } else {
-    // Fallback: full re-render for "replace" or other change types
-    clearAll(state)
-    const ops = planInitialRender(state.listRef)
-    executeOps(parent, state, handlers, ops)
-  }
-}, scope)
-```
-
-Both planning functions use `listRef.at(index)` to obtain refs, ensuring
-handlers always receive refs for value shapes. This enables the component
-pattern where refs are passed for two-way binding:
-
-```typescript
-for (const itemRef of doc.items) {
-  const item = itemRef.get()  // Read current value
-  li({ onClick: () => itemRef.set(item.toUpperCase()) }, item)  // Can write!
-}
-```
-
-**Key design decisions:**
-1. Use `listRef.at(index)` instead of `.toArray()` for ref preservation
-2. Delta inserts use count only — `listRef.at(index)` fetches actual values
-3. Store `listRef` in state for delta handling
-4. Non-sequence deltas (e.g., `"replace"`) trigger full re-render as fallback
-5. HTML codegen uses `[...listSource]` (iterator returns refs)
-
-### Text Region Architecture
-
-The `textRegion` runtime enables **O(k) surgical text updates** for direct text Changefeed reads, where k is the edit size rather than the full string length.
-
-**When it applies:**
-- Expression is itself a Changefeed (bare ref like `doc.title`)
-- The dependency has `deltaKind: "text"`
-- The expression has not been transformed (e.g., `.toUpperCase()`) or combined with other deps
-
-**Functional Core** (pure, testable):
-- `planTextPatch(ops: TextDeltaOp[])` → `TextPatchOp[]` — converts cursor-based deltas to offset-based ops
-
-**Imperative Shell** (DOM manipulation):
-- `patchText(textNode, ops)` — applies patches via `insertData`/`deleteData`
-- `textRegion(textNode, ref, scope)` — subscription-aware wrapper
-
-The `textRegion` function reads initial state via the `CHANGEFEED` protocol:
-
-```typescript
-function textRegion(textNode: Text, ref: unknown, scope: Scope): void {
-  const changefeedRef = ref as HasChangefeed<string>
-  const readValue = () => read(changefeedRef)
-
-  textNode.textContent = readValue()  // Initial value via read() helper
-
-  subscribe(ref, (change: ChangeBase) => {
-    if (isTextChange(change)) {
-      // O(k) surgical update
-      patchText(textNode, change.instructions)
-    } else {
-      // Fallback for non-text changes (e.g., "replace")
-      textNode.textContent = readValue()
-    }
-  }, scope)
-}
-```
-
-**Delta cursor model:**
-Text deltas use cursor-based operations applied left-to-right:
-- `retain: n` — advance cursor by n (no output)
-- `insert: s` — insert at cursor, cursor advances by `s.length`
-- `delete: n` — delete n chars at cursor, **cursor does NOT advance**
-
-The "cursor doesn't advance on delete" is critical — subsequent ops apply at the same position.
-
-**Codegen dispatch:**
-```typescript
-// In generateReactiveContentSubscription:
-if (directReadSource && deps.length === 1 && deps[0].deltaKind === "text") {
-  // Direct text Changefeed read — surgical patching
-  emit: textRegion(textVar, directReadSource, scopeVar)
-} else {
-  // Single or multi-dep — full replacement via valueRegion
-  emit: valueRegion(...)
-}
-```
-
-**Key design decisions:**
-1. `CHANGEFEED` protocol keeps runtime backend-agnostic — `textRegion` reads initial state via the `read()` helper (`ref[CHANGEFEED].current`) instead of ad-hoc interface casts. (`ListRefLike<T>` remains for `listRegion` because the planning functions need `{ length, at(i) }`.)
-2. Non-text changes (e.g., `"replace"` from `LocalRef`) trigger full `textContent` replacement via `read()`
-3. Multi-dep expressions use `valueRegion` with all deps in the `refs` array — change describes one source, not output
-4. Bare refs (`p(doc.title)`) produce the same codegen as explicit reads (`p(doc.title())`) — the compiler synthesizes `read()` in the IR source, but `textRegion` reads initial state via `read()` internally
-
-### Input Text Region Architecture
-
-The `inputTextRegion` runtime enables **O(k) surgical value updates** for `<input>` and `<textarea>` elements backed by a text Changefeed. It is the input-element analog of `textRegion` (which targets Text nodes).
-
-**When it applies (codegen dispatch):**
-- Attribute name is `value`
-- Expression is itself a Changefeed (`directReadSource` is set)
-- The dependency has `deltaKind: "text"`
-
-Both the createElement path (`generateAttributeSubscription`) and the template cloning path (`generateHoleSetup`) check via `isInputTextRegionCandidate()`. When the condition is met:
-1. `generateAttributeSet` **skips** the initial `.value =` (inputTextRegion handles initialization)
-2. `generateAttributeSubscription` emits `inputTextRegion(el, ref, scope)` instead of a naive `subscribe`
-
-**DOM API:** `setRangeText(text, start, end, selectMode)`
-
-Unlike `textRegion` which uses `insertData`/`deleteData` on Text nodes, input elements have no character-level DOM API. `setRangeText` provides equivalent surgical editing. The `selectMode` parameter controls cursor adjustment:
-
-- `"preserve"` — Attempts to keep the cursor where it was. Correct for **remote** edits (inserts before cursor shift it right, deletes before cursor shift it left). **Incorrect** for local edits at the cursor position — see caveat below.
-- `"end"` — Moves cursor to end of the replacement range.
-
-**`setRangeText("preserve")` cursor caveat:** Per the HTML spec, `"preserve"` adjusts `selectionStart` only when it is *strictly greater than* the replacement range endpoints. When inserting at the cursor position (`start === end === selectionStart`), neither adjustment branch fires — the cursor stays put. This means typing "Hello" character by character produces "olleH" because each character is inserted at position 0 (the cursor never advances). `"preserve"` was designed for edits happening *elsewhere* in the text, not at the cursor.
-
-**Origin-driven selectMode dispatch:** `inputTextRegion` dispatches selectMode based on the `origin` parameter — the second argument to the `subscribe` handler, propagated from `Changeset.origin` during batch unwrapping:
-
-- **`origin === "local"`** → `setRangeText(..., "end")` — cursor advances past inserts, stays at delete point. Correct for local typing, undo, and redo.
-- **anything else** (`"import"`, `undefined`) → `setRangeText(..., "preserve")` — cursor shifts relative to remote edits. Correct for remote collaborator edits.
-
-No active-edit flags, cursor arithmetic, or cross-module coordination needed. The `origin` field on `Changeset` (from `@kyneta/schema`) is the sole discriminant — it arrives as the handler's second argument after batch unwrapping. Backend adapters (e.g., a future Loro adapter) forward provenance info into this field.
-
-**Functional Core** (shared with `textRegion`):
-- `planTextPatch(ops: TextDeltaOp[])` → `TextPatchOp[]` — converts cursor-based deltas to offset-based ops
-
-**Imperative Shell:**
-- `patchInputValue(input, ops, selectMode?)` — applies patches via `setRangeText(selectMode)` (default `"preserve"`)
-- `inputTextRegion(input, ref, scope)` — subscription-aware wrapper, dispatches selectMode on `origin` (from `Changeset.origin`)
-
-```typescript
-function inputTextRegion(
-  input: HTMLInputElement | HTMLTextAreaElement,
-  ref: unknown,
-  scope: Scope,
-): void {
-  const changefeedRef = ref as HasChangefeed<string>
-  const readValue = () => read(changefeedRef)
-
-  input.value = readValue()  // Initial value via read() helper
-
-  subscribe(ref, (change: ChangeBase, origin?: string) => {
-    if (isTextChange(change)) {
-      const mode = origin === "local" ? "end" : "preserve"
-      patchInputValue(input, change.instructions, mode)  // O(k) surgical update
-    } else {
-      input.value = readValue()       // Fallback via read()
-    }
-  }, scope)
-}
-```
-
-**The `setAttribute` fix:** The `generateAttributeUpdateCode` helper was extracted as the single source of truth for attribute→DOM-API mapping. This fixed a latent bug in the template cloning path where `setAttribute("value", x)` was used instead of `.value =`. After user interaction, `setAttribute` only changes the HTML default attribute — not the live DOM property. The same fix covers `checked`, `disabled`, `class`, `style`, and `data-*` in both the createElement and cloneNode codegen paths.
-
-### Region Algebra
-
-All region types (list, conditional) share a common algebraic structure based on three principles:
-
-#### The Anchor-Based Resolution Principle
-
-Tree-structural regions (`listRegion`, `conditionalRegion`, `filteredListRegion`) modify parent-child relationships via `insertBefore`/`removeChild`. They require a parent reference — but that reference must never be cached across async boundaries (subscription callbacks).
-
-**The DocumentFragment lifecycle problem:** A `DocumentFragment` is an ephemeral container — inserting it into the DOM moves all its children to the real parent, leaving the fragment empty. When a region's create handler returns a fragment (e.g., bindings + conditional in a list body), the codegen's `generateBodyWithFragment` wraps content in a fragment. Any comment marker inside the fragment moves to the real DOM when the fragment is consumed. A cached `parent` reference pointing to the stale fragment causes:
-
-- **Deletes** to silently no-op (`node.parentNode === parent` is false)
-- **Inserts** to throw `insertBefore` errors (marker's sibling is in the real DOM, but `parent` is the empty fragment)
-
-**The principle:** Comment markers are perfect anchors — they have no visual presence and participate in all DOM tree mutations. `Node.parentNode` is a live property that always reflects the current tree state. Therefore:
-
-> **Tree-structural regions must resolve `parent` from their anchor node at operation time, never at construction time.**
-
-This is implemented via the shared `resolveParent()` helper:
-
-```typescript
-function resolveParent(anchor: Node): Node {
-  const parent = anchor.parentNode
-  if (!parent) {
-    throw new Error("Region anchor has been detached from the DOM")
-  }
-  return parent
-}
-```
-
-Both `conditionalRegion` and `listRegion` (in marker mode) call `resolveParent()` at each operation point. At initial render time, the anchor may be in a fragment — `resolveParent` returns the fragment (correct for building content). At subscription callback time, the anchor has moved to the real DOM — `resolveParent` returns the real parent (correct for updates).
-
-**`listRegion` mount-point modes:**
-
-| Mount point type | Mode | Parent resolution |
-|---|---|---|
-| Element | Container mode | `parent = mountPoint` (stable, never moves) |
-| Comment | Marker mode | `parent = resolveParent(anchor)` (lazy) |
-| DocumentFragment | Auto-promoted marker | Creates `<!--kyneta:list-->` / `<!--/kyneta:list-->` markers, proceeds in marker mode |
-
-The fragment auto-promotion is transparent to callers — no codegen changes needed.
-
-#### The Trackability Invariant
-
-Every node inserted into the DOM must remain trackable for removal. This is enforced through the `Slot` type:
-
-```typescript
-type Slot =
-  | { kind: "single"; node: Node }
-  | { kind: "range"; startMarker: Comment; endMarker: Comment }
-```
-
-**Single elements** (the common case) are tracked directly — no overhead.
-
-**Multi-element fragments** use comment markers to delimit the range:
-
-```html
-<!--kyneta:start-->
-<span>a</span>
-<span>b</span>
-<!--kyneta:end-->
-```
-
-The `claimSlot()` helper automatically chooses the appropriate strategy. When compile-time `slotKind` is provided, it dispatches directly without runtime inspection. The `releaseSlot()` function handles removal for both cases.
-
-**Runtime vs compile-time slot kind:** The compile-time `slotKind` hint is an optimization, not a contract. The runtime may produce a slot of a *different* kind than the hint when the hint is overly conservative. For example, `slotKind: "range"` with a fragment containing 0 or 1 children will produce a `"single"` slot (empty placeholder or direct child tracking). This is intentional — the runtime always produces the **minimal** slot representation, and the compile-time hint is a fast-path for the common case. The `computeSlotKind()` function in `ir.ts` is deliberately conservative (it doesn't evaluate expressions), so this divergence is expected and safe.
-
-#### Functional Core / Imperative Shell
-
-Both region types follow FC/IS for testability and clarity:
-
-| Region Type | Planning (Pure) | Execution (Imperative) |
-|-------------|-----------------|------------------------|
-| List | `planInitialRender()`, `planDeltaOps()` | `executeOps()` |
-| Conditional | `planConditionalUpdate()` | `executeConditionalOp()` |
-
-The planning functions are pure — they take state and return operations without side effects. The execution functions apply those operations to the DOM.
-
-**Conditional region operations:**
-```typescript
-type ConditionalRegionOp =
-  | { kind: "noop" }
-  | { kind: "insert"; branch: "true" | "false" }
-  | { kind: "delete" }
-  | { kind: "swap"; toBranch: "true" | "false" }
-```
-
-#### Unified State Types
-
-All region types extend `RegionStateBase`:
-
-```typescript
-interface RegionStateBase {
-  parentScope: Scope
-}
-
-interface ListRegionState<T> extends RegionStateBase {
-  slots: Slot[]
-  scopes: (Scope | null)[]
-  listRef: ListRefLike<T>
-  endMarker: Node | null
-  anchor: Node | null        // For lazy parent resolution (marker mode)
-  containerParent: Node | null // For stable parent (container mode)
-}
-
-interface ConditionalRegionState extends RegionStateBase {
-  currentBranch: "true" | "false" | null
-  currentSlot: Slot | null
-  currentScope: Scope | null
-}
-
-interface FilteredListState<T> extends RegionStateBase {
-  slots: (Slot | null)[]     // null when item is hidden by filter
-  scopes: (Scope | null)[]
-  listRef: ListRefLike<T>
-  visibility: boolean[]       // Index-aligned with listRef
-  itemUnsubs: (() => void)[][] // Per-item subscription cleanup
-}
-```
-
-`ListRegionState` includes `anchor` and `containerParent` to support the anchor-based resolution principle. In container mode, `containerParent` is the stable element. In marker mode, `anchor` is the comment marker and `resolveParent(anchor)` gives the current parent.
-
-`FilteredListState` extends the concept with a `visibility` array that tracks which items pass the filter predicate. All arrays are index-aligned — `slots[i]`, `scopes[i]`, and `visibility[i]` all correspond to `listRef.at(i)`. Items that fail the predicate have `slots[i] = null` but still occupy their index position.
-
-This unified structure makes the region system easier to understand, test, and extend.
-
-## Template Cloning Architecture
-
-Template cloning provides 3-10× faster DOM creation compared to imperative `createElement` chains by leveraging the browser's native `<template>.content.cloneNode(true)` implementation.
-
-### Four-Layer Design
-
-The template cloning system follows a clean separation of concerns:
-
-| Layer | Module | Input | Output |
-|-------|--------|-------|--------|
-| **Walker** | `walk.ts` | IR tree | `WalkEvent` stream |
-| **Extractor** | `template.ts` | `WalkEvent` stream | `TemplateNode` |
-| **Planner** | `template.ts` | `TemplateHole[]` | `NavOp[]` |
-| **Codegen** | `dom.ts` | `NavOp[]` | JavaScript code |
-
-### Template Extraction
-
-The extractor consumes walker events and produces a `TemplateNode`:
-
-```typescript
-interface TemplateNode {
-  /** Static HTML string for template.innerHTML */
-  html: string
-  /** Ordered list of dynamic holes with walk paths */
-  holes: TemplateHole[]
-  /** Counter for unique region marker IDs */
-  markerIdCounter: number
-}
-
-interface TemplateHole {
-  /** Path from root: indices into children arrays */
-  path: number[]
-  /** Hole type: text, attribute, event, binding, region */
-  kind: TemplateHoleKind
-  /** Original IR node for codegen */
-  contentNode?: ContentNode
-  regionNode?: LoopNode | ConditionalNode
-}
-```
-
-### Walk Planning
-
-The planner converts hole paths to optimal DOM navigation:
-
-```typescript
-type NavOp =
-  | { op: "down" }   // .firstChild
-  | { op: "right" }  // .nextSibling
-  | { op: "up" }     // .parentNode
-  | { op: "grab"; holeIndex: number }
-
-// Example: holes at [0,0] and [1,0]
-const ops = planWalk(holes)
-// [down, down, grab(0), up, right, down, grab(1)]
-```
-
-Holes are visited in document order (depth-first), so the walk never backtracks past already-grabbed holes.
-
-### Generated Code Pattern
-
-Template cloning generates code like:
-
-```typescript
-// Module-level template declaration (hoisted)
-const _tmpl_0 = document.createElement("template")
-_tmpl_0.innerHTML = "<div><span></span><p></p></div>"
-
-// Element factory function
-(scope) => {
-  const _root = _tmpl_0.content.cloneNode(true).firstChild
-  
-  // Walk to grab hole references
-  const _holes = new Array(2)
-  let _n = _root
-  _n = _n.firstChild          // span
-  _n = _n.firstChild          // text inside span
-  _holes[0] = _n
-  _n = _n.parentNode          // span
-  _n = _n.nextSibling         // p
-  _holes[1] = _n
-  
-  // Wire up reactivity to grabbed references
-  subscribe(dep, (delta) => {
-    _holes[0].textContent = value
-  }, scope)
-  
-  return _root
-}
-```
-
-### Region Handling
-
-Regions (loops and non-dissolvable conditionals) become comment placeholder holes in the template:
-
-```html
-<ul><!--kyneta:list:1--><!--/kyneta:list--></ul>
-```
-
-The walker grabs the opening comment node, which is passed to `listRegion()` or `conditionalRegion()` as the mount point. This format matches SSR hydration markers, ensuring template-cloned and SSR-rendered DOM are structurally identical.
-
-**Dissolvable conditionals** (structurally identical branches) are resolved at the IR level by `dissolveConditionals` before template extraction runs. Their content appears as inline elements and text in the template — no comment markers, no `conditionalRegion` at runtime. Only non-dissolvable conditionals (different tags, different child counts, no else branch) produce region comment markers.
-
-### Template Deduplication
-
-List region item templates are deduplicated via hash:
-
-```typescript
-// Codegen maintains: Map<htmlHash, templateVarName>
-// Same template HTML reuses same declaration
-const _tmpl_item = document.createElement("template")
-_tmpl_item.innerHTML = "<li></li>"
-
-// All list items clone from same template
-create: (item) => _tmpl_item.content.cloneNode(true).firstChild
-```
-
-### Integration with CodegenResult
-
-The `CodegenResult` type supports returning module declarations:
-
-```typescript
-interface CodegenResult {
-  code: string
-  moduleDeclarations: string[]
-}
-```
-
-The `transformSourceInPlace` function collects all `moduleDeclarations` and inserts them at the top of the transformed file.
-
-## Batch List Operations
-
-List regions exploit CRDT delta structure to perform batch DOM operations, reducing O(N) individual operations to O(1) batch operations for contiguous inserts/deletes.
-
-### Batch Operation Types
-
-The `ListRegionOp` type includes batch variants:
-
-```typescript
-type ListRegionOp<T> =
-  | { kind: "insert"; index: number; item: T }
-  | { kind: "delete"; index: number }
-  | { kind: "batch-insert"; index: number; count: number }
-  | { kind: "batch-delete"; index: number; count: number }
-```
-
-Note: `batch-insert` carries `count`, not `items: T[]`. The executor calls `listRef.get(index + i)` during execution. This keeps the planning function pure (no item fetching) and avoids allocating a large intermediate array for big batches.
-
-### Planning: Emit Batch Ops for Contiguous Operations
-
-The `planDeltaOps` function emits batch operations when count > 1:
-
-```typescript
-// For delta { delete: 50 } → single batch-delete
-ops.push({ kind: "batch-delete", index, count: 50 })
-
-// For delta { insert: 100 } → single batch-insert  
-ops.push({ kind: "batch-insert", index, count: 100 })
-
-// For delta { delete: 1 } or { insert: 1 } → individual ops
-ops.push({ kind: "delete", index })
-ops.push({ kind: "insert", index, item })
-```
-
-### Execution: O(1) DOM Operations
-
-**Batch Insert** uses DocumentFragment:
-```typescript
-// Create all items, collect into fragment
-const fragment = document.createDocumentFragment()
-for (let i = 0; i < op.count; i++) {
-  const item = listRef.get(op.index + i)
-  const node = handlers.create(item, op.index + i)
-  fragment.appendChild(node)
-}
-// Single DOM insertion
-parent.insertBefore(fragment, referenceNode)
-```
-
-**Batch Delete** uses Range API:
-```typescript
-const range = document.createRange()
-range.setStartBefore(startSlot.node)
-range.setEndAfter(endSlot.node)
-// Single DOM operation removes all content
-range.deleteContents()
-```
-
-### Performance Characteristics
-
-| Operation | Without Batching | With Batching |
-|-----------|------------------|---------------|
-| Insert 100 items | 100 `insertBefore` calls | 1 `insertBefore` call |
-| Delete 50 items | 50 `removeChild` calls | 1 `deleteContents` call |
-| State updates | 100 `splice` calls | 1 `splice` call |
-
-This is especially valuable for CRDT synchronization where remote peers may send large batches of changes.
-
-## Component Model
-
-Kyneta supports user-defined components alongside HTML element factories. Components are ordinary TypeScript functions typed as `ComponentFactory` — the compiler recognizes them via the type system.
-
-### ComponentFactory Type
-
-```typescript
-type ComponentFactory<P extends Record<string, unknown> = {}> =
-  | ((props: P, builder: Builder) => Element)
-  | ((props: P) => Element)
-  | ((builder: Builder) => Element)
-  | (() => Element)
-```
-
-A component is any function whose type satisfies `ComponentFactory`: it returns an `Element` (which is `(scope: Scope) => Node`), and optionally accepts props and/or a builder callback.
-
-### Two-Tier Detection
-
-The compiler uses a two-tier strategy in `checkElementOrComponent()`:
-
-1. **HTML tag check** — If the callee name is in `ELEMENT_FACTORIES` (130 known HTML tags), it's an HTML element. Fast path, no type checking.
-2. **Type-based check** — Otherwise, `isComponentFactoryType()` inspects the callee's TypeScript type via call signatures. If the return type is a function returning `Node`, it's recognized as a component.
-
-This means component detection is purely type-driven — no naming conventions required (though PascalCase is idiomatic).
-
-### IR Representation
-
-Components reuse `ElementNode` with an optional `factorySource` field rather than introducing a new `ChildNode` variant:
-
-```typescript
-interface ElementNode {
-  kind: "element"
-  tag: string              // "Avatar", "Card", etc.
-  factorySource?: string   // "Avatar" — present for components, absent for HTML
-  attributes: AttributeNode[]
-  eventHandlers: EventHandlerNode[]
-  // ...
-}
-```
-
-This avoids a cascade of changes through every `switch (node.kind)` site in codegen, slot computation, and tree merging.
-
-### Codegen Output
-
-For an HTML element:
-```typescript
-const _div0 = document.createElement("div")
-```
-
-For a component:
-```typescript
-const _Avatar0 = Avatar({ src: "photo.jpg" })(scope.createChild())
-```
-
-The component factory is called with props, returning an `Element` (a scope-accepting function), which is immediately called with a child scope. The returned `Node` is then `appendChild`-ed to its parent.
-
-### Builder Components
-
-A **Builder Component** is a function that returns a builder expression. The builder expression _is_ the template — no JSX, no virtual DOM, no separate render function. The compiler handles scope threading transparently, transforming the builder into `(scope) => Node` inside the closure. The call site emits `Factory(props)(scope.createChild())`, but the user never writes or sees the double invocation.
-
-Two idiomatic flavors:
-
-- **Props-based** — receives data via a typed props object. The standard pattern for reusable, self-contained components:
-  ```typescript
-  const TodoItem: (props: { label: string; onRemove: () => void }) => Element = (props) =>
-    li({ class: "todo-item" }, () => {
-      label(props.label)
-      button({ class: "destroy", onClick: props.onRemove }, "×")
-    })
-  ```
-
-- **Props-based with `editText`** — text input components can use `editText` as a plain function prop. Unlike `bind()`, `editText` doesn't require compiler recognition and works in any component flavor:
-  ```typescript
-  const TodoHeader: (props: { doc: TodoDoc }) => Element = ({ doc }) =>
-    header(() => {
-      h1(doc.title.toString())
-      input({ value: doc.newTodoText.toString(), onBeforeInput: editText(doc.newTodoText) })
-    })
-  ```
-
-Both compile identically — the compiler doesn't distinguish them. Detection is structural: any function whose return type has call signatures returning `Node` is recognized as a component by `isComponentFactoryType()`.
-
-**Props are not reactive.** They are captured at instantiation time. If a prop value changes, the component must be destroyed and recreated. This happens naturally for list items (the reactive loop handles insert/delete) but would not work for in-place prop updates.
-
-**Calling convention — proven end-to-end.** DOM: `Factory(props)(scope.createChild())`. SSR: `Factory(props)()` (no scope — SSR has no subscriptions to manage). Both paths are covered by integration tests in `integration.test.ts` under "Component compilation".
-
-**Type annotation note.** The `ComponentFactory<P>` type is a 4-member union of function types. TypeScript cannot resolve which union member to invoke at call sites, so components should be annotated with their specific overload (`(props: P) => Element` or `() => Element`). The compiler's type detection works on structural call signatures, not on the `ComponentFactory` name, so the specific overload is fully equivalent.
-
-### Template Cloning Interaction
-
-Components cannot be serialized into `template.innerHTML` — the browser would create an unknown element like `<Avatar>`, not a component invocation. The walker yields a `componentPlaceholder` event instead of walking component children as HTML:
-
-```typescript
-// Walker sees ElementNode with factorySource → yields placeholder
-yield { type: "componentPlaceholder", node, path: [...pathStack] }
-```
-
-The template extractor emits a `<!---->` comment placeholder and records a `{ kind: "component", elementNode }` hole. At runtime, the codegen instantiates the component via `generateElement()` and replaces the comment:
-
-```typescript
-// Generated code for a component hole
-const _Avatar0 = Avatar({ src: "photo.jpg" })(scope.createChild())
-_holes[0].parentNode.replaceChild(_Avatar0, _holes[0])
-```
-
-### Current Limitations
-
-- **Builder callbacks not wired**: The `ComponentFactory` type supports `(props, builder) => Element`, but the compiler does not yet pass children as a builder callback at call sites. Components must manage their own children internally.
-- **Bindings through props unsupported**: `bind()` values cannot be passed as component props. The `Binding<T>` type is recognized at the element level (e.g., `input({ value: bind(ref) })`), but the component codegen does not unwrap or forward bindings. Components that need two-way binding must accept the raw ref and call `bind()` internally.
-
-## Conditional Scope Creation
-
-List regions can skip per-item scope allocation when items contain no reactive content, reducing overhead for static list rendering.
-
-### Mechanism
-
-The IR computes `LoopNode.hasReactiveItems` at analysis time via `computeHasReactiveItems(body)`. The codegen emits this as `isReactive: true/false` in the `ListRegionHandlers` object:
-
-```typescript
-listRegion(parent, doc.items, {
-  create: (item, _index) => {
-    const _li0 = document.createElement("li")
-    _li0.textContent = String(item.get())
-    return _li0
-  },
-  slotKind: "single",
-  isReactive: false,  // No reactive content → skip scope allocation
-}, scope)
-```
-
-### Runtime Behavior
-
-When `isReactive` is `false`, the `executeOp` function stores `null` instead of creating a child scope:
-
-```typescript
-const needsScope = handlers.isReactive !== false
-const itemScope = needsScope ? state.parentScope.createChild() : null
-```
-
-The `scopes` array is typed as `(Scope | null)[]`. Delete and batch-delete paths already guard with `if (scope)` before calling `scope.dispose()`, so null entries are handled safely.
-
-### When It Matters
-
-This optimization is most valuable for large static lists — e.g., rendering 1000 items where each item is a simple `<li>` with no subscriptions. Without this optimization, 1000 `Scope` objects would be allocated (each with a `Set` for children tracking in the parent). With it, zero scopes are allocated for the items.
-
-## Delta Region Algebra
-
-Text patching, input text patching, list regions, conditional regions, and filtered list regions all follow the same **Functional Core / Imperative Shell** pattern, forming a unified "delta region" algebra.
-
-### The Pattern
-
-Every delta region has three phases:
-
-1. **Initial render** — Read current value, create DOM
-2. **Subscribe** — Register for delta notifications
-3. **Delta dispatch** — Apply surgical updates or fall back to full re-render
-
-| Region Type | Planning (Pure) | Execution (Imperative) | Delta Type | DOM Target |
-|-------------|-----------------|------------------------|------------|------------|
-| Text | `planTextPatch(ops)` | `patchText(node, ops)` | `"text"` | Text node |
-| Input Text | `planTextPatch(ops)` | `patchInputValue(input, ops)` | `"text"` | `<input>` / `<textarea>` value |
-| Sequence | `planDeltaOps(ref, ops)` | `executeOp(parent, state, handlers, op)` | `"sequence"` | Parent element children |
-| Filtered Sequence | `planFilterUpdate(...)` | `showItem()`/`hideItem()` | via item+external refs | Filtered children |
-| Conditional | `planConditionalUpdate(...)` | `executeConditionalOp(...)` | via condition refs (array) | Branch swap |
-| Value | — | `onValue(getValue())` | any (re-read) | Text node, attribute, etc. |
-
-`valueRegion` is the **terminal object** in the delta region algebra — a region whose delta dispatch strategy is always "replace." It re-reads via `getValue()` and applies via `onValue()` on every change from any subscribed ref. It unifies the previous `subscribeWithValue` (single ref) and `subscribeMultiple` + manual init (multiple refs) into one function with a uniform three-phase pattern. All Changefeed → DOM wiring functions are now named as "regions."
-
-`conditionalRegion` accepts an **array** of condition refs (like `valueRegion`). The codegen emits all dependencies from the condition expression — not just the first. Each ref gets its own subscription; any change from any ref triggers `getCondition()` re-evaluation and potential branch swap. This is essential for derived conditions like `if (nameMatch && veggieMatch)` where the predicate depends on multiple reactive sources (e.g., item properties *and* external filter state).
-
-The `read()` runtime helper is the universal value accessor for Changefeeds in generated code: `read(ref)` returns `ref[CHANGEFEED].current`. It keeps the `CHANGEFEED` symbol internal to the runtime, avoiding a cross-package import in every compiled component.
-
-### Delta Provenance
-
-`Changeset` carries an optional `origin` field (`"local"` | `"import"` | undefined). Backend adapters forward provenance information into this field (e.g., a Loro adapter would map `LoroEventBatch.by` to `origin`). This is a **provenance dimension** of the delta algebra — it describes *who caused the change*, not just *what changed*.
-
-Most region types ignore provenance (Text nodes, lists, conditionals have no ephemeral local state affected by origin). The exception is `inputTextRegion`, where cursor management depends on whether the edit is local or remote. See **Input Text Region Architecture** above.
-
-**Design principle:** Provenance is batch-level metadata on the `Changeset`, not per-change metadata. Core's `subscribe` unwraps batches and passes `changeset.origin` as the handler's second argument: `(change: ChangeBase, origin?: string) => void`. This lets consumers opt in to origin-awareness via the second parameter. Non-backend reactive types (e.g., `LocalRef`) omit the field — consumers treat `undefined` as "unknown origin" and fall back to safe defaults.
-
-**Origin semantics:** `"local"` origin fires for both user input and local undo/redo operations. For `inputTextRegion`, this is correct — both user typing and local undo/redo want `"end"` selectMode (cursor follows the edit). Remote edits want `"preserve"` selectMode (cursor stays put relative to surrounding text).
-
-### Delta Dispatch Strategy
-
-Each region type handles its matching delta surgically:
-
-- **Text deltas** → `insertData` / `deleteData` on Text nodes (character-level)
-- **Input text deltas** → `patchInputValue` via `setRangeText` with origin-driven selectMode: `"end"` for local edits (cursor follows edit), `"preserve"` for remote edits (cursor preserves position)
-- **Sequence deltas** → `insertBefore` / `removeChild` on parent (element-level)
-- **Condition changes** → `replaceChild` for branch swapping (subscribes to all condition dependencies)
-
-When a delta type doesn't match the region type (e.g., a "replace" delta arrives at a sequence region), the region falls back to full re-render — clear all items and re-create from scratch.
-
-### Filtered List Region
-
-`filteredListRegion` is an optimized variant of `listRegion` for the filter pattern: a reactive loop whose body is a single `if` with no `else`, wrapping all DOM content. The compiler detects this pattern via `detectFilterPattern()` and annotates `LoopNode.filter` with `FilterMetadata` containing classified `itemDeps` and `externalDeps`.
-
-Instead of nesting `conditionalRegion` inside `listRegion` (which fires N subscription callbacks per external dep change), `filteredListRegion` separates three subscription layers:
-
-1. **Structural** (Layer 1): Subscribes to the list ref for insert/delete/replace. Evaluates the predicate for new items to determine initial visibility.
-2. **External** (Layer 2): One `subscribe()` per external dep (e.g., `filterText`, `veggieOnly`), owned by the parent scope. On change, calls `planFilterUpdate()` to re-evaluate the predicate for ALL items (O(n)).
-3. **Item** (Layer 3): Per-item `subscribe()` for each item dep (e.g., `recipe.name`, `recipe.vegetarian`), owned by the item scope. On change, re-evaluates the predicate for THAT item only (O(1)).
-
-The `visibility` array invariant ensures all state arrays stay index-aligned with the list ref. Items hidden by the filter have `slots[i] = null` but retain their index position.
-
-### Composability
-
-Delta regions compose naturally:
-
-```
-┌─ div (template clone) ─────────────────────────────────────┐
-│  ┌─ h1 ─────────────────────────────────────────┐          │
-│  │  textRegion(doc.title)  ← text deltas        │          │
-│  └───────────────────────────────────────────────┘          │
-│  ┌─ input ───────────────────────────────────────┐          │
-│  │  inputTextRegion(doc.search) ← text deltas    │          │
-│  │  onBeforeInput: editText(doc.search) → CRDT   │          │
-│  └───────────────────────────────────────────────┘          │
-│  ┌─ filteredListRegion(doc.recipes) ─────────────────────┐  │
-│  │  external: [filterText, veggieOnly]  ← re-filter all  │  │
-│  │  itemRefs: [recipe.name, recipe.vegetarian]  ← O(1)   │  │
-│  │  ┌─ RecipeCard ──────────────────────────────┐        │  │
-│  │  │  textRegion(recipe.name)                  │        │  │
-│  │  └───────────────────────────────────────────┘        │  │
-│  └────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────┘
-```
-
-## Example Architecture
-
-The `examples/recipe-book/` app is the reference implementation for the patterns described above. It exercises all four delta kinds, three component complexity levels, and the full SSR → hydration → sync lifecycle.
-
-### Three-Flow SSR
-
-Traditional SSR ships rendered HTML plus the full serialized state for hydration. Kyneta's approach decomposes this into three independent flows:
-
-| # | Flow | Size | Delivery | Purpose |
-|---|------|------|----------|---------|
-| 1 | **Rendered HTML** | O(view) | Inline in response body | Immediate visual content — no JS execution needed |
-| 2 | **Frontier** | O(1) | `<meta name="kyneta-version" content="N">` | Version integer: what the server already rendered |
-| 3 | **Sync bootstrap** | O(missed ops) | WebSocket `{ type: "delta", ops, version }` | Operations since the frontier — async, post-hydration |
-
-The key insight: **Flow 2 decouples Flow 1 from Flow 3.** The client reads the frontier from the `<meta>` tag, sends it to the server as the starting point, and only receives operations that occurred *after* the SSR snapshot. If nothing changed between SSR and WebSocket connection, the delta is empty.
-
-This eliminates the "double data" problem (serialized state duplicating what's already in the HTML) and makes the SSR payload proportional to the *view*, not the *state*.
-
-### Frontier-Based Sync Model
-
-The recipe-book uses the degenerate single-peer case of a version vector:
-
-```
-version(doc) → number          Monotonic integer, increments on each flush cycle
-delta(doc, fromVersion) → ops  log.slice(fromVersion).flat() → Op[]
-```
-
-Sync state is stored per-document via `WeakMap<object, SyncState>`:
-
-```typescript
-interface SyncState {
-  version: number
-  log: Op[][]   // log[i] = batch from version i → i+1
-}
-```
-
-The version counter increments on every `subscribe(doc, ...)` delivery — both local `change()` calls and remote `applyChanges()` calls. This is correct for the single-server-authority model.
-
-**Upgrade path:** The integer becomes a version vector, `delta()` computes the set difference, and the wire format (`{ type, ops, version }`) remains compatible. The same `Op` type (`{ path: PathSegment[], change: ChangeBase }`) carries operations regardless of the sync topology.
-
-### The `createApp(doc)` Factory Pattern
-
-The app factory is a pure builder function:
-
-```typescript
-function createApp(doc: RecipeBookDoc) {
-  const filterText = state("")       // local UI state
-  const veggieOnly = state(false)    // local UI state
-
-  return div({ class: "recipe-book" }, () => {
-    h1(doc.title)                    // textRegion (delta: text)
-    Toolbar({ doc, filterText, veggieOnly })
-    for (const recipe of doc.recipes) {  // listRegion (delta: sequence)
-      RecipeCard({ recipe, onRemove: ... })
-    }
-  })
-}
-```
-
-Key properties:
-
-- **Does not own the document lifecycle** — server and client both call it with their own doc instance
-- **Isomorphic** — the Kyneta compiler transforms the same source to DOM factories (client, via `target: "dom"`) or HTML accumulators (server, via `target: "html"` auto-detected from Vite's `transformOptions.ssr`)
-- **Does not know about transport** — mutations via `change()` are forwarded by the caller's sync wiring, not the app
-
-### Schema / Local-State Boundary
-
-The recipe-book demonstrates a motivated boundary between two kinds of reactive state:
-
-| Kind | Created by | Reactive? | Synced? | Example |
-|------|-----------|-----------|---------|---------|
-| **Document state** | `createDoc(schema, seed)` → `Ref<S>` | Yes (`[CHANGEFEED]`) | Yes (via `Op[]`) | Recipe data, favorites counter |
-| **Local state** | `state(initial)` → `LocalRef<T>` | Yes (`[CHANGEFEED]`) | No | Search filter, veggie-only toggle |
-
-Both participate in the `[CHANGEFEED]` protocol, so the compiler treats them identically for reactive detection — the same `valueRegion`, `conditionalRegion`, etc. are emitted regardless of the state's provenance. The distinction is purely at the sync layer: `subscribe(doc, ...)` captures document mutations as `Op[]` for WebSocket transport; `LocalRef` changes stay local.
-
-The boundary is domain-motivated: filter preferences are per-user-session (local), while recipe data is shared (document). This pattern generalizes to any app with collaborative + private state.
-
-
-Each region independently subscribes to its own reactive source. Parent disposal cascades to children via the `Scope` tree. Template cloning provides the static structure; delta regions fill in the dynamic holes.
-
-### Bun Build Plugin: WASM Passthrough
-
-The `@kyneta/cast/unplugin/bun` adapter wraps the unplugin-generated Bun plugin with a WASM passthrough handler. This is necessary because unplugin registers `build.onLoad({ filter: /.*/ })` — a catch-all that intercepts every file Bun resolves, including `.wasm` binaries. When unplugin's handler calls `Bun.file(wasmPath).text()` on a WASM file, Bun segfaults (confirmed through Bun v1.3.11).
-
-The fix registers a `.wasm` `onLoad` handler *before* unplugin's `setup()` runs:
-
-```typescript
-plugin.setup = (build) => {
-  build.onLoad({ filter: /\.wasm$/ }, async (args) => {
-    return {
-      contents: new Uint8Array(await Bun.file(args.path).arrayBuffer()),
-      loader: "file",
-    }
-  })
-  originalSetup(build)
-}
-```
-
-Bun's first-match semantics route WASM files to this handler (which copies them to the output directory via `loader: "file"`) before unplugin's catch-all can attempt to read them as text. This is always correct — the Cast compiler should never process binary files — and the fix is invisible to users: `plugins: [kyneta()]` just works, even with WASM-dependent packages like `loro-crdt` in the dependency graph.
-
-### The Todo Example
-
-The `examples/todo/` app is the minimal vertical-slice example. It exercises the full managed sync path: `Schema` → `loro.bind()` → `Exchange` → `WebsocketServerAdapter`/`WebsocketClientAdapter` → Cast view → running app.
-
-Unlike the recipe-book (which hand-rolls WebSocket sync), the todo uses `@kyneta/exchange` for all sync concerns. The `createApp(doc)` factory follows the same pattern — a pure builder function that receives a document ref and returns a Cast element — but the caller wires sync via Exchange rather than manual `subscribe`/`applyChanges`/WebSocket message passing.
-
-Key differences from recipe-book:
-- **No SSR** — `Bun.build()` produces a static bundle; the server serves files from `dist/`
-- **No Vite** — Bun handles both the build (via the Cast unplugin/bun adapter) and the HTTP/WebSocket server
-- **Exchange-managed sync** — `change(doc, fn)` automatically propagates to all peers via the changefeed → synchronizer → adapter pipeline; no manual WebSocket code
+**Tests**: 634 passed, 0 skipped across 27 files. Run with `cd experimental/cast && pnpm exec vitest run`.

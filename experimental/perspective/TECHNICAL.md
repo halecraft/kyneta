@@ -1,614 +1,492 @@
-# Perspective Technical Documentation
+# @kyneta/perspective — Technical Reference
 
-## Overview
+> **Package**: `@kyneta/perspective`
+> **Role**: Convergent Constraint Systems (CCS) — a constraint-based approach to CRDTs. Agents assert constraints; merge is pure set union; a stratified Datalog evaluator derives the shared reality. Ships with an incremental DBSP-grounded pipeline for O(|Δ|) updates.
+> **Depends on**: zero runtime dependencies
+> **Depended on by**: Standalone experimental package — not imported by any other Kyneta package. Not published to npm.
+> **Canonical symbols**: `createReality`, `solve`, `insert`, `produceRoot`, `produceMapChild`, `produceSeqChild`, `produceValue`, `retract`, `ConstraintStore`, `createStore`, `Constraint`, `Rule`, `Agent`, `createAgent`, `CnId`, `createCnId`, `PeerID`, `VersionVector`, `AuthorityConstraint`, `PipelineConfig`, `RetractionConfig`, `evaluate`, `stratify`, `unify`, `aggregate`, `Fugue`, `LWW`, `incrementalFugue`, `incrementalLWW`, `ZSet` + operators, `STUB_SIGNATURE`
+> **Key invariant(s)**:
+> 1. **Rules are data, not code.** LWW value resolution and Fugue sequence ordering are ordinary `rule` constraints asserted at reality bootstrap. They travel in the store. Any agent with `CreateRule + Retract` capabilities can replace them — the reality changes, the engine doesn't.
+> 2. **Given the same store, any two correct implementations produce identical results.** Layer 0 (kernel) algorithms are mechanical; Layer 1 (Datalog evaluator) is deterministic. Implementation languages and optimization strategies are free to vary; the resolved reality is not.
+> 3. **Merge is set union.** Two constraint stores combine via pointwise set union — no ordering, no conflict resolution at merge time. All resolution happens at solve time.
 
-Perspective implements **Convergent Constraint Systems (CCS)** — a framework for collaborative state where constraints are the source of truth and state is derived through deterministic solving. The implementation follows the [Unified CCS Engine Specification](./theory/unified-engine.md).
+A self-contained experimental implementation of the Unified CCS Engine Specification (see `theory/unified-engine.md`). Every structural or content change is modeled as a *constraint* — a signed, CnId-addressed assertion. Stores merge via set union. To compute the current state, the solver runs a Datalog program over the constraints; the default LWW + Fugue rules are themselves constraints in the store.
 
-## Engine Architecture
-
-The engine has exactly two mandatory components (§B.1):
-
-**Layer 0 Kernel** (§B.2): Mechanical algorithms — constraint storage, set union merge, CnId generation, Lamport clocks, ed25519 signatures, authority/validity computation, retraction graph and dominance, version vectors, tree skeleton construction. Given the same store, any two correct implementations produce identical results.
-
-**Datalog Evaluator** (§B.3): Stratified, bottom-up, semi-naive fixed-point evaluation with aggregation. Evaluates rule constraints from the store over facts derived from active constraints. LWW and Fugue are Datalog rules that travel in the store — they are not hardcoded algorithms.
-
-**Native Solvers** (§B.7, optional): Host-language LWW and Fugue implementations as performance optimizations. Must produce identical results to the Datalog rules they replace. Activate only when active rules match known default patterns.
-
-### Key Insight: Rules as Data
-
-LWW value resolution and Fugue sequence ordering are not part of the engine. They are `rule` constraints asserted at reality creation (bootstrap) that travel in the store like any other constraint. An agent with `CreateRule` + `Retract` capabilities can retract the default rules and assert a custom resolution strategy — the reality changes, but no agent updates its code.
+Standalone — does not integrate with `@kyneta/schema`, `@kyneta/exchange`, or the rest of the framework. Lives in the monorepo for shared tooling and review; ships as a private package.
 
 ---
 
-## Solver Pipeline (§7.2)
+## Questions this document answers
 
-The pipeline is a composition of pure functions, each in its own module. `pipeline.ts` is the composition root — it contains no transformation logic itself.
+- What is a constraint, and how does it differ from a CRDT operation? → [Constraints as the source of truth](#constraints-as-the-source-of-truth)
+- Why is set-union merge sufficient? → [Set-union merge](#set-union-merge)
+- What is the two-layer engine and why that split? → [Two layers — kernel and Datalog](#two-layers--kernel-and-datalog)
+- What does the solver pipeline look like? → [The solver pipeline](#the-solver-pipeline)
+- Why are rules in the store, not in the code? → [Rules as data](#rules-as-data)
+- What does the native-solver fast path do? → [Native solvers — the §B.7 fast path](#native-solvers--the-b7-fast-path)
+- How does the incremental pipeline work? → [The incremental pipeline](#the-incremental-pipeline)
+- What does a CnId identify? → [CnId — content-addressed identity](#cnid--content-addressed-identity)
 
-```
-Constraint Store (S), Version Vector (V)
-    │
-    ▼
-S_V = filterByVersion(S, V)          // version-vector.ts — filter to causal moment V
-    │
-    ▼
-Valid(S_V) = computeValid(S_V)        // validity.ts — signature + capability check
-    │
-    ├──→ AllStructure(Valid(S_V))
-    │         │
-    │         ▼
-    │    buildStructureIndex()         // structure-index.ts — slot identity, parent→child
-    │
-    └──→ Active(Valid(S_V))
-              │
-              ├──→ projectToFacts()    // projection.ts — active constraints → Datalog facts
-              │         │
-              │         ▼
-              │    evaluate(rules, facts)  // datalog/evaluate.ts — primary resolution
-              │         │
-              │         ▼
-              │    extractResolution()     // resolve.ts — Datalog facts → typed winners/ordering
-              │
-              └──→ [native fast path]     // §B.7: if rules match defaults, bypass Datalog
-                        │
-                        ▼
-                   buildSkeleton()         // skeleton.ts — reality tree from ResolutionResult
-                        │
-                        ▼
-                     Reality
-```
+## Vocabulary
 
-**Datalog evaluation is the primary resolution path** (§B.1). Native solvers are an optional §B.7 fast path that activates only when the active rules structurally match known default patterns. When rules are retracted, replaced, or augmented with custom Layer 2+ rules, the pipeline falls back to Datalog evaluation automatically.
-
-### Pipeline Design Principles
-
-1. **Structure index from Valid, not Active.** The spec's pipeline forks at `Valid(S_V)`: one branch takes all valid structure constraints (immune to retraction), the other takes active constraints for value resolution. The code matches this two-path design.
-
-2. **The skeleton builder is resolution-agnostic.** It receives a `ResolutionResult` (from either Datalog or native solvers) and builds the tree without knowing which path produced it.
-
-3. **`resolve.ts` is the symmetric counterpart of `projection.ts`.** Projection converts kernel types → Datalog facts. Resolution converts Datalog facts → kernel types. The two modules are the boundary between the kernel and Datalog worlds.
+| Term | Means | Not to be confused with |
+|------|-------|-------------------------|
+| CCS | Convergent Constraint Systems — the framework. Constraints are the source of truth; state is derived by solving. | CRDT in the operational-transform sense; strict LWW |
+| Constraint | A signed, CnId-addressed assertion. Six kernel-level types: `structure`, `value`, `retract`, `authority`, `revoke`, `rule`. Merge is set union. | A CRDT operation in the usual sense — a constraint is declarative, not operational |
+| `ConstraintStore` | `Set<Constraint>` plus indexes. The data. | A database — no queries beyond the solver |
+| CnId | Content-addressed identity: hash of the constraint's immutable core. Stable across peers; never reassigned. | A UUID, a Lamport timestamp |
+| Reality | The derived output of `solve(store, config)` — a materialised tree with resolved values at each node. | The store — the store is the truth; the reality is a view |
+| Agent | A signing identity. Every constraint is signed by an agent; the agent's capabilities gate which constraint types it may assert. | A peer, a user — agents are the cryptographic principal; peers are network identity |
+| Layer 0 Kernel | Mechanical algorithms: storage, CnId computation, Lamport clocks, signatures, authority, retraction, version vectors, tree skeleton. Pure, deterministic. | A "kernel" in the OS sense |
+| Layer 1 Datalog Evaluator | Stratified, bottom-up, semi-naïve fixed-point evaluation with aggregation. Evaluates `rule` constraints from the store over facts derived from active constraints. | Prolog, SQL — Datalog is strictly less expressive and always terminating |
+| Layer 2+ Rules | Application-specific rules (app-authored). Extend the default LWW + Fugue rules. | Default rules — those are the bootstrap set |
+| §B.7 Native Solvers | Host-language LWW and Fugue implementations. Activate only when active rules match known default patterns; must produce identical results to the Datalog rules they replace. | A replacement for the Datalog evaluator — they are a fast path |
+| `Rule` | A Datalog rule: head + body (positive and negative atoms, comparison predicates, aggregations). Stored as a `rule` constraint. | A `Policy` in `@kyneta/exchange` |
+| Fact | A ground atom — no variables. Produced by projecting constraints; consumed by the evaluator. | A theorem; a premise |
+| Active constraints | Constraints that are valid (well-formed, signed, within-capability) and not dominated by a retraction. | Valid constraints — "valid" is necessary; "active" is valid + not-retracted |
+| Version vector | Per-peer Lamport clock map; defines the causal moment at which the solver should evaluate. | A state vector in Yjs terms — similar role, different implementation |
+| Projection | `active constraints → Datalog facts`. Pure. | A database projection — similar name, different operation |
+| Resolution | `Datalog-evaluated facts → typed winners + ordering`. Pure. | Resolution in the dispute sense |
+| Skeleton | Tree structure derived from *all* valid structure constraints (immune to retraction). The permanent backbone of the reality. | The reality — the reality attaches values; the skeleton is just the tree |
+| Authority / capability | `AuthorityConstraint` grants an agent a named capability (e.g., `CreateRule`, `Retract`). Gates what the agent may assert. | A scope, a policy — capabilities are the primitive |
+| Retraction | A `retract` constraint targeting another constraint's CnId. Dominates the target; the target becomes inactive. | A CRDT delete — retractions can themselves be retracted, enabling undo |
+| ℤ-set | `Map<Key, number>` with no zero entries. Abelian group under pointwise addition. Powers the incremental pipeline. | A multiset |
+| Stratification | Partitioning a Datalog program into layers s.t. negation is only across strata; enables semi-naïve evaluation. | Rule prioritisation |
+| Semi-naïve evaluation | Fixed-point evaluation using only newly-derived facts at each step. O(|output|) instead of O(|output|²). | Magic-set transformation |
 
 ---
 
-## Constraint Types (§2)
+## Architecture
 
-Six kernel-level constraint types, represented as a TypeScript discriminated union on `type`:
+**Thesis**: give agents one primitive (assert a constraint), one merge rule (set union), and one definition of truth (solve the store). Everything else — value resolution, sequence ordering, capabilities, retractions — is expressed *inside* the primitive, not around it.
 
-| Type | Payload | Retractable? | Purpose |
-|------|---------|-------------|---------|
-| `structure` | `Root { containerId, policy }` / `Map { parent, key }` / `Seq { parent, originLeft, originRight }` | Never | Permanent node in the reality tree |
-| `value` | `{ target: CnId, content: Value }` | Yes | Content at a node |
-| `retract` | `{ target: CnId }` | Yes (enables undo) | Asserts a constraint should be dominated |
-| `rule` | `{ layer, head: Atom, body: BodyElement[] }` | Yes | Datalog rule for solver evaluation |
-| `authority` | `{ targetPeer, action, capability }` | Via revocation | Capability grant/revoke |
-| `bookmark` | `{ name, version: VersionVector }` | Yes | Named point in causal time |
+Four sub-systems:
+
+| Sub-system | Source | Role |
+|------------|--------|------|
+| Kernel (Layer 0) | `src/kernel/` | Storage, CnId, signatures, authority, validity, retraction, version vectors, skeleton, pipeline composition. Mechanical. |
+| Datalog Evaluator (Layer 1) | `src/datalog/` | Stratified bottom-up fixed-point evaluation with aggregation and negation. Evaluates `rule` constraints. |
+| Native Solvers (§B.7) | `src/solver/` | Host-language LWW and Fugue. Optional fast paths; activate only on default rules. |
+| Base Algebra | `src/base/` | `ZSet`, `Result` helpers, shared types. Powers the incremental pipeline. |
+
+Plus a top-level bootstrap (`src/bootstrap.ts`) that creates a new reality with the default constraint set — admin grant + default LWW + default Fugue rules + compaction/retraction config.
+
+### What this package is NOT
+
+- **Not a CRDT library.** It implements a *framework* for building CRDTs. Individual CRDTs (LWW-register, Fugue sequence) are expressed as sets of Datalog rules. The engine doesn't know LWW from Fugue except as rule patterns.
+- **Not integrated with the rest of Kyneta.** Separate dependency graph, separate experimental status. Designed to be evaluated in isolation.
+- **Not a database.** No query language beyond the solver. No indexes for arbitrary lookup.
+- **Not production-ready.** Marked experimental in `package.json`; private (no npm publish). The Unified CCS Engine Specification is the authoritative document — this is its reference implementation.
+- **Not performant at scale without the §B.7 fast paths.** Pure Datalog evaluation of LWW over 10⁴ values is O(n²) without the native solver shortcut.
+
+---
+
+## Constraints as the source of truth
+
+Source: `src/kernel/types.ts`, `src/kernel/store.ts`.
+
+A constraint is a signed assertion. The kernel defines six types (discriminated union on `type`):
+
+| Type | Payload shape | Semantics |
+|------|---------------|-----------|
+| `structure` | `Root { containerId, policy }` / `Map { parent, key }` / `Seq { parent, originLeft, originRight }` | Permanent node in the reality tree. Never retractable. |
+| `value` | `{ target: CnId, content: Value }` | Content at a node. Retractable. |
+| `retract` | `{ target: CnId }` | Dominates the target constraint; enables undo by retracting the retraction. |
+| `authority` | `{ grantee: PeerID, capability: string, scope: Scope }` | Grants a capability. Retractable only by a revocation. |
+| `revoke` | `{ target: CnId }` | Terminal revocation of an authority grant. |
+| `rule` | `Rule` | A Datalog rule. Drives resolution. Retractable. |
 
 Every constraint carries:
-- `id: CnId` — globally unique `(peer, counter)` pair
-- `lamport: number` — Lamport timestamp for causal ordering
-- `refs: CnId[]` — causal predecessors (frontier-compressed)
-- `sig: Uint8Array` — ed25519 signature (stub: always valid)
+- A **CnId** — content-addressed identity, computed from the immutable core.
+- A **signature** — ed25519 (or `STUB_SIGNATURE` in tests) over the payload.
+- A **Lamport timestamp** — the asserting peer's logical clock value.
+- An **agent ID** (peer + keypair pointer) — the signer.
 
-### Value Domain (§3)
+The store is a `Set<Constraint>` plus derived indexes (by-target, by-type, by-peer).
 
-```typescript
-type Value =
-  | null          // absence (map deletion via LWW)
-  | boolean
-  | number        // IEEE 754 f64
-  | bigint        // arbitrary-precision integer (distinct from number)
-  | string
-  | Uint8Array    // raw binary (logically immutable)
-  | { ref: CnId } // reference to a structure constraint
+### Set-union merge
+
+Source: `src/kernel/store.ts` → `merge` / `insert`.
+
+Two stores merge by combining their constraint sets. There is no conflict resolution at merge time — two different constraints with the same target simply both exist in the merged store. Resolution happens later, at solve time, when the Datalog evaluator decides which constraints "win."
+
+This is the key architectural move: merge is **pure** (commutative, associative, idempotent) because it only combines *evidence*. Resolution is a pure function of the combined evidence. Two peers who have exchanged all constraints compute the same reality regardless of merge order.
+
+### What a constraint is NOT
+
+- **Not an operation.** Operational CRDTs specify transformations; constraints specify facts. A `value` constraint says "X is the value at CnId Y" — not "set the value at CnId Y to X."
+- **Not automatically ordered.** A store is an unordered set. Ordering (causality, Lamport precedence, rule stratification) is applied by the solver.
+- **Not free of cost.** Every constraint is permanent. Retractions reduce the *active* set but don't delete from the store. Compaction (configured via `RetractionConfig`) allows bounded garbage collection.
+
+---
+
+## CnId — content-addressed identity
+
+Source: `src/kernel/cnid.ts`.
+
+A CnId is a hash over a constraint's immutable core — its type, payload, peer, Lamport value. Two agents asserting constraints with identical semantics produce identical CnIds only if their Lamport+peer fields match — which they won't under normal sync. In practice every distinct assertion has a distinct CnId.
+
+Three properties follow:
+
+1. **Stable across peers.** A constraint's CnId is the same in every store that holds it. Cross-store references (retraction targets, value targets, rule references) work seamlessly.
+2. **Never reassigned.** The CnId is the constraint's identity. Two constraints with the same CnId are the same constraint.
+3. **Cheap to compute.** FNV-1a-128 over a deterministic byte serialisation; no cryptographic-hash cost outside signing.
+
+### What a CnId is NOT
+
+- **Not a UUID.** UUIDs are random; CnIds are content-addressed.
+- **Not a Lamport timestamp.** Lamport timestamps order events within a peer; CnIds identify constraints globally.
+- **Not collision-proof against adversaries.** FNV-1a is not cryptographic. Adversarial collisions could in principle be constructed; the cryptographic integrity is carried by the signature.
+
+---
+
+## Two layers — kernel and Datalog
+
+The Unified CCS Engine Specification splits engine responsibilities:
+
+### Layer 0 Kernel
+
+Source: `src/kernel/*.ts`.
+
+Mechanical algorithms that any correct implementation must produce identical outputs for, given the same store:
+
+| Module | Role |
+|--------|------|
+| `store.ts` | `ConstraintStore`, `createStore`, `insert`, `merge`. The data structure. |
+| `cnid.ts` | `createCnId`. Content addressing. |
+| `lamport.ts` | Per-peer logical clocks. |
+| `signature.ts` | ed25519 signing + verification; `STUB_SIGNATURE` for tests. |
+| `authority.ts` | Capability resolution. Which constraints is an agent allowed to assert at a given moment? |
+| `validity.ts` | Signature + capability check. Produces the `Valid(S)` subset. |
+| `retraction.ts` | Retraction graph + dominance. Produces the `Active(Valid(S))` subset. |
+| `version-vector.ts` | Per-peer Lamport-clock maps; defines the causal moment. |
+| `structure-index.ts` | Slot identity + parent→child relationships from structure constraints. |
+| `skeleton.ts` | Builds the reality tree from valid structure + a `ResolutionResult`. |
+| `projection.ts` | Active constraints → Datalog facts. The kernel→Datalog boundary. |
+| `resolve.ts` | Datalog-evaluated facts → typed winners/ordering. The Datalog→kernel boundary. |
+| `pipeline.ts` | Composition root. Composes all of the above into `solve(store, config)`. |
+| `incremental/` | Incremental variants of the kernel algorithms. Powers O(|Δ|) updates. |
+
+Layer 0 is **pure and deterministic**. Given the same store + version vector + rule set, every call produces the same output, in any implementation, in any language.
+
+### Layer 1 Datalog Evaluator
+
+Source: `src/datalog/*.ts`.
+
+Stratified, bottom-up, semi-naïve fixed-point evaluation with aggregation and negation.
+
+| Module | Role |
+|--------|------|
+| `types.ts` | `Rule`, `Atom`, `Term`, `PositiveAtom`, `Negation`, `Aggregation` + constructors (`rule`, `atom`, `eq`, `neq`, `lt`, `gt`, `positiveAtom`, `negation`, `varTerm`, `constTerm`, `_`). |
+| `stratify.ts` | Partitions rules into strata where negation is only across strata. |
+| `unify.ts` | Unification of terms against ground facts. |
+| `aggregate.ts` | `count`, `min`, `max`, `sum`, `collect` aggregations. |
+| `evaluator.ts` | Semi-naïve fixed-point loop. At each step, derives facts using only newly-added facts from the previous step. |
+| `evaluate.ts` | Top-level `evaluate(rules, facts)` entry point. |
+
+The evaluator is data-driven. The rules it runs come from the store (`rule` constraints). Changing the rules changes the reality.
+
+### Why the split
+
+Because rules are data, the engine must be able to run arbitrary Datalog. The kernel can't be parameterised by rules — the rules live in the store, not in compile-time configuration. So the engine has a *fixed* Datalog evaluator (Layer 1) that executes *variable* rules (from the store).
+
+Conversely, the Datalog evaluator doesn't know about constraints, CnIds, signatures, or capabilities. Its input is facts; its output is derived facts. The kernel owns that translation.
+
+### What the layers are NOT
+
+- **Not coupled.** The kernel defines `projection` and `resolve` as pure functions. The Datalog evaluator has no knowledge of kernel types.
+- **Not replaceable independently.** Both layers together define the semantics. A different kernel or a different evaluator produces a different reality.
+- **Not complete without §B.7 fast paths for performance.** Pure Datalog LWW over large stores is O(n²); the native solvers bring it to O(n log n).
+
+---
+
+## The solver pipeline
+
+Source: `src/kernel/pipeline.ts`.
+
+```
+ConstraintStore (S) + VersionVector (V)
+    │
+    ├─ filterByVersion(S, V)                      ── version-vector.ts
+    │    └─ causal-moment cut
+    ▼
+  S_V
+    │
+    ├─ computeValid(S_V)                          ── validity.ts
+    │    └─ signature + capability check
+    ▼
+  Valid(S_V)
+    │
+    ├─ AllStructure(Valid(S_V))                   (structure survives retraction)
+    │    │
+    │    └─ buildStructureIndex                   ── structure-index.ts
+    │
+    └─ Active(Valid(S_V))                         (retraction + dominance)
+         │
+         ├─ projectToFacts                        ── projection.ts
+         │    └─ active constraints → Datalog facts
+         │
+         ├─ EITHER evaluate(rules, facts)         ── datalog/evaluate.ts
+         │         └─ Datalog fixed-point
+         │
+         │         OR native fast path            ── §B.7, when rules match
+         │
+         └─ extractResolution                     ── resolve.ts
+              └─ Datalog facts → typed winners
+                  │
+                  ▼
+              buildSkeleton(structureIndex, res)  ── skeleton.ts
+                  │
+                  ▼
+                Reality
 ```
 
-`number` and `bigint` are distinct types that never unify: `int(3n) ≠ float(3.0)`. This prevents precision-loss bugs across language boundaries (JavaScript f64 vs Rust i64).
+### Why structure goes directly from `Valid`
+
+Structure constraints are **permanent** — they cannot be retracted. A `structure` constraint defining the existence of a map entry or a sequence position stands forever (given its signature is valid and the asserting agent had capability).
+
+If structure went through `Active` (which applies retraction), a retracted subtree would disappear from the reality tree — but values *within* that subtree might still be valid elsewhere. Separating the paths matches the specification's intent: "structure is the skeleton; values are the flesh."
+
+### Why `resolve.ts` is the symmetric counterpart of `projection.ts`
+
+`projection.ts` converts kernel types → Datalog facts. `resolve.ts` converts Datalog facts → kernel types. Together they form the boundary between the two worlds. Everything else (Datalog evaluation, skeleton building) operates in one world.
+
+### What the pipeline is NOT
+
+- **Not serial top-to-bottom at every solve.** The incremental variant (below) reuses previous-solve state and applies deltas; only `solve` proper walks the pipeline from the start.
+- **Not mutable.** Every stage returns new data. The original store is never modified.
+- **Not interleaved with I/O.** The pipeline is pure. Sync / persistence happens outside.
 
 ---
 
-## Slot Identity (§8)
+## Rules as data
 
-Slot identity determines how constraints map to positions in the reality tree. It is Layer 0 kernel logic — not expressible as a retractable rule.
+Source: `src/bootstrap.ts`.
 
-| Policy | Slot Identity | Why |
-|--------|--------------|-----|
-| **Map child** | `map:<parentCnIdKey>:<key>` | Context-free identity. Two peers independently creating `structure(map, parent=P, key=K)` get different CnIds but represent the **same logical slot**. |
-| **Seq child** | `seq:<ownCnIdKey>` | Causally-bound identity. Each element's CnId is unique — no two elements compete for the same slot. |
-| **Root** | `root:<containerId>` | Named top-level container. |
+At reality creation, `createReality({ creator })` returns `{ store, agent, config }`. The initial store contains:
 
-The **Map multi-structure case** is the key subtlety. When Alice creates `structure(map, parent=root@0, key="title")` → `alice@1` and Bob independently creates the same → `bob@1`, their value constraints compete for the same slot via LWW. The `structure-index.ts` module groups them by `(parent, key)`, and `projection.ts` emits both values with the same `Slot` column in the `active_value` relation.
+1. An `authority` constraint granting the creator admin capability.
+2. Three LWW `rule` constraints (see below).
+3. Eight Fugue `rule` constraints.
+4. Compaction policy + retraction-depth configuration.
 
----
-
-## Projection: Constraints → Datalog Facts
-
-`projection.ts` performs a join between active value constraints and the structure index, emitting ground facts with pre-computed slot identity:
-
-| Relation | Columns | Purpose |
-|----------|---------|---------|
-| `active_value(CnId, Slot, Content, Lamport, Peer)` | 5 | LWW rules group by Slot, pick winner by (Lamport, Peer) |
-| `active_structure_seq(CnId, Parent, OriginLeft, OriginRight)` | 4 | Fugue rules build tree structure |
-| `constraint_peer(CnId, Peer)` | 2 | Peer tiebreak in Fugue sibling ordering |
-
-Values targeting unknown structures (orphaned) are excluded from projection but tracked in `ProjectionResult.orphanedValues` for diagnostics.
-
----
-
-## Default Solver Rules (§B.4)
-
-### LWW (3 rules)
+The LWW rules implement last-writer-wins value resolution. They are ordinary Datalog:
 
 ```
 superseded(CnId, Slot) :-
-  active_value(CnId, Slot, _, L1, _),
-  active_value(CnId2, Slot, _, L2, _),
-  CnId ≠ CnId2, L2 > L1.
+  value(CnId, Slot, _, _, _),
+  value(Other, Slot, _, _, _),
+  lamport(Other, LO),
+  lamport(CnId, LC),
+  (LO > LC; LO = LC, peer(Other) > peer(CnId)).
 
-superseded(CnId, Slot) :-
-  active_value(CnId, Slot, _, L1, P1),
-  active_value(CnId2, Slot, _, L2, P2),
-  CnId ≠ CnId2, L2 == L1, P2 > P1.
-
-winner(Slot, CnId, Value) :-
-  active_value(CnId, Slot, Value, _, _),
-  not superseded(CnId, Slot).
+winner(CnId, Slot) :-
+  value(CnId, Slot, _, _, _),
+  negation superseded(CnId, Slot).
 ```
 
-Higher lamport wins. Peer ID breaks ties (lexicographically greater wins). The `winner` relation picks the sole survivor per slot via stratified negation over `superseded`.
+The Fugue rules implement Yjs-style fractional indexing for ordered sequences.
 
-### Fugue (8 rules, 3 predicates)
+An agent with `CreateRule + Retract` capabilities can:
+1. Retract the default LWW rules.
+2. Assert custom rules implementing, say, first-writer-wins.
 
-| Predicate | Rules | Purpose |
-|-----------|-------|---------|
-| `fugue_child` | 1 | Derives tree structure from `active_structure_seq` + `constraint_peer` |
-| `fugue_descendant` | 2 (base + transitive) | Transitive closure of the originLeft tree |
-| `fugue_before` | 5 | Parent-before-child, sibling-by-peer, sibling-by-CnId-on-tie, subtree propagation, transitivity |
+The engine doesn't change. The reality does.
 
-The critical rule is **subtree propagation**: "if A is a child of X, and X is before B, then A is before B" — but only when B is NOT a descendant of X. Without the `not fugue_descendant(P, B, X)` guard, parent-child ordering combined with propagation creates spurious orderings among siblings. Stratified negation handles this cleanly: `fugue_descendant` depends only on `fugue_child` (a base relation) — no cyclic dependency with `fugue_before`.
+### What "rules as data" is NOT
 
-### Canonical Source
-
-Both rule sets are defined in `src/bootstrap.ts` and exported as `buildDefaultLWWRules()`, `buildDefaultFugueRules()`, and `buildDefaultRules()`. These are the single source of truth — test files import from bootstrap rather than defining their own copies.
+- **Not unrestricted eval.** Rules must pass Datalog's stratification check — no arbitrary recursion with negation. Malformed rules are rejected at validity time.
+- **Not a scripting language.** Rules are pure Datalog — no side effects, no I/O.
+- **Not free.** Every rule is evaluated at every solve. Complex rules cost solve time.
 
 ---
 
-## Native Solvers (§B.7)
+## Native solvers — the §B.7 fast path
 
-Native TypeScript implementations that bypass Datalog when the active rules match known default patterns.
+Source: `src/solver/`.
 
-**Detection**: `isDefaultRulesOnly()` in `kernel/rule-detection.ts` performs structural matching on rule head/body shapes (not CnIds or lamport values). It checks for `superseded`/`winner` heads reading from `active_value` (LWW) and `fugue_child`/`fugue_before` heads reading from `active_structure_seq` (Fugue). When both patterns match and no Layer 2+ rules exist, native solvers activate. `selectResolutionStrategy()` encapsulates the full decision tree as a pure function.
+The Datalog evaluator is correct but slow for the common cases: plain LWW over `n` values is O(n²) because every value pairs against every other to compute `superseded`. Fugue over `n` ordered inserts is similarly quadratic.
 
-**Batch LWW** (`solver/lww.ts`): Groups value entries by slot, picks winner by `(lamport DESC, peer DESC)`. O(n) in active value count.
+The specification's §B.7 permits *native solvers* — host-language implementations of LWW / Fugue that produce identical outputs to the Datalog rules they replace. A native solver activates only when:
 
-**Batch Fugue** (`solver/fugue.ts`): Tree-based sequence ordering. Builds a tree where each element is a child of its `originLeft`, sorts siblings by Fugue interleaving rules (same `originRight` → lower peer first), depth-first traversal produces total order. O(n log n).
+1. The active rule set structurally matches a known default pattern.
+2. `PipelineConfig.enableNativeSolvers` is true.
 
-**Incremental LWW** (`solver/incremental-lww.ts`): Per-slot winner tracking. Maintains `Map<slotId, { entries, winner }>`. On insertion, O(1) comparison against current winner. On retraction, O(entries) recomputation for the affected slot only. Emits `ZSet<ResolvedWinner>` deltas.
-
-**Incremental Fugue** (`solver/incremental-fugue.ts`): Per-parent tree maintenance. Correlates `active_structure_seq` and `constraint_peer` facts (may arrive in either order), then recomputes Fugue ordering for the affected parent only using `orderFugueNodes`. Emits `ZSet<FugueBeforePair>` deltas.
-
-**Equivalence**: Batch native solvers are verified against the Datalog rules in `tests/solver/lww-equivalence.test.ts` and `tests/solver/fugue-equivalence.test.ts` (23 Fugue test cases). Incremental native solvers are verified against batch natives via permutation and differential tests.
-
----
-
-## Authority & Validity (§5)
-
-### Authority Model
-
-- The reality creator holds implicit Admin capability.
-- Capabilities propagate via `authority` constraints (grant/revoke).
-- Concurrent grant and revoke → revoke wins (conservative).
-- Capability attenuation: you can only grant capabilities you hold.
-- Authority constraints are immune to retraction (revocation is the dedicated mechanism).
-
-### Validity Filter
-
-`computeValid()` checks every constraint:
-1. **Signature** — verifies against `id.peer` (stub: always valid for now)
-2. **Capability** — asserting peer must hold the required capability at the constraint's causal moment
-
-Invalid constraints remain in the store for auditability but are excluded from solving. This means multi-agent workflows **must** include authority grants before the second agent creates constraints, or those constraints will be silently filtered.
-
----
-
-## Retraction & Dominance (§6)
-
-Retraction is an assertion, not removal. A `retract` constraint targets another constraint's CnId and asserts it should be dominated.
-
-### Rules
-
-- **Target must be in refs** (causal safety) — interpreted semantically: a ref `(peer, N)` means "I've observed all of peer's constraints 0..N." This is compatible with the Agent's frontier-compressed refs.
-- **Structure constraints are immune** — the skeleton only grows.
-- **Authority constraints are immune** — revocation is the dedicated mechanism.
-- **Depth limit** (default 2): retract a value (depth 1), retract-the-retract to undo (depth 2).
-
-### Dominance Computation
-
-Memoized reverse topological traversal:
-- No retractors → active
-- Any active retractor → dominated
-- All retractors themselves dominated → active (un-retraction / undo)
-
----
-
-## Bootstrap (§B.8)
-
-`createReality()` in `bootstrap.ts` emits the initial constraint set for a new reality:
-
-1. **Admin grant** — `authority` constraint granting Admin to the creator (counter 0)
-2. **LWW rules** — 3 `rule` constraints at Layer 1 (counters 1–3)
-3. **Fugue rules** — 8 `rule` constraints at Layer 1 (counters 4–11)
-
-Total: 12 bootstrap constraints, all from the creator peer.
-
-Bootstrap constructs Layer 1 rule constraints **directly** (not through `Agent.produceRule()`, which enforces `layer >= 2` for user-facing rules). This is architecturally correct: Layers 0–1 are kernel-reserved (§14), and bootstrap is the kernel itself setting up initial state.
-
-The returned `BootstrapResult` includes:
-- A pre-populated `ConstraintStore`
-- A ready-to-use `Agent` (counter and lamport advanced past bootstrap constraints)
-- A `PipelineConfig` with the creator and default retraction depth
-
----
-
-## Reality Tree (§7.3)
-
-The skeleton builder produces a `Reality` with a synthetic root node (`__reality__@0`, policy `map`) whose children are the top-level containers keyed by `containerId`.
-
-```typescript
-interface RealityNode {
-  id: CnId;               // representative structure constraint's CnId
-  policy: Policy;          // 'map' | 'seq'
-  children: Map<string, RealityNode>;  // key = map key or seq index ("0", "1", ...)
-  value: Value | undefined;            // LWW-resolved content
+```
+if (rulesMatchDefaultLWW(activeRules) && config.enableNativeSolvers) {
+  return nativeLWW(valueFacts)             // O(n log n)
+} else {
+  return evaluate(activeRules, valueFacts) // O(n²) but general
 }
 ```
 
-- **Map children**: Keyed by the user-provided map key string. Null-valued keys with no sub-children are excluded (null = deleted).
-- **Seq children**: Keyed by positional index ("0", "1", "2"). Elements without an active value (tombstones from value retraction) are excluded from visible children but remain in the ordering tree.
+When custom rules are present, the pipeline falls back to Datalog automatically. No rule changes; no code changes.
+
+| Module | Role |
+|--------|------|
+| `src/solver/lww.ts` | Batch LWW — full resolve. |
+| `src/solver/incremental-lww.ts` | Incremental LWW — `O(|Δ|)` update given previous state + delta. |
+| `src/solver/fugue.ts` | Batch Fugue — full sequence resolve. |
+| `src/solver/incremental-fugue.ts` | Incremental Fugue — `O(|Δ|)` update. |
+
+### What native solvers are NOT
+
+- **Not a replacement.** The Datalog evaluator is the primary path; native solvers are fast paths under constraint.
+- **Not silently divergent.** Every native solver is tested against its Datalog equivalent over randomized inputs. If they diverge, the test fails.
+- **Not user-extensible via code.** Adding new fast paths means adding new Rust/TypeScript — not new store constraints. User-added rules without matching native solvers run in Datalog.
 
 ---
 
-## Datalog Evaluator
+## The incremental pipeline
 
-### Modules
+Source: `src/kernel/incremental/`, `src/base/zset.ts`.
 
-~2200 lines of TypeScript with zero external dependencies across 6 modules:
+For agents that re-solve on every change, the batch pipeline is wasteful: a single inserted constraint shouldn't trigger a full re-evaluation. The incremental pipeline maintains previous-solve state and applies deltas in O(|Δ|) time.
 
-| Module | Purpose |
-|--------|---------|
-| `types.ts` | Atoms, terms (const, var, wildcard), rules, facts, weighted `Relation`, `Database` |
-| `unify.ts` | Variable binding, substitution (`{ bindings, weight }`), term matching, guard evaluation |
-| `stratify.ts` | Dependency graph, SCC detection, stratum ordering |
-| `evaluate.ts` | Per-rule evaluation core: `evaluateRule`, `evaluateRuleDelta` (asymmetric join), `evaluateDifferentialNegation`, `groundHead`, body element dispatch; `evaluateNaive` test utility |
-| `evaluator.ts` | Unified evaluator: `createEvaluator`, `evaluateStratumFromDelta` (unified semi-naive loop), dirty-map infrastructure, batch wrappers (`evaluate`, `evaluatePositive`) |
-| `aggregate.ts` | min, max, count, sum over groups |
+### ℤ-set algebra
 
-### Dual-Weight Relations (Plan 006.2)
+`ZSet<K>` is `Map<K, number>` with no zero entries — the standard DBSP ℤ-set. Operations:
 
-Each `Relation` entry stores two weights:
+| Operation | Meaning |
+|-----------|---------|
+| `zsetAdd(a, b)` | Pointwise sum. |
+| `zsetNegate(a)` | Pointwise negate. |
+| `zsetFilter(a, pred)` | Filter by key. |
+| `zsetMap(a, fn)` | Rekey. |
+| `zsetFromEntries`, `zsetElements`, `zsetGet`, `zsetHas`, `zsetIsEmpty`, `zsetKeys`, `zsetForEach` | Iteration + accessors. |
 
-- **`weight`** — true Z-set multiplicity. The count of independent derivation paths minus retraction paths. May be >1 (multiple paths), 0 (all paths retracted), or transiently <0 during iteration (clamped by `applyDistinct`).
-- **`clampedWeight`** — post-`distinct` presence signal: `weight > 0 ? 1 : 0`. Updated eagerly by `addWeighted` for mid-iteration visibility; authoritatively by `applyDistinct` for the negative-floor clamp.
+### Incremental variants
 
-`applyDistinct` is DBSP's `distinct(w)(x) = max(0, w(x))` — it floors negatives to 0 but does NOT clamp positives to 1. Weights >1 represent genuine independent derivation paths and must be preserved for correct retraction accounting. A fact with weight 2 (two derivation paths) that receives a −1 delta drops to weight 1 — no zero-crossing, no retraction propagated. Only when weight reaches 0 does `clampedWeight` change and a retraction enter the delta.
+Each kernel algorithm has an incremental counterpart in `src/kernel/incremental/`:
 
-The public API reads `clampedWeight`: `tuples()`, `has()`, `size`, `weightedTuples()`, `isEmpty()` all filter on `clampedWeight > 0`. `weightedTuples()` returns `clampedWeight` (always 1) as the weight value — preventing weight explosion in recursive joins. `allWeightedTuples()` returns the true `weight` including negatives (for delta databases).
+| Module | Incremental of |
+|--------|---------------|
+| `incremental/validity.ts` | `validity.ts` — deltas in the store produce deltas in `Valid(S)`. |
+| `incremental/retraction.ts` | `retraction.ts` — retraction-graph updates. |
+| `incremental/projection.ts` | `projection.ts` — fact deltas from constraint deltas. |
+| `incremental/evaluate.ts` | `datalog/evaluate.ts` — semi-naïve variant over deltas. |
+| `incremental/resolve.ts` | `resolve.ts` — delta-aware resolution extraction. |
 
-### Weighted Substitutions (Plan 006.1)
+Composing them: `updateReality(prevState, constraintDelta) → (nextState, realityDelta)`. Application code maintains `prevState` and feeds new constraints in.
 
-`Substitution` is `{ bindings: ReadonlyMap<string, Value>, weight: number }`. Weight flows through evaluation: multiply on positive atom join (`sub.weight × tuple.weight`), preserve on negation/guard (boolean filter), sign-invert on differential negation (`sub.weight × −deltaWeight`), reset to 1 on aggregation (group-by boundary), sum duplicates in `groundHead` (Z-set addition). In batch mode all weights are 1, so the weight infrastructure is invisible.
+### What the incremental pipeline is NOT
 
-### Unified Evaluator (Plan 006.1, extended by Plan 006.2)
-
-`datalog/evaluator.ts` (~800 LOC) provides a single algorithm for all stratum types. The old four duplicated semi-naive loops, `wipeAndRecompute`, `evaluatePositiveStratum`, and `evaluateNegationStratum` are all deleted.
-
-**Functional core — `evaluateStratumFromDelta(rules, db, inputDelta)`:** A unified semi-naive loop that handles positive strata, negation strata, insertions, and retractions uniformly. No `hasNegOrAgg` or `inputHasRetractions` parameters — the same algorithm runs everywhere. The sole exception is aggregation strata, which delegate to `recomputeAggregationStratum` (wipe-and-recompute, scoped limitation).
-
-**Asymmetric join (DBSP incremental join):** For a self-join `A ⋈ B` where A = B = P, standard semi-naive computes `ΔA ⋈ P_new + P_new ⋈ ΔB`, double-counting pairs where both elements are in ΔP. The correct formulation is `ΔA ⋈ P_new + P_old ⋈ ΔB`. Implementation: `step()` applies the input delta to `db` (= P_new), then `evaluateStratumFromDelta` constructs P_old = P_new − inputDelta via `constructDbOld()` (O(|delta|)). For the iteration phase, P_old = db − currentDelta. `evaluateRuleDelta(rule, fullDbOld, fullDbNew, delta, deltaIdx)` dispatches per body element position: positions before deltaIdx on the same predicate use P_new; positions after use P_old.
-
-**Differential negation:** `evaluateDifferentialNegation(atom, delta, subs)` processes changes in negated predicates with sign inversion: `output_weight = sub.weight × (−deltaWeight)`. Appearance of a negated fact blocks (→ −1); disappearance unblocks (→ +1). Both positive and negation atoms are delta sources in the unified loop — the body element at `deltaIdx` knows its own kind and dispatches accordingly.
-
-**Bidirectional `applyDerivedFact`:** Detects zero-crossings in both directions. absent→present (weight crosses ≤0 to >0) adds +1 to the next delta. present→absent (weight crosses >0 to ≤0) adds −1. A weight change from 2 to 1 does NOT cross zero — no delta entry. This enables cascading retractions through recursive rules.
-
-**Dirty map — dual-purpose infrastructure:** A single `Map<string, { fact, preWeight }>` keyed by `factKey` serves two roles:
-1. **Scoped `distinct`:** After each iteration, floor only dirty entries with weight < 0 to 0. O(|modified|) per iteration, not O(|relation|). Weights >1 are preserved (true multiplicities).
-2. **Delta extraction:** After convergence, compare each entry's `preWeight` (captured on first touch, never overwritten) to the current weight. Zero-crossings (≤0 → >0 or >0 → ≤0) become the output delta with weight +1 or −1. No snapshot-and-diff needed.
-
-**Imperative shell — `createEvaluator`:** Holds accumulated `Database`, rules, strata, and ground facts. `step(deltaFacts, deltaRules)` applies the ground fact delta to `db`, evaluates affected strata bottom-up via the unified loop, propagates stratum output deltas upward, and extracts resolution. No `retractionsPresent` flag — each stratum handles its own retractions via the unified loop.
-
-**Batch as degenerate case:** `evaluate(rules, facts)` (aliased from `evaluateUnified`) creates a fresh evaluator, feeds all facts as +1 in a single step, and returns the database. `evaluateNaive()` in `evaluate.ts` serves as the independent correctness oracle for cross-checking semi-naive evaluation.
-
-**Resolution extraction:** `winnerFactsToResolution` and `fuguePairFactsToResolution` read directly from the delta `Database` using `allWeightedTuples()`. No `ZSet<Fact>` intermediate or `groupByPredicate` splitting step needed — `Database` already groups facts by predicate.
-
-**Rule changes:** On `deltaRules`, restratify, snapshot derived facts (scoped to union of old + new derived predicates), wipe and replay all strata, diff snapshots. This is retained as wipe-then-replay because rule changes alter the set of derivable facts in ways that can't be incrementally discovered.
-
-### Key Features
-
-- **Stratified negation**: `not` in rule bodies, safe via stratum ordering (cyclic negation rejected with error)
-- **Differential negation**: Negation atoms are delta sources — appearance of a negated fact retracts derivations, disappearance unblocks them, all via sign-inverted weight propagation (no wipe-and-recompute)
-- **Aggregation**: `min`, `max`, `count`, `sum` — required for LWW (`max` by lamport). Aggregation strata retain wipe-and-recompute (scoped limitation)
-- **Guards**: Typed comparison operators (`eq`, `neq`, `lt`, `gt`, `lte`, `gte`) that filter substitutions without introducing predicate dependencies
-- **Wildcards**: `_` matches any value without binding — each occurrence independent
-- **Dual-weight relations**: True Z-set multiplicity (`weight`) alongside post-distinct presence signal (`clampedWeight`). Facts with multiple derivation paths survive partial retraction
-- **Asymmetric join**: DBSP incremental join prevents self-join double-counting. Each derivation path counted exactly once, making negative-floor `distinct` correct
-- **Weighted semi-naive**: Substitutions carry Z-set weights through joins; `distinct` floors negatives per iteration; delta extraction via zero-crossing detection
-- **One evaluator, one algorithm**: `createEvaluator` subsumes both batch and incremental paths; no conditional routing based on stratum type or retraction presence
-
-### Why TypeScript, Not WASM
-
-Evaluated Rust WASM crates (ascent, datafrog, crepe) and npm packages (datascript, @datalogui/datalog). Rejected because:
-- Rust proc-macro crates expand rules at compile time — can't evaluate rules-as-data at runtime
-- datafrog has no negation or aggregation
-- WASM FFI overhead (~100-200ns per boundary crossing) is significant for many small facts
-- The native solver optimization (§B.7) means the Datalog evaluator handles only the general case; hot paths bypass it
+- **Not lossy.** An incremental solve produces the same reality a batch solve would (given the same final constraint set).
+- **Not required for correctness.** Applications that can afford batch solve every frame don't need the incremental path.
+- **Not faster unconditionally.** For small constraint sets, the batch path wins on constant factors.
 
 ---
 
-## Store & Sync
+## The Datalog evaluator in detail
 
-### Constraint Store (§4)
+Source: `src/datalog/`.
 
-A CnId-keyed `Map<string, Constraint>`. Insert is O(1) with idempotent deduplication. The store grows monotonically. Merge is set union — commutative, associative, idempotent.
+Standard Datalog + stratified negation + bag aggregation.
 
-The `generation` counter increments on every mutation and serves as the cache-invalidation signal. Callers that cache solved results check the generation, not the store reference.
-
-### Delta Sync (§15)
-
-```typescript
-// Export constraints the other peer hasn't seen
-const delta = exportDelta(myStore, theirVersionVector);
-
-// Import received constraints
-importDelta(myStore, delta);  // mutates in place
-```
-
-After bidirectional exchange, both stores contain the same constraints → same reality. No ordering or deduplication guarantees needed from the transport — the semilattice handles both.
-
-### Version-Parameterized Solving (§7.1)
-
-```typescript
-solve(store, config)          // current reality (all constraints)
-solve(store, config, version) // historical reality at version V
-```
-
-Time travel is not a special mode. The solver is a pure function; the same `(S, V)` always produces the same reality.
-
----
-
-## Incremental Pipeline (Plan 005 complete, Plan 006 complete, Plan 006.1 complete, Plan 006.2 complete)
-
-The batch `solve()` is O(|S|) per insertion. The incremental pipeline is O(|Δ|) end-to-end — all stages including evaluation are incremental. For the common case (default LWW/Fugue rules), native incremental solvers handle resolution in O(1) per slot. For custom rules, the unified evaluator processes both insertions and retractions incrementally via the unified semi-naive loop with differential negation. All stratum types (positive, negation, mixed) use the same algorithm. Only aggregation strata retain wipe-and-recompute (scoped limitation).
-
-### Z-Sets
-
-A Z-set over a universe U is a function `w: U → Z` with finite support. Elements with weight +1 are present; weight −1 are retracted; weight 0 are pruned. Addition is pointwise, negation flips weights. This forms an abelian group — the algebraic foundation for DBSP incremental view maintenance.
-
-Implementation: `base/zset.ts`. `ZSet<T> = ReadonlyMap<string, ZSetEntry<T>>`, keyed by caller-provided string identity. Core algebra: `zsetAdd`, `zsetNegate`, `zsetSingleton`, `zsetEmpty`.
-
-### Not Everything Is a Z-Set
-
-The structure index is append-only (structure constraints are permanent, never retracted). Its output uses `StructureIndexDelta` — a plain map of new/modified `SlotGroup`s with upsert semantics — rather than `ZSet<SlotGroup>`. The reason: a `SlotGroup` has stable identity (`slotId`) but mutable contents (its `structures` array grows when a second peer creates the same map child). Emitting `{old: −1, new: +1}` for the same key would annihilate to zero under `zsetAdd`; emitting only `+1` would inflate weights on accumulation. Neither is correct. The structure index is a monotone operator on a semilattice, not a group operator on Z-sets.
-
-### Incremental DAG
+### Rule structure
 
 ```
-Δc ──→ dedup guard (hasConstraint?) ──→ store.insert
-  │
-  ▼
-  C^Δ (validity)              → ZSet<Constraint>
-  │
-  ├──→ X^Δ (structure index)  → StructureIndexDelta
-  │
-  └──→ A^Δ (retraction)       → ZSet<Constraint>
-        │
-        ▼
-  P^Δ (projection)            → ZSet<Fact>
-        │
-        ▼
-  E^Δ (evaluation)            → ZSet<ResolvedWinner> + ZSet<FugueBeforePair>
-        │                        (native LWW/Fugue or incremental Datalog)
-        ▼
-  K^Δ (skeleton)              → RealityDelta
+type Rule = {
+  head: PositiveAtom
+  body: Array<PositiveAtom | Negation | Aggregation | Comparison>
+}
 ```
 
-Each stage follows three conventions: `step(...deltas)` processes input and returns output delta; `current()` returns the full materialized output; `reset()` clears state. The correctness invariant is `current() == Q_batch(accumulated inputs)`.
+Constructors: `rule`, `atom`, `positiveAtom`, `negation`, `eq`, `neq`, `lt`, `gt`, `varTerm`, `constTerm`, `_` (wildcard).
 
-### Pipeline Composition (`incremental/pipeline.ts`)
+### Evaluation phases
 
-The `IncrementalPipeline` interface is the public entry point: `insert(c)` accepts a constraint and returns a `RealityDelta`. Internally it wires all stages into the DAG above and adds a deduplication guard (`hasConstraint` before `store.insert`).
+1. **Stratify** — partition rules into strata. Within a stratum, rules are purely positive. Negation only across strata (a negated atom in stratum N queries relations computed by strata < N).
+2. **Seed** — populate the initial fact database from projected constraints.
+3. **Semi-naïve fixed point** — for each stratum in order:
+   - Compute new facts using only facts derived in the previous iteration.
+   - Add new facts to the database.
+   - Repeat until no new facts.
+4. **Output** — the final database is the solve output.
 
-`createIncrementalPipelineFromBootstrap(result)` creates a pipeline pre-populated with bootstrap state by replaying all bootstrap constraints through `insert()`.
+### Aggregation
 
-The pipeline composition root is pure wiring — ~70 LOC connecting stages and routing deltas. All strategy complexity (native vs Datalog, rule detection, diffing) is encapsulated inside the evaluation stage.
+`count`, `min`, `max`, `sum`, `collect(x)`. Used sparingly in the default rule set — primarily for compaction policy and Fugue-position tie-breaking.
 
-### Evaluation Stage (`incremental/evaluation.ts`)
+### What the evaluator is NOT
 
-The evaluation stage is a **strategy wrapper**, not a simple DBSP operator. It delegates to either native incremental solvers (LWW + Fugue) or the unified weighted Datalog evaluator (`createEvaluator` from `evaluator.ts`) based on active rules. Its `step()` takes `(deltaFacts, deltaRules, getAccumulatedFacts, getActiveConstraints)` — the lazy getters are only called on strategy switches (bootstrapping the new strategy from accumulated facts).
-
-**Strategy switching:** When a `rule` constraint is added or retracted, the stage re-checks `selectResolutionStrategy`. If the strategy changes:
-1. The new strategy is bootstrapped from accumulated ground facts.
-2. A diff between old and new strategy's resolution is emitted.
-3. `deltaFacts` from the same step are processed through the newly-active strategy and combined with the switch diff.
-
-**Native path** (>99% common case): Routes facts by predicate to `IncrementalLWW` and `IncrementalFugue`. No calls to `projection.current()` or `retraction.current()` — fully O(|Δ|).
-
-**Datalog path** (custom rules): Delegates to the unified `Evaluator` from `evaluator.ts`. O(|Δ|×|DB|) per step for all strata (positive, negation, mixed) via the unified semi-naive loop with differential negation and asymmetric join. Only aggregation strata use wipe-and-recompute (bounded by group count).
-
-`ResolutionResult` is no longer the inter-stage type between evaluation and skeleton — `ZSet<ResolvedWinner>` + `ZSet<FugueBeforePair>` are. `ResolutionResult` remains as a materialization convenience for `current()` and strategy-switch diffing.
-
-### Operator Stages
-
-| Stage | Module | Input(s) | Output | Key design |
-|-------|--------|----------|--------|------------|
-| Validity | `incremental/validity.ts` | `ZSet<Constraint>` | `ZSet<Constraint>` | Cached `AuthorityState` with full replay on authority changes; per-peer constraint index for targeted re-checking; holds invalid constraints for out-of-order grant arrival |
-| Retraction | `incremental/retraction.ts` | `ZSet<Constraint>` | `ZSet<Constraint>` | Persistent retraction graph; two-pass delta processing (non-retracts first); deferred immunity checks for out-of-order arrival |
-| Structure Index | `incremental/structure-index.ts` | `ZSet<Constraint>` | `StructureIndexDelta` | Mutable `SlotGroup` builders; append-only; dedup by CnId |
-| Projection | `incremental/projection.ts` | `ZSet<Constraint>` × `StructureIndexDelta` | `ZSet<Fact>` | Orphan set (dual-indexed by target key and own key); resolves when target structure arrives |
-| Evaluation | `incremental/evaluation.ts` | `ZSet<Fact>` × `ZSet<Rule>` | `ZSet<ResolvedWinner>` × `ZSet<FugueBeforePair>` | Strategy wrapper: native incremental solvers or incremental Datalog; lazy getters for strategy-switch bootstrapping |
-| Skeleton | `incremental/skeleton.ts` | `ZSet<ResolvedWinner>` × `ZSet<FugueBeforePair>` × `StructureIndexDelta` | `RealityDelta` | Mutable tree with path tracking; deferred child attachment for out-of-order; seq ordering via accumulated fugue pairs + topological sort |
-
-### Out-of-Order Arrival
-
-CCS stores have no causal delivery guarantees. A retract can arrive before its target; a value before its target structure; a constraint before its enabling authority grant. Every stage that processes a constraint referencing another handles both orderings via standing instructions: when the referrer arrives first, record its effect; when the referent arrives, check for standing instructions. The differential test oracle (`solve(store, config)`) catches all order-dependent bugs mechanically.
-
-| Stage | Referrer | Referent | Standing instruction |
-|-------|----------|----------|---------------------|
-| Validity | non-authority constraint | authority grant | Hold in invalid set; re-check on grant arrival via per-peer index |
-| Retraction | retract constraint | target constraint | Record edge in graph; cascade when target arrives |
-| Projection | value constraint | target structure | Hold in orphan set (dual-indexed); project when structure arrives |
-| Skeleton | child structure | parent structure | `nodeBySlot` stores node; `attachDeferredChildren` connects when parent created |
-| Skeleton | winner | structure (slot) | `accWinners` stores winner; applied when structure node created |
-
-### Validity: Authority Cascade via Full Replay
-
-Authority constraints are rare (single-digit count per reality) but their effects cascade transitively — revoking Admin from peer A invalidates grants A made to peer B. Rather than tracking a dependency DAG, the validity stage replays `computeAuthority()` over all accumulated authority constraints when any authority constraint arrives, then diffs the old vs. new `AuthorityState` to find affected peers. A per-peer constraint index (`Map<PeerID, Set<CnIdKey>>`) enables O(constraints-by-peer) re-checking rather than scanning all constraints.
-
-### Skeleton: Mutable Tree with NodeDelta Emission
-
-The skeleton is the most complex incremental stage. It maintains a mutable reality tree (`MutableNode` type with `nodeBySlot` and `parentBySlot` indexes), processes three input streams, and emits `NodeDelta` entries. Seq children are ordered by accumulated `fugue_before` pairs via `topologicalOrderFromPairs`; retracted seq elements become tombstones (structurally present for ordering, invisible to consumers).
-
-**Map child visibility rule (must match batch exactly):** A map child node is visible in the parent's `children` map unless `value === null && children.size === 0`. This means nodes with `value === undefined` (structure exists but no value constraint resolved yet) *are* visible — `undefined` means "no value yet," while `null` is the LWW deletion sentinel. Retracting a winner sets the value to `undefined`, so the node stays visible and emits `valueChanged`; only an explicit `null` LWW winner triggers `childRemoved`. This matches the batch `buildMapChildren` exclusion rule: `if (node.value === null && node.children.size === 0) continue`.
+- **Not Prolog.** No SLD resolution; no cuts; no unification in the first-order-logic sense. Datalog is a strict subset.
+- **Not Turing-complete.** Finite Herbrand universe → always terminating.
+- **Not indexed.** Linear scan of facts per atom. Optimisation is future work.
 
 ---
 
-## Module Dependency DAG
+## Key Types
 
-```
-base/result.ts, base/types.ts, base/zset.ts  (leaves — no deps)
-         ↑
-datalog/types.ts → evaluate.ts               (Datalog layer — rule-level core)
-               → evaluator.ts                 (Datalog layer — unified evaluator, Plan 006.1)
-         ↑
-kernel/types.ts → cnid, lamport, vv,         (kernel identity/store layer)
-  store, agent, signature
-         ↑
-authority.ts → validity.ts → retraction.ts    (filters)
-         ↑
-structure-index.ts → projection.ts            (kernel → Datalog bridge)
-                   → resolve.ts               (Datalog → kernel bridge)
-                   → skeleton.ts              (tree builder)
-         ↑
-rule-detection.ts                             (shared strategy selection, Plan 006)
-native-resolution.ts                          (shared native resolution, Plan 006)
-         ↑
-pipeline.ts                                   (batch composition root)
-         ↑
-bootstrap.ts                                  (reality creation)
+| Type | File | Role |
+|------|------|------|
+| `Constraint` / `ConstraintBase` / `StructureConstraint` / `ValueConstraint` / `RetractConstraint` / `AuthorityConstraint` / `RevokeConstraint` / `RuleConstraint` | `src/kernel/types.ts` | The six constraint types (discriminated union). |
+| `CnId` / `createCnId` | `src/kernel/cnid.ts` | Content-addressed identity. |
+| `PeerID` / `Lamport` / `VersionVector` | `src/kernel/types.ts`, `src/kernel/lamport.ts`, `src/kernel/version-vector.ts` | Causal-clock primitives. |
+| `ConstraintStore` / `createStore` / `insert` / `merge` | `src/kernel/store.ts` | The data. |
+| `Agent` / `createAgent` | `src/kernel/agent.ts` | Signing identity. |
+| `Rule` / `Atom` / `PositiveAtom` / `Negation` / `Aggregation` / `Term` / `VarTerm` / `ConstTerm` | `src/datalog/types.ts` | Datalog language. |
+| `rule` / `atom` / `positiveAtom` / `negation` / `eq` / `neq` / `lt` / `gt` / `varTerm` / `constTerm` / `_` | `src/datalog/types.ts` | Datalog constructors. |
+| `evaluate` | `src/datalog/evaluate.ts` | Top-level Datalog fixed-point entry. |
+| `stratify` | `src/datalog/stratify.ts` | Rule stratification. |
+| `unify` | `src/datalog/unify.ts` | Term unification. |
+| `ResolutionResult` / `extractResolution` | `src/kernel/resolve.ts` | Datalog facts → typed winners. |
+| `StructureIndex` / `buildStructureIndex` | `src/kernel/structure-index.ts` | Tree structure from structure constraints. |
+| `Skeleton` / `buildSkeleton` | `src/kernel/skeleton.ts` | Reality tree construction. |
+| `PipelineConfig` | `src/kernel/pipeline.ts` | Solver configuration. |
+| `RetractionConfig` | `src/kernel/retraction.ts` | Retraction-depth config. |
+| `solve` | `src/kernel/pipeline.ts` | Batch solve entry point. |
+| `createReality` | `src/bootstrap.ts` | Reality-creation factory: initial store + default rules + admin grant. |
+| `STUB_SIGNATURE` | `src/kernel/signature.ts` | Test-only signature value. |
+| `ZSet<K>` + operators (`zsetAdd`, `zsetNegate`, `zsetFilter`, `zsetMap`, `zsetFromEntries`, `zsetElements`, `zsetGet`, `zsetHas`, `zsetIsEmpty`, `zsetKeys`, `zsetForEach`, `zsetEmpty`) | `src/base/zset.ts` | DBSP ℤ-set algebra. |
+| `produceRoot` / `produceMapChild` / `produceSeqChild` / `produceValue` / `retract` | `src/index.ts` (re-exports) | High-level constraint-construction helpers. |
 
-solver/
-  lww.ts, fugue.ts                            (batch native solvers)
-  incremental-lww.ts                          (incremental LWW, Plan 006)
-  incremental-fugue.ts                        (incremental Fugue, Plan 006)
+## File Map
 
-kernel/incremental/                           (incremental pipeline)
-  types.ts → retraction.ts                    (depends on kernel/ + base/zset)
-           → structure-index.ts
-           → projection.ts
-           → validity.ts                      (depends on kernel/authority)
-           → evaluation.ts                    (depends on solver/incremental-*,
-                                                datalog/evaluator,
-                                                kernel/rule-detection)
-           → skeleton.ts                      (depends on kernel/resolve, structure-index)
-           → pipeline.ts                      (incremental composition root — depends on
-                                                all above + kernel/store, kernel/pipeline)
-  index.ts                                    (barrel export)
-```
+| Path | Role |
+|------|------|
+| `src/index.ts` | Public barrel. Re-exports kernel, datalog, solver, base, plus high-level producers (`produceRoot`, `produceMapChild`, `produceValue`, `retract`). |
+| `src/bootstrap.ts` | `createReality` — creates a fresh reality with admin grant + default LWW + default Fugue rules + retraction config. |
+| `src/kernel/types.ts` | `Constraint` union + all per-type shapes. |
+| `src/kernel/cnid.ts` | Content-addressed identity. |
+| `src/kernel/store.ts` | `ConstraintStore`, `createStore`, `insert`, `merge`. |
+| `src/kernel/agent.ts` | `Agent` + `createAgent`. |
+| `src/kernel/lamport.ts` | Per-peer logical clocks. |
+| `src/kernel/version-vector.ts` | Version-vector primitives + `filterByVersion`. |
+| `src/kernel/signature.ts` | Ed25519 sign/verify + `STUB_SIGNATURE`. |
+| `src/kernel/authority.ts` | Capability resolution. |
+| `src/kernel/validity.ts` | `computeValid` — signature + capability check. |
+| `src/kernel/retraction.ts` | Retraction graph + dominance. |
+| `src/kernel/structure-index.ts` | Tree-structure index. |
+| `src/kernel/projection.ts` | Active constraints → Datalog facts. |
+| `src/kernel/resolve.ts` | Datalog facts → typed winners. |
+| `src/kernel/rule-detection.ts` | Pattern match for §B.7 native-solver dispatch. |
+| `src/kernel/native-resolution.ts` | Native-solver entry. |
+| `src/kernel/skeleton.ts` | Skeleton construction. |
+| `src/kernel/pipeline.ts` | Composition root — `solve(store, config)`. |
+| `src/kernel/index.ts` | Kernel barrel. |
+| `src/kernel/incremental/` | Incremental variants of the kernel algorithms. |
+| `src/datalog/types.ts` | Datalog language + constructors. |
+| `src/datalog/stratify.ts` | Rule stratification. |
+| `src/datalog/unify.ts` | Unification. |
+| `src/datalog/aggregate.ts` | Aggregation operators. |
+| `src/datalog/evaluator.ts` | Semi-naïve fixed-point loop. |
+| `src/datalog/evaluate.ts` | Top-level `evaluate`. |
+| `src/datalog/index.ts` | Datalog barrel. |
+| `src/solver/lww.ts` / `incremental-lww.ts` | Native LWW fast paths. |
+| `src/solver/fugue.ts` / `incremental-fugue.ts` | Native Fugue fast paths. |
+| `src/base/zset.ts` | ℤ-set algebra. |
+| `src/base/result.ts` | `Result<T, E>` helper. |
+| `src/base/types.ts` | Shared base types. |
+| `theory/unified-engine.md` | The authoritative specification. This package is its reference implementation. |
+| `tests/kernel/` | 35+ test files covering pipeline, authority, validity, cnid, Lamport, retraction, skeleton, projection, resolve, structure-index, version-vector, incremental variants. |
+| `tests/datalog/` | Evaluator, stratification, unification, aggregation, database views. |
+| `tests/solver/` | Native LWW + Fugue (batch + incremental), cross-validated against Datalog. |
 
-Dependency direction: `base → datalog → solver → kernel → pipeline → bootstrap`. The incremental modules import from existing kernel modules but do not modify them. The batch pipeline has no knowledge of the incremental modules. No batch evaluator calls remain in the incremental pipeline — all paths are incremental.
+## Testing
 
----
+Every test file is pure — no I/O, no timers. The cross-validation suites (`tests/solver/incremental-lww.test.ts`, `tests/solver/incremental-fugue.test.ts`) run randomized inputs through both the Datalog evaluator and the native solver, asserting identical outputs — this is the §B.7 correctness contract in test form. `STUB_SIGNATURE` is used throughout so tests don't require key generation; real-signature round-trips live in the dedicated signature suite.
 
-## Agent (§B.5)
+The Unified CCS Engine Specification in `theory/unified-engine.md` is the reference document. Every invariant in this TECHNICAL.md traces to a `§` reference there; the specification overrules this document wherever they differ.
 
-The Agent is the **imperative shell** — the only place where mutable state lives during normal operation:
-
-- **PeerID**: Unique identity
-- **Counter**: Monotonically increasing, allocated per constraint
-- **Lamport clock**: `max(local, max_received) + 1`
-- **Version vector**: Tracks observed constraints (frontier-compressed refs)
-- **Private key**: For signing (stub for now)
-
-All `produce*` methods return immutable `Constraint` values. The Agent enforces:
-- `layer >= 2` for rule constraints (Layers 0–1 are kernel-reserved)
-- Safe-integer bounds on counter and lamport (`<= 2^53 - 1`)
-- Refs computed **before** VV update (a constraint can't reference itself)
-
-**Important**: `agent.observe(constraint)` must be called after inserting a constraint to update the agent's version vector and lamport clock. Missing this call breaks causal chains (refs won't include the previous constraint).
-
----
-
-## Stratification (§14)
-
-| Layer | What | Retractable? |
-|-------|------|-------------|
-| **0 — Kernel** | CnId, Lamport, signatures, authority, validity, retraction, skeleton | Hardcoded |
-| **1 — Default Solver Rules** | LWW, Fugue (emitted by bootstrap) | Yes |
-| **2 — Configurable Rules** | Custom resolution, schema mappings, cross-container constraints | Yes |
-| **3+ — User Queries** | Application-specific derived relations, views, aggregations | Yes |
-
-Layers 0–1 are the engine. Layers 2+ are data in the store.
-
----
-
-## Design Decisions
-
-### Why CnId-Based Addressing, Not Path-Based?
-
-The v0 prototype used paths (`["profile", "name"]`). CnId-based addressing (`{peer, counter}` + causal `refs`) enables:
-- Retraction (target a specific constraint, not a path)
-- Authority (capabilities per peer, not per path)
-- Version-parameterized solving (filter by VV, not by timestamp)
-- No path-canonicalization bugs
-
-### Why Discriminated Unions for Constraints?
-
-A `Constraint` interface with `type: string` and `payload: any` would compile, but nothing prevents a `type: 'retract'` constraint from carrying a `ValuePayload`. The discriminated union (`type` narrows `payload` in switch/if) eliminates this class of bugs at compile time and gives exhaustive switch checking.
-
-### Why Separate Projection and Resolution Modules?
-
-The skeleton builder should not depend on Datalog types. `projection.ts` sits at the kernel→Datalog boundary (kernel types → flat fact tuples). `resolve.ts` sits at the Datalog→kernel boundary (derived fact tuples → typed winners/ordering). The skeleton reads only kernel-typed `ResolutionResult`, not `Database` or `Relation`.
-
-### Incremental Pipeline: Why a Parallel Code Path?
-
-The batch `solve()` pipeline is preserved unchanged as the correctness oracle. The incremental pipeline (`kernel/incremental/`) is a separate, parallel code path that maintains persistent state and propagates Z-set deltas. This avoids mixing pure batch functions with inherently stateful incremental operators, and lets differential tests compare `incrementalPipeline.current()` against `solve(store, config)` after every insertion. The batch pipeline is never modified — only consumed as a library by the incremental stages.
-
-### Why `number` and `bigint` Are Distinct?
-
-JavaScript's `number` is f64, which can only exactly represent integers up to 2^53 − 1. A Rust agent storing a 64-bit database row ID would lose precision when a JavaScript agent reads it. Splitting numerics into `number` (f64) and `bigint` (arbitrary-precision integer) prevents silent data corruption across language boundaries.
-
----
-
-## Future Work
-
-### Deferred from the Spec
-
-- **Real ed25519 signatures** — Phase 2 uses a stub that always returns valid
-- ~~**Incremental kernel pipeline**~~ (§9) — **Plan 005 complete.** All kernel stages are incremental, pipeline composition wired, 42 differential tests verify equivalence with batch.
-- ~~**Incremental Datalog evaluator**~~ (§9) — **Plan 006 complete.** Native incremental LWW/Fugue solvers for default rules (O(|Δ|)), incremental Datalog evaluator for custom rules, strategy switching between native and Datalog paths. The full pipeline is O(|Δ|) end-to-end.
-- ~~**Unified weighted evaluator**~~ (Plan 006.1) — **Complete.** Weighted `Relation`/`Substitution`, dirty-map `distinct` + delta extraction, unified `createEvaluator` replacing four duplicated semi-naive loops. Legacy `incremental-evaluate.ts` deleted, dead code removed.
-- ~~**Differential negation and true incremental retraction**~~ (Plan 006.2) — **Complete.** Dual-weight `Relation` (weight + clampedWeight), asymmetric join preventing self-join double-counting, differential negation with sign inversion, bidirectional `applyDerivedFact`, unified semi-naive loop for all stratum types. Wipe-and-recompute eliminated for negation strata; retained only for aggregation strata (scoped limitation). `wipeAndRecompute`, `evaluatePositiveStratum`, `evaluateNegationStratum`, `retractionsPresent` flag all deleted.
-- **Settled/Working set partitioning** (§11) — Bounds solver cost to recent activity
-- **Compaction** (§12) — Requires settled set; tombstone compaction is especially tricky for sequences due to origin references
-- **Wire format** (§13) — Batching and compact encoding for sync
-- **Full sync protocol** (§15) — Delta sync works; full protocol is future
-- **Query layer** (§16) — Level 1/2 queries over store and reality
-- **Introspection API** (§17) — explain, conflicts, history, whatIf
-- **Bookmark / time-travel UX** (§10) — Snapshots, scrubbing, branching
-- **Path-based capability checks** — Currently uses wildcard paths; real checks require the skeleton (circular dependency, likely two-pass)
-
-### Potential Extensions
-
-- **Constraint compaction**: Safe garbage collection of dominated/superseded constraints after all peers have observed them
-- **Cross-container constraints**: Referential integrity, computed values spanning multiple containers
-- **Rich text marks**: Bold, italic, etc. as mark constraints with anchor resolution
-- **Convenience DSL**: `datalog\`p(X) :- q(X, _).\`` instead of deeply nested factory calls
-
----
-
-## References
-
-1. Saraswat, V. A. (1993). *Concurrent Constraint Programming*. MIT Press.
-2. Weidner, M. & Kleppmann, M. (2023). "The Art of the Fugue: Minimizing Interleaving in Collaborative Text Editing." [arXiv:2305.00583](https://arxiv.org/abs/2305.00583).
-3. Shapiro, M., et al. (2011). "Conflict-free Replicated Data Types." SSS 2011.
-4. Hellerstein, J. M. (2010). "The Declarative Imperative: Experiences and Conjectures in Distributed Logic." SIGMOD Record.
-5. Budiu, M. & McSherry, F. (2023). "DBSP: Automatic Incremental View Maintenance."
-6. Ullman, J. D. (1988). *Principles of Database and Knowledge-Base Systems*, Vol 1.
-7. Apt, K., Blair, H., & Walker, A. (1988). "Towards a Theory of Declarative Knowledge."
+**Tests**: 1,374 passed, 0 skipped across 35 files. Run with `cd experimental/perspective && pnpm exec vitest run`.

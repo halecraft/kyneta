@@ -88,14 +88,14 @@ See the [`@kyneta/exchange` README](./packages/exchange/README.md) for the full 
 
 ## Packages
 
-5,403 tests across the monorepo.
+6,019 tests across the monorepo.
 
 ### Foundation
 
 | Package | Description | Tests |
 |---------|-------------|-------|
-| [`@kyneta/changefeed`](./packages/changefeed) | Universal reactive contract — a Moore machine identified by `[CHANGEFEED]`. Zero dependencies. | 24 |
-| [`@kyneta/schema`](./packages/schema) | Schema interpreter algebra. One recursive `Schema` type, one generic `interpret()` catamorphism, pluggable interpreters for reading, mutation, observation, and validation. Only dependency is `@kyneta/changefeed`. | 1,540 |
+| [`@kyneta/changefeed`](./packages/changefeed) | Universal reactive contract — a Moore machine identified by `[CHANGEFEED]`. Zero dependencies. | 47 |
+| [`@kyneta/schema`](./packages/schema) | Schema interpreter algebra. One recursive `Schema` type, one generic `interpret()` catamorphism, pluggable interpreters for reading, mutation, observation, and validation. Only dependency is `@kyneta/changefeed`. | 1,832 |
 | [`@kyneta/machine`](./packages/machine) | Universal Mealy machine algebra — pure state transitions with effect outputs. Powers the exchange synchronizer and all transport clients. Zero dependencies. | 45 |
 
 ### Substrates
@@ -104,22 +104,22 @@ A plain JS substrate is built into `@kyneta/schema` — no external package need
 
 | Package | Description | Tests |
 |---------|-------------|-------|
-| [`@kyneta/loro-schema`](./packages/schema/backends/loro) | Loro CRDT substrate for `@kyneta/schema`. Schema-aware typed reads, `applyDiff`-based writes, and a persistent event bridge. | 163 |
-| [`@kyneta/yjs-schema`](./packages/schema/backends/yjs) | Yjs CRDT substrate for `@kyneta/schema`. Same `Substrate` interface as Loro — swap with a one-line import change. `yjs.bind()` validates capability compatibility at compile time via `YjsCaps`. | 159 |
+| [`@kyneta/loro-schema`](./packages/schema/backends/loro) | Loro CRDT substrate for `@kyneta/schema`. Schema-aware typed reads, `applyDiff`-based writes, and a persistent event bridge. | 203 |
+| [`@kyneta/yjs-schema`](./packages/schema/backends/yjs) | Yjs CRDT substrate for `@kyneta/schema`. Same `Substrate` interface as Loro — swap with a one-line import change. `yjs.bind()` validates capability compatibility at compile time via `YjsCaps`. | 217 |
 
 ### Sync
 
 | Package | Description | Tests |
 |---------|-------------|-------|
-| [`@kyneta/exchange`](./packages/exchange) | Substrate-agnostic state exchange. Three merge strategies (concurrent, sequential, ephemeral) over a six-message sync protocol. Hosts heterogeneous documents — Loro CRDTs, Yjs CRDTs, plain JS, ephemeral presence — in one sync network. | 316 |
+| [`@kyneta/exchange`](./packages/exchange) | Substrate-agnostic state exchange. Three merge strategies (collaborative, authoritative, ephemeral) over a six-message sync protocol. Hosts heterogeneous documents — Loro CRDTs, Yjs CRDTs, plain JS, ephemeral presence — in one sync network. | 420 |
 | [`@kyneta/transport`](./packages/transport) | Transport infrastructure — base class, channel types, message vocabulary, and client utilities. | 8 |
-| [`@kyneta/wire`](./packages/exchange/wire) | Wire format codecs, framing, and fragmentation. CBOR and JSON codecs, 6-byte binary frames, and a fragmentation protocol for cloud WebSocket gateways. | 195 |
+| [`@kyneta/wire`](./packages/exchange/wire) | Wire format codecs, framing, and fragmentation. CBOR and JSON codecs, 6-byte binary frames, and a fragmentation protocol for cloud WebSocket gateways. | 232 |
 
 ### Transports
 
 | Package | Description | Tests |
 |---------|-------------|-------|
-| [`@kyneta/websocket-transport`](./packages/exchange/transports/websocket) | WebSocket transport. Client, server, and Bun-specific handlers with connection lifecycle, keepalive, and reconnection. | 51 |
+| [`@kyneta/websocket-transport`](./packages/exchange/transports/websocket) | WebSocket transport. Client, server, and Bun-specific handlers with connection lifecycle, keepalive, and reconnection. | 56 |
 | [`@kyneta/sse-transport`](./packages/exchange/transports/sse) | SSE transport. Client, server, and Express integration with reconnection state machine. | 44 |
 | [`@kyneta/webrtc-transport`](./packages/exchange/transports/webrtc) | WebRTC data channel transport. BYODC (Bring Your Own Data Channel) with binary CBOR encoding and fragmentation. | 27 |
 | [`@kyneta/unix-socket-transport`](./packages/exchange/transports/unix-socket) | Unix domain socket transport. Stream-oriented, backpressure-aware server-to-server sync. | 82 |
@@ -134,13 +134,13 @@ A plain JS substrate is built into `@kyneta/schema` — no external package need
 
 | Package | Description | Tests |
 |---------|-------------|-------|
-| [`@kyneta/index`](./packages/index) | DBSP-grounded reactive indexing — Source, Collection, Index over ℤ-set algebra. | 112 |
+| [`@kyneta/index`](./packages/index) | DBSP-grounded reactive indexing — Source, Collection, Index over ℤ-set algebra. | 143 |
 
 ### Bindings
 
 | Package | Description | Tests |
 |---------|-------------|-------|
-| [`@kyneta/react`](./packages/react) | React bindings over `@kyneta/schema` + `@kyneta/exchange`. Hooks for document access, sync status, and reactive observation via `useSyncExternalStore`. | 29 |
+| [`@kyneta/react`](./packages/react) | React bindings over `@kyneta/schema` + `@kyneta/exchange`. Hooks for document access, sync status, and reactive observation via `useSyncExternalStore`. | 84 |
 
 ## Dependencies
 
@@ -180,7 +180,7 @@ A plain JS substrate is built into `@kyneta/schema` — no external package need
 |---------|-------------|
 | [`todo`](./examples/todo) | Minimal collaborative todo list — Cast compiler + Exchange + Yjs over WebSocket |
 | [`todo-react`](./examples/todo-react) | Same domain, React bindings — proves the sync layer is framework-agnostic |
-| [`bumper-cars`](./examples/bumper-cars) | Heterogeneous documents in one Exchange — concurrent CRDTs, sequential server-authoritative state, and ephemeral presence side by side |
+| [`bumper-cars`](./examples/bumper-cars) | Heterogeneous documents in one Exchange — collaborative CRDTs, authoritative server state, and ephemeral presence side by side |
 | [`unix-socket-sync`](./examples/unix-socket-sync) | Leaderless TUI config sync over Unix sockets — N identical processes, one socket path, Loro CRDT convergence |
 
 ## Getting Started

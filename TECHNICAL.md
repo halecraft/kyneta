@@ -1,398 +1,252 @@
-# Kyneta — Technical Overview
+# Kyneta — Technical Reference
 
-This monorepo contains the Kyneta framework: a compiled, delta-driven web framework powered by the CHANGEFEED protocol from `@kyneta/schema`, with substrate-agnostic CRDT synchronization via `@kyneta/exchange`.
+> **Monorepo**: kyneta
+> **Packages**: 15 stable + 3 experimental + 1 internal
+> **Source lines**: ~76,000 (excluding tests)
+> **Test lines**: ~109,000
+> **Total tests**: 6,019 passed + 16 skipped across 18 packages
+> **Build**: `pnpm install && pnpm build`
+> **Verify**: `pnpm verify` (format → types → logic)
+> **Runtime**: TypeScript 5.9+; Bun 1.3+ or Node 22+; supports browser, Bun, and Node runtimes
+
+See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the 30,000-foot design — thesis, principles, package roles, dependency flow, and the end-to-end todo vertical slice. This document is the factual reference: per-package summaries, test counts, build commands, and workspace tree.
+
+---
+
+## Questions this document answers
+
+- What does each package do, in one paragraph? → [Packages](#packages)
+- How do I build and verify? → [Development](#development)
+- What's in `examples/`? → [Examples](#examples)
+- Where does each package live? → [Workspace structure](#workspace-structure)
+- Why Loro, and how does kyneta relate to it? → [Relationship to Loro](#relationship-to-loro)
+- How many tests does the project have, per package? → [Canonical test counts](#canonical-test-counts)
+
+## Canonical test counts
+
+Every test count in every per-package `TECHNICAL.md` agrees with this table. Run dates: 2026-04-19.
+
+| Package | Passed | Skipped | Files |
+|---------|-------:|--------:|------:|
+| `@kyneta/changefeed` | 47 | 0 | 2 |
+| `@kyneta/machine` | 45 | 0 | 2 |
+| `@kyneta/schema` | 1,832 | 8 | 56 |
+| `@kyneta/loro-schema` | 203 | 4 | 11 |
+| `@kyneta/yjs-schema` | 217 | 4 | 9 |
+| `@kyneta/transport` | 8 | 0 | 1 |
+| `@kyneta/wire` | 232 | 0 | 9 |
+| `@kyneta/websocket-transport` | 56 | 0 | 2 |
+| `@kyneta/sse-transport` | 44 | 0 | 3 |
+| `@kyneta/webrtc-transport` | 27 | 0 | 2 |
+| `@kyneta/unix-socket-transport` | 82 | 0 | 5 |
+| `@kyneta/leveldb-store` | 24 | 0 | 1 |
+| `@kyneta/exchange` | 420 | 0 | 17 |
+| `@kyneta/index` | 143 | 0 | 8 |
+| `@kyneta/react` | 84 | 0 | 7 |
+| `@kyneta/compiler` (exp.) | 547 | 0 | 13 |
+| `@kyneta/cast` (exp.) | 634 | 0 | 27 |
+| `@kyneta/perspective` (exp., private) | 1,374 | 0 | 35 |
+| **Total** | **6,019** | **16** | **210** |
+
+Two additional test suites live outside the main package graph:
+- `tests/exchange-websocket` — E2E WebSocket sync over `bun test` (separate runtime).
+- `examples/bumper-cars` — integration suite exercising the full ephemeral + collaborative sync stack.
+
+---
 
 ## Packages
 
-### `@kyneta/schema`
+### Core (tier-0)
 
-Schema interpreter algebra — pure structure, pluggable interpretations.
+**`@kyneta/changefeed`** — The universal reactive contract. One symbol (`CHANGEFEED`), one coalgebra (`{ current, subscribe }`), one batch envelope (`Changeset<C>`). Every reactive value in Kyneta — schema refs, `LocalRef`, `ReactiveMap`, `Collection`, `SecondaryIndex`, `exchange.peers`, `exchange.documents` — implements it. Zero runtime dependencies. 47 tests. → `packages/changefeed/TECHNICAL.md`.
 
-Defines a single recursive grammar (`Schema` namespace — five structural constructors plus five first-class CRDT types: `text`, `counter`, `set`, `tree`, `movable`) and a fluent `interpret()` builder that composes a six-layer interpreter stack: bottom → navigation → readable → addressing → caching → writable → changefeed. The `Interpreter` interface has 10 methods — one per `[KIND]` value. The output is a typed `Ref<S>` handle — a callable, navigable, writable, observable document reference. A `Substrate` interface abstracts state management and transfer semantics, enabling different backing stores (plain JS objects, CRDTs) behind the same interpreter stack. Backend packages (`@kyneta/loro-schema`, `@kyneta/yjs-schema`) use `Schema.*` directly via their bind functions (`loro.bind()`, `yjs.bind()`). Also provides shared version-vector algebra (`versionVectorMeet`, `versionVectorCompare`) and platform-agnostic base64 encoding helpers used by backend substrate implementations.
+**`@kyneta/machine`** — Pure Mealy-machine algebra. `Program<Msg, Model, Fx>` is a value with `init` + `update` + optional `done`; two runtimes (`runtime` for closure effects, `createObservableProgram` for data effects) interpret it. Used by every exchange transport for connection lifecycle and by the exchange itself for its session + sync programs. Zero runtime dependencies. 45 tests. → `packages/machine/TECHNICAL.md`.
 
-Also provides identity-stable schema migrations (`Migration` namespace — 14 primitives in four tiers) with identity-keyed CRDT containers for heterogeneous-version sync.
+### Schema + substrates
 
-Dependencies: `@kyneta/changefeed`. 1,832 tests.
+**`@kyneta/schema`** — The algebraic core. One recursive grammar (`Schema` with ten `[KIND]` values: five structural + five CRDT), a reactive observation surface (`[CHANGEFEED]` on every ref, composed changefeeds for composites), a substrate/replica boundary (five-method interface), a six-layer interpreter stack (navigation → readable → addressing → caching → writable → observation), a migration system that derives content-addressed identity, a position algebra for cursor stability, and a plain substrate reference implementation. Capability compatibility is enforced at compile time via `bind()`. Depends on `@kyneta/changefeed`. 1,832 + 8 skipped tests across 56 files. → `packages/schema/TECHNICAL.md`.
 
-### `@kyneta/changefeed`
+**`@kyneta/loro-schema`** — Loro CRDT substrate. Wraps a `LoroDoc` as `Substrate<LoroVersion>` with live navigation, `applyDiff`-based writes, identity-keyed containers for cross-schema sync, and a persistent `doc.subscribe()` event bridge. `LoroCaps = "text" | "counter" | "movable" | "tree" | "json"`. Peer deps: `@kyneta/schema`, `@kyneta/changefeed`, `loro-crdt`. 203 + 4 skipped tests. → `packages/schema/backends/loro/TECHNICAL.md`.
 
-Universal reactive contract — a Moore machine identified by `[CHANGEFEED]`. Provides `Changefeed<T>`, `ReactiveMap<K,V>`, and the `Callable` protocol. Extracted from `@kyneta/schema` as the foundational reactive primitive that schema, exchange, and all consumer packages depend on.
+**`@kyneta/yjs-schema`** — Yjs CRDT substrate. Wraps a `Y.Doc` as `Substrate<YjsVersion>` with a single-root-`Y.Map` design, `instanceof` container discrimination, imperative writes inside `Y.transact`, identity-keyed containers, and a persistent `observeDeep` event bridge. `YjsCaps = "text" | "json"`. Peer deps: `@kyneta/schema`, `@kyneta/changefeed`, `yjs`. 217 + 4 skipped tests. → `packages/schema/backends/yjs/TECHNICAL.md`.
 
-Zero runtime dependencies. 47 tests.
+### Transport + wire
 
-### `@kyneta/machine`
+**`@kyneta/transport`** — Abstract transport contract. `abstract class Transport<G>`, channel lifecycle (`Generated → Connected → Established`), six-message protocol vocabulary (two lifecycle — `establish`, `depart`; four sync — `present`, `interest`, `offer`, `dismiss`), identity types, and an in-process `Bridge` transport for testing. Peer deps: `@kyneta/machine`, `@kyneta/schema`. 8 tests. → `packages/transport/TECHNICAL.md`.
 
-Universal Mealy machine algebra — pure state transitions with effect outputs. Provides `Machine<S,E>` and `Observable` for modeling stateful protocols. Used by `@kyneta/transport` and exchange transports for connection lifecycle management.
+**`@kyneta/wire`** — Universal wire format. One `Frame<T>` abstraction (Complete or Fragment), two codecs (binary CBOR, text JSON), two framings (7-byte binary header, 2-char text prefix), fragmentation for cloud gateway limits, and a pure `feedBytes` stream-frame parser for stream-oriented transports. Internal CBOR encoder fixes a UTF-8 byte-length bug that plagued `@levischuck/tiny-cbor`. Peer dep: `@kyneta/transport`. 232 tests across 9 files. → `packages/exchange/wire/TECHNICAL.md`.
 
-Zero runtime dependencies. 45 tests.
+**`@kyneta/websocket-transport`** — WebSocket transport with three entry points (`./browser`, `./server`, `./bun`). Binary CBOR on the wire, a five-state TEA client lifecycle with a server-sent `"ready"` gate, and runtime-agnostic constructor injection (the `WebSocket` constructor is passed in; there is no `globalThis.WebSocket` default). Peer deps: `@kyneta/machine`, `@kyneta/transport`, `@kyneta/wire`. 56 tests. → `packages/exchange/transports/websocket/TECHNICAL.md`.
 
-### `@kyneta/loro-schema`
+**`@kyneta/sse-transport`** — Server-Sent Events transport — asymmetric transport (SSE downstream, HTTP POST upstream), symmetric text wire format. Framework-agnostic via the `sendFn` pattern; ships a ready-made Express router. Four-state client lifecycle (no ready gate — `EventSource.onopen` fires only after the server is fully wired). Peer deps: `@kyneta/machine`, `@kyneta/transport`, `@kyneta/wire`. 44 tests. →
+ `packages/exchange/transports/sse/TECHNICAL.md`.
 
-Loro CRDT substrate for `@kyneta/schema`. Wraps a `LoroDoc` with schema-aware typed reads, `applyDiff`-based writes, and a persistent event bridge that observes all mutations regardless of source. Schemas are defined with `Schema.*` constructors and bound via `loro.bind(schema)`. `LoroCaps = "text" | "counter" | "movable" | "tree" | "json"`.
+**`@kyneta/webrtc-transport`** — BYODC (Bring Your Own Data Channel) transport. The application owns `RTCPeerConnection`, signalling, ICE, and media; this transport attaches to an already-established data channel for document sync via a five-member `DataChannelLike` contract. Default 200 KB fragmentation threshold (SCTP max message size). Peer deps: `@kyneta/transport`, `@kyneta/wire`. 27 tests. → `packages/exchange/transports/webrtc/TECHNICAL.md`.
 
-180 tests.
+**`@kyneta/unix-socket-transport`** — Unix-domain-socket transport for server-to-server sync. Stream-oriented framing via `feedBytes` (no gateway caps, no fragmentation). Two pure programs: a client lifecycle + a leaderless-peer negotiator that chooses listen-or-connect based on probing the socket path. Node + Bun wrappers. Peer deps: `@kyneta/machine`, `@kyneta/transport`, `@kyneta/wire`. 82 tests across 5 files. → `packages/exchange/transports/unix-socket/TECHNICAL.md`.
 
-### `@kyneta/yjs-schema`
+**`@kyneta/leveldb-store`** — LevelDB persistence backend. Implements the `Store` interface using `classic-level`. FoundationDB-style null-byte-separated key space; zero-padded monotonic `seqNo` per doc; binary envelope for `StoreEntry`; atomic `replace` via LevelDB batch. Peer deps: `@kyneta/exchange`, `@kyneta/schema`; runtime dep: `classic-level`. 24 tests. → `packages/exchange/stores/leveldb/TECHNICAL.md`.
 
-Yjs CRDT substrate for `@kyneta/schema`. Wraps a `Y.Doc` with the same `Substrate` interface as the Loro backend — `exportSnapshot()`, `exportSince()`, `importDelta()`, `version()`. Deterministic `clientID` via FNV-1a hash of the exchange's string `peerId`.
+### Exchange + reactive surface
 
-188 tests.
+**`@kyneta/exchange`** — Substrate-agnostic document sync runtime. Two pure TEA programs (session + sync) sharing one serialized dispatch queue, a `Synchronizer` shell, and an `Exchange` façade adding storage, governance (composable `Policy`), capability negotiation, reactive `peers` + `documents` collections, a `Line` primitive for reliable peer-to-peer message streams, and `persistentPeerId` for browser-tab-unique IDs via a `localStorage` CAS lease. Invariants: the exchange never inspects `SubstratePayload`; session never sees documents; sync never sees channels. Peer deps: `@kyneta/schema`, `@kyneta/changefeed`; direct dep: `@kyneta/transport`. 420 tests across 17 files. → `packages/exchange/TECHNICAL.md`.
 
-### `@kyneta/transport`
+**`@kyneta/index`** — DBSP-grounded reactive indexing over keyed collections. Three-layer pipeline: `Source<V>` (consumer-stateless delta producer) → `Collection<V>` (stateful ℐ integrator, *is* a `Changefeed`) → `SecondaryIndex` / `JoinIndex`. All internal algebra on ℤ-sets; `Source.flatMap` for bilinear composition; `Index.by` for grouping with reactive field-mutation watchers; `Index.join` for bilinear incremental joins. Five `Source` constructors (`create`, `fromRecord`, `fromList`, `fromExchange`, `of`). Dep: `@kyneta/changefeed`. 143 tests. → `packages/index/TECHNICAL.md`.
 
-Transport infrastructure for `@kyneta/exchange` — base class, channel types, message vocabulary, identity types, client utilities, and bridge transport. Defines the `Transport` abstract interface that all exchange transports implement.
+**`@kyneta/react`** — Thin React bindings. `ExchangeProvider` + `useExchange` for context; `useDocument` for ref access; `useValue` for reactive reads (with snapshot caching for referential stability); `useSyncStatus` for per-peer readiness; `useText` for uncontrolled `<input>` / `<textarea>` binding with selection-stable patching through remote edits. Two pure store factories (`createChangefeedStore`, `createSyncStore`) form the functional core; hooks are thin `useSyncExternalStore` wrappers. Text-adapter (`attach`, `diffText`, `transformSelection`) is framework-agnostic. Peer deps: `@kyneta/schema`, `@kyneta/changefeed`, `@kyneta/exchange`, `react` ≥ 18. 84 tests. → `packages/react/TECHNICAL.md`.
 
-Peer dependencies: `@kyneta/machine`, `@kyneta/schema`. 8 tests.
+### Experimental
 
-### `@kyneta/index`
+**`@kyneta/compiler`** — Target-agnostic incremental-view-maintenance compiler. Parses builder-pattern TypeScript, produces classified IR with `BindingTime` (`literal` / `render` / `reactive`), per-loop dependency classification (`structural` / `item` / `external`), filter-pattern detection, and IR→IR transforms (`dissolveConditionals`, `filterTargetBlocks`, `mergeSiblings`). Generator-based walker; template + hole extraction. Does not generate code — rendering targets consume the IR. Deps: `@kyneta/schema`, `@kyneta/changefeed`, `ts-morph`. 547 tests across 13 files. → `experimental/compiler/TECHNICAL.md`.
 
-Live, queryable views over document collections. Group by field, join across collections, subscribe to changes — views update automatically as data moves. DBSP-grounded algebraic design with `ZSet`, `Source`, `Collection`, and `Index` primitives.
+**`@kyneta/cast`** — Web rendering target for `@kyneta/compiler`. Compiled delta-driven UI framework. Runtime is five region primitives (`listRegion`, `filteredListRegion`, `conditionalRegion`, `textRegion`, `valueRegion`) + `mount` / `hydrate` / `scope` / `subscribe` — O(k) DOM updates per delta, no VDOM. Universal build plugin (`unplugin`) for Vite, Rollup, Rolldown, esbuild, Bun, Farm, webpack. Local reactive primitive (`state()` → `LocalRef<T>`). `inputTextRegion` for selection-stable text-input binding. Deps: `@kyneta/compiler`, `@kyneta/schema`, `@kyneta/changefeed`, `ts-morph`, `unplugin`. 634 tests across 27 files. → `experimental/cast/TECHNICAL.md`.
 
-Dependencies: `@kyneta/changefeed`. Peer: `@kyneta/schema`. 143 tests.
+**`@kyneta/perspective`** — Standalone experimental package: Convergent Constraint Systems (CCS). Agents assert constraints; merge is set union; a stratified Datalog evaluator derives the shared reality. LWW and Fugue are Datalog rules that travel in the store — not hardcoded algorithms. Two-layer engine (Layer 0 kernel + Layer 1 Datalog evaluator), §B.7 native-solver fast paths, incremental pipeline with ℤ-set algebra for O(|Δ|) updates. Zero runtime dependencies, zero Kyneta dependencies. Private — not published to npm. 1,374 tests across 35 files. → `experimental/perspective/TECHNICAL.md`.
 
-### `@kyneta/compiler` (experimental)
+### Internal
 
-Target-agnostic incremental view maintenance compiler.
+**`@kyneta/bun-server`** (`internal/bun-server`) — Shared Bun build + static serving utility for examples. Not published. No dedicated TECHNICAL.md.
 
-Takes TypeScript source with builder patterns over Changefeed-emitting state and produces a classified IR annotated with incremental strategies. Does not generate code for any specific rendering target — rendering targets (`@kyneta/cast`, future `@kyneta/native`, etc.) consume the IR and produce target-specific output.
-
-Key subsystems:
-- **Analysis** (`analyze.ts`) — AST → IR via ts-morph, reactive detection, expression classification
-- **IR** (`ir.ts`) — types, factories, guards, merge algebra, slot computation
-- **Walker & Template** (`walk.ts`, `template.ts`) — generator-based IR walker, template extraction + walk planning
-- **Binding Scope** (`binding-scope.ts`) — dependency-tracked variable bindings
-- **Classification** (`classify.ts`, `patterns.ts`) — dependency classification, filter pattern recognition
-- **Transforms** (`transforms.ts`, optional `./transforms` subpath) — IR→IR pipeline transforms for rendering targets: `dissolveConditionals` (merge structurally-identical conditional branches into ternaries) and `filterTargetBlocks` (strip/unwrap labeled blocks by target)
-
-547 tests.
-
-### `@kyneta/cast` (experimental)
-
-Web rendering target — compiled delta-driven web framework.
-
-Consumes annotated IR from `@kyneta/compiler` and produces DOM manipulation or HTML string generation (SSR). The compiler detects reactive refs via the `[CHANGEFEED]` protocol and the runtime emits delta-aware regions (`textRegion`, `listRegion`, `filteredListRegion`, `conditionalRegion`, `valueRegion`) that perform O(k) DOM updates where k is the number of operations in a delta.
-
-Key subsystems:
-- **Codegen** (`src/compiler/`) — IR → DOM/HTML code generation, transform orchestration
-- **Runtime** (`src/runtime/`) — mount, scope lifecycle, delta regions, hydration
-- **Unplugin** (`src/unplugin/`) — universal build plugin with adapters for Vite, Bun, Rollup, Rolldown, esbuild, Farm
-- **Reactive** (`src/reactive/`) — `state()` local reactive primitive (`LocalRef<T>`)
-
-630 tests.
-
-### `@kyneta/exchange`
-
-Transport-agnostic, substrate-agnostic, topology-flexible (p2p, server/client, etc) state exchange.
-
-Manages document lifecycle, coordinates adapters, and synchronizes state across peers. Three merge strategies (concurrent, sequential, ephemeral) dispatched by a TEA (The Elm Architecture) state machine over a six-message protocol: two handshake messages (establish-request, establish-response) and four sync messages (present, interest, offer, destroy). Hosts heterogeneous documents — Loro CRDTs, Yjs CRDTs, plain JS objects, ephemeral presence — in one sync network. Two reactive collections — `exchange.peers` (`ReactiveMap<PeerId, PeerIdentityDetails, PeerChange>`) and `exchange.documents` (`ReactiveMap<DocId, DocInfo, DocChange>`) — provide snapshot access and subscription-based observation of peer and document lifecycle, both draining at quiescence with batched changesets. Unified persistence via `notify/state-advanced`: both local mutations and network imports produce incremental `since` deltas via `exportSince(storeVersion)` → `append()`, replacing the previous split of `onDocImported` + changefeed-based `replace()`. Two-phase substrate construction (`createReplica` → hydrate → `upgrade`) ensures correct CRDT identity and structural initialization after storage hydration. Requires explicit `peerId` for `exchange.get()` to ensure continuity across restarts. Depends on `@kyneta/transport` for the `Transport` abstract interface.
-
-Document governance is layered via `Policy` (per-document rules: `canShare`, `canAccept`, `resolve`) and `Governance` (exchange-wide coordination: `canConnect` gate, policy dispatch). ExchangeParams fields: `canShare` (whether to share a doc with a peer), `canAccept` (whether to accept a doc from a peer), `resolve` (lazily construct a doc on first encounter). Document lifecycle distinguishes `suspend()` (detach from sync, retain state for later resumption) from `destroy()` (permanent removal from the sync graph).
-
-Sub-packages:
-- **`@kyneta/wire`** (`exchange/wire/`) — binary wire protocol. CBOR codec with compact field names, 6-byte binary frame headers, and a fragmentation protocol for cloud WebSocket gateways (AWS API Gateway 128KB limit, Cloudflare Workers 1MB limit). JSON codec for debugging. See `PROTOCOL.md` for the full specification. 231 tests.
-- **`@kyneta/websocket-transport`** (`exchange/transports/websocket/`) — WebSocket transport. Client adapter (browser `WebSocket`), server adapter (abstract), and Bun-specific handlers (`createBunWebsocketHandlers`). Handles connection lifecycle, keepalive pings, ready signaling, and reconnection. 46 tests.
-- **`@kyneta/sse-transport`** (`exchange/transports/sse/`) — SSE (Server-Sent Events) transport. Symmetric text encoding, asymmetric transport (SSE downstream, POST upstream). Client, server, and Express integration. Custom reconnection state machine with `sendFn` pattern for framework-agnostic server integration. 41 tests.
-- **`@kyneta/webrtc-transport`** (`exchange/transports/webrtc/`) — WebRTC data channel transport. BYODC (Bring Your Own Data Channel) with `DataChannelLike` minimal interface. Binary CBOR encoding with transport-level fragmentation. 27 tests.
-- **`@kyneta/unix-socket-transport`** (`exchange/transports/unix-socket/`) — Unix domain socket transport for server-to-server sync. Stream-oriented, backpressure-aware, no fragmentation. Client and server entry points with `StreamFrameParser` and reconnecting `ClientStateMachine`. Binary CBOR encoding via `@kyneta/wire`. 74 tests.
-
-724 tests (+ 231 wire + 46 websocket + 41 sse + 27 webrtc + 74 unix-socket).
-
-### `@kyneta/react`
-
-Thin React bindings over `@kyneta/schema` + `@kyneta/exchange`. Bridges the `[CHANGEFEED]` reactive protocol to React's rendering cycle via `useSyncExternalStore`. Two pure store factory functions (`createChangefeedStore`, `createSyncStatusStore`) form the functional core; hooks (`useValue`, `useDocument`, `useSyncStatus`) and `ExchangeProvider` form the imperative shell. Mirrors Cast's `valueRegion` — both are pure adapters from `[CHANGEFEED]` to a consumer contract. Deep-by-default subscription strategy dispatches `subscribeTree` for composite refs and node-level subscription for scalars.
-
-15 tests.
-
-### `@kyneta/perspective` (experimental)
-
-Convergent Constraint Systems — a constraint-based approach to CRDTs. Agents assert constraints, merge is set union, and a stratified Datalog evaluator derives shared reality. Includes an incremental pipeline based on DBSP for O(|Δ|) updates. Zero runtime dependencies. Independent of the core framework. (Private — not published to npm.)
-
-1,374 tests.
-
-## Cross-Package Dependencies
-
-```
-@kyneta/changefeed                      (no deps — reactive foundation)
-@kyneta/machine                         (no deps — state machine algebra)
-    │
-    ├──► @kyneta/schema                 (+ changefeed)
-    │        │
-    │        ├──► @kyneta/loro-schema   (+ loro-crdt)
-    │        ├──► @kyneta/yjs-schema    (+ yjs)
-    │        ├──► @kyneta/index         (+ changefeed)
-    │        │
-    │        ├──► @kyneta/compiler      (+ ts-morph) [experimental]
-    │        │        │
-    │        │        └──► @kyneta/cast (+ unplugin) [experimental]
-    │        │
-    │        └──► @kyneta/transport     (+ machine)
-    │                 │
-    │                 ├──► @kyneta/exchange
-    │                 │        │
-    │                 │        ├──► @kyneta/leveldb-store
-    │                 │        └──► @kyneta/react   (+ react)
-    │                 │
-    │                 └──► @kyneta/wire
-    │                          │
-    │                          ├──► @kyneta/websocket-transport
-    │                          ├──► @kyneta/sse-transport
-    │                          ├──► @kyneta/webrtc-transport
-    │                          └──► @kyneta/unix-socket-transport
-    │
-    └──► @kyneta/perspective            (standalone — private) [experimental]
-```
-
-`@kyneta/changefeed` and `@kyneta/machine` are the tier-0 foundation — changefeed defines the `[CHANGEFEED]` reactive protocol, `Changefeed<T>`, `ReactiveMap`, and the `Callable` contract; machine provides the Mealy machine algebra for stateful protocols. `@kyneta/schema` depends on changefeed and defines the interpreter algebra, delta types, and the `Substrate` interface. `@kyneta/loro-schema` and `@kyneta/yjs-schema` are CRDT substrate backends that implement `Substrate` for Loro and Yjs respectively; each provides a bind function (`loro.bind()`, `yjs.bind()`) that accepts `Schema.*` trees. `@kyneta/index` builds live queryable views over document collections, depending on changefeed and schema. `@kyneta/compiler` is the intermediate layer — it produces target-agnostic annotated IR. `@kyneta/cast` is the web rendering target that consumes compiler IR and produces DOM/HTML output. `@kyneta/transport` defines the abstract `Transport` interface, depending on machine and schema. `@kyneta/exchange` orchestrates sync via transports and the synchronizer state machine; its sub-packages `@kyneta/wire` (binary encoding with internal CBOR codec and framing), `@kyneta/websocket-transport` (WebSocket transport pair), `@kyneta/sse-transport` (SSE transport), `@kyneta/webrtc-transport` (WebRTC data channel transport), and `@kyneta/unix-socket-transport` (Unix domain socket transport for server-to-server sync) live under the exchange directory. `@kyneta/react` bridges the CHANGEFEED protocol to React's rendering cycle. The `/transforms` subpath (`@kyneta/compiler/transforms`) provides optional IR→IR pipeline transforms that rendering targets apply before codegen.
-
-The `examples/todo` app exercises the full vertical slice:
-
-```
-@kyneta/schema → @kyneta/yjs-schema → @kyneta/exchange
-→ @kyneta/websocket-transport → @kyneta/cast → running app
-```
-
-## Key Concepts
-
-### CHANGEFEED Protocol
-
-The universal reactive interface. Any value with a `[CHANGEFEED]` symbol property participates in the observation protocol:
-
-- `ref[CHANGEFEED].current` — read the current value
-- `ref[CHANGEFEED].subscribe(cb)` — observe changes as `Changeset` batches
-
-Schema-interpreted refs, `LocalRef<T>` from `state()`, and any custom reactive type can implement this protocol. The compiler's reactive detection checks for `[CHANGEFEED]` at the type level to determine which runtime region to emit.
-
-### BoundSchema and Substrate Swapping
-
-A `BoundSchema<S>` captures three choices that define a document type, plus migration-derived metadata:
-
-1. **Schema** — what shape is the data? (`Schema.struct({ ... })`)
-2. **Factory** — how is the data stored and versioned? (`SubstrateFactory`)
-3. **Strategy** — how does the exchange sync it? (`"collaborative"` | `"authoritative"` | `"ephemeral"`)
-
-Additionally, `BoundSchema` carries migration-derived metadata: `identityBinding` (a `SchemaBinding` mapping paths to stable identity hashes), `migrationChain` (the chain of migration primitives, or `null`), and `supportedHashes` (the set of schema hashes reachable via non-breaking T0/T1a migrations, used for capability negotiation during sync).
-
-Convenience wrappers make this a one-liner:
-- `loro.bind(schema)` — Loro CRDT substrate, collaborative merge
-- `yjs.bind(schema)` — Yjs CRDT substrate, collaborative merge
-- `json.bind(schema)` — plain JS substrate, authoritative merge
-- `json.bind(schema, "ephemeral")` — ephemeral substrate (TimestampVersion), ephemeral/presence state
-
-`bind()` validates capability compatibility at compile time via the `[CAPS]` phantom brand. Each substrate declares a closed set of supported capabilities: `LoroCaps = "text" | "counter" | "movable" | "tree" | "json"`, `YjsCaps = "text" | "json"`. Schema nodes carry a `[CAPS]` brand accumulating all capability requirements bottom-up via `ExtractCaps<S>`. `yjs.bind()` accepts only schemas where `ExtractCaps<S>` is within `YjsCaps` — passing a schema containing `Schema.counter()` or `Schema.movableList()` is a compile error. `loro.bind()` accepts all capabilities in `LoroCaps`. `json.bind()` accepts all capabilities (`AllowedCaps = string`).
-
-Swapping CRDT backends is a one-import change. Everything downstream — the Exchange sync protocol, the Cast view, the WebSocket transport, the wire format — stays identical because they depend on the `Substrate` interface, not on any particular CRDT library.
-
-### Auto-Read Insertion and the `()` Snapshot Convention
-
-The compiler supports a **bare-ref developer experience**: developers write `recipe.name.toLowerCase()` and the compiler auto-inserts `()` reads at the ref/value boundary, emitting `recipe.name().toLowerCase()`. This is implemented via the `ExpressionIR` tree — a structured representation of expressions where `RefReadNode` renders as `source()` (the observation morphism).
-
-- **Bare ref access**: `recipe.name.toLowerCase()` → compiler detects `recipe.name` is a changefeed, wraps in `RefReadNode`, renders as `recipe.name().toLowerCase()`
-- **Explicit snapshot**: `recipe.name()` → developer writes `()` explicitly, compiler produces `SnapshotNode` — same rendering, distinct semantics (developer intent)
-- **Binding expansion**: `const nameMatch = recipe.name.toLowerCase().includes(filterText.toLowerCase())` — the `nameMatch` binding carries its full expression tree. In reactive closures, the codegen expands the binding inline for self-contained re-evaluation from live refs.
-
-The `reactive-view` type augmentations (`@kyneta/cast/types/reactive-view`) widen `TextRef extends String` and `CounterRef extends Number` so that value-type methods (`.toLowerCase()`, `.toFixed()`, etc.) are visible at the type level. `LocalRef<T> = Widen<T> & LocalRefBase<T>` gives the same widening via intersection. These are compile-time illusions — the compiler transforms the code before it runs.
-
-### Delta Kinds
-
-Four categories of structured change, each with a specialized runtime region:
-
-| Delta Kind | Change Type | Runtime Region | DOM Strategy |
-|------------|------------|----------------|-------------|
-| **text** | `TextChange` (retain/insert/delete ops) | `textRegion` | Surgical `insertData`/`deleteData` on text nodes |
-| **sequence** | `SequenceChange` (retain/insert/delete ops) | `listRegion` | O(1) `insertBefore`/`removeChild` per op |
-| **sequence (filtered)** | `SequenceChange` + item/external refs | `filteredListRegion` | Separated subscription layers: external O(n), item O(1) |
-| **replace** | `ReplaceChange` (whole-value swap) | `valueRegion` / `conditionalRegion` | Re-read and apply, or swap DOM branches |
-| **increment** | `IncrementChange` (counter delta) | `valueRegion` | Re-read and apply |
-
-### Interpreter Algebra
-
-`@kyneta/schema`'s core abstraction. A schema is a recursive grammar; an interpreter is an F-algebra from schema nodes to runtime values. Interpreters compose via the fluent builder:
-
-```
-interpret(schema, ctx)
-  .with(readable)     // adds callable () → value
-  .with(writable)     // adds .set(), .push(), .insert(), etc.
-  .with(changefeed)   // adds [CHANGEFEED] observation
-  .done()             // → Ref<S>
-```
-
-Each `.with(layer)` wraps the previous result, adding capabilities. The type system tracks which capabilities are present via `Ref<S>` (full stack), `RWRef<S>` (read-write), and `RRef<S>` (read-only).
-
-The Exchange builds the full interpreter stack automatically:
-
-```
-interpret(schema, substrate.context())
-  .with(readable)
-  .with(writable)
-  .with(changefeed)
-  .done()
-```
-
-### Exchange Sync Protocol
-
-The Exchange coordinates sync between peers via a six-message protocol — two handshake messages and four sync messages:
-
-1. **establish-request / establish-response** — peer identity handshake
-2. **present** — announce document IDs available for sync (includes `schemaHash` and `supportedHashes`)
-3. **interest** — request a specific document's state (with optional version for delta)
-4. **offer** — deliver document state (snapshot or delta payload)
-5. **destroy** — permanently remove a document from the sync graph; `suspend()` detaches without destroying, allowing later resumption
-
-The synchronizer is a TEA state machine — pure model updates, command outputs. Three sync algorithms are dispatched by the `BoundSchema`'s merge strategy:
-- **Collaborative**: bidirectional exchange, concurrent versions possible (Loro, Yjs)
-- **Authoritative**: request/response, total order (JSON)
-- **Ephemeral**: unidirectional push/broadcast, timestamp-based (ephemeral/presence)
-
-**Schema compatibility:** The `present` message includes the document's `supportedHashes` — the set of schema hashes reachable via T0/T1a (non-breaking) migrations. `handlePresent` uses set-intersection over `supportedHashes` instead of exact hash equality, so peers at different schema versions (connected by additive or rename migrations) can sync without coordination. Disjoint hash sets are rejected.
-
-Multi-hop relay: when the synchronizer imports a delta from peer A, it relays to all other synced peers (excluding A) via `buildRelayPush`.
-
-### Functional Core / Imperative Shell
-
-The runtime follows FC/IS throughout:
-- **Functional core** — pure planning functions (`planInitialRender`, `planDeltaOps`, `planConditionalUpdate`) produce operation lists
-- **Imperative shell** — `executeOp` applies operations to the DOM
-
-This separation enables testing without a DOM and ensures the planning logic is independent of the rendering target.
+---
 
 ## Examples
 
-### `examples/todo`
+**`examples/todo`** — Minimal vertical slice. Collaborative todo list using Loro + WebSocket + Cast. ~280 lines exercising ~10 packages end-to-end. Served by a Bun HTTP server with WebSocket upgrade; client bundles with `@kyneta/cast/unplugin/bun`. See [`ARCHITECTURE.md`](./ARCHITECTURE.md) → *Vertical slice* for the data flow.
 
-Collaborative todo app — the full vertical slice proof. ~200 lines of application code (schema + view + client bootstrap + server) backed by ~40,000 lines of framework infrastructure across 7 packages. Real-time sync between browser tabs via WebSocket.
+**`examples/todo-react`** — Same collaborative todo list rendered with React + `@kyneta/react` instead of Cast. Proves substrate-and-rendering-target agnosticism. Uses Vite in middleware mode against a Node HTTP server.
 
-Demonstrates: Cast compiler (template cloning + reactive regions), Exchange sync protocol, Yjs CRDT substrate (swappable to Loro with one import change), Bun server with `Bun.build()` + unplugin, brotli pre-compression (59KB compressed bundle).
+**`examples/bumper-cars`** — Multi-peer ephemeral + collaborative hybrid. Per-peer input docs (ephemeral, LWW) drive shared game state (collaborative CRDT). Demonstrates `canShare` / `canAccept` policies restricting input-doc visibility to the owning peer, and server-only writes to game state.
 
-### `examples/todo-react`
+**`examples/unix-socket-sync`** — Minimal demonstration of `createUnixSocketPeer` — two processes sharing a socket path, leaderless role negotiation, bidirectional sync.
 
-Collaborative todo with React bindings. Demonstrates `@kyneta/react` hooks (`ExchangeProvider`, `useDocument`, `useValue`, `useSyncStatus`) with Yjs substrate and WebSocket transport.
-
-### `examples/bumper-cars`
-
-Heterogeneous documents in one Exchange — shared game state (Yjs, concurrent merge) alongside per-player ephemeral presence. React bindings, physics simulation, Bun server.
-
-51 tests.
-
-### Shared example infrastructure
-
-Bun-based examples (`todo`, `bumper-cars`) share build and serving infrastructure via `@kyneta/bun-server` (an internal workspace package, not published). Each example's `build.ts` is a thin config (~5 lines) that calls `buildClient(opts?)`, and each server delegates static file handling to `serveDist(req, distDir)`. Brotli pre-compression uses `node:zlib` (no system CLI dependency) and can be skipped via `SKIP_BROTLI=1` for faster workspace builds.
+---
 
 ## Development
 
-### Build & Verification
+### Build & verify
 
-The monorepo uses **Turborepo** for cross-package task orchestration with content-hash caching, **tsdown** (Rolldown-based) for library bundling, and **@halecraft/verify** for intra-package verification pipelines.
+```bash
+# install + build all packages
+pnpm install
+pnpm build
 
-```sh
-# Build all packages in dependency order
-pnpm build                              # alias for: turbo build
-SKIP_BROTLI=1 pnpm build               # skip brotli pre-compression (faster)
+# full verify: format (biome) → types (tsc) → tests (vitest)
+pnpm verify
 
-# Verify all main packages (format → types → logic)
-pnpm verify                             # alias for: turbo verify --filter='!@kyneta/perspective'
+# per-package
+cd packages/schema && pnpm verify
 
-# Test a single package (auto-builds upstream deps if stale)
-npx turbo test --filter=@kyneta/cast    # builds schema + compiler first, then runs cast tests
-
-# Verify perspective separately (opt-in, not in default pipeline)
-npx turbo verify --filter=@kyneta/perspective
+# tests only
+cd packages/schema && pnpm exec vitest run
 ```
 
-**Turbo tasks** (`turbo.json`):
-- `build` — depends on `^build` (upstream builds), caches `dist/**`, env-keyed on `SKIP_BROTLI`
-- `verify` — depends on `build` (own build, which transitively includes `^build`), runs the package's `verify` script
-- `test` — depends on `build` (own build, which transitively includes `^build`), runs the package's `test` script (which calls `verify logic`)
+`pnpm build` runs via turbo; it builds every package's `dist/` output using `tsdown` (migrated from `tsup` on 2026-04-19 — see `jj:rqqtpktt`). Build output is required for cross-package dependencies during development because `@kyneta/compiler` (and other consumers) resolve module types from `dist/*.d.ts`, not source.
 
-**Verify pipeline** (`verify.config.ts` in each package):
-1. **format** — `biome check --write .` (auto-fixes formatting, reports lint issues)
-2. **types** — `tsgo --noEmit --skipLibCheck` (fast Rust-based type checking)
-3. **logic** — `vitest run` (unit + integration tests)
+### Turbo tasks
 
-Each step depends on the previous: types won't run if format fails, logic won't run if types fail.
+| Task | Runs |
+|------|------|
+| `build` | `tsdown` in every package |
+| `verify` | `biome check` → `tsgo` (or `tsc`) → `vitest run` |
+| `test` | `vitest run` (alias for `verify logic`) |
+| `clean` | Remove `dist/` |
 
-**Per-package test counts:**
+### Workspace scripts
 
-| Package | Tests | Notes |
-|---------|-------|-------|
-| `@kyneta/schema` | 1,666 | Interpreter algebra, changefeeds, substrates, zero, step, validate |
-| `@kyneta/changefeed` | 47 | Changefeed protocol, ReactiveMap, Callable |
-| `@kyneta/machine` | 45 | Mealy machine algebra, Observable |
-| `@kyneta/loro-schema` | 180 | Loro substrate, change mapping, sync, event bridge |
-| `@kyneta/yjs-schema` | 188 | Yjs substrate, change mapping, sync, version |
-| `@kyneta/compiler` | 547 | AST analysis, ExpressionIR, reactive detection, classification, transforms |
-| `@kyneta/cast` | 630 | Codegen, runtime regions, unplugin, integration tests |
-| `@kyneta/exchange` | 724 | Synchronizer state machine, three merge strategies, multi-hop relay |
-| `@kyneta/transport` | 8 | Transport base class, channel types |
-| `@kyneta/wire` | 231 | CBOR/JSON codecs, framing, fragmentation, reassembly |
-| `@kyneta/websocket-transport` | 46 | Client/server adapters, Bun handlers, connection lifecycle |
-| `@kyneta/sse-transport` | 41 | SSE client/server adapters, Express integration, reconnection |
-| `@kyneta/webrtc-transport` | 27 | BYODC lifecycle, binary round-trips, fragmentation, simple-peer bridge |
-| `@kyneta/unix-socket-transport` | 74 | Stream framing, client/server, reconnection, backpressure |
-| `@kyneta/index` | 143 | ZSet, Source, Collection, Index, joins, flatMap |
-| `@kyneta/react` | 15 | Store factories, hooks, provider lifecycle, deep subscription |
-| `@kyneta/perspective` | 1,374 | CCS kernel, Datalog evaluator, incremental pipeline |
-| `@kyneta/leveldb-store` | 10 | LevelDB persistence |
-| `examples/bumper-cars` | 51 | Heterogeneous documents, physics, React bindings |
-| `tests/exchange-websocket` | 9 | End-to-end Exchange sync over real Bun WebSocket connections |
-| **Total** | **~5,880** | |
+`package.json` at the repo root exposes:
 
-### Workspace Structure
+| Script | Behaviour |
+|--------|-----------|
+| `pnpm build` | `turbo run build` across all workspaces |
+| `pnpm verify` | `turbo run verify` |
+| `pnpm test` | `turbo run test` (same as `verify logic`) |
+
+### Package manager
+
+**pnpm is required.** Workspace references (`workspace:^`), peer-dep hoisting, and the `pnpm-workspace.yaml` glob configuration all assume pnpm. Bun and npm do not work for the monorepo build — use Bun to *run* published packages, but use pnpm for development here.
+
+### Runtime
+
+TypeScript 5.9 or newer (the `tsgo` preview compiler is used for dev-mode type checking where supported; `tsc` is the production check). Bun 1.3+ covers most runtime needs in examples and tests; Node 22+ is supported for consumers who prefer it. Node < 22 is unsupported.
+
+---
+
+## Workspace structure
 
 ```
 kyneta/
-├── packages/
-│   ├── changefeed/               @kyneta/changefeed
-│   ├── machine/                  @kyneta/machine
-│   ├── schema/                   @kyneta/schema
+├── ARCHITECTURE.md           # 30,000-foot system overview
+├── TECHNICAL.md              # (this file) dense factual reference
+├── README.md                 # public-facing entry point
+├── CHANGELOG.md
+├── LICENSE
+├── biome.json                # formatter / linter config
+├── package.json              # root scripts, turbo config
+├── pnpm-workspace.yaml       # workspace glob config
+├── pnpm-lock.yaml
+├── turbo.json                # turbo task graph
+│
+├── packages/                 # published packages
+│   ├── changefeed/           # @kyneta/changefeed
+│   ├── machine/              # @kyneta/machine
+│   ├── schema/               # @kyneta/schema
 │   │   └── backends/
-│   │       ├── loro/             @kyneta/loro-schema
-│   │       └── yjs/              @kyneta/yjs-schema
-│   ├── transport/                @kyneta/transport
-│   ├── index/                    @kyneta/index
-│   ├── exchange/                 @kyneta/exchange
-│   │   ├── wire/                 @kyneta/wire
+│   │       ├── loro/         # @kyneta/loro-schema
+│   │       └── yjs/          # @kyneta/yjs-schema
+│   ├── transport/            # @kyneta/transport
+│   ├── exchange/             # @kyneta/exchange
+│   │   ├── wire/             # @kyneta/wire
 │   │   ├── transports/
-│   │   │   ├── websocket/        @kyneta/websocket-transport
-│   │   │   ├── sse/              @kyneta/sse-transport
-│   │   │   ├── webrtc/           @kyneta/webrtc-transport
-│   │   │   └── unix-socket/      @kyneta/unix-socket-transport
+│   │   │   ├── websocket/    # @kyneta/websocket-transport
+│   │   │   ├── sse/          # @kyneta/sse-transport
+│   │   │   ├── webrtc/       # @kyneta/webrtc-transport
+│   │   │   └── unix-socket/  # @kyneta/unix-socket-transport
 │   │   └── stores/
-│   │       └── leveldb/          @kyneta/leveldb-store
-│   └── react/                    @kyneta/react
-├── experimental/
-│   ├── compiler/                 @kyneta/compiler
-│   ├── cast/                     @kyneta/cast
-│   └── perspective/              @kyneta/perspective (private)
-├── internal/
-│   └── bun-server/               @kyneta/bun-server (private — build, compress, serve)
-├── examples/
-│   ├── todo/                     Collaborative todo (Cast + Exchange + Yjs)
-│   ├── todo-react/               Collaborative todo (React + Exchange + Yjs)
-│   ├── bumper-cars/              Heterogeneous docs (React + Exchange + ephemeral)
-│   └── unix-socket-sync/         Server-to-server sync via Unix sockets
-├── tests/
-│   └── exchange-websocket/       E2E Exchange sync over real WebSockets
-├── .plans/                       Long-term architectural plans
-└── .jj-plan/                     Active jj change plans (gitignored)
+│   │       └── leveldb/      # @kyneta/leveldb-store
+│   ├── index/                # @kyneta/index
+│   └── react/                # @kyneta/react
+│
+├── experimental/             # experimental packages (public surface may shift)
+│   ├── compiler/             # @kyneta/compiler
+│   ├── cast/                 # @kyneta/cast
+│   └── perspective/          # @kyneta/perspective (private)
+│
+├── examples/                 # runnable examples
+│   ├── todo/                 # Loro + WebSocket + Cast
+│   ├── todo-react/           # Loro + WebSocket + React
+│   ├── bumper-cars/          # Ephemeral + collaborative hybrid
+│   └── unix-socket-sync/     # createUnixSocketPeer demo
+│
+├── internal/                 # unpublished shared utilities
+│   └── bun-server/           # shared Bun build + static serving for examples
+│
+├── tests/                    # cross-package test harnesses
+│   └── exchange-websocket/   # E2E WebSocket sync via bun test
+│
+├── scripts/                  # build/release/maintenance scripts
+├── papers/                   # drafts, notes, theory docs
+└── .jj-plan/                 # plan documents for jj stack
 ```
 
-Package manager: **pnpm** with workspace protocol (`workspace:^`).
-Task runner: **Turborepo** for cross-package build/test orchestration.
-Bundler: **tsdown** (Rolldown-based) — library bundling with ESM output, DTS generation, and sourcemaps.
-Verification: **@halecraft/verify** for intra-package format → types → logic pipelines.
-Linter/Formatter: **Biome** (root `biome.json`, 2-space indent, no semicolons).
-Type checker: **tsgo** (`@typescript/native-preview`) — Rust-based TypeScript compiler for fast verification.
-Runtime: **Bun** for scripts and CLI; **Vite** for dev server and build.
-VCS: **jj** (Jujutsu).
+---
 
 ## Relationship to Loro
 
-Kyneta was originally developed as `@loro-extended/*` — a set of packages extending the [Loro](https://loro.dev/) CRDT framework. The architecture has since been decoupled:
+Kyneta is deeply indebted to Loro. The `@kyneta/schema` interpreter algebra + substrate boundary owe their shape to what fits Loro cleanly; `@kyneta/loro-schema` is the reference CRDT substrate; the collaborative todo example uses Loro by default.
 
-- `@kyneta/schema` defines a **backend-agnostic** schema grammar (`Schema` namespace) with five structural constructors plus five first-class CRDT types (`text`, `counter`, `set`, `tree`, `movable`). Backend packages use `Schema.*` directly — `loro.bind(Schema.struct({...}))` binds a schema tree to the Loro substrate. The `Interpreter` interface has 10 methods — one per `[KIND]` value — and the algebra itself is pure.
-- `@kyneta/loro-schema` and `@kyneta/yjs-schema` are peer substrate backends behind the same `Substrate` interface. The todo example demonstrates swapping between them with a one-line import change.
-- `@kyneta/cast` consumes the CHANGEFEED protocol, which is defined in `@kyneta/schema` and has no CRDT dependency.
-- `@kyneta/exchange` syncs documents via the `Substrate` interface — it never imports a CRDT library directly.
-- Historical documents (`LEARNINGS.md`, `theory/interpreter-algebra.md`) retain `@loro-extended` references as they are factually accurate for their era.
+However, kyneta is **not** "a framework on top of Loro." Three things matter:
 
-First-class types (`Schema.text()`, `Schema.counter()`, `Schema.set()`, `Schema.tree()`, `Schema.movableList()`) are proper grammar nodes with their own `[KIND]` values and `Interpreter` methods. The `[CAPS]` phantom brand on each schema node declares its required merge capabilities, and substrates enforce compatibility at `bind()` time via closed capability sets (`LoroCaps`, `YjsCaps`).
+1. **Loro is one substrate among several.** `@kyneta/schema` factors state management + replication into an interface the plain substrate (authoritative), the LWW substrate (ephemeral), `@kyneta/loro-schema`, and `@kyneta/yjs-schema` all implement. Applications pick per document.
+2. **The grammar is backend-agnostic.** `@kyneta/schema`'s `Schema` type was derived by *collapsing* Loro's container/value split into one recursive grammar. First-class CRDT types (`text`, `counter`, `set`, `tree`, `movable`) are grammar nodes with `[CAPS]` phantom brands — not Loro-specific annotations. A schema using only `"text" | "json"` capabilities binds cleanly to Yjs; a schema using only `"json"` binds to plain JSON.
+3. **The sync protocol is substrate-neutral.** The exchange's six-message protocol (`establish`, `depart`, `present`, `interest`, `offer`, `dismiss`) carries `SubstratePayload` blobs opaquely. Loro-specific concerns — version vectors, WASM discrimination via `.kind()`, `applyDiff`-based writes — are confined to `@kyneta/loro-schema`.
+
+The practical consequence: Loro-backed documents and plain-JSON documents coexist in a single `Exchange`. A Yjs document synced over WebSocket and a Loro document synced over WebRTC are both just `DocRuntime`s to the synchronizer. Swapping substrates is a `bind()` change, not a framework migration.
+
+---
+
+## See also
+
+- [`ARCHITECTURE.md`](./ARCHITECTURE.md) — thesis, design principles, system invariants, package roles, dependency flow, todo vertical slice.
+- Each package's `TECHNICAL.md` — architecture, vocabulary, source-of-truth citations, file map.
+- `.jj-plan/` — plan documents for active work.
+- `papers/` — theory documents, design notes, and CCS specifications (for `@kyneta/perspective`).

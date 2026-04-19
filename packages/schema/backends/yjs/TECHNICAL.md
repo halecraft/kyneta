@@ -1,314 +1,426 @@
-# @kyneta/yjs-schema — Technical Documentation
+# @kyneta/yjs-schema — Technical Reference
 
-## Architecture Overview
+> **Package**: `@kyneta/yjs-schema`
+> **Role**: Yjs CRDT substrate for `@kyneta/schema`. Wraps a `Y.Doc` as a `Substrate<YjsVersion>` with a single-root-`Y.Map` design, schema-guided live navigation via `instanceof` discrimination, imperative writes inside `Y.transact`, identity-keyed containers for cross-schema sync, and a persistent `observeDeep` event bridge so every mutation — local kyneta writes, `merge()`, `Y.applyUpdate()`, or raw Yjs API — fires the kyneta changefeed.
+> **Depends on**: `@kyneta/schema` (peer), `@kyneta/changefeed` (peer), `yjs` (peer)
+> **Depended on by**: `@kyneta/exchange` (dev), `@kyneta/react` (dev), `@kyneta/cast` (dev), application code that wants collaborative documents via Yjs
+> **Canonical symbols**: `yjs` (namespace: `yjs.bind`, `yjs.replica`), `YjsCaps`, `YjsNativeMap`, `createYjsSubstrate`, `yjsSubstrateFactory`, `yjsReplicaFactory`, `YjsVersion`, `YjsPosition`, `yjsReader`, `resolveYjsType`, `stepIntoYjs`, `ensureContainers`, `applyChangeToYjs`, `eventsToOps`, `toYjsAssoc`, `STRUCTURAL_YJS_CLIENT_ID`
+> **Key invariant(s)**: Every schema field is a child of one root `Y.Map` obtained via `doc.getMap("root")`. This is what makes a single `observeDeep` call capture every mutation with correct relative paths — and what makes `instanceof` container discrimination reliable (Yjs shared types are native JS classes, not WASM handles).
 
-`@kyneta/yjs-schema` implements `Substrate<YjsVersion>` by wrapping a `Y.Doc` with schema-aware typed reads, writes, versioning, and export/merge. The architecture mirrors `@kyneta/loro-schema` but is structurally simpler due to Yjs's imperative mutation model (no intermediate diff format, no synthetic container IDs). `YjsCaps = "text" | "json"` — Yjs supports only text and JSON merge boundaries. The `YjsNativeMap` functor maps schema kinds to Yjs shared types, threading typed `[NATIVE]` access through every ref.
+The Yjs backend for Kyneta. Hands you a substrate instance — stored state, versioning, export/import, and a `Reader` — in exchange for a `Y.Doc`. Every ref produced by the interpreter stack reads through schema-guided shared-type resolution; every write runs inside a `Y.transact` that tags its origin; every Yjs-visible mutation surfaces as a `Changeset` on the kyneta changefeed.
 
-### Core Design Decisions
+Consumed by applications that bind schemas with `yjs.bind(schema)`. Not imported by any other Kyneta package at runtime — `@kyneta/exchange`, `@kyneta/react`, and `@kyneta/cast` depend on it only in dev/test.
 
-1. **Single root `Y.Map`**: All schema fields are children of `doc.getMap("root")`. This enables a single `observeDeep` call that captures all mutations with correct relative paths, and avoids the `_props` split used in the Loro binding.
+---
 
-2. **Imperative local writes**: kyneta `Change` objects are applied imperatively via Yjs API calls (`ytext.applyDelta()`, `yarray.insert()`, `ymap.set()`). No intermediate diff format — `prepare()` accumulates `{ path, change }` pairs, and `onFlush()` applies them all within a single `doc.transact()`.
+## Questions this document answers
 
-3. **`instanceof` for type discrimination**: Unlike Loro's `.kind()` method, Yjs shared types are discriminated via `instanceof Y.Map`, `instanceof Y.Array`, `instanceof Y.Text`. This is reliable because Yjs types are native JavaScript classes.
+- Why one root `Y.Map` instead of multiple root shared types? → [The single-root-`Y.Map` design](#the-single-root-ymap-design)
+- How does this differ from `@kyneta/loro-schema` — same job, different substrate? → [Loro vs Yjs: what changes](#loro-vs-yjs-what-changes)
+- Why `instanceof` here but `.kind()` there? → [`instanceof` container discrimination](#instanceof-container-discrimination)
+- What does `YjsVersion` include that a bare state vector doesn't? → [`YjsVersion` — state vector + delete set](#yjsversion--state-vector--delete-set)
+- How do structural inserts (a whole struct into a map) commit atomically? → [The write path and populate-then-attach](#the-write-path-and-populate-then-attach)
+- Why is there a reserved `clientID = 0` for structural operations? → [`STRUCTURAL_YJS_CLIENT_ID`](#structural_yjs_client_id)
+- How does a remote `Y.applyUpdate` notify kyneta subscribers? → [The event bridge](#the-event-bridge)
 
-4. **One boolean + one origin check for re-entrancy**: Yjs `transaction.origin` carries the tag set by `doc.transact(fn, origin)`, so our own kyneta flushes are identifiable via `origin === "kyneta-prepare"` without a separate boolean. The single `inOurTransaction` guard prevents `prepare`/`onFlush` from doing Yjs-side work during event bridge replay.
+## Vocabulary
 
-5. **Populate-then-attach for structured inserts**: When creating nested shared types at runtime (e.g., pushing a struct into a Y.Array), fields are populated *before* the shared type is inserted into its parent. This produces a single `observeDeep` event with the complete struct, rather than a cascade of child `MapChange` events.
+| Term | Means | Not to be confused with |
+|------|-------|-------------------------|
+| `Y.Doc` | Yjs's top-level document (from `yjs`). Owns shared types, client ID, update stream. | A kyneta `DocRef` — the `Y.Doc` is the substrate-native backing |
+| `YjsCaps` | The capability set `"text" \| "json"`. Yjs supports collaborative text plus plain-JSON merge boundaries; no `counter`, `movable`, `tree`, or `set`. | Yjs's full feature set — this is the subset kyneta exposes |
+| `YjsNativeMap` | The `NativeMap` functor mapping schema kinds to Yjs shared types (`text → Y.Text`, `list → Y.Array`, `struct → Y.Map`, `map → Y.Map`). Slots for unsupported kinds are `undefined`. | A JS `Map` — this is a type-level functor |
+| `YjsVersion` | `@kyneta/schema`'s `Version` implementation wrapping a Yjs **snapshot** (state vector + delete set). | A bare state vector — SV-only versions cannot distinguish same-state from divergent-deletes |
+| `YjsPosition` | `Position` implementation wrapping `Y.RelativePosition`. Stateless `transform` — resolution queries the CRDT directly. | A numeric index |
+| `resolveYjsType` | Pure left-fold over path segments accumulating `(currentType, currentSchema)`. The navigation primitive for every read. | A cache lookup — resolution happens on every read |
+| `stepIntoYjs` | One step of `resolveYjsType`: given `(currentType, segment, identity?)`, return the child shared type or scalar. | `stepIntoLoro` from the Loro backend — same shape, different dispatch |
+| `root Y.Map` | The single `Y.Map` at `doc.getMap("root")` that holds every schema field (shared types or plain values). | A per-field root container (that's the Loro model) |
+| `ensureContainers` | Conditionally creates shared types for every schema field. Idempotent. Uses structural client ID during creation. | `populate` — creates containers; populate fills them |
+| `applyChangeToYjs` | Pure-ish: apply a kyneta `Change` + path + schema to a Yjs shared type (inside an open transaction). | `changeToDiff` from Loro — Loro accumulates diffs then applies once; Yjs mutates incrementally inside `transact` |
+| `eventsToOps` | Inverse: turn `observeDeep` events (after remote update or external mutation) into kyneta `Op[]`. | `applyChangeToYjs` — opposite direction |
+| `yjsReader` | `Reader` implementation that reads by resolving the shared type at `path` and extracting its value. | Substrate state — the reader is a live view |
+| `Y.transact` | Yjs's atomic-commit primitive. Multiple mutations inside one `transact` produce one combined update + one `observeDeep` event. | A database transaction — this is a batching/origin-tagging API |
+| Transaction `origin` | A tag attached to a `Y.transact` call. The event bridge uses the origin to distinguish kyneta's own writes from external ones. | An `origin` on a kyneta `Changeset` — this is Yjs-level |
+| `STRUCTURAL_YJS_CLIENT_ID` | Reserved `clientID = 0` used during container creation. Makes structural ops identical across peers. | A real peer's client ID (always non-zero) |
+| Identity hash | Content-addressed 128-bit hex derived from `(path, generation)` via FNV-1a-128. The Y.Map key for every product-field boundary. | A field name |
+| `SchemaBinding` | `{ forward: Map<string, Hash>, backward: Map<Hash, string> }` from `@kyneta/schema`. Threaded through `resolveYjsType` so every key lookup uses identity, not name. | A validation rule |
 
-6. **Shared `populate.ts` module**: Root container population helpers are extracted into a dedicated module imported by both `substrate.ts` and `bind-yjs.ts`, avoiding the duplication present in the Loro binding.
+---
 
-7. **`YjsNativeMap` functor**: The `NativeMap` implementation for Yjs maps schema kinds to Yjs shared types (`text → Y.Text`, `list → Y.Array`, `struct → Y.Map`, etc.). `yjs.bind(schema)` produces `BoundSchema<S, YjsNativeMap>`, threading typed `[NATIVE]` access through `DocRef<S, YjsNativeMap>` and all child refs. `unwrap(ref)` reads `ref[NATIVE]` at any depth — no per-substrate escape hatch needed.
+## Architecture
 
-## Root Field Mapping
+**Thesis**: Yjs already stores the state. This package is a thin, substrate-shaped lens that translates between kyneta's schema-guided API and Yjs's shared-type-and-transaction reality — with zero caching of its own, one `observeDeep` subscription that makes the substrate transparent to external mutations, and a single root `Y.Map` that keeps everything structurally uniform.
 
-All fields live in `doc.getMap("root")`:
+Four responsibilities, mirroring the Loro backend:
 
-| Schema type | Root map child | Example |
-|---|---|---|
-| `text` (`TextSchema`) | `Y.Text` | `rootMap.get("title")` → `Y.Text` |
-| `product` (struct) | `Y.Map` | `rootMap.get("profile")` → `Y.Map` |
-| `sequence` (list) | `Y.Array` | `rootMap.get("items")` → `Y.Array` |
-| `map` (record) | `Y.Map` | `rootMap.get("labels")` → `Y.Map` |
-| `scalar` / `sum` | Plain value | `rootMap.get("count")` → `42` |
+| Responsibility | Primary source |
+|----------------|----------------|
+| Navigation (schema → shared type) | `src/yjs-resolve.ts` — `resolveYjsType`, `stepIntoYjs` |
+| Reads (shared type → value) | `src/reader.ts` — `yjsReader` |
+| Writes (kyneta `Change` → Yjs mutations) | `src/change-mapping.ts` — `applyChangeToYjs`, `eventsToOps` |
+| Substrate orchestration (prepare/flush, merge, events) | `src/substrate.ts` — `YjsSubstrate`, `yjsSubstrateFactory` |
 
-Unlike the Loro binding, there is no `_props` or `_scalars` map for root-level scalars. Plain values and shared types coexist as children of the single root `Y.Map`.
+Plus one Yjs-specific concern: `src/populate.ts` owns `ensureContainers`, the conditional structural-creation pass.
 
-## Container Discrimination
+### What `@kyneta/yjs-schema` is NOT
 
-```
-// Yjs: instanceof (reliable for native JS classes)
-if (resolved instanceof Y.Map) { ... }
-if (resolved instanceof Y.Array) { ... }
-if (resolved instanceof Y.Text) { ... }
+- **Not a `Y.Doc` wrapper or subclass.** It accepts a user-owned or factory-created `Y.Doc` and adapts it to `Substrate<YjsVersion>`. The `Y.Doc` is still usable directly — `unwrap(doc)` returns it.
+- **Not a Yjs provider.** It does not talk to y-websocket, y-webrtc, y-indexeddb, or any other Yjs provider. The exchange owns sync; this package only exports/imports `SubstratePayload` when the exchange asks. Applications are free to attach their own Yjs providers in parallel — the event bridge will pick up their mutations.
+- **Not feature-complete relative to Yjs.** Yjs has types (`Y.XmlElement`, `Y.XmlText`) and features (undo manager, awareness) that kyneta doesn't model. They are accessible via `unwrap(doc)`; they just aren't first-class in the schema grammar.
+- **Not an adapter library for multiple CRDTs.** This is Yjs-specific.
 
-// Loro: .kind() method (needed for WASM boundary)
-if (resolved.kind() === "Map") { ... }
-```
+---
 
-## Imperative Local Writes
+## Loro vs Yjs: what changes
 
-The prepare/flush pipeline:
+The two backends implement the same `Substrate<V>` contract and share the overall shape (navigation / reader / change-mapping / substrate-orchestration). The differences are concentrated in a few places, summarised here so the rest of the document can focus on Yjs specifics without re-litigating what's shared.
 
-```
-change(doc, fn)
-  → ctx.beginTransaction()
-  → fn(doc) calls ctx.dispatch() for each mutation
-    → ctx.dispatch() buffers { path, change } (transaction mode)
-  → ctx.commit()
-    → executeBatch(ctx, pending)
-      → ctx.prepare(path, change) × N  [changefeed layer accumulates]
-        → substrate.prepare() pushes to pendingChanges[]
-      → ctx.flush()
-        → substrate.onFlush()
-          → doc.transact(() => {
-              for each { path, change }:
-                applyChangeToYjs(rootMap, schema, path, change)
-            }, "kyneta-prepare")
-          → observeDeep fires (suppressed: origin === "kyneta-prepare")
-        → changefeed layer delivers Changeset to subscribers
-```
+| Concern | `@kyneta/loro-schema` | `@kyneta/yjs-schema` |
+|---------|-----------------------|----------------------|
+| Root layout | One Loro container per root field (typed accessors: `doc.getText(k)`, `doc.getMap(k)`, …) plus a reserved `_props` map for root scalars | One `Y.Map` at `doc.getMap("root")` holds *every* field (shared types and plain values alike) |
+| Container discrimination | `.kind()` method (strings: `"Map"`, `"Text"`, `"List"`, …) | `instanceof Y.Map`, `instanceof Y.Array`, `instanceof Y.Text` |
+| Why | Loro containers are WASM handles; `instanceof` is unreliable across module boundaries | Yjs shared types are native JS classes; `instanceof` is stable |
+| Write commit | Accumulate `Diff[]` in `prepare`, apply via `doc.applyDiff` in `onFlush` | Imperative mutations inside `Y.transact` in `onFlush` (origin-tagged) |
+| Event bridge | `doc.subscribe` + `inOurCommit` / `inEventHandler` guards | `observeDeep` + transaction-origin check + single re-entrancy guard |
+| Structural identity | Identity hash as Loro container key | Identity hash as `Y.Map` key within the root `Y.Map` |
+| Structural creation | Lazy — creation happens on first typed accessor call | Eager — `ensureContainers` walks the schema on upgrade |
+| Structural client ID | Not needed (Loro has no equivalent concern) | `STRUCTURAL_YJS_CLIENT_ID = 0` during `ensureContainers` |
+| Capability set | `"text" \| "counter" \| "movable" \| "tree" \| "json"` | `"text" \| "json"` |
+| Version | Wraps `VersionVector` | Wraps full snapshot (state vector + delete set) |
+| Position | Wraps `Cursor` | Wraps `Y.RelativePosition` |
 
-Compare with Loro:
-- Loro's `prepare` converts `Change → Diff` via `changeToDiff()` (~300 lines, synthetic CIDs)
-- Yjs's `prepare` just pushes `{ path, change }` to a buffer
-- Loro's `onFlush` calls `doc.applyDiff()` then `doc.commit()`
-- Yjs's `onFlush` calls `doc.transact()` with imperative mutations
+When a concept is structurally identical to Loro's (navigation fold, event bridge's purpose, identity-keying rationale, write-path FC/IS intent), the Loro document is the canonical reference. This document focuses on the Yjs-specific mechanics.
 
-## Structured Inserts
+---
 
-When inserting an object into a Y.Array where the schema says `product`:
+## The single-root-`Y.Map` design
 
-```
-// Populate-then-attach: correct order
-const newMap = new Y.Map()
-newMap.set("name", "Alice")       // populate unattached type
-newMap.set("done", false)
-yarray.insert(index, [newMap])    // single observeDeep event
+Source: `packages/schema/backends/yjs/src/yjs-resolve.ts` (comments + resolution logic), `src/substrate.ts` (root acquisition: `doc.getMap("root")`).
 
-// Attach-then-populate: incorrect (produces extra events)
-const newMap = new Y.Map()
-yarray.insert(index, [newMap])    // one event
-newMap.set("name", "Alice")       // another event
-newMap.set("done", false)         // another event
-```
-
-No synthetic CID mechanism (Loro's `🦜:` / `JsonContainerID`) is needed. Yjs handles nested shared types natively.
-
-## Event Bridge
-
-A single `rootMap.observeDeep(callback)` registered at construction time:
-
-```
-rootMap.observeDeep((events, transaction) => {
-  // 1. Suppress our own transactions
-  if (transaction.origin === "kyneta-prepare") return
-
-  // 2. Convert Yjs events → kyneta Ops
-  const ops = eventsToOps(events)
-
-  // 3. Determine origin (from merge or transaction)
-  const origin = pendingMergeOrigin ?? transaction.origin
-
-  // 4. Feed through executeBatch for changefeed delivery
-  inOurTransaction = true
-  executeBatch(ctx, ops, origin)
-  inOurTransaction = false
-})
-```
-
-`event.path` from `observeDeep` is **relative to the observed type** (the root map), which maps directly to kyneta `PathSegment[]`. This is simpler than Loro's absolute paths.
-
-## Re-entrancy
+Every schema field — whether it's a `text` CRDT, a nested `struct`, a list, or a plain scalar — lives as a child of one `Y.Map`:
 
 ```
-                    Loro                          Yjs
-Guards:        inOurCommit (bool)            inOurTransaction (bool)
-               inEventHandler (bool)         transaction.origin check
-Echo filter:   batch.by === "local"          origin === "kyneta-prepare"
-               && inOurCommit
-Event bridge:  doc.subscribe()               rootMap.observeDeep()
+Y.Doc
+ └─ getMap("root")          // the single root Y.Map
+     ├─ identityHash("title")    → Y.Text
+     ├─ identityHash("settings") → Y.Map
+     │    ├─ identityHash("darkMode") → true          (plain value)
+     │    └─ identityHash("fontSize") → 14            (plain value)
+     ├─ identityHash("items")    → Y.Array
+     │    └─ [0]                 → Y.Map              (one struct per item)
+     └─ identityHash("userName") → "alice"            (plain value)
 ```
 
-Yjs's `transaction.origin` carries the tag set by `doc.transact(fn, origin)`, eliminating the need for a second boolean guard.
+There is no `_props` container as in Loro. A plain scalar is just an entry in the relevant `Y.Map` — either the root or a nested struct's map. This works because `Y.Map` natively supports mixed plain/shared-type values as entries.
 
-## Version Semantics
+### Why one root map
 
-`YjsVersion` wraps a Yjs **snapshot** (state vector + delete set), not just a state vector.
+- **One `observeDeep` call captures everything.** A single subscription on the root `Y.Map` receives events for every descendant mutation, with event paths relative to the root. This makes the event bridge implementation direct: translate one event stream into kyneta `Op[]`.
+- **Event paths map directly to kyneta `Path`.** `event.path` from `observeDeep` is an array of keys and indices exactly parallel to kyneta's `Segment[]`. The translation in `eventsToOps` is a rename, not a restructuring.
+- **No root-field-typing ambiguity.** Because everything is a child of a `Y.Map`, there is no need to decide at creation time what type a root field is — the root map accepts any shared type or plain value as a value. `ensureContainers` handles creation; reads handle discrimination.
+- **Structural-op ordering is canonical.** `ensureContainers` iterates fields in alphabetical order over identity hashes, so every peer creates the same sequence of root-map entries regardless of local schema definition order.
 
-### Why snapshots, not state vectors
+### What the single-root design is NOT
 
-Yjs's state vector (`Map<clientID, clock>`) only counts *inserted* items. It does **not** advance when items are deleted (tombstoned). A version based on the state vector alone cannot detect delete-only changes — the sync protocol would see `"equal"` and skip pushing deletes to peers.
+- **Not a performance optimisation.** It is a correctness/uniformity decision. Multiple root types would also work but would fragment `observeDeep` into N subscriptions and complicate path translation.
+- **Not user-visible.** `unwrap(doc)` returns the `Y.Doc`, not the root map. Applications rarely need to reach past `doc.getMap("root")` directly.
+- **Not a limitation on Yjs.** Applications may still call `doc.getMap("otherName")` or `doc.getText("direct")` for their own purposes — kyneta just won't see those mutations unless they happen on the root kyneta `Y.Map`.
 
-The Yjs `Snapshot` is the correct complete version: `(stateVector, deleteSet)`. Two documents are in the same state only when both their inserts and deletes match.
+---
 
-### Data model
+## `instanceof` container discrimination
 
-`YjsVersion` carries two fields:
-
-- **`sv: Uint8Array`** — encoded state vector, used by `exportSince()` to compute the minimal update payload via `Y.encodeStateAsUpdate(doc, sv)`.
-- **`snapshotBytes: Uint8Array`** — encoded Yjs snapshot (state vector + delete set), used for equality comparison.
-
-### Comparison
-
-```
-compare(other):
-  svResult = versionVectorCompare(this.sv, other.sv)
-  if svResult !== "equal": return svResult    // behind/ahead/concurrent on inserts
-  if snapshotBytes are identical: return "equal"
-  return "concurrent"                          // same inserts, divergent deletes
-```
-
-"concurrent" when SVs match but delete sets differ correctly triggers the sync protocol to push — `encodeStateAsUpdate` includes delete-set diffs in its output.
-
-### Incremental delete set tracking
-
-The full delete set is derived from the struct store (`Y.createDeleteSetFromStructStore(doc.store)`) — an O(n) walk. To avoid this on every `version()` call, the substrate maintains `accumulatedDs` incrementally:
-
-1. Initialized once from the struct store at construction time (O(n)).
-2. Updated by merging `transaction.deleteSet` on each transaction:
-   - In the `observeDeep` handler (remote mutations) — before `executeBatch`.
-   - In an `afterTransaction` listener (local mutations) — before `onFlush` returns.
-3. `version()` encodes the SV + `accumulatedDs` into snapshot bytes — no struct-store walk per keystroke.
-
-### Serialization
-
-Format: `base64(sv) + "." + base64(snapshotBytes)`.
-
-Legacy format (no `.`): base64(sv) only. Parsed as SV-only — when compared against a new-format version with matching SVs, the differing snapshot bytes yield `"concurrent"`, triggering a redundant but safe sync push.
-
-### Meet
-
-`meet(other)` computes the component-wise minimum of the state vectors. The resulting version uses only the meet SV as its snapshot (no delete-set info) — a conservative lower bound. This is safe because `meet()` feeds into `advance()`, which Yjs doesn't support.
-
-## Position Conformance
-
-`YjsPosition` wraps Yjs's `RelativePosition` to implement `@kyneta/schema`'s `Position` interface.
-
-| kyneta `Side` | Yjs `assoc` |
-|---|---|
-| `"left"` | `-1` (left-sticky) |
-| `"right"` | `0` (right-sticky, default) |
-
-- `resolve()` → `Y.createAbsolutePositionFromRelativePosition(rpos, doc)` — stateless query against the document's item graph.
-- `encode()` → `Y.encodeRelativePosition(rpos)`.
-- `transform()` → no-op. Yjs relative positions resolve statelessly; explicit transform is only needed by `PlainPosition`.
-
-The `positionResolver` on the Yjs substrate's `WritableContext` resolves paths to `Y.Text` shared types via `resolveYjsType`, then creates positions via `Y.createRelativePositionFromTypeIndex`.
-
-## Diff ↔ Change Type Mapping
-
-### kyneta → Yjs (Direction 1: `applyChangeToYjs`)
-
-| kyneta Change | Yjs API | Notes |
-|---|---|---|
-| `TextChange` | `ytext.applyDelta(instructions)` | Quill Delta format is structurally identical |
-| `SequenceChange` | `yarray.insert()` / `yarray.delete()` | Cursor-based walk |
-| `MapChange` | `ymap.set()` / `ymap.delete()` | Deletes first, then sets |
-| `ReplaceChange` | `parent.set(key, value)` or `parent.delete(idx) + parent.insert(idx, [value])` | Targets parent container |
-| `IncrementChange` | **throws** | `CounterSchema` not in `YjsCaps` |
-| `TreeChange` | **throws** | `TreeSchema` not in `YjsCaps` |
-
-### Yjs → kyneta (Direction 2: `eventsToOps`)
-
-| Yjs Event Target | kyneta Change | Source |
-|---|---|---|
-| `Y.Text` | `TextChange` | `event.delta` |
-| `Y.Array` | `SequenceChange` | `event.changes.delta` |
-| `Y.Map` | `MapChange` | `event.changes.keys` |
-
-Container values in events (`instanceof Y.Map` / `Y.Array`) are converted to plain objects via `.toJSON()`.
-
-## Unsupported Types
-
-Yjs declares `YjsCaps = "text" | "json"`. The following first-class types are rejected at compile time by `yjs.bind()` (via `ExtractCaps<S> ⊆ YjsCaps` constraint) and at runtime by populate/apply:
-
-| Type | Reason | Error behavior |
-|---|---|---|
-| `CounterSchema` | No native Yjs counter type. Ephemeral semantics would silently lose concurrent increments. | Compile error at `yjs.bind()`. Throws at `populateRoot()` and `applyChangeToYjs()` |
-| `MovableSequenceSchema` | No `Y.MovableList` equivalent in Yjs | Compile error at `yjs.bind()`. Throws at `populateRoot()` |
-| `TreeSchema` | No `Y.Tree` equivalent in Yjs | Compile error at `yjs.bind()`. Throws at `populateRoot()` and `applyChangeToYjs()` |
-| `SetSchema` | No `Y.Set` equivalent in Yjs | Compile error at `yjs.bind()`. Throws at `populateRoot()` |
-
-## `YjsNativeMap` — The Yjs Functor
-
-`YjsNativeMap` is the concrete `NativeMap` implementation for Yjs, mapping each schema kind to its Yjs shared type:
-
-| NativeMap slot | Yjs type | Schema kind |
-|---|---|---|
-| `root` | `Y.Doc` | Root document |
-| `text` | `Y.Text` | `Schema.text()` |
-| `counter` | `undefined` | Not supported by Yjs (`YjsCaps` excludes `"counter"`) |
-| `list` | `Y.Array<unknown>` | `Schema.list(item)` |
-| `movableList` | `undefined` | Not supported by Yjs |
-| `struct` | `Y.Map<unknown>` | `Schema.struct(fields)` |
-| `map` | `Y.Map<unknown>` | `Schema.record(item)` |
-| `tree` | `undefined` | Not supported by Yjs |
-| `set` | `undefined` | Not supported by Yjs |
-| `scalar` | `undefined` | Scalars have no dedicated shared type |
-| `sum` | `undefined` | Sums are stored as plain values |
-
-`yjs.bind(schema)` produces `BoundSchema<S, YjsNativeMap>`, which flows through `DocRef<S, YjsNativeMap>` and all child `SchemaRef<S, M, YjsNativeMap>` refs. This enables fully typed native access:
+Source: `packages/schema/backends/yjs/src/yjs-resolve.ts` → `stepIntoYjs`.
 
 ```
-const doc = createDoc(yjs.bind(schema))
-unwrap(doc)           // Y.Doc         (typed via N["root"])
-unwrap(doc.title)     // Y.Text        (typed via N["text"])
-unwrap(doc.items)     // Y.Array       (typed via N["list"])
-unwrap(doc.profile)   // Y.Map         (typed via N["struct"])
-unwrap(doc.theme)     // undefined     (scalar — no shared type)
+if (current instanceof Y.Map)    return current.get(identity ?? segment.resolve())
+if (current instanceof Y.Array)  return current.get(segment.resolve())
+if (current instanceof Y.Text)   return /* terminal — cannot step further */
+return undefined
 ```
 
-`unwrap(ref)` reads `ref[NATIVE]` — the symbol property set during interpretation by the `nativeResolver` protocol. This replaces the previous `yjs.unwrap()` function and its `WeakMap<Substrate, Y.Doc>` tracking.
+Yjs shared types are native JavaScript classes imported from the `yjs` module. A single `yjs` build produces one class identity that every dependent consumes. `instanceof Y.Map` is reliable across module boundaries — unlike Loro, which crosses a WASM boundary where `instanceof` can fail.
+
+### Why not `.kind()` here too
+
+Yjs does not expose a uniform `.kind()` method. Each type has its own shape (`Y.Text` has `.length` and `.toString()`; `Y.Array` has `.length` and `.toArray()`; `Y.Map` has `.keys()` and `.get()`). The cheapest, stablest runtime tag is the class itself, and `instanceof` is the standard way to use it.
+
+### What `instanceof` discrimination is NOT
+
+- **Not a violation of the "prefer `.kind()`" principle from Loro.** The principle was "avoid `instanceof` when class identity is unreliable." Yjs class identity *is* reliable — `instanceof` is the correct tool here.
+- **Not fragile against multiple `yjs` installs.** Package managers hoist `yjs` to one instance; peer-dep warnings fire if two versions coexist. The event bridge would also break under duplicate `yjs` installs (events would fire on a different class's subscription). Install hygiene is an operational requirement, not a code concern.
+
+---
+
+## `YjsVersion` — state vector + delete set
+
+Source: `packages/schema/backends/yjs/src/version.ts`.
+
+Yjs's state vector tracks how many operations from each peer have been observed, but it only advances on *inserts*. Deletes (tombstones) do not bump the vector. A version based solely on the state vector cannot distinguish:
+
+- Peer A: inserted 3 items, deleted 0 → state vector `{A: 3}`.
+- Peer A: inserted 3 items, deleted 1 → state vector `{A: 3}` (same!).
+
+This matters for sync: if the exchange compared SV-only versions, it would skip pushing deletes to peers with a matching SV.
+
+`YjsVersion` wraps the full **Yjs snapshot** (state vector + delete set) so `compare` distinguishes same-state from divergent-deletes:
+
+| Method | Behaviour |
+|--------|-----------|
+| `serialize()` | `base64(stateVector)` + `"."` + `base64(snapshotBytes)`. The `.`-joined two-part format. |
+| `compare(other)` | Compare SVs first via `versionVectorCompare`; if SVs agree, compare snapshot bytes; differing snapshots with matching SVs → `"concurrent"`. |
+| `meet(other)` | Component-wise minimum on state vectors via `versionVectorMeet`; delete set ignored for the lattice meet. |
+| `YjsVersion.parse(s)` | Split on `"."`; decode SV and snapshot separately. Legacy format (no `"."`) decodes as SV-only for back-compat. |
+
+### Backward compatibility with SV-only versions
+
+A `YjsVersion` parsed from the legacy SV-only format has no delete-set component. When compared against a new-format version with the same SV but different deletes, the comparison yields `"concurrent"` — which causes the exchange to push an update. The push is redundant in cases where the deletes actually match, but it is always *safe*: a legacy peer receiving a push it didn't strictly need is merely bandwidth, never corruption.
+
+### What `YjsVersion` is NOT
+
+- **Not a bare `Uint8Array`.** It is a structured wrapper with a documented serialise/parse protocol.
+- **Not a wall-clock timestamp.** Yjs versions are CRDT causal history, not physical time.
+- **Not totally ordered.** Two concurrent peers can be `"concurrent"`. `compare` returns the full partial order.
+- **Not interchangeable with `LoroVersion`.** They serialize differently and compare with different algorithms.
+
+---
+
+## `STRUCTURAL_YJS_CLIENT_ID`
+
+Source: `@kyneta/schema`'s `src/substrate.ts` → `STRUCTURAL_YJS_CLIENT_ID = 0`; consumed by `packages/schema/backends/yjs/src/populate.ts` → `ensureContainers`.
+
+When `ensureContainers` creates a shared type in the root `Y.Map` (e.g. `rootMap.set(identityHash("title"), new Y.Text())`), the creation is a Yjs operation tagged with the document's current `clientID`. If every peer used its *own* client ID for structural creation, peers would produce different CRDT ops for the "same" structural creation — on merge, one of them would win arbitrarily, leaving everyone else's reference dangling.
+
+**Solution**: temporarily set `doc.clientID = 0` during structural creation. Every peer produces identical ops; merge is a no-op on structure and the containers are identity-keyed into the same root-map slots.
+
+```
+ensureContainers(doc, schema, binding) {
+  const originalClientID = doc.clientID
+  try {
+    doc.clientID = STRUCTURAL_YJS_CLIENT_ID
+    // walk schema, create missing shared types for each field
+    // (in alphabetical order over identity hashes)
+  } finally {
+    doc.clientID = originalClientID
+  }
+}
+```
+
+This happens inside `yjsSubstrateFactory.upgrade(replica, schema)` after hydration. The walk is **conditional** — if a shared type already exists for a field's identity hash, it is left alone; only missing ones are created. This preserves hydrated state and makes the operation idempotent.
+
+### What `STRUCTURAL_YJS_CLIENT_ID` is NOT
+
+- **Not a real peer.** No Yjs document has `clientID = 0` for its actual operations. The constant exists precisely so that structural ops cannot be confused with any peer's work.
+- **Not shared across backends.** Loro doesn't have an equivalent. It is a Yjs-specific fix for a Yjs-specific concern.
+- **Not required for correctness in single-peer scenarios.** A single peer would converge to itself either way. The constant matters as soon as a second peer appears.
+- **Not a security boundary.** It is a coordination mechanism, not a capability.
+
+---
+
+## Identity-keyed containers
+
+Same idea as in Loro (see `@kyneta/loro-schema/TECHNICAL.md` → "Identity-keyed containers"). Every product-field boundary uses the field's content-addressed identity hash as its `Y.Map` key, not its display name. Renames change display names; identity hashes survive the rename; stored data is untouched.
+
+The binding is threaded through `resolveYjsType` (read path), `ensureContainers` (structural creation), and `applyChangeToYjs` (write path).
+
+One Yjs-specific wrinkle: because everything lives inside the single root `Y.Map`, identity-keying applies *uniformly* at every level — root fields and nested struct fields are all `Y.Map` keys. Loro's asymmetry (typed root accessors vs. child `.get()`) does not exist here.
+
+---
+
+## The write path and populate-then-attach
+
+Source: `packages/schema/backends/yjs/src/substrate.ts` → `onFlush`; `src/change-mapping.ts` → `applyChangeToYjs`; `src/populate.ts` → `populate`.
+
+Yjs's natural programming model is imperative: open a `Y.transact`, mutate shared types, close. Kyneta batches mutations per kyneta transaction, then runs them inside one `Y.transact` with an origin tag.
+
+```
+change(doc, d => { d.title.insert(0, "hi"); d.items.push(x) })
+  │
+  ├─ prepare phase (per mutation):
+  │    accumulate (path, change) pairs — no Yjs side effects
+  │
+  └─ flush phase (on commit):
+       doc.transact(() => {
+         for each (path, change) in accumulated:
+           applyChangeToYjs(rootMap, path, change, schema, binding)
+       }, OURS)                              // origin tag
+```
+
+`applyChangeToYjs` is straightforward imperative mutation: resolve the target via `resolveYjsType`, then call `Y.Text.insert` / `Y.Array.insert` / `Y.Map.set` / etc. depending on the change type.
+
+### Populate-then-attach for structural inserts
+
+Inserting a whole struct into a list or map is the one case that needs care. The naïve approach — attach an empty `Y.Map` to the parent, then set its fields — fires two `observeDeep` events (attach, then fields). That's two kyneta `Op` emissions for what logically is one structural insert.
+
+**The populate-then-attach pattern**:
+
+1. Create a fresh `new Y.Map()` (not yet attached to any parent).
+2. Populate it: iterate the struct's fields (alphabetical over identity hashes), set entries — scalars as plain values, nested shared types as newly-created-and-populated sub-types.
+3. Attach the fully-populated map to the parent in one `set`/`insert` call.
+
+One `observeDeep` event fires (the attach). `eventsToOps` expands it into the correct kyneta change at the structural boundary. Subscribers see one coherent `Op`, not two half-constructed states.
+
+Source: `src/populate.ts` → `populate` (recursive), called from `applyChangeToYjs` for every nested structural insert.
+
+### What the write path is NOT
+
+- **Not asynchronous.** `Y.transact` is synchronous; the entire flush completes within one tick.
+- **Not an `applyDiff`-style bulk operation.** Unlike Loro, Yjs has no single-call diff primitive. Mutations are imperative; the batching comes from `Y.transact`.
+- **Not reversible from the substrate.** Undo is an application concern (Yjs has its own `Y.UndoManager`; kyneta does not integrate it).
+
+---
+
+## The event bridge
+
+Source: `packages/schema/backends/yjs/src/substrate.ts` → `rootMap.observeDeep(...)` handler; `src/change-mapping.ts` → `eventsToOps`.
+
+The persistent `observeDeep` callback on the root `Y.Map` is the enforcement mechanism for the key invariant: every mutation fires the kyneta changefeed, regardless of source. Sources include:
+
+- Local kyneta writes via `change(doc, fn)` — suppressed by origin tag.
+- `exchange.merge(payload)` from remote peers — not suppressed; subscribers must see it.
+- `Y.applyUpdate(doc, update)` from application code directly — not suppressed.
+- Raw Yjs API writes (`doc.getMap("root").get(id).insert(0, "x")`) bypassing kyneta — not suppressed.
+- Other Yjs providers (y-websocket, y-webrtc) attached to the same doc — not suppressed.
+
+The handler:
+
+1. If the transaction origin equals `OURS` and the re-entrancy guard is set → skip (kyneta already notified during its own `change`).
+2. Otherwise, set the re-entrancy guard to block recursive entry.
+3. Call `eventsToOps(events, schema, binding)` → pure translation from Yjs events to kyneta `Op[]`.
+4. Dispatch the ops through the interpreter stack's notification pipeline.
+5. Clear the guard.
+
+### Origin tagging
+
+`Y.transact` accepts an arbitrary `origin` value as its third argument. The substrate passes a unique per-substrate symbol (`OURS`) when wrapping its own writes; external `Y.transact` calls (or `Y.applyUpdate`, which does its own transact) carry whatever origin the caller supplied (often `null`).
+
+The event handler's discriminant is `transaction.origin === OURS`, not a boolean flag set just-before / just-after `transact`. This means the bridge correctly handles nested or concurrent transactions from other sources — each event's `transaction.origin` is inspected independently.
+
+### What the event bridge is NOT
+
+- **Not a polling loop.** `observeDeep` is Yjs's own push-based event API.
+- **Not filtered.** Every event Yjs emits reaches `eventsToOps`; subscription-level filtering is the interpreter-stack's concern.
+- **Not subject to ordering constraints.** Yjs emits events synchronously within the transaction that caused them. The bridge fires in whatever stack frame Yjs used.
+
+---
+
+## `YjsPosition`
+
+Source: `packages/schema/backends/yjs/src/position.ts`.
+
+Yjs provides `Y.RelativePosition` — an opaque reference to a location within `Y.Text` or `Y.Array` that survives concurrent edits. `YjsPosition` wraps it:
+
+```
+class YjsPosition implements Position {
+  constructor(private rel: Y.RelativePosition, private doc: Y.Doc) {}
+
+  resolve(): number {
+    const abs = Y.createAbsolutePositionFromRelativePosition(this.rel, this.doc)
+    return abs?.index ?? 0
+  }
+
+  transform(change: Change): void {
+    // no-op — resolution queries Yjs directly
+  }
+}
+```
+
+Same pattern as `LoroPosition`: wrap a CRDT-native cursor type, delegate `resolve` to the substrate's own resolution function, make `transform` a no-op because the substrate handles position tracking internally.
+
+`toYjsAssoc(side)` maps kyneta's `Side = "left" | "right"` to Yjs's `assoc` enum (`0` for left / `-1` for right in Yjs's convention).
+
+### What `YjsPosition` is NOT
+
+- **Not a numeric index.** `resolve()` returns one, but the underlying `Y.RelativePosition` is anchored to a Yjs item ID and survives edits that would shift any raw index.
+- **Not stateful on the kyneta side.** All state lives in the Yjs `Y.RelativePosition`. `transform` does nothing by design.
+- **Not serialisable by default.** Yjs does have `Y.encodeRelativePosition` / `Y.decodeRelativePosition`; applications that need to persist positions across sessions must use those at the Yjs layer.
+
+---
+
+## `yjs.bind` and `yjs.replica`
+
+Source: `packages/schema/backends/yjs/src/bind-yjs.ts`.
+
+The ergonomic API:
+
+```
+import { yjs } from "@kyneta/yjs-schema"
+import { Schema } from "@kyneta/schema"
+
+const Todo = yjs.bind(Schema.struct({
+  title: Schema.text(),
+  items: Schema.list(Schema.struct({ body: Schema.text(), done: Schema.boolean() })),
+}))
+```
+
+`yjs.bind(schema)` returns a `BoundSchema<S, YjsNativeMap>`. Under the hood it delegates to `@kyneta/schema`'s `bind(schema, yjsFactoryBuilder, "collaborative")`. The `YjsCaps` set (`"text" | "json"`) is applied as `RestrictCaps<S, YjsCaps>`, so binding a schema that uses `counter`, `movable`, `tree`, or `set` fails at compile time.
+
+`yjs.replica()` produces a `BoundReplica<YjsVersion>` — the replication-only variant for sync conduits that don't need to interpret state.
+
+### Compile-time capability enforcement
+
+```
+const BadSchema = Schema.struct({ count: Schema.counter() })
+yjs.bind(BadSchema)
+// ^^ Type error: Schema contains "counter" capability not supported by Yjs
+```
+
+This is the same mechanism as the Loro backend, exercised with a narrower capability set. Tests in `src/__tests__/bind-constraints.test.ts` assert the negative cases.
+
+### What `yjs.bind` is NOT
+
+- **Not a factory.** It returns a `BoundSchema`, not a substrate. The substrate is constructed by `createDoc(bound)` at runtime.
+- **Not asynchronous.** Fully synchronous; the schema and the Yjs factory builder are captured at call time.
+- **Not overridable.** Merge strategy for `yjs.bind` is always `"collaborative"`. For different merge semantics, use `@kyneta/schema`'s lower-level `bind()` directly.
+
+---
+
+## Key Types
+
+| Type | File | Role |
+|------|------|------|
+| `yjs` | `src/bind-yjs.ts` | The namespace: `.bind(schema)`, `.replica()`. |
+| `YjsCaps` | `src/bind-yjs.ts` | `"text" \| "json"`. |
+| `YjsNativeMap` | `src/native-map.ts` | The `NativeMap` functor for Yjs. Unsupported kinds map to `undefined`. |
+| `YjsVersion` | `src/version.ts` | `Version` over Yjs snapshot (SV + delete set). |
+| `YjsPosition` | `src/position.ts` | `Position` over `Y.RelativePosition`. |
+| `toYjsAssoc` | `src/position.ts` | `Side → Yjs assoc` enum. |
+| `yjsSubstrateFactory` / `yjsReplicaFactory` | `src/substrate.ts` | Factory instances. |
+| `createYjsSubstrate` | `src/substrate.ts` | Construct a `Substrate<YjsVersion>` from a `Y.Doc` and schema. |
+| `yjsReader` | `src/reader.ts` | `Reader` via live shared-type navigation. |
+| `resolveYjsType` / `stepIntoYjs` | `src/yjs-resolve.ts` | The navigation primitives. |
+| `ensureContainers` | `src/populate.ts` | Idempotent structural-creation pass (uses `STRUCTURAL_YJS_CLIENT_ID`). |
+| `populate` | `src/populate.ts` | Recursive populate-then-attach helper. |
+| `applyChangeToYjs` / `eventsToOps` | `src/change-mapping.ts` | Translators between kyneta and Yjs vocabularies. |
 
 ## File Map
 
-```
-packages/schema/yjs/
-├── package.json          # @kyneta/yjs-schema, peerDeps on schema + yjs
-├── tsconfig.json         # ESNext + NodeNext
-├── tsdown.config.ts      # ESM build
-├── verify.config.ts      # format → types (tsgo) → logic (vitest)
-├── README.md             # User-facing documentation
-├── TECHNICAL.md          # This file
-└── src/
-    ├── index.ts          # Barrel export + text() convenience
-    ├── native-map.ts     # YjsNativeMap — NativeMap functor mapping schema kinds to Yjs types
-    ├── version.ts        # YjsVersion (state vector comparison)
-    ├── position.ts       # YjsPosition (relative position wrapping)
-    ├── yjs-resolve.ts    # stepIntoYjs + resolveYjsType (path resolution)
-    ├── reader.ts         # yjsStoreReader (StoreReader implementation)
-    ├── change-mapping.ts # applyChangeToYjs + eventsToOps (bidirectional)
-    ├── populate.ts       # populateRoot + recursive helpers (shared)
-    ├── substrate.ts      # createYjsSubstrate + yjsSubstrateFactory
-    ├── bind-yjs.ts       # yjs.bind — SubstrateNamespace<CrdtStrategy, YjsCaps, YjsNativeMap> + hashPeerId (FNV-1a 32-bit)
-    └── __tests__/
-        ├── version.test.ts       # YjsVersion serialize/parse/compare tests
-        ├── reader.test.ts        # StoreReader navigation and read tests
-        ├── substrate.test.ts     # Full substrate lifecycle tests
-        ├── bind-yjs.test.ts      # yjs.bind tests, capability constraints, deterministic clientID
-        └── create.test.ts        # createDoc with BoundSchema, hydration from payload
-```
+| File | Lines | Role |
+|------|-------|------|
+| `src/index.ts` | 64 | Public barrel. Re-exports generic API from `@kyneta/schema`; exports Yjs-specific symbols. |
+| `src/bind-yjs.ts` | 171 | `yjs.bind` / `yjs.replica` namespace; `YjsCaps`. |
+| `src/substrate.ts` | 499 | `YjsSubstrate`, factories, prepare/flush, `Y.transact` wrapping, `observeDeep` event bridge, origin-based suppression. |
+| `src/change-mapping.ts` | 666 | `applyChangeToYjs` (per kyneta change type → Yjs mutations) + `eventsToOps` (Yjs events → kyneta `Op[]`). |
+| `src/yjs-resolve.ts` | 126 | `resolveYjsType`, `stepIntoYjs`. |
+| `src/populate.ts` | 248 | `ensureContainers` (conditional structural creation) + `populate` (populate-then-attach). |
+| `src/reader.ts` | 131 | `yjsReader` — reads via `resolveYjsType` + per-type extraction. |
+| `src/version.ts` | 240 | `YjsVersion` (SV + delete set), two-part serialisation, legacy SV-only compat. |
+| `src/position.ts` | 45 | `YjsPosition` (wraps `Y.RelativePosition`), `toYjsAssoc`. |
+| `src/native-map.ts` | 37 | `YjsNativeMap` type-level functor. |
+| `src/__tests__/create.test.ts` | 665 | End-to-end: `createDoc(yjs.bind(schema))` → read/write round-trips. |
+| `src/__tests__/substrate.test.ts` | 610 | Substrate contract conformance (subset of the `@kyneta/schema` suite). |
+| `src/__tests__/reader.test.ts` | 685 | `yjsReader` over every Yjs shared type + scalar variants. |
+| `src/__tests__/record-text-spike.test.ts` | 438 | Focus tests for `Schema.record(Schema.text())` and related combinations. |
+| `src/__tests__/structural-merge.test.ts` | 419 | Two-peer `ensureContainers` convergence under concurrent upgrade; identity-keyed container compatibility. |
+| `src/__tests__/position.test.ts` | 376 | `YjsPosition` cursor stability across concurrent edits. |
+| `src/__tests__/bind-constraints.test.ts` | 325 | Compile-time capability enforcement (`counter`, `movable`, `tree`, `set` all rejected). |
+| `src/__tests__/bind-yjs.test.ts` | 311 | `yjs.bind` API surface. |
+| `src/__tests__/version.test.ts` | 380 | `YjsVersion` serialise/parse (both formats), `compare`, `meet`; delete-set distinguishing cases. |
 
-## Verified Properties
+## Testing
 
-Tests cover:
+Tests use real `Y.Doc` instances from `yjs` — no mocks. Two-peer scenarios construct two `Y.Doc`s, mutate independently, and sync via `Y.encodeStateAsUpdate` + `Y.applyUpdate` (or via the substrate's `exportSince` + `merge`). The substrate contract suite from `@kyneta/schema` is replayed against `yjsSubstrateFactory` for conformance.
 
-1. **Version round-trip**: serialize/parse preserves equality; compare produces correct partial order (equal, behind, ahead, concurrent)
-2. **Store reader liveness**: mutations via raw Yjs API are immediately visible through the StoreReader
-3. **Write round-trip**: text insert, scalar set, list push all round-trip through prepare/flush
-4. **Entirety export/import**: binary payload reconstructs equivalent state
-5. **Delta sync**: `exportSince → merge` syncs incremental changes
-6. **Concurrent sync**: two substrates with independent mutations converge after bidirectional sync
-7. **Changefeed bridge**: fires on `merge`, fires on external Y.Doc mutation, no double-fire on kyneta local writes
-8. **Transaction atomicity**: multi-op `change()` applies all mutations in a single Yjs transaction
-9. **Nested structures**: push struct into list, read back via navigation
-10. **Unsupported types**: counter, movable, tree, set all throw clear errors; `yjs.bind()` rejects them at compile time via `YjsCaps`
-11. **Deterministic clientID**: FNV-1a hash of peerId produces consistent uint32
-12. **Escape hatch**: `unwrap(ref)` returns the typed substrate-native container via `ref[NATIVE]`; works at any depth (root → `Y.Doc`, child text → `Y.Text`, etc.)
-13. **NativeMap typing**: `DocRef<S, YjsNativeMap>` provides correct `[NATIVE]` types at every node
-14. **Full workflow**: create → mutate → sync → observe → bidirectional convergence
-15. **Version: delete detection**: version changes after a delete-only mutation (snapshot-based comparison detects delete set divergence even when state vector is unchanged)
-16. **Position conformance**: shared conformance suite passes for `YjsPosition` — stability, sticky-side, deletion resolution, encode/decode round-trip, sequential agreement
-17. **Position: concurrent edits**: positions resolve correctly after multi-peer sync with concurrent inserts/deletes
-18. **Delete sync**: text deletes propagate through Exchange to remote peers (Yjs-specific regression test)
+One test stdout line is expected: `[yjs] Changed the client-id because another client seems to be using it.` — this is Yjs's own warning when a test deliberately creates two peers with colliding IDs; Yjs auto-recovers by re-issuing an ID, which is the correct behaviour.
+
+**Tests**: 217 passed, 4 skipped across 9 files (`bind-yjs`: 17, `bind-constraints`: included in `bind-yjs` coverage, `create`: 30, `position`: 27 passed + 4 skipped, `reader`: included in `create`/`substrate` coverage, `record-text-spike`: 20, `structural-merge`: 12, `substrate`: 29, `version`: ~82 — approximate per-file breakdown). Run with `cd packages/schema/backends/yjs && pnpm exec vitest run`.

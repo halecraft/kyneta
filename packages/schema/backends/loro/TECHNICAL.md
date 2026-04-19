@@ -1,469 +1,414 @@
 # @kyneta/loro-schema — Technical Reference
 
-Loro CRDT substrate for `@kyneta/schema`. Wraps a `LoroDoc` with schema-aware typed reads, writes, versioning, and export/import through the standard `Substrate<LoroVersion>` interface. Schemas are defined with `Schema.*` from `@kyneta/schema`, then bound to Loro via `loro.bind()`. Capability constraints are enforced at compile time by `LoroCaps = "text" | "counter" | "movable" | "tree" | "json"`. The `LoroNativeMap` functor maps schema kinds to Loro container types, threading typed `[NATIVE]` access through every ref.
+> **Package**: `@kyneta/loro-schema`
+> **Role**: Loro CRDT substrate for `@kyneta/schema`. Wraps a `LoroDoc` as a `Substrate<LoroVersion>` with schema-guided live navigation, `applyDiff`-based writes, identity-keyed containers for cross-schema sync, and a persistent event bridge so every mutation — local kyneta writes, `merge()`, `doc.import()`, or raw Loro API — fires the kyneta changefeed.
+> **Depends on**: `@kyneta/schema` (peer), `@kyneta/changefeed` (peer), `loro-crdt` (peer)
+> **Depended on by**: `@kyneta/exchange` (dev), `@kyneta/react` (dev), `@kyneta/cast` (dev), application code that wants collaborative documents
+> **Canonical symbols**: `loro` (namespace: `loro.bind`, `loro.replica`), `LoroCaps`, `LoroNativeMap`, `createLoroSubstrate`, `loroSubstrateFactory`, `loroReplicaFactory`, `LoroVersion`, `LoroPosition`, `loroReader`, `resolveContainer`, `stepIntoLoro`, `PROPS_KEY`, `changeToDiff`, `batchToOps`, `hasKind`, `isLoroContainer`, `isLoroDoc`, `fromLoroSide`, `toLoroSide`
+> **Key invariant(s)**: Subscribing to the kyneta doc observes **every** mutation to the underlying `LoroDoc`, regardless of source — local writes, `merge()`, `doc.import()`, or raw Loro API calls. The persistent `doc.subscribe()` event bridge is the enforcement mechanism; two re-entrancy guards (`inOurCommit`, `inEventHandler`) prevent double-notification.
+
+The Loro backend for Kyneta. Hands you a substrate instance — stored state, versioning, export/import, and a `Reader` — in exchange for a `LoroDoc`. Every ref produced by the interpreter stack reads through schema-guided container resolution; every write produces a `Diff` applied via `doc.applyDiff`; every Loro-visible mutation surfaces as a `Changeset` on the kyneta changefeed.
+
+Consumed by applications that bind schemas with `loro.bind(schema)`. Not imported by any other Kyneta package at runtime — `@kyneta/exchange`, `@kyneta/react`, and `@kyneta/cast` depend on it only in dev/test.
 
 ---
 
-## 1. Architecture Overview
+## Questions this document answers
 
-`LoroStoreReader` performs **schema-guided live navigation** of the Loro container tree. There is no static container map or registry — every `read()`, `arrayLength()`, `keys()`, and `hasKey()` call resolves containers on demand by folding over path segments.
+- How does a read traverse the Loro container tree? → [Live navigation](#live-navigation)
+- Why not a static container map built at `bind()` time? → [Why live navigation](#why-live-navigation)
+- How does a kyneta `Change` become a Loro `applyDiff` call? → [The write path](#the-write-path)
+- What is `PROPS_KEY` and why do root scalars live inside one map? → [The `_props` container](#the-_props-container)
+- How are containers keyed across schema versions? → [Identity-keyed containers](#identity-keyed-containers)
+- Why `.kind()` instead of `instanceof` to discriminate containers? → [Container discrimination across the WASM boundary](#container-discrimination-across-the-wasm-boundary)
+- How does an external `doc.import()` notify kyneta subscribers? → [The event bridge](#the-event-bridge)
+- How do cursors stay stable across concurrent edits? → [`LoroPosition`](#loroposition)
 
-The fold pattern uses two collaborating functions:
+## Vocabulary
 
-- **`advanceSchema(schema, segment)`** — pure schema descent. Given a schema node and a path segment, returns the child schema. No Loro side effects. Imported from `@kyneta/schema`.
-- **`stepIntoLoro(current, currentSchema, nextSchema, segment)`** — Loro-specific navigation. Given the current position (LoroDoc or container), the schemas at both levels, and a segment, returns the child container or scalar value.
+| Term | Means | Not to be confused with |
+|------|-------|-------------------------|
+| `LoroDoc` | Loro's top-level document handle (from `loro-crdt`). Owns peers, operations, version vector. | A kyneta `DocRef` — the `LoroDoc` is the substrate-native backing; `DocRef` is the interpreter-stack handle |
+| `LoroCaps` | The capability set `"text" \| "counter" \| "movable" \| "tree" \| "json"`. Loro supports all CRDT kinds from `@kyneta/schema` plus plain JSON. | Loro's own feature set — this is the subset kyneta exposes |
+| `LoroNativeMap` | The `NativeMap` functor mapping schema kinds to Loro container types (`text → LoroText`, `list → LoroList`, `struct → LoroMap`, etc.). | A JS `Map` — this is a type-level functor, not a runtime object |
+| `LoroVersion` | `@kyneta/schema`'s `Version` implementation wrapping Loro's `VersionVector`. | Loro's `Frontiers` (DAG leaf ops for checkpoints) — `VersionVector` is the full peer-state vector used for sync diffing |
+| `LoroPosition` | `Position` implementation wrapping Loro's `Cursor`. Stateless `transform` — resolution queries the CRDT directly. | A numeric index |
+| `resolveContainer` | Pure left-fold over path segments accumulating `(currentContainer, currentSchema)`. The navigation primitive for every read. | A cache lookup — resolution happens on every read |
+| `stepIntoLoro` | One step of `resolveContainer`: given `(container, childSchema, key)`, return the child container or scalar value. | `stepFromDoc`, which is the root-level variant |
+| `stepFromDoc` | Root-level dispatch: given a `LoroDoc` and a field schema, return the typed root container (`doc.getMap(key)`, `doc.getText(key)`, etc.). | `stepIntoLoro` |
+| `PROPS_KEY` | The string `"_props"` — the reserved LoroMap key under which every root-level scalar and sum field is stored. | An application field name — reserved |
+| `changeToDiff` | Pure: turn a kyneta `Change` + path + schema into a `[ContainerID, Diff][]` tuple list. | Loro's own `Diff` construction — we translate from kyneta's vocabulary |
+| `batchToOps` | Inverse: turn Loro event-emitted `Diff[]` (after `doc.import` or external mutation) into kyneta `Op[]`. | `changeToDiff` — opposite direction |
+| `loroReader` | `Reader` implementation that reads by resolving the container at `path` and extracting its value. | Substrate state — the reader is a live view |
+| `applyDiff` | Loro's bulk-write API. The substrate prepares `Diff[]` during `prepare()` and applies them in one call during `onFlush`. | `doc.import` — imports a binary update; `applyDiff` applies structural diffs |
+| `inOurCommit` / `inEventHandler` | Two boolean guards on the substrate. The first suppresses event-bridge reprocessing when we applied the diff ourselves; the second suppresses recursive `applyDiff` calls from event handlers. | Mutex locks — these are single-threaded flags |
+| Identity hash | Content-addressed 128-bit hex derived from `(path, generation)` via FNV-1a-128. The Loro container key for every product-field boundary. | A field name |
+| `SchemaBinding` | `{ forward: Map<string, Hash>, backward: Map<Hash, string> }` from `@kyneta/schema`. Threaded through `resolveContainer` so every key lookup uses identity, not name. | A validation rule |
 
-`resolveContainer` is the full left-fold:
+---
 
-```ts
-let current: unknown = doc
-let schema = rootSchema
-for (const seg of path) {
-  const nextSchema = advanceSchema(schema, seg)
-  current = stepIntoLoro(current, schema, nextSchema, seg)
-  schema = nextSchema
+## Architecture
+
+**Thesis**: Loro already stores the state. This package is a thin, substrate-shaped lens that translates between kyneta's schema-guided API and Loro's container-and-diff reality — with zero caching of its own and one event subscription that makes the substrate transparent to external mutations.
+
+Four responsibilities:
+
+| Responsibility | Primary source |
+|----------------|----------------|
+| Navigation (schema → container) | `src/loro-resolve.ts` — `resolveContainer`, `stepIntoLoro`, `stepFromDoc` |
+| Reads (container → value) | `src/reader.ts` — `loroReader` |
+| Writes (kyneta `Change` → Loro `Diff`) | `src/change-mapping.ts` — `changeToDiff`, `batchToOps` |
+| Substrate orchestration (prepare/flush, merge, events) | `src/substrate.ts` — `LoroSubstrate`, `loroSubstrateFactory` |
+
+The interpreter stack (from `@kyneta/schema`) sits above. Loro sits below. This package is the bidirectional translator.
+
+### What `@kyneta/loro-schema` is NOT
+
+- **Not a `LoroDoc` wrapper or subclass.** It accepts a user-owned or factory-created `LoroDoc` and adapts it to `Substrate<LoroVersion>`. The `LoroDoc` is still usable directly — `unwrap(doc)` returns it.
+- **Not a query layer.** There are no indexes, no selectors, no precomputed views. All reads resolve containers on demand.
+- **Not a Loro adapter library.** It is specific to `@kyneta/schema`'s substrate contract.
+- **Not a sync engine.** The exchange runs sync; this package only exports/imports `SubstratePayload` when the exchange asks.
+
+---
+
+## Live navigation
+
+Every read (`doc.title()`, `doc.items.at(0).body()`, `ref.current`) resolves its container on demand by left-folding over the path. No preflight container cache, no materialized tree.
+
+```
+resolveContainer(doc, schema, path, binding) =
+  fold(stepIntoLoro, (doc, schema, []), path.segments)
+```
+
+Source: `packages/schema/backends/loro/src/loro-resolve.ts`.
+
+The fold accumulator is `(currentContainer, currentSchema, absPath)`. At each step:
+
+1. `advanceSchema(schema, segment)` → pure schema descent (from `@kyneta/schema`). Produces the child schema.
+2. `stepIntoLoro(container, currentSchema, childSchema, segment, binding?)` → Loro-specific: dispatches on the container's Loro kind and the child schema's `[KIND]`, returning the child container or scalar.
+
+### `stepFromDoc` — root dispatch
+
+The root case is different because `LoroDoc` is not itself a container. `stepFromDoc(doc, fieldSchema, key)` reads the field schema's `[KIND]` and calls the matching typed accessor:
+
+| Field `[KIND]` | Accessor | Returns |
+|----------------|----------|---------|
+| `text` | `doc.getText(key)` | `LoroText` |
+| `counter` | `doc.getCounter(key)` | `LoroCounter` |
+| `movable` | `doc.getMovableList(key)` | `LoroMovableList` |
+| `tree` | `doc.getTree(key)` | `LoroTree` |
+| `product`, `set` | `doc.getMap(key)` | `LoroMap` |
+| `sequence` | `doc.getList(key)` | `LoroList` |
+| `map` | `doc.getMap(key)` | `LoroMap` |
+| `scalar`, `sum` (no container) | `doc.getMap(PROPS_KEY).get(key)` | Plain value |
+
+`key` is the identity hash (see [Identity-keyed containers](#identity-keyed-containers)).
+
+### Why live navigation
+
+The predecessor design held a static container map built at `bind()`. It broke three ways:
+
+- **Structural inserts move indices.** An insert at `items[0]` invalidates every cached `items[1..]` reference.
+- **External mutations don't update the cache.** `doc.import(update)` can create, delete, or re-parent containers outside kyneta's write path.
+- **Map keys are unbounded.** A precomputed map would need to be rebuilt on every key mutation.
+
+Live navigation pays a small cost per read (one container lookup per segment) but has no invalidation burden and is transparent to any source of mutation. Memoization happens at the **interpreter-stack** level (`withCaching` from `@kyneta/schema`), not the substrate level — and that cache invalidates on every kyneta-observed change via the changefeed pipeline.
+
+### What live navigation is NOT
+
+- **Not a proxy.** No ES6 `Proxy`, no intercepted property access. Every ref method calls `resolveContainer` explicitly.
+- **Not a static map.** Nothing is precomputed at `bind()` time beyond the schema binding (an identity hash lookup table).
+- **Not memoized at the substrate level.** Caching is an interpreter-stack concern.
+
+---
+
+## The `_props` container
+
+Source: `packages/schema/backends/loro/src/loro-resolve.ts` → `PROPS_KEY`, `stepFromDoc`.
+
+Loro exposes typed root container accessors (`doc.getText`, `doc.getMap`, `doc.getCounter`, etc.) but has no "bare scalar" at the root — every top-level entity must be a container. For a root-level `Schema.string()` or `Schema.number()` field, creating a container would be wasteful and semantically wrong.
+
+**Solution**: one reserved root `LoroMap` named `"_props"` holds every non-container scalar and sum field.
+
+```
+doc.getText(identityHash("title"))       // text field → its own LoroText
+doc.getMap(identityHash("settings"))     // product field → its own LoroMap
+doc.getMap(PROPS_KEY).get(identityHash("userName"))   // scalar field → _props map entry
+```
+
+`PROPS_KEY` is a reserved identifier. Applications cannot use `"_props"` as a schema field name — the identity hash for any user-facing field will never collide (hashes are 128-bit FNV-1a, `"_props"` is a literal string).
+
+### What `_props` is NOT
+
+- **Not a global kitchen sink.** It only holds *root-level* scalar/sum fields. Nested scalars live inside their parent's own `LoroMap` or struct container.
+- **Not user-visible.** The key is internal; the user writes `doc.userName.set("alice")` and the substrate resolves to `doc.getMap(PROPS_KEY).set(identityHash("userName"), "alice")`.
+- **Not a migration concern.** Adding a new scalar field creates a new entry in `_props`; the old ones stay untouched.
+
+---
+
+## Identity-keyed containers
+
+Source: `packages/schema/backends/loro/src/loro-resolve.ts` (accepts `SchemaBinding`), `src/substrate.ts` (`deriveSchemaBinding` + `ensureLoroContainers`).
+
+Every product-field boundary keys its Loro container by the field's **identity hash** from the `SchemaBinding`, not by the field's display name.
+
+| Schema field | Old (name-keyed) | Current (identity-keyed) |
+|--------------|------------------|--------------------------|
+| `doc.title` | `doc.getText("title")` | `doc.getText("7a3f9b1c…")` |
+| `doc.settings.darkMode` | `doc.getMap("settings").get("darkMode")` | `doc.getMap("4e8d2a…").get("9b1c3a…")` |
+
+This is what makes cross-schema-version sync work. If schema v1 renames `title → heading`, v2's binding maps `heading` to the same identity hash that v1 mapped `title` to. Both versions address the same Loro container; the display name is an interpreter-level concern that never reaches the substrate.
+
+The identity hash is 128-bit FNV-1a-128 (from `@kyneta/schema`'s `hash.ts`) over `originPath + ":" + generation` — deterministic, content-addressed, unique per schema evolution step.
+
+### `ensureLoroContainers` — conditional creation
+
+On substrate construction (`loroSubstrateFactory.upgrade(replica, schema)`), the factory walks the schema and ensures every non-`_props` field has a container. The walk is **conditional**:
+
+- If `doc.getMap(identityHash("settings"))` returns an empty map (no ops yet), create it with the field's `Zero` default.
+- If the map already has entries (hydrated from storage or a merge), leave it alone — structure is preserved.
+
+This is why hydration from stored state and fresh document creation both land in the same code path, and why adding a new field to an existing schema doesn't clobber the data on peers that already have a container for the old fields.
+
+### What identity-keying is NOT
+
+- **Not a hash of the field value.** It is a hash of the field's origin — `(path, generation)` — derived from the migration chain. The same field has the same identity hash across every document that uses the schema.
+- **Not user-visible.** `unwrap(doc.title)` returns a `LoroText`; the key isn't part of the surface.
+- **Not reversible in the app layer.** The `SchemaBinding.backward` map reverses hash → path *for one specific schema version*. Applications don't use it directly.
+
+---
+
+## Container discrimination across the WASM boundary
+
+Source: `packages/schema/backends/loro/src/loro-guards.ts` → `hasKind`, `isLoroContainer`, `isLoroDoc`.
+
+Loro container instances are **WASM-backed**. They cross a boundary where `instanceof` checks are unreliable: two modules may share the same container object but see different class constructors (one for each wrapper build). The kyneta codebase therefore never uses `instanceof LoroText`. It uses:
+
+```
+if (hasKind(c) && c.kind() === "Text") { ... }
+```
+
+`hasKind(c)` is a structural type guard that asserts `c` has a `.kind()` method. `.kind()` returns one of Loro's own discriminant strings (`"Text"`, `"Map"`, `"List"`, `"MovableList"`, `"Counter"`, `"Tree"`). This is safe across the WASM boundary because it depends only on the presence of a method, not on a JS class identity.
+
+### What `.kind()` discrimination is NOT
+
+- **Not a substitute for TypeScript typing.** The Loro types from `loro-crdt` are precise; `hasKind` is the runtime check for when we've lost the type (e.g., reading from `.get()` which returns `unknown`).
+- **Not Kyneta-specific.** Loro itself exports `.kind()` as a stable API. We consume it.
+- **Not cheap at scale.** It is a method call. For hot paths, the dispatch happens once per resolution step, not per-value access.
+
+---
+
+## The write path
+
+Source: `packages/schema/backends/loro/src/substrate.ts` → `LoroSubstrate.prepare` / `onFlush`; `src/change-mapping.ts` → `changeToDiff`.
+
+```
+change(doc, d => { d.title.insert(0, "hi"); d.items.push(x) })
+  │
+  ├─ prepare phase (per mutation):
+  │    kyneta Change (Text / Sequence / Map / Replace / Increment / Tree)
+  │      └─ changeToDiff(change, path, schema, binding) ──► [ContainerID, Diff][]
+  │         └─ accumulate into pending groups (one group per transaction step)
+  │
+  └─ flush phase (on commit):
+       inOurCommit = true
+       └─ mergePendingGroups — fuse single-MapDiff groups on the same container
+          └─ for each group: doc.applyDiff(group)
+       inOurCommit = false
+```
+
+`changeToDiff` is **pure** (source: `src/change-mapping.ts`). Given a kyneta `Change` + path + schema + binding, it produces the Loro `Diff[]` that reproduces the change. It handles every built-in change type:
+
+| kyneta `Change.type` | Loro diff |
+|-----------------------|-----------|
+| `"text"` | `TextDiff` with retain/insert/delete runs |
+| `"sequence"` | `ListDiff` with splice ops |
+| `"map"` | `MapDiff` with `updated` record |
+| `"tree"` | `TreeDiff` with create/move/delete |
+| `"replace"` | Container-level replacement (varies by kind) |
+| `"increment"` | `CounterDiff` with delta |
+
+`mergePendingGroups` is a pure optimisation: when a transaction mutates multiple fields of the same struct (`d.settings.a.set(1); d.settings.b.set(2)`), both preparations target the same `LoroMap` with a single-key `MapDiff`. Merging them reduces N `applyDiff` calls to one.
+
+### The `onFlush` commit
+
+`onFlush` runs once per transaction, after every prepared `Diff`:
+
+1. `inOurCommit = true` — suppress the event bridge for this commit.
+2. `doc.applyDiff(groups)` for each merged group — Loro generates ops, advances the version vector.
+3. `inOurCommit = false`.
+4. Notifications produced during `prepare` are already delivered to subscribers by the interpreter stack; no additional notification fires from the event bridge for this commit (it was suppressed in step 1).
+
+The suppression prevents double-notification: we know what changed because we caused it, and the interpreter-stack notification pipeline already fired.
+
+### What the write path is NOT
+
+- **Not a streaming write.** Each transaction is one `applyDiff` call (or one per container group). We don't write one op per mutation.
+- **Not transactional in Loro's sense.** Loro has its own transaction semantics; kyneta's `change(doc, fn)` is an interpreter-stack transaction that commits a bundle of Loro writes atomically *from kyneta's perspective*. Loro ops can still interleave concurrently with other peers.
+- **Not reversible from the substrate.** There is no undo buffer in the substrate. Undo is an application concern.
+
+---
+
+## The event bridge
+
+Source: `packages/schema/backends/loro/src/substrate.ts` → `doc.subscribe` handler.
+
+The persistent `doc.subscribe()` callback is the enforcement mechanism for the key invariant: *every* mutation to the underlying `LoroDoc` fires the kyneta changefeed, regardless of source. Mutation sources include:
+
+- Local kyneta writes via `change(doc, fn)` — suppressed by `inOurCommit` (we already notified).
+- `exchange.merge(payload)` from remote peers — not suppressed; kyneta subscribers must see it.
+- `doc.import(update)` from application code directly — not suppressed; kyneta subscribers must see it.
+- Raw Loro API writes (`doc.getText(key).insert(0, "x")`) bypassing kyneta — not suppressed; kyneta subscribers must see it.
+
+The handler:
+
+1. If `inOurCommit` is true → skip (we already notified during `prepare`).
+2. Otherwise, set `inEventHandler = true` to block recursive `applyDiff` calls from triggering the handler again.
+3. Call `batchToOps(event.diffs, schema, binding)` → pure conversion from Loro `Diff[]` to kyneta `Op[]`.
+4. Dispatch the ops through the interpreter stack's notification pipeline.
+5. Clear `inEventHandler`.
+
+### Why two guards
+
+`inOurCommit` prevents the event bridge from double-notifying when *we* applied the diff. `inEventHandler` prevents a subscriber — who during its callback might happen to trigger another `applyDiff` through some indirect path — from recursively re-entering the bridge within the same tick. The two flags address independent failure modes; neither subsumes the other.
+
+### What the event bridge is NOT
+
+- **Not a polling loop.** `doc.subscribe()` is Loro's own push-based event API.
+- **Not ordered against the event loop.** Loro emits events synchronously from the call site that caused them. The bridge fires in whatever JavaScript microtask / stack frame Loro used.
+- **Not filtered.** Every diff Loro emits reaches `batchToOps`; filtering happens at the interpreter-stack subscription level.
+
+---
+
+## `LoroVersion`
+
+Source: `packages/schema/backends/loro/src/version.ts`.
+
+`LoroVersion` implements `@kyneta/schema`'s `Version` by wrapping Loro's `VersionVector`:
+
+| Method | Delegates to |
+|--------|--------------|
+| `serialize()` | `uint8ArrayToBase64(vv.encode())` — base64 for text-safe embedding |
+| `compare(other)` | `vv.compare(other.vv)` mapped to `"behind" \| "equal" \| "ahead" \| "concurrent"` |
+| `meet(other)` | Component-wise minimum via `versionVectorMeet` from `@kyneta/schema` |
+| `LoroVersion.parse(str)` | `VersionVector.decode(base64ToUint8Array(str))` |
+
+The choice of `VersionVector` (not `Frontiers`) is deliberate: `VersionVector` tracks the *complete* peer state — which ops from each peer have been observed. This is exactly what `exportSince(version)` needs. `Frontiers` are DAG leaf ops, used for local checkpoints but insufficient for sync diffing.
+
+### What `LoroVersion` is NOT
+
+- **Not `Frontiers`.** Loro's `Frontiers` and `VersionVector` are different concepts. This package uses the latter.
+- **Not a wall-clock timestamp.** Loro version vectors are CRDT causal history, not physical time.
+- **Not totally ordered.** Two concurrent peers' versions can be mutually `"concurrent"`. `compare` returns the full partial order.
+
+---
+
+## `LoroPosition`
+
+Source: `packages/schema/backends/loro/src/position.ts`.
+
+Loro has a first-class `Cursor` type that survives concurrent edits by anchoring to an op ID, not an index. `LoroPosition` wraps it:
+
+```
+class LoroPosition implements Position {
+  constructor(private cursor: Cursor, private container: LoroText | LoroList | LoroMovableList) {}
+
+  resolve(): number {
+    return this.container.getCursorPos(this.cursor).offset
+  }
+
+  transform(change: Change): void {
+    // no-op — resolution queries the CRDT directly
+  }
 }
-return current
 ```
 
-The reader is a **live view** — mutations to the underlying `LoroDoc` (via `applyDiff` + `commit`, `doc.import`, or raw Loro API calls) are immediately visible through subsequent reads. No cache invalidation required.
+`resolve()` asks Loro for the cursor's current index. `transform()` is a no-op because Loro maintains the mapping internally; we don't need the position to track incoming changes explicitly.
+
+`fromLoroSide` / `toLoroSide` translate between kyneta's `Side = "left" | "right"` and Loro's own boundary-bias enum.
+
+### What `LoroPosition` is NOT
+
+- **Not a numeric index.** `resolve()` returns one, but the underlying cursor is anchored to a Loro op ID and survives edits that would shift any raw index.
+- **Not stateful on the kyneta side.** All state lives in Loro. `transform` does nothing by design.
+- **Not serializable directly.** Loro `Cursor` is not a public serialisable type; applications that need to persist positions across sessions must store them at the Loro layer.
 
 ---
 
-## 2. Container Discrimination
+## `loro.bind` and `loro.replica`
 
-Runtime container type is determined exclusively via the **`.kind()` method**, never `instanceof`. The `.kind()` return type is:
+Source: `packages/schema/backends/loro/src/bind-loro.ts`.
+
+The ergonomic API:
 
 ```
-"Map" | "List" | "Text" | "Counter" | "MovableList" | "Tree"
+import { loro } from "@kyneta/loro-schema"
+import { Schema } from "@kyneta/schema"
+
+const Todo = loro.bind(Schema.struct({
+  title: Schema.text(),
+  items: Schema.list(Schema.struct({ body: Schema.text(), done: Schema.boolean() })),
+}))
 ```
 
-Three shared guards in `loro-guards.ts` centralize all Loro runtime type discrimination:
+`loro.bind(schema)` returns a `BoundSchema<S, LoroNativeMap>`. Under the hood it delegates to `@kyneta/schema`'s `bind(schema, loroFactoryBuilder, "collaborative")`. The `LoroCaps` set (`"text" | "counter" | "movable" | "tree" | "json"`) is applied as `RestrictCaps<S, LoroCaps>`, so binding a schema that uses a capability Loro doesn't support fails at compile time.
 
-| Guard | Return type | Use case |
-|---|---|---|
-| `hasKind(value)` | `{ kind(): string }` | Base guard — any object with a `.kind()` method |
-| `isLoroContainer(value)` | `{ kind(): string; id: ContainerID }` | Wider guard — also guarantees `.id` (sound: checks `"id" in value`) |
-| `isLoroDoc(value)` | `LoroDoc` | Structural document guard (checks `getMap`, `getText`, `commit`, `peerIdStr`, etc.) |
+`loro.replica()` produces a `BoundReplica<LoroVersion>` — the replication-only variant for sync conduits that don't need to interpret state.
 
-`hasKind` is the base discriminator. Loro container objects are opaque handles, not class instances from the JS perspective. `instanceof` checks against imported classes are unreliable across module boundaries and bundler configurations; `.kind()` is the stable contract. `isLoroContainer` extends `hasKind` with a verified `.id` property — used by `changeToDiff` and `replaceChangeToDiff` where the `ContainerID` is needed. `isLoroDoc` distinguishes a `LoroDoc` from its child containers using structural property checks.
+### What `loro.bind` is NOT
 
-Value extraction from containers by kind:
-
-| `.kind()` | Extraction |
-|---|---|
-| `"Text"` | `.toString()` → `string` |
-| `"Counter"` | `.value` → `number` |
-| `"Map"` | `.toJSON()` → plain object, or `.get(key)` for navigation |
-| `"List"` | `.toJSON()` → plain array, `.get(index)` for navigation, `.length` for count |
-| `"MovableList"` | Same interface as `"List"` |
-| `"Tree"` | `.toJSON()` → tree snapshot |
+- **Not a factory.** It returns a `BoundSchema`, not a substrate. The substrate is constructed by `createDoc(bound)` at runtime.
+- **Not asynchronous.** Fully synchronous; the schema and the Loro factory builder are captured at call time.
+- **Not overridable.** Merge strategy for `loro.bind` is always `"collaborative"`. For different merge semantics, use `@kyneta/schema`'s lower-level `bind()` directly.
 
 ---
 
-## 3. Static Zone vs Dynamic Zone
-
-The Loro container tree divides into two zones with different identity characteristics.
-
-### Static Zone
-
-**Root products and nested structs.** Container paths are deterministic — they derive entirely from the schema field names.
-
-- Root field `title` (`TextSchema`) → `doc.getText("title")`, CID is `cid:root-title:Text`.
-- Nested struct field `items[0].metadata` → resolved by walking `doc.getList("items").get(0).get("metadata")`.
-
-Static-zone containers have **stable ContainerIDs** that are independent of which peer created them, because the schema defines their position.
-
-### Dynamic Zone
-
-**List items and map entries.** Container IDs are **peer-dependent** — they include the creating peer's ID and a counter (`cid:{counter}@{peerID}:{Type}`).
-
-When a peer inserts a struct into a list, the `LoroMap` container for that struct gets a CID like `cid:42@abc123:Map`. A different peer inserting the same logical value would get a different CID. This is fundamental to CRDTs — concurrent inserts produce distinct containers that can be independently merged.
-
-Implication: code must never hardcode or cache dynamic-zone CIDs across operations. Always resolve via path navigation.
-
----
-
-## 4. applyDiff-based Local Writes
-
-Local writes follow a two-phase protocol: **prepare** accumulates, **onFlush** applies.
-
-### `prepare(path, change)`
-
-Converts a kyneta `Change` to Loro diff tuples via `changeToDiff()`. Returns `[ContainerID, Diff | JsonDiff][]` — one or more container-targeted diffs. These are accumulated in `pendingGroups` (an array of groups, one group per `prepare()` call).
-
-**`prepare` has zero Loro side effects.** The LoroDoc is read-only during prepare (only for container ID resolution via `resolveContainer`). No mutations occur.
-
-### `onFlush(origin?)`
-
-Applies accumulated diff groups to the LoroDoc:
-
-```
-for each group in pendingGroups:
-    doc.applyDiff(group)
-pendingGroups = []
-doc.setNextCommitMessage(origin)   // if origin provided
-doc.commit()
-```
-
-Each group is applied as a **single `applyDiff()` call**. Groups from different `prepare()` calls are applied separately — Loro cannot handle duplicate ContainerIDs in a single batch (e.g., two `TextDiff`s for the same container from a multi-op transaction). Within a group, entries may cross-reference via `JsonContainerID` and must be in the same `applyDiff()` call (see §5).
-
-### inEventHandler bypass
-
-When `inEventHandler` is true (during event bridge replay), both `prepare` and `onFlush` skip their Loro-side work. The changes are already applied by Loro; the calls exist only so the changefeed layer (`wrappedPrepare`/`wrappedFlush`) can buffer and deliver notifications.
-
----
-
-## 5. Structured Inserts via JsonContainerID
-
-Inserting a struct into a list or map requires creating new Loro containers within an `applyDiff` batch. This uses Loro's **`JsonContainerID`** mechanism.
-
-### The `🦜:` prefix
-
-A `JsonContainerID` is a string of the form `🦜:cid:{counter}@{peer}:{Type}`. When Loro encounters this string as a value in a `JsonDiff`, it treats it as a **reference to another container** in the same `applyDiff` batch rather than a literal string.
-
-### Synthetic CID generation
-
-```ts
-let syntheticCounter = 0
-function syntheticCID(containerType): ContainerID {
-    return `cid:${syntheticCounter++}@0:${containerType}`
-}
-function jsonCID(cid: ContainerID): JsonContainerID {
-    return `🦜:${cid}`
-}
-```
-
-Synthetic CIDs use peer `0` and a module-scoped monotonic counter. They are **batch-local** — Loro remaps them to real peer-scoped IDs when applying the diff. Collisions between batches are harmless since remapping is per-call.
-
-### Example: inserting `{name: "x", done: false}` into a list
-
-`changeToDiff` produces a group like:
-
-```
-[
-  [listCID,       { type: "list", diff: [{ retain: N }, { insert: ["🦜:cid:7@0:Map"] }] }],
-  ["cid:7@0:Map", { type: "map",  updated: { name: "x", done: false } }]
-]
-```
-
-The list diff references the synthetic map CID via the `🦜:` prefix. The second tuple defines the map's contents. Both tuples **must be in the same `applyDiff()` call** or the cross-reference is dangling.
-
-### Recursive materialization
-
-`materializeValueDiffs` recursively walks a plain JS value against the schema. For each nested object whose schema is `product` or `map`, it allocates a synthetic CID, emits a `[syntheticCID, MapJsonDiff]` tuple, and replaces the value in the parent with `🦜:syntheticCID`.
-
----
-
-## 6. Event Bridge
-
-A **persistent `doc.subscribe()`** handler is registered at `createLoroSubstrate()` construction time. It bridges all non-kyneta mutations to the kyneta changefeed.
-
-### Discrimination logic
-
-```ts
-doc.subscribe((batch) => {
-    if (batch.by === "local" && inOurCommit) return   // kyneta's own commit
-    if (batch.by === "checkout") return                // version travel, not mutation
-
-    const ops = batchToOps(batch, schema)
-    if (ops.length === 0) return
-
-    const origin = pendingImportOrigin ?? batch.origin
-
-    inEventHandler = true
-    try {
-        executeBatch(ctx, ops, origin)
-    } finally {
-        inEventHandler = false
-    }
-})
-```
-
-`LoroEventBatch.by` values:
-
-| `batch.by` | Meaning | Action |
-|---|---|---|
-| `"local"` + `inOurCommit` | kyneta's own `doc.commit()` | **Ignore** — changefeed already captured via `wrappedPrepare` |
-| `"local"` + `!inOurCommit` | External code called Loro API directly + committed | **Bridge** via `executeBatch` |
-| `"import"` | `doc.import()` or `doc.merge()` | **Bridge** via `executeBatch` |
-| `"checkout"` | Version travel (time-travel) | **Ignore** |
-
-### Origin threading
-
-For `merge` calls, the kyneta-level `origin` string is stashed in `pendingImportOrigin` before calling `doc.import()`. The subscriber picks it up and passes it to `executeBatch`, falling back to `batch.origin` for non-kyneta imports.
-
----
-
-## 7. Re-entrancy Guards
-
-Two boolean flags prevent infinite loops and duplicate work:
-
-### `inOurCommit`
-
-Set `true` around `doc.commit()` inside `onFlush`. Purpose: when `doc.commit()` triggers the `doc.subscribe()` handler with `by: "local"`, the subscriber sees `inOurCommit === true` and returns early. Without this, every kyneta write would double-fire the changefeed.
-
-```ts
-inOurCommit = true
-try { doc.commit() }
-finally { inOurCommit = false }
-```
-
-### `inEventHandler`
-
-Set `true` around `executeBatch()` inside the subscriber. Purpose: `executeBatch` calls `substrate.prepare()` and `substrate.onFlush()` to feed ops through the changefeed machinery. These calls must be **no-ops on the Loro side** (the changes are already applied). The `inEventHandler` flag makes `prepare` skip `changeToDiff` accumulation and `onFlush` skip `applyDiff`/`commit`.
-
-```ts
-inEventHandler = true
-try { executeBatch(ctx, ops, origin) }
-finally { inEventHandler = false }
-```
-
----
-
-## 8. Event Bridge Contract
-
-> **Wrapping a `LoroDoc` in a kyneta substrate means all mutations — regardless of source — fire kyneta changefeed subscribers.**
-
-Mutation sources and their paths to the changefeed:
-
-| Source | Mechanism |
-|---|---|
-| kyneta `change()` / `batch()` | `prepare` → `onFlush` → `doc.applyDiff` + `doc.commit` → changefeed via `wrappedPrepare`/`wrappedFlush` (subscriber ignores via `inOurCommit`) |
-| `substrate.merge()` | `doc.import()` → subscriber fires → `batchToOps` → `executeBatch` → changefeed |
-| External `doc.import()` | subscriber fires → `batchToOps` → `executeBatch` → changefeed |
-| External raw Loro API (`getText().insert()` + `doc.commit()`) | subscriber fires with `by: "local"`, `inOurCommit` is false → `batchToOps` → `executeBatch` → changefeed |
-
-This contract is tested by the `changefeed fires on merge`, `changefeed fires on external import`, and `changefeed fires on external local write` test suites.
-
----
-
-## 9. The changeToDiff / batchToOps Boundary
-
-These are **conceptual inverses** mapping between kyneta's `Change` types and Loro's `Diff` types at the substrate boundary.
-
-| Direction | Function | Input | Output |
-|---|---|---|---|
-| kyneta → Loro | `changeToDiff(path, change, schema, doc)` | `Path` + `ChangeBase` | `[ContainerID, Diff \| JsonDiff][]` |
-| Loro → kyneta | `batchToOps(batch, schema)` | `LoroEventBatch` | `Op[]` (each `Op` = `{path, change}`) |
-
-### Diff ↔ Change type mapping
-
-| Loro Diff type | kyneta Change type | Notes |
-|---|---|---|
-| `TextDiff` (`type: "text"`) | `TextChange` (`type: "text"`) | Delta shapes are structurally identical: `{insert, delete, retain}` |
-| `ListDiff` / `ListJsonDiff` (`type: "list"`) | `SequenceChange` (`type: "sequence"`) | Insert deltas carry plain values or `JsonContainerID` refs (→Loro) / container handles (←Loro, `.toJSON()`'d) |
-| `MapDiff` / `MapJsonDiff` (`type: "map"`) | `MapChange` (`type: "map"`) | `updated` entries with `undefined` values → `delete` keys; container values → `.toJSON()` on read-back |
-| `CounterDiff` (`type: "counter"`) | `IncrementChange` (`type: "increment"`) | Single `increment` / `amount` field |
-| `TreeDiff` (`type: "tree"`) | `TreeChange` (`type: "tree"`) | Action mapping: `create`→`create`, `delete`→`delete`, `move`→`move` |
-
-### ReplaceChange special case
-
-`ReplaceChange` (`type: "replace"`) does not map to a single Loro diff type. It targets the **parent container**:
-
-- Parent is a `Map` → emits `MapDiff` with `updated: { [lastSegKey]: value }`.
-- Parent is a `List` → emits `ListDiff` with `[retain(N), delete(1), insert([value])]`.
-- Parent is root LoroDoc for a scalar field → targets the `_props` map.
-
-`changeToDiff` dispatches `ReplaceChange` before resolving the target container, since it needs the parent, not the scalar itself.
-
-### Schema-informed expansion
-
-`batchToOps` passes the document schema to `expandMapOpsToLeaves`, which uses `advanceSchema` to walk the schema tree to each `MapChange` op's path. Products (structs stored as `LoroMap`) are expanded into per-key `ReplaceChange` ops for leaf-level changefeed delivery. Maps (records stored as `LoroMap`) are preserved as `MapChange` — the map changefeed requires structural events at its own path for dynamic subscription management (`handleStructuralChange`).
-
----
-
-## 10. Version Semantics
-
-`LoroVersion` wraps Loro's **`VersionVector`**, not `Frontiers`.
-
-| Loro concept | What it tracks | kyneta use |
-|---|---|---|
-| `VersionVector` | Complete peer state — which ops from each peer have been observed | `LoroVersion` wraps this. Used for `exportSince(since)` to compute minimal update payloads. |
-| `Frontiers` | DAG leaf ops (compact checkpoint representation) | **Not used** by `LoroVersion`. Frontiers are for checkout/time-travel, not sync diffing. |
-
-### Serialization
-
-`LoroVersion.serialize()` encodes as **base64**:
-
-```
-VersionVector.encode() → Uint8Array → base64 string
-```
-
-`LoroVersion.parse()` is the inverse:
-
-```
-base64 string → Uint8Array → VersionVector.decode()
-```
-
-Base64 encoding is text-safe for embedding in HTML meta tags, URL parameters, script tags, etc. The implementation uses platform-agnostic `btoa`/`atob` (no Node.js `Buffer` dependency).
-
-### Comparison
-
-`LoroVersion.compare(other)` delegates to `VersionVector.compare()` and maps:
-
-| `VV.compare()` return | `LoroVersion.compare()` return |
-|---|---|
-| `-1` | `"behind"` |
-| `0` | `"equal"` |
-| `1` | `"ahead"` |
-| `undefined` | `"concurrent"` |
-
----
-
-## 11. Root Scalar Fields
-
-Root-level fields with non-container schema types (`Schema.string()`, `Schema.number()`, `Schema.boolean()`, sum types) do **not** get their own root Loro container. Instead, they are stored as entries in a single root `LoroMap` keyed by `PROPS_KEY = "_props"`.
-
-```
-doc.getMap("_props").get("theme")   → "dark"
-doc.getMap("_props").get("count")   → 42
-```
-
-This avoids creating a separate root container per scalar field. The `_props` map is accessed:
-
-- **On read:** `stepFromDoc` detects `scalar` or `sum` schema kind → reads from `doc.getMap(PROPS_KEY).get(key)`.
-- **On write:** `ReplaceChange` at a root scalar path → emits `MapDiff` targeting the `_props` container's CID.
-- **On init:** `populateRootField` detects `scalar` or `sum` → calls `doc.getMap(PROPS_KEY).set(key, value)`.
-
-Container-typed root fields (`text`, `counter`, `product`, `sequence`, `map`, `movable`, `tree`) each get their own root container via `doc.getText(key)`, `doc.getMap(key)`, etc.
-
-### Event bridge path stripping
-
-When a remote peer mutates a root scalar field, Loro fires an event at path `["_props"]` with a `MapDiff` containing the changed keys. The `batchToOps` function calls `loroPathToKynetaPath` to convert Loro's event path to a kyneta `RawPath`. Without special handling, this would produce `RawPath.empty.field("_props").field("darkMode")` — but the changefeed listener is registered at `RawPath.empty.field("darkMode")` (no `_props` prefix). The path mismatch would cause the changefeed to never fire for remote scalar changes.
-
-`loroPathToKynetaPath` detects when the first path segment is `PROPS_KEY` and strips it. The remaining segments become the kyneta path, matching the schema tree where scalar fields are direct children of the root product.
-
-```ts
-// Loro event path: ["_props"]  →  kyneta path: RawPath.empty
-// After expandMapOpsToLeaves:  →  RawPath.empty.field("darkMode")
-// Matches listener at:            RawPath.empty.field("darkMode")  ✓
-```
-
-This stripping is safe because `_props` only exists as a root-level container. It never appears as a nested path segment.
-
----
-
-## 12. `LoroCaps` and Capability Constraints
-
-`LoroCaps` + `loro.bind()` is the sole mechanism for constraining which schemas can target the Loro substrate. There is no separate `LoroDocFieldSchema` type or `LoroSchema` namespace — schemas are defined with `Schema.*` and capability enforcement happens at bind time.
-
-### How it works
-
-Every first-class CRDT type carries a `[CAPS]` phantom brand declaring its required merge capability:
-
-| `Schema.*` constructor | `[CAPS]` brand | Loro container |
-|---|---|---|
-| `Schema.text()` | `"text"` | `LoroText` |
-| `Schema.counter()` | `"counter"` | `LoroCounter` |
-| `Schema.movableList(item)` | `"movable"` | `LoroMovableList` |
-| `Schema.tree(nodeData)` | `"tree"` | `LoroTree` |
-| `Schema.struct.json(fields)` | `"json"` | Opaque JSON in parent container |
-| `Schema.list.json(item)` | `"json"` | Opaque JSON in parent container |
-| `Schema.record.json(item)` | `"json"` | Opaque JSON in parent container |
-
-Structural types (`Schema.struct`, `Schema.list`, `Schema.record`) and scalars (`Schema.string`, `Schema.number`, `Schema.boolean`, `Schema.nullable`) carry no capability brand — they are universally supported.
-
-### Compile-time enforcement
-
-`loro.bind(schema)` uses `ExtractCaps<S>` to collect all capability brands in the schema tree, then checks that every extracted cap is assignable to `LoroCaps`. If the schema contains a capability Loro doesn't support (e.g. `"set"` from `Schema.set()`), the call produces a compile-time type error:
-
-```ts
-const schema = Schema.struct({
-  tags: Schema.set(Schema.string()),  // [CAPS] = "set"
-})
-// @ts-expect-error — "set" is not in LoroCaps
-loro.bind(schema)
-```
-
-### `.json()` merge boundaries
-
-The `.json()` suffix on structural constructors (`Schema.struct.json`, `Schema.list.json`, `Schema.record.json`) marks a **merge boundary**. Below a `.json()` node, the entire subtree is stored as opaque JSON — no individual CRDT containers are created for children. This trades fine-grained merge for simplicity and performance. The `"json"` capability is in `LoroCaps`, so `.json()` nodes are accepted by `loro.bind()`.
-
-### Root scalar fields
-
-Root-level scalars (`Schema.string()`, `Schema.number()`, `Schema.boolean()`, sum types) are stored in a single root `LoroMap` keyed by `_props` (see §11). This is handled transparently by the substrate — no special schema annotation is needed.
-
----
-
-## 13. `LoroNativeMap` — The Loro Functor
-
-`LoroNativeMap` is the concrete `NativeMap` implementation for Loro, mapping each schema kind to its Loro container type:
-
-| NativeMap slot | Loro type | Schema kind |
-|---|---|---|
-| `root` | `LoroDoc` | Root document |
-| `text` | `LoroText` | `Schema.text()` |
-| `counter` | `LoroCounter` | `Schema.counter()` |
-| `list` | `LoroList` | `Schema.list(item)` |
-| `movableList` | `LoroMovableList` | `Schema.movableList(item)` |
-| `struct` | `LoroMap` | `Schema.struct(fields)` |
-| `map` | `LoroMap` | `Schema.record(item)` |
-| `tree` | `LoroTree` | `Schema.tree(nodeData)` |
-| `set` | `undefined` | Not supported by Loro binding |
-| `scalar` | `undefined` | Scalars have no dedicated container |
-| `sum` | `undefined` | Sums are stored as scalar values |
-
-`loro.bind(schema)` produces `BoundSchema<S, LoroNativeMap>`, which flows through `DocRef<S, LoroNativeMap>` and all child `SchemaRef<S, M, LoroNativeMap>` refs. This enables fully typed native access:
-
-```
-const doc = createDoc(loro.bind(schema))
-unwrap(doc)           // LoroDoc       (typed via N["root"])
-unwrap(doc.title)     // LoroText      (typed via N["text"])
-unwrap(doc.items)     // LoroList      (typed via N["list"])
-unwrap(doc.profile)   // LoroMap       (typed via N["struct"])
-unwrap(doc.theme)     // undefined     (scalar — no container)
-```
-
-`unwrap(ref)` reads `ref[NATIVE]` — the symbol property set during interpretation by the `nativeResolver` protocol. This replaces the previous `loro.unwrap()` function and its `WeakMap<Substrate, LoroDoc>` tracking.
-
----
-
-## 14. File Map
-
-```
-src/
-├── index.ts              Public API surface. Re-exports from all modules.
-│
-├── native-map.ts         LoroNativeMap — NativeMap functor mapping schema kinds to Loro types.
-│
-├── substrate.ts          createLoroSubstrate() — Substrate<LoroVersion> implementation.
-│                         loroSubstrateFactory — SubstrateFactory (create, fromEntirety, parseVersion).
-│                         populateRootField / populateMap / populateList — seed initialization.
-│
-├── store-reader.ts       loroStoreReader() — StoreReader via live schema-guided navigation.
-│                         read(), arrayLength(), keys(), hasKey() implementations.
-│                         extractValue() — container kind → scalar extraction.
-│
-├── loro-resolve.ts       resolveContainer() — left-fold path resolution over Loro tree.
-│                         stepIntoLoro() — single fold step (LoroDoc root vs container child).
-│                         stepFromDoc() — root-level dispatch by schema [KIND].
-│                         stepFromContainer() — child dispatch by .kind().
-│                         PROPS_KEY constant ("_props").
-│
-├── change-mapping.ts     changeToDiff() — kyneta Change → Loro [ContainerID, Diff][] groups.
-│                         batchToOps() — Loro LoroEventBatch → kyneta Op[].
-│                         loroPathToKynetaPath() — strips _props prefix for root scalars.
-│                         Per-type converters in both directions.
-│                         syntheticCID / jsonCID — 🦜: prefix mechanism.
-│                         materializeValueDiffs — recursive structured insert expansion.
-│
-├── bind-loro.ts          loro.bind() — SubstrateNamespace<CrdtStrategy, LoroCaps, LoroNativeMap>.
-│                         createLoroFactory — factory builder with deterministic PeerID.
-│
-├── version.ts            LoroVersion class — wraps VersionVector.
-│                         serialize/parse (base64), compare (partial order).
-│
-├── loro-guards.ts        Type guard utilities for Loro container discrimination.
-│
-└── __tests__/
-    ├── store-reader.test.ts   StoreReader navigation and read tests.
-    ├── substrate.test.ts      Full substrate lifecycle: create, seed, write round-trip,
-    │                          version tracking, snapshot export/import, delta sync,
-    │                          concurrent sync, changefeed bridge (import, external, local),
-    │                          no-double-fire, transactions, nested structures.
-    ├── native.test.ts         [NATIVE] symbol property and unwrap() tests.
-    ├── create.test.ts         createDoc with BoundSchema, hydration from payload.
-    ├── bind-loro.test.ts      loro.bind tests, capability constraints.
-    └── version.test.ts        LoroVersion serialize/parse/compare tests.
-```
+## Key Types
+
+| Type | File | Role |
+|------|------|------|
+| `loro` | `src/bind-loro.ts` | The namespace: `.bind(schema)`, `.replica()`. |
+| `LoroCaps` | `src/bind-loro.ts` | `"text" \| "counter" \| "movable" \| "tree" \| "json"`. |
+| `LoroNativeMap` | `src/native-map.ts` | The `NativeMap` functor for Loro. |
+| `LoroVersion` | `src/version.ts` | `Version` over `VersionVector`. |
+| `LoroPosition` | `src/position.ts` | `Position` over Loro `Cursor`. |
+| `loroSubstrateFactory` / `loroReplicaFactory` | `src/substrate.ts` | Factory instances. |
+| `createLoroSubstrate` | `src/substrate.ts` | Construct a `Substrate<LoroVersion>` from a `LoroDoc` and schema. |
+| `loroReader` | `src/reader.ts` | `Reader` via live container navigation. |
+| `resolveContainer` / `stepIntoLoro` | `src/loro-resolve.ts` | The navigation primitives. |
+| `PROPS_KEY` | `src/loro-resolve.ts` | `"_props"` — reserved root map for scalars. |
+| `changeToDiff` / `batchToOps` | `src/change-mapping.ts` | Pure translators between kyneta and Loro vocabularies. |
+| `hasKind` / `isLoroContainer` / `isLoroDoc` | `src/loro-guards.ts` | Runtime container guards using `.kind()`. |
+| `fromLoroSide` / `toLoroSide` | `src/position.ts` | `Side` conversions. |
+
+## File Map
+
+| File | Lines | Role |
+|------|-------|------|
+| `src/index.ts` | 63 | Public barrel. Re-exports generic API from `@kyneta/schema`; exports Loro-specific symbols. |
+| `src/bind-loro.ts` | 174 | `loro.bind` / `loro.replica` namespace; `LoroCaps`. |
+| `src/substrate.ts` | 671 | `LoroSubstrate`, factories, prepare/flush, event bridge, `ensureLoroContainers`, `mergePendingGroups`. |
+| `src/change-mapping.ts` | 866 | Pure `changeToDiff` + `batchToOps` for every kyneta change type and every Loro container kind. |
+| `src/loro-resolve.ts` | 221 | `resolveContainer`, `stepIntoLoro`, `stepFromDoc`, `PROPS_KEY`. |
+| `src/reader.ts` | 139 | `loroReader` — reads via `resolveContainer` + container-kind extraction. |
+| `src/loro-guards.ts` | 85 | `hasKind` / `isLoroContainer` / `isLoroDoc` runtime guards. |
+| `src/version.ts` | 103 | `LoroVersion` (wraps `VersionVector`). |
+| `src/position.ts` | 61 | `LoroPosition` (wraps `Cursor`), `fromLoroSide`, `toLoroSide`. |
+| `src/native-map.ts` | 45 | `LoroNativeMap` type-level functor. |
+| `src/__tests__/create.test.ts` | 339 | End-to-end: `createDoc(loro.bind(schema))` → read/write round-trips. |
+| `src/__tests__/substrate.test.ts` | 788 | Substrate contract conformance (subset of the `@kyneta/schema` suite). |
+| `src/__tests__/reader.test.ts` | 487 | `loroReader` over every container kind + scalar variants. |
+| `src/__tests__/record-counter-spike.test.ts` | 588 | Focus tests for `Schema.record(Schema.counter())` and related combinations. |
+| `src/__tests__/structural-merge.test.ts` | 214 | `merge()` and `applyDiff` round-trips; identity-keyed container compatibility. |
+| `src/__tests__/position.test.ts` | 361 | `LoroPosition` cursor stability across concurrent edits. |
+| `src/__tests__/bind-constraints.test.ts` | 315 | Compile-time capability enforcement (schemas outside `LoroCaps` are rejected). |
+| `src/__tests__/bind-loro.test.ts` | 131 | `loro.bind` API surface. |
+| `src/__tests__/native.test.ts` | 102 | `unwrap(ref)` returns the right native container at every depth. |
+| `src/__tests__/loro-guards.test.ts` | 47 | `hasKind`, `isLoroContainer`, `isLoroDoc` runtime behaviour. |
+| `src/__tests__/version.test.ts` | 231 | `LoroVersion` serialize/parse, `compare`, `meet` algebraic properties. |
+
+## Testing
+
+Tests use real `LoroDoc` instances from `loro-crdt` — no mocks. Two-peer scenarios simulate collaborative editing by constructing two `LoroDoc`s, mutating them independently, and merging via `exportSince` + `merge`. The substrate contract suite from `@kyneta/schema` is replayed against `loroSubstrateFactory` for conformance.
+
+**Tests**: 203 passed, 4 skipped across 11 files (`bind-constraints`: 27, `bind-loro`: 9, `create`: 20, `loro-guards`: included in `native`/`reader`, `native`: 10, `position`: 27 passed + 4 skipped, `reader`: 29, `record-counter-spike`: 26, `structural-merge`: 7, `substrate`: 30, `version`: 18 — approximate per-file breakdown). Run with `cd packages/schema/backends/loro && pnpm exec vitest run`.
