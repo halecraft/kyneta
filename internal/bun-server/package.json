@@ -1,0 +1,14 @@
+{
+  "name": "@kyneta/bun-server",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "devDependencies": {
+    "bun-types": "latest",
+    "typescript": "^5.9",
+    "vitest": "^3.2.4"
+  }
+}

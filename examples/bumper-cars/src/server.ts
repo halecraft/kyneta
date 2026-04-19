@@ -26,15 +26,16 @@ import {
   createBunWebsocketHandlers,
   type BunWebsocketData,
 } from "@kyneta/websocket-transport/bun"
+import { serveDist } from "@kyneta/bun-server"
 import { GameStateDoc, PlayerInputDoc } from "./schema.js"
 import { GameLoop } from "./server/game-loop.js"
-import { buildClient } from "./build.js"
+import { build } from "./build.js"
 
 // ─────────────────────────────────────────────────────────────────────────
 // 1. Build — compile the client app
 // ─────────────────────────────────────────────────────────────────────────
 
-await buildClient()
+await build()
 
 // ─────────────────────────────────────────────────────────────────────────
 // 2. Exchange — server-side sync hub with access control
@@ -144,27 +145,7 @@ Bun.serve<BunWebsocketData>({
       return new Response("WebSocket upgrade failed", { status: 400 })
     }
 
-    // Static file serving from dist/
-    const pathname = url.pathname === "/" ? "/index.html" : url.pathname
-    const acceptsBr = /\bbr\b/.test(req.headers.get("accept-encoding") ?? "")
-
-    if (acceptsBr) {
-      const brFile = Bun.file(`./dist${pathname}.br`)
-      if (await brFile.exists()) {
-        const original = Bun.file(`./dist${pathname}`)
-        return new Response(brFile, {
-          headers: {
-            "Content-Encoding": "br",
-            "Content-Type": original.type,
-          },
-        })
-      }
-    }
-
-    const file = Bun.file(`./dist${pathname}`)
-    return (await file.exists())
-      ? new Response(file)
-      : new Response("Not found", { status: 404 })
+    return serveDist(req, "./dist")
   },
 
   websocket: createBunWebsocketHandlers(serverTransport),

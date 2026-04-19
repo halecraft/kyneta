@@ -8,6 +8,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@kyneta/bun-server": "workspace:^",
     "@kyneta/exchange": "workspace:^",
     "@kyneta/react": "workspace:^",
     "@kyneta/schema": "workspace:^",

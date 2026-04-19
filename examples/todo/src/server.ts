@@ -22,7 +22,8 @@ import {
   type BunWebsocketData,
 } from "@kyneta/websocket-transport/bun"
 import { TodoDoc } from "./schema.js"
-import { buildClient } from "./build.js"
+import { serveDist } from "@kyneta/bun-server"
+import { build } from "./build.js"
 
 // ─────────────────────────────────────────────────────────────────────────
 // 1. Exchange — server-side sync hub
@@ -44,7 +45,7 @@ exchange.get("todos", TodoDoc)
 // 2. Build — compile the client app + optional brotli pre-compression
 // ─────────────────────────────────────────────────────────────────────────
 
-await buildClient()
+await build()
 
 // ─────────────────────────────────────────────────────────────────────────
 // 3. Serve — HTTP for static files, WebSocket for sync
@@ -64,28 +65,7 @@ Bun.serve<BunWebsocketData>({
       return new Response("WebSocket upgrade failed", { status: 400 })
     }
 
-    // Static file serving from dist/
-    // Serve pre-compressed .br when the client accepts brotli
-    const pathname = url.pathname === "/" ? "/index.html" : url.pathname
-    const acceptsBr = /\bbr\b/.test(req.headers.get("accept-encoding") ?? "")
-
-    if (acceptsBr) {
-      const brFile = Bun.file(`./dist${pathname}.br`)
-      if (await brFile.exists()) {
-        const original = Bun.file(`./dist${pathname}`)
-        return new Response(brFile, {
-          headers: {
-            "Content-Encoding": "br",
-            "Content-Type": original.type,
-          },
-        })
-      }
-    }
-
-    const file = Bun.file(`./dist${pathname}`)
-    return (await file.exists())
-      ? new Response(file)
-      : new Response("Not found", { status: 404 })
+    return serveDist(req, "./dist")
   },
 
   websocket: createBunWebsocketHandlers(serverTransport),

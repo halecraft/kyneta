@@ -3,7 +3,8 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**"]
+      "outputs": ["dist/**"],
+      "env": ["SKIP_BROTLI"]
     },
     "verify": {
       "dependsOn": ["^build"],

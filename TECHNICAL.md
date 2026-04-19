@@ -273,6 +273,10 @@ Heterogeneous documents in one Exchange — shared game state (Yjs, concurrent m
 
 51 tests.
 
+### Shared example infrastructure
+
+Bun-based examples (`todo`, `bumper-cars`) share build and serving infrastructure via `@kyneta/bun-server` (an internal workspace package, not published). Each example's `build.ts` is a thin config (~5 lines) that calls `buildClient(opts?)`, and each server delegates static file handling to `serveDist(req, distDir)`. Brotli pre-compression uses `node:zlib` (no system CLI dependency) and can be skipped via `SKIP_BROTLI=1` for faster workspace builds.
+
 ## Development
 
 ### Build & Verification
@@ -282,6 +286,7 @@ The monorepo uses **Turborepo** for cross-package task orchestration with conten
 ```sh
 # Build all packages in dependency order
 pnpm build                              # alias for: turbo build
+SKIP_BROTLI=1 pnpm build               # skip brotli pre-compression (faster)
 
 # Verify all main packages (format → types → logic)
 pnpm verify                             # alias for: turbo verify --filter='!@kyneta/perspective'
@@ -294,7 +299,7 @@ npx turbo verify --filter=@kyneta/perspective
 ```
 
 **Turbo tasks** (`turbo.json`):
-- `build` — depends on `^build` (upstream builds), caches `dist/**`
+- `build` — depends on `^build` (upstream builds), caches `dist/**`, env-keyed on `SKIP_BROTLI`
 - `verify` — depends on `^build`, runs the package's `verify` script
 - `test` — depends on `^build`, runs the package's `test` script (which calls `verify logic`)
 
@@ -358,6 +363,8 @@ kyneta/
 │   ├── compiler/                 @kyneta/compiler
 │   ├── cast/                     @kyneta/cast
 │   └── perspective/              @kyneta/perspective (private)
+├── internal/
+│   └── bun-server/               @kyneta/bun-server (private — build, compress, serve)
 ├── examples/
 │   ├── todo/                     Collaborative todo (Cast + Exchange + Yjs)
 │   ├── todo-react/               Collaborative todo (React + Exchange + Yjs)

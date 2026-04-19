@@ -5,7 +5,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "build": "turbo build",
+    "build": "SKIP_BROTLI=1 turbo build",
     "test": "turbo test --filter='!@kyneta/perspective'",
     "verify": "turbo verify --filter='!@kyneta/perspective'",
     "release": "bun scripts/release.ts"
