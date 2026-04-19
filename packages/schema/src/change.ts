@@ -94,6 +94,38 @@ export interface IncrementChange extends ChangeBase {
 }
 
 // ---------------------------------------------------------------------------
+// Rich text types — cursor-based with format/mark instructions
+// ---------------------------------------------------------------------------
+
+/** Keys are mark names; values are mark data or null (remove). `unknown` because mark payloads are schema-opaque. */
+export type MarkMap = Readonly<Record<string, unknown>>
+
+export interface RichTextSpan {
+  readonly text: string
+  readonly marks?: MarkMap
+}
+
+export type RichTextDelta = readonly RichTextSpan[]
+
+/**
+ * Rich text instructions — the structural type doesn't name the variants:
+ * `retain(N)`, `insert(text, marks?)`, `delete(N)`, `format(N, marks)`.
+ *
+ * Positionally, `format(N)` ≡ `retain(N)` — it advances both cursors
+ * by N. `foldInstructions` handles this equivalence.
+ */
+export type RichTextInstruction =
+  | { readonly retain: number }
+  | { readonly insert: string; readonly marks?: MarkMap }
+  | { readonly delete: number }
+  | { readonly format: number; readonly marks: MarkMap }
+
+export interface RichTextChange extends ChangeBase {
+  readonly type: "richtext"
+  readonly instructions: readonly RichTextInstruction[]
+}
+
+// ---------------------------------------------------------------------------
 // Union of all built-in action types
 // ---------------------------------------------------------------------------
 
@@ -104,6 +136,7 @@ export type BuiltinChange =
   | ReplaceChange
   | TreeChange
   | IncrementChange
+  | RichTextChange
 
 /**
  * Any action — built-in or third-party. Use this as a general constraint
@@ -178,6 +211,16 @@ export function incrementChange(amount: number): IncrementChange {
   return { type: "increment", amount }
 }
 
+export function richTextChange(
+  instructions: readonly RichTextInstruction[],
+): RichTextChange {
+  return { type: "richtext", instructions }
+}
+
+export function isRichTextChange(change: ChangeBase): change is RichTextChange {
+  return change.type === "richtext"
+}
+
 // ---------------------------------------------------------------------------
 // Instruction — structural type for retain/insert/delete instructions
 // ---------------------------------------------------------------------------
@@ -189,6 +232,10 @@ export function incrementChange(amount: number): IncrementChange {
  * The `insert` case requires only `{ length: number }` — both
  * `string` and `readonly T[]` have `.length`, so both qualify.
  *
+ * `RichTextInstruction` also satisfies this: its `format` variant
+ * has `{ format: number }` which is handled by `foldInstructions`
+ * as positionally equivalent to `retain`.
+ *
  * This is the input type for `foldInstructions`, which manages
  * dual-cursor position tracking over any instruction stream.
  */
@@ -196,6 +243,7 @@ export type Instruction =
   | { readonly retain: number }
   | { readonly insert: { readonly length: number } }
   | { readonly delete: number }
+  | { readonly format: number }
 
 // ---------------------------------------------------------------------------
 // foldInstructions — dual-cursor fold over instructions
@@ -272,6 +320,13 @@ export function foldInstructions<S>(
       acc = result
       source += op.retain
       target += op.retain
+    } else if ("format" in op) {
+      // format ≡ retain positionally — same cursor math
+      const result = fold.onRetain(acc, op.format, source, target)
+      if (isDone(result)) return result.done
+      acc = result
+      source += op.format
+      target += op.format
     } else if ("insert" in op) {
       const length = op.insert.length
       const result = fold.onInsert(acc, length, source, target)

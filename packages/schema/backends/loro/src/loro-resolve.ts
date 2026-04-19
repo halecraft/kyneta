@@ -66,6 +66,7 @@ function stepFromDoc(
   // Dispatch on the schema's [KIND] directly — no annotation unwrapping
   switch (fieldSchema[KIND]) {
     case "text":
+    case "richtext":
       return doc.getText(key)
     case "counter":
       return doc.getCounter(key)
@@ -177,6 +178,15 @@ export function stepIntoLoro(
 // ---------------------------------------------------------------------------
 
 /**
+ * Result of resolving a Loro container at a path — includes both the
+ * container (or scalar value) and the schema at that position.
+ */
+export interface ResolveResult {
+  readonly container: unknown
+  readonly schema: SchemaNode
+}
+
+/**
  * Resolve a Loro container (or scalar value) at the given path.
  *
  * Left-folds over path segments using `advanceSchema` for pure schema
@@ -187,15 +197,16 @@ export function stepIntoLoro(
  * identity hash is used instead of the field name at every product-field
  * boundary (root and nested).
  *
- * Returns the Loro container or scalar value at the terminal position.
- * For an empty path, returns the doc itself.
+ * Returns both the Loro container (or scalar value) at the terminal
+ * position and the schema at that position.
+ * For an empty path, returns the doc itself with the root schema.
  */
 export function resolveContainer(
   doc: LoroDoc,
   rootSchema: SchemaNode,
   path: Path,
   binding?: SchemaBinding,
-): unknown {
+): ResolveResult {
   let current: unknown = doc
   let schema = rootSchema
   // Track the accumulated absolute schema path for identity lookup.
@@ -217,5 +228,5 @@ export function resolveContainer(
     current = stepIntoLoro(current, schema, nextSchema, seg, identity)
     schema = nextSchema
   }
-  return current
+  return { container: current, schema }
 }

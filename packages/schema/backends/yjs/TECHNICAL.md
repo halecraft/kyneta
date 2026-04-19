@@ -424,3 +424,14 @@ Tests use real `Y.Doc` instances from `yjs` — no mocks. Two-peer scenarios con
 One test stdout line is expected: `[yjs] Changed the client-id because another client seems to be using it.` — this is Yjs's own warning when a test deliberately creates two peers with colliding IDs; Yjs auto-recovers by re-issuing an ID, which is the correct behaviour.
 
 **Tests**: 217 passed, 4 skipped across 9 files (`bind-yjs`: 17, `bind-constraints`: included in `bind-yjs` coverage, `create`: 30, `position`: 27 passed + 4 skipped, `reader`: included in `create`/`substrate` coverage, `record-text-spike`: 20, `structural-merge`: 12, `substrate`: 29, `version`: ~82 — approximate per-file breakdown). Run with `cd packages/schema/backends/yjs && pnpm exec vitest run`.
+
+## `richtext` support
+
+`richtext` uses the same `Y.Text` shared type as `text`. The difference is in change-mapping:
+
+- **Outbound** (`applyRichTextChange`): Same delta format as Loro — `format(N, marks)` → `{ retain: N, attributes: marks }`.
+- **Inbound** (`richTextEventToChange`): `YTextEvent.delta` entries with `attributes` → `format` instructions; without → plain `retain`.
+
+Yjs does not require explicit mark style configuration (unlike Loro's `configTextStyle()`). Formatting attributes are always inclusive by default. This is an asymmetry between the two substrates.
+
+The `resolveYjsType` function returns `{ resolved, schema }` — this enables the reader to dispatch `Y.Text` → `.toJSON()` (text) vs `.toDelta()` (richtext).

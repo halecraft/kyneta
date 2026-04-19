@@ -19,6 +19,8 @@ import type {
   Op,
   Path,
   ReplaceChange,
+  RichTextChange,
+  RichTextInstruction,
   SchemaBinding,
   Schema as SchemaNode,
   SequenceChange,
@@ -31,6 +33,7 @@ import {
   expandMapOpsToLeaves,
   KIND,
   RawPath,
+  richTextChange,
   structuralKind,
 } from "@kyneta/schema"
 import type {
@@ -120,7 +123,7 @@ export function changeToDiff(
   }
 
   // Resolve the target container
-  const resolved = resolveContainer(doc, schema, path, binding)
+  const { container: resolved } = resolveContainer(doc, schema, path, binding)
 
   // Get the ContainerID
   let targetCID: ContainerID
@@ -133,7 +136,7 @@ export function changeToDiff(
       throw new Error("changeToDiff: cannot create diff for root-level scalar")
     }
     const parentPath = path.slice(0, -1)
-    const parentResolved = resolveContainer(doc, schema, parentPath, binding)
+    const { container: parentResolved } = resolveContainer(doc, schema, parentPath, binding)
     if (!isLoroContainer(parentResolved)) {
       // Parent is the LoroDoc (root level) — use the _props map
       const propsMap = (parentResolved as any).getMap(PROPS_KEY)
@@ -152,6 +155,9 @@ export function changeToDiff(
   switch (change.type) {
     case "text":
       return [[targetCID, textChangeToDiff(change as TextChange)]]
+
+    case "richtext":
+      return [[targetCID, richTextChangeToDiff(change as RichTextChange)]]
 
     case "sequence":
       return sequenceChangeToDiff(
@@ -192,6 +198,35 @@ function textChangeToDiff(change: TextChange): TextDiff {
         return { delete: inst.delete } as Delta<string>
       }
       throw new Error("textChangeToDiff: unknown instruction type")
+    },
+  )
+  return { type: "text", diff }
+}
+
+/**
+ * RichTextChange → TextDiff
+ * Rich text instructions map to Loro text deltas with attributes for marks.
+ */
+function richTextChangeToDiff(change: RichTextChange): TextDiff {
+  const diff: Delta<string>[] = change.instructions.map(
+    (inst: RichTextInstruction) => {
+      if ("retain" in inst) {
+        return { retain: inst.retain } as Delta<string>
+      }
+      if ("format" in inst) {
+        return { retain: inst.format, attributes: inst.marks } as Delta<string>
+      }
+      if ("insert" in inst) {
+        const d: any = { insert: inst.insert }
+        if (inst.marks && Object.keys(inst.marks).length > 0) {
+          d.attributes = inst.marks
+        }
+        return d as Delta<string>
+      }
+      if ("delete" in inst) {
+        return { delete: inst.delete } as Delta<string>
+      }
+      throw new Error("richTextChangeToDiff: unknown instruction type")
     },
   )
   return { type: "text", diff }
@@ -329,7 +364,7 @@ function replaceChangeToDiff(
   const lastSeg = path.segments[path.segments.length - 1]
   if (!lastSeg) throw new Error("replaceChangeToDiff: empty path")
   const parentPath = path.slice(0, -1)
-  const parentResolved = resolveContainer(doc, schema, parentPath, binding)
+  const { container: parentResolved } = resolveContainer(doc, schema, parentPath, binding)
 
   // If the parent is the LoroDoc itself (root-level field), the target
   // depends on the field type. For scalars/sums, they're stored in the
@@ -646,7 +681,18 @@ export function batchToOps(
 
   for (const event of batch.events) {
     const kynetaPath = loroPathToKynetaPath(event.path, binding)
-    const change = diffToChange(event.diff, binding)
+    // Resolve the leaf schema to distinguish text vs richtext diffs.
+    let leafSchema: SchemaNode | undefined
+    try {
+      let s = schema
+      for (const seg of kynetaPath.segments) {
+        s = advanceSchema(s, seg)
+      }
+      leafSchema = s
+    } catch {
+      // Schema walk failed — fall back to untyped dispatch
+    }
+    const change = diffToChange(event.diff, binding, leafSchema)
     if (change) {
       ops.push({ path: kynetaPath, change })
     }
@@ -710,9 +756,12 @@ function loroPathToKynetaPath(
  * Returns null for diff types we can't map (shouldn't happen for
  * supported container types).
  */
-function diffToChange(diff: Diff, binding?: SchemaBinding): ChangeBase | null {
+function diffToChange(diff: Diff, binding?: SchemaBinding, leafSchema?: SchemaNode): ChangeBase | null {
   switch (diff.type) {
     case "text":
+      if (leafSchema && leafSchema[KIND] === "richtext") {
+        return richTextDiffToChange(diff as TextDiff)
+      }
       return textDiffToChange(diff as TextDiff)
     case "list":
       return listDiffToChange(diff as ListDiff)
@@ -746,6 +795,36 @@ function textDiffToChange(diff: TextDiff): TextChange {
     },
   )
   return { type: "text", instructions }
+}
+
+/**
+ * TextDiff → RichTextChange
+ * Converts Loro text deltas (with optional attributes) to richtext instructions.
+ */
+function richTextDiffToChange(diff: TextDiff): RichTextChange {
+  const instructions: RichTextInstruction[] = diff.diff.map(
+    (delta: Delta<string>) => {
+      if (delta.insert !== undefined) {
+        const attrs = (delta as any).attributes
+        if (attrs && Object.keys(attrs).length > 0) {
+          return { insert: delta.insert, marks: attrs }
+        }
+        return { insert: delta.insert }
+      }
+      if (delta.delete !== undefined) {
+        return { delete: delta.delete }
+      }
+      if (delta.retain !== undefined) {
+        const attrs = (delta as any).attributes
+        if (attrs && Object.keys(attrs).length > 0) {
+          return { format: delta.retain, marks: attrs }
+        }
+        return { retain: delta.retain }
+      }
+      throw new Error("richTextDiffToChange: unknown delta type")
+    },
+  )
+  return richTextChange(instructions)
 }
 
 /**

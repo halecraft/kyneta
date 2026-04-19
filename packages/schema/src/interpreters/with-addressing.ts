@@ -50,6 +50,7 @@ import type {
   MapSchema,
   MovableSequenceSchema,
   ProductSchema,
+  RichTextSchema,
   ScalarSchema,
   SequenceSchema,
   SetSchema,
@@ -499,6 +500,12 @@ export function withAddressing<A extends HasNavigation>(
         handleSequenceChange as (table: unknown, change: unknown) => void,
       )
       return result
+    },
+
+    // --- RichText --------------------------------------------------------------
+    richtext(ctx: RefContext, path: Path, schema: RichTextSchema): A {
+      getOrCreateRegistry(ctx)
+      return base.richtext(ctx, path, schema)
     },
   }
 }

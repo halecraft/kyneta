@@ -96,7 +96,7 @@ Plus three cross-cutting facilities:
 
 ## The grammar
 
-Source: `packages/schema/src/schema.ts`. The recursive type `Schema` has ten cases distinguished by `[KIND]`:
+Source: `packages/schema/src/schema.ts`. The recursive type `Schema` has eleven cases distinguished by `[KIND]`:
 
 | `[KIND]` | Constructor | Category | Children | Role |
 |----------|-------------|----------|----------|------|
@@ -110,18 +110,20 @@ Source: `packages/schema/src/schema.ts`. The recursive type `Schema` has ten cas
 | `set` | `set(item)` | CRDT | `() => Schema` | Add-wins unordered collection |
 | `tree` | `tree(nodeData)` | CRDT | `() => Schema` | Hierarchical tree with move operations |
 | `movable` | `movableList(item)` | CRDT | `() => Schema` | Ordered collection with move operations |
+| `richtext` | `richText(marks)` | CRDT | — | Collaborative rich text with formatting marks |
 
-Five structural kinds describe composition. Five CRDT kinds are first-class leaves or composites that carry merge semantics.
+Five structural kinds describe composition. Six CRDT kinds are first-class leaves or composites that carry merge semantics.
 
 `Schema.*` also exposes ergonomic aliases: `Schema.struct(fields)` = `product`, `Schema.list(item)` = `sequence`, `Schema.record(item)` = `map`, `Schema.string()` / `Schema.number()` / `Schema.boolean()` wrap `scalar`, `Schema.nullable(inner)` wraps as a two-variant nullable sum, `Schema.union` / `Schema.discriminatedUnion` wrap `sum`. See `src/schema.ts` for the full list.
 
 ### First-class CRDT types
 
-Why `text`, `counter`, `set`, `tree`, `movable` are grammar nodes rather than annotations on structural types:
+Why `text`, `counter`, `set`, `tree`, `movable`, `richtext` are grammar nodes rather than annotations on structural types:
 
 - Their **change vocabulary** differs. A `sequence` has `SequenceChange` (retain / insert / delete of items); a `movable` has that *plus* move operations.
 - Their **capability requirements** differ. A `text` node requires its substrate to support character-level merge; a plain JSON substrate cannot satisfy it. Encoding this as a phantom `[CAPS]` on the grammar means the type system catches incompatibilities at `bind()`, not at runtime.
 - Their **identity semantics** differ. Two concurrent insertions into a `sequence` are ordered arbitrarily; two concurrent insertions into a `movable` carry identity-bearing positions.
+- Rich text has the same positional algebra as text but extends the instruction stream with `format` — a cursor instruction that annotates characters with marks.
 
 Each CRDT kind contributes to the `[CAPS]` phantom of every ancestor node. A `Schema.struct({ body: Schema.text() })` has `"text"` in its `[CAPS]` accumulator even though `struct` itself is structural.
 
@@ -139,13 +141,13 @@ type ExtractCaps<S> = /* walk S, collect every node's [CAPS] */
 type RestrictCaps<S, AllowedCaps> = ExtractCaps<S> extends AllowedCaps ? S : never
 ```
 
-A substrate declares its closed capability set: `LoroCaps = "text" | "counter" | "movable" | "tree" | "json"`; `YjsCaps = "text" | "json"`; `PlainCaps = "json"`. `bind(schema, factoryBuilder, mergeStrategy)` applies `RestrictCaps<S, typeof factoryBuilder.caps>` at the type level. A schema with `"counter"` in its `[CAPS]` cannot be bound to a Yjs factory — the compiler refuses.
+A substrate declares its closed capability set: `LoroCaps = "text" | "richtext" | "counter" | "movable" | "tree" | "json"`; `YjsCaps = "text" | "richtext" | "json"`; `PlainCaps = "json"`. `bind(schema, factoryBuilder, mergeStrategy)` applies `RestrictCaps<S, typeof factoryBuilder.caps>` at the type level. A schema with `"counter"` in its `[CAPS]` cannot be bound to a Yjs factory — the compiler refuses.
 
 No runtime dispatch, no substrate-specific error messages. The type system is the enforcement mechanism.
 
 ### What the grammar is NOT
 
-- **Not closed.** `sum` variants are open (you can add more) and `product` fields are open (you can nest arbitrary schemas). The ten *kinds* are closed; user composition is not.
+- **Not closed.** `sum` variants are open (you can add more) and `product` fields are open (you can nest arbitrary schemas). The eleven *kinds* are closed; user composition is not.
 - **Not validated at construction.** `Schema.struct({})` with a circular reference via thunks is valid grammar. Cycles are detected only during specific interpretations (e.g. `canonicalizeSchema` for hashing).
 - **Not self-describing at runtime.** `[KIND]` is the only tag. Fields, variants, etc. are discovered structurally. Never `Object.keys(schema)` to enumerate its kind — pattern-match on `[KIND]`.
 
@@ -362,16 +364,16 @@ Used internally to combine capability-specific interpreters into composed layers
 
 ### Interpreter duplication families
 
-The 10 interpreter cases fall into four structural categories. The first three are **duplication families** — groups of cases that share identical logic across every transformer, captured by shared helper modules. The fourth has unique per-case logic.
+The 11 interpreter cases fall into four structural categories. The first three are **duplication families** — groups of cases that share identical logic across every transformer, captured by shared helper modules. The fourth has unique per-case logic.
 
 | Family | Cases | Shared helpers | Shared algebra |
 |--------|-------|---------------|----------------|
-| **Indexed** (positional) | `text`, `sequence`, `movable` | `sequence-helpers.ts` — `at()`, `wireTextWriteOps`, `wireListWriteOps`, `wireSequenceReadable`, `wireSequenceNavigation`, `wireSequenceAddressing`, `wireSequenceCaching` | `Instruction`, `foldInstructions`, `transformIndex`, `advanceAddresses` |
+| **Indexed** (positional) | `text`, `sequence`, `movable`, `richtext` | `sequence-helpers.ts` — `at()`, `wireTextWriteOps`, `wireListWriteOps`, `wireRichTextWriteOps`, `wireSequenceReadable`, `wireSequenceNavigation`, `wireSequenceAddressing`, `wireSequenceCaching` | `Instruction`, `foldInstructions`, `transformIndex`, `advanceAddresses` |
 | **Keyed** (named) | `map`, `set` | `keyed-helpers.ts` — `wireKeyedWriteOps`, `wireKeyedReadable`, `wireKeyedNavigation`, `wireKeyedAddressing`, `wireKeyedCaching` | `MapChange`, keyed addressing/tombstoning |
-| **Leaf** (terminal) | `scalar`, `text`, `counter` | `wireChangefeed` in `with-changefeed.ts` unifies changefeed boilerplate across all leaf and composite cases | `createLeafChangefeed` |
+| **Leaf** (terminal) | `scalar`, `text`, `counter`, `richtext` | `wireChangefeed` in `with-changefeed.ts` unifies changefeed boilerplate across all leaf and composite cases | `createLeafChangefeed` |
 | **Structural** (unique) | `product`, `sum`, `tree` | None — each has unique per-case logic | Product: schema-driven fields + discriminant. Sum: store-based variant dispatch. Tree: thin pass-through. |
 
-**`text` straddles two families.** It is indexed for writable (shares `at()` and the retain/insert/delete instruction stream with sequence/movable) but leaf for readable, navigation, and changefeed (returns `string` directly, not a fold over children). Characters are not independently addressable refs.
+**`text` and `richtext` straddle two families.** They are indexed for writable (share `at()` and the retain/insert/delete instruction stream with sequence/movable) but leaf for readable, navigation, and changefeed (return `string` / delta directly, not a fold over children). Characters are not independently addressable refs.
 
 The `Interpreter` interface retains separate cases per kind — the sharing is internal to the built-in transformers. Substrate authors implement one case per kind; they never see the shared helpers.
 
@@ -573,6 +575,28 @@ The caller composes: `resolveTreePosition` → navigate to the ref at the resolv
 
 ---
 
+## Sequence extension composition
+
+Source: `packages/schema/src/change.ts` (types), `packages/schema/src/interpreters/sequence-helpers.ts` (write wiring).
+
+The positional algebra (`Instruction`, `foldInstructions`, `transformIndex`, `advanceAddresses`) is shared across `text`, `sequence`, `movable`, and `richtext`. Extensions compose in two orthogonal patterns:
+
+### Instruction-stream extensions (marks)
+
+The extension adds new instruction variants to the sequence's instruction type. `format` interleaves with `retain`/`insert`/`delete` in one instruction stream. The changefeed delivers a single change type (`RichTextChange`) containing the extended instructions.
+
+Positionally, `format(N)` ≡ `retain(N)` — the `Instruction` abstraction handles `format` by delegating to `onRetain` in `foldInstructions`. All position-tracking primitives (`transformIndex`, `advanceIndex`, `advanceAddresses`) work unchanged.
+
+Why marks compose *within* the instruction stream: format is cursor-relative — it advances the cursor by N characters while annotating them. A `format` at position 5 references a cursor position established by preceding operations in the same stream. Splitting it into a separate change would lose this positional relationship.
+
+### Change-union extensions (move)
+
+The extension adds a new change type alongside the base sequence change. The changefeed's `C` parameter becomes a union: `SequenceChange<T> | MoveChange`. Move uses absolute indices (not cursor-relative), so it cannot be expressed as a cursor instruction.
+
+Why move composes *alongside* the instruction stream: move is absolute-index-to-absolute-index — it cannot be expressed in the left-to-right cursor model that `foldInstructions` implements.
+
+---
+
 ## Migration and identity
 
 Source: `packages/schema/src/migration.ts`.
@@ -640,6 +664,7 @@ Every mutation flows through a `Change` — a discriminated union identified by 
 | `"tree"` | `{ instructions: TreeInstruction[] }` — create / move / delete nodes | Trees |
 | `"replace"` | `{ value: unknown }` — overwrite this node | Scalars, plain JSON sub-trees |
 | `"increment"` | `{ delta: number }` — counter increment | Counters |
+| `"richtext"` | `{ instructions: RichTextInstruction[] }` — retain / insert / delete / format over characters | Rich text CRDTs |
 
 Note: `TextChange` and `SequenceChange` are parameterizations of the same positional algebra, unified by the `Instruction` type. Both use `retain`/`insert`/`delete` cursor instructions; the only difference is the content type (`string` vs `T[]`). The shared algebra is captured by `foldInstructions`, `transformIndex`, and `advanceAddresses`, which operate on `Instruction` generically.
 
@@ -742,7 +767,7 @@ Selection of the most-used types. Full list in [Canonical symbols](#canonical-sy
 | Type | File | Role |
 |------|------|------|
 | `Schema` | `src/schema.ts` | The recursive schema union. |
-| `ScalarSchema`, `ProductSchema`, `SequenceSchema`, `MapSchema`, `SumSchema`, `TextSchema`, `CounterSchema`, `SetSchema`, `TreeSchema`, `MovableSequenceSchema` | `src/schema.ts` | The ten `[KIND]` variants. |
+| `ScalarSchema`, `ProductSchema`, `SequenceSchema`, `MapSchema`, `SumSchema`, `TextSchema`, `CounterSchema`, `SetSchema`, `TreeSchema`, `MovableSequenceSchema`, `RichTextSchema` | `src/schema.ts` | The eleven `[KIND]` variants. |
 | `PlainSchema` | `src/schema.ts` | The CRDT-free subset. |
 | `ExtractCaps<S>`, `RestrictCaps<S, C>` | `src/schema.ts` | Type-level capability extraction + constraint. |
 | `BoundSchema<S>`, `BoundReplica<V>` | `src/bind.ts` | Static binding types. |
@@ -753,7 +778,10 @@ Selection of the most-used types. Full list in [Canonical symbols](#canonical-sy
 | `SubstratePayload` | `src/substrate.ts` | Opaque transfer shape. |
 | `MergeStrategy` | `src/substrate.ts` | `"collaborative" \| "authoritative" \| "ephemeral"`. |
 | `Version` | `src/substrate.ts` | Abstract version base. |
-| `Change`, `ChangeBase`, `TextChange`, `SequenceChange`, `MapChange`, `TreeChange`, `ReplaceChange`, `IncrementChange` | `src/change.ts` | Change vocabulary. |
+| `Change`, `ChangeBase`, `TextChange`, `SequenceChange`, `MapChange`, `TreeChange`, `ReplaceChange`, `IncrementChange`, `RichTextChange` | `src/change.ts` | Change vocabulary. |
+| `RichTextSchema`, `MarkConfig` | `src/schema.ts` | Rich text schema kind + mark configuration. |
+| `RichTextDelta` | `src/change.ts` | Delta representation for rich text content. |
+| `RichTextRef` | `src/ref.ts` | Ref specialization for `richtext` schema kind. |
 | `Op` | `src/changefeed.ts` | `{ path, change }` — composed-feed notification. |
 | `ComposedChangefeedProtocol<S>`, `HasComposedChangefeed<S>` | `src/changefeed.ts` | Composite refs' observation surface. |
 | `Position`, `Side`, `HasPosition`, `PositionCapable`, `PlainPosition` | `src/position.ts` | Position algebra. |
@@ -776,7 +804,7 @@ Selection of the most-used types. Full list in [Canonical symbols](#canonical-sy
 | `src/change.ts` | ~600 | Change vocabulary, constructors, guards, `transformIndex`, `textInstructionsToPatches`, `advanceAddresses`. |
 | `src/interpret.ts` | ~400 | `interpret`, `Interpreter`, `InterpretBuilder`, `InterpreterLayer`, `dispatchSum`, `RawPath`. |
 | `src/interpreters/bottom.ts` | ~200 | Bottom layer: `[CHANGEFEED]`, `[NATIVE]`, `[SUBSTRATE]`, `[CALL]`. |
-| `src/interpreters/sequence-helpers.ts` | ~280 | Shared indexed-coalgebra helpers: `at()`, `wireTextWriteOps`, `wireListWriteOps`, `wireSequenceReadable`, `wireSequenceNavigation`, `wireSequenceAddressing`, `wireSequenceCaching`. |
+| `src/interpreters/sequence-helpers.ts` | ~280 | Shared indexed-coalgebra helpers: `at()`, `wireTextWriteOps`, `wireListWriteOps`, `wireRichTextWriteOps`, `wireSequenceReadable`, `wireSequenceNavigation`, `wireSequenceAddressing`, `wireSequenceCaching`. |
 | `src/interpreters/keyed-helpers.ts` | ~235 | Shared keyed-coalgebra helpers: `wireKeyedWriteOps`, `wireKeyedReadable`, `wireKeyedNavigation`, `wireKeyedAddressing`, `wireKeyedCaching`. |
 | `src/interpreters/with-navigation.ts` | ~235 | Structural descent. Sequence/movable and map/set cases delegate to shared helpers. |
 | `src/interpreters/with-readable.ts` | ~225 | `.current`, `()`, read-by-path. Sequence/movable and map/set cases delegate to shared helpers. |

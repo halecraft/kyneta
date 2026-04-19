@@ -26,6 +26,7 @@ import type {
   MapSchema,
   MovableSequenceSchema,
   ProductSchema,
+  RichTextSchema,
   ScalarSchema,
   SequenceSchema,
   SetSchema,
@@ -230,6 +231,13 @@ export function withNavigation<A extends HasCall>(
       const result = base.movable(ctx, path, schema, baseItem) as any
       wireSequenceNavigation(result, ctx, path, item)
       return result as A & HasNavigation
+    },
+
+    // --- RichText --------------------------------------------------------------
+    // Leaf type — pass through to base. withReadable will fill [CALL]
+    // and add toPrimitive later.
+    richtext(ctx: RefContext, path: Path, schema: RichTextSchema): A & HasNavigation {
+      return base.richtext(ctx, path, schema) as A & HasNavigation
     },
   }
 }

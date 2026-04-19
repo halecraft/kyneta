@@ -52,7 +52,7 @@ import { dispatchSum } from "./interpret.js"
  */
 export function isLeaf(schema: SchemaNode): boolean {
   const k = schema[KIND]
-  return k === "text" || k === "scalar" || k === "counter"
+  return k === "text" || k === "scalar" || k === "counter" || k === "richtext"
 }
 
 // ---------------------------------------------------------------------------
@@ -156,6 +156,15 @@ export function nodeSize(
           "Trees have move semantics that break the static depth-first walk assumption. " +
           "See tree-position.ts for details.",
       )
+
+    case "richtext": {
+      const value = reader.read(path)
+      if (!Array.isArray(value)) return 0
+      return (value as Array<{ text: string }>).reduce(
+        (sum, span) => sum + span.text.length,
+        0,
+      )
+    }
   }
 }
 
@@ -426,6 +435,7 @@ function getChildren(
     case "text":
     case "scalar":
     case "counter":
+    case "richtext":
       return []
 
     case "set":

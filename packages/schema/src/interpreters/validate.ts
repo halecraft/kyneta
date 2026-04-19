@@ -21,6 +21,7 @@ import {
   KIND,
   type MapSchema,
   type MovableSequenceSchema,
+  type RichTextSchema,
   type PositionalSumSchema,
   type ProductSchema,
   type ScalarSchema,
@@ -402,6 +403,41 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
 
     return value.map((_element, index) => item(index))
   },
+
+  richtext(ctx: ValidateContext, path: Path, _schema: RichTextSchema): unknown {
+    const value = path.read(ctx.root)
+
+    if (!Array.isArray(value)) {
+      ctx.errors.push(
+        new SchemaValidationError(
+          path.format(),
+          "RichTextDelta (array of spans)",
+          value,
+        ),
+      )
+      return undefined
+    }
+
+    for (let i = 0; i < value.length; i++) {
+      const span = value[i]
+      if (
+        span === null ||
+        span === undefined ||
+        typeof span !== "object" ||
+        typeof (span as any).text !== "string"
+      ) {
+        ctx.errors.push(
+          new SchemaValidationError(
+            `${path.format()}[${i}]`,
+            "{ text: string, marks?: object }",
+            span,
+          ),
+        )
+      }
+    }
+
+    return value
+  },
 }
 
 // ---------------------------------------------------------------------------
@@ -434,6 +470,8 @@ function innerSchemaExpected(schema: Schema): string {
       return innerSchemaExpected(schema.nodeData)
     case "movable":
       return "array"
+    case "richtext":
+      return "RichTextDelta (array of spans)"
   }
 }
 

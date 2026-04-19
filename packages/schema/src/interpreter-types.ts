@@ -9,6 +9,7 @@
 // Previously RefContext lived in writable.ts (and was re-exported by readable.ts)
 // and Plain<S> lived in writable.ts (forcing readable.ts to duplicate it as ReadablePlain<S>).
 
+import type { RichTextDelta } from "./change.js"
 import type { Path } from "./path.js"
 import type { PositionCapable } from "./position.js"
 import type { Reader } from "./reader.js"
@@ -19,6 +20,7 @@ import type {
   MovableSequenceSchema,
   PositionalSumSchema,
   ProductSchema,
+  RichTextSchema,
   ScalarSchema,
   Schema,
   SequenceSchema,
@@ -84,7 +86,7 @@ export interface RefContext {
    * is not attached.
    */
   readonly positionResolver?: (
-    schema: TextSchema,
+    schema: TextSchema | RichTextSchema,
     path: Path,
   ) => PositionCapable
 }
@@ -130,8 +132,10 @@ export type Plain<S extends Schema> =
   // --- First-class CRDT types ---
   S extends TextSchema
     ? string
-    : S extends CounterSchema
-      ? number
+    : S extends RichTextSchema
+      ? RichTextDelta
+      : S extends CounterSchema
+        ? number
       : S extends SetSchema<infer I>
         ? Plain<I>[]
         : S extends TreeSchema<infer Inner>

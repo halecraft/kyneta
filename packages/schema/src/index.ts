@@ -37,7 +37,12 @@ export type {
   Instruction,
   InstructionFold,
   MapChange,
+  MarkMap,
   ReplaceChange,
+  RichTextChange,
+  RichTextDelta,
+  RichTextInstruction,
+  RichTextSpan,
   SequenceChange,
   SequenceInstruction,
   TextChange,
@@ -54,12 +59,14 @@ export {
   isIncrementChange,
   isMapChange,
   isReplaceChange,
+  isRichTextChange,
   isSequenceChange,
   // Type guards
   isTextChange,
   isTreeChange,
   mapChange,
   replaceChange,
+  richTextChange,
   sequenceChange,
   // Constructors
   textChange,
@@ -178,6 +185,7 @@ export type {
   HasRemove,
   HasTransact,
   ProductRef,
+  RichTextRef,
   ScalarRef,
   SequenceRef,
   TextRef,
@@ -309,6 +317,8 @@ export type {
   ExtractCaps,
   // KIND symbol type
   KindSymbol,
+  MarkConfig,
+  MarkExpand,
   MapSchema,
   MovableSequenceSchema,
   PlainDiscriminatedSumSchema,
@@ -320,6 +330,8 @@ export type {
   PlainSequenceSchema,
   PositionalSumSchema,
   ProductSchema,
+  // Rich text
+  RichTextSchema,
   // Scalar kinds
   ScalarKind,
   ScalarPlain,
@@ -346,10 +358,12 @@ export {
 } from "./schema.js"
 // Step — pure state transitions: (State, Change) → State
 export {
+  normalizeSpans,
   step,
   stepIncrement,
   stepMap,
   stepReplace,
+  stepRichText,
   stepSequence,
   stepText,
 } from "./step.js"

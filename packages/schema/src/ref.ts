@@ -40,6 +40,7 @@
 // See .plans/navigation-layer.md §Phase 3, Task 3.3.
 
 import type { HasChangefeed } from "@kyneta/changefeed"
+import type { RichTextDelta } from "./change.js"
 import type { Plain } from "./interpreter-types.js"
 import type {
   Readable,
@@ -51,6 +52,7 @@ import type {
   HasRemove,
   HasTransact,
   ProductRef,
+  RichTextRef,
   ScalarRef,
   SequenceRef,
   TextRef,
@@ -69,6 +71,7 @@ import type {
   MovableSequenceSchema,
   PositionalSumSchema,
   ProductSchema,
+  RichTextSchema,
   ScalarSchema,
   Schema,
   SequenceSchema,
@@ -197,7 +200,16 @@ export type SchemaRef<
         M,
         N["text"]
       >
-    : // --- Counter ---
+    : // --- RichText ---
+      S extends RichTextSchema
+      ? Wrap<
+          (() => RichTextDelta) & {
+            [Symbol.toPrimitive](hint: string): string
+          } & RichTextRef,
+          M,
+          N["richtext"]
+        >
+      : // --- Counter ---
       S extends CounterSchema
       ? Wrap<
           (() => number) & {

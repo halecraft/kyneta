@@ -32,6 +32,7 @@ import type {
   MapSchema,
   MovableSequenceSchema,
   ProductSchema,
+  RichTextSchema,
   ScalarSchema,
   SequenceSchema,
   SetSchema,
@@ -290,6 +291,10 @@ export const bottomInterpreter: Interpreter<unknown, HasCall> = {
     _schema: MovableSequenceSchema,
     _item: (index: number) => HasCall,
   ): HasCall {
+    return makeCarrier()
+  },
+
+  richtext(_ctx: unknown, _path: Path, _schema: RichTextSchema): HasCall {
     return makeCarrier()
   },
 }

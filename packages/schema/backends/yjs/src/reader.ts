@@ -8,15 +8,22 @@
 // Y.Text → .toJSON() (string), Y.Map → .toJSON() (plain object),
 // Y.Array → .toJSON() (plain array), plain values → as-is.
 //
+// Richtext: when the schema at the resolved path is "richtext" and
+// the resolved value is a Y.Text, we call .toDelta() and convert to
+// RichTextDelta (array of { text, marks? } spans) instead of .toJSON().
+//
 // Identity-keying: when a SchemaBinding is provided, resolveYjsType
 // navigates Y.Map children using identity hashes instead of field names.
 
 import type {
   Path,
   Reader,
+  RichTextDelta,
+  RichTextSpan,
   SchemaBinding,
   Schema as SchemaNode,
 } from "@kyneta/schema"
+import { KIND } from "@kyneta/schema"
 import * as Y from "yjs"
 import { resolveYjsType } from "./yjs-resolve.js"
 
@@ -44,6 +51,33 @@ function extractValue(resolved: unknown): unknown {
   }
   // Plain scalar value (string, number, boolean, null, etc.)
   return resolved
+}
+
+// ---------------------------------------------------------------------------
+// Rich text delta conversion
+// ---------------------------------------------------------------------------
+
+/**
+ * Convert a Y.Text's delta (Quill format) to a kyneta RichTextDelta.
+ *
+ * Yjs `.toDelta()` returns `{ insert: string, attributes?: Record<string, any> }[]`.
+ * Kyneta RichTextDelta is `{ text: string, marks?: MarkMap }[]`.
+ */
+function yTextToRichTextDelta(ytext: Y.Text): RichTextDelta {
+  const delta = ytext.toDelta() as Array<{
+    insert: string
+    attributes?: Record<string, unknown>
+  }>
+  const spans: RichTextSpan[] = []
+  for (const d of delta) {
+    if (typeof d.insert !== "string") continue
+    const span: RichTextSpan =
+      d.attributes && Object.keys(d.attributes).length > 0
+        ? { text: d.insert, marks: d.attributes }
+        : { text: d.insert }
+    spans.push(span)
+  }
+  return spans
 }
 
 // ---------------------------------------------------------------------------
@@ -78,12 +112,24 @@ export function yjsReader(
         // Root read — return the full root map as JSON
         return rootMap.toJSON()
       }
-      const resolved = resolveYjsType(rootMap, schema, path, binding)
+      const { resolved, schema: nodeSchema } = resolveYjsType(
+        rootMap,
+        schema,
+        path,
+        binding,
+      )
+      // Richtext: Y.Text at a richtext schema position → RichTextDelta
+      if (
+        nodeSchema[KIND] === "richtext" &&
+        resolved instanceof Y.Text
+      ) {
+        return yTextToRichTextDelta(resolved)
+      }
       return extractValue(resolved)
     },
 
     arrayLength(path: Path): number {
-      const resolved = resolveYjsType(rootMap, schema, path, binding)
+      const { resolved } = resolveYjsType(rootMap, schema, path, binding)
       if (resolved instanceof Y.Array) {
         return resolved.length
       }
@@ -95,7 +141,7 @@ export function yjsReader(
     },
 
     keys(path: Path): string[] {
-      const resolved = resolveYjsType(rootMap, schema, path, binding)
+      const { resolved } = resolveYjsType(rootMap, schema, path, binding)
       if (resolved instanceof Y.Map) {
         return Array.from(resolved.keys())
       }
@@ -112,7 +158,7 @@ export function yjsReader(
     },
 
     hasKey(path: Path, key: string): boolean {
-      const resolved = resolveYjsType(rootMap, schema, path, binding)
+      const { resolved } = resolveYjsType(rootMap, schema, path, binding)
       if (resolved instanceof Y.Map) {
         return resolved.has(key)
       }

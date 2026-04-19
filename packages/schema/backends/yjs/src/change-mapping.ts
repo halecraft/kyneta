@@ -23,6 +23,8 @@ import type {
   Op,
   Path,
   ReplaceChange,
+  RichTextChange,
+  RichTextInstruction,
   SchemaBinding,
   Schema as SchemaNode,
   SequenceChange,
@@ -35,6 +37,7 @@ import {
   expandMapOpsToLeaves,
   KIND,
   RawPath,
+  richTextChange,
 } from "@kyneta/schema"
 import * as Y from "yjs"
 import { resolveYjsType } from "./yjs-resolve.js"
@@ -65,6 +68,16 @@ export function applyChangeToYjs(
   switch (change.type) {
     case "text":
       applyTextChange(rootMap, rootSchema, path, change as TextChange, binding)
+      return
+
+    case "richtext":
+      applyRichTextChange(
+        rootMap,
+        rootSchema,
+        path,
+        change as RichTextChange,
+        binding,
+      )
       return
 
     case "sequence":
@@ -123,7 +136,7 @@ function applyTextChange(
   change: TextChange,
   binding?: SchemaBinding,
 ): void {
-  const resolved = resolveYjsType(rootMap, rootSchema, path, binding)
+  const { resolved } = resolveYjsType(rootMap, rootSchema, path, binding)
   if (!(resolved instanceof Y.Text)) {
     throw new Error(
       `applyChangeToYjs: TextChange target at path [${pathToString(path)}] is not a Y.Text`,
@@ -133,6 +146,40 @@ function applyTextChange(
   // Yjs Y.Text.applyDelta uses the Quill Delta format, which is
   // structurally identical to kyneta TextInstruction[].
   resolved.applyDelta(change.instructions as any)
+}
+
+// ---------------------------------------------------------------------------
+// Rich text change
+// ---------------------------------------------------------------------------
+
+function applyRichTextChange(
+  rootMap: Y.Map<any>,
+  rootSchema: SchemaNode,
+  path: Path,
+  change: RichTextChange,
+  binding?: SchemaBinding,
+): void {
+  const { resolved } = resolveYjsType(rootMap, rootSchema, path, binding)
+  if (!(resolved instanceof Y.Text)) {
+    throw new Error(
+      `applyChangeToYjs: RichTextChange target at path [${pathToString(path)}] is not a Y.Text`,
+    )
+  }
+  // Map RichTextInstruction → Yjs delta format
+  const delta = change.instructions.map((inst: RichTextInstruction) => {
+    if ("retain" in inst) return { retain: inst.retain }
+    if ("format" in inst) return { retain: inst.format, attributes: inst.marks }
+    if ("insert" in inst) {
+      const d: any = { insert: inst.insert }
+      if (inst.marks && Object.keys(inst.marks).length > 0) {
+        d.attributes = inst.marks
+      }
+      return d
+    }
+    if ("delete" in inst) return { delete: inst.delete }
+    throw new Error("applyRichTextChange: unknown instruction type")
+  })
+  resolved.applyDelta(delta as any)
 }
 
 // ---------------------------------------------------------------------------
@@ -146,7 +193,7 @@ function applySequenceChange(
   change: SequenceChange,
   binding?: SchemaBinding,
 ): void {
-  const resolved = resolveYjsType(rootMap, rootSchema, path, binding)
+  const { resolved } = resolveYjsType(rootMap, rootSchema, path, binding)
   if (!(resolved instanceof Y.Array)) {
     throw new Error(
       `applyChangeToYjs: SequenceChange target at path [${pathToString(path)}] is not a Y.Array`,
@@ -186,7 +233,7 @@ function applyMapChange(
   change: MapChange,
   binding?: SchemaBinding,
 ): void {
-  const resolved = resolveYjsType(rootMap, rootSchema, path, binding)
+  const { resolved } = resolveYjsType(rootMap, rootSchema, path, binding)
   if (!(resolved instanceof Y.Map)) {
     throw new Error(
       `applyChangeToYjs: MapChange target at path [${pathToString(path)}] is not a Y.Map`,
@@ -248,7 +295,7 @@ function applyReplaceChange(
   const lastSeg = path.segments.at(-1)
   if (!lastSeg) throw new Error("replaceChangeToDiff: empty path")
   const parentPath = path.slice(0, -1)
-  const parent = resolveYjsType(rootMap, rootSchema, parentPath, binding)
+  const { resolved: parent } = resolveYjsType(rootMap, rootSchema, parentPath, binding)
 
   const resolved = lastSeg.resolve()
   if (parent instanceof Y.Map && lastSeg.role === "key") {
@@ -285,8 +332,8 @@ function applyReplaceChange(
 
 /**
  * If the schema says the value should be a shared type (product → Y.Map,
- * sequence → Y.Array, text → Y.Text), create and populate it.
- * Otherwise return the plain value as-is.
+ * sequence → Y.Array, text → Y.Text, richtext → Y.Text), create and
+ * populate it. Otherwise return the plain value as-is.
  *
  * Uses populate-then-attach: the new shared type is fully populated
  * before being returned for insertion into its parent.
@@ -303,6 +350,29 @@ function maybeCreateSharedType(
       const text = new Y.Text()
       if (typeof value === "string" && value.length > 0) {
         text.insert(0, value)
+      }
+      return text
+    }
+
+    // Rich text → Y.Text (Yjs uses Y.Text for both plain and rich text)
+    case "richtext": {
+      const text = new Y.Text()
+      if (typeof value === "string" && value.length > 0) {
+        text.insert(0, value)
+      } else if (Array.isArray(value)) {
+        // RichTextDelta: array of { text, marks? } spans → Yjs delta
+        const delta = (value as Array<{ text: string; marks?: Record<string, unknown> }>).map(
+          span => {
+            const d: any = { insert: span.text }
+            if (span.marks && Object.keys(span.marks).length > 0) {
+              d.attributes = span.marks
+            }
+            return d
+          },
+        )
+        if (delta.length > 0) {
+          text.applyDelta(delta)
+        }
       }
       return text
     }
@@ -401,7 +471,7 @@ function createStructuredMap(
     productSchema.fields as Record<string, SchemaNode>,
   )) {
     if (key in obj) continue // already processed above
-    if (fieldSchema[KIND] === "text") {
+    if (fieldSchema[KIND] === "text" || fieldSchema[KIND] === "richtext") {
       map.set(key, new Y.Text())
     }
   }
@@ -435,7 +505,7 @@ export function eventsToOps(
 
   for (const event of events) {
     const kynetaPath = yjsPathToKynetaPath(event.path, binding)
-    const change = eventToChange(event, binding)
+    const change = eventToChange(event, schema, kynetaPath, binding)
     if (change) {
       ops.push({ path: kynetaPath, change })
     }
@@ -485,13 +555,26 @@ function yjsPathToKynetaPath(
 
 /**
  * Convert a single Yjs event into a kyneta Change.
+ *
+ * For Y.Text events, dispatches to either `textEventToChange` or
+ * `richTextEventToChange` based on the schema at the event's path.
+ * Both text and richtext produce `Y.YTextEvent`, so schema awareness
+ * is required for correct dispatch.
+ *
  * Returns null for event types we can't map.
  */
 function eventToChange(
   event: Y.YEvent<any>,
+  rootSchema: SchemaNode,
+  kynetaPath: RawPath,
   binding?: SchemaBinding,
 ): ChangeBase | null {
   if (event.target instanceof Y.Text) {
+    // Both text and richtext use Y.Text — resolve the schema to dispatch.
+    const schemaAtPath = resolveSchemaAtPath(rootSchema, kynetaPath)
+    if (schemaAtPath[KIND] === "richtext") {
+      return richTextEventToChange(event)
+    }
     return textEventToChange(event)
   }
   if (event.target instanceof Y.Array) {
@@ -508,7 +591,7 @@ function eventToChange(
  *
  * `event.delta` uses the Quill Delta format, structurally identical to
  * kyneta `TextInstruction[]`. We strip the `attributes` field (rich text
- * formatting not surfaced by kyneta).
+ * formatting not surfaced by kyneta plain text).
  */
 function textEventToChange(event: Y.YEvent<any>): TextChange {
   const instructions: TextInstruction[] = []
@@ -524,6 +607,39 @@ function textEventToChange(event: Y.YEvent<any>): TextChange {
   }
 
   return { type: "text", instructions }
+}
+
+/**
+ * Y.Text event → RichTextChange.
+ *
+ * `event.delta` uses the Quill Delta format. We map each delta op to a
+ * `RichTextInstruction`, preserving `attributes` as `marks` for format
+ * and insert instructions.
+ */
+function richTextEventToChange(event: Y.YEvent<any>): RichTextChange {
+  const instructions: RichTextInstruction[] = []
+
+  for (const delta of event.delta) {
+    if (delta.retain !== undefined) {
+      const attrs = (delta as any).attributes
+      if (attrs && Object.keys(attrs).length > 0) {
+        instructions.push({ format: delta.retain as number, marks: attrs })
+      } else {
+        instructions.push({ retain: delta.retain as number })
+      }
+    } else if (delta.insert !== undefined) {
+      const attrs = (delta as any).attributes
+      if (attrs && Object.keys(attrs).length > 0) {
+        instructions.push({ insert: delta.insert as string, marks: attrs })
+      } else {
+        instructions.push({ insert: delta.insert as string })
+      }
+    } else if (delta.delete !== undefined) {
+      instructions.push({ delete: delta.delete as number })
+    }
+  }
+
+  return richTextChange(instructions)
 }
 
 /**

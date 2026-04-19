@@ -13,6 +13,7 @@ import type {
   MapSchema,
   MovableSequenceSchema,
   ProductSchema,
+  RichTextSchema,
   ScalarSchema,
   SequenceSchema,
   SetSchema,
@@ -175,6 +176,10 @@ export function product<Ctx, A, B>(
 
     counter(ctx: Ctx, path: Path, schema: CounterSchema): [A, B] {
       return [f.counter(ctx, path, schema), g.counter(ctx, path, schema)]
+    },
+
+    richtext(ctx: Ctx, path: Path, schema: RichTextSchema): [A, B] {
+      return [f.richtext(ctx, path, schema), g.richtext(ctx, path, schema)]
     },
 
     // --- First-class container types ------------------------------------------
@@ -344,6 +349,14 @@ export function overlay<Ctx, A>(
       return merge(
         primary.counter(ctx, path, schema),
         fallback.counter(ctx, path, schema),
+        path,
+      )
+    },
+
+    richtext(ctx: Ctx, path: Path, schema: RichTextSchema): A {
+      return merge(
+        primary.richtext(ctx, path, schema),
+        fallback.richtext(ctx, path, schema),
         path,
       )
     },

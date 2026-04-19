@@ -61,6 +61,7 @@ export const SUBSTRATE: unique symbol = Symbol.for("kyneta:substrate") as any
 export interface NativeMap {
   readonly root: unknown
   readonly text: unknown
+  readonly richtext: unknown
   readonly counter: unknown
   readonly list: unknown
   readonly movableList: unknown
@@ -86,6 +87,7 @@ export interface NativeMap {
 export interface UnknownNativeMap extends NativeMap {
   readonly root: unknown
   readonly text: unknown
+  readonly richtext: unknown
   readonly counter: unknown
   readonly list: unknown
   readonly movableList: unknown
@@ -111,6 +113,7 @@ export interface UnknownNativeMap extends NativeMap {
 export interface PlainNativeMap extends NativeMap {
   readonly root: PlainState
   readonly text: undefined
+  readonly richtext: undefined
   readonly counter: undefined
   readonly list: undefined
   readonly movableList: undefined

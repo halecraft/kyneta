@@ -29,6 +29,7 @@ import type {
   MapSchema,
   MovableSequenceSchema,
   ProductSchema,
+  RichTextSchema,
   ScalarSchema,
   SequenceSchema,
   SetSchema,
@@ -219,6 +220,24 @@ export function withReadable<A extends HasNavigation>(
       const baseItem = item as (index: number) => A
       const result = base.movable(ctx, path, schema, baseItem) as any
       wireSequenceReadable(result, ctx, path)
+      return result as A & HasRead
+    },
+
+    // --- RichText --------------------------------------------------------------
+    // RichText: callable returning string, text-specific toPrimitive.
+    richtext(ctx: RefContext, path: Path, schema: RichTextSchema): A & HasRead {
+      const result = base.richtext(ctx, path, schema) as any
+
+      result[CALL] = () => ctx.reader.read(path)
+      result[Symbol.toPrimitive] = (_hint: string) => {
+        const v = ctx.reader.read(path)
+        if (Array.isArray(v)) {
+          return (v as Array<{ text: string }>)
+            .map(s => s.text)
+            .join("")
+        }
+        return ""
+      }
       return result as A & HasRead
     },
   }

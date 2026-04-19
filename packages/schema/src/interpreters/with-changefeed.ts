@@ -52,6 +52,7 @@ import type {
   MapSchema,
   MovableSequenceSchema,
   ProductSchema,
+  RichTextSchema,
   ScalarSchema,
   SequenceSchema,
   SetSchema,
@@ -1308,6 +1309,16 @@ export function withChangefeed<A extends HasRead>(
           () => ctx.reader.arrayLength(p),
         )
       })
+      return result as A & HasChangefeed
+    },
+
+    // --- RichText -------------------------------------------------------------
+    // Leaf type — attach a leaf changefeed + isPopulated.
+    richtext(ctx: RefContext, path: Path, schema: RichTextSchema): A & HasChangefeed {
+      const result = base.richtext(ctx, path, schema)
+      wireChangefeed(result, ctx, path, (listeners, p) =>
+        createLeafChangefeed(listeners, p, () => (result as any)[CALL]()),
+      )
       return result as A & HasChangefeed
     },
   }

@@ -32,7 +32,7 @@
 // sequence of characters, but characters are not independently
 // addressable refs.
 
-import { textChange, sequenceChange } from "../change.js"
+import { textChange, richTextChange, sequenceChange } from "../change.js"
 import { isPropertyHost } from "../guards.js"
 import type { RefContext } from "../interpreter-types.js"
 import type { WritableContext } from "./writable.js"
@@ -92,6 +92,73 @@ export function wireTextWriteOps(
         ...(currentLength > 0 ? [{ delete: currentLength }] : []),
         { insert: content },
       ]),
+    )
+  }
+}
+
+// ---------------------------------------------------------------------------
+// wireRichTextWriteOps — insert / delete / update / mark / unmark for richtext refs
+// ---------------------------------------------------------------------------
+
+/**
+ * Wire richtext mutation methods onto a ref: `insert`, `delete`, `update`,
+ * `mark`, `unmark`.
+ *
+ * A peer of `wireTextWriteOps`, NOT a wrapper — richtext's `insert` takes
+ * optional marks and uses `richTextChange` instead of `textChange`.
+ * What IS shared is `at()`, the cursor-positioning primitive.
+ */
+export function wireRichTextWriteOps(
+  result: any,
+  ctx: WritableContext,
+  path: Path,
+): void {
+  result.insert = (index: number, content: string, marks?: Record<string, unknown>): void => {
+    ctx.dispatch(
+      path,
+      richTextChange(
+        at(index, marks ? { insert: content, marks } : { insert: content }),
+      ),
+    )
+  }
+
+  result.delete = (index: number, length: number): void => {
+    ctx.dispatch(path, richTextChange(at(index, { delete: length })))
+  }
+
+  result.update = (content: string): void => {
+    const current = ctx.reader.read(path)
+    const currentLength = Array.isArray(current)
+      ? (current as Array<{ text: string }>).reduce(
+          (sum, span) => sum + span.text.length,
+          0,
+        )
+      : 0
+    ctx.dispatch(
+      path,
+      richTextChange([
+        ...(currentLength > 0 ? [{ delete: currentLength }] : []),
+        { insert: content },
+      ]),
+    )
+  }
+
+  result.mark = (
+    start: number,
+    end: number,
+    key: string,
+    value: unknown,
+  ): void => {
+    ctx.dispatch(
+      path,
+      richTextChange(at(start, { format: end - start, marks: { [key]: value } })),
+    )
+  }
+
+  result.unmark = (start: number, end: number, key: string): void => {
+    ctx.dispatch(
+      path,
+      richTextChange(at(start, { format: end - start, marks: { [key]: null } })),
     )
   }
 }

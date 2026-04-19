@@ -17,6 +17,7 @@ import type {
   SequenceSchema,
   SetSchema,
   SumSchema,
+  RichTextSchema,
   TextSchema,
   TreeSchema,
 } from "../schema.js"
@@ -185,5 +186,11 @@ export const plainInterpreter: Interpreter<unknown, unknown> = {
       return []
     }
     return arr.map((_element, index) => item(index))
+  },
+
+  // --- RichText --------------------------------------------------------------
+  // Leaf type — read the raw value at path.
+  richtext(ctx: unknown, path: Path, _schema: RichTextSchema): unknown {
+    return path.read(ctx)
   },
 }

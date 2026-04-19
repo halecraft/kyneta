@@ -412,3 +412,14 @@ const Todo = loro.bind(Schema.struct({
 Tests use real `LoroDoc` instances from `loro-crdt` — no mocks. Two-peer scenarios simulate collaborative editing by constructing two `LoroDoc`s, mutating them independently, and merging via `exportSince` + `merge`. The substrate contract suite from `@kyneta/schema` is replayed against `loroSubstrateFactory` for conformance.
 
 **Tests**: 203 passed, 4 skipped across 11 files (`bind-constraints`: 27, `bind-loro`: 9, `create`: 20, `loro-guards`: included in `native`/`reader`, `native`: 10, `position`: 27 passed + 4 skipped, `reader`: 29, `record-counter-spike`: 26, `structural-merge`: 7, `substrate`: 30, `version`: 18 — approximate per-file breakdown). Run with `cd packages/schema/backends/loro && pnpm exec vitest run`.
+
+## `richtext` support
+
+`richtext` uses the same `LoroText` container as `text`. The difference is in how change-mapping preserves mark attributes:
+
+- **Outbound** (`richTextChangeToDiff`): `format(N, marks)` → `{ retain: N, attributes: marks }`. `insert(text, marks)` → `{ insert: text, attributes: marks }`.
+- **Inbound** (`richTextDiffToChange`): `{ retain: N, attributes }` → `{ format: N, marks: attributes }`. Discriminates `retain` vs `format` by the presence of `attributes`.
+
+`configTextStyle()` is called once during `ensureLoroContainers` with the merged `MarkConfig` from all richtext fields in the schema. Conflicting expand values for the same mark name are caught at bind time.
+
+The `resolveContainer` function returns `{ container, schema }` — this enables the reader to dispatch `LoroText` → `.toString()` (text) vs `.toDelta()` (richtext) based on the schema kind.

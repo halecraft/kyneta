@@ -244,6 +244,10 @@ describe("interpret: path accumulation", () => {
         paths.push({ kind: "movable", path })
         return null
       },
+      richtext(_ctx, path, _schema) {
+        paths.push({ kind: "richtext", path })
+        return null
+      },
     }
 
     const schema = Schema.struct({

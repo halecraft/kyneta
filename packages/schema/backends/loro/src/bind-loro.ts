@@ -156,7 +156,7 @@ function createLoroFactory(
  * Loro capability tags — the set of first-class CRDT types that the
  * Loro substrate supports, plus `"json"` for merge-boundary containers.
  */
-export type LoroCaps = "text" | "counter" | "movable" | "tree" | "json"
+export type LoroCaps = "text" | "richtext" | "counter" | "movable" | "tree" | "json"
 
 export const loro: SubstrateNamespace<CrdtStrategy, LoroCaps, LoroNativeMap> =
   createSubstrateNamespace<CrdtStrategy, LoroCaps, LoroNativeMap>({

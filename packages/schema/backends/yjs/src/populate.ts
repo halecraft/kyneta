@@ -130,6 +130,7 @@ function ensureRootField(
 ): void {
   switch (fieldSchema[KIND]) {
     case "text":
+    case "richtext":
       rootMap.set(key, new Y.Text())
       return
 
@@ -163,7 +164,7 @@ function ensureRootField(
     case "movable":
       throw new Error(
         `Yjs substrate does not support [KIND]="${fieldSchema[KIND]}". ` +
-          `Supported kinds: text, product, sequence, map, scalar, sum. ` +
+          `Supported kinds: text, richtext, product, sequence, map, scalar, sum. ` +
           `Encountered unsupported kind at root field "${key}".`,
       )
   }
@@ -208,6 +209,7 @@ function ensureMapContainers(
 
     switch (fieldSchema[KIND]) {
       case "text":
+      case "richtext":
         map.set(mapKey, new Y.Text())
         break
 
@@ -238,7 +240,7 @@ function ensureMapContainers(
       case "movable":
         throw new Error(
           `Yjs substrate does not support [KIND]="${fieldSchema[KIND]}". ` +
-            `Supported kinds: text, product, sequence, map, scalar, sum. ` +
+            `Supported kinds: text, richtext, product, sequence, map, scalar, sum. ` +
             `Encountered unsupported kind at nested field "${key}".`,
         )
     }

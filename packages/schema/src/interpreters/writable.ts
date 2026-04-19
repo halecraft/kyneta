@@ -29,7 +29,7 @@ import {
   incrementChange,
   replaceChange,
 } from "../change.js"
-import { wireTextWriteOps, wireListWriteOps } from "./sequence-helpers.js"
+import { wireTextWriteOps, wireRichTextWriteOps, wireListWriteOps } from "./sequence-helpers.js"
 import { wireKeyedWriteOps } from "./keyed-helpers.js"
 import type { Plain, RefContext } from "../interpreter-types.js"
 import type {
@@ -39,6 +39,7 @@ import type {
   MovableSequenceSchema,
   PositionalSumSchema,
   ProductSchema,
+  RichTextSchema,
   ScalarSchema,
   Schema,
   SequenceSchema,
@@ -365,6 +366,14 @@ export interface TextRef {
   update: (content: string) => void
 }
 
+export interface RichTextRef {
+  insert: (index: number, content: string, marks?: Record<string, unknown>) => void
+  delete: (index: number, length: number) => void
+  update: (content: string) => void
+  mark: (start: number, end: number, key: string, value: unknown) => void
+  unmark: (start: number, end: number, key: string) => void
+}
+
 export interface CounterRef {
   increment: (n?: number) => void
   decrement: (n?: number) => void
@@ -442,8 +451,10 @@ export type Writable<S extends Schema> =
     ? TextRef
     : S extends CounterSchema
       ? CounterRef
-      : // --- First-class container types ---
-        S extends SetSchema<infer I>
+      : S extends RichTextSchema
+        ? RichTextRef
+        : // --- First-class container types ---
+          S extends SetSchema<infer I>
         ? WritableMapRef<Plain<I>>
         : S extends TreeSchema<infer Inner>
           ? Writable<Inner>
@@ -689,6 +700,19 @@ export function withWritable<A>(
     ): A & HasTransact {
       const result = base.movable(ctx, path, schema, item) as any
       wireListWriteOps(result, ctx, path)
+      attachTransact(result, ctx)
+      return result
+    },
+
+    // --- RichText -------------------------------------------------------------
+
+    richtext(
+      ctx: WritableContext,
+      path: Path,
+      schema: RichTextSchema,
+    ): A & HasTransact {
+      const result = base.richtext(ctx, path, schema) as any
+      wireRichTextWriteOps(result, ctx, path)
       attachTransact(result, ctx)
       return result
     },

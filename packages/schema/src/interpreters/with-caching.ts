@@ -33,6 +33,7 @@ import type {
   MapSchema,
   MovableSequenceSchema,
   ProductSchema,
+  RichTextSchema,
   ScalarSchema,
   SequenceSchema,
   SetSchema,
@@ -377,6 +378,12 @@ export function withCaching<A extends HasNavigation>(
         (p, handler) => registerCacheHandler(ensureCacheWiring(ctx), p, handler),
       )
       return result as A & HasCaching
+    },
+
+    // --- RichText --------------------------------------------------------------
+    // No caching needed for richtext — pass through.
+    richtext(ctx: RefContext, path: Path, schema: RichTextSchema): A & HasCaching {
+      return base.richtext(ctx, path, schema) as A & HasCaching
     },
   }
 }

@@ -117,6 +117,9 @@ function structural(schema: Schema): unknown {
     case "text":
       return ""
 
+    case "richtext":
+      return []
+
     case "counter":
       return 0
 

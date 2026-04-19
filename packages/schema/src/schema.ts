@@ -56,7 +56,7 @@ export type ScalarKind =
 // ---------------------------------------------------------------------------
 
 /**
- * A schema node. This is the fixed point of a functor with ten cases:
+ * A schema node. This is the fixed point of a functor with eleven cases:
  *
  * - `scalar(kind)` — leaf value
  * - `product(fields)` — fixed-key record (struct)
@@ -68,6 +68,7 @@ export type ScalarKind =
  * - `set(item)` — unordered collection with add-wins semantics
  * - `tree(nodeData)` — hierarchical tree with move operations
  * - `movable(item)` — ordered collection with move operations
+ * - `richtext(marks)` — collaborative rich text with formatting marks
  *
  * The grammar is backend-agnostic. Substrates declare which capabilities
  * they support via closed capability sets.
@@ -83,6 +84,7 @@ export type Schema =
   | SetSchema
   | TreeSchema
   | MovableSequenceSchema
+  | RichTextSchema
 
 // --- Scalar ------------------------------------------------------------------
 
@@ -289,6 +291,40 @@ export interface MovableSequenceSchema<
 > {
   readonly [KIND]: "movable"
   readonly item: I
+  readonly [CAPS]?: Caps
+}
+
+// --- RichText ----------------------------------------------------------------
+
+/**
+ * Expand behaviors for mark boundaries (Peritext model).
+ *
+ * - `"before"` — typing before the mark extends it
+ * - `"after"` — typing after the mark extends it
+ * - `"both"` — typing at either boundary extends it
+ * - `"none"` — typing at neither boundary extends it
+ */
+export type MarkExpand = "before" | "after" | "none" | "both"
+
+/**
+ * Declared on the schema, read by substrates at `bind()` time:
+ * Loro calls `configTextStyle()`, Yjs handles it implicitly.
+ */
+export interface MarkConfig {
+  readonly [markName: string]: { readonly expand: MarkExpand }
+}
+
+/**
+ * Collaborative rich text — character-level CRDT with formatting marks.
+ *
+ * The `marks` property declares the mark vocabulary and Peritext expand
+ * behavior. This is structural data — two documents with different mark
+ * vocabularies are structurally different (like two structs with different
+ * fields).
+ */
+export interface RichTextSchema<Caps extends string = "richtext"> {
+  readonly [KIND]: "richtext"
+  readonly marks: MarkConfig
   readonly [CAPS]?: Caps
 }
 
@@ -516,6 +552,10 @@ function movableList<I extends Schema>(
   item: I,
 ): MovableSequenceSchema<I, "movable" | ExtractCaps<I>> {
   return { [KIND]: "movable", item } as any
+}
+
+function richText(marks: MarkConfig): RichTextSchema<"richtext"> {
+  return { [KIND]: "richtext", marks } as RichTextSchema<"richtext">
 }
 
 // ---------------------------------------------------------------------------
@@ -789,6 +829,7 @@ export const Schema = {
   set,
   tree,
   movableList,
+  richText,
 } as const
 
 // ---------------------------------------------------------------------------
@@ -816,6 +857,7 @@ export function structuralKind(schema: Schema): StructuralKind {
   switch (schema[KIND]) {
     case "text":
     case "counter":
+    case "richtext":
       return "scalar"
     case "set":
       return "map"
@@ -944,5 +986,10 @@ export function advanceSchema(schema: Schema, segment: Segment): Schema {
       }
       return schema.item
     }
+
+    case "richtext":
+      throw new Error(
+        `advanceSchema: cannot advance into richtext (leaf type, no inner schema)`,
+      )
   }
 }

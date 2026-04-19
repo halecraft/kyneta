@@ -73,6 +73,18 @@ export function stepIntoYjs(
 // ---------------------------------------------------------------------------
 
 /**
+ * Result of resolving a Yjs shared type at a path.
+ *
+ * Includes both the resolved Yjs value and the schema at that position,
+ * enabling callers to distinguish between schema kinds that map to the
+ * same Yjs type (e.g. "text" vs "richtext" both use Y.Text).
+ */
+export interface ResolvedYjs {
+  readonly resolved: unknown
+  readonly schema: SchemaNode
+}
+
+/**
  * Resolve a Yjs shared type (or plain value) at the given path.
  *
  * Left-folds over path segments using `advanceSchema` for pure schema
@@ -83,8 +95,9 @@ export function stepIntoYjs(
  * identity hash is used instead of the field name at every product-field
  * boundary (root and nested).
  *
- * Returns the Yjs shared type or plain value at the terminal position.
- * For an empty path, returns the root map itself.
+ * Returns both the Yjs shared type (or plain value) and the schema at
+ * the terminal position. For an empty path, returns the root map and
+ * root schema.
  *
  * @param rootMap - The root `Y.Map` obtained via `doc.getMap("root")`
  * @param rootSchema - The root document schema
@@ -96,7 +109,7 @@ export function resolveYjsType(
   rootSchema: SchemaNode,
   path: Path,
   binding?: SchemaBinding,
-): unknown {
+): ResolvedYjs {
   let current: unknown = rootMap
   let schema = rootSchema
   // Track the accumulated absolute schema path for identity lookup.
@@ -122,5 +135,5 @@ export function resolveYjsType(
     schema = nextSchema
   }
 
-  return current
+  return { resolved: current, schema }
 }

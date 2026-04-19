@@ -33,6 +33,7 @@ import {
   KIND,
   type MapSchema,
   type MovableSequenceSchema,
+  type RichTextSchema,
   type PositionalSumSchema,
   type ProductSchema,
   type ScalarSchema,
@@ -116,6 +117,8 @@ export interface Interpreter<Ctx, A> {
     schema: MovableSequenceSchema,
     item: (index: number) => A,
   ): A
+
+  richtext(ctx: Ctx, path: Path, schema: RichTextSchema): A
 }
 
 /**
@@ -748,6 +751,13 @@ function interpretImpl<Ctx, A>(
       attachNative(movableResult, ctx, schema, resolvedPath)
       return movableResult
     }
+
+    case "richtext": {
+      const richtextResult = interp.richtext(ctx, resolvedPath, schema)
+      attachNative(richtextResult, ctx, schema, resolvedPath)
+      attachPosition(richtextResult, ctx, schema, resolvedPath)
+      return richtextResult
+    }
   }
 }
 
@@ -801,5 +811,7 @@ export function createInterpreter<Ctx, A>(
     movable:
       overrides.movable ??
       ((ctx, path, schema, _item) => fallback(ctx, path, schema)),
+    richtext:
+      overrides.richtext ?? ((ctx, path, schema) => fallback(ctx, path, schema)),
   }
 }

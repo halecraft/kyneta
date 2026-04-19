@@ -194,6 +194,12 @@ function walk(
       return
     }
 
+    // --- RichText: first-class leaf ------------------------------------------
+    case "richtext": {
+      lines.push(`${prefix}${lbl}richtext`)
+      return
+    }
+
     // --- Set: first-class container ------------------------------------------
     case "set": {
       const itemDesc = inlineOrNull(schema.item)
@@ -252,6 +258,9 @@ function inlineOrNull(schema: Schema): string | null {
 
     case "counter":
       return "counter"
+
+    case "richtext":
+      return "richtext"
 
     case "movable": {
       const inner = inlineOrNull(schema.item)

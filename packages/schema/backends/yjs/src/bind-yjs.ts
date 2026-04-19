@@ -153,7 +153,7 @@ function createYjsFactory(
  * To access the underlying Y.Doc, use `unwrap(ref)` from `@kyneta/schema`.
  */
 /** The closed set of capability tags that the Yjs substrate supports. */
-export type YjsCaps = "text" | "json"
+export type YjsCaps = "text" | "richtext" | "json"
 
 export const yjs: SubstrateNamespace<CrdtStrategy, YjsCaps, YjsNativeMap> =
   createSubstrateNamespace<CrdtStrategy, YjsCaps, YjsNativeMap>({

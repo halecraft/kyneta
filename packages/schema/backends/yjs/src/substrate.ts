@@ -159,7 +159,7 @@ export function createYjsSubstrate(
           if (path.segments.length === 0) return doc
           if (nodeSchema[KIND] === "scalar" || nodeSchema[KIND] === "sum")
             return undefined
-          return resolveYjsType(rootMap, schema, path as any, binding)
+          return resolveYjsType(rootMap, schema, path as any, binding).resolved
         }
         ;(cachedCtx as any).positionResolver = (
           _nodeSchema: unknown,
@@ -168,7 +168,7 @@ export function createYjsSubstrate(
           return {
             createPosition(index: number, side: Side) {
               // Resolve path to the Y.Text shared type
-              const ytype = resolveYjsType(
+              const { resolved: ytype } = resolveYjsType(
                 rootMap,
                 schema,
                 path as any,

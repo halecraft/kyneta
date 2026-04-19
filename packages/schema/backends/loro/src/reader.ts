@@ -7,14 +7,19 @@
 //
 // LoroText → .toString(), LoroCounter → .value, plain values as-is.
 // Collections: LoroList/LoroMovableList → .length, LoroMap → .keys().
+//
+// Richtext: schema-guided dispatch uses toDelta() instead of toString().
 
 import type {
   Path,
   Reader,
+  RichTextDelta,
+  RichTextSpan,
   SchemaBinding,
   Schema as SchemaNode,
 } from "@kyneta/schema"
-import type { LoroDoc } from "loro-crdt"
+import { KIND } from "@kyneta/schema"
+import type { Delta, LoroDoc } from "loro-crdt"
 import { hasKind } from "./loro-guards.js"
 import { resolveContainer } from "./loro-resolve.js"
 
@@ -52,6 +57,30 @@ function extractValue(resolved: unknown): unknown {
   }
 }
 
+/**
+ * Convert a Loro text delta array (from LoroText.toDelta()) to a
+ * kyneta RichTextDelta (array of RichTextSpan).
+ *
+ * Loro format: `{ insert: string, attributes?: Record<string, unknown> }`
+ * Kyneta format: `{ text: string, marks?: MarkMap }`
+ */
+function loroDeltaToRichTextDelta(
+  deltas: Delta<string>[],
+): RichTextDelta {
+  const spans: RichTextSpan[] = []
+  for (const delta of deltas) {
+    if (delta.insert !== undefined) {
+      const attrs = (delta as any).attributes
+      if (attrs && Object.keys(attrs).length > 0) {
+        spans.push({ text: delta.insert, marks: attrs })
+      } else {
+        spans.push({ text: delta.insert })
+      }
+    }
+  }
+  return spans
+}
+
 // ---------------------------------------------------------------------------
 // loroReader
 // ---------------------------------------------------------------------------
@@ -79,59 +108,70 @@ export function loroReader(
         // Root read — return the full doc as JSON
         return (doc as any).toJSON()
       }
-      const resolved = resolveContainer(doc, schema, path, binding)
-      return extractValue(resolved)
+      const result = resolveContainer(doc, schema, path, binding)
+
+      // Richtext: use toDelta() and convert to RichTextDelta
+      if (
+        result.schema[KIND] === "richtext" &&
+        hasKind(result.container) &&
+        result.container.kind() === "Text"
+      ) {
+        const deltas = (result.container as any).toDelta() as Delta<string>[]
+        return loroDeltaToRichTextDelta(deltas)
+      }
+
+      return extractValue(result.container)
     },
 
     arrayLength(path: Path): number {
-      const resolved = resolveContainer(doc, schema, path, binding)
-      if (!hasKind(resolved)) {
+      const { container } = resolveContainer(doc, schema, path, binding)
+      if (!hasKind(container)) {
         // Plain array value (unlikely in Loro context, but handle gracefully)
-        return Array.isArray(resolved) ? resolved.length : 0
+        return Array.isArray(container) ? container.length : 0
       }
-      const kind = resolved.kind()
+      const kind = container.kind()
       if (kind === "List" || kind === "MovableList") {
-        return (resolved as any).length as number
+        return (container as any).length as number
       }
       return 0
     },
 
     keys(path: Path): string[] {
-      const resolved = resolveContainer(doc, schema, path, binding)
-      if (!hasKind(resolved)) {
+      const { container } = resolveContainer(doc, schema, path, binding)
+      if (!hasKind(container)) {
         // Plain object value
         if (
-          resolved !== null &&
-          resolved !== undefined &&
-          typeof resolved === "object"
+          container !== null &&
+          container !== undefined &&
+          typeof container === "object"
         ) {
-          return Object.keys(resolved as Record<string, unknown>)
+          return Object.keys(container as Record<string, unknown>)
         }
         return []
       }
-      const kind = resolved.kind()
+      const kind = container.kind()
       if (kind === "Map") {
-        return (resolved as any).keys() as string[]
+        return (container as any).keys() as string[]
       }
       return []
     },
 
     hasKey(path: Path, key: string): boolean {
-      const resolved = resolveContainer(doc, schema, path, binding)
-      if (!hasKind(resolved)) {
+      const { container } = resolveContainer(doc, schema, path, binding)
+      if (!hasKind(container)) {
         // Plain object value
         if (
-          resolved !== null &&
-          resolved !== undefined &&
-          typeof resolved === "object"
+          container !== null &&
+          container !== undefined &&
+          typeof container === "object"
         ) {
-          return key in (resolved as Record<string, unknown>)
+          return key in (container as Record<string, unknown>)
         }
         return false
       }
-      const kind = resolved.kind()
+      const kind = container.kind()
       if (kind === "Map") {
-        return (resolved as any).get(key) !== undefined
+        return (container as any).get(key) !== undefined
       }
       return false
     },

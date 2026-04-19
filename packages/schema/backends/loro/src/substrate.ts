@@ -17,11 +17,13 @@ import {
   deriveSchemaBinding,
   executeBatch,
   KIND,
+  type MarkConfig,
   type Path,
   type PositionCapable,
   type ProductSchema,
   type Replica,
   type ReplicaFactory,
+  type RichTextSchema,
   type SchemaBinding,
   type Schema as SchemaNode,
   type Side,
@@ -253,7 +255,7 @@ export function createLoroSubstrate(
           if (path.segments.length === 0) return doc
           if (nodeSchema[KIND] === "scalar" || nodeSchema[KIND] === "sum")
             return undefined
-          return resolveContainer(doc, schema, path as any, binding)
+          return resolveContainer(doc, schema, path as any, binding).container
         }
         // Attach positionResolver — used to create and decode LoroPositions
         // backed by Loro Cursors. Resolves the schema path to a LoroText
@@ -270,7 +272,7 @@ export function createLoroSubstrate(
                 schema,
                 path as any,
                 binding,
-              )
+              ).container
               if (
                 !container ||
                 typeof (container as any).getCursor !== "function"
@@ -585,12 +587,55 @@ export const loroSubstrateFactory: SubstrateFactory<LoroVersion> = {
  * @param conditional - If true, skip scalar defaults for existing keys.
  *   Context: jj:smmulzkm (two-phase substrate construction)
  */
+/**
+ * Recursively walk a schema tree collecting all RichTextSchema nodes'
+ * `.marks` properties into a single MarkConfig. Throws if two richtext
+ * fields declare the same mark name with different expand values.
+ */
+function collectMarkConfigs(schema: SchemaNode): MarkConfig {
+  const result: Record<string, { expand: string }> = {}
+
+  function walk(s: SchemaNode): void {
+    if (s[KIND] === "richtext") {
+      const rt = s as RichTextSchema
+      for (const [name, config] of Object.entries(rt.marks)) {
+        if (name in result && result[name]!.expand !== config.expand) {
+          throw new Error(
+            `collectMarkConfigs: mark "${name}" declared with conflicting expand values: "${result[name]!.expand}" vs "${config.expand}"`,
+          )
+        }
+        result[name] = config
+      }
+    } else if (s[KIND] === "product") {
+      for (const fieldSchema of Object.values((s as any).fields)) {
+        walk(fieldSchema as SchemaNode)
+      }
+    } else if (s[KIND] === "sequence" || s[KIND] === "movable") {
+      walk((s as any).item)
+    } else if (s[KIND] === "map" || s[KIND] === "set") {
+      walk((s as any).item)
+    } else if (s[KIND] === "tree") {
+      walk((s as any).nodeData)
+    }
+    // scalar, text, counter, sum — no recursion needed (leaves or no richtext children in sums)
+  }
+
+  walk(schema)
+  return result as MarkConfig
+}
+
 export function ensureLoroContainers(
   doc: LoroDocType,
   schema: SchemaNode,
   conditional: boolean,
   binding?: SchemaBinding,
 ): void {
+  // Loro requires configTextStyle() to be called before mark/unmark ops.
+  const markConfig = collectMarkConfigs(schema)
+  if (Object.keys(markConfig).length > 0) {
+    doc.configTextStyle(markConfig as any)
+  }
+
   // The schema is now directly a ProductSchema (no annotation wrapper)
   if (schema[KIND] === "product") {
     for (const [key, fieldSchema] of Object.entries(schema.fields).sort(
@@ -629,6 +674,7 @@ export function ensureRootContainer(
   // Dispatch on the schema's [KIND] directly — no annotation unwrapping
   switch (fieldSchema[KIND]) {
     case "text":
+    case "richtext":
       doc.getText(key)
       return
     case "counter":

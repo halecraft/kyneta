@@ -12,6 +12,9 @@ import type {
   IncrementChange,
   MapChange,
   ReplaceChange,
+  RichTextChange,
+  RichTextDelta,
+  RichTextSpan,
   SequenceChange,
   TextChange,
 } from "./change.js"
@@ -172,6 +175,142 @@ export function stepIncrement(state: number, action: IncrementChange): number {
 }
 
 // ---------------------------------------------------------------------------
+// normalizeSpans — merge adjacent spans with identical marks
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalize a span array: merge adjacent spans with deeply-equal marks,
+ * remove empty spans.
+ */
+export function normalizeSpans(spans: RichTextSpan[]): RichTextSpan[] {
+  const result: RichTextSpan[] = []
+  for (const span of spans) {
+    if (span.text === "") continue
+    const prev = result[result.length - 1]
+    if (prev && marksEqual(prev.marks, span.marks)) {
+      result[result.length - 1] = { text: prev.text + span.text, ...(prev.marks ? { marks: prev.marks } : {}) }
+    } else {
+      result.push(span)
+    }
+  }
+  return result
+}
+
+/** Deep equality for mark maps (null/undefined/empty are all equivalent to "no marks"). */
+function marksEqual(a: Record<string, unknown> | undefined, b: Record<string, unknown> | undefined): boolean {
+  const aKeys = a ? Object.keys(a).filter(k => a[k] !== undefined) : []
+  const bKeys = b ? Object.keys(b).filter(k => b[k] !== undefined) : []
+  if (aKeys.length !== bKeys.length) return false
+  for (const key of aKeys) {
+    if (a![key] !== b?.[key]) return false
+  }
+  return true
+}
+
+// ---------------------------------------------------------------------------
+// stepRichText — apply rich text instructions to a RichTextDelta
+// ---------------------------------------------------------------------------
+
+/**
+ * Applies a `RichTextChange` to a `RichTextDelta`, producing a new delta.
+ *
+ * Remaining input spans after the last instruction are implicitly retained.
+ * The result is normalized: adjacent spans with equal marks are merged.
+ */
+export function stepRichText(
+  state: RichTextDelta,
+  action: RichTextChange,
+): RichTextDelta {
+  const output: RichTextSpan[] = []
+
+  // Flat cursor into the input spans
+  let spanIndex = 0
+  let charOffset = 0
+
+  function consume(
+    count: number,
+    markMerger?: (existing: Record<string, unknown> | undefined) => Record<string, unknown> | undefined,
+  ): void {
+    let remaining = count
+    while (remaining > 0 && spanIndex < state.length) {
+      const span = state[spanIndex]!
+      const available = span.text.length - charOffset
+      const take = Math.min(remaining, available)
+
+      const text = span.text.slice(charOffset, charOffset + take)
+      const marks = markMerger ? markMerger(span.marks) : span.marks
+      output.push(marks && Object.keys(marks).length > 0 ? { text, marks } : { text })
+
+      remaining -= take
+      charOffset += take
+      if (charOffset >= span.text.length) {
+        spanIndex++
+        charOffset = 0
+      }
+    }
+  }
+
+  function skip(count: number): void {
+    let remaining = count
+    while (remaining > 0 && spanIndex < state.length) {
+      const span = state[spanIndex]!
+      const available = span.text.length - charOffset
+      const take = Math.min(remaining, available)
+
+      remaining -= take
+      charOffset += take
+      if (charOffset >= span.text.length) {
+        spanIndex++
+        charOffset = 0
+      }
+    }
+  }
+
+  for (const op of action.instructions) {
+    if ("retain" in op) {
+      consume(op.retain)
+    } else if ("format" in op) {
+      consume(op.format, existing => {
+        const merged = { ...(existing ?? {}) }
+        for (const [key, value] of Object.entries(op.marks)) {
+          if (value === null) {
+            delete merged[key]
+          } else {
+            merged[key] = value
+          }
+        }
+        return Object.keys(merged).length > 0 ? merged : undefined
+      })
+    } else if ("insert" in op) {
+      const span: RichTextSpan =
+        op.marks && Object.keys(op.marks).length > 0
+          ? { text: op.insert, marks: op.marks }
+          : { text: op.insert }
+      output.push(span)
+    } else if ("delete" in op) {
+      skip(op.delete)
+    }
+  }
+
+  // Append remaining input spans (implicit trailing retain)
+  while (spanIndex < state.length) {
+    const span = state[spanIndex]!
+    if (charOffset > 0) {
+      const text = span.text.slice(charOffset)
+      if (text) {
+        output.push(span.marks ? { text, marks: span.marks } : { text })
+      }
+      charOffset = 0
+    } else {
+      output.push(span)
+    }
+    spanIndex++
+  }
+
+  return normalizeSpans(output)
+}
+
+// ---------------------------------------------------------------------------
 // step — top-level dispatcher
 // ---------------------------------------------------------------------------
 
@@ -216,6 +355,12 @@ export function step<S>(state: S, action: ChangeBase): S {
 
     case "increment":
       return stepIncrement(state as number, action as IncrementChange) as S
+
+    case "richtext":
+      return stepRichText(
+        state as RichTextDelta,
+        action as RichTextChange,
+      ) as S
 
     default:
       throw new Error(

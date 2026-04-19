@@ -47,6 +47,7 @@ export { batchToOps, changeToDiff } from "./change-mapping.js"
 export { hasKind, isLoroContainer, isLoroDoc } from "./loro-guards.js"
 // Container resolution
 export { resolveContainer, stepIntoLoro } from "./loro-resolve.js"
+export type { ResolveResult } from "./loro-resolve.js"
 // NativeMap — the Loro functor
 export type { LoroNativeMap } from "./native-map.js"
 // Position conformance

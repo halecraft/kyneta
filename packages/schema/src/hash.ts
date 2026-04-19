@@ -103,6 +103,14 @@ function canonicalizeSchema(schema: SchemaNode): string {
     case "movable":
       return `t:movable(${canonicalizeSchema((schema as any).item as SchemaNode)})`
 
+    case "richtext": {
+      const marks = (schema as any).marks as Record<string, { expand: string }>
+      const parts = Object.keys(marks)
+        .sort()
+        .map(k => `${k}:${marks[k]!.expand}`)
+      return `t:richtext(${parts.join(",")})`
+    }
+
     default:
       throw new Error(
         `canonicalizeSchema: unknown schema kind "${(schema as any)[KIND]}"`,
