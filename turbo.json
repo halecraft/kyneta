@@ -7,11 +7,11 @@
       "env": ["SKIP_BROTLI"]
     },
     "verify": {
-      "dependsOn": ["^build"],
+      "dependsOn": ["build"],
       "outputs": []
     },
     "test": {
-      "dependsOn": ["^build"],
+      "dependsOn": ["build"],
       "outputs": []
     },
     "dev": {

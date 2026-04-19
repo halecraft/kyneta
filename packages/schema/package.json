@@ -37,7 +37,7 @@
     "./basic/src/*": "./src/basic/*"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsdown",
     "test": "verify logic",
     "verify": "verify"
   },
@@ -46,7 +46,7 @@
   },
   "devDependencies": {
     "@kyneta/changefeed": "workspace:^",
-    "tsup": "^8.5.0",
+    "tsdown": "^0.21.9",
     "typescript": "^5.9.2",
     "vitest": "^4.0.17"
   }

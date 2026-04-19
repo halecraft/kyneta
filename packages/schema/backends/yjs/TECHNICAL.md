@@ -267,7 +267,7 @@ unwrap(doc.theme)     // undefined     (scalar — no shared type)
 packages/schema/yjs/
 ├── package.json          # @kyneta/yjs-schema, peerDeps on schema + yjs
 ├── tsconfig.json         # ESNext + NodeNext
-├── tsup.config.ts        # ESM build
+├── tsdown.config.ts      # ESM build
 ├── verify.config.ts      # format → types (tsgo) → logic (vitest)
 ├── README.md             # User-facing documentation
 ├── TECHNICAL.md          # This file

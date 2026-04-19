@@ -284,7 +284,7 @@ export class LevelDBStore implements Store {
  *
  * @example
  * ```typescript
- * import { createLevelDBStore } from "@kyneta/leveldb-store/server"
+ * import { createLevelDBStore } from "@kyneta/leveldb-store"
  *
  * const exchange = new Exchange({
  *   stores: [createLevelDBStore("./data/exchange-db")],

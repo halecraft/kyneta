@@ -15,7 +15,7 @@ import {
   plainMetadata,
 } from "@kyneta/exchange/testing"
 import { afterAll, describe, expect, it } from "vitest"
-import { decodeStoreEntry, encodeStoreEntry, LevelDBStore } from "../server.js"
+import { decodeStoreEntry, encodeStoreEntry, LevelDBStore } from "../index.js"
 
 // ---------------------------------------------------------------------------
 // Temp directory management

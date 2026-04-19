@@ -752,90 +752,104 @@ describe("Exchange", () => {
     })
 
     it("departure timer fires after grace period", async () => {
-      const bridge = new Bridge()
-      const exchange1 = createExchange({
-        id: "alice",
-        transports: [createBridgeTransport({ transportType: "alice", bridge })],
-        departureTimeout: 50,
-      })
-      const exchange2 = createExchange({
-        id: "bob",
-        transports: [createBridgeTransport({ transportType: "bob", bridge })],
-      })
+      vi.useFakeTimers()
+      try {
+        const bridge = new Bridge()
+        const exchange1 = createExchange({
+          id: "alice",
+          transports: [
+            createBridgeTransport({ transportType: "alice", bridge }),
+          ],
+          departureTimeout: 5_000,
+        })
+        const exchange2 = createExchange({
+          id: "bob",
+          transports: [createBridgeTransport({ transportType: "bob", bridge })],
+        })
 
-      await drain()
+        // Flush zero-delay timers only (microtask rounds) — does NOT advance clock
+        await vi.advanceTimersByTimeAsync(0)
 
-      const changes: PeerChange[] = []
-      exchange1.peers.subscribe(cs => {
-        changes.push(...cs.changes)
-      })
+        const changes: PeerChange[] = []
+        exchange1.peers.subscribe(cs => {
+          changes.push(...cs.changes)
+        })
 
-      // Involuntary disconnect
-      await exchange2.removeTransport("bob")
-      await drain()
+        // Involuntary disconnect
+        await exchange2.removeTransport("bob")
+        // Flush zero-delay timers without advancing the departure timer
+        await vi.advanceTimersByTimeAsync(0)
 
-      // Immediately after: peer-disconnected, peer still in map
-      expect(changes).toEqual([
-        {
-          type: "peer-disconnected",
-          peer: expect.objectContaining({ peerId: "bob" }),
-        },
-      ])
-      expect(exchange1.peers().size).toBe(1)
+        // Immediately after: peer-disconnected, peer still in map
+        expect(changes).toEqual([
+          {
+            type: "peer-disconnected",
+            peer: expect.objectContaining({ peerId: "bob" }),
+          },
+        ])
+        expect(exchange1.peers().size).toBe(1)
 
-      // Wait for the departure timer to fire
-      await new Promise<void>(r => setTimeout(r, 100))
-      await drain()
+        // Now advance clock past the departure timeout
+        await vi.advanceTimersByTimeAsync(5_000)
 
-      // Now peer-departed should have fired
-      const departed = changes.filter(c => c.type === "peer-departed")
-      expect(departed.length).toBe(1)
-      expect(departed[0].peer.peerId).toBe("bob")
-      expect(exchange1.peers().size).toBe(0)
+        // peer-departed should have fired
+        const departed = changes.filter(c => c.type === "peer-departed")
+        expect(departed.length).toBe(1)
+        expect(departed[0].peer.peerId).toBe("bob")
+        expect(exchange1.peers().size).toBe(0)
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it("reconnection before departure timer cancels the timer", async () => {
-      const bridge = new Bridge()
-      const exchange1 = createExchange({
-        id: "alice",
-        transports: [createBridgeTransport({ transportType: "alice", bridge })],
-        departureTimeout: 50,
-      })
-      const exchange2 = createExchange({
-        id: "bob",
-        transports: [createBridgeTransport({ transportType: "bob", bridge })],
-      })
+      vi.useFakeTimers()
+      try {
+        const bridge = new Bridge()
+        const exchange1 = createExchange({
+          id: "alice",
+          transports: [
+            createBridgeTransport({ transportType: "alice", bridge }),
+          ],
+          departureTimeout: 5_000,
+        })
+        const exchange2 = createExchange({
+          id: "bob",
+          transports: [createBridgeTransport({ transportType: "bob", bridge })],
+        })
 
-      await drain()
+        await vi.advanceTimersByTimeAsync(0)
 
-      const changes: PeerChange[] = []
-      exchange1.peers.subscribe(cs => {
-        changes.push(...cs.changes)
-      })
+        const changes: PeerChange[] = []
+        exchange1.peers.subscribe(cs => {
+          changes.push(...cs.changes)
+        })
 
-      // Involuntary disconnect
-      await exchange2.removeTransport("bob")
-      await drain()
+        // Involuntary disconnect
+        await exchange2.removeTransport("bob")
+        await vi.advanceTimersByTimeAsync(0)
 
-      expect(changes.at(-1)?.type).toBe("peer-disconnected")
+        expect(changes.at(-1)?.type).toBe("peer-disconnected")
 
-      // Reconnect before the 50ms timer fires
-      await exchange2.addTransport(
-        new BridgeTransport({ transportType: "bob", bridge }),
-      )
-      await drain()
+        // Reconnect before the departure timer fires
+        await exchange2.addTransport(
+          new BridgeTransport({ transportType: "bob", bridge }),
+        )
+        await vi.advanceTimersByTimeAsync(0)
 
-      expect(changes.at(-1)?.type).toBe("peer-reconnected")
+        expect(changes.at(-1)?.type).toBe("peer-reconnected")
 
-      // Wait past the original departure timeout
-      await new Promise<void>(r => setTimeout(r, 100))
-      await drain()
+        // Advance well past the original departure timeout
+        await vi.advanceTimersByTimeAsync(10_000)
 
-      // No peer-departed should have fired — timer was cancelled
-      const departed = changes.filter(c => c.type === "peer-departed")
-      expect(departed.length).toBe(0)
-      expect(exchange1.peers().size).toBe(1)
-      expect(exchange1.peers().has("bob")).toBe(true)
+        // No peer-departed should have fired — timer was cancelled
+        const departed = changes.filter(c => c.type === "peer-departed")
+        expect(departed.length).toBe(0)
+        expect(exchange1.peers().size).toBe(1)
+        expect(exchange1.peers().has("bob")).toBe(true)
+      } finally {
+        vi.useRealTimers()
+      }
     })
   })
 

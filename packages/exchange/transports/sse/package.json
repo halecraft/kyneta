@@ -33,7 +33,7 @@
     "./src/*": "./src/*"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsdown",
     "test": "verify logic",
     "verify": "verify"
   },
@@ -50,13 +50,13 @@
   "devDependencies": {
     "@kyneta/exchange": "workspace:^",
     "@kyneta/machine": "workspace:^",
+    "@kyneta/schema": "workspace:^",
     "@kyneta/transport": "workspace:^",
     "@kyneta/wire": "workspace:^",
-    "@kyneta/schema": "workspace:^",
     "@types/express": "^4.17.23",
     "@types/node": "^22",
     "express": "^4.21.0",
-    "tsup": "^8.5.0",
+    "tsdown": "^0.21.9",
     "typescript": "^5.9.2",
     "vitest": "^4.0.17"
   }

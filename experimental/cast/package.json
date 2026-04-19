@@ -86,7 +86,7 @@
     "./src/*": "./src/*"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsdown",
     "test": "verify logic",
     "verify": "verify"
   },
@@ -106,7 +106,7 @@
     "@types/jsdom": "^21.1.7",
     "@typescript/native-preview": "7.0.0-dev.20260103.1",
     "jsdom": "^26.1.0",
-    "tsup": "^8.5.0",
+    "tsdown": "^0.21.9",
     "typescript": "^5.9.2",
     "vite": "^6.1.1",
     "vitest": "^4.0.17"

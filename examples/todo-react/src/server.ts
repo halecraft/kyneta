@@ -26,7 +26,7 @@ import {
   WebsocketServerTransport,
   wrapNodeWebsocket,
 } from "@kyneta/websocket-transport/server"
-import { createLevelDBStore } from "@kyneta/leveldb-store/server"
+import { createLevelDBStore } from "@kyneta/leveldb-store"
 import { createServer as createViteServer } from "vite"
 import { WebSocketServer } from "ws"
 import { TodoDoc } from "./schema.js"

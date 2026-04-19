@@ -1346,6 +1346,6 @@ packages/schema/
 │       └── README.md            # Advanced documentation
 ├── package.json                 # No runtime deps, ./basic subpath export
 ├── tsconfig.json
-├── tsup.config.ts               # Two entry points: src/index.ts, src/basic/index.ts
+├── tsdown.config.ts             # Two entry points: src/index.ts, src/basic/index.ts
 └── TECHNICAL.md                 # This file
 ```

@@ -6,7 +6,7 @@
  * tests exercise the full path: schema definition → interpret →
  * subscribe → reactive DOM update.
  *
- * Requires the schema package to be built (`npx tsup` in packages/schema).
+ * Requires the schema package to be built (`npx tsdown` in packages/schema).
  */
 
 import { CHANGEFEED, hasChangefeed } from "@kyneta/changefeed"

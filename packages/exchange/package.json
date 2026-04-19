@@ -33,7 +33,7 @@
     }
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsdown",
     "test": "verify logic",
     "verify": "verify"
   },
@@ -50,7 +50,7 @@
     "@kyneta/schema": "workspace:^",
     "@kyneta/yjs-schema": "workspace:^",
     "loro-crdt": "^1.10.0",
-    "tsup": "^8.5.0",
+    "tsdown": "^0.21.9",
     "typescript": "^5.9.2",
     "vitest": "^4.0.17",
     "yjs": "^13.6.30"

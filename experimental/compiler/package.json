@@ -33,7 +33,7 @@
     "./src/*": "./src/*"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsdown",
     "test": "verify logic",
     "verify": "verify"
   },
@@ -43,7 +43,7 @@
     "ts-morph": "^25.0.0"
   },
   "devDependencies": {
-    "tsup": "^8.5.0",
+    "tsdown": "^0.21.9",
     "typescript": "^5.9.2",
     "vitest": "^4.0.17"
   }

@@ -21,7 +21,7 @@ but had zero imports in any core source file. It was a phantom dependency.
 
 `@kyneta/schema`'s `package.json` points `main` at `./dist/index.js`, but the
 `dist/` directory didn't exist. Vitest resolves workspace dependencies through
-the `exports` map, so you must run `npx tsup` in the schema package before
+the `exports` map, so you must run `npx tsdown` in the schema package before
 core's tests can import from `@kyneta/schema`. This is easy to forget and
 produces a confusing Vite error: `Failed to resolve entry for package`.
 

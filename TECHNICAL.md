@@ -281,7 +281,7 @@ Bun-based examples (`todo`, `bumper-cars`) share build and serving infrastructur
 
 ### Build & Verification
 
-The monorepo uses **Turborepo** for cross-package task orchestration with content-hash caching, and **@halecraft/verify** for intra-package verification pipelines.
+The monorepo uses **Turborepo** for cross-package task orchestration with content-hash caching, **tsdown** (Rolldown-based) for library bundling, and **@halecraft/verify** for intra-package verification pipelines.
 
 ```sh
 # Build all packages in dependency order
@@ -300,8 +300,8 @@ npx turbo verify --filter=@kyneta/perspective
 
 **Turbo tasks** (`turbo.json`):
 - `build` — depends on `^build` (upstream builds), caches `dist/**`, env-keyed on `SKIP_BROTLI`
-- `verify` — depends on `^build`, runs the package's `verify` script
-- `test` — depends on `^build`, runs the package's `test` script (which calls `verify logic`)
+- `verify` — depends on `build` (own build, which transitively includes `^build`), runs the package's `verify` script
+- `test` — depends on `build` (own build, which transitively includes `^build`), runs the package's `test` script (which calls `verify logic`)
 
 **Verify pipeline** (`verify.config.ts` in each package):
 1. **format** — `biome check --write .` (auto-fixes formatting, reports lint issues)
@@ -378,6 +378,7 @@ kyneta/
 
 Package manager: **pnpm** with workspace protocol (`workspace:^`).
 Task runner: **Turborepo** for cross-package build/test orchestration.
+Bundler: **tsdown** (Rolldown-based) — library bundling with ESM output, DTS generation, and sourcemaps.
 Verification: **@halecraft/verify** for intra-package format → types → logic pipelines.
 Linter/Formatter: **Biome** (root `biome.json`, 2-space indent, no semicolons).
 Type checker: **tsgo** (`@typescript/native-preview`) — Rust-based TypeScript compiler for fast verification.

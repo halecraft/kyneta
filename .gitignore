@@ -4,3 +4,4 @@ dist
 vendor
 /**/*.db
 .env
+.jj-plan

@@ -1,4 +1,4 @@
-import { defineConfig } from "tsup"
+import { defineConfig } from "tsdown"
 
 export default defineConfig({
   entry: {
@@ -14,8 +14,7 @@ export default defineConfig({
     "runtime/index": "src/runtime/index.ts",
     "testing/index": "src/testing/index.ts",
   },
-  format: ["esm"],
   dts: true,
   sourcemap: true,
-  clean: true,
+  fixedExtension: false,
 })
