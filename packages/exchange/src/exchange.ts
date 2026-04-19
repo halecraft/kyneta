@@ -56,7 +56,7 @@ import type { Store } from "./store/store.js"
 import { registerSync } from "./sync.js"
 import { type DocRuntime, Synchronizer } from "./synchronizer.js"
 import type { DocChange, DocInfo, PeerChange } from "./types.js"
-import { generatePeerId, validatePeerId } from "./utils.js"
+import { randomPeerId, validatePeerId } from "./utils.js"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -257,7 +257,7 @@ export class Exchange {
     ...policyFields
   }: ExchangeParams = {}) {
     // Resolve peer identity
-    const peerId = identity.peerId ?? generatePeerId()
+    const peerId = identity.peerId ?? randomPeerId()
     validatePeerId(peerId)
     this.peerId = peerId
     this.#peerIdIsExplicit = identity.peerId !== undefined

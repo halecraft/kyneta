@@ -349,7 +349,7 @@ const exchange = new Exchange({
 })
 ```
 
-> **Peer identity:** `peerId` identifies this exchange as a participant in causal history and must be stable across restarts for correct CRDT operation. For browser clients, use `persistentPeerId(storageKey)` — it generates a random peerId on first visit and caches it in `localStorage`.
+> **Peer identity:** `peerId` identifies this exchange as a participant in causal history and must be stable across restarts for correct CRDT operation. For browser clients, use `persistentPeerId(storageKey)` — it provides a per-tab unique peerId via a localStorage CAS lease protocol, stable across reloads within the same tab. Call `releasePeerId(storageKey)` for explicit cleanup.
 
 ### Heterogeneous Documents
 
@@ -635,7 +635,9 @@ You only engage the next level when you need it. Each level is additive — it d
 
 | Export | Description |
 |--------|-------------|
-| `persistentPeerId(storageKey)` | Browser-only: generate a random peerId on first visit, cache in `localStorage`. |
+| `persistentPeerId(storageKey)` | Browser-only: per-tab unique peerId via localStorage CAS lease. First tab gets the stable device peerId; concurrent tabs get fresh random peerIds. Stable across reloads. |
+| `releasePeerId(storageKey)` | Release the peerId lease. Clears only the holder token — `sessionStorage` keys survive for reload stability. Called automatically on `pagehide`. |
+| `resolveLease(state)` | Pure decision function for the lease protocol. Exported for testing and advanced use. |
 
 ---
 

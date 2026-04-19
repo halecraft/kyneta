@@ -196,7 +196,12 @@ export {
 // Peer identity — browser-only persistent peerId generation
 // ---------------------------------------------------------------------------
 
-export { persistentPeerId } from "./persistent-peer-id.js"
+export type { LeaseDecision, LeaseState } from "./persistent-peer-id.js"
+export {
+  persistentPeerId,
+  releasePeerId,
+  resolveLease,
+} from "./persistent-peer-id.js"
 
 // ---------------------------------------------------------------------------
 // Line — reliable bidirectional message stream between two peers

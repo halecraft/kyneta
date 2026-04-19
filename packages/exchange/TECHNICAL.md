@@ -1405,7 +1405,28 @@ The `peerId` in `ExchangeParams.identity` must satisfy two invariants:
 
 **Self-connection detection:** When a peer connects to itself (remote peerId matches `model.identity.peerId`), the synchronizer emits a `notify/warning`. This is always a misconfiguration — syncing with yourself produces no useful result.
 
-**Browser clients:** Use `persistentPeerId(storageKey)` from `@kyneta/exchange` to generate a random 16-char hex peerId on first visit and cache it in `localStorage`. This satisfies both stability (survives page reloads) and uniqueness (each browser profile gets its own peerId).
+#### Multi-Tab Behavior
+
+`persistentPeerId(storageKey)` from `@kyneta/exchange` uses a **localStorage CAS lease protocol** to elect a primary tab per browser profile. The implementation follows the FC/IS boundary: `resolveLease(state)` is a pure decision function (given current storage state, return `{ peerId, writes }`) and `persistentPeerId(key)` is the imperative shell (reads storage, calls `resolveLease`, applies writes, registers lifecycle hooks).
+
+**Storage keys** (for a given `key`):
+
+| Key | Storage | Purpose |
+|-----|---------|---------|
+| `localStorage[key]` | persistent | The device peerId (random 16-char hex, created on first visit) |
+| `localStorage[key + ":held"]` | persistent | The holder token — identifies which tab currently holds the lease |
+| `sessionStorage[key]` | per-tab | Cached peerId for this tab (survives reloads within the same tab) |
+| `sessionStorage[key + ":tk"]` | per-tab | This tab's session token (compared against the holder token) |
+
+**Primary election:** The first tab to call `persistentPeerId(key)` finds no holder token in `localStorage[key + ":held"]`. It generates a session token, writes it as the holder token (CAS: compare-and-swap — only claim if still unclaimed), and claims the device peerId from `localStorage[key]`. Subsequent tabs find the holder token already set (and not matching their own session token), so they generate a fresh `randomPeerId()` instead. Each tab caches its resolved peerId in `sessionStorage[key]`.
+
+**Reload stability:** `sessionStorage` survives page reloads within the same tab. On reload, `persistentPeerId` finds the cached peerId in `sessionStorage[key]` and returns it immediately — no lease negotiation needed. This satisfies the stability invariant across reloads.
+
+**`pagehide` release:** When a tab closes, navigates away, or is evicted from bfcache, `releasePeerId(key)` is called via the `pagehide` event. This clears only `localStorage[key + ":held"]` (the holder token). It does NOT touch `sessionStorage` — if the tab is restored from bfcache, it will re-acquire the lease or get a fresh peerId on next call. It does NOT touch `localStorage[key]` — the device peerId is permanent.
+
+**Orphaned lease graceful degradation:** If a tab crashes (no `pagehide` fires), the holder token in `localStorage[key + ":held"]` is orphaned. Subsequent tabs see a holder token that doesn't match their session token and fall through to generating fresh peerIds. The orphaned lease is effectively harmless: the device peerId goes unclaimed until the user closes all tabs and opens a fresh one (which finds no holder and claims it). The cost of orphaned leases is one extra version vector entry per tab that couldn't claim the device peerId — negligible compared to the silent corruption that would result from two tabs sharing a peerId.
+
+**Each tab IS a distinct CRDT actor.** The multi-tab design intentionally gives non-primary tabs their own peerIds. The cost is one version vector entry per concurrent tab — a small, bounded overhead. This is the correct tradeoff: sharing a peerId across tabs would violate the uniqueness invariant and cause silent data corruption.
 
 **Servers:** Use an explicit string (e.g. `"my-server"`). Servers don't need generation helpers.
 
