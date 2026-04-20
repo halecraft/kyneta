@@ -6,7 +6,13 @@
 
 import { hasChangefeed } from "@kyneta/changefeed"
 import { loro } from "@kyneta/loro-schema"
-import { Defer, json, plainReplicaFactory, Schema } from "@kyneta/schema"
+import {
+  Defer,
+  json,
+  plainReplicaFactory,
+  Schema,
+  SYNC_AUTHORITATIVE,
+} from "@kyneta/schema"
 import { Bridge, createBridgeTransport } from "@kyneta/transport"
 import { afterEach, describe, expect, it } from "vitest"
 import {
@@ -109,7 +115,7 @@ describe("exchange.documents", () => {
       exchange.replicate(
         "rep-1",
         plainReplicaFactory,
-        "authoritative",
+        SYNC_AUTHORITATIVE,
         "00test",
       )
 
@@ -173,7 +179,7 @@ describe("exchange.documents", () => {
       exchange.replicate(
         "rep-1",
         plainReplicaFactory,
-        "authoritative",
+        SYNC_AUTHORITATIVE,
         "00test",
       )
 
@@ -224,7 +230,7 @@ describe("exchange.documents", () => {
       exchange.replicate(
         "rep-1",
         plainReplicaFactory,
-        "authoritative",
+        SYNC_AUTHORITATIVE,
         "00test",
       )
 
@@ -359,7 +365,7 @@ describe("exchange.documents", () => {
       exchange.replicate(
         "rep-1",
         plainReplicaFactory,
-        "authoritative",
+        SYNC_AUTHORITATIVE,
         "00test",
       )
 
@@ -412,7 +418,7 @@ describe("exchange.documents", () => {
       exchange.replicate(
         "rep-1",
         plainReplicaFactory,
-        "authoritative",
+        SYNC_AUTHORITATIVE,
         "00test",
       )
 

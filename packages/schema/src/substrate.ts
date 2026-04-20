@@ -377,30 +377,70 @@ export function replicaTypesCompatible(
 }
 
 // ---------------------------------------------------------------------------
-// MergeStrategy — dispatch key for the sync algorithm
+// SyncProtocol — structured sync protocol
 // ---------------------------------------------------------------------------
 
+/** Who can write to this document? */
+export type WriterModel = "serialized" | "concurrent"
+
+/** What's sent over the wire? */
+export type Delivery = "delta-capable" | "snapshot-only"
+
+/** Is this document persisted? */
+export type Durability = "persistent" | "transient"
+
 /**
- * Declares which sync algorithm the exchange runs on behalf of a substrate.
- *
- * - **"collaborative"**: Bidirectional exchange. `compare()` may return
- *   `"concurrent"`. Uses `exportSince()` for fine-grained deltas.
- *
- * - **"authoritative"**: Request/response. Total order — `compare()` never
- *   returns `"concurrent"`. Uses `exportSince()` or `exportEntirety()`.
- *
- * - **"ephemeral"**: Unidirectional push/broadcast. Timestamp-based. Always
- *   uses `exportEntirety()`. Receiver compares timestamps and discards
- *   stale arrivals.
+ * The sync protocol for a document — decomposed into three independent axes
+ * so each dispatch site in the exchange can match on exactly the field it
+ * cares about.
  */
-export type MergeStrategy = "collaborative" | "authoritative" | "ephemeral"
+export interface SyncProtocol {
+  readonly writerModel: WriterModel
+  readonly delivery: Delivery
+  readonly durability: Durability
+}
+
+/** Authoritative: serialized writes, delta-capable, persistent. Used by `json`. */
+export const SYNC_AUTHORITATIVE: SyncProtocol = {
+  writerModel: "serialized",
+  delivery: "delta-capable",
+  durability: "persistent",
+} as const
+
+/** Collaborative: concurrent CRDT writes, delta-capable, persistent. Used by `loro`, `yjs`. */
+export const SYNC_COLLABORATIVE: SyncProtocol = {
+  writerModel: "concurrent",
+  delivery: "delta-capable",
+  durability: "persistent",
+} as const
+
+/** Ephemeral: concurrent LWW writes, snapshot-only, transient. Used by `ephemeral`. */
+export const SYNC_EPHEMERAL: SyncProtocol = {
+  writerModel: "concurrent",
+  delivery: "snapshot-only",
+  durability: "transient",
+} as const
+
+/**
+ * Does this protocol require bidirectional state exchange (causal merge)?
+ *
+ * True for collaborative CRDTs (concurrent + delta-capable).
+ * False for ephemeral LWW (concurrent + snapshot-only) — unidirectional push suffices.
+ * False for authoritative (serialized + delta-capable) — request/response, not exchange.
+ */
+export function requiresBidirectionalSync(protocol: SyncProtocol): boolean {
+  return (
+    protocol.writerModel === "concurrent" &&
+    protocol.delivery === "delta-capable"
+  )
+}
 
 // ---------------------------------------------------------------------------
 // DocMetadata — per-document metadata
 // ---------------------------------------------------------------------------
 
 /**
- * Per-document metadata — the replicaType + mergeStrategy pair.
+ * Per-document metadata — the replicaType + syncProtocol pair.
  *
  * Used in StorageBackend, PresentMsg, DocEntry, cmd/ensure-doc,
  * and onDocDiscovered. Named as a first-class type because it appears
@@ -408,7 +448,7 @@ export type MergeStrategy = "collaborative" | "authoritative" | "ephemeral"
  */
 export type DocMetadata = {
   readonly replicaType: ReplicaType
-  readonly mergeStrategy: MergeStrategy
+  readonly syncProtocol: SyncProtocol
   readonly schemaHash: string
   readonly supportedHashes?: readonly string[]
 }

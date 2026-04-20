@@ -5,22 +5,22 @@
 
 // Base64 — platform-agnostic encoding utilities
 export { base64ToUint8Array, uint8ArrayToBase64 } from "./base64.js"
-// Bind — schema + factory + strategy binding
+// Bind — schema + factory + sync protocol binding
 export type {
+  BindingTarget,
   BoundSchema,
-  CrdtStrategy,
+  EphemeralLaws,
   FactoryBuilder,
-  JsonStrategy,
-  RestrictCaps,
-  SubstrateNamespace,
+  RestrictLaws,
 } from "./bind.js"
 // Interpret, Replicate, BoundReplica are dual-namespace (type + value) —
 // export from the value line only; TypeScript resolves the type automatically.
 export {
   BoundReplica,
   bind,
-  createSubstrateNamespace,
+  createBindingTarget,
   Defer,
+  ephemeral,
   Interpret,
   isBoundSchema,
   json,
@@ -147,6 +147,8 @@ export type {
   ReadableMapRef,
   ReadableSequenceRef,
 } from "./interpreters/readable.js"
+// Positional algebra — cursor-positioning kernel
+export { at } from "./interpreters/sequence-helpers.js"
 export type { ValidateContext } from "./interpreters/validate.js"
 // Validate interpreter — schema-driven validation with collecting errors
 export {
@@ -282,15 +284,6 @@ export {
   PlainPosition,
   POSITION,
 } from "./position.js"
-// Tree-position algebra — flat↔tree position mapping for editor bindings
-export type { ResolvedTreePosition } from "./tree-position.js"
-export {
-  contentSize,
-  flattenTreePosition,
-  isLeaf,
-  nodeSize,
-  resolveTreePosition,
-} from "./tree-position.js"
 export type { PlainState, Reader } from "./reader.js"
 // Reader — shared utilities for reading/writing plain state objects
 export {
@@ -310,17 +303,19 @@ export type {
   Wrap,
 } from "./ref.js"
 export type {
-  // Capability extraction
-  CapsSymbol,
   CounterSchema,
   DiscriminatedSumSchema,
-  ExtractCaps,
+  ExtractLaws,
   // KIND symbol type
   KindSymbol,
+  // Capability extraction
+  LawsSymbol,
+  MapSchema,
   MarkConfig,
   MarkExpand,
-  MapSchema,
   MovableSequenceSchema,
+  NullableSumOf,
+  NullableSumSchema,
   PlainDiscriminatedSumSchema,
   PlainMapSchema,
   PlainPositionalSumSchema,
@@ -350,9 +345,9 @@ export type {
 export {
   advanceSchema,
   buildVariantMap,
-  CAPS,
   isNullableSum,
   KIND,
+  LAWS,
   Schema,
   structuralKind,
 } from "./schema.js"
@@ -369,8 +364,9 @@ export {
 } from "./step.js"
 // Substrate — state management, versioning, and transfer semantics
 export type {
+  Delivery,
   DocMetadata,
-  MergeStrategy,
+  Durability,
   Replica,
   ReplicaFactory,
   ReplicaType,
@@ -378,14 +374,20 @@ export type {
   SubstrateFactory,
   SubstratePayload,
   SubstratePrepare,
+  SyncProtocol,
   Version,
+  WriterModel,
 } from "./substrate.js"
 export {
   BACKING_DOC,
   computeSchemaHash,
   fnv1a128,
   replicaTypesCompatible,
+  requiresBidirectionalSync,
   STRUCTURAL_YJS_CLIENT_ID,
+  SYNC_AUTHORITATIVE,
+  SYNC_COLLABORATIVE,
+  SYNC_EPHEMERAL,
 } from "./substrate.js"
 // Plain substrate — plain JS object store with version tracking
 export {
@@ -407,6 +409,15 @@ export {
   merge,
   version,
 } from "./sync.js"
+// Tree-position algebra — flat↔tree position mapping for editor bindings
+export type { ResolvedTreePosition } from "./tree-position.js"
+export {
+  contentSize,
+  flattenTreePosition,
+  isLeaf,
+  nodeSize,
+  resolveTreePosition,
+} from "./tree-position.js"
 export type { HasNativeAny } from "./unwrap.js"
 // Unwrap — typed escape hatch for accessing the native container backing a ref
 export { unwrap } from "./unwrap.js"

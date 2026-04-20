@@ -75,7 +75,7 @@ const relay = new Exchange({
     createWebsocketClient({ url: "ws://downstream:3001/ws" }),
   ],
   replicas: [loro.replica()],
-  onUnresolvedDoc: () => Replicate(),
+  resolve: () => Replicate(),
 })
 ```
 
@@ -87,7 +87,7 @@ const relay = new Exchange({
 const server = new Exchange({
   id: "game-server",
   transports: [serverTransport],
-  onUnresolvedDoc: (docId, peer) => {
+  resolve: (docId, peer) => {
     if (docId.startsWith("input:")) return Interpret(PlayerInputDoc)
     return Reject()
   },
@@ -173,15 +173,15 @@ const exchange = new Exchange({
 ### Add presence alongside your documents — same exchange
 
 ```ts
-const PresenceDoc = json.bind(Schema.struct({
+const PresenceDoc = ephemeral.bind(Schema.struct({
   cursor: Schema.struct({
     x: Schema.number(),
     y: Schema.number()
   }),
   name: Schema.string(),
-}), "ephemeral")
+}))
 
-// Same exchange, same transport connections, different sync strategy
+// Same exchange, same transport connections, different sync protocol
 const doc = exchange.get("shared-doc", TodoDoc)          // Loro CRDT, concurrent merge
 const presence = exchange.get("my-presence", PresenceDoc) // ephemeral broadcast
 ```
@@ -192,13 +192,13 @@ const presence = exchange.get("my-presence", PresenceDoc) // ephemeral broadcast
 const exchange = new Exchange({
   id: "server",
   transports: [serverTransport],
-  route: (docId, peer) => {  // ← new: outbound flow control
+  canShare: (docId, peer) => {  // ← new: outbound flow control
     if (docId.startsWith("input:")) return peer.peerId === docId.slice(6)
-    return true
+    return undefined
   },
-  authorize: (docId, peer) => {  // ← new: inbound flow control
+  canAccept: (docId, peer) => {  // ← new: inbound flow control
     if (docId === "game-state") return false  // only server writes
-    return true
+    return undefined
   },
 })
 ```
@@ -215,7 +215,7 @@ const relay = new Exchange({
     createWebsocketClient({ url: "ws://downstream:3001/ws" }),
   ],
   replicas: [loro.replica()],
-  onUnresolvedDoc: () => Replicate(),
+  resolve: () => Replicate(),
 })
 ```
 
@@ -231,10 +231,10 @@ A `BoundSchema` captures the three choices that define a document type:
 
 1. **Schema** — what shape is the data?
 2. **Factory** — how is the data stored and versioned?
-3. **Strategy** — how does the exchange sync it?
+3. **SyncProtocol** — how does the exchange sync it?
 
 ```ts
-import { Schema, json } from "@kyneta/schema"
+import { Schema, json, ephemeral } from "@kyneta/schema"
 import { loro } from "@kyneta/loro-schema"
 import { yjs } from "@kyneta/yjs-schema"
 
@@ -253,58 +253,63 @@ const NoteDoc = yjs.bind(Schema.struct({
 const ConfigDoc = json.bind(Schema.struct({ theme: Schema.string() }))
 
 // Ephemeral presence — ephemeral broadcast, only the latest value matters
-const PresenceDoc = json.bind(Schema.struct({
+const PresenceDoc = ephemeral.bind(Schema.struct({
   cursor: Schema.struct({ x: Schema.number(), y: Schema.number() }),
   name: Schema.string(),
-}), "ephemeral")
+}))
 ```
 
 BoundSchemas are static declarations, defined at module scope. They can be shared across multiple exchange instances — each exchange calls the factory builder independently, producing a fresh factory with the correct peer identity.
 
-For custom substrates, use `bind()` directly as the general primitive, and `createSubstrateNamespace` to build custom namespace objects:
+For custom substrates, use `bind()` directly as the general primitive, and `createBindingTarget` to build custom binding target objects:
 
 ```ts
-import { bind, createSubstrateNamespace } from "@kyneta/schema"
+import { bind, createBindingTarget, SYNC_COLLABORATIVE } from "@kyneta/schema"
 
-// bind() is the general primitive — explicit schema, factory builder, strategy
+// bind() is the general primitive — explicit schema, factory builder, syncProtocol
 const CustomDoc = bind({
   schema: Schema.struct({ data: Schema.string() }),
   factory: (ctx) => createMyFactory(ctx.peerId),
-  strategy: "concurrent",
+  syncProtocol: SYNC_COLLABORATIVE,
 })
 
-// createSubstrateNamespace builds a namespace object like json/loro/yjs
-const mySubstrate = createSubstrateNamespace({
+// createBindingTarget builds a binding target like json/ephemeral/loro/yjs
+const mySubstrate = createBindingTarget({
   factory: (ctx) => createMyFactory(ctx.peerId),
-  strategy: "concurrent",
+  replicaFactory: myReplicaFactory,
+  syncProtocol: {
+    writerModel: "concurrent",
+    delivery: "delta-capable",
+    durability: "persistent",
+  }
 })
 
 const AnotherDoc = mySubstrate.bind(Schema.struct({ data: Schema.string() }))
 const replica = mySubstrate.replica()
 ```
 
-### Three merge strategies, one protocol
+### Three sync protocols, one wire format
 
-Each BoundSchema declares a merge strategy that determines how the exchange syncs documents of that type. These are genuinely different sync algorithms, not transport optimizations:
+Each BoundSchema carries a `SyncProtocol` — a structured record with three orthogonal axes (`writerModel`, `delivery`, `durability`) — that determines how the exchange syncs documents of that type. These are genuinely different sync algorithms, not transport optimizations:
 
-| Strategy | Protocol | Version Order | Use Case |
-|----------|----------|---------------|----------|
-| `"concurrent"` | Bidirectional exchange | Partial (concurrent possible) | Loro / Yjs CRDTs |
-| `"sequential"` | Request/response | Total (no concurrency) | Plain substrates |
-| `"ephemeral"` | Unidirectional broadcast | Total (timestamp-based) | Ephemeral/presence |
+| SyncProtocol constant | Axes | Protocol | Version Order | Use Case |
+|-----------------------|------|----------|---------------|----------|
+| `SYNC_COLLABORATIVE` | concurrent + delta-capable + persistent | Bidirectional exchange | Partial (concurrent possible) | Loro / Yjs CRDTs |
+| `SYNC_AUTHORITATIVE` | serialized + delta-capable + persistent | Request/response | Total (no concurrency) | Plain substrates |
+| `SYNC_EPHEMERAL` | concurrent + snapshot-only + transient | Interest-based broadcast | Total (timestamp-based) | Ephemeral/presence |
 
 All three run over the same four-message sync protocol:
 
-- **`present`** — "I have these documents." Carries `docId`, `replicaType`, `mergeStrategy`, and `schemaHash` so the receiver can validate compatibility before any data exchange.
-- **`interest`** — "I want document X. Here's my version." Carries `reciprocate` for concurrent bidirectional exchange.
+- **`present`** — "I have these documents." Carries `docId`, `replicaType`, `syncProtocol`, and `schemaHash` so the receiver can validate compatibility before any data exchange.
+- **`interest`** — "I want document X. Here's my version." Carries `reciprocate` for collaborative bidirectional exchange.
 - **`offer`** — "Here is state for document X." Carries an opaque `SubstratePayload` — the exchange never inspects the bytes.
 - **`dismiss`** — "I'm leaving document X."
 
-Two additional messages (`establish-request`, `establish-response`) handle channel handshake. The merge strategy determines *when* and *how* these messages are sent, not their shape.
+Two additional messages (`establish-request`, `establish-response`) handle channel handshake. The sync protocol's field values determine *when* and *how* these messages are sent, not their shape.
 
 ### The exchange never inspects your data
 
-This is the architectural decision that makes substrate agnosticism real. The exchange dispatches on `MergeStrategy` to decide protocol behavior, but actual document payloads are opaque `SubstratePayload` values. The exchange moves bytes; the substrate interprets them. This means:
+This is the architectural decision that makes substrate agnosticism real. The exchange dispatches on `SyncProtocol` fields (`delivery`, `writerModel`) to decide protocol behavior, but actual document payloads are opaque `SubstratePayload` values. The exchange moves bytes; the substrate interprets them. This means:
 
 - A Loro document, a Yjs document, a plain JS object, and an ephemeral value all flow through the same protocol.
 - A relay can forward documents without knowing what CRDT library produced them.
@@ -317,11 +322,11 @@ When a peer announces a document, your exchange decides how to participate:
 | Disposition | What happens | Created by |
 |-------------|-------------|------------|
 | **Interpret** | Full schema-driven interpretation — `Ref<S>`, changefeed, reads, writes | `exchange.get(docId, bound)` |
-| **Replicate** | Headless replication — version tracking, export/import, no schema | `exchange.replicate(docId)` or `onUnresolvedDoc: () => Replicate()` |
-| **Defer** | Track for routing but don't replicate yet — promotable later | `onUnresolvedDoc: () => Defer()` |
-| **Reject** | Refuse to track the document at all | `onUnresolvedDoc: () => Reject()` |
+| **Replicate** | Headless replication — version tracking, export/import, no schema | `exchange.replicate(docId)` or `resolve: () => Replicate()` |
+| **Defer** | Track for routing but don't replicate yet — promotable later | `resolve: () => Defer()` |
+| **Reject** | Refuse to track the document at all | `resolve: () => Reject()` |
 
-The two-tiered default (when no `onUnresolvedDoc` callback matches): documents whose replica type is supported get **deferred** (promotable via a later `exchange.get()` or `registerSchema()`), while documents with unsupported replica types are silently **rejected**.
+The two-tiered default (when no `resolve` callback matches): documents whose replica type is supported get **deferred** (promotable via a later `exchange.get()` or `registerSchema()`), while documents with unsupported replica types are silently **rejected**.
 
 ---
 
@@ -336,15 +341,13 @@ const exchange = new Exchange({
   id: { peerId: "alice", name: "Alice", type: "user" },
   transports: [networkTransport],
   stores: [createInMemoryStore()],
-  route: (docId, peer) => {
-    // Outbound flow control — which peers see which documents
+  canShare: (docId, peer) => {
     if (docId.startsWith("input:")) return peer.peerId === docId.slice(6)
-    return true
+    return undefined
   },
-  authorize: (docId, peer) => {
-    // Inbound flow control — whose mutations are accepted
+  canAccept: (docId, peer) => {
     if (docId === "game-state") return false
-    return true
+    return undefined
   },
 })
 ```
@@ -361,19 +364,23 @@ const config = exchange.get("settings", ConfigDoc)     // Plain JSON, sequential
 const presence = exchange.get("presence", PresenceDoc) // ephemeral broadcast
 ```
 
-Each document's substrate and sync strategy are determined by its BoundSchema. No configuration needed at the exchange level.
+Each document's substrate and sync protocol are determined by its BoundSchema. No configuration needed at the exchange level.
 
-### Route and Authorize
+### Governance Predicates
 
-Two predicates control information flow:
+Four predicates control information flow. All use three-valued logic (`true` / `false` / `undefined`) for composable policy stacking — `false` short-circuits, `undefined` defers to other policies, and the default when all policies abstain is `true`.
 
-- **`route(docId, peer) → boolean`** — Outbound. Which peers participate in the sync graph for each document. Checked at every outbound gate: present, push, relay. Also gates `onUnresolvedDoc` — if route returns `false` for the announcing peer, the callback never fires. Default: `() => true`.
+- **`canShare(docId, peer) → boolean | undefined`** — Outbound. Gates every outbound message: present, push, relay. Also gates `resolve` — if `canShare` returns `false` for the announcing peer, the callback never fires.
 
-- **`authorize(docId, peer) → boolean`** — Inbound. Whose mutations are accepted. Checked before importing offers. When rejected, the offer is silently dropped. Default: `() => true`.
+- **`canAccept(docId, peer) → boolean | undefined`** — Inbound. Gates offer imports. When rejected, the offer is silently dropped.
+
+- **`canReset(docId, peer) → boolean | undefined`** — Epoch boundary. Fires when a peer sends an entirety payload for a document that already has local state — meaning the remote peer has compacted history past our known version. Accepting discards local state and adopts the entirety; rejecting keeps local state and diverges from compacted peers.
+
+- **`canConnect(peer) → boolean | undefined`** — Connection. Gates the `establish` handshake. When rejected, the peer's channel is ignored entirely — no documents are exchanged. Unlike the other predicates, this takes only a peer (no docId).
 
 ### Dynamic Document Creation
 
-**`onUnresolvedDoc`** fires when a peer announces a document your exchange doesn't know about. Return a disposition:
+**`resolve`** fires when a peer announces a document your exchange doesn't know about. Return a disposition:
 
 ```ts
 import { Interpret, Replicate, Defer, Reject } from "@kyneta/schema"
@@ -381,7 +388,7 @@ import { Interpret, Replicate, Defer, Reject } from "@kyneta/schema"
 const gameExchange = new Exchange({
   id: "game-server",
   transports: [serverTransport],
-  onUnresolvedDoc: (docId, peer, replicaType, mergeStrategy, schemaHash) => {
+  resolve: (docId, peer, replicaType, syncProtocol, schemaHash) => {
     if (docId.startsWith("input:")) return Interpret(PlayerInputDoc)
     if (docId.startsWith("ephemeral:")) return Defer()
     return Reject()
@@ -400,7 +407,7 @@ const exchange = new Exchange({
 })
 ```
 
-**`onDocCreated`** fires for every document creation — local `get()`, remote auto-resolve, `onUnresolvedDoc`, or deferred promotion:
+**`onDocCreated`** fires for every document creation — local `get()`, remote auto-resolve, `resolve`, or deferred promotion:
 
 ```ts
 const exchange = new Exchange({
@@ -415,7 +422,7 @@ const exchange = new Exchange({
 })
 ```
 
-Use `onUnresolvedDoc` to decide **what to do**. Use `onDocCreated` to observe **what happened**.
+Use `resolve` to decide **what to do**. Use `onDocCreated` to observe **what happened**.
 
 ### Storage
 
@@ -450,7 +457,7 @@ await exchange1.shutdown()
 const exchange2 = new Exchange({
   id: "server",
   stores: [createInMemoryStore({ sharedData })],
-  onUnresolvedDoc: () => Interpret(TodoDoc),
+  resolve: () => Interpret(TodoDoc),
 })
 // "my-doc" is restored from storage automatically
 ```
@@ -519,7 +526,7 @@ loroDoc.toJSON()
 |-------|----------------|--------------|
 | **Trivial** | `exchange.get("doc", MyDoc)` | Typed, syncable, observable document |
 | **Standard** | Add `transports`, `stores` | Network sync + persistence |
-| **Intermediate** | Add `route`, `authorize`, `onUnresolvedDoc` | Information flow control, dynamic doc creation |
+| **Intermediate** | Add `canShare`, `canAccept`, `resolve` | Information flow control, dynamic doc creation |
 | **Advanced** | `register()` scopes, `Line`, custom transports | Composable rules, reliable messaging, custom protocols |
 | **Expert** | Custom `Substrate<V>` implementation | New CRDT runtimes, new state models |
 
@@ -535,7 +542,7 @@ You only engage the next level when you need it. Each level is additive — it d
 |----------------|-------------|
 | `get(docId, boundSchema)` | Get or create a document in interpret mode. Returns `Ref<S>`. Auto-registers the schema in the capabilities registry. |
 | `replicate(docId)` | Promote a deferred document — factory resolved from the capabilities registry. |
-| `replicate(docId, replicaFactory, strategy, schemaHash)` | Register a document for headless replication with explicit arguments. |
+| `replicate(docId, replicaFactory, syncProtocol, schemaHash)` | Register a document for headless replication with explicit arguments. |
 | `has(docId)` | Check if a document exists (interpret or replicate mode). |
 | `deferred` | `ReadonlySet<DocId>` — deferred document IDs. Participate in routing but have no local representation. |
 | `dismiss(docId)` | Leave the sync graph — removes locally, broadcasts `dismiss`, deletes from stores. |
@@ -559,11 +566,12 @@ You only engage the next level when you need it. Each level is additive — it d
 | `stores` | `Store[]` — persistent storage backends. |
 | `schemas` | `BoundSchema[]` — upfront schema registration for auto-resolution. |
 | `replicas` | `BoundReplica[]` — replication modes for headless participation. E.g. `[loro.replica()]`. |
-| `route` | `(docId, peer) → boolean` — outbound flow control. Default: `() => true`. |
-| `authorize` | `(docId, peer) → boolean` — inbound flow control. Default: `() => true`. |
-| `onUnresolvedDoc` | `(docId, peer, replicaType, mergeStrategy, schemaHash) → Disposition` — policy gate for unknown docs. |
-| `onDocCreated` | `(docId, peer, mode, origin) → void` — lifecycle notification for every doc creation. |
-| `onDocDismissed` | `(docId, peer) → void` — react to peer leaving a document. |
+| `canShare` | `(docId, peer) → boolean \| undefined` — outbound flow control. Default: allow. |
+| `canAccept` | `(docId, peer) → boolean \| undefined` — inbound flow control. Default: allow. |
+| `canReset` | `(docId, peer) → boolean \| undefined` — epoch boundary policy. Default: allow. |
+| `canConnect` | `(peer) → boolean \| undefined` — connection-level gate. Default: allow. |
+| `resolve` | `(docId, peer, replicaType, syncProtocol, schemaHash) → Disposition` — policy gate for unknown docs. |
+| `departureTimeout` | `number` — ms before a disconnected peer is declared departed. Default: `30_000`. |
 
 ### sync()
 
@@ -579,23 +587,27 @@ You only engage the next level when you need it. Each level is additive — it d
 
 | Function | Package | Description |
 |----------|---------|-------------|
-| `bind({ schema, factory, strategy })` | `@kyneta/schema` | General primitive — explicit schema, factory builder, strategy. |
-| `json.bind(schema)` | `@kyneta/schema` | Plain substrate + sequential strategy. |
-| `json.bind(schema, "ephemeral")` | `@kyneta/schema` | Plain substrate + ephemeral broadcast strategy. Ideal for presence. |
-| `loro.bind(schema)` | `@kyneta/loro-schema` | Loro substrate + concurrent strategy. |
-| `yjs.bind(schema)` | `@kyneta/yjs-schema` | Yjs substrate + concurrent strategy. |
+| `bind({ schema, factory, syncProtocol })` | `@kyneta/schema` | General primitive — explicit schema, factory builder, sync protocol. |
+| `json.bind(schema)` | `@kyneta/schema` | Plain substrate + authoritative protocol (`SYNC_AUTHORITATIVE`). |
+| `ephemeral.bind(schema)` | `@kyneta/schema` | Plain substrate + ephemeral broadcast protocol (`SYNC_EPHEMERAL`). Ideal for presence. |
+| `loro.bind(schema)` | `@kyneta/loro-schema` | Loro substrate + collaborative protocol (`SYNC_COLLABORATIVE`). |
+| `yjs.bind(schema)` | `@kyneta/yjs-schema` | Yjs substrate + collaborative protocol (`SYNC_COLLABORATIVE`). |
 
-### Namespace Objects
+### Binding Targets
 
-| Function | Package | Description |
-|----------|---------|-------------|
-| `json.bind(schema, strategy?)` | `@kyneta/schema` | Bind a plain substrate. Optional strategy override (`"ephemeral"`). |
-| `json.replica()` | `@kyneta/schema` | Create a plain replica for headless replication. |
-| `loro.bind(schema)` | `@kyneta/loro-schema` | Bind a Loro substrate with concurrent strategy. |
-| `loro.replica()` | `@kyneta/loro-schema` | Create a Loro replica for headless replication. |
-| `yjs.bind(schema)` | `@kyneta/yjs-schema` | Bind a Yjs substrate with concurrent strategy. |
-| `yjs.replica()` | `@kyneta/yjs-schema` | Create a Yjs replica for headless replication. |
-| `createSubstrateNamespace(opts)` | `@kyneta/schema` | Build a custom namespace object with `.bind()`, `.replica()`, `.unwrap()`. |
+Each binding target is a fixed `(substrate, sync-protocol, supported-laws)` bundle. No strategy parameter — each target has exactly one sync protocol.
+
+| Target | Package | `syncProtocol` | Description |
+|--------|---------|----------------|-------------|
+| `json.bind(schema)` | `@kyneta/schema` | `SYNC_AUTHORITATIVE` | Plain substrate, sequential sync. |
+| `json.replica()` | `@kyneta/schema` | `SYNC_AUTHORITATIVE` | Plain replica for headless replication. |
+| `ephemeral.bind(schema)` | `@kyneta/schema` | `SYNC_EPHEMERAL` | Plain substrate, ephemeral broadcast. |
+| `ephemeral.replica()` | `@kyneta/schema` | `SYNC_EPHEMERAL` | LWW replica for headless replication. |
+| `loro.bind(schema)` | `@kyneta/loro-schema` | `SYNC_COLLABORATIVE` | Loro substrate, collaborative CRDT sync. |
+| `loro.replica()` | `@kyneta/loro-schema` | `SYNC_COLLABORATIVE` | Loro replica for headless replication. |
+| `yjs.bind(schema)` | `@kyneta/yjs-schema` | `SYNC_COLLABORATIVE` | Yjs substrate, collaborative CRDT sync. |
+| `yjs.replica()` | `@kyneta/yjs-schema` | `SYNC_COLLABORATIVE` | Yjs replica for headless replication. |
+| `createBindingTarget(opts)` | `@kyneta/schema` | (custom) | Build a custom binding target with `.bind()`, `.replica()`. |
 
 ### Disposition Constructors
 

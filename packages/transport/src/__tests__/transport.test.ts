@@ -1,5 +1,6 @@
 // Transport and BridgeTransport — unit tests for the transport/channel infrastructure.
 
+import { SYNC_AUTHORITATIVE } from "@kyneta/schema"
 import { describe, expect, it, vi } from "vitest"
 import { Bridge, BridgeTransport } from "../bridge.js"
 import type { GeneratedChannel } from "../channel.js"
@@ -204,7 +205,7 @@ describe("BridgeTransport", () => {
           docId: "test-doc",
           schemaHash: "00test",
           replicaType: ["plain", 1, 0] as const,
-          mergeStrategy: "authoritative" as const,
+          syncProtocol: SYNC_AUTHORITATIVE,
         },
       ],
     }

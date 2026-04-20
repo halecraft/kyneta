@@ -11,6 +11,7 @@
 import { loro } from "@kyneta/loro-schema"
 import {
   change,
+  ephemeral,
   Interpret,
   json,
   PlainVersion,
@@ -77,7 +78,7 @@ const presenceSchema = Schema.struct({
   name: Schema.string(),
   x: Schema.number(),
 })
-const PresenceDoc = json.bind(presenceSchema, "ephemeral")
+const PresenceDoc = ephemeral.bind(presenceSchema)
 
 const sequentialSchema = Schema.struct({
   title: Schema.string(),

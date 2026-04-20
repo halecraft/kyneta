@@ -1,13 +1,14 @@
-// bind-constraints — compile-time and runtime tests for yjs.bind() caps enforcement.
+// bind-constraints — compile-time and runtime tests for yjs.bind() laws enforcement.
 //
-// Verifies that `yjs.bind()` rejects schemas containing capabilities
-// that Yjs doesn't support (counter, movable, tree, set) at COMPILE TIME
-// via the `RestrictCaps` / `AllowedCaps` mechanism, while accepting
-// capabilities it does support (text) and plain schemas.
+// Verifies that `yjs.bind()` rejects schemas containing composition laws
+// that Yjs doesn't support (additive, positional-ot-move, tree-move,
+// add-wins-per-key) at COMPILE TIME via the `RestrictLaws` / `AllowedLaws`
+// mechanism, while accepting laws it does support (lww, lww-per-key,
+// positional-ot, lww-tag-replaced) and plain schemas.
 
 import {
   type BoundSchema,
-  type ExtractCaps,
+  type ExtractLaws,
   json,
   Schema,
 } from "@kyneta/schema"
@@ -105,36 +106,36 @@ describe("yjs.bind() accepts Yjs-compatible schemas", () => {
 // §2 — Compile-time rejection: schemas that yjs.bind() SHOULD reject
 // ===========================================================================
 
-describe("yjs.bind() rejects schemas with unsupported caps", () => {
-  it("rejects counter", () => {
+describe("yjs.bind() rejects schemas with unsupported composition laws", () => {
+  it("rejects counter (additive not in YjsLaws)", () => {
     const schema = Schema.struct({
       count: Schema.counter(),
     })
-    // @ts-expect-error — counter is not in YjsCaps
+    // @ts-expect-error — "additive" is not in YjsLaws
     yjs.bind(schema)
   })
 
-  it("rejects movableList", () => {
+  it("rejects movableList (positional-ot-move not in YjsLaws)", () => {
     const schema = Schema.struct({
       items: Schema.movableList(Schema.string()),
     })
-    // @ts-expect-error — movable is not in YjsCaps
+    // @ts-expect-error — "positional-ot-move" is not in YjsLaws
     yjs.bind(schema)
   })
 
-  it("rejects tree", () => {
+  it("rejects tree (tree-move not in YjsLaws)", () => {
     const schema = Schema.struct({
       hierarchy: Schema.tree(Schema.struct({ label: Schema.string() })),
     })
-    // @ts-expect-error — tree is not in YjsCaps
+    // @ts-expect-error — "tree-move" is not in YjsLaws
     yjs.bind(schema)
   })
 
-  it("rejects set", () => {
+  it("rejects set (add-wins-per-key not in YjsLaws)", () => {
     const schema = Schema.struct({
       tags: Schema.set(Schema.string()),
     })
-    // @ts-expect-error — set is not in YjsCaps
+    // @ts-expect-error — "add-wins-per-key" is not in YjsLaws
     yjs.bind(schema)
   })
 
@@ -146,7 +147,7 @@ describe("yjs.bind() rejects schemas with unsupported caps", () => {
         }),
       ),
     })
-    // @ts-expect-error — counter is deeply nested but still caught
+    // @ts-expect-error — "additive" is deeply nested but still caught
     yjs.bind(schema)
   })
 
@@ -155,7 +156,7 @@ describe("yjs.bind() rejects schemas with unsupported caps", () => {
       title: Schema.text(),
       views: Schema.counter(),
     })
-    // @ts-expect-error — counter is not in YjsCaps
+    // @ts-expect-error — "additive" is not in YjsLaws
     yjs.bind(schema)
   })
 
@@ -163,7 +164,7 @@ describe("yjs.bind() rejects schemas with unsupported caps", () => {
     const schema = Schema.struct({
       scores: Schema.list(Schema.struct({ value: Schema.counter() })),
     })
-    // @ts-expect-error — counter nested inside list struct
+    // @ts-expect-error — "additive" nested inside list struct
     yjs.bind(schema)
   })
 })
@@ -191,16 +192,24 @@ describe("cross-substrate: universal schema vs substrate-specific schema", () =>
     tasks: Schema.movableList(Schema.struct({ name: Schema.string() })),
   })
 
-  it("universal schema is Yjs-compatible (ExtractCaps check)", () => {
-    type Caps = ExtractCaps<typeof universalSchema>
-    // Only "text" — in YjsCaps
-    expectTypeOf<Caps>().toEqualTypeOf<"text">()
+  it("universal schema is Yjs-compatible (ExtractLaws check)", () => {
+    type Laws = ExtractLaws<typeof universalSchema>
+    // lww-per-key (struct), positional-ot (text, list), lww (scalars) — all in YjsLaws
+    expectTypeOf<Laws>().toEqualTypeOf<
+      "lww-per-key" | "positional-ot" | "lww"
+    >()
   })
 
-  it("Loro-specific schema is NOT Yjs-compatible (ExtractCaps check)", () => {
-    type Caps = ExtractCaps<typeof loroSpecificSchema>
-    // Includes "counter" and "movable" which are NOT in YjsCaps
-    expectTypeOf<Caps>().toEqualTypeOf<"text" | "counter" | "movable">()
+  it("Loro-specific schema is NOT Yjs-compatible (ExtractLaws check)", () => {
+    type Laws = ExtractLaws<typeof loroSpecificSchema>
+    // Includes "additive" and "positional-ot-move" which are NOT in YjsLaws
+    expectTypeOf<Laws>().toEqualTypeOf<
+      | "lww-per-key"
+      | "positional-ot"
+      | "additive"
+      | "positional-ot-move"
+      | "lww"
+    >()
   })
 
   it("universal schema binds to yjs", () => {
@@ -210,11 +219,11 @@ describe("cross-substrate: universal schema vs substrate-specific schema", () =>
   })
 
   it("Loro-specific schema is rejected by yjs.bind()", () => {
-    // @ts-expect-error — counter and movable not in YjsCaps
+    // @ts-expect-error — "additive" and "positional-ot-move" not in YjsLaws
     yjs.bind(loroSpecificSchema)
   })
 
-  it("json.bind() accepts schemas with all caps (AllowedCaps = string)", () => {
+  it("json.bind() accepts schemas with all laws (AllowedLaws = string)", () => {
     const schema = Schema.struct({
       title: Schema.text(),
       count: Schema.counter(),
@@ -262,7 +271,7 @@ describe("bind constraint edge cases", () => {
       ]),
       hits: Schema.counter(),
     })
-    // @ts-expect-error — counter taints the whole schema
+    // @ts-expect-error — "additive" taints the whole schema
     yjs.bind(schema)
   })
 
@@ -276,7 +285,7 @@ describe("bind constraint edge cases", () => {
     expect(bound).toBeDefined()
   })
 
-  it("plain-only schema (no caps at all) is accepted", () => {
+  it("plain-only schema (no laws at all) is accepted", () => {
     const schema = Schema.struct({
       name: Schema.string(),
       age: Schema.number(),

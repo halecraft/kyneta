@@ -4,8 +4,8 @@
 > **Role**: The schema interpreter algebra — one recursive grammar for document structure, a reactive observation surface (`[CHANGEFEED]` on every ref, with tree-level composed changefeeds for composites), a substrate boundary that separates state management from replication, a migration system that derives stable identity from structure, and a position algebra for cursor-stable text and sequences.
 > **Depends on**: `@kyneta/changefeed`
 > **Depended on by**: `@kyneta/exchange`, `@kyneta/loro-schema`, `@kyneta/yjs-schema`, `@kyneta/index`, `@kyneta/react`, `@kyneta/compiler`, `@kyneta/cast`, `@kyneta/transport`
-> **Canonical symbols**: `Schema`, `Schema.*` constructors, `KIND`, `CAPS`, `bind`, `BoundSchema`, `BoundReplica`, `Interpret`, `Replicate`, `Defer`, `Reject`, `interpret`, `Interpreter`, `InterpreterLayer`, `createDoc`, `createRef`, `change`, `applyChanges`, `subscribe`, `subscribeNode`, `Substrate`, `SubstrateFactory`, `Replica`, `ReplicaFactory`, `SubstratePayload`, `Version`, `MergeStrategy`, `computeSchemaHash`, `BACKING_DOC`, `Op`, `ComposedChangefeedProtocol`, `Change`, `ChangeBase`, `TextChange`, `SequenceChange`, `MapChange`, `TreeChange`, `ReplaceChange`, `IncrementChange`, `transformIndex`, `textInstructionsToPatches`, `Migration`, `MIGRATION_CHAIN`, `deriveIdentity`, `deriveManifest`, `deriveSchemaBinding`, `deriveTier`, `validateChain`, `Position`, `POSITION`, `PlainPosition`, `hasPosition`, `decodePlainPosition`, `Side`, `NATIVE`, `SUBSTRATE`, `NativeMap`, `unwrap`, `versionVectorMeet`, `versionVectorCompare`, `Zero`, `validate`, `tryValidate`, `SchemaValidationError`
-> **Key invariant(s)**: The schema grammar is one recursive type with ten node kinds; substrates declare *closed* capability sets via phantom `[CAPS]` brands; `bind()` enforces capability compatibility at compile time. No runtime capability dispatch; no open-world subtyping; no hidden backend coupling.
+> **Canonical symbols**: `Schema`, `Schema.*` constructors, `KIND`, `LAWS`, `bind`, `BoundSchema`, `BoundReplica`, `BindingTarget`, `createBindingTarget`, `json`, `ephemeral`, `Interpret`, `Replicate`, `Defer`, `Reject`, `interpret`, `Interpreter`, `InterpreterLayer`, `createDoc`, `createRef`, `change`, `applyChanges`, `subscribe`, `subscribeNode`, `Substrate`, `SubstrateFactory`, `Replica`, `ReplicaFactory`, `SubstratePayload`, `Version`, `SyncProtocol`, `SYNC_AUTHORITATIVE`, `SYNC_COLLABORATIVE`, `SYNC_EPHEMERAL`, `requiresBidirectionalSync`, `computeSchemaHash`, `BACKING_DOC`, `Op`, `ComposedChangefeedProtocol`, `Change`, `ChangeBase`, `TextChange`, `SequenceChange`, `MapChange`, `TreeChange`, `ReplaceChange`, `IncrementChange`, `RichTextChange`, `transformIndex`, `textInstructionsToPatches`, `Migration`, `MIGRATION_CHAIN`, `deriveIdentity`, `deriveManifest`, `deriveSchemaBinding`, `deriveTier`, `validateChain`, `Position`, `POSITION`, `PlainPosition`, `hasPosition`, `decodePlainPosition`, `Side`, `NATIVE`, `SUBSTRATE`, `NativeMap`, `unwrap`, `versionVectorMeet`, `versionVectorCompare`, `Zero`, `validate`, `tryValidate`, `SchemaValidationError`
+> **Key invariant(s)**: The schema grammar is one recursive type with eleven node kinds; substrates declare *closed* composition-law sets via phantom `[LAWS]` brands; `bind()` enforces law compatibility at compile time. Four named binding targets (`json`, `ephemeral`, `loro`, `yjs`) each bundle a substrate factory, a `SyncProtocol`, and a set of allowed laws. No runtime law dispatch; no open-world subtyping; no hidden backend coupling.
 
 The algebraic core of every document in Kyneta. You write a schema once — a tree of structural composites and CRDT leaves — and hand it to a substrate (plain JS, Loro, Yjs). The substrate stores state; the interpreter stack gives you a typed, navigable, writable reference (`Ref<S>`) over that state, with reactive observation baked in — every ref carries a `[CHANGEFEED]`, and composite refs expose a tree-level composed changefeed that emits one `Changeset<Op>` per transaction covering all descendants. Migration primitives derive a content-addressed identity from the schema tree so that documents can evolve across schema versions without losing peer-to-peer identity.
 
@@ -30,15 +30,16 @@ Imported by every other Kyneta package that touches documents: the CRDT backends
 
 | Term | Means | Not to be confused with |
 |------|-------|-------------------------|
-| `Schema` | The recursive union type `ScalarSchema \| ProductSchema \| SequenceSchema \| MapSchema \| SumSchema \| TextSchema \| CounterSchema \| SetSchema \| TreeSchema \| MovableSequenceSchema`. Every node carries `[KIND]` and `[CAPS]` phantom brands. | A JSON Schema, a TypeScript type, a Zod schema — this is an interpreter *grammar*, not a validator |
-| `Schema.*` constructors | `Schema.struct`, `Schema.list`, `Schema.record`, `Schema.string`, `Schema.number`, `Schema.boolean`, `Schema.nullable`, `Schema.union`, `Schema.discriminatedUnion`, `Schema.text`, `Schema.counter`, `Schema.set`, `Schema.tree`, `Schema.movableList`, plus low-level `Schema.scalar`, `Schema.product`, `Schema.sequence`, `Schema.map`, `Schema.sum`. | Any per-backend namespace — the `Schema.*` constructors are backend-agnostic |
+| `Schema` | The recursive union type `ScalarSchema \| ProductSchema \| SequenceSchema \| MapSchema \| SumSchema \| TextSchema \| CounterSchema \| SetSchema \| TreeSchema \| MovableSequenceSchema \| RichTextSchema`. Every node carries `[KIND]` and `[LAWS]` phantom brands. | A JSON Schema, a TypeScript type, a Zod schema — this is an interpreter *grammar*, not a validator |
+| `Schema.*` constructors | `Schema.struct`, `Schema.list`, `Schema.record`, `Schema.string`, `Schema.number`, `Schema.boolean`, `Schema.union`, `Schema.discriminatedUnion`, `Schema.text`, `Schema.counter`, `Schema.set`, `Schema.tree`, `Schema.movableList`, `Schema.richText`, plus low-level `Schema.scalar`, `Schema.product`, `Schema.sequence`, `Schema.map`, `Schema.sum`. Fluent `.nullable()` is available on all plain schema types. | Any per-backend namespace — the `Schema.*` constructors are backend-agnostic |
 | `[KIND]` | `Symbol("kyneta:kind")` — runtime discriminant on every schema node. Narrows in TypeScript via structural matching. | A string tag, a class `instanceof` check |
-| `[CAPS]` | `Symbol("kyneta:caps")` — phantom type-level capability accumulator. Never populated at runtime. | A capability flag on the runtime object |
-| `PlainSchema` | The subset of `Schema` that excludes all CRDT kinds (`text`, `counter`, `set`, `tree`, `movable`). Used where a plain-JSON substrate is the only option (inside `.json()`, sum variants). | `Schema` — `PlainSchema ⊂ Schema` |
+| `[LAWS]` | `Symbol("kyneta:laws")` — phantom type-level composition-law accumulator. Never populated at runtime. Tags are algebraic properties of the merge semantics: `"lww"`, `"additive"`, `"positional-ot"`, `"positional-ot-move"`, `"tree-move"`, `"lww-per-key"`, `"lww-tag-replaced"`, `"add-wins-per-key"`. | A capability flag on the runtime object |
+| `PlainSchema` | The subset of `Schema` that excludes all CRDT kinds (`text`, `counter`, `set`, `tree`, `movable`, `richtext`). Used where a plain-JSON substrate is the only option (inside `.json()`, sum variants). | `Schema` — `PlainSchema ⊂ Schema` |
 | `Substrate<V>` | State-management + transfer interface: `version()`, `exportEntirety()`, `exportSince(since?)`, `merge(payload, origin?)`, `context()`, plus `reader()`, `writable()`, `prepare()`. `V` is the substrate's version type (Lamport vector, Loro version, wall clock, …). | A database, a backend — this is an *interface* the backends implement |
 | `Replica<V>` | The replication surface *alone* — `version`, `exportEntirety`, `exportSince`, `merge`. No schema knowledge. | `Substrate<V>`, which adds `reader`, `writable`, `prepare`, and schema awareness |
 | `ReplicaFactory<V>` / `SubstrateFactory<V>` | Constructors for replicas / substrates. Every `SubstrateFactory` exposes a `replica` accessor yielding a `ReplicaFactory`. | A runtime singleton — factories are reusable and stateless |
-| `BoundSchema<S>` | The triple `(schema, factoryBuilder, mergeStrategy)` captured at module scope via `bind()`. The static declaration of a document type. | A runtime instance — `BoundSchema` is a value describing *how* to make one |
+| `BindingTarget<AllowedLaws, N>` | A fixed `(substrate factory, sync protocol, allowed laws)` bundle. Named targets: `json` (authoritative, all laws), `ephemeral` (LWW-family only), `loro` (CRDT laws), `yjs` (Yjs-supported laws). Each exposes `.bind(schema)` → `BoundSchema` and `.replica()` → `BoundReplica`. | `SubstrateFactory` — the target *wraps* a factory; it is not one |
+| `BoundSchema<S>` | The triple `(schema, factory, syncProtocol)` captured at module scope via `target.bind(schema)`. The static declaration of a document type. | A runtime instance — `BoundSchema` is a value describing *how* to make one |
 | `BoundReplica<V>` | `BoundSchema` minus the schema — used by replication conduits that persist state without reading it. | `BoundSchema` |
 | `Interpret` / `Replicate` / `Defer` / `Reject` | The four variants of an exchange `resolve` callback outcome. Return values from application-level logic that decides how to handle an unknown doc. | Handlers, error types — these are discriminated-union constructors |
 | `Interpreter<Ctx, A>` | The F-algebra: one method per `[KIND]` value, collapsing a schema tree into a value of type `A`. | A parser, a visitor, a validator alone |
@@ -46,7 +47,8 @@ Imported by every other Kyneta package that touches documents: the CRDT backends
 | `Ref<S>` | The developer-facing handle: callable, navigable, readable, writable, observable. The result of `interpret(schema, ctx)...done()`. | A React ref, a DOM ref — this is a substrate-backed document reference |
 | `Change` | The universal currency of change — discriminated union with `type` (`"text" \| "sequence" \| "map" \| "tree" \| "replace" \| "increment"` and extensible). Flows both inbound (intent) and outbound (notification). | A diff, a patch — `Change` is applied atomically by the substrate |
 | `SubstratePayload` | `{ kind: "entirety" \| "since", encoding: "json" \| "binary", data: string \| Uint8Array }` — opaque state carrier. Produced by the substrate, carried by the exchange. | A `ChannelMsg` — payloads ride *inside* `offer` messages |
-| `MergeStrategy` | `"collaborative" \| "authoritative" \| "ephemeral"` — tells the exchange how to drive sync on behalf of the substrate. | A CRDT algorithm — the strategy picks the *protocol shape*, not the merge function |
+
+| `SyncProtocol` | Structured record decomposing sync semantics into three orthogonal axes: `WriterModel` (`"serialized"` / `"concurrent"`), `Delivery` (`"delta-capable"` / `"snapshot-only"`), `Durability` (`"persistent"` / `"transient"`). Three constants: `SYNC_AUTHORITATIVE`, `SYNC_COLLABORATIVE`, `SYNC_EPHEMERAL`. `requiresBidirectionalSync(protocol)` is the helper predicate. | A string enum, a CRDT algorithm |
 | `NativeMap<S>` | Type-level functor mapping each schema kind to its substrate-native type (e.g. Loro's `LoroText`, Yjs's `Y.Text`, plain JS `string`). | A runtime `Map<K,V>` |
 | `NATIVE` / `SUBSTRATE` / `BACKING_DOC` | Symbol-keyed accessors for the underlying native container, the substrate instance, and the backing document object. | User-facing APIs — these are escape hatches |
 | `Position` | Substrate-mediated stable reference to a location within text or a sequence. Survives concurrent edits. | A numeric index, a character position |
@@ -60,14 +62,14 @@ Imported by every other Kyneta package that touches documents: the CRDT backends
 
 ## Architecture
 
-**Thesis**: one recursive grammar for structure, one capability phantom for compile-time safety, one substrate interface for state, one interpreter algebra for capabilities, one change vocabulary for updates. Everything else — backends, transports, reactive bindings, compilers — lives above this surface.
+**Thesis**: one recursive grammar for structure, one composition-law phantom for compile-time safety, one substrate interface for state, one interpreter algebra for capabilities, one change vocabulary for updates. Everything else — backends, transports, reactive bindings, compilers — lives above this surface.
 
 Five orthogonal sub-systems:
 
 | Sub-system | Source file | Role |
 |-----------|-------------|------|
 | Grammar | `src/schema.ts` | The recursive `Schema` type and its constructors. |
-| Binding | `src/bind.ts` | `BoundSchema`, `bind()`, capability enforcement. |
+| Binding | `src/bind.ts` | `BoundSchema`, `BindingTarget`, `createBindingTarget`, `json`, `ephemeral`, `bind()`, law enforcement. |
 | Interpretation | `src/interpret.ts`, `src/interpreters/*`, `src/layers.ts`, `src/ref.ts` | The six-layer interpreter stack. |
 | Substrate | `src/substrate.ts`, `src/substrates/*` | The state / replication interface. |
 | Migration | `src/migration.ts`, `src/hash.ts` | Identity derivation and schema evolution. |
@@ -90,7 +92,7 @@ Plus three cross-cutting facilities:
 - **Not a database.** It is an interface. Plain JS objects, Loro CRDTs, and Yjs docs all satisfy it.
 - **Not a backend in the framework sense.** No framework choices leak through the substrate boundary — there is no "Loro mode" that propagates upward. The interpreter stack treats every substrate identically.
 - **Not responsible for sync.** The substrate produces and consumes `SubstratePayload`. The exchange owns *when* and *to whom* to send it.
-- **Not symmetric across merge strategies.** A `"collaborative"` substrate (Loro, Yjs) has concurrent versions; an `"authoritative"` substrate (plain) has a total order; an `"ephemeral"` substrate has wall-clock-timestamped overwrite. The `MergeStrategy` tells the exchange which protocol shape to run.
+- **Not symmetric across sync protocols.** A collaborative substrate (Loro, Yjs) has concurrent versions (`SYNC_COLLABORATIVE`); an authoritative substrate (json) has a total order (`SYNC_AUTHORITATIVE`); an ephemeral substrate has wall-clock-timestamped overwrite (`SYNC_EPHEMERAL`). The `SyncProtocol` — decomposed into `WriterModel`, `Delivery`, and `Durability` axes — tells the exchange which protocol shape to run. `requiresBidirectionalSync(protocol)` is the predicate the exchange uses to decide whether to establish a bidirectional causal exchange or a unidirectional push.
 
 ---
 
@@ -114,18 +116,18 @@ Source: `packages/schema/src/schema.ts`. The recursive type `Schema` has eleven 
 
 Five structural kinds describe composition. Six CRDT kinds are first-class leaves or composites that carry merge semantics.
 
-`Schema.*` also exposes ergonomic aliases: `Schema.struct(fields)` = `product`, `Schema.list(item)` = `sequence`, `Schema.record(item)` = `map`, `Schema.string()` / `Schema.number()` / `Schema.boolean()` wrap `scalar`, `Schema.nullable(inner)` wraps as a two-variant nullable sum, `Schema.union` / `Schema.discriminatedUnion` wrap `sum`. See `src/schema.ts` for the full list.
+`Schema.*` also exposes ergonomic aliases: `Schema.struct(fields)` = `product`, `Schema.list(item)` = `sequence`, `Schema.record(item)` = `map`, `Schema.string()` / `Schema.number()` / `Schema.boolean()` wrap `scalar`, `Schema.union` / `Schema.discriminatedUnion` wrap `sum`. Fluent `.nullable()` is available on all plain schema types: `Schema.string().nullable()` produces a positional sum `[null, string]`. Not available on CRDT types (text, counter, set, tree, movableList, richText). See `src/schema.ts` for the full list.
 
 ### First-class CRDT types
 
 Why `text`, `counter`, `set`, `tree`, `movable`, `richtext` are grammar nodes rather than annotations on structural types:
 
 - Their **change vocabulary** differs. A `sequence` has `SequenceChange` (retain / insert / delete of items); a `movable` has that *plus* move operations.
-- Their **capability requirements** differ. A `text` node requires its substrate to support character-level merge; a plain JSON substrate cannot satisfy it. Encoding this as a phantom `[CAPS]` on the grammar means the type system catches incompatibilities at `bind()`, not at runtime.
+- Their **composition-law requirements** differ. A `text` node carries the `"positional-ot"` law; a `counter` carries `"additive"`; a plain JSON substrate only satisfies `"lww"`. Encoding this as a phantom `[LAWS]` tag on the grammar means the type system catches incompatibilities at `bind()`, not at runtime.
 - Their **identity semantics** differ. Two concurrent insertions into a `sequence` are ordered arbitrarily; two concurrent insertions into a `movable` carry identity-bearing positions.
 - Rich text has the same positional algebra as text but extends the instruction stream with `format` — a cursor instruction that annotates characters with marks.
 
-Each CRDT kind contributes to the `[CAPS]` phantom of every ancestor node. A `Schema.struct({ body: Schema.text() })` has `"text"` in its `[CAPS]` accumulator even though `struct` itself is structural.
+Each CRDT kind contributes to the `[LAWS]` phantom of every ancestor node. A `Schema.struct({ body: Schema.text() })` has `"positional-ot"` in its `[LAWS]` accumulator even though `struct` itself is structural. The tags are algebraic properties (`"lww"`, `"additive"`, `"positional-ot"`, `"positional-ot-move"`, `"tree-move"`, `"lww-per-key"`, `"lww-tag-replaced"`, `"add-wins-per-key"`), not kind names.
 
 ### `PlainSchema`: the no-CRDT subset
 
@@ -134,14 +136,23 @@ Each CRDT kind contributes to the `[CAPS]` phantom of every ancestor node. A `Sc
 1. **`.json()` modifier.** `Schema.struct({...}).json()` marks a product as a plain-JSON merge boundary — the entire subtree is replaced atomically on write, not composed CRDT-style. Inside `.json()`, only `PlainSchema` is permitted.
 2. **Sum variants.** Variants of a `sum` must all be `PlainSchema` because discriminated-union semantics are structural — a union of CRDTs would require merging *across* variants, which is not well-defined.
 
-### Capability enforcement
+### Composition-law enforcement
 
 ```
-type ExtractCaps<S> = /* walk S, collect every node's [CAPS] */
-type RestrictCaps<S, AllowedCaps> = ExtractCaps<S> extends AllowedCaps ? S : never
+type ExtractLaws<S> = /* walk S, collect every node's [LAWS] */
+type RestrictLaws<S, AllowedLaws> = ExtractLaws<S> extends AllowedLaws ? S : never
 ```
 
-A substrate declares its closed capability set: `LoroCaps = "text" | "richtext" | "counter" | "movable" | "tree" | "json"`; `YjsCaps = "text" | "richtext" | "json"`; `PlainCaps = "json"`. `bind(schema, factoryBuilder, mergeStrategy)` applies `RestrictCaps<S, typeof factoryBuilder.caps>` at the type level. A schema with `"counter"` in its `[CAPS]` cannot be bound to a Yjs factory — the compiler refuses.
+Each binding target declares its closed law set:
+
+| Target | Laws | Algebraic meaning |
+|--------|------|-------------------|
+| `json` | `AllowedLaws = string` (all) | Authoritative — any law is fine because writes are serialized. |
+| `ephemeral` | `EphemeralLaws = "lww" \| "lww-per-key" \| "lww-tag-replaced"` | LWW-family only — no concurrent merge needed. |
+| `loro` | `LoroLaws = "lww" \| "additive" \| "positional-ot" \| "positional-ot-move" \| "lww-per-key" \| "tree-move" \| "lww-tag-replaced"` | Full CRDT law set minus `"add-wins-per-key"`. |
+| `yjs` | `YjsLaws = "lww" \| "positional-ot" \| "lww-per-key" \| "lww-tag-replaced"` | Text and structural laws — no `"additive"`, `"positional-ot-move"`, `"tree-move"`, `"add-wins-per-key"`. |
+
+`target.bind(schema)` applies `RestrictLaws<S, AllowedLaws>` at the type level. A schema with `"additive"` in its `[LAWS]` (from `Schema.counter()`) cannot be bound to the `yjs` target — the compiler refuses.
 
 No runtime dispatch, no substrate-specific error messages. The type system is the enforcement mechanism.
 
@@ -157,19 +168,47 @@ No runtime dispatch, no substrate-specific error messages. The type system is th
 
 Source: `packages/schema/src/bind.ts`.
 
-`bind(schema, factoryBuilder, mergeStrategy)` returns a `BoundSchema<S>`. It captures three decisions at module scope:
+### The four binding targets
+
+Rather than parameterizing a generic namespace with a merge strategy, each substrate is a named `BindingTarget` — a fixed bundle of `(factory, syncProtocol, allowedLaws)`:
+
+| Target | Import | `SyncProtocol` | Allowed laws | Substrate |
+|--------|--------|----------------|--------------|-----------|
+| `json` | `@kyneta/schema` | `SYNC_AUTHORITATIVE` | all (`string`) | Plain JS objects, Lamport version |
+| `ephemeral` | `@kyneta/schema` | `SYNC_EPHEMERAL` | `EphemeralLaws` (`"lww"`, `"lww-per-key"`, `"lww-tag-replaced"`) | LWW substrate, wall-clock version |
+| `loro` | `@kyneta/loro-schema` | `SYNC_COLLABORATIVE` | `LoroLaws` (full CRDT set minus `"add-wins-per-key"`) | Loro CRDT doc |
+| `yjs` | `@kyneta/yjs-schema` | `SYNC_COLLABORATIVE` | `YjsLaws` (text + structural laws) | Yjs doc |
+
+Usage:
+
+```
+import { json, ephemeral, Schema } from "@kyneta/schema"
+import { loro } from "@kyneta/loro-schema"
+import { yjs } from "@kyneta/yjs-schema"
+
+const Config = json.bind(Schema.struct({ theme: Schema.string() }))
+const Cursor = ephemeral.bind(Schema.struct({ x: Schema.number(), y: Schema.number() }))
+const Todo = loro.bind(Schema.struct({ title: Schema.text(), done: Schema.boolean() }))
+const Note = yjs.bind(Schema.struct({ body: Schema.text() }))
+```
+
+No strategy parameter — the sync protocol is fixed per target.
+
+### Low-level `bind()`
+
+`bind({ schema, factory, syncProtocol })` returns a `BoundSchema<S>`. It captures three decisions at module scope:
 
 1. **Which schema** — the recursive `Schema` value.
 2. **Which factory builder** — `(context: { peerId, binding }) => SubstrateFactory<V>`. The builder receives the peer's identity and the schema binding; this is how a fresh factory instance is produced per exchange.
-3. **Which merge strategy** — `"collaborative"` / `"authoritative"` / `"ephemeral"`.
+3. **Which sync protocol** — a `SyncProtocol` value (one of `SYNC_AUTHORITATIVE`, `SYNC_COLLABORATIVE`, `SYNC_EPHEMERAL`, or a custom record).
 
-The result is a static value: `const Todo = bind(schema, loroFactoryBuilder, "collaborative")`. The exchange consumes it as `exchange.get(docId, Todo)`.
+The result is a static value: `const Todo = loro.bind(schema)`. The exchange consumes it as `exchange.get(docId, Todo)`.
 
 ```
 type BoundSchema<S extends Schema> = {
   schema: S
-  factoryBuilder: FactoryBuilder<V>
-  mergeStrategy: MergeStrategy
+  factory: FactoryBuilder<V>
+  syncProtocol: SyncProtocol
   manifest: IdentityManifest
   schemaHash: string
 }
@@ -177,15 +216,27 @@ type BoundSchema<S extends Schema> = {
 
 The `manifest` is derived eagerly by `deriveManifest(schema)` — a pure function over the canonicalized schema tree. The `schemaHash` is `computeSchemaHash(manifest)`. Both are cached on the `BoundSchema` value.
 
+### `createBindingTarget` — building custom targets
+
+```
+export function createBindingTarget<AllowedLaws, N>(config: {
+  factory: FactoryBuilder<any>
+  replicaFactory: ReplicaFactory
+  syncProtocol: SyncProtocol
+}): BindingTarget<AllowedLaws, N>
+```
+
+Custom substrate authors use `createBindingTarget` to build their own targets. The built-in `json`, `ephemeral`, `loro`, and `yjs` are all constructed this way.
+
 ### What `bind` is NOT
 
 - **Not lazy.** Both `manifest` and `schemaHash` are computed on construction. Binding at module scope does the work once at import time.
-- **Not runtime-variable.** The schema, factory, and strategy are all captured as values; `BoundSchema` has no runtime parameters.
-- **Not magic.** `bind` validates the migration chain (if any) via `validateChain`, derives the binding, and stores the four fields. No side effects on the schema or the factory.
+- **Not runtime-variable.** The schema, factory, and sync protocol are all captured as values; `BoundSchema` has no runtime parameters.
+- **Not magic.** `bind` validates the migration chain (if any) via `validateChain`, derives the binding, and stores the fields. No side effects on the schema or the factory.
 
 ### `BoundReplica<V>`: replication-only binding
 
-A pure replication conduit (a routing server, a CDN edge, a store-only peer) does not need to interpret document state. It only needs to receive, persist, and re-emit payloads. `BoundReplica<V>` is `BoundSchema<S>` minus the schema — it carries the replica factory, merge strategy, and schema hash, but not the grammar itself.
+A pure replication conduit (a routing server, a CDN edge, a store-only peer) does not need to interpret document state. It only needs to receive, persist, and re-emit payloads. `BoundReplica<V>` is `BoundSchema<S>` minus the schema — it carries the replica factory, sync protocol, and schema hash, but not the grammar itself.
 
 This is the three-tier participation model:
 
@@ -368,8 +419,8 @@ The 11 interpreter cases fall into four structural categories. The first three a
 
 | Family | Cases | Shared helpers | Shared algebra |
 |--------|-------|---------------|----------------|
-| **Indexed** (positional) | `text`, `sequence`, `movable`, `richtext` | `sequence-helpers.ts` — `at()`, `wireTextWriteOps`, `wireListWriteOps`, `wireRichTextWriteOps`, `wireSequenceReadable`, `wireSequenceNavigation`, `wireSequenceAddressing`, `wireSequenceCaching` | `Instruction`, `foldInstructions`, `transformIndex`, `advanceAddresses` |
-| **Keyed** (named) | `map`, `set` | `keyed-helpers.ts` — `wireKeyedWriteOps`, `wireKeyedReadable`, `wireKeyedNavigation`, `wireKeyedAddressing`, `wireKeyedCaching` | `MapChange`, keyed addressing/tombstoning |
+| **Indexed** (positional) | `text`, `sequence`, `movable`, `richtext` | `sequence-helpers.ts` — `at()`, `installTextWriteOps`, `installListWriteOps`, `installRichTextWriteOps`, `installSequenceReadable`, `installSequenceNavigation`, `installSequenceAddressing`, `installSequenceCaching` | `Instruction`, `foldInstructions`, `transformIndex`, `advanceAddresses` |
+| **Keyed** (named) | `map`, `set` | `keyed-helpers.ts` — `installKeyedWriteOps`, `installKeyedReadable`, `installKeyedNavigation`, `installKeyedAddressing`, `installKeyedCaching` | `MapChange`, keyed addressing/tombstoning |
 | **Leaf** (terminal) | `scalar`, `text`, `counter`, `richtext` | `wireChangefeed` in `with-changefeed.ts` unifies changefeed boilerplate across all leaf and composite cases | `createLeafChangefeed` |
 | **Structural** (unique) | `product`, `sum`, `tree` | None — each has unique per-case logic | Product: schema-driven fields + discriminant. Sum: store-based variant dispatch. Tree: thin pass-through. |
 
@@ -656,15 +707,15 @@ Source: `packages/schema/src/change.ts`.
 
 Every mutation flows through a `Change` — a discriminated union identified by `type`. The built-in types:
 
-| `type` | Shape | Used by |
-|--------|-------|---------|
-| `"text"` | `{ instructions: TextInstruction[] }` — retain / insert / delete over characters | Text CRDTs |
-| `"sequence"` | `{ instructions: SequenceInstruction[] }` — retain / insert / delete over items | Lists, movable lists |
-| `"map"` | `{ entries: MapInstruction[] }` — set / delete over keys | Maps, sets |
-| `"tree"` | `{ instructions: TreeInstruction[] }` — create / move / delete nodes | Trees |
-| `"replace"` | `{ value: unknown }` — overwrite this node | Scalars, plain JSON sub-trees |
-| `"increment"` | `{ delta: number }` — counter increment | Counters |
-| `"richtext"` | `{ instructions: RichTextInstruction[] }` — retain / insert / delete / format over characters | Rich text CRDTs |
+| `type` | Shape | Composition law | Used by |
+|--------|-------|-----------------|---------|
+| `"text"` | `{ instructions: TextInstruction[] }` — retain / insert / delete over characters | `positional-ot` | Text CRDTs |
+| `"sequence"` | `{ instructions: SequenceInstruction[] }` — retain / insert / delete over items | `positional-ot` | Lists, movable lists |
+| `"map"` | `{ entries: MapInstruction[] }` — set / delete over keys | `lww-per-key` | Maps, sets |
+| `"tree"` | `{ instructions: TreeInstruction[] }` — create / move / delete nodes | `tree-move` | Trees |
+| `"replace"` | `{ value: unknown }` — overwrite this node | `lww` | Scalars, plain JSON sub-trees |
+| `"increment"` | `{ delta: number }` — counter increment | `additive` | Counters |
+| `"richtext"` | `{ instructions: RichTextInstruction[] }` — retain / insert / delete / format over characters | `positional-ot` | Rich text CRDTs |
 
 Note: `TextChange` and `SequenceChange` are parameterizations of the same positional algebra, unified by the `Instruction` type. Both use `retain`/`insert`/`delete` cursor instructions; the only difference is the content type (`string` vs `T[]`). The shared algebra is captured by `foldInstructions`, `transformIndex`, and `advanceAddresses`, which operate on `Instruction` generically.
 
@@ -769,14 +820,17 @@ Selection of the most-used types. Full list in [Canonical symbols](#canonical-sy
 | `Schema` | `src/schema.ts` | The recursive schema union. |
 | `ScalarSchema`, `ProductSchema`, `SequenceSchema`, `MapSchema`, `SumSchema`, `TextSchema`, `CounterSchema`, `SetSchema`, `TreeSchema`, `MovableSequenceSchema`, `RichTextSchema` | `src/schema.ts` | The eleven `[KIND]` variants. |
 | `PlainSchema` | `src/schema.ts` | The CRDT-free subset. |
-| `ExtractCaps<S>`, `RestrictCaps<S, C>` | `src/schema.ts` | Type-level capability extraction + constraint. |
+| `ExtractLaws<S>`, `RestrictLaws<S, L>` | `src/schema.ts` | Type-level composition-law extraction + constraint. |
+| `BindingTarget<AllowedLaws, N>` | `src/bind.ts` | Fixed substrate target: `.bind(schema)`, `.replica()`. |
 | `BoundSchema<S>`, `BoundReplica<V>` | `src/bind.ts` | Static binding types. |
+| `EphemeralLaws` | `src/bind.ts` | `"lww" \| "lww-per-key" \| "lww-tag-replaced"` — the LWW-family law set. |
 | `Interpret`, `Replicate`, `Defer`, `Reject` | `src/bind.ts` | Resolve-outcome variants. |
 | `Interpreter<Ctx, A>`, `InterpreterLayer<Ctx, In, Out>` | `src/interpret.ts` | F-algebra + layer transformer. |
 | `Ref<S>`, `RRef<S>`, `RWRef<S>`, `DocRef<S>` | `src/ref.ts` | Refs at each capability tier. |
 | `Substrate<V>`, `Replica<V>`, `SubstrateFactory<V>`, `ReplicaFactory<V>` | `src/substrate.ts` | Interfaces. |
 | `SubstratePayload` | `src/substrate.ts` | Opaque transfer shape. |
-| `MergeStrategy` | `src/substrate.ts` | `"collaborative" \| "authoritative" \| "ephemeral"`. |
+| `SyncProtocol`, `WriterModel`, `Delivery`, `Durability` | `src/substrate.ts` | Structured sync protocol and its three axes. |
+| `SYNC_AUTHORITATIVE`, `SYNC_COLLABORATIVE`, `SYNC_EPHEMERAL` | `src/substrate.ts` | The three built-in sync protocol constants. |
 | `Version` | `src/substrate.ts` | Abstract version base. |
 | `Change`, `ChangeBase`, `TextChange`, `SequenceChange`, `MapChange`, `TreeChange`, `ReplaceChange`, `IncrementChange`, `RichTextChange` | `src/change.ts` | Change vocabulary. |
 | `RichTextSchema`, `MarkConfig` | `src/schema.ts` | Rich text schema kind + mark configuration. |
@@ -788,7 +842,7 @@ Selection of the most-used types. Full list in [Canonical symbols](#canonical-sy
 | `MigrationChain`, `MigrationStep`, `EpochStep`, `MigrationPrimitive`, `Droppable`, `T2Primitive`, `NonT2Primitive` | `src/migration.ts` | Migration types. |
 | `NodeIdentity`, `IdentityManifest`, `IdentityOrigin`, `SchemaBinding`, `TransformProof` | `src/migration.ts` | Identity types. |
 | `NativeMap<S>`, `PlainNativeMap`, `UnknownNativeMap`, `HasNative` | `src/native.ts` | Type-level substrate-native mapping. |
-| `CALL`, `NATIVE`, `SUBSTRATE`, `BACKING_DOC`, `KIND`, `CAPS`, `POSITION`, `MIGRATION_CHAIN`, `INVALIDATE`, `REMOVE`, `TRANSACT`, `ADDRESS_TABLE` | various | Symbol-keyed runtime protocol tags. |
+| `CALL`, `NATIVE`, `SUBSTRATE`, `BACKING_DOC`, `KIND`, `LAWS`, `POSITION`, `MIGRATION_CHAIN`, `INVALIDATE`, `REMOVE`, `TRANSACT`, `ADDRESS_TABLE` | various | Symbol-keyed runtime protocol tags. |
 | `Reader`, `PlainState` | `src/reader.ts` | Plain-state reader primitive. |
 | `Path`, `Segment`, `Address`, `AddressTableRegistry` | `src/path.ts` | Path and address types. |
 
@@ -798,14 +852,14 @@ Selection of the most-used types. Full list in [Canonical symbols](#canonical-sy
 |------|-------|------|
 | `src/index.ts` | ~400 | Public barrel — exports every public symbol. |
 | `src/schema.ts` | ~800 | The grammar: types + `Schema.*` constructors + `advanceSchema` + `buildVariantMap` + `isNullableSum`. |
-| `src/bind.ts` | ~500 | `bind`, `BoundSchema`, `BoundReplica`, resolve outcomes, `FactoryBuilder`. |
+| `src/bind.ts` | ~500 | `bind`, `BoundSchema`, `BoundReplica`, `BindingTarget`, `createBindingTarget`, `json`, `ephemeral`, resolve outcomes, `FactoryBuilder`. |
 | `src/substrate.ts` | ~300 | `Substrate<V>`, `Replica<V>`, factories, `computeSchemaHash`, `BACKING_DOC`, `fnv1a128`. |
 | `src/migration.ts` | ~1000 | 14 primitives, 4 tiers, identity derivation, chain validation, `MIGRATION_CHAIN`. |
 | `src/change.ts` | ~600 | Change vocabulary, constructors, guards, `transformIndex`, `textInstructionsToPatches`, `advanceAddresses`. |
 | `src/interpret.ts` | ~400 | `interpret`, `Interpreter`, `InterpretBuilder`, `InterpreterLayer`, `dispatchSum`, `RawPath`. |
 | `src/interpreters/bottom.ts` | ~200 | Bottom layer: `[CHANGEFEED]`, `[NATIVE]`, `[SUBSTRATE]`, `[CALL]`. |
-| `src/interpreters/sequence-helpers.ts` | ~280 | Shared indexed-coalgebra helpers: `at()`, `wireTextWriteOps`, `wireListWriteOps`, `wireRichTextWriteOps`, `wireSequenceReadable`, `wireSequenceNavigation`, `wireSequenceAddressing`, `wireSequenceCaching`. |
-| `src/interpreters/keyed-helpers.ts` | ~235 | Shared keyed-coalgebra helpers: `wireKeyedWriteOps`, `wireKeyedReadable`, `wireKeyedNavigation`, `wireKeyedAddressing`, `wireKeyedCaching`. |
+| `src/interpreters/sequence-helpers.ts` | ~280 | Shared indexed-coalgebra helpers: `at()`, `installTextWriteOps`, `installListWriteOps`, `installRichTextWriteOps`, `installSequenceReadable`, `installSequenceNavigation`, `installSequenceAddressing`, `installSequenceCaching`. |
+| `src/interpreters/keyed-helpers.ts` | ~235 | Shared keyed-coalgebra helpers: `installKeyedWriteOps`, `installKeyedReadable`, `installKeyedNavigation`, `installKeyedAddressing`, `installKeyedCaching`. |
 | `src/interpreters/with-navigation.ts` | ~235 | Structural descent. Sequence/movable and map/set cases delegate to shared helpers. |
 | `src/interpreters/with-readable.ts` | ~225 | `.current`, `()`, read-by-path. Sequence/movable and map/set cases delegate to shared helpers. |
 | `src/interpreters/with-addressing.ts` | ~500 | Address-table layer. Sequence/movable and map/set cases delegate to shared helpers. |

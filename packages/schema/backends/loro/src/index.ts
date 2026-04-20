@@ -40,14 +40,14 @@ export {
 // ---------------------------------------------------------------------------
 
 // Namespace — substrate strategies
-export { type LoroCaps, loro } from "./bind-loro.js"
+export { type LoroLaws, loro } from "./bind-loro.js"
 // Change mapping
 export { batchToOps, changeToDiff } from "./change-mapping.js"
 // Guards — shared Loro runtime type guards
 export { hasKind, isLoroContainer, isLoroDoc } from "./loro-guards.js"
+export type { ResolveResult } from "./loro-resolve.js"
 // Container resolution
 export { resolveContainer, stepIntoLoro } from "./loro-resolve.js"
-export type { ResolveResult } from "./loro-resolve.js"
 // NativeMap — the Loro functor
 export type { LoroNativeMap } from "./native-map.js"
 // Position conformance

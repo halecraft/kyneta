@@ -4,7 +4,7 @@
 > **Role**: Loro CRDT substrate for `@kyneta/schema`. Wraps a `LoroDoc` as a `Substrate<LoroVersion>` with schema-guided live navigation, `applyDiff`-based writes, identity-keyed containers for cross-schema sync, and a persistent event bridge so every mutation — local kyneta writes, `merge()`, `doc.import()`, or raw Loro API — fires the kyneta changefeed.
 > **Depends on**: `@kyneta/schema` (peer), `@kyneta/changefeed` (peer), `loro-crdt` (peer)
 > **Depended on by**: `@kyneta/exchange` (dev), `@kyneta/react` (dev), `@kyneta/cast` (dev), application code that wants collaborative documents
-> **Canonical symbols**: `loro` (namespace: `loro.bind`, `loro.replica`), `LoroCaps`, `LoroNativeMap`, `createLoroSubstrate`, `loroSubstrateFactory`, `loroReplicaFactory`, `LoroVersion`, `LoroPosition`, `loroReader`, `resolveContainer`, `stepIntoLoro`, `PROPS_KEY`, `changeToDiff`, `batchToOps`, `hasKind`, `isLoroContainer`, `isLoroDoc`, `fromLoroSide`, `toLoroSide`
+> **Canonical symbols**: `loro` (binding target: `loro.bind`, `loro.replica`), `LoroLaws`, `LoroNativeMap`, `createLoroSubstrate`, `loroSubstrateFactory`, `loroReplicaFactory`, `LoroVersion`, `LoroPosition`, `loroReader`, `resolveContainer`, `stepIntoLoro`, `PROPS_KEY`, `changeToDiff`, `batchToOps`, `hasKind`, `isLoroContainer`, `isLoroDoc`, `fromLoroSide`, `toLoroSide`
 > **Key invariant(s)**: Subscribing to the kyneta doc observes **every** mutation to the underlying `LoroDoc`, regardless of source — local writes, `merge()`, `doc.import()`, or raw Loro API calls. The persistent `doc.subscribe()` event bridge is the enforcement mechanism; two re-entrancy guards (`inOurCommit`, `inEventHandler`) prevent double-notification.
 
 The Loro backend for Kyneta. Hands you a substrate instance — stored state, versioning, export/import, and a `Reader` — in exchange for a `LoroDoc`. Every ref produced by the interpreter stack reads through schema-guided container resolution; every write produces a `Diff` applied via `doc.applyDiff`; every Loro-visible mutation surfaces as a `Changeset` on the kyneta changefeed.
@@ -29,7 +29,7 @@ Consumed by applications that bind schemas with `loro.bind(schema)`. Not importe
 | Term | Means | Not to be confused with |
 |------|-------|-------------------------|
 | `LoroDoc` | Loro's top-level document handle (from `loro-crdt`). Owns peers, operations, version vector. | A kyneta `DocRef` — the `LoroDoc` is the substrate-native backing; `DocRef` is the interpreter-stack handle |
-| `LoroCaps` | The capability set `"text" \| "counter" \| "movable" \| "tree" \| "json"`. Loro supports all CRDT kinds from `@kyneta/schema` plus plain JSON. | Loro's own feature set — this is the subset kyneta exposes |
+| `LoroLaws` | The composition-law set `"lww" \| "additive" \| "positional-ot" \| "positional-ot-move" \| "lww-per-key" \| "tree-move" \| "lww-tag-replaced"`. The algebraic merge properties Loro faithfully implements. | Loro's own feature set — this is the subset kyneta exposes via law tags |
 | `LoroNativeMap` | The `NativeMap` functor mapping schema kinds to Loro container types (`text → LoroText`, `list → LoroList`, `struct → LoroMap`, etc.). | A JS `Map` — this is a type-level functor, not a runtime object |
 | `LoroVersion` | `@kyneta/schema`'s `Version` implementation wrapping Loro's `VersionVector`. | Loro's `Frontiers` (DAG leaf ops for checkpoints) — `VersionVector` is the full peer-state vector used for sync diffing |
 | `LoroPosition` | `Position` implementation wrapping Loro's `Cursor`. Stateless `transform` — resolution queries the CRDT directly. | A numeric index |
@@ -339,7 +339,7 @@ class LoroPosition implements Position {
 
 Source: `packages/schema/backends/loro/src/bind-loro.ts`.
 
-The ergonomic API:
+`loro` is a `BindingTarget<LoroLaws, LoroNativeMap>` — a fixed bundle of `(factory, syncProtocol, allowedLaws)` built via `createBindingTarget` from `@kyneta/schema`. The ergonomic API:
 
 ```
 import { loro } from "@kyneta/loro-schema"
@@ -351,7 +351,7 @@ const Todo = loro.bind(Schema.struct({
 }))
 ```
 
-`loro.bind(schema)` returns a `BoundSchema<S, LoroNativeMap>`. Under the hood it delegates to `@kyneta/schema`'s `bind(schema, loroFactoryBuilder, "collaborative")`. The `LoroCaps` set (`"text" | "counter" | "movable" | "tree" | "json"`) is applied as `RestrictCaps<S, LoroCaps>`, so binding a schema that uses a capability Loro doesn't support fails at compile time.
+`loro.bind(schema)` returns a `BoundSchema<S, LoroNativeMap>`. Under the hood it delegates to `@kyneta/schema`'s `bind({ schema, factory: loroFactoryBuilder, syncProtocol: SYNC_COLLABORATIVE })`. The `LoroLaws` set (`"lww" | "additive" | "positional-ot" | "positional-ot-move" | "lww-per-key" | "tree-move" | "lww-tag-replaced"`) is applied as `RestrictLaws<S, LoroLaws>`, so binding a schema that requires a composition law Loro doesn't support (e.g. `"add-wins-per-key"` from `Schema.set()`) fails at compile time.
 
 `loro.replica()` produces a `BoundReplica<LoroVersion>` — the replication-only variant for sync conduits that don't need to interpret state.
 
@@ -359,7 +359,7 @@ const Todo = loro.bind(Schema.struct({
 
 - **Not a factory.** It returns a `BoundSchema`, not a substrate. The substrate is constructed by `createDoc(bound)` at runtime.
 - **Not asynchronous.** Fully synchronous; the schema and the Loro factory builder are captured at call time.
-- **Not overridable.** Merge strategy for `loro.bind` is always `"collaborative"`. For different merge semantics, use `@kyneta/schema`'s lower-level `bind()` directly.
+- **Not overridable.** The sync protocol for `loro` is always `SYNC_COLLABORATIVE`. For different sync semantics, use `@kyneta/schema`'s lower-level `bind()` directly.
 
 ---
 
@@ -367,8 +367,8 @@ const Todo = loro.bind(Schema.struct({
 
 | Type | File | Role |
 |------|------|------|
-| `loro` | `src/bind-loro.ts` | The namespace: `.bind(schema)`, `.replica()`. |
-| `LoroCaps` | `src/bind-loro.ts` | `"text" \| "counter" \| "movable" \| "tree" \| "json"`. |
+| `loro` | `src/bind-loro.ts` | The binding target: `.bind(schema)`, `.replica()`. |
+| `LoroLaws` | `src/bind-loro.ts` | `"lww" \| "additive" \| "positional-ot" \| "positional-ot-move" \| "lww-per-key" \| "tree-move" \| "lww-tag-replaced"`. |
 | `LoroNativeMap` | `src/native-map.ts` | The `NativeMap` functor for Loro. |
 | `LoroVersion` | `src/version.ts` | `Version` over `VersionVector`. |
 | `LoroPosition` | `src/position.ts` | `Position` over Loro `Cursor`. |
@@ -386,7 +386,7 @@ const Todo = loro.bind(Schema.struct({
 | File | Lines | Role |
 |------|-------|------|
 | `src/index.ts` | 63 | Public barrel. Re-exports generic API from `@kyneta/schema`; exports Loro-specific symbols. |
-| `src/bind-loro.ts` | 174 | `loro.bind` / `loro.replica` namespace; `LoroCaps`. |
+| `src/bind-loro.ts` | 174 | `loro.bind` / `loro.replica` binding target; `LoroLaws`. |
 | `src/substrate.ts` | 671 | `LoroSubstrate`, factories, prepare/flush, event bridge, `ensureLoroContainers`, `mergePendingGroups`. |
 | `src/change-mapping.ts` | 866 | Pure `changeToDiff` + `batchToOps` for every kyneta change type and every Loro container kind. |
 | `src/loro-resolve.ts` | 221 | `resolveContainer`, `stepIntoLoro`, `stepFromDoc`, `PROPS_KEY`. |
@@ -401,7 +401,7 @@ const Todo = loro.bind(Schema.struct({
 | `src/__tests__/record-counter-spike.test.ts` | 588 | Focus tests for `Schema.record(Schema.counter())` and related combinations. |
 | `src/__tests__/structural-merge.test.ts` | 214 | `merge()` and `applyDiff` round-trips; identity-keyed container compatibility. |
 | `src/__tests__/position.test.ts` | 361 | `LoroPosition` cursor stability across concurrent edits. |
-| `src/__tests__/bind-constraints.test.ts` | 315 | Compile-time capability enforcement (schemas outside `LoroCaps` are rejected). |
+| `src/__tests__/bind-constraints.test.ts` | 315 | Compile-time composition-law enforcement (schemas outside `LoroLaws` are rejected). |
 | `src/__tests__/bind-loro.test.ts` | 131 | `loro.bind` API surface. |
 | `src/__tests__/native.test.ts` | 102 | `unwrap(ref)` returns the right native container at every depth. |
 | `src/__tests__/loro-guards.test.ts` | 47 | `hasKind`, `isLoroContainer`, `isLoroDoc` runtime behaviour. |

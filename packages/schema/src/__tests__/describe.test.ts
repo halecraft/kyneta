@@ -440,24 +440,18 @@ testDescribe("describe: annotation rendering", () => {
 
   testDescribe("nullable sugar", () => {
     it("renders nullable<string> for sum([null, string])", () => {
-      expect(describe(Schema.nullable(Schema.string()))).toBe(
-        "nullable<string>",
-      )
+      expect(describe(Schema.string().nullable())).toBe("nullable<string>")
     })
 
     it("renders nullable<number> for sum([null, number])", () => {
-      expect(describe(Schema.nullable(Schema.number()))).toBe(
-        "nullable<number>",
-      )
+      expect(describe(Schema.number().nullable())).toBe("nullable<number>")
     })
 
     it("renders nullable with complex inner as indented children", () => {
-      const s = Schema.nullable(
-        Schema.struct({
-          name: Schema.string(),
-          age: Schema.number(),
-        }),
-      )
+      const s = Schema.struct({
+        name: Schema.string(),
+        age: Schema.number(),
+      }).nullable()
       expect(describe(s)).toBe(
         ["nullable", "  name: string", "  age: number"].join("\n"),
       )
@@ -478,7 +472,7 @@ testDescribe("describe: annotation rendering", () => {
     })
 
     it("nullable with constrained inner", () => {
-      expect(describe(Schema.nullable(Schema.string("a", "b")))).toBe(
+      expect(describe(Schema.string("a", "b").nullable())).toBe(
         'nullable<string("a" | "b")>',
       )
     })
@@ -486,7 +480,7 @@ testDescribe("describe: annotation rendering", () => {
     it("nullable field in struct", () => {
       const s = Schema.struct({
         name: Schema.string(),
-        bio: Schema.nullable(Schema.string()),
+        bio: Schema.string().nullable(),
       })
       expect(describe(s)).toBe(
         ["name: string", "bio: nullable<string>"].join("\n"),

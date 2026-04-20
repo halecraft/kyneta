@@ -25,6 +25,7 @@ import {
   type ProductSchema,
   plainSubstrateFactory,
   Schema,
+  SYNC_AUTHORITATIVE,
   snapshotManifest,
   validateChain,
 } from "../index.js"
@@ -478,7 +479,7 @@ describe("bind() with migrations", () => {
     const bound = bind({
       schema: s,
       factory: () => plainSubstrateFactory,
-      strategy: "authoritative",
+      syncProtocol: SYNC_AUTHORITATIVE,
     })
 
     expect(bound.identityBinding.forward.size).toBeGreaterThan(0)
@@ -496,7 +497,7 @@ describe("bind() with migrations", () => {
     const bound = bind({
       schema: s,
       factory: () => plainSubstrateFactory,
-      strategy: "authoritative",
+      syncProtocol: SYNC_AUTHORITATIVE,
     })
 
     expect(bound.identityBinding.forward.size).toBe(1)
@@ -513,7 +514,7 @@ describe("bind() with migrations", () => {
     const bound = bind({
       schema: s,
       factory: () => plainSubstrateFactory,
-      strategy: "authoritative",
+      syncProtocol: SYNC_AUTHORITATIVE,
     })
 
     expect(bound.identityBinding.forward.get("b")).toBe(deriveIdentity("a", 1))

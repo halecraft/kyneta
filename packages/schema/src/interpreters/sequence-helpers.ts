@@ -7,17 +7,17 @@
 //
 // The shared positional algebra (retain/insert/delete) is captured by
 // `Instruction` and `foldInstructions` in `change.ts`. The shared ref
-// wiring (write ops, readable, navigation, addressing, caching) is
+// installation (write ops, readable, navigation, addressing, caching) is
 // captured by the helpers in this module. Each interpreter transformer
 // (`withWritable`, `withReadable`, etc.) delegates its sequence and
 // movable cases to these helpers, adding only kind-specific behavior.
 //
 // Extensions compose orthogonally:
 // - Marks extend the instruction stream (format ≡ retain positionally).
-//   jj:mlntwtqv will add `wireRichTextWriteOps` as a peer of
-//   `wireTextWriteOps`, sharing `at()`.
+//   jj:mlntwtqv will add `installRichTextWriteOps` as a peer of
+//   `installTextWriteOps`, sharing `at()`.
 // - Move extends the change union (move is absolute-to-absolute, not
-//   cursor-relative). Future plans will add `wireMoveOps`.
+//   cursor-relative). Future plans will add `installMoveOps`.
 //
 // Kind-specific behavior remains in the interpreter cases:
 // - text returns `string`, sequence/movable return `T[]`
@@ -32,12 +32,12 @@
 // sequence of characters, but characters are not independently
 // addressable refs.
 
-import { textChange, richTextChange, sequenceChange } from "../change.js"
+import { richTextChange, sequenceChange, textChange } from "../change.js"
 import { isPropertyHost } from "../guards.js"
-import type { RefContext } from "../interpreter-types.js"
-import type { WritableContext } from "./writable.js"
 import type { Path } from "../interpret.js"
+import type { RefContext } from "../interpreter-types.js"
 import { CALL } from "./bottom.js"
+import type { WritableContext } from "./writable.js"
 
 // ---------------------------------------------------------------------------
 // at — cursor-positioning primitive
@@ -55,20 +55,20 @@ export const at = <T>(index: number, op: T): (T | { retain: number })[] =>
   index > 0 ? [{ retain: index }, op] : [op]
 
 // ---------------------------------------------------------------------------
-// wireTextWriteOps — insert / delete / update for text refs
+// installTextWriteOps — insert / delete / update for text refs
 // ---------------------------------------------------------------------------
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 /**
- * Wire text mutation methods onto a ref: `insert`, `delete`, `update`.
+ * Install text mutation methods onto a ref: `insert`, `delete`, `update`.
  *
- * Extension point: jj:mlntwtqv will add `wireRichTextWriteOps` as a
+ * Extension point: jj:mlntwtqv will add `installRichTextWriteOps` as a
  * peer (not wrapper) — richtext's `insert` takes optional marks and
  * uses `richTextChange` instead of `textChange`. What IS shared is
  * `at()`, the cursor-positioning primitive.
  */
-export function wireTextWriteOps(
+export function installTextWriteOps(
   result: any,
   ctx: WritableContext,
   path: Path,
@@ -97,23 +97,27 @@ export function wireTextWriteOps(
 }
 
 // ---------------------------------------------------------------------------
-// wireRichTextWriteOps — insert / delete / update / mark / unmark for richtext refs
+// installRichTextWriteOps — insert / delete / update / mark / unmark for richtext refs
 // ---------------------------------------------------------------------------
 
 /**
- * Wire richtext mutation methods onto a ref: `insert`, `delete`, `update`,
+ * Install richtext mutation methods onto a ref: `insert`, `delete`, `update`,
  * `mark`, `unmark`.
  *
- * A peer of `wireTextWriteOps`, NOT a wrapper — richtext's `insert` takes
+ * A peer of `installTextWriteOps`, NOT a wrapper — richtext's `insert` takes
  * optional marks and uses `richTextChange` instead of `textChange`.
  * What IS shared is `at()`, the cursor-positioning primitive.
  */
-export function wireRichTextWriteOps(
+export function installRichTextWriteOps(
   result: any,
   ctx: WritableContext,
   path: Path,
 ): void {
-  result.insert = (index: number, content: string, marks?: Record<string, unknown>): void => {
+  result.insert = (
+    index: number,
+    content: string,
+    marks?: Record<string, unknown>,
+  ): void => {
     ctx.dispatch(
       path,
       richTextChange(
@@ -151,20 +155,24 @@ export function wireRichTextWriteOps(
   ): void => {
     ctx.dispatch(
       path,
-      richTextChange(at(start, { format: end - start, marks: { [key]: value } })),
+      richTextChange(
+        at(start, { format: end - start, marks: { [key]: value } }),
+      ),
     )
   }
 
   result.unmark = (start: number, end: number, key: string): void => {
     ctx.dispatch(
       path,
-      richTextChange(at(start, { format: end - start, marks: { [key]: null } })),
+      richTextChange(
+        at(start, { format: end - start, marks: { [key]: null } }),
+      ),
     )
   }
 }
 
 // ---------------------------------------------------------------------------
-// wireListWriteOps — push / insert / delete for sequence refs
+// installListWriteOps — push / insert / delete for sequence refs
 // ---------------------------------------------------------------------------
 
 /**
@@ -174,7 +182,7 @@ export function wireRichTextWriteOps(
  * for annotated lists (future). Both would be added as additional wiring
  * functions, not modifications to this one.
  */
-export function wireListWriteOps(
+export function installListWriteOps(
   result: any,
   ctx: WritableContext,
   path: Path,
@@ -195,11 +203,11 @@ export function wireListWriteOps(
 }
 
 // ---------------------------------------------------------------------------
-// wireSequenceReadable — CALL slot (array snapshot) + .get(i)
+// installSequenceReadable — CALL slot (array snapshot) + .get(i)
 // ---------------------------------------------------------------------------
 
-/** Wire the CALL slot (array snapshot) and `.get(i)` onto a sequence ref. */
-export function wireSequenceReadable(
+/** Install the CALL slot (array snapshot) and `.get(i)` onto a sequence ref. */
+export function installSequenceReadable(
   result: any,
   ctx: RefContext,
   path: Path,
@@ -229,11 +237,11 @@ export function wireSequenceReadable(
 }
 
 // ---------------------------------------------------------------------------
-// wireSequenceNavigation — .at(i), .length, [Symbol.iterator]
+// installSequenceNavigation — .at(i), .length, [Symbol.iterator]
 // ---------------------------------------------------------------------------
 
-/** Wire positional navigation (`.at(i)`, `.length`, `[Symbol.iterator]`) onto a sequence ref. */
-export function wireSequenceNavigation(
+/** Install positional navigation (`.at(i)`, `.length`, `[Symbol.iterator]`) onto a sequence ref. */
+export function installSequenceNavigation(
   result: any,
   ctx: RefContext,
   path: Path,
@@ -266,11 +274,11 @@ export function wireSequenceNavigation(
 }
 
 // ---------------------------------------------------------------------------
-// wireSequenceAddressing — address table getter + prepare handler
+// installSequenceAddressing — address table getter + prepare handler
 // ---------------------------------------------------------------------------
 
 /** Expose the address table via a symbol property and register a prepare handler for address advancement. */
-export function wireSequenceAddressing(
+export function installSequenceAddressing(
   result: any,
   path: Path,
   addressTableSymbol: symbol,
@@ -295,11 +303,11 @@ export function wireSequenceAddressing(
 }
 
 // ---------------------------------------------------------------------------
-// wireSequenceCaching — address-table-backed .at() override + INVALIDATE
+// installSequenceCaching — address-table-backed .at() override + INVALIDATE
 // ---------------------------------------------------------------------------
 
 /** Override `.at()` with address-table-backed lookup for stable ref identity across mutations. */
-export function wireSequenceCaching(
+export function installSequenceCaching(
   result: any,
   path: Path,
   addressTableSym: symbol,

@@ -3,7 +3,13 @@
 // Architecture mirrors governance.ts: pure function tests first (composeGate),
 // then imperative shell tests (Governance).
 
-import { Interpret, json, Schema } from "@kyneta/schema"
+import {
+  Interpret,
+  json,
+  Schema,
+  SYNC_AUTHORITATIVE,
+  SYNC_COLLABORATIVE,
+} from "@kyneta/schema"
 import type { PeerIdentityDetails } from "@kyneta/transport"
 import { describe, expect, it, vi } from "vitest"
 import { Exchange } from "../exchange.js"
@@ -355,7 +361,7 @@ describe("Governance", () => {
           _docId: unknown,
           _peer: unknown,
           _replicaType: unknown,
-          _mergeStrategy: unknown,
+          _syncProtocol: unknown,
           _schemaHash: unknown,
         ) => Interpret(bound),
       )
@@ -368,7 +374,7 @@ describe("Governance", () => {
         doc,
         alice,
         ["plain", 1, 0],
-        "authoritative",
+        SYNC_AUTHORITATIVE,
         "hash",
       )
       expect(result).toBe(disposition)
@@ -383,7 +389,7 @@ describe("Governance", () => {
         doc,
         alice,
         ["plain", 1, 0],
-        "authoritative",
+        SYNC_AUTHORITATIVE,
         "hash",
       )
       expect(result).toBeUndefined()
@@ -398,21 +404,21 @@ describe("Governance", () => {
     it("defaults to true when all policies return undefined", () => {
       const registry = new Governance()
       registry.register({ canReset: () => undefined })
-      expect(registry.canReset(doc, alice, "collaborative")).toBe(true)
+      expect(registry.canReset(doc, alice, SYNC_COLLABORATIVE)).toBe(true)
     })
 
     it("false from any policy vetoes the reset", () => {
       const registry = new Governance()
       registry.register({ canReset: () => true })
       registry.register({ canReset: () => false })
-      expect(registry.canReset(doc, alice, "collaborative")).toBe(false)
+      expect(registry.canReset(doc, alice, SYNC_COLLABORATIVE)).toBe(false)
     })
 
     it("true from at least one policy permits the reset", () => {
       const registry = new Governance()
       registry.register({ canReset: () => undefined })
       registry.register({ canReset: () => true })
-      expect(registry.canReset(doc, alice, "collaborative")).toBe(true)
+      expect(registry.canReset(doc, alice, SYNC_COLLABORATIVE)).toBe(true)
     })
   })
 })

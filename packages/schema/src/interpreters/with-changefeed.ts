@@ -1083,7 +1083,9 @@ function wireChangefeed(
   createCf: (
     listeners: Map<string, Set<(changeset: Changeset<ChangeBase>) => void>>,
     path: Path,
-  ) => ChangefeedProtocol<unknown, ChangeBase> | ComposedChangefeedProtocol<unknown, ChangeBase>,
+  ) =>
+    | ChangefeedProtocol<unknown, ChangeBase>
+    | ComposedChangefeedProtocol<unknown, ChangeBase>,
 ): void {
   if (isPropertyHost(result)) {
     const listeners = ensurePrepareWiring(ctx)
@@ -1314,7 +1316,11 @@ export function withChangefeed<A extends HasRead>(
 
     // --- RichText -------------------------------------------------------------
     // Leaf type — attach a leaf changefeed + isPopulated.
-    richtext(ctx: RefContext, path: Path, schema: RichTextSchema): A & HasChangefeed {
+    richtext(
+      ctx: RefContext,
+      path: Path,
+      schema: RichTextSchema,
+    ): A & HasChangefeed {
       const result = base.richtext(ctx, path, schema)
       wireChangefeed(result, ctx, path, (listeners, p) =>
         createLeafChangefeed(listeners, p, () => (result as any)[CALL]()),

@@ -116,7 +116,7 @@ describe("computeSchemaHash", () => {
       }),
       list: Schema.list(Schema.boolean()),
       record: Schema.record(Schema.string()),
-      optional: Schema.nullable(Schema.string()),
+      optional: Schema.string().nullable(),
     })
 
     const hash = computeSchemaHash(complex)

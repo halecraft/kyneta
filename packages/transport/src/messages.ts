@@ -10,13 +10,13 @@
 // - `establish` — symmetric handshake; both peers send on connect
 // - `depart` — intentional departure; peer is leaving the channel
 //
-// These are uniform across all merge strategies. The sync algorithm
+// These are uniform across all sync protocols. The sync algorithm
 // determines *when* and *how* they are sent, not their shape.
 
 import type {
-  MergeStrategy,
   ReplicaType,
   SubstratePayload,
+  SyncProtocol,
 } from "@kyneta/schema"
 import type { DocId, PeerIdentityDetails } from "./types.js"
 
@@ -50,7 +50,7 @@ export type DepartMsg = {
  * announce documents it holds. The receiver checks its own state and
  * decides whether to send `interest`. No response expected.
  *
- * Each entry carries per-document metadata (replicaType, mergeStrategy)
+ * Each entry carries per-document metadata (replicaType, syncProtocol)
  * so the receiver can validate compatibility before any binary exchange.
  */
 export type PresentMsg = {
@@ -58,7 +58,7 @@ export type PresentMsg = {
   docs: Array<{
     docId: DocId
     replicaType: ReplicaType
-    mergeStrategy: MergeStrategy
+    syncProtocol: SyncProtocol
     schemaHash: string
     supportedHashes?: readonly string[]
   }>

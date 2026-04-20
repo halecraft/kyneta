@@ -1,8 +1,10 @@
-// bind-yjs — Yjs CRDT substrate namespace and factory.
+// bind-yjs — Yjs CRDT binding target and factory internals.
 //
-// Provides the `yjs` substrate namespace (`yjs.bind()`, `yjs.replica()`)
-// and the internal factory builder that injects a deterministic numeric
-// Yjs clientID derived from the exchange's peerId.
+// The `yjs` binding target provides `yjs.bind()` and `yjs.replica()` for
+// binding schemas to the Yjs substrate with collaborative sync protocol.
+// The factory builder accepts { peerId } and returns a SubstrateFactory
+// that calls doc.clientID = hashPeerId(peerId) on every new Y.Doc,
+// ensuring deterministic peer identity across all documents in an exchange.
 //
 // Yjs clientID is a uint32 number. We use FNV-1a hash truncated to
 // 32 bits, mirroring the Loro binding's hashPeerId pattern but
@@ -19,19 +21,19 @@
 //   const doc = exchange.get("my-doc", TodoDoc)
 
 import type {
-  CrdtStrategy,
+  BindingTarget,
   Replica,
   SchemaBinding,
   Schema as SchemaNode,
   Substrate,
   SubstrateFactory,
-  SubstrateNamespace,
   SubstratePayload,
 } from "@kyneta/schema"
 import {
   BACKING_DOC,
-  createSubstrateNamespace,
+  createBindingTarget,
   STRUCTURAL_YJS_CLIENT_ID,
+  SYNC_COLLABORATIVE,
 } from "@kyneta/schema"
 import * as Y from "yjs"
 import type { YjsNativeMap } from "./native-map.js"
@@ -136,36 +138,37 @@ function createYjsFactory(
 }
 
 // ---------------------------------------------------------------------------
-// yjs — the Yjs CRDT substrate namespace
+// yjs — the Yjs CRDT binding target
 // ---------------------------------------------------------------------------
 
 /**
- * The Yjs CRDT substrate namespace.
+ * Yjs composition-law tags — the set of concurrent composition laws
+ * that the Yjs substrate faithfully implements.
+ */
+export type YjsLaws =
+  | "lww"
+  | "positional-ot"
+  | "lww-per-key"
+  | "lww-tag-replaced"
+
+/**
+ * The Yjs CRDT binding target.
  *
- * - `yjs.bind(schema)` — collaborative sync (default)
- * - `yjs.bind(schema, "ephemeral")` — ephemeral/presence broadcast
- * - `yjs.replica()` — collaborative replication (default)
- * - `yjs.replica("ephemeral")` — ephemeral replication
+ * - `yjs.bind(schema)` — bind a schema to Yjs with collaborative sync
+ * - `yjs.replica()` — create a collaborative replica
  *
- * Strategy is constrained to `CrdtStrategy` (`"collaborative" | "ephemeral"`).
- * Passing `"authoritative"` is a compile error.
+ * Laws are constrained to `YjsLaws` — schemas requiring composition laws
+ * outside this set (e.g. `"additive"` from `Schema.counter()`,
+ * `"positional-ot-move"` from `Schema.movableList()`) are rejected at
+ * compile time.
  *
  * To access the underlying Y.Doc, use `unwrap(ref)` from `@kyneta/schema`.
  */
-/** The closed set of capability tags that the Yjs substrate supports. */
-export type YjsCaps = "text" | "richtext" | "json"
-
-export const yjs: SubstrateNamespace<CrdtStrategy, YjsCaps, YjsNativeMap> =
-  createSubstrateNamespace<CrdtStrategy, YjsCaps, YjsNativeMap>({
-    strategies: {
-      collaborative: {
-        factory: ctx => createYjsFactory(ctx.peerId, ctx.binding),
-        replicaFactory: yjsReplicaFactory,
-      },
-      ephemeral: {
-        factory: ctx => createYjsFactory(ctx.peerId, ctx.binding),
-        replicaFactory: yjsReplicaFactory,
-      },
-    },
-    defaultStrategy: "collaborative",
-  })
+export const yjs: BindingTarget<YjsLaws, YjsNativeMap> = createBindingTarget<
+  YjsLaws,
+  YjsNativeMap
+>({
+  factory: ctx => createYjsFactory(ctx.peerId, ctx.binding),
+  replicaFactory: yjsReplicaFactory,
+  syncProtocol: SYNC_COLLABORATIVE,
+})

@@ -4,7 +4,7 @@
 > **Role**: Substrate-agnostic document sync runtime. Orchestrates channel topology, document convergence, and persistence above any transport and any `@kyneta/schema` substrate — via two pure TEA programs (session + sync), a Synchronizer shell that owns the serialized dispatch queue, and an Exchange façade that adds storage, governance, capability negotiation, and reactive peer/document collections.
 > **Depends on**: `@kyneta/schema` (peer), `@kyneta/changefeed` (peer), `@kyneta/transport` (direct)
 > **Depended on by**: `@kyneta/react` (peer), `@kyneta/leveldb-store`, application code, every transport package (dev)
-> **Canonical symbols**: `Exchange`, `ExchangeParams`, `Synchronizer`, `DocRuntime`, `SessionModel`, `SessionInput`, `SessionEffect`, `SyncModel`, `SyncInput`, `SyncEffect`, `updateSession`, `updateSync`, `Governance`, `Policy`, `composeGate`, `GatePredicate`, `EpochBoundaryPredicate`, `Line`, `LineProtocol`, `Capabilities`, `ReplicaKey`, `DEFAULT_REPLICAS`, `Interpret`, `Replicate`, `Defer`, `Reject`, `Disposition`, `PeerIdentityInput`, `PeerChange`, `DocChange`, `DocInfo`, `PeerState`, `ReadyState`, `PeerDocSyncState`, `Store`, `StoreEntry`, `DocMetadata`, `persistentPeerId`, `releasePeerId`, `resolveLease`, `LeaseState`, `sync` (helper)
+> **Canonical symbols**: `Exchange`, `ExchangeParams`, `Synchronizer`, `DocRuntime`, `SessionModel`, `SessionInput`, `SessionEffect`, `SyncModel`, `SyncInput`, `SyncEffect`, `updateSession`, `updateSync`, `Governance`, `Policy`, `composeGate`, `GatePredicate`, `EpochBoundaryPredicate`, `Line`, `LineProtocol`, `Capabilities`, `ReplicaKey`, `DEFAULT_REPLICAS`, `Interpret`, `Replicate`, `Defer`, `Reject`, `Disposition`, `PeerIdentityInput`, `PeerChange`, `DocChange`, `DocInfo`, `PeerState`, `ReadyState`, `PeerDocSyncState`, `Store`, `StoreEntry`, `DocMetadata`, `persistentPeerId`, `releasePeerId`, `resolveLease`, `LeaseState`, `sync` (helper), `SyncProtocol`, `SYNC_COLLABORATIVE`, `SYNC_AUTHORITATIVE`, `SYNC_EPHEMERAL`, `requiresBidirectionalSync`, `BindingTarget`, `createBindingTarget`
 > **Key invariant(s)**:
 > 1. The exchange never inspects `SubstratePayload` contents. Payloads are opaque blobs carried by `offer` messages; only the substrate produces and consumes them.
 > 2. The session program never sees documents. The sync program never sees channels, transports, or connection state. They share a single dispatch queue and communicate exclusively through `sync-event` effects the shell forwards.
@@ -36,7 +36,7 @@ Imported by applications to construct the top-level sync graph; by `@kyneta/reac
 | `Exchange` | The top-level class. One per participant. Owns transports, stores, governance, capabilities, the `Synchronizer`, and the `ReactiveMap`s of peers/documents. | A message bus, a pub-sub hub, a database |
 | `Synchronizer` | The imperative shell that runs the session and sync programs, owns the serialized dispatch queue, executes effects (sends, persistence, callbacks), and drains notifications at quiescence. | The session/sync programs themselves — those are pure data; `Synchronizer` is the runtime |
 | Session program | Pure `Program<SessionInput, SessionModel, SessionEffect>` in `src/session-program.ts`. Models channel topology, establish handshake, peer identity, departure. | Sync program |
-| Sync program | Pure `Program<SyncInput, SyncModel, SyncEffect>` in `src/sync-program.ts`. Models document convergence: `present`, `interest`, `offer`, `dismiss`, ready states, merge-strategy dispatch. | Session program |
+| Sync program | Pure `Program<SyncInput, SyncModel, SyncEffect>` in `src/sync-program.ts`. Models document convergence: `present`, `interest`, `offer`, `dismiss`, ready states, sync-protocol dispatch. | Session program |
 | `sync-event` effect | A `SessionEffect` whose payload is a `SyncInput`. The shell drains it into the sync program's pending-input queue in the same dispatch cycle. The one cross-program channel. | A wire message |
 | Dispatch cycle | One inbound input → update → effects executed → (possibly) more inputs queued from `sync-event` effects → update again → … → quiescence. Notifications accumulate throughout, deliver once on drain. | An event-loop tick |
 | Quiescence | The state after one dispatch cycle completes: session queue empty, sync queue empty, no pending `sync-event`s. Notifications drain here. | Async settlement |
@@ -45,8 +45,8 @@ Imported by applications to construct the top-level sync graph; by `@kyneta/reac
 | `Policy` | Interface with gate predicates (`canShare`, `canAccept`, `canConnect`, `canReset`) and document handlers (`resolve`). Multiple policies register into one `Governance`. | An HTTP middleware, an authorization system |
 | `Governance` | The composer. Exposes `composeGate` (pure) + the registry (imperative). Every gate evaluates three-valued logic: `false` vetoes, `true` permits, all-`undefined` falls back to default. | `Policy` — `Governance` *composes* policies |
 | `composeGate` | Pure function. Takes an iterable of `boolean \| undefined` results and a default. Returns `false` if any is `false`; `true` if any is `true`; otherwise the default. | A synchronous reducer |
-| `Capabilities` | Registry of supported `ReplicaType × MergeStrategy` pairs and their bound schemas, keyed by `ReplicaKey`. Conduit participants register only replicas; interpreters register schemas too. | A schema registry |
-| `ReplicaKey` | `${replicaName}:${major}:${mergeStrategy}` — composite string key into `Capabilities`. | A doc ID |
+| `Capabilities` | Registry of supported `ReplicaType × SyncProtocol` pairs and their bound schemas, keyed by `ReplicaKey`. Conduit participants register only replicas; interpreters register schemas too. | A schema registry |
+| `ReplicaKey` | `${replicaName}:${major}:${syncProtocol}` — composite string key into `Capabilities`. | A doc ID |
 | `DEFAULT_REPLICAS` | The default replica-factory bundle: plain (authoritative), plain+LWW (ephemeral). Applications extend with Loro / Yjs replica factories as needed. | A per-doc factory |
 | `Disposition` | `Interpret \| Replicate \| Defer \| Reject` — the four outcomes of classifying an unknown doc on `present`. | An HTTP status |
 | `resolve` callback | Application-supplied function on `ExchangeParams`. Receives a peer + doc metadata; returns a `Disposition`. Runs only when auto-resolution (via `Capabilities`) fails. | A React ref, an async resolver |
@@ -54,12 +54,15 @@ Imported by applications to construct the top-level sync graph; by `@kyneta/reac
 | `Replicate(replicaBound)` | Decision: persist and forward without interpretation. For relays / stores. | `Interpret(bound)` |
 | `Defer()` | Decision: accept `present`, don't sync yet. The doc is known but inactive; the app can promote it later. | `Reject()` — defer keeps the peer-doc relationship |
 | `Reject()` | Decision: refuse the doc. The peer's `present` for this doc is silently dropped. | `Defer()` |
-| `MergeStrategy` | `"collaborative" \| "authoritative" \| "ephemeral"` from `@kyneta/schema`. Drives protocol shape: reciprocate or not, entirety-only or deltas, etc. | A CRDT algorithm |
+| `SyncProtocol` | Structured record from `@kyneta/schema` with three orthogonal axes: `writerModel` (`"concurrent" \| "serialized"`), `delivery` (`"delta-capable" \| "snapshot-only"`), `durability` (`"persistent" \| "transient"`). Three named constants: `SYNC_COLLABORATIVE`, `SYNC_AUTHORITATIVE`, `SYNC_EPHEMERAL`. Drives protocol shape via field-level dispatch. | A CRDT algorithm, a string enum |
+| `requiresBidirectionalSync(protocol)` | Pure predicate: `true` when `protocol.writerModel === "concurrent" && protocol.delivery === "delta-capable"`. Used to decide whether `interest.reciprocate` should be set. `writerModel` alone is insufficient — ephemeral protocols have `writerModel: "concurrent"` but `delivery: "snapshot-only"`, meaning they do NOT require bidirectional sync. | A single-field check |
+| `BindingTarget` | A fixed `(substrate, sync-protocol, supported-laws)` bundle with `.bind()` and `.replica()`. Named targets (`json`, `ephemeral`, `loro`, `yjs`) follow the rename-over-configure ergonomic rule. | A strategy-parameterized namespace |
+| `createBindingTarget` | Pure factory for building custom `BindingTarget` objects. | A strategy-dispatching factory |
 | `ReadyState` | Per-doc flag visible via `subscribe(exchange.documents)` — whether the local state has converged with at least one peer since the doc was opened. | A HTTP readyState |
-| `present` / `interest` / `offer` / `dismiss` | The four sync messages from `@kyneta/transport`. | Lifecycle messages (`establish`, `depart`) |
+| `present` / `interest` / `offer` / `dismiss` | The four sync messages from `@kyneta/transport`. `present` carries `syncProtocol: SyncProtocol` per doc entry. | Lifecycle messages (`establish`, `depart`) |
 | Departure | A peer leaving the sync graph. Explicit (`depart` message), channel-drop + expired grace timer, or `destroy()` on a local doc. | Disconnection — channel drop without grace-timer expiry is *disconnection*, not departure |
 | Epoch boundary | A merge that discards local state and adopts an incoming entirety — triggered when a remote peer advances past our version via `advance(to)` / compaction. Gated by `Policy.canReset`. | `reset` on a durable log |
-| `Line` | A reliable bidirectional message stream between two peers, implemented as two `json.bind()` authoritative documents (one per direction) with automatic seqno + ack pruning. | A socket, a channel, a queue |
+| `Line` | A reliable bidirectional message stream between two peers, implemented as two authoritative documents (one per direction) with automatic seqno + ack pruning. | A socket, a channel, a queue |
 | `LineProtocol` | The reified schema pair + topic from `Line.protocol(opts)`. Exposes `open(peerId)` (client) and `listen(onLine)` (server). | `Line` — `LineProtocol` *creates* `Line`s |
 | `persistentPeerId` | Browser-only helper: assigns each tab a unique `peerId` that survives reload, via a `localStorage` CAS-based lease protocol. | A cookie, a UUID generator |
 | `Store` | The persistence interface from this package. Methods: `lookup`, `ensureDoc`, `append`, `loadAll`, `replace`, `delete`, `listDocIds`, `close`. | A reactive store — this is an append/replace log |
@@ -176,24 +179,44 @@ Source: `src/sync-program.ts` message handlers. The six messages from `@kyneta/t
 |---------|----------|-----------|---------|----------|
 | `establish` | Lifecycle | Symmetric | `{ identity: PeerIdentityDetails }` | Peer identity exchange on connection. Both peers send. |
 | `depart` | Lifecycle | One-way | `{}` | Explicit departure — the receiver skips the grace timer. |
-| `present` | Sync | One-way | `{ docs: Array<{ docId, replicaType, mergeStrategy, schemaHash, supportedHashes? }> }` | "I have these documents." Filtered by `canShare`. |
+| `present` | Sync | One-way | `{ docs: Array<{ docId, replicaType, syncProtocol, schemaHash, supportedHashes? }> }` | "I have these documents." Filtered by `canShare`. |
 | `interest` | Sync | One-way | `{ docId, version?, reciprocate? }` | "I want this doc. Here's my version." `reciprocate` asks for the symmetric interest. |
-| `offer` | Sync | One-way | `{ docId, payload: SubstratePayload, version, reciprocate? }` | State transfer. `payload.kind` (`"entirety" \| "since"`) is substrate-internal. |
+| `offer` | Sync | One-way | `{ docId, payload: SubstratePayload, version, reciprocate? }` | State transfer. `payload.kind` (`"entirety" | "since"`) is substrate-internal. |
 | `dismiss` | Sync | One-way | `{ docId }` | "I am leaving the sync graph for this doc." Dual of `present`. |
 
 The six are defined once in `@kyneta/transport`; the wire encoding is defined once in `@kyneta/wire`. This package implements the *semantics*.
 
-### Merge-strategy dispatch
+### Sync-protocol dispatch
 
-Each `BoundSchema` declares one of three merge strategies. The sync program's message handlers branch on it:
+Each `BoundSchema` carries a `SyncProtocol` — a structured record with three orthogonal axes. The sync program dispatches on individual fields, not a monolithic enum:
 
-| Strategy | `interest.reciprocate` on first? | On local change | Primary export |
-|----------|----------------------------------|-----------------|----------------|
-| `collaborative` | `true` (bidirectional exchange) | Push delta to all synced peers | `exportSince(peerVersion)` |
-| `authoritative` | `false` (request/response) | Push delta to synced peers | `exportSince(peerVersion)` falling back to `exportEntirety()` |
-| `ephemeral` | N/A | Broadcast entirety to all subscribers | `exportEntirety()` always |
+**Primary dispatch axis: `syncProtocol.delivery`**
 
-`collaborative` is for CRDTs with concurrent writes (Loro, Yjs). `authoritative` is for single-writer-per-doc state (plain JSON). `ephemeral` is for last-writer-wins broadcast (presence, cursors, typing indicators). The strategy is a property of the document, not the substrate — a Loro substrate can host ephemeral docs via `loro.bind(schema, "ephemeral")`.
+| `delivery` | On local change | Primary export |
+|-------------|-----------------|----------------|
+| `"delta-capable"` | Push delta to synced peers (interest-based routing) | `exportSince(peerVersion)` |
+| `"snapshot-only"` | Broadcast entirety to all interested peers | `exportEntirety()` always |
+
+**Secondary dispatch axis: `requiresBidirectionalSync(syncProtocol)`**
+
+| Result | Condition | `interest.reciprocate` on first? | Meaning |
+|--------|-----------|----------------------------------|---------|
+| `true` | `writerModel === "concurrent" && delivery === "delta-capable"` | `true` (bidirectional exchange) | CRDT — both peers must exchange deltas |
+| `false` | all other combinations | `false` (request/response) | One-way push suffices |
+
+**Why `writerModel` alone is insufficient**: Ephemeral protocols have `writerModel: "concurrent"` (any peer can write) but `delivery: "snapshot-only"` (no delta computation). If `requiresBidirectionalSync` checked only `writerModel`, ephemeral docs would trigger reciprocal interest exchange — wasting a round-trip for a protocol that always sends entireties. The conjunction of both fields is the correct discriminant.
+
+**The three named constants map to these dispatch paths:**
+
+| Constant | `writerModel` | `delivery` | `durability` | `requiresBidirectionalSync` | Routing | Use case |
+|----------|---------------|------------|--------------|----------------------------|---------|----------|
+| `SYNC_COLLABORATIVE` | `concurrent` | `delta-capable` | `persistent` | `true` | Interest-based (synced peers only) | Loro / Yjs CRDTs |
+| `SYNC_AUTHORITATIVE` | `serialized` | `delta-capable` | `persistent` | `false` | Interest-based (synced peers only) | Plain JSON, single-writer |
+| `SYNC_EPHEMERAL` | `concurrent` | `snapshot-only` | `transient` | `false` | Interest-based (all interested peers) | Presence, cursors, typing |
+
+**Routing fix**: All three protocols now use interest-based routing. Previously, ephemeral docs broadcast to *all* available peers regardless of interest. Now, ephemeral pushes go only to peers who have expressed interest (via the interest-based routing path in `buildPush`), filtered by `canShare`. The `delivery` axis determines *what* is sent (delta vs entirety), but interest registration determines *who* receives it.
+
+The sync protocol is a property of the document, not the substrate — a Loro substrate can host ephemeral docs via `ephemeral.bind(schema)`.
 
 ### Document classification on `present`
 
@@ -202,11 +225,11 @@ Source: `src/sync-program.ts` → `handlePresent`, `src/exchange.ts` → `classi
 When a peer announces an unknown doc, four checks run in order:
 
 1. **`canShare` / `canAccept` governance check.** `canAccept(peer, docMeta)` → `false` silently drops the `present`. `resolve` never fires.
-2. **Schema-hash auto-resolve via `Capabilities`.** If `(schemaHash, replicaType, mergeStrategy)` matches a registered `BoundSchema`, the triple auto-classifies as `Interpret(bound)`. `resolve` never fires.
+2. **Schema-hash auto-resolve via `Capabilities`.** If `(schemaHash, replicaType, syncProtocol)` matches a registered `BoundSchema`, the triple auto-classifies as `Interpret(bound)`. `resolve` never fires.
 3. **`resolve` callback.** The application's `resolve(peer, docMeta)` runs. It returns one of the four dispositions.
 4. **Two-tiered default (no `resolve` callback).** If `replicaType` is supported (present in `Capabilities` as a replica-only entry), default is `Defer()`. Otherwise `Reject()`.
 
-For *known* docs (already in `DocRuntime`), all three metadata fields — `replicaType`, `mergeStrategy`, `schemaHash` — are validated against the local entry. Any mismatch skips sync with a console warning. `supportedHashes` admits heterogeneous-schema sync: two peers with different migrated schema versions can sync if their `supportedHashes` sets overlap.
+For *known* docs (already in `DocRuntime`), all three metadata fields — `replicaType`, `syncProtocol`, `schemaHash` — are validated against the local entry. Any mismatch (comparing all three `SyncProtocol` axes: `writerModel`, `delivery`, `durability`) skips sync with a console warning. `supportedHashes` admits heterogeneous-schema sync: two peers with different migrated schema versions can sync if their `supportedHashes` sets overlap.
 
 ---
 
@@ -379,7 +402,7 @@ The default differs per gate:
 | Gate | All-`undefined` default |
 |------|------------------------|
 | `canShare` / `canAccept` / `canConnect` | `true` (open) |
-| `canReset` | Strategy-aware — `false` for `collaborative` (preserve causal history), `true` for `authoritative` / `ephemeral` |
+| `canReset` | Protocol-aware — `false` when `requiresBidirectionalSync(syncProtocol)` (preserve causal history for CRDTs), `true` otherwise (`authoritative` / `ephemeral`) |
 
 Three-valued logic is the composition mechanism. One `false` vetoes; one `true` permits (with no vetoes); all-undefined falls through to default. This lets a feature (a `Line`, a room, a game loop, a user-supplied policy) register its own gates without coordinating with the rest of the system — policies are independent concerns that unify cleanly.
 
@@ -450,7 +473,7 @@ Every local mutation and every remote `offer` merge drives the same persistence 
 3. `store.append(docId, entry)` on each registered store.
 4. Records the new version as `lastPersistedVersion`.
 
-This collapses what was formerly two pipelines (local writes → `append`; remote imports → `replace` via `onDocImported`) into one. The substrate's `exportSince` returns entirety or delta as appropriate; the store's `append` semantic handles both.
+This unifies the persistence path: `exportSince` returns entirety or delta as appropriate, and the store's `append` semantic handles both.
 
 ### What `Store` is NOT
 
@@ -464,7 +487,7 @@ This collapses what was formerly two pipelines (local writes → `append`; remot
 
 Source: `src/capabilities.ts`.
 
-The `Capabilities` registry maps `ReplicaKey` (`${name}:${major}:${strategy}`) to `ReplicaEntry`:
+The `Capabilities` registry maps `ReplicaKey` (`${name}:${major}:${syncProtocol}`) to `ReplicaEntry`:
 
 ```ts
 interface ReplicaEntry {
@@ -481,7 +504,7 @@ Registration happens in three places:
 | `exchange.registerReplica(replicaBound)` | Additional replica types | App startup (Loro/Yjs on the server tier, for instance) |
 | `exchange.get(docId, bound)` | Auto-registers `bound.schemaHash → bound` | On first use |
 
-On incoming `present`, the sync program's `handlePresent` queries `Capabilities.findSchema(replicaType, mergeStrategy, schemaHash)`. If found, the doc auto-resolves to `Interpret(bound)`. If only the replica is registered (not this specific schema hash), the doc qualifies as `Replicate` — the conduit tier. If neither, the exchange consults `resolve` or defaults.
+On incoming `present`, the sync program's `handlePresent` queries `Capabilities.findSchema(replicaType, syncProtocol, schemaHash)`. If found, the doc auto-resolves to `Interpret(bound)`. If only the replica is registered (not this specific schema hash), the doc qualifies as `Replicate` — the conduit tier. If neither, the exchange consults `resolve` or defaults.
 
 This is how a routing server with `DEFAULT_REPLICAS + loroReplicaFactory` can relay Loro documents for any schema without ever *interpreting* one: all it needs is the replica factory, not the schema.
 
@@ -527,7 +550,7 @@ Properties:
 
 ### `LineProtocol`: reified protocol objects
 
-Before the protocol-first refactor, each side built its own `Line` instances from raw schemas. Reference-equality conflicts in `exchange.get` (different `bind()` calls yielding distinct `BoundSchema` values with the same hash) caused docs to be interpreted twice. `Line.protocol(opts)` captures the `BoundSchema` pair + topic in one `LineProtocol` object; `open` and `listen` both use those same references, eliminating the conflict.
+`Line.protocol(opts)` captures the `BoundSchema` pair + topic in one `LineProtocol` object. Both `open` and `listen` use those same references, ensuring each doc is interpreted exactly once — building `Line` instances from raw schemas would produce distinct `BoundSchema` values with the same hash, causing reference-equality conflicts in `exchange.get`.
 
 ### What a `Line` is NOT
 
@@ -551,11 +574,11 @@ When the receiver encounters an entirety for a doc that already has local state,
 
 `Policy.canReset(docId, peer)` is the gate. Its default varies:
 
-| Merge strategy | Default |
-|----------------|---------|
-| `collaborative` | `false` — preserve causal history by default |
-| `authoritative` | `true` — total order, resets are fine |
-| `ephemeral` | `true` — no history anyway |
+| SyncProtocol | Default |
+|--------------|---------|
+| `SYNC_COLLABORATIVE` (`requiresBidirectionalSync` = true) | `false` — preserve causal history by default |
+| `SYNC_AUTHORITATIVE` (`requiresBidirectionalSync` = false) | `true` — total order, resets are fine |
+| `SYNC_EPHEMERAL` (`requiresBidirectionalSync` = false) | `true` — no history anyway |
 
 The decision is per-doc per-peer, consulted at the sync-program level. Applications can register a custom `canReset` policy for nuanced cases (e.g., "accept reset iff I've been offline for less than 1 hour").
 
@@ -595,7 +618,7 @@ The decision is per-doc per-peer, consulted at the sync-program level. Applicati
 
 | File | Lines | Role |
 |------|-------|------|
-| `src/index.ts` | 228 | Public barrel. Re-exports `bind` / `json` / `MergeStrategy` from `@kyneta/schema`; exports exchange-specific types. |
+| `src/index.ts` | 228 | Public barrel. Re-exports `bind` / `json` / `ephemeral` / `SyncProtocol` / `SYNC_COLLABORATIVE` / `SYNC_AUTHORITATIVE` / `SYNC_EPHEMERAL` / `requiresBidirectionalSync` from `@kyneta/schema`; exports exchange-specific types. |
 | `src/exchange.ts` | 1250 | `Exchange` class, `ExchangeParams`, disposition types, `classifyDoc`, `peerId` validation, `registerReplica`, `registerPolicy`, reactive-collection wiring. |
 | `src/synchronizer.ts` | 1517 | Shell. Dispatch queue, `DocRuntime` map, effect interpreter, drain methods (`#drainOutbound`, `#drainReadyStateChanges`, `#drainStateAdvanced`, `#drainPeerEvents`), local-change subscription, transport integration, storage integration. |
 | `src/session-program.ts` | 543 | Pure session program: `SessionModel`, inputs, effects, `updateSession`, transition collapse. |

@@ -188,7 +188,10 @@ export function normalizeSpans(spans: RichTextSpan[]): RichTextSpan[] {
     if (span.text === "") continue
     const prev = result[result.length - 1]
     if (prev && marksEqual(prev.marks, span.marks)) {
-      result[result.length - 1] = { text: prev.text + span.text, ...(prev.marks ? { marks: prev.marks } : {}) }
+      result[result.length - 1] = {
+        text: prev.text + span.text,
+        ...(prev.marks ? { marks: prev.marks } : {}),
+      }
     } else {
       result.push(span)
     }
@@ -197,7 +200,10 @@ export function normalizeSpans(spans: RichTextSpan[]): RichTextSpan[] {
 }
 
 /** Deep equality for mark maps (null/undefined/empty are all equivalent to "no marks"). */
-function marksEqual(a: Record<string, unknown> | undefined, b: Record<string, unknown> | undefined): boolean {
+function marksEqual(
+  a: Record<string, unknown> | undefined,
+  b: Record<string, unknown> | undefined,
+): boolean {
   const aKeys = a ? Object.keys(a).filter(k => a[k] !== undefined) : []
   const bKeys = b ? Object.keys(b).filter(k => b[k] !== undefined) : []
   if (aKeys.length !== bKeys.length) return false
@@ -229,7 +235,9 @@ export function stepRichText(
 
   function consume(
     count: number,
-    markMerger?: (existing: Record<string, unknown> | undefined) => Record<string, unknown> | undefined,
+    markMerger?: (
+      existing: Record<string, unknown> | undefined,
+    ) => Record<string, unknown> | undefined,
   ): void {
     let remaining = count
     while (remaining > 0 && spanIndex < state.length) {
@@ -239,7 +247,9 @@ export function stepRichText(
 
       const text = span.text.slice(charOffset, charOffset + take)
       const marks = markMerger ? markMerger(span.marks) : span.marks
-      output.push(marks && Object.keys(marks).length > 0 ? { text, marks } : { text })
+      output.push(
+        marks && Object.keys(marks).length > 0 ? { text, marks } : { text },
+      )
 
       remaining -= take
       charOffset += take
@@ -357,10 +367,7 @@ export function step<S>(state: S, action: ChangeBase): S {
       return stepIncrement(state as number, action as IncrementChange) as S
 
     case "richtext":
-      return stepRichText(
-        state as RichTextDelta,
-        action as RichTextChange,
-      ) as S
+      return stepRichText(state as RichTextDelta, action as RichTextChange) as S
 
     default:
       throw new Error(

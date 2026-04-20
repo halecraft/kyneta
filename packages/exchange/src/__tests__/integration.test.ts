@@ -1,7 +1,7 @@
-// Integration tests — two-peer sync for all three merge strategies.
+// Integration tests — two-peer sync for all three sync protocols.
 //
 // These tests prove documents converge across two Exchange instances
-// connected via BridgeTransport, for each merge strategy:
+// connected via BridgeTransport, for each sync protocol:
 // - Authoritative (PlainSubstrate via json.bind)
 // - Collaborative (LoroSubstrate via loro.bind)
 // - Ephemeral (TimestampVersion via json.bind ephemeral)
@@ -11,6 +11,7 @@ import { loro } from "@kyneta/loro-schema"
 import {
   change,
   Defer,
+  ephemeral,
   Interpret,
   json,
   Reject,
@@ -89,7 +90,7 @@ const presenceSchema = Schema.struct({
   }),
   name: Schema.string(),
 })
-const PresenceDoc = json.bind(presenceSchema, "ephemeral")
+const PresenceDoc = ephemeral.bind(presenceSchema)
 
 const yjsTextSchema = Schema.struct({
   title: Schema.text(),
@@ -1569,7 +1570,7 @@ describe("deferred document lifecycle", () => {
 
     // Promote d1 via get() — this calls registerSchema(SequentialDoc)
     // internally, which auto-promotes ALL deferred docs matching the
-    // same (schemaHash, replicaType, mergeStrategy) triple.
+    // same (schemaHash, replicaType, syncProtocol) triple.
     // Since d2 also uses SequentialDoc, both are promoted.
     exchangeB.get("d1", SequentialDoc)
     await drain(20)

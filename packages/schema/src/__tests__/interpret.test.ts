@@ -151,8 +151,8 @@ describe("interpret: schema constructors produce correct grammar nodes", () => {
     expect(s.scalarKind).toBe("string")
   })
 
-  it("Schema.nullable() produces a positional sum with null first", () => {
-    const s = Schema.nullable(Schema.string())
+  it("Schema.string().nullable() produces a positional sum with null first", () => {
+    const s = Schema.string().nullable()
     expect(s[KIND]).toBe("sum")
     expect(s.variants).toHaveLength(2)
     expect(s.variants[0][KIND]).toBe("scalar")

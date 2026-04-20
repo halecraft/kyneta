@@ -1,5 +1,11 @@
 // sync-program — unit tests for the pure TEA update function.
 
+import {
+  SYNC_AUTHORITATIVE,
+  SYNC_COLLABORATIVE,
+  SYNC_EPHEMERAL,
+  type SyncProtocol,
+} from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import {
   createSyncUpdate,
@@ -67,7 +73,7 @@ function ensureDoc(
   docId: string,
   opts?: {
     mode?: "interpret" | "replicate"
-    mergeStrategy?: "collaborative" | "authoritative" | "ephemeral"
+    syncProtocol?: SyncProtocol
     version?: string
     schemaHash?: string
     supportedHashes?: readonly string[]
@@ -80,7 +86,7 @@ function ensureDoc(
       mode: opts?.mode ?? "interpret",
       version: opts?.version ?? "v1",
       replicaType: ["test", 0, 0],
-      mergeStrategy: opts?.mergeStrategy ?? "collaborative",
+      syncProtocol: opts?.syncProtocol ?? SYNC_COLLABORATIVE,
       schemaHash: opts?.schemaHash ?? "abc123",
       supportedHashes: opts?.supportedHashes,
     },
@@ -95,7 +101,7 @@ function deferDoc(
   model: SyncModel,
   docId: string,
   opts?: {
-    mergeStrategy?: "collaborative" | "authoritative" | "ephemeral"
+    syncProtocol?: SyncProtocol
   },
 ): [SyncModel, SyncEffect[], SyncNotification[]] {
   const [m, e, n] = update(
@@ -103,7 +109,7 @@ function deferDoc(
       type: "sync/doc-defer",
       docId,
       replicaType: ["test", 0, 0],
-      mergeStrategy: opts?.mergeStrategy ?? "collaborative",
+      syncProtocol: opts?.syncProtocol ?? SYNC_COLLABORATIVE,
       schemaHash: "abc123",
     },
     model,
@@ -397,7 +403,7 @@ describe("sync-program", () => {
       expect(entry.docId).toBe("doc-1")
       expect(entry.mode).toBe("interpret")
       expect(entry.version).toBe("v1")
-      expect(entry.mergeStrategy).toBe("collaborative")
+      expect(entry.syncProtocol).toBe(SYNC_COLLABORATIVE)
     })
 
     it("announces to all available peers via present", () => {
@@ -422,7 +428,7 @@ describe("sync-program", () => {
       ;[model] = addPeer(update, model, "bob", bob)
 
       const [, effects] = ensureDoc(update, model, "doc-1", {
-        mergeStrategy: "collaborative",
+        syncProtocol: SYNC_COLLABORATIVE,
       })
       const interests = effectsOfType(effects, "send-to-peers")
       const interestEffect = interests.find(
@@ -521,7 +527,7 @@ describe("sync-program", () => {
           {
             docId: "doc-1",
             replicaType: ["test", 0, 0],
-            mergeStrategy: "collaborative",
+            syncProtocol: SYNC_COLLABORATIVE,
             schemaHash: "abc123",
           },
         ],
@@ -541,7 +547,7 @@ describe("sync-program", () => {
       let model = initSync(alice)
       ;[model] = addPeer(update, model, "bob", bob)
       ;[model] = ensureDoc(update, model, "doc-1", {
-        mergeStrategy: "collaborative",
+        syncProtocol: SYNC_COLLABORATIVE,
       })
 
       const [, effects] = receiveMessage(update, model, "bob", {
@@ -550,7 +556,7 @@ describe("sync-program", () => {
           {
             docId: "doc-1",
             replicaType: ["test", 0, 0],
-            mergeStrategy: "collaborative",
+            syncProtocol: SYNC_COLLABORATIVE,
             schemaHash: "abc123",
           },
         ],
@@ -575,7 +581,7 @@ describe("sync-program", () => {
           {
             docId: "unknown-doc",
             replicaType: ["test", 0, 0],
-            mergeStrategy: "collaborative",
+            syncProtocol: SYNC_COLLABORATIVE,
             schemaHash: "abc123",
           },
         ],
@@ -600,7 +606,7 @@ describe("sync-program", () => {
           {
             docId: "blocked-doc",
             replicaType: ["test", 0, 0],
-            mergeStrategy: "collaborative",
+            syncProtocol: SYNC_COLLABORATIVE,
             schemaHash: "abc123",
           },
         ],
@@ -622,7 +628,7 @@ describe("sync-program", () => {
           {
             docId: "doc-1",
             replicaType: ["test", 0, 0],
-            mergeStrategy: "collaborative",
+            syncProtocol: SYNC_COLLABORATIVE,
             schemaHash: "abc123",
           },
         ],
@@ -647,7 +653,7 @@ describe("sync-program", () => {
           {
             docId: "doc-1",
             replicaType: ["other", 0, 0], // different name → incompatible
-            mergeStrategy: "collaborative",
+            syncProtocol: SYNC_COLLABORATIVE,
             schemaHash: "abc123",
           },
         ],
@@ -674,7 +680,7 @@ describe("sync-program", () => {
           {
             docId: "doc-1",
             replicaType: ["test", 0, 0],
-            mergeStrategy: "collaborative",
+            syncProtocol: SYNC_COLLABORATIVE,
             schemaHash: "different-hash",
           },
         ],
@@ -705,7 +711,7 @@ describe("sync-program", () => {
           {
             docId: "doc-1",
             replicaType: ["test", 0, 0],
-            mergeStrategy: "collaborative",
+            syncProtocol: SYNC_COLLABORATIVE,
             schemaHash: "v1",
             supportedHashes: ["v1"],
           },
@@ -735,7 +741,7 @@ describe("sync-program", () => {
           {
             docId: "doc-1",
             replicaType: ["test", 0, 0],
-            mergeStrategy: "collaborative",
+            syncProtocol: SYNC_COLLABORATIVE,
             schemaHash: "abc123",
             // NO supportedHashes — legacy peer
           },
@@ -767,7 +773,7 @@ describe("sync-program", () => {
           {
             docId: "doc-1",
             replicaType: ["test", 0, 0],
-            mergeStrategy: "collaborative",
+            syncProtocol: SYNC_COLLABORATIVE,
             schemaHash: "v1",
             supportedHashes: ["v1"],
           },
@@ -782,12 +788,12 @@ describe("sync-program", () => {
       expect(sends.length).toBe(0)
     })
 
-    it("merge strategy mismatch: emits warning", () => {
+    it("syncProtocol mismatch: emits warning", () => {
       const update = makeUpdate()
       let model = initSync(alice)
       ;[model] = addPeer(update, model, "bob", bob)
       ;[model] = ensureDoc(update, model, "doc-1", {
-        mergeStrategy: "collaborative",
+        syncProtocol: SYNC_COLLABORATIVE,
       })
 
       const [, effects, notifications] = receiveMessage(update, model, "bob", {
@@ -796,7 +802,7 @@ describe("sync-program", () => {
           {
             docId: "doc-1",
             replicaType: ["test", 0, 0],
-            mergeStrategy: "ephemeral",
+            syncProtocol: SYNC_EPHEMERAL,
             schemaHash: "abc123",
           },
         ],
@@ -804,7 +810,7 @@ describe("sync-program", () => {
 
       const warnings = notificationsOfType(notifications, "notify/warning")
       expect(warnings.length).toBe(1)
-      expect(defined(warnings[0]).message).toContain("mergeStrategy mismatch")
+      expect(defined(warnings[0]).message).toContain("syncProtocol mismatch")
 
       const sends = effectsOfType(effects, "send-to-peer")
       expect(sends.length).toBe(0)
@@ -820,7 +826,7 @@ describe("sync-program", () => {
       let model = initSync(alice)
       ;[model] = addPeer(update, model, "bob", bob)
       ;[model] = ensureDoc(update, model, "doc-1", {
-        mergeStrategy: "collaborative",
+        syncProtocol: SYNC_COLLABORATIVE,
       })
 
       const [, effects] = receiveMessage(update, model, "bob", {
@@ -841,7 +847,7 @@ describe("sync-program", () => {
       let model = initSync(alice)
       ;[model] = addPeer(update, model, "bob", bob)
       ;[model] = ensureDoc(update, model, "doc-1", {
-        mergeStrategy: "collaborative",
+        syncProtocol: SYNC_COLLABORATIVE,
       })
 
       const [, effects] = receiveMessage(update, model, "bob", {
@@ -869,7 +875,7 @@ describe("sync-program", () => {
       let model = initSync(alice)
       ;[model] = addPeer(update, model, "bob", bob)
       ;[model] = ensureDoc(update, model, "doc-1", {
-        mergeStrategy: "authoritative",
+        syncProtocol: SYNC_AUTHORITATIVE,
       })
 
       const [, effects] = receiveMessage(update, model, "bob", {
@@ -889,7 +895,7 @@ describe("sync-program", () => {
       let model = initSync(alice)
       ;[model] = addPeer(update, model, "bob", bob)
       ;[model] = ensureDoc(update, model, "doc-1", {
-        mergeStrategy: "ephemeral",
+        syncProtocol: SYNC_EPHEMERAL,
       })
 
       const [, effects] = receiveMessage(update, model, "bob", {
@@ -1171,7 +1177,7 @@ describe("sync-program", () => {
       let model = initSync(alice)
       ;[model] = addPeer(update, model, "bob", bob)
       ;[model] = ensureDoc(update, model, "doc-1", {
-        mergeStrategy: "collaborative",
+        syncProtocol: SYNC_COLLABORATIVE,
       })
 
       // Create a synced peer state for bob via doc-imported
@@ -1198,27 +1204,38 @@ describe("sync-program", () => {
       expect(defined(offers[0]).sinceVersion).toBeDefined()
     })
 
-    it("broadcasts to all peers for ephemeral", () => {
+    it("pushes to synced peers for ephemeral (no sinceVersion)", () => {
       const update = makeUpdate()
       let model = initSync(alice)
       ;[model] = addPeer(update, model, "bob", bob)
       ;[model] = addPeer(update, model, "carol", carol)
       ;[model] = ensureDoc(update, model, "doc-1", {
-        mergeStrategy: "ephemeral",
+        syncProtocol: SYNC_EPHEMERAL,
       })
 
+      // Only bob has synced — carol has not expressed interest
+      ;[model] = update(
+        {
+          type: "sync/doc-imported",
+          docId: "doc-1",
+          version: "v2",
+          fromPeerId: "bob",
+        },
+        model,
+      )
+
       const [, e] = update(
-        { type: "sync/local-doc-change", docId: "doc-1", version: "v2" },
+        { type: "sync/local-doc-change", docId: "doc-1", version: "v3" },
         model,
       )
       const effects = flattenEffects(e)
 
-      // Ephemeral broadcasts to all available peers (not just synced)
+      // Interest-based routing: only bob (synced) receives the push, not carol
       const offers = effectsOfType(effects, "send-offers")
       expect(offers.length).toBe(1)
       expect(defined(offers[0]).to).toContain("bob")
-      expect(defined(offers[0]).to).toContain("carol")
-      expect(defined(offers[0]).sinceVersion).toBeUndefined() // ephemeral = no delta
+      expect(defined(offers[0]).to).not.toContain("carol")
+      expect(defined(offers[0]).sinceVersion).toBeUndefined() // snapshot-only = no delta
     })
 
     it("emits state-advanced notification", () => {
@@ -1319,7 +1336,7 @@ describe("sync-program", () => {
       ;[model] = addPeer(update, model, "bob", bob)
       ;[model] = addPeer(update, model, "carol", carol)
       ;[model] = ensureDoc(update, model, "doc-1", {
-        mergeStrategy: "collaborative",
+        syncProtocol: SYNC_COLLABORATIVE,
       })
 
       // Both peers need to have synced state for relay to work
@@ -1430,7 +1447,7 @@ describe("sync-program", () => {
       ;[model] = addPeer(update, model, "bob", bob)
       ;[model] = addPeer(update, model, "carol", carol)
       ;[model] = ensureDoc(update, model, "doc-1", {
-        mergeStrategy: "ephemeral",
+        syncProtocol: SYNC_EPHEMERAL,
       })
 
       const [, e] = update(
@@ -1459,13 +1476,13 @@ describe("sync-program", () => {
           {
             docId: "private-doc",
             replicaType: ["test", 0, 0],
-            mergeStrategy: "collaborative",
+            syncProtocol: SYNC_COLLABORATIVE,
             schemaHash: "abc123",
           },
           {
             docId: "public-doc",
             replicaType: ["test", 0, 0],
-            mergeStrategy: "collaborative",
+            syncProtocol: SYNC_COLLABORATIVE,
             schemaHash: "abc123",
           },
         ],

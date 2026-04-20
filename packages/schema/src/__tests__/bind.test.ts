@@ -1,12 +1,17 @@
-// bind — unit tests for BoundSchema, bind(), json namespace, compile-time type constraints.
+// bind — unit tests for BoundSchema, bind(), json/ephemeral binding targets, compile-time type constraints.
 
 import { describe, expect, it, vi } from "vitest"
-import { bind, isBoundSchema, json } from "../bind.js"
+import { bind, ephemeral, isBoundSchema, json } from "../bind.js"
 import { replaceChange } from "../change.js"
 import { executeBatch } from "../interpreters/writable.js"
 import { RawPath } from "../path.js"
 import { Schema } from "../schema.js"
 import type { SubstratePayload } from "../substrate.js"
+import {
+  SYNC_AUTHORITATIVE,
+  SYNC_COLLABORATIVE,
+  SYNC_EPHEMERAL,
+} from "../substrate.js"
 import { lwwReplicaFactory } from "../substrates/lww.js"
 import {
   plainReplicaFactory,
@@ -20,18 +25,18 @@ const testSchema = Schema.struct({
 })
 
 describe("bind()", () => {
-  it("creates a BoundSchema with correct schema, factory, strategy", () => {
+  it("creates a BoundSchema with correct schema, factory, syncProtocol", () => {
     const factory = vi.fn(() => plainSubstrateFactory)
     const bound = bind({
       schema: testSchema,
       factory,
-      strategy: "collaborative",
+      syncProtocol: SYNC_COLLABORATIVE,
     })
 
     expect(isBoundSchema(bound)).toBe(true)
     expect(bound.schema).toBe(testSchema)
     expect(bound.factory).toBe(factory)
-    expect(bound.strategy).toBe("collaborative")
+    expect(bound.syncProtocol).toBe(SYNC_COLLABORATIVE)
   })
 
   it("factory builder is called with { peerId } and returns a SubstrateFactory", () => {
@@ -39,7 +44,7 @@ describe("bind()", () => {
     const bound = bind({
       schema: testSchema,
       factory,
-      strategy: "authoritative",
+      syncProtocol: SYNC_AUTHORITATIVE,
     })
 
     const result = bound.factory({
@@ -71,40 +76,29 @@ describe("isBoundSchema()", () => {
 })
 
 describe("json.bind()", () => {
-  it("creates a BoundSchema with authoritative strategy", () => {
+  it("creates a BoundSchema with authoritative syncProtocol", () => {
     const bound = json.bind(testSchema)
     expect(bound.schema).toBe(testSchema)
-    expect(bound.strategy).toBe("authoritative")
+    expect(bound.syncProtocol).toBe(SYNC_AUTHORITATIVE)
   })
 })
 
 describe("json.replica()", () => {
-  it("produces a BoundReplica with authoritative strategy and plainReplicaFactory", () => {
+  it("produces a BoundReplica with authoritative syncProtocol and plainReplicaFactory", () => {
     const replica = json.replica()
-    expect(replica.strategy).toBe("authoritative")
+    expect(replica.syncProtocol).toBe(SYNC_AUTHORITATIVE)
     expect(replica.factory).toBe(plainReplicaFactory)
-    expect(replica.factory.replicaType).toEqual(["plain", 1, 0])
-  })
-
-  it("json.replica('ephemeral') produces a BoundReplica with ephemeral strategy and lwwReplicaFactory", () => {
-    const replica = json.replica("ephemeral")
-    expect(replica.strategy).toBe("ephemeral")
-    expect(replica.factory).toBe(lwwReplicaFactory)
     expect(replica.factory.replicaType).toEqual(["plain", 1, 0])
   })
 })
 
+describe("json binding target", () => {
+  it("exposes SYNC_AUTHORITATIVE as its syncProtocol", () => {
+    expect(json.syncProtocol).toBe(SYNC_AUTHORITATIVE)
+  })
+})
+
 describe("compile-time type constraints", () => {
-  it("json.bind rejects 'collaborative' strategy (compile-time + runtime)", () => {
-    // @ts-expect-error — "collaborative" not assignable to JsonStrategy
-    expect(() => json.bind(testSchema, "collaborative")).toThrow()
-  })
-
-  it("json.replica rejects 'collaborative' strategy (compile-time + runtime)", () => {
-    // @ts-expect-error — "collaborative" not assignable to JsonStrategy
-    expect(() => json.replica("collaborative")).toThrow()
-  })
-
   it("json.bind rejects bare list at root", () => {
     // @ts-expect-error — SequenceSchema is not ProductSchema
     json.bind(Schema.list(Schema.string()))
@@ -131,15 +125,26 @@ describe("compile-time type constraints", () => {
   })
 })
 
-describe("json.bind(ephemeral)", () => {
-  it("creates a BoundSchema with ephemeral strategy", () => {
-    const bound = json.bind(testSchema, "ephemeral")
+describe("ephemeral binding target", () => {
+  it("exposes SYNC_EPHEMERAL as its syncProtocol", () => {
+    expect(ephemeral.syncProtocol).toBe(SYNC_EPHEMERAL)
+  })
+
+  it("creates a BoundSchema with ephemeral syncProtocol", () => {
+    const bound = ephemeral.bind(testSchema)
     expect(bound.schema).toBe(testSchema)
-    expect(bound.strategy).toBe("ephemeral")
+    expect(bound.syncProtocol).toBe(SYNC_EPHEMERAL)
+  })
+
+  it("replica() produces a BoundReplica with ephemeral syncProtocol and lwwReplicaFactory", () => {
+    const replica = ephemeral.replica()
+    expect(replica.syncProtocol).toBe(SYNC_EPHEMERAL)
+    expect(replica.factory).toBe(lwwReplicaFactory)
+    expect(replica.factory.replicaType).toEqual(["plain", 1, 0])
   })
 
   it("factory produces a substrate with TimestampVersion", () => {
-    const bound = json.bind(testSchema, "ephemeral")
+    const bound = ephemeral.bind(testSchema)
     const factory = bound.factory({
       peerId: "test-peer",
       binding: bound.identityBinding,
@@ -150,7 +155,7 @@ describe("json.bind(ephemeral)", () => {
   })
 
   it("substrate bumps TimestampVersion on flush", () => {
-    const bound = json.bind(testSchema, "ephemeral")
+    const bound = ephemeral.bind(testSchema)
     const factory = bound.factory({
       peerId: "test-peer",
       binding: bound.identityBinding,
@@ -172,7 +177,7 @@ describe("json.bind(ephemeral)", () => {
   })
 
   it("each mutation advances the timestamp (monotonic wall clock)", () => {
-    const bound = json.bind(testSchema, "ephemeral")
+    const bound = ephemeral.bind(testSchema)
     const factory = bound.factory({
       peerId: "test-peer",
       binding: bound.identityBinding,
@@ -197,8 +202,73 @@ describe("json.bind(ephemeral)", () => {
     expect(ts2).toBeGreaterThanOrEqual(ts1)
   })
 
+  describe("ephemeral rejects non-LWW schemas at compile time", () => {
+    it("rejects counter (additive law)", () => {
+      const schema = Schema.struct({ count: Schema.counter() })
+      // @ts-expect-error — additive law not in ephemeral's LWW-family set
+      ephemeral.bind(schema)
+    })
+
+    it("rejects text (positional-ot law)", () => {
+      const schema = Schema.struct({ body: Schema.text() })
+      // @ts-expect-error — positional-ot law not in ephemeral's LWW-family set
+      ephemeral.bind(schema)
+    })
+
+    it("rejects list of structs (positional-ot law from sequence)", () => {
+      const schema = Schema.struct({
+        items: Schema.list(Schema.struct({ name: Schema.string() })),
+      })
+      // @ts-expect-error — positional-ot law not in ephemeral's LWW-family set
+      ephemeral.bind(schema)
+    })
+
+    it("rejects set (add-wins-per-key law)", () => {
+      const schema = Schema.struct({ tags: Schema.set(Schema.string()) })
+      // @ts-expect-error — add-wins-per-key law not in ephemeral's LWW-family set
+      ephemeral.bind(schema)
+    })
+
+    it("rejects tree (tree-move law)", () => {
+      const schema = Schema.struct({
+        hierarchy: Schema.tree(Schema.struct({ label: Schema.string() })),
+      })
+      // @ts-expect-error — tree-move law not in ephemeral's LWW-family set
+      ephemeral.bind(schema)
+    })
+
+    it("rejects movableList (positional-ot-move law)", () => {
+      const schema = Schema.struct({
+        items: Schema.movableList(Schema.string()),
+      })
+      // @ts-expect-error — positional-ot-move law not in ephemeral's LWW-family set
+      ephemeral.bind(schema)
+    })
+
+    it("accepts scalar-only structs (lww + lww-per-key)", () => {
+      const schema = Schema.struct({ x: Schema.number(), y: Schema.number() })
+      const bound = ephemeral.bind(schema)
+      expect(bound).toBeDefined()
+    })
+
+    it("json.bind() accepts counter (serialized writes satisfy all laws)", () => {
+      const schema = Schema.struct({ count: Schema.counter() })
+      const bound = json.bind(schema)
+      expect(bound).toBeDefined()
+    })
+
+    it(".json() merge boundary suppresses child laws", () => {
+      // list.json() emits "lww" (merge boundary), not "positional-ot"
+      const schema = Schema.struct({
+        data: Schema.list.json(Schema.string()),
+      })
+      const bound = ephemeral.bind(schema)
+      expect(bound).toBeDefined()
+    })
+  })
+
   it("fromEntirety starts with a current timestamp (not zero)", () => {
-    const bound = json.bind(testSchema, "ephemeral")
+    const bound = ephemeral.bind(testSchema)
     const factory = bound.factory({
       peerId: "test-peer",
       binding: bound.identityBinding,
@@ -219,7 +289,7 @@ describe("json.bind(ephemeral)", () => {
   })
 
   it("merge with entirety payload absorbs state and bumps timestamp", () => {
-    const bound = json.bind(testSchema, "ephemeral")
+    const bound = ephemeral.bind(testSchema)
     const factory = bound.factory({
       peerId: "test-peer",
       binding: bound.identityBinding,
@@ -245,7 +315,7 @@ describe("json.bind(ephemeral)", () => {
   })
 
   it("merge with since payload applies ops and bumps timestamp", () => {
-    const bound = json.bind(testSchema, "ephemeral")
+    const bound = ephemeral.bind(testSchema)
     const factory = bound.factory({
       peerId: "test-peer",
       binding: bound.identityBinding,

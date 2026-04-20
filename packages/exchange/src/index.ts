@@ -1,8 +1,8 @@
 // @kyneta/exchange — substrate-agnostic state exchange.
 //
 // Provides sync infrastructure for any @kyneta/schema substrate.
-// Three merge strategies (causal, sequential, lww) are dispatched
-// by factory declaration over a uniform four-message protocol
+// Three sync protocols (authoritative, collaborative, ephemeral) are
+// dispatched by factory declaration over a uniform four-message protocol
 // (present, interest, offer, dismiss).
 
 // ---------------------------------------------------------------------------
@@ -34,8 +34,16 @@ export type {
 // Schema binding — re-exported from @kyneta/schema for convenience
 // ---------------------------------------------------------------------------
 
-export type { BoundSchema, FactoryBuilder, MergeStrategy } from "@kyneta/schema"
-export { bind, isBoundSchema, json } from "@kyneta/schema"
+export type { BoundSchema, FactoryBuilder, SyncProtocol } from "@kyneta/schema"
+export {
+  bind,
+  isBoundSchema,
+  json,
+  requiresBidirectionalSync,
+  SYNC_AUTHORITATIVE,
+  SYNC_COLLABORATIVE,
+  SYNC_EPHEMERAL,
+} from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
 // Unwrap — re-exported from @kyneta/schema for convenience

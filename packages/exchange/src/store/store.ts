@@ -2,7 +2,7 @@
 //
 // The Store interface defines document-level operations
 // that concrete backends implement. Backends need no knowledge of the
-// sync protocol, substrates, merge strategies, or schemas.
+// wire protocol, substrates, sync protocols, or schemas.
 //
 // The Exchange guarantees that for any given docId, these methods are
 // called sequentially — never concurrently. Backends may assume

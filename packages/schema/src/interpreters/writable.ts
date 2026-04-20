@@ -25,12 +25,7 @@ import type { Interpreter, Path, SumVariants } from "../interpret.js"
 export type { Op }
 
 import type { ChangeBase } from "../change.js"
-import {
-  incrementChange,
-  replaceChange,
-} from "../change.js"
-import { wireTextWriteOps, wireRichTextWriteOps, wireListWriteOps } from "./sequence-helpers.js"
-import { wireKeyedWriteOps } from "./keyed-helpers.js"
+import { incrementChange, replaceChange } from "../change.js"
 import type { Plain, RefContext } from "../interpreter-types.js"
 import type {
   CounterSchema,
@@ -49,6 +44,12 @@ import type {
   TreeSchema,
 } from "../schema.js"
 import type { SubstratePrepare } from "../substrate.js"
+import { installKeyedWriteOps } from "./keyed-helpers.js"
+import {
+  installListWriteOps,
+  installRichTextWriteOps,
+  installTextWriteOps,
+} from "./sequence-helpers.js"
 
 // ---------------------------------------------------------------------------
 // WritableDiscriminantProductRef — hybrid product ref for discriminated unions
@@ -367,7 +368,11 @@ export interface TextRef {
 }
 
 export interface RichTextRef {
-  insert: (index: number, content: string, marks?: Record<string, unknown>) => void
+  insert: (
+    index: number,
+    content: string,
+    marks?: Record<string, unknown>,
+  ) => void
   delete: (index: number, length: number) => void
   update: (content: string) => void
   mark: (start: number, end: number, key: string, value: unknown) => void
@@ -455,36 +460,39 @@ export type Writable<S extends Schema> =
         ? RichTextRef
         : // --- First-class container types ---
           S extends SetSchema<infer I>
-        ? WritableMapRef<Plain<I>>
-        : S extends TreeSchema<infer Inner>
-          ? Writable<Inner>
-          : S extends MovableSequenceSchema<infer _I>
-            ? SequenceRef
-            : // --- Scalar ---
-              S extends ScalarSchema<infer _K, infer V>
-              ? ScalarRef<V>
-              : // --- Product ---
-                S extends ProductSchema<infer F>
-                ? { readonly [K in keyof F]: Writable<F[K]> } & ProductRef<{
-                    [K in keyof F]: Plain<F[K]>
-                  }>
-                : // --- Sequence ---
-                  S extends SequenceSchema<infer _I>
-                  ? SequenceRef
-                  : // --- Map ---
-                    S extends MapSchema<infer I>
-                    ? WritableMapRef<Plain<I>>
-                    : // --- Sum ---
-                      S extends PositionalSumSchema<infer V>
-                      ? V extends readonly [
-                          ScalarSchema<"null", any>,
-                          infer Inner extends Schema,
-                        ]
-                        ? ScalarRef<Plain<Inner> | null>
-                        : Writable<V[number]>
-                      : S extends DiscriminatedSumSchema<infer D, infer V>
-                        ? WritableDiscriminantProductRef<V[number]["fields"], D>
-                        : unknown
+          ? WritableMapRef<Plain<I>>
+          : S extends TreeSchema<infer Inner>
+            ? Writable<Inner>
+            : S extends MovableSequenceSchema<infer _I>
+              ? SequenceRef
+              : // --- Scalar ---
+                S extends ScalarSchema<infer _K, infer V>
+                ? ScalarRef<V>
+                : // --- Product ---
+                  S extends ProductSchema<infer F>
+                  ? { readonly [K in keyof F]: Writable<F[K]> } & ProductRef<{
+                      [K in keyof F]: Plain<F[K]>
+                    }>
+                  : // --- Sequence ---
+                    S extends SequenceSchema<infer _I>
+                    ? SequenceRef
+                    : // --- Map ---
+                      S extends MapSchema<infer I>
+                      ? WritableMapRef<Plain<I>>
+                      : // --- Sum ---
+                        S extends PositionalSumSchema<infer V>
+                        ? V extends readonly [
+                            ScalarSchema<"null", any>,
+                            infer Inner extends Schema,
+                          ]
+                          ? ScalarRef<Plain<Inner> | null>
+                          : Writable<V[number]>
+                        : S extends DiscriminatedSumSchema<infer D, infer V>
+                          ? WritableDiscriminantProductRef<
+                              V[number]["fields"],
+                              D
+                            >
+                          : unknown
 
 // ---------------------------------------------------------------------------
 // withWritable — interpreter transformer
@@ -589,7 +597,7 @@ export function withWritable<A>(
       item: (index: number) => A,
     ): A & HasTransact {
       const result = base.sequence(ctx, path, schema, item) as any
-      wireListWriteOps(result, ctx, path)
+      installListWriteOps(result, ctx, path)
       attachTransact(result, ctx)
       return result
     },
@@ -603,7 +611,7 @@ export function withWritable<A>(
       item: (key: string) => A,
     ): A & HasTransact {
       const result = base.map(ctx, path, schema, item) as any
-      wireKeyedWriteOps(result, ctx, path)
+      installKeyedWriteOps(result, ctx, path)
       attachTransact(result, ctx)
       return result
     },
@@ -632,7 +640,7 @@ export function withWritable<A>(
       schema: TextSchema,
     ): A & HasTransact {
       const result = base.text(ctx, path, schema) as any
-      wireTextWriteOps(result, ctx, path)
+      installTextWriteOps(result, ctx, path)
       attachTransact(result, ctx)
       return result
     },
@@ -669,7 +677,7 @@ export function withWritable<A>(
       item: (key: string) => A,
     ): A & HasTransact {
       const result = base.set(ctx, path, schema, item) as any
-      wireKeyedWriteOps(result, ctx, path)
+      installKeyedWriteOps(result, ctx, path)
       attachTransact(result, ctx)
       return result
     },
@@ -699,7 +707,7 @@ export function withWritable<A>(
       item: (index: number) => A,
     ): A & HasTransact {
       const result = base.movable(ctx, path, schema, item) as any
-      wireListWriteOps(result, ctx, path)
+      installListWriteOps(result, ctx, path)
       attachTransact(result, ctx)
       return result
     },
@@ -712,7 +720,7 @@ export function withWritable<A>(
       schema: RichTextSchema,
     ): A & HasTransact {
       const result = base.richtext(ctx, path, schema) as any
-      wireRichTextWriteOps(result, ctx, path)
+      installRichTextWriteOps(result, ctx, path)
       attachTransact(result, ctx)
       return result
     },

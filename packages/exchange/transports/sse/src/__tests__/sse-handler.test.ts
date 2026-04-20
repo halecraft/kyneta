@@ -5,6 +5,7 @@
 // 2. Fragment text frame body → returns pending, then complete on final fragment
 // 3. Malformed body → returns error
 
+import { SYNC_AUTHORITATIVE } from "@kyneta/schema"
 import type { ChannelMsg } from "@kyneta/transport"
 import {
   encodeTextComplete,
@@ -25,13 +26,13 @@ const presentMsg: ChannelMsg = {
     {
       docId: "doc-1",
       replicaType: ["plain", 1, 0] as const,
-      mergeStrategy: "authoritative" as const,
+      syncProtocol: SYNC_AUTHORITATIVE,
       schemaHash: "test-hash",
     },
     {
       docId: "doc-2",
       replicaType: ["plain", 1, 0] as const,
-      mergeStrategy: "authoritative" as const,
+      syncProtocol: SYNC_AUTHORITATIVE,
       schemaHash: "test-hash",
     },
   ],

@@ -43,8 +43,8 @@ import type {
 } from "../schema.js"
 
 import type { HasCaching, HasNavigation } from "./bottom.js"
-import { wireSequenceCaching } from "./sequence-helpers.js"
-import { wireKeyedCaching } from "./keyed-helpers.js"
+import { installKeyedCaching } from "./keyed-helpers.js"
+import { installSequenceCaching } from "./sequence-helpers.js"
 
 // ---------------------------------------------------------------------------
 // INVALIDATE symbol — composability hook for cache coordination
@@ -280,9 +280,13 @@ export function withCaching<A extends HasNavigation>(
     ): A & HasCaching {
       const baseItem = item as (index: number) => A
       const result = base.sequence(ctx, path, schema, baseItem) as any
-      wireSequenceCaching(
-        result, path, ADDRESS_TABLE_SYM, INVALIDATE,
-        (p, handler) => registerCacheHandler(ensureCacheWiring(ctx), p, handler),
+      installSequenceCaching(
+        result,
+        path,
+        ADDRESS_TABLE_SYM,
+        INVALIDATE,
+        (p, handler) =>
+          registerCacheHandler(ensureCacheWiring(ctx), p, handler),
       )
       return result as A & HasCaching
     },
@@ -297,9 +301,13 @@ export function withCaching<A extends HasNavigation>(
     ): A & HasCaching {
       const baseItem = item as (key: string) => A
       const result = base.map(ctx, path, schema, baseItem) as any
-      wireKeyedCaching(
-        result, path, ADDRESS_TABLE_SYM, INVALIDATE,
-        (p, handler) => registerCacheHandler(ensureCacheWiring(ctx), p, handler),
+      installKeyedCaching(
+        result,
+        path,
+        ADDRESS_TABLE_SYM,
+        INVALIDATE,
+        (p, handler) =>
+          registerCacheHandler(ensureCacheWiring(ctx), p, handler),
       )
       return result as A & HasCaching
     },
@@ -342,9 +350,13 @@ export function withCaching<A extends HasNavigation>(
     ): A & HasCaching {
       const baseItem = item as (key: string) => A
       const result = base.set(ctx, path, schema, baseItem) as any
-      wireKeyedCaching(
-        result, path, ADDRESS_TABLE_SYM, INVALIDATE,
-        (p, handler) => registerCacheHandler(ensureCacheWiring(ctx), p, handler),
+      installKeyedCaching(
+        result,
+        path,
+        ADDRESS_TABLE_SYM,
+        INVALIDATE,
+        (p, handler) =>
+          registerCacheHandler(ensureCacheWiring(ctx), p, handler),
       )
       return result as A & HasCaching
     },
@@ -373,16 +385,24 @@ export function withCaching<A extends HasNavigation>(
     ): A & HasCaching {
       const baseItem = item as (index: number) => A
       const result = base.movable(ctx, path, schema, baseItem) as any
-      wireSequenceCaching(
-        result, path, ADDRESS_TABLE_SYM, INVALIDATE,
-        (p, handler) => registerCacheHandler(ensureCacheWiring(ctx), p, handler),
+      installSequenceCaching(
+        result,
+        path,
+        ADDRESS_TABLE_SYM,
+        INVALIDATE,
+        (p, handler) =>
+          registerCacheHandler(ensureCacheWiring(ctx), p, handler),
       )
       return result as A & HasCaching
     },
 
     // --- RichText --------------------------------------------------------------
     // No caching needed for richtext — pass through.
-    richtext(ctx: RefContext, path: Path, schema: RichTextSchema): A & HasCaching {
+    richtext(
+      ctx: RefContext,
+      path: Path,
+      schema: RichTextSchema,
+    ): A & HasCaching {
       return base.richtext(ctx, path, schema) as A & HasCaching
     },
   }

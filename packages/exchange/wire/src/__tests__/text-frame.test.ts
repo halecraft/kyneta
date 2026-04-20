@@ -4,6 +4,11 @@
 // x=type/hash via case), JSON array envelope, fragment fields,
 // fragmentTextPayload splitting, and end-to-end with TextReassembler.
 
+import {
+  SYNC_AUTHORITATIVE,
+  SYNC_COLLABORATIVE,
+  SYNC_EPHEMERAL,
+} from "@kyneta/schema"
 import type { ChannelMsg, OfferMsg, PresentMsg } from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
 import { complete, fragment, isComplete, isFragment } from "../frame-types.js"
@@ -78,7 +83,7 @@ describe("Text frame — complete round-trip", () => {
           docId: "doc-1",
           schemaHash: "00test",
           replicaType: ["plain", 1, 0] as const,
-          mergeStrategy: "authoritative" as const,
+          syncProtocol: SYNC_AUTHORITATIVE,
         },
       ],
     })
@@ -101,7 +106,7 @@ describe("Text frame — complete round-trip", () => {
             docId: "a",
             schemaHash: "00test",
             replicaType: ["plain", 1, 0] as const,
-            mergeStrategy: "authoritative" as const,
+            syncProtocol: SYNC_AUTHORITATIVE,
           },
         ],
       },
@@ -135,7 +140,7 @@ describe("Text frame — complete round-trip", () => {
           docId: "x",
           schemaHash: "00test",
           replicaType: ["plain", 1, 0] as const,
-          mergeStrategy: "authoritative" as const,
+          syncProtocol: SYNC_AUTHORITATIVE,
         },
       ],
     })
@@ -155,7 +160,7 @@ describe("Text frame — complete round-trip", () => {
           docId: "x",
           schemaHash: "00test",
           replicaType: ["plain", 1, 0] as const,
-          mergeStrategy: "authoritative" as const,
+          syncProtocol: SYNC_AUTHORITATIVE,
         },
       ],
     })
@@ -383,13 +388,13 @@ describe("Text frame — convenience functions", () => {
           docId: "doc-1",
           schemaHash: "00test",
           replicaType: ["plain", 1, 0] as const,
-          mergeStrategy: "authoritative" as const,
+          syncProtocol: SYNC_AUTHORITATIVE,
         },
         {
           docId: "doc-2",
           schemaHash: "00test",
           replicaType: ["yjs", 1, 0] as const,
-          mergeStrategy: "collaborative" as const,
+          syncProtocol: SYNC_COLLABORATIVE,
         },
       ],
     }
@@ -412,7 +417,7 @@ describe("Text frame — convenience functions", () => {
             docId: "a",
             schemaHash: "00test",
             replicaType: ["plain", 1, 0] as const,
-            mergeStrategy: "authoritative" as const,
+            syncProtocol: SYNC_AUTHORITATIVE,
           },
         ],
       },
@@ -513,19 +518,19 @@ describe("Text frame — end-to-end with TextReassembler", () => {
             docId: "a",
             schemaHash: "00test",
             replicaType: ["plain", 1, 0] as const,
-            mergeStrategy: "authoritative" as const,
+            syncProtocol: SYNC_AUTHORITATIVE,
           },
           {
             docId: "b",
             schemaHash: "00test",
             replicaType: ["yjs", 1, 0] as const,
-            mergeStrategy: "collaborative" as const,
+            syncProtocol: SYNC_COLLABORATIVE,
           },
           {
             docId: "c",
             schemaHash: "00test",
             replicaType: ["loro", 1, 0] as const,
-            mergeStrategy: "ephemeral" as const,
+            syncProtocol: SYNC_EPHEMERAL,
           },
         ],
       },
@@ -608,7 +613,7 @@ describe("Text frame — end-to-end with TextReassembler", () => {
           docId: "x",
           schemaHash: "00test",
           replicaType: ["plain", 1, 0] as const,
-          mergeStrategy: "authoritative" as const,
+          syncProtocol: SYNC_AUTHORITATIVE,
         },
       ],
     }

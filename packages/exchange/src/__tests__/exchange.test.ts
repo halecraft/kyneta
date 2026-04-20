@@ -12,6 +12,7 @@ import {
   Schema,
   SUBSTRATE,
   type Substrate,
+  SYNC_AUTHORITATIVE,
   unwrap,
 } from "@kyneta/schema"
 import {
@@ -150,7 +151,7 @@ describe("Exchange", () => {
       const Doc = bind({
         schema: testSchema,
         factory: builder,
-        strategy: "authoritative",
+        syncProtocol: SYNC_AUTHORITATIVE,
       })
 
       const exchange = new Exchange({ id: "alice-123" })
@@ -166,7 +167,7 @@ describe("Exchange", () => {
       const DocA = bind({
         schema: testSchema,
         factory: builder,
-        strategy: "authoritative",
+        syncProtocol: SYNC_AUTHORITATIVE,
       })
 
       const exchange = new Exchange({ id: "test" })
@@ -190,7 +191,7 @@ describe("Exchange", () => {
       const Doc = bind({
         schema: testSchema,
         factory: builder,
-        strategy: "authoritative",
+        syncProtocol: SYNC_AUTHORITATIVE,
       })
 
       const exchangeA = new Exchange({ id: "alice" })
@@ -863,7 +864,7 @@ describe("Exchange", () => {
       exchange.replicate(
         "rep-doc",
         plainReplicaFactory,
-        "authoritative",
+        SYNC_AUTHORITATIVE,
         "00test",
       )
       expect(exchange.has("rep-doc")).toBe(true)
@@ -876,7 +877,7 @@ describe("Exchange", () => {
         exchange.replicate(
           "doc-1",
           plainReplicaFactory,
-          "authoritative",
+          SYNC_AUTHORITATIVE,
           "00test",
         ),
       ).toThrow(/already registered/)
@@ -887,14 +888,14 @@ describe("Exchange", () => {
       exchange.replicate(
         "doc-1",
         plainReplicaFactory,
-        "authoritative",
+        SYNC_AUTHORITATIVE,
         "00test",
       )
       expect(() =>
         exchange.replicate(
           "doc-1",
           plainReplicaFactory,
-          "authoritative",
+          SYNC_AUTHORITATIVE,
           "00test",
         ),
       ).toThrow(/already registered/)
@@ -905,7 +906,7 @@ describe("Exchange", () => {
       exchange.replicate(
         "doc-1",
         plainReplicaFactory,
-        "authoritative",
+        SYNC_AUTHORITATIVE,
         "00test",
       )
       expect(() => exchange.get("doc-1", TestDoc)).toThrow(/replicate mode/)
@@ -916,7 +917,7 @@ describe("Exchange", () => {
       exchange.replicate(
         "rep-doc",
         plainReplicaFactory,
-        "authoritative",
+        SYNC_AUTHORITATIVE,
         "00test",
       )
       expect(exchange.has("rep-doc")).toBe(true)
@@ -930,7 +931,7 @@ describe("Exchange", () => {
       exchange.replicate(
         "rep-doc",
         plainReplicaFactory,
-        "authoritative",
+        SYNC_AUTHORITATIVE,
         "00test",
       )
       expect(exchange.has("int-doc")).toBe(true)

@@ -19,13 +19,13 @@ import type {
 import { type CBORType, decodeCBOR, encodeCBOR } from "./cbor-encoding.js"
 import type { BinaryCodec } from "./codec.js"
 import {
-  MergeStrategyWireToString,
   MessageType,
   PayloadEncodingToString,
   PayloadKindToString,
-  StringToMergeStrategyWire,
   StringToPayloadEncoding,
   StringToPayloadKind,
+  SyncProtocolWireToProtocol,
+  syncProtocolToWire,
   type WireDepartMsg,
   type WireDismissMsg,
   type WireEstablishMsg,
@@ -122,10 +122,7 @@ function toWireFormat(msg: ChannelMsg): WireMessage {
       return {
         t: MessageType.Present,
         docs: msg.docs.map(d => {
-          const ms = StringToMergeStrategyWire[d.mergeStrategy]
-          if (ms === undefined) {
-            throw new Error(`Unknown merge strategy: ${d.mergeStrategy}`)
-          }
+          const ms = syncProtocolToWire(d.syncProtocol)
           const entry: WirePresentMsg["docs"][number] = {
             d: d.docId,
             rt: [...d.replicaType] as [string, number, number],
@@ -206,14 +203,14 @@ function fromWireFormat(wire: WireMessage): ChannelMsg {
       return {
         type: "present",
         docs: presentWire.docs.map(d => {
-          const mergeStrategy = MergeStrategyWireToString[d.ms]
-          if (!mergeStrategy) {
-            throw new Error(`Unknown wire merge strategy: ${d.ms}`)
+          const syncProtocol = SyncProtocolWireToProtocol[d.ms]
+          if (!syncProtocol) {
+            throw new Error(`Unknown wire sync protocol: ${d.ms}`)
           }
           const entry: PresentMsg["docs"][number] = {
             docId: d.d,
             replicaType: d.rt as readonly [string, number, number],
-            mergeStrategy,
+            syncProtocol,
             schemaHash: d.sh,
           }
           if (d.shs) {

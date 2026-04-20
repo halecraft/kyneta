@@ -3,11 +3,15 @@
 import { loro } from "@kyneta/loro-schema"
 import {
   type BoundSchema,
+  ephemeral,
   type FactoryBuilder,
   json,
   plainReplicaFactory,
   Schema,
   type SubstrateFactory,
+  SYNC_AUTHORITATIVE,
+  SYNC_COLLABORATIVE,
+  SYNC_EPHEMERAL,
 } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import { createCapabilities, DEFAULT_REPLICAS } from "../capabilities.js"
@@ -83,21 +87,21 @@ describe("Capabilities", () => {
       resolveFactory,
     })
 
-    const resolved = caps.resolveReplica(["plain", 1, 0], "authoritative")
+    const resolved = caps.resolveReplica(["plain", 1, 0], SYNC_AUTHORITATIVE)
     expect(resolved).toBeDefined()
     expect(resolved?.factory).toBe(plainReplicaFactory)
-    expect(resolved?.strategy).toBe("authoritative")
+    expect(resolved?.syncProtocol).toBe(SYNC_AUTHORITATIVE)
   })
 
-  it("resolveReplica returns undefined for wrong strategy", () => {
+  it("resolveReplica returns undefined for wrong syncProtocol", () => {
     const caps = createCapabilities({
       schemas: [],
       replicas: [...DEFAULT_REPLICAS],
       resolveFactory,
     })
 
-    // ["plain", 1, 0] is registered with "authoritative" and "ephemeral", but not "collaborative"
-    const resolved = caps.resolveReplica(["plain", 1, 0], "collaborative")
+    // ["plain", 1, 0] is registered with authoritative and ephemeral, but not collaborative
+    const resolved = caps.resolveReplica(["plain", 1, 0], SYNC_COLLABORATIVE)
     expect(resolved).toBeUndefined()
   })
 
@@ -108,7 +112,7 @@ describe("Capabilities", () => {
       resolveFactory,
     })
 
-    const resolved = caps.resolveReplica(["loro", 1, 0], "collaborative")
+    const resolved = caps.resolveReplica(["loro", 1, 0], SYNC_COLLABORATIVE)
     expect(resolved).toBeUndefined()
   })
 
@@ -129,12 +133,12 @@ describe("Capabilities", () => {
     const resolved = caps.resolveSchema(
       bound.schemaHash,
       ["plain", 1, 0],
-      "authoritative",
+      SYNC_AUTHORITATIVE,
     )
     expect(resolved).toBe(bound)
   })
 
-  it("resolveSchema returns undefined for wrong strategy", () => {
+  it("resolveSchema returns undefined for wrong syncProtocol", () => {
     const schema = Schema.struct({ title: Schema.string() })
     const bound = json.bind(schema)
 
@@ -147,7 +151,7 @@ describe("Capabilities", () => {
     const resolved = caps.resolveSchema(
       bound.schemaHash,
       ["plain", 1, 0],
-      "ephemeral",
+      SYNC_EPHEMERAL,
     )
     expect(resolved).toBeUndefined()
   })
@@ -165,7 +169,7 @@ describe("Capabilities", () => {
     const resolved = caps.resolveSchema(
       "nonexistent",
       ["plain", 1, 0],
-      "authoritative",
+      SYNC_AUTHORITATIVE,
     )
     expect(resolved).toBeUndefined()
   })
@@ -188,10 +192,10 @@ describe("Capabilities", () => {
 
     expect(caps.supportsReplicaType(["loro", 1, 0])).toBe(true)
 
-    const resolved = caps.resolveReplica(["loro", 1, 0], "collaborative")
+    const resolved = caps.resolveReplica(["loro", 1, 0], SYNC_COLLABORATIVE)
     expect(resolved).toBeDefined()
     expect(resolved?.factory.replicaType).toEqual(["loro", 1, 0])
-    expect(resolved?.strategy).toBe("collaborative")
+    expect(resolved?.syncProtocol).toBe(SYNC_COLLABORATIVE)
   })
 
   // -------------------------------------------------------------------------
@@ -210,7 +214,7 @@ describe("Capabilities", () => {
 
     // Before registration: nothing resolves
     expect(
-      caps.resolveSchema(bound.schemaHash, ["plain", 1, 0], "authoritative"),
+      caps.resolveSchema(bound.schemaHash, ["plain", 1, 0], SYNC_AUTHORITATIVE),
     ).toBeUndefined()
     expect(caps.supportsReplicaType(["plain", 1, 0])).toBe(false)
 
@@ -219,7 +223,7 @@ describe("Capabilities", () => {
 
     // After registration: schema resolves and replica type is supported
     expect(
-      caps.resolveSchema(bound.schemaHash, ["plain", 1, 0], "authoritative"),
+      caps.resolveSchema(bound.schemaHash, ["plain", 1, 0], SYNC_AUTHORITATIVE),
     ).toBe(bound)
     expect(caps.supportsReplicaType(["plain", 1, 0])).toBe(true)
   })
@@ -228,22 +232,22 @@ describe("Capabilities", () => {
   // DEFAULT_REPLICAS coverage
   // -------------------------------------------------------------------------
 
-  it("DEFAULT_REPLICAS covers both plain-wire strategies", () => {
+  it("DEFAULT_REPLICAS covers both plain-wire sync protocols", () => {
     const caps = createCapabilities({
       schemas: [],
       replicas: [...DEFAULT_REPLICAS],
       resolveFactory,
     })
 
-    const sequential = caps.resolveReplica(["plain", 1, 0], "authoritative")
-    const ephemeral = caps.resolveReplica(["plain", 1, 0], "ephemeral")
+    const sequential = caps.resolveReplica(["plain", 1, 0], SYNC_AUTHORITATIVE)
+    const eph = caps.resolveReplica(["plain", 1, 0], SYNC_EPHEMERAL)
 
     expect(sequential).toBeDefined()
-    expect(ephemeral).toBeDefined()
+    expect(eph).toBeDefined()
 
     // They should be different BoundReplica instances with different factories
     expect(sequential?.factory).toBe(plainReplicaFactory)
-    expect(ephemeral?.factory).toBe(json.replica("ephemeral").factory)
-    expect(sequential?.factory).not.toBe(ephemeral?.factory)
+    expect(eph?.factory).toBe(ephemeral.replica().factory)
+    expect(sequential?.factory).not.toBe(eph?.factory)
   })
 })

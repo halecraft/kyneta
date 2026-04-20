@@ -150,7 +150,7 @@ The `cborCodec` encodes `ChannelMsg` objects as compact wire objects with short 
 | `sh` | schemaHash | `string` (34-char hex) | present (doc entry, required) |
 | `d` | docId / data | `string` (present doc entry) or `string \| Uint8Array` (offer) | present, offer |
 | `rt` | replicaType | `[string, number, number]` | present (doc entry) |
-| `ms` | mergeStrategy | `MergeStrategyWireValue` (`0x00` causal, `0x01` sequential, `0x02` lww) | present (doc entry) |
+| `ms` | syncProtocol | `SyncProtocolWireValue` (`0x00` collaborative, `0x01` authoritative, `0x02` ephemeral) | present (doc entry) |
 | `v` | version | `string` | interest (optional), offer |
 | `r` | reciprocate | `boolean` (optional) | interest, offer |
 | `pk` | payload kind | `0x00` (entirety) or `0x01` (since) | offer |

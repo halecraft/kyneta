@@ -532,7 +532,7 @@ describe("withCaching: sum dispatch", () => {
 
   it("nullable sum dispatches correctly", () => {
     const schema = Schema.struct({
-      bio: Schema.nullable(Schema.string()),
+      bio: Schema.string().nullable(),
     })
     const { doc: doc1 } = createDoc(schema, { bio: null })
     expect(doc1.bio()).toBe(null)

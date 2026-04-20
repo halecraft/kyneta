@@ -1,24 +1,24 @@
 // capabilities — registry of supported replica types and schema bindings.
 //
 // The Capabilities registry is the exchange's knowledge base: it knows
-// which ReplicaType + MergeStrategy pairs this participant supports,
+// which ReplicaType + SyncProtocol pairs this participant supports,
 // and which BoundSchemas map to which replicas. Conduit participants
 // (relay servers, stores) register only replicas; application servers
 // and clients additionally register schemas.
 //
 // The registry is keyed by `ReplicaKey` — a composite of replica name,
-// major version, and merge strategy — giving O(1) lookup for both
+// major version, and sync protocol name — giving O(1) lookup for both
 // schema resolution and replica-type support checks.
 
 import type {
   BoundSchema,
   FactoryBuilder,
-  MergeStrategy,
   ReplicaFactory,
   ReplicaType,
   SubstrateFactory,
+  SyncProtocol,
 } from "@kyneta/schema"
-import { BoundReplica, json } from "@kyneta/schema"
+import { BoundReplica, ephemeral, json } from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
 // ReplicaKey — composite lookup key
@@ -27,11 +27,11 @@ import { BoundReplica, json } from "@kyneta/schema"
 /**
  * Composite key for the capabilities registry.
  *
- * Encodes `${replicaTypeName}:${replicaTypeMajor}:${mergeStrategy}` so
+ * Encodes `${replicaTypeName}:${replicaTypeMajor}:${syncProtocolName}` so
  * that a single `Map` lookup resolves both the replica factory and all
  * schemas bound to that replication tier.
  */
-type ReplicaKey = string // `${name}:${major}:${strategy}`
+type ReplicaKey = string // `${name}:${major}:${protocolName}`
 
 /**
  * An entry in the capabilities registry: a replica binding and all
@@ -43,19 +43,30 @@ type ReplicaEntry = {
 }
 
 // ---------------------------------------------------------------------------
+// syncProtocolName — canonical name derivation
+// ---------------------------------------------------------------------------
+
+/** Canonical string key for `ReplicaKey` construction. */
+function syncProtocolName(protocol: SyncProtocol): string {
+  if (protocol.writerModel === "serialized") return "authoritative"
+  if (protocol.delivery === "delta-capable") return "collaborative"
+  return "ephemeral"
+}
+
+// ---------------------------------------------------------------------------
 // replicaKey — deterministic key construction
 // ---------------------------------------------------------------------------
 
 /**
  * Compute the composite `ReplicaKey` from a `ReplicaType` and
- * `MergeStrategy`. Two entries share a key iff they are replication-
- * compatible (same name, same major) and use the same sync algorithm.
+ * `SyncProtocol`. Two entries share a key iff they are replication-
+ * compatible (same name, same major) and use the same sync protocol.
  */
 function replicaKey(
   replicaType: ReplicaType,
-  strategy: MergeStrategy,
+  syncProtocol: SyncProtocol,
 ): ReplicaKey {
-  return `${replicaType[0]}:${replicaType[1]}:${strategy}`
+  return `${replicaType[0]}:${replicaType[1]}:${syncProtocolName(syncProtocol)}`
 }
 
 // ---------------------------------------------------------------------------
@@ -66,17 +77,17 @@ function replicaKey(
  * Default replica bindings shipped with the exchange.
  *
  * - **json / authoritative**: monotonic-version plain JS objects with
- *   request/response sync (the default strategy).
- * - **json / ephemeral**: timestamp-versioned plain JS objects with
+ *   request/response sync (the default protocol).
+ * - **ephemeral**: timestamp-versioned plain JS objects with
  *   last-writer-wins broadcast (ephemeral/presence state).
  *
- * Both are provided by the `json` substrate namespace. Consumers can
- * extend this set by passing additional replicas (e.g. `loro.replica()`)
- * to `createCapabilities`.
+ * Both are provided by the `json` and `ephemeral` substrate namespaces.
+ * Consumers can extend this set by passing additional replicas (e.g.
+ * `loro.replica()`) to `createCapabilities`.
  */
 export const DEFAULT_REPLICAS: readonly BoundReplica[] = [
   json.replica(),
-  json.replica("ephemeral"),
+  ephemeral.replica(),
 ]
 
 // ---------------------------------------------------------------------------
@@ -115,23 +126,23 @@ export interface Capabilities {
   resolveSchema(
     schemaHash: string,
     replicaType: ReplicaType,
-    mergeStrategy: MergeStrategy,
+    syncProtocol: SyncProtocol,
   ): BoundSchema | undefined
 
   /**
    * Look up the `BoundReplica` for a replication tier.
    *
-   * Returns `undefined` if the replica type + strategy pair is not
+   * Returns `undefined` if the replica type + sync protocol pair is not
    * registered.
    */
   resolveReplica(
     replicaType: ReplicaType,
-    mergeStrategy: MergeStrategy,
+    syncProtocol: SyncProtocol,
   ): BoundReplica | undefined
 
   /**
    * Check whether this participant can handle the given `ReplicaType`
-   * (any strategy). Uses compatible semantics: same name, same major.
+   * (any sync protocol). Uses compatible semantics: same name, same major.
    */
   supportsReplicaType(replicaType: ReplicaType): boolean
 
@@ -197,8 +208,8 @@ export function createCapabilities(params: {
   ): void {
     const substrateFactory = resolve(bound.factory, bound)
     const replicaFactory: ReplicaFactory = substrateFactory.replica
-    const br = BoundReplica(replicaFactory, bound.strategy)
-    const key = replicaKey(replicaFactory.replicaType, bound.strategy)
+    const br = BoundReplica(replicaFactory, bound.syncProtocol)
+    const key = replicaKey(replicaFactory.replicaType, bound.syncProtocol)
 
     const existing = registry.get(key)
     if (existing) {
@@ -226,7 +237,7 @@ export function createCapabilities(params: {
   // -- initial registration -------------------------------------------------
 
   for (const br of params.replicas) {
-    const key = replicaKey(br.factory.replicaType, br.strategy)
+    const key = replicaKey(br.factory.replicaType, br.syncProtocol)
     ensureEntry(key, br)
   }
 
@@ -250,9 +261,9 @@ export function createCapabilities(params: {
     resolveSchema(
       schemaHash: string,
       replicaType: ReplicaType,
-      mergeStrategy: MergeStrategy,
+      syncProtocol: SyncProtocol,
     ): BoundSchema | undefined {
-      const key = replicaKey(replicaType, mergeStrategy)
+      const key = replicaKey(replicaType, syncProtocol)
       const entry = registry.get(key)
       if (!entry) return undefined
       // Try exact match first
@@ -267,9 +278,9 @@ export function createCapabilities(params: {
 
     resolveReplica(
       replicaType: ReplicaType,
-      mergeStrategy: MergeStrategy,
+      syncProtocol: SyncProtocol,
     ): BoundReplica | undefined {
-      const key = replicaKey(replicaType, mergeStrategy)
+      const key = replicaKey(replicaType, syncProtocol)
       return registry.get(key)?.replica
     },
 

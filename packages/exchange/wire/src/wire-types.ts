@@ -8,6 +8,13 @@
 //   0x01–0x0F: Lifecycle messages (establish, depart)
 //   0x10–0x1F: Sync messages (present, interest, offer, dismiss)
 
+import type { SyncProtocol } from "@kyneta/schema"
+import {
+  SYNC_AUTHORITATIVE,
+  SYNC_COLLABORATIVE,
+  SYNC_EPHEMERAL,
+} from "@kyneta/schema"
+
 // ---------------------------------------------------------------------------
 // Message type discriminators
 // ---------------------------------------------------------------------------
@@ -120,42 +127,43 @@ export const StringToPayloadEncoding: Record<string, PayloadEncodingValue> = {
 }
 
 // ---------------------------------------------------------------------------
-// MergeStrategy discriminators
+// SyncProtocol discriminators
 // ---------------------------------------------------------------------------
 
 /**
- * Integer discriminators for MergeStrategy on the wire.
+ * Integer discriminators for SyncProtocol on the wire.
  */
-export const MergeStrategyWire = {
+export const SyncProtocolWire = {
   Collaborative: 0x00,
   Authoritative: 0x01,
   Ephemeral: 0x02,
 } as const
 
-export type MergeStrategyWireValue =
-  (typeof MergeStrategyWire)[keyof typeof MergeStrategyWire]
+export type SyncProtocolWireValue =
+  (typeof SyncProtocolWire)[keyof typeof SyncProtocolWire]
 
 /**
- * Reverse lookup: merge strategy integer → string.
+ * Reverse lookup: wire integer → SyncProtocol object.
  */
-export const MergeStrategyWireToString: Record<
-  MergeStrategyWireValue,
-  "collaborative" | "authoritative" | "ephemeral"
+export const SyncProtocolWireToProtocol: Record<
+  SyncProtocolWireValue,
+  SyncProtocol
 > = {
-  [MergeStrategyWire.Collaborative]: "collaborative",
-  [MergeStrategyWire.Authoritative]: "authoritative",
-  [MergeStrategyWire.Ephemeral]: "ephemeral",
+  [SyncProtocolWire.Collaborative]: SYNC_COLLABORATIVE,
+  [SyncProtocolWire.Authoritative]: SYNC_AUTHORITATIVE,
+  [SyncProtocolWire.Ephemeral]: SYNC_EPHEMERAL,
 }
 
-/**
- * Forward lookup: merge strategy string → integer.
- */
-export const StringToMergeStrategyWire: Record<string, MergeStrategyWireValue> =
-  {
-    collaborative: MergeStrategyWire.Collaborative,
-    authoritative: MergeStrategyWire.Authoritative,
-    ephemeral: MergeStrategyWire.Ephemeral,
-  }
+/** Forward lookup: SyncProtocol → wire integer discriminant. */
+export function syncProtocolToWire(
+  protocol: SyncProtocol,
+): SyncProtocolWireValue {
+  if (protocol.writerModel === "serialized")
+    return SyncProtocolWire.Authoritative
+  if (protocol.delivery === "delta-capable")
+    return SyncProtocolWire.Collaborative
+  return SyncProtocolWire.Ephemeral
+}
 
 // ---------------------------------------------------------------------------
 // Compact wire object types (CBOR)
@@ -172,7 +180,7 @@ export const StringToMergeStrategyWire: Record<string, MergeStrategyWireValue> =
  *   doc — docId (string)
  *   d   — docId within present entry / payload data
  *   rt  — replicaType tuple [string, number, number]
- *   ms  — mergeStrategy (MergeStrategyWireValue)
+ *   ms  — syncProtocol (SyncProtocolWireValue)
  *   v   — version (string, serialized)
  *   r   — reciprocate (boolean, optional)
  *   sh  — schemaHash (string, 34-char hex, required in present doc entries)
@@ -199,7 +207,7 @@ export type WirePresentMsg = {
   docs: Array<{
     d: string
     rt: [string, number, number]
-    ms: MergeStrategyWireValue
+    ms: SyncProtocolWireValue
     sh: string
     shs?: string[]
   }>

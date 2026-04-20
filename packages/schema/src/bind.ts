@@ -1,7 +1,7 @@
-// bind — BoundSchema, bind(), and convenience wrappers.
+// bind — BoundSchema, BindingTarget, and convenience wrappers.
 //
 // A BoundSchema<S> is the static declaration of a document type:
-// three explicit choices (schema, factory builder, merge strategy)
+// three explicit choices (schema, factory builder, sync protocol)
 // captured at module scope. The exchange consumes BoundSchema at
 // runtime via exchange.get(docId, boundSchema).
 //
@@ -14,11 +14,13 @@
 // For LWW/ephemeral, the builder returns lwwSubstrateFactory (which wraps
 // plain with TimestampVersion for cross-peer stale rejection).
 //
-// MergeStrategy is a string union declaring the sync algorithm the
-// exchange runs on behalf of the substrate:
-// - "collaborative": bidirectional exchange, concurrent versions possible (Loro)
-// - "authoritative": request/response, total order (Plain)
-// - "ephemeral": unidirectional broadcast, timestamp-based (Ephemeral)
+// SyncProtocol is a structured record decomposing sync semantics into
+// three orthogonal axes (writerModel, delivery, durability). Each
+// BindingTarget has a fixed SyncProtocol. The exchange dispatches on
+// individual fields, not a monolithic enum.
+//
+// Named binding targets follow the rename-over-configure ergonomic rule:
+// `json` and `ephemeral` are separate targets, not `json("ephemeral")`.
 
 import type {
   IdentityManifest,
@@ -33,26 +35,27 @@ import {
 } from "./migration.js"
 import type { NativeMap, PlainNativeMap, UnknownNativeMap } from "./native.js"
 import type {
-  ExtractCaps,
+  ExtractLaws,
   ProductSchema,
   Schema as SchemaNode,
 } from "./schema.js"
 import { KIND } from "./schema.js"
 import type {
-  MergeStrategy,
   ReplicaFactory,
   SubstrateFactory,
+  SyncProtocol,
   Version,
 } from "./substrate.js"
-import { computeSchemaHash } from "./substrate.js"
+import {
+  computeSchemaHash,
+  SYNC_AUTHORITATIVE,
+  SYNC_EPHEMERAL,
+} from "./substrate.js"
 import { lwwReplicaFactory, lwwSubstrateFactory } from "./substrates/lww.js"
 import {
   plainReplicaFactory,
   plainSubstrateFactory,
 } from "./substrates/plain.js"
-
-// Re-export MergeStrategy so existing imports from "./bind.js" keep working.
-export type { MergeStrategy } from "./substrate.js"
 
 // ---------------------------------------------------------------------------
 // FactoryBuilder — deferred factory construction with peer identity
@@ -77,7 +80,7 @@ export type FactoryBuilder<V extends Version = Version> = (context: {
 }) => SubstrateFactory<V>
 
 // ---------------------------------------------------------------------------
-// BoundSchema — schema + factory + strategy binding
+// BoundSchema — schema + factory + sync protocol binding
 // ---------------------------------------------------------------------------
 
 /**
@@ -85,10 +88,10 @@ export type FactoryBuilder<V extends Version = Version> = (context: {
  *
  * 1. **schema** — what shape is the data?
  * 2. **factory** — how is the data stored and versioned?
- * 3. **strategy** — how does the exchange sync it?
+ * 3. **syncProtocol** — how does the exchange sync it?
  *
  * BoundSchemas are static declarations created at module scope via
- * the substrate namespaces: `json.bind()`, `loro.bind()`, or `yjs.bind()`.
+ * the binding targets: `json.bind()`, `loro.bind()`, or `yjs.bind()`.
  * They are consumed at runtime by `exchange.get(docId, boundSchema)`.
  *
  * A BoundSchema can safely be shared across multiple exchange instances.
@@ -104,7 +107,7 @@ export interface BoundSchema<
   readonly _nativeMap?: N
   readonly schema: S
   readonly factory: FactoryBuilder<any>
-  readonly strategy: MergeStrategy
+  readonly syncProtocol: SyncProtocol
   readonly schemaHash: string
 
   /**
@@ -136,11 +139,11 @@ export interface BoundSchema<
 }
 
 // ---------------------------------------------------------------------------
-// BoundReplica — replication binding (factory + strategy)
+// BoundReplica — replication binding (factory + sync protocol)
 // ---------------------------------------------------------------------------
 
 /**
- * The replication binding: the pair of `ReplicaFactory` and `MergeStrategy`
+ * The replication binding: the pair of `ReplicaFactory` and `SyncProtocol`
  * that fully determines headless replication behavior.
  *
  * A `BoundReplica` captures everything the exchange needs to create and
@@ -148,20 +151,20 @@ export interface BoundSchema<
  */
 export interface BoundReplica {
   readonly factory: ReplicaFactory
-  readonly strategy: MergeStrategy
+  readonly syncProtocol: SyncProtocol
 }
 
 /**
- * Construct a `BoundReplica` from a `ReplicaFactory` and `MergeStrategy`.
+ * Construct a `BoundReplica` from a `ReplicaFactory` and `SyncProtocol`.
  *
  * TypeScript dual-namespace pattern: `BoundReplica` is both a type and a
  * same-named constructor function.
  */
 export function BoundReplica(
   factory: ReplicaFactory,
-  strategy: MergeStrategy,
+  syncProtocol: SyncProtocol,
 ): BoundReplica {
-  return { factory, strategy }
+  return { factory, syncProtocol }
 }
 
 // ---------------------------------------------------------------------------
@@ -194,7 +197,7 @@ export type Interpret = {
  * servers, audit logs.
  *
  * The caller declares intent to replicate; the Exchange resolves the
- * concrete `ReplicaFactory` and `MergeStrategy` from its capabilities
+ * concrete `ReplicaFactory` and `SyncProtocol` from its capabilities
  * registry.
  */
 export type Replicate = { readonly kind: "replicate" }
@@ -276,24 +279,24 @@ export function Defer(): Defer {
 // ---------------------------------------------------------------------------
 
 /**
- * Create a BoundSchema from explicit schema, factory builder, and strategy.
+ * Create a BoundSchema from explicit schema, factory builder, and sync protocol.
  *
- * This is the general primitive. Most users should prefer the substrate
- * namespaces: `json.bind()`, `loro.bind()`, or `yjs.bind()`.
+ * This is the general primitive. Most users should prefer the binding
+ * targets: `json.bind()`, `loro.bind()`, or `yjs.bind()`.
  *
  * @example
  * ```ts
  * const MyDoc = bind({
  *   schema: Schema.struct({ title: Schema.string() }),
  *   factory: (ctx) => createMyFactory(ctx.peerId),
- *   strategy: "collaborative",
+ *   syncProtocol: SYNC_COLLABORATIVE,
  * })
  * ```
  */
 export function bind<S extends SchemaNode>(config: {
   schema: S
   factory: FactoryBuilder<any>
-  strategy: MergeStrategy
+  syncProtocol: SyncProtocol
 }): BoundSchema<S> {
   const schemaHash = computeSchemaHash(config.schema)
 
@@ -342,7 +345,7 @@ export function bind<S extends SchemaNode>(config: {
     _brand: "BoundSchema",
     schema: config.schema,
     factory: config.factory,
-    strategy: config.strategy,
+    syncProtocol: config.syncProtocol,
     schemaHash,
     identityBinding,
     migrationChain: chain,
@@ -368,142 +371,115 @@ export function isBoundSchema(value: unknown): value is BoundSchema {
 }
 
 // ---------------------------------------------------------------------------
-// RestrictCaps — compile-time bind() guard
+// RestrictLaws — compile-time bind() guard
 // ---------------------------------------------------------------------------
 
 /**
- * Type-level guard for bind(). Resolves to S when all capability tags
- * in S are within AllowedCaps, never otherwise.
+ * Type-level guard for bind(). Resolves to S when all composition laws
+ * in S are within AllowedLaws, never otherwise.
  *
- * Uses Exclude to check if any accumulated caps fall outside AllowedCaps.
- * When AllowedCaps = string, every cap is allowed (unconstrained).
+ * Uses Exclude to check if any accumulated laws fall outside AllowedLaws.
+ * When AllowedLaws = string, every law is allowed (unconstrained).
  */
-export type RestrictCaps<S, AllowedCaps extends string> = [
-  Exclude<ExtractCaps<S>, AllowedCaps>,
+export type RestrictLaws<S, AllowedLaws extends string> = [
+  Exclude<ExtractLaws<S>, AllowedLaws>,
 ] extends [never]
   ? S
   : never
 
 // ---------------------------------------------------------------------------
-// Strategy type aliases — constrain namespace overrides
-// ---------------------------------------------------------------------------
-
-/** Strategies available for the plain JSON substrate. */
-export type JsonStrategy = "authoritative" | "ephemeral"
-
-/** Strategies available for CRDT substrates (Loro, Yjs). */
-export type CrdtStrategy = "collaborative" | "ephemeral"
-
-// ---------------------------------------------------------------------------
-// SubstrateNamespace — substrate-first API
+// BindingTarget — substrate-first API
 // ---------------------------------------------------------------------------
 
 /**
- * A substrate namespace groups `bind()` and `replica()` under a single
- * substrate identity. The strategy is a type-constrained optional
- * parameter with a sane default. Invalid (substrate, strategy)
- * combinations are compile errors.
+ * A named binding target: a fixed (substrate, sync-protocol, supported-laws) bundle.
  *
- * @example
- * ```ts
- * json.bind(schema)               // authoritative (default)
- * json.bind(schema, "ephemeral")  // ephemeral
- * json.replica()                  // authoritative (default)
- * loro.bind(schema)               // collaborative (default)
- * loro.replica("ephemeral")       // ephemeral
- * ```
+ * Follows the rename-over-configure ergonomic rule: like `HashMap` vs `TreeMap`,
+ * not `Map({ ordering: "hash" })`.
  */
-export interface SubstrateNamespace<
-  S extends MergeStrategy,
-  AllowedCaps extends string = string,
+export interface BindingTarget<
+  AllowedLaws extends string = string,
   N extends NativeMap = UnknownNativeMap,
 > {
   bind<P extends ProductSchema>(
-    schema: RestrictCaps<P, AllowedCaps>,
-    strategy?: S,
+    schema: RestrictLaws<P, AllowedLaws>,
   ): BoundSchema<P, N>
-  replica(strategy?: S): BoundReplica
+  replica(): BoundReplica
+  readonly syncProtocol: SyncProtocol
 }
 
 // ---------------------------------------------------------------------------
-// createSubstrateNamespace — pure factory for building namespace objects
+// createBindingTarget — pure factory for building target objects
 // ---------------------------------------------------------------------------
 
 /**
- * Create a `SubstrateNamespace` from a strategy → factory mapping.
- *
- * This is a pure function (Functional Core) that constructs the namespace
- * object. The dispatch from strategy → factory is driven by the
- * `strategies` map. Custom substrate authors can use this to build their
- * own namespaces.
- *
- * @example
- * ```ts
- * const json = createSubstrateNamespace({
- *   strategies: {
- *     authoritative: { factory: () => plainSubstrateFactory, replicaFactory: plainReplicaFactory },
- *     ephemeral: { factory: () => lwwSubstrateFactory, replicaFactory: lwwReplicaFactory },
- *   },
- *   defaultStrategy: "authoritative",
- * })
- * ```
+ * Create a `BindingTarget` from a fixed factory configuration.
+ * Used by custom substrate authors to build third-party binding targets.
  */
-export function createSubstrateNamespace<
-  S extends MergeStrategy,
-  AllowedCaps extends string = string,
+export function createBindingTarget<
+  AllowedLaws extends string = string,
   N extends NativeMap = UnknownNativeMap,
 >(config: {
-  strategies: {
-    [K in S]: {
-      factory: FactoryBuilder<any>
-      replicaFactory: ReplicaFactory
-    }
-  }
-  defaultStrategy: S
-}): SubstrateNamespace<S, AllowedCaps, N> {
+  factory: FactoryBuilder<any>
+  replicaFactory: ReplicaFactory
+  syncProtocol: SyncProtocol
+}): BindingTarget<AllowedLaws, N> {
   return {
-    bind<P extends ProductSchema>(schema: P, strategy?: S): BoundSchema<P, N> {
-      const s = strategy ?? config.defaultStrategy
+    bind<P extends ProductSchema>(schema: P): BoundSchema<P, N> {
       return bind({
         schema,
-        factory: config.strategies[s].factory,
-        strategy: s,
+        factory: config.factory,
+        syncProtocol: config.syncProtocol,
       }) as BoundSchema<P, N>
     },
-    replica(strategy?: S): BoundReplica {
-      const s = strategy ?? config.defaultStrategy
-      return BoundReplica(config.strategies[s].replicaFactory, s)
+    replica(): BoundReplica {
+      return BoundReplica(config.replicaFactory, config.syncProtocol)
     },
+    syncProtocol: config.syncProtocol,
   }
 }
 
 // ---------------------------------------------------------------------------
-// json — the plain JSON substrate namespace
+// json — the authoritative plain JSON binding target
 // ---------------------------------------------------------------------------
 
 /**
- * The plain JSON substrate namespace.
+ * The authoritative plain JSON binding target.
  *
- * - `json.bind(schema)` — authoritative sync (default)
- * - `json.bind(schema, "ephemeral")` — ephemeral/presence broadcast
- * - `json.replica()` — authoritative replication (default)
- * - `json.replica("ephemeral")` — ephemeral replication
+ * `json.bind(schema)` — authoritative sync, serialized writes.
+ * `json.replica()` — authoritative replication.
  *
- * Strategy is constrained to `JsonStrategy` (`"authoritative" | "ephemeral"`).
- * Passing `"collaborative"` is a compile error — plain substrates cannot
- * return `"concurrent"` from `compare()`.
+ * Supports ALL composition laws — serialized writes mean no concurrent
+ * operations to resolve, so every law is trivially satisfied.
  */
-export const json: SubstrateNamespace<JsonStrategy, string, PlainNativeMap> =
-  createSubstrateNamespace<JsonStrategy, string, PlainNativeMap>({
-    strategies: {
-      authoritative: {
-        factory: () => plainSubstrateFactory,
-        replicaFactory: plainReplicaFactory,
-      },
-      ephemeral: {
-        factory: () => lwwSubstrateFactory,
-        replicaFactory: lwwReplicaFactory,
-      },
-    },
-    defaultStrategy: "authoritative",
+export const json: BindingTarget<string, PlainNativeMap> = createBindingTarget<
+  string,
+  PlainNativeMap
+>({
+  factory: () => plainSubstrateFactory,
+  replicaFactory: plainReplicaFactory,
+  syncProtocol: SYNC_AUTHORITATIVE,
+})
+
+// ---------------------------------------------------------------------------
+// ephemeral — the LWW broadcast binding target
+// ---------------------------------------------------------------------------
+
+/** The LWW-family composition laws — supported by the ephemeral target. */
+export type EphemeralLaws = "lww" | "lww-per-key" | "lww-tag-replaced"
+
+/**
+ * The ephemeral broadcast binding target.
+ *
+ * `ephemeral.bind(schema)` — LWW broadcast, snapshot-only delivery, transient.
+ * `ephemeral.replica()` — ephemeral replication.
+ *
+ * Only supports LWW-family composition laws. Schemas requiring additive,
+ * positional-OT, or other non-LWW laws are rejected at compile time.
+ */
+export const ephemeral: BindingTarget<EphemeralLaws, PlainNativeMap> =
+  createBindingTarget<EphemeralLaws, PlainNativeMap>({
+    factory: () => lwwSubstrateFactory,
+    replicaFactory: lwwReplicaFactory,
+    syncProtocol: SYNC_EPHEMERAL,
   })

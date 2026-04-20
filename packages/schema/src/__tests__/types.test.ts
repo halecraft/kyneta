@@ -6,7 +6,7 @@ import {
   type CounterRef,
   type CounterSchema,
   change,
-  type ExtractCaps,
+  type ExtractLaws,
   type HasCaching,
   type HasCall,
   type HasRead,
@@ -40,7 +40,7 @@ import {
   type RefContext,
   type Resolve,
   type ResolveCarrier,
-  type RestrictCaps,
+  type RestrictLaws,
   type RRef,
   type RWRef,
   readable,
@@ -229,14 +229,14 @@ describe("type-level: sum variant preservation", () => {
             type: ScalarSchema<"string", string>
             content: ScalarSchema<"string", string>
           },
-          never
+          "lww-per-key" | "lww"
         >,
         ProductSchema<
           {
             type: ScalarSchema<"string", string>
             url: ScalarSchema<"string", string>
           },
-          never
+          "lww-per-key" | "lww"
         >,
       ]
     >()
@@ -1721,7 +1721,7 @@ const _discUnionSchema = Schema.discriminatedUnion("type", [
   }),
 ])
 
-const _nullableStringSchema = Schema.nullable(Schema.string())
+const _nullableStringSchema = Schema.string().nullable()
 
 describe("type-level: Ref<S> for discriminated sums (hybrid discriminant)", () => {
   it("Ref<DiscriminatedSumSchema> resolves to union of variant product refs (not unknown)", () => {
@@ -1873,11 +1873,9 @@ describe("type-level: general positional sums must NOT collapse (collapse bounda
 })
 
 describe("type-level: nullable composite — inner is a product, not a scalar", () => {
-  const nullableStructSchema = Schema.nullable(
-    Schema.struct({
-      x: Schema.string(),
-    }),
-  )
+  const nullableStructSchema = Schema.struct({
+    x: Schema.string(),
+  }).nullable()
 
   it("Ref<nullable(struct({ x: string() }))> call returns { x: string } | null", () => {
     type Result = Ref<typeof nullableStructSchema>
@@ -1895,7 +1893,7 @@ describe("type-level: nullable composite — inner is a product, not a scalar", 
 describe("type-level: sums nested inside products (composition)", () => {
   it("Ref<struct({ bio: nullable(string) })> — .bio has .set(string | null)", () => {
     const s = Schema.struct({
-      bio: Schema.nullable(Schema.string()),
+      bio: Schema.string().nullable(),
     })
     type Doc = Ref<typeof s>
     type Bio = Doc["bio"]
@@ -1973,87 +1971,89 @@ describe("[KIND] is invisible to serialization", () => {
 })
 
 // ===========================================================================
-// [CAPS] phantom capability accumulation
+// [LAWS] phantom law accumulation
 // ===========================================================================
 
-describe("ExtractCaps: capability accumulation through constructors", () => {
-  it("scalars have no caps (Caps defaults to never)", () => {
-    type StringCaps = ExtractCaps<ReturnType<typeof Schema.string>>
-    type NumberCaps = ExtractCaps<ReturnType<typeof Schema.number>>
-    expectTypeOf<StringCaps>().toEqualTypeOf<never>()
-    expectTypeOf<NumberCaps>().toEqualTypeOf<never>()
+describe("ExtractLaws: law accumulation through constructors", () => {
+  it("scalars emit 'lww'", () => {
+    type StringLaws = ExtractLaws<ReturnType<typeof Schema.string>>
+    type NumberLaws = ExtractLaws<ReturnType<typeof Schema.number>>
+    expectTypeOf<StringLaws>().toEqualTypeOf<"lww">()
+    expectTypeOf<NumberLaws>().toEqualTypeOf<"lww">()
   })
 
-  it("text() → 'text'", () => {
+  it("text() → 'positional-ot'", () => {
     const s = Schema.text()
-    type Caps = ExtractCaps<typeof s>
-    expectTypeOf<Caps>().toEqualTypeOf<"text">()
+    type Laws = ExtractLaws<typeof s>
+    expectTypeOf<Laws>().toEqualTypeOf<"positional-ot">()
   })
 
-  it("counter() → 'counter'", () => {
+  it("counter() → 'additive'", () => {
     const s = Schema.counter()
-    type Caps = ExtractCaps<typeof s>
-    expectTypeOf<Caps>().toEqualTypeOf<"counter">()
+    type Laws = ExtractLaws<typeof s>
+    expectTypeOf<Laws>().toEqualTypeOf<"additive">()
   })
 
-  it("movableList(sequence) → 'movable'", () => {
+  it("movableList(string) → 'positional-ot-move' | 'lww'", () => {
     const s = Schema.movableList(Schema.string())
-    type Caps = ExtractCaps<typeof s>
-    expectTypeOf<Caps>().toEqualTypeOf<"movable">()
+    type Laws = ExtractLaws<typeof s>
+    expectTypeOf<Laws>().toEqualTypeOf<"positional-ot-move" | "lww">()
   })
 
-  it("tree(struct) → 'tree'", () => {
+  it("tree(struct) → 'tree-move' | 'lww-per-key' | 'lww'", () => {
     const s = Schema.tree(Schema.struct({ label: Schema.string() }))
-    type Caps = ExtractCaps<typeof s>
-    expectTypeOf<Caps>().toEqualTypeOf<"tree">()
+    type Laws = ExtractLaws<typeof s>
+    expectTypeOf<Laws>().toEqualTypeOf<"tree-move" | "lww-per-key" | "lww">()
   })
 
-  it("struct({ name: string }) → never (no caps)", () => {
+  it("struct({ name: string }) → 'lww-per-key' | 'lww'", () => {
     const s = Schema.struct({ name: Schema.string() })
-    type Caps = ExtractCaps<typeof s>
-    expectTypeOf<Caps>().toEqualTypeOf<never>()
+    type Laws = ExtractLaws<typeof s>
+    expectTypeOf<Laws>().toEqualTypeOf<"lww-per-key" | "lww">()
   })
 
-  it("struct({ title: text }) → 'text'", () => {
+  it("struct({ title: text }) → 'lww-per-key' | 'positional-ot'", () => {
     const s = Schema.struct({ title: Schema.text() })
-    type Caps = ExtractCaps<typeof s>
-    expectTypeOf<Caps>().toEqualTypeOf<"text">()
+    type Laws = ExtractLaws<typeof s>
+    expectTypeOf<Laws>().toEqualTypeOf<"lww-per-key" | "positional-ot">()
   })
 
-  it("struct({ title: text, count: counter }) → 'text' | 'counter'", () => {
+  it("struct({ title: text, count: counter }) → 'lww-per-key' | 'positional-ot' | 'additive'", () => {
     const s = Schema.struct({
       title: Schema.text(),
       count: Schema.counter(),
     })
-    type Caps = ExtractCaps<typeof s>
-    expectTypeOf<Caps>().toEqualTypeOf<"text" | "counter">()
+    type Laws = ExtractLaws<typeof s>
+    expectTypeOf<Laws>().toEqualTypeOf<
+      "lww-per-key" | "positional-ot" | "additive"
+    >()
   })
 
-  it("list(struct({ title: text })) → 'text'", () => {
+  it("list(struct({ title: text })) → 'positional-ot' | 'lww-per-key'", () => {
     const s = Schema.list(Schema.struct({ title: Schema.text() }))
-    type Caps = ExtractCaps<typeof s>
-    expectTypeOf<Caps>().toEqualTypeOf<"text">()
+    type Laws = ExtractLaws<typeof s>
+    expectTypeOf<Laws>().toEqualTypeOf<"positional-ot" | "lww-per-key">()
   })
 
-  it("record(struct({ hits: counter })) → 'counter'", () => {
+  it("record(struct({ hits: counter })) → 'lww-per-key' | 'additive'", () => {
     const s = Schema.record(Schema.struct({ hits: Schema.counter() }))
-    type Caps = ExtractCaps<typeof s>
-    expectTypeOf<Caps>().toEqualTypeOf<"counter">()
+    type Laws = ExtractLaws<typeof s>
+    expectTypeOf<Laws>().toEqualTypeOf<"lww-per-key" | "additive">()
   })
 
-  it("struct({ title: text }) → 'text'", () => {
+  it("struct({ title: text }) → 'lww-per-key' | 'positional-ot'", () => {
     const s = Schema.struct({ title: Schema.text() })
-    type Caps = ExtractCaps<typeof s>
-    expectTypeOf<Caps>().toEqualTypeOf<"text">()
+    type Laws = ExtractLaws<typeof s>
+    expectTypeOf<Laws>().toEqualTypeOf<"lww-per-key" | "positional-ot">()
   })
 
-  it("struct({ count: counter }) → 'counter'", () => {
+  it("struct({ count: counter }) → 'lww-per-key' | 'additive'", () => {
     const s = Schema.struct({ count: Schema.counter() })
-    type Caps = ExtractCaps<typeof s>
-    expectTypeOf<Caps>().toEqualTypeOf<"counter">()
+    type Laws = ExtractLaws<typeof s>
+    expectTypeOf<Laws>().toEqualTypeOf<"lww-per-key" | "additive">()
   })
 
-  it("struct({ title: text, items: list(struct({ name: string, done: boolean })) }) → 'text'", () => {
+  it("struct({ title: text, items: list(struct({ name: string, done: boolean })) }) → 'lww-per-key' | 'positional-ot' | 'lww'", () => {
     const s = Schema.struct({
       title: Schema.text(),
       items: Schema.list(
@@ -2063,11 +2063,13 @@ describe("ExtractCaps: capability accumulation through constructors", () => {
         }),
       ),
     })
-    type Caps = ExtractCaps<typeof s>
-    expectTypeOf<Caps>().toEqualTypeOf<"text">()
+    type Laws = ExtractLaws<typeof s>
+    expectTypeOf<Laws>().toEqualTypeOf<
+      "lww-per-key" | "positional-ot" | "lww"
+    >()
   })
 
-  it("deep nesting: struct > list > struct > record > struct > counter (5 levels) → 'counter'", () => {
+  it("deep nesting: struct > list > struct > record > struct > counter (5 levels) → 'lww-per-key' | 'positional-ot' | 'additive'", () => {
     const s = Schema.struct({
       channels: Schema.list(
         Schema.struct({
@@ -2079,52 +2081,58 @@ describe("ExtractCaps: capability accumulation through constructors", () => {
         }),
       ),
     })
-    type Caps = ExtractCaps<typeof s>
-    expectTypeOf<Caps>().toEqualTypeOf<"counter">()
+    type Laws = ExtractLaws<typeof s>
+    expectTypeOf<Laws>().toEqualTypeOf<
+      "lww-per-key" | "positional-ot" | "additive"
+    >()
   })
 
-  it("struct with movableList(text) → 'movable' | 'text'", () => {
+  it("struct with movableList(text) → 'lww-per-key' | 'positional-ot-move' | 'positional-ot'", () => {
     const s = Schema.struct({
       items: Schema.movableList(Schema.text()),
     })
-    type Caps = ExtractCaps<typeof s>
-    expectTypeOf<Caps>().toEqualTypeOf<"movable" | "text">()
+    type Laws = ExtractLaws<typeof s>
+    expectTypeOf<Laws>().toEqualTypeOf<
+      "lww-per-key" | "positional-ot-move" | "positional-ot"
+    >()
   })
 
-  it("struct with tree(struct) → 'tree'", () => {
+  it("struct with tree(struct) → 'lww-per-key' | 'tree-move' | 'lww'", () => {
     const s = Schema.struct({
       hierarchy: Schema.tree(Schema.struct({ label: Schema.string() })),
     })
-    type Caps = ExtractCaps<typeof s>
-    expectTypeOf<Caps>().toEqualTypeOf<"tree">()
+    type Laws = ExtractLaws<typeof s>
+    expectTypeOf<Laws>().toEqualTypeOf<"lww-per-key" | "tree-move" | "lww">()
   })
 
-  it("struct with counter → 'counter'", () => {
+  it("struct with counter → 'lww-per-key' | 'additive'", () => {
     const s = Schema.struct({
       count: Schema.counter(),
     })
-    type Caps = ExtractCaps<typeof s>
-    expectTypeOf<Caps>().toEqualTypeOf<"counter">()
+    type Laws = ExtractLaws<typeof s>
+    expectTypeOf<Laws>().toEqualTypeOf<"lww-per-key" | "additive">()
   })
 
-  it("struct with text → 'text'", () => {
+  it("struct with text → 'lww-per-key' | 'positional-ot'", () => {
     const s = Schema.struct({
       title: Schema.text(),
     })
-    type Caps = ExtractCaps<typeof s>
-    expectTypeOf<Caps>().toEqualTypeOf<"text">()
+    type Laws = ExtractLaws<typeof s>
+    expectTypeOf<Laws>().toEqualTypeOf<"lww-per-key" | "positional-ot">()
   })
 
-  it("struct with text and counter → 'text' | 'counter'", () => {
+  it("struct with text and counter → 'lww-per-key' | 'positional-ot' | 'additive'", () => {
     const s = Schema.struct({
       title: Schema.text(),
       count: Schema.counter(),
     })
-    type Caps = ExtractCaps<typeof s>
-    expectTypeOf<Caps>().toEqualTypeOf<"text" | "counter">()
+    type Laws = ExtractLaws<typeof s>
+    expectTypeOf<Laws>().toEqualTypeOf<
+      "lww-per-key" | "positional-ot" | "additive"
+    >()
   })
 
-  it("struct with text in discriminatedUnion → caps from all variants", () => {
+  it("struct with text in discriminatedUnion → laws from all variants", () => {
     const s = Schema.struct({
       content: Schema.discriminatedUnion("type", [
         Schema.struct({
@@ -2138,53 +2146,55 @@ describe("ExtractCaps: capability accumulation through constructors", () => {
       ]),
       title: Schema.text(),
     })
-    type Caps = ExtractCaps<typeof s>
-    expectTypeOf<Caps>().toEqualTypeOf<"text">()
+    type Laws = ExtractLaws<typeof s>
+    expectTypeOf<Laws>().toEqualTypeOf<
+      "lww-per-key" | "lww-tag-replaced" | "lww" | "positional-ot"
+    >()
   })
 })
 
-describe("ExtractCaps: caps survive generic constraints", () => {
-  it("caps survive Record<string, Schema> boundary via product", () => {
+describe("ExtractLaws: laws survive generic constraints", () => {
+  it("laws survive Record<string, Schema> boundary via product", () => {
     // This is the critical test: when fields flow through
-    // F extends Record<string, Schema>, do caps survive?
+    // F extends Record<string, Schema>, do laws survive?
     function makeStruct<F extends Record<string, SchemaNode>>(
       fields: F,
-    ): ProductSchema<F, ExtractCaps<F[keyof F]>> {
+    ): ProductSchema<F, ExtractLaws<F[keyof F]>> {
       return Schema.struct(fields) as any
     }
     const s = makeStruct({
       title: Schema.text(),
       count: Schema.counter(),
     })
-    type Caps = ExtractCaps<typeof s>
-    expectTypeOf<Caps>().toEqualTypeOf<"text" | "counter">()
+    type Laws = ExtractLaws<typeof s>
+    expectTypeOf<Laws>().toEqualTypeOf<"positional-ot" | "additive">()
   })
 
   it("never exclusion → always false (never is excluded from any union)", () => {
     const s = Schema.struct({ count: Schema.counter() })
-    type Caps = ExtractCaps<typeof s>
+    type Laws = ExtractLaws<typeof s>
     // Exclude nothing → everything remains
-    type Remaining = Exclude<Caps, never>
-    expectTypeOf<Remaining>().toEqualTypeOf<"counter">()
+    type Remaining = Exclude<Laws, never>
+    expectTypeOf<Remaining>().toEqualTypeOf<"lww-per-key" | "additive">()
   })
 })
 
-describe("RestrictCaps: allowed-caps formulation", () => {
-  it("RestrictCaps<S, string> always resolves to S (unconstrained substrates)", () => {
+describe("RestrictLaws: allowed-laws formulation", () => {
+  it("RestrictLaws<S, string> always resolves to S (unconstrained substrates)", () => {
     const s = Schema.struct({
       title: Schema.text(),
       count: Schema.counter(),
       tasks: Schema.movableList(Schema.string()),
       hierarchy: Schema.tree(Schema.struct({ label: Schema.string() })),
     })
-    // AllowedCaps = string means Exclude<T, string> is always never
-    type Result = RestrictCaps<typeof s, string>
+    // AllowedLaws = string means Exclude<T, string> is always never
+    type Result = RestrictLaws<typeof s, string>
     expectTypeOf<Result>().toEqualTypeOf(s)
   })
 
-  it("RestrictCaps resolves to never when caps exceed allowed set", () => {
+  it("RestrictLaws resolves to never when laws exceed allowed set", () => {
     const s = Schema.struct({ count: Schema.counter() })
-    type Result = RestrictCaps<typeof s, "text">
+    type Result = RestrictLaws<typeof s, "positional-ot">
     expectTypeOf<Result>().toEqualTypeOf<never>()
   })
 })

@@ -12,6 +12,7 @@
 // The byte-at-a-time test subsumes all partial-header / partial-payload /
 // boundary-crossing variants — if it passes, every possible split point works.
 
+import { SYNC_AUTHORITATIVE } from "@kyneta/schema"
 import type { ChannelMsg, InterestMsg, PresentMsg } from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
 import { cborCodec } from "../cbor.js"
@@ -31,7 +32,7 @@ function makePresent(docId: string): PresentMsg {
         docId,
         schemaHash: "00test",
         replicaType: ["plain", 1, 0] as const,
-        mergeStrategy: "authoritative" as const,
+        syncProtocol: SYNC_AUTHORITATIVE,
       },
     ],
   }
@@ -191,7 +192,7 @@ describe("feedBytes", () => {
         docId: `large-doc-${i.toString().padStart(5, "0")}`,
         schemaHash: "00test",
         replicaType: ["plain", 1, 0] as const,
-        mergeStrategy: "authoritative" as const,
+        syncProtocol: SYNC_AUTHORITATIVE,
       })
     }
 

@@ -64,9 +64,7 @@ function extractValue(resolved: unknown): unknown {
  * Loro format: `{ insert: string, attributes?: Record<string, unknown> }`
  * Kyneta format: `{ text: string, marks?: MarkMap }`
  */
-function loroDeltaToRichTextDelta(
-  deltas: Delta<string>[],
-): RichTextDelta {
+function loroDeltaToRichTextDelta(deltas: Delta<string>[]): RichTextDelta {
   const spans: RichTextSpan[] = []
   for (const delta of deltas) {
     if (delta.insert !== undefined) {

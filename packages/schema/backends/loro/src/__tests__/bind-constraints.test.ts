@@ -1,13 +1,14 @@
-// bind-constraints — compile-time and runtime tests for loro.bind() caps enforcement.
+// bind-constraints — compile-time and runtime tests for loro.bind() laws enforcement.
 //
-// Verifies that `loro.bind()` rejects schemas containing capabilities
-// that Loro doesn't support (set) at COMPILE TIME via the `RestrictCaps`
-// / `AllowedCaps` mechanism, while accepting capabilities it does support
-// (text, counter, movable, tree, json) and plain schemas.
+// Verifies that `loro.bind()` rejects schemas containing composition laws
+// that Loro doesn't support (add-wins-per-key) at COMPILE TIME via the
+// `RestrictLaws` / `AllowedLaws` mechanism, while accepting laws it does
+// support (lww, lww-per-key, positional-ot, additive, positional-ot-move,
+// tree-move, lww-tag-replaced) and plain schemas.
 
 import {
   type BoundSchema,
-  type ExtractCaps,
+  type ExtractLaws,
   json,
   Schema,
 } from "@kyneta/schema"
@@ -123,12 +124,12 @@ describe("loro.bind() accepts Loro-compatible schemas", () => {
 // §2 — Compile-time rejection: schemas that loro.bind() SHOULD reject
 // ===========================================================================
 
-describe("loro.bind() rejects schemas with unsupported caps", () => {
-  it("rejects set", () => {
+describe("loro.bind() rejects schemas with unsupported composition laws", () => {
+  it("rejects set (add-wins-per-key not in LoroLaws)", () => {
     const schema = Schema.struct({
       tags: Schema.set(Schema.string()),
     })
-    // @ts-expect-error — set is not in LoroCaps
+    // @ts-expect-error — add-wins-per-key is not in LoroLaws
     loro.bind(schema)
   })
 
@@ -142,7 +143,7 @@ describe("loro.bind() rejects schemas with unsupported caps", () => {
         }),
       ),
     })
-    // @ts-expect-error — set is deeply nested but still caught
+    // @ts-expect-error — add-wins-per-key is deeply nested but still caught
     loro.bind(schema)
   })
 
@@ -151,7 +152,7 @@ describe("loro.bind() rejects schemas with unsupported caps", () => {
       title: Schema.text(),
       tags: Schema.set(Schema.string()),
     })
-    // @ts-expect-error — set is not in LoroCaps
+    // @ts-expect-error — add-wins-per-key is not in LoroLaws
     loro.bind(schema)
   })
 })
@@ -177,14 +178,22 @@ describe("cross-substrate: universal schema vs substrate-specific schema", () =>
     tasks: Schema.movableList(Schema.struct({ name: Schema.string() })),
   })
 
-  it("universal schema is Loro-compatible (ExtractCaps check)", () => {
-    type Caps = ExtractCaps<typeof universalSchema>
-    expectTypeOf<Caps>().toEqualTypeOf<"text">()
+  it("universal schema ExtractLaws check", () => {
+    type Laws = ExtractLaws<typeof universalSchema>
+    expectTypeOf<Laws>().toEqualTypeOf<
+      "lww-per-key" | "positional-ot" | "lww"
+    >()
   })
 
-  it("Loro-specific schema ExtractCaps check", () => {
-    type Caps = ExtractCaps<typeof loroSpecificSchema>
-    expectTypeOf<Caps>().toEqualTypeOf<"text" | "counter" | "movable">()
+  it("Loro-specific schema ExtractLaws check", () => {
+    type Laws = ExtractLaws<typeof loroSpecificSchema>
+    expectTypeOf<Laws>().toEqualTypeOf<
+      | "lww-per-key"
+      | "positional-ot"
+      | "additive"
+      | "positional-ot-move"
+      | "lww"
+    >()
   })
 
   it("universal schema binds to loro", () => {
@@ -199,7 +208,7 @@ describe("cross-substrate: universal schema vs substrate-specific schema", () =>
     expect(bound.schema).toBe(loroSpecificSchema)
   })
 
-  it("json.bind() accepts schemas with all caps (AllowedCaps = string)", () => {
+  it("json.bind() accepts schemas with all laws (AllowedLaws = string)", () => {
     const schema = Schema.struct({
       title: Schema.text(),
       count: Schema.counter(),
@@ -247,7 +256,7 @@ describe("bind constraint edge cases", () => {
       ]),
       tags: Schema.set(Schema.string()),
     })
-    // @ts-expect-error — set taints the whole schema
+    // @ts-expect-error — add-wins-per-key taints the whole schema
     loro.bind(schema)
   })
 

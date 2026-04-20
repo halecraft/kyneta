@@ -136,7 +136,12 @@ export function changeToDiff(
       throw new Error("changeToDiff: cannot create diff for root-level scalar")
     }
     const parentPath = path.slice(0, -1)
-    const { container: parentResolved } = resolveContainer(doc, schema, parentPath, binding)
+    const { container: parentResolved } = resolveContainer(
+      doc,
+      schema,
+      parentPath,
+      binding,
+    )
     if (!isLoroContainer(parentResolved)) {
       // Parent is the LoroDoc (root level) — use the _props map
       const propsMap = (parentResolved as any).getMap(PROPS_KEY)
@@ -364,7 +369,12 @@ function replaceChangeToDiff(
   const lastSeg = path.segments[path.segments.length - 1]
   if (!lastSeg) throw new Error("replaceChangeToDiff: empty path")
   const parentPath = path.slice(0, -1)
-  const { container: parentResolved } = resolveContainer(doc, schema, parentPath, binding)
+  const { container: parentResolved } = resolveContainer(
+    doc,
+    schema,
+    parentPath,
+    binding,
+  )
 
   // If the parent is the LoroDoc itself (root-level field), the target
   // depends on the field type. For scalars/sums, they're stored in the
@@ -756,7 +766,11 @@ function loroPathToKynetaPath(
  * Returns null for diff types we can't map (shouldn't happen for
  * supported container types).
  */
-function diffToChange(diff: Diff, binding?: SchemaBinding, leafSchema?: SchemaNode): ChangeBase | null {
+function diffToChange(
+  diff: Diff,
+  binding?: SchemaBinding,
+  leafSchema?: SchemaNode,
+): ChangeBase | null {
   switch (diff.type) {
     case "text":
       if (leafSchema && leafSchema[KIND] === "richtext") {

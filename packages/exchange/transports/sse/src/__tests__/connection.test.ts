@@ -7,6 +7,7 @@
 // 4. Guard: send() throws if sendFn not set
 // 5. Guard: receive() throws if channel not set
 
+import { SYNC_AUTHORITATIVE } from "@kyneta/schema"
 import type { ChannelMsg } from "@kyneta/transport"
 import { decodeTextFrame, textCodec } from "@kyneta/wire"
 import { describe, expect, it, vi } from "vitest"
@@ -37,13 +38,13 @@ const presentMsg: ChannelMsg = {
     {
       docId: "doc-1",
       replicaType: ["plain", 1, 0] as const,
-      mergeStrategy: "authoritative" as const,
+      syncProtocol: SYNC_AUTHORITATIVE,
       schemaHash: "test-hash",
     },
     {
       docId: "doc-2",
       replicaType: ["plain", 1, 0] as const,
-      mergeStrategy: "authoritative" as const,
+      syncProtocol: SYNC_AUTHORITATIVE,
       schemaHash: "test-hash",
     },
   ],

@@ -255,7 +255,7 @@ describe("withNavigation: sum dispatch", () => {
 
   it("nullable sum dispatches based on null/non-null", () => {
     const schema = Schema.struct({
-      bio: Schema.nullable(Schema.string()),
+      bio: Schema.string().nullable(),
     })
 
     // Non-null case

@@ -516,7 +516,7 @@ describe("validate: discriminated sum", () => {
 // ---------------------------------------------------------------------------
 
 describe("validate: nullable", () => {
-  const s = Schema.nullable(Schema.string())
+  const s = Schema.string().nullable()
 
   it("null passes", () => {
     expect(validate(s, null)).toBe(null)
@@ -537,14 +537,14 @@ describe("validate: nullable", () => {
   })
 
   it("nullable number", () => {
-    const sNum = Schema.nullable(Schema.number())
+    const sNum = Schema.number().nullable()
     expect(validate(sNum, null)).toBe(null)
     expect(validate(sNum, 42)).toBe(42)
     expect(() => validateUntyped(sNum, "nope")).toThrow(SchemaValidationError)
   })
 
   it("nullable struct", () => {
-    const ss = Schema.nullable(Schema.struct({ x: Schema.number() }))
+    const ss = Schema.struct({ x: Schema.number() }).nullable()
     expect(validate(ss, null)).toBe(null)
     expect(validate(ss, { x: 1 })).toEqual({ x: 1 })
     const result = tryValidate(ss, "nope")
@@ -651,7 +651,7 @@ describe("validate: nested realistic schema", () => {
       maxTasks: Schema.number(),
     }),
     labels: Schema.record(Schema.string()),
-    bio: Schema.nullable(Schema.string()),
+    bio: Schema.string().nullable(),
   })
 
   const validData = {
@@ -877,7 +877,7 @@ describe("validate: type narrowing", () => {
   })
 
   it("validate narrows nullable", () => {
-    const s = Schema.nullable(Schema.string())
+    const s = Schema.string().nullable()
     const result = validate(s, null)
     expectTypeOf(result).toEqualTypeOf<string | null>()
   })

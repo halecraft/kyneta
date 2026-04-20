@@ -19,12 +19,12 @@ import type { ReactiveMap, ReactiveMapHandle } from "@kyneta/changefeed"
 import { createReactiveMap } from "@kyneta/changefeed"
 import type {
   DocMetadata,
-  MergeStrategy,
   Replica,
   ReplicaFactory,
   ReplicaType,
   Substrate,
   SubstratePayload,
+  SyncProtocol,
   Version,
 } from "@kyneta/schema"
 import type {
@@ -76,7 +76,7 @@ type DocRuntimeBase = {
   docId: DocId
   replica: Replica<any>
   replicaFactory: ReplicaFactory<any>
-  strategy: MergeStrategy
+  syncProtocol: SyncProtocol
   schemaHash: string
 }
 
@@ -110,7 +110,7 @@ export type DocCreationCallback = (
   docId: DocId,
   peer: PeerIdentityDetails,
   replicaType: ReplicaType,
-  mergeStrategy: MergeStrategy,
+  syncProtocol: SyncProtocol,
   schemaHash: string,
   supportedHashes?: readonly string[],
 ) => void
@@ -138,7 +138,7 @@ export type DocDismissedCallback = (
 export type EpochBoundaryPredicate = (
   docId: DocId,
   peer: PeerIdentityDetails,
-  strategy: MergeStrategy,
+  syncProtocol: SyncProtocol,
 ) => boolean
 
 export type SynchronizerParams = {
@@ -422,7 +422,7 @@ export class Synchronizer {
       mode: runtime.mode,
       version: runtime.replica.version().serialize(),
       replicaType: runtime.replicaFactory.replicaType,
-      mergeStrategy: runtime.strategy,
+      syncProtocol: runtime.syncProtocol,
       schemaHash: runtime.schemaHash,
     })
   }
@@ -437,7 +437,7 @@ export class Synchronizer {
   deferDoc(
     docId: DocId,
     replicaType: ReplicaType,
-    mergeStrategy: MergeStrategy,
+    syncProtocol: SyncProtocol,
     schemaHash: string,
   ): void {
     // Only accumulate if the doc doesn't already exist in the model —
@@ -450,7 +450,7 @@ export class Synchronizer {
       type: "sync/doc-defer",
       docId,
       replicaType,
-      mergeStrategy,
+      syncProtocol,
       schemaHash,
     })
   }
@@ -467,7 +467,7 @@ export class Synchronizer {
     if (!entry) return undefined
     return {
       replicaType: entry.replicaType,
-      mergeStrategy: entry.mergeStrategy,
+      syncProtocol: entry.syncProtocol,
       schemaHash: entry.schemaHash,
     }
   }
@@ -615,7 +615,7 @@ export class Synchronizer {
       mode: runtime.mode,
       version: runtime.replica.version().serialize(),
       replicaType: runtime.replicaFactory.replicaType,
-      mergeStrategy: runtime.strategy,
+      syncProtocol: runtime.syncProtocol,
       schemaHash: runtime.schemaHash,
     })
   }
@@ -1075,7 +1075,7 @@ export class Synchronizer {
           effect.docId,
           effect.peer,
           effect.replicaType,
-          effect.mergeStrategy,
+          effect.syncProtocol,
           effect.schemaHash,
           effect.supportedHashes,
         )
@@ -1268,7 +1268,7 @@ export class Synchronizer {
       const accept = this.#canReset(
         effect.docId,
         peerIdentity as PeerIdentityDetails,
-        runtime.strategy,
+        runtime.syncProtocol,
       )
 
       if (!accept) {

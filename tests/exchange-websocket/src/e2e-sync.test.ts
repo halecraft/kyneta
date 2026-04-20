@@ -27,7 +27,7 @@
 
 import { Exchange, type ExchangeParams } from "@kyneta/exchange"
 import { loro } from "@kyneta/loro-schema"
-import { change, json, Schema } from "@kyneta/schema"
+import { change, ephemeral, json, Schema } from "@kyneta/schema"
 import { WebsocketClientTransport } from "@kyneta/websocket-transport/browser"
 import {
   type BunWebsocketData,
@@ -154,7 +154,7 @@ const presenceSchema = Schema.struct({
   }),
   name: Schema.string(),
 })
-const PresenceDoc = json.bind(presenceSchema, "ephemeral")
+const PresenceDoc = ephemeral.bind(presenceSchema)
 
 // ---------------------------------------------------------------------------
 // Helper: create connected server + client exchange pair

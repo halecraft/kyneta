@@ -24,7 +24,10 @@ import {
 // ===========================================================================
 
 function setup(state: unknown) {
-  return { reader: plainReader(state as Record<string, unknown>), root: RawPath.empty }
+  return {
+    reader: plainReader(state as Record<string, unknown>),
+    root: RawPath.empty,
+  }
 }
 
 /** Assert the round-trip property for every valid position in [0, cs]. */
@@ -119,9 +122,10 @@ describe("nodeSize", () => {
   })
 
   it("nullable sum: dispatches to active variant", () => {
-    const schema = Schema.nullable(
-      Schema.struct({ x: Schema.string(), y: Schema.number() }),
-    )
+    const schema = Schema.struct({
+      x: Schema.string(),
+      y: Schema.number(),
+    }).nullable()
     // null → scalar("null") → 1
     const s1 = setup(null)
     expect(nodeSize(s1.reader, schema, s1.root)).toBe(1)
@@ -140,18 +144,26 @@ describe("nodeSize", () => {
       }),
     ])
     // "image" variant: 2 + 3 fields = 5
-    const { reader, root } = setup({ type: "image", url: "http://...", width: 100 })
+    const { reader, root } = setup({
+      type: "image",
+      url: "http://...",
+      width: 100,
+    })
     expect(nodeSize(reader, schema, root)).toBe(5)
   })
 
   it("set and tree throw", () => {
     const s1 = setup([])
-    expect(() => nodeSize(s1.reader, Schema.set(Schema.string()), s1.root)).toThrow(
-      /set.*not supported/,
-    )
+    expect(() =>
+      nodeSize(s1.reader, Schema.set(Schema.string()), s1.root),
+    ).toThrow(/set.*not supported/)
     const s2 = setup({})
     expect(() =>
-      nodeSize(s2.reader, Schema.tree(Schema.struct({ label: Schema.string() })), s2.root),
+      nodeSize(
+        s2.reader,
+        Schema.tree(Schema.struct({ label: Schema.string() })),
+        s2.root,
+      ),
     ).toThrow(/tree.*not supported/)
   })
 })
@@ -343,10 +355,7 @@ describe("map ordering", () => {
 
 describe("round-trip: flatten(resolve(pos)) === pos", () => {
   it("struct with text field", () => {
-    assertRoundTrip(
-      Schema.struct({ title: Schema.text() }),
-      { title: "Hello" },
-    )
+    assertRoundTrip(Schema.struct({ title: Schema.text() }), { title: "Hello" })
   })
 
   it("struct with mixed fields (text + scalar + text)", () => {
@@ -357,10 +366,11 @@ describe("round-trip: flatten(resolve(pos)) === pos", () => {
   })
 
   it("list of structs", () => {
-    assertRoundTrip(
-      Schema.list(Schema.struct({ name: Schema.text() })),
-      [{ name: "Alice" }, { name: "Bob" }, { name: "C" }],
-    )
+    assertRoundTrip(Schema.list(Schema.struct({ name: Schema.text() })), [
+      { name: "Alice" },
+      { name: "Bob" },
+      { name: "C" },
+    ])
   })
 
   it("nested: struct > list > struct > text", () => {
@@ -384,18 +394,17 @@ describe("round-trip: flatten(resolve(pos)) === pos", () => {
   })
 
   it("empty content", () => {
-    const cs = assertRoundTrip(
-      Schema.struct({ title: Schema.text() }),
-      { title: "" },
-    )
+    const cs = assertRoundTrip(Schema.struct({ title: Schema.text() }), {
+      title: "",
+    })
     expect(cs).toBe(0)
   })
 
   it("movable list", () => {
-    assertRoundTrip(
-      Schema.movableList(Schema.struct({ v: Schema.text() })),
-      [{ v: "ab" }, { v: "c" }],
-    )
+    assertRoundTrip(Schema.movableList(Schema.struct({ v: Schema.text() })), [
+      { v: "ab" },
+      { v: "c" },
+    ])
   })
 
   it("struct with map field", () => {
@@ -406,17 +415,15 @@ describe("round-trip: flatten(resolve(pos)) === pos", () => {
   })
 
   it("nullable sum (null)", () => {
-    assertRoundTrip(
-      Schema.struct({ subtitle: Schema.nullable(Schema.string()) }),
-      { subtitle: null },
-    )
+    assertRoundTrip(Schema.struct({ subtitle: Schema.string().nullable() }), {
+      subtitle: null,
+    })
   })
 
   it("nullable sum (non-null)", () => {
-    assertRoundTrip(
-      Schema.struct({ subtitle: Schema.nullable(Schema.string()) }),
-      { subtitle: "Hello" },
-    )
+    assertRoundTrip(Schema.struct({ subtitle: Schema.string().nullable() }), {
+      subtitle: "Hello",
+    })
   })
 })
 
@@ -443,7 +450,6 @@ describe("live reader reflects mutations", () => {
       const r = resolveTreePosition(reader, schema, pos)!
       expect(flattenTreePosition(reader, schema, r.path, r.offset)).toBe(pos)
     }
-
     // Mutate
     ;(state as any).title = "Document"
     ;(state as any).items = [{ name: "Alpha" }, { name: "Beta" }]

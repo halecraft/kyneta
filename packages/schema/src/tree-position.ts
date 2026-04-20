@@ -29,6 +29,7 @@
 //
 // Context: jj:oxwyqyvx
 
+import { dispatchSum } from "./interpret.js"
 import type { Path } from "./path.js"
 import { RawPath } from "./path.js"
 import type { Reader } from "./reader.js"
@@ -39,7 +40,6 @@ import {
   type Schema as SchemaNode,
   type SumSchema,
 } from "./schema.js"
-import { dispatchSum } from "./interpret.js"
 
 // ---------------------------------------------------------------------------
 // isLeaf — PM-specific leaf/composite distinction
@@ -245,12 +245,7 @@ function resolveInComposite(
     }
 
     if (!isLeaf(child.schema) && remaining < childSize) {
-      return resolveInComposite(
-        reader,
-        child.schema,
-        child.path,
-        remaining - 1,
-      )
+      return resolveInComposite(reader, child.schema, child.path, remaining - 1)
     }
 
     remaining -= childSize
@@ -474,9 +469,7 @@ function advanceToChild(
       const key = segment.resolve() as string
       const fieldSchema = schema.fields[key]
       if (!fieldSchema) {
-        throw new Error(
-          `advanceToChild: product has no field "${key}"`,
-        )
+        throw new Error(`advanceToChild: product has no field "${key}"`)
       }
       return fieldSchema
     }
@@ -494,18 +487,14 @@ function advanceToChild(
         for (const variant of Object.values(disc.variantMap)) {
           try {
             return advanceToChild(variant, segment)
-          } catch {
-            continue
-          }
+          } catch {}
         }
       } else {
         const pos = schema as PositionalSumSchema
         for (const variant of pos.variants) {
           try {
             return advanceToChild(variant, segment)
-          } catch {
-            continue
-          }
+          } catch {}
         }
       }
       throw new Error(
@@ -514,8 +503,6 @@ function advanceToChild(
     }
 
     default:
-      throw new Error(
-        `advanceToChild: cannot advance into ${schema[KIND]}`,
-      )
+      throw new Error(`advanceToChild: cannot advance into ${schema[KIND]}`)
   }
 }

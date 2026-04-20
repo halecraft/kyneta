@@ -562,7 +562,7 @@ describe("withReadable: hybrid discriminant", () => {
 
 describe("withReadable: nullable (positional sum)", () => {
   const schema = Schema.struct({
-    bio: Schema.nullable(Schema.string()),
+    bio: Schema.string().nullable(),
   })
 
   it("null store value dispatches to the null variant", () => {
@@ -687,7 +687,7 @@ describe("dispatchSum", () => {
   })
 
   it("nullable: null dispatches to variant 0", () => {
-    const schema = Schema.nullable(Schema.string())
+    const schema = Schema.string().nullable()
     let calledIndex: number | undefined
     const variants = {
       byIndex: (index: number) => {
@@ -700,7 +700,7 @@ describe("dispatchSum", () => {
   })
 
   it("nullable: undefined dispatches to variant 0", () => {
-    const schema = Schema.nullable(Schema.string())
+    const schema = Schema.string().nullable()
     let calledIndex: number | undefined
     const variants = {
       byIndex: (index: number) => {
@@ -713,7 +713,7 @@ describe("dispatchSum", () => {
   })
 
   it("nullable: non-null dispatches to variant 1", () => {
-    const schema = Schema.nullable(Schema.string())
+    const schema = Schema.string().nullable()
     let calledIndex: number | undefined
     const variants = {
       byIndex: (index: number) => {

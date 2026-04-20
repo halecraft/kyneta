@@ -197,7 +197,7 @@ describe("advanceSchema", () => {
 
   describe("sum", () => {
     it("throws when advancing through a sum", () => {
-      const schema = Schema.nullable(Schema.string())
+      const schema = Schema.string().nullable()
       expect(() => advanceSchema(schema, key("x"))).toThrow(
         "cannot advance through a sum",
       )
@@ -260,7 +260,7 @@ describe("advanceSchema", () => {
 
   describe("result is a sum", () => {
     const schema = Schema.struct({
-      bio: Schema.nullable(Schema.string()),
+      bio: Schema.string().nullable(),
     })
 
     it("product field returning a sum returns the sum node", () => {

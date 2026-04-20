@@ -7,6 +7,11 @@
 //
 // The text codec works with JSON-safe objects, not bytes.
 
+import {
+  SYNC_AUTHORITATIVE,
+  SYNC_COLLABORATIVE,
+  SYNC_EPHEMERAL,
+} from "@kyneta/schema"
 import type {
   ChannelMsg,
   DepartMsg,
@@ -100,19 +105,19 @@ describe("Text codec — present", () => {
           docId: "doc-1",
           schemaHash: "00test",
           replicaType: ["plain", 1, 0] as const,
-          mergeStrategy: "authoritative" as const,
+          syncProtocol: SYNC_AUTHORITATIVE,
         },
         {
           docId: "doc-2",
           schemaHash: "00test",
           replicaType: ["yjs", 1, 0] as const,
-          mergeStrategy: "collaborative" as const,
+          syncProtocol: SYNC_COLLABORATIVE,
         },
         {
           docId: "doc-3",
           schemaHash: "00test",
           replicaType: ["loro", 1, 0] as const,
-          mergeStrategy: "ephemeral" as const,
+          syncProtocol: SYNC_EPHEMERAL,
         },
       ],
     }
@@ -326,13 +331,13 @@ describe("Text codec — batch", () => {
             docId: "d1",
             schemaHash: "00test",
             replicaType: ["plain", 1, 0] as const,
-            mergeStrategy: "authoritative" as const,
+            syncProtocol: SYNC_AUTHORITATIVE,
           },
           {
             docId: "d2",
             schemaHash: "00test",
             replicaType: ["yjs", 1, 0] as const,
-            mergeStrategy: "collaborative" as const,
+            syncProtocol: SYNC_COLLABORATIVE,
           },
         ],
       },
@@ -445,7 +450,7 @@ describe("Text codec — JSON-safe output", () => {
             docId: "a",
             schemaHash: "00test",
             replicaType: ["plain", 1, 0] as const,
-            mergeStrategy: "authoritative" as const,
+            syncProtocol: SYNC_AUTHORITATIVE,
           },
         ],
       },

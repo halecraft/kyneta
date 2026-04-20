@@ -31,7 +31,7 @@ const sumSchema = Schema.struct({
 })
 
 const nullableSchema = Schema.struct({
-  bio: Schema.nullable(Schema.string()),
+  bio: Schema.string().nullable(),
 })
 
 function interpretBottom(schema: Parameters<typeof interpret>[0]) {

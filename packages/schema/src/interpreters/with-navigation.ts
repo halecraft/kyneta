@@ -17,8 +17,6 @@
 // See .plans/navigation-layer.md §Phase 2, Task 2.1.
 
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
-import { wireSequenceNavigation } from "./sequence-helpers.js"
-import { wireKeyedNavigation } from "./keyed-helpers.js"
 import { dispatchSum } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
 import type {
@@ -35,6 +33,8 @@ import type {
   TreeSchema,
 } from "../schema.js"
 import type { HasCall, HasNavigation } from "./bottom.js"
+import { installKeyedNavigation } from "./keyed-helpers.js"
+import { installSequenceNavigation } from "./sequence-helpers.js"
 
 // ---------------------------------------------------------------------------
 // withNavigation — the coalgebraic structural addressing transformer
@@ -132,7 +132,7 @@ export function withNavigation<A extends HasCall>(
     ): A & HasNavigation {
       const baseItem = item as (index: number) => A
       const result = base.sequence(ctx, path, schema, baseItem) as any
-      wireSequenceNavigation(result, ctx, path, item)
+      installSequenceNavigation(result, ctx, path, item)
       return result as A & HasNavigation
     },
 
@@ -147,7 +147,7 @@ export function withNavigation<A extends HasCall>(
     ): A & HasNavigation {
       const baseItem = item as (key: string) => A
       const result = base.map(ctx, path, schema, baseItem) as any
-      wireKeyedNavigation(result, ctx, path, item)
+      installKeyedNavigation(result, ctx, path, item)
       return result as A & HasNavigation
     },
 
@@ -198,7 +198,7 @@ export function withNavigation<A extends HasCall>(
     ): A & HasNavigation {
       const baseItem = item as (key: string) => A
       const result = base.set(ctx, path, schema, baseItem) as any
-      wireKeyedNavigation(result, ctx, path, item)
+      installKeyedNavigation(result, ctx, path, item)
       return result as A & HasNavigation
     },
 
@@ -229,14 +229,18 @@ export function withNavigation<A extends HasCall>(
     ): A & HasNavigation {
       const baseItem = item as (index: number) => A
       const result = base.movable(ctx, path, schema, baseItem) as any
-      wireSequenceNavigation(result, ctx, path, item)
+      installSequenceNavigation(result, ctx, path, item)
       return result as A & HasNavigation
     },
 
     // --- RichText --------------------------------------------------------------
     // Leaf type — pass through to base. withReadable will fill [CALL]
     // and add toPrimitive later.
-    richtext(ctx: RefContext, path: Path, schema: RichTextSchema): A & HasNavigation {
+    richtext(
+      ctx: RefContext,
+      path: Path,
+      schema: RichTextSchema,
+    ): A & HasNavigation {
       return base.richtext(ctx, path, schema) as A & HasNavigation
     },
   }

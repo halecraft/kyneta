@@ -8,7 +8,14 @@
 // StorageAdapter / storage-first sync machinery.
 
 import { loro } from "@kyneta/loro-schema"
-import { change, Interpret, json, Replicate, Schema } from "@kyneta/schema"
+import {
+  change,
+  ephemeral,
+  Interpret,
+  json,
+  Replicate,
+  Schema,
+} from "@kyneta/schema"
 import { Bridge, createBridgeTransport } from "@kyneta/transport"
 import { afterEach, describe, expect, it } from "vitest"
 import {
@@ -72,12 +79,11 @@ const CausalDoc = loro.bind(
   }),
 )
 
-const PresenceDoc = json.bind(
+const PresenceDoc = ephemeral.bind(
   Schema.struct({
     cursor: Schema.struct({ x: Schema.number(), y: Schema.number() }),
     name: Schema.string(),
   }),
-  "ephemeral",
 )
 
 // ===========================================================================

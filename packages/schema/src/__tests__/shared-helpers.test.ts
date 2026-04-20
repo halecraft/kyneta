@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest"
-import { at } from "../interpreters/sequence-helpers.js"
 import {
   interpret,
   plainContext,
@@ -7,6 +6,7 @@ import {
   Schema,
   writable,
 } from "../index.js"
+import { at } from "../interpreters/sequence-helpers.js"
 
 // ===========================================================================
 // at() — the cursor-positioning primitive
@@ -34,27 +34,28 @@ describe("at: cursor-positioning primitive", () => {
 // ===========================================================================
 // Movable ↔ Sequence parity
 //
-// Movable delegates to the same wireListWriteOps helper as sequence.
+// Movable delegates to the same installListWriteOps helper as sequence.
 // This test ensures the contract holds through the full interpreter stack.
 // ===========================================================================
 
 describe("movable list has the same write surface as sequence", () => {
   const movableSchema = Schema.struct({
-    items: Schema.movableList(
-      Schema.struct({ name: Schema.string() }),
-    ),
+    items: Schema.movableList(Schema.struct({ name: Schema.string() })),
   })
 
   const sequenceSchema = Schema.struct({
-    items: Schema.list(
-      Schema.struct({ name: Schema.string() }),
-    ),
+    items: Schema.list(Schema.struct({ name: Schema.string() })),
   })
 
   function createDoc(schema: any) {
     const store = { items: [{ name: "a" }] }
     const ctx = plainContext(store)
-    const doc = interpret(schema, ctx).with(readable).with(writable).done()
+    // Cast avoids TS2589 — the fluent builder produces deeply recursive
+    // types when S is widened to `any`. Same pattern as createRef().
+    const doc = (interpret as any)(schema, ctx)
+      .with(readable)
+      .with(writable)
+      .done()
     return { store, doc }
   }
 
@@ -79,7 +80,7 @@ describe("movable list has the same write surface as sequence", () => {
 // ===========================================================================
 // Set ↔ Map parity
 //
-// Set delegates to the same wireKeyedWriteOps helper as map.
+// Set delegates to the same installKeyedWriteOps helper as map.
 // This test ensures the contract holds through the full interpreter stack.
 // ===========================================================================
 
@@ -95,7 +96,11 @@ describe("set kind has the same write surface as map", () => {
   function createDoc(schema: any) {
     const store = { tags: { alpha: "1" } }
     const ctx = plainContext(store)
-    const doc = interpret(schema, ctx).with(readable).with(writable).done()
+    // Cast avoids TS2589 — same pattern as above and createRef().
+    const doc = (interpret as any)(schema, ctx)
+      .with(readable)
+      .with(writable)
+      .done()
     return { store, doc }
   }
 

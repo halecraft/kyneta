@@ -4,6 +4,11 @@
 // for both complete and fragment frames, using cborCodec only.
 // Batching is orthogonal to framing — not tested here.
 
+import {
+  SYNC_AUTHORITATIVE,
+  SYNC_COLLABORATIVE,
+  SYNC_EPHEMERAL,
+} from "@kyneta/schema"
 import type {
   ChannelMsg,
   InterestMsg,
@@ -56,7 +61,7 @@ describe("Binary frame — complete", () => {
           docId: "doc-1",
           schemaHash: "00test",
           replicaType: ["plain", 1, 0] as const,
-          mergeStrategy: "authoritative" as const,
+          syncProtocol: SYNC_AUTHORITATIVE,
         },
       ],
     }
@@ -80,19 +85,19 @@ describe("Binary frame — complete", () => {
           docId: "a",
           schemaHash: "00test",
           replicaType: ["plain", 1, 0] as const,
-          mergeStrategy: "authoritative" as const,
+          syncProtocol: SYNC_AUTHORITATIVE,
         },
         {
           docId: "b",
           schemaHash: "00test",
           replicaType: ["yjs", 1, 0] as const,
-          mergeStrategy: "collaborative" as const,
+          syncProtocol: SYNC_COLLABORATIVE,
         },
         {
           docId: "c",
           schemaHash: "00test",
           replicaType: ["loro", 1, 0] as const,
-          mergeStrategy: "ephemeral" as const,
+          syncProtocol: SYNC_EPHEMERAL,
         },
       ],
     }
@@ -198,7 +203,7 @@ describe("Binary frame — batch (via complete frame)", () => {
             docId: "d1",
             schemaHash: "00test",
             replicaType: ["plain", 1, 0] as const,
-            mergeStrategy: "authoritative" as const,
+            syncProtocol: SYNC_AUTHORITATIVE,
           },
         ],
       },
@@ -225,13 +230,13 @@ describe("Binary frame — batch (via complete frame)", () => {
             docId: "d1",
             schemaHash: "00test",
             replicaType: ["plain", 1, 0] as const,
-            mergeStrategy: "authoritative" as const,
+            syncProtocol: SYNC_AUTHORITATIVE,
           },
           {
             docId: "d2",
             schemaHash: "00test",
             replicaType: ["yjs", 1, 0] as const,
-            mergeStrategy: "collaborative" as const,
+            syncProtocol: SYNC_COLLABORATIVE,
           },
         ],
       },
@@ -370,7 +375,7 @@ describe("Binary frame — encodeBinaryFrame generic", () => {
           docId: "x",
           schemaHash: "00test",
           replicaType: ["plain", 1, 0] as const,
-          mergeStrategy: "authoritative" as const,
+          syncProtocol: SYNC_AUTHORITATIVE,
         },
       ],
     })
@@ -524,7 +529,7 @@ describe("Binary frame — edge cases", () => {
           docId: "test",
           schemaHash: "00test",
           replicaType: ["plain", 1, 0] as const,
-          mergeStrategy: "authoritative" as const,
+          syncProtocol: SYNC_AUTHORITATIVE,
         },
       ],
     }

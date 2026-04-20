@@ -11,7 +11,11 @@ import {
   plainSubstrateFactory,
   readable,
   replicaTypesCompatible,
+  requiresBidirectionalSync,
   Schema,
+  SYNC_AUTHORITATIVE,
+  SYNC_COLLABORATIVE,
+  SYNC_EPHEMERAL,
   subscribe,
   writable,
   Zero,
@@ -974,5 +978,23 @@ describe("PlainSubstrate.advance()", () => {
     change(doc, d => d.theme.set("dark"))
     expect(doc.theme()).toBe("dark")
     expect(substrate.version().value).toBe(v2.value + 2)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// requiresBidirectionalSync — protocol constant invariant
+// ---------------------------------------------------------------------------
+
+describe("requiresBidirectionalSync", () => {
+  it("collaborative (concurrent + delta) requires bidirectional", () => {
+    expect(requiresBidirectionalSync(SYNC_COLLABORATIVE)).toBe(true)
+  })
+
+  it("authoritative (serialized + delta) does not require bidirectional", () => {
+    expect(requiresBidirectionalSync(SYNC_AUTHORITATIVE)).toBe(false)
+  })
+
+  it("ephemeral (concurrent + snapshot) does not require bidirectional", () => {
+    expect(requiresBidirectionalSync(SYNC_EPHEMERAL)).toBe(false)
   })
 })

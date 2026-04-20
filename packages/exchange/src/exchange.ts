@@ -30,7 +30,6 @@ import {
   type DocMetadata,
   type FactoryBuilder,
   type Interpret,
-  type MergeStrategy,
   type Ref,
   type Reject,
   type Replica,
@@ -38,6 +37,7 @@ import {
   type ReplicaType,
   type Replicate,
   type Schema as SchemaNode,
+  type SyncProtocol,
   subscribe,
   type Version,
 } from "@kyneta/schema"
@@ -152,7 +152,7 @@ export type ExchangeParams = {
   /**
    * Declares replication modes for headless participation.
    *
-   * Each `BoundReplica` pairs a `ReplicaFactory` with a `MergeStrategy`,
+   * Each `BoundReplica` pairs a `ReplicaFactory` with a `SyncProtocol`,
    * defining a replication tier the Exchange can service. The defaults
    * cover plain/authoritative and lww/lww — extend this set for CRDT-backed
    * relay or storage participants.
@@ -323,7 +323,7 @@ export class Exchange {
         docId,
         peer,
         replicaType,
-        mergeStrategy,
+        syncProtocol,
         schemaHash,
         _supportedHashes,
       ): void => {
@@ -331,7 +331,7 @@ export class Exchange {
         const resolvedBound = this.#capabilities.resolveSchema(
           schemaHash,
           replicaType,
-          mergeStrategy,
+          syncProtocol,
         )
         if (resolvedBound) {
           this.#interpretDoc(docId, resolvedBound)
@@ -343,7 +343,7 @@ export class Exchange {
           docId,
           peer,
           replicaType,
-          mergeStrategy,
+          syncProtocol,
           schemaHash,
         )
 
@@ -353,7 +353,7 @@ export class Exchange {
             // Supported replica type but no schema match — defer.
             // Promotion is plausible: a later exchange.get() or registerSchema()
             // will expand the schema set and auto-promote.
-            this.#deferDoc(docId, replicaType, mergeStrategy, schemaHash)
+            this.#deferDoc(docId, replicaType, syncProtocol, schemaHash)
           }
           // Unsupported replica type — reject silently.
           // No callback, no schema, no replica capability. Nothing to do.
@@ -367,12 +367,12 @@ export class Exchange {
           case "replicate": {
             const boundReplica = this.#capabilities.resolveReplica(
               replicaType,
-              mergeStrategy,
+              syncProtocol,
             )
             if (!boundReplica) {
               console.warn(
                 `[exchange] resolve returned Replicate() for doc "${docId}" but no BoundReplica ` +
-                  `is registered for replicaType [${replicaType}] with strategy "${mergeStrategy}". ` +
+                  `is registered for replicaType [${replicaType}] with syncProtocol ${JSON.stringify(syncProtocol)}. ` +
                   `Add the appropriate BoundReplica to ExchangeParams.replicas.`,
               )
               return
@@ -380,13 +380,13 @@ export class Exchange {
             this.#replicateDoc(
               docId,
               boundReplica.factory,
-              mergeStrategy,
+              syncProtocol,
               schemaHash,
             )
             break
           }
           case "defer":
-            this.#deferDoc(docId, replicaType, mergeStrategy, schemaHash)
+            this.#deferDoc(docId, replicaType, syncProtocol, schemaHash)
             break
           case "reject":
             // Explicitly rejected — do nothing
@@ -481,7 +481,7 @@ export class Exchange {
         docId,
         substrate,
         factory.replica,
-        bound.strategy,
+        bound.syncProtocol,
         bound.schemaHash,
         "interpret",
       ).then(() => {
@@ -497,7 +497,7 @@ export class Exchange {
         docId,
         replica: substrate,
         replicaFactory: factory.replica,
-        strategy: bound.strategy,
+        syncProtocol: bound.syncProtocol,
         schemaHash: bound.schemaHash,
       })
 
@@ -519,7 +519,7 @@ export class Exchange {
   #replicateDoc(
     docId: DocId,
     replicaFactory: ReplicaFactory<any>,
-    strategy: MergeStrategy,
+    syncProtocol: SyncProtocol,
     schemaHash: string,
   ): void {
     // Ensure semantics: if this doc already exists in replicate mode,
@@ -536,7 +536,7 @@ export class Exchange {
         docId,
         replica,
         replicaFactory,
-        strategy,
+        syncProtocol,
         schemaHash,
         "replicate",
       )
@@ -547,7 +547,7 @@ export class Exchange {
         docId,
         replica,
         replicaFactory,
-        strategy,
+        syncProtocol,
         schemaHash,
       })
     }
@@ -561,10 +561,10 @@ export class Exchange {
   #deferDoc(
     docId: DocId,
     replicaType: ReplicaType,
-    mergeStrategy: MergeStrategy,
+    syncProtocol: SyncProtocol,
     schemaHash: string,
   ): void {
-    this.#synchronizer.deferDoc(docId, replicaType, mergeStrategy, schemaHash)
+    this.#synchronizer.deferDoc(docId, replicaType, syncProtocol, schemaHash)
     this.#docCache.set(docId, { mode: "deferred" })
   }
 
@@ -657,13 +657,13 @@ export class Exchange {
     docId: DocId,
     replica: Replica<any>,
     replicaFactory: ReplicaFactory<any>,
-    strategy: MergeStrategy,
+    syncProtocol: SyncProtocol,
     schemaHash: string,
     mode: "interpret" | "replicate",
   ): Promise<void> {
     const metadata: DocMetadata = {
       replicaType: replicaFactory.replicaType,
-      mergeStrategy: strategy,
+      syncProtocol,
       schemaHash,
     }
 
@@ -722,7 +722,7 @@ export class Exchange {
       docId,
       replica,
       replicaFactory,
-      strategy,
+      syncProtocol,
       schemaHash,
     } as DocRuntime)
   }
@@ -837,12 +837,12 @@ export class Exchange {
    * **Overloaded:**
    * - `replicate(docId)` — promote a deferred document, resolving the
    *   factory from the capabilities registry.
-   * - `replicate(docId, replicaFactory, strategy, schemaHash)` — full
+   * - `replicate(docId, replicaFactory, syncProtocol, schemaHash)` — full
    *   registration with explicit arguments.
    *
    * @param docId - The document ID
    * @param replicaFactory - Factory for constructing headless replicas
-   * @param strategy - The merge strategy for this document
+   * @param syncProtocol - The sync protocol for this document
    * @param schemaHash - The schema hash for this document
    *
    * @example
@@ -850,7 +850,7 @@ export class Exchange {
    * import { loro } from "@kyneta/loro-schema"
    *
    * // Schema-free relay — replicate all docs without compile-time schema knowledge
-   * exchange.replicate("shared-doc", loro.replica().factory, "causal", "v1:abc123")
+   * exchange.replicate("shared-doc", loro.replica().factory, SYNC_COLLABORATIVE, "v1:abc123")
    *
    * // Promote a deferred doc — factory resolved from capabilities registry
    * exchange.replicate("deferred-doc")
@@ -860,13 +860,13 @@ export class Exchange {
   replicate(
     docId: DocId,
     replicaFactory: ReplicaFactory<any>,
-    strategy: MergeStrategy,
+    syncProtocol: SyncProtocol,
     schemaHash: string,
   ): void
   replicate(
     docId: DocId,
     replicaFactory?: ReplicaFactory<any>,
-    strategy?: MergeStrategy,
+    syncProtocol?: SyncProtocol,
     schemaHash?: string,
   ): void {
     // Handle deferred promotion or throw on duplicate
@@ -882,16 +882,16 @@ export class Exchange {
       }
       const bound = this.#capabilities.resolveReplica(
         metadata.replicaType,
-        metadata.mergeStrategy,
+        metadata.syncProtocol,
       )
       if (!bound) {
         throw new Error(
           `Document '${docId}' is deferred with replicaType [${metadata.replicaType}] and ` +
-            `strategy "${metadata.mergeStrategy}" but no matching BoundReplica is registered.`,
+            `syncProtocol ${JSON.stringify(metadata.syncProtocol)} but no matching BoundReplica is registered.`,
         )
       }
       replicaFactory = bound.factory
-      strategy = metadata.mergeStrategy
+      syncProtocol = metadata.syncProtocol
       schemaHash = metadata.schemaHash
     } else if (cached) {
       throw new Error(
@@ -900,14 +900,14 @@ export class Exchange {
       )
     }
 
-    if (!replicaFactory || !strategy || !schemaHash) {
+    if (!replicaFactory || !syncProtocol || !schemaHash) {
       throw new Error(
-        `exchange.replicate() requires (docId, replicaFactory, strategy, schemaHash) ` +
+        `exchange.replicate() requires (docId, replicaFactory, syncProtocol, schemaHash) ` +
           `or a deferred document to promote.`,
       )
     }
 
-    this.#replicateDoc(docId, replicaFactory, strategy, schemaHash)
+    this.#replicateDoc(docId, replicaFactory, syncProtocol, schemaHash)
   }
 
   /**
@@ -965,7 +965,7 @@ export class Exchange {
     const entirety = runtime.replica.exportEntirety()
     const metadata: DocMetadata = {
       replicaType: runtime.replicaFactory.replicaType,
-      mergeStrategy: runtime.strategy,
+      syncProtocol: runtime.syncProtocol,
       schemaHash: runtime.schemaHash,
     }
     for (const store of this.#stores) {
@@ -1118,7 +1118,9 @@ export class Exchange {
         bound.schemaHash === metadata.schemaHash &&
         replicaType[0] === metadata.replicaType[0] &&
         replicaType[1] === metadata.replicaType[1] &&
-        bound.strategy === metadata.mergeStrategy
+        bound.syncProtocol.writerModel === metadata.syncProtocol.writerModel &&
+        bound.syncProtocol.delivery === metadata.syncProtocol.delivery &&
+        bound.syncProtocol.durability === metadata.syncProtocol.durability
       ) {
         // Safe to mutate Map during iteration per ES spec.
         // Delete the deferred entry, then #interpretDoc inserts the new one.

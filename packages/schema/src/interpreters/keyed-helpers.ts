@@ -10,18 +10,18 @@
 
 import { mapChange } from "../change.js"
 import { isPropertyHost } from "../guards.js"
-import type { RefContext } from "../interpreter-types.js"
 import type { Path } from "../interpret.js"
-import type { WritableContext } from "./writable.js"
+import type { RefContext } from "../interpreter-types.js"
 import { CALL } from "./bottom.js"
+import type { WritableContext } from "./writable.js"
 
 /**
- * Wire keyed mutation methods onto a ref: `set`, `delete`, `clear`.
+ * Install keyed mutation methods onto a ref: `set`, `delete`, `clear`.
  *
  * Shared by both `map` and `set` kinds — the mutation surface is
  * identical (set a key, delete a key, clear all keys).
  */
-export function wireKeyedWriteOps(
+export function installKeyedWriteOps(
   result: any,
   ctx: WritableContext,
   path: Path,
@@ -61,8 +61,8 @@ export function wireKeyedWriteOps(
 // Readable, navigation, addressing, caching helpers for map/set
 // ---------------------------------------------------------------------------
 
-/** Wire the CALL slot (record snapshot) and `.get(key)` onto a keyed ref. */
-export function wireKeyedReadable(
+/** Install the CALL slot (record snapshot) and `.get(key)` onto a keyed ref. */
+export function installKeyedReadable(
   result: any,
   ctx: RefContext,
   path: Path,
@@ -90,8 +90,8 @@ export function wireKeyedReadable(
   })
 }
 
-/** Wire `.at(key)`, `.has()`, `.keys()`, `.size`, `.entries()`, `.values()`, and `[Symbol.iterator]` onto a keyed ref. */
-export function wireKeyedNavigation(
+/** Install `.at(key)`, `.has()`, `.keys()`, `.size`, `.entries()`, `.values()`, and `[Symbol.iterator]` onto a keyed ref. */
+export function installKeyedNavigation(
   result: any,
   ctx: RefContext,
   path: Path,
@@ -162,7 +162,7 @@ export function wireKeyedNavigation(
 }
 
 /** Expose the address table via a well-known symbol and register a prepare handler for key-based address tracking. */
-export function wireKeyedAddressing(
+export function installKeyedAddressing(
   result: any,
   path: Path,
   addressTableSymbol: symbol,
@@ -187,7 +187,7 @@ export function wireKeyedAddressing(
 }
 
 /** Override `.at(key)` with address-table-backed lookup and register an invalidation handler. */
-export function wireKeyedCaching(
+export function installKeyedCaching(
   result: any,
   path: Path,
   addressTableSym: symbol,

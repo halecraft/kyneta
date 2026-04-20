@@ -68,7 +68,7 @@ class MyTransport extends Transport<void> {
 }
 ```
 
-`@kyneta/schema` is needed for `MergeStrategy`, `ReplicaType`, and `SubstratePayload` used in message type definitions.
+`@kyneta/schema` is needed for `SyncProtocol`, `ReplicaType`, and `SubstratePayload` used in message type definitions.
 
 ## License
 

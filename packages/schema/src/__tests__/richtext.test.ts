@@ -1,16 +1,16 @@
-import { describe, it, expect } from "vitest"
+import { describe, expect, it } from "vitest"
+import type { ChangeBase, Instruction } from "../index.js"
 import {
-  Schema,
-  richTextChange,
-  isRichTextChange,
   foldInstructions,
-  transformIndex,
-  stepRichText,
-  normalizeSpans,
-  Zero,
+  isRichTextChange,
   KIND,
+  normalizeSpans,
+  richTextChange,
+  Schema,
+  stepRichText,
+  transformIndex,
+  Zero,
 } from "../index.js"
-import type { Instruction } from "../index.js"
 
 // ---------------------------------------------------------------------------
 // Types and constructors
@@ -22,7 +22,7 @@ describe("richTextChange", () => {
     expect(rc.type).toBe("richtext")
     expect(rc.instructions).toEqual([{ insert: "hello" }])
     expect(isRichTextChange(rc)).toBe(true)
-    expect(isRichTextChange({ type: "text", instructions: [] })).toBe(false)
+    expect(isRichTextChange({ type: "text" } as ChangeBase)).toBe(false)
   })
 })
 
@@ -55,7 +55,7 @@ describe("format ≡ retain in position algebra", () => {
           cursors.push(source, target)
           return acc
         },
-        onDelete: (acc) => acc,
+        onDelete: acc => acc,
       },
     )
     // format(3): source=0,target=0 → advance to 3
@@ -70,7 +70,10 @@ describe("format ≡ retain in position algebra", () => {
 
 describe("Schema.richText", () => {
   it("produces richtext kind with mark config", () => {
-    const s = Schema.richText({ bold: { expand: "after" }, link: { expand: "none" } })
+    const s = Schema.richText({
+      bold: { expand: "after" },
+      link: { expand: "none" },
+    })
     expect(s[KIND]).toBe("richtext")
     expect(s.marks.bold.expand).toBe("after")
     expect(s.marks.link.expand).toBe("none")
@@ -92,9 +95,9 @@ describe("stepRichText", () => {
   // --- Basic operations ---
 
   it("insert into empty delta", () => {
-    expect(
-      stepRichText([], richTextChange([{ insert: "Hello" }])),
-    ).toEqual([{ text: "Hello" }])
+    expect(stepRichText([], richTextChange([{ insert: "Hello" }]))).toEqual([
+      { text: "Hello" },
+    ])
   })
 
   it("insert with marks at the beginning", () => {
@@ -103,10 +106,7 @@ describe("stepRichText", () => {
         [{ text: "World" }],
         richTextChange([{ insert: "Hello ", marks: { bold: true } }]),
       ),
-    ).toEqual([
-      { text: "Hello ", marks: { bold: true } },
-      { text: "World" },
-    ])
+    ).toEqual([{ text: "Hello ", marks: { bold: true } }, { text: "World" }])
   })
 
   it("delete spanning multiple spans", () => {
@@ -144,20 +144,14 @@ describe("stepRichText", () => {
         [{ text: "Hello" }],
         richTextChange([{ format: 3, marks: { bold: true } }]),
       ),
-    ).toEqual([
-      { text: "Hel", marks: { bold: true } },
-      { text: "lo" },
-    ])
+    ).toEqual([{ text: "Hel", marks: { bold: true } }, { text: "lo" }])
   })
 
   it("format across multiple spans merges marks into each", () => {
     // Formats chars 0-3 bold across a two-span input
     expect(
       stepRichText(
-        [
-          { text: "AB", marks: { italic: true } },
-          { text: "CD" },
-        ],
+        [{ text: "AB", marks: { italic: true } }, { text: "CD" }],
         richTextChange([{ format: 3, marks: { bold: true } }]),
       ),
     ).toEqual([
@@ -194,10 +188,7 @@ describe("stepRichText", () => {
         [{ text: "Hello World" }],
         richTextChange([{ format: 5, marks: { bold: true } }]),
       ),
-    ).toEqual([
-      { text: "Hello", marks: { bold: true } },
-      { text: " World" },
-    ])
+    ).toEqual([{ text: "Hello", marks: { bold: true } }, { text: " World" }])
   })
 
   // --- Normalization under step ---
@@ -230,9 +221,9 @@ describe("normalizeSpans", () => {
   })
 
   it("drops empty spans", () => {
-    expect(
-      normalizeSpans([{ text: "" }, { text: "A" }, { text: "" }]),
-    ).toEqual([{ text: "A" }])
+    expect(normalizeSpans([{ text: "" }, { text: "A" }, { text: "" }])).toEqual(
+      [{ text: "A" }],
+    )
   })
 
   it("preserves spans with different marks", () => {

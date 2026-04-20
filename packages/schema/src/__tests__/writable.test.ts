@@ -362,7 +362,7 @@ describe("writable: discriminated sum", () => {
 
 describe("writable: nullable (positional sum)", () => {
   const schema = Schema.struct({
-    bio: Schema.nullable(Schema.string()),
+    bio: Schema.string().nullable(),
   })
 
   it("null store value dispatches to the null variant", () => {

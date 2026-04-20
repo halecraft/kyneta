@@ -39,7 +39,7 @@ export {
 // Yjs-specific exports
 // ---------------------------------------------------------------------------
 
-export type { YjsCaps } from "./bind-yjs.js"
+export type { YjsLaws } from "./bind-yjs.js"
 // Namespace
 export { yjs } from "./bind-yjs.js"
 // Change mapping

@@ -2,18 +2,21 @@
 //
 // The sync program handles the document-exchange vocabulary: present,
 // interest, offer, dismiss. It tracks per-peer document sync states
-// and manages merge strategy dispatch.
+// and manages sync protocol dispatch.
 //
 // Key invariant: the sync program never sees channels, transports, or
 // connection state. It speaks only in terms of peers and documents.
 // The shell resolves PeerId → ChannelId when interpreting effects.
 
 import type {
-  MergeStrategy,
   ReplicaType,
   SubstratePayload,
+  SyncProtocol,
 } from "@kyneta/schema"
-import { replicaTypesCompatible } from "@kyneta/schema"
+import {
+  replicaTypesCompatible,
+  requiresBidirectionalSync,
+} from "@kyneta/schema"
 import type {
   DocId,
   PeerId,
@@ -48,8 +51,8 @@ export type DocEntry = {
   /** Identifies the binary format of this document's replica */
   replicaType: ReplicaType
 
-  /** The merge strategy for this document's substrate */
-  mergeStrategy: MergeStrategy
+  /** The sync protocol for this document's substrate */
+  syncProtocol: SyncProtocol
 
   /** A deterministic hash representing the document's schema */
   schemaHash: string
@@ -102,7 +105,7 @@ export type SyncInput =
       mode: "interpret" | "replicate"
       version: string
       replicaType: ReplicaType
-      mergeStrategy: MergeStrategy
+      syncProtocol: SyncProtocol
       schemaHash: string
       supportedHashes?: readonly string[]
     }
@@ -110,7 +113,7 @@ export type SyncInput =
       type: "sync/doc-defer"
       docId: DocId
       replicaType: ReplicaType
-      mergeStrategy: MergeStrategy
+      syncProtocol: SyncProtocol
       schemaHash: string
       supportedHashes?: readonly string[]
     }
@@ -161,7 +164,7 @@ export type SyncEffect =
       docId: DocId
       peer: PeerIdentityDetails
       replicaType: ReplicaType
-      mergeStrategy: MergeStrategy
+      syncProtocol: SyncProtocol
       schemaHash: string
       supportedHashes?: readonly string[]
     }
@@ -298,26 +301,22 @@ function buildPush(
   canShare: SyncPredicate,
   excludePeerId?: PeerId,
 ): SyncEffect | undefined {
-  switch (docEntry.mergeStrategy) {
-    case "collaborative":
-    case "authoritative": {
-      const raw = getSyncedPeers(model, docId, excludePeerId)
-      const peerIds = filterPeersByShare(model, raw, docId, canShare)
-      if (peerIds.length === 0) return undefined
-      return {
-        type: "send-offers",
-        to: peerIds,
-        docId,
-        sinceVersion: docEntry.version,
-      }
-    }
+  // Interest-based routing for all protocols — only peers who have
+  // expressed interest (via announce → interest → offer) receive pushes.
+  const raw = getSyncedPeers(model, docId, excludePeerId)
+  const peerIds = filterPeersByShare(model, raw, docId, canShare)
+  if (peerIds.length === 0) return undefined
 
-    case "ephemeral": {
-      const raw = getAvailablePeers(model, excludePeerId)
-      const peerIds = filterPeersByShare(model, raw, docId, canShare)
-      if (peerIds.length === 0) return undefined
-      return { type: "send-offers", to: peerIds, docId }
-    }
+  // Delta-capable: include sinceVersion so the substrate can compute a delta.
+  // Snapshot-only: omit sinceVersion — the substrate always sends entirety.
+  return {
+    type: "send-offers",
+    to: peerIds,
+    docId,
+    sinceVersion:
+      docEntry.syncProtocol.delivery === "delta-capable"
+        ? docEntry.version
+        : undefined,
   }
 }
 
@@ -328,7 +327,7 @@ function buildPush(
 function announceDoc(
   docId: DocId,
   replicaType: ReplicaType,
-  mergeStrategy: MergeStrategy,
+  syncProtocol: SyncProtocol,
   schemaHash: string,
   model: SyncModel,
   canShare: SyncPredicate,
@@ -340,13 +339,13 @@ function announceDoc(
   const docEntry: {
     docId: DocId
     replicaType: ReplicaType
-    mergeStrategy: MergeStrategy
+    syncProtocol: SyncProtocol
     schemaHash: string
     supportedHashes?: readonly string[]
   } = {
     docId,
     replicaType,
-    mergeStrategy,
+    syncProtocol,
     schemaHash,
   }
   // Only include supportedHashes if it carries more info than the primary hash alone
@@ -382,13 +381,13 @@ function buildPresent(
       const doc: {
         docId: DocId
         replicaType: ReplicaType
-        mergeStrategy: MergeStrategy
+        syncProtocol: SyncProtocol
         schemaHash: string
         supportedHashes?: readonly string[]
       } = {
         docId,
         replicaType: entry.replicaType,
-        mergeStrategy: entry.mergeStrategy,
+        syncProtocol: entry.syncProtocol,
         schemaHash: entry.schemaHash,
       }
       // Only include supportedHashes if it carries more info than the primary hash alone
@@ -422,55 +421,38 @@ function buildInterestResponse(
 ): SyncEffect[] {
   const effects: SyncEffect[] = []
 
-  switch (docEntry.mergeStrategy) {
-    case "collaborative":
-      // Collaborative: always send our state (the CRDT handles merge).
-      // Use exportSince if the peer provided a version, otherwise snapshot.
-      effects.push({
-        type: "send-offer",
-        to: fromPeerId,
-        docId: message.docId,
-        sinceVersion: message.version,
-        reciprocate: false,
-      })
+  if (docEntry.syncProtocol.delivery === "delta-capable") {
+    effects.push({
+      type: "send-offer",
+      to: fromPeerId,
+      docId: message.docId,
+      sinceVersion: message.version,
+      reciprocate: false,
+    })
 
-      // If the peer asked for reciprocation, send our own interest
-      if (message.reciprocate) {
-        effects.push({
-          type: "send-to-peer",
-          to: fromPeerId,
-          message: {
-            type: "interest",
-            docId: message.docId,
-            version: docEntry.version,
-            reciprocate: false, // prevent infinite loop
-          },
-        })
-      }
-      break
-
-    case "authoritative":
-      // Authoritative: we always send an offer and let the runtime/receiver
-      // decide based on version comparison.
+    // CRDTs need bidirectional exchange — send interest back so the peer can receive our state too
+    if (
+      requiresBidirectionalSync(docEntry.syncProtocol) &&
+      message.reciprocate
+    ) {
       effects.push({
-        type: "send-offer",
+        type: "send-to-peer",
         to: fromPeerId,
-        docId: message.docId,
-        sinceVersion: message.version,
-        reciprocate: false,
+        message: {
+          type: "interest",
+          docId: message.docId,
+          version: docEntry.version,
+          reciprocate: false, // prevent infinite loop
+        },
       })
-      break
-
-    case "ephemeral":
-      // Ephemeral: always respond with snapshot (no delta computation)
-      effects.push({
-        type: "send-offer",
-        to: fromPeerId,
-        docId: message.docId,
-        // No sinceVersion — always entirety for LWW
-        reciprocate: false,
-      })
-      break
+    }
+  } else {
+    effects.push({
+      type: "send-offer",
+      to: fromPeerId,
+      docId: message.docId,
+      reciprocate: false,
+    })
   }
 
   return effects
@@ -670,7 +652,7 @@ function handleDocEnsure(
     mode: "interpret" | "replicate"
     version: string
     replicaType: ReplicaType
-    mergeStrategy: MergeStrategy
+    syncProtocol: SyncProtocol
     schemaHash: string
     supportedHashes?: readonly string[]
   },
@@ -690,7 +672,7 @@ function handleDocEnsure(
     mode: msg.mode,
     version: msg.version,
     replicaType: msg.replicaType,
-    mergeStrategy: msg.mergeStrategy,
+    syncProtocol: msg.syncProtocol,
     schemaHash: msg.schemaHash,
   }
   if (msg.supportedHashes) entry.supportedHashes = msg.supportedHashes
@@ -706,7 +688,7 @@ function handleDocEnsure(
   const { peerIds, present } = announceDoc(
     msg.docId,
     msg.replicaType,
-    msg.mergeStrategy,
+    msg.syncProtocol,
     msg.schemaHash,
     updatedModel,
     canShare,
@@ -716,7 +698,7 @@ function handleDocEnsure(
     return [updatedModel]
   }
 
-  const isCausal = msg.mergeStrategy === "collaborative"
+  const isCausal = requiresBidirectionalSync(msg.syncProtocol)
   const interest: SyncEffect = {
     type: "send-to-peers",
     to: peerIds,
@@ -736,7 +718,7 @@ function handleDocDefer(
     type: "sync/doc-defer"
     docId: DocId
     replicaType: ReplicaType
-    mergeStrategy: MergeStrategy
+    syncProtocol: SyncProtocol
     schemaHash: string
     supportedHashes?: readonly string[]
   },
@@ -750,7 +732,7 @@ function handleDocDefer(
     mode: "deferred",
     version: "",
     replicaType: msg.replicaType,
-    mergeStrategy: msg.mergeStrategy,
+    syncProtocol: msg.syncProtocol,
     schemaHash: msg.schemaHash,
   }
   if (msg.supportedHashes) entry.supportedHashes = msg.supportedHashes
@@ -762,7 +744,7 @@ function handleDocDefer(
   const { present } = announceDoc(
     msg.docId,
     msg.replicaType,
-    msg.mergeStrategy,
+    msg.syncProtocol,
     msg.schemaHash,
     updatedModel,
     canShare,
@@ -784,7 +766,7 @@ function handleLocalDocChange(
   const documents = new Map(model.documents)
   documents.set(msg.docId, { ...docEntry, version: msg.version })
 
-  // Push to synced peers based on merge strategy
+  // Push to peers based on sync protocol
   const effect = buildPush(msg.docId, docEntry, model, canShare)
 
   return [{ ...model, documents }, effect, stateAdvanced(msg.docId)]
@@ -879,7 +861,7 @@ function handlePresent(
     docs: Array<{
       docId: DocId
       replicaType: ReplicaType
-      mergeStrategy: MergeStrategy
+      syncProtocol: SyncProtocol
       schemaHash: string
       supportedHashes?: readonly string[]
     }>
@@ -896,7 +878,7 @@ function handlePresent(
   for (const {
     docId,
     replicaType,
-    mergeStrategy,
+    syncProtocol,
     schemaHash,
     supportedHashes: remoteSupportedHashes,
   } of message.docs) {
@@ -935,13 +917,17 @@ function handlePresent(
         })
         continue
       }
-      // Check mergeStrategy compatibility
-      if (docEntry.mergeStrategy !== mergeStrategy) {
+      // Check syncProtocol compatibility
+      if (
+        docEntry.syncProtocol.writerModel !== syncProtocol.writerModel ||
+        docEntry.syncProtocol.delivery !== syncProtocol.delivery ||
+        docEntry.syncProtocol.durability !== syncProtocol.durability
+      ) {
         warnings.push({
           type: "notify/warning",
           message:
-            `[exchange] mergeStrategy mismatch for doc '${docId}': ` +
-            `local '${docEntry.mergeStrategy}' vs remote '${mergeStrategy}' — skipping sync`,
+            `[exchange] syncProtocol mismatch for doc '${docId}': ` +
+            `local ${JSON.stringify(docEntry.syncProtocol)} vs remote ${JSON.stringify(syncProtocol)} — skipping sync`,
         })
         continue
       }
@@ -949,7 +935,7 @@ function handlePresent(
       if (docEntry.mode === "deferred") continue
 
       // Compatible — send interest with our version
-      const isCausal = docEntry.mergeStrategy === "collaborative"
+      const isCausal = requiresBidirectionalSync(docEntry.syncProtocol)
       effects.push({
         type: "send-to-peer",
         to: from,
@@ -969,7 +955,7 @@ function handlePresent(
         docId,
         peer: peerState.identity,
         replicaType,
-        mergeStrategy,
+        syncProtocol,
         schemaHash,
         supportedHashes: remoteSupportedHashes,
       })
@@ -980,7 +966,7 @@ function handlePresent(
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-// HANDLER: Interest — merge-strategy dispatch
+// HANDLER: Interest — sync-protocol dispatch
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
 function handleInterest(

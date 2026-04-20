@@ -8,6 +8,7 @@
 //   import { describeStore } from "@kyneta/exchange/testing"
 //   describeStore("MyBackend", () => new MyBackend(), async (b) => { ... })
 
+import { SYNC_AUTHORITATIVE, SYNC_COLLABORATIVE } from "@kyneta/schema"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import type { Store, StoreEntry } from "../store/store.js"
 
@@ -54,7 +55,7 @@ export async function collectAll<T>(iter: AsyncIterable<T>): Promise<T[]> {
 
 export const plainMetadata = {
   replicaType: ["plain", 1, 0] as const,
-  mergeStrategy: "authoritative" as const,
+  syncProtocol: SYNC_AUTHORITATIVE,
   schemaHash: "00test",
 }
 
@@ -107,7 +108,7 @@ export function describeStore(
     it("ensureDoc does not overwrite existing metadata", async () => {
       const meta2 = {
         replicaType: ["loro", 1, 0] as const,
-        mergeStrategy: "collaborative" as const,
+        syncProtocol: SYNC_COLLABORATIVE,
         schemaHash: "00test2",
       }
       await backend.ensureDoc("doc-1", plainMetadata)

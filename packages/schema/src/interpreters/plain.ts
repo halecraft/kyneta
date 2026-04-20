@@ -13,11 +13,11 @@ import type {
   MapSchema,
   MovableSequenceSchema,
   ProductSchema,
+  RichTextSchema,
   ScalarSchema,
   SequenceSchema,
   SetSchema,
   SumSchema,
-  RichTextSchema,
   TextSchema,
   TreeSchema,
 } from "../schema.js"

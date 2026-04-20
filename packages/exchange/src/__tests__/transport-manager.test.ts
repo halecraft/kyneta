@@ -1,5 +1,6 @@
 // TransportManager — unit tests for transport lifecycle and message routing.
 
+import { SYNC_AUTHORITATIVE } from "@kyneta/schema"
 import type {
   ChannelMsg,
   GeneratedChannel,
@@ -167,7 +168,7 @@ describe("TransportManager", () => {
           docId: "doc-1",
           schemaHash: "00test",
           replicaType: ["plain", 1, 0] as const,
-          mergeStrategy: "authoritative" as const,
+          syncProtocol: SYNC_AUTHORITATIVE,
         },
       ],
     }

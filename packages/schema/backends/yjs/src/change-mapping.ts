@@ -295,7 +295,12 @@ function applyReplaceChange(
   const lastSeg = path.segments.at(-1)
   if (!lastSeg) throw new Error("replaceChangeToDiff: empty path")
   const parentPath = path.slice(0, -1)
-  const { resolved: parent } = resolveYjsType(rootMap, rootSchema, parentPath, binding)
+  const { resolved: parent } = resolveYjsType(
+    rootMap,
+    rootSchema,
+    parentPath,
+    binding,
+  )
 
   const resolved = lastSeg.resolve()
   if (parent instanceof Y.Map && lastSeg.role === "key") {
@@ -361,15 +366,15 @@ function maybeCreateSharedType(
         text.insert(0, value)
       } else if (Array.isArray(value)) {
         // RichTextDelta: array of { text, marks? } spans → Yjs delta
-        const delta = (value as Array<{ text: string; marks?: Record<string, unknown> }>).map(
-          span => {
-            const d: any = { insert: span.text }
-            if (span.marks && Object.keys(span.marks).length > 0) {
-              d.attributes = span.marks
-            }
-            return d
-          },
-        )
+        const delta = (
+          value as Array<{ text: string; marks?: Record<string, unknown> }>
+        ).map(span => {
+          const d: any = { insert: span.text }
+          if (span.marks && Object.keys(span.marks).length > 0) {
+            d.attributes = span.marks
+          }
+          return d
+        })
         if (delta.length > 0) {
           text.applyDelta(delta)
         }

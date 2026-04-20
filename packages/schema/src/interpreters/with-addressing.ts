@@ -59,10 +59,10 @@ import type {
   TreeSchema,
 } from "../schema.js"
 import type { HasNavigation } from "./bottom.js"
+import { installKeyedAddressing } from "./keyed-helpers.js"
+import { installSequenceAddressing } from "./sequence-helpers.js"
 import type { WritableContext } from "./writable.js"
 import { hasTransact, REMOVE, TRANSACT } from "./writable.js"
-import { wireSequenceAddressing } from "./sequence-helpers.js"
-import { wireKeyedAddressing } from "./keyed-helpers.js"
 
 // ---------------------------------------------------------------------------
 // ADDRESS_TABLE symbol — discovery hook for withCaching (Phase 5)
@@ -399,10 +399,13 @@ export function withAddressing<A extends HasNavigation>(
       const registry = getOrCreateRegistry(ctx)
       const result = base.sequence(ctx, path, schema, item)
       const seqPathKey = path.key
-      wireSequenceAddressing(
-        result, path, ADDRESS_TABLE,
+      installSequenceAddressing(
+        result,
+        path,
+        ADDRESS_TABLE,
         () => registry.getSequenceTable(seqPathKey),
-        (p, handler) => registerAddressingHandler(ensureAddressingWiring(ctx), p, handler),
+        (p, handler) =>
+          registerAddressingHandler(ensureAddressingWiring(ctx), p, handler),
         handleSequenceChange as (table: unknown, change: unknown) => void,
       )
       return result
@@ -419,10 +422,13 @@ export function withAddressing<A extends HasNavigation>(
       const registry = getOrCreateRegistry(ctx)
       const result = base.map(ctx, path, schema, item)
       const mapPathKey = path.key
-      wireKeyedAddressing(
-        result, path, ADDRESS_TABLE,
+      installKeyedAddressing(
+        result,
+        path,
+        ADDRESS_TABLE,
         () => registry.getMapTable(mapPathKey),
-        (p, handler) => registerAddressingHandler(ensureAddressingWiring(ctx), p, handler),
+        (p, handler) =>
+          registerAddressingHandler(ensureAddressingWiring(ctx), p, handler),
         handleMapChange as (table: unknown, change: unknown) => void,
       )
       return result
@@ -462,10 +468,13 @@ export function withAddressing<A extends HasNavigation>(
       const registry = getOrCreateRegistry(ctx)
       const result = base.set(ctx, path, schema, item)
       const mapPathKey = path.key
-      wireKeyedAddressing(
-        result, path, ADDRESS_TABLE,
+      installKeyedAddressing(
+        result,
+        path,
+        ADDRESS_TABLE,
         () => registry.getMapTable(mapPathKey),
-        (p, handler) => registerAddressingHandler(ensureAddressingWiring(ctx), p, handler),
+        (p, handler) =>
+          registerAddressingHandler(ensureAddressingWiring(ctx), p, handler),
         handleMapChange as (table: unknown, change: unknown) => void,
       )
       return result
@@ -493,10 +502,13 @@ export function withAddressing<A extends HasNavigation>(
       const registry = getOrCreateRegistry(ctx)
       const result = base.movable(ctx, path, schema, item)
       const seqPathKey = path.key
-      wireSequenceAddressing(
-        result, path, ADDRESS_TABLE,
+      installSequenceAddressing(
+        result,
+        path,
+        ADDRESS_TABLE,
         () => registry.getSequenceTable(seqPathKey),
-        (p, handler) => registerAddressingHandler(ensureAddressingWiring(ctx), p, handler),
+        (p, handler) =>
+          registerAddressingHandler(ensureAddressingWiring(ctx), p, handler),
         handleSequenceChange as (table: unknown, change: unknown) => void,
       )
       return result

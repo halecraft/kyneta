@@ -136,27 +136,27 @@ export type Plain<S extends Schema> =
       ? RichTextDelta
       : S extends CounterSchema
         ? number
-      : S extends SetSchema<infer I>
-        ? Plain<I>[]
-        : S extends TreeSchema<infer Inner>
-          ? Plain<Inner>
-          : S extends MovableSequenceSchema<infer I>
-            ? Plain<I>[]
-            : // --- Scalar ---
-              S extends ScalarSchema<infer _K, infer V>
-              ? V
-              : // --- Product ---
-                S extends ProductSchema<infer F>
-                ? { [K in keyof F]: Plain<F[K]> }
-                : // --- Sequence ---
-                  S extends SequenceSchema<infer I>
-                  ? Plain<I>[]
-                  : // --- Map ---
-                    S extends MapSchema<infer I>
-                    ? { [key: string]: Plain<I> }
-                    : // --- Sum ---
-                      S extends PositionalSumSchema<infer V>
-                      ? Plain<V[number]>
-                      : S extends DiscriminatedSumSchema<infer _D, infer V>
+        : S extends SetSchema<infer I>
+          ? Plain<I>[]
+          : S extends TreeSchema<infer Inner>
+            ? Plain<Inner>
+            : S extends MovableSequenceSchema<infer I>
+              ? Plain<I>[]
+              : // --- Scalar ---
+                S extends ScalarSchema<infer _K, infer V>
+                ? V
+                : // --- Product ---
+                  S extends ProductSchema<infer F>
+                  ? { [K in keyof F]: Plain<F[K]> }
+                  : // --- Sequence ---
+                    S extends SequenceSchema<infer I>
+                    ? Plain<I>[]
+                    : // --- Map ---
+                      S extends MapSchema<infer I>
+                      ? { [key: string]: Plain<I> }
+                      : // --- Sum ---
+                        S extends PositionalSumSchema<infer V>
                         ? Plain<V[number]>
-                        : unknown
+                        : S extends DiscriminatedSumSchema<infer _D, infer V>
+                          ? Plain<V[number]>
+                          : unknown

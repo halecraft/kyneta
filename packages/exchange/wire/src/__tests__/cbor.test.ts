@@ -4,6 +4,11 @@
 // through the CBOR codec, including OfferMsg with both "json" and
 // "binary" SubstratePayload encodings.
 
+import {
+  SYNC_AUTHORITATIVE,
+  SYNC_COLLABORATIVE,
+  SYNC_EPHEMERAL,
+} from "@kyneta/schema"
 import type {
   ChannelMsg,
   DepartMsg,
@@ -16,6 +21,10 @@ import type {
 import { describe, expect, it } from "vitest"
 import { cborCodec } from "../cbor.js"
 import { type CBORType, encodeCBOR } from "../cbor-encoding.js"
+import {
+  SyncProtocolWireToProtocol,
+  syncProtocolToWire,
+} from "../wire-types.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -102,19 +111,19 @@ describe("CBOR codec — present", () => {
           docId: "doc-1",
           schemaHash: "00test",
           replicaType: ["plain", 1, 0] as const,
-          mergeStrategy: "authoritative" as const,
+          syncProtocol: SYNC_AUTHORITATIVE,
         },
         {
           docId: "doc-2",
           schemaHash: "00test",
           replicaType: ["yjs", 1, 0] as const,
-          mergeStrategy: "collaborative" as const,
+          syncProtocol: SYNC_COLLABORATIVE,
         },
         {
           docId: "doc-3",
           schemaHash: "00test",
           replicaType: ["loro", 1, 0] as const,
-          mergeStrategy: "ephemeral" as const,
+          syncProtocol: SYNC_EPHEMERAL,
         },
       ],
     }
@@ -281,13 +290,13 @@ describe("CBOR codec — batch", () => {
             docId: "d1",
             schemaHash: "00test",
             replicaType: ["plain", 1, 0] as const,
-            mergeStrategy: "authoritative" as const,
+            syncProtocol: SYNC_AUTHORITATIVE,
           },
           {
             docId: "d2",
             schemaHash: "00test",
             replicaType: ["yjs", 1, 0] as const,
-            mergeStrategy: "collaborative" as const,
+            syncProtocol: SYNC_COLLABORATIVE,
           },
         ],
       },
@@ -472,5 +481,23 @@ describe("CBOR codec — multi-byte UTF-8", () => {
     expect(decoded).toHaveLength(2)
     expect(decoded[0]).toEqual(msgs[0])
     expect(decoded[1]).toEqual(msgs[1])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// SyncProtocol wire round-trip
+// ---------------------------------------------------------------------------
+
+describe("SyncProtocol wire round-trip", () => {
+  it("round-trips all three protocol constants through wire encoding", () => {
+    for (const protocol of [
+      SYNC_AUTHORITATIVE,
+      SYNC_COLLABORATIVE,
+      SYNC_EPHEMERAL,
+    ]) {
+      const wireValue = syncProtocolToWire(protocol)
+      const decoded = SyncProtocolWireToProtocol[wireValue]
+      expect(decoded).toEqual(protocol)
+    }
   })
 })

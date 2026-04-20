@@ -210,96 +210,96 @@ export type SchemaRef<
           N["richtext"]
         >
       : // --- Counter ---
-      S extends CounterSchema
-      ? Wrap<
-          (() => number) & {
-            [Symbol.toPrimitive](hint: string): number | string
-          } & CounterRef,
-          M,
-          N["counter"]
-        >
-      : // --- Set (map-like shape) ---
-        S extends SetSchema<infer I>
+        S extends CounterSchema
         ? Wrap<
-            ReadableMapRef<Removable<SchemaRef<I, M, N>>, Plain<I>> &
-              WritableMapRef<Plain<I>>,
+            (() => number) & {
+              [Symbol.toPrimitive](hint: string): number | string
+            } & CounterRef,
             M,
-            N["set"]
+            N["counter"]
           >
-        : // --- Tree (delegate to inner nodeData) ---
-          S extends TreeSchema<infer Inner>
-          ? Inner extends Schema
-            ? SchemaRef<Inner, M, N>
-            : unknown
-          : // --- MovableSequence ---
-            S extends MovableSequenceSchema<infer I>
-            ? Wrap<
-                ReadableSequenceRef<Removable<SchemaRef<I, M, N>>, Plain<I>> &
-                  SequenceRef,
-                M,
-                N["movableList"]
-              >
-            : // --- Scalar ---
-              S extends ScalarSchema<infer _K, infer V>
+        : // --- Set (map-like shape) ---
+          S extends SetSchema<infer I>
+          ? Wrap<
+              ReadableMapRef<Removable<SchemaRef<I, M, N>>, Plain<I>> &
+                WritableMapRef<Plain<I>>,
+              M,
+              N["set"]
+            >
+          : // --- Tree (delegate to inner nodeData) ---
+            S extends TreeSchema<infer Inner>
+            ? Inner extends Schema
+              ? SchemaRef<Inner, M, N>
+              : unknown
+            : // --- MovableSequence ---
+              S extends MovableSequenceSchema<infer I>
               ? Wrap<
-                  (() => V) & {
-                    [Symbol.toPrimitive](hint: string): V | string
-                  } & ScalarRef<V>,
+                  ReadableSequenceRef<Removable<SchemaRef<I, M, N>>, Plain<I>> &
+                    SequenceRef,
                   M,
-                  N["scalar"]
+                  N["movableList"]
                 >
-              : // --- Product ---
-                S extends ProductSchema<infer F>
+              : // --- Scalar ---
+                S extends ScalarSchema<infer _K, infer V>
                 ? Wrap<
-                    (() => { [K in keyof F]: Plain<F[K]> }) & {
-                      readonly [K in keyof F]: SchemaRef<F[K], M, N>
-                    } & ProductRef<{ [K in keyof F]: Plain<F[K]> }>,
+                    (() => V) & {
+                      [Symbol.toPrimitive](hint: string): V | string
+                    } & ScalarRef<V>,
                     M,
-                    N["struct"]
+                    N["scalar"]
                   >
-                : // --- Sequence ---
-                  S extends SequenceSchema<infer I>
+                : // --- Product ---
+                  S extends ProductSchema<infer F>
                   ? Wrap<
-                      ReadableSequenceRef<
-                        Removable<SchemaRef<I, M, N>>,
-                        Plain<I>
-                      > &
-                        SequenceRef,
+                      (() => { [K in keyof F]: Plain<F[K]> }) & {
+                        readonly [K in keyof F]: SchemaRef<F[K], M, N>
+                      } & ProductRef<{ [K in keyof F]: Plain<F[K]> }>,
                       M,
-                      N["list"]
+                      N["struct"]
                     >
-                  : // --- Map ---
-                    S extends MapSchema<infer I>
+                  : // --- Sequence ---
+                    S extends SequenceSchema<infer I>
                     ? Wrap<
-                        ReadableMapRef<
+                        ReadableSequenceRef<
                           Removable<SchemaRef<I, M, N>>,
                           Plain<I>
                         > &
-                          WritableMapRef<Plain<I>>,
+                          SequenceRef,
                         M,
-                        N["map"]
+                        N["list"]
                       >
-                    : // --- Sum ---
-                      S extends PositionalSumSchema<infer V>
-                      ? V extends readonly [
-                          ScalarSchema<"null", any>,
-                          infer Inner extends Schema,
-                        ]
-                        ? // Nullable sugar: collapse to a single ref with nullable value domain
-                          Wrap<
-                            (() => Plain<Inner> | null) & {
-                              [Symbol.toPrimitive](
-                                hint: string,
-                              ): Plain<Inner> | null | string
-                            } & ScalarRef<Plain<Inner> | null>,
-                            M,
-                            N["sum"]
-                          >
-                        : // General positional sum: distribute over variant union
-                          SchemaRef<V[number], M, N>
-                      : S extends DiscriminatedSumSchema<infer D, infer V>
-                        ? DiscriminantProductRef<V[number]["fields"], D, M, N>
-                        : unknown
+                    : // --- Map ---
+                      S extends MapSchema<infer I>
+                      ? Wrap<
+                          ReadableMapRef<
+                            Removable<SchemaRef<I, M, N>>,
+                            Plain<I>
+                          > &
+                            WritableMapRef<Plain<I>>,
+                          M,
+                          N["map"]
+                        >
+                      : // --- Sum ---
+                        S extends PositionalSumSchema<infer V>
+                        ? V extends readonly [
+                            ScalarSchema<"null", any>,
+                            infer Inner extends Schema,
+                          ]
+                          ? // Nullable sugar: collapse to a single ref with nullable value domain
+                            Wrap<
+                              (() => Plain<Inner> | null) & {
+                                [Symbol.toPrimitive](
+                                  hint: string,
+                                ): Plain<Inner> | null | string
+                              } & ScalarRef<Plain<Inner> | null>,
+                              M,
+                              N["sum"]
+                            >
+                          : // General positional sum: distribute over variant union
+                            SchemaRef<V[number], M, N>
+                        : S extends DiscriminatedSumSchema<infer D, infer V>
+                          ? DiscriminantProductRef<V[number]["fields"], D, M, N>
+                          : unknown
 
 // ---------------------------------------------------------------------------
 // DocRef — root ref with N["root"] override

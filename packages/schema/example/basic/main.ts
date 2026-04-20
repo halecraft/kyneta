@@ -74,7 +74,7 @@ const ProjectSchema = Schema.struct({
     }),
   ]),
 
-  bio: Schema.nullable(Schema.string()),
+  bio: Schema.string().nullable(),
 
   labels: Schema.record(Schema.string()),
 })

@@ -1,7 +1,7 @@
-// bind-loro — Loro CRDT substrate namespace and factory internals.
+// bind-loro — Loro CRDT binding target and factory internals.
 //
-// The `loro` namespace provides `loro.bind()` and `loro.replica()` for
-// binding schemas to the Loro substrate with concurrent merge strategy.
+// The `loro` binding target provides `loro.bind()` and `loro.replica()` for
+// binding schemas to the Loro substrate with collaborative sync protocol.
 // The factory builder accepts { peerId } and returns a SubstrateFactory
 // that calls doc.setPeerId() on every new LoroDoc, ensuring deterministic
 // peer identity across all documents in an exchange.
@@ -17,16 +17,19 @@
 //   const doc = exchange.get("my-doc", TodoDoc)
 
 import type {
-  CrdtStrategy,
+  BindingTarget,
   Replica,
   SchemaBinding,
   Schema as SchemaNode,
   Substrate,
   SubstrateFactory,
-  SubstrateNamespace,
   SubstratePayload,
 } from "@kyneta/schema"
-import { BACKING_DOC, createSubstrateNamespace } from "@kyneta/schema"
+import {
+  BACKING_DOC,
+  createBindingTarget,
+  SYNC_COLLABORATIVE,
+} from "@kyneta/schema"
 import type { LoroDoc as LoroDocType, PeerID } from "loro-crdt"
 import { LoroDoc } from "loro-crdt"
 import type { LoroNativeMap } from "./native-map.js"
@@ -135,40 +138,40 @@ function createLoroFactory(
 }
 
 // ---------------------------------------------------------------------------
-// loro — the Loro CRDT substrate namespace
+// loro — the Loro CRDT binding target
 // ---------------------------------------------------------------------------
 
 /**
- * The Loro CRDT substrate namespace.
+ * Loro composition-law tags — the set of concurrent composition laws
+ * that the Loro substrate faithfully implements.
+ */
+export type LoroLaws =
+  | "lww"
+  | "additive"
+  | "positional-ot"
+  | "positional-ot-move"
+  | "lww-per-key"
+  | "tree-move"
+  | "lww-tag-replaced"
+
+/**
+ * The Loro CRDT binding target.
  *
- * - `loro.bind(schema)` — collaborative sync (default)
- * - `loro.bind(schema, "ephemeral")` — ephemeral/presence broadcast
- * - `loro.replica()` — collaborative replication (default)
- * - `loro.replica("ephemeral")` — ephemeral replication
+ * - `loro.bind(schema)` — bind a schema to Loro with collaborative sync
+ * - `loro.replica()` — create a collaborative replica
  *
- * Strategy is constrained to `CrdtStrategy` (`"collaborative" | "ephemeral"`).
- * Passing `"authoritative"` is a compile error.
+ * Laws are constrained to `LoroLaws` — schemas requiring composition laws
+ * outside this set (e.g. `"add-wins-per-key"` from `Schema.set()`) are
+ * rejected at compile time.
  *
  * To access the underlying LoroDoc, use `unwrap(ref)` from `@kyneta/schema`
  * which reads the `[NATIVE]` symbol property set during interpretation.
  */
-/**
- * Loro capability tags — the set of first-class CRDT types that the
- * Loro substrate supports, plus `"json"` for merge-boundary containers.
- */
-export type LoroCaps = "text" | "richtext" | "counter" | "movable" | "tree" | "json"
-
-export const loro: SubstrateNamespace<CrdtStrategy, LoroCaps, LoroNativeMap> =
-  createSubstrateNamespace<CrdtStrategy, LoroCaps, LoroNativeMap>({
-    strategies: {
-      collaborative: {
-        factory: ctx => createLoroFactory(ctx.peerId, ctx.binding),
-        replicaFactory: loroReplicaFactory,
-      },
-      ephemeral: {
-        factory: ctx => createLoroFactory(ctx.peerId, ctx.binding),
-        replicaFactory: loroReplicaFactory,
-      },
-    },
-    defaultStrategy: "collaborative",
-  })
+export const loro: BindingTarget<LoroLaws, LoroNativeMap> = createBindingTarget<
+  LoroLaws,
+  LoroNativeMap
+>({
+  factory: ctx => createLoroFactory(ctx.peerId, ctx.binding),
+  replicaFactory: loroReplicaFactory,
+  syncProtocol: SYNC_COLLABORATIVE,
+})

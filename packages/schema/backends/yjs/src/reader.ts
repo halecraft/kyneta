@@ -119,10 +119,7 @@ export function yjsReader(
         binding,
       )
       // Richtext: Y.Text at a richtext schema position → RichTextDelta
-      if (
-        nodeSchema[KIND] === "richtext" &&
-        resolved instanceof Y.Text
-      ) {
+      if (nodeSchema[KIND] === "richtext" && resolved instanceof Y.Text) {
         return yTextToRichTextDelta(resolved)
       }
       return extractValue(resolved)

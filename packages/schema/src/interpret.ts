@@ -33,9 +33,9 @@ import {
   KIND,
   type MapSchema,
   type MovableSequenceSchema,
-  type RichTextSchema,
   type PositionalSumSchema,
   type ProductSchema,
+  type RichTextSchema,
   type ScalarSchema,
   type Schema,
   type SequenceSchema,
@@ -812,6 +812,7 @@ export function createInterpreter<Ctx, A>(
       overrides.movable ??
       ((ctx, path, schema, _item) => fallback(ctx, path, schema)),
     richtext:
-      overrides.richtext ?? ((ctx, path, schema) => fallback(ctx, path, schema)),
+      overrides.richtext ??
+      ((ctx, path, schema) => fallback(ctx, path, schema)),
   }
 }

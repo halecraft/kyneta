@@ -82,7 +82,7 @@ Exactly six messages (source: `packages/transport/src/messages.ts`). Two groups:
 |---------|-------|--------|---------|---------|
 | `establish` | Lifecycle | Both peers, on connect | `{ identity: PeerIdentityDetails }` | Symmetric handshake — no request/response, both peers send |
 | `depart` | Lifecycle | Departing peer | `{}` | Intentional, explicit departure — the receiver skips any disconnect-grace timer |
-| `present` | Sync | Either peer | `{ docs: Array<{ docId, replicaType, mergeStrategy, schemaHash, supportedHashes? }> }` | "I hold these documents" |
+| `present` | Sync | Either peer | `{ docs: Array<{ docId, replicaType, syncProtocol, schemaHash, supportedHashes? }> }` | "I hold these documents" |
 | `interest` | Sync | Either peer | `{ docId, version?, reciprocate? }` | "I want this document; here is my version" |
 | `offer` | Sync | Either peer | `{ docId, payload: SubstratePayload, version, reciprocate? }` | "Here is state for this document" |
 | `dismiss` | Sync | Leaving peer | `{ docId }` | "I am leaving the sync graph for this document" — dual of `present` |

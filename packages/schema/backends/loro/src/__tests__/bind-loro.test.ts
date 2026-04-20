@@ -1,4 +1,8 @@
 // loro.bind() and unwrap() escape hatch — unit tests.
+//
+// Tests verify that loro.bind() produces a BoundSchema with the
+// collaborative sync protocol, deterministic peer identity, and
+// correct unwrap() escape hatch behavior.
 
 import {
   createDoc,
@@ -19,11 +23,15 @@ const testSchema = Schema.struct({
 })
 
 describe("loro.bind()", () => {
-  it("creates a BoundSchema with collaborative strategy", () => {
+  it("creates a BoundSchema with collaborative sync protocol", () => {
     const bound = loro.bind(testSchema)
     expect(isBoundSchema(bound)).toBe(true)
     expect(bound.schema).toBe(testSchema)
-    expect(bound.strategy).toBe("collaborative")
+    expect(bound.syncProtocol).toEqual({
+      writerModel: "concurrent",
+      delivery: "delta-capable",
+      durability: "persistent",
+    })
   })
 
   it("factory builder produces a working SubstrateFactory", () => {
@@ -105,18 +113,6 @@ describe("unwrap() escape hatch", () => {
     expect(native).toBeDefined()
     // It should NOT have LoroDoc-specific methods like getText
     expect((native as any).getText).toBeUndefined()
-  })
-})
-
-describe("compile-time type constraints", () => {
-  it("loro.bind rejects 'sequential' strategy (compile-time + runtime)", () => {
-    // @ts-expect-error — "sequential" not assignable to CrdtStrategy
-    expect(() => loro.bind(testSchema, "sequential")).toThrow()
-  })
-
-  it("loro.replica rejects 'sequential' strategy (compile-time + runtime)", () => {
-    // @ts-expect-error — "sequential" not assignable to CrdtStrategy
-    expect(() => loro.replica("sequential")).toThrow()
   })
 })
 

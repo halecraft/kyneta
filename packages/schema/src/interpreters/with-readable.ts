@@ -40,8 +40,8 @@ import type {
 
 import type { HasNavigation, HasRead } from "./bottom.js"
 import { CALL } from "./bottom.js"
-import { wireSequenceReadable } from "./sequence-helpers.js"
-import { wireKeyedReadable } from "./keyed-helpers.js"
+import { installKeyedReadable } from "./keyed-helpers.js"
+import { installSequenceReadable } from "./sequence-helpers.js"
 
 // ---------------------------------------------------------------------------
 // withReadable — the reading transformer
@@ -126,7 +126,7 @@ export function withReadable<A extends HasNavigation>(
     ): A & HasRead {
       const baseItem = item as (index: number) => A
       const result = base.sequence(ctx, path, schema, baseItem) as any
-      wireSequenceReadable(result, ctx, path)
+      installSequenceReadable(result, ctx, path)
       return result as A & HasRead
     },
 
@@ -139,7 +139,7 @@ export function withReadable<A extends HasNavigation>(
     ): A & HasRead {
       const baseItem = item as (key: string) => A
       const result = base.map(ctx, path, schema, baseItem) as any
-      wireKeyedReadable(result, ctx, path)
+      installKeyedReadable(result, ctx, path)
       return result as A & HasRead
     },
 
@@ -193,7 +193,7 @@ export function withReadable<A extends HasNavigation>(
     ): A & HasRead {
       const baseItem = item as (key: string) => A
       const result = base.set(ctx, path, schema, baseItem) as any
-      wireKeyedReadable(result, ctx, path)
+      installKeyedReadable(result, ctx, path)
       return result as A & HasRead
     },
 
@@ -219,7 +219,7 @@ export function withReadable<A extends HasNavigation>(
     ): A & HasRead {
       const baseItem = item as (index: number) => A
       const result = base.movable(ctx, path, schema, baseItem) as any
-      wireSequenceReadable(result, ctx, path)
+      installSequenceReadable(result, ctx, path)
       return result as A & HasRead
     },
 
@@ -232,9 +232,7 @@ export function withReadable<A extends HasNavigation>(
       result[Symbol.toPrimitive] = (_hint: string) => {
         const v = ctx.reader.read(path)
         if (Array.isArray(v)) {
-          return (v as Array<{ text: string }>)
-            .map(s => s.text)
-            .join("")
+          return (v as Array<{ text: string }>).map(s => s.text).join("")
         }
         return ""
       }

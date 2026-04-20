@@ -169,7 +169,7 @@ The CBOR codec uses integer type discriminators and short field names to minimiz
 | `docs` | Present doc entries array (`Array<{d, rt, ms, sh}>`) | present |
 | `d` | Doc ID (within present entry) / payload data (offer) | present, offer |
 | `rt` | Replica type tuple `[string, number, number]` | present (doc entry) |
-| `ms` | Merge strategy (`0x00` causal, `0x01` sequential, `0x02` lww) | present (doc entry) |
+| `ms` | Sync protocol (`SyncProtocolWireValue`: `0x00` collaborative, `0x01` authoritative, `0x02` ephemeral) | present (doc entry) |
 | `sh` | Schema hash (34-char hex string, required) | present (doc entry) |
 | `doc` | Document ID | interest, offer, dismiss |
 | `v` | Version | interest (optional), offer |

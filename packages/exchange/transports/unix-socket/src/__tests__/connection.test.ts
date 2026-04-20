@@ -12,6 +12,7 @@
 // covered in stream-frame-parser.test.ts. The connection is a thin
 // imperative shell over feedBytes; we test the glue, not the parser.
 
+import { SYNC_AUTHORITATIVE } from "@kyneta/schema"
 import type { ChannelMsg, PresentMsg } from "@kyneta/transport"
 import {
   cborCodec,
@@ -36,7 +37,7 @@ function makePresent(docId: string): PresentMsg {
         docId,
         schemaHash: "00test",
         replicaType: ["plain", 1, 0] as const,
-        mergeStrategy: "authoritative" as const,
+        syncProtocol: SYNC_AUTHORITATIVE,
       },
     ],
   }

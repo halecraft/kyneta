@@ -5,6 +5,7 @@ import {
   exportEntirety,
   RawPath,
   Schema,
+  SYNC_COLLABORATIVE,
   unwrap,
 } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
@@ -54,11 +55,11 @@ describe("yjs.bind", () => {
   // -------------------------------------------------------------------------
 
   describe("BoundSchema", () => {
-    it("creates BoundSchema with collaborative strategy", () => {
+    it("creates BoundSchema with collaborative sync protocol", () => {
       const bound = yjs.bind(TodoSchema)
       expect(bound._brand).toBe("BoundSchema")
       expect(bound.schema).toBe(TodoSchema)
-      expect(bound.strategy).toBe("collaborative")
+      expect(bound.syncProtocol).toEqual(SYNC_COLLABORATIVE)
     })
 
     it("has a factory builder function", () => {

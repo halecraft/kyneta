@@ -10,6 +10,8 @@ import {
   plainReplicaFactory,
   Replicate,
   Schema,
+  SYNC_AUTHORITATIVE,
+  SYNC_COLLABORATIVE,
 } from "@kyneta/schema"
 import { Bridge, createBridgeTransport } from "@kyneta/transport"
 import { yjs } from "@kyneta/yjs-schema"
@@ -64,7 +66,7 @@ describe("InMemoryStore", () => {
     const backend = new InMemoryStore()
     const metadata = {
       replicaType: ["plain", 1, 0] as const,
-      mergeStrategy: "authoritative" as const,
+      syncProtocol: SYNC_AUTHORITATIVE,
       schemaHash: "00test",
     }
     await backend.ensureDoc("doc-1", metadata)
@@ -75,7 +77,7 @@ describe("InMemoryStore", () => {
     const backend = new InMemoryStore()
     const metadata = {
       replicaType: ["plain", 1, 0] as const,
-      mergeStrategy: "authoritative" as const,
+      syncProtocol: SYNC_AUTHORITATIVE,
       schemaHash: "00test",
     }
     await backend.ensureDoc("doc-1", metadata)
@@ -87,12 +89,12 @@ describe("InMemoryStore", () => {
     const backend = new InMemoryStore()
     const meta1 = {
       replicaType: ["plain", 1, 0] as const,
-      mergeStrategy: "authoritative" as const,
+      syncProtocol: SYNC_AUTHORITATIVE,
       schemaHash: "00test",
     }
     const meta2 = {
       replicaType: ["loro", 1, 0] as const,
-      mergeStrategy: "collaborative" as const,
+      syncProtocol: SYNC_COLLABORATIVE,
       schemaHash: "00test",
     }
     await backend.ensureDoc("doc-1", meta1)
@@ -104,7 +106,7 @@ describe("InMemoryStore", () => {
     const backend = new InMemoryStore()
     await backend.ensureDoc("doc-1", {
       replicaType: ["plain", 1, 0] as const,
-      mergeStrategy: "authoritative" as const,
+      syncProtocol: SYNC_AUTHORITATIVE,
       schemaHash: "00test",
     })
     const entry = {
@@ -132,7 +134,7 @@ describe("InMemoryStore", () => {
     const backend = new InMemoryStore()
     await backend.ensureDoc("doc-1", {
       replicaType: ["plain", 1, 0] as const,
-      mergeStrategy: "authoritative" as const,
+      syncProtocol: SYNC_AUTHORITATIVE,
       schemaHash: "00test",
     })
     await backend.append("doc-1", {
@@ -157,12 +159,12 @@ describe("InMemoryStore", () => {
     const backend = new InMemoryStore()
     await backend.ensureDoc("a", {
       replicaType: ["plain", 1, 0] as const,
-      mergeStrategy: "authoritative" as const,
+      syncProtocol: SYNC_AUTHORITATIVE,
       schemaHash: "00test",
     })
     await backend.ensureDoc("b", {
       replicaType: ["plain", 1, 0] as const,
-      mergeStrategy: "authoritative" as const,
+      syncProtocol: SYNC_AUTHORITATIVE,
       schemaHash: "00test",
     })
 
@@ -189,7 +191,7 @@ describe("InMemoryStore", () => {
     const backend1 = new InMemoryStore(sharedData)
     await backend1.ensureDoc("doc-1", {
       replicaType: ["plain", 1, 0] as const,
-      mergeStrategy: "authoritative" as const,
+      syncProtocol: SYNC_AUTHORITATIVE,
       schemaHash: "00test",
     })
     await backend1.append("doc-1", {
@@ -205,7 +207,7 @@ describe("InMemoryStore", () => {
     const backend2 = new InMemoryStore(sharedData)
     expect(await backend2.lookup("doc-1")).toEqual({
       replicaType: ["plain", 1, 0],
-      mergeStrategy: "authoritative",
+      syncProtocol: SYNC_AUTHORITATIVE,
       schemaHash: "00test",
     })
     const loaded: unknown[] = []
@@ -230,7 +232,7 @@ describe("Exchange storage hydration", () => {
     const seedBackend = new InMemoryStore(sharedData)
     await seedBackend.ensureDoc("doc-1", {
       replicaType: ["plain", 1, 0] as const,
-      mergeStrategy: "authoritative" as const,
+      syncProtocol: SYNC_AUTHORITATIVE,
       schemaHash: "00test",
     })
     await seedBackend.append("doc-1", {
@@ -283,7 +285,7 @@ describe("Exchange storage hydration", () => {
     const seedBackend = new InMemoryStore(sharedData)
     await seedBackend.ensureDoc("doc-1", {
       replicaType: ["plain", 1, 0] as const,
-      mergeStrategy: "authoritative" as const,
+      syncProtocol: SYNC_AUTHORITATIVE,
       schemaHash: "00test",
     })
     await seedBackend.append("doc-1", {
@@ -300,7 +302,12 @@ describe("Exchange storage hydration", () => {
       stores: [createInMemoryStore({ sharedData })],
     })
 
-    exchange.replicate("doc-1", plainReplicaFactory, "authoritative", "00test")
+    exchange.replicate(
+      "doc-1",
+      plainReplicaFactory,
+      SYNC_AUTHORITATIVE,
+      "00test",
+    )
 
     // Wait for hydration
     await exchange.flush()
@@ -455,7 +462,7 @@ describe("Exchange storage persistence", () => {
     // After flush, ensureDoc should have been called
     expect(await backend.lookup("doc-1")).toEqual({
       replicaType: ["plain", 1, 0],
-      mergeStrategy: "authoritative",
+      syncProtocol: SYNC_AUTHORITATIVE,
       schemaHash: TestDoc.schemaHash,
     })
 

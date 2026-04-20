@@ -5,8 +5,8 @@
 // tree, movable). The `.json()` modifier on struct/list/record creates
 // a merge boundary — everything below is an inert JSON blob.
 //
-// This grammar is backend-agnostic. Substrates declare closed capability
-// sets via `[CAPS]` and enforce them at `bind()` time.
+// This grammar is backend-agnostic. Substrates declare closed composition-law
+// sets via `[LAWS]` and enforce them at `bind()` time.
 
 import type {
   IdentityManifest,
@@ -26,13 +26,29 @@ export const KIND = Symbol("kyneta:kind")
 export type KindSymbol = typeof KIND
 
 // ---------------------------------------------------------------------------
-// CAPS — phantom capability accumulator (type-level only)
+// LAWS — phantom composition-law accumulator (type-level only)
 // ---------------------------------------------------------------------------
 
-/** Phantom capability accumulator. Type-level only — never populated
- *  at runtime. Enables compile-time bind() validation via ExtractCaps<S>. */
-export const CAPS = Symbol("kyneta:caps")
-export type CapsSymbol = typeof CAPS
+/** Phantom composition-law accumulator. Type-level only — never populated
+ *  at runtime. Enables compile-time bind() validation via ExtractLaws<S>. */
+export const LAWS = Symbol("kyneta:laws")
+export type LawsSymbol = typeof LAWS
+
+/**
+ * The algebraic rule governing how pairs of operations compose when they
+ * arrive concurrently. Each schema kind emits one composition law; the
+ * binding check verifies that the (schema, substrate) pair can faithfully
+ * execute every law the schema requires.
+ */
+export type CompositionLaw =
+  | "lww" // Terminal: ReplaceChange — last writer wins
+  | "additive" // Terminal: IncrementChange — commutative monoid
+  | "positional-ot" // Positional: Instruction streams — OT transform
+  | "positional-ot-move" // Positional + move: Instruction + MoveChange
+  | "lww-per-key" // Named: MapChange — independent LWW per key
+  | "add-wins-per-key" // Named: MapChange — add wins concurrent delete
+  | "tree-move" // Hierarchical: TreeInstruction — subtree-move, cycle-free
+  | "lww-tag-replaced" // Tagged coproduct: VariantChange — LWW tag, payload replaced
 
 // ---------------------------------------------------------------------------
 // Scalar kinds — leaf values (not a separate recursive grammar)
@@ -70,8 +86,8 @@ export type ScalarKind =
  * - `movable(item)` — ordered collection with move operations
  * - `richtext(marks)` — collaborative rich text with formatting marks
  *
- * The grammar is backend-agnostic. Substrates declare which capabilities
- * they support via closed capability sets.
+ * The grammar is backend-agnostic. Substrates declare which composition
+ * laws they support via closed law sets.
  */
 export type Schema =
   | ScalarSchema
@@ -91,12 +107,14 @@ export type Schema =
 export interface ScalarSchema<
   K extends ScalarKind = ScalarKind,
   V extends ScalarPlain<K> = ScalarPlain<K>,
-  Caps extends string = never,
+  Laws extends string = "lww",
 > {
   readonly [KIND]: "scalar"
   readonly scalarKind: K
   readonly constraint?: readonly V[]
-  readonly [CAPS]?: Caps
+  readonly [LAWS]?: Laws
+
+  nullable(): NullableSumOf<ScalarSchema<K, V, Laws>, Laws>
 }
 
 /**
@@ -125,44 +143,50 @@ export type ScalarPlain<K extends ScalarKind> = K extends "string"
 
 export interface ProductSchema<
   F extends Record<string, Schema> = Record<string, Schema>,
-  Caps extends string = string,
+  Laws extends string = string,
 > {
   readonly [KIND]: "product"
   readonly fields: Readonly<F>
   readonly discriminantKey?: string
-  readonly [CAPS]?: Caps
+  readonly [LAWS]?: Laws
 
   // -- Migration methods (mixed in by product() via Object.assign) ----------
 
   /** Append a migration step. Accepts non-T2 primitives directly,
    *  or T2 primitives wrapped via `.drop()`. */
-  migrated(...inputs: MigrationInput[]): ProductSchema<F, Caps>
+  migrated(...inputs: MigrationInput[]): ProductSchema<F, Laws>
   /** Append an epoch boundary (T3 or bare reset). */
-  epoch(...primitives: MigrationPrimitive[]): ProductSchema<F, Caps>
+  epoch(...primitives: MigrationPrimitive[]): ProductSchema<F, Laws>
   /** Set the base identity manifest (must precede migrated/epoch). */
-  migrationBase(manifest: IdentityManifest): ProductSchema<F, Caps>
+  migrationBase(manifest: IdentityManifest): ProductSchema<F, Laws>
+
+  nullable(): NullableSumOf<ProductSchema<F, Laws>, Laws>
 }
 
 // --- Sequence ----------------------------------------------------------------
 
 export interface SequenceSchema<
   I extends Schema = Schema,
-  Caps extends string = string,
+  Laws extends string = string,
 > {
   readonly [KIND]: "sequence"
   readonly item: I
-  readonly [CAPS]?: Caps
+  readonly [LAWS]?: Laws
+
+  nullable(): NullableSumOf<SequenceSchema<I, Laws>, Laws>
 }
 
 // --- Map ---------------------------------------------------------------------
 
 export interface MapSchema<
   I extends Schema = Schema,
-  Caps extends string = string,
+  Laws extends string = string,
 > {
   readonly [KIND]: "map"
   readonly item: I
-  readonly [CAPS]?: Caps
+  readonly [LAWS]?: Laws
+
+  nullable(): NullableSumOf<MapSchema<I, Laws>, Laws>
 }
 
 // --- Sum ---------------------------------------------------------------------
@@ -186,18 +210,20 @@ export type SumSchema = PositionalSumSchema | DiscriminatedSumSchema
 
 export interface PositionalSumSchema<
   V extends readonly PlainSchema[] = readonly PlainSchema[],
-  Caps extends string = string,
+  Laws extends string = string,
 > {
   readonly [KIND]: "sum"
   readonly variants: V
   readonly discriminant?: undefined
-  readonly [CAPS]?: Caps
+  readonly [LAWS]?: Laws
+
+  nullable(): NullableSumOf<PositionalSumSchema<V, Laws>, Laws>
 }
 
 export interface DiscriminatedSumSchema<
   D extends string = string,
   V extends readonly PlainProductSchema[] = readonly PlainProductSchema[],
-  Caps extends string = string,
+  Laws extends string = string,
 > {
   readonly [KIND]: "sum"
   readonly discriminant: D
@@ -209,7 +235,9 @@ export interface DiscriminatedSumSchema<
    * `describe`, etc.
    */
   readonly variantMap: Readonly<Record<string, PlainProductSchema>>
-  readonly [CAPS]?: Caps
+  readonly [LAWS]?: Laws
+
+  nullable(): NullableSumOf<DiscriminatedSumSchema<D, V, Laws>, Laws>
 }
 
 // --- Text --------------------------------------------------------------------
@@ -221,9 +249,9 @@ export interface DiscriminatedSumSchema<
  * `text()` is NOT `PlainSchema` — it requires non-LWW merge and cannot
  * appear inside sums or `.json()` subtrees.
  */
-export interface TextSchema<Caps extends string = "text"> {
+export interface TextSchema<Laws extends string = "positional-ot"> {
   readonly [KIND]: "text"
-  readonly [CAPS]?: Caps
+  readonly [LAWS]?: Laws
 }
 
 // --- Counter -----------------------------------------------------------------
@@ -234,9 +262,9 @@ export interface TextSchema<Caps extends string = "text"> {
  * `counter()` is NOT `PlainSchema` — it requires non-LWW merge and cannot
  * appear inside sums or `.json()` subtrees.
  */
-export interface CounterSchema<Caps extends string = "counter"> {
+export interface CounterSchema<Laws extends string = "additive"> {
   readonly [KIND]: "counter"
-  readonly [CAPS]?: Caps
+  readonly [LAWS]?: Laws
 }
 
 // --- Set ---------------------------------------------------------------------
@@ -250,11 +278,11 @@ export interface CounterSchema<Caps extends string = "counter"> {
  */
 export interface SetSchema<
   I extends Schema = Schema,
-  Caps extends string = string,
+  Laws extends string = string,
 > {
   readonly [KIND]: "set"
   readonly item: I
-  readonly [CAPS]?: Caps
+  readonly [LAWS]?: Laws
 }
 
 // --- Tree --------------------------------------------------------------------
@@ -269,11 +297,11 @@ export interface SetSchema<
  */
 export interface TreeSchema<
   S extends Schema = Schema,
-  Caps extends string = string,
+  Laws extends string = string,
 > {
   readonly [KIND]: "tree"
   readonly nodeData: S
-  readonly [CAPS]?: Caps
+  readonly [LAWS]?: Laws
 }
 
 // --- MovableSequence ---------------------------------------------------------
@@ -287,11 +315,11 @@ export interface TreeSchema<
  */
 export interface MovableSequenceSchema<
   I extends Schema = Schema,
-  Caps extends string = string,
+  Laws extends string = string,
 > {
   readonly [KIND]: "movable"
   readonly item: I
-  readonly [CAPS]?: Caps
+  readonly [LAWS]?: Laws
 }
 
 // --- RichText ----------------------------------------------------------------
@@ -322,10 +350,10 @@ export interface MarkConfig {
  * vocabularies are structurally different (like two structs with different
  * fields).
  */
-export interface RichTextSchema<Caps extends string = "richtext"> {
+export interface RichTextSchema<Laws extends string = "positional-ot"> {
   readonly [KIND]: "richtext"
   readonly marks: MarkConfig
-  readonly [CAPS]?: Caps
+  readonly [LAWS]?: Laws
 }
 
 // ---------------------------------------------------------------------------
@@ -340,8 +368,8 @@ export interface RichTextSchema<Caps extends string = "richtext"> {
  * - Sum variants (sums are always LWW — variants are replaced atomically)
  *
  * This type excludes `TextSchema`, `CounterSchema`, `SetSchema`,
- * `TreeSchema`, and `MovableSequenceSchema` — they all require non-LWW
- * merge semantics that are contradicted by LWW contexts.
+ * `TreeSchema`, `MovableSequenceSchema`, and `RichTextSchema` — they all
+ * require non-LWW merge semantics that are contradicted by LWW contexts.
  *
  * Every `PlainSchema` value is also a `Schema` value (structural subtype),
  * so plain schemas work with `interpret()`, `describe()`, `validate()`,
@@ -362,32 +390,32 @@ export type PlainSchema =
  */
 export interface PlainProductSchema<
   F extends Record<string, PlainSchema> = Record<string, PlainSchema>,
-  Caps extends string = string,
-> extends ProductSchema<F, Caps> {}
+  Laws extends string = string,
+> extends ProductSchema<F, Laws> {}
 
 /**
  * Sequence (ordered collection) constrained to plain children.
  */
 export interface PlainSequenceSchema<
   I extends PlainSchema = PlainSchema,
-  Caps extends string = string,
-> extends SequenceSchema<I, Caps> {}
+  Laws extends string = string,
+> extends SequenceSchema<I, Laws> {}
 
 /**
  * Map (dynamic-key collection) constrained to plain children.
  */
 export interface PlainMapSchema<
   I extends PlainSchema = PlainSchema,
-  Caps extends string = string,
-> extends MapSchema<I, Caps> {}
+  Laws extends string = string,
+> extends MapSchema<I, Laws> {}
 
 /**
  * Positional sum constrained to plain variants.
  */
 export interface PlainPositionalSumSchema<
   V extends readonly PlainSchema[] = readonly PlainSchema[],
-  Caps extends string = string,
-> extends PositionalSumSchema<V, Caps> {}
+  Laws extends string = string,
+> extends PositionalSumSchema<V, Laws> {}
 
 /**
  * Discriminated sum constrained to plain variants.
@@ -395,20 +423,20 @@ export interface PlainPositionalSumSchema<
 export interface PlainDiscriminatedSumSchema<
   D extends string = string,
   V extends readonly PlainProductSchema[] = readonly PlainProductSchema[],
-  Caps extends string = string,
-> extends DiscriminatedSumSchema<D, V, Caps> {}
+  Laws extends string = string,
+> extends DiscriminatedSumSchema<D, V, Laws> {}
 
 // ---------------------------------------------------------------------------
-// ExtractCaps — single-level indexed access for capability extraction
+// ExtractLaws — single-level indexed access for law extraction
 // ---------------------------------------------------------------------------
 
 /**
- * Extract the accumulated capability tags from a schema type.
+ * Extract the accumulated composition-law tags from a schema type.
  *
- * Single-level indexed access — NOT recursive. Capabilities are accumulated
+ * Single-level indexed access — NOT recursive. Laws are accumulated
  * by constructors during schema construction (a type-level catamorphism).
  */
-export type ExtractCaps<S> = S extends { readonly [CAPS]?: infer T }
+export type ExtractLaws<S> = S extends { readonly [LAWS]?: infer T }
   ? T extends string
     ? T
     : never
@@ -425,6 +453,72 @@ export type ExtractCaps<S> = S extends { readonly [CAPS]?: infer T }
 export type StructuralKind = "scalar" | "product" | "sequence" | "map" | "sum"
 
 // ---------------------------------------------------------------------------
+// NullableSumSchema — the result type of `.nullable()`
+// ---------------------------------------------------------------------------
+
+/**
+ * The schema produced by `.nullable()` — a positional sum of `[null, S]`.
+ */
+export type NullableSumSchema<S extends PlainSchema> = PositionalSumSchema<
+  [ScalarSchema<"null">, S],
+  "lww-tag-replaced" | "lww" | ExtractLaws<S>
+>
+
+// ---------------------------------------------------------------------------
+// NullableSumOf — structural return type for `.nullable()` methods
+// ---------------------------------------------------------------------------
+
+/**
+ * The structural shape returned by `.nullable()`. Mirrors
+ * `PositionalSumSchema<[ScalarSchema<"null">, S], ...>` but without
+ * inheriting its `PlainSchema[]` constraint on `V`, allowing
+ * `.nullable()` to live on all structural schema interfaces regardless
+ * of whether their children are plain.
+ *
+ * Structurally compatible with `PositionalSumSchema` when `S` is plain —
+ * callers who expect a `PositionalSumSchema` or `PlainSchema` can use
+ * the result without casts.
+ */
+export interface NullableSumOf<S, Laws extends string = string> {
+  readonly [KIND]: "sum"
+  readonly variants: readonly [ScalarSchema<"null">, S]
+  readonly discriminant?: undefined
+  readonly [LAWS]?: "lww-tag-replaced" | "lww" | Laws
+
+  nullable(): NullableSumOf<
+    NullableSumOf<S, Laws>,
+    "lww-tag-replaced" | "lww" | Laws
+  >
+}
+
+// ---------------------------------------------------------------------------
+// withPlainModifiers — attach fluent `.nullable()` to a schema object
+// ---------------------------------------------------------------------------
+
+/**
+ * Attach fluent `.nullable()` to a schema object at runtime.
+ *
+ * Only attached to schemas satisfying `PlainSchema` — the absence of
+ * `.nullable()` from non-plain schemas (text, counter, set, tree,
+ * movableList, richText) communicates incompatibility at the API surface.
+ *
+ * Type safety for callers is enforced by the `.nullable()` method
+ * declared on the structural schema interfaces.
+ */
+function withPlainModifiers(schema: any): any {
+  Object.defineProperty(schema, "nullable", {
+    value() {
+      const result = sum([null_(), schema])
+      return withPlainModifiers(result)
+    },
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  })
+  return schema
+}
+
+// ---------------------------------------------------------------------------
 // Structural constructors (low-level, grammar-native)
 // ---------------------------------------------------------------------------
 
@@ -438,31 +532,42 @@ function scalar<K extends ScalarKind, V extends ScalarPlain<K>>(
   constraint?: readonly V[],
 ): ScalarSchema<K, V> {
   if (constraint !== undefined && constraint.length > 0) {
-    return { [KIND]: "scalar", scalarKind, constraint } as ScalarSchema<K, V>
+    return withPlainModifiers({
+      [KIND]: "scalar",
+      scalarKind,
+      constraint,
+    } as ScalarSchema<K, V>)
   }
-  return { [KIND]: "scalar", scalarKind } as ScalarSchema<K, V>
+  return withPlainModifiers({ [KIND]: "scalar", scalarKind } as ScalarSchema<
+    K,
+    V
+  >)
 }
 
 function product<F extends Record<string, Schema>>(
   fields: F,
-): ProductSchema<F, ExtractCaps<F[keyof F]>> {
-  return Object.assign({ [KIND]: "product", fields }, migrationMethods) as any
+): ProductSchema<F, "lww-per-key" | ExtractLaws<F[keyof F]>> {
+  return withPlainModifiers(
+    Object.assign({ [KIND]: "product", fields }, migrationMethods),
+  )
 }
 
 function sequence<I extends Schema>(
   item: I,
-): SequenceSchema<I, ExtractCaps<I>> {
-  return { [KIND]: "sequence", item } as any
+): SequenceSchema<I, "positional-ot" | ExtractLaws<I>> {
+  return withPlainModifiers({ [KIND]: "sequence", item })
 }
 
-function map<I extends Schema>(item: I): MapSchema<I, ExtractCaps<I>> {
-  return { [KIND]: "map", item } as any
+function map<I extends Schema>(
+  item: I,
+): MapSchema<I, "lww-per-key" | ExtractLaws<I>> {
+  return withPlainModifiers({ [KIND]: "map", item })
 }
 
 function sum<V extends PlainSchema[]>(
   variants: [...V],
-): PositionalSumSchema<V, ExtractCaps<V[number]>> {
-  return { [KIND]: "sum", variants } as any
+): PositionalSumSchema<V, "lww-tag-replaced" | ExtractLaws<V[number]>> {
+  return withPlainModifiers({ [KIND]: "sum", variants })
 }
 
 /**
@@ -516,46 +621,53 @@ export function buildVariantMap<D extends string>(
 function discriminatedSum<D extends string, V extends PlainProductSchema[]>(
   discriminant: D,
   variants: [...V],
-): DiscriminatedSumSchema<D, V, ExtractCaps<V[number]>> {
+): DiscriminatedSumSchema<D, V, "lww-tag-replaced" | ExtractLaws<V[number]>> {
   const variantMap = buildVariantMap(discriminant, variants)
   // Stamp each variant with the discriminant key so interpreter layers
   // can identify and special-case the discriminant field at runtime.
   for (const variant of variants) {
     ;(variant as any).discriminantKey = discriminant
   }
-  return { [KIND]: "sum", discriminant, variants, variantMap } as any
+  return withPlainModifiers({
+    [KIND]: "sum",
+    discriminant,
+    variants,
+    variantMap,
+  })
 }
 
 // ---------------------------------------------------------------------------
 // First-class leaf/container constructors
 // ---------------------------------------------------------------------------
 
-function text(): TextSchema<"text"> {
-  return { [KIND]: "text" } as TextSchema<"text">
+function text(): TextSchema<"positional-ot"> {
+  return { [KIND]: "text" } as TextSchema<"positional-ot">
 }
 
-function counter(): CounterSchema<"counter"> {
-  return { [KIND]: "counter" } as CounterSchema<"counter">
+function counter(): CounterSchema<"additive"> {
+  return { [KIND]: "counter" } as CounterSchema<"additive">
 }
 
-function set<I extends Schema>(item: I): SetSchema<I, "set" | ExtractCaps<I>> {
+function set<I extends Schema>(
+  item: I,
+): SetSchema<I, "add-wins-per-key" | ExtractLaws<I>> {
   return { [KIND]: "set", item } as any
 }
 
 function tree<S extends Schema>(
   nodeData: S,
-): TreeSchema<S, "tree" | ExtractCaps<S>> {
+): TreeSchema<S, "tree-move" | ExtractLaws<S>> {
   return { [KIND]: "tree", nodeData } as any
 }
 
 function movableList<I extends Schema>(
   item: I,
-): MovableSequenceSchema<I, "movable" | ExtractCaps<I>> {
+): MovableSequenceSchema<I, "positional-ot-move" | ExtractLaws<I>> {
   return { [KIND]: "movable", item } as any
 }
 
-function richText(marks: MarkConfig): RichTextSchema<"richtext"> {
-  return { [KIND]: "richtext", marks } as RichTextSchema<"richtext">
+function richText(marks: MarkConfig): RichTextSchema<"positional-ot"> {
+  return { [KIND]: "richtext", marks } as RichTextSchema<"positional-ot">
 }
 
 // ---------------------------------------------------------------------------
@@ -566,62 +678,66 @@ function richText(marks: MarkConfig): RichTextSchema<"richtext"> {
  * Ordered list. Produces `sequence(item)`.
  *
  * `list.json(item)` constrains children to `PlainSchema` and produces
- * a schema with only `"json"` as its capability (merge boundary).
+ * a schema with only `"lww"` as its law (merge boundary).
  */
-function list<I extends Schema>(item: I): SequenceSchema<I, ExtractCaps<I>> {
+function list<I extends Schema>(
+  item: I,
+): SequenceSchema<I, "positional-ot" | ExtractLaws<I>> {
   return sequence(item)
 }
 
 /**
  * `.json()` modifier for list — merge boundary.
- * Everything below is an inert JSON blob. No child capabilities propagated.
+ * Everything below is an inert JSON blob. No child laws propagated.
  */
 list.json = function listJson<I extends PlainSchema>(
   item: I,
-): SequenceSchema<I, "json"> {
-  return { [KIND]: "sequence", item } as any
+): SequenceSchema<I, "lww"> {
+  return withPlainModifiers({ [KIND]: "sequence", item })
 }
 
 /**
  * Fixed-key struct. Produces `product(fields)`.
  *
  * `struct.json(fields)` constrains children to `PlainSchema` and produces
- * a schema with only `"json"` as its capability (merge boundary).
+ * a schema with only `"lww"` as its law (merge boundary).
  */
 function struct<F extends Record<string, Schema>>(
   fields: F,
-): ProductSchema<F, ExtractCaps<F[keyof F]>> {
+): ProductSchema<F, "lww-per-key" | ExtractLaws<F[keyof F]>> {
   return product(fields)
 }
 
 /**
  * `.json()` modifier for struct — merge boundary.
- * Everything below is an inert JSON blob. No child capabilities propagated.
+ * Everything below is an inert JSON blob. No child laws propagated.
  */
 struct.json = function structJson<F extends Record<string, PlainSchema>>(
   fields: F,
-): ProductSchema<F, "json"> {
-  return product(fields) as any
+): ProductSchema<F, "lww"> {
+  return withPlainModifiers(product(fields))
 }
 
 /**
  * Dynamic-key record. Produces `map(item)`.
  *
  * `record.json(item)` constrains children to `PlainSchema` and produces
- * a schema with only `"json"` as its capability (merge boundary).
+ * a schema with only `"lww"` as its law (merge boundary).
  */
-function record<I extends Schema>(item: I): MapSchema<I, ExtractCaps<I>> {
+function record<I extends Schema>(
+  item: I,
+): MapSchema<I, "lww-per-key" | ExtractLaws<I>> {
   return map(item)
 }
 
 /**
  * `.json()` modifier for record — merge boundary.
- * Everything below is an inert JSON blob. No child capabilities propagated.
+ * Everything below is an inert JSON blob. No child laws propagated.
  */
 record.json = function recordJson<I extends PlainSchema>(
   item: I,
-): MapSchema<I, "json"> {
-  return { [KIND]: "map", item } as any
+): MapSchema<I, "lww"> {
+  return withPlainModifiers({ [KIND]: "map", item })
 }
 
 // ---------------------------------------------------------------------------
@@ -639,9 +755,9 @@ record.json = function recordJson<I extends PlainSchema>(
 function string_<V extends string = string>(
   ...options: V[]
 ): ScalarSchema<"string", V> {
-  return options.length > 0
-    ? scalar("string", options)
-    : (scalar("string") as ScalarSchema<"string", V>)
+  return (
+    options.length > 0 ? scalar("string", options) : scalar("string")
+  ) as any
 }
 
 /**
@@ -655,9 +771,9 @@ function string_<V extends string = string>(
 function number_<V extends number = number>(
   ...options: V[]
 ): ScalarSchema<"number", V> {
-  return options.length > 0
-    ? scalar("number", options)
-    : (scalar("number") as ScalarSchema<"number", V>)
+  return (
+    options.length > 0 ? scalar("number", options) : scalar("number")
+  ) as any
 }
 
 /**
@@ -671,9 +787,9 @@ function number_<V extends number = number>(
 function boolean_<V extends boolean = boolean>(
   ...options: V[]
 ): ScalarSchema<"boolean", V> {
-  return options.length > 0
-    ? scalar("boolean", options)
-    : (scalar("boolean") as ScalarSchema<"boolean", V>)
+  return (
+    options.length > 0 ? scalar("boolean", options) : scalar("boolean")
+  ) as any
 }
 
 /** Scalar null. Produces `scalar("null")`. */
@@ -711,7 +827,7 @@ function any(): ScalarSchema<"any"> {
  */
 function union<V extends PlainSchema[]>(
   ...variants: [...V]
-): PositionalSumSchema<V, ExtractCaps<V[number]>> {
+): PositionalSumSchema<V, "lww-tag-replaced" | ExtractLaws<V[number]>> {
   return sum(variants)
 }
 
@@ -738,27 +854,8 @@ function union<V extends PlainSchema[]>(
 function discriminatedUnion<D extends string, V extends PlainProductSchema[]>(
   discriminant: D,
   variants: [...V],
-): DiscriminatedSumSchema<D, V, ExtractCaps<V[number]>> {
+): DiscriminatedSumSchema<D, V, "lww-tag-replaced" | ExtractLaws<V[number]>> {
   return discriminatedSum(discriminant, variants)
-}
-
-/**
- * Nullable schema — sugar for `union(null, inner)`.
- * Produces `sum([scalar("null"), inner])`.
- *
- * The inner type must be `PlainSchema` — sums are always LWW.
- * `nullable(text())` is a compile error. Use `nullable(string())`
- * for a nullable LWW string, or the visibility flag pattern
- * (boolean + persistent text field) for nullable-or-collaborative-text.
- *
- * ```ts
- * Schema.nullable(Schema.string()) // string | null
- * ```
- */
-function nullable<S extends PlainSchema>(
-  inner: S,
-): PositionalSumSchema<[ScalarSchema<"null">, S], ExtractCaps<S>> {
-  return sum([null_(), inner])
 }
 
 // ---------------------------------------------------------------------------
@@ -784,7 +881,17 @@ function nullable<S extends PlainSchema>(
  *
  * **Structural composites:**
  * `Schema.struct`, `Schema.list`, `Schema.record`,
- * `Schema.union`, `Schema.discriminatedUnion`, `Schema.nullable`
+ * `Schema.union`, `Schema.discriminatedUnion`
+ *
+ * **Fluent modifiers (on plain schemas only):**
+ * `.nullable()` — produces `sum([null, inner])`.
+ * Available on all plain schema types (scalar, product, sequence, map, sum).
+ * Not available on CRDT types (text, counter, set, tree, movableList, richText).
+ *
+ * ```ts
+ * Schema.string().nullable()           // string | null
+ * Schema.struct({ x: Schema.number() }).nullable()  // { x: number } | null
+ * ```
  *
  * **First-class CRDT types:**
  * `Schema.text`, `Schema.counter`, `Schema.set`, `Schema.tree`,
@@ -821,7 +928,6 @@ export const Schema = {
   record,
   union,
   discriminatedUnion,
-  nullable,
 
   // First-class CRDT types
   text,
@@ -874,7 +980,7 @@ export function structuralKind(schema: Schema): StructuralKind {
  * Returns `true` if the schema is the nullable sugar pattern:
  * a positional sum with exactly 2 variants where the first is `scalar("null")`.
  *
- * This is the pattern produced by `Schema.nullable(inner)`.
+ * This is the pattern produced by `inner.nullable()`.
  */
 export function isNullableSum(schema: PositionalSumSchema): boolean {
   return (

@@ -17,7 +17,7 @@
 // - When every policy returns `undefined`, the gate falls back to
 //   a caller-supplied default.
 
-import type { MergeStrategy, ReplicaType } from "@kyneta/schema"
+import type { ReplicaType, SyncProtocol } from "@kyneta/schema"
 import type { DocId, PeerIdentityDetails } from "@kyneta/transport"
 import type { Disposition } from "./exchange.js"
 
@@ -74,7 +74,7 @@ export interface Policy {
     docId: DocId,
     peer: PeerIdentityDetails,
     replicaType: ReplicaType,
-    mergeStrategy: MergeStrategy,
+    syncProtocol: SyncProtocol,
     schemaHash: string,
   ) => Disposition | undefined
   dispose?: () => void
@@ -195,12 +195,12 @@ export class Governance {
    *
    * Uses three-valued composition: any policy returning `false` vetoes
    * the reset. If no policy has an opinion, defaults to `true` (all
-   * strategies currently accept by default).
+   * sync protocols currently accept by default).
    */
   canReset(
     docId: DocId,
     peer: PeerIdentityDetails,
-    _strategy: MergeStrategy,
+    _syncProtocol: SyncProtocol,
   ): boolean {
     return composeGate(
       this.#policies.map(p => p.canReset?.(docId, peer)),
@@ -228,7 +228,7 @@ export class Governance {
     docId: DocId,
     peer: PeerIdentityDetails,
     replicaType: ReplicaType,
-    mergeStrategy: MergeStrategy,
+    syncProtocol: SyncProtocol,
     schemaHash: string,
   ): Disposition | undefined {
     for (const policy of this.#policies) {
@@ -237,7 +237,7 @@ export class Governance {
         docId,
         peer,
         replicaType,
-        mergeStrategy,
+        syncProtocol,
         schemaHash,
       )
       if (result !== undefined) return result
