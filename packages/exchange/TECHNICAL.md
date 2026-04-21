@@ -498,7 +498,13 @@ Persistence is driven by a pure Mealy machine: `Program<StoreInput, StoreModel, 
 | `persist-delete` | Calls `store.delete(docId)` on each registered store |
 | `store-error` | Calls the `onStoreError` callback |
 
-**Composition with the Exchange.** The Exchange constructor registers an `onStateAdvanced` callback on the Synchronizer. When a document's state advances (local mutation or remote merge), the callback computes `exportSince(confirmedVersion)` to get the delta, then dispatches `{ type: 'state-advanced', docId, delta, newVersion }` into the store-program. The store-program emits `persist-append` effects; the executor calls `store.append(docId, record)` on each store and feeds back `write-succeeded` or `write-failed`.
+**Composition with the Exchange.** The Exchange constructor registers a listener via `synchronizer.onStateAdvanced(cb)`. The listener does *not* fire inline with the mutation — it fires at quiescence, after the Synchronizer's `#drainStateAdvanced` method processes the dirty set. The full dispatch chain:
+
+1. A local mutation or remote merge causes the sync program to emit a `notify/state-advanced` notification carrying the affected `docId`s.
+2. `#accumulateSyncNotification` adds each `docId` to a `Set<DocId>` (`#dirtyStateAdvanced`). The set deduplicates: multiple state advances for the same doc within a single dispatch cycle coalesce into one callback.
+3. At quiescence, `#drainPending` calls `#drainStateAdvanced`, which snapshots the dirty set, clears it, and fires each registered listener once per doc.
+4. The Exchange's listener computes `exportSince(confirmedVersion)` to get the delta, then dispatches `{ type: 'state-advanced', docId, delta, newVersion }` into the store-program.
+5. The store-program emits `persist-append` effects; the Exchange's effect interpreter calls `store.append(docId, record)` on each registered store and feeds back `write-succeeded` or `write-failed`.
 
 **Per-doc phase tracking.** Each document tracked by the store-program is in one of two phases: `idle` (version confirmed, ready for next write) or `writing` (I/O in flight, with an optional queued input). When a `state-advanced` arrives during `writing`, the delta is queued (latest-wins) and replayed on `write-succeeded`. This ensures at most one in-flight write per document.
 
@@ -510,16 +516,17 @@ Persistence is driven by a pure Mealy machine: `Program<StoreInput, StoreModel, 
 
 ### Unified persistence via `state-advanced`
 
-Every local mutation and every remote `offer` merge drives the same persistence path. The Exchange's `onStateAdvanced` callback:
+Every local mutation and every remote `offer` merge drives the same persistence path. The pipeline (from quiescence drain to durable write):
 
-1. Reads the store-program's confirmed version for the doc (`phase.version`).
-2. Calls `replica.exportSince(confirmedVersion)` to compute the delta since the last persisted point.
-3. Dispatches `{ type: 'state-advanced', docId, delta, newVersion }` into the store-program.
-4. The store-program emits a `persist-append` effect with the delta as an `entry` record.
-5. The executor fans out `store.append(docId, record)` to each registered store.
-6. On success, feeds `write-succeeded` back into the store-program, which advances the confirmed version.
+1. The Synchronizer's `#drainStateAdvanced` fires the Exchange's listener with a `docId` whose state advanced during the just-completed dispatch cycle.
+2. The listener reads the store-program's confirmed version for the doc (`phase.version`).
+3. It calls `replica.exportSince(confirmedVersion)` to compute the delta since the last persisted point. If the version didn't actually advance (deduplication guard), it returns early.
+4. It dispatches `{ type: 'state-advanced', docId, delta, newVersion }` into the store-program.
+5. The store-program emits a `persist-append` effect with the delta as an `entry` record.
+6. The effect interpreter fans out `store.append(docId, record)` to each registered store.
+7. On success, feeds `write-succeeded` back into the store-program, which advances the confirmed version.
 
-This unifies the persistence path: `exportSince` returns entirety or delta as appropriate, and the store's `append` semantic handles both.
+Because the dirty set coalesces multiple advances per doc per dispatch cycle, a burst of rapid local edits produces at most one `state-advanced` dispatch (and therefore one write) per quiescence point. This unifies the persistence path: `exportSince` returns entirety or delta as appropriate, and the store's `append` semantic handles both.
 
 ### What `Store` is NOT
 
