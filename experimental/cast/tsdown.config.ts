@@ -14,6 +14,7 @@ export default defineConfig({
     "runtime/index": "src/runtime/index.ts",
     "testing/index": "src/testing/index.ts",
   },
+  deps: { onlyBundle: false },
   dts: true,
   sourcemap: true,
   fixedExtension: false,
