@@ -738,7 +738,7 @@ export class Exchange {
    * `Ref<S>` — callable, navigable, writable, transactable, and observable.
    *
    * The ref is backed by a substrate determined by the `BoundSchema`'s
-   * factory builder. The bound schema's merge strategy determines how
+   * factory builder. The bound schema's sync protocol determines how
    * the exchange syncs this document with peers.
    *
    * Multiple calls with the same `docId` return the same instance.

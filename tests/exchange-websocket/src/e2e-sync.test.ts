@@ -20,7 +20,7 @@
 //     Synchronizer →
 //   Exchange
 //
-// Covers all three merge strategies (sequential, causal, LWW),
+// Covers all three sync protocols (authoritative, collaborative, ephemeral),
 // heterogeneous documents, and large payload fragmentation.
 
 /// <reference types="bun-types" />

@@ -7,7 +7,7 @@
 // cross-peer stale rejection in the synchronizer: incoming offers with
 // older timestamps are discarded.
 //
-// The factory is consumed by `json.bind(schema, "ephemeral")` in `bind.ts`.
+// The factory is consumed by `ephemeral.bind(schema)` in `bind.ts`.
 //
 // Architecture: the plain substrate constructors (`createPlainSubstrate`,
 // `createPlainReplica`) accept a `VersionStrategy<V>` that governs
@@ -91,7 +91,7 @@ export const lwwReplicaFactory: ReplicaFactory<TimestampVersion> = {
  *
  * Uses the parameterized plain substrate constructors with
  * `timestampVersionStrategy` for cross-peer stale rejection.
- * Consumed by `json.bind(schema, "ephemeral")`.
+ * Consumed by `ephemeral.bind(schema)`.
  *
  * Supports two-phase construction:
  * - `createReplica()` → bare replica (empty doc, timestamp strategy)

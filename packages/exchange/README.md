@@ -246,7 +246,7 @@ const TodoDoc = loro.bind(Schema.struct({
 
 // Collaborative text — Yjs CRDT with concurrent merge
 const NoteDoc = yjs.bind(Schema.struct({
-  body: Schema.annotated("text"),
+  body: Schema.text(),
 }))
 
 // Config data — plain substrate with sequential sync

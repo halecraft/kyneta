@@ -192,7 +192,7 @@ Both directions use the `@kyneta/wire` text pipeline — symmetric encoding with
 Every message is wrapped in a text frame — a JSON array with a 2-character prefix:
 
 ```/dev/null/text-frame-example.txt#L1-5
-Complete frame:  ["0c", {"type":"discover","docIds":["doc-1"]}]
+Complete frame:  ["0c", {"type":"present","docs":[{"docId":"doc-1"}]}]
 Fragment frame:  ["0f", "a1b2c3d4", 0, 3, 1500, "{\"type\":\"offer\"..."]
 ```
 

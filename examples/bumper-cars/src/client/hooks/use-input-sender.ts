@@ -41,7 +41,7 @@ type UseInputSenderOptions = {
  *
  * Writes the player's current input state to their LWW input doc
  * via change(). The Exchange broadcasts the snapshot to the server
- * automatically via the LWW merge strategy.
+ * automatically via the ephemeral sync protocol.
  */
 export function useInputSender({
   inputDoc,

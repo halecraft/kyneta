@@ -8,20 +8,22 @@ Schemas are defined once with `Schema.*`, then bound to Loro via `loro.bind()`. 
 
 ```ts
 import { Schema } from "@kyneta/schema"
-import { createLoroDoc, change, subscribe, loro } from "@kyneta/loro-schema"
+import { createDoc, change, subscribe, loro } from "@kyneta/loro-schema"
 
-// Define a schema using Schema.* — the universal grammar
-const schema = Schema.struct({
+// Define a schema and bind to Loro
+const TodoDoc = loro.bind(Schema.struct({
   title: Schema.text(),
   count: Schema.counter(),
   items: Schema.list(
-    Schema.struct.json({ name: Schema.string(), done: Schema.boolean() }),
+    Schema.struct.json({
+      name: Schema.string(),
+      done: Schema.boolean()
+    }),
   ),
-})
+}))
 
-// Bind to Loro and create a live, collaborative document
-const bound = loro.bind(schema)
-const doc = createLoroDoc(schema, { title: "Hello" })
+// Create a live, collaborative document
+const doc = createDoc(TodoDoc, { title: "Hello" })
 
 // Read and write through the typed ref API
 doc.title()  // "Hello"
@@ -66,18 +68,19 @@ const loroBound = loro.bind(schema)
 const jsonBound = json.bind(schema)
 ```
 
-`loro.bind()` enforces Loro's capability constraints at compile time via `LoroCaps`. If your schema uses a capability Loro doesn't support (e.g. `Schema.set()`), `loro.bind()` produces a type error.
+`loro.bind()` enforces Loro's composition-law constraints at compile time via `LoroLaws`. If your schema uses a composition law Loro doesn't support (e.g. `Schema.set()`), `loro.bind()` produces a type error.
 
 ## Bring Your Own LoroDoc
 
-If you already have a `LoroDoc` (e.g. from a state bus), pass it directly:
+Every `createDoc` document is backed by a real `LoroDoc`. Use `loro.unwrap()` to access it — e.g. for interop with a state bus or another Loro-aware library:
 
 ```ts
-import { LoroDoc } from "loro-crdt"
-import { createLoroDoc, subscribe } from "@kyneta/loro-schema"
+import { createDoc, subscribe, loro } from "@kyneta/loro-schema"
 
-const loroDoc = new LoroDoc()
-const doc = createLoroDoc(mySchema, loroDoc)
+const doc = createDoc(myBoundSchema)
+
+// Escape hatch — access the underlying LoroDoc
+const loroDoc = loro.unwrap(doc)
 
 // External mutations to the LoroDoc fire kyneta subscribers
 subscribe(doc, () => console.log("Something changed"))
@@ -93,16 +96,16 @@ Two peers exchange state via `exportSince` / `importDelta`:
 
 ```ts
 import {
-  createLoroDoc, change, subscribe,
+  createDoc, change, subscribe,
   version, exportSince, importDelta,
 } from "@kyneta/loro-schema"
 
 // Peer A
-const docA = createLoroDoc(mySchema)
+const docA = createDoc(myBoundSchema)
 change(docA, d => d.title.insert(0, "Hello from A"))
 
 // Peer B
-const docB = createLoroDoc(mySchema)
+const docB = createDoc(myBoundSchema)
 subscribe(docB, () => console.log("B updated"))
 
 // Sync A → B
@@ -113,13 +116,14 @@ importDelta(docB, delta!, "sync")
 // docB.title() === "Hello from A"
 ```
 
-For full state transfer (SSR, reconnection), use snapshots:
+For full state transfer (SSR, reconnection), use snapshots via the exchange:
 
 ```ts
-import { exportSnapshot, createLoroDocFromSnapshot } from "@kyneta/loro-schema"
+import { exportSnapshot, createDoc } from "@kyneta/loro-schema"
 
 const snapshot = exportSnapshot(docA)
-const docB = createLoroDocFromSnapshot(mySchema, snapshot)
+const docB = createDoc(myBoundSchema)
+// restore from snapshot via the exchange or substrate
 ```
 
 ## API Reference
@@ -128,15 +132,15 @@ const docB = createLoroDocFromSnapshot(mySchema, snapshot)
 
 | Export | Description |
 |--------|-------------|
-| `loro.bind(schema)` | Bind a schema to the Loro CRDT substrate. Enforces `LoroCaps` constraints at compile time — schemas containing unsupported capabilities (e.g. `Schema.set()`) are rejected. Returns a `BoundSchema<S>` for use with `exchange.get()`. The factory builder injects a deterministic numeric Loro PeerID derived from the exchange's string peerId. |
+| `loro.bind(schema)` | Bind a schema to the Loro CRDT substrate. Enforces `LoroLaws` constraints at compile time — schemas containing unsupported composition laws (e.g. `Schema.set()`) are rejected. Returns a `BoundSchema<S>` for use with `exchange.get()`. The factory builder injects a deterministic numeric Loro PeerID derived from the exchange's string peerId. |
 | `loro.unwrap(ref)` | Escape hatch — returns the `LoroDoc` backing a root document ref. Throws if the ref is not backed by a Loro substrate. Currently supports root refs only; child-level resolution is future work. |
 
 ### Batteries-Included (most users)
 
 | Export | Description |
 |--------|-------------|
-| `createLoroDoc(schema, docOrSeed?)` | Create a live Loro-backed document. Pass a `LoroDoc` to wrap it, or a seed object (or nothing) to create a fresh one. |
-| `createLoroDocFromSnapshot(schema, payload)` | Reconstruct a document from a snapshot payload. |
+| `createDoc(boundSchema, seed?)` | Create a live Loro-backed document. Pass a bound schema (result of `loro.bind()`) and an optional seed object. *(re-exported from `@kyneta/schema`)* |
+
 | `version(doc)` | Current version as a `LoroVersion`. |
 | `exportSnapshot(doc)` | Full state as a binary `SubstratePayload`. |
 | `exportSince(doc, since)` | Delta payload since a version. |
@@ -177,7 +181,7 @@ Schemas are defined with `Schema.*` from `@kyneta/schema`. All constructors are 
 | `changeToDiff(path, change, schema, doc)` | Convert a kyneta Change to Loro `[ContainerID, Diff][]` tuples. |
 | `batchToOps(batch, schema)` | Convert a Loro event batch to kyneta `Op[]`. |
 | `LoroVersion` | `Version` implementation wrapping Loro's `VersionVector`. |
-| `LoroCaps` | Capability type: `"text" | "counter" | "movable" | "tree" | "json"`. |
+| `LoroLaws` | Composition-law type: `"lww" | "additive" | "positional-ot" | "positional-ot-move" | "lww-per-key" | "tree-move" | "lww-tag-replaced"`. |
 
 ## Event Bridge Contract
 

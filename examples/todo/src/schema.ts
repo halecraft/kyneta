@@ -3,7 +3,7 @@
 //   Todo — Schema
 //
 //   Defines the collaborative todo document schema using Loro CRDT substrate
-//   (Loro CRDT-backed) and binds it with causal merge strategy.
+//   (Loro CRDT-backed) and binds it with collaborative sync protocol.
 //
 //   No `id` field in the todo struct — Cast's listRegion uses index-based
 //   tracking (structural position in the CRDT list), not key-based

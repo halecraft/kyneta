@@ -8,19 +8,20 @@ Wraps a `Y.Doc` with schema-aware typed reads, writes, versioning, and export/im
 
 ```ts
 import {
-  createYjsDoc,
+  createDoc,
   change,
   subscribe,
   Schema,
   text,
+  yjs,
   version,
   exportSnapshot,
   exportSince,
   importDelta,
 } from "@kyneta/yjs-schema"
 
-// Define a schema
-const TodoDoc = Schema.struct({
+// Define a schema and bind to Yjs substrate
+const TodoDoc = yjs.bind(Schema.struct({
   title: text(),
   items: Schema.list(
     Schema.struct({
@@ -28,10 +29,10 @@ const TodoDoc = Schema.struct({
       done: Schema.boolean(),
     }),
   ),
-})
+}))
 
 // Create a document with optional seed values
-const doc = createYjsDoc(TodoDoc, {
+const doc = createDoc(TodoDoc, {
   title: "My Todos",
   items: [{ name: "Buy milk", done: false }],
 })
@@ -66,16 +67,16 @@ subscribe(doc, (changeset) => {
 
 ### Unsupported
 
-- **`Schema.annotated("counter")`** — Yjs has no native counter type. Use `Schema.number()` with `ReplaceChange` instead. Attempting to use a counter annotation will throw at construction time.
-- **`Schema.annotated("movable")`** — Yjs has no native movable list. Will throw at construction time.
-- **`Schema.annotated("tree")`** — Yjs has no native tree type. Will throw at construction time.
+- **`Schema.counter()`** — Yjs has no native counter type. Use `Schema.number()` with `ReplaceChange` instead. Attempting to use a counter annotation will throw at construction time.
+- **`Schema.movableList()`** — Yjs has no native movable list. Will throw at construction time.
+- **`Schema.tree()`** — Yjs has no native tree type. Will throw at construction time.
 
 ## Sync
 
 ```ts
 import {
-  createYjsDoc,
-  createYjsDocFromSnapshot,
+  createDoc,
+  yjs,
   version,
   exportSnapshot,
   exportSince,
@@ -83,12 +84,14 @@ import {
   change,
 } from "@kyneta/yjs-schema"
 
+const MyDoc = yjs.bind(MySchema)
+
 // Peer A creates a doc
-const docA = createYjsDoc(MySchema, { title: "Draft" })
+const docA = createDoc(MyDoc, { title: "Draft" })
 
 // Peer B bootstraps from a full snapshot
 const snapshot = exportSnapshot(docA)
-const docB = createYjsDocFromSnapshot(MySchema, snapshot)
+const docB = createDoc(MyDoc, snapshot)
 
 // After mutations on A, sync incrementally
 const vBefore = version(docB)
@@ -102,10 +105,10 @@ importDelta(docB, delta!)
 ## Exchange Integration
 
 ```ts
-import { bindYjs } from "@kyneta/yjs-schema"
+import { yjs } from "@kyneta/yjs-schema"
 import { Schema, text } from "@kyneta/yjs-schema"
 
-const TodoDoc = bindYjs(Schema.struct({
+const TodoDoc = yjs.bind(Schema.struct({
   title: text(),
   items: Schema.list(Schema.struct({
     name: Schema.string(),
@@ -117,16 +120,17 @@ const TodoDoc = bindYjs(Schema.struct({
 const doc = exchange.get("my-todos", TodoDoc)
 ```
 
-`bindYjs` produces a `BoundSchema` with `strategy: "causal"`, which the exchange uses for bidirectional CRDT sync.
+`yjs.bind()` produces a `BoundSchema` with the collaborative `SyncProtocol`, which the exchange uses for bidirectional CRDT sync.
 
 ## Escape Hatch
 
 Access the underlying `Y.Doc` for direct Yjs API usage:
 
 ```ts
-import { yjs } from "@kyneta/yjs-schema"
+import { yjs, createDoc } from "@kyneta/yjs-schema"
 
-const doc = createYjsDoc(MySchema)
+const MyDoc = yjs.bind(MySchema)
+const doc = createDoc(MyDoc)
 const yjsDoc = yjs(doc)
 
 // Use with Yjs ecosystem
@@ -152,28 +156,27 @@ Because `yjs(doc)` returns a standard `Y.Doc`, the entire Yjs provider ecosystem
 
 | Export | Description |
 |---|---|
-| `createYjsDoc(schema, docOrSeed?)` | Create a live Yjs-backed document |
-| `createYjsDocFromSnapshot(schema, payload)` | Reconstruct from snapshot |
+| `createDoc(schema, docOrSeed?)` | Create a live Yjs-backed document *(re-exported from `@kyneta/schema`)* |
 | `version(doc)` | Current `YjsVersion` |
-| `exportSnapshot(doc)` | Full state as `SubstratePayload` |
+| `exportEntirety(doc)` | Full state as `SubstratePayload` |
 | `exportSince(doc, since)` | Delta since version |
-| `importDelta(doc, payload, origin?)` | Apply delta from peer |
+| `merge(doc, payload, origin?)` | Apply delta from peer |
 | `change(doc, fn)` | Transactional mutation |
 | `subscribe(doc, callback)` | Observe changes |
-| `bindYjs(schema)` | Bind schema for exchange use |
+| `yjs.bind(schema)` | Bind schema for exchange use |
 | `yjs(ref)` | Escape hatch → `Y.Doc` |
-| `text()` | `Schema.annotated("text")` convenience |
+| `text()` | `Schema.text()` convenience — collaborative text schema kind |
 
 ### Low-level primitives (power users)
 
 | Export | Description |
 |---|---|
 | `YjsVersion` | Version class wrapping Yjs state vectors |
-| `yjsStoreReader(doc, schema)` | Live `StoreReader` over Yjs types |
+| `yjsReader(doc, schema)` | Live `StoreReader` over Yjs types |
 | `resolveYjsType(rootMap, schema, path)` | Path resolution |
 | `applyChangeToYjs(rootMap, schema, path, change)` | kyneta → Yjs |
 | `eventsToOps(events)` | Yjs → kyneta |
-| `populateRoot(doc, schema, seed)` | Root container population |
+| `ensureContainers(doc, schema, seed)` | Root container population |
 | `createYjsSubstrate(doc, schema)` | Low-level substrate construction |
 | `yjsSubstrateFactory` | `SubstrateFactory<YjsVersion>` |
 

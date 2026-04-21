@@ -114,7 +114,7 @@ Everything else — schema, Exchange, transport, @kyneta/cast view — stays the
 
 1. **On server start**: `Bun.build()` compiles `src/main.ts` (and its imports) with the @kyneta/cast via [unplugin](https://unplugin.unjs.io/) → `dist/`
 2. **Browser loads**: `index.html` → bundled JS + WASM (loro-crdt) as server-side rendered HTML
-3. **WebSocket connects**: Client Exchange ↔ Server Exchange via the three-message sync protocol (discover → interest → offer)
+3. **WebSocket connects**: Client Exchange ↔ Server Exchange via the four-message sync protocol (present → interest → offer → dismiss)
 4. **Changes sync**: Any `change(doc, ...)` call automatically propagates to all connected clients via the Exchange's changefeed → synchronizer wiring
 
 ## Why Is This Interesting?
@@ -192,7 +192,7 @@ The @kyneta/exchange, the @kyneta/wire protocol, the @kyneta/cast view, the serv
 
 ### The sync layer is pluggable end-to-end
 
-The @kyneta/exchange handles sync through pluggable **transports** and pluggable **stores** — via the same five-message protocol (`establish`, `discover`, `interest`, `offer`) regardless of what's underneath. This todo uses WebSocket, but the adapter could be SSE, WebRTC, or HTTP polling without changing a line of application code.
+The @kyneta/exchange handles sync through pluggable **transports** and pluggable **stores** — via the same six-message protocol (`establish`, `depart`, `present`, `interest`, `offer`, `dismiss`) regardless of what's underneath. This todo uses WebSocket, but the adapter could be SSE, WebRTC, or HTTP polling without changing a line of application code.
 
 The synchronizer itself is a pure **TEA (Elm Architecture) state machine**: immutable model in, commands out, no I/O. Multi-hop relay — server receives a change from Tab A, forwards to Tab B — falls out naturally from this design, because the state machine doesn't know or care where messages came from.
 

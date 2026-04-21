@@ -475,7 +475,7 @@ export class Synchronizer {
   /**
    * Notify the synchronizer of a local change to a document.
    *
-   * Triggers push to synced peers based on merge strategy.
+   * Triggers push to synced peers based on sync protocol.
    *
    * **Normally called automatically** by the Exchange's changefeed
    * subscription — you do NOT need to call this after `change()`.

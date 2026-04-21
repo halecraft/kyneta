@@ -1,6 +1,6 @@
 # Kyneta Wire Protocol Specification
 
-Wire protocol for `@kyneta/transport` message transport. Defines the universal `Frame<T>` abstraction, two encoding pipelines (binary and text), framing, fragmentation, and reassembly for the exchange's 5-message protocol.
+Wire protocol for `@kyneta/transport` message transport. Defines the universal `Frame<T>` abstraction, two encoding pipelines (binary and text), framing, fragmentation, and reassembly for the exchange's 6-message protocol.
 
 ## Overview
 
@@ -17,21 +17,22 @@ Batching is **orthogonal to framing**. The frame layer does not distinguish sing
 
 ## Message Types
 
-Five message types form the exchange protocol:
+Six message types form the exchange protocol:
 
 | Discriminator (CBOR) | Type | Direction | Purpose |
 |----------------------|------|-----------|---------|
-| `0x01` | `establish-request` | Client → Server | Initiate peer identity handshake |
-| `0x02` | `establish-response` | Server → Client | Confirm peer identity |
-| `0x10` | `discover` | Bidirectional | Announce or query document IDs |
+| `0x01` | `establish` | Bidirectional | Announce peer identity |
+| `0x02` | `depart` | Bidirectional | Signal peer departure |
+| `0x10` | `present` | Bidirectional | Announce document IDs and metadata |
 | `0x11` | `interest` | Bidirectional | Request a specific document's state |
 | `0x12` | `offer` | Bidirectional | Deliver document state (snapshot or delta) |
+| `0x13` | `dismiss` | Bidirectional | Retract interest in a document |
 
 Discriminator ranges:
-- `0x01–0x0F` — Connection establishment
-- `0x10–0x1F` — Exchange messages
+- `0x01–0x0F` — Lifecycle messages (establish, depart)
+- `0x10–0x1F` — Sync messages (present, interest, offer, dismiss)
 
-The text codec uses human-readable type strings (`"establish-request"`, `"discover"`, etc.) instead of integer discriminators.
+The text codec uses human-readable type strings (`"establish"`, `"present"`, etc.) instead of integer discriminators.
 
 ## Frame<T> — Universal Frame Abstraction
 
@@ -142,11 +143,11 @@ The `cborCodec` encodes `ChannelMsg` objects as compact wire objects with short 
 | Wire field | Full name | Type | Used by |
 |------------|-----------|------|---------|
 | `t` | type | integer discriminator | All messages |
-| `id` | peerId | `string` | establish-request, establish-response |
-| `n` | name | `string` (optional) | establish-request, establish-response |
-| `y` | type | `"user" \| "bot" \| "service"` | establish-request, establish-response |
+| `id` | peerId | `string` | establish |
+| `n` | name | `string` (optional) | establish |
+| `y` | type | `"user" \| "bot" \| "service"` | establish |
 | `docs` | docs | `Array<{d, rt, ms, sh}>` | present |
-| `doc` | docId | `string` | interest, offer |
+| `doc` | docId | `string` | interest, offer, dismiss |
 | `sh` | schemaHash | `string` (34-char hex) | present (doc entry, required) |
 | `d` | docId / data | `string` (present doc entry) or `string \| Uint8Array` (offer) | present, offer |
 | `rt` | replicaType | `[string, number, number]` | present (doc entry) |
@@ -348,8 +349,8 @@ After the WebSocket connection opens, the server sends a text `"ready"` frame to
 1. Client opens WebSocket          → state: connecting
 2. WebSocket open event fires      → state: connected
 3. Server sends text "ready"       → state: ready
-4. Client sends establish-request  (binary frame)
-5. Server sends establish-response (binary frame)
+4. Client sends establish  (binary frame)
+5. Server sends establish  (binary frame)
 6. Protocol messages flow freely
 ```
 

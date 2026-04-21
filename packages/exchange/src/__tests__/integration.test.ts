@@ -4,7 +4,7 @@
 // connected via BridgeTransport, for each sync protocol:
 // - Authoritative (PlainSubstrate via json.bind)
 // - Collaborative (LoroSubstrate via loro.bind)
-// - Ephemeral (TimestampVersion via json.bind ephemeral)
+// - Ephemeral (TimestampVersion via ephemeral.bind)
 // - Heterogeneous (mixed substrates in one exchange)
 
 import { loro } from "@kyneta/loro-schema"

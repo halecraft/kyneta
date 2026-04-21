@@ -8,8 +8,8 @@ Define a schema. Get a live, reactive, syncable document with full TypeScript ty
 import { Schema, createDoc, change, subscribe } from "@kyneta/schema/basic"
 
 const TaskDoc = Schema.struct({
-  title: Schema.annotated("text"),
-  count: Schema.annotated("counter"),
+  title: Schema.text(),
+  count: Schema.counter(),
   games: Schema.list(
     Schema.struct({
       type: Schema.string("uno", "catan"),
@@ -80,9 +80,13 @@ Schema.string()                      // also Schema.string("a", "b") for constra
 Schema.number()
 Schema.boolean()
 
-// CRDT-ready annotations
-Schema.annotated("text")             // collaborative text
-Schema.annotated("counter")          // increment/decrement counter
+// CRDT kinds
+Schema.text()                        // collaborative text
+Schema.counter()                     // increment/decrement counter
+Schema.set(itemSchema)               // add-wins set
+Schema.tree(itemSchema)              // tree with move semantics
+Schema.movableList(itemSchema)       // ordered list with move
+Schema.richText({ bold: { expand: "after" } })  // collaborative rich text with marks
 
 // Composites
 Schema.struct({ ... })               // fixed-key product
@@ -91,10 +95,10 @@ Schema.record(valueSchema)           // dynamic-key map
 
 // Unions
 Schema.discriminatedUnion("type", [  // native TS narrowing
-  Schema.struct({ type: Schema.string("text"), body: Schema.annotated("text") }),
+  Schema.struct({ type: Schema.string("text"), body: Schema.text() }),
   Schema.struct({ type: Schema.string("image"), url: Schema.string() }),
 ])
-Schema.nullable(inner)               // null | inner
+Schema.string().nullable()           // null | string (fluent method on all plain schema types)
 
 // Root
 Schema.struct({ ... })                  // document root (annotated product)

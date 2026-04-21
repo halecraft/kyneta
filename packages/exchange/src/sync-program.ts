@@ -936,13 +936,13 @@ function handleInterest(
   if (!docEntry) return [model]
   if (docEntry.mode === "deferred") return [model]
 
-  // Known doc — respond based on merge strategy and update peer sync state
+  // Known doc — respond based on sync protocol and update peer sync state
   return handleInterestForKnownDoc(from, message, docEntry, model)
 }
 
 /**
  * Handle a normal interest for a doc that exists. Responds based on
- * merge strategy and updates peer sync state to "pending".
+ * sync protocol and updates peer sync state to "pending".
  */
 function handleInterestForKnownDoc(
   fromPeerId: PeerId,

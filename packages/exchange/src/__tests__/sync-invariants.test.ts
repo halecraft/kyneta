@@ -270,7 +270,7 @@ describe("ephemeral stale rejection", () => {
 // ---------------------------------------------------------------------------
 // 4. Collaborative sync: delta (not snapshot) used when versions differ
 //
-// Verifies that the collaborative merge strategy uses exportSince() for
+// Verifies that the collaborative sync protocol uses exportSince() for
 // incremental deltas when the sender is ahead, rather than always
 // falling back to snapshots.
 // ---------------------------------------------------------------------------

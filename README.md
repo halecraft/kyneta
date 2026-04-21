@@ -72,7 +72,7 @@ Every step below is additive — earlier code doesn't change.
 | **Two peers, plain sync** | Add `Exchange` + transport | Schema, reads, writes |
 | **Switch to CRDTs** | `json.bind(schema)` → `loro.bind(schema)` | Exchange, transport, reads, writes |
 | **Add persistence** | Add `stores: [leveldb()]` to exchange config | Everything above |
-| **Add presence** | `json.bind(schema, "ephemeral")` alongside your docs | Everything above |
+| **Add presence** | `ephemeral.bind(schema)` alongside your collaborative docs | Everything above |
 | **Add access control** | Add `route` and `authorize` predicates | Client code unchanged |
 | **Add a relay** | One more Exchange with `type: "relay"` | Client code unchanged |
 
@@ -80,7 +80,7 @@ See the [`@kyneta/exchange` README](./packages/exchange/README.md) for the full 
 
 ## Why Kyneta
 
-**Schemas should be walked once.** A schema tree gets traversed for reading, mutation, observation, validation, sync, and more. Most frameworks implement these as parallel switch dispatches that drift apart. Kyneta's schema algebra collapses them into one catamorphism with pluggable interpreters — all capabilities are derived from the same structure. Your schema is the single source of truth not by convention, but by construction. Add a field and every capability follows. There is nothing else to update.
+**Schemas should be walked once.** A schema tree gets traversed for reading, mutation, observation, validation, sync, and more. Most frameworks implement these as parallel switch dispatches that drift apart. Kyneta's schema algebra collapses them into one catamorphism with pluggable interpreters — all behaviors are derived from the same structure. Your schema is the single source of truth not by convention, but by construction. Add a field and every behavior follows. There is nothing else to update.
 
 **Collaboration shouldn't require rewriting your app.** Start with plain JS objects and `createDoc()`. When you need concurrent merge, swap to `loro.bind()` or `yjs.bind()` — reads, writes, and observation don't change. The exchange syncs documents via the `Substrate` interface — the exchange doesn't need to understand the inner workings of your CRDT library of choice. This is powerful, because you can mix collaborative CRDTs, authoritative json state, and ephemeral presence in one sync network.
 
@@ -88,14 +88,14 @@ See the [`@kyneta/exchange` README](./packages/exchange/README.md) for the full 
 
 ## Packages
 
-6,019 tests across the monorepo.
+6,087 tests across the monorepo.
 
 ### Foundation
 
 | Package | Description | Tests |
 |---------|-------------|-------|
 | [`@kyneta/changefeed`](./packages/changefeed) | Universal reactive contract — a Moore machine identified by `[CHANGEFEED]`. Zero dependencies. | 47 |
-| [`@kyneta/schema`](./packages/schema) | Schema interpreter algebra. One recursive `Schema` type, one generic `interpret()` catamorphism, pluggable interpreters for reading, mutation, observation, and validation. Only dependency is `@kyneta/changefeed`. | 1,832 |
+| [`@kyneta/schema`](./packages/schema) | Schema interpreter algebra. One recursive `Schema` type, one generic `interpret()` catamorphism, pluggable interpreters for reading, mutation, observation, and validation. Only dependency is `@kyneta/changefeed`. | 1,901 |
 | [`@kyneta/machine`](./packages/machine) | Universal Mealy machine algebra — pure state transitions with effect outputs. Powers the exchange synchronizer and all transport clients. Zero dependencies. | 45 |
 
 ### Substrates
@@ -104,16 +104,16 @@ A plain JS substrate is built into `@kyneta/schema` — no external package need
 
 | Package | Description | Tests |
 |---------|-------------|-------|
-| [`@kyneta/loro-schema`](./packages/schema/backends/loro) | Loro CRDT substrate for `@kyneta/schema`. Schema-aware typed reads, `applyDiff`-based writes, and a persistent event bridge. | 203 |
-| [`@kyneta/yjs-schema`](./packages/schema/backends/yjs) | Yjs CRDT substrate for `@kyneta/schema`. Same `Substrate` interface as Loro — swap with a one-line import change. `yjs.bind()` validates capability compatibility at compile time via `YjsCaps`. | 217 |
+| [`@kyneta/loro-schema`](./packages/schema/backends/loro) | Loro CRDT substrate for `@kyneta/schema`. Schema-aware typed reads, `applyDiff`-based writes, and a persistent event bridge. | 201 |
+| [`@kyneta/yjs-schema`](./packages/schema/backends/yjs) | Yjs CRDT substrate for `@kyneta/schema`. Same `Substrate` interface as Loro — swap with a one-line import change. `yjs.bind()` validates composition-law compatibility at compile time via `YjsLaws`. | 217 |
 
 ### Sync
 
 | Package | Description | Tests |
 |---------|-------------|-------|
-| [`@kyneta/exchange`](./packages/exchange) | Substrate-agnostic state exchange. Three merge strategies (collaborative, authoritative, ephemeral) over a six-message sync protocol. Hosts heterogeneous documents — Loro CRDTs, Yjs CRDTs, plain JS, ephemeral presence — in one sync network. | 420 |
+| [`@kyneta/exchange`](./packages/exchange) | Substrate-agnostic state exchange. Four named binding targets (`json`, `ephemeral`, `loro`, `yjs`) with fixed sync protocols over a six-message sync protocol. Hosts heterogeneous documents — Loro CRDTs, Yjs CRDTs, plain JS, ephemeral presence — in one sync network. | 420 |
 | [`@kyneta/transport`](./packages/transport) | Transport infrastructure — base class, channel types, message vocabulary, and client utilities. | 8 |
-| [`@kyneta/wire`](./packages/exchange/wire) | Wire format codecs, framing, and fragmentation. CBOR and JSON codecs, 6-byte binary frames, and a fragmentation protocol for cloud WebSocket gateways. | 232 |
+| [`@kyneta/wire`](./packages/exchange/wire) | Wire format codecs, framing, and fragmentation. CBOR and JSON codecs, 6-byte binary frames, and a fragmentation protocol for cloud WebSocket gateways. | 233 |
 
 ### Transports
 

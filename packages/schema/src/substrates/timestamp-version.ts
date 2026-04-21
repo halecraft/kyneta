@@ -16,7 +16,7 @@ import type { Version } from "../substrate.js"
  *
  * Timestamps form a total order — `compare()` returns `"behind"`,
  * `"equal"`, or `"ahead"` but never `"concurrent"`. This is the
- * correct version type for LWW merge strategy: the receiver compares
+ * correct version type for the ephemeral sync protocol: the receiver compares
  * timestamps and discards stale arrivals.
  *
  * `serialize()` encodes to a decimal string for text-safe embedding.

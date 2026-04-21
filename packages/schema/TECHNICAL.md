@@ -901,4 +901,4 @@ Every test in this package is pure. Substrates-under-test are the plain substrat
 
 The full suite serves as the specification of the `Substrate<V>` contract: `@kyneta/loro-schema` and `@kyneta/yjs-schema` run this same suite (adapted) against their substrates via the shared conformance harness in `src/basic/index.ts`.
 
-**Tests**: 1,903 passed, 8 skipped across 58 files. Run with `cd packages/schema && pnpm exec vitest run`.
+**Tests**: 1,901 passed, 8 skipped across 59 files. Run with `cd packages/schema && pnpm exec vitest run`.

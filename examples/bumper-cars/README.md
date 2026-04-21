@@ -1,8 +1,8 @@
 # Bumper Cars Arena
 
-A multiplayer bumper cars game demonstrating **heterogeneous documents** in one Exchange — two merge strategies, zero CRDT dependencies.
+A multiplayer bumper cars game demonstrating **heterogeneous documents** in one Exchange — two binding targets, zero CRDT dependencies.
 
-> **Architectural point:** Different data has different sync requirements. The Exchange handles them transparently — no special "presence" or "ephemeral" API. Ephemeral state is just `json.bind(schema, "ephemeral")` + `exchange.get()`, same as everything else.
+> **Architectural point:** Different data has different sync requirements. The Exchange handles them transparently — no special "presence" or "ephemeral" API. Ephemeral state is just `ephemeral.bind(schema)` + `exchange.get()`, same as everything else.
 
 ## How to Run
 
@@ -18,12 +18,12 @@ Open [http://localhost:5173](http://localhost:5173) in multiple tabs. Pick a nam
 
 ## Architecture
 
-Two document types, two merge strategies, one Exchange:
+Two document types, two binding targets, one Exchange:
 
 | Document | Binding | Strategy | Writer | Purpose |
 |----------|---------|----------|--------|---------|
 | `game-state` | `json.bind` | Sequential | Server only | Cars, scores, tick — the server runs physics at 60fps and pushes authoritative state to all clients |
-| `input:${peerId}` | `json.bind(schema, "ephemeral")` | Ephemeral broadcast | One client each | Joystick/keyboard input — each client writes at ~20fps, the server reads all input docs every tick |
+| `input:${peerId}` | `ephemeral.bind(schema)` | Ephemeral broadcast | One client each | Joystick/keyboard input — each client writes at ~20fps, the server reads all input docs every tick |
 
 ### Data Flow
 
@@ -67,7 +67,7 @@ onDocDismissed(docId, peer)  // removes the player's car when they disconnect
 **`src/schema.ts`** — the centerpiece file:
 
 ```ts
-import { Schema, json } from "@kyneta/schema"
+import { Schema, json, ephemeral } from "@kyneta/schema"
 
 // Game state — plain JS, sequential merge, server-authoritative.
 // The server is the single writer. Cars, scores, and tick are all
@@ -81,12 +81,12 @@ export const GameStateDoc = json.bind(Schema.struct({
 // Player input — ephemeral, one doc per player.
 // Each client writes joystick/keyboard state at ~20fps. The server
 // reads all input docs every tick. Only the latest value matters.
-export const PlayerInputDoc = json.bind(Schema.struct({
+export const PlayerInputDoc = ephemeral.bind(Schema.struct({
   name, color, force, angle,
-}), "ephemeral")
+}))
 ```
 
-Two `json.bind` calls. Two strategies. That's it.
+Two bind calls. Two binding targets. That's it.
 
 ## What's Here
 
@@ -132,9 +132,9 @@ bumper-cars/
 
 ### No special API for ephemeral state
 
-The vendor example (`@loro-extended/examples/bumper-cars`) uses a dedicated "ephemeral/presence" system baked into the sync engine — `sync(doc).presence.setSelf(...)`, `useEphemeral(...)`, a discriminated union schema for presence types.
+Previously, in `@loro-extended` (see `@loro-extended/examples/bumper-cars`) we used a dedicated "ephemeral/presence" system baked into the sync engine — `sync(doc).presence.setSelf(...)`, `useEphemeral(...)`, a discriminated union schema for presence types.
 
-Kyneta has none of that. Player input is a regular document bound with `json.bind(schema, "ephemeral")`. It goes through the same Exchange, the same WebSocket adapter, the same `change()` / `useValue()` API as everything else. The ephemeral merge strategy handles the semantics (broadcast snapshot on every change, timestamp-based stale rejection at the receiver).
+Kyneta has none of that. Player input is a regular document bound with `ephemeral.bind(schema)`. It goes through the same Exchange, the same WebSocket adapter, the same `change()` / `useValue()` API as everything else. The ephemeral sync protocol handles the semantics (broadcast snapshot on every change, timestamp-based stale rejection at the receiver).
 
 ### The server is the right tool for game state
 

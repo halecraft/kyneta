@@ -4,7 +4,7 @@
 > **Packages**: 15 stable + 3 experimental + 1 internal
 > **Source lines**: ~76,000 (excluding tests)
 > **Test lines**: ~109,000
-> **Total tests**: 6,019 passed + 16 skipped across 18 packages
+> **Total tests**: 6,087 passed + 16 skipped across 18 packages
 > **Build**: `pnpm install && pnpm build`
 > **Verify**: `pnpm verify` (format → types → logic)
 > **Runtime**: TypeScript 5.9+; Bun 1.3+ or Node 22+; supports browser, Bun, and Node runtimes
@@ -24,17 +24,17 @@ See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the 30,000-foot design — thesis
 
 ## Canonical test counts
 
-Every test count in every per-package `TECHNICAL.md` agrees with this table. Run dates: 2026-04-19.
+Every test count in every per-package `TECHNICAL.md` agrees with this table. Run dates: 2026-04-20.
 
 | Package | Passed | Skipped | Files |
 |---------|-------:|--------:|------:|
 | `@kyneta/changefeed` | 47 | 0 | 2 |
 | `@kyneta/machine` | 45 | 0 | 2 |
-| `@kyneta/schema` | 1,832 | 8 | 56 |
-| `@kyneta/loro-schema` | 203 | 4 | 11 |
+| `@kyneta/schema` | 1,901 | 8 | 59 |
+| `@kyneta/loro-schema` | 201 | 4 | 11 |
 | `@kyneta/yjs-schema` | 217 | 4 | 9 |
 | `@kyneta/transport` | 8 | 0 | 1 |
-| `@kyneta/wire` | 232 | 0 | 9 |
+| `@kyneta/wire` | 233 | 0 | 9 |
 | `@kyneta/websocket-transport` | 56 | 0 | 2 |
 | `@kyneta/sse-transport` | 44 | 0 | 3 |
 | `@kyneta/webrtc-transport` | 27 | 0 | 2 |
@@ -46,7 +46,7 @@ Every test count in every per-package `TECHNICAL.md` agrees with this table. Run
 | `@kyneta/compiler` (exp.) | 547 | 0 | 13 |
 | `@kyneta/cast` (exp.) | 634 | 0 | 27 |
 | `@kyneta/perspective` (exp., private) | 1,374 | 0 | 35 |
-| **Total** | **6,019** | **16** | **210** |
+| **Total** | **6,087** | **16** | **213** |
 
 Two additional test suites live outside the main package graph:
 - `tests/exchange-websocket` — E2E WebSocket sync over `bun test` (separate runtime).
@@ -64,17 +64,17 @@ Two additional test suites live outside the main package graph:
 
 ### Schema + substrates
 
-**`@kyneta/schema`** — The algebraic core. One recursive grammar (`Schema` with ten `[KIND]` values: five structural + five CRDT), a reactive observation surface (`[CHANGEFEED]` on every ref, composed changefeeds for composites), a substrate/replica boundary (five-method interface), a six-layer interpreter stack (navigation → readable → addressing → caching → writable → observation), a migration system that derives content-addressed identity, a position algebra for cursor stability, and a plain substrate reference implementation. Capability compatibility is enforced at compile time via `bind()`. Depends on `@kyneta/changefeed`. 1,832 + 8 skipped tests across 56 files. → `packages/schema/TECHNICAL.md`.
+**`@kyneta/schema`** — The algebraic core. One recursive grammar (`Schema` with eleven `[KIND]` values: five structural + six CRDT), a reactive observation surface (`[CHANGEFEED]` on every ref, composed changefeeds for composites), a substrate/replica boundary (five-method interface), a six-layer interpreter stack (navigation → readable → addressing → caching → writable → observation), a migration system that derives content-addressed identity, a position algebra for cursor stability, and a plain substrate reference implementation. Composition-law compatibility is enforced at compile time via `bind()` and phantom `[LAWS]` brands. Four named binding targets (`json`, `ephemeral`, `loro`, `yjs`) each bundle a substrate factory, a `SyncProtocol`, and a closed set of allowed laws — no strategy parameter. Depends on `@kyneta/changefeed`. 1,901 + 8 skipped tests across 59 files. → `packages/schema/TECHNICAL.md`.
 
-**`@kyneta/loro-schema`** — Loro CRDT substrate. Wraps a `LoroDoc` as `Substrate<LoroVersion>` with live navigation, `applyDiff`-based writes, identity-keyed containers for cross-schema sync, and a persistent `doc.subscribe()` event bridge. `LoroCaps = "text" | "counter" | "movable" | "tree" | "json"`. Peer deps: `@kyneta/schema`, `@kyneta/changefeed`, `loro-crdt`. 203 + 4 skipped tests. → `packages/schema/backends/loro/TECHNICAL.md`.
+**`@kyneta/loro-schema`** — Loro CRDT substrate. Wraps a `LoroDoc` as `Substrate<LoroVersion>` with live navigation, `applyDiff`-based writes, identity-keyed containers for cross-schema sync, and a persistent `doc.subscribe()` event bridge. `LoroLaws = "lww" | "additive" | "positional-ot" | "positional-ot-move" | "lww-per-key" | "tree-move" | "lww-tag-replaced"`. Peer deps: `@kyneta/schema`, `@kyneta/changefeed`, `loro-crdt`. 201 + 4 skipped tests. → `packages/schema/backends/loro/TECHNICAL.md`.
 
-**`@kyneta/yjs-schema`** — Yjs CRDT substrate. Wraps a `Y.Doc` as `Substrate<YjsVersion>` with a single-root-`Y.Map` design, `instanceof` container discrimination, imperative writes inside `Y.transact`, identity-keyed containers, and a persistent `observeDeep` event bridge. `YjsCaps = "text" | "json"`. Peer deps: `@kyneta/schema`, `@kyneta/changefeed`, `yjs`. 217 + 4 skipped tests. → `packages/schema/backends/yjs/TECHNICAL.md`.
+**`@kyneta/yjs-schema`** — Yjs CRDT substrate. Wraps a `Y.Doc` as `Substrate<YjsVersion>` with a single-root-`Y.Map` design, `instanceof` container discrimination, imperative writes inside `Y.transact`, identity-keyed containers, and a persistent `observeDeep` event bridge. `YjsLaws = "lww" | "positional-ot" | "lww-per-key" | "lww-tag-replaced"`. Peer deps: `@kyneta/schema`, `@kyneta/changefeed`, `yjs`. 217 + 4 skipped tests. → `packages/schema/backends/yjs/TECHNICAL.md`.
 
 ### Transport + wire
 
 **`@kyneta/transport`** — Abstract transport contract. `abstract class Transport<G>`, channel lifecycle (`Generated → Connected → Established`), six-message protocol vocabulary (two lifecycle — `establish`, `depart`; four sync — `present`, `interest`, `offer`, `dismiss`), identity types, and an in-process `Bridge` transport for testing. Peer deps: `@kyneta/machine`, `@kyneta/schema`. 8 tests. → `packages/transport/TECHNICAL.md`.
 
-**`@kyneta/wire`** — Universal wire format. One `Frame<T>` abstraction (Complete or Fragment), two codecs (binary CBOR, text JSON), two framings (7-byte binary header, 2-char text prefix), fragmentation for cloud gateway limits, and a pure `feedBytes` stream-frame parser for stream-oriented transports. Internal CBOR encoder fixes a UTF-8 byte-length bug that plagued `@levischuck/tiny-cbor`. Peer dep: `@kyneta/transport`. 232 tests across 9 files. → `packages/exchange/wire/TECHNICAL.md`.
+**`@kyneta/wire`** — Universal wire format. One `Frame<T>` abstraction (Complete or Fragment), two codecs (binary CBOR, text JSON), two framings (7-byte binary header, 2-char text prefix), fragmentation for cloud gateway limits, and a pure `feedBytes` stream-frame parser for stream-oriented transports. Internal CBOR encoder fixes a UTF-8 byte-length bug that plagued `@levischuck/tiny-cbor`. Peer dep: `@kyneta/transport`. 233 tests across 9 files. → `packages/exchange/wire/TECHNICAL.md`.
 
 **`@kyneta/websocket-transport`** — WebSocket transport with three entry points (`./browser`, `./server`, `./bun`). Binary CBOR on the wire, a five-state TEA client lifecycle with a server-sent `"ready"` gate, and runtime-agnostic constructor injection (the `WebSocket` constructor is passed in; there is no `globalThis.WebSocket` default). Peer deps: `@kyneta/machine`, `@kyneta/transport`, `@kyneta/wire`. 56 tests. → `packages/exchange/transports/websocket/TECHNICAL.md`.
 
@@ -236,8 +236,8 @@ Kyneta is deeply indebted to Loro. The `@kyneta/schema` interpreter algebra + su
 
 However, kyneta is **not** "a framework on top of Loro." Three things matter:
 
-1. **Loro is one substrate among several.** `@kyneta/schema` factors state management + replication into an interface the plain substrate (authoritative), the LWW substrate (ephemeral), `@kyneta/loro-schema`, and `@kyneta/yjs-schema` all implement. Applications pick per document.
-2. **The grammar is backend-agnostic.** `@kyneta/schema`'s `Schema` type was derived by *collapsing* Loro's container/value split into one recursive grammar. First-class CRDT types (`text`, `counter`, `set`, `tree`, `movable`) are grammar nodes with `[CAPS]` phantom brands — not Loro-specific annotations. A schema using only `"text" | "json"` capabilities binds cleanly to Yjs; a schema using only `"json"` binds to plain JSON.
+1. **Loro is one substrate among several.** `@kyneta/schema` factors state management + replication into an interface that four named binding targets — `json` (authoritative, serialized writer), `ephemeral` (LWW-only, transient), `loro`, and `yjs` — all implement. Each target bundles a substrate factory, a `SyncProtocol`, and a closed set of allowed composition laws. Applications pick per document.
+2. **The grammar is backend-agnostic.** `@kyneta/schema`'s `Schema` type was derived by *collapsing* Loro's container/value split into one recursive grammar. First-class CRDT types (`text`, `counter`, `set`, `tree`, `movable`, `richtext`) are grammar nodes with `[LAWS]` phantom brands — not Loro-specific annotations. Each CRDT kind carries a composition law (`"additive"`, `"positional-ot"`, `"tree-move"`, etc.) describing how concurrent operations merge; `bind()` enforces at compile time that the target's law set covers every law the schema requires. A schema whose laws are a subset of `"lww" | "lww-per-key" | "lww-tag-replaced"` binds to any target; a schema containing `Schema.counter()` (law: `"additive"`) is rejected by `ephemeral` and `yjs` at the type level.
 3. **The sync protocol is substrate-neutral.** The exchange's six-message protocol (`establish`, `depart`, `present`, `interest`, `offer`, `dismiss`) carries `SubstratePayload` blobs opaquely. Loro-specific concerns — version vectors, WASM discrimination via `.kind()`, `applyDiff`-based writes — are confined to `@kyneta/loro-schema`.
 
 The practical consequence: Loro-backed documents and plain-JSON documents coexist in a single `Exchange`. A Yjs document synced over WebSocket and a Loro document synced over WebRTC are both just `DocRuntime`s to the synchronizer. Swapping substrates is a `bind()` change, not a framework migration.

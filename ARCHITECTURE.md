@@ -4,7 +4,7 @@
 >
 > **Design principles**:
 > - **Functional Core / Imperative Shell.** Every non-trivial module splits pure state transitions from I/O and effect interpretation. Pure cores are tested without mocks; shells are thin.
-> - **Symbol protocols over base classes.** `[CHANGEFEED]`, `[NATIVE]`, `[SUBSTRATE]`, `[KIND]`, `[CAPS]`, `[POSITION]`, `[TRANSACT]` let any value participate in a protocol without subclassing. Structural typing over nominal.
+> - **Symbol protocols over base classes.** `[CHANGEFEED]`, `[NATIVE]`, `[SUBSTRATE]`, `[KIND]`, `[LAWS]`, `[POSITION]`, `[TRANSACT]` let any value participate in a protocol without subclassing. Structural typing over nominal.
 > - **The Elm Architecture (TEA).** State machines are pure `Program<Msg, Model, Fx>` values; runtimes interpret their effects. `@kyneta/machine` is the algebra; every transport's client lifecycle and the exchange's session/sync programs are instances.
 > - **Substrate agnosticism.** `@kyneta/schema` defines the boundary; substrates (plain, Loro, Yjs) implement it. The exchange never inspects substrate-native state; transports never inspect substrate payloads.
 > - **Content-addressed identity.** Schema identities, document hashes, and CnIds are all derived from content — renames change display names, not stored data.
@@ -15,7 +15,7 @@
 > 2. **The session program never sees documents; the sync program never sees channels.** Two pure TEA programs, one serialized dispatch queue, one `sync-event` effect as the only coupling (`packages/exchange/src/session-program.ts`, `sync-program.ts`, `synchronizer.ts`).
 > 3. **`[CHANGEFEED]` is the universal reactive interface.** Every reactive value in Kyneta — schema refs, `LocalRef`, `ReactiveMap`, `Collection`, `SecondaryIndex`, `exchange.peers`, `exchange.documents` — exposes the same two-method protocol (`packages/changefeed/src/changefeed.ts`).
 > 4. **The grammar is closed; composition is open.** `Schema` has ten `[KIND]` values; users compose schemas freely, but do not add kinds (`packages/schema/src/schema.ts`).
-> 5. **Capability compatibility is checked at compile time.** `bind()` applies `RestrictCaps<S, AllowedCaps>`; binding a `Schema.counter()` to a substrate without `"counter"` in its `[CAPS]` set fails in the type system (`packages/schema/src/bind.ts`).
+> 5. **Composition-law compatibility is checked at compile time.** `bind()` applies `RestrictLaws<S, AllowedLaws>`; binding a `Schema.counter()` to a substrate without `"additive"` in its `[LAWS]` set fails in the type system (`packages/schema/src/bind.ts`).
 >
 > **Primary substrates**: plain JS (authoritative, ephemeral), Loro (collaborative CRDT), Yjs (collaborative CRDT).
 > **Primary transports**: WebSocket, SSE, WebRTC, Unix socket, in-process bridge.
@@ -46,9 +46,9 @@ Kyneta is a framework for collaborative, substrate-agnostic documents. You defin
 | **Changefeed** | The reactive protocol: `{ current, subscribe }` behind the `[CHANGEFEED]` symbol. Every reactive value in Kyneta implements it. |
 | **Exchange** | The top-level sync runtime — one per participant. Holds transports, stores, governance, and `DocRuntime`s. |
 | **Transport** | The abstract interface between exchange and wire. WebSocket, SSE, WebRTC, Unix socket, in-process bridge — each implements it. |
-| **Session / Sync programs** | Two pure TEA programs inside the exchange — session owns channel topology + peers; sync owns document convergence + merge strategies. |
+| **Session / Sync programs** | Two pure TEA programs inside the exchange — session owns channel topology + peers; sync owns document convergence + sync protocols. |
 | **Substrate payload** | Opaque state-transfer blob with `kind: "entirety" \| "since"`. Produced by substrates, carried by transports, consumed by substrates. The exchange never opens it. |
-| **Merge strategy** | `"collaborative" \| "authoritative" \| "ephemeral"` — tells the exchange which sync protocol shape to run per document. |
+| **Sync protocol** | A structured record with `writerModel`, `delivery`, and `durability` axes. Three named constants — `SYNC_COLLABORATIVE`, `SYNC_AUTHORITATIVE`, `SYNC_EPHEMERAL` — tell the exchange which sync shape to run per document. Each binding target (`json`, `ephemeral`, `loro`, `yjs`) has a fixed sync protocol. |
 
 ## Package roles
 

@@ -4,9 +4,9 @@
 //
 //   Wires together the Exchange documents, input hooks, and UI components.
 //
-//   Two documents, two merge strategies:
-//     • game-state (bindPlain, sequential) — server-authoritative cars + scores
-//     • input:${peerId} (bindEphemeral, LWW) — this player's joystick input
+//   Two documents, two binding targets:
+//     • game-state (json.bind, authoritative) — server-authoritative cars + scores
+//     • input:${peerId} (ephemeral.bind, LWW) — this player's joystick input
 //
 //   The client reads game state reactively via useValue() and writes
 //   input via change() through the useInputSender hook.
