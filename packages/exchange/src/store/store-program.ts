@@ -350,7 +350,11 @@ export const storeProgram: Program<StoreInput, StoreModel, StoreEffect> = {
             idleVersion,
             existing.queued,
           )
-          return [withDoc(model, msg.docId, phase), errorEffect, ...queuedEffects]
+          return [
+            withDoc(model, msg.docId, phase),
+            errorEffect,
+            ...queuedEffects,
+          ]
         }
 
         const phase: DocPhase = { status: "idle", version: idleVersion }

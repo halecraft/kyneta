@@ -15,10 +15,10 @@
 
 import {
   type DocId,
+  resolveMetaFromBatch,
   type Store,
   type StoreMeta,
   type StoreRecord,
-  resolveMetaFromBatch,
 } from "@kyneta/exchange"
 import { ClassicLevel } from "classic-level"
 

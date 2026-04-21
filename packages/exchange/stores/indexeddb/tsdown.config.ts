@@ -1,9 +1,8 @@
 import { defineConfig } from "tsdown"
 
 export default defineConfig({
-  entry: ["src/client.ts", "src/server.ts", "src/express.ts"],
+  entry: ["src/index.ts"],
   dts: true,
   sourcemap: true,
   fixedExtension: false,
-  deps: { onlyBundle: false },
 })

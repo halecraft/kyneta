@@ -4,18 +4,18 @@
 // asserts on the resulting [StoreModel, ...StoreEffect[]] tuples. No I/O,
 // no mocks — pure state transitions.
 
+import type { SubstratePayload } from "@kyneta/schema"
+import type { DocId } from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
+import type { StoreMeta } from "../store.js"
 import {
   allDocsIdle,
-  storeProgram,
   type DocPhase,
   type StoreEffect,
   type StoreInput,
   type StoreModel,
+  storeProgram,
 } from "../store-program.js"
-import type { StoreMeta, StoreRecord } from "../store.js"
-import type { SubstratePayload } from "@kyneta/schema"
-import type { DocId } from "@kyneta/transport"
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -271,9 +271,7 @@ describe("storeProgram", () => {
     expect(fx.docId).toBe("doc-1")
     expect(
       (fx as Extract<StoreEffect, { type: "persist-append" }>).records,
-    ).toEqual([
-      { kind: "entry", payload: fakeDelta("delta-2"), version: "v3" },
-    ])
+    ).toEqual([{ kind: "entry", payload: fakeDelta("delta-2"), version: "v3" }])
   })
 
   // -----------------------------------------------------------------------
@@ -412,14 +410,12 @@ describe("storeProgram", () => {
 
     // First effect is the store-error, second is the queued persist-append
     expect(effects).toHaveLength(2)
-    expect(effects[0]!.type).toBe("store-error")
-    expect(effects[1]!.type).toBe("persist-append")
-    expect(effects[1]!.docId).toBe("doc-1")
+    expect(effects[0]?.type).toBe("store-error")
+    expect(effects[1]?.type).toBe("persist-append")
+    expect(effects[1]?.docId).toBe("doc-1")
     expect(
       (effects[1] as Extract<StoreEffect, { type: "persist-append" }>).records,
-    ).toEqual([
-      { kind: "entry", payload: fakeDelta("delta-2"), version: "v3" },
-    ])
+    ).toEqual([{ kind: "entry", payload: fakeDelta("delta-2"), version: "v3" }])
   })
 
   // -----------------------------------------------------------------------
@@ -794,11 +790,10 @@ describe("storeProgram", () => {
 
     // store-error first, then persist-replace for the queued compact
     expect(effects).toHaveLength(2)
-    expect(effects[0]!.type).toBe("store-error")
-    expect(effects[1]!.type).toBe("persist-replace")
+    expect(effects[0]?.type).toBe("store-error")
+    expect(effects[1]?.type).toBe("persist-replace")
     expect(
-      (effects[1] as Extract<StoreEffect, { type: "persist-replace" }>)
-        .records,
+      (effects[1] as Extract<StoreEffect, { type: "persist-replace" }>).records,
     ).toEqual([
       { kind: "meta", meta: plainMeta },
       { kind: "entry", payload: fakePayload("compacted"), version: "v3" },

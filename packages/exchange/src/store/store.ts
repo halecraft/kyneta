@@ -213,7 +213,9 @@ export function resolveMetaFromBatch(
             `existing [${existingMeta.replicaType}] vs incoming [${incoming.replicaType}]`,
         )
       }
-      if (!syncProtocolsEqual(incoming.syncProtocol, existingMeta.syncProtocol)) {
+      if (
+        !syncProtocolsEqual(incoming.syncProtocol, existingMeta.syncProtocol)
+      ) {
         throw new Error(
           `Store: syncProtocol mismatch for document — ` +
             `existing ${JSON.stringify(existingMeta.syncProtocol)} vs ` +

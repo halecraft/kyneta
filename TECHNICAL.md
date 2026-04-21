@@ -39,14 +39,15 @@ Every test count in every per-package `TECHNICAL.md` agrees with this table. Run
 | `@kyneta/sse-transport` | 44 | 0 | 3 |
 | `@kyneta/webrtc-transport` | 27 | 0 | 2 |
 | `@kyneta/unix-socket-transport` | 82 | 0 | 5 |
-| `@kyneta/leveldb-store` | 24 | 0 | 1 |
-| `@kyneta/exchange` | 420 | 0 | 17 |
+| `@kyneta/leveldb-store` | 34 | 0 | 1 |
+| `@kyneta/indexeddb-store` | 23 | 0 | 1 |
+| `@kyneta/exchange` | 449 | 0 | 17 |
 | `@kyneta/index` | 143 | 0 | 8 |
 | `@kyneta/react` | 84 | 0 | 7 |
 | `@kyneta/compiler` (exp.) | 547 | 0 | 13 |
 | `@kyneta/cast` (exp.) | 634 | 0 | 27 |
 | `@kyneta/perspective` (exp., private) | 1,374 | 0 | 35 |
-| **Total** | **6,087** | **16** | **213** |
+| **Total** | **6,149** | **16** | **214** |
 
 Two additional test suites live outside the main package graph:
 - `tests/exchange-websocket` — E2E WebSocket sync over `bun test` (separate runtime).
@@ -85,7 +86,9 @@ Two additional test suites live outside the main package graph:
 
 **`@kyneta/unix-socket-transport`** — Unix-domain-socket transport for server-to-server sync. Stream-oriented framing via `feedBytes` (no gateway caps, no fragmentation). Two pure programs: a client lifecycle + a leaderless-peer negotiator that chooses listen-or-connect based on probing the socket path. Node + Bun wrappers. Peer deps: `@kyneta/machine`, `@kyneta/transport`, `@kyneta/wire`. 82 tests across 5 files. → `packages/exchange/transports/unix-socket/TECHNICAL.md`.
 
-**`@kyneta/leveldb-store`** — LevelDB persistence backend. Implements the `Store` interface using `classic-level`. FoundationDB-style null-byte-separated key space; zero-padded monotonic `seqNo` per doc; binary envelope for `StoreEntry`; atomic `replace` via LevelDB batch. Peer deps: `@kyneta/exchange`, `@kyneta/schema`; runtime dep: `classic-level`. 24 tests. → `packages/exchange/stores/leveldb/TECHNICAL.md`.
+**`@kyneta/leveldb-store`** — LevelDB persistence backend. Implements the `Store` interface using `classic-level`. FoundationDB-style null-byte-separated key space; zero-padded monotonic `seqNo` per doc; binary envelope for `StoreRecord`; atomic `replace` via LevelDB batch. Peer deps: `@kyneta/exchange`, `@kyneta/schema`; runtime dep: `classic-level`. 34 tests. → `packages/exchange/stores/leveldb/TECHNICAL.md`.
+
+**`@kyneta/indexeddb-store`** — IndexedDB persistence backend for browser-side storage. Implements the `Store` interface using the browser's native IndexedDB API. Two object stores (`meta`, `records`) with structured clone — no binary envelope, no key engineering. Auto-increment keys preserve insertion order; single `readwrite` transactions guarantee atomicity. Zero runtime dependencies. Peer deps: `@kyneta/exchange`, `@kyneta/schema`. 23 tests. → `packages/exchange/stores/indexeddb/TECHNICAL.md`.
 
 ### Exchange + reactive surface
 

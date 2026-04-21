@@ -3,7 +3,7 @@
 > **Package**: `@kyneta/exchange`
 > **Role**: Substrate-agnostic document sync runtime. Orchestrates channel topology, document convergence, and persistence above any transport and any `@kyneta/schema` substrate — via two pure TEA programs (session + sync), a Synchronizer shell that owns the serialized dispatch queue, and an Exchange façade that adds storage, governance, capability negotiation, and reactive peer/document collections.
 > **Depends on**: `@kyneta/schema` (peer), `@kyneta/changefeed` (peer), `@kyneta/transport` (direct)
-> **Depended on by**: `@kyneta/react` (peer), `@kyneta/leveldb-store`, application code, every transport package (dev)
+> **Depended on by**: `@kyneta/react` (peer), `@kyneta/leveldb-store`, `@kyneta/indexeddb-store`, application code, every transport package (dev)
 > **Canonical symbols**: `Exchange`, `ExchangeParams`, `Synchronizer`, `DocRuntime`, `SessionModel`, `SessionInput`, `SessionEffect`, `SyncModel`, `SyncInput`, `SyncEffect`, `updateSession`, `updateSync`, `Governance`, `Policy`, `composeGate`, `GatePredicate`, `EpochBoundaryPredicate`, `Line`, `LineProtocol`, `Capabilities`, `ReplicaKey`, `DEFAULT_REPLICAS`, `Interpret`, `Replicate`, `Defer`, `Reject`, `Disposition`, `PeerIdentityInput`, `PeerChange`, `DocChange`, `DocInfo`, `PeerState`, `ReadyState`, `PeerDocSyncState`, `Store`, `StoreRecord`, `StoreMeta`, `DocMetadata`, `persistentPeerId`, `releasePeerId`, `resolveLease`, `LeaseState`, `sync` (helper), `SyncProtocol`, `SYNC_COLLABORATIVE`, `SYNC_AUTHORITATIVE`, `SYNC_EPHEMERAL`, `requiresBidirectionalSync`, `BindingTarget`, `createBindingTarget`
 > **Key invariant(s)**:
 > 1. The exchange never inspects `SubstratePayload` contents. Payloads are opaque blobs carried by `offer` messages; only the substrate produces and consumes them.
@@ -441,7 +441,7 @@ This is the reactive surface for `@kyneta/react`'s `useSyncStatus` and similar h
 
 ## Storage
 
-Source: `src/store/*.ts`, `src/store-program.ts`, `src/synchronizer.ts` → `#drainStateAdvanced`.
+Source: `src/store/*.ts`, `src/store/store-program.ts`, `src/exchange.ts` → store-program executor.
 
 A `Store` is a persistence interface this package defines. A `Store` instance must be owned by exactly one `Exchange` for its entire lifetime — exclusive ownership ensures that version tracking, append ordering, and compaction are never corrupted by concurrent access from a second exchange.
 
@@ -471,44 +471,53 @@ The `StoreRecord` tagged union carries either document metadata (`"meta"`) or a 
 
 ### Multi-store semantics
 
-Applications pass zero or more stores in `ExchangeParams.stores`. Writes fan out to all stores. Reads use first-hit: stores are tried in array order; the first store where `currentMeta(docId)` returns non-null is used for hydration. `@kyneta/leveldb-store` is the primary production implementation; the in-memory store in `src/store/memory.ts` is used for tests and browser-ephemeral cases.
+Applications pass zero or more stores in `ExchangeParams.stores`. Writes fan out to all stores. Reads use first-hit: stores are tried in array order; the first store where `currentMeta(docId)` returns non-null is used for hydration. Two production implementations exist: `@kyneta/leveldb-store` for server-side (LevelDB via `classic-level`) and `@kyneta/indexeddb-store` for browser-side (IndexedDB). The in-memory store in `src/store/in-memory-store.ts` is used for tests and browser-ephemeral cases.
 
 ### The store-program
 
-Persistence is driven by a pure Mealy machine: `Program<StoreInput, StoreModel, StoreEffect>`. Like the session and sync programs, the store-program is a pure function that the Synchronizer shell executes.
+Persistence is driven by a pure Mealy machine: `Program<StoreInput, StoreModel, StoreEffect>` in `src/store/store-program.ts`. Like the session and sync programs, the store-program is a pure function; the Exchange constructor instantiates it via `createObservableProgram` and provides an executor that interprets effects as actual store I/O.
 
 **Input vocabulary:**
 
 | Input | Trigger |
 |-------|---------|
-| `write-requested` | Quiescence drain finds a doc in `#dirtyForPersistence` |
-| `write-succeeded` | Store `.append()` resolved successfully |
-| `write-failed` | Store `.append()` rejected |
+| `register` | First boot — doc not found in any store during hydration |
+| `hydrated` | Re-boot — doc loaded from a store during hydration |
+| `state-advanced` | Exchange's `onStateAdvanced` callback fires after a local or remote mutation |
+| `compact` | `exchange.compact(docId)` called |
+| `destroy` | `exchange.destroy(docId)` called |
+| `write-succeeded` | Store `.append()` or `.replace()` resolved successfully |
+| `write-failed` | Store `.append()` or `.replace()` rejected |
 
 **Effect vocabulary:**
 
 | Effect | Executed by shell |
 |--------|-------------------|
-| `persist` | Calls `substrate.exportSince(lastPersistedVersion)` → `StoreRecord`, then `store.append(docId, record)` on each registered store |
-| `notify-error` | Calls the `onStoreError` callback |
+| `persist-append` | Calls `store.append(docId, record)` for each record on each registered store |
+| `persist-replace` | Calls `store.replace(docId, records)` on each registered store |
+| `persist-delete` | Calls `store.delete(docId)` on each registered store |
+| `store-error` | Calls the `onStoreError` callback |
 
-**Composition with quiescence drain.** The Synchronizer's `#drainStateAdvanced` dispatches `write-requested` inputs into the store-program. On each quiescence cycle, the shell invokes `onStateAdvanced` which flushes all pending store writes. The store-program emits `persist` effects; the shell executes them and feeds back `write-succeeded` or `write-failed`.
+**Composition with the Exchange.** The Exchange constructor registers an `onStateAdvanced` callback on the Synchronizer. When a document's state advances (local mutation or remote merge), the callback computes `exportSince(confirmedVersion)` to get the delta, then dispatches `{ type: 'state-advanced', docId, delta, newVersion }` into the store-program. The store-program emits `persist-append` effects; the executor calls `store.append(docId, record)` on each store and feeds back `write-succeeded` or `write-failed`.
 
-**Self-healing version tracking.** The store-program's `lastPersistedVersion` only advances on `write-succeeded`. If a write fails, the old version is preserved so the next `exportSince` recomputes the full delta from the last known-good point. This means transient store failures (disk full, network blip on a remote store) self-heal on the next successful write without data loss.
+**Per-doc phase tracking.** Each document tracked by the store-program is in one of two phases: `idle` (version confirmed, ready for next write) or `writing` (I/O in flight, with an optional queued input). When a `state-advanced` arrives during `writing`, the delta is queued (latest-wins) and replayed on `write-succeeded`. This ensures at most one in-flight write per document.
+
+**Self-healing version tracking.** The store-program's confirmed version only advances on `write-succeeded`. If a write fails, the old version is preserved so the next `exportSince` recomputes the full delta from the last known-good point. This means transient store failures (disk full, `QuotaExceededError` on IndexedDB, network blip on a remote store) self-heal on the next successful write without data loss.
 
 ### `onStoreError` callback
 
-`ExchangeParams.onStoreError` is an optional callback invoked for any store write failure. Signature: `(error: unknown, docId: DocId, store: Store) => void`. Default: `console.warn`. This allows applications to surface persistence failures to monitoring, retry infrastructure, or user-facing error states without coupling the store-program to any particular error-handling strategy.
+`ExchangeParams.onStoreError` is an optional callback invoked for any store operation failure. Signature: `(docId: DocId, operation: string, error: unknown) => void`. Default: `console.warn`. This allows applications to surface persistence failures to monitoring, retry infrastructure, or user-facing error states without coupling the store-program to any particular error-handling strategy.
 
 ### Unified persistence via `state-advanced`
 
-Every local mutation and every remote `offer` merge drives the same persistence path. When `substrate.merge(payload)` completes (whether on `"local"` or `"sync"` origin), the Synchronizer registers the doc as pending in `#dirtyForPersistence`. At quiescence, `#drainStateAdvanced`:
+Every local mutation and every remote `offer` merge drives the same persistence path. The Exchange's `onStateAdvanced` callback:
 
-1. Snapshots the pending set.
-2. Dispatches `write-requested` into the store-program for each dirty doc.
-3. The store-program emits `persist` effects; the shell calls `substrate.exportSince(lastPersistedVersion)` → `StoreRecord`.
-4. `store.append(docId, record)` on each registered store.
-5. On success, feeds `write-succeeded` back into the store-program, which advances `lastPersistedVersion`.
+1. Reads the store-program's confirmed version for the doc (`phase.version`).
+2. Calls `replica.exportSince(confirmedVersion)` to compute the delta since the last persisted point.
+3. Dispatches `{ type: 'state-advanced', docId, delta, newVersion }` into the store-program.
+4. The store-program emits a `persist-append` effect with the delta as an `entry` record.
+5. The executor fans out `store.append(docId, record)` to each registered store.
+6. On success, feeds `write-succeeded` back into the store-program, which advances the confirmed version.
 
 This unifies the persistence path: `exportSince` returns entirety or delta as appropriate, and the store's `append` semantic handles both.
 

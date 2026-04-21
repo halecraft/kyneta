@@ -131,10 +131,10 @@ export function describeStore(
 
       const meta = await backend.currentMeta("doc-1")
       expect(meta).not.toBeNull()
-      expect(meta!.schemaHash).toBe("00updated")
-      // Immutable fields unchanged
-      expect(meta!.replicaType).toEqual(plainMeta.replicaType)
-      expect(meta!.syncProtocol).toEqual(plainMeta.syncProtocol)
+      if (meta === null) return
+      expect(meta.schemaHash).toBe("00updated")
+      expect(meta.replicaType).toEqual(plainMeta.replicaType)
+      expect(meta.syncProtocol).toEqual(plainMeta.syncProtocol)
     })
 
     // =======================================================================
@@ -180,9 +180,9 @@ export function describeStore(
       const records = await collectAll(backend.loadAll("doc-1"))
       expect(records).toHaveLength(4)
       expect(records[0]).toEqual(meta)
-      expect(records[0]!.kind).toBe("meta")
+      expect(records[0]?.kind).toBe("meta")
       expect(records[1]).toEqual(e1)
-      expect(records[1]!.kind).toBe("entry")
+      expect(records[1]?.kind).toBe("entry")
       expect(records[2]).toEqual(e2)
       expect(records[3]).toEqual(e3)
     })
@@ -245,8 +245,8 @@ export function describeStore(
 
       const meta = await backend.currentMeta("doc-1")
       expect(meta).not.toBeNull()
-      // Last meta in batch wins
-      expect(meta!.schemaHash).toBe("hash-b")
+      if (meta === null) return
+      expect(meta.schemaHash).toBe("hash-b")
     })
 
     // =======================================================================
@@ -312,14 +312,14 @@ export function describeStore(
       const records = await collectAll(backend.loadAll("doc-1"))
       expect(records).toHaveLength(3)
       expect(records[0]).toEqual(snapshot)
-      expect(records[1]!.kind).toBe("entry")
-      expect((records[1] as { kind: "entry"; version: string }).version).toBe(
-        "3",
-      )
-      expect(records[2]!.kind).toBe("entry")
-      expect((records[2] as { kind: "entry"; version: string }).version).toBe(
-        "4",
-      )
+      expect(records[1]?.kind).toBe("entry")
+      if (records[1]?.kind === "entry") {
+        expect(records[1].version).toBe("3")
+      }
+      expect(records[2]?.kind).toBe("entry")
+      if (records[2]?.kind === "entry") {
+        expect(records[2].version).toBe("4")
+      }
     })
 
     // =======================================================================
@@ -337,14 +337,14 @@ export function describeStore(
 
       // loadAll for "doc" must not include records from "doc-extra" or "doc2"
       const docRecords = await collectAll(backend.loadAll("doc"))
-      const docEntries = docRecords.filter((r) => r.kind === "entry")
+      const docEntries = docRecords.filter(r => r.kind === "entry")
       expect(docEntries).toHaveLength(1)
       expect(
         (docEntries[0] as { kind: "entry"; version: string }).version,
       ).toBe("a")
 
       const extraRecords = await collectAll(backend.loadAll("doc-extra"))
-      const extraEntries = extraRecords.filter((r) => r.kind === "entry")
+      const extraEntries = extraRecords.filter(r => r.kind === "entry")
       expect(extraEntries).toHaveLength(1)
       expect(
         (extraEntries[0] as { kind: "entry"; version: string }).version,
@@ -363,7 +363,7 @@ export function describeStore(
       await backend.append("doc-1", entry)
 
       const records = await collectAll(backend.loadAll("doc-1"))
-      const entries = records.filter((r) => r.kind === "entry")
+      const entries = records.filter(r => r.kind === "entry")
       expect(entries).toHaveLength(1)
 
       const loaded = entries[0] as {
@@ -392,23 +392,21 @@ export function describeStore(
       await backend.append("doc-1", binaryEntry)
 
       const records = await collectAll(backend.loadAll("doc-1"))
-      const entries = records.filter((r) => r.kind === "entry") as Array<{
-        kind: "entry"
-        payload: { kind: string; encoding: string; data: unknown }
-        version: string
-      }>
+      const entries = records.filter(r => r.kind === "entry")
       expect(entries).toHaveLength(2)
 
-      // JSON entry
-      expect(entries[0]!.payload.encoding).toBe("json")
-      expect(typeof entries[0]!.payload.data).toBe("string")
-      expect(entries[0]!.version).toBe("v1")
+      const loadedJson = entries[0]
+      const loadedBinary = entries[1]
+      if (loadedJson?.kind !== "entry" || loadedBinary?.kind !== "entry") return
 
-      // Binary entry
-      expect(entries[1]!.payload.encoding).toBe("binary")
-      expect(entries[1]!.payload.data).toBeInstanceOf(Uint8Array)
-      expect(entries[1]!.payload.data).toEqual(new Uint8Array([10, 20, 30]))
-      expect(entries[1]!.version).toBe("v2")
+      expect(loadedJson.payload.encoding).toBe("json")
+      expect(typeof loadedJson.payload.data).toBe("string")
+      expect(loadedJson.version).toBe("v1")
+
+      expect(loadedBinary.payload.encoding).toBe("binary")
+      expect(loadedBinary.payload.data).toBeInstanceOf(Uint8Array)
+      expect(loadedBinary.payload.data).toEqual(new Uint8Array([10, 20, 30]))
+      expect(loadedBinary.version).toBe("v2")
     })
   })
 }

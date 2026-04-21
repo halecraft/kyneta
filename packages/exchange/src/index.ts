@@ -198,11 +198,11 @@ export { hasSync, sync } from "./sync.js"
 // ---------------------------------------------------------------------------
 
 export type { Store, StoreMeta, StoreRecord } from "./store/index.js"
-export { resolveMetaFromBatch } from "./store/index.js"
 export {
   createInMemoryStore,
   InMemoryStore,
   type InMemoryStoreData,
+  resolveMetaFromBatch,
 } from "./store/index.js"
 
 // ---------------------------------------------------------------------------

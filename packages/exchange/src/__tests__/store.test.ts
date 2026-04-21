@@ -146,10 +146,7 @@ describe("resolveMetaFromBatch", () => {
       syncProtocol: SYNC_COLLABORATIVE,
       schemaHash: "exotic-hash",
     }
-    const result = resolveMetaFromBatch(
-      [{ kind: "meta", meta: exotic }],
-      null,
-    )
+    const result = resolveMetaFromBatch([{ kind: "meta", meta: exotic }], null)
     expect(result).toEqual(exotic)
   })
 })

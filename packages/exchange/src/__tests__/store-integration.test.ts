@@ -475,7 +475,7 @@ describe("onStoreError callback", () => {
 
     // The store-program should have reported the failure
     expect(errors.length).toBeGreaterThan(0)
-    expect(errors[0]!.docId).toBe("doc-1")
+    expect(errors[0]?.docId).toBe("doc-1")
   })
 })
 

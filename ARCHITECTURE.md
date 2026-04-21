@@ -65,6 +65,7 @@ Kyneta is a framework for collaborative, substrate-agnostic documents. You defin
 | `@kyneta/webrtc-transport` | BYODC WebRTC transport — the application owns the data channel; this attaches. | `createWebrtcTransport`, `DataChannelLike` |
 | `@kyneta/unix-socket-transport` | Unix-domain-socket transport for server-to-server sync + leaderless peer negotiation. | `createUnixSocketClient`, `UnixSocketServerTransport`, `createUnixSocketPeer` |
 | `@kyneta/leveldb-store` | LevelDB `Store` implementation for server-side persistence. | `createLevelDBStore` |
+| `@kyneta/indexeddb-store` | IndexedDB `Store` implementation for browser-side persistence. | `createIndexedDBStore`, `deleteIndexedDBStore` |
 | `@kyneta/exchange` | Sync runtime — TEA session + sync programs, governance, capabilities, Line, reactive peer/doc collections. | `Exchange`, `Policy`, `Governance`, `Line`, `LineProtocol` |
 | `@kyneta/index` | DBSP-grounded reactive indexing — ℤ-set algebra, `Source`, `Collection`, `SecondaryIndex`, `JoinIndex`. | `Source.of`, `Collection.from`, `Index.by`, `Index.join` |
 | `@kyneta/react` | React bindings — hooks + text-adapter, all `useSyncExternalStore` over pure stores. | `ExchangeProvider`, `useValue`, `useDocument`, `useSyncStatus`, `useText` |
@@ -89,7 +90,8 @@ Kyneta is a framework for collaborative, substrate-agnostic documents. You defin
    │   @kyneta/exchange ◄─────────────────────────────┤
    │      │                                           ├─► @kyneta/sse-transport
    │      ├─► @kyneta/leveldb-store                   ├─► @kyneta/webrtc-transport
-   │      └─► @kyneta/react (+ react)                 └─► @kyneta/unix-socket-transport
+   │      ├─► @kyneta/indexeddb-store                 └─► @kyneta/unix-socket-transport
+   │      └─► @kyneta/react (+ react)
    │
 @kyneta/machine (zero deps) ─► @kyneta/transport + the four transport clients
 

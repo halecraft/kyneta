@@ -114,7 +114,7 @@ const registeredKeys = new Set<string>()
  * @param storageKey - The localStorage namespace. Defaults to `"kyneta-peer-id"`.
  */
 export function releasePeerId(storageKey = "kyneta-peer-id"): void {
-  localStorage.removeItem(storageKey + ":held")
+  localStorage.removeItem(`${storageKey}:held`)
 }
 
 /**
@@ -145,8 +145,8 @@ export function releasePeerId(storageKey = "kyneta-peer-id"): void {
  * ```
  */
 export function persistentPeerId(storageKey = "kyneta-peer-id"): string {
-  const heldKey = storageKey + ":held"
-  const tokenKey = storageKey + ":tk"
+  const heldKey = `${storageKey}:held`
+  const tokenKey = `${storageKey}:tk`
 
   // ── GATHER ──────────────────────────────────────────────────────────────
 

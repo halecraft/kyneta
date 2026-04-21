@@ -56,10 +56,10 @@ import { Governance } from "./governance.js"
 import type { Store, StoreMeta } from "./store/store.js"
 import {
   allDocsIdle,
-  storeProgram,
   type StoreEffect,
   type StoreInput,
   type StoreModel,
+  storeProgram,
 } from "./store/store-program.js"
 import { registerSync } from "./sync.js"
 import { type DocRuntime, Synchronizer } from "./synchronizer.js"
@@ -448,9 +448,7 @@ export class Exchange {
             }
             case "persist-delete": {
               const { docId } = effect
-              Promise.all(
-                this.#stores.map(store => store.delete(docId)),
-              ).then(
+              Promise.all(this.#stores.map(store => store.delete(docId))).then(
                 () => {}, // No write-succeeded for destroy
                 error => errorHandler(docId, "delete", error),
               )
