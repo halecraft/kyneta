@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/machine",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "description": "Universal Mealy machine algebra — Program, Effect, Dispatch, runtime",
   "author": "Duane Johnson",
   "license": "MIT",
