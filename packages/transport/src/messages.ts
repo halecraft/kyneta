@@ -13,11 +13,7 @@
 // These are uniform across all sync protocols. The sync algorithm
 // determines *when* and *how* they are sent, not their shape.
 
-import type {
-  ReplicaType,
-  SubstratePayload,
-  SyncProtocol,
-} from "@kyneta/schema"
+import type { DocMetadata, SubstratePayload } from "@kyneta/schema"
 import type { DocId, PeerIdentityDetails } from "./types.js"
 
 // ---------------------------------------------------------------------------
@@ -55,13 +51,7 @@ export type DepartMsg = {
  */
 export type PresentMsg = {
   type: "present"
-  docs: Array<{
-    docId: DocId
-    replicaType: ReplicaType
-    syncProtocol: SyncProtocol
-    schemaHash: string
-    supportedHashes?: readonly string[]
-  }>
+  docs: Array<{ docId: DocId } & DocMetadata>
 }
 
 /**

@@ -18,9 +18,13 @@ import {
   requiresBidirectionalSync,
 } from "@kyneta/schema"
 import type {
+  DismissMsg,
   DocId,
+  InterestMsg,
+  OfferMsg,
   PeerId,
   PeerIdentityDetails,
+  PresentMsg,
   SyncMsg,
 } from "@kyneta/transport"
 import { collapse, type Transition } from "./program-types.js"
@@ -336,29 +340,22 @@ function announceDoc(
   const allPeers = getAvailablePeers(model)
   const peerIds = filterPeersByShare(model, allPeers, docId, canShare)
   if (peerIds.length === 0) return { peerIds, present: undefined }
-  const docEntry: {
-    docId: DocId
-    replicaType: ReplicaType
-    syncProtocol: SyncProtocol
-    schemaHash: string
-    supportedHashes?: readonly string[]
-  } = {
-    docId,
-    replicaType,
-    syncProtocol,
-    schemaHash,
-  }
-  // Only include supportedHashes if it carries more info than the primary hash alone
-  if (supportedHashes && supportedHashes.length > 1) {
-    docEntry.supportedHashes = supportedHashes
-  }
+  const docs: PresentMsg["docs"] = [
+    {
+      docId,
+      replicaType,
+      syncProtocol,
+      schemaHash,
+      // Only include supportedHashes if it carries more info than the primary hash alone
+      ...(supportedHashes && supportedHashes.length > 1
+        ? { supportedHashes }
+        : undefined),
+    },
+  ]
   const present: SyncEffect = {
     type: "send-to-peers",
     to: peerIds,
-    message: {
-      type: "present",
-      docs: [docEntry],
-    },
+    message: { type: "present", docs },
   }
   return { peerIds, present }
 }
@@ -374,27 +371,20 @@ function buildPresent(
   model: SyncModel,
 ): SyncEffect | undefined {
   if (docIds.length === 0) return undefined
-  const docs = docIds
+  const docs: PresentMsg["docs"] = docIds
     .map(docId => {
       const entry = model.documents.get(docId)
       if (!entry) return null
-      const doc: {
-        docId: DocId
-        replicaType: ReplicaType
-        syncProtocol: SyncProtocol
-        schemaHash: string
-        supportedHashes?: readonly string[]
-      } = {
+      return {
         docId,
         replicaType: entry.replicaType,
         syncProtocol: entry.syncProtocol,
         schemaHash: entry.schemaHash,
+        // Only include supportedHashes if it carries more info than the primary hash alone
+        ...(entry.supportedHashes && entry.supportedHashes.length > 1
+          ? { supportedHashes: entry.supportedHashes }
+          : undefined),
       }
-      // Only include supportedHashes if it carries more info than the primary hash alone
-      if (entry.supportedHashes && entry.supportedHashes.length > 1) {
-        doc.supportedHashes = entry.supportedHashes
-      }
-      return doc
     })
     .filter((d): d is NonNullable<typeof d> => d !== null)
   if (docs.length === 0) return undefined
@@ -411,12 +401,7 @@ function buildPresent(
  */
 function buildInterestResponse(
   fromPeerId: PeerId,
-  message: {
-    type: "interest"
-    docId: DocId
-    version?: string
-    reciprocate?: boolean
-  },
+  message: InterestMsg,
   docEntry: DocEntry,
 ): SyncEffect[] {
   const effects: SyncEffect[] = []
@@ -646,16 +631,7 @@ function handlePeerDeparted(peerId: PeerId, model: SyncModel): SyncTransition {
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
 function handleDocEnsure(
-  msg: {
-    type: "sync/doc-ensure"
-    docId: DocId
-    mode: "interpret" | "replicate"
-    version: string
-    replicaType: ReplicaType
-    syncProtocol: SyncProtocol
-    schemaHash: string
-    supportedHashes?: readonly string[]
-  },
+  msg: Extract<SyncInput, { type: "sync/doc-ensure" }>,
   model: SyncModel,
   canShare: SyncPredicate,
 ): SyncTransition {
@@ -714,14 +690,7 @@ function handleDocEnsure(
 }
 
 function handleDocDefer(
-  msg: {
-    type: "sync/doc-defer"
-    docId: DocId
-    replicaType: ReplicaType
-    syncProtocol: SyncProtocol
-    schemaHash: string
-    supportedHashes?: readonly string[]
-  },
+  msg: Extract<SyncInput, { type: "sync/doc-defer" }>,
   model: SyncModel,
   canShare: SyncPredicate,
 ): SyncTransition {
@@ -755,7 +724,7 @@ function handleDocDefer(
 }
 
 function handleLocalDocChange(
-  msg: { type: "sync/local-doc-change"; docId: DocId; version: string },
+  msg: Extract<SyncInput, { type: "sync/local-doc-change" }>,
   model: SyncModel,
   canShare: SyncPredicate,
 ): SyncTransition {
@@ -773,7 +742,7 @@ function handleLocalDocChange(
 }
 
 function handleDocDelete(
-  msg: { type: "sync/doc-delete"; docId: DocId },
+  msg: Extract<SyncInput, { type: "sync/doc-delete" }>,
   model: SyncModel,
 ): SyncTransition {
   const documents = new Map(model.documents)
@@ -782,7 +751,7 @@ function handleDocDelete(
 }
 
 function handleDocDismiss(
-  msg: { type: "sync/doc-dismiss"; docId: DocId },
+  msg: Extract<SyncInput, { type: "sync/doc-dismiss" }>,
   model: SyncModel,
   canShare: SyncPredicate,
 ): SyncTransition {
@@ -806,12 +775,7 @@ function handleDocDismiss(
 }
 
 function handleDocImported(
-  msg: {
-    type: "sync/doc-imported"
-    docId: DocId
-    version: string
-    fromPeerId: PeerId
-  },
+  msg: Extract<SyncInput, { type: "sync/doc-imported" }>,
   model: SyncModel,
   canShare: SyncPredicate,
 ): SyncTransition {
@@ -856,16 +820,7 @@ function handleDocImported(
 
 function handlePresent(
   from: PeerId,
-  message: {
-    type: "present"
-    docs: Array<{
-      docId: DocId
-      replicaType: ReplicaType
-      syncProtocol: SyncProtocol
-      schemaHash: string
-      supportedHashes?: readonly string[]
-    }>
-  },
+  message: PresentMsg,
   model: SyncModel,
   canShare: SyncPredicate,
 ): SyncTransition {
@@ -971,12 +926,7 @@ function handlePresent(
 
 function handleInterest(
   from: PeerId,
-  message: {
-    type: "interest"
-    docId: DocId
-    version?: string
-    reciprocate?: boolean
-  },
+  message: InterestMsg,
   model: SyncModel,
 ): SyncTransition {
   const peerState = model.peers.get(from)
@@ -996,12 +946,7 @@ function handleInterest(
  */
 function handleInterestForKnownDoc(
   fromPeerId: PeerId,
-  message: {
-    type: "interest"
-    docId: DocId
-    version?: string
-    reciprocate?: boolean
-  },
+  message: InterestMsg,
   docEntry: DocEntry,
   model: SyncModel,
 ): SyncTransition {
@@ -1032,13 +977,7 @@ function handleInterestForKnownDoc(
 
 function handleOffer(
   from: PeerId,
-  message: {
-    type: "offer"
-    docId: DocId
-    payload: SubstratePayload
-    version: string
-    reciprocate?: boolean
-  },
+  message: OfferMsg,
   model: SyncModel,
   canAccept: SyncPredicate,
 ): SyncTransition {
@@ -1091,7 +1030,7 @@ function handleOffer(
 
 function handleDismiss(
   from: PeerId,
-  message: { type: "dismiss"; docId: DocId },
+  message: DismissMsg,
   model: SyncModel,
 ): SyncTransition {
   const peerState = model.peers.get(from)

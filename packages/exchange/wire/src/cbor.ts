@@ -207,16 +207,13 @@ function fromWireFormat(wire: WireMessage): ChannelMsg {
           if (!syncProtocol) {
             throw new Error(`Unknown wire sync protocol: ${d.ms}`)
           }
-          const entry: PresentMsg["docs"][number] = {
+          return {
             docId: d.d,
             replicaType: d.rt as readonly [string, number, number],
             syncProtocol,
             schemaHash: d.sh,
+            ...(d.shs ? { supportedHashes: d.shs } : undefined),
           }
-          if (d.shs) {
-            entry.supportedHashes = d.shs
-          }
-          return entry
         }),
       } satisfies PresentMsg
     }
