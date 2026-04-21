@@ -1,32 +1,24 @@
 // in-memory-store — a Map-backed Store for testing.
 //
-// Uses Map<DocId, StoreEntry[]> for entries and Map<DocId, DocMetadata>
-// for per-document metadata. Entries are stored in insertion order.
-// `replace` atomically swaps the array to a single-element array.
-// `listDocIds` iterates the metadata map keys.
-//
 // Supports an optional `sharedData` constructor arg so that multiple
 // InMemoryStore instances can share the same underlying Maps —
 // useful for simulating persist → restart → hydrate in tests.
-//
-// The `createInMemoryStore()` factory function returns a
-// `Store` directly for use in Exchange({ stores: [...] }).
 
-import type { DocMetadata } from "@kyneta/schema"
 import type { DocId } from "@kyneta/transport"
-import type { Store, StoreEntry } from "./store.js"
+import type { Store, StoreMeta, StoreRecord } from "./store.js"
+import { resolveMetaFromBatch } from "./store.js"
 
 export type InMemoryStoreData = {
-  entries: Map<DocId, StoreEntry[]>
-  metadata: Map<DocId, DocMetadata>
+  records: Map<DocId, StoreRecord[]>
+  metadata: Map<DocId, StoreMeta>
 }
 
 export class InMemoryStore implements Store {
-  readonly #entries: Map<DocId, StoreEntry[]>
-  readonly #metadata: Map<DocId, DocMetadata>
+  readonly #records: Map<DocId, StoreRecord[]>
+  readonly #metadata: Map<DocId, StoreMeta>
 
   constructor(sharedData?: InMemoryStoreData) {
-    this.#entries = sharedData?.entries ?? new Map()
+    this.#records = sharedData?.records ?? new Map()
     this.#metadata = sharedData?.metadata ?? new Map()
   }
 
@@ -37,52 +29,69 @@ export class InMemoryStore implements Store {
    */
   getStorage(): InMemoryStoreData {
     return {
-      entries: this.#entries,
+      records: this.#records,
       metadata: this.#metadata,
     }
   }
 
-  async lookup(docId: DocId): Promise<DocMetadata | null> {
-    return this.#metadata.get(docId) ?? null
-  }
+  async append(docId: DocId, record: StoreRecord): Promise<void> {
+    const existingMeta = this.#metadata.get(docId) ?? null
 
-  async ensureDoc(docId: DocId, metadata: DocMetadata): Promise<void> {
-    if (!this.#metadata.has(docId)) {
-      this.#metadata.set(docId, metadata)
-    }
-  }
-
-  async append(docId: DocId, entry: StoreEntry): Promise<void> {
-    const entries = this.#entries.get(docId)
-    if (entries) {
-      entries.push(entry)
+    if (record.kind === "entry") {
+      if (existingMeta === null) {
+        throw new Error(
+          `Store: first record for doc '${docId}' must be meta, got entry`,
+        )
+      }
     } else {
-      this.#entries.set(docId, [entry])
+      const resolved = resolveMetaFromBatch([record], existingMeta)
+      this.#metadata.set(docId, resolved)
+    }
+
+    const stream = this.#records.get(docId)
+    if (stream) {
+      stream.push(record)
+    } else {
+      this.#records.set(docId, [record])
     }
   }
 
-  async *loadAll(docId: DocId): AsyncIterable<StoreEntry> {
-    const entries = this.#entries.get(docId)
-    if (entries) {
-      yield* entries
+  async *loadAll(docId: DocId): AsyncIterable<StoreRecord> {
+    const stream = this.#records.get(docId)
+    if (stream) {
+      yield* stream
     }
   }
 
-  async replace(docId: DocId, entry: StoreEntry): Promise<void> {
-    // Atomic swap — set the array to a single-element array in one
-    // synchronous operation. A concurrent reader (in the same tick)
-    // sees either the old array or the new one, never an empty state.
-    this.#entries.set(docId, [entry])
+  async replace(docId: DocId, records: StoreRecord[]): Promise<void> {
+    const existingMeta = this.#metadata.get(docId) ?? null
+
+    const resolved = resolveMetaFromBatch(records, existingMeta)
+
+    // A concurrent reader (in the same tick) sees either the old
+    // array or the new one, never an empty state.
+    this.#records.set(docId, [...records])
+    this.#metadata.set(docId, resolved)
   }
 
   async delete(docId: DocId): Promise<void> {
-    this.#entries.delete(docId)
+    this.#records.delete(docId)
     this.#metadata.delete(docId)
   }
 
-  async *listDocIds(): AsyncIterable<DocId> {
-    yield* this.#metadata.keys()
+  async currentMeta(docId: DocId): Promise<StoreMeta | null> {
+    return this.#metadata.get(docId) ?? null
   }
+
+  async *listDocIds(prefix?: string): AsyncIterable<DocId> {
+    for (const docId of this.#metadata.keys()) {
+      if (prefix === undefined || docId.startsWith(prefix)) {
+        yield docId
+      }
+    }
+  }
+
+  async close(): Promise<void> {}
 }
 
 // ---------------------------------------------------------------------------
@@ -99,7 +108,7 @@ export class InMemoryStore implements Store {
  *
  * ```typescript
  * const sharedData: InMemoryStoreData = {
- *   entries: new Map(),
+ *   records: new Map(),
  *   metadata: new Map(),
  * }
  * const exchange1 = new Exchange({

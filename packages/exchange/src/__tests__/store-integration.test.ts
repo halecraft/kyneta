@@ -28,6 +28,8 @@ import {
   InMemoryStore,
   type InMemoryStoreData,
 } from "../store/in-memory-store.js"
+import type { Store, StoreRecord } from "../store/store.js"
+import { collectAll, makeMetaRecord } from "../testing/store-conformance.js"
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -93,7 +95,7 @@ const PresenceDoc = ephemeral.bind(
 describe("Storage persist + hydrate", () => {
   it("authoritative doc: write → shutdown → restart with same storage → hydrate", async () => {
     const sharedData: InMemoryStoreData = {
-      entries: new Map(),
+      records: new Map(),
       metadata: new Map(),
     }
 
@@ -127,7 +129,7 @@ describe("Storage persist + hydrate", () => {
 
   it("collaborative doc (Loro): write → shutdown → restart → hydrate", async () => {
     const sharedData: InMemoryStoreData = {
-      entries: new Map(),
+      records: new Map(),
       metadata: new Map(),
     }
 
@@ -159,7 +161,7 @@ describe("Storage persist + hydrate", () => {
 
   it("ephemeral doc: write → shutdown → restart → hydrate", async () => {
     const sharedData: InMemoryStoreData = {
-      entries: new Map(),
+      records: new Map(),
       metadata: new Map(),
     }
 
@@ -199,7 +201,7 @@ describe("Storage persist + hydrate", () => {
 describe("Storage + network sync", () => {
   it("peer A writes → server persists → peer B connects → gets data", async () => {
     const sharedData: InMemoryStoreData = {
-      entries: new Map(),
+      records: new Map(),
       metadata: new Map(),
     }
 
@@ -231,9 +233,9 @@ describe("Storage + network sync", () => {
     await drain(200)
     await server.flush()
 
-    // Verify server persisted
+    // Verify server persisted — use currentMeta instead of lookup
     const backend = new InMemoryStore(sharedData)
-    expect(await backend.lookup("doc-1")).not.toBeNull()
+    expect(await backend.currentMeta("doc-1")).not.toBeNull()
 
     // Stop peer A, restart server with same storage
     await peerA.shutdown()
@@ -306,11 +308,11 @@ describe("Storage + network sync", () => {
     await drain(200)
     await server.flush()
 
-    // Storage on server should have entries
-    const entries: unknown[] = []
-    for await (const e of backend.loadAll("doc-1")) {
-      entries.push(e)
-    }
+    // Storage on server should have records — filter for entry records
+    const records = await collectAll(backend.loadAll("doc-1"))
+    const entries = records.filter(
+      (r): r is StoreRecord & { kind: "entry" } => r.kind === "entry",
+    )
     expect(entries.length).toBeGreaterThanOrEqual(1)
   })
 })
@@ -322,7 +324,7 @@ describe("Storage + network sync", () => {
 describe("Storage + replicated doc", () => {
   it("exchange.replicate() + storage → relay persists and hydrates", async () => {
     const sharedData: InMemoryStoreData = {
-      entries: new Map(),
+      records: new Map(),
       metadata: new Map(),
     }
 
@@ -357,13 +359,11 @@ describe("Storage + replicated doc", () => {
     await drain(200)
     await relay1.flush()
 
-    // Verify storage has data
+    // Verify storage has data — use currentMeta and filter for entry records
     const check = new InMemoryStore(sharedData)
-    expect(await check.lookup("doc-1")).not.toBeNull()
-    const entries: unknown[] = []
-    for await (const e of check.loadAll("doc-1")) {
-      entries.push(e)
-    }
+    expect(await check.currentMeta("doc-1")).not.toBeNull()
+    const records = await collectAll(check.loadAll("doc-1"))
+    const entries = records.filter(r => r.kind === "entry")
     expect(entries.length).toBeGreaterThanOrEqual(1)
 
     // Shut down relay 1
@@ -424,12 +424,104 @@ describe("Storage + destroy", () => {
     change(doc, d => d.title.set("will be destroyed"))
     await exchange.flush()
 
-    expect(await backend.lookup("doc-1")).not.toBeNull()
+    expect(await backend.currentMeta("doc-1")).not.toBeNull()
 
     exchange.destroy("doc-1")
     await exchange.flush()
 
-    expect(await backend.lookup("doc-1")).toBeNull()
+    expect(await backend.currentMeta("doc-1")).toBeNull()
+  })
+})
+
+// ===========================================================================
+// onStoreError callback
+// ===========================================================================
+
+describe("onStoreError callback", () => {
+  it("receives store errors instead of swallowing them", async () => {
+    const errors: Array<{ docId: string; operation: string }> = []
+
+    // Create a store that fails on append — currentMeta returns null
+    // so hydration takes the "first boot" path, which dispatches
+    // `register` → `persist-append`. The executor calls append(),
+    // which throws. The executor catches and dispatches `write-failed`.
+    // The store-program emits `store-error`. The executor calls onStoreError.
+    const failingStore: Store = {
+      async append() {
+        throw new Error("disk full")
+      },
+      async currentMeta() {
+        return null
+      },
+      async *loadAll() {},
+      async *listDocIds() {},
+      async replace() {
+        throw new Error("disk full")
+      },
+      async delete() {},
+      async close() {},
+    }
+
+    const exchange = createExchange({
+      id: "server",
+      stores: [failingStore],
+      onStoreError: (docId, operation, _error) => {
+        errors.push({ docId, operation })
+      },
+    })
+
+    exchange.get("doc-1", SequentialDoc)
+    await exchange.flush()
+
+    // The store-program should have reported the failure
+    expect(errors.length).toBeGreaterThan(0)
+    expect(errors[0]!.docId).toBe("doc-1")
+  })
+})
+
+// ===========================================================================
+// Multi-store first-hit reads
+// ===========================================================================
+
+describe("Multi-store first-hit reads", () => {
+  it("hydration uses the first store that has data, not merge-all", async () => {
+    // Store A has doc with value "from-A"
+    const storeA = new InMemoryStore()
+    await storeA.append("doc-1", makeMetaRecord())
+    await storeA.append("doc-1", {
+      kind: "entry",
+      payload: {
+        kind: "entirety",
+        encoding: "json",
+        data: '{"title":"from-A","count":1}',
+      },
+      version: "v1",
+    })
+
+    // Store B has doc with DIFFERENT value "from-B"
+    const storeB = new InMemoryStore()
+    await storeB.append("doc-1", makeMetaRecord())
+    await storeB.append("doc-1", {
+      kind: "entry",
+      payload: {
+        kind: "entirety",
+        encoding: "json",
+        data: '{"title":"from-B","count":2}',
+      },
+      version: "v2",
+    })
+
+    const exchange = createExchange({
+      id: "server",
+      stores: [storeA, storeB], // A is first
+    })
+
+    const doc = exchange.get("doc-1", SequentialDoc)
+    await exchange.flush()
+
+    // Should use store A (first-hit), not merge from both
+    expect(doc.title()).toBe("from-A")
+    expect(doc.count()).toBe(1)
   })
 })
 

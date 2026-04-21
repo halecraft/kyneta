@@ -7,7 +7,8 @@
 export {
   collectAll,
   describeStore,
-  makeBinaryEntry,
-  makeEntry,
-  plainMetadata,
+  makeBinaryEntryRecord,
+  makeEntryRecord,
+  makeMetaRecord,
+  plainMeta,
 } from "./store-conformance.js"

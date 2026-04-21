@@ -197,7 +197,8 @@ export { hasSync, sync } from "./sync.js"
 // Storage — persistent storage adapters
 // ---------------------------------------------------------------------------
 
-export type { Store, StoreEntry } from "./store/index.js"
+export type { Store, StoreMeta, StoreRecord } from "./store/index.js"
+export { resolveMetaFromBatch } from "./store/index.js"
 export {
   createInMemoryStore,
   InMemoryStore,

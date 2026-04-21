@@ -11,7 +11,6 @@ import {
   Replicate,
   Schema,
   SYNC_AUTHORITATIVE,
-  SYNC_COLLABORATIVE,
 } from "@kyneta/schema"
 import { Bridge, createBridgeTransport } from "@kyneta/transport"
 import { yjs } from "@kyneta/yjs-schema"
@@ -26,7 +25,8 @@ import {
   InMemoryStore,
   type InMemoryStoreData,
 } from "../store/in-memory-store.js"
-import type { StoreEntry } from "../store/store.js"
+import type { StoreRecord } from "../store/store.js"
+import { collectAll, makeMetaRecord } from "../testing/store-conformance.js"
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -53,189 +53,20 @@ function createExchange(options: Partial<ExchangeParams> = {}): Exchange {
 }
 
 // ===========================================================================
-// Store interface (InMemoryStore)
-// ===========================================================================
-
-describe("InMemoryStore", () => {
-  it("lookup() returns null for nonexistent doc", async () => {
-    const backend = new InMemoryStore()
-    expect(await backend.lookup("nonexistent")).toBeNull()
-  })
-
-  it("lookup() returns DocMetadata after ensureDoc()", async () => {
-    const backend = new InMemoryStore()
-    const metadata = {
-      replicaType: ["plain", 1, 0] as const,
-      syncProtocol: SYNC_AUTHORITATIVE,
-      schemaHash: "00test",
-    }
-    await backend.ensureDoc("doc-1", metadata)
-    expect(await backend.lookup("doc-1")).toEqual(metadata)
-  })
-
-  it("ensureDoc() is idempotent — calling twice with same metadata is a no-op", async () => {
-    const backend = new InMemoryStore()
-    const metadata = {
-      replicaType: ["plain", 1, 0] as const,
-      syncProtocol: SYNC_AUTHORITATIVE,
-      schemaHash: "00test",
-    }
-    await backend.ensureDoc("doc-1", metadata)
-    await backend.ensureDoc("doc-1", metadata)
-    expect(await backend.lookup("doc-1")).toEqual(metadata)
-  })
-
-  it("ensureDoc() does not overwrite existing metadata", async () => {
-    const backend = new InMemoryStore()
-    const meta1 = {
-      replicaType: ["plain", 1, 0] as const,
-      syncProtocol: SYNC_AUTHORITATIVE,
-      schemaHash: "00test",
-    }
-    const meta2 = {
-      replicaType: ["loro", 1, 0] as const,
-      syncProtocol: SYNC_COLLABORATIVE,
-      schemaHash: "00test",
-    }
-    await backend.ensureDoc("doc-1", meta1)
-    await backend.ensureDoc("doc-1", meta2)
-    expect(await backend.lookup("doc-1")).toEqual(meta1)
-  })
-
-  it("StoreEntry stays lean — only payload and version", async () => {
-    const backend = new InMemoryStore()
-    await backend.ensureDoc("doc-1", {
-      replicaType: ["plain", 1, 0] as const,
-      syncProtocol: SYNC_AUTHORITATIVE,
-      schemaHash: "00test",
-    })
-    const entry = {
-      payload: {
-        kind: "entirety" as const,
-        encoding: "json" as const,
-        data: '{"title":"hello","count":0}',
-      },
-      version: "1",
-    }
-    await backend.append("doc-1", entry)
-
-    const loaded: StoreEntry[] = []
-    for await (const e of backend.loadAll("doc-1")) {
-      loaded.push(e)
-    }
-    expect(loaded).toHaveLength(1)
-    expect(loaded[0]).toEqual(entry)
-    // Verify no extra fields
-    if (!loaded[0]) throw new Error("expected loaded entry")
-    expect(Object.keys(loaded[0])).toEqual(["payload", "version"])
-  })
-
-  it("delete() removes both entries and metadata", async () => {
-    const backend = new InMemoryStore()
-    await backend.ensureDoc("doc-1", {
-      replicaType: ["plain", 1, 0] as const,
-      syncProtocol: SYNC_AUTHORITATIVE,
-      schemaHash: "00test",
-    })
-    await backend.append("doc-1", {
-      payload: {
-        kind: "entirety" as const,
-        encoding: "json" as const,
-        data: "{}",
-      },
-      version: "0",
-    })
-
-    await backend.delete("doc-1")
-    expect(await backend.lookup("doc-1")).toBeNull()
-    const loaded: unknown[] = []
-    for await (const e of backend.loadAll("doc-1")) {
-      loaded.push(e)
-    }
-    expect(loaded).toHaveLength(0)
-  })
-
-  it("listDocIds() yields registered doc IDs", async () => {
-    const backend = new InMemoryStore()
-    await backend.ensureDoc("a", {
-      replicaType: ["plain", 1, 0] as const,
-      syncProtocol: SYNC_AUTHORITATIVE,
-      schemaHash: "00test",
-    })
-    await backend.ensureDoc("b", {
-      replicaType: ["plain", 1, 0] as const,
-      syncProtocol: SYNC_AUTHORITATIVE,
-      schemaHash: "00test",
-    })
-
-    const ids: string[] = []
-    for await (const id of backend.listDocIds()) {
-      ids.push(id)
-    }
-    expect(ids.sort()).toEqual(["a", "b"])
-  })
-
-  it("getStorage() returns shared data for cross-instance persistence", () => {
-    const backend = new InMemoryStore()
-    const data = backend.getStorage()
-    expect(data.entries).toBeInstanceOf(Map)
-    expect(data.metadata).toBeInstanceOf(Map)
-  })
-
-  it("shared data enables cross-instance persistence", async () => {
-    const sharedData: InMemoryStoreData = {
-      entries: new Map(),
-      metadata: new Map(),
-    }
-
-    const backend1 = new InMemoryStore(sharedData)
-    await backend1.ensureDoc("doc-1", {
-      replicaType: ["plain", 1, 0] as const,
-      syncProtocol: SYNC_AUTHORITATIVE,
-      schemaHash: "00test",
-    })
-    await backend1.append("doc-1", {
-      payload: {
-        kind: "entirety" as const,
-        encoding: "json" as const,
-        data: '{"title":"hello","count":0}',
-      },
-      version: "1",
-    })
-
-    // Second instance sees the data
-    const backend2 = new InMemoryStore(sharedData)
-    expect(await backend2.lookup("doc-1")).toEqual({
-      replicaType: ["plain", 1, 0],
-      syncProtocol: SYNC_AUTHORITATIVE,
-      schemaHash: "00test",
-    })
-    const loaded: unknown[] = []
-    for await (const e of backend2.loadAll("doc-1")) {
-      loaded.push(e)
-    }
-    expect(loaded).toHaveLength(1)
-  })
-})
-
-// ===========================================================================
 // Exchange-level storage hydration
 // ===========================================================================
 
 describe("Exchange storage hydration", () => {
   it("exchange.get() hydrates from storage", async () => {
-    // Pre-populate storage with a document
+    // Pre-populate storage with a document (meta + entry)
     const sharedData: InMemoryStoreData = {
-      entries: new Map(),
+      records: new Map(),
       metadata: new Map(),
     }
     const seedBackend = new InMemoryStore(sharedData)
-    await seedBackend.ensureDoc("doc-1", {
-      replicaType: ["plain", 1, 0] as const,
-      syncProtocol: SYNC_AUTHORITATIVE,
-      schemaHash: "00test",
-    })
+    await seedBackend.append("doc-1", makeMetaRecord())
     await seedBackend.append("doc-1", {
+      kind: "entry",
       payload: {
         kind: "entirety" as const,
         encoding: "json" as const,
@@ -279,16 +110,13 @@ describe("Exchange storage hydration", () => {
   it("exchange.replicate() hydrates from storage", async () => {
     // Pre-populate storage
     const sharedData: InMemoryStoreData = {
-      entries: new Map(),
+      records: new Map(),
       metadata: new Map(),
     }
     const seedBackend = new InMemoryStore(sharedData)
-    await seedBackend.ensureDoc("doc-1", {
-      replicaType: ["plain", 1, 0] as const,
-      syncProtocol: SYNC_AUTHORITATIVE,
-      schemaHash: "00test",
-    })
+    await seedBackend.append("doc-1", makeMetaRecord())
     await seedBackend.append("doc-1", {
+      kind: "entry",
       payload: {
         kind: "entirety" as const,
         encoding: "json" as const,
@@ -348,13 +176,12 @@ describe("Exchange storage persistence", () => {
     // Wait for persistence
     await exchange.flush()
 
-    // Storage should have the data — the first entry is the base entirety
-    // from initial hydration (first boot), and the second is a since delta
-    // from the local mutation via onStateAdvanced.
-    const entries: { payload: any; version: string }[] = []
-    for await (const e of backend.loadAll("doc-1")) {
-      entries.push(e)
-    }
+    // Storage should have the data — records include meta records and entry records.
+    // Filter for entry records to inspect payloads.
+    const records = await collectAll(backend.loadAll("doc-1"))
+    const entries = records.filter(
+      (r): r is StoreRecord & { kind: "entry" } => r.kind === "entry",
+    )
     expect(entries.length).toBeGreaterThanOrEqual(2)
 
     // First entry: base entirety from first boot
@@ -408,11 +235,9 @@ describe("Exchange storage persistence", () => {
     await drain(200)
     await exchangeB.flush()
 
-    // Storage on B should have persisted the import
-    const entries: { payload: any; version: string }[] = []
-    for await (const e of backend.loadAll("doc-1")) {
-      entries.push(e)
-    }
+    // Storage on B should have persisted the import — filter for entry records
+    const records = await collectAll(backend.loadAll("doc-1"))
+    const entries = records.filter(r => r.kind === "entry")
     // Should have at least one entry from the network import
     expect(entries.length).toBeGreaterThanOrEqual(1)
 
@@ -435,14 +260,14 @@ describe("Exchange storage persistence", () => {
     await exchange.flush()
 
     // Verify storage has data
-    expect(await backend.lookup("doc-1")).not.toBeNull()
+    expect(await backend.currentMeta("doc-1")).not.toBeNull()
 
     // Destroy
     exchange.destroy("doc-1")
     await exchange.flush()
 
     // Storage should be cleaned up
-    expect(await backend.lookup("doc-1")).toBeNull()
+    expect(await backend.currentMeta("doc-1")).toBeNull()
 
     await exchange.shutdown()
   })
@@ -459,8 +284,8 @@ describe("Exchange storage persistence", () => {
     // Flush should not throw and should complete all pending ops
     await exchange.flush()
 
-    // After flush, ensureDoc should have been called
-    expect(await backend.lookup("doc-1")).toEqual({
+    // After flush, a meta record should have been appended
+    expect(await backend.currentMeta("doc-1")).toEqual({
       replicaType: ["plain", 1, 0],
       syncProtocol: SYNC_AUTHORITATIVE,
       schemaHash: TestDoc.schemaHash,
@@ -477,7 +302,7 @@ describe("Exchange storage persistence", () => {
 describe("Storage round-trip (persist → restart → hydrate)", () => {
   it("data survives exchange restart via shared storage", async () => {
     const sharedData: InMemoryStoreData = {
-      entries: new Map(),
+      records: new Map(),
       metadata: new Map(),
     }
 
@@ -580,7 +405,7 @@ describe("Yjs storage round-trip", () => {
     )
 
     const sharedData: InMemoryStoreData = {
-      entries: new Map(),
+      records: new Map(),
       metadata: new Map(),
     }
 

@@ -5,10 +5,10 @@
 // transports and stores, and provides the main API for
 // document operations.
 //
-// Storage is a direct dependency — not an adapter, not a channel, not
-// a participant in the sync protocol. The Exchange handles hydration
-// and persistence directly, keeping the synchronizer purely focused
-// on network sync.
+// Storage is coordinated via a pure Mealy machine (store-program) that
+// models per-document write phases (idle ↔ writing). The Exchange
+// instantiates the machine via createObservableProgram and interprets
+// its data effects as actual I/O against the configured Store backends.
 //
 // Usage:
 //   const exchange = new Exchange({
@@ -22,12 +22,13 @@
 //   sync(doc).waitForSync()
 
 import type { ReactiveMap } from "@kyneta/changefeed"
+import type { ObservableHandle } from "@kyneta/machine"
+import { createObservableProgram } from "@kyneta/machine"
 import {
   type BoundReplica,
   type BoundSchema,
   createRef,
   type Defer,
-  type DocMetadata,
   type FactoryBuilder,
   type Interpret,
   type Ref,
@@ -52,7 +53,14 @@ import type { Capabilities } from "./capabilities.js"
 import { createCapabilities, DEFAULT_REPLICAS } from "./capabilities.js"
 import type { Policy } from "./governance.js"
 import { Governance } from "./governance.js"
-import type { Store } from "./store/store.js"
+import type { Store, StoreMeta } from "./store/store.js"
+import {
+  allDocsIdle,
+  storeProgram,
+  type StoreEffect,
+  type StoreInput,
+  type StoreModel,
+} from "./store/store-program.js"
 import { registerSync } from "./sync.js"
 import { type DocRuntime, Synchronizer } from "./synchronizer.js"
 import type { DocChange, DocInfo, PeerChange } from "./types.js"
@@ -139,6 +147,12 @@ export type ExchangeParams = {
    * ```
    */
   stores?: Store[]
+
+  /**
+   * Called when a store operation fails. Receives the docId, operation
+   * name, and error. Default: `console.warn`.
+   */
+  onStoreError?: (docId: DocId, operation: string, error: unknown) => void
 
   /**
    * Declares document types this Exchange can interpret.
@@ -242,28 +256,11 @@ export class Exchange {
   readonly #docCache = new Map<DocId, DocCacheEntry>()
   readonly #stores: Store[]
 
-  /**
-   * Per-doc store version — the version at which the store was last
-   * persisted. Used by `onStateAdvanced` to compute incremental deltas
-   * via `exportSince(storeVersion)`.
-   *
-   * Context: jj:smmulzkm (unified persistence via notify/state-advanced)
-   */
-  readonly #storeVersions = new Map<DocId, Version>()
+  /** Store-program handle — pure machine for store coordination. */
+  readonly #storeHandle: ObservableHandle<StoreInput, StoreModel> | null
 
-  /**
-   * Pending async store operations tracked for flush()/shutdown().
-   * Each promise is added when a store write begins and removed
-   * when it settles.
-   */
-  readonly #pendingStorageOps: Set<Promise<void>> = new Set()
-
-  /**
-   * Per-doc operation chains ensuring sequential backend access.
-   * Each docId maps to the tail of a promise chain — new operations
-   * for that docId await the previous one before proceeding.
-   */
-  readonly #docQueues: Map<DocId, Promise<void>> = new Map()
+  /** In-flight hydration I/O tracked so flush()/shutdown() can await it. */
+  readonly #pendingHydrations = new Set<Promise<void>>()
 
   constructor({
     id,
@@ -272,6 +269,7 @@ export class Exchange {
     schemas = [],
     replicas = DEFAULT_REPLICAS,
     departureTimeout,
+    onStoreError,
     ...policyFields
   }: ExchangeParams) {
     // Resolve peer identity from id: string | PeerIdentityInput
@@ -397,37 +395,107 @@ export class Exchange {
     this.peers = this.#synchronizer.createPeerFeed()
     this.documents = this.#synchronizer.createDocFeed()
 
-    // ── Unified persistence via onStateAdvanced ──
-    // Subscribe to state-advanced events from the synchronizer. This fires
-    // at quiescence when any document's state has advanced — either from a
-    // local mutation (changefeed → notifyLocalChange → handleLocalDocChange)
-    // or a network import (handleOffer → cmd/import-doc-data → handleDocImported).
-    //
-    // The listener computes an incremental delta via exportSince(storeVersion)
-    // and appends it to all stores. This replaces both:
-    // - The old onDocImported callback (which stored orphaned raw deltas)
-    // - The old changefeed-based replace() (which stored full snapshots per keystroke)
-    //
-    // Context: jj:smmulzkm (unified persistence via notify/state-advanced)
+    // ── Store-program — pure machine for store coordination ──
     if (this.#stores.length > 0) {
+      const errorHandler =
+        onStoreError ??
+        ((docId: DocId, operation: string, error: unknown) => {
+          console.warn(
+            `[exchange] store ${operation} failed for doc '${docId}':`,
+            error,
+          )
+        })
+
+      this.#storeHandle = createObservableProgram(
+        storeProgram,
+        (effect: StoreEffect, dispatch: (msg: StoreInput) => void) => {
+          switch (effect.type) {
+            case "persist-append": {
+              const { docId, records } = effect
+              Promise.all(
+                this.#stores.map(async store => {
+                  for (const record of records) {
+                    await store.append(docId, record)
+                  }
+                }),
+              ).then(
+                () => {
+                  let version = ""
+                  for (const r of records) {
+                    if (r.kind === "entry") version = r.version
+                  }
+                  dispatch({ type: "write-succeeded", docId, version })
+                },
+                error => dispatch({ type: "write-failed", docId, error }),
+              )
+              break
+            }
+            case "persist-replace": {
+              const { docId, records } = effect
+              Promise.all(
+                this.#stores.map(store => store.replace(docId, records)),
+              ).then(
+                () => {
+                  let version = ""
+                  for (const r of records) {
+                    if (r.kind === "entry") version = r.version
+                  }
+                  dispatch({ type: "write-succeeded", docId, version })
+                },
+                error => dispatch({ type: "write-failed", docId, error }),
+              )
+              break
+            }
+            case "persist-delete": {
+              const { docId } = effect
+              Promise.all(
+                this.#stores.map(store => store.delete(docId)),
+              ).then(
+                () => {}, // No write-succeeded for destroy
+                error => errorHandler(docId, "delete", error),
+              )
+              break
+            }
+            case "store-error": {
+              errorHandler(effect.docId, effect.operation, effect.error)
+              break
+            }
+          }
+        },
+      )
+
+      // Always export since the CONFIRMED version (phase.version). This
+      // handles both the success and failure cases correctly:
+      // - Success: queued delta overlaps with the just-written entry, but
+      //   merge is idempotent — safe.
+      // - Failure: queued delta covers confirmed → current, which is the
+      //   full gap — correct.
       this.#synchronizer.onStateAdvanced((docId: DocId) => {
-        const storeVersion = this.#storeVersions.get(docId)
-        if (!storeVersion) return // Doc not yet initialized — still hydrating
+        if (!this.#storeHandle) return
+        const phase = this.#storeHandle.getState().docs.get(docId)
+        if (!phase) return // Not yet registered — still hydrating
 
         const runtime = this.#synchronizer.getDocRuntime(docId)
         if (!runtime) return
 
-        const delta = runtime.replica.exportSince(storeVersion)
+        const confirmedVersion = phase.version
+        if (!confirmedVersion) return // Empty string = initial register, skip
+
+        const sinceVersion =
+          runtime.replicaFactory.parseVersion(confirmedVersion)
+        const delta = runtime.replica.exportSince(sinceVersion)
         if (!delta) return // Version didn't actually advance — deduplication
 
-        const newVersion = runtime.replica.version()
-        this.#storeVersions.set(docId, newVersion)
-
-        const versionStr = newVersion.serialize()
-        this.#persistToStore(docId, backend =>
-          backend.append(docId, { payload: delta, version: versionStr }),
-        )
+        const newVersion = runtime.replica.version().serialize()
+        this.#storeHandle.dispatch({
+          type: "state-advanced",
+          docId,
+          delta,
+          newVersion,
+        })
       })
+    } else {
+      this.#storeHandle = null
     }
   }
 
@@ -490,7 +558,7 @@ export class Exchange {
           this.#synchronizer.notifyLocalChange(docId)
         })
       })
-      this.#trackOp(hydrationOp)
+      this.#trackHydration(hydrationOp)
     } else {
       this.#synchronizer.registerDoc({
         mode: "interpret",
@@ -540,7 +608,7 @@ export class Exchange {
         schemaHash,
         "replicate",
       )
-      this.#trackOp(hydrationOp)
+      this.#trackHydration(hydrationOp)
     } else {
       this.#synchronizer.registerDoc({
         mode: "replicate",
@@ -569,81 +637,38 @@ export class Exchange {
   }
 
   // =========================================================================
-  // PRIVATE — Storage helpers
+  // PRIVATE — Hydration tracking
   // =========================================================================
 
   /**
-   * Track an async store operation so flush() can await it.
+   * Track an in-flight hydration promise so flush()/shutdown() can
+   * await all hydrations before settling.
    */
-  #trackOp(op: Promise<void>): void {
-    this.#pendingStorageOps.add(op)
+  #trackHydration(op: Promise<void>): void {
+    this.#pendingHydrations.add(op)
     op.finally(() => {
-      this.#pendingStorageOps.delete(op)
+      this.#pendingHydrations.delete(op)
     })
   }
 
   /**
-   * Enqueue a backend operation for a specific docId, ensuring
-   * sequential execution per document.
-   *
-   * Uses a promise-chain pattern: each new operation for a docId
-   * is chained onto the previous one. Cross-document operations
-   * remain concurrent for throughput.
+   * The loop handles the case where a hydration spawns another
+   * hydration (e.g. schema auto-promotion during onEnsureDoc).
    */
-  #enqueueForDoc(docId: DocId, fn: () => Promise<void>): Promise<void> {
-    const prev = this.#docQueues.get(docId) ?? Promise.resolve()
-    const next = prev.then(fn, fn) // Run fn regardless of prev result
-    this.#docQueues.set(docId, next)
-
-    // Clean up the queue entry when this tail settles and nothing new
-    // has been chained on since.
-    const cleanup = () => {
-      if (this.#docQueues.get(docId) === next) {
-        this.#docQueues.delete(docId)
-      }
+  async #awaitHydrations(): Promise<void> {
+    while (this.#pendingHydrations.size > 0) {
+      await Promise.all(this.#pendingHydrations)
     }
-    next.then(cleanup, cleanup)
-
-    return next
   }
 
-  /**
-   * Run a store operation against all backends for a document,
-   * with per-doc sequencing and flush tracking.
-   */
-  #persistToStore(
-    docId: DocId,
-    operation: (backend: Store) => Promise<void>,
-  ): void {
-    if (this.#stores.length === 0) return
-
-    const op = this.#enqueueForDoc(docId, async () => {
-      for (const backend of this.#stores) {
-        try {
-          await operation(backend)
-        } catch (error) {
-          console.error(
-            `[exchange] store operation failed for doc '${docId}':`,
-            error,
-          )
-        }
-      }
-    })
-    this.#trackOp(op)
-  }
+  // =========================================================================
+  // PRIVATE — Storage: hydrate & register
+  // =========================================================================
 
   /**
-   * Hydrate a replica/substrate from stores, then register with the
-   * synchronizer.
-   *
-   * This is the async tail of get() and replicate() when stores are
-   * configured. The caller has already created the replica/substrate
-   * and cached the ref (if interpret mode). This function:
-   * 1. Ensures doc metadata in all backends
-   * 2. Loads stored entries and merges into the replica
-   * 3. If store was empty (first boot), persists an entirety base entry
-   * 4. Records storeVersion for incremental persistence
-   * 5. Registers with the synchronizer
+   * Async tail of get() and replicate() when stores are configured.
+   * The caller has already created the replica/substrate and cached
+   * the ref (if interpret mode).
    *
    * For interpret mode with structural clientID 0, `factory.create(schema)`
    * produces structural ops at `(0, 0..N)` — identical to what any stored
@@ -661,62 +686,61 @@ export class Exchange {
     schemaHash: string,
     mode: "interpret" | "replicate",
   ): Promise<void> {
-    const metadata: DocMetadata = {
+    const meta: StoreMeta = {
       replicaType: replicaFactory.replicaType,
       syncProtocol,
       schemaHash,
     }
 
-    // 1. Ensure doc metadata is registered in all backends
-    for (const backend of this.#stores) {
-      try {
-        await backend.ensureDoc(docId, metadata)
-      } catch (error) {
-        console.error(`[exchange] ensureDoc failed for doc '${docId}':`, error)
-      }
-    }
-
-    // 2. Hydrate from storage — load all entries and merge into the replica
+    // First-hit semantics: use the first store that has data
     let hadStoredEntries = false
     for (const backend of this.#stores) {
       try {
-        const existing = await backend.lookup(docId)
+        const existing = await backend.currentMeta(docId)
         if (existing) {
-          for await (const entry of backend.loadAll(docId)) {
-            try {
-              replica.merge(entry.payload, "sync")
-              hadStoredEntries = true
-            } catch (err) {
-              console.warn(
-                `[exchange] failed to merge stored entry for doc '${docId}':`,
-                err,
-              )
+          for await (const record of backend.loadAll(docId)) {
+            if (record.kind === "entry") {
+              try {
+                replica.merge(record.payload, "sync")
+                hadStoredEntries = true
+              } catch (err) {
+                console.warn(
+                  `[exchange] failed to merge stored entry for doc '${docId}':`,
+                  err,
+                )
+              }
             }
           }
+          break // First-hit: use first store that has the doc
         }
       } catch (error) {
-        console.error(
+        console.warn(
           `[exchange] store hydration failed for doc '${docId}':`,
           error,
         )
       }
     }
 
-    // 3. If store was empty (first boot), persist an entirety base entry
-    //    so future deltas have a base to build on.
-    if (!hadStoredEntries) {
-      const payload = replica.exportEntirety()
-      const version = replica.version().serialize()
-      this.#persistToStore(docId, backend =>
-        backend.append(docId, { payload, version }),
-      )
+    if (hadStoredEntries) {
+      // Re-boot: data already on disk — register at the hydrated version
+      this.#storeHandle!.dispatch({
+        type: "hydrated",
+        docId,
+        version: replica.version().serialize(),
+      })
+    } else {
+      // First boot: persist initial meta + entirety
+      this.#storeHandle!.dispatch({
+        type: "register",
+        docId,
+        meta,
+        entirety: replica.exportEntirety(),
+        version: replica.version().serialize(),
+      })
     }
 
-    // 4. Record storeVersion for incremental persistence via onStateAdvanced
-    this.#storeVersions.set(docId, replica.version())
-
-    // 5. Register with synchronizer — present/interest messages carry
-    //    the hydrated version, not an empty one
+    // Register with synchronizer — present/interest messages carry
+    // the hydrated version, not an empty one
     this.#synchronizer.registerDoc({
       mode,
       docId,
@@ -943,7 +967,7 @@ export class Exchange {
    * stored payloads with the trimmed entirety.
    *
    * This is a convenience that composes `leastCommonVersion()` →
-   * `replica.advance()` → `exportEntirety()` → `store.replace()`.
+   * `replica.advance()` → `exportEntirety()` → store-program `compact`.
    *
    * If no peers are synced, the full document is projected (all
    * history discarded). The undershoot contract ensures the base
@@ -961,18 +985,22 @@ export class Exchange {
 
     runtime.replica.advance(target)
 
-    // Replace stored payloads with the trimmed entirety.
-    const entirety = runtime.replica.exportEntirety()
-    const metadata: DocMetadata = {
-      replicaType: runtime.replicaFactory.replicaType,
-      syncProtocol: runtime.syncProtocol,
-      schemaHash: runtime.schemaHash,
-    }
-    for (const store of this.#stores) {
-      await store.ensureDoc(docId, metadata)
-      await store.replace(docId, {
-        payload: entirety,
-        version: runtime.replica.version().serialize(),
+    if (this.#storeHandle) {
+      const meta: StoreMeta = {
+        replicaType: runtime.replicaFactory.replicaType,
+        syncProtocol: runtime.syncProtocol,
+        schemaHash: runtime.schemaHash,
+      }
+      this.#storeHandle.dispatch({
+        type: "compact",
+        docId,
+        meta,
+        entirety: runtime.replica.exportEntirety(),
+        newVersion: runtime.replica.version().serialize(),
+      })
+      await this.#storeHandle.waitForState((s: StoreModel) => {
+        const phase = s.docs.get(docId)
+        return !phase || phase.status === "idle"
       })
     }
   }
@@ -1033,9 +1061,7 @@ export class Exchange {
   destroy(docId: DocId): void {
     this.#docCache.delete(docId)
     this.#synchronizer.dismissDocument(docId)
-
-    // Delete from all stores
-    this.#persistToStore(docId, backend => backend.delete(docId))
+    this.#storeHandle?.dispatch({ type: "destroy", docId })
   }
 
   /**
@@ -1169,23 +1195,16 @@ export class Exchange {
   // =========================================================================
 
   /**
-   * Await all pending store operations. The loop handles operations
-   * that spawn new operations (e.g. a hydration that triggers a save).
-   */
-  async #flushStores(): Promise<void> {
-    while (this.#pendingStorageOps.size > 0) {
-      await Promise.all(this.#pendingStorageOps)
-    }
-  }
-
-  /**
    * Await all pending store operations without disconnecting transports.
    *
    * Use this when you want to ensure all data has been persisted but
    * plan to continue using the Exchange afterwards.
    */
   async flush(): Promise<void> {
-    await this.#flushStores()
+    await this.#awaitHydrations()
+    if (this.#storeHandle) {
+      await this.#storeHandle.waitForState(allDocsIdle)
+    }
     await this.#synchronizer.flush()
   }
 
@@ -1199,6 +1218,7 @@ export class Exchange {
   reset(): void {
     const disposeErrors = this.#governance.clear()
     this.#docCache.clear()
+    this.#storeHandle?.dispose()
     this.#synchronizer.reset()
     rethrowErrors(disposeErrors)
   }
@@ -1211,13 +1231,16 @@ export class Exchange {
    * stores.
    */
   async shutdown(): Promise<void> {
-    await this.#flushStores()
+    await this.#awaitHydrations()
+    if (this.#storeHandle) {
+      await this.#storeHandle.waitForState(allDocsIdle)
+      this.#storeHandle.dispose()
+    }
     const disposeErrors = this.#governance.clear()
     this.#docCache.clear()
     await this.#synchronizer.shutdown()
-    // Close stores that hold native handles
     for (const backend of this.#stores) {
-      if (backend.close) await backend.close()
+      await backend.close()
     }
     rethrowErrors(disposeErrors)
   }

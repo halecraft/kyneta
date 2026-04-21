@@ -4,7 +4,7 @@
 > **Role**: Substrate-agnostic document sync runtime. Orchestrates channel topology, document convergence, and persistence above any transport and any `@kyneta/schema` substrate — via two pure TEA programs (session + sync), a Synchronizer shell that owns the serialized dispatch queue, and an Exchange façade that adds storage, governance, capability negotiation, and reactive peer/document collections.
 > **Depends on**: `@kyneta/schema` (peer), `@kyneta/changefeed` (peer), `@kyneta/transport` (direct)
 > **Depended on by**: `@kyneta/react` (peer), `@kyneta/leveldb-store`, application code, every transport package (dev)
-> **Canonical symbols**: `Exchange`, `ExchangeParams`, `Synchronizer`, `DocRuntime`, `SessionModel`, `SessionInput`, `SessionEffect`, `SyncModel`, `SyncInput`, `SyncEffect`, `updateSession`, `updateSync`, `Governance`, `Policy`, `composeGate`, `GatePredicate`, `EpochBoundaryPredicate`, `Line`, `LineProtocol`, `Capabilities`, `ReplicaKey`, `DEFAULT_REPLICAS`, `Interpret`, `Replicate`, `Defer`, `Reject`, `Disposition`, `PeerIdentityInput`, `PeerChange`, `DocChange`, `DocInfo`, `PeerState`, `ReadyState`, `PeerDocSyncState`, `Store`, `StoreEntry`, `DocMetadata`, `persistentPeerId`, `releasePeerId`, `resolveLease`, `LeaseState`, `sync` (helper), `SyncProtocol`, `SYNC_COLLABORATIVE`, `SYNC_AUTHORITATIVE`, `SYNC_EPHEMERAL`, `requiresBidirectionalSync`, `BindingTarget`, `createBindingTarget`
+> **Canonical symbols**: `Exchange`, `ExchangeParams`, `Synchronizer`, `DocRuntime`, `SessionModel`, `SessionInput`, `SessionEffect`, `SyncModel`, `SyncInput`, `SyncEffect`, `updateSession`, `updateSync`, `Governance`, `Policy`, `composeGate`, `GatePredicate`, `EpochBoundaryPredicate`, `Line`, `LineProtocol`, `Capabilities`, `ReplicaKey`, `DEFAULT_REPLICAS`, `Interpret`, `Replicate`, `Defer`, `Reject`, `Disposition`, `PeerIdentityInput`, `PeerChange`, `DocChange`, `DocInfo`, `PeerState`, `ReadyState`, `PeerDocSyncState`, `Store`, `StoreRecord`, `StoreMeta`, `DocMetadata`, `persistentPeerId`, `releasePeerId`, `resolveLease`, `LeaseState`, `sync` (helper), `SyncProtocol`, `SYNC_COLLABORATIVE`, `SYNC_AUTHORITATIVE`, `SYNC_EPHEMERAL`, `requiresBidirectionalSync`, `BindingTarget`, `createBindingTarget`
 > **Key invariant(s)**:
 > 1. The exchange never inspects `SubstratePayload` contents. Payloads are opaque blobs carried by `offer` messages; only the substrate produces and consumes them.
 > 2. The session program never sees documents. The sync program never sees channels, transports, or connection state. They share a single dispatch queue and communicate exclusively through `sync-event` effects the shell forwards.
@@ -65,8 +65,9 @@ Imported by applications to construct the top-level sync graph; by `@kyneta/reac
 | `Line` | A reliable bidirectional message stream between two peers, implemented as two authoritative documents (one per direction) with automatic seqno + ack pruning. | A socket, a channel, a queue |
 | `LineProtocol` | The reified schema pair + topic from `Line.protocol(opts)`. Exposes `open(peerId)` (client) and `listen(onLine)` (server). | `Line` — `LineProtocol` *creates* `Line`s |
 | `persistentPeerId` | Browser-only helper: assigns each tab a unique `peerId` that survives reload, via a `localStorage` CAS-based lease protocol. | A cookie, a UUID generator |
-| `Store` | The persistence interface from this package. Methods: `lookup`, `ensureDoc`, `append`, `loadAll`, `replace`, `delete`, `listDocIds`, `close`. | A reactive store — this is an append/replace log |
-| `StoreEntry` | `{ payload: SubstratePayload, version: string }` — one durably-persisted piece of doc state. | A `ChannelMsg` |
+| `Store` | The persistence interface from this package. Methods: `append`, `loadAll`, `replace`, `delete`, `currentMeta`, `listDocIds`, `close`. A `Store` instance must be owned by exactly one `Exchange` for its entire lifetime. | A reactive store — this is an append/replace log. Not shared across exchanges. |
+| `StoreRecord` | Tagged union: `{ kind: "meta", meta: StoreMeta }` or `{ kind: "entry", payload: SubstratePayload, version: string }` — one durably-persisted record of doc state. | A `ChannelMsg` |
+| `StoreMeta` | `Omit<DocMetadata, "supportedHashes">` — the metadata subset persisted per-doc in the store. | `DocMetadata` — `StoreMeta` omits `supportedHashes` |
 
 ---
 
@@ -440,46 +441,83 @@ This is the reactive surface for `@kyneta/react`'s `useSyncStatus` and similar h
 
 ## Storage
 
-Source: `src/store/*.ts`, `src/synchronizer.ts` → `#drainStateAdvanced`.
+Source: `src/store/*.ts`, `src/store-program.ts`, `src/synchronizer.ts` → `#drainStateAdvanced`.
 
-A `Store` is a persistence interface this package defines:
+A `Store` is a persistence interface this package defines. A `Store` instance must be owned by exactly one `Exchange` for its entire lifetime — exclusive ownership ensures that version tracking, append ordering, and compaction are never corrupted by concurrent access from a second exchange.
+
+### `StoreRecord` and `StoreMeta`
 
 ```ts
-interface Store {
-  lookup(docId): Promise<DocMetadata | null>
-  ensureDoc(docId, metadata): Promise<void>           // idempotent register
-  append(docId, entry: StoreEntry): Promise<void>     // incremental since-delta
-  loadAll(docId): AsyncIterable<StoreEntry>            // replay on hydration
-  replace(docId, entry): Promise<void>                 // compaction or full reset
-  delete(docId): Promise<void>
-  listDocIds(): AsyncIterable<DocId>
-  close(): Promise<void>
-}
+type StoreMeta = Omit<DocMetadata, "supportedHashes">
 
-interface StoreEntry {
-  payload: SubstratePayload
-  version: string
+type StoreRecord =
+  | { readonly kind: "meta"; readonly meta: StoreMeta }
+  | { readonly kind: "entry"; readonly payload: SubstratePayload; readonly version: string }
+
+interface Store {
+  append(docId: DocId, record: StoreRecord): Promise<void>
+  loadAll(docId: DocId): AsyncIterable<StoreRecord>
+  replace(docId: DocId, records: StoreRecord[]): Promise<void>
+  delete(docId: DocId): Promise<void>
+  currentMeta(docId: DocId): Promise<StoreMeta | null>
+  listDocIds(prefix?: string): AsyncIterable<DocId>
+  close(): Promise<void>
 }
 ```
 
-Applications pass zero or more stores in `ExchangeParams.stores`. Writes fan out to all; reads query sequentially until one returns the doc (or all miss). `@kyneta/leveldb-store` is the primary production implementation; the in-memory store in `src/store/memory.ts` is used for tests and browser-ephemeral cases.
+The `StoreRecord` tagged union carries either document metadata (`"meta"`) or a substrate payload with its version tag (`"entry"`). Both record kinds flow through the same `append` / `loadAll` / `replace` pipeline, so metadata and state are always co-located and atomically durable.
+
+`StoreMeta` is `Omit<DocMetadata, "supportedHashes">` — the subset of document metadata that the store persists. `supportedHashes` is runtime-derived from the schema binding and never stored.
+
+### Multi-store semantics
+
+Applications pass zero or more stores in `ExchangeParams.stores`. Writes fan out to all stores. Reads use first-hit: stores are tried in array order; the first store where `currentMeta(docId)` returns non-null is used for hydration. `@kyneta/leveldb-store` is the primary production implementation; the in-memory store in `src/store/memory.ts` is used for tests and browser-ephemeral cases.
+
+### The store-program
+
+Persistence is driven by a pure Mealy machine: `Program<StoreInput, StoreModel, StoreEffect>`. Like the session and sync programs, the store-program is a pure function that the Synchronizer shell executes.
+
+**Input vocabulary:**
+
+| Input | Trigger |
+|-------|---------|
+| `write-requested` | Quiescence drain finds a doc in `#dirtyForPersistence` |
+| `write-succeeded` | Store `.append()` resolved successfully |
+| `write-failed` | Store `.append()` rejected |
+
+**Effect vocabulary:**
+
+| Effect | Executed by shell |
+|--------|-------------------|
+| `persist` | Calls `substrate.exportSince(lastPersistedVersion)` → `StoreRecord`, then `store.append(docId, record)` on each registered store |
+| `notify-error` | Calls the `onStoreError` callback |
+
+**Composition with quiescence drain.** The Synchronizer's `#drainStateAdvanced` dispatches `write-requested` inputs into the store-program. On each quiescence cycle, the shell invokes `onStateAdvanced` which flushes all pending store writes. The store-program emits `persist` effects; the shell executes them and feeds back `write-succeeded` or `write-failed`.
+
+**Self-healing version tracking.** The store-program's `lastPersistedVersion` only advances on `write-succeeded`. If a write fails, the old version is preserved so the next `exportSince` recomputes the full delta from the last known-good point. This means transient store failures (disk full, network blip on a remote store) self-heal on the next successful write without data loss.
+
+### `onStoreError` callback
+
+`ExchangeParams.onStoreError` is an optional callback invoked for any store write failure. Signature: `(error: unknown, docId: DocId, store: Store) => void`. Default: `console.warn`. This allows applications to surface persistence failures to monitoring, retry infrastructure, or user-facing error states without coupling the store-program to any particular error-handling strategy.
 
 ### Unified persistence via `state-advanced`
 
 Every local mutation and every remote `offer` merge drives the same persistence path. When `substrate.merge(payload)` completes (whether on `"local"` or `"sync"` origin), the Synchronizer registers the doc as pending in `#dirtyForPersistence`. At quiescence, `#drainStateAdvanced`:
 
 1. Snapshots the pending set.
-2. For each doc, calls `substrate.exportSince(lastPersistedVersion)` → `StoreEntry`.
-3. `store.append(docId, entry)` on each registered store.
-4. Records the new version as `lastPersistedVersion`.
+2. Dispatches `write-requested` into the store-program for each dirty doc.
+3. The store-program emits `persist` effects; the shell calls `substrate.exportSince(lastPersistedVersion)` → `StoreRecord`.
+4. `store.append(docId, record)` on each registered store.
+5. On success, feeds `write-succeeded` back into the store-program, which advances `lastPersistedVersion`.
 
 This unifies the persistence path: `exportSince` returns entirety or delta as appropriate, and the store's `append` semantic handles both.
 
 ### What `Store` is NOT
 
 - **Not a sync primitive.** Stores do not announce themselves on `present`, receive `offer`, or emit `interest`. They are local to the exchange instance.
-- **Not a cache.** Every entry is durable on return.
+- **Not a cache.** Every record is durable on return.
 - **Not reactive.** No `subscribe`; reactivity lives at the `Ref<S>` / `ReactiveMap` layer.
+- **Not shared across exchanges.** Exclusive ownership is required. If two exchanges share a `Store` instance, version-tracking invariants break and data corruption is possible.
 
 ---
 
@@ -609,7 +647,7 @@ The decision is per-doc per-peer, consulted at the sync-program level. Applicati
 | `Capabilities` / `ReplicaKey` / `DEFAULT_REPLICAS` / `createCapabilities` | `src/capabilities.ts` | Replica + schema registry. |
 | `Line` / `LineProtocol` / `createLineDocSchema` | `src/line.ts` | Reliable message-stream primitive. |
 | `persistentPeerId` / `releasePeerId` / `resolveLease` / `LeaseState` | `src/persistent-peer-id.ts` | Browser-tab peer-ID lease helper + pure core. |
-| `Store` / `StoreEntry` / `DocMetadata` | `src/store/store.ts` | Persistence interface. |
+| `Store` / `StoreRecord` / `StoreMeta` / `DocMetadata` | `src/store/store.ts` | Persistence interface. |
 | `PeerChange` / `DocChange` / `DocInfo` / `PeerState` / `ReadyState` | `src/types.ts` | Reactive-collection change types and snapshot shapes. |
 | `sync(doc)` | `src/sync.ts` | Helper: returns `{ waitForSync }` for imperative test synchronization. |
 | `AsyncQueue` | `src/async-queue.ts` | Bounded async producer/consumer queue used inside `Line`. |

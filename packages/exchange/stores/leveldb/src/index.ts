@@ -3,18 +3,23 @@
 // Implements the Store interface using classic-level.
 //
 // Key-space design (FoundationDB convention — \x00 null-byte separator):
-//   meta\x00{docId}                    → JSON-encoded DocMetadata
-//   entry\x00{docId}\x00{seqNo}       → binary-encoded StoreEntry
+//   meta\x00{docId}                       → JSON-encoded StoreMeta (materialized index)
+//   record\x00{docId}\x00{seqNo}          → binary-encoded StoreRecord (unified stream)
 //
 // The \x00 separator cannot appear in valid UTF-8 strings, so no docId
 // validation is needed — the key-space imposes zero constraints on callers.
 //
-// SeqNo is a zero-padded 10-digit monotonic counter per doc, tracked in
+// SeqNo is a zero-padded 16-digit monotonic counter per doc, tracked in
 // memory. On reboot, the max seqNo for a doc is lazily discovered via a
 // single reverse-iterator seek on first append.
 
-import type { DocId, Store, StoreEntry } from "@kyneta/exchange"
-import type { DocMetadata } from "@kyneta/schema"
+import {
+  type DocId,
+  type Store,
+  type StoreMeta,
+  type StoreRecord,
+  resolveMetaFromBatch,
+} from "@kyneta/exchange"
 import { ClassicLevel } from "classic-level"
 
 // ---------------------------------------------------------------------------
@@ -23,25 +28,40 @@ import { ClassicLevel } from "classic-level"
 
 const SEP = "\x00"
 const META_PREFIX = `meta${SEP}`
-const ENTRY_PREFIX = `entry${SEP}`
-const SEQ_PAD = 10
+const RECORD_PREFIX = `record${SEP}`
+const SEQ_PAD = 16
 
 // ---------------------------------------------------------------------------
-// Binary envelope — pure encode/decode for StoreEntry
+// Binary envelope v2 — pure encode/decode for StoreRecord
 // ---------------------------------------------------------------------------
 
 // Flags byte layout:
-//   bit 0: kind        (0 = entirety, 1 = since)
-//   bit 1: encoding    (0 = json, 1 = binary)
-//   bit 2: data type   (0 = string, 1 = Uint8Array)
+//   bit 0: payload kind     (0 = entirety, 1 = since) — entry records only
+//   bit 1: encoding         (0 = json, 1 = binary) — entry records only
+//   bit 2: data type        (0 = string, 1 = Uint8Array) — entry records only
+//   bit 3: record kind      (0 = entry, 1 = meta)
+//   bit 7: future-format    (0 = current format, reserved)
 //
-// Layout: [1 byte flags] [4 bytes version length BE] [N bytes version UTF-8] [remaining: payload data]
+// Meta records (bit 3 = 1):
+//   [1 byte flags] [remaining: JSON-encoded StoreMeta]
+//
+// Entry records (bit 3 = 0):
+//   [1 byte flags] [4 bytes version length BE] [N bytes version UTF-8] [remaining: payload data]
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
 
-export function encodeStoreEntry(entry: StoreEntry): Uint8Array {
-  const { payload, version } = entry
+export function encodeStoreRecord(record: StoreRecord): Uint8Array {
+  if (record.kind === "meta") {
+    const metaBytes = encoder.encode(JSON.stringify(record.meta))
+    const buf = new Uint8Array(1 + metaBytes.length)
+    buf[0] = 0x08 // bit 3 set (meta)
+    buf.set(metaBytes, 1)
+    return buf
+  }
+
+  // Entry record
+  const { payload, version } = record
 
   let flags = 0
   if (payload.kind === "since") flags |= 0x01
@@ -66,12 +86,26 @@ export function encodeStoreEntry(entry: StoreEntry): Uint8Array {
   return buf
 }
 
-export function decodeStoreEntry(bytes: Uint8Array): StoreEntry {
+export function decodeStoreRecord(bytes: Uint8Array): StoreRecord {
+  const flagByte = bytes[0]
+  if (flagByte === undefined) throw new Error("empty store record bytes")
+  const flags = flagByte
+
+  // Check future-format flag (bit 7)
+  if ((flags & 0x80) !== 0) {
+    throw new Error("unknown store record format (future-format bit set)")
+  }
+
+  const isMeta = (flags & 0x08) !== 0
+
+  if (isMeta) {
+    const metaJson = decoder.decode(bytes.subarray(1))
+    return { kind: "meta", meta: JSON.parse(metaJson) as StoreMeta }
+  }
+
+  // Entry record
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
 
-  const flagByte = bytes[0]
-  if (flagByte === undefined) throw new Error("empty store entry bytes")
-  const flags = flagByte
   const kind = (flags & 0x01) !== 0 ? "since" : "entirety"
   const encoding = (flags & 0x02) !== 0 ? "binary" : "json"
   const isDataBinary = (flags & 0x04) !== 0
@@ -87,6 +121,7 @@ export function decodeStoreEntry(bytes: Uint8Array): StoreEntry {
     : decoder.decode(rawData)
 
   return {
+    kind: "entry",
     payload: { kind, encoding, data },
     version,
   }
@@ -100,20 +135,20 @@ function metaKey(docId: DocId): string {
   return `${META_PREFIX}${docId}`
 }
 
-function entryPrefix(docId: DocId): string {
-  return `${ENTRY_PREFIX}${docId}${SEP}`
+function recordPrefix(docId: DocId): string {
+  return `${RECORD_PREFIX}${docId}${SEP}`
 }
 
-function entryKey(docId: DocId, seqNo: number): string {
-  return `${entryPrefix(docId)}${String(seqNo).padStart(SEQ_PAD, "0")}`
+function recordKey(docId: DocId, seqNo: number): string {
+  return `${recordPrefix(docId)}${String(seqNo).padStart(SEQ_PAD, "0")}`
 }
 
 function parseDocIdFromMetaKey(key: string): DocId {
   return key.slice(META_PREFIX.length)
 }
 
-function parseSeqNoFromEntryKey(key: string, docId: DocId): number {
-  const prefix = entryPrefix(docId)
+function parseSeqNoFromRecordKey(key: string, docId: DocId): number {
+  const prefix = recordPrefix(docId)
   return Number.parseInt(key.slice(prefix.length), 10)
 }
 
@@ -148,7 +183,7 @@ export class LevelDBStore implements Store {
     }
 
     // Lazy discovery: reverse iterate to find the highest existing seqNo
-    const prefix = entryPrefix(docId)
+    const prefix = recordPrefix(docId)
     let maxSeq = -1
     for await (const key of this.#db.keys({
       gte: prefix,
@@ -156,7 +191,7 @@ export class LevelDBStore implements Store {
       reverse: true,
       limit: 1,
     })) {
-      maxSeq = parseSeqNoFromEntryKey(key, docId)
+      maxSeq = parseSeqNoFromRecordKey(key, docId)
     }
 
     const next = maxSeq + 1
@@ -168,51 +203,57 @@ export class LevelDBStore implements Store {
   // Store interface
   // -------------------------------------------------------------------------
 
-  async lookup(docId: DocId): Promise<DocMetadata | null> {
+  async currentMeta(docId: DocId): Promise<StoreMeta | null> {
     try {
       const raw = await this.#db.get(metaKey(docId))
-      return JSON.parse(decoder.decode(raw)) as DocMetadata
+      return JSON.parse(decoder.decode(raw)) as StoreMeta
     } catch (error: any) {
       if (error.code === "LEVEL_NOT_FOUND") return null
       throw error
     }
   }
 
-  async ensureDoc(docId: DocId, metadata: DocMetadata): Promise<void> {
-    try {
-      await this.#db.get(metaKey(docId))
-      // Already exists — no-op (first call wins)
-    } catch (error: any) {
-      if (error.code === "LEVEL_NOT_FOUND") {
-        await this.#db.put(
-          metaKey(docId),
-          encoder.encode(JSON.stringify(metadata)),
+  async append(docId: DocId, record: StoreRecord): Promise<void> {
+    const existingMeta = await this.currentMeta(docId)
+
+    if (record.kind === "entry") {
+      if (existingMeta === null) {
+        throw new Error(
+          `Store: first record for doc '${docId}' must be meta, got entry`,
         )
-        return
       }
-      throw error
+    } else {
+      // record.kind === "meta" — validate immutability via resolution
+      const resolved = resolveMetaFromBatch([record], existingMeta)
+      await this.#db.put(
+        metaKey(docId),
+        encoder.encode(JSON.stringify(resolved)),
+      )
     }
-  }
 
-  async append(docId: DocId, entry: StoreEntry): Promise<void> {
     const seq = await this.#nextSeqNo(docId)
-    await this.#db.put(entryKey(docId, seq), encodeStoreEntry(entry))
+    await this.#db.put(recordKey(docId, seq), encodeStoreRecord(record))
   }
 
-  async *loadAll(docId: DocId): AsyncIterable<StoreEntry> {
-    const prefix = entryPrefix(docId)
+  async *loadAll(docId: DocId): AsyncIterable<StoreRecord> {
+    const prefix = recordPrefix(docId)
     for await (const value of this.#db.values({
       gte: prefix,
       lt: `${prefix}\xff`,
     })) {
-      yield decodeStoreEntry(value)
+      yield decodeStoreRecord(value)
     }
   }
 
-  async replace(docId: DocId, entry: StoreEntry): Promise<void> {
-    const prefix = entryPrefix(docId)
+  async replace(docId: DocId, records: StoreRecord[]): Promise<void> {
+    const existingMeta = await this.currentMeta(docId)
 
-    // Collect keys to delete
+    // Resolve validates: at least one meta present, immutable fields match.
+    const resolved = resolveMetaFromBatch(records, existingMeta)
+
+    const prefix = recordPrefix(docId)
+
+    // Collect existing record keys to delete
     const keysToDelete: string[] = []
     for await (const key of this.#db.keys({
       gte: prefix,
@@ -221,26 +262,36 @@ export class LevelDBStore implements Store {
       keysToDelete.push(key)
     }
 
-    // Atomic batch: delete all existing entries + write the single replacement
+    // Atomic batch: delete all existing records, write replacements, upsert meta
     const ops: Array<
       | { type: "del"; key: string }
       | { type: "put"; key: string; value: Uint8Array }
     > = keysToDelete.map(key => ({ type: "del" as const, key }))
+
+    for (let i = 0; i < records.length; i++) {
+      ops.push({
+        type: "put",
+        key: recordKey(docId, i),
+        value: encodeStoreRecord(records[i]!),
+      })
+    }
+
     ops.push({
       type: "put",
-      key: entryKey(docId, 0),
-      value: encodeStoreEntry(entry),
+      key: metaKey(docId),
+      value: encoder.encode(JSON.stringify(resolved)),
     })
+
     await this.#db.batch(ops)
 
-    // Reset seqNo counter
-    this.#seqNos.set(docId, 0)
+    // Reset seqNo counter to the last written index
+    this.#seqNos.set(docId, records.length - 1)
   }
 
   async delete(docId: DocId): Promise<void> {
-    const prefix = entryPrefix(docId)
+    const prefix = recordPrefix(docId)
 
-    // Collect entry keys to delete
+    // Collect record keys to delete
     const keysToDelete: string[] = [metaKey(docId)]
     for await (const key of this.#db.keys({
       gte: prefix,
@@ -257,10 +308,12 @@ export class LevelDBStore implements Store {
     this.#seqNos.delete(docId)
   }
 
-  async *listDocIds(): AsyncIterable<DocId> {
+  async *listDocIds(prefix?: string): AsyncIterable<DocId> {
+    const rangePrefix =
+      prefix !== undefined ? `${META_PREFIX}${prefix}` : META_PREFIX
     for await (const key of this.#db.keys({
-      gte: META_PREFIX,
-      lt: `${META_PREFIX}\xff`,
+      gte: rangePrefix,
+      lt: `${rangePrefix}\xff`,
     })) {
       yield parseDocIdFromMetaKey(key)
     }
