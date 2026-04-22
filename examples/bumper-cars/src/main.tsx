@@ -42,13 +42,15 @@ const initialColor = localStorage.getItem(COLOR_KEY)
 // Mount
 // ─────────────────────────────────────────────────────────────────────────
 
-const config = {
-  id: { peerId, name: initialName, type: "user" },
-  transports: [createWebsocketClient({ url: `ws://${location.host}/ws`, WebSocket })],
-}
-
 createRoot(document.getElementById("root")!).render(
-  <ExchangeProvider config={config}>
+  <ExchangeProvider
+    config={{
+      id: { peerId, name: initialName, type: "user" },
+      transports: [
+        createWebsocketClient({ url: `ws://${location.host}/ws`, WebSocket }),
+      ],
+    }}
+  >
     <BumperCarsApp initialName={initialName} initialColor={initialColor} />
   </ExchangeProvider>,
 )

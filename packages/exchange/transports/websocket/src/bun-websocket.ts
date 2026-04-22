@@ -31,7 +31,7 @@ import type { Socket, SocketReadyState } from "./types.js"
  */
 export type BunWebsocketData = {
   handlers: {
-    onMessage?: (data: Uint8Array | string) => void
+    onMessage?: (data: Uint8Array<ArrayBuffer> | string) => void
     onClose?: (code: number, reason: string) => void
   }
 }
@@ -78,7 +78,7 @@ export function wrapBunWebsocket(
   ws.data = { handlers: {} }
 
   return {
-    send(data: Uint8Array | string): void {
+    send(data: Uint8Array<ArrayBuffer> | string): void {
       ws.send(data)
     },
 
@@ -86,7 +86,7 @@ export function wrapBunWebsocket(
       ws.close(code, reason)
     },
 
-    onMessage(handler: (data: Uint8Array | string) => void): void {
+    onMessage(handler: (data: Uint8Array<ArrayBuffer> | string) => void): void {
       ws.data.handlers.onMessage = handler
     },
 

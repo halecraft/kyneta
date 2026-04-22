@@ -107,7 +107,7 @@ export function hexToBytes(hex: string, length: number): Uint8Array {
  * Used by adapters for unfragmented messages — prepends the 0x00 byte
  * so the receiver can distinguish complete frames from fragments.
  */
-export function wrapCompleteMessage(data: Uint8Array): Uint8Array {
+export function wrapCompleteMessage(data: Uint8Array): Uint8Array<ArrayBuffer> {
   const result = new Uint8Array(1 + data.length)
   result[0] = MESSAGE_COMPLETE
   result.set(data, 1)
@@ -120,7 +120,7 @@ export function wrapCompleteMessage(data: Uint8Array): Uint8Array {
  * Used by adapters for fragmented messages — prepends the 0x01 byte
  * so the receiver can quickly distinguish fragments from complete frames.
  */
-export function wrapFragment(data: Uint8Array): Uint8Array {
+export function wrapFragment(data: Uint8Array): Uint8Array<ArrayBuffer> {
   const result = new Uint8Array(1 + data.length)
   result[0] = FRAGMENT
   result.set(data, 1)
@@ -199,7 +199,7 @@ export function parseTransportPayload(data: Uint8Array): TransportPayload {
 export function fragmentPayload(
   frameData: Uint8Array,
   maxChunkSize: number,
-): Uint8Array[] {
+): Uint8Array<ArrayBuffer>[] {
   if (maxChunkSize <= 0) {
     throw new Error("maxChunkSize must be positive")
   }
@@ -208,7 +208,7 @@ export function fragmentPayload(
   const frameIdBytes = hexToBytes(frameId, FRAME_ID_SIZE)
   const totalSize = frameData.length
   const fragmentCount = Math.ceil(totalSize / maxChunkSize)
-  const result: Uint8Array[] = []
+  const result: Uint8Array<ArrayBuffer>[] = []
 
   for (let i = 0; i < fragmentCount; i++) {
     const chunkStart = i * maxChunkSize
@@ -242,7 +242,7 @@ function buildFragmentFrame(
   total: number,
   totalSize: number,
   chunk: Uint8Array,
-): Uint8Array {
+): Uint8Array<ArrayBuffer> {
   const frame = new Uint8Array(HEADER_SIZE + FRAGMENT_META_SIZE + chunk.length)
   const view = new DataView(frame.buffer)
 

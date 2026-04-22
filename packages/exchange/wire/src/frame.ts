@@ -44,7 +44,9 @@ import { complete, fragment as fragmentFrame } from "./frame-types.js"
  * `encodeComplete` / `encodeCompleteBatch` for the common case of
  * encoding from `ChannelMsg`.
  */
-export function encodeBinaryFrame(frame: Frame<Uint8Array>): Uint8Array {
+export function encodeBinaryFrame(
+  frame: Frame<Uint8Array>,
+): Uint8Array<ArrayBuffer> {
   const { version, hash, content } = frame
 
   const hashAlgo = hash !== null ? HASH_ALGO.SHA256 : HASH_ALGO.NONE
@@ -206,7 +208,7 @@ export function decodeBinaryFrame(data: Uint8Array): Frame<Uint8Array> {
 export function encodeComplete(
   codec: BinaryCodec,
   msg: ChannelMsg,
-): Uint8Array {
+): Uint8Array<ArrayBuffer> {
   const payload = codec.encode(msg)
   return encodeBinaryFrame(complete(WIRE_VERSION, payload))
 }
@@ -220,7 +222,7 @@ export function encodeComplete(
 export function encodeCompleteBatch(
   codec: BinaryCodec,
   msgs: ChannelMsg[],
-): Uint8Array {
+): Uint8Array<ArrayBuffer> {
   const payload = codec.encode(msgs)
   return encodeBinaryFrame(complete(WIRE_VERSION, payload))
 }

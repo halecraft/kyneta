@@ -108,14 +108,21 @@ export type SocketReadyState = "connecting" | "open" | "closing" | "closed"
  * adapter needs are exposed.
  */
 export interface Socket {
-  /** Send binary or text data through the Websocket. */
-  send(data: Uint8Array | string): void
+  /**
+   * Narrowed to `Uint8Array<ArrayBuffer>` because the strictest downstream
+   * runtimes reject `SharedArrayBuffer`-backed views: Bun's `BufferSource`
+   * resolves to `ArrayBufferView<ArrayBuffer> | ArrayBuffer`, and Hono's
+   * `WSContext.send` takes `Uint8Array<ArrayBuffer>` directly. The wire
+   * pipeline allocates with `new Uint8Array(n)`, so producers satisfy this
+   * without changes.
+   */
+  send(data: Uint8Array<ArrayBuffer> | string): void
 
   /** Close the Websocket connection. */
   close(code?: number, reason?: string): void
 
   /** Register a handler for incoming messages (binary or text). */
-  onMessage(handler: (data: Uint8Array | string) => void): void
+  onMessage(handler: (data: Uint8Array<ArrayBuffer> | string) => void): void
 
   /** Register a handler for connection close. */
   onClose(handler: (code: number, reason: string) => void): void
@@ -234,17 +241,15 @@ export type TransitionListener = GenericTransitionListener<WebsocketClientState>
  */
 export function wrapStandardWebsocket(ws: WebSocket): Socket {
   return {
-    send(data: Uint8Array | string): void {
-      ws.send(
-        typeof data === "string" ? data : (data as Uint8Array<ArrayBuffer>),
-      )
+    send(data: Uint8Array<ArrayBuffer> | string): void {
+      ws.send(data)
     },
 
     close(code?: number, reason?: string): void {
       ws.close(code, reason)
     },
 
-    onMessage(handler: (data: Uint8Array | string) => void): void {
+    onMessage(handler: (data: Uint8Array<ArrayBuffer> | string) => void): void {
       ws.addEventListener("message", event => {
         if (event.data instanceof ArrayBuffer) {
           handler(new Uint8Array(event.data))
@@ -299,7 +304,7 @@ export function wrapStandardWebsocket(ws: WebSocket): Socket {
  * the actual `ws` instance, we just need these methods.
  */
 export interface NodeWebsocketLike {
-  send(data: Uint8Array | string): void
+  send(data: Uint8Array<ArrayBuffer> | string): void
   close(code?: number, reason?: string): void
   on(
     event: "message",
@@ -321,7 +326,7 @@ export function wrapNodeWebsocket(ws: NodeWebsocketLike): Socket {
   const CLOSING = 2
 
   return {
-    send(data: Uint8Array | string): void {
+    send(data: Uint8Array<ArrayBuffer> | string): void {
       ws.send(data)
     },
 
@@ -329,7 +334,7 @@ export function wrapNodeWebsocket(ws: NodeWebsocketLike): Socket {
       ws.close(code, reason)
     },
 
-    onMessage(handler: (data: Uint8Array | string) => void): void {
+    onMessage(handler: (data: Uint8Array<ArrayBuffer> | string) => void): void {
       ws.on(
         "message",
         (data: Buffer | ArrayBuffer | string, isBinary: boolean) => {

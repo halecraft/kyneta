@@ -134,7 +134,7 @@ function encodeNumber(
   }
 }
 
-function encodeFloat(data: number): Uint8Array {
+function encodeFloat(data: number): Uint8Array<ArrayBuffer> {
   if (
     Math.fround(data) === data ||
     !Number.isFinite(data) ||
@@ -221,8 +221,12 @@ function encodeValue(data: CBORType, output: (number | Uint8Array)[]): void {
 
 /**
  * Encode a value to a CBOR byte string.
+ *
+ * Returns `Uint8Array<ArrayBuffer>` (not `Uint8Array<ArrayBufferLike>`)
+ * so downstream WebSocket `.send` paths that reject SharedArrayBuffer
+ * (Bun, Hono) can accept the result without a cast.
  */
-export function encodeCBOR(data: CBORType): Uint8Array {
+export function encodeCBOR(data: CBORType): Uint8Array<ArrayBuffer> {
   const parts: (number | Uint8Array)[] = []
   encodeValue(data, parts)
 

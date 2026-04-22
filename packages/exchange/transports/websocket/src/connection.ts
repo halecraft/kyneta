@@ -157,7 +157,7 @@ export class WebsocketConnection {
   /**
    * Handle an incoming message from the Websocket.
    */
-  #handleMessage(data: Uint8Array | string): void {
+  #handleMessage(data: Uint8Array<ArrayBuffer> | string): void {
     // Handle keepalive ping/pong (text frames)
     if (typeof data === "string") {
       this.#handleKeepalive(data)

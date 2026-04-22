@@ -38,7 +38,7 @@ import type { FragmentReassembler } from "./reassembler.js"
 export function encodeBinaryAndSend(
   msg: ChannelMsg,
   fragmentThreshold: number,
-  sendFn: (data: Uint8Array) => void,
+  sendFn: (data: Uint8Array<ArrayBuffer>) => void,
 ): void {
   const frame = encodeComplete(cborCodec, msg)
   if (fragmentThreshold > 0 && frame.length > fragmentThreshold) {

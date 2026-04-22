@@ -278,7 +278,7 @@ function fromWireFormat(wire: WireMessage): ChannelMsg {
  * natively as CBOR byte strings — no base64 overhead.
  */
 export const cborCodec: BinaryCodec = {
-  encode(input: ChannelMsg | ChannelMsg[]): Uint8Array {
+  encode(input: ChannelMsg | ChannelMsg[]): Uint8Array<ArrayBuffer> {
     if (Array.isArray(input)) {
       const wireMessages = input.map(toWireFormat)
       return encodeCBOR(objectToMap(wireMessages))

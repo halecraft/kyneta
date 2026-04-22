@@ -33,10 +33,11 @@ import type { ChannelMsg } from "@kyneta/transport"
 export interface BinaryCodec {
   /**
    * Encode one or more messages to bytes.
-   * A single message produces a single-message payload.
-   * An array produces a batch payload.
+   *
+   * Returns `Uint8Array<ArrayBuffer>` so WebSocket runtimes that reject
+   * SharedArrayBuffer-backed views (Bun, Hono) accept the result directly.
    */
-  encode(input: ChannelMsg | ChannelMsg[]): Uint8Array
+  encode(input: ChannelMsg | ChannelMsg[]): Uint8Array<ArrayBuffer>
 
   /**
    * Decode bytes back to messages. Always returns an array.
