@@ -19,6 +19,7 @@
 //   // Wire up GET /events and POST /sync manually using
 //   // serverAdapter.registerConnection() and parseTextPostBody()
 
+import { randomPeerId } from "@kyneta/random"
 import type { ChannelMsg, GeneratedChannel, PeerId } from "@kyneta/transport"
 import { Transport } from "@kyneta/transport"
 import { DEFAULT_FRAGMENT_THRESHOLD, SseConnection } from "./connection.js"
@@ -38,22 +39,6 @@ export interface SseServerTransportOptions {
    * Default: 60000 (60K chars)
    */
   fragmentThreshold?: number
-}
-
-// ---------------------------------------------------------------------------
-// Peer ID generation
-// ---------------------------------------------------------------------------
-
-/**
- * Generate a random peer ID for connections that don't provide one.
- */
-function generatePeerId(): PeerId {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-  let result = "sse-"
-  for (let i = 0; i < 12; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length))
-  }
-  return result
 }
 
 // ---------------------------------------------------------------------------
@@ -153,7 +138,7 @@ export class SseServerTransport extends Transport<PeerId> {
    * ```
    */
   registerConnection(peerId?: PeerId): SseConnection {
-    const resolvedPeerId = peerId ?? generatePeerId()
+    const resolvedPeerId = peerId ?? (`sse-${randomPeerId()}` as PeerId)
 
     // Check for existing connection and clean it up
     const existingConnection = this.#connections.get(resolvedPeerId)

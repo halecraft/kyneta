@@ -11,6 +11,7 @@
 // No "ready" handshake — UDS connections are bidirectionally ready
 // immediately. The client calls `establishChannel` directly after connect.
 
+import { randomPeerId } from "@kyneta/random"
 import type { ChannelMsg, GeneratedChannel, PeerId } from "@kyneta/transport"
 import { Transport } from "@kyneta/transport"
 import { UnixSocketConnection } from "./connection.js"
@@ -32,22 +33,6 @@ export interface UnixSocketServerOptions {
   path: string
   /** Remove stale socket file on start. Default: true. */
   cleanup?: boolean
-}
-
-// ---------------------------------------------------------------------------
-// Peer ID generation
-// ---------------------------------------------------------------------------
-
-/**
- * Generate a random peer ID for connections that don't provide one.
- */
-function generatePeerId(): PeerId {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-  let result = "uds-"
-  for (let i = 0; i < 12; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length))
-  }
-  return result
 }
 
 // ---------------------------------------------------------------------------
@@ -142,7 +127,7 @@ export class UnixSocketServerTransport extends Transport<PeerId> {
    * creates a channel, and starts processing messages.
    */
   #handleConnection(socket: UnixSocket): void {
-    const peerId = generatePeerId()
+    const peerId = `uds-${randomPeerId()}` as PeerId
 
     // Create channel for this peer
     const channel = this.addChannel(peerId)

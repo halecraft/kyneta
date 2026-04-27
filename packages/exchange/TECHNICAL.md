@@ -304,7 +304,7 @@ The `resolveLease` pure core is independently tested. Storage keys (`key`, `key 
 
 ### What `persistentPeerId` is NOT
 
-- **Not a UUID generator.** The fresh-tab peer is a `randomPeerId()`, but the primary case returns a *stable* device-level ID.
+- **Not a UUID generator.** The fresh-tab peer uses `randomPeerId()` (from `@kyneta/random`), but the primary case returns a *stable* device-level ID.
 - **Not cross-domain.** `localStorage` is origin-scoped. Different domains mean different devices.
 - **Not a server-side helper.** Server processes should pass explicit `peerId` strings; the lease protocol assumes `localStorage` / `sessionStorage`.
 
@@ -682,10 +682,10 @@ The decision is per-doc per-peer, consulted at the sync-program level. Applicati
 | `src/capabilities.ts` | 284 | `Capabilities`, `ReplicaKey`, `ReplicaEntry`, `DEFAULT_REPLICAS`, `createCapabilities`. |
 | `src/line.ts` | 745 | `Line`, `LineProtocol`, envelope schema, ack-based pruning. |
 | `src/async-queue.ts` | 69 | Bounded async queue used by `Line`. |
-| `src/persistent-peer-id.ts` | 216 | Browser-tab peer-ID lease; FC/IS split. |
+| `src/persistent-peer-id.ts` | 216 | Browser-tab peer-ID lease; FC/IS split. Imports `randomPeerId` and `randomHex` from `@kyneta/random`. |
 | `src/sync.ts` | 195 | `sync(doc)` helper + `registerSync`. |
 | `src/types.ts` | 134 | `DocChange`, `DocInfo`, `PeerChange`, `PeerDocSyncState`, `PeerState`, `ReadyState`. |
-| `src/utils.ts` | 50 | `validatePeerId`, `randomPeerId`, `randomToken`. |
+| `src/utils.ts` | 50 | `validatePeerId`. (Random ID generation extracted to `@kyneta/random`.) |
 | `src/store/` | — | `Store` interface + in-memory implementation. |
 | `src/transport/` | — | Transport-manager glue. |
 | `src/testing/` | — | Test-only helpers exported from `@kyneta/exchange/testing`. |

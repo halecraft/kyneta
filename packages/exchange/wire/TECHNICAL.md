@@ -2,7 +2,7 @@
 
 > **Package**: `@kyneta/wire`
 > **Role**: The universal wire format — one `Frame<T>` abstraction, two codecs (binary CBOR + text JSON), two framings (7-byte binary header + 2-char text prefix), one fragmentation protocol, and a pure byte-stream parser for stream-oriented transports.
-> **Depends on**: `@kyneta/transport` (peer)
+> **Depends on**: `@kyneta/transport` (peer), `@kyneta/random`
 > **Depended on by**: `@kyneta/websocket-transport`, `@kyneta/sse-transport`, `@kyneta/webrtc-transport`, `@kyneta/unix-socket-transport`
 > **Canonical symbols**: `Frame<T>`, `Complete<T>`, `Fragment<T>`, `complete`, `fragment`, `isComplete`, `isFragment`, `BinaryCodec`, `TextCodec`, `cborCodec`, `textCodec`, `encodeBinaryFrame`, `decodeBinaryFrame`, `encodeComplete`, `encodeCompleteBatch`, `encodeTextFrame`, `decodeTextFrame`, `FragmentCollector<T>`, `decideFragment`, `FragmentReassembler`, `TextReassembler`, `encodeBinaryAndSend`, `decodeBinaryMessages`, `feedBytes`, `initialParserState`, `StreamParserState`, `WIRE_VERSION`, `HEADER_SIZE`, `FRAGMENT_META_SIZE`, `FrameDecodeError`, `TextFrameDecodeError`, `SyncProtocolWire`, `SyncProtocolWireValue`, `SyncProtocolWireToProtocol`, `syncProtocolToWire`
 > **Key invariant(s)**: Every byte that crosses a transport is a `Frame<T>`. A frame is either `Complete<T>` (full payload) or `Fragment<T>` (one chunk of a larger payload). Batching is not a frame concern — the codec's payload is self-describing (CBOR array vs map, JSON array vs object).
@@ -192,7 +192,7 @@ Fragmentation and reassembly work identically to the binary pipeline, via `fragm
 
 Source: `packages/exchange/wire/src/fragment.ts`, `packages/exchange/wire/src/fragment-collector.ts`.
 
-`shouldFragment(payloadSize, maxSize)` decides whether a payload needs to be split. `fragmentPayload(payload, maxSize)` splits it and returns `Fragment<T>[]`. Each fragment carries `frameId` (8-byte random), `index`, `total`, and `totalSize` so the receiver can reassemble without side-channel state.
+`shouldFragment(payloadSize, maxSize)` decides whether a payload needs to be split. `fragmentPayload(payload, maxSize)` splits it and returns `Fragment<T>[]`. Each fragment carries `frameId` (8-byte hex string produced by `generateFrameId`, which delegates to `@kyneta/random`'s `randomHex(FRAME_ID_SIZE)` for secure-context-free randomness), `index`, `total`, and `totalSize` so the receiver can reassemble without side-channel state.
 
 ### `FragmentCollector<T>` — functional core / imperative shell
 

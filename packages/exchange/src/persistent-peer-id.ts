@@ -21,7 +21,7 @@
 // This is intentionally browser-only. Server-side peerIds should be
 // explicit strings passed via `ExchangeParams.identity.peerId`.
 
-import { randomPeerId, randomToken } from "./utils.js"
+import { randomHex, randomPeerId } from "@kyneta/random"
 
 // ---------------------------------------------------------------------------
 // Functional Core — pure lease decision
@@ -160,7 +160,7 @@ export function persistentPeerId(storageKey = "kyneta-peer-id"): string {
   // Ensure session token exists in sessionStorage (unique per tab, survives reload).
   let sessionToken = sessionStorage.getItem(tokenKey)
   if (!sessionToken) {
-    sessionToken = randomToken()
+    sessionToken = randomHex(16)
     sessionStorage.setItem(tokenKey, sessionToken)
   }
 

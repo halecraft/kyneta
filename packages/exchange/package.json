@@ -43,6 +43,7 @@
   },
   "dependencies": {
     "@kyneta/machine": "workspace:*",
+    "@kyneta/random": "workspace:^",
     "@kyneta/transport": "workspace:^"
   },
   "devDependencies": {

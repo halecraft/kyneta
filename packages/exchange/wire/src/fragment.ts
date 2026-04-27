@@ -12,6 +12,7 @@
 // total, and totalSize. No separate "fragment header" message is
 // needed — the collector auto-creates state on first contact.
 
+import { randomHex } from "@kyneta/random"
 import {
   BinaryFrameType,
   FRAGMENT,
@@ -64,13 +65,11 @@ export class FragmentParseError extends Error {
 /**
  * Generate a random frame ID as a hex string.
  *
- * Uses crypto.getRandomValues for randomness. The returned string
- * is `FRAME_ID_SIZE * 2` hex characters (16 chars for 8 bytes).
+ * Delegates to `@kyneta/random` for secure-context-free randomness.
+ * The returned string is `FRAME_ID_SIZE * 2` hex characters (16 chars for 8 bytes).
  */
 export function generateFrameId(): string {
-  const bytes = new Uint8Array(FRAME_ID_SIZE)
-  crypto.getRandomValues(bytes)
-  return bytesToHex(bytes)
+  return randomHex(FRAME_ID_SIZE)
 }
 
 /**

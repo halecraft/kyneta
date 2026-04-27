@@ -28,6 +28,7 @@
 // Ported from @loro-extended/adapter-websocket's WsServerNetworkAdapter with
 // kyneta naming conventions and the kyneta 5-message protocol.
 
+import { randomPeerId } from "@kyneta/random"
 import type { ChannelMsg, GeneratedChannel, PeerId } from "@kyneta/transport"
 import { Transport } from "@kyneta/transport"
 import {
@@ -53,22 +54,6 @@ export interface WebsocketServerTransportOptions {
    * Default: 100KB (safe for AWS API Gateway's 128KB limit)
    */
   fragmentThreshold?: number
-}
-
-// ---------------------------------------------------------------------------
-// Peer ID generation
-// ---------------------------------------------------------------------------
-
-/**
- * Generate a random peer ID for connections that don't provide one.
- */
-function generatePeerId(): PeerId {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-  let result = "ws-"
-  for (let i = 0; i < 12; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length))
-  }
-  return result
 }
 
 // ---------------------------------------------------------------------------
@@ -174,7 +159,7 @@ export class WebsocketServerTransport extends Transport<PeerId> {
     const { socket, peerId: providedPeerId } = options
 
     // Generate peer ID if not provided
-    const peerId = providedPeerId ?? generatePeerId()
+    const peerId = providedPeerId ?? (`ws-${randomPeerId()}` as PeerId)
 
     // Check for existing connection with same peer ID
     const existingConnection = this.#connections.get(peerId)

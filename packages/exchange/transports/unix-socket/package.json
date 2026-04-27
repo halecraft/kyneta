@@ -31,6 +31,7 @@
   },
   "peerDependencies": {
     "@kyneta/machine": "^1.4.0",
+    "@kyneta/random": "workspace:^",
     "@kyneta/transport": "^1.4.0",
     "@kyneta/wire": "^1.4.0"
   },

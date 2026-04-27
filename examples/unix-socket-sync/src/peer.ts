@@ -7,6 +7,7 @@
 // over a single socket path. Kill any instance and the rest heal.
 
 import { Exchange } from "@kyneta/exchange"
+import { randomPeerId } from "@kyneta/random"
 import { change, subscribe } from "@kyneta/schema"
 import { createUnixSocketPeer } from "@kyneta/unix-socket-transport"
 import { ConfigDoc } from "./schema.js"
@@ -18,7 +19,7 @@ import { render, startInput, type PeerInfo } from "./tui.js"
 // ---------------------------------------------------------------------------
 
 const SOCKET_PATH = process.env.SOCKET_PATH ?? "/tmp/kyneta-sync.sock"
-const peerId = `peer-${Math.random().toString(36).slice(2, 8)}`
+const peerId = `peer-${randomPeerId()}`
 
 // ---------------------------------------------------------------------------
 // Exchange + document

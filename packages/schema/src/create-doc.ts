@@ -10,6 +10,7 @@
 // [NATIVE] is attached during interpretation via the nativeResolver protocol.
 // [SUBSTRATE] is attached by createRef on the root ref for sync functions.
 
+import { randomPeerId } from "@kyneta/random"
 import type { BoundSchema } from "./bind.js"
 import { interpret } from "./interpret.js"
 import { observation, readable, writable } from "./layers.js"
@@ -86,19 +87,23 @@ export function createRef(schema: SchemaType, substrate: Substrate<any>): any {
 type CreateDoc = {
   <S extends SchemaType, N extends NativeMap>(
     bound: BoundSchema<S, N>,
+    payload?: SubstratePayload,
+    peerId?: string,
   ): DocRef<S, N>
   <S extends SchemaType, N extends NativeMap>(
     bound: BoundSchema<S, N>,
     payload: SubstratePayload,
+    peerId?: string,
   ): DocRef<S, N>
 }
 
 export const createDoc: CreateDoc = ((
   bound: BoundSchema<any, any>,
   payload?: SubstratePayload,
+  peerId?: string,
 ): any => {
   const factory = bound.factory({
-    peerId: crypto.randomUUID(),
+    peerId: peerId ?? randomPeerId(),
     binding: bound.identityBinding,
   })
   const substrate = payload
