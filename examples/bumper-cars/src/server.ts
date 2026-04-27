@@ -50,7 +50,11 @@ const serverTransport = new WebsocketServerTransport()
 let gameLoop: GameLoop
 
 const exchange = new Exchange({
-  id: { peerId: "bumper-cars-server", name: "bumper-cars-server", type: "service" },
+  id: {
+    peerId: "bumper-cars-server",
+    name: "bumper-cars-server",
+    type: "service",
+  },
   transports: [() => serverTransport],
   schemas: [PlayerInputDoc],
 
@@ -131,9 +135,11 @@ gameLoop.start()
 // 3. Serve — HTTP for static files, WebSocket for sync
 // ─────────────────────────────────────────────────────────────────────────
 
+const HOST = "0.0.0.0"
 const PORT = Number(process.env.PORT ?? 5173)
 
 Bun.serve<BunWebsocketData>({
+  hostname: HOST,
   port: PORT,
 
   async fetch(req, server) {
@@ -152,5 +158,5 @@ Bun.serve<BunWebsocketData>({
 })
 
 console.log(`\n  ✅ Bumper Cars server`)
-console.log(`     http://localhost:${PORT}/`)
-console.log(`     WebSocket: ws://localhost:${PORT}/ws\n`)
+console.log(`     http://${HOST}:${PORT}/`)
+console.log(`     WebSocket: ws://${HOST}:${PORT}/ws\n`)
