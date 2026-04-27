@@ -37,9 +37,18 @@ export function useKeyboardInput(): InputState {
   const [keys, setKeys] = useState(INITIAL_KEYS)
 
   useEffect(() => {
+    // Don't capture game keys when the user is typing in a form field.
+    const isTyping = (e: KeyboardEvent): boolean => {
+      const t = e.target
+      if (!(t instanceof HTMLElement)) return false
+      if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement) return true
+      return t.isContentEditable
+    }
+
     const handleKeyDown = (e: KeyboardEvent) => {
       // Ignore key repeat events — only handle initial press
       if (e.repeat) return
+      if (isTyping(e)) return
 
       switch (e.key.toLowerCase()) {
         case "w":
@@ -66,6 +75,8 @@ export function useKeyboardInput(): InputState {
     }
 
     const handleKeyUp = (e: KeyboardEvent) => {
+      if (isTyping(e)) return
+
       switch (e.key.toLowerCase()) {
         case "w":
         case "arrowup":
