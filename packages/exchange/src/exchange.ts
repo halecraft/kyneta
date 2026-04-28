@@ -288,13 +288,8 @@ export class Exchange {
     // _start() if a transport immediately discovers peers.
     this.#governance = new Governance()
 
-    // Register the initial policy from ExchangeParams. Because
-    // ExchangeParams intersects Policy, the spread contains all
-    // Policy fields the caller provided. Register if any gate is set.
-    const { canShare, canAccept, canReset, canConnect, resolve } = policyFields
-    if (canShare || canAccept || canReset || canConnect || resolve) {
-      this.#governance.register(policyFields)
-    }
+    // Register the initial policy from ExchangeParams.
+    this.#governance.register(policyFields)
 
     // Build the capabilities registry from declared schemas and replicas.
     this.#capabilities = createCapabilities({
@@ -947,9 +942,12 @@ export class Exchange {
 
   /**
    * Compute the least common version (LCV) for a document across all
-   * synced peers. The LCV is the greatest version that is ≤ every
-   * synced peer's last known version — the safe trim point for
-   * `advance()`.
+   * synced cohort members. The LCV is the greatest version that is ≤
+   * every synced cohort peer's last known version — the safe trim
+   * point for `advance()`.
+   *
+   * Cohort membership is determined by the governance `cohort` gate;
+   * the default cohort includes all peers (open gate).
    *
    * Returns `null` if no peers are synced for this doc, or if the
    * doc doesn't exist.
@@ -957,7 +955,9 @@ export class Exchange {
    * @param docId - The document to compute the LCV for
    */
   leastCommonVersion(docId: DocId): Version | null {
-    return this.#synchronizer.leastCommonVersion(docId)
+    return this.#synchronizer.leastCommonVersion(docId, (peer, docId) =>
+      this.#governance.cohort(docId, peer),
+    )
   }
 
   /**

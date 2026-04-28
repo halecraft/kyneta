@@ -421,6 +421,22 @@ describe("Governance", () => {
       expect(registry.canReset(doc, alice, SYNC_COLLABORATIVE)).toBe(true)
     })
   })
+
+  // -----------------------------------------------------------------------
+
+  describe("cohort composition", () => {
+    it("defaults to true (all peers in cohort) when no policy has an opinion", () => {
+      const registry = new Governance()
+      expect(registry.cohort(doc, alice)).toBe(true)
+    })
+
+    it("false from any policy excludes the peer from the cohort", () => {
+      const registry = new Governance()
+      registry.register({ cohort: () => true })
+      registry.register({ cohort: () => false })
+      expect(registry.cohort(doc, alice)).toBe(false)
+    })
+  })
 })
 
 // ---------------------------------------------------------------------------

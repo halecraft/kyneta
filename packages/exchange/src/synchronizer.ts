@@ -514,7 +514,10 @@ export class Synchronizer {
    * raise the LCV incorrectly when the local node has advanced
    * past what it's pushed to peers.
    */
-  leastCommonVersion(docId: DocId): Version | null {
+  leastCommonVersion(
+    docId: DocId,
+    peerFilter?: (peer: PeerIdentityDetails, docId: DocId) => boolean,
+  ): Version | null {
     const runtime = this.#docRuntimes.get(docId)
     if (!runtime) return null
 
@@ -523,6 +526,7 @@ export class Synchronizer {
     for (const [, peerState] of this.#syncModel.peers) {
       const docSync = peerState.docSyncStates.get(docId)
       if (!docSync || docSync.status !== "synced") continue
+      if (peerFilter && !peerFilter(peerState.identity, docId)) continue
 
       let peerVersion: Version
       try {

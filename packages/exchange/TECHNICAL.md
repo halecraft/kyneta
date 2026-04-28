@@ -383,8 +383,9 @@ A `Policy` is an interface with **optional** gate predicates and handlers. Any f
 interface Policy {
   canShare?: GatePredicate       // Should we include this doc in our `present`?
   canAccept?: GatePredicate       // Should we accept a peer's `present` for this doc?
-  canConnect?: (peer) => boolean | undefined   // Should we accept this peer at all?
   canReset?: EpochBoundaryPredicate     // Accept compaction-induced state discard?
+  cohort?: GatePredicate         // Does this peer's version constrain compaction?
+  canConnect?: (peer) => boolean | undefined   // Should we accept this peer at all?
   resolve?: (peer, docMeta) => Disposition      // Classify an unknown doc
 }
 ```
@@ -402,10 +403,25 @@ The default differs per gate:
 
 | Gate | All-`undefined` default |
 |------|------------------------|
-| `canShare` / `canAccept` / `canConnect` | `true` (open) |
-| `canReset` | Protocol-aware — `false` when `requiresBidirectionalSync(syncProtocol)` (preserve causal history for CRDTs), `true` otherwise (`authoritative` / `ephemeral`) |
+| `canShare` / `canAccept` / `canConnect` / `canReset` | `true` (open) |
+| `cohort` | `true` (all synced peers in the cohort) |
 
 Three-valued logic is the composition mechanism. One `false` vetoes; one `true` permits (with no vetoes); all-undefined falls through to default. This lets a feature (a `Line`, a room, a game loop, a user-supplied policy) register its own gates without coordinating with the rest of the system — policies are independent concerns that unify cleanly.
+
+### `cohort` — compaction scope governance
+
+The `cohort` gate determines which peers' confirmed versions participate in the LCV (least common version) computation. `Exchange.compact(docId)` uses the LCV as the safe trim point — `replica.advance()` never exceeds the LCV, so cohort members are guaranteed incremental delta sync (never stranded by compaction).
+
+Peers **outside** the cohort sync normally but may be compacted past. When this happens, `exportSince()` returns `null` for the stranded peer, triggering an `exportEntirety()` fallback — an epoch reset. If the stranded peer has unsynced local writes, those writes are lost on reset.
+
+The default (`true`) includes all synced peers in the cohort, matching pre-cohort behavior: the LCV considers every synced peer, and compaction never strands anyone. Set a `cohort` policy to restrict the LCV to durable peers (e.g., `peer.type === "service"`), allowing ephemeral peers (browser tabs, mobile clients) to be compacted past without holding back the frontier.
+
+```ts
+new Exchange({
+  id: { peerId: "server", type: "service" },
+  cohort: (_docId, peer) => peer.type === "service" ? true : false,
+})
+```
 
 ### What `Policy` / `Governance` is NOT
 
@@ -626,15 +642,9 @@ When the receiver encounters an entirety for a doc that already has local state,
 1. **Accept the reset.** Discard local state, adopt the incoming entirety. This is safe if the receiver's state was already ahead of compaction (all its ops are already in the sender's snapshot).
 2. **Reject the reset.** Keep local state. Sync will diverge from peers that compacted.
 
-`Policy.canReset(docId, peer)` is the gate. Its default varies:
+`Policy.canReset(docId, peer)` is the gate. It defaults to `true` (accept) for all sync protocols. Applications that need to reject resets for specific docs or peers register a `canReset` policy.
 
-| SyncProtocol | Default |
-|--------------|---------|
-| `SYNC_COLLABORATIVE` (`requiresBidirectionalSync` = true) | `false` — preserve causal history by default |
-| `SYNC_AUTHORITATIVE` (`requiresBidirectionalSync` = false) | `true` — total order, resets are fine |
-| `SYNC_EPHEMERAL` (`requiresBidirectionalSync` = false) | `true` — no history anyway |
-
-The decision is per-doc per-peer, consulted at the sync-program level. Applications can register a custom `canReset` policy for nuanced cases (e.g., "accept reset iff I've been offline for less than 1 hour").
+For durability guarantees, use the `cohort` predicate to prevent compaction past critical peers — this is strictly better than receiver-side rejection, which causes permanent divergence with no built-in reconciliation path. The cohort prevents the situation from arising: `Exchange.leastCommonVersion(docId)` computes the LCV over cohort members only, so `compact()` never advances past a cohort member's confirmed version. The default cohort (no policy) includes all synced peers, preserving backward compatibility.
 
 ### What an epoch boundary is NOT
 

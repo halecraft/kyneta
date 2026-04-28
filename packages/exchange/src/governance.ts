@@ -69,6 +69,7 @@ export interface Policy {
   canShare?: GatePredicate
   canAccept?: GatePredicate
   canReset?: EpochBoundaryPredicate
+  cohort?: GatePredicate
   canConnect?: (peer: PeerIdentityDetails) => boolean | undefined
   resolve?: (
     docId: DocId,
@@ -204,6 +205,17 @@ export class Governance {
   ): boolean {
     return composeGate(
       this.#policies.map(p => p.canReset?.(docId, peer)),
+      true,
+    )
+  }
+
+  /**
+   * Composed cohort gate. Defaults to open (`true`) when all
+   * policies return `undefined`.
+   */
+  cohort(docId: DocId, peer: PeerIdentityDetails): boolean {
+    return composeGate(
+      this.#policies.map(p => p.cohort?.(docId, peer)),
       true,
     )
   }
