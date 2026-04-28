@@ -16,7 +16,7 @@
 
 import type { ChannelMsg } from "@kyneta/transport"
 import { cborCodec } from "./cbor.js"
-import { fragmentPayload, wrapCompleteMessage } from "./fragment.js"
+import { fragmentPayload } from "./fragment.js"
 import { decodeBinaryFrame, encodeComplete } from "./frame.js"
 import type { FragmentReassembler } from "./reassembler.js"
 
@@ -31,23 +31,25 @@ import type { FragmentReassembler } from "./reassembler.js"
  * (WebSocket, WebRTC). The caller provides the send function —
  * the transport-specific effectful operation.
  *
- * @param msg - The channel message to encode
- * @param fragmentThreshold - Fragment payloads larger than this (bytes). 0 disables.
- * @param sendFn - Transport-specific send (e.g. `data => socket.send(data)`)
+ * @param msg                - The channel message to encode
+ * @param sendFn             - Transport-specific send (e.g. `data => socket.send(data)`)
+ * @param fragmentThreshold  - Fragment payloads larger than this (bytes). 0 disables.
+ * @param nextFrameId        - Callback returning a unique frame ID for fragment grouping
  */
 export function encodeBinaryAndSend(
   msg: ChannelMsg,
-  fragmentThreshold: number,
   sendFn: (data: Uint8Array<ArrayBuffer>) => void,
+  fragmentThreshold: number,
+  nextFrameId: () => number,
 ): void {
   const frame = encodeComplete(cborCodec, msg)
   if (fragmentThreshold > 0 && frame.length > fragmentThreshold) {
-    const fragments = fragmentPayload(frame, fragmentThreshold)
-    for (const fragment of fragments) {
-      sendFn(fragment)
+    const fragments = fragmentPayload(frame, fragmentThreshold, nextFrameId())
+    for (const frag of fragments) {
+      sendFn(frag)
     }
   } else {
-    sendFn(wrapCompleteMessage(frame))
+    sendFn(frame)
   }
 }
 

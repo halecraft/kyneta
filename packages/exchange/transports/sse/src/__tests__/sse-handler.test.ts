@@ -93,7 +93,7 @@ describe("parseTextPostBody — fragments", () => {
 
     // Encode the message payload and fragment it into small chunks
     const payload = JSON.stringify(textCodec.encode(presentMsg))
-    const fragments = fragmentTextPayload(payload, 20) // very small chunks
+    const fragments = fragmentTextPayload(payload, 20, 1) // very small chunks
 
     expect(fragments.length).toBeGreaterThan(1)
 

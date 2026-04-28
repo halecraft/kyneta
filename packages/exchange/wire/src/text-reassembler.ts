@@ -56,9 +56,9 @@ export interface TextReassemblerConfig {
   /** Maximum total characters across all in-flight frames (default: 50M). */
   maxTotalChars?: number
   /** Callback when a frame times out. */
-  onTimeout?: (frameId: string) => void
+  onTimeout?: (frameId: number) => void
   /** Callback when a frame is evicted due to pressure. */
-  onEvicted?: (frameId: string) => void
+  onEvicted?: (frameId: number) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -90,12 +90,12 @@ const TEXT_OPS = {
  * ```typescript
  * const reassembler = new TextReassembler({ timeoutMs: 5000 })
  *
- * const result = reassembler.receive('["0f","abc12345",0,3,100,"{\\"type\\":\\"off"]')
+ * const result = reassembler.receive('["1f",42,0,3,100,"{\\"type\\":\\"off"]')
  * // result.status === "pending"
  *
  * // ... more fragments ...
  *
- * const final = reassembler.receive('["0f","abc12345",2,3,100,"...\\"}"]')
+ * const final = reassembler.receive('["1f",42,2,3,100,"...\\"}"]')
  * // final.status === "complete"
  * // final.frame.content.kind === "complete"
  * // final.frame.content.payload === original JSON string

@@ -85,7 +85,7 @@ describe("decideFragment — pure", () => {
 
   it("returns accept for a valid non-completing fragment", () => {
     const batch = {
-      frameId: "test",
+      frameId: 0,
       expectedTotal: 3,
       expectedTotalSize: 100,
       receivedChunks: new Map<number, string>([[0, "abc"]]),
@@ -99,7 +99,7 @@ describe("decideFragment — pure", () => {
 
   it("returns complete when adding the final fragment", () => {
     const batch = {
-      frameId: "test",
+      frameId: 0,
       expectedTotal: 3,
       expectedTotalSize: 100,
       receivedChunks: new Map<number, string>([
@@ -116,7 +116,7 @@ describe("decideFragment — pure", () => {
 
   it("returns reject_duplicate for already-received index", () => {
     const batch = {
-      frameId: "test",
+      frameId: 0,
       expectedTotal: 3,
       expectedTotalSize: 100,
       receivedChunks: new Map<number, string>([[0, "abc"]]),
@@ -130,7 +130,7 @@ describe("decideFragment — pure", () => {
 
   it("returns reject_invalid_index for out-of-range index", () => {
     const batch = {
-      frameId: "test",
+      frameId: 0,
       expectedTotal: 3,
       expectedTotalSize: 100,
       receivedChunks: new Map<number, string>(),
@@ -144,7 +144,7 @@ describe("decideFragment — pure", () => {
 
   it("returns reject_total_mismatch when total disagrees", () => {
     const batch = {
-      frameId: "test",
+      frameId: 0,
       expectedTotal: 3,
       expectedTotalSize: 100,
       receivedChunks: new Map<number, string>(),
@@ -158,7 +158,7 @@ describe("decideFragment — pure", () => {
 
   it("returns reject_size_mismatch when totalSize disagrees", () => {
     const batch = {
-      frameId: "test",
+      frameId: 0,
       expectedTotal: 3,
       expectedTotalSize: 100,
       receivedChunks: new Map<number, string>(),
@@ -184,7 +184,7 @@ describe("FragmentCollector — basic", () => {
       timer,
     )
 
-    const result = collector.addFragment("f1", 0, 1, 5, "hello")
+    const result = collector.addFragment(1, 0, 1, 5, "hello")
 
     expect(result.status).toBe("complete")
     if (result.status === "complete") {
@@ -205,50 +205,15 @@ describe("FragmentCollector — basic", () => {
       timer,
     )
 
-    expect(collector.addFragment("f1", 0, 3, 11, "hel").status).toBe("pending")
-    expect(collector.addFragment("f1", 1, 3, 11, "lo ").status).toBe("pending")
+    expect(collector.addFragment(1, 0, 3, 11, "hel").status).toBe("pending")
+    expect(collector.addFragment(1, 1, 3, 11, "lo ").status).toBe("pending")
 
-    const result = collector.addFragment("f1", 2, 3, 11, "world")
+    const result = collector.addFragment(1, 2, 3, 11, "world")
     expect(result.status).toBe("complete")
     if (result.status === "complete") {
       expect(result.data).toBe("hello world")
     }
 
-    collector.dispose()
-  })
-
-  it("collects fragments out of order", () => {
-    const timer = createMockTimer()
-    const collector = new FragmentCollector(
-      { timeoutMs: 5000 },
-      STRING_OPS,
-      timer,
-    )
-
-    collector.addFragment("f1", 2, 3, 6, "ld")
-    collector.addFragment("f1", 0, 3, 6, "wo")
-
-    collector.addFragment("f1", 1, 3, 6, "r")
-    // Note: size check might fail since totalSize=6 but actual is 2+2+1=5
-    // Let's use correct totalSize
-    collector.dispose()
-  })
-
-  it("concatenates in index order regardless of arrival order", () => {
-    const timer = createMockTimer()
-    const collector = new FragmentCollector(
-      { timeoutMs: 5000 },
-      STRING_OPS,
-      timer,
-    )
-
-    collector.addFragment("f1", 2, 3, 5, "C")
-    collector.addFragment("f1", 0, 3, 5, "A")
-
-    collector.addFragment("f1", 1, 3, 5, "B")
-
-    // totalSize is 5 but actual is 3 — size_mismatch expected
-    // Let's fix: use totalSize matching actual
     collector.dispose()
   })
 
@@ -260,9 +225,9 @@ describe("FragmentCollector — basic", () => {
       timer,
     )
 
-    collector.addFragment("f1", 2, 3, 3, "C")
-    collector.addFragment("f1", 0, 3, 3, "A")
-    const result = collector.addFragment("f1", 1, 3, 3, "B")
+    collector.addFragment(1, 2, 3, 3, "C")
+    collector.addFragment(1, 0, 3, 3, "A")
+    const result = collector.addFragment(1, 1, 3, 3, "B")
 
     expect(result.status).toBe("complete")
     if (result.status === "complete") {
@@ -280,16 +245,16 @@ describe("FragmentCollector — basic", () => {
       timer,
     )
 
-    collector.addFragment("f1", 0, 2, 2, "A")
-    collector.addFragment("f2", 0, 2, 2, "X")
+    collector.addFragment(1, 0, 2, 2, "A")
+    collector.addFragment(2, 0, 2, 2, "X")
 
-    const r1 = collector.addFragment("f1", 1, 2, 2, "B")
+    const r1 = collector.addFragment(1, 1, 2, 2, "B")
     expect(r1.status).toBe("complete")
     if (r1.status === "complete") {
       expect(r1.data).toBe("AB")
     }
 
-    const r2 = collector.addFragment("f2", 1, 2, 2, "Y")
+    const r2 = collector.addFragment(2, 1, 2, 2, "Y")
     expect(r2.status).toBe("complete")
     if (r2.status === "complete") {
       expect(r2.data).toBe("XY")
@@ -308,13 +273,13 @@ describe("FragmentCollector — basic", () => {
 
     expect(collector.pendingFrameCount).toBe(0)
 
-    collector.addFragment("f1", 0, 2, 2, "A")
+    collector.addFragment(1, 0, 2, 2, "A")
     expect(collector.pendingFrameCount).toBe(1)
 
-    collector.addFragment("f2", 0, 3, 3, "X")
+    collector.addFragment(2, 0, 3, 3, "X")
     expect(collector.pendingFrameCount).toBe(2)
 
-    collector.addFragment("f1", 1, 2, 2, "B") // completes f1
+    collector.addFragment(1, 1, 2, 2, "B") // completes f1
     expect(collector.pendingFrameCount).toBe(1)
 
     collector.dispose()
@@ -330,13 +295,13 @@ describe("FragmentCollector — basic", () => {
 
     expect(collector.pendingSize).toBe(0)
 
-    collector.addFragment("f1", 0, 3, 9, "abc")
+    collector.addFragment(1, 0, 3, 9, "abc")
     expect(collector.pendingSize).toBe(3)
 
-    collector.addFragment("f1", 1, 3, 9, "def")
+    collector.addFragment(1, 1, 3, 9, "def")
     expect(collector.pendingSize).toBe(6)
 
-    collector.addFragment("f1", 2, 3, 9, "ghi") // completes
+    collector.addFragment(1, 2, 3, 9, "ghi") // completes
     expect(collector.pendingSize).toBe(0)
 
     collector.dispose()
@@ -356,14 +321,14 @@ describe("FragmentCollector — errors", () => {
       timer,
     )
 
-    collector.addFragment("f1", 0, 3, 9, "abc")
-    const result = collector.addFragment("f1", 0, 3, 9, "abc") // duplicate
+    collector.addFragment(1, 0, 3, 9, "abc")
+    const result = collector.addFragment(1, 0, 3, 9, "abc") // duplicate
 
     expect(result.status).toBe("error")
     if (result.status === "error") {
       expect(result.error.type).toBe("duplicate_fragment")
       if (result.error.type === "duplicate_fragment") {
-        expect(result.error.frameId).toBe("f1")
+        expect(result.error.frameId).toBe(1)
         expect(result.error.index).toBe(0)
       }
     }
@@ -379,7 +344,7 @@ describe("FragmentCollector — errors", () => {
       timer,
     )
 
-    const result = collector.addFragment("f1", 5, 3, 9, "abc") // index 5 >= total 3
+    const result = collector.addFragment(1, 5, 3, 9, "abc") // index 5 >= total 3
 
     expect(result.status).toBe("error")
     if (result.status === "error") {
@@ -397,8 +362,8 @@ describe("FragmentCollector — errors", () => {
       timer,
     )
 
-    collector.addFragment("f1", 0, 3, 9, "abc")
-    const result = collector.addFragment("f1", 1, 5, 9, "def") // claims total=5, batch expects 3
+    collector.addFragment(1, 0, 3, 9, "abc")
+    const result = collector.addFragment(1, 1, 5, 9, "def") // claims total=5, batch expects 3
 
     expect(result.status).toBe("error")
     if (result.status === "error") {
@@ -420,8 +385,8 @@ describe("FragmentCollector — errors", () => {
       timer,
     )
 
-    collector.addFragment("f1", 0, 3, 100, "abc")
-    const result = collector.addFragment("f1", 1, 3, 200, "def") // claims totalSize=200, batch expects 100
+    collector.addFragment(1, 0, 3, 100, "abc")
+    const result = collector.addFragment(1, 1, 3, 200, "def") // claims totalSize=200, batch expects 100
 
     expect(result.status).toBe("error")
     if (result.status === "error") {
@@ -444,8 +409,8 @@ describe("FragmentCollector — errors", () => {
     )
 
     // totalSize=100 but actual chunks are only 6 chars
-    collector.addFragment("f1", 0, 2, 100, "abc")
-    const result = collector.addFragment("f1", 1, 2, 100, "def")
+    collector.addFragment(1, 0, 2, 100, "abc")
+    const result = collector.addFragment(1, 1, 2, 100, "def")
 
     expect(result.status).toBe("error")
     if (result.status === "error") {
@@ -465,7 +430,7 @@ describe("FragmentCollector — errors", () => {
 
     collector.dispose()
 
-    const result = collector.addFragment("f1", 0, 1, 5, "hello")
+    const result = collector.addFragment(1, 0, 1, 5, "hello")
     expect(result.status).toBe("error")
     if (result.status === "error") {
       expect(result.error.type).toBe("disposed")
@@ -487,13 +452,13 @@ describe("FragmentCollector — timeouts", () => {
       timer,
     )
 
-    collector.addFragment("f1", 0, 3, 9, "abc")
+    collector.addFragment(1, 0, 3, 9, "abc")
     expect(collector.pendingFrameCount).toBe(1)
 
     // Fire the timeout
     timer.fireAll()
 
-    expect(onTimeout).toHaveBeenCalledWith("f1")
+    expect(onTimeout).toHaveBeenCalledWith(1)
     expect(collector.pendingFrameCount).toBe(0)
     expect(collector.pendingSize).toBe(0)
 
@@ -508,7 +473,7 @@ describe("FragmentCollector — timeouts", () => {
       timer,
     )
 
-    collector.addFragment("f1", 0, 2, 4, "ab")
+    collector.addFragment(1, 0, 2, 4, "ab")
 
     const timerEntry = [...timer.timers.values()][0]
     expect(timerEntry?.ms).toBe(3000)
@@ -524,10 +489,10 @@ describe("FragmentCollector — timeouts", () => {
       timer,
     )
 
-    collector.addFragment("f1", 0, 2, 4, "ab")
+    collector.addFragment(1, 0, 2, 4, "ab")
     expect(timer.timers.size).toBe(1)
 
-    collector.addFragment("f1", 1, 2, 4, "cd") // completes
+    collector.addFragment(1, 1, 2, 4, "cd") // completes
     expect(timer.timers.size).toBe(0)
 
     collector.dispose()
@@ -541,7 +506,7 @@ describe("FragmentCollector — timeouts", () => {
       timer,
     )
 
-    collector.addFragment("f1", 0, 1, 5, "hello")
+    collector.addFragment(1, 0, 1, 5, "hello")
     expect(timer.timers.size).toBe(0)
 
     collector.dispose()
@@ -562,14 +527,14 @@ describe("FragmentCollector — eviction", () => {
       timer,
     )
 
-    collector.addFragment("f1", 0, 3, 9, "aaa")
-    collector.addFragment("f2", 0, 3, 9, "bbb")
+    collector.addFragment(1, 0, 3, 9, "aaa")
+    collector.addFragment(2, 0, 3, 9, "bbb")
     expect(collector.pendingFrameCount).toBe(2)
 
-    // Third frame triggers eviction of oldest (f1)
-    collector.addFragment("f3", 0, 3, 9, "ccc")
+    // Third frame triggers eviction of oldest (1)
+    collector.addFragment(3, 0, 3, 9, "ccc")
     expect(collector.pendingFrameCount).toBe(2)
-    expect(onEvicted).toHaveBeenCalledWith("f1")
+    expect(onEvicted).toHaveBeenCalledWith(1)
 
     collector.dispose()
   })
@@ -583,11 +548,11 @@ describe("FragmentCollector — eviction", () => {
       timer,
     )
 
-    collector.addFragment("f1", 0, 3, 15, "aaaaa") // 5 chars
-    collector.addFragment("f2", 0, 3, 15, "bbbbb") // +5 = 10 chars (at limit)
+    collector.addFragment(1, 0, 3, 15, "aaaaa") // 5 chars
+    collector.addFragment(2, 0, 3, 15, "bbbbb") // +5 = 10 chars (at limit)
 
     // This pushes over the limit, should trigger eviction
-    collector.addFragment("f2", 1, 3, 15, "ccccc") // +5 = 15, over limit
+    collector.addFragment(2, 1, 3, 15, "ccccc") // +5 = 15, over limit
 
     expect(onEvicted).toHaveBeenCalled()
 
@@ -606,10 +571,10 @@ describe("FragmentCollector — eviction", () => {
       timer,
     )
 
-    collector.addFragment("f1", 0, 3, 15, "abcde") // 5 chars, at limit
+    collector.addFragment(1, 0, 3, 15, "abcde") // 5 chars, at limit
 
-    // Another chunk pushes over — f1 should be evicted
-    const result = collector.addFragment("f1", 1, 3, 15, "fghij") // +5 = 10, over limit
+    // Another chunk pushes over — 1 should be evicted
+    const result = collector.addFragment(1, 1, 3, 15, "fghij") // +5 = 10, over limit
 
     expect(result.status).toBe("error")
     if (result.status === "error") {
@@ -633,8 +598,8 @@ describe("FragmentCollector — dispose", () => {
       timer,
     )
 
-    collector.addFragment("f1", 0, 3, 9, "abc")
-    collector.addFragment("f2", 0, 3, 9, "xyz")
+    collector.addFragment(1, 0, 3, 9, "abc")
+    collector.addFragment(2, 0, 3, 9, "xyz")
     expect(timer.timers.size).toBe(2)
 
     collector.dispose()

@@ -38,7 +38,7 @@ export type Complete<T> = {
 export type Fragment<T> = {
   readonly kind: "fragment"
   /** Identifier grouping fragments of the same payload. */
-  readonly frameId: string
+  readonly frameId: number
   /** Zero-based index of this fragment. */
   readonly index: number
   /** Total number of fragments in this group. */
@@ -73,7 +73,6 @@ export type Frame<T> = {
 // Constructors
 // ---------------------------------------------------------------------------
 
-/** Create a complete frame. */
 export function complete<T>(
   version: number,
   payload: T,
@@ -82,10 +81,9 @@ export function complete<T>(
   return { version, hash, content: { kind: "complete", payload } }
 }
 
-/** Create a fragment frame. */
 export function fragment<T>(
   version: number,
-  frameId: string,
+  frameId: number,
   index: number,
   total: number,
   totalSize: number,
@@ -103,14 +101,12 @@ export function fragment<T>(
 // Type guards
 // ---------------------------------------------------------------------------
 
-/** Check if a frame's content is complete (not fragmented). */
 export function isComplete<T>(
   frame: Frame<T>,
 ): frame is Frame<T> & { content: Complete<T> } {
   return frame.content.kind === "complete"
 }
 
-/** Check if a frame's content is a fragment. */
 export function isFragment<T>(
   frame: Frame<T>,
 ): frame is Frame<T> & { content: Fragment<T> } {

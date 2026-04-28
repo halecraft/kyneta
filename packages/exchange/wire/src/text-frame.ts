@@ -3,16 +3,12 @@
 // Text frames use a JSON array wire format with a 2-character prefix:
 //
 //   Position 0: version character ('0' = version 0, '1' = version 1, ...)
-//   Position 1: type + hash via case:
-//     'c' = complete, no hash
-//     'C' = complete, with SHA-256 hash (digest in next element)
-//     'f' = fragment, no hash
-//     'F' = fragment, with SHA-256 hash (digest in next element)
+//   Position 1: type character:
+//     'c' = complete
+//     'f' = fragment
 //
-// Complete frame (no hash):   ["0c", <payload>]
-// Complete frame (with hash): ["0C", "hexdigest", <payload>]
-// Fragment (no hash):         ["0f", frameId, index, total, totalSize, chunk]
-// Fragment (with hash):       ["0F", "hexdigest", frameId, index, total, totalSize, chunk]
+// Complete frame:   ["1c", <payload>]
+// Fragment frame:   ["1f", frameId, index, total, totalSize, chunk]
 //
 // The payload is a JSON-safe object (single message) or array (batch).
 // Fragments carry JSON substring chunks. The receiver concatenates
@@ -20,7 +16,6 @@
 
 import type { ChannelMsg } from "@kyneta/transport"
 import type { TextCodec } from "./codec.js"
-import { generateFrameId } from "./fragment.js"
 import type { Frame } from "./frame-types.js"
 import { complete, fragment } from "./frame-types.js"
 
@@ -28,29 +23,15 @@ import { complete, fragment } from "./frame-types.js"
 // Version
 // ---------------------------------------------------------------------------
 
-/** Current text wire protocol version. */
-export const TEXT_WIRE_VERSION = 0
+export const TEXT_WIRE_VERSION = 1
 
 // ---------------------------------------------------------------------------
 // Prefix encoding
 // ---------------------------------------------------------------------------
 
-/**
- * Build the 2-character prefix string from version, type, and hash presence.
- */
-function buildPrefix(
-  version: number,
-  isFragment: boolean,
-  hasHash: boolean,
-): string {
+function buildPrefix(version: number, isFragment: boolean): string {
   const versionChar = String(version)
-  let typeChar: string
-  if (isFragment) {
-    typeChar = hasHash ? "F" : "f"
-  } else {
-    typeChar = hasHash ? "C" : "c"
-  }
-  return versionChar + typeChar
+  return versionChar + (isFragment ? "f" : "c")
 }
 
 /**
@@ -59,13 +40,9 @@ function buildPrefix(
 type PrefixInfo = {
   version: number
   isFragment: boolean
-  hasHash: boolean
 }
 
-/**
- * Parse a 2-character prefix string.
- * @throws Error if the prefix is malformed
- */
+/** @throws TextFrameDecodeError if the prefix is malformed */
 function parsePrefix(prefix: string): PrefixInfo {
   if (typeof prefix !== "string" || prefix.length !== 2) {
     throw new TextFrameDecodeError(
@@ -85,34 +62,17 @@ function parsePrefix(prefix: string): PrefixInfo {
     )
   }
 
-  let isFragment: boolean
-  let hasHash: boolean
-
   switch (typeChar) {
     case "c":
-      isFragment = false
-      hasHash = false
-      break
-    case "C":
-      isFragment = false
-      hasHash = true
-      break
+      return { version, isFragment: false }
     case "f":
-      isFragment = true
-      hasHash = false
-      break
-    case "F":
-      isFragment = true
-      hasHash = true
-      break
+      return { version, isFragment: true }
     default:
       throw new TextFrameDecodeError(
         "invalid_prefix",
         `Unknown type character: ${JSON.stringify(typeChar)}`,
       )
   }
-
-  return { version, isFragment, hasHash }
 }
 
 // ---------------------------------------------------------------------------
@@ -130,34 +90,17 @@ function parsePrefix(prefix: string): PrefixInfo {
  * it's embedded as a JSON string element in the array.
  */
 export function encodeTextFrame(frame: Frame<string>): string {
-  const { version, hash, content } = frame
-  const hasHash = hash !== null
+  const { version, content } = frame
 
   if (content.kind === "complete") {
-    const prefix = buildPrefix(version, false, hasHash)
-    // Parse the payload string to embed as native JSON value.
-    // The payload is a JSON-serialized object or array from the codec.
+    const prefix = buildPrefix(version, false)
     const payloadValue = JSON.parse(content.payload)
-    if (hasHash) {
-      return JSON.stringify([prefix, hash, payloadValue])
-    }
     return JSON.stringify([prefix, payloadValue])
   }
 
   // Fragment
   const { frameId, index, total, totalSize, payload } = content
-  const prefix = buildPrefix(version, true, hasHash)
-  if (hasHash) {
-    return JSON.stringify([
-      prefix,
-      hash,
-      frameId,
-      index,
-      total,
-      totalSize,
-      payload,
-    ])
-  }
+  const prefix = buildPrefix(version, true)
   return JSON.stringify([prefix, frameId, index, total, totalSize, payload])
 }
 
@@ -194,8 +137,7 @@ export function decodeTextFrame(wire: string): Frame<string> {
     )
   }
 
-  const prefixInfo = parsePrefix(arr[0] as string)
-  const { version, isFragment, hasHash } = prefixInfo
+  const { version, isFragment } = parsePrefix(arr[0] as string)
 
   if (version !== TEXT_WIRE_VERSION) {
     throw new TextFrameDecodeError(
@@ -205,66 +147,30 @@ export function decodeTextFrame(wire: string): Frame<string> {
   }
 
   if (!isFragment) {
-    // Complete frame
-    let hash: string | null = null
-    let payloadValue: unknown
-
-    if (hasHash) {
-      // ["0C", hash, payload]
-      if (arr.length < 3) {
-        throw new TextFrameDecodeError(
-          "truncated",
-          `Complete frame with hash requires at least 3 elements, got ${arr.length}`,
-        )
-      }
-      hash = arr[1] as string
-      payloadValue = arr[2]
-    } else {
-      // ["0c", payload]
-      payloadValue = arr[1]
-    }
-
-    // Re-serialize the payload to string (Frame<string> carries string payloads)
+    // Complete frame: ["Vc", payload]
+    const payloadValue = arr[1]
     const payload = JSON.stringify(payloadValue)
-    return complete(version, payload, hash)
+    return complete(version, payload, null)
   }
 
-  // Fragment frame
-  let hash: string | null = null
-  let offset = 1 // skip prefix
-
-  if (hasHash) {
-    // ["0F", hash, frameId, index, total, totalSize, chunk]
-    const minElements = 7
-    if (arr.length < minElements) {
-      throw new TextFrameDecodeError(
-        "truncated",
-        `Fragment frame with hash requires at least ${minElements} elements, got ${arr.length}`,
-      )
-    }
-    hash = arr[offset] as string
-    offset++
-  } else {
-    // ["0f", frameId, index, total, totalSize, chunk]
-    const minElements = 6
-    if (arr.length < minElements) {
-      throw new TextFrameDecodeError(
-        "truncated",
-        `Fragment frame requires at least ${minElements} elements, got ${arr.length}`,
-      )
-    }
+  // Fragment frame: ["Vf", frameId, index, total, totalSize, chunk]
+  if (arr.length < 6) {
+    throw new TextFrameDecodeError(
+      "truncated",
+      `Fragment frame requires at least 6 elements, got ${arr.length}`,
+    )
   }
 
-  const frameId = arr[offset] as string
-  const index = arr[offset + 1] as number
-  const total = arr[offset + 2] as number
-  const totalSize = arr[offset + 3] as number
-  const chunk = arr[offset + 4] as string
+  const frameId = arr[1] as number
+  const index = arr[2] as number
+  const total = arr[3] as number
+  const totalSize = arr[4] as number
+  const chunk = arr[5] as string
 
-  if (typeof frameId !== "string") {
+  if (typeof frameId !== "number") {
     throw new TextFrameDecodeError(
       "invalid_structure",
-      "Fragment frameId must be a string",
+      "Fragment frameId must be a number",
     )
   }
   if (
@@ -284,7 +190,7 @@ export function decodeTextFrame(wire: string): Frame<string> {
     )
   }
 
-  return fragment(version, frameId, index, total, totalSize, chunk, hash)
+  return fragment(version, frameId, index, total, totalSize, chunk, null)
 }
 
 // ---------------------------------------------------------------------------
@@ -301,17 +207,18 @@ export function decodeTextFrame(wire: string): Frame<string> {
  *
  * @param payload - The JSON string to fragment (e.g. from JSON.stringify(codec.encode(msg)))
  * @param maxChunkSize - Maximum character length of each chunk
+ * @param frameId - Caller-owned frame identifier grouping fragments
  * @returns Array of text frame JSON strings, one per fragment
  */
 export function fragmentTextPayload(
   payload: string,
   maxChunkSize: number,
+  frameId: number,
 ): string[] {
   if (maxChunkSize <= 0) {
     throw new Error("maxChunkSize must be positive")
   }
 
-  const frameId = generateFrameId()
   const totalSize = payload.length
   const total = Math.ceil(totalSize / maxChunkSize)
   const result: string[] = []

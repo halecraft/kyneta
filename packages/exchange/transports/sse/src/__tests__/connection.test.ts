@@ -121,8 +121,8 @@ describe("SseConnection — fragmentation", () => {
 
     // Small message → single call
     expect(sent).toHaveLength(1)
-    // Should be a complete frame (starts with ["0c",...])
-    expect(sent[0]).toContain('"0c"')
+    // Should be a complete frame (starts with ["1c",...])
+    expect(sent[0]).toContain('"1c"')
   })
 
   it("fragments into multiple sendFn calls when above threshold", () => {
@@ -136,9 +136,9 @@ describe("SseConnection — fragmentation", () => {
 
     // Should produce multiple fragments
     expect(sent.length).toBeGreaterThan(1)
-    // Each fragment should be a fragment frame (contains "0f" prefix)
+    // Each fragment should be a fragment frame (contains "1f" prefix)
     for (const frame of sent) {
-      expect(frame).toContain('"0f"')
+      expect(frame).toContain('"1f"')
     }
   })
 

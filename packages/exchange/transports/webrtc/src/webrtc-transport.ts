@@ -20,6 +20,7 @@ import type {
 } from "@kyneta/transport"
 import { Transport } from "@kyneta/transport"
 import {
+  createFrameIdCounter,
   decodeBinaryMessages,
   encodeBinaryAndSend,
   FragmentReassembler,
@@ -78,6 +79,7 @@ type AttachedChannel = {
   channel: DataChannelLike
   channelId: ChannelId | null
   reassembler: FragmentReassembler
+  nextFrameId: () => number
   cleanup: () => void
 }
 
@@ -155,11 +157,15 @@ export class WebrtcTransport extends Transport<DataChannelContext> {
     return {
       transportType: this.transportType,
       send: (msg: ChannelMsg) => {
-        if (channel.readyState !== "open") {
+        const attached = this.#attachedChannels.get(context.remotePeerId)
+        if (!attached || channel.readyState !== "open") {
           return
         }
-        encodeBinaryAndSend(msg, this.#fragmentThreshold, data =>
-          channel.send(data),
+        encodeBinaryAndSend(
+          msg,
+          data => channel.send(data),
+          this.#fragmentThreshold,
+          attached.nextFrameId,
         )
       },
       stop: () => {
@@ -260,6 +266,7 @@ export class WebrtcTransport extends Transport<DataChannelContext> {
       channel,
       channelId: null,
       reassembler,
+      nextFrameId: createFrameIdCounter(),
       cleanup,
     }
     this.#attachedChannels.set(remotePeerId, attached)

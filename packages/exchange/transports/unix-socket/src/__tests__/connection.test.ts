@@ -303,14 +303,13 @@ describe("UnixSocketConnection", () => {
     const { socket, received } = createStartedConnection()
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {})
 
-    // Valid 7-byte header with payloadLength=13, followed by garbage payload
+    // Valid 6-byte header with payloadLength=14, followed by garbage payload
     const garbage = new Uint8Array(20)
     const view = new DataView(garbage.buffer)
-    view.setUint8(0, 0) // version
+    view.setUint8(0, 1) // version
     view.setUint8(1, 0x00) // type COMPLETE
-    view.setUint8(2, 0x00) // hash NONE
-    view.setUint32(3, 13, false) // payload length
-    for (let i = 7; i < 20; i++) garbage[i] = 0xff
+    view.setUint32(2, 14, false) // payload length
+    for (let i = 6; i < 20; i++) garbage[i] = 0xff
 
     socket.emitData(garbage)
 

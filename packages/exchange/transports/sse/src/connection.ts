@@ -14,6 +14,7 @@
 
 import type { Channel, ChannelMsg, PeerId } from "@kyneta/transport"
 import {
+  createFrameIdCounter,
   encodeTextComplete,
   fragmentTextPayload,
   TextReassembler,
@@ -57,6 +58,7 @@ export class SseConnection {
 
   // Fragmentation support
   readonly #fragmentThreshold: number
+  #nextFrameId = createFrameIdCounter()
 
   /**
    * Text reassembler for handling fragmented POST bodies.
@@ -71,7 +73,7 @@ export class SseConnection {
       config?.fragmentThreshold ?? DEFAULT_FRAGMENT_THRESHOLD
     this.reassembler = new TextReassembler({
       timeoutMs: 10_000,
-      onTimeout: (frameId: string) => {
+      onTimeout: (frameId: number) => {
         console.warn(
           `[SseConnection] Fragment batch timed out for peer ${peerId}: ${frameId}`,
         )
@@ -140,7 +142,11 @@ export class SseConnection {
       textFrame.length > this.#fragmentThreshold
     ) {
       const payload = JSON.stringify(textCodec.encode(msg))
-      const fragments = fragmentTextPayload(payload, this.#fragmentThreshold)
+      const fragments = fragmentTextPayload(
+        payload,
+        this.#fragmentThreshold,
+        this.#nextFrameId(),
+      )
       for (const fragment of fragments) {
         this.#sendFn(fragment)
       }

@@ -57,9 +57,9 @@ export interface CollectorConfig {
   /** Maximum total size across all in-flight frames (default: 50MB for binary, 50M chars for text). */
   maxTotalSize: number
   /** Callback when a frame times out. */
-  onTimeout?: (frameId: string) => void
+  onTimeout?: (frameId: number) => void
   /** Callback when a frame is evicted due to pressure. */
-  onEvicted?: (frameId: string) => void
+  onEvicted?: (frameId: number) => void
 }
 
 const DEFAULT_CONFIG: CollectorConfig = {
@@ -88,12 +88,12 @@ export type CollectorResult<T> =
  * Errors that can occur during fragment collection.
  */
 export type CollectorError =
-  | { type: "duplicate_fragment"; frameId: string; index: number }
-  | { type: "invalid_index"; frameId: string; index: number; max: number }
-  | { type: "total_mismatch"; frameId: string; expected: number; got: number }
-  | { type: "size_mismatch"; frameId: string; expected: number; actual: number }
-  | { type: "timeout"; frameId: string }
-  | { type: "evicted"; frameId: string }
+  | { type: "duplicate_fragment"; frameId: number; index: number }
+  | { type: "invalid_index"; frameId: number; index: number; max: number }
+  | { type: "total_mismatch"; frameId: number; expected: number; got: number }
+  | { type: "size_mismatch"; frameId: number; expected: number; actual: number }
+  | { type: "timeout"; frameId: number }
+  | { type: "evicted"; frameId: number }
   | { type: "disposed" }
 
 // ---------------------------------------------------------------------------
@@ -104,7 +104,7 @@ export type CollectorError =
  * Internal state for an in-flight frame being reassembled.
  */
 interface BatchState<T> {
-  readonly frameId: string
+  readonly frameId: number
   readonly expectedTotal: number
   readonly expectedTotalSize: number
   readonly receivedChunks: Map<number, T>
@@ -228,7 +228,7 @@ export class FragmentCollector<T> {
   readonly #config: CollectorConfig
   readonly #ops: CollectorOps<T>
   readonly #timer: TimerAPI
-  readonly #batches = new Map<string, BatchState<T>>()
+  readonly #batches = new Map<number, BatchState<T>>()
   #totalSize = 0
   #disposed = false
 
@@ -263,7 +263,7 @@ export class FragmentCollector<T> {
    * @param chunk - This fragment's data chunk
    */
   addFragment(
-    frameId: string,
+    frameId: number,
     index: number,
     total: number,
     totalSize: number,
@@ -322,7 +322,7 @@ export class FragmentCollector<T> {
 
   #executeDecision(
     decision: FragmentDecision,
-    frameId: string,
+    frameId: number,
     index: number,
     total: number,
     totalSize: number,
@@ -430,7 +430,7 @@ export class FragmentCollector<T> {
   // ==========================================================================
 
   #createBatch(
-    frameId: string,
+    frameId: number,
     expectedTotal: number,
     expectedTotalSize: number,
   ): BatchState<T> {
@@ -460,7 +460,7 @@ export class FragmentCollector<T> {
     this.#totalSize += chunkSize
   }
 
-  #completeBatch(frameId: string, batch: BatchState<T>): CollectorResult<T> {
+  #completeBatch(frameId: number, batch: BatchState<T>): CollectorResult<T> {
     // Cancel timeout timer
     if (batch.timerId !== undefined) {
       this.#timer.clearTimeout(batch.timerId)
@@ -506,7 +506,7 @@ export class FragmentCollector<T> {
   // PRIVATE — timeout handling
   // ==========================================================================
 
-  #handleTimeout(frameId: string): void {
+  #handleTimeout(frameId: number): void {
     const batch = this.#batches.get(frameId)
     if (!batch) return
 
@@ -527,7 +527,7 @@ export class FragmentCollector<T> {
    * @returns true if a batch was evicted
    */
   #evictOldest(): boolean {
-    let oldest: { frameId: string; batch: BatchState<T> } | undefined
+    let oldest: { frameId: number; batch: BatchState<T> } | undefined
 
     for (const [frameId, batch] of this.#batches) {
       if (!oldest || batch.startedAt < oldest.batch.startedAt) {

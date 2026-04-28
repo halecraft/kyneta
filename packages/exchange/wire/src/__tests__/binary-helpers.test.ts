@@ -39,7 +39,8 @@ const LARGE_MSG: ChannelMsg = {
 describe("encodeBinaryAndSend", () => {
   it("calls sendFn exactly once for a small message", () => {
     const sendFn = vi.fn()
-    encodeBinaryAndSend(SMALL_MSG, 100_000, sendFn)
+    let frameId = 0
+    encodeBinaryAndSend(SMALL_MSG, sendFn, 100_000, () => frameId++)
 
     expect(sendFn).toHaveBeenCalledTimes(1)
     expect(sendFn.mock.calls.at(0)?.[0]).toBeInstanceOf(Uint8Array)
@@ -47,7 +48,8 @@ describe("encodeBinaryAndSend", () => {
 
   it("fragments a large message when payload exceeds threshold", () => {
     const sendFn = vi.fn()
-    encodeBinaryAndSend(LARGE_MSG, 100_000, sendFn)
+    let frameId = 0
+    encodeBinaryAndSend(LARGE_MSG, sendFn, 100_000, () => frameId++)
 
     expect(sendFn.mock.calls.length).toBeGreaterThan(1)
     for (const [data] of sendFn.mock.calls) {
@@ -57,7 +59,8 @@ describe("encodeBinaryAndSend", () => {
 
   it("disables fragmentation when threshold is 0", () => {
     const sendFn = vi.fn()
-    encodeBinaryAndSend(LARGE_MSG, 0, sendFn)
+    let frameId = 0
+    encodeBinaryAndSend(LARGE_MSG, sendFn, 0, () => frameId++)
 
     expect(sendFn).toHaveBeenCalledTimes(1)
     expect(sendFn.mock.calls.at(0)?.[0]).toBeInstanceOf(Uint8Array)
@@ -71,7 +74,13 @@ describe("encodeBinaryAndSend", () => {
 describe("decodeBinaryMessages", () => {
   it("round-trips a small message through encode and decode", () => {
     const sent: Uint8Array[] = []
-    encodeBinaryAndSend(SMALL_MSG, 100_000, data => sent.push(data))
+    let frameId = 0
+    encodeBinaryAndSend(
+      SMALL_MSG,
+      data => sent.push(data),
+      100_000,
+      () => frameId++,
+    )
 
     expect(sent).toHaveLength(1)
 
@@ -94,7 +103,13 @@ describe("decodeBinaryMessages", () => {
 
   it("returns null for pending fragments", () => {
     const sent: Uint8Array[] = []
-    encodeBinaryAndSend(LARGE_MSG, 100_000, data => sent.push(data))
+    let frameId = 0
+    encodeBinaryAndSend(
+      LARGE_MSG,
+      data => sent.push(data),
+      100_000,
+      () => frameId++,
+    )
 
     expect(sent.length).toBeGreaterThan(1)
 

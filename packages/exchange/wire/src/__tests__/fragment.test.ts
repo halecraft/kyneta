@@ -1,31 +1,17 @@
-// Fragment and transport layer tests.
+// Fragment tests — wire protocol v1.
 //
-// Tests the transport-level fragmentation protocol:
-// - fragmentPayload() splits payloads into self-describing fragment frames
-// - parseTransportPayload() parses raw bytes to 2-variant TransportPayload
-// - wrapCompleteMessage() / wrapFragment() prepend transport prefixes
-// - shouldFragment() / calculateFragmentationOverhead() utilities
-// - generateFrameId() / bytesToHex() / hexToBytes() helpers
+// Tests the simplified fragmentation API:
+// - fragmentPayload() splits payloads into encoded binary fragment frames
+// - shouldFragment() size threshold check
+// - calculateFragmentationOverhead() per-fragment overhead calculation
 
 import { describe, expect, it } from "vitest"
+import { FRAGMENT_META_SIZE, HEADER_SIZE } from "../constants.js"
 import {
-  FRAGMENT,
-  FRAGMENT_META_SIZE,
-  FRAME_ID_SIZE,
-  HEADER_SIZE,
-  MESSAGE_COMPLETE,
-} from "../constants.js"
-import {
-  bytesToHex,
   calculateFragmentationOverhead,
-  FragmentParseError,
+  createFrameIdCounter,
   fragmentPayload,
-  generateFrameId,
-  hexToBytes,
-  parseTransportPayload,
   shouldFragment,
-  wrapCompleteMessage,
-  wrapFragment,
 } from "../fragment.js"
 import { decodeBinaryFrame } from "../frame.js"
 
@@ -42,217 +28,92 @@ function createTestPayload(size: number): Uint8Array {
   return data
 }
 
-// ---------------------------------------------------------------------------
-// Hex helpers
-// ---------------------------------------------------------------------------
-
-describe("bytesToHex / hexToBytes", () => {
-  it("round-trips bytes through hex", () => {
-    const bytes = new Uint8Array([0x00, 0xff, 0xab, 0x12])
-    const hex = bytesToHex(bytes)
-    expect(hex).toBe("00ffab12")
-
-    const back = hexToBytes(hex, 4)
-    expect(back).toEqual(bytes)
-  })
-
-  it("pads short hex strings with zeros", () => {
-    const bytes = hexToBytes("ab", 4)
-    expect(bytes).toEqual(new Uint8Array([0xab, 0x00, 0x00, 0x00]))
-  })
-
-  it("truncates long hex strings", () => {
-    const bytes = hexToBytes("aabbccddee", 2)
-    expect(bytes).toEqual(new Uint8Array([0xaa, 0xbb]))
-  })
-})
-
-describe("generateFrameId", () => {
-  it("returns a hex string of correct length", () => {
-    const id = generateFrameId()
-    expect(typeof id).toBe("string")
-    expect(id.length).toBe(FRAME_ID_SIZE * 2) // 16 hex chars for 8 bytes
-  })
-
-  it("generates unique IDs", () => {
-    const ids = new Set<string>()
-    for (let i = 0; i < 100; i++) {
-      ids.add(generateFrameId())
-    }
-    expect(ids.size).toBe(100)
-  })
-
-  it("contains only hex characters", () => {
-    const id = generateFrameId()
-    expect(id).toMatch(/^[0-9a-f]+$/)
-  })
-})
+/** Decode a fragment frame and extract its content (asserts fragment kind). */
+function decodeFragment(encoded: Uint8Array) {
+  const frame = decodeBinaryFrame(encoded)
+  expect(frame.content.kind).toBe("fragment")
+  if (frame.content.kind !== "fragment") {
+    throw new Error("Expected fragment frame")
+  }
+  return frame.content
+}
 
 // ---------------------------------------------------------------------------
-// wrapCompleteMessage / wrapFragment
-// ---------------------------------------------------------------------------
-
-describe("wrapCompleteMessage", () => {
-  it("prepends MESSAGE_COMPLETE prefix byte", () => {
-    const data = new Uint8Array([1, 2, 3, 4, 5])
-    const wrapped = wrapCompleteMessage(data)
-
-    expect(wrapped.length).toBe(1 + data.length)
-    expect(wrapped[0]).toBe(MESSAGE_COMPLETE)
-    expect(wrapped.slice(1)).toEqual(data)
-  })
-
-  it("handles empty payload", () => {
-    const wrapped = wrapCompleteMessage(new Uint8Array(0))
-    expect(wrapped.length).toBe(1)
-    expect(wrapped[0]).toBe(MESSAGE_COMPLETE)
-  })
-})
-
-describe("wrapFragment", () => {
-  it("prepends FRAGMENT prefix byte", () => {
-    const data = new Uint8Array([10, 20, 30])
-    const wrapped = wrapFragment(data)
-
-    expect(wrapped.length).toBe(1 + data.length)
-    expect(wrapped[0]).toBe(FRAGMENT)
-    expect(wrapped.slice(1)).toEqual(data)
-  })
-})
-
-// ---------------------------------------------------------------------------
-// parseTransportPayload — 2-variant protocol
-// ---------------------------------------------------------------------------
-
-describe("parseTransportPayload", () => {
-  it("parses a complete payload (MESSAGE_COMPLETE prefix)", () => {
-    const frameData = new Uint8Array(HEADER_SIZE + 10)
-    const wrapped = wrapCompleteMessage(frameData)
-    const payload = parseTransportPayload(wrapped)
-
-    expect(payload.kind).toBe("complete")
-    if (payload.kind === "complete") {
-      expect(payload.data).toEqual(frameData)
-    }
-  })
-
-  it("parses a fragment payload (FRAGMENT prefix)", () => {
-    // Create a minimal valid fragment frame (header + metadata + 1 byte)
-    const minSize = HEADER_SIZE + FRAGMENT_META_SIZE + 1
-    const fragFrame = new Uint8Array(minSize)
-    const wrapped = wrapFragment(fragFrame)
-    const payload = parseTransportPayload(wrapped)
-
-    expect(payload.kind).toBe("fragment")
-    if (payload.kind === "fragment") {
-      expect(payload.data).toEqual(fragFrame)
-    }
-  })
-
-  it("throws on empty input", () => {
-    expect(() => parseTransportPayload(new Uint8Array(0))).toThrow(
-      FragmentParseError,
-    )
-  })
-
-  it("throws on unknown prefix byte", () => {
-    const data = new Uint8Array([0x99, 0x01, 0x02])
-    expect(() => parseTransportPayload(data)).toThrow(FragmentParseError)
-    expect(() => parseTransportPayload(data)).toThrow("Unknown")
-  })
-
-  it("throws on truncated complete payload", () => {
-    // A complete payload needs at least 1 (prefix) + HEADER_SIZE bytes
-    const tooShort = new Uint8Array([MESSAGE_COMPLETE, 0x00])
-    expect(() => parseTransportPayload(tooShort)).toThrow(FragmentParseError)
-    expect(() => parseTransportPayload(tooShort)).toThrow("too short")
-  })
-
-  it("throws on truncated fragment payload", () => {
-    // A fragment payload needs at least 1 + FRAGMENT_MIN_SIZE bytes
-    const tooShort = new Uint8Array([FRAGMENT, 0x00, 0x01, 0x02])
-    expect(() => parseTransportPayload(tooShort)).toThrow(FragmentParseError)
-    expect(() => parseTransportPayload(tooShort)).toThrow("too short")
-  })
-
-  it("only has two valid prefix types", () => {
-    // 0x00 and 0x01 are valid; 0x02 (old FRAGMENT_DATA) should now be invalid
-    const oldFragData = new Uint8Array([0x02, 0x00, 0x01, 0x02, 0x03])
-    expect(() => parseTransportPayload(oldFragData)).toThrow(FragmentParseError)
-    expect(() => parseTransportPayload(oldFragData)).toThrow("Unknown")
-  })
-})
-
-// ---------------------------------------------------------------------------
-// fragmentPayload — self-describing fragments
+// fragmentPayload
 // ---------------------------------------------------------------------------
 
 describe("fragmentPayload", () => {
   it("splits payload into correct number of fragments", () => {
     const data = createTestPayload(100)
-    const fragments = fragmentPayload(data, 30)
+    const fragments = fragmentPayload(data, 30, 1)
 
-    // 100 bytes / 30 per chunk = ceil(100/30) = 4 fragments
+    // ceil(100 / 30) = 4 fragments
     expect(fragments.length).toBe(4)
-  })
-
-  it("each fragment has FRAGMENT transport prefix", () => {
-    const data = createTestPayload(100)
-    const fragments = fragmentPayload(data, 50)
-
-    for (const frag of fragments) {
-      expect(frag[0]).toBe(FRAGMENT)
-    }
   })
 
   it("each fragment decodes as a valid fragment frame", () => {
     const data = createTestPayload(100)
-    const fragments = fragmentPayload(data, 30)
+    const fragments = fragmentPayload(data, 30, 42)
 
     for (let i = 0; i < fragments.length; i++) {
-      // Strip transport prefix
-      const frameData = fragments[i]?.slice(1)
-      const frame = decodeBinaryFrame(frameData)
-
-      expect(frame.content.kind).toBe("fragment")
-      if (frame.content.kind === "fragment") {
-        expect(frame.content.index).toBe(i)
-        expect(frame.content.total).toBe(fragments.length)
-        expect(frame.content.totalSize).toBe(data.length)
-      }
+      const content = decodeFragment(fragments[i] ?? new Uint8Array(0))
+      expect(content.index).toBe(i)
+      expect(content.total).toBe(fragments.length)
+      expect(content.totalSize).toBe(data.length)
     }
   })
 
-  it("all fragments share the same frameId", () => {
-    const data = createTestPayload(200)
-    const fragments = fragmentPayload(data, 50)
+  it("returns raw encoded frames without transport prefix", () => {
+    const data = createTestPayload(50)
+    const fragments = fragmentPayload(data, 25, 7)
 
-    const frameIds = new Set<string>()
     for (const frag of fragments) {
-      const frameData = frag.slice(1)
-      const frame = decodeBinaryFrame(frameData)
-      if (frame.content.kind === "fragment") {
-        frameIds.add(frame.content.frameId)
-      }
+      // First byte should be wire version (1), not a transport prefix
+      expect(frag[0]).toBe(1)
+      // Should decode cleanly as a binary frame
+      const frame = decodeBinaryFrame(frag)
+      expect(frame.version).toBe(1)
+    }
+  })
+
+  it("all fragments share the caller-provided frameId", () => {
+    const data = createTestPayload(200)
+    const frameId = 99
+    const fragments = fragmentPayload(data, 50, frameId)
+
+    const frameIds = new Set<number>()
+    for (const frag of fragments) {
+      const content = decodeFragment(frag)
+      frameIds.add(content.frameId)
     }
 
     expect(frameIds.size).toBe(1)
+    expect(frameIds.has(frameId)).toBe(true)
+  })
+
+  it("different frameId values produce different fragment groups", () => {
+    const data = createTestPayload(50)
+    const frags1 = fragmentPayload(data, 20, 1)
+    const frags2 = fragmentPayload(data, 20, 2)
+
+    const id1 = decodeFragment(frags1[0] ?? new Uint8Array(0)).frameId
+    const id2 = decodeFragment(frags2[0] ?? new Uint8Array(0)).frameId
+
+    expect(id1).toBe(1)
+    expect(id2).toBe(2)
+    expect(id1).not.toBe(id2)
   })
 
   it("concatenated chunks reconstruct the original payload", () => {
     const data = createTestPayload(150)
-    const fragments = fragmentPayload(data, 40)
+    const fragments = fragmentPayload(data, 40, 5)
 
     const chunks: Uint8Array[] = []
     for (const frag of fragments) {
-      const frameData = frag.slice(1)
-      const frame = decodeBinaryFrame(frameData)
-      if (frame.content.kind === "fragment") {
-        chunks.push(frame.content.payload)
-      }
+      const content = decodeFragment(frag)
+      chunks.push(content.payload)
     }
 
-    // Concatenate chunks in order
     let totalLen = 0
     for (const c of chunks) totalLen += c.length
     const reassembled = new Uint8Array(totalLen)
@@ -267,67 +128,77 @@ describe("fragmentPayload", () => {
 
   it("handles single-chunk fragmentation", () => {
     const data = createTestPayload(10)
-    const fragments = fragmentPayload(data, 100) // chunk size > data size
+    const fragments = fragmentPayload(data, 100, 3) // chunk size > data size
 
     expect(fragments.length).toBe(1)
 
-    const frameData = fragments[0]?.slice(1)
-    const frame = decodeBinaryFrame(frameData)
-    if (frame.content.kind === "fragment") {
-      expect(frame.content.index).toBe(0)
-      expect(frame.content.total).toBe(1)
-      expect(frame.content.totalSize).toBe(10)
-      expect(frame.content.payload).toEqual(data)
-    }
+    const content = decodeFragment(fragments[0] ?? new Uint8Array(0))
+    expect(content.index).toBe(0)
+    expect(content.total).toBe(1)
+    expect(content.totalSize).toBe(10)
+    expect(content.payload).toEqual(data)
   })
 
   it("handles exact chunk boundary", () => {
     const data = createTestPayload(100)
-    const fragments = fragmentPayload(data, 50) // exactly 2 chunks
+    const fragments = fragmentPayload(data, 50, 1)
 
     expect(fragments.length).toBe(2)
 
-    const chunks: Uint8Array[] = []
-    for (const frag of fragments) {
-      const frameData = frag.slice(1)
-      const frame = decodeBinaryFrame(frameData)
-      if (frame.content.kind === "fragment") {
-        chunks.push(frame.content.payload)
-      }
-    }
+    const chunk0 = decodeFragment(fragments[0] ?? new Uint8Array(0))
+    const chunk1 = decodeFragment(fragments[1] ?? new Uint8Array(0))
 
-    expect(chunks[0]?.length).toBe(50)
-    expect(chunks[1]?.length).toBe(50)
+    expect(chunk0.payload.length).toBe(50)
+    expect(chunk1.payload.length).toBe(50)
+  })
+
+  it("handles 1-byte chunk size", () => {
+    const data = createTestPayload(5)
+    const fragments = fragmentPayload(data, 1, 10)
+
+    expect(fragments.length).toBe(5)
+
+    for (let i = 0; i < fragments.length; i++) {
+      const content = decodeFragment(fragments[i] ?? new Uint8Array(0))
+      expect(content.payload.length).toBe(1)
+      expect(content.payload[0]).toBe(i % 256)
+    }
   })
 
   it("throws on zero maxChunkSize", () => {
-    expect(() => fragmentPayload(createTestPayload(10), 0)).toThrow(
+    expect(() => fragmentPayload(createTestPayload(10), 0, 1)).toThrow(
       "maxChunkSize must be positive",
     )
   })
 
   it("throws on negative maxChunkSize", () => {
-    expect(() => fragmentPayload(createTestPayload(10), -1)).toThrow(
+    expect(() => fragmentPayload(createTestPayload(10), -1, 1)).toThrow(
       "maxChunkSize must be positive",
     )
   })
 
-  it("different calls produce different frameIds", () => {
-    const data = createTestPayload(50)
-    const frags1 = fragmentPayload(data, 20)
-    const frags2 = fragmentPayload(data, 20)
+  it("handles empty payload (produces one fragment with empty chunk)", () => {
+    const data = new Uint8Array(0)
+    // ceil(0 / 50) = 0, so no fragments
+    const fragments = fragmentPayload(data, 50, 1)
+    expect(fragments.length).toBe(0)
+  })
 
-    const getFrameId = (frag: Uint8Array) => {
-      const frame = decodeBinaryFrame(frag.slice(1))
-      return frame.content.kind === "fragment" ? frame.content.frameId : ""
-    }
+  it("fragment frame sizes match expected layout", () => {
+    const data = createTestPayload(80)
+    const chunkSize = 30
+    const fragments = fragmentPayload(data, chunkSize, 1)
 
-    const first1 = frags1.at(0)
-    const first2 = frags2.at(0)
-    if (!first1 || !first2)
-      throw new Error("Expected fragments to be non-empty")
+    // First 3 fragments: 30 bytes each, last: 80 - 90 = ... ceil(80/30) = 3
+    // chunks: 30, 30, 20
+    expect(fragments.length).toBe(3)
 
-    expect(getFrameId(first1)).not.toBe(getFrameId(first2))
+    const frag0 = fragments[0] ?? new Uint8Array(0)
+    const frag2 = fragments[2] ?? new Uint8Array(0)
+
+    // Full fragment frame = HEADER_SIZE + FRAGMENT_META_SIZE + chunkBytes
+    expect(frag0.length).toBe(HEADER_SIZE + FRAGMENT_META_SIZE + 30)
+    expect(frag2.length).toBe(HEADER_SIZE + FRAGMENT_META_SIZE + 20)
   })
 })
 
@@ -336,15 +207,9 @@ describe("fragmentPayload", () => {
 // ---------------------------------------------------------------------------
 
 describe("shouldFragment", () => {
-  it("returns true when payload exceeds threshold", () => {
+  it("returns true only when payload exceeds threshold", () => {
     expect(shouldFragment(101, 100)).toBe(true)
-  })
-
-  it("returns false when payload equals threshold", () => {
     expect(shouldFragment(100, 100)).toBe(false)
-  })
-
-  it("returns false when payload is under threshold", () => {
     expect(shouldFragment(50, 100)).toBe(false)
   })
 })
@@ -354,10 +219,8 @@ describe("shouldFragment", () => {
 // ---------------------------------------------------------------------------
 
 describe("calculateFragmentationOverhead", () => {
-  it("calculates per-fragment overhead correctly", () => {
-    // Each fragment: 1 (transport prefix) + 7 (header) + 20 (metadata) = 28 bytes
-    const perFragment = 1 + HEADER_SIZE + FRAGMENT_META_SIZE
-    expect(perFragment).toBe(28)
+  it("calculates per-fragment overhead as HEADER_SIZE + FRAGMENT_META_SIZE", () => {
+    const perFragment = HEADER_SIZE + FRAGMENT_META_SIZE
 
     // 100 bytes with 50-byte chunks = 2 fragments
     const overhead = calculateFragmentationOverhead(100, 50)
@@ -365,15 +228,43 @@ describe("calculateFragmentationOverhead", () => {
   })
 
   it("handles single fragment", () => {
-    const perFragment = 1 + HEADER_SIZE + FRAGMENT_META_SIZE
+    const perFragment = HEADER_SIZE + FRAGMENT_META_SIZE
     const overhead = calculateFragmentationOverhead(10, 100)
     expect(overhead).toBe(1 * perFragment)
   })
 
   it("handles non-even division", () => {
-    const perFragment = 1 + HEADER_SIZE + FRAGMENT_META_SIZE
-    // 101 bytes with 50-byte chunks = ceil(101/50) = 3 fragments
+    const perFragment = HEADER_SIZE + FRAGMENT_META_SIZE
+    // ceil(101 / 50) = 3 fragments
     const overhead = calculateFragmentationOverhead(101, 50)
     expect(overhead).toBe(3 * perFragment)
+  })
+
+  it("no transport prefix byte in overhead (v1 change)", () => {
+    // v0 was 1 + HEADER_SIZE + FRAGMENT_META_SIZE per fragment
+    // v1 is HEADER_SIZE + FRAGMENT_META_SIZE per fragment (no prefix)
+    const perFragment = HEADER_SIZE + FRAGMENT_META_SIZE
+    expect(perFragment).toBe(6 + 10) // 16 bytes, not 17
+    expect(calculateFragmentationOverhead(100, 100)).toBe(perFragment)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// createFrameIdCounter
+// ---------------------------------------------------------------------------
+
+describe("createFrameIdCounter", () => {
+  it("yields 1, 2, …, 65535, then wraps to 0", () => {
+    const next = createFrameIdCounter()
+
+    expect(next()).toBe(1)
+    expect(next()).toBe(2)
+
+    // Fast-forward to the wrap point
+    for (let i = 3; i <= 0xffff; i++) next()
+
+    // Should have wrapped
+    expect(next()).toBe(0)
+    expect(next()).toBe(1)
   })
 })

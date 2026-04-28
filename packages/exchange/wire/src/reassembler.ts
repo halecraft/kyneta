@@ -1,11 +1,10 @@
 // reassembler — binary fragment reassembler for @kyneta/wire.
 //
 // Thin wrapper around FragmentCollector<Uint8Array> that handles
-// binary transport payload parsing. The collector does all the
-// heavy lifting (timeouts, eviction, validation); this module
-// just parses the binary wire format and delegates.
+// binary frame decoding. The collector does all the heavy lifting
+// (timeouts, eviction, validation); this module just decodes the
+// binary wire format and delegates.
 
-import { parseTransportPayload, type TransportPayload } from "./fragment.js"
 import {
   type CollectorConfig,
   type CollectorError,
@@ -20,7 +19,7 @@ import { decodeBinaryFrame } from "./frame.js"
 // ---------------------------------------------------------------------------
 
 /**
- * Result of processing a transport payload through the reassembler.
+ * Result of processing a binary frame through the reassembler.
  *
  * - `"complete"`: a full message is ready (either a complete message or
  *   a fully reassembled fragmented payload)
@@ -56,9 +55,9 @@ export interface ReassemblerConfig {
   /** Maximum total bytes across all in-flight batches (default: 50MB). */
   maxTotalReassemblyBytes?: number
   /** Callback when a batch times out. */
-  onTimeout?: (frameId: string) => void
+  onTimeout?: (frameId: number) => void
   /** Callback when a batch is evicted due to memory pressure. */
-  onEvicted?: (frameId: string) => void
+  onEvicted?: (frameId: number) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -91,24 +90,21 @@ const BINARY_OPS = {
 /**
  * Binary fragment reassembler.
  *
- * Thin wrapper around `FragmentCollector<Uint8Array>`. Parses binary
- * transport payloads (complete vs fragment prefix) and delegates
- * fragment collection to the generic collector.
- *
- * For fragment payloads, decodes the binary frame header to extract
- * frameId, index, total, totalSize, and the chunk data, then passes
- * them to the collector.
+ * Thin wrapper around `FragmentCollector<Uint8Array>`. Decodes binary
+ * frames to determine if they are complete or fragmented, then either
+ * returns immediately or delegates fragment collection to the generic
+ * collector.
  *
  * Usage:
  * ```typescript
  * const reassembler = new FragmentReassembler({ timeoutMs: 5000 })
  *
- * // Feed raw transport payloads from the network
+ * // Feed raw binary frames from the network
  * const result = reassembler.receiveRaw(data)
  *
  * if (result.status === "complete") {
- *   // result.data is the reassembled payload (codec-encoded bytes)
- *   // Decode with: codec.decode(result.data) → ChannelMsg[]
+ *   // result.data is the raw frame bytes
+ *   // decodeBinaryMessages will decode them downstream
  * }
  *
  * // Clean up when done
@@ -134,76 +130,33 @@ export class FragmentReassembler {
   // ==========================================================================
 
   /**
-   * Process a pre-parsed transport payload.
+   * Process raw binary frame bytes.
    *
-   * @param payload - Parsed transport payload (from parseTransportPayload)
-   * @returns Result: complete, pending, or error
-   */
-  receive(payload: TransportPayload): ReassembleResult {
-    switch (payload.kind) {
-      case "complete":
-        // Complete frame — pass through immediately
-        return { status: "complete", data: payload.data }
-
-      case "fragment": {
-        // Parse the binary frame to extract fragment metadata
-        try {
-          const frame = decodeBinaryFrame(payload.data)
-
-          if (frame.content.kind !== "fragment") {
-            // A fragment transport payload should contain a fragment frame
-            return {
-              status: "error",
-              error: {
-                type: "parse_error",
-                message:
-                  "Fragment transport payload contains a non-fragment frame",
-              },
-            }
-          }
-
-          const {
-            frameId,
-            index,
-            total,
-            totalSize,
-            payload: chunk,
-          } = frame.content
-
-          return this.#mapCollectorResult(
-            this.#collector.addFragment(
-              frameId,
-              index,
-              total,
-              totalSize,
-              chunk,
-            ),
-          )
-        } catch (error) {
-          return {
-            status: "error",
-            error: {
-              type: "parse_error",
-              message: error instanceof Error ? error.message : String(error),
-            },
-          }
-        }
-      }
-    }
-  }
-
-  /**
-   * Process raw bytes as a transport payload.
+   * Decodes the binary frame header to determine if it's a complete
+   * frame or a fragment. Complete frames are returned immediately
+   * (as raw bytes — `decodeBinaryMessages` expects raw frame bytes
+   * and calls `decodeBinaryFrame` itself). Fragments are collected
+   * until all pieces arrive, then the reassembled payload is returned.
    *
-   * Parses the transport prefix, then delegates to `receive()`.
-   *
-   * @param data - Raw transport payload bytes from the network
+   * @param data - Raw binary frame bytes from the network
    * @returns Result: complete, pending, or error
    */
   receiveRaw(data: Uint8Array): ReassembleResult {
     try {
-      const payload = parseTransportPayload(data)
-      return this.receive(payload)
+      const frame = decodeBinaryFrame(data)
+
+      if (frame.content.kind === "complete") {
+        // Complete frame — return the raw frame bytes as-is.
+        // decodeBinaryMessages downstream will re-decode them.
+        return { status: "complete", data }
+      }
+
+      // Fragment — extract metadata and delegate to collector
+      const { frameId, index, total, totalSize, payload } = frame.content
+
+      return this.#mapCollectorResult(
+        this.#collector.addFragment(frameId, index, total, totalSize, payload),
+      )
     } catch (error) {
       return {
         status: "error",

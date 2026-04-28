@@ -5,12 +5,7 @@
 // channel management.
 
 import type { ChannelMsg } from "@kyneta/transport"
-import {
-  cborCodec,
-  encodeComplete,
-  fragmentPayload,
-  wrapCompleteMessage,
-} from "@kyneta/wire"
+import { cborCodec, encodeComplete, fragmentPayload } from "@kyneta/wire"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { WebrtcTransport } from "../webrtc-transport.js"
 import { MockDataChannel } from "./mock-data-channel.js"
@@ -195,12 +190,11 @@ describe("Receive", () => {
 
     // Encode a test message through the wire pipeline
     const encoded = encodeComplete(cborCodec, TEST_MSG)
-    const wrapped = wrapCompleteMessage(encoded)
 
     // Convert to ArrayBuffer (as native RTCDataChannel with binaryType "arraybuffer" would deliver)
-    const ab = wrapped.buffer.slice(
-      wrapped.byteOffset,
-      wrapped.byteOffset + wrapped.byteLength,
+    const ab = encoded.buffer.slice(
+      encoded.byteOffset,
+      encoded.byteOffset + encoded.byteLength,
     )
 
     dc.emit("message", { data: ab })
@@ -219,10 +213,9 @@ describe("Receive", () => {
     transport.attachDataChannel("peer-1", dc)
 
     const encoded = encodeComplete(cborCodec, TEST_MSG)
-    const wrapped = wrapCompleteMessage(encoded)
 
     // Pass Uint8Array directly (as simple-peer and other wrappers may deliver)
-    dc.emit("message", { data: wrapped })
+    dc.emit("message", { data: encoded })
 
     expect(ctx.onChannelReceive).toHaveBeenCalled()
     const callArgs = ctx.onChannelReceive.mock.calls.at(0)
@@ -335,7 +328,7 @@ describe("Fragmentation", () => {
     }
 
     const encoded = encodeComplete(cborCodec, largeMsg)
-    const fragments = fragmentPayload(encoded, 50)
+    const fragments = fragmentPayload(encoded, 50, 1)
     expect(fragments.length).toBeGreaterThan(1)
 
     // Emit all but the last fragment — should NOT trigger receive yet
@@ -467,8 +460,7 @@ describe("Message before open (race condition)", () => {
 
     // Simulate a message arriving before the open event
     const encoded = encodeComplete(cborCodec, TEST_MSG)
-    const wrapped = wrapCompleteMessage(encoded)
-    dc.emit("message", { data: wrapped })
+    dc.emit("message", { data: encoded })
 
     // Message should be silently dropped — no delivery, no error
     expect(ctx.onChannelReceive).not.toHaveBeenCalled()
@@ -477,7 +469,7 @@ describe("Message before open (race condition)", () => {
     dc.open()
     expect(transport.channels.size).toBe(1)
 
-    dc.emit("message", { data: wrapped })
+    dc.emit("message", { data: encoded })
     expect(ctx.onChannelReceive).toHaveBeenCalledOnce()
   })
 })

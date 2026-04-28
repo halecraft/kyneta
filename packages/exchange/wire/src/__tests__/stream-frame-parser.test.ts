@@ -151,13 +151,12 @@ describe("feedBytes", () => {
   })
 
   it("handles zero-length payload frames", () => {
-    // Construct a frame with payloadLength = 0 (header only, 7 bytes)
+    // Construct a frame with payloadLength = 0 (header only, 6 bytes)
     const frame = new Uint8Array(HEADER_SIZE)
     const view = new DataView(frame.buffer)
     view.setUint8(0, WIRE_VERSION) // version
     view.setUint8(1, 0x00) // type COMPLETE
-    view.setUint8(2, 0x00) // hash NONE
-    view.setUint32(3, 0, false) // payloadLength = 0
+    view.setUint32(2, 0, false) // payloadLength = 0
 
     const result = feedBytes(initialParserState(), frame)
 
@@ -172,8 +171,7 @@ describe("feedBytes", () => {
     const view = new DataView(zeroFrame.buffer)
     view.setUint8(0, WIRE_VERSION)
     view.setUint8(1, 0x00)
-    view.setUint8(2, 0x00)
-    view.setUint32(3, 0, false)
+    view.setUint32(2, 0, false)
 
     const normalFrame = encodeComplete(cborCodec, makePresent("after-zero"))
     const combined = concat(zeroFrame, normalFrame)

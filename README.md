@@ -1,6 +1,8 @@
 # Kyneta
 
-Schema-first, local-first. Define your data once — sync, reactivity, validation, and persistence are derived from that single definition. Start on one machine with plain objects. Add peers, CRDTs, transports, and storage as you grow — without rewriting your app.
+Your schema is your sync engine — a framework for collaborative, local-first apps.
+
+Define your data once — sync, reactivity, validation, and persistence are derived from that single definition. Start on one machine with plain objects. Add peers, CRDTs, transports, and storage as you grow — without rewriting your app.
 
 ## Quick Start
 

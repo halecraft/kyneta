@@ -8,7 +8,7 @@
 // (establish, depart, present, interest, offer, dismiss):
 //
 // Binary pipeline (WebSocket, WebRTC):
-//   BinaryCodec (CBOR) → binary frame (7B header) → binary fragmentation → FragmentReassembler
+//   BinaryCodec (CBOR) → binary frame (6B header) → binary fragmentation → FragmentReassembler
 //
 // Text pipeline (SSE, HTTP):
 //   TextCodec (JSON) → text frame ("Vx" prefix) → text fragmentation → TextReassembler
@@ -71,25 +71,20 @@ export {
 } from "./wire-types.js"
 
 // ---------------------------------------------------------------------------
-// Constants — protocol version, transport prefixes
+// Constants — protocol version, frame layout
 // ---------------------------------------------------------------------------
 
 export {
   BinaryFrameType,
   type BinaryFrameTypeValue,
-  FRAGMENT,
   FRAGMENT_META_SIZE,
   FRAGMENT_MIN_SIZE,
-  FRAME_ID_SIZE,
-  HASH_ALGO,
-  type HashAlgoValue,
   HEADER_SIZE,
-  MESSAGE_COMPLETE,
   WIRE_VERSION,
 } from "./constants.js"
 
 // ---------------------------------------------------------------------------
-// Frame — 7-byte header encoding/decoding
+// Frame — 6-byte header encoding/decoding
 // ---------------------------------------------------------------------------
 
 export {
@@ -121,17 +116,10 @@ export {
 // ---------------------------------------------------------------------------
 
 export {
-  bytesToHex,
   calculateFragmentationOverhead,
-  FragmentParseError,
+  createFrameIdCounter,
   fragmentPayload,
-  generateFrameId,
-  hexToBytes,
-  parseTransportPayload,
   shouldFragment,
-  type TransportPayload,
-  wrapCompleteMessage,
-  wrapFragment,
 } from "./fragment.js"
 
 // ---------------------------------------------------------------------------

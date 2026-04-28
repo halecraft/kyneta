@@ -12,6 +12,7 @@
 
 import type { Channel, ChannelMsg, PeerId } from "@kyneta/transport"
 import {
+  createFrameIdCounter,
   decodeBinaryMessages,
   encodeBinaryAndSend,
   FragmentReassembler,
@@ -57,6 +58,7 @@ export class WebsocketConnection {
   // Fragmentation support
   readonly #fragmentThreshold: number
   readonly #reassembler: FragmentReassembler
+  #nextFrameId = createFrameIdCounter()
 
   constructor(
     peerId: PeerId,
@@ -71,7 +73,7 @@ export class WebsocketConnection {
       config?.fragmentThreshold ?? DEFAULT_FRAGMENT_THRESHOLD
     this.#reassembler = new FragmentReassembler({
       timeoutMs: 10_000,
-      onTimeout: (frameId: string) => {
+      onTimeout: (frameId: number) => {
         console.warn(
           `[WebsocketConnection] Fragment batch timed out: ${frameId}`,
         )
@@ -123,8 +125,11 @@ export class WebsocketConnection {
       return
     }
 
-    encodeBinaryAndSend(msg, this.#fragmentThreshold, data =>
-      this.#socket.send(data),
+    encodeBinaryAndSend(
+      msg,
+      data => this.#socket.send(data),
+      this.#fragmentThreshold,
+      this.#nextFrameId,
     )
   }
 

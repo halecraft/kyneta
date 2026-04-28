@@ -45,6 +45,7 @@ import type {
 } from "@kyneta/transport"
 import { Transport } from "@kyneta/transport"
 import {
+  createFrameIdCounter,
   encodeTextComplete,
   fragmentTextPayload,
   TextReassembler,
@@ -411,6 +412,7 @@ export class SseClientTransport extends Transport<void> {
   // ==========================================================================
 
   protected generate(): GeneratedChannel {
+    const nextFrameId = createFrameIdCounter()
     return {
       transportType: this.transportType,
       send: (msg: ChannelMsg) => {
@@ -442,6 +444,7 @@ export class SseClientTransport extends Transport<void> {
           const fragments = fragmentTextPayload(
             payload,
             this.#fragmentThreshold,
+            nextFrameId(),
           )
           for (const fragment of fragments) {
             void this.#sendTextWithRetry(resolvedPostUrl, fragment)

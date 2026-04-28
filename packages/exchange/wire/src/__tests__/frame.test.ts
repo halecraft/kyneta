@@ -1,6 +1,6 @@
 // Binary frame encode/decode tests.
 //
-// Verifies the 7-byte frame header (version + type + hashAlgo + Uint32 payload length)
+// Verifies the 6-byte frame header (version + type + Uint32 payload length)
 // for both complete and fragment frames, using cborCodec only.
 // Batching is orthogonal to framing — not tested here.
 
@@ -20,7 +20,6 @@ import { cborCodec } from "../cbor.js"
 import {
   BinaryFrameType,
   FRAGMENT_META_SIZE,
-  HASH_ALGO,
   HEADER_SIZE,
   WIRE_VERSION,
 } from "../constants.js"
@@ -37,14 +36,13 @@ import { complete, fragment, isComplete, isFragment } from "../frame-types.js"
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Read the 7-byte frame header fields. */
+/** Read the 6-byte frame header fields. */
 function readHeader(frame: Uint8Array) {
   const view = new DataView(frame.buffer, frame.byteOffset, frame.byteLength)
   return {
     version: view.getUint8(0),
     type: view.getUint8(1),
-    hashAlgo: view.getUint8(2),
-    payloadLength: view.getUint32(3, false),
+    payloadLength: view.getUint32(2, false),
   }
 }
 
@@ -53,7 +51,7 @@ function readHeader(frame: Uint8Array) {
 // ---------------------------------------------------------------------------
 
 describe("Binary frame — complete", () => {
-  it("encodes a complete frame with correct 7-byte header", () => {
+  it("encodes a complete frame with correct 6-byte header", () => {
     const msg: PresentMsg = {
       type: "present",
       docs: [
@@ -73,7 +71,6 @@ describe("Binary frame — complete", () => {
     const header = readHeader(frame)
     expect(header.version).toBe(WIRE_VERSION)
     expect(header.type).toBe(BinaryFrameType.COMPLETE)
-    expect(header.hashAlgo).toBe(HASH_ALGO.NONE)
     expect(header.payloadLength).toBe(frame.length - HEADER_SIZE)
   })
 
@@ -214,7 +211,6 @@ describe("Binary frame — batch (via complete frame)", () => {
     const header = readHeader(encoded)
     expect(header.version).toBe(WIRE_VERSION)
     expect(header.type).toBe(BinaryFrameType.COMPLETE)
-    expect(header.hashAlgo).toBe(HASH_ALGO.NONE)
   })
 
   it("round-trips a batch of mixed messages", () => {
@@ -284,26 +280,18 @@ describe("Binary frame — batch (via complete frame)", () => {
 describe("Binary frame — fragment", () => {
   it("encodes a fragment frame with correct header", () => {
     const payload = new Uint8Array([0xaa, 0xbb, 0xcc])
-    const frame = fragment(
-      WIRE_VERSION,
-      "abcdef0123456789",
-      2,
-      5,
-      1000,
-      payload,
-    )
+    const frame = fragment(WIRE_VERSION, 0xabcd, 2, 5, 1000, payload)
     const encoded = encodeBinaryFrame(frame)
 
     const header = readHeader(encoded)
     expect(header.version).toBe(WIRE_VERSION)
     expect(header.type).toBe(BinaryFrameType.FRAGMENT)
-    expect(header.hashAlgo).toBe(HASH_ALGO.NONE)
     expect(header.payloadLength).toBe(payload.length)
   })
 
   it("fragment frame size = header + fragment meta + payload", () => {
     const payload = new Uint8Array(42)
-    const frame = fragment(WIRE_VERSION, "abcdef0123456789", 0, 3, 126, payload)
+    const frame = fragment(WIRE_VERSION, 0xabcd, 0, 3, 126, payload)
     const encoded = encodeBinaryFrame(frame)
 
     expect(encoded.length).toBe(
@@ -313,7 +301,7 @@ describe("Binary frame — fragment", () => {
 
   it("round-trips a fragment frame", () => {
     const payload = new Uint8Array([1, 2, 3, 4, 5])
-    const frameId = "a1b2c3d4e5f60718"
+    const frameId = 0xa1b2
     const original = fragment(WIRE_VERSION, frameId, 3, 10, 500, payload)
     const encoded = encodeBinaryFrame(original)
     const decoded = decodeBinaryFrame(encoded)
@@ -332,7 +320,7 @@ describe("Binary frame — fragment", () => {
   })
 
   it("preserves frameId through round-trip", () => {
-    const frameId = "0000000000000000"
+    const frameId = 0
     const frame = fragment(WIRE_VERSION, frameId, 0, 1, 5, new Uint8Array([42]))
     const encoded = encodeBinaryFrame(frame)
     const decoded = decodeBinaryFrame(encoded)
@@ -345,9 +333,9 @@ describe("Binary frame — fragment", () => {
   it("handles max values for index and total", () => {
     const frame = fragment(
       WIRE_VERSION,
-      "ffffffffffffffff",
-      0xfffffffe,
-      0xffffffff,
+      0xffff,
+      0xfffe,
+      0xffff,
       0xffffffff,
       new Uint8Array([1]),
     )
@@ -355,8 +343,8 @@ describe("Binary frame — fragment", () => {
     const decoded = decodeBinaryFrame(encoded)
 
     if (decoded.content.kind === "fragment") {
-      expect(decoded.content.index).toBe(0xfffffffe)
-      expect(decoded.content.total).toBe(0xffffffff)
+      expect(decoded.content.index).toBe(0xfffe)
+      expect(decoded.content.total).toBe(0xffff)
       expect(decoded.content.totalSize).toBe(0xffffffff)
     }
   })
@@ -389,7 +377,7 @@ describe("Binary frame — encodeBinaryFrame generic", () => {
 
   it("encodes a fragment frame from Frame<Uint8Array>", () => {
     const payload = new Uint8Array([10, 20, 30])
-    const frame = fragment(WIRE_VERSION, "1234567890abcdef", 0, 2, 6, payload)
+    const frame = fragment(WIRE_VERSION, 0x1234, 0, 2, 6, payload)
     const encoded = encodeBinaryFrame(frame)
 
     const decoded = decodeBinaryFrame(encoded)
@@ -404,8 +392,14 @@ describe("Binary frame — encodeBinaryFrame generic", () => {
 describe("Binary frame — error handling", () => {
   it("rejects frame shorter than header size", () => {
     const tooShort = new Uint8Array(3)
-    expect(() => decodeBinaryFrame(tooShort)).toThrow(FrameDecodeError)
-    expect(() => decodeBinaryFrame(tooShort)).toThrow("too short")
+    try {
+      decodeBinaryFrame(tooShort)
+      expect.unreachable("should have thrown")
+    } catch (error) {
+      expect(error).toBeInstanceOf(FrameDecodeError)
+      expect((error as FrameDecodeError).code).toBe("truncated_frame")
+      expect((error as FrameDecodeError).message).toContain("too short")
+    }
   })
 
   it("rejects unsupported wire version", () => {
@@ -413,11 +407,18 @@ describe("Binary frame — error handling", () => {
     const view = new DataView(frame.buffer)
     view.setUint8(0, 0xff) // bad version
     view.setUint8(1, BinaryFrameType.COMPLETE)
-    view.setUint8(2, HASH_ALGO.NONE)
-    view.setUint32(3, 4, false)
+    view.setUint32(2, 4, false)
 
-    expect(() => decodeBinaryFrame(frame)).toThrow(FrameDecodeError)
-    expect(() => decodeBinaryFrame(frame)).toThrow("Unsupported wire version")
+    try {
+      decodeBinaryFrame(frame)
+      expect.unreachable("should have thrown")
+    } catch (error) {
+      expect(error).toBeInstanceOf(FrameDecodeError)
+      expect((error as FrameDecodeError).code).toBe("unsupported_version")
+      expect((error as FrameDecodeError).message).toContain(
+        "Unsupported wire version",
+      )
+    }
   })
 
   it("rejects truncated complete frame", () => {
@@ -425,8 +426,7 @@ describe("Binary frame — error handling", () => {
     const view = new DataView(frame.buffer)
     view.setUint8(0, WIRE_VERSION)
     view.setUint8(1, BinaryFrameType.COMPLETE)
-    view.setUint8(2, HASH_ALGO.NONE)
-    view.setUint32(3, 100, false) // claims 100 bytes but only 2 available
+    view.setUint32(2, 100, false) // claims 100 bytes but only 2 available
 
     expect(() => decodeBinaryFrame(frame)).toThrow(FrameDecodeError)
     expect(() => decodeBinaryFrame(frame)).toThrow("truncated")
@@ -435,12 +435,11 @@ describe("Binary frame — error handling", () => {
   it("rejects truncated fragment frame", () => {
     // Fragment frame needs header + fragment meta + payload
     // Create one that claims payload but is too short for fragment meta
-    const frame = new Uint8Array(HEADER_SIZE + 5) // too short for 20-byte fragment meta
+    const frame = new Uint8Array(HEADER_SIZE + 5) // too short for 10-byte fragment meta
     const view = new DataView(frame.buffer)
     view.setUint8(0, WIRE_VERSION)
     view.setUint8(1, BinaryFrameType.FRAGMENT)
-    view.setUint8(2, HASH_ALGO.NONE)
-    view.setUint32(3, 1, false) // claims 1 byte payload
+    view.setUint32(2, 1, false) // claims 1 byte payload
 
     expect(() => decodeBinaryFrame(frame)).toThrow(FrameDecodeError)
     expect(() => decodeBinaryFrame(frame)).toThrow("truncated")
@@ -451,60 +450,7 @@ describe("Binary frame — error handling", () => {
     const view = new DataView(frame.buffer)
     view.setUint8(0, WIRE_VERSION)
     view.setUint8(1, 0xff) // unknown type
-    view.setUint8(2, HASH_ALGO.NONE)
-    view.setUint32(3, 4, false)
-
-    expect(() => decodeBinaryFrame(frame)).toThrow(FrameDecodeError)
-    expect(() => decodeBinaryFrame(frame)).toThrow("Unknown frame type")
-  })
-
-  it("rejects unsupported hash algorithm", () => {
-    const frame = new Uint8Array(HEADER_SIZE + 4)
-    const view = new DataView(frame.buffer)
-    view.setUint8(0, WIRE_VERSION)
-    view.setUint8(1, BinaryFrameType.COMPLETE)
-    view.setUint8(2, 0xfe) // unknown hash algo
-    view.setUint32(3, 4, false)
-
-    expect(() => decodeBinaryFrame(frame)).toThrow(FrameDecodeError)
-    expect(() => decodeBinaryFrame(frame)).toThrow("Unsupported hash")
-  })
-
-  it("FrameDecodeError has correct code for truncated frame", () => {
-    const tooShort = new Uint8Array(2)
-    try {
-      decodeBinaryFrame(tooShort)
-      expect.unreachable("should have thrown")
-    } catch (error) {
-      expect(error).toBeInstanceOf(FrameDecodeError)
-      expect((error as FrameDecodeError).code).toBe("truncated_frame")
-    }
-  })
-
-  it("FrameDecodeError has correct code for unsupported version", () => {
-    const frame = new Uint8Array(HEADER_SIZE)
-    const view = new DataView(frame.buffer)
-    view.setUint8(0, 99) // wrong version
-    view.setUint8(1, BinaryFrameType.COMPLETE)
-    view.setUint8(2, HASH_ALGO.NONE)
-    view.setUint32(3, 0, false)
-
-    try {
-      decodeBinaryFrame(frame)
-      expect.unreachable("should have thrown")
-    } catch (error) {
-      expect(error).toBeInstanceOf(FrameDecodeError)
-      expect((error as FrameDecodeError).code).toBe("unsupported_version")
-    }
-  })
-
-  it("FrameDecodeError has correct code for invalid type", () => {
-    const frame = new Uint8Array(HEADER_SIZE + 1)
-    const view = new DataView(frame.buffer)
-    view.setUint8(0, WIRE_VERSION)
-    view.setUint8(1, 0xab) // invalid type
-    view.setUint8(2, HASH_ALGO.NONE)
-    view.setUint32(3, 1, false)
+    view.setUint32(2, 4, false)
 
     try {
       decodeBinaryFrame(frame)
@@ -512,6 +458,9 @@ describe("Binary frame — error handling", () => {
     } catch (error) {
       expect(error).toBeInstanceOf(FrameDecodeError)
       expect((error as FrameDecodeError).code).toBe("invalid_type")
+      expect((error as FrameDecodeError).message).toContain(
+        "Unknown frame type",
+      )
     }
   })
 })
@@ -559,7 +508,7 @@ describe("Binary frame — edge cases", () => {
   it("fragment frame with 1-byte payload", () => {
     const frame = fragment(
       WIRE_VERSION,
-      "1234567890abcdef",
+      0x1234,
       0,
       1,
       1,

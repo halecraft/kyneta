@@ -3,7 +3,7 @@
 // Unix domain sockets (and any stream-oriented transport) deliver bytes
 // as a continuous stream — writes coalesce, reads deliver arbitrary chunks.
 // This parser accumulates bytes and extracts complete binary frames using
-// the 7-byte header's payload length field.
+// the 6-byte header's payload length field.
 //
 // FC/IS design: feedBytes is the functional core (pure, no side effects,
 // no mutation of inputs). The transport's data handler is the imperative
@@ -26,7 +26,7 @@ import { HEADER_SIZE } from "./constants.js"
 /**
  * Discriminated union representing the parser's current phase.
  *
- * - `"header"`: accumulating bytes until we have a complete 7-byte header
+ * - `"header"`: accumulating bytes until we have a complete 6-byte header
  * - `"payload"`: header parsed, accumulating payload bytes
  *
  * The buffer holds accumulated bytes for the current phase. The offset
@@ -101,27 +101,22 @@ export function feedBytes(
       const available = chunk.length - pos
       const toCopy = Math.min(remaining, available)
 
-      // Copy bytes into the header buffer
-      const headerBuffer =
-        current.offset === 0 && current.buffer.length === HEADER_SIZE
-          ? current.buffer
-          : current.buffer
+      const headerBuffer = current.buffer
       headerBuffer.set(chunk.subarray(pos, pos + toCopy), current.offset)
       pos += toCopy
 
       const newOffset = current.offset + toCopy
 
       if (newOffset < HEADER_SIZE) {
-        // Still accumulating header bytes
         current = { phase: "header", buffer: headerBuffer, offset: newOffset }
       } else {
-        // Header complete — read payload length from bytes 3–6 (4 bytes, big-endian)
+        // Header complete — read payload length from bytes 2–5 (4 bytes, big-endian)
         const view = new DataView(
           headerBuffer.buffer,
           headerBuffer.byteOffset,
           headerBuffer.byteLength,
         )
-        const payloadLength = view.getUint32(3, false)
+        const payloadLength = view.getUint32(2, false)
 
         if (payloadLength === 0) {
           // Edge case: zero-length payload — emit header-only frame immediately
@@ -134,7 +129,6 @@ export function feedBytes(
             offset: 0,
           }
         } else {
-          // Transition to payload phase
           current = {
             phase: "payload",
             header: new Uint8Array(headerBuffer),
@@ -145,7 +139,6 @@ export function feedBytes(
         }
       }
     } else {
-      // phase === "payload"
       const remaining = current.payloadLength - current.offset
       const available = chunk.length - pos
       const toCopy = Math.min(remaining, available)
@@ -156,7 +149,6 @@ export function feedBytes(
       const newOffset = current.offset + toCopy
 
       if (newOffset < current.payloadLength) {
-        // Still accumulating payload bytes
         current = {
           phase: "payload",
           header: current.header,
@@ -165,13 +157,11 @@ export function feedBytes(
           offset: newOffset,
         }
       } else {
-        // Payload complete — assemble and emit the full frame (header + payload)
         const frame = new Uint8Array(HEADER_SIZE + current.payloadLength)
         frame.set(current.header, 0)
         frame.set(current.buffer, HEADER_SIZE)
         frames.push(frame)
 
-        // Reset to header phase for next frame
         current = {
           phase: "header",
           buffer: new Uint8Array(HEADER_SIZE),

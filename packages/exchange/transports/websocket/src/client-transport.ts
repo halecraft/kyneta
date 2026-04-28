@@ -22,6 +22,7 @@ import type {
 } from "@kyneta/transport"
 import { Transport } from "@kyneta/transport"
 import {
+  createFrameIdCounter,
   decodeBinaryMessages,
   encodeBinaryAndSend,
   FragmentReassembler,
@@ -535,6 +536,7 @@ export class WebsocketClientTransport extends Transport<void> {
   // ==========================================================================
 
   protected generate(): GeneratedChannel {
+    const nextFrameId = createFrameIdCounter()
     return {
       transportType: this.transportType,
       send: (msg: ChannelMsg) => {
@@ -543,8 +545,11 @@ export class WebsocketClientTransport extends Transport<void> {
           return
         }
 
-        encodeBinaryAndSend(msg, this.#fragmentThreshold, data =>
-          socket.send(new Uint8Array(data).buffer),
+        encodeBinaryAndSend(
+          msg,
+          data => socket.send(new Uint8Array(data).buffer),
+          this.#fragmentThreshold,
+          nextFrameId,
         )
       },
       stop: () => {
