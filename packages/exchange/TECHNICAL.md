@@ -3,7 +3,7 @@
 > **Package**: `@kyneta/exchange`
 > **Role**: Substrate-agnostic document sync runtime. Orchestrates channel topology, document convergence, and persistence above any transport and any `@kyneta/schema` substrate — via two pure TEA programs (session + sync), a Synchronizer shell that owns the serialized dispatch queue, and an Exchange façade that adds storage, governance, capability negotiation, and reactive peer/document collections.
 > **Depends on**: `@kyneta/schema` (peer), `@kyneta/changefeed` (peer), `@kyneta/transport` (direct)
-> **Depended on by**: `@kyneta/react` (peer), `@kyneta/leveldb-store`, `@kyneta/indexeddb-store`, application code, every transport package (dev)
+> **Depended on by**: `@kyneta/react` (peer), `@kyneta/leveldb-store`, `@kyneta/indexeddb-store`, `@kyneta/sqlite-store`, application code, every transport package (dev)
 > **Canonical symbols**: `Exchange`, `ExchangeParams`, `Synchronizer`, `DocRuntime`, `SessionModel`, `SessionInput`, `SessionEffect`, `SyncModel`, `SyncInput`, `SyncEffect`, `updateSession`, `updateSync`, `Governance`, `Policy`, `composeGate`, `GatePredicate`, `EpochBoundaryPredicate`, `Line`, `LineProtocol`, `Capabilities`, `ReplicaKey`, `DEFAULT_REPLICAS`, `Interpret`, `Replicate`, `Defer`, `Reject`, `Disposition`, `PeerIdentityInput`, `PeerChange`, `DocChange`, `DocInfo`, `PeerState`, `ReadyState`, `PeerDocSyncState`, `Store`, `StoreRecord`, `StoreMeta`, `DocMetadata`, `persistentPeerId`, `releasePeerId`, `resolveLease`, `LeaseState`, `sync` (helper), `SyncProtocol`, `SYNC_COLLABORATIVE`, `SYNC_AUTHORITATIVE`, `SYNC_EPHEMERAL`, `requiresBidirectionalSync`, `BindingTarget`, `createBindingTarget`
 > **Key invariant(s)**:
 > 1. The exchange never inspects `SubstratePayload` contents. Payloads are opaque blobs carried by `offer` messages; only the substrate produces and consumes them.
@@ -92,7 +92,7 @@ Plus cross-cutting facilities:
 | Capabilities | `src/capabilities.ts` | Replica-type + schema registry keyed by `ReplicaKey`. |
 | Line | `src/line.ts` | Reliable bidirectional message stream built above `exchange.get`. |
 | Persistent peer ID | `src/persistent-peer-id.ts` | Browser-only lease protocol for per-tab unique, reload-stable `peerId`. |
-| Storage | `src/store/*.ts` | `Store` interface + in-memory implementation; `@kyneta/leveldb-store` is a production impl. |
+| Storage | `src/store/*.ts` | `Store` interface, in-memory implementation, shared utilities (`SeqNoTracker`, `validateAppend`); production impls in `@kyneta/leveldb-store`, `@kyneta/indexeddb-store`, `@kyneta/sqlite-store`. |
 
 ### What the exchange is NOT
 
@@ -487,7 +487,15 @@ The `StoreRecord` tagged union carries either document metadata (`"meta"`) or a 
 
 ### Multi-store semantics
 
-Applications pass zero or more stores in `ExchangeParams.stores`. Writes fan out to all stores. Reads use first-hit: stores are tried in array order; the first store where `currentMeta(docId)` returns non-null is used for hydration. Two production implementations exist: `@kyneta/leveldb-store` for server-side (LevelDB via `classic-level`) and `@kyneta/indexeddb-store` for browser-side (IndexedDB). The in-memory store in `src/store/in-memory-store.ts` is used for tests and browser-ephemeral cases.
+Applications pass zero or more stores in `ExchangeParams.stores`. Writes fan out to all stores. Reads use first-hit: stores are tried in array order; the first store where `currentMeta(docId)` returns non-null is used for hydration. Three production implementations exist: `@kyneta/leveldb-store` for server-side (LevelDB via `classic-level`), `@kyneta/indexeddb-store` for browser-side (IndexedDB), and `@kyneta/sqlite-store` for universal server-side deployment (SQLite via a thin four-method adapter interface `{ exec, iterate, transaction, close }` — `iterate` returns `Iterable<T>` so `loadAll` streams large result sets without materializing them; supports `bun:sqlite`, `better-sqlite3`, and Cloudflare DO `ctx.storage.sql`). The in-memory store in `src/store/in-memory-store.ts` is used for tests and browser-ephemeral cases.
+
+### Shared store utilities
+
+Two patterns common to all store backends are extracted into shared utilities in `src/store/`:
+
+- **`SeqNoTracker`** (`src/store/seq-tracker.ts`) — per-document monotonic sequence number tracker. Maintains an in-memory cache of the last-used seqNo per document; on first access, a caller-supplied `discover` callback resolves the current maximum from the backend (reverse-iterator seek in LevelDB, `SELECT MAX(seq)` in SQLite). Used by `LevelDBStore` and `SqliteStore`.
+
+- **`validateAppend`** (`src/store/store.ts`) — shared meta-first invariant guard. Validates that an `entry` record is not appended before a `meta` record exists, and resolves metadata for `meta` records via `resolveMetaFromBatch`. Used by `InMemoryStore`, `LevelDBStore`, and `SqliteStore`. The IndexedDB store has its own inline variant that calls `tx.abort()` before throwing.
 
 ### The store-program
 
@@ -674,6 +682,8 @@ For durability guarantees, use the `cohort` predicate to prevent compaction past
 | `Line` / `LineProtocol` / `createLineDocSchema` | `src/line.ts` | Reliable message-stream primitive. |
 | `persistentPeerId` / `releasePeerId` / `resolveLease` / `LeaseState` | `src/persistent-peer-id.ts` | Browser-tab peer-ID lease helper + pure core. |
 | `Store` / `StoreRecord` / `StoreMeta` / `DocMetadata` | `src/store/store.ts` | Persistence interface. |
+| `validateAppend` | `src/store/store.ts` | Shared meta-first invariant guard for `append` implementations. |
+| `SeqNoTracker` | `src/store/seq-tracker.ts` | Per-doc monotonic seqNo tracker with lazy backend discovery. |
 | `PeerChange` / `DocChange` / `DocInfo` / `PeerState` / `ReadyState` | `src/types.ts` | Reactive-collection change types and snapshot shapes. |
 | `sync(doc)` | `src/sync.ts` | Helper: returns `{ waitForSync }` for imperative test synchronization. |
 | `AsyncQueue` | `src/async-queue.ts` | Bounded async producer/consumer queue used inside `Line`. |
@@ -696,7 +706,7 @@ For durability guarantees, use the `cohort` predicate to prevent compaction past
 | `src/sync.ts` | 195 | `sync(doc)` helper + `registerSync`. |
 | `src/types.ts` | 134 | `DocChange`, `DocInfo`, `PeerChange`, `PeerDocSyncState`, `PeerState`, `ReadyState`. |
 | `src/utils.ts` | 50 | `validatePeerId`. (Random ID generation extracted to `@kyneta/random`.) |
-| `src/store/` | — | `Store` interface + in-memory implementation. |
+| `src/store/` | — | `Store` interface, in-memory implementation, shared utilities (`seq-tracker.ts`, `validateAppend` in `store.ts`). |
 | `src/transport/` | — | Transport-manager glue. |
 | `src/testing/` | — | Test-only helpers exported from `@kyneta/exchange/testing`. |
 | `src/__tests__/` | 17 files | Full dispatch-loop, governance, capabilities, line, persistent-peer-id, storage, compaction, classification, and end-to-end tests. |

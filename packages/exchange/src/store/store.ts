@@ -250,3 +250,29 @@ export function resolveMetaFromBatch(
 
   return resolved
 }
+
+// ---------------------------------------------------------------------------
+// validateAppend — shared meta-first invariant guard for Store implementations
+// ---------------------------------------------------------------------------
+
+/**
+ * IndexedDB cannot use this — it needs `tx.abort()` before throwing.
+ *
+ * @throws If the record is an `entry` and no prior `meta` exists.
+ */
+export function validateAppend(
+  docId: string,
+  record: StoreRecord,
+  existingMeta: StoreMeta | null,
+): StoreMeta | null {
+  if (record.kind === "entry") {
+    if (existingMeta === null) {
+      throw new Error(
+        `Store: first record for doc '${docId}' must be meta, got entry`,
+      )
+    }
+    return null
+  }
+
+  return resolveMetaFromBatch([record], existingMeta)
+}

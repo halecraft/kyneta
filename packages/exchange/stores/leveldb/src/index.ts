@@ -16,9 +16,11 @@
 import {
   type DocId,
   resolveMetaFromBatch,
+  SeqNoTracker,
   type Store,
   type StoreMeta,
   type StoreRecord,
+  validateAppend,
 } from "@kyneta/exchange"
 import { ClassicLevel } from "classic-level"
 
@@ -158,45 +160,12 @@ function parseSeqNoFromRecordKey(key: string, docId: DocId): number {
 
 export class LevelDBStore implements Store {
   readonly #db: ClassicLevel<string, Uint8Array>
-  readonly #seqNos: Map<DocId, number> = new Map()
+  readonly #seqNos = new SeqNoTracker()
 
   constructor(dbPath: string) {
     this.#db = new ClassicLevel(dbPath, {
       valueEncoding: "binary",
     })
-  }
-
-  // -------------------------------------------------------------------------
-  // Private — seqNo management
-  // -------------------------------------------------------------------------
-
-  /**
-   * Get the next seqNo for a doc. On first call after reboot, discovers
-   * the max existing seqNo via a single reverse-iterator seek.
-   */
-  async #nextSeqNo(docId: DocId): Promise<number> {
-    const cached = this.#seqNos.get(docId)
-    if (cached !== undefined) {
-      const next = cached + 1
-      this.#seqNos.set(docId, next)
-      return next
-    }
-
-    // Lazy discovery: reverse iterate to find the highest existing seqNo
-    const prefix = recordPrefix(docId)
-    let maxSeq = -1
-    for await (const key of this.#db.keys({
-      gte: prefix,
-      lt: `${prefix}\xff`,
-      reverse: true,
-      limit: 1,
-    })) {
-      maxSeq = parseSeqNoFromRecordKey(key, docId)
-    }
-
-    const next = maxSeq + 1
-    this.#seqNos.set(docId, next)
-    return next
   }
 
   // -------------------------------------------------------------------------
@@ -215,23 +184,27 @@ export class LevelDBStore implements Store {
 
   async append(docId: DocId, record: StoreRecord): Promise<void> {
     const existingMeta = await this.currentMeta(docId)
+    const resolved = validateAppend(docId, record, existingMeta)
 
-    if (record.kind === "entry") {
-      if (existingMeta === null) {
-        throw new Error(
-          `Store: first record for doc '${docId}' must be meta, got entry`,
-        )
-      }
-    } else {
-      // record.kind === "meta" — validate immutability via resolution
-      const resolved = resolveMetaFromBatch([record], existingMeta)
+    if (resolved !== null) {
       await this.#db.put(
         metaKey(docId),
         encoder.encode(JSON.stringify(resolved)),
       )
     }
 
-    const seq = await this.#nextSeqNo(docId)
+    const seq = await this.#seqNos.next(docId, async () => {
+      const prefix = recordPrefix(docId)
+      for await (const key of this.#db.keys({
+        gte: prefix,
+        lt: `${prefix}\xff`,
+        reverse: true,
+        limit: 1,
+      })) {
+        return parseSeqNoFromRecordKey(key, docId)
+      }
+      return null
+    })
     await this.#db.put(recordKey(docId, seq), encodeStoreRecord(record))
   }
 
@@ -285,7 +258,7 @@ export class LevelDBStore implements Store {
     await this.#db.batch(ops)
 
     // Reset seqNo counter to the last written index
-    this.#seqNos.set(docId, records.length - 1)
+    this.#seqNos.reset(docId, records.length - 1)
   }
 
   async delete(docId: DocId): Promise<void> {
@@ -305,7 +278,7 @@ export class LevelDBStore implements Store {
     )
 
     // Remove from in-memory seqNo tracker
-    this.#seqNos.delete(docId)
+    this.#seqNos.remove(docId)
   }
 
   async *listDocIds(prefix?: string): AsyncIterable<DocId> {

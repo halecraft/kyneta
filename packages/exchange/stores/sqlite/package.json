@@ -1,0 +1,51 @@
+{
+  "name": "@kyneta/sqlite-store",
+  "version": "1.4.0",
+  "description": "SQLite storage backend for @kyneta/exchange — universal persistent storage",
+  "author": "Duane Johnson",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/halecraft/kyneta",
+    "directory": "packages/exchange/stores/sqlite"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./src": "./src/index.ts",
+    "./src/*": "./src/*"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "test": "verify logic",
+    "verify": "verify"
+  },
+  "peerDependencies": {
+    "@kyneta/exchange": "^1.4.0",
+    "@kyneta/schema": "^1.4.0"
+  },
+  "devDependencies": {
+    "@kyneta/exchange": "workspace:^",
+    "@kyneta/schema": "workspace:^",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22",
+    "better-sqlite3": "^11.9.1",
+    "tsdown": "^0.21.9",
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.17"
+  }
+}

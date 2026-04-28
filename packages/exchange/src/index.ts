@@ -203,6 +203,8 @@ export {
   InMemoryStore,
   type InMemoryStoreData,
   resolveMetaFromBatch,
+  SeqNoTracker,
+  validateAppend,
 } from "./store/index.js"
 
 // ---------------------------------------------------------------------------

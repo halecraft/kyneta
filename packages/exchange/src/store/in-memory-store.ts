@@ -6,7 +6,7 @@
 
 import type { DocId } from "@kyneta/transport"
 import type { Store, StoreMeta, StoreRecord } from "./store.js"
-import { resolveMetaFromBatch } from "./store.js"
+import { resolveMetaFromBatch, validateAppend } from "./store.js"
 
 export type InMemoryStoreData = {
   records: Map<DocId, StoreRecord[]>
@@ -36,15 +36,9 @@ export class InMemoryStore implements Store {
 
   async append(docId: DocId, record: StoreRecord): Promise<void> {
     const existingMeta = this.#metadata.get(docId) ?? null
+    const resolved = validateAppend(docId, record, existingMeta)
 
-    if (record.kind === "entry") {
-      if (existingMeta === null) {
-        throw new Error(
-          `Store: first record for doc '${docId}' must be meta, got entry`,
-        )
-      }
-    } else {
-      const resolved = resolveMetaFromBatch([record], existingMeta)
+    if (resolved !== null) {
       this.#metadata.set(docId, resolved)
     }
 

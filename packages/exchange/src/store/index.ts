@@ -9,7 +9,13 @@
 // ---------------------------------------------------------------------------
 
 export type { Store, StoreMeta, StoreRecord } from "./store.js"
-export { resolveMetaFromBatch } from "./store.js"
+export { resolveMetaFromBatch, validateAppend } from "./store.js"
+
+// ---------------------------------------------------------------------------
+// SeqNoTracker — shared per-document sequence number management
+// ---------------------------------------------------------------------------
+
+export { SeqNoTracker } from "./seq-tracker.js"
 
 // ---------------------------------------------------------------------------
 // InMemoryStore — Map-backed backend for testing
