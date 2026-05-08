@@ -50,7 +50,12 @@ Every test count in every per-package `TECHNICAL.md` agrees with this table. Run
 | **Total** | **6,149** | **16** | **214** |
 
 Two additional test suites live outside the main package graph:
-- `tests/exchange-websocket` — E2E WebSocket sync over `bun test` (separate runtime).
+- `tests/integration` — cross-package integration suite. Files use
+  `.node.test.ts` (vitest) or `.bun.test.ts` (bun test) suffixes to
+  declare their runtime contract; `verify.config.ts` runs both runners
+  in parallel as children of one `logic` task. Currently covers
+  WebSocket sync (Node + Bun) and SQLite-backed sync + restart over
+  WebSocket.
 - `examples/bumper-cars` — integration suite exercising the full ephemeral + collaborative sync stack.
 
 ---
@@ -224,7 +229,7 @@ kyneta/
 │   └── bun-server/           # shared Bun build + static serving for examples
 │
 ├── tests/                    # cross-package test harnesses
-│   └── exchange-websocket/   # E2E WebSocket sync via bun test
+│   └── integration/          # Node (vitest) + Bun (bun test) suites
 │
 ├── scripts/                  # build/release/maintenance scripts
 ├── papers/                   # drafts, notes, theory docs

@@ -15,8 +15,8 @@ export default defineConfig({
     },
     {
       key: "logic",
-      run: "bun test",
-      parser: parsers.generic,
+      run: "vitest run",
+      parser: parsers.vitest,
       reportingDependsOn: ["format", "types"],
     },
   ],

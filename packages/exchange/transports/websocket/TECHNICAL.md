@@ -3,7 +3,7 @@
 > **Package**: `@kyneta/websocket-transport`
 > **Role**: WebSocket transport for `@kyneta/exchange` — browser client, server, Bun integration, and service-to-service client. Binary CBOR on the wire, a pure Mealy-machine client lifecycle, and a server-sent `"ready"` gate that makes the handshake race-free.
 > **Depends on**: `@kyneta/machine`, `@kyneta/transport`, `@kyneta/wire` (all peer)
-> **Depended on by**: `@kyneta/exchange` (through application configuration), `tests/exchange-websocket`
+> **Depended on by**: `@kyneta/exchange` (through application configuration), `tests/integration`
 > **Canonical symbols**: `createWebsocketClient`, `WebsocketClientTransport`, `WebsocketClientOptions`, `WebsocketServerTransport`, `WebsocketServerTransportOptions`, `WebsocketConnection`, `WebsocketConnectionConfig`, `createServiceWebsocketClient`, `createWsClientProgram`, `WsClientMsg`, `WsClientEffect`, `WebsocketClientState`, `Socket`, `WebSocketLike`, `WebSocketConstructor`, `wrapStandardWebsocket`, `wrapNodeWebsocket`, `wrapBunWebsocket`, `BunWebsocketData`, `READY_STATE`, `DEFAULT_FRAGMENT_THRESHOLD`
 > **Key invariant(s)**: The client creates its exchange channel only after the *server* has sent a text `"ready"` signal — never on `socket.onopen` alone. This is why the client lifecycle has five states (`disconnected → connecting → connected → ready → reconnecting`) rather than four.
 

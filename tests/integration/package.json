@@ -1,5 +1,5 @@
 {
-  "name": "@kyneta/test-exchange-websocket",
+  "name": "@kyneta/test-integration",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,13 +10,19 @@
     "@kyneta/exchange": "workspace:^",
     "@kyneta/loro-schema": "workspace:^",
     "@kyneta/schema": "workspace:^",
+    "@kyneta/sqlite-store": "workspace:^",
     "@kyneta/websocket-transport": "workspace:^",
     "@kyneta/wire": "workspace:^",
+    "@kyneta/yjs-schema": "workspace:^",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22",
     "@types/ws": "^8.18.1",
-    "bun-types": "latest",
+    "better-sqlite3": "^11.9.1",
+    "bun-types": "^1.3.11",
     "loro-crdt": "^1.10.0",
     "typescript": "^5.9.2",
     "vitest": "^4.0.17",
-    "ws": "^8.20.0"
+    "ws": "^8.20.0",
+    "yjs": "^13.6.30"
   }
 }

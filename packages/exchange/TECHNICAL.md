@@ -718,3 +718,10 @@ Tests use real `BridgeTransport` pairs from `@kyneta/transport` for multi-peer s
 The `line.test.ts` file alone runs ~50 scenarios including relay topology, hub-and-spoke, and one-way flow — validating that `Line`'s durability surface works end-to-end through real transports.
 
 **Tests**: 420 passed, 0 skipped across 17 files (notable files: `line.test.ts` at 50 tests, full doc lifecycle and governance suites). Run with `cd packages/exchange && pnpm exec vitest run`.
+
+Cross-package integration tests live in `tests/integration/` (workspace
+package `@kyneta/test-integration`, private). Files in that suite use
+`.node.test.ts` (vitest) or `.bun.test.ts` (bun test) suffixes to declare
+their runtime contract; `verify.config.ts` runs both runners as parallel
+children of one `logic` task. Today's coverage: WebSocket sync (Node and
+Bun) and SQLite-backed sync + restart over WebSocket (Node only).
