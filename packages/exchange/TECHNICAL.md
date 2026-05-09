@@ -3,7 +3,7 @@
 > **Package**: `@kyneta/exchange`
 > **Role**: Substrate-agnostic document sync runtime. Orchestrates channel topology, document convergence, and persistence above any transport and any `@kyneta/schema` substrate — via two pure TEA programs (session + sync), a Synchronizer shell that owns the serialized dispatch queue, and an Exchange façade that adds storage, governance, capability negotiation, and reactive peer/document collections.
 > **Depends on**: `@kyneta/schema` (peer), `@kyneta/changefeed` (peer), `@kyneta/transport` (direct)
-> **Depended on by**: `@kyneta/react` (peer), `@kyneta/leveldb-store`, `@kyneta/indexeddb-store`, `@kyneta/sqlite-store`, application code, every transport package (dev)
+> **Depended on by**: `@kyneta/react` (peer), `@kyneta/leveldb-store`, `@kyneta/indexeddb-store`, `@kyneta/sqlite-store`, `@kyneta/postgres-store`, `@kyneta/prisma-store`, `@kyneta/sql-store-core`, application code, every transport package (dev)
 > **Canonical symbols**: `Exchange`, `ExchangeParams`, `Synchronizer`, `DocRuntime`, `SessionModel`, `SessionInput`, `SessionEffect`, `SyncModel`, `SyncInput`, `SyncEffect`, `updateSession`, `updateSync`, `Governance`, `Policy`, `composeGate`, `GatePredicate`, `EpochBoundaryPredicate`, `Line`, `LineProtocol`, `Capabilities`, `ReplicaKey`, `DEFAULT_REPLICAS`, `Interpret`, `Replicate`, `Defer`, `Reject`, `Disposition`, `PeerIdentityInput`, `PeerChange`, `DocChange`, `DocInfo`, `PeerState`, `ReadyState`, `PeerDocSyncState`, `Store`, `StoreRecord`, `StoreMeta`, `DocMetadata`, `persistentPeerId`, `releasePeerId`, `resolveLease`, `LeaseState`, `sync` (helper), `SyncProtocol`, `SYNC_COLLABORATIVE`, `SYNC_AUTHORITATIVE`, `SYNC_EPHEMERAL`, `requiresBidirectionalSync`, `BindingTarget`, `createBindingTarget`
 > **Key invariant(s)**:
 > 1. The exchange never inspects `SubstratePayload` contents. Payloads are opaque blobs carried by `offer` messages; only the substrate produces and consumes them.
@@ -92,7 +92,7 @@ Plus cross-cutting facilities:
 | Capabilities | `src/capabilities.ts` | Replica-type + schema registry keyed by `ReplicaKey`. |
 | Line | `src/line.ts` | Reliable bidirectional message stream built above `exchange.get`. |
 | Persistent peer ID | `src/persistent-peer-id.ts` | Browser-only lease protocol for per-tab unique, reload-stable `peerId`. |
-| Storage | `src/store/*.ts` | `Store` interface, in-memory implementation, shared utilities (`SeqNoTracker`, `validateAppend`); production impls in `@kyneta/leveldb-store`, `@kyneta/indexeddb-store`, `@kyneta/sqlite-store`. |
+| Storage | `src/store/*.ts` | `Store` interface, in-memory implementation, shared utilities (`SeqNoTracker`, `validateAppend`, `resolveMetaFromBatch`); production impls in `@kyneta/leveldb-store`, `@kyneta/indexeddb-store`, `@kyneta/sqlite-store`, `@kyneta/postgres-store`, `@kyneta/prisma-store`. SQL-family stores share pure helpers (`toRow`, `fromRow`, `planAppend`, `planReplace`, `failOnNthCall`) via `@kyneta/sql-store-core`. |
 
 ### What the exchange is NOT
 
@@ -487,7 +487,23 @@ The `StoreRecord` tagged union carries either document metadata (`"meta"`) or a 
 
 ### Multi-store semantics
 
-Applications pass zero or more stores in `ExchangeParams.stores`. Writes fan out to all stores. Reads use first-hit: stores are tried in array order; the first store where `currentMeta(docId)` returns non-null is used for hydration. Three production implementations exist: `@kyneta/leveldb-store` for server-side (LevelDB via `classic-level`), `@kyneta/indexeddb-store` for browser-side (IndexedDB), and `@kyneta/sqlite-store` for universal server-side deployment (SQLite via a thin four-method adapter interface `{ exec, iterate, transaction, close }` — `iterate` returns `Iterable<T>` so `loadAll` streams large result sets without materializing them; supports `bun:sqlite`, `better-sqlite3`, and Cloudflare DO `ctx.storage.sql`). The in-memory store in `src/store/in-memory-store.ts` is used for tests and browser-ephemeral cases.
+Applications pass zero or more stores in `ExchangeParams.stores`. Writes fan out to all stores. Reads use first-hit: stores are tried in array order; the first store where `currentMeta(docId)` returns non-null is used for hydration. Five production implementations exist:
+
+- `@kyneta/leveldb-store` — server-side (LevelDB via `classic-level`).
+- `@kyneta/indexeddb-store` — browser-side (IndexedDB).
+- `@kyneta/sqlite-store` — universal SQLite (thin synchronous adapter; supports `better-sqlite3`, `bun:sqlite`, and is shaped to also fit Cloudflare DO `ctx.storage.sql` when a factory ships).
+- `@kyneta/postgres-store` — async-native Postgres backend over `pg`.
+- `@kyneta/prisma-store` — backend that takes a caller-supplied `PrismaClient`.
+
+The three SQL-family backends share pure helpers (`toRow`, `fromRow`, `planAppend`, `planReplace`, `failOnNthCall`) via `@kyneta/sql-store-core` — preserving round-trip portability of a `StoreRecord` stream across SQL backends. The in-memory store in `src/store/in-memory-store.ts` is used for tests and browser-ephemeral cases.
+
+### Async-factory pattern for stores requiring async setup
+
+`Store` instances handed to `Exchange` must be ready by construction — the seven `Store` methods are all that the Exchange knows about; there is no lifecycle hook and no orchestration of readiness. Backends needing async setup (open a connection, validate a schema, probe connectivity) expose **async factory functions** returning `Promise<Store>`. The Exchange takes ready stores; readiness is a per-backend concern, surfacing curated errors at the right altitude.
+
+Canonical async factories: `createIndexedDBStore` (opens the IDB database), `createPostgresStore` (validates schema via `information_schema.columns`). Sync constructors are kept where they're honest: `SqliteStore` does fast local DDL in its constructor; `PrismaStore` defers to the caller-supplied client. `createSqliteStore` and `createPrismaStore` exist for ergonomic symmetry but do no async work.
+
+Earlier planning briefly considered adding a `Store.initialize?(): Promise<void>` lifecycle hook to the Exchange. Rejected: the Exchange's effect interpreter only handles writes; reads (`loadAll`, `currentMeta`, `listDocIds`) are called imperatively during hydration and bypass the executor entirely. Gating writes only leaves reads racing pre-init; gating both invasively introduces an `#initReady` mechanism whose purpose duplicates what an async factory already does cleanly. The honest factoring is "async factory, ready stores in." See the SQL-store-family plan's Learnings for the full reasoning.
 
 ### Shared store utilities
 

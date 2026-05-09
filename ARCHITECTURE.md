@@ -66,6 +66,10 @@ Kyneta is a framework for collaborative, substrate-agnostic documents. You defin
 | `@kyneta/unix-socket-transport` | Unix-domain-socket transport for server-to-server sync + leaderless peer negotiation. | `createUnixSocketClient`, `UnixSocketServerTransport`, `createUnixSocketPeer` |
 | `@kyneta/leveldb-store` | LevelDB `Store` implementation for server-side persistence. | `createLevelDBStore` |
 | `@kyneta/indexeddb-store` | IndexedDB `Store` implementation for browser-side persistence. | `createIndexedDBStore`, `deleteIndexedDBStore` |
+| `@kyneta/sqlite-store` | Universal SQLite `Store` — synchronous adapter shape (better-sqlite3, bun:sqlite, future Cloudflare DO). | `SqliteStore`, `createSqliteStore`, `fromBetterSqlite3`, `fromBunSqlite` |
+| `@kyneta/sql-store-core` | Pure helpers shared by every SQL-family store — `RowShape`, `toRow`/`fromRow`, `planAppend`/`planReplace`, `failOnNthCall`. | `RowShape`, `toRow`, `fromRow`, `planAppend`, `planReplace` |
+| `@kyneta/postgres-store` | Async-native Postgres `Store` over `pg`; `createPostgresStore` validates the canonical schema. | `PostgresStore`, `createPostgresStore` |
+| `@kyneta/prisma-store` | `Store` over a caller-supplied `PrismaClient`. Loose `unknown` typing for Prisma-version portability. | `PrismaStore`, `createPrismaStore` |
 | `@kyneta/exchange` | Sync runtime — TEA session + sync programs, governance, capabilities, Line, reactive peer/doc collections. | `Exchange`, `Policy`, `Governance`, `Line`, `LineProtocol` |
 | `@kyneta/index` | DBSP-grounded reactive indexing — ℤ-set algebra, `Source`, `Collection`, `SecondaryIndex`, `JoinIndex`. | `Source.of`, `Collection.from`, `Index.by`, `Index.join` |
 | `@kyneta/react` | React bindings — hooks + text-adapter, all `useSyncExternalStore` over pure stores. | `ExchangeProvider`, `useValue`, `useDocument`, `useSyncStatus`, `useText` |
@@ -91,6 +95,9 @@ Kyneta is a framework for collaborative, substrate-agnostic documents. You defin
    │      │                                           ├─► @kyneta/sse-transport
    │      ├─► @kyneta/leveldb-store                   ├─► @kyneta/webrtc-transport
    │      ├─► @kyneta/indexeddb-store                 └─► @kyneta/unix-socket-transport
+   │      ├─► @kyneta/sqlite-store ──┐
+   │      ├─► @kyneta/postgres-store ├──► @kyneta/sql-store-core (pure helpers)
+   │      ├─► @kyneta/prisma-store ──┘
    │      └─► @kyneta/react (+ react)
    │
 @kyneta/machine (zero deps) ─► @kyneta/transport + the four transport clients

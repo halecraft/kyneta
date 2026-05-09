@@ -21,6 +21,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { Exchange } from "@kyneta/exchange"
 import { change, Schema } from "@kyneta/schema"
+import type { EntryPayloadJson } from "@kyneta/sql-store-core"
 import { fromBetterSqlite3, SqliteStore } from "@kyneta/sqlite-store"
 import { yjs } from "@kyneta/yjs-schema"
 import Database from "better-sqlite3"
@@ -65,13 +66,6 @@ function openStore(filePath: string): SqliteStore {
   return new SqliteStore(fromBetterSqlite3(db))
 }
 
-interface EntryPayloadJson {
-  readonly kind: "entirety" | "since"
-  readonly encoding: "json" | "binary"
-  readonly version: string
-  readonly data?: string
-}
-
 /**
  * Inspect a SQLite file via a separate read-only handle. Returns the meta
  * row count for `doc-1`, the raw entry rows, and the count of entry rows
@@ -91,7 +85,7 @@ function inspectDb(
   const db = new Database(filePath, { readonly: true })
   try {
     const metaRow = db
-      .prepare(`SELECT data FROM meta WHERE doc_id = ?`)
+      .prepare(`SELECT data FROM kyneta_meta WHERE doc_id = ?`)
       .get(docId) as { data: string } | undefined
     const metaSchemaHash =
       metaRow !== undefined
@@ -104,7 +98,7 @@ function inspectDb(
 
     const kindCounts = db
       .prepare(
-        `SELECT kind, COUNT(*) AS n FROM records WHERE doc_id = ? GROUP BY kind`,
+        `SELECT kind, COUNT(*) AS n FROM kyneta_records WHERE doc_id = ? GROUP BY kind`,
       )
       .all(docId) as { kind: string; n: number }[]
     let metaKindRowCount = 0
@@ -116,7 +110,7 @@ function inspectDb(
 
     const lastEntry = db
       .prepare(
-        `SELECT payload, blob FROM records WHERE doc_id = ? AND kind = 'entry' ORDER BY seq DESC LIMIT 1`,
+        `SELECT payload, blob FROM kyneta_records WHERE doc_id = ? AND kind = 'entry' ORDER BY seq DESC LIMIT 1`,
       )
       .get(docId) as { payload: string; blob: Uint8Array | null } | undefined
 

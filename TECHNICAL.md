@@ -24,7 +24,7 @@ See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the 30,000-foot design — thesis
 
 ## Canonical test counts
 
-Every test count in every per-package `TECHNICAL.md` agrees with this table. Run dates: 2026-04-20.
+Every test count in every per-package `TECHNICAL.md` agrees with this table. Run dates: 2026-05-08 (rows updated for SQL-store-family work; other rows from 2026-04-20).
 
 | Package | Passed | Skipped | Files |
 |---------|-------:|--------:|------:|
@@ -39,23 +39,27 @@ Every test count in every per-package `TECHNICAL.md` agrees with this table. Run
 | `@kyneta/sse-transport` | 44 | 0 | 3 |
 | `@kyneta/webrtc-transport` | 27 | 0 | 2 |
 | `@kyneta/unix-socket-transport` | 82 | 0 | 5 |
-| `@kyneta/leveldb-store` | 34 | 0 | 1 |
-| `@kyneta/indexeddb-store` | 23 | 0 | 1 |
-| `@kyneta/exchange` | 449 | 0 | 17 |
+| `@kyneta/leveldb-store` | 35 | 0 | 1 |
+| `@kyneta/indexeddb-store` | 24 | 0 | 1 |
+| `@kyneta/sqlite-store` | 26 | 0 | 1 |
+| `@kyneta/sql-store-core` | 27 | 0 | 1 |
+| `@kyneta/postgres-store` | gated by `KYNETA_PG_URL` | — | 1 |
+| `@kyneta/prisma-store` | 8 | 0 | 1 |
+| `@kyneta/exchange` | 463 | 0 | 17 |
 | `@kyneta/index` | 143 | 0 | 8 |
 | `@kyneta/react` | 84 | 0 | 7 |
 | `@kyneta/compiler` (exp.) | 547 | 0 | 13 |
 | `@kyneta/cast` (exp.) | 634 | 0 | 27 |
 | `@kyneta/perspective` (exp., private) | 1,374 | 0 | 35 |
-| **Total** | **6,149** | **16** | **214** |
 
 Two additional test suites live outside the main package graph:
 - `tests/integration` — cross-package integration suite. Files use
   `.node.test.ts` (vitest) or `.bun.test.ts` (bun test) suffixes to
   declare their runtime contract; `verify.config.ts` runs both runners
   in parallel as children of one `logic` task. Currently covers
-  WebSocket sync (Node + Bun) and SQLite-backed sync + restart over
-  WebSocket.
+  WebSocket sync (Node + Bun), SQLite-backed sync + restart over
+  WebSocket, and Postgres-backed sync + restart over WebSocket
+  (gated by `KYNETA_PG_URL`).
 - `examples/bumper-cars` — integration suite exercising the full ephemeral + collaborative sync stack.
 
 ---
@@ -91,9 +95,17 @@ Two additional test suites live outside the main package graph:
 
 **`@kyneta/unix-socket-transport`** — Unix-domain-socket transport for server-to-server sync. Stream-oriented framing via `feedBytes` (no gateway caps, no fragmentation). Two pure programs: a client lifecycle + a leaderless-peer negotiator that chooses listen-or-connect based on probing the socket path. Node + Bun wrappers. Peer deps: `@kyneta/machine`, `@kyneta/transport`, `@kyneta/wire`. 82 tests across 5 files. → `packages/exchange/transports/unix-socket/TECHNICAL.md`.
 
-**`@kyneta/leveldb-store`** — LevelDB persistence backend. Implements the `Store` interface using `classic-level`. FoundationDB-style null-byte-separated key space; zero-padded monotonic `seqNo` per doc; binary envelope for `StoreRecord`; atomic `replace` via LevelDB batch. Peer deps: `@kyneta/exchange`, `@kyneta/schema`; runtime dep: `classic-level`. 34 tests. → `packages/exchange/stores/leveldb/TECHNICAL.md`.
+**`@kyneta/leveldb-store`** — LevelDB persistence backend. Implements the `Store` interface using `classic-level`. FoundationDB-style null-byte-separated key space; zero-padded monotonic `seqNo` per doc; binary envelope for `StoreRecord`; atomic `replace` via LevelDB batch. Peer deps: `@kyneta/exchange`, `@kyneta/schema`; runtime dep: `classic-level`. 35 tests. → `packages/exchange/stores/leveldb/TECHNICAL.md`.
 
-**`@kyneta/indexeddb-store`** — IndexedDB persistence backend for browser-side storage. Implements the `Store` interface using the browser's native IndexedDB API. Two object stores (`meta`, `records`) with structured clone — no binary envelope, no key engineering. Auto-increment keys preserve insertion order; single `readwrite` transactions guarantee atomicity. Zero runtime dependencies. Peer deps: `@kyneta/exchange`, `@kyneta/schema`. 23 tests. → `packages/exchange/stores/indexeddb/TECHNICAL.md`.
+**`@kyneta/indexeddb-store`** — IndexedDB persistence backend for browser-side storage. Implements the `Store` interface using the browser's native IndexedDB API. Two object stores (`meta`, `records`) with structured clone — no binary envelope, no key engineering. Auto-increment keys preserve insertion order; single `readwrite` transactions guarantee atomicity. Zero runtime dependencies. Peer deps: `@kyneta/exchange`, `@kyneta/schema`. 24 tests. → `packages/exchange/stores/indexeddb/TECHNICAL.md`.
+
+**`@kyneta/sqlite-store`** — Universal SQLite persistence backend. Wraps any SQLite binding behind a thin synchronous adapter (`SqliteAdapter`); ships factories for `better-sqlite3` and `bun:sqlite`. Designed to also fit Cloudflare DO `ctx.storage.sql` when a factory ships. Two tables (`kyneta_meta`, `kyneta_records`); meta as TEXT (JSON); binary entry payloads in a BLOB column to avoid base64 doubling. Atomic append + replace inside a single transaction. v2.0.0 replaces v1.x's `tablePrefix` option with `tables: { meta, records }`. Peer deps: `@kyneta/exchange`, `@kyneta/schema`, `@kyneta/sql-store-core`. 26 tests. → `packages/exchange/stores/sqlite/TECHNICAL.md`.
+
+**`@kyneta/sql-store-core`** — Pure helpers shared by every SQL-family `Store` backend. Contains `RowShape`, `EntryPayloadJson`, `toRow`, `fromRow`, `normalizeBlob`, `DEFAULT_TABLES`, `resolveTables`, the pure planning helpers `planAppend` / `planReplace`, and the `failOnNthCall` fault-injection helper. Zero runtime dependencies, no SQL templates, no driver knowledge. Peer deps: `@kyneta/exchange`, `@kyneta/schema`. 27 tests. → `packages/exchange/stores/sql-core/TECHNICAL.md`.
+
+**`@kyneta/postgres-store`** — Async-native Postgres `Store` over `pg`. Caller supplies a `Client` or `Pool`; `createPostgresStore` factory validates the canonical schema before returning a ready instance. JSONB on the meta column (operator queryability), BYTEA on entry blobs. Range-scan `listDocIds` (no LIKE-pattern hazards). Peer deps: `@kyneta/exchange`, `@kyneta/schema`, `@kyneta/sql-store-core`, `pg`. Conformance suite gated by `KYNETA_PG_URL`. → `packages/exchange/stores/postgres/TECHNICAL.md`.
+
+**`@kyneta/prisma-store`** — `Store` implementation that takes a caller-supplied `PrismaClient` plus model accessors typed as `unknown` (deliberately loose for Prisma-version portability). Uses Prisma's typed query API natively — no raw SQL, no ORM-as-adapter abstraction. Ships a canonical Prisma schema fragment (`KynetaMeta`, `KynetaRecord`). Peer deps: `@kyneta/exchange`, `@kyneta/schema`, `@kyneta/sql-store-core`, `@prisma/client`. 8 tests. → `packages/exchange/stores/prisma/TECHNICAL.md`.
 
 ### Exchange + reactive surface
 
@@ -210,7 +222,12 @@ kyneta/
 │   │   │   ├── webrtc/       # @kyneta/webrtc-transport
 │   │   │   └── unix-socket/  # @kyneta/unix-socket-transport
 │   │   └── stores/
-│   │       └── leveldb/      # @kyneta/leveldb-store
+│   │       ├── leveldb/      # @kyneta/leveldb-store
+│   │       ├── indexeddb/    # @kyneta/indexeddb-store
+│   │       ├── sqlite/       # @kyneta/sqlite-store
+│   │       ├── sql-core/     # @kyneta/sql-store-core (shared helpers)
+│   │       ├── postgres/     # @kyneta/postgres-store
+│   │       └── prisma/       # @kyneta/prisma-store
 │   ├── index/                # @kyneta/index
 │   └── react/                # @kyneta/react
 │

@@ -6,7 +6,10 @@
 
 export {
   collectAll,
+  type DescribeStoreOptions,
   describeStore,
+  type FaultInjection,
+  type IsolationPair,
   makeBinaryEntryRecord,
   makeEntryRecord,
   makeMetaRecord,

@@ -45,13 +45,11 @@ afterAll(() => {
 // Conformance suite — validates the full Store contract
 // ---------------------------------------------------------------------------
 
-describeStore(
-  "LevelDBStore",
-  () => new LevelDBStore(makeTmpDir()),
-  async backend => {
+describeStore("LevelDBStore", () => new LevelDBStore(makeTmpDir()), {
+  cleanup: async backend => {
     await backend.close()
   },
-)
+})
 
 // ---------------------------------------------------------------------------
 // LevelDB-specific tests

@@ -2,11 +2,18 @@
 //
 // Any conforming Store implementation must pass these tests.
 // The suite covers: currentMeta, append, loadAll, replace, delete,
-// listDocIds, and both JSON and binary payload round-trips.
+// listDocIds, and both JSON and binary payload round-trips. Backends
+// that opt in via `faultFactory` and `isolationFactory` get additional
+// property-level tests (atomicity under fault injection; storage-domain
+// isolation across two stores sharing one physical resource).
 //
 // Usage:
 //   import { describeStore } from "@kyneta/exchange/testing"
-//   describeStore("MyBackend", () => new MyBackend(), async (b) => { ... })
+//   describeStore("MyBackend", () => new MyBackend(), {
+//     cleanup: async (b) => { ... },
+//     faultFactory: async (failOnNthCall) => ({ ... }),
+//     isolationFactory: async () => ({ ... }),
+//   })
 
 import { SYNC_AUTHORITATIVE, SYNC_COLLABORATIVE } from "@kyneta/schema"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
@@ -64,17 +71,56 @@ export async function collectAll<T>(iter: AsyncIterable<T>): Promise<T[]> {
 // ---------------------------------------------------------------------------
 
 /**
+ * A fault-injection harness for a single backend.
+ *
+ * `store` is the primary Store used by the test — it begins
+ * non-faulting and is used to prime backing state. `injectFault(n)`
+ * arms the harness so that the Nth subsequent call to the backend's
+ * underlying write seam (adapter `exec` for sqlite, client `query`
+ * for postgres, `$transaction` for prisma) throws. `freshStore()`
+ * opens a separate non-faulting Store reading the same persistent
+ * state — used to assert that no partial state leaked.
+ */
+export interface FaultInjection {
+  readonly store: Store
+  readonly injectFault: (n: number) => void
+  readonly freshStore: () => Promise<Store>
+  readonly cleanup: () => Promise<void>
+}
+
+/** Two stores sharing a physical resource via distinct namespacing. */
+export interface IsolationPair {
+  readonly storeA: Store
+  readonly storeB: Store
+  readonly cleanup?: () => Promise<void>
+}
+
+/**
+ * Options for the conformance suite.
+ *
+ * Backends supplying `faultFactory` get the atomicity property test;
+ * backends supplying `isolationFactory` get the storage-domain
+ * isolation test. Backends that opt out get those tests skipped.
+ */
+export interface DescribeStoreOptions {
+  cleanup?: (backend: Store) => Promise<void>
+  faultFactory?: () => Promise<FaultInjection>
+  isolationFactory?: () => Promise<IsolationPair>
+}
+
+/**
  * Register the full Store contract test suite for a given backend.
  *
  * @param name - Display name for the describe block
  * @param factory - Creates a fresh backend instance per test
- * @param cleanup - Optional teardown (close handles, remove temp dirs)
+ * @param options - Optional teardown and opt-in property tests
  */
 export function describeStore(
   name: string,
   factory: () => Store | Promise<Store>,
-  cleanup?: (backend: Store) => Promise<void>,
+  options: DescribeStoreOptions = {},
 ): void {
+  const { cleanup, faultFactory, isolationFactory } = options
   describe(name, () => {
     let backend: Store
 
@@ -408,5 +454,128 @@ export function describeStore(
       expect(loadedBinary.payload.data).toEqual(new Uint8Array([10, 20, 30]))
       expect(loadedBinary.version).toBe("v2")
     })
+
+    // Sentinel: after an append succeeds, both writes are observable
+    // together. Mostly subsumed by test 6's round-trip; kept as a
+    // human-readable statement of the invariant. Backends that supply
+    // `faultFactory` get the stronger property check below.
+
+    it("atomic append — meta+record writes commit together", async () => {
+      await backend.append("doc-1", makeMetaRecord())
+      await backend.append("doc-1", makeEntryRecord("entirety", "v1"))
+
+      const meta = await backend.currentMeta("doc-1")
+      expect(meta).toEqual(plainMeta)
+
+      const records = await collectAll(backend.loadAll("doc-1"))
+      expect(records).toHaveLength(2)
+      expect(records[0]?.kind).toBe("meta")
+      expect(records[1]?.kind).toBe("entry")
+    })
   })
+
+  // Property test: a meta-record append performs two writes (meta
+  // upsert + record insert). If those aren't atomic, a mid-append
+  // failure leaves the meta column updated with no corresponding row.
+  // Each backend supplies the seam-counting harness; conformance only
+  // asserts the post-failure state.
+
+  if (faultFactory !== undefined) {
+    describe(`${name} — fault-injected atomicity`, () => {
+      it("a mid-append failure leaves no partial state observable", async () => {
+        const fault = await faultFactory()
+        try {
+          await fault.store.append(
+            "doc-1",
+            makeMetaRecord({ schemaHash: "primer" }),
+          )
+
+          // Arming with n=2 targets the 2nd write of the next append.
+          // For a meta record that's the record-insert step (1st was
+          // the meta-upsert), so the throw fires after one write has
+          // already happened — the case that catches non-atomic
+          // implementations.
+          fault.injectFault(2)
+
+          await expect(
+            fault.store.append(
+              "doc-1",
+              makeMetaRecord({ schemaHash: "injected" }),
+            ),
+          ).rejects.toThrow()
+
+          // Verify on a fresh non-faulting store: state must be the
+          // primer's, never the injected one.
+          const fresh = await fault.freshStore()
+          try {
+            const meta = await fresh.currentMeta("doc-1")
+            expect(meta?.schemaHash).toBe("primer")
+
+            const records = await collectAll(fresh.loadAll("doc-1"))
+            // Exactly one record (the primer's meta), no leaked second meta.
+            expect(records).toHaveLength(1)
+            expect(records[0]?.kind).toBe("meta")
+            if (records[0]?.kind === "meta") {
+              expect(records[0].meta.schemaHash).toBe("primer")
+            }
+          } finally {
+            await fresh.close()
+          }
+        } finally {
+          await fault.cleanup()
+        }
+      })
+    })
+  }
+
+  // Two stores backed by the same physical resource (same DB file,
+  // same Pool, same PrismaClient) but namespaced differently must not
+  // leak writes across the boundary. Distinct from test 13's
+  // doc-prefix isolation, which covers overlap inside one store.
+
+  if (isolationFactory !== undefined) {
+    describe(`${name} — storage-domain isolation`, () => {
+      it("writes in one namespace are not visible in the other", async () => {
+        const pair = await isolationFactory()
+        try {
+          await pair.storeA.append("doc-1", makeMetaRecord())
+          await pair.storeA.append(
+            "doc-1",
+            makeEntryRecord("entirety", "from-A"),
+          )
+
+          await pair.storeB.append("doc-1", makeMetaRecord())
+          await pair.storeB.append(
+            "doc-1",
+            makeEntryRecord("entirety", "from-B"),
+          )
+
+          const recordsA = await collectAll(pair.storeA.loadAll("doc-1"))
+          const entriesA = recordsA.filter(r => r.kind === "entry")
+          expect(entriesA).toHaveLength(1)
+          expect(
+            (entriesA[0] as { kind: "entry"; version: string }).version,
+          ).toBe("from-A")
+
+          const recordsB = await collectAll(pair.storeB.loadAll("doc-1"))
+          const entriesB = recordsB.filter(r => r.kind === "entry")
+          expect(entriesB).toHaveLength(1)
+          expect(
+            (entriesB[0] as { kind: "entry"; version: string }).version,
+          ).toBe("from-B")
+
+          // Doc-id list must reflect each namespace independently.
+          const idsA = await collectAll(pair.storeA.listDocIds())
+          const idsB = await collectAll(pair.storeB.listDocIds())
+          expect(idsA).toContain("doc-1")
+          expect(idsB).toContain("doc-1")
+        } finally {
+          // Stores may share a connection (one adapter, one Pool); the
+          // pair's cleanup closes the shared resource once. Calling
+          // store.close() on each would double-close.
+          await pair.cleanup?.()
+        }
+      })
+    })
+  }
 }

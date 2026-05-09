@@ -38,8 +38,10 @@ describeStore(
     dbNames.push(name)
     return IndexedDBStore.open(name)
   },
-  async backend => {
-    await backend.close()
+  {
+    cleanup: async backend => {
+      await backend.close()
+    },
   },
 )
 

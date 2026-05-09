@@ -1,39 +1,37 @@
-// sqlite-store — SQLite storage backend for @kyneta/exchange.
+// SQLite Store backend.
 //
-// Implements the Store interface using a thin database adapter abstraction.
-// The caller provides an adapter conforming to `SqliteAdapter`; this module
-// has zero opinion about which SQLite binding is used.
-//
-// Schema (two tables, created on first use):
-//   {prefix}meta    — materialized metadata index (doc_id TEXT PK → JSON)
-//   {prefix}records — per-document append-only record stream
-//                     (doc_id TEXT, seq INTEGER, kind TEXT, payload TEXT, blob BLOB)
-//
-// Binary Uint8Array payloads are stored in the `blob` column; string/JSON
-// payloads go in `payload`. The `kind` discriminant ('meta' | 'entry') is
-// stored explicitly for clarity and queryability.
+// Why a thin adapter rather than a direct better-sqlite3 dependency: the
+// adapter shape is deliberately synchronous because every supported
+// SQLite binding is sync (better-sqlite3, bun:sqlite, Cloudflare DO's
+// ctx.storage.sql). Forcing async here would dilute that ergonomics for
+// no benefit, since postgres-store and prisma-store get their own
+// async-native packages.
 
 import {
   type DocId,
-  resolveMetaFromBatch,
   SeqNoTracker,
   type Store,
   type StoreMeta,
   type StoreRecord,
-  validateAppend,
 } from "@kyneta/exchange"
-import type { SubstratePayload } from "@kyneta/schema"
+import {
+  fromRow,
+  planAppend,
+  planReplace,
+  type RowShape,
+  resolveTables,
+  type TableNames,
+} from "@kyneta/sql-store-core"
 
 // ---------------------------------------------------------------------------
 // SqliteAdapter — minimal synchronous database interface
 // ---------------------------------------------------------------------------
 
 /**
- * Minimal synchronous SQLite database interface.
- *
  * `iterate` returns `Iterable<T>` rather than `T[]` so `loadAll` can
- * stream large result sets without materializing them — same reason
- * Cloudflare DO's `ctx.storage.sql.exec` returns a cursor.
+ * stream million-record stores without materializing them all in
+ * memory. Cloudflare DO's `ctx.storage.sql.exec` returns a cursor for
+ * the same reason; this shape is chosen to pass through.
  */
 export interface SqliteAdapter {
   exec(sql: string, ...params: unknown[]): void
@@ -138,110 +136,18 @@ interface BunSqliteDatabase {
 }
 
 // ---------------------------------------------------------------------------
-// Row serialization — pure functional core
-// ---------------------------------------------------------------------------
-
-interface RowShape {
-  readonly kind: string
-  readonly payload: string
-  readonly blob: Uint8Array | null
-}
-
-/** Binary data lives in the `blob` column, not here. */
-interface EntryPayloadJson {
-  readonly kind: "entirety" | "since"
-  readonly encoding: "json" | "binary"
-  readonly version: string
-  readonly data?: string
-}
-
-function toRow(record: StoreRecord): RowShape {
-  if (record.kind === "meta") {
-    return {
-      kind: "meta",
-      payload: JSON.stringify(record.meta),
-      blob: null,
-    }
-  }
-
-  const { payload, version } = record
-
-  if (payload.data instanceof Uint8Array) {
-    const json: EntryPayloadJson = {
-      kind: payload.kind,
-      encoding: payload.encoding,
-      version,
-    }
-    return {
-      kind: "entry",
-      payload: JSON.stringify(json),
-      blob: payload.data as Uint8Array,
-    }
-  }
-
-  const json: EntryPayloadJson = {
-    kind: payload.kind,
-    encoding: payload.encoding,
-    version,
-    data: payload.data as string,
-  }
-  return {
-    kind: "entry",
-    payload: JSON.stringify(json),
-    blob: null,
-  }
-}
-
-/**
- * Normalize a blob value to a plain `Uint8Array`.
- *
- * `better-sqlite3` returns `Buffer` for BLOB columns. `Buffer` extends
- * `Uint8Array`, so `instanceof Uint8Array` passes — but vitest's `toEqual`
- * treats them as structurally distinct types. This normalization ensures
- * the Store contract returns plain `Uint8Array` values regardless of the
- * underlying SQLite binding.
- */
-function normalizeBlob(blob: Uint8Array): Uint8Array {
-  if (blob.constructor === Uint8Array) return blob
-  return new Uint8Array(blob.buffer, blob.byteOffset, blob.byteLength)
-}
-
-function fromRow(row: RowShape): StoreRecord {
-  if (row.kind === "meta") {
-    return { kind: "meta", meta: JSON.parse(row.payload) as StoreMeta }
-  }
-
-  const json = JSON.parse(row.payload) as EntryPayloadJson
-
-  let data: string | Uint8Array
-  if (row.blob !== null) {
-    data = normalizeBlob(row.blob)
-  } else {
-    data = json.data as string
-  }
-
-  const payload: SubstratePayload = {
-    kind: json.kind,
-    encoding: json.encoding,
-    data,
-  }
-
-  return { kind: "entry", payload, version: json.version }
-}
-
-// ---------------------------------------------------------------------------
 // SqliteStore options
 // ---------------------------------------------------------------------------
 
 export interface SqliteStoreOptions {
   /**
-   * Optional table name prefix. Default `""`.
+   * Override the default table names (`kyneta_meta` and `kyneta_records`).
    *
-   * Use when co-locating Exchange tables alongside application tables
-   * in the same SQLite database (e.g. `{ tablePrefix: "kyneta_" }`
-   * produces tables `kyneta_meta` and `kyneta_records`).
+   * Use when co-locating Exchange tables alongside application tables in
+   * the same SQLite database, or when running multiple isolated Exchange
+   * instances in one database. Either or both names may be overridden.
    */
-  tablePrefix?: string
+  tables?: Partial<TableNames>
 }
 
 // ---------------------------------------------------------------------------
@@ -251,26 +157,23 @@ export interface SqliteStoreOptions {
 export class SqliteStore implements Store {
   readonly #adapter: SqliteAdapter
   readonly #seqNos = new SeqNoTracker()
-  readonly #metaTable: string
-  readonly #recordsTable: string
+  readonly #tables: TableNames
 
   constructor(adapter: SqliteAdapter, options: SqliteStoreOptions = {}) {
     this.#adapter = adapter
-    const prefix = options.tablePrefix ?? ""
-    this.#metaTable = `${prefix}meta`
-    this.#recordsTable = `${prefix}records`
+    this.#tables = resolveTables(options)
     this.#ensureSchema()
   }
 
   #ensureSchema(): void {
     this.#adapter.exec(`
-      CREATE TABLE IF NOT EXISTS ${this.#metaTable} (
+      CREATE TABLE IF NOT EXISTS ${this.#tables.meta} (
         doc_id  TEXT PRIMARY KEY,
         data    TEXT NOT NULL
       ) WITHOUT ROWID
     `)
     this.#adapter.exec(`
-      CREATE TABLE IF NOT EXISTS ${this.#recordsTable} (
+      CREATE TABLE IF NOT EXISTS ${this.#tables.records} (
         doc_id  TEXT    NOT NULL,
         seq     INTEGER NOT NULL,
         kind    TEXT    NOT NULL,
@@ -287,38 +190,41 @@ export class SqliteStore implements Store {
 
   async append(docId: DocId, record: StoreRecord): Promise<void> {
     const existingMeta = await this.currentMeta(docId)
-    const resolved = validateAppend(docId, record, existingMeta)
-
-    if (resolved !== null) {
-      this.#adapter.exec(
-        `INSERT OR REPLACE INTO ${this.#metaTable} (doc_id, data) VALUES (?, ?)`,
-        docId,
-        JSON.stringify(resolved),
-      )
-    }
-
     const seq = await this.#seqNos.next(docId, async () => {
       const [row] = this.#adapter.iterate<{ max_seq: number | null }>(
-        `SELECT MAX(seq) AS max_seq FROM ${this.#recordsTable} WHERE doc_id = ?`,
+        `SELECT MAX(seq) AS max_seq FROM ${this.#tables.records} WHERE doc_id = ?`,
         docId,
       )
       return row?.max_seq ?? null
     })
 
-    const { kind, payload, blob } = toRow(record)
-    this.#adapter.exec(
-      `INSERT INTO ${this.#recordsTable} (doc_id, seq, kind, payload, blob) VALUES (?, ?, ?, ?, ?)`,
-      docId,
-      seq,
-      kind,
-      payload,
-      blob,
-    )
+    const plan = planAppend(docId, record, existingMeta, seq)
+
+    // Both writes must commit together or neither — a crash between
+    // them used to leave meta updated with no corresponding row.
+    this.#adapter.transaction(() => {
+      if (plan.upsertMeta !== null) {
+        this.#adapter.exec(
+          `INSERT OR REPLACE INTO ${this.#tables.meta} (doc_id, data) VALUES (?, ?)`,
+          docId,
+          plan.upsertMeta.data,
+        )
+      }
+      const { row } = plan.insertRecord
+      this.#adapter.exec(
+        `INSERT INTO ${this.#tables.records} (doc_id, seq, kind, payload, blob) VALUES (?, ?, ?, ?, ?)`,
+        docId,
+        plan.insertRecord.seq,
+        row.kind,
+        row.payload,
+        row.blob,
+      )
+    })
   }
 
   async *loadAll(docId: DocId): AsyncIterable<StoreRecord> {
     for (const row of this.#adapter.iterate<RowShape>(
-      `SELECT kind, payload, blob FROM ${this.#recordsTable} WHERE doc_id = ? ORDER BY seq`,
+      `SELECT kind, payload, blob FROM ${this.#tables.records} WHERE doc_id = ? ORDER BY seq`,
       docId,
     )) {
       yield fromRow(row)
@@ -327,46 +233,48 @@ export class SqliteStore implements Store {
 
   async replace(docId: DocId, records: StoreRecord[]): Promise<void> {
     const existingMeta = await this.currentMeta(docId)
-    const resolved = resolveMetaFromBatch(records, existingMeta)
+    const plan = planReplace(records, existingMeta)
 
     this.#adapter.transaction(() => {
       this.#adapter.exec(
-        `DELETE FROM ${this.#recordsTable} WHERE doc_id = ?`,
+        `DELETE FROM ${this.#tables.records} WHERE doc_id = ?`,
         docId,
       )
 
-      for (let i = 0; i < records.length; i++) {
-        const record = records[i]
-        if (record === undefined) continue
-        const { kind, payload, blob } = toRow(record)
+      for (const { seq, row } of plan.records) {
         this.#adapter.exec(
-          `INSERT INTO ${this.#recordsTable} (doc_id, seq, kind, payload, blob) VALUES (?, ?, ?, ?, ?)`,
+          `INSERT INTO ${this.#tables.records} (doc_id, seq, kind, payload, blob) VALUES (?, ?, ?, ?, ?)`,
           docId,
-          i,
-          kind,
-          payload,
-          blob,
+          seq,
+          row.kind,
+          row.payload,
+          row.blob,
         )
       }
 
       this.#adapter.exec(
-        `INSERT OR REPLACE INTO ${this.#metaTable} (doc_id, data) VALUES (?, ?)`,
+        `INSERT OR REPLACE INTO ${this.#tables.meta} (doc_id, data) VALUES (?, ?)`,
         docId,
-        JSON.stringify(resolved),
+        plan.upsertMeta.data,
       )
     })
 
+    // Must run after the transaction commits. If `transaction()` throws,
+    // control jumps past this line; the cache stays unmutated. Moving
+    // this inside the callback or before the call would corrupt the
+    // cache on rollback — the next append would compute a seq that
+    // collides with restored rows on the (doc_id, seq) primary key.
     this.#seqNos.reset(docId, records.length - 1)
   }
 
   async delete(docId: DocId): Promise<void> {
     this.#adapter.transaction(() => {
       this.#adapter.exec(
-        `DELETE FROM ${this.#recordsTable} WHERE doc_id = ?`,
+        `DELETE FROM ${this.#tables.records} WHERE doc_id = ?`,
         docId,
       )
       this.#adapter.exec(
-        `DELETE FROM ${this.#metaTable} WHERE doc_id = ?`,
+        `DELETE FROM ${this.#tables.meta} WHERE doc_id = ?`,
         docId,
       )
     })
@@ -375,7 +283,7 @@ export class SqliteStore implements Store {
 
   async currentMeta(docId: DocId): Promise<StoreMeta | null> {
     const [row] = this.#adapter.iterate<{ data: string }>(
-      `SELECT data FROM ${this.#metaTable} WHERE doc_id = ?`,
+      `SELECT data FROM ${this.#tables.meta} WHERE doc_id = ?`,
       docId,
     )
     if (row === undefined) return null
@@ -386,11 +294,11 @@ export class SqliteStore implements Store {
     const rows =
       prefix !== undefined
         ? this.#adapter.iterate<{ doc_id: string }>(
-            `SELECT doc_id FROM ${this.#metaTable} WHERE doc_id LIKE ? ESCAPE '\\'`,
+            `SELECT doc_id FROM ${this.#tables.meta} WHERE doc_id LIKE ? ESCAPE '\\'`,
             `${escapeLike(prefix)}%`,
           )
         : this.#adapter.iterate<{ doc_id: string }>(
-            `SELECT doc_id FROM ${this.#metaTable}`,
+            `SELECT doc_id FROM ${this.#tables.meta}`,
           )
     for (const row of rows) {
       yield row.doc_id
@@ -407,11 +315,9 @@ export class SqliteStore implements Store {
 // ---------------------------------------------------------------------------
 
 /**
- * Escape special LIKE pattern characters (`%`, `_`, `\`) in a prefix string.
- *
- * SQLite's LIKE operator treats `%` and `_` as wildcards. If a docId
- * contains these characters, the prefix filter must escape them. We use
- * `\` as the escape character (declared via `ESCAPE '\'` in the query).
+ * SQLite's LIKE treats `%` and `_` as wildcards. Escape them (and the
+ * escape char itself) so doc IDs containing those characters are
+ * matched literally. The query declares `ESCAPE '\'`.
  */
 function escapeLike(value: string): string {
   return value.replace(/[%_\\]/g, ch => `\\${ch}`)

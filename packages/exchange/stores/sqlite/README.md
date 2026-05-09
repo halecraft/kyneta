@@ -8,7 +8,7 @@ SQLite storage backend for `@kyneta/exchange` — universal persistent storage f
 pnpm add @kyneta/sqlite-store
 ```
 
-Peer dependencies: `@kyneta/exchange`, `@kyneta/schema`.
+Peer dependencies: `@kyneta/exchange`, `@kyneta/schema`, `@kyneta/sql-store-core`.
 
 You also need a SQLite binding of your choice — this package has **zero opinion** about which one you use. It works with any object conforming to the `SqliteAdapter` interface.
 
@@ -116,23 +116,42 @@ Not needed for Cloudflare DO — the platform manages durability.
 
 ## Options
 
-### `tablePrefix`
+### `tables`
 
 ```ts
-const store = new SqliteStore(adapter, { tablePrefix: "kyneta_" })
-// Creates tables: kyneta_meta, kyneta_records
+const store = new SqliteStore(adapter, {
+  tables: { meta: "app_meta", records: "app_records" },
+})
 ```
 
-Default: `""` (tables are named `meta` and `records`).
+Default: `{ meta: "kyneta_meta", records: "kyneta_records" }`. Either or both names may be overridden.
 
-Use `tablePrefix` when co-locating Exchange tables alongside application tables in the same SQLite database — for example, in a Cloudflare Durable Object that also stores application state.
+Use `tables` when co-locating Exchange tables alongside application tables in the same SQLite database (for example, in a Cloudflare Durable Object that also stores application state), or when running multiple isolated Exchange instances in one database with distinct table-name pairs.
+
+## Migration from v1.x
+
+`v2.0.0` replaces the `tablePrefix` option with an explicit `tables` pair, and changes the default table names from `meta` / `records` to `kyneta_meta` / `kyneta_records`. There is no compatibility shim.
+
+```ts
+// v1.x
+new SqliteStore(adapter)                                  // tables: meta, records
+new SqliteStore(adapter, { tablePrefix: "app_" })         // tables: app_meta, app_records
+
+// v2.0
+new SqliteStore(adapter)                                  // tables: kyneta_meta, kyneta_records
+new SqliteStore(adapter, {
+  tables: { meta: "app_meta", records: "app_records" },
+})
+```
+
+If you have existing data under the v1.x default names (`meta` / `records`), pass `tables: { meta: "meta", records: "records" }` explicitly to keep using them, or rename the tables via `ALTER TABLE`.
 
 ## Schema
 
 The store creates two tables on first use:
 
-- **`{prefix}meta`** — materialized metadata index. `doc_id TEXT PRIMARY KEY`, `data TEXT NOT NULL` (JSON-encoded `StoreMeta`). `WITHOUT ROWID`.
-- **`{prefix}records`** — per-document append-only record stream. Composite primary key `(doc_id, seq)`. Binary `Uint8Array` payloads are stored in a `BLOB` column; string/JSON payloads in a `TEXT` column. `WITHOUT ROWID`.
+- **`tables.meta`** (default `kyneta_meta`) — materialized metadata index. `doc_id TEXT PRIMARY KEY`, `data TEXT NOT NULL` (JSON-encoded `StoreMeta`). `WITHOUT ROWID`.
+- **`tables.records`** (default `kyneta_records`) — per-document append-only record stream. Composite primary key `(doc_id, seq)`. Binary `Uint8Array` payloads are stored in a `BLOB` column; string/JSON payloads in a `TEXT` column. `WITHOUT ROWID`.
 
 ## Store interface
 
@@ -140,4 +159,10 @@ See the [`Store` interface](../../src/store/store.ts) in `@kyneta/exchange` for 
 
 ## Testing
 
-The package passes the full `describeStore` conformance suite (17 contract tests) exported from `@kyneta/exchange/testing`, plus SQLite-specific tests for close/reopen persistence, sequence number continuity, replace atomicity, adapter factories, and table prefix isolation.
+The package passes the full `describeStore` conformance suite (17 contract tests) exported from `@kyneta/exchange/testing`, plus SQLite-specific tests for close/reopen persistence, sequence number continuity, replace atomicity, adapter factories, and `tables` isolation.
+
+## See also
+
+- [`@kyneta/sql-store-core`](../sql-core/) — pure helpers shared with `postgres-store` and `prisma-store`.
+- [`@kyneta/postgres-store`](../postgres/) — async-native Postgres backend.
+- [`@kyneta/prisma-store`](../prisma/) — backend that takes a caller-supplied `PrismaClient`.

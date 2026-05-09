@@ -404,6 +404,85 @@ importers:
         specifier: ^4.0.17
         version: 4.1.4(@opentelemetry/api@1.9.0)(@types/node@22.19.17)(jsdom@26.1.0)(vite@7.3.2(@types/node@22.19.17)(tsx@4.21.0))
 
+  packages/exchange/stores/postgres:
+    devDependencies:
+      '@kyneta/exchange':
+        specifier: workspace:^
+        version: link:../..
+      '@kyneta/schema':
+        specifier: workspace:^
+        version: link:../../../schema
+      '@kyneta/sql-store-core':
+        specifier: workspace:^
+        version: link:../sql-core
+      '@types/node':
+        specifier: ^22
+        version: 22.19.17
+      '@types/pg':
+        specifier: ^8.11.0
+        version: 8.20.0
+      pg:
+        specifier: ^8.13.0
+        version: 8.20.0
+      tsdown:
+        specifier: ^0.21.9
+        version: 0.21.9(@typescript/native-preview@7.0.0-dev.20260322.1)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.17
+        version: 4.1.4(@opentelemetry/api@1.9.0)(@types/node@22.19.17)(jsdom@26.1.0)(vite@7.3.2(@types/node@22.19.17)(tsx@4.21.0))
+
+  packages/exchange/stores/prisma:
+    dependencies:
+      '@prisma/client':
+        specifier: ^5.0.0 || ^6.0.0
+        version: 6.19.3(typescript@5.9.3)
+    devDependencies:
+      '@kyneta/exchange':
+        specifier: workspace:^
+        version: link:../..
+      '@kyneta/schema':
+        specifier: workspace:^
+        version: link:../../../schema
+      '@kyneta/sql-store-core':
+        specifier: workspace:^
+        version: link:../sql-core
+      '@types/node':
+        specifier: ^22
+        version: 22.19.17
+      tsdown:
+        specifier: ^0.21.9
+        version: 0.21.9(@typescript/native-preview@7.0.0-dev.20260322.1)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.17
+        version: 4.1.4(@opentelemetry/api@1.9.0)(@types/node@22.19.17)(jsdom@26.1.0)(vite@7.3.2(@types/node@22.19.17)(tsx@4.21.0))
+
+  packages/exchange/stores/sql-core:
+    devDependencies:
+      '@kyneta/exchange':
+        specifier: workspace:^
+        version: link:../..
+      '@kyneta/schema':
+        specifier: workspace:^
+        version: link:../../../schema
+      '@types/node':
+        specifier: ^22
+        version: 22.19.17
+      tsdown:
+        specifier: ^0.21.9
+        version: 0.21.9(@typescript/native-preview@7.0.0-dev.20260322.1)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.17
+        version: 4.1.4(@opentelemetry/api@1.9.0)(@types/node@22.19.17)(jsdom@26.1.0)(vite@7.3.2(@types/node@22.19.17)(tsx@4.21.0))
+
   packages/exchange/stores/sqlite:
     devDependencies:
       '@kyneta/exchange':
@@ -412,6 +491,9 @@ importers:
       '@kyneta/schema':
         specifier: workspace:^
         version: link:../../../schema
+      '@kyneta/sql-store-core':
+        specifier: workspace:^
+        version: link:../sql-core
       '@types/better-sqlite3':
         specifier: ^7.6.12
         version: 7.6.13
@@ -766,9 +848,15 @@ importers:
       '@kyneta/loro-schema':
         specifier: workspace:^
         version: link:../../packages/schema/backends/loro
+      '@kyneta/postgres-store':
+        specifier: workspace:^
+        version: link:../../packages/exchange/stores/postgres
       '@kyneta/schema':
         specifier: workspace:^
         version: link:../../packages/schema
+      '@kyneta/sql-store-core':
+        specifier: workspace:^
+        version: link:../../packages/exchange/stores/sql-core
       '@kyneta/sqlite-store':
         specifier: workspace:^
         version: link:../../packages/exchange/stores/sqlite
@@ -787,6 +875,9 @@ importers:
       '@types/node':
         specifier: ^22
         version: 22.19.17
+      '@types/pg':
+        specifier: ^8.11.0
+        version: 8.20.0
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
@@ -799,6 +890,9 @@ importers:
       loro-crdt:
         specifier: ^1.10.0
         version: 1.10.8
+      pg:
+        specifier: ^8.13.0
+        version: 8.20.0
       typescript:
         specifier: ^5.9.2
         version: 5.9.3
@@ -1824,6 +1918,18 @@ packages:
     resolution: {integrity: sha512-+1VkjdD0QBLPodGrJUeqarH8VAIvQODIbwh9XpP5Syisf7YoQgsJKPNFoqqLQlu+VQ/tVSshMR6loPMn8U+dPg==}
     engines: {node: '>=14'}
 
+  '@prisma/client@6.19.3':
+    resolution: {integrity: sha512-mKq3jQFhjvko5LTJFHGilsuQs+W+T3Gm451NzuTDGQxwCzwXHYnIu2zGkRoW+Exq3Rob7yp2MfzSrdIiZVhrBg==}
+    engines: {node: '>=18.18'}
+    peerDependencies:
+      prisma: '*'
+      typescript: '>=5.1.0'
+    peerDependenciesMeta:
+      prisma:
+        optional: true
+      typescript:
+        optional: true
+
   '@quansync/fs@1.0.0':
     resolution: {integrity: sha512-4TJ3DFtlf1L5LDMaM6CanJ/0lckGNtJcMjQ1NAV6zDmA0tEHKZtxNKin8EgPaVX1YzljbxckyT2tJrpQKAtngQ==}
 
@@ -2182,6 +2288,9 @@ packages:
 
   '@types/object-path@0.11.4':
     resolution: {integrity: sha512-4tgJ1Z3elF/tOMpA8JLVuR9spt9Ynsf7+JjqsQ2IqtiPJtcLoHoXcT6qU4E10cPFqyXX5HDm9QwIzZhBSkLxsw==}
+
+  '@types/pg@8.20.0':
+    resolution: {integrity: sha512-bEPFOaMAHTEP1EzpvHTbmwR8UsFyHSKsRisLIHVMXnpNefSbGA1bD6CVy+qKjGSqmZqNqBDV2azOBo8TgkcVow==}
 
   '@types/qs@6.15.0':
     resolution: {integrity: sha512-JawvT8iBVWpzTrz3EGw9BTQFg3BQNmwERdKE22vlTxawwtbyUSlMppvZYKLZzB5zgACXdXxbD3m1bXaMqP/9ow==}
@@ -3619,6 +3728,40 @@ packages:
     resolution: {integrity: sha512-//nshmD55c46FuFw26xV/xFAaB5HF9Xdap7HJBBnrKdAd6/GxDBaNA1870O79+9ueg61cZLSVc+OaFlfmObYVQ==}
     engines: {node: '>= 14.16'}
 
+  pg-cloudflare@1.3.0:
+    resolution: {integrity: sha512-6lswVVSztmHiRtD6I8hw4qP/nDm1EJbKMRhf3HCYaqud7frGysPv7FYJ5noZQdhQtN2xJnimfMtvQq21pdbzyQ==}
+
+  pg-connection-string@2.12.0:
+    resolution: {integrity: sha512-U7qg+bpswf3Cs5xLzRqbXbQl85ng0mfSV/J0nnA31MCLgvEaAo7CIhmeyrmJpOr7o+zm0rXK+hNnT5l9RHkCkQ==}
+
+  pg-int8@1.0.1:
+    resolution: {integrity: sha512-WCtabS6t3c8SkpDBUlb1kjOs7l66xsGdKpIPZsg4wR+B3+u9UAum2odSsF9tnvxg80h4ZxLWMy4pRjOsFIqQpw==}
+    engines: {node: '>=4.0.0'}
+
+  pg-pool@3.13.0:
+    resolution: {integrity: sha512-gB+R+Xud1gLFuRD/QgOIgGOBE2KCQPaPwkzBBGC9oG69pHTkhQeIuejVIk3/cnDyX39av2AxomQiyPT13WKHQA==}
+    peerDependencies:
+      pg: '>=8.0'
+
+  pg-protocol@1.13.0:
+    resolution: {integrity: sha512-zzdvXfS6v89r6v7OcFCHfHlyG/wvry1ALxZo4LqgUoy7W9xhBDMaqOuMiF3qEV45VqsN6rdlcehHrfDtlCPc8w==}
+
+  pg-types@2.2.0:
+    resolution: {integrity: sha512-qTAAlrEsl8s4OiEQY69wDvcMIdQN6wdz5ojQiOy6YRMuynxenON0O5oCpJI6lshc6scgAY8qvJ2On/p+CXY0GA==}
+    engines: {node: '>=4'}
+
+  pg@8.20.0:
+    resolution: {integrity: sha512-ldhMxz2r8fl/6QkXnBD3CR9/xg694oT6DZQ2s6c/RI28OjtSOpxnPrUCGOBJ46RCUxcWdx3p6kw/xnDHjKvaRA==}
+    engines: {node: '>= 16.0.0'}
+    peerDependencies:
+      pg-native: '>=3.0.1'
+    peerDependenciesMeta:
+      pg-native:
+        optional: true
+
+  pgpass@1.0.5:
+    resolution: {integrity: sha512-FdW9r/jQZhSeohs1Z3sI1yxFQNFvMcnmfuj4WBMUTxOrAyLMaTcE1aAMBiTlbMNaXvBCQuVi0R7hd8udDSP7ug==}
+
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
 
@@ -3641,6 +3784,22 @@ packages:
   postcss@8.5.8:
     resolution: {integrity: sha512-OW/rX8O/jXnm82Ey1k44pObPtdblfiuWnrd8X7GJ7emImCOstunGbXUpp7HdBrFQX6rJzn3sPT397Wp5aCwCHg==}
     engines: {node: ^10 || ^12 || >=14}
+
+  postgres-array@2.0.0:
+    resolution: {integrity: sha512-VpZrUqU5A69eQyW2c5CA1jtLecCsN2U/bD6VilrFDWq5+5UIEVO7nazS3TEcHf1zuPYO/sqGvUvW62g86RXZuA==}
+    engines: {node: '>=4'}
+
+  postgres-bytea@1.0.1:
+    resolution: {integrity: sha512-5+5HqXnsZPE65IJZSMkZtURARZelel2oXUEO8rH83VS/hxH5vv1uHquPg5wZs8yMAfdv971IU+kcPUczi7NVBQ==}
+    engines: {node: '>=0.10.0'}
+
+  postgres-date@1.0.7:
+    resolution: {integrity: sha512-suDmjLVQg78nMK2UZ454hAG+OAW+HQPZ6n++TNDUX+L0+uUlLywnoxJKDou51Zm+zTCjrCl0Nq6J9C5hP9vK/Q==}
+    engines: {node: '>=0.10.0'}
+
+  postgres-interval@1.2.0:
+    resolution: {integrity: sha512-9ZhXKM/rw350N1ovuWHbGxnGh/SNJ4cnxHiM0rxE4VN41wsg8P8zWn9hv/buK00RP4WvlOyr/RBDiptyxVbkZQ==}
+    engines: {node: '>=0.10.0'}
 
   prebuild-install@7.1.3:
     resolution: {integrity: sha512-8Mf2cbV7x1cXPUILADGI3wuhfqWvtiLA1iclTDbFRZkgRQS0NqsPZphna9V+HyTEadheuPmjaJMsbzKQFOzLug==}
@@ -3883,6 +4042,10 @@ packages:
 
   spawndamnit@3.0.1:
     resolution: {integrity: sha512-MmnduQUuHCoFckZoWnXsTg7JaiLBJrKFj9UI2MbRPGaJeVpsLcVBu6P/IGZovziM/YBsellCmsprgNA+w0CzVg==}
+
+  split2@4.2.0:
+    resolution: {integrity: sha512-UcjcJOWknrNkF6PLX83qcHM6KHgVKNkV62Y8a5uYDVv9ydGQVwAHMKqHdJje1VTWpljG0WYpCDhrCdAOYH4TWg==}
+    engines: {node: '>= 10.x'}
 
   sprintf-js@1.0.3:
     resolution: {integrity: sha512-D9cPgkvLlV3t3IzL0D0YLvGA9Ahk4PcvVwUbN0dSGr1aP0Nrt4AEnTUbuGvquEC0mA64Gqt1fzirlRs5ibXx8g==}
@@ -4371,6 +4534,10 @@ packages:
 
   xmlchars@2.2.0:
     resolution: {integrity: sha512-JZnDKK8B0RCDw84FNdDAIpZK+JuJw+s7Lz8nksI7SIuU3UXJJslUthsi+uWBUYOwPFwW7W7PRLRfUKpxjtjFCw==}
+
+  xtend@4.0.2:
+    resolution: {integrity: sha512-LKYU1iAXJXUgAXn9URjiu+MWhyUXHsvfp7mcuYm9dSUKK0/CjtrUwFAxD82/mCWbtLsGjFIad0wIsod4zrTAEQ==}
+    engines: {node: '>=0.4'}
 
   yallist@3.1.1:
     resolution: {integrity: sha512-a4UGQaWPH59mOXUYnAG2ewncQS4i4F43Tv3JoAM+s2VDAmS9NsK8GpDMLrCHPksFT7h3K6TOoUNn2pb7RoXx4g==}
@@ -5299,6 +5466,10 @@ snapshots:
   '@pkgjs/parseargs@0.11.0':
     optional: true
 
+  '@prisma/client@6.19.3(typescript@5.9.3)':
+    optionalDependencies:
+      typescript: 5.9.3
+
   '@quansync/fs@1.0.0':
     dependencies:
       quansync: 1.0.0
@@ -5584,6 +5755,12 @@ snapshots:
     optional: true
 
   '@types/object-path@0.11.4': {}
+
+  '@types/pg@8.20.0':
+    dependencies:
+      '@types/node': 22.19.17
+      pg-protocol: 1.13.0
+      pg-types: 2.2.0
 
   '@types/qs@6.15.0': {}
 
@@ -7085,6 +7262,41 @@ snapshots:
 
   pathval@2.0.1: {}
 
+  pg-cloudflare@1.3.0:
+    optional: true
+
+  pg-connection-string@2.12.0: {}
+
+  pg-int8@1.0.1: {}
+
+  pg-pool@3.13.0(pg@8.20.0):
+    dependencies:
+      pg: 8.20.0
+
+  pg-protocol@1.13.0: {}
+
+  pg-types@2.2.0:
+    dependencies:
+      pg-int8: 1.0.1
+      postgres-array: 2.0.0
+      postgres-bytea: 1.0.1
+      postgres-date: 1.0.7
+      postgres-interval: 1.2.0
+
+  pg@8.20.0:
+    dependencies:
+      pg-connection-string: 2.12.0
+      pg-pool: 3.13.0(pg@8.20.0)
+      pg-protocol: 1.13.0
+      pg-types: 2.2.0
+      pgpass: 1.0.5
+    optionalDependencies:
+      pg-cloudflare: 1.3.0
+
+  pgpass@1.0.5:
+    dependencies:
+      split2: 4.2.0
+
   picocolors@1.1.1: {}
 
   picomatch@2.3.1: {}
@@ -7100,6 +7312,16 @@ snapshots:
       nanoid: 3.3.11
       picocolors: 1.1.1
       source-map-js: 1.2.1
+
+  postgres-array@2.0.0: {}
+
+  postgres-bytea@1.0.1: {}
+
+  postgres-date@1.0.7: {}
+
+  postgres-interval@1.2.0:
+    dependencies:
+      xtend: 4.0.2
 
   prebuild-install@7.1.3:
     dependencies:
@@ -7432,6 +7654,8 @@ snapshots:
     dependencies:
       cross-spawn: 7.0.6
       signal-exit: 4.1.0
+
+  split2@4.2.0: {}
 
   sprintf-js@1.0.3: {}
 
@@ -7983,6 +8207,8 @@ snapshots:
   xml-name-validator@5.0.0: {}
 
   xmlchars@2.2.0: {}
+
+  xtend@4.0.2: {}
 
   yallist@3.1.1: {}
 

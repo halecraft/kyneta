@@ -1,13 +1,13 @@
 {
-  "name": "@kyneta/sqlite-store",
-  "version": "2.0.0",
-  "description": "SQLite storage backend for @kyneta/exchange — universal persistent storage",
+  "name": "@kyneta/sql-store-core",
+  "version": "1.4.0",
+  "description": "Pure helpers shared by SQL-family Store backends for @kyneta/exchange",
   "author": "Duane Johnson",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/halecraft/kyneta",
-    "directory": "packages/exchange/stores/sqlite"
+    "directory": "packages/exchange/stores/sql-core"
   },
   "publishConfig": {
     "access": "public"
@@ -36,16 +36,12 @@
   },
   "peerDependencies": {
     "@kyneta/exchange": "^1.4.0",
-    "@kyneta/schema": "^1.4.0",
-    "@kyneta/sql-store-core": "^1.4.0"
+    "@kyneta/schema": "^1.4.0"
   },
   "devDependencies": {
     "@kyneta/exchange": "workspace:^",
     "@kyneta/schema": "workspace:^",
-    "@kyneta/sql-store-core": "workspace:^",
-    "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22",
-    "better-sqlite3": "^11.9.1",
     "tsdown": "^0.21.9",
     "typescript": "^5.9.2",
     "vitest": "^4.0.17"

@@ -12,7 +12,42 @@ import {
 } from "@kyneta/exchange/testing"
 import Database from "better-sqlite3"
 import { afterAll, describe, expect, it } from "vitest"
-import { fromBetterSqlite3, SqliteStore } from "../index.js"
+import { fromBetterSqlite3, type SqliteAdapter, SqliteStore } from "../index.js"
+
+/**
+ * Why `arm(n)` instead of a constructor-time `failOnNth`: schema DDL
+ * runs `exec` during `SqliteStore` construction. We need the counter
+ * latent until after the priming append succeeds, so the conformance
+ * test can target a specific subsequent write call.
+ */
+function makeFaultyAdapter(base: SqliteAdapter): {
+  adapter: SqliteAdapter
+  arm: (n: number) => void
+} {
+  let armed: number | null = null
+  let count = 0
+  const adapter: SqliteAdapter = {
+    exec(sql, ...params) {
+      if (armed !== null) {
+        count += 1
+        if (count === armed) {
+          throw new Error(`fault-injected: exec call #${count}`)
+        }
+      }
+      base.exec(sql, ...params)
+    },
+    iterate: base.iterate.bind(base),
+    transaction: base.transaction.bind(base),
+    close: base.close.bind(base),
+  }
+  return {
+    adapter,
+    arm: n => {
+      armed = n
+      count = 0
+    },
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Temp file management
@@ -47,8 +82,52 @@ describeStore(
     const db = new Database(":memory:")
     return new SqliteStore(fromBetterSqlite3(db))
   },
-  async backend => {
-    await backend.close()
+  {
+    cleanup: async backend => {
+      await backend.close()
+    },
+    // The harness counts only after `arm(n)`, so schema DDL during
+    // `SqliteStore` construction (a sequence of `exec` calls) doesn't
+    // trip the counter. A meta-record append issues 2 execs (meta
+    // upsert + record insert) inside one transaction; arming n=2 fires
+    // mid-transaction so rollback is observable.
+    faultFactory: async () => {
+      const file = makeTmpFile()
+      const db = new Database(file)
+      const base = fromBetterSqlite3(db)
+      const { adapter, arm } = makeFaultyAdapter(base)
+      const store = new SqliteStore(adapter)
+      return {
+        store,
+        injectFault: arm,
+        // freshStore opens a separate connection on the same file. The
+        // primary `db` connection is used by `store`; the fresh one is
+        // independent so its lifecycle is the caller's.
+        freshStore: async () => {
+          const freshDb = new Database(file)
+          return new SqliteStore(fromBetterSqlite3(freshDb))
+        },
+        cleanup: async () => {
+          await store.close()
+        },
+      }
+    },
+    isolationFactory: async () => {
+      const db = new Database(":memory:")
+      const adapter = fromBetterSqlite3(db)
+      return {
+        storeA: new SqliteStore(adapter, {
+          tables: { meta: "a_meta", records: "a_records" },
+        }),
+        storeB: new SqliteStore(adapter, {
+          tables: { meta: "b_meta", records: "b_records" },
+        }),
+        // Both stores share `adapter`; closing it once tears down both.
+        cleanup: async () => {
+          adapter.close()
+        },
+      }
+    },
   },
 )
 
@@ -152,13 +231,17 @@ describe("SqliteStore — adapter factory", () => {
   })
 })
 
-describe("SqliteStore — tablePrefix isolation", () => {
-  it("two stores with different prefixes coexist in the same database", async () => {
+describe("SqliteStore — tables isolation", () => {
+  it("two stores with different table names coexist in the same database", async () => {
     const db = new Database(":memory:")
     const adapter = fromBetterSqlite3(db)
 
-    const store1 = new SqliteStore(adapter, { tablePrefix: "app1_" })
-    const store2 = new SqliteStore(adapter, { tablePrefix: "app2_" })
+    const store1 = new SqliteStore(adapter, {
+      tables: { meta: "app1_meta", records: "app1_records" },
+    })
+    const store2 = new SqliteStore(adapter, {
+      tables: { meta: "app2_meta", records: "app2_records" },
+    })
 
     await store1.append("doc-1", makeMetaRecord())
     await store1.append("doc-1", makeEntryRecord("entirety", "v1-app1"))
