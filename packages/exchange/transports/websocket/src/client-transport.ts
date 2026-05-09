@@ -400,10 +400,7 @@ export class WebsocketClientTransport extends Transport<void> {
     // Handle binary messages through shared decode pipeline
     if (data instanceof ArrayBuffer) {
       try {
-        const wires = decodeBinaryWires(
-          new Uint8Array(data),
-          this.#reassembler,
-        )
+        const wires = decodeBinaryWires(new Uint8Array(data), this.#reassembler)
         if (!wires) return
         for (const wire of wires) {
           const result = applyInboundAliasing(this.#aliasState, wire)

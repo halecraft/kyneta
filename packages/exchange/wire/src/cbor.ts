@@ -20,10 +20,7 @@ import type {
 import { type CBORType, decodeCBOR, encodeCBOR } from "./cbor-encoding.js"
 import type { BinaryCodec } from "./codec.js"
 import { FrameDecodeError } from "./frame.js"
-import {
-  validateDocId,
-  validateSchemaHash,
-} from "./validate-identifiers.js"
+import { validateDocId, validateSchemaHash } from "./validate-identifiers.js"
 import {
   MessageType,
   PayloadEncodingToString,

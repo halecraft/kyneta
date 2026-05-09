@@ -423,8 +423,7 @@ export function applyInboundAliasing(
       const w = wire as WireOfferMsg
       const result = resolveDocId(s_get_inbound(state), w.doc, w.dx)
       if ("error" in result) return { state, error: result.error }
-      const kind =
-        PayloadKindToString[w.pk as keyof typeof PayloadKindToString]
+      const kind = PayloadKindToString[w.pk as keyof typeof PayloadKindToString]
       const encoding =
         PayloadEncodingToString[w.pe as keyof typeof PayloadEncodingToString]
       if (!kind) {
@@ -451,9 +450,7 @@ export function applyInboundAliasing(
     }
 
     default:
-      throw new Error(
-        `Unknown wire message type: ${(wire as WireMessage).t}`,
-      )
+      throw new Error(`Unknown wire message type: ${(wire as WireMessage).t}`)
   }
 }
 
@@ -466,9 +463,7 @@ function resolveDocId(
   inbound: ReadonlyMap<Alias, string>,
   doc: string | undefined,
   dx: number | undefined,
-):
-  | { docId: string }
-  | { error: AliasResolutionError } {
+): { docId: string } | { error: AliasResolutionError } {
   if (doc !== undefined && dx !== undefined) {
     return {
       error: {

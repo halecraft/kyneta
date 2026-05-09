@@ -403,6 +403,6 @@ A `KeySpec<V>` tells `Index.by` how to derive group keys from a value. Three com
 
 ## Testing
 
-Every test is pure JS — no `Schema.bind` requirement beyond what `Source.of` / `Source.fromList` exercise, no real substrates needed for the core ℤ-set algebra. Adapter tests use in-memory exchanges (`Bridge` + `BridgeTransport` from `@kyneta/transport`) and the plain substrate from `@kyneta/schema`. Algebraic-law tests assert the abelian-group properties directly on constructed `ZSet` values.
+Every test is pure JS — no `Schema.bind` requirement beyond what `Source.of` / `Source.fromList` exercise, no real substrates needed for the core ℤ-set algebra. Adapter tests use in-memory exchanges (`Bridge` + `BridgeTransport` from `@kyneta/bridge-transport`) and the plain substrate from `@kyneta/schema`. Algebraic-law tests assert the abelian-group properties directly on constructed `ZSet` values.
 
 **Tests**: 143 passed, 0 skipped across 8 files (`zset.test.ts`: ~30 by convention; `source.test.ts`: 30; `index.test.ts`: 27; `join.test.ts`: 13; `key-spec.test.ts`: 11; plus `collection.test.ts`, `flatmap.test.ts`, `source-of.test.ts`). Run with `cd packages/index && pnpm exec vitest run`.

@@ -74,6 +74,7 @@ export type {
   PresentMsg,
   ReturnEnvelope,
   SyncMsg,
+  WireFeatures,
 } from "@kyneta/transport"
 export { isLifecycleMsg, isSyncMsg } from "@kyneta/transport"
 
@@ -109,17 +110,6 @@ export {
   Transport,
 } from "@kyneta/transport"
 export { TransportManager } from "./transport/transport-manager.js"
-
-// ---------------------------------------------------------------------------
-// Bridge — re-exported from @kyneta/bridge-transport
-// ---------------------------------------------------------------------------
-
-export type { BridgeTransportParams } from "@kyneta/bridge-transport"
-export {
-  Bridge,
-  BridgeTransport,
-  createBridgeTransport,
-} from "@kyneta/bridge-transport"
 
 // ---------------------------------------------------------------------------
 // Session program — peer lifecycle TEA state machine

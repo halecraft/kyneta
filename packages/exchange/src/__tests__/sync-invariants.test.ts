@@ -8,6 +8,7 @@
 // 5. Universal version comparison — all strategies reject stale offers
 // 6. Plain replica snapshot import falls back to replicaFactory.fromSnapshot()
 
+import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { loro } from "@kyneta/loro-schema"
 import {
   change,
@@ -19,7 +20,7 @@ import {
   Schema,
   TimestampVersion,
 } from "@kyneta/schema"
-import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
+import { cborCodec } from "@kyneta/wire"
 import { afterEach, describe, expect, it } from "vitest"
 import {
   Exchange,
@@ -27,7 +28,6 @@ import {
   type PeerIdentityInput,
 } from "../exchange.js"
 import { sync } from "../sync.js"
-import { cborCodec } from "@kyneta/wire"
 
 // ---------------------------------------------------------------------------
 // Drain + cleanup helpers

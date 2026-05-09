@@ -9,15 +9,15 @@
 // covered by the 204 pre-existing integration tests — no need to
 // duplicate that coverage here.
 
-import { change, Interpret, json, Reject, Schema } from "@kyneta/schema"
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
+import { change, Interpret, json, Reject, Schema } from "@kyneta/schema"
+import { cborCodec } from "@kyneta/wire"
 import { afterEach, describe, expect, it } from "vitest"
 import {
   Exchange,
   type ExchangeParams,
   type PeerIdentityInput,
 } from "../exchange.js"
-import { cborCodec } from "@kyneta/wire"
 
 // ---------------------------------------------------------------------------
 // Test helpers

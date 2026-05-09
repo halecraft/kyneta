@@ -523,8 +523,10 @@ describe("CBOR codec — identifier length caps", () => {
   it("accepts a docId one byte under the cap with a 4-byte UTF-8 codepoint", () => {
     // 🚀 (rocket) is 4 UTF-8 bytes. Build a docId at the boundary:
     // (cap - 4) ASCII bytes + one rocket = exactly cap bytes.
-    const docId = "a".repeat(DOC_ID_MAX_UTF8_BYTES - 4) + "🚀"
-    expect(new TextEncoder().encode(docId).byteLength).toBe(DOC_ID_MAX_UTF8_BYTES)
+    const docId = `${"a".repeat(DOC_ID_MAX_UTF8_BYTES - 4)}🚀`
+    expect(new TextEncoder().encode(docId).byteLength).toBe(
+      DOC_ID_MAX_UTF8_BYTES,
+    )
     const msg: InterestMsg = { type: "interest", docId }
     const decoded = roundTrip(msg) as InterestMsg
     expect(decoded.docId).toEqual(docId)
@@ -544,7 +546,7 @@ describe("CBOR codec — identifier length caps", () => {
 
   it("rejects a multi-byte UTF-8 docId one byte over the cap", () => {
     // (cap - 4) + 4-byte rocket + 1 ASCII byte = cap + 1
-    const docId = "a".repeat(DOC_ID_MAX_UTF8_BYTES - 4) + "🚀a"
+    const docId = `${"a".repeat(DOC_ID_MAX_UTF8_BYTES - 4)}🚀a`
     expect(new TextEncoder().encode(docId).byteLength).toBe(
       DOC_ID_MAX_UTF8_BYTES + 1,
     )
@@ -661,9 +663,6 @@ describe("CBOR codec — WireFeatures negotiation", () => {
 // Phase 3 — alias wire-form invariants
 // ---------------------------------------------------------------------------
 
-import { encodeBinaryFrame } from "../frame.js"
-import { complete } from "../frame-types.js"
-import { WIRE_VERSION } from "../constants.js"
 import { MessageType } from "../wire-types.js"
 
 /**
@@ -711,9 +710,9 @@ describe("CBOR codec — Phase 3 alias-form invariants", () => {
   })
 
   it("rejects interest with neither doc nor dx", () => {
-    expect(() =>
-      decodeWireObject({ t: MessageType.Interest }),
-    ).toThrowError(FrameDecodeError)
+    expect(() => decodeWireObject({ t: MessageType.Interest })).toThrowError(
+      FrameDecodeError,
+    )
   })
 
   it("rejects interest with dx-only (codec has no alias state)", () => {

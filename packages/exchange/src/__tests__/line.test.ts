@@ -12,9 +12,14 @@
 //   onLine callback management, dispose semantics, queued messages,
 //   hub-and-spoke with listen
 
+import {
+  Bridge,
+  BridgeTransport,
+  createBridgeTransport,
+} from "@kyneta/bridge-transport"
 import { json, Replicate, Schema } from "@kyneta/schema"
 import type { DocId } from "@kyneta/transport"
-import { Bridge, BridgeTransport, createBridgeTransport } from "@kyneta/bridge-transport"
+import { cborCodec } from "@kyneta/wire"
 import { afterEach, describe, expect, it } from "vitest"
 import {
   Exchange,
@@ -30,7 +35,6 @@ import {
   routeLine,
 } from "../line.js"
 import { InMemoryStore } from "../store/in-memory-store.js"
-import { cborCodec } from "@kyneta/wire"
 
 // ---------------------------------------------------------------------------
 // Test helpers

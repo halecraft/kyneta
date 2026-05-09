@@ -1,5 +1,10 @@
 // Exchange — unit tests for the public Exchange API.
 
+import {
+  Bridge,
+  BridgeTransport,
+  createBridgeTransport,
+} from "@kyneta/bridge-transport"
 import { hasChangefeed } from "@kyneta/changefeed"
 import { loro } from "@kyneta/loro-schema"
 import {
@@ -15,8 +20,8 @@ import {
   SYNC_AUTHORITATIVE,
   unwrap,
 } from "@kyneta/schema"
-import { type PeerIdentityDetails } from "@kyneta/transport"
-import { Bridge, BridgeTransport, createBridgeTransport } from "@kyneta/bridge-transport"
+import type { PeerIdentityDetails } from "@kyneta/transport"
+import { cborCodec } from "@kyneta/wire"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   Exchange,
@@ -25,7 +30,6 @@ import {
 } from "../exchange.js"
 import { hasSync, sync } from "../sync.js"
 import type { PeerChange } from "../types.js"
-import { cborCodec } from "@kyneta/wire"
 
 // ---------------------------------------------------------------------------
 // Test schemas (bound at module scope)
@@ -1112,9 +1116,7 @@ describe("Exchange", () => {
 
       const alice = new Exchange({
         id: "alice",
-        transports: [
-          createBridgeTransport({ transportType: "alice", bridge }),
-        ],
+        transports: [createBridgeTransport({ transportType: "alice", bridge })],
       })
       const bob = new Exchange({
         id: "bob",
@@ -1133,9 +1135,7 @@ describe("Exchange", () => {
       const bridge = new Bridge({ codec: cborCodec })
       const alice = new Exchange({
         id: "alice",
-        transports: [
-          createBridgeTransport({ transportType: "alice", bridge }),
-        ],
+        transports: [createBridgeTransport({ transportType: "alice", bridge })],
       })
       activeExchanges.push(alice)
       expect(alice.getPeerFeatures("bob")).toBeUndefined()

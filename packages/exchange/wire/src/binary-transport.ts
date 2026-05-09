@@ -15,8 +15,12 @@ import type { ChannelMsg } from "@kyneta/transport"
 import { cborCodec } from "./cbor.js"
 import { WIRE_VERSION } from "./constants.js"
 import { fragmentPayload } from "./fragment.js"
+import {
+  decodeBinaryFrame,
+  encodeBinaryFrame,
+  encodeComplete,
+} from "./frame.js"
 import { complete } from "./frame-types.js"
-import { decodeBinaryFrame, encodeBinaryFrame, encodeComplete } from "./frame.js"
 import type { FragmentReassembler } from "./reassembler.js"
 import { decodeWireMessage, encodeWireMessage } from "./wire-message-helpers.js"
 import type { WireMessage } from "./wire-types.js"

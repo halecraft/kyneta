@@ -168,7 +168,7 @@ Source: `packages/transport/src/transport.ts` → `TransportFactory`.
 
 ## `BridgeTransport` (moved)
 
-In-process testing is provided by `@kyneta/bridge-transport` (`packages/exchange/transports/bridge`). `@kyneta/exchange` re-exports `Bridge`, `BridgeTransport`, and `createBridgeTransport` for backward compat. See that package's docs for usage.
+In-process testing is provided by `@kyneta/bridge-transport` (`packages/exchange/transports/bridge`). Consumers import directly from `@kyneta/bridge-transport`. See that package's docs for usage.
 
 The bridge transport lives outside `@kyneta/transport` because it needs the alias transformer from `@kyneta/wire` (Phase 4 of the v1 alias work), and `@kyneta/transport` cannot depend on `@kyneta/wire` without creating a circular peer-dep — `@kyneta/wire` already peer-depends on `@kyneta/transport` for shared message types.
 

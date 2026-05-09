@@ -21,6 +21,7 @@ import {
   type AliasState,
   applyInboundAliasing,
   applyOutboundAliasing,
+  complete,
   decodeBinaryFrame,
   decodeWireMessage,
   emptyAliasState,
@@ -31,7 +32,6 @@ import {
   type StreamParserState,
   WIRE_VERSION,
 } from "@kyneta/wire"
-import { complete } from "@kyneta/wire"
 import type { UnixSocket } from "./types.js"
 
 // ---------------------------------------------------------------------------

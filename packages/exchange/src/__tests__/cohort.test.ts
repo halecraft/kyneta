@@ -15,16 +15,15 @@
 // the transport handshake completes before offers flow, so "synced" status
 // is reached deterministically rather than racing.
 
-import { change, json, Schema } from "@kyneta/schema"
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
+import { change, json, Schema } from "@kyneta/schema"
+import { cborCodec } from "@kyneta/wire"
 import { afterEach, describe, expect, it } from "vitest"
-
 import {
   Exchange,
   type ExchangeParams,
   type PeerIdentityInput,
 } from "../exchange.js"
-import { cborCodec } from "@kyneta/wire"
 
 // ---------------------------------------------------------------------------
 // Test helpers

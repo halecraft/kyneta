@@ -7,6 +7,7 @@
 // Replaces the old storage-integration tests which tested the deleted
 // StorageAdapter / storage-first sync machinery.
 
+import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { loro } from "@kyneta/loro-schema"
 import {
   change,
@@ -16,7 +17,7 @@ import {
   Replicate,
   Schema,
 } from "@kyneta/schema"
-import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
+import { cborCodec } from "@kyneta/wire"
 import { afterEach, describe, expect, it } from "vitest"
 import {
   Exchange,
@@ -30,7 +31,6 @@ import {
 } from "../store/in-memory-store.js"
 import type { Store, StoreRecord } from "../store/store.js"
 import { collectAll, makeMetaRecord } from "../testing/store-conformance.js"
-import { cborCodec } from "@kyneta/wire"
 
 // ---------------------------------------------------------------------------
 // Test helpers

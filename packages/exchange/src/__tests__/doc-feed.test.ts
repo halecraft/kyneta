@@ -4,6 +4,7 @@
 // via `exchange.documents`, including snapshot access, subscription events,
 // reset/shutdown, and two-peer integration.
 
+import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { hasChangefeed } from "@kyneta/changefeed"
 import { loro } from "@kyneta/loro-schema"
 import {
@@ -13,7 +14,7 @@ import {
   Schema,
   SYNC_AUTHORITATIVE,
 } from "@kyneta/schema"
-import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
+import { cborCodec } from "@kyneta/wire"
 import { afterEach, describe, expect, it } from "vitest"
 import {
   Exchange,
@@ -21,7 +22,6 @@ import {
   type PeerIdentityInput,
 } from "../exchange.js"
 import type { DocChange, DocInfo } from "../types.js"
-import { cborCodec } from "@kyneta/wire"
 
 // ---------------------------------------------------------------------------
 // Test helpers

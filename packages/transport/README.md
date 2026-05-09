@@ -18,14 +18,14 @@ Transport infrastructure for `@kyneta/exchange` — base class, channel types, m
 
 ```
 @kyneta/transport  (defines Transport, Channel, ChannelMsg, ...)
-    ↑           ↑           ↑
-@kyneta/exchange  @kyneta/wire  @kyneta/websocket-transport
-(Synchronizer)    (codecs)      (extends Transport)
+    ↑           ↑           ↑            ↑
+@kyneta/exchange  @kyneta/wire  @kyneta/bridge-transport  @kyneta/websocket-transport
+(Synchronizer)    (codecs)      (in-process testing)       (extends Transport)
 ```
 
 - **`@kyneta/wire`** — peer-depends on `@kyneta/transport` for `ChannelMsg` and message type variants (type-only imports for codec definitions).
-- **`@kyneta/exchange`** — depends on `@kyneta/transport` and re-exports everything. The exchange adds the sync runtime (`Synchronizer`, `Exchange`, `TransportManager`) on top.
-- **Transport implementations** (`@kyneta/websocket-transport`, `@kyneta/sse-transport`, `@kyneta/unix-socket-transport`, `@kyneta/webrtc-transport`) — peer-depend on `@kyneta/transport` for the `Transport<G>` base class, channel types, and message vocabulary.
+- **`@kyneta/exchange`** — depends on `@kyneta/transport` and re-exports its infrastructure (identity types, message vocabulary, channel types, Transport base class, reconnection utilities). The exchange adds the sync runtime (`Synchronizer`, `Exchange`, `TransportManager`) on top.
+- **Transport implementations** (`@kyneta/bridge-transport`, `@kyneta/websocket-transport`, `@kyneta/sse-transport`, `@kyneta/unix-socket-transport`, `@kyneta/webrtc-transport`) — peer-depend on `@kyneta/transport` for the `Transport<G>` base class, channel types, and message vocabulary.
 
 ## Creating a transport
 

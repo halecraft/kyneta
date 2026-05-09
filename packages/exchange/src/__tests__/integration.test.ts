@@ -7,6 +7,7 @@
 // - Ephemeral (TimestampVersion via ephemeral.bind)
 // - Heterogeneous (mixed substrates in one exchange)
 
+import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { loro } from "@kyneta/loro-schema"
 import {
   change,
@@ -18,17 +19,15 @@ import {
   Replicate,
   Schema,
 } from "@kyneta/schema"
-import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
+import { cborCodec } from "@kyneta/wire"
 import { yjs } from "@kyneta/yjs-schema"
 import { afterEach, describe, expect, it } from "vitest"
-
 import {
   Exchange,
   type ExchangeParams,
   type PeerIdentityInput,
 } from "../exchange.js"
 import { sync } from "../sync.js"
-import { cborCodec } from "@kyneta/wire"
 
 // ---------------------------------------------------------------------------
 // Test helpers

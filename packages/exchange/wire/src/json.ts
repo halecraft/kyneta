@@ -22,10 +22,7 @@ import type {
 } from "@kyneta/transport"
 import type { TextCodec } from "./codec.js"
 import { TextFrameDecodeError } from "./text-frame.js"
-import {
-  validateDocId,
-  validateSchemaHash,
-} from "./validate-identifiers.js"
+import { validateDocId, validateSchemaHash } from "./validate-identifiers.js"
 
 function checkDocId(value: string): void {
   const err = validateDocId(value)
@@ -162,9 +159,7 @@ function rejectIfAliasFormed(record: Record<string, unknown>): void {
   }
 }
 
-function rejectIfAliasFormedInPresentDoc(
-  d: Record<string, unknown>,
-): void {
+function rejectIfAliasFormedInPresentDoc(d: Record<string, unknown>): void {
   if (d.docAlias !== undefined) {
     throw new TextFrameDecodeError(
       "doc-id-form-conflict",
@@ -195,9 +190,7 @@ function fromJsonSafe(obj: unknown): ChannelMsg {
     case "present": {
       const present = record as unknown as PresentMsg
       for (const d of present.docs) {
-        rejectIfAliasFormedInPresentDoc(
-          d as unknown as Record<string, unknown>,
-        )
+        rejectIfAliasFormedInPresentDoc(d as unknown as Record<string, unknown>)
         checkDocId(d.docId)
         checkSchemaHash(d.schemaHash)
       }

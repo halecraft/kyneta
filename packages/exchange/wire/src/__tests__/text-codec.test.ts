@@ -497,7 +497,7 @@ describe("Text codec — identifier length caps", () => {
   })
 
   it("accepts a docId at the cap built from a 4-byte UTF-8 codepoint", () => {
-    const docId = "a".repeat(DOC_ID_MAX_UTF8_BYTES - 4) + "🚀"
+    const docId = `${"a".repeat(DOC_ID_MAX_UTF8_BYTES - 4)}🚀`
     expect(new TextEncoder().encode(docId).byteLength).toBe(
       DOC_ID_MAX_UTF8_BYTES,
     )

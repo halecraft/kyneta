@@ -81,32 +81,37 @@ function encodeLength(major: number, argument: number | bigint): number[] {
   }
 
   // Encode into 8 bytes big-endian then slice the tail
-  const buf = new Uint8Array(8)
-  const view = new DataView(buf.buffer)
+  const view = new DataView(new ArrayBuffer(8))
   view.setBigUint64(0, big, false)
 
   if (big <= 23n) {
-    return [m | buf[7]!]
+    return [m | view.getUint8(7)]
   }
   if (big <= 0xffn) {
-    return [m | 24, buf[7]!]
+    return [m | 24, view.getUint8(7)]
   }
   if (big <= 0xffffn) {
-    return [m | 25, buf[6]!, buf[7]!]
+    return [m | 25, view.getUint8(6), view.getUint8(7)]
   }
   if (big <= 0xffff_ffffn) {
-    return [m | 26, buf[4]!, buf[5]!, buf[6]!, buf[7]!]
+    return [
+      m | 26,
+      view.getUint8(4),
+      view.getUint8(5),
+      view.getUint8(6),
+      view.getUint8(7),
+    ]
   }
   return [
     m | 27,
-    buf[0]!,
-    buf[1]!,
-    buf[2]!,
-    buf[3]!,
-    buf[4]!,
-    buf[5]!,
-    buf[6]!,
-    buf[7]!,
+    view.getUint8(0),
+    view.getUint8(1),
+    view.getUint8(2),
+    view.getUint8(3),
+    view.getUint8(4),
+    view.getUint8(5),
+    view.getUint8(6),
+    view.getUint8(7),
   ]
 }
 

@@ -222,7 +222,7 @@ type DocCacheEntry =
  *
  * const exchange = new Exchange({
  *   id: "alice",
- *   transports: [createBridgeTransport({ transportType: "peer-a", bridge })],
+ *   transports: [transportFactory], // e.g. createWebsocketClient(...)
  *   stores: [createInMemoryStore()],
  * })
  *

@@ -82,9 +82,11 @@ Two additional test suites live outside the main package graph:
 
 ### Transport + wire
 
-**`@kyneta/transport`** — Abstract transport contract. `abstract class Transport<G>`, channel lifecycle (`Generated → Connected → Established`), six-message protocol vocabulary (two lifecycle — `establish`, `depart`; four sync — `present`, `interest`, `offer`, `dismiss`), identity types, and an in-process `Bridge` transport for testing. Peer deps: `@kyneta/machine`, `@kyneta/schema`. 8 tests. → `packages/transport/TECHNICAL.md`.
+**`@kyneta/transport`** — Abstract transport contract. `abstract class Transport<G>`, channel lifecycle (`Generated → Connected → Established`), six-message protocol vocabulary (two lifecycle — `establish`, `depart`; four sync — `present`, `interest`, `offer`, `dismiss`), and identity types. Peer deps: `@kyneta/machine`, `@kyneta/schema`. 8 tests. → `packages/transport/TECHNICAL.md`.
 
 **`@kyneta/wire`** — Universal wire format. One `Frame<T>` abstraction (Complete or Fragment), two codecs (binary CBOR, text JSON), two framings (7-byte binary header, 2-char text prefix), fragmentation for cloud gateway limits, and a pure `feedBytes` stream-frame parser for stream-oriented transports. Internal CBOR encoder fixes a UTF-8 byte-length bug that plagued `@levischuck/tiny-cbor`. Peer dep: `@kyneta/transport`. 233 tests across 9 files. → `packages/exchange/wire/TECHNICAL.md`.
+
+**`@kyneta/bridge-transport`** — In-process transport for testing. Codec-faithful + alias-aware delivery via `queueMicrotask()`. The `Bridge` byte router connects multiple `BridgeTransport` instances in a single process, running the production codec and alias transformer end-to-end. Peer deps: `@kyneta/transport`, `@kyneta/wire`. Location: `packages/exchange/transports/bridge`.
 
 **`@kyneta/websocket-transport`** — WebSocket transport with three entry points (`./browser`, `./server`, `./bun`). Binary CBOR on the wire, a five-state TEA client lifecycle with a server-sent `"ready"` gate, and runtime-agnostic constructor injection (the `WebSocket` constructor is passed in; there is no `globalThis.WebSocket` default). Peer deps: `@kyneta/machine`, `@kyneta/transport`, `@kyneta/wire`. 56 tests. → `packages/exchange/transports/websocket/TECHNICAL.md`.
 

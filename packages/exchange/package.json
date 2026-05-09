@@ -42,7 +42,6 @@
     "@kyneta/schema": "^1.4.0"
   },
   "dependencies": {
-    "@kyneta/bridge-transport": "workspace:^",
     "@kyneta/machine": "workspace:*",
     "@kyneta/random": "workspace:^",
     "@kyneta/transport": "workspace:^"

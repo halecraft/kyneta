@@ -7,7 +7,7 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/halecraft/kyneta",
-    "directory": "packages/exchange/network-adapters/sse"
+    "directory": "packages/exchange/transports/sse"
   },
   "publishConfig": {
     "access": "public"

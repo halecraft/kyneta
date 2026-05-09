@@ -729,7 +729,7 @@ For durability guarantees, use the `cohort` predicate to prevent compaction past
 
 ## Testing
 
-Tests use real `BridgeTransport` pairs from `@kyneta/transport` for multi-peer scenarios and in-memory stores for persistence. There are no mocks — the `@kyneta/machine` runtime interprets pure programs against real effects. Per-test exchanges are fully torn down via `await exchange.close()`.
+Tests use real `BridgeTransport` pairs from `@kyneta/bridge-transport` for multi-peer scenarios and in-memory stores for persistence. There are no mocks — the `@kyneta/machine` runtime interprets pure programs against real effects. Per-test exchanges are fully torn down via `await exchange.close()`.
 
 The `line.test.ts` file alone runs ~50 scenarios including relay topology, hub-and-spoke, and one-way flow — validating that `Line`'s durability surface works end-to-end through real transports.
 

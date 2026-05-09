@@ -6,12 +6,7 @@
 // unknown-alias error path.
 
 import { SYNC_AUTHORITATIVE } from "@kyneta/schema"
-import type {
-  ChannelMsg,
-  EstablishMsg,
-  InterestMsg,
-  PresentMsg,
-} from "@kyneta/transport"
+import type { EstablishMsg, InterestMsg, PresentMsg } from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
 import {
   applyInboundAliasing,
@@ -128,7 +123,7 @@ describe("alias-table — present always announces aliases", () => {
   })
 
   it("monotonically assigns aliases for distinct docIds", () => {
-    let state = emptyAliasState()
+    const state = emptyAliasState()
     const present2: PresentMsg = {
       type: "present",
       docs: [
@@ -304,7 +299,7 @@ describe("alias-table — schema-hash compaction", () => {
   })
 
   it("byte-size: present with shared schema is O(1) in schema-hash bytes", () => {
-    let state = setupMutual()
+    const state = setupMutual()
     // Build a present with a relatively long schema hash (34 chars) and
     // 10 docs, all sharing it. The encoded byte count should be much
     // smaller than the naive (10 × 34) bytes for the schema hash.

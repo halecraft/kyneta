@@ -7,13 +7,13 @@
 // This is the integration test that no unit test can replace: it exercises
 // the wiring between layers, not the layers themselves.
 
+import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { Exchange } from "@kyneta/exchange"
 import { loro } from "@kyneta/loro-schema"
 import { change, Schema } from "@kyneta/schema"
-import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
+import { cborCodec } from "@kyneta/wire"
 import { afterEach, describe, expect, it } from "vitest"
 import { attach, type TextRefLike } from "../text-adapter.js"
-import { cborCodec } from "@kyneta/wire"
 
 // ---------------------------------------------------------------------------
 // Schema — a document with a single collaborative text field

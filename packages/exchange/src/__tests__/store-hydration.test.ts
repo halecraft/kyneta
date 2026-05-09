@@ -4,6 +4,7 @@
 // Store on get()/replicate(), persists network imports
 // via onDocImported, and persists local changes via changefeed.
 
+import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import {
   change,
   json,
@@ -12,7 +13,7 @@ import {
   Schema,
   SYNC_AUTHORITATIVE,
 } from "@kyneta/schema"
-import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
+import { cborCodec } from "@kyneta/wire"
 import { yjs } from "@kyneta/yjs-schema"
 import { describe, expect, it } from "vitest"
 import {
@@ -27,7 +28,6 @@ import {
 } from "../store/in-memory-store.js"
 import type { StoreRecord } from "../store/store.js"
 import { collectAll, makeMetaRecord } from "../testing/store-conformance.js"
-import { cborCodec } from "@kyneta/wire"
 
 // ---------------------------------------------------------------------------
 // Test helpers

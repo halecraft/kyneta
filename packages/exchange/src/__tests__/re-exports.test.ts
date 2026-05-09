@@ -1,11 +1,13 @@
-// re-exports — verify @kyneta/exchange re-exports are identical to source.
+// re-exports — verify @kyneta/exchange re-exports transport infrastructure
+// as the same reference (not copies) — critical for instanceof checks.
 //
-// The exchange barrel re-exports symbols from @kyneta/transport and
-// @kyneta/bridge-transport for backwards compatibility. This test
-// ensures re-exported values are the *same reference* (not copies) —
-// critical for instanceof checks.
+// The exchange barrel re-exports symbols from @kyneta/transport as a user
+// convenience so consumers don't need a second import for common types and
+// values (identity types, message vocabulary, channel types, Transport
+// base class, reconnection utilities). The "every value export" assertion
+// serves as a forward-looking guardrail: if a new value export is added to
+// @kyneta/transport, this test catches the gap.
 
-import * as bridgeTransport from "@kyneta/bridge-transport"
 import * as transport from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
 import * as exchange from "../index.js"
@@ -27,21 +29,6 @@ describe("@kyneta/exchange re-exports from @kyneta/transport", () => {
       const fromTransport = (transport as Record<string, unknown>)[name]
       const fromExchange = (exchange as Record<string, unknown>)[name]
       expect(fromExchange).toBe(fromTransport)
-    })
-  }
-
-  // Value exports re-exported from @kyneta/bridge-transport
-  const bridgeValues = [
-    "Bridge",
-    "BridgeTransport",
-    "createBridgeTransport",
-  ] as const
-
-  for (const name of bridgeValues) {
-    it(`re-exports ${name} as the same reference`, () => {
-      const fromBridge = (bridgeTransport as Record<string, unknown>)[name]
-      const fromExchange = (exchange as Record<string, unknown>)[name]
-      expect(fromExchange).toBe(fromBridge)
     })
   }
 

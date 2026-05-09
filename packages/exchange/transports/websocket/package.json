@@ -7,7 +7,7 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/halecraft/kyneta",
-    "directory": "packages/exchange/network-adapters/websocket"
+    "directory": "packages/exchange/transports/websocket"
   },
   "publishConfig": {
     "access": "public"

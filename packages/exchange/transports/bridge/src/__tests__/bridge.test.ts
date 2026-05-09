@@ -2,8 +2,8 @@
 
 import { SYNC_AUTHORITATIVE } from "@kyneta/schema"
 import type { ChannelMsg, TransportContext } from "@kyneta/transport"
-import { describe, expect, it, vi } from "vitest"
 import { cborCodec } from "@kyneta/wire"
+import { describe, expect, it, vi } from "vitest"
 import { Bridge, BridgeTransport } from "../bridge.js"
 
 function createTransportContext(
