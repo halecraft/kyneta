@@ -111,15 +111,15 @@ export {
 export { TransportManager } from "./transport/transport-manager.js"
 
 // ---------------------------------------------------------------------------
-// Bridge — re-exported from @kyneta/transport
+// Bridge — re-exported from @kyneta/bridge-transport
 // ---------------------------------------------------------------------------
 
-export type { BridgeTransportParams } from "@kyneta/transport"
+export type { BridgeTransportParams } from "@kyneta/bridge-transport"
 export {
   Bridge,
   BridgeTransport,
   createBridgeTransport,
-} from "@kyneta/transport"
+} from "@kyneta/bridge-transport"
 
 // ---------------------------------------------------------------------------
 // Session program — peer lifecycle TEA state machine

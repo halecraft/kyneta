@@ -125,12 +125,24 @@ export class SseConnection {
    * Encodes via textCodec → text frame → fragment if needed → sendFn().
    * Encoding and fragmentation are the connection's concern — the
    * framework integration only needs to write strings.
+   *
+   * SSE does not yet run the alias transformer; outbound `establish`
+   * messages have `features.alias` stripped so peers do not negotiate
+   * alias support over SSE channels. Other features are preserved.
    */
   send(msg: ChannelMsg): void {
     if (!this.#sendFn) {
       throw new Error(
         `Cannot send message: send function not set for peer ${this.peerId}`,
       )
+    }
+
+    // Strip alias feature from outbound establish — see comment above.
+    if (msg.type === "establish" && msg.features?.alias) {
+      msg = {
+        ...msg,
+        features: { ...msg.features, alias: false },
+      }
     }
 
     // Encode to text wire format

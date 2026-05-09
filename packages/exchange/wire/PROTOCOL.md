@@ -92,21 +92,22 @@ Implementation: `textCodec` — human-readable JSON with full type strings. `Uin
 
 ## Binary Wire Format
 
-### Frame Header (7 bytes)
+### Frame Header (6 bytes)
 
 ```
 Offset  Size   Field
 ──────  ─────  ──────────────────
-0       1      Version (0x00)
+0       1      Version (0x01)
 1       1      Type (0x00 = complete, 0x01 = fragment)
-2       1      Hash algorithm (0x00 = none, 0x01 = SHA-256 reserved)
-3       4      Payload length (Uint32 big-endian)
+2       4      Payload length (Uint32 big-endian)
 ```
+
+The v1 framing tightening (jj:spwsxmoq) compacted the header from 7 bytes to 6 by removing the hash-algorithm byte (replaced by a future frame trailer when hash verification is added) and removed the single-byte transport prefix layer.
 
 ### Complete Frame
 
 ```
-[7-byte header]
+[6-byte header]
 [payload: codec-encoded bytes]
 ```
 
@@ -115,26 +116,21 @@ The type byte is `0x00`. Payload length covers the codec-encoded bytes.
 ### Fragment Frame
 
 ```
-[7-byte header]
-[frameId: 8 bytes]
-[index: 4 bytes big-endian]
-[total: 4 bytes big-endian]
-[totalSize: 4 bytes big-endian]
+[6-byte header]
+[frameId:   2 bytes uint16 big-endian]
+[index:     2 bytes uint16 big-endian]
+[total:     2 bytes uint16 big-endian]
+[totalSize: 4 bytes uint32 big-endian]
 [payload: chunk bytes]
 ```
 
-The type byte is `0x01`. Payload length covers the **chunk data only** (not the 20 bytes of fragment metadata). Total frame size = 7 (header) + 20 (metadata) + payload length.
+The type byte is `0x01`. Payload length covers the **chunk data only** (not the 10 bytes of fragment metadata). Total frame size = 6 (header) + 10 (metadata) + payload length.
 
-### Transport Prefixes
+The frame ID is a per-channel-direction monotonic uint16 counter (`createFrameIdCounter()` in `@kyneta/wire`). It wraps at 65535; in practice fragment batches are short-lived so wrap-around is non-issue.
 
-Binary frames are wrapped with a single-byte transport prefix for fast-path discrimination:
+### No Transport Prefixes
 
-| Prefix | Name | Description |
-|--------|------|-------------|
-| `0x00` | `MESSAGE_COMPLETE` | A complete frame (single message or batch) |
-| `0x01` | `FRAGMENT` | A fragment frame (self-describing) |
-
-The receiver checks byte 0 to decide whether fragment collection is needed, without parsing the full frame header.
+v1 has no transport-prefix layer. The frame type byte (offset 1 of the 6-byte header) distinguishes complete vs fragment frames. The receiver decodes the header to decide whether fragment collection is needed.
 
 ### CBOR Compact Encoding
 
@@ -146,9 +142,14 @@ The `cborCodec` encodes `ChannelMsg` objects as compact wire objects with short 
 | `id` | peerId | `string` | establish |
 | `n` | name | `string` (optional) | establish |
 | `y` | type | `"user" \| "bot" \| "service"` | establish |
-| `docs` | docs | `Array<{d, rt, ms, sh}>` | present |
-| `doc` | docId | `string` | interest, offer, dismiss |
-| `sh` | schemaHash | `string` (34-char hex) | present (doc entry, required) |
+| `f` | features | `WireFeatures` (compact map) | establish (optional) |
+| `docs` | docs | `Array<{d, a?, rt, ms, sh?, sa?, shx?, shs?}>` | present |
+| `doc` | docId | `string` (one of doc/dx required) | interest, offer, dismiss |
+| `dx` | docId alias | non-negative integer | interest, offer, dismiss (one of doc/dx required) |
+| `sh` | schemaHash | `string` (one of sh/shx required on present-doc) | present (doc entry) |
+| `sa` | schemaHash alias | non-negative integer (alias assignment) | present (doc entry, optional) |
+| `shx` | schemaHash alias | non-negative integer (alias reference) | present (doc entry, alternative to sh) |
+| `a` | docId alias | non-negative integer (alias assignment) | present (doc entry, optional) |
 | `d` | docId / data | `string` (present doc entry) or `string \| Uint8Array` (offer) | present, offer |
 | `rt` | replicaType | `[string, number, number]` | present (doc entry) |
 | `ms` | syncProtocol | `SyncProtocolWireValue` (`0x00` collaborative, `0x01` authoritative, `0x02` ephemeral) | present (doc entry) |
@@ -156,6 +157,23 @@ The `cborCodec` encodes `ChannelMsg` objects as compact wire objects with short 
 | `r` | reciprocate | `boolean` (optional) | interest, offer |
 | `pk` | payload kind | `0x00` (entirety) or `0x01` (since) | offer |
 | `pe` | payload encoding | `0x00` (json) or `0x01` (binary) | offer |
+
+**Decoder invariants** (Phase 3):
+- Interest, offer, dismiss: exactly one of `{doc, dx}` must be present. Both → `doc-id-form-conflict`. Neither → same code.
+- Present doc entries: exactly one of `{sh, shx}` must be present. Both → `schema-hash-form-conflict`.
+
+### Default values for optional fields
+
+Decoders MUST tolerate absent optional fields by applying these defaults:
+
+| Field | Default | Notes |
+|-------|---------|-------|
+| `r` (reciprocate) | `false` | Most messages don't reciprocate |
+| `pe` (payload encoding) | `0` (json) | When omitted on `offer` |
+| `v` (version) | `undefined` | Absent means LWW initial-sync |
+| `n` (name) | `undefined` | Optional display name |
+| `f` (features) | `undefined` | Treated as no features advertised — no alias/streamed/datagram |
+| `shs` (supported hashes) | `undefined` | Absent means just the primary hash |
 
 ### Binary Encoding Flow
 
@@ -248,12 +266,12 @@ Each wire string is a complete, self-describing fragment frame:
 
 Every fragment — binary or text — carries its full metadata:
 
-| Field | Binary | Text |
-|-------|--------|------|
-| Frame ID | 8 bytes | JSON string (16 hex chars) |
-| Index | 4 bytes big-endian | JSON number |
-| Total | 4 bytes big-endian | JSON number |
-| Total Size | 4 bytes big-endian | JSON number |
+| Field | Binary (v1) | Text |
+|-------|-------------|------|
+| Frame ID | 2 bytes uint16 big-endian | JSON number |
+| Index | 2 bytes uint16 big-endian | JSON number |
+| Total | 2 bytes uint16 big-endian | JSON number |
+| Total Size | 4 bytes uint32 big-endian | JSON number |
 | Chunk | Raw bytes | JSON string (substring) |
 
 There is no separate "fragment header" message. The `FragmentCollector` auto-creates tracking state when it first encounters a new frame ID.
@@ -325,13 +343,119 @@ Receiver:
 | Cloudflare Workers | 1MB | **500KB** |
 | Self-hosted (Bun, Node.js) | Unlimited | **0** (disabled) |
 
+## Identifier Length Caps
+
+DocIds and schema hashes have explicit UTF-8 byte-length caps applied uniformly across binary and text codecs:
+
+| Identifier | Cap | Constant |
+|------------|-----|----------|
+| `DocId` (`doc` / `d`) | 512 UTF-8 bytes | `DOC_ID_MAX_UTF8_BYTES` |
+| Schema hash (`sh`) | 256 UTF-8 bytes | `SCHEMA_HASH_MAX_UTF8_BYTES` |
+
+The unit is **bytes**, not codepoints — multi-byte UTF-8 characters count proportionally. Receivers reject overlong values at decode time with `FrameDecodeError` (binary) or `TextFrameDecodeError` (text) using `code: "doc-id-too-long"` / `"schema-hash-too-long"`.
+
+## Wire Features Negotiation
+
+The `establish` message carries an optional `WireFeatures` map advertising what wire-format extensions a peer understands. Distinct from `Capabilities` in `@kyneta/exchange` (which describes substrate/schema bindings).
+
+### Wire shape (CBOR)
+
+```ts
+type WireFeaturesCompact = {
+  a?: boolean   // alias    — peer understands a/dx/sa/shx alias fields
+  s?: boolean   // streamed — reserved for future QUIC streamed mode
+  d?: boolean   // datagram — reserved for future QUIC datagram mode
+}
+```
+
+### JSON shape (text codec)
+
+The text codec uses long names: `{ alias?, streamed?, datagram? }`.
+
+### Backward compatibility
+
+A peer that omits `features` (or omits any field) is treated as not advertising that feature. Old peers ignore the unknown `f` field harmlessly thanks to CBOR's "ignore unknown map fields" semantics.
+
+### Default features
+
+The current default for v1 is `{ alias: true }` (set in `SessionModel.selfFeatures`). Override via `Synchronizer`'s `selfFeatures` parameter to opt out.
+
+## DocId and Schema Hash Aliasing
+
+Variable-length string identifiers (`doc`, `sh`) repeat heavily in steady-state sync. The QUIC connection-ID / HPACK pattern — receiver-meaningful indices replacing globally-meaningful identifiers — applies cleanly: a per-channel-direction alias table assigned via `present` lets later messages reference docs and schemas by short integers.
+
+### Wire fields
+
+- `present` doc entries:
+  - `a?: number` — alias assignment for the docId. Always emitted (announcement is forward-compatible).
+  - `sa?: number` — alias assignment for the schema hash. Emitted on first reference.
+  - `shx?: number` — alias reference; replaces `sh` on subsequent references when `mutualAlias` is on.
+- `interest` / `offer` / `dismiss`:
+  - `dx?: number` — alias reference; replaces `doc` when `mutualAlias` is on.
+
+Aliases are non-negative integers (CBOR major type 0). They have no fixed width: CBOR encodes the smallest fitting form (1 byte for 0–23, 2 bytes for 24–255, 3 bytes for 256–65,535, 5 bytes above). Practical upper bound is `Number.MAX_SAFE_INTEGER`; unreachable in any realistic channel lifetime.
+
+### Announce vs use
+
+| Operation | When to emit | Rationale |
+|-----------|--------------|-----------|
+| **Announce** (`a`, `sa` in `present`) | Always, regardless of peer's `features.alias` | Old peers ignore unknown CBOR map fields; emitting unconditionally captures bytes-back-on-the-wire the moment both ends understand them. |
+| **Use** (`dx`, or `shx` with `sh` absent) | Only if both peers advertised `features.alias` (mutualAlias) | Old peers cannot resolve aliases. Emitting `dx` to a non-alias peer would trigger their decoder's "exactly one of doc/dx" invariant. |
+
+### Negotiation rule
+
+A sender MAY emit `dx` (or `shx`-without-`sh`) only after sending a `present` containing the corresponding `a` (or `sa`) on the same channel and direction. On muxed transports (in-order delivery), this guarantees the receiver has seen the introduction before the use. Streamed-mode delivery (deferred) requires explicit ordering between announcement and use streams; aliases as a feature are scoped to muxed and (future) datagram modes only.
+
+### Architecture
+
+The alias transformer lives in `@kyneta/wire`'s `alias-table.ts` as two pure functions:
+
+```ts
+applyOutboundAliasing(state, msg) → { state, wire }
+applyInboundAliasing(state, wire) → { state, msg | error }
+```
+
+Each transport's Channel holds a per-channel `AliasState` and calls the transformers adjacent to its codec invocation. The transformer absorbs feature capture from `establish` messages flowing through it — `mutualAlias` is derived state (per-feature AND of `selfFeatures` and `peerFeatures`), no external parameter.
+
+## Delivery Modes
+
+The protocol reserves three delivery modes. Two are implementation-deferred in v1 but the protocol slots are reserved so future implementation can land without protocol changes.
+
+| Mode | Identification of messages | Aliasing applies? | Implemented in v1? |
+|------|---------------------------|-------------------|--------------------|
+| **Muxed** | docId/alias inline in each message; one ordered byte stream | Yes (saves repeated bytes) | Yes — current behavior |
+| **Streamed** | Stream identity *is* the docId context; offers on the stream omit doc identification | No (subsumed by stream-context) | Deferred |
+| **Datagram** | docId/alias inline (each datagram is independent) | Yes (same machinery as muxed) | Deferred |
+
+### Muxed (v1, only formally specified)
+
+All current transports (Bridge, WebSocket, SSE, WebRTC, Unix-socket) operate in muxed mode: a single ordered byte stream per channel-direction carries every message, with each message naming its docId (or alias) inline. Fragmentation handles MTU-bounded transports; aliasing handles the repeated-identifier compression.
+
+### Streamed (deferred)
+
+Reserved for QUIC/WebTransport adapters. Each frame would correspond to a QUIC stream: stream identity *is* the docId context; offers on the stream omit doc identification. No in-stream framing; FIN ends the frame; the fragmentation layer is inert. The `WireFeatures.streamed` flag advertises support; aliasing is unnecessary in streamed mode (stream-as-context subsumes it).
+
+### Datagram (deferred)
+
+Reserved for QUIC datagrams. One MTU-bounded datagram per ephemeral snapshot; aliasing required for compact self-identification. Hand-off rule: a datagram referencing an unknown alias is silently dropped. The `WireFeatures.datagram` flag advertises support.
+
+### Reserved type discriminator range
+
+The discriminator range `0x14–0x17` is reserved for future datagram-only message types (e.g., `EphemeralSnapshot`, `EphemeralAck`). Reserving the range now prevents collisions when datagram mode lands.
+
+### Future hash rule
+
+When hash verification is added, it will be a frame **trailer**, not a header byte. (The v1 framing already removed the v0 hash-algorithm header byte for this reason.) Do not retrofit a header-byte solution.
+
+## Counter-Shape Parallel
+
+The wire layer exports `createFrameIdCounter()` — a per-channel-direction monotonic counter that wraps at uint16 (`& 0xffff`) for fragment IDs at the transport-framing layer. The alias counter (per-channel-direction, monotonic, CBOR-major-type-0-encoded, unbounded JS number) follows the same conceptual *position* at the exchange layer but the encoding differs: framing uses fixed-width with wrap; aliasing uses CBOR varint with no wrap. Same shape, different layers, different encoding.
+
 ## Hash Support (Reserved)
 
-Every frame carries a hash slot — `null`/`0x00` today, reserved for future SHA-256 content verification.
+v1 has no hash byte in the binary header. Hash verification, when added, will be a frame **trailer** — not a header byte. (See "Future hash rule" above.)
 
-**Binary**: Hash algorithm byte in the frame header (byte 2). `0x00` = none, `0x01` = SHA-256 (32-byte digest follows the header).
-
-**Text**: Case-encoded in the prefix character. Lowercase (`c`, `f`) = no hash. Uppercase (`C`, `F`) = SHA-256 hex digest in the next array element.
+**Text**: Case-encoded in the prefix character. Lowercase (`c`, `f`) = no hash. Uppercase (`C`, `F`) = SHA-256 hex digest in the next array element. Reserved; not yet emitted.
 
 Per-frame hashing enables **streaming verification**: the sender hashes and sends each frame independently. For fragments, this means per-chunk verification without waiting for reassembly.
 
@@ -379,7 +503,10 @@ Shared:
 | `src/codec.ts` | `BinaryCodec` and `TextCodec` interfaces |
 | `src/cbor.ts` | `cborCodec` — CBOR BinaryCodec implementation |
 | `src/json.ts` | `textCodec` — JSON TextCodec implementation |
-| `src/constants.ts` | Wire version, header size, frame types, transport prefixes, fragment sizes |
+| `src/constants.ts` | Wire version, header size, frame types, fragment sizes, identifier length caps |
+| `src/alias-table.ts` | Pure ChannelMsg ⇄ WireMessage transformer with alias state and feature snapshotting |
+| `src/wire-message-helpers.ts` | `encodeWireMessage`/`decodeWireMessage` (binary) and `encodeTextWireMessage`/`decodeTextWireMessage` (text) — operate on pre-formed `WireMessage` |
+| `src/validate-identifiers.ts` | UTF-8 byte-length validation for DocIds and schema hashes |
 | `src/wire-types.ts` | CBOR integer discriminators and compact field names |
 | `src/frame.ts` | Binary frame encode/decode (`encodeBinaryFrame`, `decodeBinaryFrame`, convenience functions) |
 | `src/text-frame.ts` | Text frame encode/decode (`encodeTextFrame`, `decodeTextFrame`, `fragmentTextPayload`) |
@@ -392,4 +519,5 @@ Shared:
 
 | Version | Changes |
 |---------|---------|
-| 0 | Current. Unified `Frame<T>` architecture. 7-byte binary header (version, type, hashAlgo, payloadLength). Two transport prefixes (complete, fragment). Self-describing fragments. Text wire format with 2-char prefix. Generic `FragmentCollector<T>`. Hash slot reserved. Replaces unreleased v2. |
+| 0 | Pre-release. Unified `Frame<T>` architecture. 7-byte binary header. Single-byte transport prefixes. 8-byte string frameId, 4-byte index/total. |
+| 1 | **Current.** Compact 6-byte binary header (version, type, payloadLength); no hash-algorithm byte (deferred to frame trailer). Numeric uint16 frameId / index / total; uint32 totalSize. Removed transport-prefix layer. **DocId & schemaHash aliasing** with `a`/`dx`/`sa`/`shx` fields. **Wire features negotiation** in `establish` (`f` map; backward-compat). **Identifier length caps** (DocId 512 UTF-8 bytes; schemaHash 256). **Delivery-mode taxonomy** (muxed, streamed-deferred, datagram-deferred). |

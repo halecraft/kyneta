@@ -432,6 +432,16 @@ export class SseClientTransport extends Transport<void> {
             ? this.#options.postUrl(this.#peerId)
             : this.#options.postUrl
 
+        // SSE does not yet run the alias transformer; strip alias from
+        // outbound establish so peers do not negotiate alias support
+        // over SSE channels.
+        if (msg.type === "establish" && msg.features?.alias) {
+          msg = {
+            ...msg,
+            features: { ...msg.features, alias: false },
+          }
+        }
+
         // Encode to text wire format
         const textFrame = encodeTextComplete(textCodec, msg)
 

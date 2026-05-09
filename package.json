@@ -24,5 +24,16 @@
     "prosemirror-transform": "^1.12.0",
     "prosemirror-view": "^1.41.8",
     "turbo": "^2.8.20"
-  }
+  },
+  "workspaces": [
+    "internal/*",
+    "examples/*",
+    "experimental/*",
+    "packages/*",
+    "packages/schema/backends/*",
+    "packages/exchange/wire",
+    "packages/exchange/transports/*",
+    "packages/exchange/stores/*",
+    "tests/*"
+  ]
 }

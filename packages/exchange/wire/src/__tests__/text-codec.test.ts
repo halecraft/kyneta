@@ -477,3 +477,105 @@ describe("Text codec — JSON-safe output", () => {
     expect(offer.payload.data).toEqual(new Uint8Array([10, 20]))
   })
 })
+
+// ---------------------------------------------------------------------------
+// Identifier length caps (Phase 1)
+// ---------------------------------------------------------------------------
+
+import {
+  DOC_ID_MAX_UTF8_BYTES,
+  SCHEMA_HASH_MAX_UTF8_BYTES,
+} from "../constants.js"
+import { TextFrameDecodeError } from "../text-frame.js"
+
+describe("Text codec — identifier length caps", () => {
+  it("accepts a docId at the UTF-8 byte cap", () => {
+    const docId = "a".repeat(DOC_ID_MAX_UTF8_BYTES)
+    const msg: InterestMsg = { type: "interest", docId }
+    const decoded = roundTrip(msg) as InterestMsg
+    expect(decoded.docId).toEqual(docId)
+  })
+
+  it("accepts a docId at the cap built from a 4-byte UTF-8 codepoint", () => {
+    const docId = "a".repeat(DOC_ID_MAX_UTF8_BYTES - 4) + "🚀"
+    expect(new TextEncoder().encode(docId).byteLength).toBe(
+      DOC_ID_MAX_UTF8_BYTES,
+    )
+    const msg: InterestMsg = { type: "interest", docId }
+    const decoded = roundTrip(msg) as InterestMsg
+    expect(decoded.docId).toEqual(docId)
+  })
+
+  it("rejects a docId one byte over the cap", () => {
+    const docId = "a".repeat(DOC_ID_MAX_UTF8_BYTES + 1)
+    const msg: InterestMsg = { type: "interest", docId }
+    const encoded = textCodec.encode(msg)
+    expect(() => textCodec.decode(encoded)).toThrowError(TextFrameDecodeError)
+    try {
+      textCodec.decode(encoded)
+    } catch (err) {
+      expect((err as TextFrameDecodeError).code).toBe("doc-id-too-long")
+    }
+  })
+
+  it("rejects a schemaHash over the cap with a typed error", () => {
+    const big = "h".repeat(SCHEMA_HASH_MAX_UTF8_BYTES + 1)
+    const msg: PresentMsg = {
+      type: "present",
+      docs: [
+        {
+          docId: "doc-1",
+          schemaHash: big,
+          replicaType: ["plain", 1, 0] as const,
+          syncProtocol: SYNC_AUTHORITATIVE,
+        },
+      ],
+    }
+    const encoded = textCodec.encode(msg)
+    expect(() => textCodec.decode(encoded)).toThrowError(TextFrameDecodeError)
+    try {
+      textCodec.decode(encoded)
+    } catch (err) {
+      expect((err as TextFrameDecodeError).code).toBe("schema-hash-too-long")
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// WireFeatures round-trip (Phase 2)
+// ---------------------------------------------------------------------------
+
+describe("Text codec — WireFeatures negotiation", () => {
+  it("round-trips establish with all features advertised", () => {
+    const msg: EstablishMsg = {
+      type: "establish",
+      identity: { peerId: "alice", type: "user" },
+      features: { alias: true, streamed: true, datagram: true },
+    }
+    const decoded = roundTrip(msg) as EstablishMsg
+    expect(decoded.features).toEqual({
+      alias: true,
+      streamed: true,
+      datagram: true,
+    })
+  })
+
+  it("round-trips establish with no features (legacy peer)", () => {
+    const msg: EstablishMsg = {
+      type: "establish",
+      identity: { peerId: "alice", type: "user" },
+    }
+    const decoded = roundTrip(msg) as EstablishMsg
+    expect(decoded.features).toBeUndefined()
+  })
+
+  it("round-trips establish with partial features", () => {
+    const msg: EstablishMsg = {
+      type: "establish",
+      identity: { peerId: "alice", type: "user" },
+      features: { alias: true },
+    }
+    const decoded = roundTrip(msg) as EstablishMsg
+    expect(decoded.features).toEqual({ alias: true })
+  })
+})

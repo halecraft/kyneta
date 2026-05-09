@@ -42,14 +42,17 @@
     "@kyneta/schema": "^1.4.0"
   },
   "dependencies": {
+    "@kyneta/bridge-transport": "workspace:^",
     "@kyneta/machine": "workspace:*",
     "@kyneta/random": "workspace:^",
     "@kyneta/transport": "workspace:^"
   },
   "devDependencies": {
+    "@kyneta/bridge-transport": "workspace:^",
     "@kyneta/changefeed": "workspace:^",
     "@kyneta/loro-schema": "workspace:^",
     "@kyneta/schema": "workspace:^",
+    "@kyneta/wire": "workspace:^",
     "@kyneta/yjs-schema": "workspace:^",
     "loro-crdt": "^1.10.0",
     "tsdown": "^0.21.9",

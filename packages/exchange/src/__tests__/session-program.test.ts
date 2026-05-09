@@ -164,13 +164,17 @@ describe("session-program", () => {
       const entry = defined(m.channels.get(1))
       expect(entry.localEstablishSent).toBe(true)
 
-      // Should emit a send effect with our identity
+      // Should emit a send effect with our identity and v1 default features
       const effects = flattenEffects(effect)
       expect(effects).toHaveLength(1)
       expect(effects[0]).toEqual({
         type: "send",
         to: 1,
-        message: { type: "establish", identity: alice },
+        message: {
+          type: "establish",
+          identity: alice,
+          features: { alias: true },
+        },
       })
 
       // No notification yet — handshake not complete
@@ -297,12 +301,16 @@ describe("session-program", () => {
       expect(peer.identity).toEqual(bob)
       expect(peer.channels.has(1)).toBe(true)
 
-      // An echo establish is sent back
+      // An echo establish is sent back, carrying v1 default features
       const effects = flattenEffects(effect)
       expect(effects).toContainEqual({
         type: "send",
         to: 1,
-        message: { type: "establish", identity: alice },
+        message: {
+          type: "establish",
+          identity: alice,
+          features: { alias: true },
+        },
       })
 
       // peer-established notification

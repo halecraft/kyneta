@@ -20,9 +20,13 @@ import type {
 } from "@kyneta/transport"
 import { Transport } from "@kyneta/transport"
 import {
+  type AliasState,
+  applyInboundAliasing,
+  applyOutboundAliasing,
   createFrameIdCounter,
-  decodeBinaryMessages,
-  encodeBinaryAndSend,
+  decodeBinaryWires,
+  emptyAliasState,
+  encodeWireFrameAndSend,
   FragmentReassembler,
 } from "@kyneta/wire"
 import type { DataChannelLike } from "./data-channel-like.js"
@@ -80,6 +84,8 @@ type AttachedChannel = {
   channelId: ChannelId | null
   reassembler: FragmentReassembler
   nextFrameId: () => number
+  /** Per-channel alias state (Phase 4). */
+  aliasState: AliasState
   cleanup: () => void
 }
 
@@ -161,8 +167,10 @@ export class WebrtcTransport extends Transport<DataChannelContext> {
         if (!attached || channel.readyState !== "open") {
           return
         }
-        encodeBinaryAndSend(
-          msg,
+        const { state, wire } = applyOutboundAliasing(attached.aliasState, msg)
+        attached.aliasState = state
+        encodeWireFrameAndSend(
+          wire,
           data => channel.send(data),
           this.#fragmentThreshold,
           attached.nextFrameId,
@@ -267,6 +275,7 @@ export class WebrtcTransport extends Transport<DataChannelContext> {
       channelId: null,
       reassembler,
       nextFrameId: createFrameIdCounter(),
+      aliasState: emptyAliasState(),
       cleanup,
     }
     this.#attachedChannels.set(remotePeerId, attached)
@@ -393,11 +402,19 @@ export class WebrtcTransport extends Transport<DataChannelContext> {
     }
 
     try {
-      const messages = decodeBinaryMessages(bytes, attached.reassembler)
-      if (messages) {
-        for (const msg of messages) {
-          syncChannel.onReceive(msg)
+      const wires = decodeBinaryWires(bytes, attached.reassembler)
+      if (!wires) return
+      for (const wire of wires) {
+        const result = applyInboundAliasing(attached.aliasState, wire)
+        attached.aliasState = result.state
+        if (result.error || !result.msg) {
+          console.warn(
+            `[webrtc-transport] alias resolution failed for peer ${remotePeerId}:`,
+            result.error,
+          )
+          continue
         }
+        syncChannel.onReceive(result.msg)
       }
     } catch (error) {
       console.error(

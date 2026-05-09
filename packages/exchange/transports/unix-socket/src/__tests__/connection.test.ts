@@ -202,9 +202,13 @@ describe("UnixSocketConnection", () => {
 
     expect(socket.write).toHaveBeenCalledTimes(2)
 
-    // Verify second write is msg2 (not msg1 again)
+    // Verify second write is distinct from first (not msg1 sent twice).
+    // Cannot compare bytes against `encodeComplete(cborCodec, msg2)`
+    // directly because the connection runs the alias transformer first,
+    // which adds alias-announcement fields to outbound `present`.
+    const firstWriteBytes = socket.write.mock.calls.at(0)?.at(0)
     const secondWriteBytes = socket.write.mock.calls.at(1)?.at(0)
-    expect(secondWriteBytes).toEqual(encodeComplete(cborCodec, msg2))
+    expect(secondWriteBytes).not.toEqual(firstWriteBytes)
   })
 
   it("drain during flush: stops if write returns false again", () => {

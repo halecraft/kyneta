@@ -12,7 +12,7 @@ Transport infrastructure for `@kyneta/exchange` — base class, channel types, m
 | **Transport base class** | `Transport<G>`, `TransportFactory`, `TransportContext` |
 | **Client state machine** | `ClientStateMachine<S>`, `StateTransition<S>`, `TransitionListener<S>` |
 | **Reconnection** | `computeBackoffDelay`, `createReconnectScheduler`, `ReconnectOptions`, `DEFAULT_RECONNECT` |
-| **Bridge transport** | `Bridge`, `BridgeTransport`, `createBridgeTransport` — in-process testing |
+| **Bridge transport** | Moved to `@kyneta/bridge-transport` — codec-faithful + alias-aware in-process testing |
 
 ## Who depends on this
 

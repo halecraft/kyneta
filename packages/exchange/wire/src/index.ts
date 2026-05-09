@@ -64,6 +64,7 @@ export {
   type SyncProtocolWireValue,
   syncProtocolToWire,
   type WireEstablishMsg,
+  type WireFeaturesCompact,
   type WireInterestMsg,
   type WireMessage,
   type WireOfferMsg,
@@ -77,9 +78,11 @@ export {
 export {
   BinaryFrameType,
   type BinaryFrameTypeValue,
+  DOC_ID_MAX_UTF8_BYTES,
   FRAGMENT_META_SIZE,
   FRAGMENT_MIN_SIZE,
   HEADER_SIZE,
+  SCHEMA_HASH_MAX_UTF8_BYTES,
   WIRE_VERSION,
 } from "./constants.js"
 
@@ -154,7 +157,9 @@ export {
 
 export {
   decodeBinaryMessages,
+  decodeBinaryWires,
   encodeBinaryAndSend,
+  encodeWireFrameAndSend,
 } from "./binary-transport.js"
 
 // ---------------------------------------------------------------------------
@@ -178,3 +183,38 @@ export {
   initialParserState,
   type StreamParserState,
 } from "./stream-frame-parser.js"
+
+// ---------------------------------------------------------------------------
+// Identifier validation — UTF-8 byte length caps
+// ---------------------------------------------------------------------------
+
+export {
+  type IdentifierValidationError,
+  utf8ByteLength,
+  validateDocId,
+  validateSchemaHash,
+} from "./validate-identifiers.js"
+
+// ---------------------------------------------------------------------------
+// Alias table — pure ChannelMsg ⇄ WireMessage transformer
+// ---------------------------------------------------------------------------
+
+export {
+  type Alias,
+  type AliasResolutionError,
+  type AliasState,
+  applyInboundAliasing,
+  applyOutboundAliasing,
+  emptyAliasState,
+} from "./alias-table.js"
+
+// ---------------------------------------------------------------------------
+// Wire-message helpers — bypass ChannelMsg ⇄ WireMessage conversion
+// ---------------------------------------------------------------------------
+
+export {
+  decodeTextWireMessage,
+  decodeWireMessage,
+  encodeTextWireMessage,
+  encodeWireMessage,
+} from "./wire-message-helpers.js"

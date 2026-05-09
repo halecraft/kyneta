@@ -13,7 +13,7 @@ import {
   Schema,
   SYNC_AUTHORITATIVE,
 } from "@kyneta/schema"
-import { Bridge, createBridgeTransport } from "@kyneta/transport"
+import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { afterEach, describe, expect, it } from "vitest"
 import {
   Exchange,
@@ -21,6 +21,7 @@ import {
   type PeerIdentityInput,
 } from "../exchange.js"
 import type { DocChange, DocInfo } from "../types.js"
+import { cborCodec } from "@kyneta/wire"
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -259,7 +260,7 @@ describe("exchange.documents", () => {
     })
 
     it("subscribe receives doc-deferred for deferred docs via resolve → Defer()", async () => {
-      const bridge = new Bridge()
+      const bridge = new Bridge({ codec: cborCodec })
 
       const exchangeA = createExchange({
         id: "alice",
@@ -293,7 +294,7 @@ describe("exchange.documents", () => {
     })
 
     it("subscribe receives doc-promoted when deferred doc is promoted via get()", async () => {
-      const bridge = new Bridge()
+      const bridge = new Bridge({ codec: cborCodec })
 
       const exchangeA = createExchange({
         id: "alice",
@@ -388,7 +389,7 @@ describe("exchange.documents", () => {
     })
 
     it("exchange.deferred still returns deferred docs from #docCache", async () => {
-      const bridge = new Bridge()
+      const bridge = new Bridge({ codec: cborCodec })
 
       const exchangeA = createExchange({
         id: "alice",
@@ -500,7 +501,7 @@ describe("exchange.documents", () => {
     })
 
     it("reset() emits synthetic doc-removed for deferred docs too", async () => {
-      const bridge = new Bridge()
+      const bridge = new Bridge({ codec: cborCodec })
 
       const exchangeA = createExchange({
         id: "alice",
@@ -541,7 +542,7 @@ describe("exchange.documents", () => {
 
   describe("two-peer sync", () => {
     it("peer B auto-resolves and receives doc-created when peer A creates a doc", async () => {
-      const bridge = new Bridge()
+      const bridge = new Bridge({ codec: cborCodec })
 
       const exchangeA = createExchange({
         id: "alice",
@@ -571,7 +572,7 @@ describe("exchange.documents", () => {
     })
 
     it("peer B receives doc-created for collaborative (loro) docs", async () => {
-      const bridge = new Bridge()
+      const bridge = new Bridge({ codec: cborCodec })
 
       const exchangeA = createExchange({
         id: "alice",
@@ -604,7 +605,7 @@ describe("exchange.documents", () => {
     })
 
     it("local destroy emits doc-removed on the destroying peer's feed", async () => {
-      const bridge = new Bridge()
+      const bridge = new Bridge({ codec: cborCodec })
 
       const exchangeA = createExchange({
         id: "alice",

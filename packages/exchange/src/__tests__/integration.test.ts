@@ -18,7 +18,7 @@ import {
   Replicate,
   Schema,
 } from "@kyneta/schema"
-import { Bridge, createBridgeTransport } from "@kyneta/transport"
+import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { yjs } from "@kyneta/yjs-schema"
 import { afterEach, describe, expect, it } from "vitest"
 
@@ -28,6 +28,7 @@ import {
   type PeerIdentityInput,
 } from "../exchange.js"
 import { sync } from "../sync.js"
+import { cborCodec } from "@kyneta/wire"
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -103,7 +104,7 @@ const YjsDoc = yjs.bind(yjsTextSchema)
 
 describe("Authoritative sync (PlainSubstrate)", () => {
   it("peer A creates doc, peer B syncs and gets the same state", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -137,7 +138,7 @@ describe("Authoritative sync (PlainSubstrate)", () => {
   })
 
   it("mutations propagate from A to B after initial sync", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -180,7 +181,7 @@ describe("Authoritative sync (PlainSubstrate)", () => {
 
 describe("Collaborative sync (LoroSubstrate)", () => {
   it("peer A creates doc with text, peer B syncs and gets the same state", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -212,7 +213,7 @@ describe("Collaborative sync (LoroSubstrate)", () => {
   })
 
   it("concurrent edits from both peers converge", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -261,7 +262,7 @@ describe("Collaborative sync (LoroSubstrate)", () => {
 
 describe("Collaborative sync: Yjs delete propagation", () => {
   it("text delete syncs from peer A to peer B", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -298,7 +299,7 @@ describe("Collaborative sync: Yjs delete propagation", () => {
   })
 
   it("bidirectional deletes converge", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -342,7 +343,7 @@ describe("Collaborative sync: Yjs delete propagation", () => {
 
 describe("Ephemeral sync (Ephemeral/Presence)", () => {
   it("peer A sets presence, peer B receives via broadcast", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -375,7 +376,7 @@ describe("Ephemeral sync (Ephemeral/Presence)", () => {
   })
 
   it("updates propagate via ephemeral broadcast", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -420,7 +421,7 @@ describe("Ephemeral sync (Ephemeral/Presence)", () => {
 
 describe("Heterogeneous documents", () => {
   it("one exchange hosts both authoritative and collaborative docs, both sync", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const plainSchema = Schema.struct({
       config: Schema.string(),
@@ -474,8 +475,8 @@ describe("Heterogeneous documents", () => {
 describe("Multi-hop relay (three-peer topology)", () => {
   it("collaborative: mutation on A propagates through Hub to B", async () => {
     // Two separate bridges: Alice↔Hub and Hub↔Bob
-    const bridgeAH = new Bridge()
-    const bridgeHB = new Bridge()
+    const bridgeAH = new Bridge({ codec: cborCodec })
+    const bridgeHB = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -525,8 +526,8 @@ describe("Multi-hop relay (three-peer topology)", () => {
   })
 
   it("authoritative: mutation on A propagates through Hub to B", async () => {
-    const bridgeAH = new Bridge()
-    const bridgeHB = new Bridge()
+    const bridgeAH = new Bridge({ codec: cborCodec })
+    const bridgeHB = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -590,7 +591,7 @@ describe("Multi-hop relay (three-peer topology)", () => {
 
 describe("resolve (dynamic document creation)", () => {
   it("peer A creates doc, peer B materializes it via resolve", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -624,7 +625,7 @@ describe("resolve (dynamic document creation)", () => {
   })
 
   it("resolve returning Reject() does not create the doc", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -645,7 +646,7 @@ describe("resolve (dynamic document creation)", () => {
   })
 
   it("ephemeral dynamic doc syncs correctly", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -697,7 +698,7 @@ describe("resolve (dynamic document creation)", () => {
 
 describe("canShare predicate", () => {
   it("canShare prevents document announcement", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -719,8 +720,8 @@ describe("canShare predicate", () => {
   })
 
   it("canShare prevents relay in three-peer topology", async () => {
-    const bridgeAH = new Bridge()
-    const bridgeHB = new Bridge()
+    const bridgeAH = new Bridge({ codec: cborCodec })
+    const bridgeHB = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -774,7 +775,7 @@ describe("canShare predicate", () => {
 
 describe("canAccept predicate", () => {
   it("canAccept rejects offer — doc content unchanged", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -809,7 +810,7 @@ describe("canAccept predicate", () => {
 
 describe("destroy", () => {
   it("destroy removes doc locally and stops sync", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -848,7 +849,7 @@ describe("destroy", () => {
 
 describe("canShare + resolve interaction", () => {
   it("canShare denying a peer prevents resolve from firing", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
     let discoveredCallCount = 0
 
     const exchangeA = createExchange({
@@ -884,8 +885,8 @@ describe("canShare + resolve interaction", () => {
 
 describe("relay via exchange.replicate()", () => {
   it("collaborative doc syncs through a schema-free relay: peer A → relay → peer B", async () => {
-    const bridgeAR = new Bridge()
-    const bridgeRB = new Bridge()
+    const bridgeAR = new Bridge({ codec: cborCodec })
+    const bridgeRB = new Bridge({ codec: cborCodec })
 
     // Peer A — full interpreter
     const exchangeA = createExchange({
@@ -936,8 +937,8 @@ describe("relay via exchange.replicate()", () => {
   })
 
   it("authoritative doc syncs through a schema-free relay", async () => {
-    const bridgeAR = new Bridge()
-    const bridgeRB = new Bridge()
+    const bridgeAR = new Bridge({ codec: cborCodec })
+    const bridgeRB = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -982,8 +983,8 @@ describe("relay via exchange.replicate()", () => {
   })
 
   it("ephemeral doc syncs through a schema-free relay", async () => {
-    const bridgeAR = new Bridge()
-    const bridgeRB = new Bridge()
+    const bridgeAR = new Bridge({ codec: cborCodec })
+    const bridgeRB = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -1030,7 +1031,7 @@ describe("relay via exchange.replicate()", () => {
   })
 
   it("resolve returning Replicate() creates replicated doc from peer discovery", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -1060,7 +1061,7 @@ describe("relay via exchange.replicate()", () => {
   })
 
   it("late-joiner via relay: peer A pushes, peer B connects later, relay serves B", async () => {
-    const bridgeAR = new Bridge()
+    const bridgeAR = new Bridge({ codec: cborCodec })
 
     // Phase 1: Alice connects to relay, writes data
     const exchangeA = createExchange({
@@ -1091,7 +1092,7 @@ describe("relay via exchange.replicate()", () => {
     expect(relay.has("shared")).toBe(true)
 
     // Phase 2: Bob connects to relay AFTER Alice wrote
-    const bridgeRB = new Bridge()
+    const bridgeRB = new Bridge({ codec: cborCodec })
     await relay.addTransport(
       createBridgeTransport({ transportType: "relay-b", bridge: bridgeRB })(),
     )
@@ -1117,7 +1118,7 @@ describe("relay via exchange.replicate()", () => {
   })
 
   it("mixed dispositions: one exchange with interpreted + replicated docs", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -1170,8 +1171,8 @@ describe("relay via exchange.replicate()", () => {
     // The doc has nested structure (list of structs) — validates that the
     // append-log replica + init ops fix works end-to-end through a relay.
     // Context: jj:oyouvrss (Phase 4 — general integration test)
-    const bridgeAR = new Bridge()
-    const bridgeRB = new Bridge()
+    const bridgeAR = new Bridge({ codec: cborCodec })
+    const bridgeRB = new Bridge({ codec: cborCodec })
 
     const nestedSchema = Schema.struct({
       title: Schema.string(),
@@ -1252,7 +1253,7 @@ describe("relay via exchange.replicate()", () => {
 
 describe("waitForSync", () => {
   it("resolves after peer completes sync", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -1280,7 +1281,7 @@ describe("waitForSync", () => {
   })
 
   it("onReadyStateChange fires only for the doc that synced", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -1324,7 +1325,7 @@ describe("capability gate", () => {
   it("no callback, unsupported type → rejected by default", async () => {
     // Peer A uses Loro. Peer B has default capabilities (no Loro)
     // and no resolve callback. Two-tiered default: unsupported → Reject.
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -1350,7 +1351,7 @@ describe("capability gate", () => {
   it("callback provided, unsupported type → callback fires", async () => {
     // Same setup, but Peer B provides resolve: () => Defer().
     // The callback fires even for unsupported types (no synchronizer gate).
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
     let classifyCallCount = 0
 
     const exchangeA = createExchange({
@@ -1395,7 +1396,7 @@ describe("two-tiered default", () => {
     // Peer A creates both an authoritative doc (supported by default) and
     // a Loro doc (unsupported by default on B).
     // Peer B has no resolve callback and no Loro schemas.
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -1444,7 +1445,7 @@ describe("two-tiered default", () => {
 
 describe("auto-interpretation from schema registry", () => {
   it("registered schema auto-interprets without resolve", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -1477,7 +1478,7 @@ describe("auto-interpretation from schema registry", () => {
 
 describe("deferred document lifecycle", () => {
   it("Defer() defers doc, exchange.get() promotes it and syncs data", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -1511,7 +1512,7 @@ describe("deferred document lifecycle", () => {
   })
 
   it("registerSchema() auto-promotes matching deferred docs", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -1546,7 +1547,7 @@ describe("deferred document lifecycle", () => {
   })
 
   it("exchange.deferred accessor tracks deferred state", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -1608,7 +1609,7 @@ describe("exchange.get() validation", () => {
 
 describe("waitForSync semantics", () => {
   it("receiver-side waitForSync resolves after originator's data arrives", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -1638,7 +1639,7 @@ describe("waitForSync semantics", () => {
     // waitForSync answers "has someone sent me state?" not "has my state
     // reached all peers?" — the originator never receives an offer back
     // from the receiver, so the peer stays "pending" from its perspective.
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -1665,8 +1666,8 @@ describe("waitForSync semantics", () => {
   })
 
   it("three-peer hub: receiver-side waitForSync resolves through relay", async () => {
-    const bridgeAH = new Bridge()
-    const bridgeHB = new Bridge()
+    const bridgeAH = new Bridge({ codec: cborCodec })
+    const bridgeHB = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -1718,7 +1719,7 @@ describe("ensure-doc idempotency", () => {
   })
 
   it("duplicate present for replicated doc does not throw", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
     const exchangeA = createExchange({
       id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
@@ -1749,7 +1750,7 @@ describe("ensure-doc idempotency", () => {
 
 describe("suspend / resume sync convergence", () => {
   it("suspended doc re-converges with peer after resume (collaborative)", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -1804,7 +1805,7 @@ describe("suspend / resume sync convergence", () => {
   })
 
   it("destroy after suspend removes doc from both peers' sync graph", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -1836,7 +1837,7 @@ describe("suspend / resume sync convergence", () => {
 
 describe("canConnect gate", () => {
   it("rejected peer cannot sync documents", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -1859,8 +1860,8 @@ describe("canConnect gate", () => {
   })
 
   it("selective canConnect: accept some peers, reject others", async () => {
-    const bridgeAB = new Bridge()
-    const bridgeAC = new Bridge()
+    const bridgeAB = new Bridge({ codec: cborCodec })
+    const bridgeAC = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",

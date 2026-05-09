@@ -51,3 +51,26 @@ export const FRAGMENT_META_SIZE = 2 + 2 + 2 + 4
  * 6 (header) + 10 (metadata) + 1 (data) = 17 bytes.
  */
 export const FRAGMENT_MIN_SIZE = HEADER_SIZE + FRAGMENT_META_SIZE + 1
+
+// ---------------------------------------------------------------------------
+// Identifier length caps
+// ---------------------------------------------------------------------------
+
+/**
+ * Maximum length of a `DocId` in UTF-8 bytes. Receivers MUST reject any
+ * `doc` / `d` field with a UTF-8 byte length exceeding this value.
+ *
+ * Applied uniformly across binary and text codecs. The unit is bytes, not
+ * codepoints — multi-byte UTF-8 characters count proportionally to their
+ * encoded byte length.
+ */
+export const DOC_ID_MAX_UTF8_BYTES = 512
+
+/**
+ * Maximum length of a schema hash in UTF-8 bytes. Receivers MUST reject
+ * any `sh` field with a UTF-8 byte length exceeding this value.
+ *
+ * Schema hashes are conventionally Blake3-prefix hex (~34 chars); the cap
+ * leaves headroom for alternate hash families.
+ */
+export const SCHEMA_HASH_MAX_UTF8_BYTES = 256

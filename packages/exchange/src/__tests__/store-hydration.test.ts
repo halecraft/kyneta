@@ -12,7 +12,7 @@ import {
   Schema,
   SYNC_AUTHORITATIVE,
 } from "@kyneta/schema"
-import { Bridge, createBridgeTransport } from "@kyneta/transport"
+import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { yjs } from "@kyneta/yjs-schema"
 import { describe, expect, it } from "vitest"
 import {
@@ -27,6 +27,7 @@ import {
 } from "../store/in-memory-store.js"
 import type { StoreRecord } from "../store/store.js"
 import { collectAll, makeMetaRecord } from "../testing/store-conformance.js"
+import { cborCodec } from "@kyneta/wire"
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -210,7 +211,7 @@ describe("Exchange storage persistence", () => {
 
   it("network import persists to storage via onDocImported → append()", async () => {
     const backend = new InMemoryStore()
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     // Exchange A (source) — has the doc
     const exchangeA = createExchange({

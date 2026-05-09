@@ -22,9 +22,13 @@ import type {
 } from "@kyneta/transport"
 import { Transport } from "@kyneta/transport"
 import {
+  type AliasState,
+  applyInboundAliasing,
+  applyOutboundAliasing,
   createFrameIdCounter,
-  decodeBinaryMessages,
-  encodeBinaryAndSend,
+  decodeBinaryWires,
+  emptyAliasState,
+  encodeWireFrameAndSend,
   FragmentReassembler,
 } from "@kyneta/wire"
 import {
@@ -164,6 +168,9 @@ export class WebsocketClientTransport extends Transport<void> {
   // Fragmentation
   readonly #fragmentThreshold: number
   readonly #reassembler: FragmentReassembler
+
+  // Per-channel alias state (Phase 4). Single channel per client.
+  #aliasState: AliasState = emptyAliasState()
 
   constructor(options: WebsocketClientOptions) {
     super({ transportType: "websocket-client" })
@@ -393,14 +400,22 @@ export class WebsocketClientTransport extends Transport<void> {
     // Handle binary messages through shared decode pipeline
     if (data instanceof ArrayBuffer) {
       try {
-        const messages = decodeBinaryMessages(
+        const wires = decodeBinaryWires(
           new Uint8Array(data),
           this.#reassembler,
         )
-        if (messages) {
-          for (const msg of messages) {
-            this.#handleChannelMessage(msg)
+        if (!wires) return
+        for (const wire of wires) {
+          const result = applyInboundAliasing(this.#aliasState, wire)
+          this.#aliasState = result.state
+          if (result.error || !result.msg) {
+            console.warn(
+              "[WebsocketClient] alias resolution failed:",
+              result.error,
+            )
+            continue
           }
+          this.#handleChannelMessage(result.msg)
         }
       } catch (error) {
         console.error("Failed to decode message:", error)
@@ -537,6 +552,8 @@ export class WebsocketClientTransport extends Transport<void> {
 
   protected generate(): GeneratedChannel {
     const nextFrameId = createFrameIdCounter()
+    // New channel = fresh alias state; reset on (re)connect.
+    this.#aliasState = emptyAliasState()
     return {
       transportType: this.transportType,
       send: (msg: ChannelMsg) => {
@@ -545,8 +562,11 @@ export class WebsocketClientTransport extends Transport<void> {
           return
         }
 
-        encodeBinaryAndSend(
-          msg,
+        const { state, wire } = applyOutboundAliasing(this.#aliasState, msg)
+        this.#aliasState = state
+
+        encodeWireFrameAndSend(
+          wire,
           data => socket.send(new Uint8Array(data).buffer),
           this.#fragmentThreshold,
           nextFrameId,

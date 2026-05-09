@@ -31,6 +31,7 @@ export type {
   PresentMsg,
   ReturnEnvelope,
   SyncMsg,
+  WireFeatures,
 } from "./messages.js"
 export { isLifecycleMsg, isSyncMsg } from "./messages.js"
 
@@ -83,9 +84,3 @@ export {
   type ReconnectOptions,
 } from "./reconnect.js"
 
-// ---------------------------------------------------------------------------
-// Bridge transport — in-process testing
-// ---------------------------------------------------------------------------
-
-export type { BridgeTransportParams } from "./bridge.js"
-export { Bridge, BridgeTransport, createBridgeTransport } from "./bridge.js"

@@ -19,7 +19,7 @@ import {
   Schema,
   TimestampVersion,
 } from "@kyneta/schema"
-import { Bridge, createBridgeTransport } from "@kyneta/transport"
+import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { afterEach, describe, expect, it } from "vitest"
 import {
   Exchange,
@@ -27,6 +27,7 @@ import {
   type PeerIdentityInput,
 } from "../exchange.js"
 import { sync } from "../sync.js"
+import { cborCodec } from "@kyneta/wire"
 
 // ---------------------------------------------------------------------------
 // Drain + cleanup helpers
@@ -101,7 +102,7 @@ const LoroDoc = loro.bind(loroSchema)
 
 describe("initial content via change() syncs to peers", () => {
   it("change()-applied content syncs to peer via delta", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -142,7 +143,7 @@ describe("initial content via change() syncs to peers", () => {
 
 describe("snapshot import preserves ref identity", () => {
   it("docB ref object is the same before and after receiving a snapshot", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -171,7 +172,7 @@ describe("snapshot import preserves ref identity", () => {
   })
 
   it("sync(docB) remains valid after snapshot import", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -204,7 +205,7 @@ describe("snapshot import preserves ref identity", () => {
 
 describe("ephemeral stale rejection", () => {
   it("out-of-order arrival: newer local state is not overwritten by stale offer", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -277,7 +278,7 @@ describe("ephemeral stale rejection", () => {
 
 describe("collaborative sync uses deltas when sender is ahead", () => {
   it("after initial sync, mutations propagate as deltas (not full snapshots)", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -325,7 +326,7 @@ describe("collaborative sync uses deltas when sender is ahead", () => {
 
 describe("universal version comparison rejects stale offers for all strategies", () => {
   it("authoritative: second peer's stale snapshot does not overwrite fresher local state", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -403,7 +404,7 @@ describe("universal version comparison rejects stale offers for all strategies",
 
 describe("plain replica snapshot import falls back to replicaFactory.fromSnapshot()", () => {
   it("plain relay receives snapshot from peer and serves it to a late-joiner", async () => {
-    const bridgeAR = new Bridge()
+    const bridgeAR = new Bridge({ codec: cborCodec })
 
     // Alice — full interpreter with plain/authoritative substrate
     const exchangeA = createExchange({
@@ -435,7 +436,7 @@ describe("plain replica snapshot import falls back to replicaFactory.fromSnapsho
     expect(relay.has("config")).toBe(true)
 
     // Phase 2: Bob connects to relay AFTER Alice wrote
-    const bridgeRB = new Bridge()
+    const bridgeRB = new Bridge({ codec: cborCodec })
     await relay.addTransport(
       createBridgeTransport({ transportType: "relay-b", bridge: bridgeRB })(),
     )
@@ -474,7 +475,7 @@ describe("plain replica snapshot import falls back to replicaFactory.fromSnapsho
 
 describe("schema hash compatibility", () => {
   it("schema hash mismatch rejects sync — no import, warning logged", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     // Schema A
     const SchemaA = loro.bind(
@@ -524,8 +525,8 @@ describe("schema hash compatibility", () => {
   })
 
   it("schema hash forwarded through relay: A → relay → C", async () => {
-    const bridgeAR = new Bridge()
-    const bridgeRC = new Bridge()
+    const bridgeAR = new Bridge({ codec: cborCodec })
+    const bridgeRC = new Bridge({ codec: cborCodec })
 
     const TodoDoc = loro.bind(
       Schema.struct({

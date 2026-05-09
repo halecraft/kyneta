@@ -210,6 +210,10 @@ export type FrameDecodeErrorCode =
   | "unsupported_version"
   | "invalid_type"
   | "decode_failed"
+  | "doc-id-too-long"
+  | "schema-hash-too-long"
+  | "doc-id-form-conflict"
+  | "schema-hash-form-conflict"
 
 export class FrameDecodeError extends Error {
   override readonly name = "FrameDecodeError"

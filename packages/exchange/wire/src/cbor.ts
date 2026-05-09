@@ -15,9 +15,15 @@ import type {
   InterestMsg,
   OfferMsg,
   PresentMsg,
+  WireFeatures,
 } from "@kyneta/transport"
 import { type CBORType, decodeCBOR, encodeCBOR } from "./cbor-encoding.js"
 import type { BinaryCodec } from "./codec.js"
+import { FrameDecodeError } from "./frame.js"
+import {
+  validateDocId,
+  validateSchemaHash,
+} from "./validate-identifiers.js"
 import {
   MessageType,
   PayloadEncodingToString,
@@ -29,11 +35,81 @@ import {
   type WireDepartMsg,
   type WireDismissMsg,
   type WireEstablishMsg,
+  type WireFeaturesCompact,
   type WireInterestMsg,
   type WireMessage,
   type WireOfferMsg,
   type WirePresentMsg,
 } from "./wire-types.js"
+
+/** Convert `WireFeatures` (long names) to its compact wire form. */
+function featuresToCompact(
+  features: WireFeatures | undefined,
+): WireFeaturesCompact | undefined {
+  if (!features) return undefined
+  const out: WireFeaturesCompact = {}
+  if (features.alias !== undefined) out.a = features.alias
+  if (features.streamed !== undefined) out.s = features.streamed
+  if (features.datagram !== undefined) out.d = features.datagram
+  return out
+}
+
+/** Convert compact wire features to the long-name `WireFeatures` shape. */
+function featuresFromCompact(
+  compact: WireFeaturesCompact | undefined,
+): WireFeatures | undefined {
+  if (!compact) return undefined
+  const out: WireFeatures = {}
+  if (compact.a !== undefined) out.alias = compact.a
+  if (compact.s !== undefined) out.streamed = compact.s
+  if (compact.d !== undefined) out.datagram = compact.d
+  return out
+}
+
+function checkDocId(value: string): void {
+  const err = validateDocId(value)
+  if (err) throw new FrameDecodeError(err.code, err.message)
+}
+
+function checkSchemaHash(value: string): void {
+  const err = validateSchemaHash(value)
+  if (err) throw new FrameDecodeError(err.code, err.message)
+}
+
+/**
+ * Validate the `{doc, dx}` invariant on interest/offer/dismiss wire forms,
+ * and resolve to the docId string.
+ *
+ * The codec itself has no alias state — `dx`-only form requires the alias
+ * transformer (`applyInboundAliasing`) to resolve. If the codec is called
+ * directly on a `dx`-only message, throw a typed form-conflict error.
+ */
+function resolveWireDocId(
+  doc: string | undefined,
+  dx: number | undefined,
+): string {
+  const hasDoc = doc !== undefined
+  const hasDx = dx !== undefined
+  if (hasDoc && hasDx) {
+    throw new FrameDecodeError(
+      "doc-id-form-conflict",
+      "Wire message must not carry both doc and dx",
+    )
+  }
+  if (!hasDoc && !hasDx) {
+    throw new FrameDecodeError(
+      "doc-id-form-conflict",
+      "Wire message must carry exactly one of doc or dx",
+    )
+  }
+  if (!hasDoc) {
+    throw new FrameDecodeError(
+      "doc-id-form-conflict",
+      "dx (alias reference) requires an alias resolver; use decodeWireMessage with the alias transformer",
+    )
+  }
+  return doc as string
+}
 
 // ---------------------------------------------------------------------------
 // CBOR ↔ plain object bridge
@@ -105,13 +181,17 @@ function mapToObject(value: CBORType): unknown {
  */
 function toWireFormat(msg: ChannelMsg): WireMessage {
   switch (msg.type) {
-    case "establish":
-      return {
+    case "establish": {
+      const wire: WireEstablishMsg = {
         t: MessageType.Establish,
         id: msg.identity.peerId,
         n: msg.identity.name,
         y: msg.identity.type,
-      } satisfies WireEstablishMsg
+      }
+      const f = featuresToCompact(msg.features)
+      if (f !== undefined) wire.f = f
+      return wire
+    }
 
     case "depart":
       return {
@@ -185,15 +265,19 @@ function toWireFormat(msg: ChannelMsg): WireMessage {
  */
 function fromWireFormat(wire: WireMessage): ChannelMsg {
   switch (wire.t) {
-    case MessageType.Establish:
-      return {
+    case MessageType.Establish: {
+      const result: EstablishMsg = {
         type: "establish",
         identity: {
           peerId: wire.id,
           name: wire.n,
           type: wire.y,
         },
-      } satisfies EstablishMsg
+      }
+      const features = featuresFromCompact(wire.f)
+      if (features !== undefined) result.features = features
+      return result
+    }
 
     case MessageType.Depart:
       return { type: "depart" }
@@ -207,11 +291,35 @@ function fromWireFormat(wire: WireMessage): ChannelMsg {
           if (!syncProtocol) {
             throw new Error(`Unknown wire sync protocol: ${d.ms}`)
           }
+          checkDocId(d.d)
+          // Exactly one of {sh, shx} must be present.
+          const hasSh = d.sh !== undefined
+          const hasShx = d.shx !== undefined
+          if (hasSh && hasShx) {
+            throw new FrameDecodeError(
+              "schema-hash-form-conflict",
+              "Present doc entry must not carry both sh and shx",
+            )
+          }
+          if (!hasSh && !hasShx) {
+            throw new FrameDecodeError(
+              "schema-hash-form-conflict",
+              "Present doc entry must carry exactly one of sh or shx",
+            )
+          }
+          if (!hasSh) {
+            // shx-only — codec cannot resolve without alias state.
+            throw new FrameDecodeError(
+              "schema-hash-form-conflict",
+              "shx (alias reference) requires an alias resolver; use decodeWireMessage with the alias transformer",
+            )
+          }
+          checkSchemaHash(d.sh as string)
           return {
             docId: d.d,
             replicaType: d.rt as readonly [string, number, number],
             syncProtocol,
-            schemaHash: d.sh,
+            schemaHash: d.sh as string,
             ...(d.shs ? { supportedHashes: d.shs } : undefined),
           }
         }),
@@ -219,10 +327,9 @@ function fromWireFormat(wire: WireMessage): ChannelMsg {
     }
 
     case MessageType.Interest: {
-      const msg: InterestMsg = {
-        type: "interest",
-        docId: wire.doc,
-      }
+      const docId = resolveWireDocId(wire.doc, wire.dx)
+      checkDocId(docId)
+      const msg: InterestMsg = { type: "interest", docId }
       if (wire.v !== undefined) msg.version = wire.v
       if (wire.r !== undefined) msg.reciprocate = wire.r
       return msg
@@ -241,25 +348,23 @@ function fromWireFormat(wire: WireMessage): ChannelMsg {
         throw new Error(`Unknown wire payload encoding: ${wire.pe}`)
       }
 
+      const docId = resolveWireDocId(wire.doc, wire.dx)
+      checkDocId(docId)
       const msg: OfferMsg = {
         type: "offer",
-        docId: wire.doc,
-        payload: {
-          kind,
-          encoding,
-          data: wire.d,
-        },
+        docId,
+        payload: { kind, encoding, data: wire.d },
         version: wire.v,
       }
       if (wire.r !== undefined) msg.reciprocate = wire.r
       return msg
     }
 
-    case MessageType.Dismiss:
-      return {
-        type: "dismiss",
-        docId: wire.doc,
-      } satisfies DismissMsg
+    case MessageType.Dismiss: {
+      const docId = resolveWireDocId(wire.doc, wire.dx)
+      checkDocId(docId)
+      return { type: "dismiss", docId } satisfies DismissMsg
+    }
 
     default:
       throw new Error(`Unknown wire message type: ${(wire as WireMessage).t}`)
@@ -298,6 +403,8 @@ export const cborCodec: BinaryCodec = {
       }
       return [fromWireFormat(obj as WireMessage)]
     } catch (error) {
+      // Pass through typed decode errors and "Unknown wire" sentinel.
+      if (error instanceof FrameDecodeError) throw error
       if (error instanceof Error && error.message.startsWith("Unknown wire")) {
         throw error
       }

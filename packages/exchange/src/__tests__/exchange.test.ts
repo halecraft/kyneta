@@ -15,12 +15,8 @@ import {
   SYNC_AUTHORITATIVE,
   unwrap,
 } from "@kyneta/schema"
-import {
-  Bridge,
-  BridgeTransport,
-  createBridgeTransport,
-  type PeerIdentityDetails,
-} from "@kyneta/transport"
+import { type PeerIdentityDetails } from "@kyneta/transport"
+import { Bridge, BridgeTransport, createBridgeTransport } from "@kyneta/bridge-transport"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   Exchange,
@@ -29,6 +25,7 @@ import {
 } from "../exchange.js"
 import { hasSync, sync } from "../sync.js"
 import type { PeerChange } from "../types.js"
+import { cborCodec } from "@kyneta/wire"
 
 // ---------------------------------------------------------------------------
 // Test schemas (bound at module scope)
@@ -333,7 +330,7 @@ describe("Exchange", () => {
 
     describe("changefeed → synchronizer auto-wiring", () => {
       it("change() auto-notifies synchronizer — no manual notifyLocalChange needed", async () => {
-        const bridge = new Bridge()
+        const bridge = new Bridge({ codec: cborCodec })
 
         const exchangeA = new Exchange({
           id: "alice",
@@ -389,7 +386,7 @@ describe("Exchange", () => {
     })
 
     it("peer-established fires when a remote peer connects via Bridge", async () => {
-      const bridge = new Bridge()
+      const bridge = new Bridge({ codec: cborCodec })
       const exchange1 = createExchange({
         id: "alice",
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
@@ -421,7 +418,7 @@ describe("Exchange", () => {
     })
 
     it("peer-departed fires when a remote peer disconnects", async () => {
-      const bridge = new Bridge()
+      const bridge = new Bridge({ codec: cborCodec })
       const exchange1 = createExchange({
         id: "alice",
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
@@ -454,7 +451,7 @@ describe("Exchange", () => {
     })
 
     it("exchange.peers() reflects correct state during subscriber callback", async () => {
-      const bridge = new Bridge()
+      const bridge = new Bridge({ codec: cborCodec })
       const exchange1 = createExchange({
         id: "alice",
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
@@ -480,8 +477,8 @@ describe("Exchange", () => {
     })
 
     it("multi-transport: one peer-established on first bridge, no second on second bridge", async () => {
-      const bridge1 = new Bridge()
-      const bridge2 = new Bridge()
+      const bridge1 = new Bridge({ codec: cborCodec })
+      const bridge2 = new Bridge({ codec: cborCodec })
       const exchange1 = createExchange({
         id: "alice",
         transports: [
@@ -512,7 +509,7 @@ describe("Exchange", () => {
     })
 
     it("shutdown emits peer-departed for all connected peers", async () => {
-      const bridge = new Bridge()
+      const bridge = new Bridge({ codec: cborCodec })
       const exchange1 = createExchange({
         id: "alice",
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
@@ -540,7 +537,7 @@ describe("Exchange", () => {
     })
 
     it("reset() emits peer-departed for all connected peers", async () => {
-      const bridge = new Bridge()
+      const bridge = new Bridge({ codec: cborCodec })
       const exchange1 = createExchange({
         id: "alice",
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
@@ -572,7 +569,7 @@ describe("Exchange", () => {
     // -----------------------------------------------------------------------
 
     it("involuntary disconnect: peer-disconnected fires, peer preserved in peers()", async () => {
-      const bridge = new Bridge()
+      const bridge = new Bridge({ codec: cborCodec })
       const exchange1 = createExchange({
         id: "alice",
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
@@ -605,7 +602,7 @@ describe("Exchange", () => {
     })
 
     it("involuntary disconnect then shutdown: peer-departed fires", async () => {
-      const bridge = new Bridge()
+      const bridge = new Bridge({ codec: cborCodec })
       const exchange1 = createExchange({
         id: "alice",
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
@@ -636,7 +633,7 @@ describe("Exchange", () => {
     })
 
     it("reconnection after involuntary disconnect: peer-reconnected fires", async () => {
-      const bridge = new Bridge()
+      const bridge = new Bridge({ codec: cborCodec })
       const exchange1 = createExchange({
         id: "alice",
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
@@ -675,7 +672,7 @@ describe("Exchange", () => {
     })
 
     it("sync resumes after reconnection", async () => {
-      const bridge = new Bridge()
+      const bridge = new Bridge({ codec: cborCodec })
       const exchange1 = createExchange({
         id: "alice",
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
@@ -722,7 +719,7 @@ describe("Exchange", () => {
     // -----------------------------------------------------------------------
 
     it("departureTimeout: 0 — involuntary disconnect triggers immediate peer-departed", async () => {
-      const bridge = new Bridge()
+      const bridge = new Bridge({ codec: cborCodec })
       const exchange1 = createExchange({
         id: "alice",
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
@@ -755,7 +752,7 @@ describe("Exchange", () => {
     it("departure timer fires after grace period", async () => {
       vi.useFakeTimers()
       try {
-        const bridge = new Bridge()
+        const bridge = new Bridge({ codec: cborCodec })
         const exchange1 = createExchange({
           id: "alice",
           transports: [
@@ -806,7 +803,7 @@ describe("Exchange", () => {
     it("reconnection before departure timer cancels the timer", async () => {
       vi.useFakeTimers()
       try {
-        const bridge = new Bridge()
+        const bridge = new Bridge({ codec: cborCodec })
         const exchange1 = createExchange({
           id: "alice",
           transports: [
@@ -1040,7 +1037,7 @@ describe("Exchange", () => {
     })
 
     it("suspend() on deferred doc throws", async () => {
-      const bridge = new Bridge()
+      const bridge = new Bridge({ codec: cborCodec })
       const exchangeA = createExchange({
         id: "alice",
         transports: [createBridgeTransport({ transportType: "alice", bridge })],
@@ -1065,7 +1062,7 @@ describe("Exchange", () => {
 
   describe("canConnect", () => {
     it("canConnect returning false prevents peer establishment", async () => {
-      const bridge = new Bridge()
+      const bridge = new Bridge({ codec: cborCodec })
 
       const _exchange1 = createExchange({
         id: "alice",
@@ -1087,7 +1084,7 @@ describe("Exchange", () => {
     })
 
     it("canConnect returning undefined defers (default open)", async () => {
-      const bridge = new Bridge()
+      const bridge = new Bridge({ codec: cborCodec })
 
       const _exchange1 = createExchange({
         id: "alice",
@@ -1106,6 +1103,42 @@ describe("Exchange", () => {
 
       // Undefined = no opinion, default is open
       expect(exchange2.peers().size).toBe(1)
+    })
+  })
+
+  describe("getPeerFeatures", () => {
+    it("returns the peer's advertised features after handshake", async () => {
+      const bridge = new Bridge({ codec: cborCodec })
+
+      const alice = new Exchange({
+        id: "alice",
+        transports: [
+          createBridgeTransport({ transportType: "alice", bridge }),
+        ],
+      })
+      const bob = new Exchange({
+        id: "bob",
+        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      })
+      activeExchanges.push(alice, bob)
+
+      await drain()
+
+      // v1 default features: { alias: true } (set by initSession default).
+      expect(alice.getPeerFeatures("bob")).toEqual({ alias: true })
+      expect(bob.getPeerFeatures("alice")).toEqual({ alias: true })
+    })
+
+    it("returns undefined for a peer that has not established yet", () => {
+      const bridge = new Bridge({ codec: cborCodec })
+      const alice = new Exchange({
+        id: "alice",
+        transports: [
+          createBridgeTransport({ transportType: "alice", bridge }),
+        ],
+      })
+      activeExchanges.push(alice)
+      expect(alice.getPeerFeatures("bob")).toBeUndefined()
     })
   })
 })

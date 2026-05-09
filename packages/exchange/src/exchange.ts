@@ -48,6 +48,7 @@ import type {
   PeerId,
   PeerIdentityDetails,
   TransportFactory,
+  WireFeatures,
 } from "@kyneta/transport"
 import type { Capabilities } from "./capabilities.js"
 import { createCapabilities, DEFAULT_REPLICAS } from "./capabilities.js"
@@ -490,6 +491,20 @@ export class Exchange {
     } else {
       this.#storeHandle = null
     }
+  }
+
+  /**
+   * Wire features advertised by a remote peer.
+   *
+   * Returns the features the peer advertised in its `establish` message,
+   * or `undefined` if the peer is not yet established or advertised no
+   * features. Features describe what wire-format extensions the peer
+   * understands (aliasing, future QUIC modes); they are distinct from the
+   * exchange's own `Capabilities` registry, which describes substrate /
+   * schema bindings.
+   */
+  getPeerFeatures(peerId: PeerId): WireFeatures | undefined {
+    return this.#synchronizer.getPeerFeatures(peerId)
   }
 
   /**

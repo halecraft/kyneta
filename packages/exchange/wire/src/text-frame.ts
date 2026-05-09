@@ -284,6 +284,10 @@ export type TextFrameDecodeErrorCode =
   | "invalid_structure"
   | "unsupported_version"
   | "truncated"
+  | "doc-id-too-long"
+  | "schema-hash-too-long"
+  | "doc-id-form-conflict"
+  | "schema-hash-form-conflict"
 
 /**
  * Error thrown when text frame decoding fails.

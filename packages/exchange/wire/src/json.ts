@@ -21,6 +21,21 @@ import type {
   PresentMsg,
 } from "@kyneta/transport"
 import type { TextCodec } from "./codec.js"
+import { TextFrameDecodeError } from "./text-frame.js"
+import {
+  validateDocId,
+  validateSchemaHash,
+} from "./validate-identifiers.js"
+
+function checkDocId(value: string): void {
+  const err = validateDocId(value)
+  if (err) throw new TextFrameDecodeError(err.code, err.message)
+}
+
+function checkSchemaHash(value: string): void {
+  const err = validateSchemaHash(value)
+  if (err) throw new TextFrameDecodeError(err.code, err.message)
+}
 
 // ---------------------------------------------------------------------------
 // Base64 helpers — intentional local copy.
@@ -133,6 +148,39 @@ function toJsonSafe(msg: ChannelMsg): unknown {
  *
  * Reverses the base64 encoding for binary SubstratePayload data.
  */
+/**
+ * Validate that a JSON wire record has exactly the legacy `docId` form
+ * (no alias-form fields). The text codec has no alias state — alias-form
+ * messages require the alias transformer.
+ */
+function rejectIfAliasFormed(record: Record<string, unknown>): void {
+  if (record.docAlias !== undefined) {
+    throw new TextFrameDecodeError(
+      "doc-id-form-conflict",
+      "JSON wire form carries docAlias; alias resolution requires the alias transformer",
+    )
+  }
+}
+
+function rejectIfAliasFormedInPresentDoc(
+  d: Record<string, unknown>,
+): void {
+  if (d.docAlias !== undefined) {
+    throw new TextFrameDecodeError(
+      "doc-id-form-conflict",
+      "Present doc entry carries docAlias; alias resolution requires the alias transformer",
+    )
+  }
+  if (d.schemaAlias !== undefined || d.schemaAliasRef !== undefined) {
+    if (d.schemaAliasRef !== undefined && d.schemaHash === undefined) {
+      throw new TextFrameDecodeError(
+        "schema-hash-form-conflict",
+        "schemaAliasRef requires the alias transformer",
+      )
+    }
+  }
+}
+
 function fromJsonSafe(obj: unknown): ChannelMsg {
   const record = obj as Record<string, unknown>
   const type = record.type as string
@@ -144,16 +192,34 @@ function fromJsonSafe(obj: unknown): ChannelMsg {
     case "depart":
       return { type: "depart" }
 
-    case "present":
-      return record as unknown as PresentMsg
+    case "present": {
+      const present = record as unknown as PresentMsg
+      for (const d of present.docs) {
+        rejectIfAliasFormedInPresentDoc(
+          d as unknown as Record<string, unknown>,
+        )
+        checkDocId(d.docId)
+        checkSchemaHash(d.schemaHash)
+      }
+      return present
+    }
 
-    case "interest":
-      return record as unknown as InterestMsg
+    case "interest": {
+      rejectIfAliasFormed(record)
+      const interest = record as unknown as InterestMsg
+      checkDocId(interest.docId)
+      return interest
+    }
 
-    case "dismiss":
-      return record as unknown as DismissMsg
+    case "dismiss": {
+      rejectIfAliasFormed(record)
+      const dismiss = record as unknown as DismissMsg
+      checkDocId(dismiss.docId)
+      return dismiss
+    }
 
     case "offer": {
+      rejectIfAliasFormed(record)
       const jsonOffer = record as unknown as JsonOfferMsg
       const payload = jsonOffer.payload
 
@@ -163,6 +229,7 @@ function fromJsonSafe(obj: unknown): ChannelMsg {
           ? base64ToUint8Array(payload.data)
           : payload.data
 
+      checkDocId(jsonOffer.docId)
       const msg: OfferMsg = {
         type: "offer",
         docId: jsonOffer.docId,

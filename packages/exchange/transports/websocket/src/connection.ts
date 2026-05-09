@@ -12,9 +12,13 @@
 
 import type { Channel, ChannelMsg, PeerId } from "@kyneta/transport"
 import {
+  type AliasState,
+  applyInboundAliasing,
+  applyOutboundAliasing,
   createFrameIdCounter,
-  decodeBinaryMessages,
-  encodeBinaryAndSend,
+  decodeBinaryWires,
+  emptyAliasState,
+  encodeWireFrameAndSend,
   FragmentReassembler,
 } from "@kyneta/wire"
 import type { Socket } from "./types.js"
@@ -59,6 +63,10 @@ export class WebsocketConnection {
   readonly #fragmentThreshold: number
   readonly #reassembler: FragmentReassembler
   #nextFrameId = createFrameIdCounter()
+
+  // Per-channel alias state (Phase 4). Captures features from establish
+  // messages flowing through; gates dx/shx emissions on mutualAlias.
+  #aliasState: AliasState = emptyAliasState()
 
   constructor(
     peerId: PeerId,
@@ -118,15 +126,19 @@ export class WebsocketConnection {
   /**
    * Send a ChannelMsg through the Websocket.
    *
-   * Encodes via CBOR codec → frame → fragment if needed → socket.send().
+   * Pipeline: alias transformer → wire encode → frame → fragment if needed
+   * → socket.send().
    */
   send(msg: ChannelMsg): void {
     if (this.#socket.readyState !== "open") {
       return
     }
 
-    encodeBinaryAndSend(
-      msg,
+    const { state, wire } = applyOutboundAliasing(this.#aliasState, msg)
+    this.#aliasState = state
+
+    encodeWireFrameAndSend(
+      wire,
       data => this.#socket.send(data),
       this.#fragmentThreshold,
       this.#nextFrameId,
@@ -169,13 +181,21 @@ export class WebsocketConnection {
       return
     }
 
-    // Handle binary protocol messages through shared decode pipeline
+    // Binary path: reassemble → wire → alias transformer → ChannelMsg.
     try {
-      const messages = decodeBinaryMessages(data, this.#reassembler)
-      if (messages) {
-        for (const msg of messages) {
-          this.#handleChannelMessage(msg)
+      const wires = decodeBinaryWires(data, this.#reassembler)
+      if (!wires) return
+      for (const wire of wires) {
+        const result = applyInboundAliasing(this.#aliasState, wire)
+        this.#aliasState = result.state
+        if (result.error || !result.msg) {
+          console.warn(
+            "[WebsocketConnection] alias resolution failed:",
+            result.error,
+          )
+          continue
         }
+        this.#handleChannelMessage(result.msg)
       }
     } catch (error) {
       console.error("Failed to decode wire message:", error)

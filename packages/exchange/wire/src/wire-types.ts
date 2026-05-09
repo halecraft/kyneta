@@ -188,12 +188,24 @@ export function syncProtocolToWire(
  *   pe  — payload encoding (PayloadEncodingValue)
  */
 
+/**
+ * Compact CBOR shape of `WireFeatures` map. Field names are short:
+ * `a` = alias, `s` = streamed, `d` = datagram. Each is optional;
+ * absent ⇒ `false`. Old decoders ignore unknown fields harmlessly.
+ */
+export type WireFeaturesCompact = {
+  a?: boolean
+  s?: boolean
+  d?: boolean
+}
+
 /** Compact wire format for establish. */
 export type WireEstablishMsg = {
   t: typeof MessageType.Establish
   id: string
   n?: string
   y: "user" | "bot" | "service"
+  f?: WireFeaturesCompact
 }
 
 /** Compact wire format for depart. */
@@ -201,30 +213,66 @@ export type WireDepartMsg = {
   t: typeof MessageType.Depart
 }
 
-/** Compact wire format for present. */
+/**
+ * Compact wire format for present.
+ *
+ * Each doc entry carries either a full `d` (docId string, on first
+ * reference) or — once an alias is announced — an alias-only form is
+ * not used here (`present` always names docs explicitly). What MAY
+ * change across `present` messages is the schema-hash form:
+ *   - First reference to a schema: `sh` (full hash) and optional `sa`
+ *     (alias assignment).
+ *   - Subsequent reference to an already-announced schema: `shx`
+ *     (alias reference) with `sh` absent.
+ *
+ * `a` is an optional alias *assignment* for the docId — emitted
+ * unconditionally when the sender supports aliasing. Old peers ignore
+ * unknown CBOR map fields harmlessly.
+ *
+ * Decoder invariant: exactly one of `{sh, shx}` must be present.
+ */
 export type WirePresentMsg = {
   t: typeof MessageType.Present
   docs: Array<{
     d: string
+    /** Optional alias assignment for `d` (CBOR major type 0). */
+    a?: number
     rt: [string, number, number]
     ms: SyncProtocolWireValue
-    sh: string
+    /** Full schema hash (on first reference, or always for legacy peers). */
+    sh?: string
+    /** Optional alias assignment for `sh` (CBOR major type 0). */
+    sa?: number
+    /** Alias reference to a previously-announced schema (CBOR major type 0). */
+    shx?: number
     shs?: string[]
   }>
 }
 
-/** Compact wire format for interest. */
+/**
+ * Compact wire format for interest.
+ *
+ * Decoder invariant: exactly one of `{doc, dx}` must be present.
+ */
 export type WireInterestMsg = {
   t: typeof MessageType.Interest
-  doc: string
+  /** Full docId (used when no alias is in force). */
+  doc?: string
+  /** Alias reference to a previously-announced docId (CBOR major type 0). */
+  dx?: number
   v?: string
   r?: boolean
 }
 
-/** Compact wire format for offer. */
+/**
+ * Compact wire format for offer.
+ *
+ * Decoder invariant: exactly one of `{doc, dx}` must be present.
+ */
 export type WireOfferMsg = {
   t: typeof MessageType.Offer
-  doc: string
+  doc?: string
+  dx?: number
   pk: PayloadKindValue
   pe: PayloadEncodingValue
   d: string | Uint8Array
@@ -232,10 +280,15 @@ export type WireOfferMsg = {
   r?: boolean
 }
 
-/** Compact wire format for dismiss. */
+/**
+ * Compact wire format for dismiss.
+ *
+ * Decoder invariant: exactly one of `{doc, dx}` must be present.
+ */
 export type WireDismissMsg = {
   t: typeof MessageType.Dismiss
-  doc: string
+  doc?: string
+  dx?: number
 }
 
 /** Union of all compact wire message types. */

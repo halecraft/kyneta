@@ -4,7 +4,9 @@
 > **Role**: The abstract transport contract — an `abstract class Transport<G>`, the channel lifecycle, the six-message protocol vocabulary, identity types, and the in-process test bridge that every real transport (websocket, sse, webrtc, unix-socket) implements against.
 > **Depends on**: `@kyneta/machine`, `@kyneta/schema`
 > **Depended on by**: `@kyneta/exchange`, `@kyneta/websocket-transport`, `@kyneta/sse-transport`, `@kyneta/unix-socket-transport`, `@kyneta/webrtc-transport`
-> **Canonical symbols**: `Transport<G>`, `TransportFactory`, `TransportContext`, `Channel`, `ConnectedChannel`, `EstablishedChannel`, `GeneratedChannel`, `ChannelDirectory<G>`, `ChannelMsg`, `LifecycleMsg`, `SyncMsg`, `EstablishMsg`, `DepartMsg`, `PresentMsg`, `InterestMsg`, `OfferMsg`, `DismissMsg`, `AddressedEnvelope`, `ReturnEnvelope`, `PeerIdentityDetails`, `Bridge`, `BridgeTransport`, `createBridgeTransport`, `computeBackoffDelay`, `DEFAULT_RECONNECT`
+> **Canonical symbols**: `Transport<G>`, `TransportFactory`, `TransportContext`, `Channel`, `ConnectedChannel`, `EstablishedChannel`, `GeneratedChannel`, `ChannelDirectory<G>`, `ChannelMsg`, `LifecycleMsg`, `SyncMsg`, `EstablishMsg`, `DepartMsg`, `PresentMsg`, `InterestMsg`, `OfferMsg`, `DismissMsg`, `AddressedEnvelope`, `ReturnEnvelope`, `PeerIdentityDetails`, `WireFeatures`, `computeBackoffDelay`, `DEFAULT_RECONNECT`
+
+`Bridge`, `BridgeTransport`, and `createBridgeTransport` moved to `@kyneta/bridge-transport` in the v1 alias work — they need to import the alias transformer from `@kyneta/wire`, which would create a circular peer-dep if they remained in `@kyneta/transport`.
 > **Key invariant(s)**: The protocol is exactly six messages. Two lifecycle (`establish`, `depart`) for channel presence, four sync (`present`, `interest`, `offer`, `dismiss`) for document exchange. Nothing in `@kyneta/transport` knows what a substrate is — `SubstratePayload` is carried as an opaque field on `OfferMsg`.
 
 A small kit of shared types and one abstract base class that every concrete transport extends. It fixes the shape of a channel, the vocabulary of messages, and the split between "channel created" / "channel connected" / "channel established" — so that the runtime in `@kyneta/exchange` can drive any transport without caring whether bytes flow over a WebSocket, an SSE stream, a Unix socket, or an in-process bridge.
@@ -19,7 +21,7 @@ Imported by `@kyneta/exchange` (which owns the sync runtime) and by every concre
 - What does a channel's lifecycle look like? → [Channel lifecycle](#channel-lifecycle)
 - How do I write a new transport? → [Writing a transport](#writing-a-transport)
 - Why a `TransportFactory` instead of a `Transport` instance? → [Factories, not instances](#factories-not-instances)
-- How do I test two peers without real network? → [`BridgeTransport`](#bridgetransport--in-process-testing)
+- How do I test two peers without real network? → [`BridgeTransport` (moved)](#bridgetransport-moved) — in `@kyneta/bridge-transport`
 - What is `computeBackoffDelay` for? → [Reconnection utilities](#reconnection-utilities)
 
 ## Vocabulary
@@ -164,22 +166,25 @@ Source: `packages/transport/src/transport.ts` → `TransportFactory`.
 
 ---
 
-## `BridgeTransport` — in-process testing
+## `BridgeTransport` (moved)
 
-`Bridge` + `BridgeTransport` + `createBridgeTransport` (source: `packages/transport/src/bridge.ts`) let two or more `Exchange` instances communicate in a single process without real I/O.
+In-process testing is provided by `@kyneta/bridge-transport` (`packages/exchange/transports/bridge`). `@kyneta/exchange` re-exports `Bridge`, `BridgeTransport`, and `createBridgeTransport` for backward compat. See that package's docs for usage.
 
-| Component | Role |
-|-----------|------|
-| `Bridge` | The rendezvous. Holds a `Map<TransportType, BridgeTransport>` and routes messages by transport type. |
-| `BridgeTransport` | A `Transport<{ targetTransportType }>` whose `send` calls `bridge.routeMessage`. Delivers incoming messages via `queueMicrotask` so tests exercise async codepaths. |
-| `createBridgeTransport(params)` | Returns a `TransportFactory`. |
+The bridge transport lives outside `@kyneta/transport` because it needs the alias transformer from `@kyneta/wire` (Phase 4 of the v1 alias work), and `@kyneta/transport` cannot depend on `@kyneta/wire` without creating a circular peer-dep — `@kyneta/wire` already peer-depends on `@kyneta/transport` for shared message types.
 
-Two-phase `onStart` (`packages/transport/src/bridge.ts` → `BridgeTransport.onStart`): every existing transport creates a channel to the new one and vice versa, then only the newly-joining transport initiates `establish` to avoid double-handshake.
+## Wire-format mechanics live in transports
 
-### What `BridgeTransport` is NOT
+Wire-encoding concerns (codec invocation, fragmentation, alias state, future hash verification, future compression) live inside each transport's `Channel.send` / `Channel.receive` path — not in the synchronizer. The synchronizer trades in `ChannelMsg`; only the transport ever forms or parses bytes.
 
-- **Not a mock.** It is a real `Transport<G>` with the full lifecycle — it merely replaces the wire with an in-process dispatcher. Tests that pass with `BridgeTransport` exercise the production lifecycle.
-- **Not synchronous.** Delivery is deferred via `queueMicrotask` so callers must `await` a tick (or use `waitForSync`) before asserting. This matches real-network asynchrony.
+Per-channel state for wire-format features is held as private fields on the transport's Channel implementation:
+
+- `frameId` counter (today, in every binary transport).
+- `aliasState` (v1, see `@kyneta/wire` → `alias-table.ts`).
+- Future: hash-verifier state, compression dictionary, encryption layer.
+
+Each transport calls `@kyneta/wire`'s pure transformers adjacent to its codec invocation. Lifecycle is automatic: state is created with the channel and dies with the channel — no parallel-keyed map to keep in sync with the session model.
+
+The synchronizer never sees `WireMessage`, never participates in alias decisions, and never pushes wire-format state into transports. Future wire-format work attaches at the same per-channel location.
 
 ---
 
@@ -214,7 +219,6 @@ Scheduling (`setTimeout`, retry on failure) happens inside each concrete transpo
 | `AddressedEnvelope` / `ReturnEnvelope` | `src/messages.ts` | Outbound / inbound routing wrappers. |
 | `PeerIdentityDetails` | `src/types.ts` | `{ peerId, name?, type }`. |
 | `PeerId` / `DocId` / `ChannelId` / `TransportType` | `src/types.ts` | String / string / number / string identity aliases. |
-| `Bridge` / `BridgeTransport` / `BridgeTransportParams` | `src/bridge.ts` | In-process testing transport. |
 | `ReconnectOptions` / `DEFAULT_RECONNECT` / `computeBackoffDelay` | `src/reconnect.ts` | Pure backoff math. |
 | `StateTransition` / `TransitionListener` | re-exported from `@kyneta/machine` | Surfaced for consumers observing client-program state. |
 
@@ -229,11 +233,10 @@ Scheduling (`setTimeout`, retry on failure) happens inside each concrete transpo
 | `src/channel-directory.ts` | 79 | `ChannelDirectory<G>` — channel store with monotonic ID issuance. |
 | `src/transport.ts` | 266 | `Transport<G>` abstract class, lifecycle, internal `_initialize` / `_start` / `_stop` / `_send`. |
 | `src/reconnect.ts` | 53 | `computeBackoffDelay`, `DEFAULT_RECONNECT`. |
-| `src/bridge.ts` | 272 | `Bridge`, `BridgeTransport`, `createBridgeTransport`. |
-| `src/__tests__/transport.test.ts` | 277 | Lifecycle tests via `BridgeTransport` — channel add/remove, establish, message routing. |
+| `src/__tests__/transport.test.ts` | — | Lifecycle tests against a minimal in-test `TestAdapter`. BridgeTransport-using tests live in `@kyneta/bridge-transport`. |
 
 ## Testing
 
-All tests run in-process using `Bridge` + `BridgeTransport` pairs. Real transport packages (`websocket`, `sse`, `unix-socket`) maintain their own test suites with their own integration harnesses; this package's tests only exercise the abstract contract and the in-process bridge.
+Tests run in-process using a minimal in-test `TestAdapter`. The bridge transport now lives in `@kyneta/bridge-transport` and has its own test suite. Real transport packages (`websocket`, `sse`, `unix-socket`, `webrtc`, `bridge`) maintain their own test suites with their own integration harnesses; this package's tests only exercise the abstract contract.
 
 **Tests**: 8 passed, 0 skipped across 1 file (`transport.test.ts`: 8). Run with `cd packages/transport && pnpm exec vitest run`.

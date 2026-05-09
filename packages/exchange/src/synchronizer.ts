@@ -38,6 +38,7 @@ import type {
   PeerId,
   PeerIdentityDetails,
   SyncMsg,
+  WireFeatures,
 } from "@kyneta/transport"
 import { isLifecycleMsg } from "@kyneta/transport"
 
@@ -151,6 +152,11 @@ export type SynchronizerParams = {
   onEnsureDoc?: DocCreationCallback
   onEnsureDocDismissed?: DocDismissedCallback
   departureTimeout?: number
+  /**
+   * Wire features advertised by this peer in outbound `establish`.
+   * Defaults to `{ alias: true }` for v1.
+   */
+  selfFeatures?: WireFeatures
 }
 
 // ---------------------------------------------------------------------------
@@ -349,6 +355,7 @@ export class Synchronizer {
     onEnsureDoc,
     onEnsureDocDismissed,
     departureTimeout,
+    selfFeatures,
   }: SynchronizerParams) {
     this.identity = identity
 
@@ -359,7 +366,11 @@ export class Synchronizer {
     this.#docDismissedCallback = onEnsureDocDismissed
 
     // Initialize models
-    this.#sessionModel = initSession(this.identity, departureTimeout ?? 30_000)
+    this.#sessionModel = initSession(
+      this.identity,
+      departureTimeout ?? 30_000,
+      selfFeatures,
+    )
     this.#syncModel = initSync(this.identity)
 
     // Create adapter context
@@ -389,6 +400,25 @@ export class Synchronizer {
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
   // PUBLIC API — Document management
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+  /**
+   * Wire features advertised by a remote peer.
+   *
+   * Returns the features from the first established channel for the peer,
+   * or `undefined` if the peer is not yet established or advertised no
+   * features. For multi-channel peers, all channels' advertised features
+   * are expected to match (peers are identified by `peerId`, and a peer
+   * advertises one feature set per identity).
+   */
+  getPeerFeatures(peerId: PeerId): WireFeatures | undefined {
+    const peer = this.#sessionModel.peers.get(peerId)
+    if (!peer) return undefined
+    for (const channelId of peer.channels) {
+      const entry = this.#sessionModel.channels.get(channelId)
+      if (entry?.peerFeatures) return entry.peerFeatures
+    }
+    return undefined
+  }
 
   /**
    * Register a document runtime with the synchronizer.

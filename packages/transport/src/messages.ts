@@ -17,15 +17,46 @@ import type { DocMetadata, SubstratePayload } from "@kyneta/schema"
 import type { DocId, PeerIdentityDetails } from "./types.js"
 
 // ---------------------------------------------------------------------------
+// Wire-feature negotiation (v1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Optional wire-format features advertised by a peer in `establish`.
+ *
+ * Distinct from `Capabilities` in `@kyneta/exchange` (which describes
+ * substrate/schema bindings — `ReplicaType × SyncProtocol` pairs the peer
+ * speaks). `WireFeatures` describes what *wire-format* extensions a peer
+ * understands — independent of any substrate.
+ *
+ * Backward compatibility: a peer that omits `features` (or omits any
+ * field) is treated as not supporting that feature. Absent ⇒ `false`.
+ *
+ * `streamed` and `datagram` are reserved for future QUIC modes and are
+ * implementation-deferred in v1.
+ */
+export type WireFeatures = {
+  /** Peer understands `a`/`dx`/`sa`/`shx` alias fields. */
+  alias?: boolean
+  /** Peer can receive over QUIC streams. Reserved for future. */
+  streamed?: boolean
+  /** Peer can receive over QUIC datagrams. Reserved for future. */
+  datagram?: boolean
+}
+
+// ---------------------------------------------------------------------------
 // Lifecycle messages — channel presence
 // ---------------------------------------------------------------------------
 
 /**
  * Symmetric handshake. Both peers send this upon connecting.
+ *
+ * `features` is optional; absent means the peer advertises no
+ * wire-format features (treat as all-`false`).
  */
 export type EstablishMsg = {
   type: "establish"
   identity: PeerIdentityDetails
+  features?: WireFeatures
 }
 
 /**

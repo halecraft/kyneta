@@ -18,13 +18,20 @@
 
 import type { Channel, ChannelMsg } from "@kyneta/transport"
 import {
-  cborCodec,
+  type AliasState,
+  applyInboundAliasing,
+  applyOutboundAliasing,
   decodeBinaryFrame,
-  encodeComplete,
+  decodeWireMessage,
+  emptyAliasState,
+  encodeBinaryFrame,
+  encodeWireMessage,
   feedBytes,
   initialParserState,
   type StreamParserState,
+  WIRE_VERSION,
 } from "@kyneta/wire"
+import { complete } from "@kyneta/wire"
 import type { UnixSocket } from "./types.js"
 
 // ---------------------------------------------------------------------------
@@ -56,6 +63,9 @@ export class UnixSocketConnection {
   // Backpressure write queue
   #writeQueue: Uint8Array[] = []
   #draining = false
+
+  // Per-channel alias state (Phase 4).
+  #aliasState: AliasState = emptyAliasState()
 
   constructor(peerId: string, channelId: number, socket: UnixSocket) {
     this.peerId = peerId
@@ -114,7 +124,10 @@ export class UnixSocketConnection {
       return
     }
 
-    const frameBytes = encodeComplete(cborCodec, msg)
+    const { state, wire } = applyOutboundAliasing(this.#aliasState, msg)
+    this.#aliasState = state
+    const payload = encodeWireMessage(wire)
+    const frameBytes = encodeBinaryFrame(complete(WIRE_VERSION, payload))
 
     if (this.#draining) {
       // Already under backpressure — queue the frame
@@ -173,10 +186,17 @@ export class UnixSocketConnection {
           continue
         }
 
-        const messages = cborCodec.decode(decoded.content.payload)
-        for (const msg of messages) {
-          this.#handleChannelMessage(msg)
+        const wire = decodeWireMessage(decoded.content.payload)
+        const aliasResult = applyInboundAliasing(this.#aliasState, wire)
+        this.#aliasState = aliasResult.state
+        if (aliasResult.error || !aliasResult.msg) {
+          console.warn(
+            `[UnixSocketConnection] alias resolution failed for peer ${this.peerId}:`,
+            aliasResult.error,
+          )
+          continue
         }
+        this.#handleChannelMessage(aliasResult.msg)
       } catch (error) {
         console.error(
           `[UnixSocketConnection] Failed to decode frame from peer ${this.peerId}:`,

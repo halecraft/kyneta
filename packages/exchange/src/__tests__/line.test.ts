@@ -14,11 +14,7 @@
 
 import { json, Replicate, Schema } from "@kyneta/schema"
 import type { DocId } from "@kyneta/transport"
-import {
-  Bridge,
-  BridgeTransport,
-  createBridgeTransport,
-} from "@kyneta/transport"
+import { Bridge, BridgeTransport, createBridgeTransport } from "@kyneta/bridge-transport"
 import { afterEach, describe, expect, it } from "vitest"
 import {
   Exchange,
@@ -34,6 +30,7 @@ import {
   routeLine,
 } from "../line.js"
 import { InMemoryStore } from "../store/in-memory-store.js"
+import { cborCodec } from "@kyneta/wire"
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -164,7 +161,7 @@ describe("createLineDocSchema", () => {
 
 describe("symmetric Line send and receive via generator", () => {
   it("Alice sends a message, Bob receives it via async iterator", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
     const exchangeA = createExchange({
       id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
@@ -200,7 +197,7 @@ describe("symmetric Line send and receive via generator", () => {
   })
 
   it("messages arrive in order", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
     const exchangeA = createExchange({
       id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
@@ -256,7 +253,7 @@ describe("symmetric Line send and receive via generator", () => {
   })
 
   it("concurrent sends from both sides", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
     const exchangeA = createExchange({
       id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
@@ -298,7 +295,7 @@ describe("symmetric Line send and receive via generator", () => {
 
 describe("asymmetric Line", () => {
   it("different schemas per direction via listen", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
     const exchangeClient = createExchange({
       id: "client",
       transports: [createBridgeTransport({ transportType: "client", bridge })],
@@ -356,7 +353,7 @@ describe("asymmetric Line", () => {
 
 describe("ack and pruning", () => {
   it("messages are delivered reliably after many send/receive cycles", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
     const exchangeA = createExchange({
       id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
@@ -457,7 +454,7 @@ describe("duplicate detection", () => {
 
 describe("multiple Lines per peer pair", () => {
   it("two Lines with different topics are independent", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
     const exchangeA = createExchange({
       id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
@@ -563,8 +560,8 @@ describe("hub-and-spoke relay", () => {
   //    (abstain) for unknown peers instead of `false` (hard veto), so
   //    relay-forwarded offers are accepted by the exchange-level canAccept.
   it("messages flow Alice → Server → Bob via relay", async () => {
-    const bridgeAS = new Bridge()
-    const bridgeSB = new Bridge()
+    const bridgeAS = new Bridge({ codec: cborCodec })
+    const bridgeSB = new Bridge({ codec: cborCodec })
 
     // The server is a schema-free relay — it uses Replicate() for all
     // docs, same pattern as the existing authoritative relay integration test.
@@ -633,7 +630,7 @@ describe("hub-and-spoke relay", () => {
 
 describe("protocol.listen", () => {
   it("server responds to client request via protocol.listen", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
     const exchangeClient = createExchange({
       id: "client",
       transports: [createBridgeTransport({ transportType: "client", bridge })],
@@ -692,8 +689,8 @@ describe("protocol.listen", () => {
   })
 
   it("multiple clients each get an independent Line", async () => {
-    const bridge1 = new Bridge()
-    const bridge2 = new Bridge()
+    const bridge1 = new Bridge({ codec: cborCodec })
+    const bridge2 = new Bridge({ codec: cborCodec })
     const exchangeServer = createExchange({
       id: "server",
       transports: [
@@ -763,8 +760,8 @@ describe("protocol.listen", () => {
   })
 
   it("onLine callbacks — multiple, unsubscribe", async () => {
-    const bridge1 = new Bridge()
-    const bridge2 = new Bridge()
+    const bridge1 = new Bridge({ codec: cborCodec })
+    const bridge2 = new Bridge({ codec: cborCodec })
     const exchangeServer = createExchange({
       id: "server",
       transports: [
@@ -823,8 +820,8 @@ describe("protocol.listen", () => {
   })
 
   it("dispose() stops accepting new Lines but existing Lines remain open", async () => {
-    const bridge1 = new Bridge()
-    const bridge2 = new Bridge()
+    const bridge1 = new Bridge({ codec: cborCodec })
+    const bridge2 = new Bridge({ codec: cborCodec })
     const exchangeServer = createExchange({
       id: "server",
       transports: [
@@ -899,7 +896,7 @@ describe("protocol.listen", () => {
   })
 
   it("client's queued messages delivered immediately", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
     const exchangeClient = createExchange({
       id: "client",
       transports: [createBridgeTransport({ transportType: "client", bridge })],
@@ -959,8 +956,8 @@ describe("protocol.listen", () => {
   })
 
   it("hub-and-spoke relay with protocol.listen", async () => {
-    const bridgeCR = new Bridge()
-    const bridgeRS = new Bridge()
+    const bridgeCR = new Bridge({ codec: cborCodec })
+    const bridgeRS = new Bridge({ codec: cborCodec })
 
     const exchangeClient = createExchange({
       id: "client",
@@ -1032,7 +1029,7 @@ describe("protocol.listen", () => {
   })
 
   it("late listen: client connects before server starts listening", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
     const exchangeClient = createExchange({
       id: "client",
       transports: [createBridgeTransport({ transportType: "client", bridge })],
@@ -1086,7 +1083,7 @@ describe("protocol.listen", () => {
   })
 
   it("listeners on different topics are independent", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
     const exchangeClient = createExchange({
       id: "client",
       transports: [createBridgeTransport({ transportType: "client", bridge })],
@@ -1131,8 +1128,8 @@ describe("protocol.listen", () => {
   })
 
   it("listener ignores Line docs addressed to other peers", async () => {
-    const bridgeAS = new Bridge()
-    const bridgeBS = new Bridge()
+    const bridgeAS = new Bridge({ codec: cborCodec })
+    const bridgeBS = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -1224,7 +1221,7 @@ describe("durable Line: close() vs destroy()", () => {
   })
 
   it("destroy() resets state — reopen starts fresh at seq 1", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
     const exchangeA = createExchange({
       id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
@@ -1273,7 +1270,7 @@ describe("durable Line: close() vs destroy()", () => {
 
 describe("durable Line: nextSeq persistence", () => {
   it("nextSeq survives prune — close+reopen after prune still resumes", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
     const exchangeA = createExchange({
       id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
@@ -1323,7 +1320,7 @@ describe("durable Line: nextSeq persistence", () => {
 
 describe("durable Line: peer lifecycle decoupling", () => {
   it("Line remains open and functional after remote peer departs", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
     const exchangeA = createExchange({
       id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
@@ -1353,7 +1350,7 @@ describe("durable Line: peer lifecycle decoupling", () => {
 
 describe("durable Line: close then reopen resumes state", () => {
   it("close+reopen delivers new messages without replaying old ones", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
     const exchangeA = createExchange({
       id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
@@ -1406,7 +1403,7 @@ describe("durable Line: close then reopen resumes state", () => {
 
 describe("durable Line: disconnect/reconnect", () => {
   it("messages sent during disconnect are delivered on reconnect", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
     const exchangeA = createExchange({
       id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
@@ -1456,7 +1453,7 @@ describe("durable Line: disconnect/reconnect", () => {
   })
 
   it("bidirectional sends during disconnect — both sides receive all", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
     const exchangeA = createExchange({
       id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
@@ -1508,7 +1505,7 @@ describe("durable Line: disconnect/reconnect", () => {
 
 describe("durable Line: survives peer departure", () => {
   it("queued messages are delivered when peer returns after departure", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
     const exchangeA = createExchange({
       id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
@@ -1572,7 +1569,7 @@ describe("durable Line: survives peer departure", () => {
 
 describe("durable Line: bidirectional close/reopen", () => {
   it("bidirectional close/reopen cycle preserves seq on both sides", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
     const exchangeA = createExchange({
       id: "alice",
       transports: [createBridgeTransport({ transportType: "alice", bridge })],
@@ -1639,7 +1636,7 @@ describe("durable Line: storage stays bounded", () => {
   it("unidirectional: sender's store stays bounded even when receiver never sends", async () => {
     const storeA = new InMemoryStore()
     const storeB = new InMemoryStore()
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
 
     const exchangeA = createExchange({
       id: "alice",
@@ -1750,7 +1747,7 @@ describe("per-Exchange Line registry", () => {
 
 describe("Line policy teardown", () => {
   it("exchange.shutdown() closes all open Lines", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
     const P = Line.protocol({ topic: "teardown", schema: SimpleSchema })
 
     const exchangeA = createExchange({
@@ -1797,7 +1794,7 @@ describe("Line policy teardown", () => {
   })
 
   it("exchange.shutdown() disposes all active listeners", async () => {
-    const bridge = new Bridge()
+    const bridge = new Bridge({ codec: cborCodec })
     const P = Line.protocol({
       topic: "listener-teardown",
       schema: SimpleSchema,

@@ -1,8 +1,8 @@
-// Transport and BridgeTransport — unit tests for the transport/channel infrastructure.
+// Transport — unit tests for the abstract transport / channel infrastructure.
+//
+// BridgeTransport tests live in @kyneta/bridge-transport.
 
-import { SYNC_AUTHORITATIVE } from "@kyneta/schema"
 import { describe, expect, it, vi } from "vitest"
-import { Bridge, BridgeTransport } from "../bridge.js"
 import type { GeneratedChannel } from "../channel.js"
 import type { ChannelMsg } from "../messages.js"
 import type { TransportContext } from "../transport.js"
@@ -157,122 +157,5 @@ describe("Transport lifecycle", () => {
 
     const sent = adapter._send({ toChannelIds: [9999], message: msg })
     expect(sent).toBe(0)
-  })
-})
-
-// ---------------------------------------------------------------------------
-// BridgeTransport — two adapters exchange messages
-// ---------------------------------------------------------------------------
-
-describe("BridgeTransport", () => {
-  it("two adapters exchange messages through a Bridge", async () => {
-    const bridge = new Bridge()
-
-    const receivedByA: ChannelMsg[] = []
-    const receivedByB: ChannelMsg[] = []
-
-    const ctxA = createTransportContext({
-      identity: { peerId: "peer-a", type: "user" },
-      onChannelReceive: (_channelId, msg) => receivedByA.push(msg),
-    })
-
-    const ctxB = createTransportContext({
-      identity: { peerId: "peer-b", type: "user" },
-      onChannelReceive: (_channelId, msg) => receivedByB.push(msg),
-    })
-
-    const adapterA = new BridgeTransport({ transportType: "peer-a", bridge })
-    const adapterB = new BridgeTransport({ transportType: "peer-b", bridge })
-
-    adapterA._initialize(ctxA)
-    await adapterA._start()
-
-    adapterB._initialize(ctxB)
-    await adapterB._start()
-
-    // At this point, both adapters should have channels to each other.
-    // adapterB's onStart creates channels to adapterA and establishes them.
-    // The establish handshake triggers onChannelEstablish — but our mock
-    // doesn't complete the handshake. Let's verify channels were created.
-
-    expect(bridge.transports.size).toBe(2)
-
-    // Send a message from A to B via the bridge directly
-    const msg: ChannelMsg = {
-      type: "present",
-      docs: [
-        {
-          docId: "test-doc",
-          schemaHash: "00test",
-          replicaType: ["plain", 1, 0] as const,
-          syncProtocol: SYNC_AUTHORITATIVE,
-        },
-      ],
-    }
-    adapterA.deliverMessage("peer-b", msg)
-
-    // Message delivered async — wait for microtask
-    // Note: deliverMessage is called ON adapterA, meaning peer-b sends TO adapterA
-    // but we're testing the bridge routing, so let's route through bridge instead
-
-    bridge.routeMessage("peer-a", "peer-b", msg)
-
-    // Wait for async delivery
-    await new Promise<void>(r => queueMicrotask(r))
-    await new Promise<void>(r => queueMicrotask(r))
-
-    // adapterB should have received the message via deliverMessage → onReceive
-    expect(receivedByB.length).toBe(1)
-    expect(receivedByB[0]).toEqual(msg)
-  })
-
-  it("stops cleanly and removes from bridge", async () => {
-    const bridge = new Bridge()
-
-    const ctxA = createTransportContext({
-      identity: { peerId: "peer-a", type: "user" },
-    })
-
-    const adapterA = new BridgeTransport({ transportType: "peer-a", bridge })
-    adapterA._initialize(ctxA)
-    await adapterA._start()
-
-    expect(bridge.transports.size).toBe(1)
-
-    await adapterA._stop()
-    expect(bridge.transports.size).toBe(0)
-  })
-
-  it("channel lifecycle: connected → established via handshake", async () => {
-    const bridge = new Bridge()
-
-    const establishedChannels: number[] = []
-
-    const ctxA = createTransportContext({
-      identity: { peerId: "peer-a", type: "user" },
-      onChannelEstablish: channel => {
-        establishedChannels.push(channel.channelId)
-      },
-    })
-
-    const ctxB = createTransportContext({
-      identity: { peerId: "peer-b", type: "user" },
-      onChannelEstablish: channel => {
-        establishedChannels.push(channel.channelId)
-      },
-    })
-
-    const adapterA = new BridgeTransport({ transportType: "peer-a", bridge })
-    const adapterB = new BridgeTransport({ transportType: "peer-b", bridge })
-
-    adapterA._initialize(ctxA)
-    await adapterA._start()
-
-    adapterB._initialize(ctxB)
-    await adapterB._start()
-
-    // adapterB's onStart creates channels to adapterA and establishes them.
-    // onChannelEstablish should have been called for adapterB's channels.
-    expect(establishedChannels.length).toBeGreaterThan(0)
   })
 })

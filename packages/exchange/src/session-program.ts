@@ -18,6 +18,7 @@ import type {
   PeerId,
   PeerIdentityDetails,
   TransportType,
+  WireFeatures,
 } from "@kyneta/transport"
 import { collapse, type Transition } from "./program-types.js"
 import type { SyncInput } from "./sync-program.js"
@@ -32,6 +33,12 @@ export type ChannelEntry = {
   localEstablishSent: boolean
   remoteIdentity?: PeerIdentityDetails
   transportType: TransportType
+  /**
+   * Wire features advertised by the remote peer in `establish`.
+   * `undefined` until the remote `establish` arrives (or if the peer
+   * advertises no features).
+   */
+  peerFeatures?: WireFeatures
 }
 
 /** Per-peer state. */
@@ -43,6 +50,8 @@ export type SessionPeer = {
 
 export type SessionModel = {
   identity: PeerIdentityDetails
+  /** Wire features this peer advertises in its outbound `establish`. */
+  selfFeatures: WireFeatures
   channels: Map<ChannelId, ChannelEntry>
   peers: Map<PeerId, SessionPeer>
   departureTimeout: number // ms, 0 = immediate departure
@@ -114,9 +123,11 @@ export type SessionUpdate = (
 export function initSession(
   identity: PeerIdentityDetails,
   departureTimeout: number = 30_000,
+  selfFeatures: WireFeatures = { alias: true },
 ): SessionModel {
   return {
     identity,
+    selfFeatures,
     channels: new Map(),
     peers: new Map(),
     departureTimeout,
@@ -309,7 +320,11 @@ function handleChannelEstablish(
   const sendEffect: SessionEffect = {
     type: "send",
     to: input.channelId,
-    message: { type: "establish", identity: model.identity },
+    message: {
+      type: "establish",
+      identity: model.identity,
+      features: model.selfFeatures,
+    },
   }
 
   // Check if channel is now fully established
@@ -327,7 +342,11 @@ function handleChannelEstablish(
 
 function handleEstablishReceived(
   fromChannelId: ChannelId,
-  message: { type: "establish"; identity: PeerIdentityDetails },
+  message: {
+    type: "establish"
+    identity: PeerIdentityDetails
+    features?: WireFeatures
+  },
   model: SessionModel,
   canConnect?: (peer: PeerIdentityDetails) => boolean,
 ): SessionTransition {
@@ -344,11 +363,12 @@ function handleEstablishReceived(
   // (prevents infinite ping-pong)
   if (entry.localEstablishSent && entry.remoteIdentity) return [model]
 
-  // Set remoteIdentity and mark localEstablishSent = true
+  // Set remoteIdentity, peerFeatures, and mark localEstablishSent = true
   // (echoing establish back counts as our local send)
   const updatedEntry: ChannelEntry = {
     ...entry,
     remoteIdentity: message.identity,
+    peerFeatures: message.features,
     localEstablishSent: true,
   }
   const channels = new Map(model.channels)
@@ -359,7 +379,11 @@ function handleEstablishReceived(
   const echoEffect: SessionEffect = {
     type: "send",
     to: fromChannelId,
-    message: { type: "establish", identity: model.identity },
+    message: {
+      type: "establish",
+      identity: model.identity,
+      features: model.selfFeatures,
+    },
   }
 
   // Channel is now fully established (both flags set)

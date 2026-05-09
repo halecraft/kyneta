@@ -1,22 +1,19 @@
-// re-exports — verify @kyneta/exchange re-exports are identical to @kyneta/transport.
+// re-exports — verify @kyneta/exchange re-exports are identical to source.
 //
-// This refactoring extracted transport infrastructure into @kyneta/transport.
-// The exchange barrel re-exports everything for backwards compatibility.
-// This test ensures:
-//   1. Every value export from @kyneta/transport is re-exported by @kyneta/exchange
-//   2. Re-exported values are the *same reference* (not copies) — critical for instanceof
+// The exchange barrel re-exports symbols from @kyneta/transport and
+// @kyneta/bridge-transport for backwards compatibility. This test
+// ensures re-exported values are the *same reference* (not copies) —
+// critical for instanceof checks.
 
+import * as bridgeTransport from "@kyneta/bridge-transport"
 import * as transport from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
 import * as exchange from "../index.js"
 
 describe("@kyneta/exchange re-exports from @kyneta/transport", () => {
-  // Value exports that must be reference-identical
-  const sharedValues = [
+  // Value exports re-exported from @kyneta/transport
+  const transportValues = [
     "Transport",
-    "Bridge",
-    "BridgeTransport",
-    "createBridgeTransport",
     "ChannelDirectory",
     "computeBackoffDelay",
     "DEFAULT_RECONNECT",
@@ -25,11 +22,26 @@ describe("@kyneta/exchange re-exports from @kyneta/transport", () => {
     "isSyncMsg",
   ] as const
 
-  for (const name of sharedValues) {
+  for (const name of transportValues) {
     it(`re-exports ${name} as the same reference`, () => {
       const fromTransport = (transport as Record<string, unknown>)[name]
       const fromExchange = (exchange as Record<string, unknown>)[name]
       expect(fromExchange).toBe(fromTransport)
+    })
+  }
+
+  // Value exports re-exported from @kyneta/bridge-transport
+  const bridgeValues = [
+    "Bridge",
+    "BridgeTransport",
+    "createBridgeTransport",
+  ] as const
+
+  for (const name of bridgeValues) {
+    it(`re-exports ${name} as the same reference`, () => {
+      const fromBridge = (bridgeTransport as Record<string, unknown>)[name]
+      const fromExchange = (exchange as Record<string, unknown>)[name]
+      expect(fromExchange).toBe(fromBridge)
     })
   }
 

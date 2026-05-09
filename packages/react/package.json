@@ -41,11 +41,13 @@
     "react": ">=18"
   },
   "devDependencies": {
+    "@kyneta/bridge-transport": "workspace:^",
     "@kyneta/changefeed": "workspace:^",
     "@kyneta/exchange": "workspace:^",
     "@kyneta/loro-schema": "workspace:^",
     "@kyneta/schema": "workspace:^",
     "@kyneta/transport": "workspace:^",
+    "@kyneta/wire": "workspace:^",
     "@kyneta/yjs-schema": "workspace:^",
     "@testing-library/react": "^16.3.0",
     "@types/react": "^19.1.8",
