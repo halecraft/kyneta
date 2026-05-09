@@ -10,7 +10,7 @@ import { Pool } from "pg"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { createPostgresStore, PostgresStore } from "../index.js"
 
-const PG_URL = process.env["KYNETA_PG_URL"]
+const PG_URL = process.env.KYNETA_PG_URL
 const ENABLED = PG_URL !== undefined && PG_URL.length > 0
 
 const pool: Pool | null = ENABLED

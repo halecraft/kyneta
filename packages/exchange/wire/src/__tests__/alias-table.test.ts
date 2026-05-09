@@ -13,6 +13,10 @@ import {
   applyOutboundAliasing,
   emptyAliasState,
 } from "../alias-table.js"
+import {
+  DOC_ID_MAX_UTF8_BYTES,
+  SCHEMA_HASH_MAX_UTF8_BYTES,
+} from "../constants.js"
 
 const alice: EstablishMsg = {
   type: "establish",
@@ -247,6 +251,106 @@ describe("alias-table — unknown-alias error path", () => {
     } as any)
     expect(result.msg).toBeUndefined()
     expect(result.error?.code).toBe("missing-doc-id")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Identifier length validation
+// ---------------------------------------------------------------------------
+
+describe("alias-table — identifier length validation", () => {
+  it("inbound interest with oversized docId returns doc-id-too-long error", () => {
+    const docId = "a".repeat(DOC_ID_MAX_UTF8_BYTES + 1)
+    const result = applyInboundAliasing(emptyAliasState(), {
+      t: 0x11, // Interest
+      doc: docId,
+    } as any)
+    expect(result.msg).toBeUndefined()
+    expect(result.error).toEqual({
+      code: "doc-id-too-long",
+      message: `DocId exceeds ${DOC_ID_MAX_UTF8_BYTES} UTF-8 bytes (got ${DOC_ID_MAX_UTF8_BYTES + 1})`,
+    })
+  })
+
+  it("inbound present with oversized schemaHash returns schema-hash-too-long error", () => {
+    const schemaHash = "h".repeat(SCHEMA_HASH_MAX_UTF8_BYTES + 1)
+    const result = applyInboundAliasing(emptyAliasState(), {
+      t: 0x10, // Present
+      docs: [
+        {
+          d: "doc-1",
+          a: 0,
+          rt: ["plain", 1, 0],
+          ms: 1,
+          sh: schemaHash,
+        },
+      ],
+    } as any)
+    expect(result.msg).toBeUndefined()
+    expect(result.error).toEqual({
+      code: "schema-hash-too-long",
+      message: `SchemaHash exceeds ${SCHEMA_HASH_MAX_UTF8_BYTES} UTF-8 bytes (got ${SCHEMA_HASH_MAX_UTF8_BYTES + 1})`,
+    })
+  })
+
+  it("inbound docId at cap (512 bytes) resolves correctly", () => {
+    const docId = "a".repeat(DOC_ID_MAX_UTF8_BYTES)
+    const result = applyInboundAliasing(emptyAliasState(), {
+      t: 0x11, // Interest
+      doc: docId,
+    } as any)
+    expect(result.error).toBeUndefined()
+    expect(result.msg?.type).toBe("interest")
+    if (result.msg?.type === "interest") {
+      expect(result.msg.docId).toBe(docId)
+    }
+  })
+
+  it("inbound schemaHash at cap (256 bytes) resolves correctly", () => {
+    const schemaHash = "h".repeat(SCHEMA_HASH_MAX_UTF8_BYTES)
+    const result = applyInboundAliasing(emptyAliasState(), {
+      t: 0x10, // Present
+      docs: [
+        {
+          d: "doc-1",
+          a: 0,
+          rt: ["plain", 1, 0],
+          ms: 1,
+          sh: schemaHash,
+        },
+      ],
+    } as any)
+    expect(result.error).toBeUndefined()
+    expect(result.msg?.type).toBe("present")
+    if (result.msg?.type === "present") {
+      expect(result.msg.docs[0]?.schemaHash).toBe(schemaHash)
+    }
+  })
+
+  it("multi-byte UTF-8 docId at cap (512 bytes) resolves correctly", () => {
+    // "ñ" is 2 UTF-8 bytes. 256 × 2 = 512 bytes.
+    const docId = "ñ".repeat(256)
+    const result = applyInboundAliasing(emptyAliasState(), {
+      t: 0x11, // Interest
+      doc: docId,
+    } as any)
+    expect(result.error).toBeUndefined()
+    expect(result.msg?.type).toBe("interest")
+    if (result.msg?.type === "interest") {
+      expect(result.msg.docId).toBe(docId)
+    }
+  })
+
+  it("multi-byte UTF-8 docId one byte over cap returns error", () => {
+    // "ñ" is 2 UTF-8 bytes. 256 × 2 = 512 bytes (at cap).
+    // 257 × 2 = 514 bytes (over cap).
+    const docId = "ñ".repeat(257)
+    const result = applyInboundAliasing(emptyAliasState(), {
+      t: 0x11, // Interest
+      doc: docId,
+    } as any)
+    expect(result.msg).toBeUndefined()
+    expect(result.error?.code).toBe("doc-id-too-long")
   })
 })
 

@@ -21,7 +21,6 @@ import {
   unwrap,
 } from "@kyneta/schema"
 import type { PeerIdentityDetails } from "@kyneta/transport"
-import { cborCodec } from "@kyneta/wire"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   Exchange,
@@ -334,7 +333,7 @@ describe("Exchange", () => {
 
     describe("changefeed → synchronizer auto-wiring", () => {
       it("change() auto-notifies synchronizer — no manual notifyLocalChange needed", async () => {
-        const bridge = new Bridge({ codec: cborCodec })
+        const bridge = new Bridge()
 
         const exchangeA = new Exchange({
           id: "alice",
@@ -388,7 +387,7 @@ describe("Exchange", () => {
     })
 
     it("peer-established fires when a remote peer connects via Bridge", async () => {
-      const bridge = new Bridge({ codec: cborCodec })
+      const bridge = new Bridge()
       const exchange1 = createExchange({
         id: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
@@ -420,7 +419,7 @@ describe("Exchange", () => {
     })
 
     it("peer-departed fires when a remote peer disconnects", async () => {
-      const bridge = new Bridge({ codec: cborCodec })
+      const bridge = new Bridge()
       const exchange1 = createExchange({
         id: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
@@ -453,7 +452,7 @@ describe("Exchange", () => {
     })
 
     it("exchange.peers() reflects correct state during subscriber callback", async () => {
-      const bridge = new Bridge({ codec: cborCodec })
+      const bridge = new Bridge()
       const exchange1 = createExchange({
         id: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
@@ -479,8 +478,8 @@ describe("Exchange", () => {
     })
 
     it("multi-transport: one peer-established on first bridge, no second on second bridge", async () => {
-      const bridge1 = new Bridge({ codec: cborCodec })
-      const bridge2 = new Bridge({ codec: cborCodec })
+      const bridge1 = new Bridge()
+      const bridge2 = new Bridge()
       const exchange1 = createExchange({
         id: "alice",
         transports: [
@@ -511,7 +510,7 @@ describe("Exchange", () => {
     })
 
     it("shutdown emits peer-departed for all connected peers", async () => {
-      const bridge = new Bridge({ codec: cborCodec })
+      const bridge = new Bridge()
       const exchange1 = createExchange({
         id: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
@@ -539,7 +538,7 @@ describe("Exchange", () => {
     })
 
     it("reset() emits peer-departed for all connected peers", async () => {
-      const bridge = new Bridge({ codec: cborCodec })
+      const bridge = new Bridge()
       const exchange1 = createExchange({
         id: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
@@ -571,7 +570,7 @@ describe("Exchange", () => {
     // -----------------------------------------------------------------------
 
     it("involuntary disconnect: peer-disconnected fires, peer preserved in peers()", async () => {
-      const bridge = new Bridge({ codec: cborCodec })
+      const bridge = new Bridge()
       const exchange1 = createExchange({
         id: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
@@ -604,7 +603,7 @@ describe("Exchange", () => {
     })
 
     it("involuntary disconnect then shutdown: peer-departed fires", async () => {
-      const bridge = new Bridge({ codec: cborCodec })
+      const bridge = new Bridge()
       const exchange1 = createExchange({
         id: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
@@ -635,7 +634,7 @@ describe("Exchange", () => {
     })
 
     it("reconnection after involuntary disconnect: peer-reconnected fires", async () => {
-      const bridge = new Bridge({ codec: cborCodec })
+      const bridge = new Bridge()
       const exchange1 = createExchange({
         id: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
@@ -674,7 +673,7 @@ describe("Exchange", () => {
     })
 
     it("sync resumes after reconnection", async () => {
-      const bridge = new Bridge({ codec: cborCodec })
+      const bridge = new Bridge()
       const exchange1 = createExchange({
         id: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
@@ -721,7 +720,7 @@ describe("Exchange", () => {
     // -----------------------------------------------------------------------
 
     it("departureTimeout: 0 — involuntary disconnect triggers immediate peer-departed", async () => {
-      const bridge = new Bridge({ codec: cborCodec })
+      const bridge = new Bridge()
       const exchange1 = createExchange({
         id: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
@@ -754,7 +753,7 @@ describe("Exchange", () => {
     it("departure timer fires after grace period", async () => {
       vi.useFakeTimers()
       try {
-        const bridge = new Bridge({ codec: cborCodec })
+        const bridge = new Bridge()
         const exchange1 = createExchange({
           id: "alice",
           transports: [createBridgeTransport({ transportId: "alice", bridge })],
@@ -803,7 +802,7 @@ describe("Exchange", () => {
     it("reconnection before departure timer cancels the timer", async () => {
       vi.useFakeTimers()
       try {
-        const bridge = new Bridge({ codec: cborCodec })
+        const bridge = new Bridge()
         const exchange1 = createExchange({
           id: "alice",
           transports: [createBridgeTransport({ transportId: "alice", bridge })],
@@ -1035,7 +1034,7 @@ describe("Exchange", () => {
     })
 
     it("suspend() on deferred doc throws", async () => {
-      const bridge = new Bridge({ codec: cborCodec })
+      const bridge = new Bridge()
       const exchangeA = createExchange({
         id: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],
@@ -1060,7 +1059,7 @@ describe("Exchange", () => {
 
   describe("canConnect", () => {
     it("canConnect returning false prevents peer establishment", async () => {
-      const bridge = new Bridge({ codec: cborCodec })
+      const bridge = new Bridge()
 
       const _exchange1 = createExchange({
         id: "alice",
@@ -1082,7 +1081,7 @@ describe("Exchange", () => {
     })
 
     it("canConnect returning undefined defers (default open)", async () => {
-      const bridge = new Bridge({ codec: cborCodec })
+      const bridge = new Bridge()
 
       const _exchange1 = createExchange({
         id: "alice",
@@ -1106,7 +1105,7 @@ describe("Exchange", () => {
 
   describe("getPeerFeatures", () => {
     it("returns the peer's advertised features after handshake", async () => {
-      const bridge = new Bridge({ codec: cborCodec })
+      const bridge = new Bridge()
 
       const alice = new Exchange({
         id: "alice",
@@ -1126,7 +1125,7 @@ describe("Exchange", () => {
     })
 
     it("returns undefined for a peer that has not established yet", () => {
-      const bridge = new Bridge({ codec: cborCodec })
+      const bridge = new Bridge()
       const alice = new Exchange({
         id: "alice",
         transports: [createBridgeTransport({ transportId: "alice", bridge })],

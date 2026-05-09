@@ -1,21 +1,20 @@
-// @kyneta/wire — wire format codecs, framing, and fragmentation.
+// @kyneta/wire — wire format, framing, and fragmentation.
 //
 // Universal Frame<T> abstraction: every message is a frame. A frame
 // carries a version, optional hash, and content (Complete or Fragment).
 // Binary: Frame<Uint8Array>. Text: Frame<string>.
 //
-// Two pipelines for @kyneta/transport's 6-message protocol
+// Single alias-aware pipeline for @kyneta/transport's 6-message protocol
 // (establish, depart, present, interest, offer, dismiss):
 //
-// Binary pipeline (WebSocket, WebRTC):
-//   BinaryCodec (CBOR) → binary frame (6B header) → binary fragmentation → FragmentReassembler
+// Binary transports (WebSocket, WebRTC, Unix Socket, Bridge):
+//   applyOutboundAliasing → encodeWireMessage → binary frame → fragmentation → FragmentReassembler
 //
-// Text pipeline (SSE, HTTP):
-//   TextCodec (JSON) → text frame ("Vx" prefix) → text fragmentation → TextReassembler
+// Text transports (SSE):
+//   applyOutboundAliasing → encodeTextWireMessage → text frame → fragmentation → TextReassembler
 //
 // Shared: FragmentCollector<T> — generic stateful fragment collection
 // with FC/IS design (pure decideFragment + imperative shell).
-// Batching is orthogonal to framing — the codec handles it.
 
 // ---------------------------------------------------------------------------
 // Frame types — universal frame abstraction
@@ -23,24 +22,6 @@
 
 export type { Complete, Fragment, Frame } from "./frame-types.js"
 export { complete, fragment, isComplete, isFragment } from "./frame-types.js"
-
-// ---------------------------------------------------------------------------
-// Codec interfaces
-// ---------------------------------------------------------------------------
-
-export type { BinaryCodec, TextCodec } from "./codec.js"
-
-// ---------------------------------------------------------------------------
-// CBOR codec — binary transports
-// ---------------------------------------------------------------------------
-
-export { cborCodec } from "./cbor.js"
-
-// ---------------------------------------------------------------------------
-// Text codec — text transports (SSE, HTTP)
-// ---------------------------------------------------------------------------
-
-export { textCodec } from "./json.js"
 
 // ---------------------------------------------------------------------------
 // Wire types — discriminators and compact field names (CBOR internals)
@@ -93,8 +74,6 @@ export {
 export {
   decodeBinaryFrame,
   encodeBinaryFrame,
-  encodeComplete,
-  encodeCompleteBatch,
   FrameDecodeError,
   type FrameDecodeErrorCode,
 } from "./frame.js"
@@ -105,8 +84,6 @@ export {
 
 export {
   decodeTextFrame,
-  encodeTextComplete,
-  encodeTextCompleteBatch,
   encodeTextFrame,
   fragmentTextPayload,
   TEXT_WIRE_VERSION,
@@ -152,13 +129,12 @@ export {
 } from "./reassembler.js"
 
 // ---------------------------------------------------------------------------
-// Binary transport helpers — shared encode/decode for binary transports
+// Binary transport helpers — shared encode/decode for binary and text transports
 // ---------------------------------------------------------------------------
 
 export {
-  decodeBinaryMessages,
   decodeBinaryWires,
-  encodeBinaryAndSend,
+  decodeTextWires,
   encodeWireFrameAndSend,
 } from "./binary-transport.js"
 

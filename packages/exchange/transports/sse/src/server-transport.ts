@@ -13,11 +13,11 @@
 //
 // Usage with Hono:
 //   import { SseServerTransport } from "@kyneta/sse-network-adapter/server"
-//   import { parseTextPostBody } from "@kyneta/sse-network-adapter/express"
+//   import { SseConnection } from "@kyneta/sse-network-adapter/express"
 //
 //   const serverAdapter = new SseServerTransport()
 //   // Wire up GET /events and POST /sync manually using
-//   // serverAdapter.registerConnection() and parseTextPostBody()
+//   // serverAdapter.registerConnection() and connection.handlePostBody()
 
 import { randomPeerId } from "@kyneta/random"
 import type { ChannelMsg, GeneratedChannel, PeerId } from "@kyneta/transport"

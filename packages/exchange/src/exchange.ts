@@ -729,22 +729,23 @@ export class Exchange {
       }
     }
 
-    if (hadStoredEntries) {
-      // Re-boot: data already on disk — register at the hydrated version
-      this.#storeHandle!.dispatch({
-        type: "hydrated",
-        docId,
-        version: replica.version().serialize(),
-      })
-    } else {
-      // First boot: persist initial meta + entirety
-      this.#storeHandle!.dispatch({
-        type: "register",
-        docId,
-        meta,
-        entirety: replica.exportEntirety(),
-        version: replica.version().serialize(),
-      })
+    const handle = this.#storeHandle
+    if (handle) {
+      if (hadStoredEntries) {
+        handle.dispatch({
+          type: "hydrated",
+          docId,
+          version: replica.version().serialize(),
+        })
+      } else {
+        handle.dispatch({
+          type: "register",
+          docId,
+          meta,
+          entirety: replica.exportEntirety(),
+          version: replica.version().serialize(),
+        })
+      }
     }
 
     // Register with synchronizer — present/interest messages carry

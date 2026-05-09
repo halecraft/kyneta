@@ -7,7 +7,7 @@
 > **Canonical symbols**: `createUnixSocketClient`, `UnixSocketClientTransport`, `UnixSocketClientOptions`, `UnixSocketServerTransport`, `UnixSocketServerOptions`, `UnixSocketListener`, `UnixSocketConnection`, `connect`, `listen`, `createUnixSocketPeer`, `UnixSocketPeer`, `UnixSocketPeerOptions`, `createPeerProgram`, `PeerMsg`, `PeerEffect`, `PeerModel`, `createUnixSocketClientProgram`, `UnixSocketClientMsg`, `UnixSocketClientEffect`, `UnixSocketClientState`, `UnixSocket`, `wrapNodeUnixSocket`, `wrapBunUnixSocket`, `ProbeResult`
 > **Key invariant(s)**: Unix sockets are byte streams, not message streams — every outbound payload is length-prefixed by the binary frame header and every inbound chunk flows through `feedBytes` from `@kyneta/wire`. There is no fragmentation layer (no gateway cap); a single message is one frame regardless of size.
 
-A Unix-domain-socket transport kit for server-to-server sync. It runs the same binary CBOR codec as the WebSocket and WebRTC transports, but replaces message-oriented framing with pure stream framing (`feedBytes` / `StreamParserState`) because stream transports coalesce writes and split reads at arbitrary boundaries.
+A Unix-domain-socket transport kit for server-to-server sync. It runs the same alias-aware binary pipeline as the WebSocket and WebRTC transports, but replaces message-oriented framing with pure stream framing (`feedBytes` / `StreamParserState`) because stream transports coalesce writes and split reads at arbitrary boundaries.
 
 Imported by server-side applications that want sync to flow over a local filesystem socket rather than a TCP connection. The package also exports a leaderless-peer negotiator so two processes sharing a socket path can cooperate without either being pre-designated the server.
 
@@ -30,7 +30,7 @@ Imported by server-side applications that want sync to flow over a local filesys
 | `UnixSocket` | Framework-agnostic interface: `write` (returns backpressure bool), `end`, `onData`, `onClose`, `onError`, `onDrain`. | The runtime's raw `net.Socket` or Bun socket |
 | `UnixSocketClientTransport` | The client-side `Transport<...>` subclass. Owns one outbound connection. | `UnixSocketServerTransport` |
 | `UnixSocketServerTransport` | The server-side `Transport<...>` subclass. Accepts inbound connections via a listener. | `UnixSocketListener`, which is the platform listening object |
-| `UnixSocketConnection` | Per-peer connection — owns the stream-frame parser, the CBOR codec, and the outbound write queue. | `UnixSocket`, which is the raw byte pipe |
+| `UnixSocketConnection` | Per-peer connection — owns the stream-frame parser, the alias-aware binary pipeline, and the outbound write queue. | `UnixSocket`, which is the raw byte pipe |
 | `UnixSocketPeer` | A peer running in leaderless mode. Chooses at runtime whether to listen or connect based on probing the socket path. | A regular client or server transport instance |
 | `createPeerProgram` | Factory returning a pure `Program<PeerMsg, PeerModel, PeerEffect>` that encodes the listen-or-connect decision. | `createUnixSocketClientProgram`, which is for the client lifecycle only |
 | `ProbeResult` | `"connected" \| "enoent" \| "econnrefused" \| "eaddrinuse"` — the outcome of probing a socket path. | A TCP probe or port scan |
@@ -57,7 +57,7 @@ Two structural differences from the WebSocket transport:
 | Topology | Client ↔ Server | Leaderless peer (optional) or Client ↔ Server |
 | Ready gate | Yes (server sends `"ready"`) | No (stream is bidirectionally ready on connect) |
 
-All else — the binary CBOR codec, the `createObservableProgram` runtime, the exchange's six-message protocol, the channel lifecycle — is identical.
+All else — the alias-aware binary pipeline, the `createObservableProgram` runtime, the exchange's six-message protocol, the channel lifecycle — is identical.
 
 ### What this transport is NOT
 
@@ -85,22 +85,24 @@ onData(chunk)
   └─ feedBytes(parserState, chunk) ──► { state, frames: Uint8Array[] }
      └─ for each frame:
         └─ decodeBinaryFrame(frame) ──► Frame<Uint8Array>
-           └─ cborCodec.decode(frame.content.payload) ──► ChannelMsg[]
-              └─ onChannelReceive(channelId, msg)
+           └─ decodeWireMessage(frame.content.payload) ──► WireMessage
+              └─ applyInboundAliasing ──► ChannelMsg[]
+                └─ onChannelReceive(channelId, msg)
 ```
 
-`feedBytes` is pure — it takes the parser's current state (either accumulating a 7-byte header or accumulating the declared payload), consumes bytes from the chunk, and emits any complete frames. The `StreamParserState` discriminated union makes every partial state representable.
+`feedBytes` is pure — it takes the parser's current state (either accumulating a 6-byte header or accumulating the declared payload), consumes bytes from the chunk, and emits any complete frames. The `StreamParserState` discriminated union makes every partial state representable.
 
 The outbound pipeline is similarly direct:
 
 ```
 ChannelMsg
-  └─ cborCodec.encode ──► Uint8Array (payload)
-     └─ encodeBinaryFrame(complete(WIRE_VERSION, payload)) ──► Uint8Array (framed)
-        └─ connection.write(framed)
+  └─ applyOutboundAliasing ──► WireMessage
+     └─ encodeWireMessage ──► Uint8Array (payload)
+        └─ encodeBinaryFrame(complete(WIRE_VERSION, payload)) ──► Uint8Array (framed)
+           └─ connection.write(framed)
 ```
 
-There is no `fragmentPayload` call. Every message is one complete frame with a 7-byte header. The kernel splits writes across chunks based on its own buffering; `feedBytes` reassembles them from length alone.
+There is no `fragmentPayload` call. Every message is one complete frame with a 6-byte header. The kernel splits writes across chunks based on its own buffering; `feedBytes` reassembles them from length alone.
 
 ### Why no fragmentation layer
 
@@ -110,7 +112,7 @@ Adding fragmentation here would be dead weight: every message would pay the 28-b
 
 ### What stream framing is NOT
 
-- **Not a decoder.** `feedBytes` emits raw frame bytes; the pipeline feeds them into `decodeBinaryFrame` + `cborCodec.decode`.
+- **Not a decoder.** `feedBytes` emits raw frame bytes; the pipeline feeds them into `decodeBinaryFrame` + `decodeWireMessage`.
 - **Not a fragment reassembler.** The `FragmentReassembler` from `@kyneta/wire` is not used here. Stream framing and payload fragmentation address different problems.
 - **Not lossy.** Unix sockets are reliable; if the kernel buffer overflows, `write` returns `false` and the producer waits. `feedBytes` never drops bytes.
 
@@ -250,21 +252,23 @@ const exchange = new Exchange({ transports: [peer] })
 
 ## Wire pipeline
 
-Identical to the WebSocket transport's binary pipeline, minus the fragmentation layer:
+Identical to the WebSocket transport's alias-aware binary pipeline, minus the fragmentation layer:
 
 ```
 Outbound:
   ChannelMsg
-    └─ cborCodec.encode ──► Uint8Array
-       └─ encodeBinaryFrame(complete(...)) ──► framed bytes
-          └─ UnixSocket.write (with backpressure queue)
+    └─ applyOutboundAliasing ──► WireMessage
+       └─ encodeWireMessage ──► Uint8Array
+          └─ encodeBinaryFrame(complete(...)) ──► framed bytes
+             └─ UnixSocket.write (with backpressure queue)
 
 Inbound:
   onData(chunk)
     └─ feedBytes(parserState, chunk) ──► frames
        └─ decodeBinaryFrame(frame)
-          └─ cborCodec.decode(payload) ──► ChannelMsg[]
-             └─ onChannelReceive
+          └─ decodeWireMessage(payload) ──► WireMessage
+             └─ applyInboundAliasing ──► ChannelMsg[]
+                └─ onChannelReceive
 ```
 
 The `WIRE_VERSION`, `HEADER_SIZE`, and binary frame type constants all come from `@kyneta/wire` — no Unix-socket-specific protocol.
@@ -282,7 +286,7 @@ The `WIRE_VERSION`, `HEADER_SIZE`, and binary frame type constants all come from
 | `UnixSocketServerOptions` | `src/server-transport.ts` | `{ path, ... }`. |
 | `UnixSocketListener` | `src/server-transport.ts` | The platform listening object (wraps Node's `net.Server` or Bun's equivalent). |
 | `OnConnectionCallback` | `src/server-transport.ts` | `(socket: UnixSocket) => void` — fired per inbound accept. |
-| `UnixSocketConnection` | `src/connection.ts` | Per-peer pipeline: parser state, CBOR codec, write queue, channel. |
+| `UnixSocketConnection` | `src/connection.ts` | Per-peer pipeline: parser state, alias-aware binary pipeline, write queue, channel. |
 | `UnixSocketPeer` | `src/peer.ts` | Leaderless peer — imperative shell around `createPeerProgram`. |
 | `UnixSocketPeerOptions` | `src/peer.ts` | `{ path, reconnect?, retryDelayMs? }`. |
 | `createUnixSocketPeer` | `src/peer.ts` | `TransportFactory` for leaderless peers. |

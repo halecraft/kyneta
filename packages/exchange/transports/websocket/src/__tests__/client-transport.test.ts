@@ -94,7 +94,7 @@ describe("WebsocketClientTransport — constructor injection", () => {
     await startTransport(transport)
 
     expect(calls).toHaveLength(1)
-    expect(calls[0]!.url).toBe("ws://localhost:9999/ws")
+    expect(calls[0]?.url).toBe("ws://localhost:9999/ws")
   })
 
   it("resolves URL function with peerId before passing to constructor", async () => {
@@ -109,7 +109,7 @@ describe("WebsocketClientTransport — constructor injection", () => {
     await startTransport(transport)
 
     expect(calls).toHaveLength(1)
-    expect(calls[0]!.url).toBe(`ws://localhost:9999/ws/${testIdentity.peerId}`)
+    expect(calls[0]?.url).toBe(`ws://localhost:9999/ws/${testIdentity.peerId}`)
   })
 })
 
@@ -131,7 +131,7 @@ describe("WebsocketClientTransport — header passing", () => {
     await startTransport(transport)
 
     expect(calls).toHaveLength(1)
-    expect(calls[0]!.rest).toEqual([{ headers }])
+    expect(calls[0]?.rest).toEqual([{ headers }])
   })
 
   it("omits second arg when headers are not provided", async () => {
@@ -146,7 +146,7 @@ describe("WebsocketClientTransport — header passing", () => {
     await startTransport(transport)
 
     expect(calls).toHaveLength(1)
-    expect(calls[0]!.rest).toEqual([])
+    expect(calls[0]?.rest).toEqual([])
   })
 
   it("omits second arg when headers is an empty object", async () => {
@@ -162,6 +162,6 @@ describe("WebsocketClientTransport — header passing", () => {
     await startTransport(transport)
 
     expect(calls).toHaveLength(1)
-    expect(calls[0]!.rest).toEqual([])
+    expect(calls[0]?.rest).toEqual([])
   })
 })

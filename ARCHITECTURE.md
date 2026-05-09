@@ -144,7 +144,7 @@ Schema composed changefeed emits Changeset<Op>            (5)
                envelope { offer, docId, payload, version }
                │
                ▼
-          @kyneta/wire encodes: cborCodec → binary frame   (7)
+          @kyneta/wire encodes: alias-aware binary pipeline → binary frame   (7)
                │
                └─ WebSocket transport: socket.send(frame)
                      │
@@ -152,7 +152,7 @@ Schema composed changefeed emits Changeset<Op>            (5)
                   Remote peer's WebSocket onMessage
                      │
                      ▼
-               decodeBinaryMessages → ChannelMsg[]         (8)
+               decodeBinaryWires → ChannelMsg[]         (8)
                      │
                      ▼
                remote Synchronizer's sync program:

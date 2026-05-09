@@ -1,13 +1,13 @@
 # @kyneta/webrtc-transport — Technical Reference
 
 > **Package**: `@kyneta/webrtc-transport`
-> **Role**: WebRTC data-channel transport for `@kyneta/exchange` — attaches to application-owned data channels and runs the same binary CBOR pipeline as the WebSocket transport over them. "Bring Your Own Data Channel" (BYODC).
+> **Role**: WebRTC data-channel transport for `@kyneta/exchange` — attaches to application-owned data channels and runs the same alias-aware binary pipeline as the WebSocket transport over them. "Bring Your Own Data Channel" (BYODC).
 > **Depends on**: `@kyneta/transport`, `@kyneta/wire` (both peer)
 > **Depended on by**: `@kyneta/exchange` (through application configuration)
 > **Canonical symbols**: `WebrtcTransport`, `createWebrtcTransport`, `WebrtcTransportOptions`, `DataChannelLike`, `DEFAULT_FRAGMENT_THRESHOLD`
 > **Key invariant(s)**: The transport never creates, negotiates, or closes a data channel. It only *attaches* to channels the application provides via `attachDataChannel(remotePeerId, channel)` and *detaches* via `detachDataChannel(remotePeerId)`. Closing the data channel, tearing down `RTCPeerConnection`, handling ICE, and running signalling are all the application's job.
 
-A tiny WebRTC transport kit. It accepts any object satisfying a five-member `DataChannelLike` interface, runs `ChannelMsg` through the same `@kyneta/wire` binary pipeline used by the WebSocket transport, and stays completely out of the signalling layer. Native `RTCDataChannel` satisfies `DataChannelLike` structurally with zero wrapping; `simple-peer` and other libraries conform through ~20 lines of bridge code.
+A tiny WebRTC transport kit. It accepts any object satisfying a five-member `DataChannelLike` interface, runs `ChannelMsg` through the same `@kyneta/wire` alias-aware binary pipeline used by the WebSocket transport, and stays completely out of the signalling layer. Native `RTCDataChannel` satisfies `DataChannelLike` structurally with zero wrapping; `simple-peer` and other libraries conform through ~20 lines of bridge code.
 
 Imported by applications that have already established a peer-to-peer connection via their own signalling infrastructure and now want document sync to flow over the existing data channel.
 
@@ -60,6 +60,7 @@ None of that has anything to do with document sync, and none of it is generaliza
 | Attach sync traffic to the data channel | This transport |
 | CBOR encode / decode | This transport (via `@kyneta/wire`) |
 | Fragment / reassemble | This transport (via `@kyneta/wire`) |
+| Apply alias transformer | This transport (via `@kyneta/wire`) |
 | Run the six-message protocol | `@kyneta/exchange` (through this transport) |
 
 `detachDataChannel(remotePeerId)` is explicit about its boundary: it removes the four event listeners, drops the reassembler, and removes the `ConnectedChannel` from the exchange — **but it does not call `channel.close()`**. The application may keep using the data channel for other purposes, or may close it later as part of its own teardown.
@@ -118,19 +119,20 @@ A `simple-peer` bridge is ~20 lines: map `"open"` / `"close"` / `"error"` / `"da
 
 ## Wire pipeline
 
-Source: `packages/exchange/transports/webrtc/src/webrtc-transport.ts`. Identical to the WebSocket transport's binary pipeline, differing only in the threshold constant.
+Source: `packages/exchange/transports/webrtc/src/webrtc-transport.ts`. Identical to the WebSocket transport's alias-aware binary pipeline, differing only in the threshold constant.
 
 ```
 Outbound:
   ChannelMsg
-    └─ cborCodec.encode
-       └─ encodeBinaryAndSend (fragment if > threshold)
-          └─ channel.send(Uint8Array)
+    └─ applyOutboundAliasing
+       └─ encodeWireMessage
+          └─ encodeWireFrameAndSend (fragment if > threshold)
+             └─ channel.send(Uint8Array)
 
 Inbound:
   event.data (ArrayBuffer | Uint8Array)
     └─ FragmentReassembler (per-channel, per-peer)
-       └─ decodeBinaryMessages (cborCodec)
+       └─ decodeBinaryWires
           └─ ChannelMsg[]
              └─ onChannelReceive(channelId, msg)
 ```

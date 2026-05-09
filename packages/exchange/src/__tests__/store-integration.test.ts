@@ -17,7 +17,6 @@ import {
   Replicate,
   Schema,
 } from "@kyneta/schema"
-import { cborCodec } from "@kyneta/wire"
 import { afterEach, describe, expect, it } from "vitest"
 import {
   Exchange,
@@ -206,7 +205,7 @@ describe("Storage + network sync", () => {
       metadata: new Map(),
     }
 
-    const bridge = new Bridge({ codec: cborCodec })
+    const bridge = new Bridge()
 
     const server = createExchange({
       id: { peerId: "server", type: "service" },
@@ -242,7 +241,7 @@ describe("Storage + network sync", () => {
     await peerA.shutdown()
     await server.shutdown()
 
-    const bridge2 = new Bridge({ codec: cborCodec })
+    const bridge2 = new Bridge()
 
     const server2 = createExchange({
       id: { peerId: "server", type: "service" },
@@ -282,7 +281,7 @@ describe("Storage + network sync", () => {
 
   it("network import persists to storage via onDocImported", async () => {
     const backend = new InMemoryStore()
-    const bridge = new Bridge({ codec: cborCodec })
+    const bridge = new Bridge()
 
     const server = createExchange({
       id: { peerId: "server", type: "service" },
@@ -329,7 +328,7 @@ describe("Storage + replicated doc", () => {
       metadata: new Map(),
     }
 
-    const bridge1 = new Bridge({ codec: cborCodec })
+    const bridge1 = new Bridge()
 
     // Relay 1: replicate mode + storage
     const relay1 = createExchange({
@@ -372,7 +371,7 @@ describe("Storage + replicated doc", () => {
     await relay1.shutdown()
 
     // Relay 2: restart with same storage, connect to peer B
-    const bridge2 = new Bridge({ codec: cborCodec })
+    const bridge2 = new Bridge()
 
     const relay2 = createExchange({
       id: { peerId: "relay-2", type: "service" },
@@ -532,7 +531,7 @@ describe("Multi-store first-hit reads", () => {
 
 describe("No storage (baseline)", () => {
   it("exchange without storage works exactly as before", async () => {
-    const bridge = new Bridge({ codec: cborCodec })
+    const bridge = new Bridge()
 
     const exchangeA = createExchange({
       id: "peer-a",

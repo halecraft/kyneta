@@ -51,11 +51,12 @@ function makeMockClient(state: MockState): unknown {
       select: { docId: true }
     }) {
       const ids = Array.from(state.metas.keys())
+      const docIdFilter = args.where?.docId
       const filtered =
-        args.where?.docId === undefined
+        docIdFilter === undefined
           ? ids
           : ids.filter(id => {
-              const { gte, lt } = args.where!.docId!
+              const { gte, lt } = docIdFilter
               if (gte !== undefined && id < gte) return false
               if (lt !== undefined && id >= lt) return false
               return true

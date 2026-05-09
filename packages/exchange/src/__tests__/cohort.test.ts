@@ -17,7 +17,6 @@
 
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { change, json, Schema } from "@kyneta/schema"
-import { cborCodec } from "@kyneta/wire"
 import { afterEach, describe, expect, it } from "vitest"
 import {
   Exchange,
@@ -73,7 +72,7 @@ const TestDoc = json.bind(
 
 describe("cohort governance predicate", () => {
   it("compact preserves delta sync when no cohort policy is set", async () => {
-    const bridge = new Bridge({ codec: cborCodec })
+    const bridge = new Bridge()
 
     const server = createExchange({
       id: "server",
@@ -115,8 +114,8 @@ describe("cohort governance predicate", () => {
   })
 
   it("LCV excludes non-cohort peers; compact preserves cohort member", async () => {
-    const bridgeSR = new Bridge({ codec: cborCodec })
-    const bridgeSB = new Bridge({ codec: cborCodec })
+    const bridgeSR = new Bridge()
+    const bridgeSB = new Bridge()
 
     const server = createExchange({
       id: { peerId: "server", type: "service" },
@@ -124,7 +123,7 @@ describe("cohort governance predicate", () => {
         createBridgeTransport({ transportId: "server-r", bridge: bridgeSR }),
         createBridgeTransport({ transportId: "server-b", bridge: bridgeSB }),
       ],
-      cohort: (_docId, peer) => (peer.type === "service" ? true : false),
+      cohort: (_docId, peer) => peer.type === "service",
     })
 
     const relay = createExchange({
@@ -183,12 +182,12 @@ describe("cohort governance predicate", () => {
   })
 
   it("non-cohort writer loses writes on epoch reset", async () => {
-    const bridge = new Bridge({ codec: cborCodec })
+    const bridge = new Bridge()
 
     const server = createExchange({
       id: { peerId: "server", type: "service" },
       transports: [createBridgeTransport({ transportId: "server", bridge })],
-      cohort: (_docId, peer) => (peer.type === "service" ? true : false),
+      cohort: (_docId, peer) => peer.type === "service",
     })
 
     const client = createExchange({
@@ -243,7 +242,7 @@ describe("cohort governance predicate", () => {
   })
 
   it("cohort member's writes survive compaction", async () => {
-    const bridge = new Bridge({ codec: cborCodec })
+    const bridge = new Bridge()
 
     const server = createExchange({
       id: { peerId: "server", type: "service" },
@@ -292,13 +291,13 @@ describe("cohort governance predicate", () => {
   })
 
   it("cohort policy that discriminates by docId", async () => {
-    const bridge = new Bridge({ codec: cborCodec })
+    const bridge = new Bridge()
 
     // Only the "durable" doc has cohort protection; "ephemeral" does not.
     const server = createExchange({
       id: { peerId: "server", type: "service" },
       transports: [createBridgeTransport({ transportId: "server", bridge })],
-      cohort: (docId, _peer) => (docId === "durable" ? true : false),
+      cohort: (docId, _peer) => docId === "durable",
     })
 
     const client = createExchange({
@@ -341,7 +340,7 @@ describe("cohort governance predicate", () => {
   })
 
   it("empty cohort triggers full projection on compact", async () => {
-    const bridge = new Bridge({ codec: cborCodec })
+    const bridge = new Bridge()
 
     const server = createExchange({
       id: { peerId: "server", type: "service" },

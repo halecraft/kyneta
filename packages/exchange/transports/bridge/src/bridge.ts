@@ -1,25 +1,19 @@
-// bridge-adapter — in-process transport with codec-faithful + alias-aware delivery.
+// bridge-adapter — in-process transport with alias-aware delivery.
 //
-// BridgeTransport is a real transport that runs the production codec
+// BridgeTransport is a real transport that runs the alias-aware pipeline
 // end-to-end and applies the docId/schemaHash alias transformer at the
 // channel send/receive boundary — exactly like every other binary
 // transport. Async delivery is preserved via `queueMicrotask()` to keep
 // test behavior representative of real network adapters.
 //
-// `@kyneta/transport` peer-depends on `@kyneta/wire` (a workspace-circular
-// peer-dep that resolves cleanly because the imports between the two
-// packages are runtime-disjoint: wire imports types from transport,
-// transport imports concrete machinery from wire).
-//
 // Usage:
-//   const bridge = new Bridge({ codec: cborCodec })
+//   const bridge = new Bridge()
 //   const exchangeA = new Exchange({
 //     transports: [createBridgeTransport({ transportId: "peer-a", bridge })],
 //   })
 
 import type {
   ChannelId,
-  ChannelMsg,
   GeneratedChannel,
   TransportFactory,
 } from "@kyneta/transport"
@@ -33,49 +27,19 @@ import {
   encodeWireMessage,
 } from "@kyneta/wire"
 
-/**
- * Structural codec interface used by `Bridge`'s convenience
- * `routeMessage` API. Compatible with `cborCodec` from `@kyneta/wire`.
- *
- * The bridge's main delivery path (`routeBytes`) is codec-agnostic; only
- * `routeMessage` (used by tests that bypass channel sends) needs a codec.
- */
-export type BridgeCodec = {
-  encode(input: ChannelMsg | ChannelMsg[]): Uint8Array<ArrayBuffer>
-  decode(data: Uint8Array): ChannelMsg[]
-}
-
 // ---------------------------------------------------------------------------
 // Bridge — message router connecting multiple BridgeTransports in-process
 // ---------------------------------------------------------------------------
-
-export type BridgeParams = {
-  /**
-   * Codec used by the convenience `routeMessage(from, to, msg)` API to
-   * encode `ChannelMsg` to bytes. Channel sends bypass this and produce
-   * bytes directly via the alias transformer + `encodeWireMessage`.
-   *
-   * Typically `cborCodec` from `@kyneta/wire`.
-   */
-  codec: BridgeCodec
-}
 
 /**
  * In-process byte router connecting multiple `BridgeTransport`s,
  * keyed by each transport's unique `transportId`.
  *
  * Channel-level sends produce alias-aware encoded bytes via the wire-layer
- * transformer and call `routeBytes`. The convenience `routeMessage` API
- * encodes a `ChannelMsg` to bytes via the injected codec for tests that
- * bypass channel sends.
+ * transformer and call `routeBytes`.
  */
 export class Bridge {
   readonly transports = new Map<string, BridgeTransport>()
-  readonly codec: BridgeCodec
-
-  constructor(params: BridgeParams) {
-    this.codec = params.codec
-  }
 
   addTransport(transport: BridgeTransport): void {
     if (!transport.transportId) {
@@ -105,24 +69,6 @@ export class Bridge {
     toTransport.deliverBytes(fromTransportId, bytes)
   }
 
-  /**
-   * Convenience: encode a `ChannelMsg` via the bridge's codec and route
-   * the bytes. Used by tests that inject messages directly into the
-   * bridge without going through a channel send.
-   *
-   * NOTE: Bypasses the alias transformer. The receiving channel still
-   * runs the inbound transformer, but the message will not carry alias
-   * fields. Production code should always send through a channel.
-   */
-  routeMessage(
-    fromTransportId: string,
-    toTransportId: string,
-    message: ChannelMsg,
-  ): void {
-    const bytes = this.codec.encode(message)
-    this.routeBytes(fromTransportId, toTransportId, bytes)
-  }
-
   get transportIds(): Set<string> {
     return new Set(this.transports.keys())
   }
@@ -148,13 +94,13 @@ export type BridgeTransportParams = {
 }
 
 /**
- * In-memory transport that runs the production codec and alias transformer
- * end-to-end. Tests that use this transport exercise the same wire path
- * as production transports.
+ * In-memory transport that runs the alias-aware pipeline end-to-end.
+ * Tests that use this transport exercise the same wire path as
+ * production transports.
  *
  * @example
  * ```typescript
- * const bridge = new Bridge({ codec: cborCodec })
+ * const bridge = new Bridge()
  * const exchangeA = new Exchange({
  *   transports: [createBridgeTransport({ transportId: "peer-a", bridge })],
  * })
@@ -295,7 +241,7 @@ export class BridgeTransport extends Transport<BridgeTransportContext> {
  *
  * @example
  * ```typescript
- * const bridge = new Bridge({ codec: cborCodec })
+ * const bridge = new Bridge()
  * const exchangeA = new Exchange({
  *   transports: [createBridgeTransport({ transportId: "peer-a", bridge })],
  * })

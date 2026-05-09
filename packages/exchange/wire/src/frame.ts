@@ -16,8 +16,6 @@
 // Batching is orthogonal — the payload is self-describing (CBOR array
 // vs map). The frame layer never needs to know.
 
-import type { ChannelMsg } from "@kyneta/transport"
-import type { BinaryCodec } from "./codec.js"
 import {
   BinaryFrameType,
   type BinaryFrameTypeValue,
@@ -36,9 +34,7 @@ import { complete, fragment as fragmentFrame } from "./frame-types.js"
  * Encode a `Frame<Uint8Array>` into its binary wire representation.
  *
  * Handles both complete and fragment frames. The payload must already
- * be codec-encoded (raw bytes). Use the convenience functions
- * `encodeComplete` / `encodeCompleteBatch` for the common case of
- * encoding from `ChannelMsg`.
+ * be codec-encoded (raw bytes).
  */
 export function encodeBinaryFrame(
   frame: Frame<Uint8Array>,
@@ -92,7 +88,8 @@ export function encodeBinaryFrame(
  * Decode a binary wire frame back to a `Frame<Uint8Array>`.
  *
  * The returned frame contains the raw codec-encoded payload. Use
- * the codec's `decode` to get `ChannelMsg[]`.
+ * `decodeWireMessage` to get a `WireMessage`, then `applyInboundAliasing`
+ * to obtain `ChannelMsg`.
  *
  * @throws FrameDecodeError if the frame is malformed
  */
@@ -168,37 +165,6 @@ export function decodeBinaryFrame(data: Uint8Array): Frame<Uint8Array> {
     "invalid_type",
     `Unknown frame type: 0x${(type as number).toString(16).padStart(2, "0")}`,
   )
-}
-
-// ---------------------------------------------------------------------------
-// Convenience — encode from ChannelMsg
-// ---------------------------------------------------------------------------
-
-/**
- * Encode a single `ChannelMsg` as a complete binary frame.
- *
- * Shorthand for `encodeBinaryFrame(complete(WIRE_VERSION, codec.encode(msg)))`.
- */
-export function encodeComplete(
-  codec: BinaryCodec,
-  msg: ChannelMsg,
-): Uint8Array<ArrayBuffer> {
-  const payload = codec.encode(msg)
-  return encodeBinaryFrame(complete(WIRE_VERSION, payload))
-}
-
-/**
- * Encode a batch of `ChannelMsg` as a complete binary frame.
- *
- * The batch is codec-encoded as a single payload. The frame layer
- * doesn't add a BATCH flag — the payload is self-describing.
- */
-export function encodeCompleteBatch(
-  codec: BinaryCodec,
-  msgs: ChannelMsg[],
-): Uint8Array<ArrayBuffer> {
-  const payload = codec.encode(msgs)
-  return encodeBinaryFrame(complete(WIRE_VERSION, payload))
 }
 
 // ---------------------------------------------------------------------------

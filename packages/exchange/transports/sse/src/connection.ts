@@ -1,7 +1,7 @@
 // connection — SseConnection for server-side peer connections.
 //
-// Wraps a TextReassembler + textCodec to provide send/receive for
-// ChannelMsg over a single SSE connection.
+// Wraps a TextReassembler + alias-aware pipeline to provide send/receive
+// for ChannelMsg over a single SSE connection.
 //
 // Used by SseServerTransport to manage individual client connections.
 // The client adapter handles its own encoding/decoding inline since it
@@ -14,12 +14,44 @@
 
 import type { Channel, ChannelMsg, PeerId } from "@kyneta/transport"
 import {
+  type AliasState,
+  applyInboundAliasing,
+  applyOutboundAliasing,
+  complete,
   createFrameIdCounter,
-  encodeTextComplete,
+  decodeTextWires,
+  emptyAliasState,
+  encodeTextFrame,
+  encodeTextWireMessage,
   fragmentTextPayload,
+  TEXT_WIRE_VERSION,
   TextReassembler,
-  textCodec,
 } from "@kyneta/wire"
+
+// ---------------------------------------------------------------------------
+// Result types
+// ---------------------------------------------------------------------------
+
+/**
+ * Response to send back to the client after processing a POST.
+ */
+export interface SsePostResponse {
+  status: 200 | 202 | 400
+  body: { ok: true } | { pending: true } | { error: string }
+}
+
+/**
+ * Result of parsing a text POST body.
+ *
+ * Discriminated union describing what happened:
+ * - "messages": Complete message(s) decoded, ready to deliver
+ * - "pending": Fragment received, waiting for more
+ * - "error": Decode/reassembly error
+ */
+export type SsePostResult =
+  | { type: "messages"; messages: ChannelMsg[]; response: SsePostResponse }
+  | { type: "pending"; response: SsePostResponse }
+  | { type: "error"; response: SsePostResponse }
 
 /**
  * Default fragment threshold in characters for outbound SSE messages.
@@ -42,11 +74,14 @@ export interface SseConnectionConfig {
 /**
  * Represents a single SSE connection to a peer (server-side).
  *
- * Manages encoding, framing, fragmentation, and reassembly for one
- * connected client. Created by `SseServerTransport.registerConnection()`.
+ * Manages encoding, framing, fragmentation, reassembly, and alias
+ * resolution for one connected client. Created by
+ * `SseServerTransport.registerConnection()`.
  *
- * The connection uses the text codec for transport — this is the natural
- * choice for SSE's text-only protocol.
+ * The connection uses the alias-aware text pipeline — the same
+ * `applyOutboundAliasing` / `applyInboundAliasing` transformer that
+ * every other transport uses. This means SSE now participates in
+ * docId/schemaHash aliasing just like binary transports.
  */
 export class SseConnection {
   readonly peerId: PeerId
@@ -59,6 +94,9 @@ export class SseConnection {
   // Fragmentation support
   readonly #fragmentThreshold: number
   #nextFrameId = createFrameIdCounter()
+
+  // Alias-aware pipeline state
+  #aliasState: AliasState = emptyAliasState()
 
   /**
    * Text reassembler for handling fragmented POST bodies.
@@ -122,13 +160,11 @@ export class SseConnection {
   /**
    * Send a ChannelMsg to the peer through the SSE stream.
    *
-   * Encodes via textCodec → text frame → fragment if needed → sendFn().
-   * Encoding and fragmentation are the connection's concern — the
-   * framework integration only needs to write strings.
+   * Runs the alias-aware outbound pipeline:
+   *   ChannelMsg → applyOutboundAliasing → WireMessage → encodeTextWireMessage → text frame → sendFn()
    *
-   * SSE does not yet run the alias transformer; outbound `establish`
-   * messages have `features.alias` stripped so peers do not negotiate
-   * alias support over SSE channels. Other features are preserved.
+   * Fragmentation is transparent to callers — the connection splits
+   * large frames into multiple sendFn calls automatically.
    */
   send(msg: ChannelMsg): void {
     if (!this.#sendFn) {
@@ -137,23 +173,17 @@ export class SseConnection {
       )
     }
 
-    // Strip alias feature from outbound establish — see comment above.
-    if (msg.type === "establish" && msg.features?.alias) {
-      msg = {
-        ...msg,
-        features: { ...msg.features, alias: false },
-      }
-    }
+    const { state, wire } = applyOutboundAliasing(this.#aliasState, msg)
+    this.#aliasState = state
 
-    // Encode to text wire format
-    const textFrame = encodeTextComplete(textCodec, msg)
+    const payload = JSON.stringify(encodeTextWireMessage(wire))
 
-    // Fragment large payloads
+    const textFrame = encodeTextFrame(complete(TEXT_WIRE_VERSION, payload))
+
     if (
       this.#fragmentThreshold > 0 &&
       textFrame.length > this.#fragmentThreshold
     ) {
-      const payload = JSON.stringify(textCodec.encode(msg))
       const fragments = fragmentTextPayload(
         payload,
         this.#fragmentThreshold,
@@ -168,10 +198,62 @@ export class SseConnection {
   }
 
   /**
+   * Handle an inbound POST body through the full alias-aware inbound pipeline.
+   *
+   * Pipeline: text frame → TextReassembler → decodeTextWireMessage → applyInboundAliasing → ChannelMsg
+   *
+   * Messages that fail alias resolution are silently skipped (logged and
+   * dropped) — the connection continues processing remaining messages.
+   * This matches the error-dropping behavior of every other transport.
+   *
+   * @param body - Text wire frame string (JSON array with "1c"/"1f" prefix)
+   * @returns Result describing what happened
+   */
+  handlePostBody(body: string): SsePostResult {
+    try {
+      const wires = decodeTextWires(this.reassembler, body)
+      if (wires === null) {
+        return {
+          type: "pending",
+          response: { status: 202, body: { pending: true } },
+        }
+      }
+
+      const messages: ChannelMsg[] = []
+      for (const wire of wires) {
+        const result = applyInboundAliasing(this.#aliasState, wire)
+        this.#aliasState = result.state
+        if (result.error) {
+          console.warn(
+            `[SseConnection] alias resolution failed for peer ${this.peerId}:`,
+            result.error,
+          )
+          continue
+        }
+        if (result.msg) {
+          messages.push(result.msg)
+        }
+      }
+
+      return {
+        type: "messages",
+        messages,
+        response: { status: 200, body: { ok: true } },
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : "decode_failed"
+      return {
+        type: "error",
+        response: { status: 400, body: { error: errorMessage } },
+      }
+    }
+  }
+
+  /**
    * Receive a message from the peer and route it to the channel.
    *
-   * Called by the framework integration after parsing a POST body
-   * through `parseTextPostBody`.
+   * Called by the framework integration after processing a POST body
+   * through `handlePostBody`.
    */
   receive(msg: ChannelMsg): void {
     if (!this.#channel) {

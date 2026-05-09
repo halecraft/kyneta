@@ -5,7 +5,15 @@
 // channel management.
 
 import type { ChannelMsg } from "@kyneta/transport"
-import { cborCodec, encodeComplete, fragmentPayload } from "@kyneta/wire"
+import {
+  applyOutboundAliasing,
+  complete,
+  emptyAliasState,
+  encodeBinaryFrame,
+  encodeWireMessage,
+  fragmentPayload,
+  WIRE_VERSION,
+} from "@kyneta/wire"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { WebrtcTransport } from "../webrtc-transport.js"
 import { MockDataChannel } from "./mock-data-channel.js"
@@ -44,6 +52,14 @@ async function initializeTransport(
 const TEST_MSG: ChannelMsg = {
   type: "establish",
   identity: { peerId: "remote", name: "R", type: "user" },
+}
+
+/** Encode a ChannelMsg through the alias-aware pipeline. */
+function encodeViaAlias(msg: ChannelMsg): Uint8Array<ArrayBuffer> {
+  const state = emptyAliasState()
+  const { wire } = applyOutboundAliasing(state, msg)
+  const payload = encodeWireMessage(wire)
+  return encodeBinaryFrame(complete(WIRE_VERSION, payload))
 }
 
 // ---------------------------------------------------------------------------
@@ -188,8 +204,8 @@ describe("Receive", () => {
     const dc = new MockDataChannel("open")
     transport.attachDataChannel("peer-1", dc)
 
-    // Encode a test message through the wire pipeline
-    const encoded = encodeComplete(cborCodec, TEST_MSG)
+    // Encode a test message through the alias-aware pipeline
+    const encoded = encodeViaAlias(TEST_MSG)
 
     // Convert to ArrayBuffer (as native RTCDataChannel with binaryType "arraybuffer" would deliver)
     const ab = encoded.buffer.slice(
@@ -212,7 +228,7 @@ describe("Receive", () => {
     const dc = new MockDataChannel("open")
     transport.attachDataChannel("peer-1", dc)
 
-    const encoded = encodeComplete(cborCodec, TEST_MSG)
+    const encoded = encodeViaAlias(TEST_MSG)
 
     // Pass Uint8Array directly (as simple-peer and other wrappers may deliver)
     dc.emit("message", { data: encoded })
@@ -327,7 +343,7 @@ describe("Fragmentation", () => {
       },
     }
 
-    const encoded = encodeComplete(cborCodec, largeMsg)
+    const encoded = encodeViaAlias(largeMsg)
     const fragments = fragmentPayload(encoded, 50, 1)
     expect(fragments.length).toBeGreaterThan(1)
 
@@ -459,7 +475,7 @@ describe("Message before open (race condition)", () => {
     expect(transport.channels.size).toBe(0)
 
     // Simulate a message arriving before the open event
-    const encoded = encodeComplete(cborCodec, TEST_MSG)
+    const encoded = encodeViaAlias(TEST_MSG)
     dc.emit("message", { data: encoded })
 
     // Message should be silently dropped — no delivery, no error

@@ -19,11 +19,12 @@ export {
 export { SseServerTransport } from "./server-transport.js"
 
 // ---------------------------------------------------------------------------
-// Handler (for custom framework integration)
+// Connection (for custom framework integration)
 // ---------------------------------------------------------------------------
 
 export {
-  parseTextPostBody,
+  SseConnection,
+  type SseConnectionConfig,
   type SsePostResponse,
   type SsePostResult,
-} from "./sse-handler.js"
+} from "./connection.js"

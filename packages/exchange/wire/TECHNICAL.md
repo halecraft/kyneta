@@ -1,10 +1,10 @@
 # @kyneta/wire — Technical Reference
 
 > **Package**: `@kyneta/wire`
-> **Role**: The universal wire format — one `Frame<T>` abstraction, two codecs (binary CBOR + text JSON), two framings (6-byte binary header + 2-char text prefix), one fragmentation protocol, and a pure byte-stream parser for stream-oriented transports.
+> **Role**: The universal wire format — one `Frame<T>` abstraction, one alias-aware pipeline per transport family (binary transports: `applyOutboundAliasing → encodeWireMessage → binary frame`; text transports: `applyOutboundAliasing → encodeTextWireMessage → text frame`), two framings (6-byte binary header + 2-char text prefix), one fragmentation protocol, and a pure byte-stream parser for stream-oriented transports.
 > **Depends on**: `@kyneta/transport` (peer), `@kyneta/schema`
 > **Depended on by**: `@kyneta/bridge-transport`, `@kyneta/websocket-transport`, `@kyneta/sse-transport`, `@kyneta/webrtc-transport`, `@kyneta/unix-socket-transport`
-> **Canonical symbols**: `Frame<T>`, `Complete<T>`, `Fragment<T>`, `complete`, `fragment`, `isComplete`, `isFragment`, `BinaryCodec`, `TextCodec`, `cborCodec`, `textCodec`, `encodeBinaryFrame`, `decodeBinaryFrame`, `encodeComplete`, `encodeCompleteBatch`, `encodeTextFrame`, `decodeTextFrame`, `FragmentCollector<T>`, `decideFragment`, `FragmentReassembler`, `TextReassembler`, `encodeBinaryAndSend`, `decodeBinaryMessages`, `encodeWireFrameAndSend`, `decodeBinaryWires`, `encodeWireMessage`, `decodeWireMessage`, `encodeTextWireMessage`, `decodeTextWireMessage`, `AliasState`, `applyOutboundAliasing`, `applyInboundAliasing`, `emptyAliasState`, `validateDocId`, `validateSchemaHash`, `feedBytes`, `initialParserState`, `StreamParserState`, `WIRE_VERSION`, `HEADER_SIZE`, `FRAGMENT_META_SIZE`, `DOC_ID_MAX_UTF8_BYTES`, `SCHEMA_HASH_MAX_UTF8_BYTES`, `FrameDecodeError`, `TextFrameDecodeError`, `SyncProtocolWire`, `SyncProtocolWireValue`, `SyncProtocolWireToProtocol`, `syncProtocolToWire`, `createFrameIdCounter`, `fragmentTextPayload`
+> **Canonical symbols**: `Frame<T>`, `Complete<T>`, `Fragment<T>`, `complete`, `fragment`, `isComplete`, `isFragment`, `encodeBinaryFrame`, `decodeBinaryFrame`, `encodeTextFrame`, `decodeTextFrame`, `FragmentCollector<T>`, `decideFragment`, `FragmentReassembler`, `TextReassembler`, `encodeWireFrameAndSend`, `decodeBinaryWires`, `encodeWireMessage`, `decodeWireMessage`, `encodeTextWireMessage`, `decodeTextWireMessage`, `AliasState`, `applyOutboundAliasing`, `applyInboundAliasing`, `emptyAliasState`, `validateDocId`, `validateSchemaHash`, `feedBytes`, `initialParserState`, `StreamParserState`, `WIRE_VERSION`, `HEADER_SIZE`, `FRAGMENT_META_SIZE`, `DOC_ID_MAX_UTF8_BYTES`, `SCHEMA_HASH_MAX_UTF8_BYTES`, `FrameDecodeError`, `TextFrameDecodeError`, `SyncProtocolWire`, `SyncProtocolWireValue`, `SyncProtocolWireToProtocol`, `syncProtocolToWire`, `createFrameIdCounter`, `fragmentTextPayload`
 > **Key invariant(s)**: Every byte that crosses a transport is a `Frame<T>`. A frame is either `Complete<T>` (full payload) or `Fragment<T>` (one chunk of a larger payload). Batching is not a frame concern — the codec's payload is self-describing (CBOR array vs map, JSON array vs object).
 
 A small kit for turning `ChannelMsg` values from `@kyneta/transport` into bytes (or JSON-safe strings) that can travel over any wire, and turning them back. It is pure protocol mechanics — encoding, framing, fragmentation, reassembly — with no transport-specific logic.
@@ -29,10 +29,6 @@ Consumed by every concrete transport package. Not used by application code. `@ky
 | `Frame<T>` | `{ version, hash, content: Complete<T> \| Fragment<T> }` — the universal delivery unit. | A networking "frame" in the ISO-OSI sense; an HTML/animation frame |
 | `Complete<T>` | `{ kind: "complete", payload: T }` — the frame carries the whole message (single or batch). | `Fragment<T>` |
 | `Fragment<T>` | `{ kind: "fragment", frameId, index, total, totalSize, payload }` — one chunk of a larger payload. | A TCP/IP network fragment; a URL fragment |
-| `BinaryCodec` | `ChannelMsg ↔ Uint8Array` — CBOR encoding for binary transports. | `TextCodec` |
-| `TextCodec` | `ChannelMsg ↔ JSON-safe value` — JSON encoding (text transports). Binary `SubstratePayload` is transparently base64'd. | `BinaryCodec`; also: `string` — `TextCodec` produces *objects*, serialized to a string by the text frame layer |
-| `cborCodec` | The exported `BinaryCodec` instance. | `cbor-encoding.ts`, which is the internal CBOR encoder/decoder |
-| `textCodec` | The exported `TextCodec` instance. | `JSON.stringify` — text codec encoding is JSON-*compatible* but structured (discriminated message shapes, not raw objects) |
 | `WIRE_VERSION` | The current binary wire protocol version (`1`). | A schema version, a package version |
 | `HEADER_SIZE` | The binary frame header size in bytes (`6`). | The fragment metadata size (`FRAGMENT_META_SIZE` = 10) |
 | `FRAGMENT_META_SIZE` | The per-fragment metadata appended after the header: `frameId(u16: 2) + index(u16: 2) + total(u16: 2) + totalSize(u32: 4) = 10`. | `FRAGMENT_MIN_SIZE` (= `HEADER_SIZE + FRAGMENT_META_SIZE + 1`) |
@@ -45,39 +41,66 @@ Consumed by every concrete transport package. Not used by application code. `@ky
 
 ## Architecture
 
-**Thesis**: one abstract frame type covers every wire. The binary (CBOR) pipeline and the text (JSON) pipeline share all their structural logic — only the payload type differs.
+**Thesis**: one abstract frame type covers every wire. The binary pipeline and the text pipeline share all structural logic — only the payload type and frame formatting differ. The alias transformer (`applyOutboundAliasing` / `applyInboundAliasing`) is the single `ChannelMsg ⇄ WireMessage` conversion; `encodeWireMessage`/`decodeWireMessage` and `encodeTextWireMessage`/`decodeTextWireMessage` handle the codec portion of the pipeline.
 
-Two pipelines, one shape:
+One pipeline per transport family:
 
-| Pipeline | `T` | Codec | Frame encoding | Transports |
-|----------|-----|-------|----------------|------------|
-| Binary | `Uint8Array` | `cborCodec` (`BinaryCodec`) | 6-byte header + payload (+ 10-byte fragment meta if fragment) | WebSocket, WebRTC, Unix socket |
-| Text | `string` | `textCodec` (`TextCodec`) | `"Vx"` prefix + JSON string (+ fragment meta inline) | SSE, HTTP |
+| Pipeline | `T` | Alias step | Codec step | Frame encoding | Transports |
+|----------|-----|------------|------------|----------------|------------|
+| Binary | `Uint8Array` | `applyOutboundAliasing` → `encodeWireMessage` | Internal CBOR (compact integer discriminants) | 6-byte header + payload (+ 10-byte fragment meta if fragment) | WebSocket, WebRTC, Unix socket |
+| Text | `string` | `applyOutboundAliasing` → `encodeTextWireMessage` | JSON (human-readable type strings; base64 for binary payloads) | `"Vx"` prefix + JSON string (+ fragment meta inline) | SSE, HTTP |
 
-A message's journey:
+A message's journey (binary transport):
 
 ```
-ChannelMsg ─┬→ codec.encode ──► T (payload bytes/string)
-            │
-            └→ fragment if payload > limit
-                    │
-                    ▼
-              Frame<T> (Complete or Fragment per piece)
-                    │
-                    ▼
-              encodeBinaryFrame / encodeTextFrame
-                    │
-                    ▼
-              over the wire
+ChannelMsg ──► applyOutboundAliasing ──► WireMessage
+                                          │
+                                          ▼
+                                     encodeWireMessage ──► T (payload bytes)
+                                          │
+                                          ▼
+                                fragment if payload > limit
+                                          │
+                                          ▼
+                                    Frame<T> (Complete or Fragment per piece)
+                                          │
+                                          ▼
+                                    encodeBinaryFrame
+                                          │
+                                          ▼
+                                    over the wire
 ```
 
-The reverse path: bytes → `decodeBinaryFrame`/`decodeTextFrame` → `Frame<T>` → reassembler (if fragment) → `codec.decode` → `ChannelMsg[]`.
+The reverse path: bytes → `decodeBinaryFrame` → `Frame<T>` → reassembler (if fragment) → `decodeWireMessage` → `applyInboundAliasing` → `ChannelMsg[]`.
+
+A message's journey (text transport):
+
+```
+ChannelMsg ──► applyOutboundAliasing ──► WireMessage
+                                          │
+                                          ▼
+                                     encodeTextWireMessage ──► T (payload string)
+                                          │
+                                          ▼
+                                fragment if payload > limit
+                                          │
+                                          ▼
+                                    Frame<T> (Complete or Fragment per piece)
+                                          │
+                                          ▼
+                                    encodeTextFrame
+                                          │
+                                          ▼
+                                    over the wire
+```
+
+The reverse path: string → `decodeTextFrame` → `Frame<T>` → reassembler (if fragment) → `decodeTextWireMessage` → `applyInboundAliasing` → `ChannelMsg[]`.
 
 ### What a `Frame` is NOT
 
 - **Not an ISO-OSI frame.** No link-layer semantics, no addressing, no sequence numbers in the traditional sense. A kyneta frame is a single application-level delivery unit with a version byte.
 - **Not an animation frame.** No relation to rAF, repaint cycles, or video frames.
-- **Not order-preserving across frames.** One frame holds one payload. Multi-message ordering semantics live in the codec (a batch = one payload with multiple messages) or in the substrate layer above.
+- **Not order-preserving across frames.** One frame holds one payload. Multi-message ordering semantics live in the `WireMessage` layer (a batch = one payload with multiple messages) or in the substrate layer above.
 - **Not self-addressed.** A frame has no sender or receiver in its header. Routing is the transport's concern (`AddressedEnvelope` / `ReturnEnvelope` from `@kyneta/transport`).
 
 ### What fragmentation is NOT
@@ -106,7 +129,7 @@ The two type parameters actually used in the codebase are `Frame<Uint8Array>` an
 
 ### Batching is a codec concern, not a frame concern
 
-A single `ChannelMsg` encodes as a CBOR map or a JSON object; a batch of `ChannelMsg` encodes as a CBOR array or a JSON array. The codec's `encode` accepts either; the codec's `decode` auto-detects and always returns `ChannelMsg[]`. The frame layer never inspects the payload — it is a length-prefixed byte blob or a prefixed string.
+A single `ChannelMsg` maps to a single `WireMessage`; a batch of `ChannelMsg` maps to an array of `WireMessage`. `encodeWireMessage`/`encodeTextWireMessage` accept either; the decode functions auto-detect and always return `ChannelMsg[]`. The frame layer never inspects the payload — it is a length-prefixed byte blob or a prefixed string.
 
 This separation is why there is no `BATCH` flag on the wire. Adding batching required zero frame changes.
 
@@ -139,10 +162,8 @@ Source: `packages/exchange/wire/src/constants.ts`, `packages/exchange/wire/src/f
 
 | Function | Produces |
 |----------|----------|
-| `encodeComplete(codec, msg)` | `Uint8Array` — single `ChannelMsg` → complete binary frame |
-| `encodeCompleteBatch(codec, msgs)` | `Uint8Array` — array of `ChannelMsg` → complete binary frame (codec auto-detects batch) |
-| `encodeBinaryAndSend(msg, sendFn, fragmentThreshold, nextFrameId)` | Fragments if necessary, encodes each piece, calls `sendFn` per frame (source: `src/binary-transport.ts`) |
-| `decodeBinaryMessages(bytes, reassembler)` | `ChannelMsg[]` — handles fragments via the reassembler and returns any fully-reassembled messages |
+| `encodeWireFrameAndSend(msg, sendFn, fragmentThreshold, nextFrameId)` | Aliases, encodes to WireMessage, fragments if necessary, encodes binary frame per piece, calls `sendFn` per frame (source: `src/binary-transport.ts`) |
+| `decodeBinaryWires(bytes, reassembler)` | `ChannelMsg[]` — handles fragments via the reassembler, decodes WireMessage, applies inbound aliasing, and returns any fully-reassembled messages |
 
 ---
 
@@ -157,15 +178,15 @@ Source: `packages/exchange/wire/src/cbor-encoding.ts`.
 
 The internal implementation covers RFC 8949 major types 0–7 — exactly the subset kyneta uses. No CBOR tags (major type 6), no indefinite-length encoding.
 
-### What `cborCodec` is NOT
+### What `encodeWireMessage` is NOT
 
 - **Not a general-purpose CBOR library.** It encodes only the `WireMessage` shape. Arbitrary CBOR values are not supported and not a goal.
 - **Not `@levischuck/tiny-cbor` or `cbor-x`.** It is a focused, self-contained replacement sized to kyneta's needs.
-- **Not symmetric with `textCodec` byte-for-byte.** Both codecs produce the *same* `ChannelMsg[]` on decode, but the bytes/strings they emit are completely different formats.
+- **Not symmetric with `encodeTextWireMessage` byte-for-byte.** Both functions produce the *same* `ChannelMsg[]` on decode, but the bytes/strings they emit are completely different formats.
 
 ### Compact wire-message shape
 
-Source: `packages/exchange/wire/src/wire-types.ts`. The CBOR codec maps `ChannelMsg` fields to integer discriminants and short field names to minimize bytes on the wire. The public `MessageType`, `PayloadEncoding`, `PayloadKind` enums (and their `*ToString` / `StringTo*` reverse maps) are exported for any code that must match the wire representation directly.
+Source: `packages/exchange/wire/src/wire-types.ts`. `encodeWireMessage` maps `ChannelMsg` fields to integer discriminants and short field names to minimize bytes on the wire. The public `MessageType`, `PayloadEncoding`, `PayloadKind` enums (and their `*ToString` / `StringTo*` reverse maps) are exported for any code that must match the wire representation directly.
 
 The `ms` field in `present` doc entries carries a `SyncProtocolWireValue` — an integer discriminant that encodes the `SyncProtocol` for wire transport. The lookup tables `SyncProtocolWire`, `SyncProtocolWireToProtocol`, and `syncProtocolToWire` handle the conversion between the structured `SyncProtocol` record and its wire representation.
 
@@ -179,7 +200,7 @@ Source: `packages/exchange/wire/src/json.ts`, `packages/exchange/wire/src/text-f
 
 The text pipeline mirrors the binary pipeline but with JSON-safe objects and a character-prefix framing. `TEXT_WIRE_VERSION = 1` is the text-pipeline version constant. Text frames use a two-character `"Vx"` prefix (where `x` encodes the version) followed by the JSON string. The valid type prefixes are `c` (complete) and `f` (fragment).
 
-Binary `SubstratePayload.bytes` data is base64-encoded by `textCodec` on write and decoded on read, so the resulting object is safely JSON-serializable.
+`encodeTextWireMessage` and `decodeTextWireMessage` (in `src/json.ts`) handle the `ChannelMsg → WireMessage → JSON-safe object` step. Binary `SubstratePayload.bytes` data is base64-encoded by `encodeTextWireMessage` on write and decoded by `decodeTextWireMessage` on read, so the resulting object is safely JSON-serializable.
 
 Fragmentation and reassembly work identically to the binary pipeline, via `fragmentTextPayload` / `TextReassembler` (which is a thin wrapper over the generic `FragmentCollector<string>`).
 
@@ -238,7 +259,7 @@ The parser handles every edge case by construction:
 
 ### What stream framing is NOT
 
-- **Not a decoder.** `feedBytes` emits raw frame bytes; the caller pipes them through `decodeBinaryFrame` + `codec.decode`.
+- **Not a decoder.** `feedBytes` emits raw frame bytes; the caller pipes them through `decodeBinaryFrame` + `decodeWireMessage`.
 - **Not a fragment collector.** Stream framing and payload fragmentation are orthogonal — a Unix-socket transport uses stream framing because it has no gateway cap, and does not use fragmentation at all.
 - **Not a parser for the text pipeline.** SSE has its own event-boundary framing; the text pipeline uses `decodeTextFrame` directly on each event's `data:` field.
 
@@ -249,19 +270,16 @@ The parser handles every edge case by construction:
 | Type | File | Role |
 |------|------|------|
 | `Frame<T>`, `Complete<T>`, `Fragment<T>` | `src/frame-types.ts` | Universal frame algebra + constructors + guards. |
-| `BinaryCodec`, `TextCodec` | `src/codec.ts` | Codec interfaces. |
-| `cborCodec` | `src/cbor.ts` | The exported `BinaryCodec`. |
-| `textCodec` | `src/json.ts` | The exported `TextCodec`. |
 | `WireMessage`, `Wire*Msg`, `MessageType`, `PayloadEncoding`, `PayloadKind` | `src/wire-types.ts` | Compact wire-message shape + enum discriminants. |
 | `SyncProtocolWire`, `SyncProtocolWireValue`, `SyncProtocolWireToProtocol`, `syncProtocolToWire` | `src/wire-types.ts` | Wire encoding for `SyncProtocol` — integer discriminants (`0x00`/`0x01`/`0x02`) and bidirectional lookup tables. |
 | `WIRE_VERSION`, `HEADER_SIZE`, `FRAGMENT_META_SIZE`, `FRAGMENT_MIN_SIZE`, `BinaryFrameType` | `src/constants.ts` | Wire constants. |
-| `encodeBinaryFrame`, `decodeBinaryFrame`, `encodeComplete`, `encodeCompleteBatch`, `FrameDecodeError` | `src/frame.ts` | Binary frame I/O. |
-| `encodeTextFrame`, `decodeTextFrame`, `encodeTextComplete`, `encodeTextCompleteBatch`, `fragmentTextPayload`, `TEXT_WIRE_VERSION`, `TextFrameDecodeError` | `src/text-frame.ts` | Text frame I/O. |
+| `encodeBinaryFrame`, `decodeBinaryFrame`, `FrameDecodeError` | `src/frame.ts` | Binary frame I/O. |
+| `encodeTextFrame`, `decodeTextFrame`, `fragmentTextPayload`, `TEXT_WIRE_VERSION`, `TextFrameDecodeError` | `src/text-frame.ts` | Text frame I/O. |
 | `fragmentPayload`, `shouldFragment`, `calculateFragmentationOverhead`, `createFrameIdCounter` | `src/fragment.ts` | Fragmentation primitives. |
 | `FragmentCollector<T>`, `decideFragment`, `FragmentDecision`, `CollectorConfig`, `CollectorOps<T>`, `CollectorResult`, `CollectorError`, `TimerAPI` | `src/fragment-collector.ts` | Generic collector (FC/IS). |
 | `FragmentReassembler`, `ReassembleResult`, `ReassembleError`, `ReassemblerConfig` | `src/reassembler.ts` | Binary-pipeline reassembler wrapper. |
 | `TextReassembler`, `TextReassembleResult`, `TextReassembleError`, `TextReassemblerConfig` | `src/text-reassembler.ts` | Text-pipeline reassembler wrapper. |
-| `encodeBinaryAndSend`, `decodeBinaryMessages` | `src/binary-transport.ts` | High-level outbound/inbound helpers for binary transports. |
+| `encodeWireFrameAndSend`, `decodeBinaryWires` | `src/binary-transport.ts` | High-level outbound/inbound helpers for binary transports (alias → encode → fragment → send). |
 | `feedBytes`, `initialParserState`, `StreamParserState`, `FeedBytesResult` | `src/stream-frame-parser.ts` | Pure stream framing. |
 
 ## File Map
@@ -271,27 +289,26 @@ The parser handles every edge case by construction:
 | `src/index.ts` | 180 | Public exports. |
 | `src/constants.ts` | 53 | Wire protocol constants. |
 | `src/frame-types.ts` | 118 | `Frame<T>`, `Complete<T>`, `Fragment<T>` + guards. |
-| `src/codec.ts` | 81 | `BinaryCodec`, `TextCodec` interfaces. |
-| `src/cbor.ts` | 309 | `cborCodec` — `ChannelMsg` ↔ CBOR bytes. |
+| `src/cbor.ts` | 309 | `encodeWireMessage`/`decodeWireMessage` — `ChannelMsg` ↔ CBOR-encoded `WireMessage` bytes (via `cbor-encoding.ts`). |
 | `src/cbor-encoding.ts` | 553 | Internal CBOR encoder/decoder (RFC 8949, major types 0–7). |
 | `src/wire-types.ts` | 248 | Compact wire-message shape + enums. |
-| `src/json.ts` | 219 | `textCodec` — `ChannelMsg` ↔ JSON-safe objects. |
+| `src/json.ts` | 219 | `encodeTextWireMessage`/`decodeTextWireMessage` — `ChannelMsg` ↔ JSON-safe `WireMessage` objects. |
 | `src/frame.ts` | 223 | Binary frame encode/decode. |
 | `src/text-frame.ts` | 306 | Text frame encode/decode. |
 | `src/fragment.ts` | 105 | Fragmentation primitives. |
 | `src/fragment-collector.ts` | 554 | Generic `FragmentCollector<T>` + pure `decideFragment`. |
 | `src/reassembler.ts` | 201 | Binary reassembler wrapper. |
 | `src/text-reassembler.ts` | 197 | Text reassembler wrapper. |
-| `src/binary-transport.ts` | 86 | `encodeBinaryAndSend`, `decodeBinaryMessages`. |
+| `src/binary-transport.ts` | 86 | `encodeWireFrameAndSend`, `decodeBinaryWires`. |
 | `src/stream-frame-parser.ts` | 182 | Pure `feedBytes` stream parser. |
 | `src/__tests__/cbor-encoding.test.ts` | 268 | CBOR encoder/decoder — UTF-8 strings, nested maps, pooled buffers. |
-| `src/__tests__/cbor.test.ts` | 503 | `cborCodec` round-trips for every `ChannelMsg` type. |
-| `src/__tests__/text-codec.test.ts` | 479 | `textCodec` round-trips + base64 transparency. |
+| `src/__tests__/cbor.test.ts` | 503 | `encodeWireMessage`/`decodeWireMessage` round-trips for every `ChannelMsg` type. |
+| `src/__tests__/text-codec.test.ts` | 479 | `encodeTextWireMessage`/`decodeTextWireMessage` round-trips + base64 transparency. |
 | `src/__tests__/frame.test.ts` | 553 | Binary frame encode/decode, truncation, version errors. |
 | `src/__tests__/text-frame.test.ts` | 696 | Text frame encode/decode + fragmentation. |
 | `src/__tests__/fragment.test.ts` | 262 | Fragmentation primitives. |
 | `src/__tests__/fragment-collector.test.ts` | 657 | `decideFragment` purity + `FragmentCollector` shell. |
-| `src/__tests__/binary-helpers.test.ts` | 142 | `encodeBinaryAndSend` / `decodeBinaryMessages`. |
+| `src/__tests__/binary-helpers.test.ts` | 142 | `encodeWireFrameAndSend` / `decodeBinaryWires`. |
 | `src/__tests__/stream-frame-parser.test.ts` | 229 | Stream parser edge cases: split headers, split payloads, coalesced writes, large payloads. |
 
 ## Testing

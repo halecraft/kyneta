@@ -11,7 +11,6 @@
 
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { change, Interpret, json, Reject, Schema } from "@kyneta/schema"
-import { cborCodec } from "@kyneta/wire"
 import { afterEach, describe, expect, it } from "vitest"
 import {
   Exchange,
@@ -71,7 +70,7 @@ const SequentialDoc = json.bind(
 
 describe("dynamic policy canShare", () => {
   it("blocks sharing while registered; disposing lifts the restriction", async () => {
-    const bridge = new Bridge({ codec: cborCodec })
+    const bridge = new Bridge()
 
     const exchangeA = createExchange({
       id: "alice",
@@ -118,7 +117,7 @@ describe("dynamic policy canShare", () => {
   })
 
   it("multiple policies compose — false from any policy denies", async () => {
-    const bridge = new Bridge({ codec: cborCodec })
+    const bridge = new Bridge()
 
     const exchangeA = createExchange({
       id: "alice",
@@ -167,7 +166,7 @@ describe("dynamic policy canShare", () => {
   })
 
   it("initial ExchangeParams policy and dynamic policy compose together", async () => {
-    const bridge = new Bridge({ codec: cborCodec })
+    const bridge = new Bridge()
 
     const exchangeA = createExchange({
       id: "alice",
@@ -214,7 +213,7 @@ describe("dynamic policy canShare", () => {
 
 describe("dynamic policy canAccept", () => {
   it("blocks inbound mutations while registered; disposing re-enables them", async () => {
-    const bridge = new Bridge({ codec: cborCodec })
+    const bridge = new Bridge()
 
     const exchangeA = createExchange({
       id: "alice",
@@ -257,7 +256,7 @@ describe("dynamic policy canAccept", () => {
 
 describe("dynamic policy resolve", () => {
   it("dynamically registered handler materializes peer-announced docs", async () => {
-    const bridge = new Bridge({ codec: cborCodec })
+    const bridge = new Bridge()
 
     const exchangeA = createExchange({
       id: "alice",
@@ -300,7 +299,7 @@ describe("dynamic policy resolve", () => {
 
 describe("named policy replacement", () => {
   it("re-registering a name replaces the old policy's rules", async () => {
-    const bridge = new Bridge({ codec: cborCodec })
+    const bridge = new Bridge()
 
     const exchangeA = createExchange({
       id: "alice",
@@ -346,8 +345,8 @@ describe("named policy replacement", () => {
 
 describe("relay topology", () => {
   it("policy on hub blocks relay to a specific peer", async () => {
-    const bridgeAH = new Bridge({ codec: cborCodec })
-    const bridgeHB = new Bridge({ codec: cborCodec })
+    const bridgeAH = new Bridge()
+    const bridgeHB = new Bridge()
 
     const exchangeA = createExchange({
       id: "alice",

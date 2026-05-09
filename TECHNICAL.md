@@ -34,7 +34,7 @@ Every test count in every per-package `TECHNICAL.md` agrees with this table. Run
 | `@kyneta/loro-schema` | 201 | 4 | 11 |
 | `@kyneta/yjs-schema` | 217 | 4 | 9 |
 | `@kyneta/transport` | 8 | 0 | 1 |
-| `@kyneta/wire` | 233 | 0 | 9 |
+| `@kyneta/wire` | 216 | 0 | 9 |
 | `@kyneta/websocket-transport` | 56 | 0 | 2 |
 | `@kyneta/sse-transport` | 44 | 0 | 3 |
 | `@kyneta/webrtc-transport` | 27 | 0 | 2 |
@@ -84,9 +84,9 @@ Two additional test suites live outside the main package graph:
 
 **`@kyneta/transport`** — Abstract transport contract. `abstract class Transport<G>`, channel lifecycle (`Generated → Connected → Established`), six-message protocol vocabulary (two lifecycle — `establish`, `depart`; four sync — `present`, `interest`, `offer`, `dismiss`), and identity types. Peer deps: `@kyneta/machine`, `@kyneta/schema`. 8 tests. → `packages/transport/TECHNICAL.md`.
 
-**`@kyneta/wire`** — Universal wire format. One `Frame<T>` abstraction (Complete or Fragment), two codecs (binary CBOR, text JSON), two framings (7-byte binary header, 2-char text prefix), fragmentation for cloud gateway limits, and a pure `feedBytes` stream-frame parser for stream-oriented transports. Internal CBOR encoder fixes a UTF-8 byte-length bug that plagued `@levischuck/tiny-cbor`. Peer dep: `@kyneta/transport`. 233 tests across 9 files. → `packages/exchange/wire/TECHNICAL.md`.
+**`@kyneta/wire`** — Universal wire format. One `Frame<T>` abstraction (Complete or Fragment), one alias-aware pipeline per transport family (`applyOutboundAliasing → encodeWireMessage → binary frame` for binary transports; `applyOutboundAliasing → encodeTextWireMessage → text frame` for text transports), two framings (6-byte binary header, 2-char text prefix), fragmentation for cloud gateway limits, and a pure `feedBytes` stream-frame parser for stream-oriented transports. Internal CBOR encoder fixes a UTF-8 byte-length bug that plagued `@levischuck/tiny-cbor`. Peer dep: `@kyneta/transport`. 216 tests across 9 files. → `packages/exchange/wire/TECHNICAL.md`.
 
-**`@kyneta/bridge-transport`** — In-process transport for testing. Codec-faithful + alias-aware delivery via `queueMicrotask()`. The `Bridge` byte router connects multiple `BridgeTransport` instances in a single process, running the production codec and alias transformer end-to-end. Peer deps: `@kyneta/transport`, `@kyneta/wire`. Location: `packages/exchange/transports/bridge`.
+**`@kyneta/bridge-transport`** — In-process transport for testing. Alias-aware delivery via `queueMicrotask()`. The `Bridge` byte router connects multiple `BridgeTransport` instances in a single process, running the production alias transformer and `WireMessage` pipeline end-to-end. Peer deps: `@kyneta/transport`, `@kyneta/wire`. Location: `packages/exchange/transports/bridge`.
 
 **`@kyneta/websocket-transport`** — WebSocket transport with three entry points (`./browser`, `./server`, `./bun`). Binary CBOR on the wire, a five-state TEA client lifecycle with a server-sent `"ready"` gate, and runtime-agnostic constructor injection (the `WebSocket` constructor is passed in; there is no `globalThis.WebSocket` default). Peer deps: `@kyneta/machine`, `@kyneta/transport`, `@kyneta/wire`. 56 tests. → `packages/exchange/transports/websocket/TECHNICAL.md`.
 

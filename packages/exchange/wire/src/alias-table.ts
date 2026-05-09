@@ -33,6 +33,7 @@ import type {
   PresentMsg,
   WireFeatures,
 } from "@kyneta/transport"
+import { validateDocId, validateSchemaHash } from "./validate-identifiers.js"
 import {
   MessageType,
   PayloadEncodingToString,
@@ -77,6 +78,8 @@ export type AliasResolutionError =
   | { code: "unknown-schema-alias"; alias: Alias }
   | { code: "missing-doc-id"; reason: string }
   | { code: "missing-schema-hash"; reason: string }
+  | { code: "doc-id-too-long"; message: string }
+  | { code: "schema-hash-too-long"; message: string }
 
 export function emptyAliasState(): AliasState {
   return {
@@ -326,6 +329,9 @@ export function applyOutboundAliasing(
  * Returns `error` (without `msg`) when an alias is referenced before it
  * has been introduced — a protocol violation. The caller should log and
  * drop; channel state remains valid.
+ *
+ * Also validates docId and schemaHash byte-length caps on the inbound
+ * side (trust boundary). Outbound data is locally generated and trusted.
  */
 export function applyInboundAliasing(
   state: AliasState,
@@ -398,6 +404,10 @@ export function applyInboundAliasing(
           }
         }
 
+        // Validate schema hash byte length after resolution.
+        const shErr = validateSchemaHash(schemaHash)
+        if (shErr) return { state: s, error: shErr }
+
         docs.push({
           docId: d.d,
           replicaType: d.rt as readonly [string, number, number],
@@ -413,6 +423,8 @@ export function applyInboundAliasing(
       const w = wire as WireInterestMsg
       const result = resolveDocId(s_get_inbound(state), w.doc, w.dx)
       if ("error" in result) return { state, error: result.error }
+      const docErr = validateDocId(result.docId)
+      if (docErr) return { state, error: docErr }
       const msg: InterestMsg = { type: "interest", docId: result.docId }
       if (w.v !== undefined) msg.version = w.v
       if (w.r !== undefined) msg.reciprocate = w.r
@@ -423,6 +435,8 @@ export function applyInboundAliasing(
       const w = wire as WireOfferMsg
       const result = resolveDocId(s_get_inbound(state), w.doc, w.dx)
       if ("error" in result) return { state, error: result.error }
+      const docErr = validateDocId(result.docId)
+      if (docErr) return { state, error: docErr }
       const kind = PayloadKindToString[w.pk as keyof typeof PayloadKindToString]
       const encoding =
         PayloadEncodingToString[w.pe as keyof typeof PayloadEncodingToString]
@@ -446,6 +460,8 @@ export function applyInboundAliasing(
       const w = wire as WireDismissMsg
       const result = resolveDocId(s_get_inbound(state), w.doc, w.dx)
       if ("error" in result) return { state, error: result.error }
+      const docErr = validateDocId(result.docId)
+      if (docErr) return { state, error: docErr }
       return { state, msg: { type: "dismiss", docId: result.docId } }
     }
 

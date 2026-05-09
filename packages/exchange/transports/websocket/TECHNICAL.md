@@ -1,13 +1,13 @@
 # @kyneta/websocket-transport — Technical Reference
 
 > **Package**: `@kyneta/websocket-transport`
-> **Role**: WebSocket transport for `@kyneta/exchange` — browser client, server, Bun integration, and service-to-service client. Binary CBOR on the wire, a pure Mealy-machine client lifecycle, and a server-sent `"ready"` gate that makes the handshake race-free.
+> **Role**: WebSocket transport for `@kyneta/exchange` — browser client, server, Bun integration, and service-to-service client. Alias-aware binary pipeline (`applyOutboundAliasing → encodeWireMessage → binary frame`) on the wire, a pure Mealy-machine client lifecycle, and a server-sent `"ready"` gate that makes the handshake race-free.
 > **Depends on**: `@kyneta/machine`, `@kyneta/transport`, `@kyneta/wire` (all peer)
 > **Depended on by**: `@kyneta/exchange` (through application configuration), `tests/integration`
 > **Canonical symbols**: `createWebsocketClient`, `WebsocketClientTransport`, `WebsocketClientOptions`, `WebsocketServerTransport`, `WebsocketServerTransportOptions`, `WebsocketConnection`, `WebsocketConnectionConfig`, `createServiceWebsocketClient`, `createWsClientProgram`, `WsClientMsg`, `WsClientEffect`, `WebsocketClientState`, `Socket`, `WebSocketLike`, `WebSocketConstructor`, `wrapStandardWebsocket`, `wrapNodeWebsocket`, `wrapBunWebsocket`, `BunWebsocketData`, `READY_STATE`, `DEFAULT_FRAGMENT_THRESHOLD`
 > **Key invariant(s)**: The client creates its exchange channel only after the *server* has sent a text `"ready"` signal — never on `socket.onopen` alone. This is why the client lifecycle has five states (`disconnected → connecting → connected → ready → reconnecting`) rather than four.
 
-A WebSocket transport kit with three entry points — `./browser` (browser-to-server), `./server` (server accept + service-to-service), and `./bun` (Bun-specific wrapper). All three share one wire format (CBOR via `@kyneta/wire`) and one client state machine (`createWsClientProgram`).
+A WebSocket transport kit with three entry points — `./browser` (browser-to-server), `./server` (server accept + service-to-service), and `./bun` (Bun-specific wrapper). All three share one wire format (alias-aware binary pipeline via `@kyneta/wire`) and one client state machine (`createWsClientProgram`).
 
 Imported by applications via the `transports: [...]` array on `new Exchange(...)`. Application code calls `createWebsocketClient({ url, WebSocket })` or `new WebsocketServerTransport()` and hands the result to the exchange.
 
@@ -28,7 +28,7 @@ Imported by applications via the `transports: [...]` array on `new Exchange(...)
 |------|-------|-------------------------|
 | `WebsocketClientTransport` | The client-side `Transport<...>` subclass. Owns one socket, one channel, and the `createObservableProgram` runtime for its client program. | `WebsocketServerTransport`, which manages many sockets |
 | `WebsocketServerTransport` | The server-side `Transport<...>` subclass. One instance per server; accepts many client connections. | `WebsocketConnection`, which is one accepted connection on the server |
-| `WebsocketConnection` | One accepted peer connection on the server side. Owns the per-connection CBOR pipeline, fragment reassembler, and channel. | `WebsocketClientTransport` |
+| `WebsocketConnection` | One accepted peer connection on the server side. Owns the per-connection alias-aware binary pipeline, fragment reassembler, and channel. | `WebsocketClientTransport` |
 | `createWsClientProgram` | Factory returning a pure `Program<WsClientMsg, WebsocketClientState, WsClientEffect>`. | `WebsocketClientTransport`, which is the imperative shell that *runs* the program |
 | `WsClientEffect` | Inspectable data describing an I/O action (create-websocket, close-websocket, start-reconnect-timer, etc.). | An `Effect<Msg>` closure — these effects are data |
 | `Socket` | Framework-agnostic interface with `send`, `close`, `onMessage`, `onClose`, and a string `readyState`. Server side. | `WebSocketLike`, which is a structural type over real WebSocket *instances* and uses `addEventListener` |
@@ -48,7 +48,7 @@ Imported by applications via the `transports: [...]` array on `new Exchange(...)
 
 **Thesis**: one WebSocket-shaped wire, three runtime environments, and a pure state machine keeps the client's reconnect logic testable without mocks.
 
-The package is structured around a single shared wire format (CBOR frames via `@kyneta/wire`) and a single shared client state machine (`createWsClientProgram`). The three entry points only differ in which constructor/wrapper they expose:
+The package is structured around a single shared wire format (alias-aware binary pipeline via `@kyneta/wire`) and a single shared client state machine (`createWsClientProgram`). The three entry points only differ in which constructor/wrapper they expose:
 
 | Entry | Concrete transport | Consumers |
 |-------|--------------------|-----------|
@@ -56,7 +56,7 @@ The package is structured around a single shared wire format (CBOR frames via `@
 | `./server` | `WebsocketServerTransport` + `createServiceWebsocketClient` | Node/Bun servers, service-to-service |
 | `./bun` | `wrapBunWebsocket` + `BunWebsocketData` | Bun's `Bun.serve<T>` callback style |
 
-All four runtime situations (browser client, Bun server, Node server, server-to-server client) produce and consume bytes in the same `@kyneta/wire` pipeline: `ChannelMsg → cborCodec.encode → encodeBinaryAndSend → socket.send`, reversed on receive through `decodeBinaryMessages + FragmentReassembler`.
+All four runtime situations (browser client, Bun server, Node server, server-to-server client) produce and consume bytes in the same `@kyneta/wire` alias-aware binary pipeline: `ChannelMsg → applyOutboundAliasing → encodeWireMessage → encodeBinaryFrame → socket.send`, reversed on receive through `decodeBinaryFrame + FragmentReassembler → decodeWireMessage → applyInboundAliasing`.
 
 ### What this transport is NOT
 
@@ -101,7 +101,7 @@ The race has a second corner: the server's `"ready"` can arrive *before* the cli
 
 - **Not a handshake message in the `establish` sense.** It does not carry identity. It only signals that the server side of the channel is wired up.
 - **Not batched.** It is always a single WebSocket text frame containing the literal string `"ready"`.
-- **Not codec-routed.** It is intercepted below the CBOR layer — the client recognises it before invoking the codec.
+- **Not codec-routed.** It is intercepted below the `WireMessage` layer — the client recognises it before invoking the binary pipeline.
 
 ---
 
@@ -250,9 +250,9 @@ const exchange = new Exchange({
 | `src/bun.ts` | 24 | `./bun` entry — Bun wrapper + `BunWebsocketData`. |
 | `src/types.ts` | 378 | `Socket`, `WebSocketLike`, wrappers, `DisconnectReason`, state type. |
 | `src/client-program.ts` | 272 | Pure `createWsClientProgram` Mealy machine. |
-| `src/client-transport.ts` | 602 | Imperative shell: runs the program, owns the socket, runs the CBOR pipeline, fragments. |
+| `src/client-transport.ts` | 602 | Imperative shell: runs the program, owns the socket, runs the alias-aware binary pipeline, fragments. |
 | `src/server-transport.ts` | 280 | Server-side `Transport<...>`: accepts connections, dispatches to `WebsocketConnection`. |
-| `src/connection.ts` | 206 | Per-connection CBOR pipeline + fragment reassembler + channel ownership. |
+| `src/connection.ts` | 206 | Per-connection alias-aware binary pipeline + fragment reassembler + channel ownership. |
 | `src/service-client.ts` | 52 | `createServiceWebsocketClient` factory (headers). |
 | `src/bun-websocket.ts` | 163 | `wrapBunWebsocket` + `BunWebsocketData`. |
 | `src/__tests__/client-program.test.ts` | 760 | Pure tests: every state transition and effect asserted on data. No sockets. |

@@ -128,8 +128,8 @@ describe("LevelDBStore — close + reopen", () => {
     const backend2 = new LevelDBStore(dir)
     const records = await collectAll(backend2.loadAll("doc-1"))
     expect(records).toHaveLength(2)
-    expect(records[0]!.kind).toBe("meta")
-    expect(records[1]!.kind).toBe("entry")
+    expect(records[0]?.kind).toBe("meta")
+    expect(records[1]?.kind).toBe("entry")
     expect((records[1] as { kind: "entry"; version: string }).version).toBe(
       "v3",
     )

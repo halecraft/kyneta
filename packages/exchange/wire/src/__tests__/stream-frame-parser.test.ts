@@ -15,14 +15,39 @@
 import { SYNC_AUTHORITATIVE } from "@kyneta/schema"
 import type { ChannelMsg, InterestMsg, PresentMsg } from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
-import { cborCodec } from "../cbor.js"
-import { HEADER_SIZE, WIRE_VERSION } from "../constants.js"
-import { decodeBinaryFrame, encodeComplete } from "../frame.js"
+import { HEADER_SIZE } from "../constants.js"
+import { decodeBinaryFrame } from "../frame.js"
+import {
+  applyInboundAliasing,
+  applyOutboundAliasing,
+  complete,
+  decodeWireMessage,
+  emptyAliasState,
+  encodeBinaryFrame,
+  encodeWireMessage,
+  WIRE_VERSION,
+} from "../index.js"
 import { feedBytes, initialParserState } from "../stream-frame-parser.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+function encodeViaAlias(msg: ChannelMsg): Uint8Array<ArrayBuffer> {
+  const state = emptyAliasState()
+  const { wire } = applyOutboundAliasing(state, msg)
+  const payload = encodeWireMessage(wire)
+  return encodeBinaryFrame(complete(WIRE_VERSION, payload))
+}
+
+function decodeViaAlias(payload: Uint8Array): ChannelMsg {
+  const wire = decodeWireMessage(payload)
+  const result = applyInboundAliasing(emptyAliasState(), wire)
+  if (result.error)
+    throw new Error(`Alias resolution failed: ${result.error.code}`)
+  if (!result.msg) throw new Error("Alias resolution produced no message")
+  return result.msg
+}
 
 function makePresent(docId: string): PresentMsg {
   return {
@@ -55,7 +80,7 @@ function concat(...arrays: Uint8Array[]): Uint8Array {
 
 describe("feedBytes", () => {
   it("extracts a single complete frame from one chunk", () => {
-    const frame = encodeComplete(cborCodec, makePresent("doc-1"))
+    const frame = encodeViaAlias(makePresent("doc-1"))
     const state = initialParserState()
 
     const result = feedBytes(state, frame)
@@ -67,9 +92,9 @@ describe("feedBytes", () => {
   })
 
   it("extracts multiple frames from one chunk (write coalescing)", () => {
-    const frame1 = encodeComplete(cborCodec, makePresent("doc-a"))
-    const frame2 = encodeComplete(cborCodec, makePresent("doc-b"))
-    const frame3 = encodeComplete(cborCodec, makePresent("doc-c"))
+    const frame1 = encodeViaAlias(makePresent("doc-a"))
+    const frame2 = encodeViaAlias(makePresent("doc-b"))
+    const frame3 = encodeViaAlias(makePresent("doc-c"))
     const combined = concat(frame1, frame2, frame3)
 
     const result = feedBytes(initialParserState(), combined)
@@ -81,7 +106,7 @@ describe("feedBytes", () => {
   })
 
   it("handles byte-at-a-time delivery (subsumes all split-boundary cases)", () => {
-    const frame = encodeComplete(cborCodec, makePresent("byte-by-byte"))
+    const frame = encodeViaAlias(makePresent("byte-by-byte"))
 
     let state = initialParserState()
     const allFrames: Uint8Array[] = []
@@ -103,7 +128,7 @@ describe("feedBytes", () => {
       makePresent("seq-3"),
     ]
 
-    const frames = messages.map(msg => encodeComplete(cborCodec, msg))
+    const frames = messages.map(msg => encodeViaAlias(msg))
     const combined = concat(...frames)
 
     const result = feedBytes(initialParserState(), combined)
@@ -115,15 +140,14 @@ describe("feedBytes", () => {
       const decoded = decodeBinaryFrame(frameBytes)
       expect(decoded.content.kind).toBe("complete")
       if (decoded.content.kind === "complete") {
-        const decoded_msgs = cborCodec.decode(decoded.content.payload)
-        expect(decoded_msgs).toHaveLength(1)
-        expect(decoded_msgs[0]).toEqual(messages[i])
+        const msg = decodeViaAlias(decoded.content.payload)
+        expect(msg).toEqual(messages[i])
       }
     }
   })
 
   it("empty chunk is a no-op at any parse phase", () => {
-    const frame = encodeComplete(cborCodec, makePresent("doc-empty"))
+    const frame = encodeViaAlias(makePresent("doc-empty"))
     const empty = new Uint8Array(0)
 
     // Empty at start
@@ -173,7 +197,7 @@ describe("feedBytes", () => {
     view.setUint8(1, 0x00)
     view.setUint32(2, 0, false)
 
-    const normalFrame = encodeComplete(cborCodec, makePresent("after-zero"))
+    const normalFrame = encodeViaAlias(makePresent("after-zero"))
     const combined = concat(zeroFrame, normalFrame)
 
     const result = feedBytes(initialParserState(), combined)
@@ -195,7 +219,7 @@ describe("feedBytes", () => {
     }
 
     const original: PresentMsg = { type: "present", docs }
-    const frameBytes = encodeComplete(cborCodec, original)
+    const frameBytes = encodeViaAlias(original)
 
     // Feed in 4KB chunks
     const chunkSize = 4096
@@ -221,9 +245,8 @@ describe("feedBytes", () => {
     const decoded = decodeBinaryFrame(firstFrame)
     expect(decoded.content.kind).toBe("complete")
     if (decoded.content.kind === "complete") {
-      const messages = cborCodec.decode(decoded.content.payload)
-      expect(messages).toHaveLength(1)
-      expect(messages[0]).toEqual(original)
+      const msg = decodeViaAlias(decoded.content.payload)
+      expect(msg).toEqual(original)
     }
   })
 })

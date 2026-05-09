@@ -11,7 +11,6 @@ import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { Exchange } from "@kyneta/exchange"
 import { loro } from "@kyneta/loro-schema"
 import { change, Schema } from "@kyneta/schema"
-import { cborCodec } from "@kyneta/wire"
 import { afterEach, describe, expect, it } from "vitest"
 import { attach, type TextRefLike } from "../text-adapter.js"
 
@@ -94,7 +93,7 @@ function simulateTyping(
 
 describe("collaborative text editing: two peers with attach()", () => {
   it("typing on peer A appears on peer B's textarea", async () => {
-    const bridge = new Bridge({ codec: cborCodec })
+    const bridge = new Bridge()
     const alice = createPeer("alice", bridge)
     const bob = createPeer("bob", bridge)
 
@@ -125,7 +124,7 @@ describe("collaborative text editing: two peers with attach()", () => {
   })
 
   it("typing on peer B appears on peer A's textarea", async () => {
-    const bridge = new Bridge({ codec: cborCodec })
+    const bridge = new Bridge()
     const alice = createPeer("alice", bridge)
     const bob = createPeer("bob", bridge)
 
@@ -150,7 +149,7 @@ describe("collaborative text editing: two peers with attach()", () => {
   })
 
   it("sequential edits from both peers converge", async () => {
-    const bridge = new Bridge({ codec: cborCodec })
+    const bridge = new Bridge()
     const alice = createPeer("alice", bridge)
     const bob = createPeer("bob", bridge)
 
@@ -182,7 +181,7 @@ describe("collaborative text editing: two peers with attach()", () => {
   })
 
   it("concurrent edits from both peers converge to the same value", async () => {
-    const bridge = new Bridge({ codec: cborCodec })
+    const bridge = new Bridge()
     const alice = createPeer("alice", bridge)
     const bob = createPeer("bob", bridge)
 
@@ -227,7 +226,7 @@ describe("collaborative text editing: two peers with attach()", () => {
   })
 
   it("cursor position is preserved through remote edits", async () => {
-    const bridge = new Bridge({ codec: cborCodec })
+    const bridge = new Bridge()
     const alice = createPeer("alice", bridge)
     const bob = createPeer("bob", bridge)
 
@@ -259,7 +258,7 @@ describe("collaborative text editing: two peers with attach()", () => {
   })
 
   it("echo suppression: local edits do not double-apply", async () => {
-    const bridge = new Bridge({ codec: cborCodec })
+    const bridge = new Bridge()
     const alice = createPeer("alice", bridge)
 
     const textareaA = createTextarea()
@@ -280,7 +279,7 @@ describe("collaborative text editing: two peers with attach()", () => {
   })
 
   it("detach stops bidirectional flow", async () => {
-    const bridge = new Bridge({ codec: cborCodec })
+    const bridge = new Bridge()
     const alice = createPeer("alice", bridge)
     const bob = createPeer("bob", bridge)
 
@@ -312,7 +311,7 @@ describe("collaborative text editing: two peers with attach()", () => {
   })
 
   it("multi-round editing: alternating inserts and deletes", async () => {
-    const bridge = new Bridge({ codec: cborCodec })
+    const bridge = new Bridge()
     const alice = createPeer("alice", bridge)
     const bob = createPeer("bob", bridge)
 

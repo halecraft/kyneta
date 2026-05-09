@@ -8,12 +8,12 @@ Every message sent over a transport is wrapped in a **frame**. The frame is the 
 
 Two encoding pipelines share this frame abstraction:
 
-| Pipeline | Payload type `T` | Wire format | Codec | Use case |
-|----------|-------------------|-------------|-------|----------|
-| **Binary** | `Uint8Array` | Binary bytes | `cborCodec` (BinaryCodec) | WebSocket, WebRTC |
-| **Text** | `string` | JSON string | `textCodec` (TextCodec) | SSE, HTTP |
+| Pipeline | Payload type `T` | Wire format | Encoding | Use case |
+|----------|-------------------|-------------|----------|----------|
+| **Binary** | `Uint8Array` | Binary bytes | `encodeWireMessage` (CBOR) | WebSocket, WebRTC, Unix socket |
+| **Text** | `string` | JSON string | `encodeTextWireMessage` (JSON) | SSE, HTTP |
 
-Batching is **orthogonal to framing**. The frame layer does not distinguish single messages from batches. The payload's own structure (CBOR array vs map, JSON array vs object) determines singular vs plural. The codec decides how to encode/decode; the frame just carries the payload.
+Batching is **orthogonal to framing**. The frame layer does not distinguish single messages from batches. The payload's own structure (CBOR array vs map, JSON array vs object) determines singular vs plural. The `WireMessage` layer handles encode/decode; the frame just carries the payload.
 
 ## Message Types
 
@@ -32,7 +32,7 @@ Discriminator ranges:
 - `0x01–0x0F` — Lifecycle messages (establish, depart)
 - `0x10–0x1F` — Sync messages (present, interest, offer, dismiss)
 
-The text codec uses human-readable type strings (`"establish"`, `"present"`, etc.) instead of integer discriminators.
+The text pipeline uses human-readable type strings (`"establish"`, `"present"`, etc.) instead of integer discriminators.
 
 ## Frame<T> — Universal Frame Abstraction
 
@@ -64,31 +64,19 @@ Fragments are **fully self-describing**. Every fragment carries `frameId`, `inde
 
 ## Codec Interfaces
 
-### BinaryCodec (Uint8Array in/out)
+`encodeWireMessage`/`decodeWireMessage` (binary) and `encodeTextWireMessage`/`decodeTextWireMessage` (text) handle the `ChannelMsg ⇄ WireMessage` conversion. The alias transformer (`applyOutboundAliasing` / `applyInboundAliasing`) applied before encode and after decode is the single `ChannelMsg ⇄ WireMessage` step.
 
-```typescript
-interface BinaryCodec {
-  encode(msg: ChannelMsg): Uint8Array
-  decode(data: Uint8Array): ChannelMsg
-  encodeBatch(msgs: ChannelMsg[]): Uint8Array
-  decodeBatch(data: Uint8Array): ChannelMsg[]
-}
-```
+### Binary (Uint8Array in/out)
 
-Implementation: `cborCodec` — compact CBOR with integer discriminators and short field names. `Uint8Array` data in `SubstratePayload` is encoded natively as CBOR byte strings (no base64).
+`encodeWireMessage(msg: ChannelMsg): WireMessage` and `decodeWireMessage(wire: WireMessage): ChannelMsg`. CBOR-encoded `Uint8Array` in/out at the frame layer.
 
-### TextCodec (JSON-safe objects in/out)
+Implementation in `src/cbor.ts` — compact CBOR with integer discriminators and short field names. `Uint8Array` data in `SubstratePayload` is encoded natively as CBOR byte strings (no base64).
 
-```typescript
-interface TextCodec {
-  encode(msg: ChannelMsg): unknown        // JSON-safe object
-  decode(obj: unknown): ChannelMsg
-  encodeBatch(msgs: ChannelMsg[]): unknown[]
-  decodeBatch(objs: unknown[]): ChannelMsg[]
-}
-```
+### Text (JSON-safe objects in/out)
 
-Implementation: `textCodec` — human-readable JSON with full type strings. `Uint8Array` data in `SubstratePayload` is transparently base64-encoded on write and base64-decoded on read. JSON `SubstratePayload` data passes through as-is.
+`encodeTextWireMessage(msg: ChannelMsg): unknown` and `decodeTextWireMessage(obj: unknown): ChannelMsg`. JSON-safe object in/out at the frame layer.
+
+Implementation in `src/json.ts` — human-readable JSON with full type strings. `Uint8Array` data in `SubstratePayload` is transparently base64-encoded on write and base64-decoded on read. JSON `SubstratePayload` data passes through as-is.
 
 ## Binary Wire Format
 
@@ -134,7 +122,7 @@ v1 has no transport-prefix layer. The frame type byte (offset 1 of the 6-byte he
 
 ### CBOR Compact Encoding
 
-The `cborCodec` encodes `ChannelMsg` objects as compact wire objects with short field names:
+`encodeWireMessage` encodes `ChannelMsg` objects as compact wire objects with short field names:
 
 | Wire field | Full name | Type | Used by |
 |------------|-----------|------|---------|
@@ -179,14 +167,16 @@ Decoders MUST tolerate absent optional fields by applying these defaults:
 
 ```
 Encode:
-  ChannelMsg → cborCodec.encode(msg) → Uint8Array
+  ChannelMsg → applyOutboundAliasing → WireMessage
+  → encodeWireMessage(wire) → Uint8Array
   → encodeBinaryFrame(complete(0, payload)) → framed bytes
   → wrapCompleteMessage(framed) → transport payload
 
 Decode:
   transport payload → parseTransportPayload → { kind: "complete", data }
   → decodeBinaryFrame(data) → Frame<Uint8Array> { content: Complete }
-  → cborCodec.decode(payload) → ChannelMsg
+  → decodeWireMessage(payload) → WireMessage
+  → applyInboundAliasing → ChannelMsg
 ```
 
 ## Text Wire Format
@@ -236,14 +226,16 @@ With hash:
 
 ```
 Encode:
-  ChannelMsg → textCodec.encode(msg) → JSON-safe object
+  ChannelMsg → applyOutboundAliasing → WireMessage
+  → encodeTextWireMessage(wire) → JSON-safe object
   → JSON.stringify(object) → payload string
   → encodeTextFrame(complete(0, payload)) → wire string
 
 Decode:
   wire string → decodeTextFrame → Frame<string> { content: Complete }
   → JSON.parse(payload) → JSON-safe object
-  → textCodec.decode(object) → ChannelMsg
+  → decodeTextWireMessage(object) → WireMessage
+  → applyInboundAliasing → ChannelMsg
 ```
 
 ### Text Fragmentation
@@ -319,20 +311,20 @@ Both are thin wrappers (~80–100 lines) that handle format-specific parsing and
 
 ```
 Sender:
-  1. Encode message → complete binary frame (7-byte header + payload)
+  1. Encode message → complete binary frame (6-byte header + payload)
   2. If frame size ≤ threshold: wrapCompleteMessage(frame) → send
   3. If frame size > threshold:
-     a. Generate random 8-byte frame ID (hex string)
+     a. Generate next frameId (uint16 per-channel-direction counter)
      b. Split payload into chunks of maxChunkSize bytes
      c. For each chunk: build fragment frame (header + metadata + chunk)
      d. wrapFragment(fragmentFrame) → send each
 
 Receiver:
   1. parseTransportPayload(data)
-  2. If complete: decodeBinaryFrame(data) → Frame<Uint8Array> → codec.decode
+  2. If complete: decodeBinaryFrame(data) → Frame<Uint8Array> → decodeWireMessage → ChannelMsg
   3. If fragment: decodeBinaryFrame(data) → Frame<Uint8Array> with Fragment content
      → collector.addFragment(frameId, index, total, totalSize, chunk)
-     → eventually: complete data → codec.decode
+     → eventually: complete data → decodeWireMessage → ChannelMsg
 ```
 
 ### Fragment Thresholds by Environment
@@ -345,7 +337,7 @@ Receiver:
 
 ## Identifier Length Caps
 
-DocIds and schema hashes have explicit UTF-8 byte-length caps applied uniformly across binary and text codecs:
+DocIds and schema hashes have explicit UTF-8 byte-length caps applied uniformly across binary and text pipelines:
 
 | Identifier | Cap | Constant |
 |------------|-----|----------|
@@ -368,9 +360,9 @@ type WireFeaturesCompact = {
 }
 ```
 
-### JSON shape (text codec)
+### JSON shape (text pipeline)
 
-The text codec uses long names: `{ alias?, streamed?, datagram? }`.
+The text pipeline uses long names: `{ alias?, streamed?, datagram? }`.
 
 ### Backward compatibility
 
@@ -481,15 +473,17 @@ After the WebSocket connection opens, the server sends a text `"ready"` frame to
 ## Pipeline Architecture
 
 ```
-Binary pipeline (WebSocket, WebRTC):
-  BinaryCodec (CBOR) → binary frame (7B header) → binary fragmentation → FragmentReassembler
-                                                                           └→ FragmentCollector<Uint8Array>
+Binary pipeline (WebSocket, WebRTC, Unix socket):
+  applyOutboundAliasing → encodeWireMessage (CBOR) → binary frame (6B header) → binary fragmentation → FragmentReassembler
+                                                                                      └→ FragmentCollector<Uint8Array>
 
 Text pipeline (SSE, HTTP):
-  TextCodec (JSON) → text frame ("Vx" prefix) → text fragmentation → TextReassembler
-                                                                       └→ FragmentCollector<string>
+  applyOutboundAliasing → encodeTextWireMessage (JSON) → text frame ("Vx" prefix) → text fragmentation → TextReassembler
+                                                                                        └→ FragmentCollector<string>
 
 Shared:
+  AliasState ← per-channel-direction alias table (docId/schemaHash → integer)
+  applyOutboundAliasing / applyInboundAliasing ← single ChannelMsg ⇄ WireMessage transformer
   Frame<T> type ← universal frame abstraction
   FragmentCollector<T> ← generic reassembly (FC/IS design)
   CollectorOps<T> ← injected { sizeOf, concatenate }
@@ -500,9 +494,8 @@ Shared:
 | File | Purpose |
 |------|---------|
 | `src/frame-types.ts` | `Frame<T>`, `Complete<T>`, `Fragment<T>` types, constructors, type guards |
-| `src/codec.ts` | `BinaryCodec` and `TextCodec` interfaces |
-| `src/cbor.ts` | `cborCodec` — CBOR BinaryCodec implementation |
-| `src/json.ts` | `textCodec` — JSON TextCodec implementation |
+| `src/cbor.ts` | `encodeWireMessage`/`decodeWireMessage` — `ChannelMsg` ↔ CBOR-encoded `WireMessage` bytes |
+| `src/json.ts` | `encodeTextWireMessage`/`decodeTextWireMessage` — `ChannelMsg` ↔ JSON-safe `WireMessage` objects |
 | `src/constants.ts` | Wire version, header size, frame types, fragment sizes, identifier length caps |
 | `src/alias-table.ts` | Pure ChannelMsg ⇄ WireMessage transformer with alias state and feature snapshotting |
 | `src/wire-message-helpers.ts` | `encodeWireMessage`/`decodeWireMessage` (binary) and `encodeTextWireMessage`/`decodeTextWireMessage` (text) — operate on pre-formed `WireMessage` |

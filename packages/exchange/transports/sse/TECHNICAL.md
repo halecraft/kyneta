@@ -5,9 +5,9 @@
 > **Depends on**: `@kyneta/machine`, `@kyneta/transport`, `@kyneta/wire` (all peer)
 > **Depended on by**: `@kyneta/exchange` (through application configuration)
 > **Canonical symbols**: `createSseClient`, `SseClientTransport`, `SseClientOptions`, `SseServerTransport`, `SseServerTransportOptions`, `SseConnection`, `SseConnectionConfig`, `createSseClientProgram`, `SseClientMsg`, `SseClientEffect`, `SseClientState`, `parseTextPostBody`, `SsePostResult`, `SsePostResponse`, `createSseExpressRouter`, `SseExpressRouterOptions`, `DEFAULT_FRAGMENT_THRESHOLD`
-> **Key invariant(s)**: The wire is asymmetric but the encoding is symmetric — both directions use the `@kyneta/wire` text codec and text-frame format. SSE carries server→client bytes via `EventSource`'s `data:` field; client→server bytes are POSTed to a paired endpoint. The server never `send`s out-of-band; clients never receive via POST.
+> **Key invariant(s)**: The wire is asymmetric but the encoding is symmetric — both directions use `@kyneta/wire`'s alias-aware text pipeline (`applyOutboundAliasing → encodeTextWireMessage → text frame`). SSE carries server→client bytes via `EventSource`'s `data:` field; client→server bytes are POSTed to a paired endpoint. The server never `send`s out-of-band; clients never receive via POST.
 
-An SSE transport kit with three entry points — `./client` (browser `EventSource` + `fetch` POST), `./server` (framework-agnostic server core), and `./express` (ready-made Express router + re-exports of the server core). All three share one wire format (JSON-over-text via `@kyneta/wire.textCodec`) and one client state machine (`createSseClientProgram`).
+An SSE transport kit with three entry points — `./client` (browser `EventSource` + `fetch` POST), `./server` (framework-agnostic server core), and `./express` (ready-made Express router + re-exports of the server core). All three share one wire format (alias-aware text pipeline via `@kyneta/wire`) and one client state machine (`createSseClientProgram`).
 
 Imported by applications via the `transports: [...]` array on `new Exchange(...)`. Application code calls `createSseClient({ url, postUrl })` for clients, or mounts `createSseExpressRouter({ transport })` into an Express app for servers.
 
@@ -52,7 +52,7 @@ Two HTTP endpoints per connection (exact URLs are application choices; defaults 
 | Server → client | `/sse` (`url`) | `GET` with `Accept: text/event-stream` | `data: <text frame>\n\n` per SSE spec |
 | Client → server | `/sse/post` (`postUrl`) | `POST`, `Content-Type: text/plain` | Body is a single text frame string |
 
-The text frame format is the same in both directions: a JSON array or object with a `"0c"`/`"0f"` prefix (see `@kyneta/wire` → `encodeTextFrame` / `decodeTextFrame`). Binary `SubstratePayload` bytes ride through base64-encoded by the text codec.
+The text frame format is the same in both directions: a JSON array or object with a `"0c"`/`"0f"` prefix (see `@kyneta/wire` → `encodeTextFrame` / `decodeTextFrame`). Binary `SubstratePayload` bytes ride through base64-encoded by the text pipeline.
 
 ### What this transport is NOT
 
@@ -96,7 +96,7 @@ The framework wraps the text frame in whatever SSE syntax its runtime requires:
 | Bun / raw `http` | `(text) => controller.enqueue(encoder.encode(`data: ${text}\n\n`))` |
 | Test | `(text) => recorded.push(text)` |
 
-Source: `packages/exchange/transports/sse/src/connection.ts` → `SseConnection.#sendFn`. The transport calls `sendFn(encodeTextComplete(textCodec, msg))` (or the fragmented variant for large payloads) and stays ignorant of the response object.
+Source: `packages/exchange/transports/sse/src/connection.ts` → `SseConnection.#sendFn`. The transport aliases and encodes outbound messages through `@kyneta/wire`'s alias-aware text pipeline, then calls `sendFn` with the pre-encoded text frame (or fragmented variant for large payloads), staying ignorant of the response object.
 
 ### What `sendFn` is NOT
 
@@ -122,7 +122,7 @@ On the server, the framework integration mounts two routes:
 ### What `parseTextPostBody` is NOT
 
 - **Not an HTTP handler.** It never calls `res.send()` or returns a `Response`. It returns data; the framework sends the HTTP response.
-- **Not a decoder.** It delegates to the `TextReassembler` and `textCodec`; it only orchestrates them and maps outcomes to the `SsePostResult` variants.
+- **Not a decoder.** It delegates to the `TextReassembler` and the text pipeline (`decodeTextWireMessage`); it only orchestrates them and maps outcomes to the `SsePostResult` variants.
 - **Not stateful across calls.** State lives on the connection's `TextReassembler`. The function itself is a pure mapping.
 
 ---

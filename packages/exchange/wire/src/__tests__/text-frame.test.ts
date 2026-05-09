@@ -12,17 +12,32 @@ import {
 import type { ChannelMsg, OfferMsg, PresentMsg } from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
 import { complete, fragment, isComplete, isFragment } from "../frame-types.js"
-import { textCodec } from "../json.js"
+import {
+  applyInboundAliasing,
+  applyOutboundAliasing,
+  decodeTextWireMessage,
+  emptyAliasState,
+  encodeTextWireMessage,
+} from "../index.js"
 import {
   decodeTextFrame,
-  encodeTextComplete,
-  encodeTextCompleteBatch,
   encodeTextFrame,
   fragmentTextPayload,
   TEXT_WIRE_VERSION,
   TextFrameDecodeError,
 } from "../text-frame.js"
 import { TextReassembler } from "../text-reassembler.js"
+
+// ---------------------------------------------------------------------------
+// Helper
+// ---------------------------------------------------------------------------
+
+function encodeViaAlias(msg: ChannelMsg): string {
+  const state = emptyAliasState()
+  const { wire } = applyOutboundAliasing(state, msg)
+  const payload = JSON.stringify(encodeTextWireMessage(wire))
+  return encodeTextFrame(complete(TEXT_WIRE_VERSION, payload))
+}
 
 // ---------------------------------------------------------------------------
 // Prefix correctness
@@ -308,7 +323,7 @@ describe("fragmentTextPayload", () => {
 // ---------------------------------------------------------------------------
 
 describe("Text frame — convenience functions", () => {
-  it("encodeTextComplete encodes a single message", () => {
+  it("encodeViaAlias encodes a single message", () => {
     const msg: PresentMsg = {
       type: "present",
       docs: [
@@ -326,43 +341,17 @@ describe("Text frame — convenience functions", () => {
         },
       ],
     }
-    const wire = encodeTextComplete(textCodec, msg)
+    const wire = encodeViaAlias(msg)
 
     const frame = decodeTextFrame(wire)
     expect(isComplete(frame)).toBe(true)
 
-    const decoded = textCodec.decode(JSON.parse(frame.content.payload))
-    expect(decoded).toHaveLength(1)
-    expect(decoded[0]).toEqual(msg)
+    const wireMsg = decodeTextWireMessage(JSON.parse(frame.content.payload))
+    const { msg: decoded } = applyInboundAliasing(emptyAliasState(), wireMsg)
+    expect(decoded).toEqual(msg)
   })
 
-  it("encodeTextCompleteBatch encodes a batch", () => {
-    const msgs: ChannelMsg[] = [
-      {
-        type: "present",
-        docs: [
-          {
-            docId: "a",
-            schemaHash: "00test",
-            replicaType: ["plain", 1, 0] as const,
-            syncProtocol: SYNC_AUTHORITATIVE,
-          },
-        ],
-      },
-      { type: "interest", docId: "b", version: "1" },
-    ]
-    const wire = encodeTextCompleteBatch(textCodec, msgs)
-
-    const frame = decodeTextFrame(wire)
-    expect(isComplete(frame)).toBe(true)
-
-    const decoded = textCodec.decode(JSON.parse(frame.content.payload))
-    expect(decoded).toHaveLength(2)
-    expect(decoded[0]?.type).toBe("present")
-    expect(decoded[1]?.type).toBe("interest")
-  })
-
-  it("encodeTextComplete handles offer with binary payload", () => {
+  it("encodeViaAlias handles offer with binary payload", () => {
     const msg: OfferMsg = {
       type: "offer",
       docId: "doc-1",
@@ -373,11 +362,12 @@ describe("Text frame — convenience functions", () => {
       },
       version: "1",
     }
-    const wire = encodeTextComplete(textCodec, msg)
+    const wire = encodeViaAlias(msg)
     const frame = decodeTextFrame(wire)
-    const decoded = textCodec.decode(JSON.parse(frame.content.payload))
-    expect(decoded).toHaveLength(1)
-    const offer = decoded[0] as OfferMsg
+
+    const wireMsg = decodeTextWireMessage(JSON.parse(frame.content.payload))
+    const { msg: decoded } = applyInboundAliasing(emptyAliasState(), wireMsg)
+    const offer = decoded as OfferMsg
 
     expect(offer.payload.encoding).toBe("binary")
     expect(offer.payload.data).toBeInstanceOf(Uint8Array)
@@ -404,8 +394,10 @@ describe("Text frame — end-to-end with TextReassembler", () => {
       version: "42",
     }
 
-    // Encode to complete frame payload
-    const payload = JSON.stringify(textCodec.encode(msg))
+    // Encode through alias pipeline to wire form, then JSON-stringify
+    const aliasState = emptyAliasState()
+    const { wire } = applyOutboundAliasing(aliasState, msg)
+    const payload = JSON.stringify(encodeTextWireMessage(wire))
 
     // Fragment into small chunks
     const fragments = fragmentTextPayload(payload, 50, 1)
@@ -426,9 +418,11 @@ describe("Text frame — end-to-end with TextReassembler", () => {
     expect(result.status).toBe("complete")
     if (result.status === "complete") {
       expect(isComplete(result.frame)).toBe(true)
-      const decoded = textCodec.decode(JSON.parse(result.frame.content.payload))
-      expect(decoded).toHaveLength(1)
-      const offer = decoded[0] as OfferMsg
+      const wireMsg = decodeTextWireMessage(
+        JSON.parse(result.frame.content.payload),
+      )
+      const { msg: decoded } = applyInboundAliasing(emptyAliasState(), wireMsg)
+      const offer = decoded as OfferMsg
       expect(offer.type).toBe("offer")
       expect(offer.docId).toBe("doc-large")
       expect(offer.version).toBe("42")
@@ -475,7 +469,13 @@ describe("Text frame — end-to-end with TextReassembler", () => {
       },
     ]
 
-    const payload = JSON.stringify(textCodec.encode(msgs))
+    // Encode each message through alias pipeline, collect wire messages
+    const aliasState = emptyAliasState()
+    const wireMsgs = msgs.map(m => {
+      const { wire } = applyOutboundAliasing(aliasState, m)
+      return encodeTextWireMessage(wire)
+    })
+    const payload = JSON.stringify(wireMsgs)
     const fragments = fragmentTextPayload(payload, 30, 1)
     expect(fragments.length).toBeGreaterThan(1)
 
@@ -492,8 +492,13 @@ describe("Text frame — end-to-end with TextReassembler", () => {
 
     expect(result.status).toBe("complete")
     if (result.status === "complete") {
-      const decoded = textCodec.decode(JSON.parse(result.frame.content.payload))
-      expect(decoded).toHaveLength(2)
+      const wireArr = JSON.parse(result.frame.content.payload) as unknown[]
+      expect(wireArr).toHaveLength(2)
+      const decoded = wireArr.map(w => {
+        const wireMsg = decodeTextWireMessage(w)
+        const { msg } = applyInboundAliasing(emptyAliasState(), wireMsg)
+        return msg
+      })
       expect(decoded[0]?.type).toBe("present")
       const offer = decoded[1] as OfferMsg
       expect(offer.payload.data).toEqual(new Uint8Array([10, 20, 30]))
@@ -545,7 +550,7 @@ describe("Text frame — end-to-end with TextReassembler", () => {
         },
       ],
     }
-    const wire = encodeTextComplete(textCodec, msg)
+    const wire = encodeViaAlias(msg)
 
     const reassembler = new TextReassembler({ timeoutMs: 5000 })
     const result = reassembler.receive(wire)
@@ -553,9 +558,11 @@ describe("Text frame — end-to-end with TextReassembler", () => {
     expect(result.status).toBe("complete")
     if (result.status === "complete") {
       expect(isComplete(result.frame)).toBe(true)
-      const decoded = textCodec.decode(JSON.parse(result.frame.content.payload))
-      expect(decoded).toHaveLength(1)
-      expect(decoded[0]).toEqual(msg)
+      const wireMsg = decodeTextWireMessage(
+        JSON.parse(result.frame.content.payload),
+      )
+      const { msg: decoded } = applyInboundAliasing(emptyAliasState(), wireMsg)
+      expect(decoded).toEqual(msg)
     }
 
     reassembler.dispose()

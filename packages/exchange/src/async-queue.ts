@@ -44,7 +44,13 @@ export class AsyncQueue<T> {
 
   #next(): Promise<IteratorResult<T>> {
     if (this.#buffer.length > 0) {
-      return Promise.resolve({ value: this.#buffer.shift()!, done: false })
+      const value = this.#buffer.shift()
+      if (value === undefined) {
+        throw new Error(
+          "async-queue invariant: buffer reported non-empty but shift returned undefined",
+        )
+      }
+      return Promise.resolve({ value, done: false })
     }
     if (this.#closed) {
       return Promise.resolve({ value: undefined as any, done: true })

@@ -1,7 +1,7 @@
 // Binary frame encode/decode tests.
 //
 // Verifies the 6-byte frame header (version + type + Uint32 payload length)
-// for both complete and fragment frames, using cborCodec only.
+// for both complete and fragment frames, using the alias-aware wire pipeline.
 // Batching is orthogonal to framing — not tested here.
 
 import {
@@ -16,7 +16,6 @@ import type {
   PresentMsg,
 } from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
-import { cborCodec } from "../cbor.js"
 import {
   BinaryFrameType,
   FRAGMENT_META_SIZE,
@@ -26,11 +25,16 @@ import {
 import {
   decodeBinaryFrame,
   encodeBinaryFrame,
-  encodeComplete,
-  encodeCompleteBatch,
   FrameDecodeError,
 } from "../frame.js"
 import { complete, fragment, isComplete, isFragment } from "../frame-types.js"
+import {
+  applyInboundAliasing,
+  applyOutboundAliasing,
+  decodeWireMessage,
+  emptyAliasState,
+  encodeWireMessage,
+} from "../index.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -44,6 +48,27 @@ function readHeader(frame: Uint8Array) {
     type: view.getUint8(1),
     payloadLength: view.getUint32(2, false),
   }
+}
+
+/**
+ * Encode a ChannelMsg into a binary frame via the alias-aware pipeline:
+ * ChannelMsg → applyOutboundAliasing → WireMessage → encodeWireMessage → binary frame.
+ */
+function encodeViaAlias(msg: ChannelMsg): Uint8Array<ArrayBuffer> {
+  const state = emptyAliasState()
+  const { wire } = applyOutboundAliasing(state, msg)
+  const payload = encodeWireMessage(wire)
+  return encodeBinaryFrame(complete(WIRE_VERSION, payload))
+}
+
+/**
+ * Decode a binary frame payload back to a ChannelMsg via the alias-aware pipeline:
+ * binary frame payload → decodeWireMessage → WireMessage → applyInboundAliasing → ChannelMsg.
+ */
+function decodeViaAlias(payload: Uint8Array): ChannelMsg | undefined {
+  const wire = decodeWireMessage(payload)
+  const { msg } = applyInboundAliasing(emptyAliasState(), wire)
+  return msg
 }
 
 // ---------------------------------------------------------------------------
@@ -63,7 +88,7 @@ describe("Binary frame — complete", () => {
         },
       ],
     }
-    const frame = encodeComplete(cborCodec, msg)
+    const frame = encodeViaAlias(msg)
 
     expect(frame).toBeInstanceOf(Uint8Array)
     expect(frame.length).toBeGreaterThan(HEADER_SIZE)
@@ -98,16 +123,15 @@ describe("Binary frame — complete", () => {
         },
       ],
     }
-    const encoded = encodeComplete(cborCodec, msg)
+    const encoded = encodeViaAlias(msg)
     const frame = decodeBinaryFrame(encoded)
 
     expect(isComplete(frame)).toBe(true)
     expect(frame.version).toBe(WIRE_VERSION)
     expect(frame.hash).toBeNull()
 
-    const decoded = cborCodec.decode(frame.content.payload)
-    expect(decoded).toHaveLength(1)
-    expect(decoded[0]).toEqual(msg)
+    const decoded = decodeViaAlias(frame.content.payload)
+    expect(decoded).toEqual(msg)
   })
 
   it("round-trips an interest message", () => {
@@ -117,12 +141,11 @@ describe("Binary frame — complete", () => {
       version: "42",
       reciprocate: true,
     }
-    const encoded = encodeComplete(cborCodec, msg)
+    const encoded = encodeViaAlias(msg)
     const frame = decodeBinaryFrame(encoded)
-    const decoded = cborCodec.decode(frame.content.payload)
+    const decoded = decodeViaAlias(frame.content.payload)
 
-    expect(decoded).toHaveLength(1)
-    expect(decoded[0]).toEqual(msg)
+    expect(decoded).toEqual(msg)
   })
 
   it("round-trips an offer with binary payload", () => {
@@ -133,15 +156,14 @@ describe("Binary frame — complete", () => {
       payload: { kind: "entirety", encoding: "binary", data: binaryData },
       version: "7",
     }
-    const encoded = encodeComplete(cborCodec, msg)
+    const encoded = encodeViaAlias(msg)
     const frame = decodeBinaryFrame(encoded)
-    const decoded = cborCodec.decode(frame.content.payload)
-    const offer = decoded[0] as OfferMsg
+    const decoded = decodeViaAlias(frame.content.payload) as OfferMsg
 
-    expect(offer.type).toBe("offer")
-    expect(offer.payload.encoding).toBe("binary")
-    expect(offer.payload.data).toBeInstanceOf(Uint8Array)
-    expect(offer.payload.data).toEqual(binaryData)
+    expect(decoded.type).toBe("offer")
+    expect(decoded.payload.encoding).toBe("binary")
+    expect(decoded.payload.data).toBeInstanceOf(Uint8Array)
+    expect(decoded.payload.data).toEqual(binaryData)
   })
 
   it("round-trips an offer with JSON payload", () => {
@@ -152,12 +174,11 @@ describe("Binary frame — complete", () => {
       version: "3",
       reciprocate: false,
     }
-    const encoded = encodeComplete(cborCodec, msg)
+    const encoded = encodeViaAlias(msg)
     const frame = decodeBinaryFrame(encoded)
-    const decoded = cborCodec.decode(frame.content.payload)
+    const decoded = decodeViaAlias(frame.content.payload)
 
-    expect(decoded).toHaveLength(1)
-    expect(decoded[0]).toEqual(msg)
+    expect(decoded).toEqual(msg)
   })
 
   it("round-trips establish", () => {
@@ -165,24 +186,22 @@ describe("Binary frame — complete", () => {
       type: "establish",
       identity: { peerId: "peer-1", name: "Alice", type: "user" },
     }
-    const encoded = encodeComplete(cborCodec, msg)
+    const encoded = encodeViaAlias(msg)
     const frame = decodeBinaryFrame(encoded)
-    const decoded = cborCodec.decode(frame.content.payload)
+    const decoded = decodeViaAlias(frame.content.payload)
 
-    expect(decoded).toHaveLength(1)
-    expect(decoded[0]).toEqual(msg)
+    expect(decoded).toEqual(msg)
   })
 
   it("round-trips depart", () => {
     const msg: ChannelMsg = {
       type: "depart",
     }
-    const encoded = encodeComplete(cborCodec, msg)
+    const encoded = encodeViaAlias(msg)
     const frame = decodeBinaryFrame(encoded)
-    const decoded = cborCodec.decode(frame.content.payload)
+    const decoded = decodeViaAlias(frame.content.payload)
 
-    expect(decoded).toHaveLength(1)
-    expect(decoded[0]?.type).toBe("depart")
+    expect(decoded?.type).toBe("depart")
   })
 })
 
@@ -191,7 +210,7 @@ describe("Binary frame — complete", () => {
 // ---------------------------------------------------------------------------
 
 describe("Binary frame — batch (via complete frame)", () => {
-  it("encodes a batch as a complete frame (no BATCH flag)", () => {
+  it("encodes a batch as individual complete frames", () => {
     const msgs: ChannelMsg[] = [
       {
         type: "present",
@@ -206,11 +225,16 @@ describe("Binary frame — batch (via complete frame)", () => {
       },
       { type: "interest", docId: "d1", version: "0" },
     ]
-    const encoded = encodeCompleteBatch(cborCodec, msgs)
 
-    const header = readHeader(encoded)
-    expect(header.version).toBe(WIRE_VERSION)
-    expect(header.type).toBe(BinaryFrameType.COMPLETE)
+    // Encode each message individually via the alias-aware pipeline
+    const frames = msgs.map(msg => encodeViaAlias(msg))
+
+    // Each frame should have a valid complete header
+    for (const frame of frames) {
+      const header = readHeader(frame)
+      expect(header.version).toBe(WIRE_VERSION)
+      expect(header.type).toBe(BinaryFrameType.COMPLETE)
+    }
   })
 
   it("round-trips a batch of mixed messages", () => {
@@ -249,11 +273,16 @@ describe("Binary frame — batch (via complete frame)", () => {
         reciprocate: false,
       },
     ]
-    const encoded = encodeCompleteBatch(cborCodec, msgs)
-    const frame = decodeBinaryFrame(encoded)
 
-    expect(isComplete(frame)).toBe(true)
-    const decoded = cborCodec.decode(frame.content.payload)
+    // Encode each message individually via the alias-aware pipeline
+    const frames = msgs.map(msg => encodeViaAlias(msg))
+
+    // Decode each frame and verify
+    const decoded = frames.map(frame => {
+      const decodedFrame = decodeBinaryFrame(frame)
+      expect(isComplete(decodedFrame)).toBe(true)
+      return decodeViaAlias(decodedFrame.content.payload)
+    })
 
     expect(decoded).toHaveLength(4)
     expect(decoded[0]?.type).toBe("establish")
@@ -265,11 +294,11 @@ describe("Binary frame — batch (via complete frame)", () => {
     expect(offer.payload.data).toEqual(new Uint8Array([1, 2, 3]))
   })
 
-  it("round-trips an empty batch", () => {
-    const encoded = encodeCompleteBatch(cborCodec, [])
-    const frame = decodeBinaryFrame(encoded)
-    const decoded = cborCodec.decode(frame.content.payload)
-    expect(decoded).toEqual([])
+  it("round-trips an empty batch (no frames produced)", () => {
+    // An empty batch produces no frames — this is valid and expected.
+    const msgs: ChannelMsg[] = []
+    const frames = msgs.map(msg => encodeViaAlias(msg))
+    expect(frames).toEqual([])
   })
 })
 
@@ -356,7 +385,7 @@ describe("Binary frame — fragment", () => {
 
 describe("Binary frame — encodeBinaryFrame generic", () => {
   it("encodes a complete frame from Frame<Uint8Array>", () => {
-    const payload = cborCodec.encode({
+    const msg: PresentMsg = {
       type: "present",
       docs: [
         {
@@ -366,7 +395,10 @@ describe("Binary frame — encodeBinaryFrame generic", () => {
           syncProtocol: SYNC_AUTHORITATIVE,
         },
       ],
-    })
+    }
+    const state = emptyAliasState()
+    const { wire } = applyOutboundAliasing(state, msg)
+    const payload = encodeWireMessage(wire)
     const frame = complete(WIRE_VERSION, payload)
     const encoded = encodeBinaryFrame(frame)
 
@@ -482,16 +514,15 @@ describe("Binary frame — edge cases", () => {
         },
       ],
     }
-    const encoded = encodeComplete(cborCodec, msg)
+    const encoded = encodeViaAlias(msg)
 
     // Create a copy via ArrayBuffer (simulates Buffer → Uint8Array path)
     const copy = new Uint8Array(encoded.buffer.slice(0))
     const frame = decodeBinaryFrame(copy)
 
     expect(isComplete(frame)).toBe(true)
-    const decoded = cborCodec.decode(frame.content.payload)
-    expect(decoded).toHaveLength(1)
-    expect(decoded[0]).toEqual(msg)
+    const decoded = decodeViaAlias(frame.content.payload)
+    expect(decoded).toEqual(msg)
   })
 
   it("complete frame with empty payload is valid (header-only)", () => {

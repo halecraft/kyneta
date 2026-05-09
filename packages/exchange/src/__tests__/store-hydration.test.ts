@@ -13,7 +13,6 @@ import {
   Schema,
   SYNC_AUTHORITATIVE,
 } from "@kyneta/schema"
-import { cborCodec } from "@kyneta/wire"
 import { yjs } from "@kyneta/yjs-schema"
 import { describe, expect, it } from "vitest"
 import {
@@ -211,7 +210,7 @@ describe("Exchange storage persistence", () => {
 
   it("network import persists to storage via onDocImported → append()", async () => {
     const backend = new InMemoryStore()
-    const bridge = new Bridge({ codec: cborCodec })
+    const bridge = new Bridge()
 
     // Exchange A (source) — has the doc
     const exchangeA = createExchange({

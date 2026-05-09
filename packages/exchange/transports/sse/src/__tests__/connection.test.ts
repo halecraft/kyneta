@@ -1,15 +1,21 @@
 // SseConnection tests.
-//
-// Tests the core behavioral contracts:
-// 1. send() encodes a ChannelMsg to a decodable text frame and calls sendFn
-// 2. send() fragments large messages into multiple sendFn calls
-// 3. receive() routes messages to the channel's onReceive
-// 4. Guard: send() throws if sendFn not set
-// 5. Guard: receive() throws if channel not set
 
 import { SYNC_AUTHORITATIVE } from "@kyneta/schema"
 import type { ChannelMsg } from "@kyneta/transport"
-import { decodeTextFrame, textCodec } from "@kyneta/wire"
+import type { WireInterestMsg } from "@kyneta/wire"
+import {
+  applyInboundAliasing,
+  applyOutboundAliasing,
+  complete,
+  decodeTextFrame,
+  decodeTextWireMessage,
+  emptyAliasState,
+  encodeTextFrame,
+  encodeTextWireMessage,
+  fragmentTextPayload,
+  MessageType,
+  TEXT_WIRE_VERSION,
+} from "@kyneta/wire"
 import { describe, expect, it, vi } from "vitest"
 import { SseConnection } from "../connection.js"
 
@@ -32,6 +38,15 @@ function createMockChannel() {
   }
 }
 
+/**
+ * Encode a ChannelMsg into a text frame string via the alias-aware pipeline.
+ */
+function encodeToTextFrame(msg: ChannelMsg): string {
+  const { wire } = applyOutboundAliasing(emptyAliasState(), msg)
+  const payload = JSON.stringify(encodeTextWireMessage(wire))
+  return encodeTextFrame(complete(TEXT_WIRE_VERSION, payload))
+}
+
 const presentMsg: ChannelMsg = {
   type: "present",
   docs: [
@@ -50,13 +65,8 @@ const presentMsg: ChannelMsg = {
   ],
 }
 
-const establishMsg: ChannelMsg = {
-  type: "establish",
-  identity: { peerId: "peer-1", name: "Peer 1", type: "user" },
-}
-
 // ---------------------------------------------------------------------------
-// send() — encoding round-trip
+// send()
 // ---------------------------------------------------------------------------
 
 describe("SseConnection — send", () => {
@@ -70,30 +80,41 @@ describe("SseConnection — send", () => {
 
     expect(sent).toHaveLength(1)
 
-    // The sent string should be a valid text frame that round-trips
     const sentFrame = sent.at(0)
     if (!sentFrame) throw new Error("expected sent frame")
     const frame = decodeTextFrame(sentFrame)
     expect(frame.content.kind).toBe("complete")
     const parsed = JSON.parse(frame.content.payload)
-    const decoded = textCodec.decode(parsed)
-    expect(decoded).toHaveLength(1)
-    expect(decoded[0]).toEqual(presentMsg)
+    const wire = decodeTextWireMessage(parsed)
+    const decoded = applyInboundAliasing(emptyAliasState(), wire)
+    expect(decoded.error).toBeUndefined()
+    expect(decoded.msg).toEqual(presentMsg)
   })
 
-  it("round-trips establish with identity", () => {
+  it("sends messages with short field names (alias-form wire format)", () => {
     const conn = createConnection()
     const sent: string[] = []
     conn.setSendFunction(textFrame => sent.push(textFrame))
     conn._setChannel(createMockChannel() as any)
 
-    conn.send(establishMsg)
+    conn.send(presentMsg)
 
     const sentFrame = sent.at(0)
     if (!sentFrame) throw new Error("expected sent frame")
     const frame = decodeTextFrame(sentFrame)
-    const decoded = textCodec.decode(JSON.parse(frame.content.payload))
-    expect(decoded[0]).toEqual(establishMsg)
+    const payload = JSON.parse(frame.content.payload) as Record<string, unknown>
+
+    // The alias-aware pipeline uses compact integer discriminators and
+    // short field names, not the long-name human-readable format.
+    expect(payload.t).toBe(MessageType.Present)
+    expect(payload.docs).toBeInstanceOf(Array)
+    const doc = (payload.docs as Array<Record<string, unknown>>)[0]
+    if (!doc) throw new Error("expected doc entry")
+    expect(doc.d).toBe("doc-1")
+    expect(doc.sh).toBe("test-hash")
+    // No long-name fields from the old textCodec format
+    expect(doc.docId).toBeUndefined()
+    expect(doc.schemaHash).toBeUndefined()
   })
 
   it("throws if sendFn not set", () => {
@@ -119,14 +140,11 @@ describe("SseConnection — fragmentation", () => {
 
     conn.send(presentMsg)
 
-    // Small message → single call
     expect(sent).toHaveLength(1)
-    // Should be a complete frame (starts with ["1c",...])
     expect(sent[0]).toContain('"1c"')
   })
 
   it("fragments into multiple sendFn calls when above threshold", () => {
-    // Use a very low threshold to force fragmentation on a normal message
     const conn = createConnection({ fragmentThreshold: 20 })
     const sent: string[] = []
     conn.setSendFunction(textFrame => sent.push(textFrame))
@@ -134,9 +152,7 @@ describe("SseConnection — fragmentation", () => {
 
     conn.send(presentMsg)
 
-    // Should produce multiple fragments
     expect(sent.length).toBeGreaterThan(1)
-    // Each fragment should be a fragment frame (contains "1f" prefix)
     for (const frame of sent) {
       expect(frame).toContain('"1f"')
     }
@@ -155,7 +171,7 @@ describe("SseConnection — fragmentation", () => {
 })
 
 // ---------------------------------------------------------------------------
-// receive() — delivery
+// receive()
 // ---------------------------------------------------------------------------
 
 describe("SseConnection — receive", () => {
@@ -176,6 +192,130 @@ describe("SseConnection — receive", () => {
     expect(() => conn.receive(presentMsg)).toThrow(
       "Cannot receive message: channel not set",
     )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// handlePostBody
+// ---------------------------------------------------------------------------
+
+describe("SseConnection — handlePostBody", () => {
+  it("decodes a complete frame to messages", () => {
+    const conn = createConnection()
+
+    const textFrame = encodeToTextFrame(presentMsg)
+    const result = conn.handlePostBody(textFrame)
+
+    expect(result.type).toBe("messages")
+    if (result.type !== "messages") throw new Error("expected messages")
+    expect(result.messages).toHaveLength(1)
+    expect(result.messages[0]).toEqual(presentMsg)
+    expect(result.response).toEqual({ status: 200, body: { ok: true } })
+  })
+
+  it("skips messages with alias resolution errors, continues processing", () => {
+    const conn = createConnection()
+
+    // An interest with an unresolved dx alias will fail alias resolution.
+    // The connection should skip it (not throw, not break) and return
+    // an empty messages array with a 200 (no fatal error).
+    const unresolvedInterest: WireInterestMsg = {
+      t: MessageType.Interest,
+      dx: 999,
+    }
+    const payload = JSON.stringify(encodeTextWireMessage(unresolvedInterest))
+    const textFrame = encodeTextFrame(complete(TEXT_WIRE_VERSION, payload))
+
+    const result = conn.handlePostBody(textFrame)
+
+    expect(result.type).toBe("messages")
+    if (result.type !== "messages") throw new Error("expected messages")
+    expect(result.messages).toHaveLength(0)
+    expect(result.response).toEqual({ status: 200, body: { ok: true } })
+  })
+
+  it("reassembles fragmented payloads", () => {
+    const conn = createConnection()
+
+    const { wire } = applyOutboundAliasing(emptyAliasState(), presentMsg)
+    const payload = JSON.stringify(encodeTextWireMessage(wire))
+    const fragments = fragmentTextPayload(payload, 50, 42)
+
+    expect(fragments.length).toBeGreaterThan(1)
+
+    for (let i = 0; i < fragments.length - 1; i++) {
+      const fragment = fragments.at(i)
+      if (fragment === undefined) throw new Error(`missing fragment ${i}`)
+      const result = conn.handlePostBody(fragment)
+      expect(result.type).toBe("pending")
+      if (result.type === "pending") {
+        expect(result.response).toEqual({
+          status: 202,
+          body: { pending: true },
+        })
+      }
+    }
+
+    const lastFragment = fragments.at(fragments.length - 1)
+    if (lastFragment === undefined) throw new Error("missing last fragment")
+    const finalResult = conn.handlePostBody(lastFragment)
+
+    expect(finalResult.type).toBe("messages")
+    if (finalResult.type !== "messages") throw new Error("expected messages")
+    expect(finalResult.messages).toHaveLength(1)
+    expect(finalResult.messages[0]).toEqual(presentMsg)
+  })
+
+  it("resolves docId aliases across messages", () => {
+    const conn = createConnection()
+
+    const { wire: presentWire } = applyOutboundAliasing(
+      emptyAliasState(),
+      presentMsg,
+    )
+    const presentPayload = JSON.stringify(encodeTextWireMessage(presentWire))
+    const presentFrame = encodeTextFrame(
+      complete(TEXT_WIRE_VERSION, presentPayload),
+    )
+
+    const presentResult = conn.handlePostBody(presentFrame)
+    expect(presentResult.type).toBe("messages")
+    if (presentResult.type !== "messages") throw new Error("expected messages")
+    expect(presentResult.messages[0]).toEqual(presentMsg)
+
+    const docAlias = (presentWire as { docs: Array<{ a?: number }> }).docs[0]?.a
+    if (docAlias === undefined) throw new Error("expected doc alias assignment")
+
+    const interestWire: WireInterestMsg = {
+      t: MessageType.Interest,
+      dx: docAlias,
+    }
+    const interestPayload = JSON.stringify(encodeTextWireMessage(interestWire))
+    const interestFrame = encodeTextFrame(
+      complete(TEXT_WIRE_VERSION, interestPayload),
+    )
+
+    const interestResult = conn.handlePostBody(interestFrame)
+    expect(interestResult.type).toBe("messages")
+    if (interestResult.type !== "messages") throw new Error("expected messages")
+    expect(interestResult.messages).toHaveLength(1)
+
+    const interestMsg = interestResult.messages[0]
+    if (!interestMsg) throw new Error("expected interest message")
+    expect(interestMsg.type).toBe("interest")
+    if (interestMsg.type !== "interest") throw new Error("expected interest")
+    expect(interestMsg.docId).toBe("doc-1")
+  })
+
+  it("returns error on malformed JSON input", () => {
+    const conn = createConnection()
+
+    const result = conn.handlePostBody("not json")
+
+    expect(result.type).toBe("error")
+    if (result.type === "error") {
+      expect(result.response.status).toBe(400)
+    }
   })
 })
 

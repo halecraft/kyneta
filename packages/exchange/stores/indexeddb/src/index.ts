@@ -208,7 +208,7 @@ export class IndexedDBStore implements Store {
     const store = tx.objectStore(META_STORE)
     const range =
       prefix !== undefined
-        ? IDBKeyRange.bound(prefix, prefix + "\uffff", false, true)
+        ? IDBKeyRange.bound(prefix, `${prefix}\uffff`, false, true)
         : undefined
     const keys = (await req(store.getAllKeys(range))) as string[]
     for (const key of keys) {

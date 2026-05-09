@@ -50,8 +50,8 @@ function step(
 /** Extract the DocPhase for a given docId, asserting it exists. */
 function getPhase(model: StoreModel, docId: DocId): DocPhase {
   const phase = model.docs.get(docId)
-  expect(phase).toBeDefined()
-  return phase!
+  if (!phase) throw new Error(`no phase found for ${docId}`)
+  return phase
 }
 
 // ---------------------------------------------------------------------------
@@ -89,7 +89,8 @@ describe("storeProgram", () => {
     })
 
     expect(effects).toHaveLength(1)
-    const fx = effects[0]!
+    const fx = effects[0]
+    if (!fx) throw new Error("expected effect")
     expect(fx.type).toBe("persist-append")
     expect(fx.docId).toBe("doc-1")
 
@@ -147,7 +148,8 @@ describe("storeProgram", () => {
     })
 
     expect(effects).toHaveLength(1)
-    const fx = effects[0]!
+    const fx = effects[0]
+    if (!fx) throw new Error("expected effect")
     expect(fx.type).toBe("persist-append")
     expect(fx.docId).toBe("doc-1")
 
@@ -266,7 +268,8 @@ describe("storeProgram", () => {
     })
 
     expect(effects).toHaveLength(1)
-    const fx = effects[0]!
+    const fx = effects[0]
+    if (!fx) throw new Error("expected effect")
     expect(fx.type).toBe("persist-append")
     expect(fx.docId).toBe("doc-1")
     expect(
@@ -313,7 +316,8 @@ describe("storeProgram", () => {
     })
 
     expect(effects).toHaveLength(1)
-    const fx = effects[0]!
+    const fx = effects[0]
+    if (!fx) throw new Error("expected effect")
     expect(fx.type).toBe("persist-replace")
     expect(fx.docId).toBe("doc-1")
     expect(
@@ -357,7 +361,8 @@ describe("storeProgram", () => {
     expect(phase).toEqual({ status: "idle", version: "v1" })
 
     expect(effects).toHaveLength(1)
-    const fx = effects[0]!
+    const fx = effects[0]
+    if (!fx) throw new Error("expected effect")
     expect(fx.type).toBe("store-error")
     expect(fx.docId).toBe("doc-1")
     expect(
@@ -445,7 +450,8 @@ describe("storeProgram", () => {
     })
 
     expect(effects).toHaveLength(1)
-    const fx = effects[0]!
+    const fx = effects[0]
+    if (!fx) throw new Error("expected effect")
     expect(fx.type).toBe("persist-replace")
     expect(fx.docId).toBe("doc-1")
     expect(

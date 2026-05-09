@@ -14,8 +14,6 @@
 // Fragments carry JSON substring chunks. The receiver concatenates
 // chunks in index order and JSON.parse the result.
 
-import type { ChannelMsg } from "@kyneta/transport"
-import type { TextCodec } from "./codec.js"
 import type { Frame } from "./frame-types.js"
 import { complete, fragment } from "./frame-types.js"
 
@@ -241,34 +239,6 @@ export function fragmentTextPayload(
   }
 
   return result
-}
-
-// ---------------------------------------------------------------------------
-// Convenience — encode from ChannelMsg
-// ---------------------------------------------------------------------------
-
-/**
- * Encode a single `ChannelMsg` as a complete text frame string.
- *
- * Composes codec.encode → JSON.stringify → encodeTextFrame.
- */
-export function encodeTextComplete(codec: TextCodec, msg: ChannelMsg): string {
-  const payload = JSON.stringify(codec.encode(msg))
-  return encodeTextFrame(complete(TEXT_WIRE_VERSION, payload))
-}
-
-/**
- * Encode a batch of `ChannelMsg` as a complete text frame string.
- *
- * The batch is codec-encoded as an array payload. The frame layer
- * doesn't distinguish single from batch — the payload is self-describing.
- */
-export function encodeTextCompleteBatch(
-  codec: TextCodec,
-  msgs: ChannelMsg[],
-): string {
-  const payload = JSON.stringify(codec.encode(msgs))
-  return encodeTextFrame(complete(TEXT_WIRE_VERSION, payload))
 }
 
 // ---------------------------------------------------------------------------

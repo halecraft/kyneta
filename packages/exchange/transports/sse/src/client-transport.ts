@@ -11,7 +11,7 @@
 // - EventSource (GET) for server→client messages
 // - fetch POST for client→server messages
 //
-// Both directions use the text wire format (textCodec + text framing).
+// Both directions use the alias-aware text pipeline.
 //
 // Features:
 // - Pure Mealy machine for connection lifecycle (client-program.ts)
@@ -45,11 +45,18 @@ import type {
 } from "@kyneta/transport"
 import { Transport } from "@kyneta/transport"
 import {
+  type AliasState,
+  applyInboundAliasing,
+  applyOutboundAliasing,
+  complete,
   createFrameIdCounter,
-  encodeTextComplete,
+  decodeTextWires,
+  emptyAliasState,
+  encodeTextFrame,
+  encodeTextWireMessage,
   fragmentTextPayload,
+  TEXT_WIRE_VERSION,
   TextReassembler,
-  textCodec,
 } from "@kyneta/wire"
 import {
   createSseClientProgram,
@@ -137,7 +144,7 @@ export type SseClientStateTransition = StateTransition<SseClientState>
  * - **EventSource** (GET, long-lived) for server→client messages
  * - **fetch POST** for client→server messages
  *
- * Both directions use the text wire format (`textCodec` + text framing).
+ * Both directions use the alias-aware text pipeline.
  *
  * Internally, the connection lifecycle is a `Program<Msg, Model, Fx>` —
  * a pure Mealy machine whose transitions are deterministically testable.
@@ -171,6 +178,9 @@ export class SseClientTransport extends Transport<void> {
 
   // Fragmentation
   readonly #fragmentThreshold: number
+
+  // Alias-aware pipeline state — tracks alias bindings per connection
+  #aliasState: AliasState = emptyAliasState()
 
   // Inbound reassembly for fragmented SSE messages from server
   readonly #reassembler: TextReassembler
@@ -432,25 +442,24 @@ export class SseClientTransport extends Transport<void> {
             ? this.#options.postUrl(this.#peerId)
             : this.#options.postUrl
 
-        // SSE does not yet run the alias transformer; strip alias from
-        // outbound establish so peers do not negotiate alias support
-        // over SSE channels.
-        if (msg.type === "establish" && msg.features?.alias) {
-          msg = {
-            ...msg,
-            features: { ...msg.features, alias: false },
-          }
-        }
+        // Alias-aware outbound: ChannelMsg → AliasWireMessage
+        const { state: nextState, wire } = applyOutboundAliasing(
+          this.#aliasState,
+          msg,
+        )
+        this.#aliasState = nextState
 
-        // Encode to text wire format
-        const textFrame = encodeTextComplete(textCodec, msg)
+        // AliasWireMessage → JSON-safe object → JSON string
+        const payload = JSON.stringify(encodeTextWireMessage(wire))
+
+        // JSON string → text frame
+        const textFrame = encodeTextFrame(complete(TEXT_WIRE_VERSION, payload))
 
         // Fragment large payloads
         if (
           this.#fragmentThreshold > 0 &&
           textFrame.length > this.#fragmentThreshold
         ) {
-          const payload = JSON.stringify(textCodec.encode(msg))
           const fragments = fragmentTextPayload(
             payload,
             this.#fragmentThreshold,
@@ -494,8 +503,8 @@ export class SseClientTransport extends Transport<void> {
    * Handle incoming SSE message.
    *
    * Each SSE `data:` event contains a text wire frame string.
-   * Feed it through the TextReassembler to handle both complete
-   * and fragmented frames.
+   * Feed it through the TextReassembler, then through the alias-aware
+   * inbound pipeline to resolve aliases and deliver ChannelMsgs.
    */
   #handleMessage(event: MessageEvent): void {
     if (!this.#serverChannel) {
@@ -507,24 +516,22 @@ export class SseClientTransport extends Transport<void> {
       return
     }
 
-    // Feed through reassembler (handles both complete and fragment frames)
-    const result = this.#reassembler.receive(data)
-
-    if (result.status === "complete") {
-      try {
-        // Two-step decode: Frame<string> → JSON.parse → textCodec.decode
-        const parsed = JSON.parse(result.frame.content.payload)
-        const messages = textCodec.decode(parsed)
-        for (const msg of messages) {
-          this.#serverChannel.onReceive(msg)
-        }
-      } catch (error) {
-        console.error("Failed to decode SSE message:", error)
-      }
-    } else if (result.status === "error") {
-      console.error("SSE message reassembly error:", result.error)
+    // Text wire → AliasWireMessage[] (complete batches only)
+    const wires = decodeTextWires(this.#reassembler, data)
+    if (!wires) {
+      // Still assembling fragments, or reassembly error already logged
+      return
     }
-    // "pending" status means we're waiting for more fragments — nothing to do
+
+    for (const wire of wires) {
+      const result = applyInboundAliasing(this.#aliasState, wire)
+      this.#aliasState = result.state
+      if (result.error || !result.msg) {
+        console.warn("[sse-client] alias resolution failed:", result.error)
+        continue
+      }
+      this.#serverChannel?.onReceive(result.msg)
+    }
   }
 
   // ==========================================================================

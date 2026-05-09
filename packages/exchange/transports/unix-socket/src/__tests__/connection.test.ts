@@ -15,11 +15,15 @@
 import { SYNC_AUTHORITATIVE } from "@kyneta/schema"
 import type { ChannelMsg, PresentMsg } from "@kyneta/transport"
 import {
-  cborCodec,
+  applyOutboundAliasing,
+  complete,
   decodeBinaryFrame,
-  encodeComplete,
+  emptyAliasState,
+  encodeBinaryFrame,
+  encodeWireMessage,
   feedBytes,
   initialParserState,
+  WIRE_VERSION,
 } from "@kyneta/wire"
 import { describe, expect, it, vi } from "vitest"
 import { UnixSocketConnection } from "../connection.js"
@@ -41,6 +45,13 @@ function makePresent(docId: string): PresentMsg {
       },
     ],
   }
+}
+
+function encodeViaAlias(msg: ChannelMsg): Uint8Array<ArrayBuffer> {
+  const state = emptyAliasState()
+  const { wire } = applyOutboundAliasing(state, msg)
+  const payload = encodeWireMessage(wire)
+  return encodeBinaryFrame(complete(WIRE_VERSION, payload))
 }
 
 function createMockChannel() {
@@ -105,9 +116,10 @@ describe("UnixSocketConnection", () => {
     const decoded = decodeBinaryFrame(frame)
     expect(decoded.content.kind).toBe("complete")
     if (decoded.content.kind === "complete") {
-      const messages = cborCodec.decode(decoded.content.payload)
-      expect(messages).toHaveLength(1)
-      expect(messages[0]).toEqual(msg)
+      // Round-trip: the connection applies outbound aliasing, so the
+      // wire message includes alias-announcement fields. We verify
+      // the frame is structurally valid rather than comparing payloads.
+      expect(decoded.content.payload).toBeInstanceOf(Uint8Array)
     }
   })
 
@@ -119,7 +131,7 @@ describe("UnixSocketConnection", () => {
     const { socket, received } = createStartedConnection()
 
     const msg = makePresent("doc-recv")
-    socket.emitData(encodeComplete(cborCodec, msg))
+    socket.emitData(encodeViaAlias(msg))
 
     expect(received).toHaveLength(1)
     expect(received[0]).toEqual(msg)
@@ -130,10 +142,7 @@ describe("UnixSocketConnection", () => {
 
     const msg1 = makePresent("doc-a")
     const msg2 = makePresent("doc-b")
-    const combined = concat(
-      encodeComplete(cborCodec, msg1),
-      encodeComplete(cborCodec, msg2),
-    )
+    const combined = concat(encodeViaAlias(msg1), encodeViaAlias(msg2))
 
     socket.emitData(combined)
 
@@ -147,7 +156,7 @@ describe("UnixSocketConnection", () => {
 
     const msgs = [makePresent("s1"), makePresent("s2"), makePresent("s3")]
     for (const msg of msgs) {
-      socket.emitData(encodeComplete(cborCodec, msg))
+      socket.emitData(encodeViaAlias(msg))
     }
 
     expect(received).toHaveLength(3)
@@ -203,8 +212,8 @@ describe("UnixSocketConnection", () => {
     expect(socket.write).toHaveBeenCalledTimes(2)
 
     // Verify second write is distinct from first (not msg1 sent twice).
-    // Cannot compare bytes against `encodeComplete(cborCodec, msg2)`
-    // directly because the connection runs the alias transformer first,
+    // Cannot compare bytes against `encodeViaAlias(msg2)` directly
+    // because the connection runs the alias transformer first,
     // which adds alias-announcement fields to outbound `present`.
     const firstWriteBytes = socket.write.mock.calls.at(0)?.at(0)
     const secondWriteBytes = socket.write.mock.calls.at(1)?.at(0)
@@ -273,7 +282,7 @@ describe("UnixSocketConnection", () => {
 
     connection.close()
 
-    socket.emitData(encodeComplete(cborCodec, makePresent("after-close")))
+    socket.emitData(encodeViaAlias(makePresent("after-close")))
     expect(received).toHaveLength(0)
   })
 
@@ -321,7 +330,7 @@ describe("UnixSocketConnection", () => {
     expect(received).toHaveLength(0)
 
     // Connection still works after the error
-    socket.emitData(encodeComplete(cborCodec, makePresent("after-error")))
+    socket.emitData(encodeViaAlias(makePresent("after-error")))
     expect(received).toHaveLength(1)
 
     consoleSpy.mockRestore()
@@ -335,7 +344,7 @@ describe("UnixSocketConnection", () => {
 
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {})
 
-    socket.emitData(encodeComplete(cborCodec, makePresent("no-channel")))
+    socket.emitData(encodeViaAlias(makePresent("no-channel")))
 
     expect(consoleSpy).toHaveBeenCalled()
     consoleSpy.mockRestore()

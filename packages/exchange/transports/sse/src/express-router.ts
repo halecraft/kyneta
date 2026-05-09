@@ -7,14 +7,13 @@
 // The POST endpoint accepts text/plain bodies containing text wire frames.
 // The GET endpoint sends text wire frames as SSE data events.
 //
-// Design: Imperative Shell — delegates parsing to parseTextPostBody()
-// (functional core) and message delivery to SseConnection.
+// Design: Imperative Shell — delegates POST body parsing to
+// SseConnection.handlePostBody() and message delivery to SseConnection.receive().
 
 import type { PeerId } from "@kyneta/transport"
 import type { Request, Response, Router } from "express"
 import express from "express"
 import type { SseServerTransport } from "./server-transport.js"
-import { parseTextPostBody } from "./sse-handler.js"
 
 // ---------------------------------------------------------------------------
 // Options
@@ -68,7 +67,7 @@ export interface SseExpressRouterOptions {
  * ## Wire Format
  *
  * The POST endpoint accepts text/plain bodies containing text wire frames
- * (JSON arrays with "0c"/"0f" prefix). The SSE endpoint sends text wire
+ * (JSON arrays with "1c"/"1f" prefix). The SSE endpoint sends text wire
  * frames as `data:` events. Both directions use the same encoding.
  *
  * @param adapter The SseServerTransport instance
@@ -139,8 +138,9 @@ export function createSseExpressRouter(
         return
       }
 
-      // Functional core: parse body through reassembler
-      const result = parseTextPostBody(connection.reassembler, req.body)
+      // Connection owns the full inbound pipeline:
+      // text frame → TextReassembler → decodeTextWireMessage → applyInboundAliasing → ChannelMsg
+      const result = connection.handlePostBody(req.body)
 
       // Imperative shell: execute side effects based on result
       if (result.type === "messages") {

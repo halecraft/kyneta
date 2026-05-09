@@ -1,7 +1,9 @@
-// CBOR codec tests — round-trip all message types.
+// Wire pipeline tests — round-trip all message types through the
+// alias-aware pipeline.
 //
-// Verifies that every ChannelMsg variant survives encode → decode
-// through the CBOR codec, including OfferMsg with both "json" and
+// Verifies that every ChannelMsg variant survives
+// applyOutboundAliasing → encodeWireMessage → decodeWireMessage →
+// applyInboundAliasing, including OfferMsg with both "json" and
 // "binary" SubstratePayload encodings.
 
 import {
@@ -19,8 +21,14 @@ import type {
   PresentMsg,
 } from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
-import { cborCodec } from "../cbor.js"
-import { type CBORType, encodeCBOR } from "../cbor-encoding.js"
+import {
+  applyInboundAliasing,
+  applyOutboundAliasing,
+  decodeWireMessage,
+  emptyAliasState,
+  encodeWireMessage,
+} from "../index.js"
+import type { WireMessage } from "../wire-types.js"
 import {
   SyncProtocolWireToProtocol,
   syncProtocolToWire,
@@ -30,15 +38,16 @@ import {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function roundTrip(msg: ChannelMsg): ChannelMsg {
-  const encoded = cborCodec.encode(msg)
-  expect(encoded).toBeInstanceOf(Uint8Array)
-  expect(encoded.length).toBeGreaterThan(0)
-  const decoded = cborCodec.decode(encoded)
-  expect(decoded).toHaveLength(1)
-  const first = decoded.at(0)
-  if (!first) throw new Error("expected decoded[0] to exist")
-  return first
+function roundTripViaAlias(msg: ChannelMsg): ChannelMsg {
+  const state = emptyAliasState()
+  const { wire } = applyOutboundAliasing(state, msg)
+  const bytes = encodeWireMessage(wire)
+  const decoded = decodeWireMessage(bytes)
+  const result = applyInboundAliasing(emptyAliasState(), decoded)
+  if (result.error)
+    throw new Error(`Alias resolution failed: ${result.error.code}`)
+  if (!result.msg) throw new Error("Alias resolution produced no message")
+  return result.msg
 }
 
 // ---------------------------------------------------------------------------
@@ -55,7 +64,7 @@ describe("CBOR codec — lifecycle messages", () => {
         type: "user",
       },
     }
-    const decoded = roundTrip(msg)
+    const decoded = roundTripViaAlias(msg)
     expect(decoded).toEqual(msg)
   })
 
@@ -67,7 +76,7 @@ describe("CBOR codec — lifecycle messages", () => {
         type: "bot",
       },
     }
-    const decoded = roundTrip(msg)
+    const decoded = roundTripViaAlias(msg)
     expect(decoded.type).toBe("establish")
     const identity = (decoded as EstablishMsg).identity
     expect(identity.peerId).toBe("bot-42")
@@ -85,7 +94,7 @@ describe("CBOR codec — lifecycle messages", () => {
         type: "service",
       },
     }
-    const decoded = roundTrip(msg)
+    const decoded = roundTripViaAlias(msg)
     expect(decoded).toEqual(msg)
   })
 
@@ -93,7 +102,7 @@ describe("CBOR codec — lifecycle messages", () => {
     const msg: DepartMsg = {
       type: "depart",
     }
-    const decoded = roundTrip(msg)
+    const decoded = roundTripViaAlias(msg)
     expect(decoded).toEqual(msg)
   })
 })
@@ -127,7 +136,7 @@ describe("CBOR codec — present", () => {
         },
       ],
     }
-    const decoded = roundTrip(msg)
+    const decoded = roundTripViaAlias(msg)
     expect(decoded).toEqual(msg)
   })
 
@@ -136,7 +145,7 @@ describe("CBOR codec — present", () => {
       type: "present",
       docs: [],
     }
-    const decoded = roundTrip(msg)
+    const decoded = roundTripViaAlias(msg)
     expect(decoded).toEqual(msg)
   })
 })
@@ -149,7 +158,7 @@ describe("CBOR codec — interest", () => {
       version: "42",
       reciprocate: true,
     }
-    const decoded = roundTrip(msg)
+    const decoded = roundTripViaAlias(msg)
     expect(decoded).toEqual(msg)
   })
 
@@ -158,7 +167,7 @@ describe("CBOR codec — interest", () => {
       type: "interest",
       docId: "doc-xyz",
     }
-    const decoded = roundTrip(msg)
+    const decoded = roundTripViaAlias(msg)
     expect(decoded.type).toBe("interest")
     const interest = decoded as InterestMsg
     expect(interest.docId).toBe("doc-xyz")
@@ -173,7 +182,7 @@ describe("CBOR codec — interest", () => {
       version: "7",
       reciprocate: false,
     }
-    const decoded = roundTrip(msg)
+    const decoded = roundTripViaAlias(msg)
     expect(decoded).toEqual(msg)
   })
 })
@@ -190,7 +199,7 @@ describe("CBOR codec — offer", () => {
       },
       version: "5",
     }
-    const decoded = roundTrip(msg)
+    const decoded = roundTripViaAlias(msg)
     expect(decoded).toEqual(msg)
   })
 
@@ -207,14 +216,14 @@ describe("CBOR codec — offer", () => {
       version: "AQ==:3",
       reciprocate: true,
     }
-    const decoded = roundTrip(msg) as OfferMsg
+    const decoded = roundTripViaAlias(msg) as OfferMsg
     expect(decoded.type).toBe("offer")
     expect(decoded.docId).toBe("doc-crdt")
     expect(decoded.payload.encoding).toBe("binary")
     expect(decoded.version).toBe("AQ==:3")
     expect(decoded.reciprocate).toBe(true)
 
-    // Uint8Array should survive CBOR round-trip natively
+    // Uint8Array should survive wire round-trip natively
     expect(decoded.payload.data).toBeInstanceOf(Uint8Array)
     expect(decoded.payload.data).toEqual(binaryData)
   })
@@ -236,7 +245,7 @@ describe("CBOR codec — offer", () => {
       },
       version: "100",
     }
-    const decoded = roundTrip(msg) as OfferMsg
+    const decoded = roundTripViaAlias(msg) as OfferMsg
     expect(decoded.payload.data).toBeInstanceOf(Uint8Array)
     expect(decoded.payload.data).toEqual(largeData)
   })
@@ -252,7 +261,7 @@ describe("CBOR codec — offer", () => {
       },
       version: "1",
     }
-    const decoded = roundTrip(msg) as OfferMsg
+    const decoded = roundTripViaAlias(msg) as OfferMsg
     expect(decoded.reciprocate).toBeUndefined()
   })
 })
@@ -267,7 +276,7 @@ describe("CBOR codec — dismiss", () => {
       type: "dismiss",
       docId: "doc-to-leave",
     }
-    const decoded = roundTrip(msg)
+    const decoded = roundTripViaAlias(msg)
     expect(decoded).toEqual(msg)
   })
 })
@@ -326,10 +335,7 @@ describe("CBOR codec — batch", () => {
       },
     ]
 
-    const encoded = cborCodec.encode(msgs)
-    expect(encoded).toBeInstanceOf(Uint8Array)
-
-    const decoded = cborCodec.decode(encoded)
+    const decoded = msgs.map(m => roundTripViaAlias(m))
     expect(decoded).toHaveLength(6)
     expect(decoded[0]?.type).toBe("establish")
     expect(decoded[1]?.type).toBe("present")
@@ -342,15 +348,13 @@ describe("CBOR codec — batch", () => {
     expect(decoded[0]).toEqual(msgs[0])
     expect(decoded[1]).toEqual(msgs[1])
     expect(decoded[2]).toEqual(msgs[2])
-
-    // Offer needs special comparison for Uint8Array
-    const decodedOffer = decoded[3] as OfferMsg
-    expect(decodedOffer.payload.data).toEqual(new Uint8Array([1, 2, 3]))
+    expect(decoded[3]).toEqual(msgs[3])
+    expect(decoded[4]).toEqual(msgs[4])
+    expect(decoded[5]).toEqual(msgs[5])
   })
 
   it("round-trips an empty batch", () => {
-    const encoded = cborCodec.encode([])
-    const decoded = cborCodec.decode(encoded)
+    const decoded = ([] as ChannelMsg[]).map(m => roundTripViaAlias(m))
     expect(decoded).toEqual([])
   })
 })
@@ -362,49 +366,52 @@ describe("CBOR codec — batch", () => {
 describe("CBOR codec — error handling", () => {
   it("throws on invalid CBOR data", () => {
     const garbage = new Uint8Array([0xff, 0xfe, 0xfd, 0xfc])
-    expect(() => cborCodec.decode(garbage)).toThrow("Failed to decode")
+    expect(() => decodeWireMessage(garbage)).toThrow("Failed to decode")
   })
 
   it("throws on empty input", () => {
-    expect(() => cborCodec.decode(new Uint8Array(0))).toThrow()
+    expect(() => decodeWireMessage(new Uint8Array(0))).toThrow()
   })
 
   it("throws on unknown message type discriminator", () => {
     // Craft a valid CBOR payload with an unrecognized type discriminator.
     // This simulates receiving a message from a newer protocol version.
-    const wire = new Map<string, CBORType>([["t", 0xff]])
-    const encoded = encodeCBOR(wire) as Uint8Array
-    expect(() => cborCodec.decode(encoded)).toThrow(
+    const wire = { t: 0xff } as unknown as WireMessage
+    const encoded = encodeWireMessage(wire)
+    const decoded = decodeWireMessage(encoded)
+    expect(() => applyInboundAliasing(emptyAliasState(), decoded)).toThrow(
       "Unknown wire message type: 255",
     )
   })
 
   it("throws on unknown payload kind in offer message", () => {
-    const wire = new Map<string, CBORType>([
-      ["t", 0x12], // Offer
-      ["doc", "d1"],
-      ["pk", 0x99], // invalid payload kind
-      ["pe", 0x00], // valid encoding
-      ["d", "data"],
-      ["v", "1"],
-    ])
-    const encoded = encodeCBOR(wire) as Uint8Array
-    expect(() => cborCodec.decode(encoded)).toThrow(
+    const wire = {
+      t: 0x12, // Offer
+      doc: "d1",
+      pk: 0x99, // invalid payload kind
+      pe: 0x00, // valid encoding
+      d: "data",
+      v: "1",
+    } as unknown as WireMessage
+    const encoded = encodeWireMessage(wire)
+    const decoded = decodeWireMessage(encoded)
+    expect(() => applyInboundAliasing(emptyAliasState(), decoded)).toThrow(
       "Unknown wire payload kind: 153",
     )
   })
 
   it("throws on unknown payload encoding in offer message", () => {
-    const wire = new Map<string, CBORType>([
-      ["t", 0x12], // Offer
-      ["doc", "d1"],
-      ["pk", 0x00], // valid payload kind (entirety)
-      ["pe", 0x99], // invalid encoding
-      ["d", "data"],
-      ["v", "1"],
-    ])
-    const encoded = encodeCBOR(wire) as Uint8Array
-    expect(() => cborCodec.decode(encoded)).toThrow(
+    const wire = {
+      t: 0x12, // Offer
+      doc: "d1",
+      pk: 0x00, // valid payload kind (entirety)
+      pe: 0x99, // invalid encoding
+      d: "data",
+      v: "1",
+    } as unknown as WireMessage
+    const encoded = encodeWireMessage(wire)
+    const decoded = decodeWireMessage(encoded)
+    expect(() => applyInboundAliasing(emptyAliasState(), decoded)).toThrow(
       "Unknown wire payload encoding: 153",
     )
   })
@@ -426,7 +433,7 @@ describe("CBOR codec — multi-byte UTF-8", () => {
       },
       version: "1",
     }
-    const decoded = roundTrip(msg)
+    const decoded = roundTripViaAlias(msg)
     expect(decoded).toEqual(msg)
   })
 
@@ -441,7 +448,7 @@ describe("CBOR codec — multi-byte UTF-8", () => {
       },
       version: "3",
     }
-    const decoded = roundTrip(msg)
+    const decoded = roundTripViaAlias(msg)
     expect(decoded).toEqual(msg)
   })
 
@@ -454,7 +461,7 @@ describe("CBOR codec — multi-byte UTF-8", () => {
         type: "user",
       },
     }
-    const decoded = roundTrip(msg)
+    const decoded = roundTripViaAlias(msg)
     expect(decoded).toEqual(msg)
   })
 
@@ -476,8 +483,7 @@ describe("CBOR codec — multi-byte UTF-8", () => {
       },
     ]
 
-    const encoded = cborCodec.encode(msgs)
-    const decoded = cborCodec.decode(encoded)
+    const decoded = msgs.map(m => roundTripViaAlias(m))
     expect(decoded).toHaveLength(2)
     expect(decoded[0]).toEqual(msgs[0])
     expect(decoded[1]).toEqual(msgs[1])
@@ -510,13 +516,12 @@ import {
   DOC_ID_MAX_UTF8_BYTES,
   SCHEMA_HASH_MAX_UTF8_BYTES,
 } from "../constants.js"
-import { FrameDecodeError } from "../frame.js"
 
 describe("CBOR codec — identifier length caps", () => {
   it("accepts a docId exactly at the UTF-8 byte cap", () => {
     const docId = "a".repeat(DOC_ID_MAX_UTF8_BYTES)
     const msg: InterestMsg = { type: "interest", docId }
-    const decoded = roundTrip(msg) as InterestMsg
+    const decoded = roundTripViaAlias(msg) as InterestMsg
     expect(decoded.docId).toEqual(docId)
   })
 
@@ -528,20 +533,14 @@ describe("CBOR codec — identifier length caps", () => {
       DOC_ID_MAX_UTF8_BYTES,
     )
     const msg: InterestMsg = { type: "interest", docId }
-    const decoded = roundTrip(msg) as InterestMsg
+    const decoded = roundTripViaAlias(msg) as InterestMsg
     expect(decoded.docId).toEqual(docId)
   })
 
   it("rejects a docId one byte over the cap with a typed error", () => {
     const docId = "a".repeat(DOC_ID_MAX_UTF8_BYTES + 1)
     const msg: InterestMsg = { type: "interest", docId }
-    const encoded = cborCodec.encode(msg)
-    expect(() => cborCodec.decode(encoded)).toThrowError(FrameDecodeError)
-    try {
-      cborCodec.decode(encoded)
-    } catch (err) {
-      expect((err as FrameDecodeError).code).toBe("doc-id-too-long")
-    }
+    expect(() => roundTripViaAlias(msg)).toThrow("doc-id-too-long")
   })
 
   it("rejects a multi-byte UTF-8 docId one byte over the cap", () => {
@@ -551,8 +550,7 @@ describe("CBOR codec — identifier length caps", () => {
       DOC_ID_MAX_UTF8_BYTES + 1,
     )
     const msg: InterestMsg = { type: "interest", docId }
-    const encoded = cborCodec.encode(msg)
-    expect(() => cborCodec.decode(encoded)).toThrowError(FrameDecodeError)
+    expect(() => roundTripViaAlias(msg)).toThrow("doc-id-too-long")
   })
 
   it("accepts a schemaHash at the cap and rejects one byte over", () => {
@@ -580,16 +578,10 @@ describe("CBOR codec — identifier length caps", () => {
         },
       ],
     }
-    const decoded = roundTrip(okMsg) as PresentMsg
+    const decoded = roundTripViaAlias(okMsg) as PresentMsg
     expect(decoded.docs[0]?.schemaHash).toEqual(okHash)
 
-    const overEnc = cborCodec.encode(overMsg)
-    expect(() => cborCodec.decode(overEnc)).toThrowError(FrameDecodeError)
-    try {
-      cborCodec.decode(overEnc)
-    } catch (err) {
-      expect((err as FrameDecodeError).code).toBe("schema-hash-too-long")
-    }
+    expect(() => roundTripViaAlias(overMsg)).toThrow("schema-hash-too-long")
   })
 
   it("rejects an oversize docId on offer and dismiss", () => {
@@ -601,12 +593,8 @@ describe("CBOR codec — identifier length caps", () => {
       version: "v",
     }
     const dismissMsg: DismissMsg = { type: "dismiss", docId: big }
-    expect(() => cborCodec.decode(cborCodec.encode(offerMsg))).toThrowError(
-      FrameDecodeError,
-    )
-    expect(() => cborCodec.decode(cborCodec.encode(dismissMsg))).toThrowError(
-      FrameDecodeError,
-    )
+    expect(() => roundTripViaAlias(offerMsg)).toThrow("doc-id-too-long")
+    expect(() => roundTripViaAlias(dismissMsg)).toThrow("doc-id-too-long")
   })
 })
 
@@ -621,7 +609,7 @@ describe("CBOR codec — WireFeatures negotiation", () => {
       identity: { peerId: "alice", type: "user" },
       features: { alias: true, streamed: true, datagram: true },
     }
-    const decoded = roundTrip(msg) as EstablishMsg
+    const decoded = roundTripViaAlias(msg) as EstablishMsg
     expect(decoded.features).toEqual({
       alias: true,
       streamed: true,
@@ -635,7 +623,7 @@ describe("CBOR codec — WireFeatures negotiation", () => {
       identity: { peerId: "alice", type: "user" },
       features: { alias: true },
     }
-    const decoded = roundTrip(msg) as EstablishMsg
+    const decoded = roundTripViaAlias(msg) as EstablishMsg
     expect(decoded.features).toEqual({ alias: true })
   })
 
@@ -644,7 +632,7 @@ describe("CBOR codec — WireFeatures negotiation", () => {
       type: "establish",
       identity: { peerId: "alice", type: "user" },
     }
-    const decoded = roundTrip(msg) as EstablishMsg
+    const decoded = roundTripViaAlias(msg) as EstablishMsg
     expect(decoded.features).toBeUndefined()
   })
 
@@ -654,167 +642,7 @@ describe("CBOR codec — WireFeatures negotiation", () => {
       identity: { peerId: "alice", type: "user" },
       features: { alias: false, streamed: false },
     }
-    const decoded = roundTrip(msg) as EstablishMsg
+    const decoded = roundTripViaAlias(msg) as EstablishMsg
     expect(decoded.features).toEqual({ alias: false, streamed: false })
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Phase 3 — alias wire-form invariants
-// ---------------------------------------------------------------------------
-
-import { MessageType } from "../wire-types.js"
-
-/**
- * Helper: encode an arbitrary CBOR object as a complete binary frame's
- * payload, then decode through cborCodec.decode to exercise the
- * fromWireFormat invariants on raw wire shapes.
- */
-function decodeWireObject(obj: unknown): ChannelMsg[] {
-  // Build the CBOR-encoded payload directly via mapToObject machinery —
-  // we can encode the wire-shape object using the same encoder that
-  // cborCodec.encode uses. Here we just use the codec's decode directly,
-  // bypassing toWireFormat by hand-crafting the CBOR.
-  const bytes = encodeCBOR(deepObjectToMap(obj) as CBORType)
-  return cborCodec.decode(bytes)
-}
-
-function deepObjectToMap(value: unknown): unknown {
-  if (value === null || value === undefined) return value
-  if (value instanceof Uint8Array) return value
-  if (Array.isArray(value)) return value.map(deepObjectToMap)
-  if (typeof value === "object") {
-    const m = new Map<string | number, unknown>()
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      if (v !== undefined) m.set(k, deepObjectToMap(v))
-    }
-    return m
-  }
-  return value
-}
-
-describe("CBOR codec — Phase 3 alias-form invariants", () => {
-  it("rejects interest with both doc and dx (form conflict)", () => {
-    expect(() =>
-      decodeWireObject({
-        t: MessageType.Interest,
-        doc: "doc-1",
-        dx: 5,
-      }),
-    ).toThrowError(FrameDecodeError)
-    try {
-      decodeWireObject({ t: MessageType.Interest, doc: "doc-1", dx: 5 })
-    } catch (err) {
-      expect((err as FrameDecodeError).code).toBe("doc-id-form-conflict")
-    }
-  })
-
-  it("rejects interest with neither doc nor dx", () => {
-    expect(() => decodeWireObject({ t: MessageType.Interest })).toThrowError(
-      FrameDecodeError,
-    )
-  })
-
-  it("rejects interest with dx-only (codec has no alias state)", () => {
-    expect(() =>
-      decodeWireObject({ t: MessageType.Interest, dx: 5 }),
-    ).toThrowError(FrameDecodeError)
-  })
-
-  it("rejects offer with both doc and dx", () => {
-    expect(() =>
-      decodeWireObject({
-        t: MessageType.Offer,
-        doc: "doc-1",
-        dx: 5,
-        pk: 0,
-        pe: 0,
-        d: "{}",
-        v: "v1",
-      }),
-    ).toThrowError(FrameDecodeError)
-  })
-
-  it("rejects dismiss with both doc and dx", () => {
-    expect(() =>
-      decodeWireObject({
-        t: MessageType.Dismiss,
-        doc: "doc-1",
-        dx: 5,
-      }),
-    ).toThrowError(FrameDecodeError)
-  })
-
-  it("rejects present doc entry with both sh and shx", () => {
-    expect(() =>
-      decodeWireObject({
-        t: MessageType.Present,
-        docs: [
-          {
-            d: "doc-1",
-            rt: ["plain", 1, 0],
-            ms: 1,
-            sh: "00abc",
-            shx: 5,
-          },
-        ],
-      }),
-    ).toThrowError(FrameDecodeError)
-    try {
-      decodeWireObject({
-        t: MessageType.Present,
-        docs: [
-          {
-            d: "doc-1",
-            rt: ["plain", 1, 0],
-            ms: 1,
-            sh: "00abc",
-            shx: 5,
-          },
-        ],
-      })
-    } catch (err) {
-      expect((err as FrameDecodeError).code).toBe("schema-hash-form-conflict")
-    }
-  })
-
-  it("rejects present doc entry with shx-only (codec cannot resolve)", () => {
-    expect(() =>
-      decodeWireObject({
-        t: MessageType.Present,
-        docs: [
-          {
-            d: "doc-1",
-            rt: ["plain", 1, 0],
-            ms: 1,
-            shx: 5,
-          },
-        ],
-      }),
-    ).toThrowError(FrameDecodeError)
-  })
-
-  it("preserves ASCII docIds via interest round-trip (sanity)", () => {
-    const msg: InterestMsg = { type: "interest", docId: "doc-1" }
-    const decoded = roundTrip(msg) as InterestMsg
-    expect(decoded.docId).toBe("doc-1")
-  })
-
-  it("CBOR-encodes alias values across width transitions", () => {
-    // Verify that the underlying CBOR encoding produces 1/2/3/5-byte
-    // forms for non-negative integers across the documented boundaries.
-    const widths: Array<[number, number]> = [
-      [0, 1], // 1 byte
-      [23, 1], // 1 byte
-      [24, 2], // 2 bytes
-      [255, 2],
-      [256, 3], // 3 bytes
-      [65535, 3],
-      [65536, 5], // 5 bytes
-    ]
-    for (const [value, expectedWidth] of widths) {
-      const encoded = encodeCBOR(value)
-      expect(encoded.length).toBe(expectedWidth)
-    }
   })
 })
