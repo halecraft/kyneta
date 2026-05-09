@@ -75,12 +75,12 @@ describe("dynamic policy canShare", () => {
 
     const exchangeA = createExchange({
       id: "alice",
-      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       id: "bob",
-      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportId: "bob", bridge })],
       resolve: () => Interpret(SequentialDoc),
     })
 
@@ -122,12 +122,12 @@ describe("dynamic policy canShare", () => {
 
     const exchangeA = createExchange({
       id: "alice",
-      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       id: "bob",
-      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportId: "bob", bridge })],
       resolve: () => Interpret(SequentialDoc),
     })
 
@@ -171,13 +171,13 @@ describe("dynamic policy canShare", () => {
 
     const exchangeA = createExchange({
       id: "alice",
-      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
       canShare: docId => docId !== "params-blocked",
     })
 
     const exchangeB = createExchange({
       id: "bob",
-      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportId: "bob", bridge })],
       resolve: () => Interpret(SequentialDoc),
     })
 
@@ -218,12 +218,12 @@ describe("dynamic policy canAccept", () => {
 
     const exchangeA = createExchange({
       id: "alice",
-      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       id: "bob",
-      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportId: "bob", bridge })],
     })
 
     // Bob blocks all mutations from alice
@@ -261,12 +261,12 @@ describe("dynamic policy resolve", () => {
 
     const exchangeA = createExchange({
       id: "alice",
-      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       id: "bob",
-      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportId: "bob", bridge })],
     })
 
     // Register resolve dynamically via policy
@@ -304,12 +304,12 @@ describe("named policy replacement", () => {
 
     const exchangeA = createExchange({
       id: "alice",
-      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
     })
 
     const exchangeB = createExchange({
       id: "bob",
-      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportId: "bob", bridge })],
       resolve: () => Interpret(SequentialDoc),
     })
 
@@ -352,15 +352,15 @@ describe("relay topology", () => {
     const exchangeA = createExchange({
       id: "alice",
       transports: [
-        createBridgeTransport({ transportType: "alice", bridge: bridgeAH }),
+        createBridgeTransport({ transportId: "alice", bridge: bridgeAH }),
       ],
     })
 
     const exchangeHub = createExchange({
       id: "hub",
       transports: [
-        createBridgeTransport({ transportType: "hub-a", bridge: bridgeAH }),
-        createBridgeTransport({ transportType: "hub-b", bridge: bridgeHB }),
+        createBridgeTransport({ transportId: "hub-a", bridge: bridgeAH }),
+        createBridgeTransport({ transportId: "hub-b", bridge: bridgeHB }),
       ],
       resolve: () => Interpret(SequentialDoc),
     })
@@ -368,7 +368,7 @@ describe("relay topology", () => {
     const exchangeB = createExchange({
       id: "bob",
       transports: [
-        createBridgeTransport({ transportType: "bob", bridge: bridgeHB }),
+        createBridgeTransport({ transportId: "bob", bridge: bridgeHB }),
       ],
       resolve: () => Interpret(SequentialDoc),
     })

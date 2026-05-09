@@ -338,13 +338,11 @@ describe("Exchange", () => {
 
         const exchangeA = new Exchange({
           id: "alice",
-          transports: [
-            createBridgeTransport({ transportType: "alice", bridge }),
-          ],
+          transports: [createBridgeTransport({ transportId: "alice", bridge })],
         })
         const exchangeB = new Exchange({
           id: "bob",
-          transports: [createBridgeTransport({ transportType: "bob", bridge })],
+          transports: [createBridgeTransport({ transportId: "bob", bridge })],
         })
 
         const docA = exchangeA.get("doc-1", TestDoc)
@@ -393,11 +391,11 @@ describe("Exchange", () => {
       const bridge = new Bridge({ codec: cborCodec })
       const exchange1 = createExchange({
         id: "alice",
-        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+        transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
       const _exchange2 = createExchange({
         id: { peerId: "bob", name: "Bob" },
-        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+        transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
 
       const changes: PeerChange[] = []
@@ -425,11 +423,11 @@ describe("Exchange", () => {
       const bridge = new Bridge({ codec: cborCodec })
       const exchange1 = createExchange({
         id: "alice",
-        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+        transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
       const exchange2 = createExchange({
         id: "bob",
-        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+        transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
 
       await drain()
@@ -458,11 +456,11 @@ describe("Exchange", () => {
       const bridge = new Bridge({ codec: cborCodec })
       const exchange1 = createExchange({
         id: "alice",
-        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+        transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
       const _exchange2 = createExchange({
         id: "bob",
-        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+        transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
 
       let peersDuringCallback:
@@ -486,15 +484,15 @@ describe("Exchange", () => {
       const exchange1 = createExchange({
         id: "alice",
         transports: [
-          createBridgeTransport({ transportType: "alice-1", bridge: bridge1 }),
-          createBridgeTransport({ transportType: "alice-2", bridge: bridge2 }),
+          createBridgeTransport({ transportId: "alice-1", bridge: bridge1 }),
+          createBridgeTransport({ transportId: "alice-2", bridge: bridge2 }),
         ],
       })
       const _exchange2 = createExchange({
         id: "bob",
         transports: [
-          createBridgeTransport({ transportType: "bob-1", bridge: bridge1 }),
-          createBridgeTransport({ transportType: "bob-2", bridge: bridge2 }),
+          createBridgeTransport({ transportId: "bob-1", bridge: bridge1 }),
+          createBridgeTransport({ transportId: "bob-2", bridge: bridge2 }),
         ],
       })
 
@@ -516,11 +514,11 @@ describe("Exchange", () => {
       const bridge = new Bridge({ codec: cborCodec })
       const exchange1 = createExchange({
         id: "alice",
-        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+        transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
       const _exchange2 = createExchange({
         id: "bob",
-        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+        transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
 
       await drain()
@@ -544,11 +542,11 @@ describe("Exchange", () => {
       const bridge = new Bridge({ codec: cborCodec })
       const exchange1 = createExchange({
         id: "alice",
-        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+        transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
       const _exchange2 = createExchange({
         id: "bob",
-        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+        transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
 
       await drain()
@@ -576,11 +574,11 @@ describe("Exchange", () => {
       const bridge = new Bridge({ codec: cborCodec })
       const exchange1 = createExchange({
         id: "alice",
-        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+        transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
       const _exchange2 = createExchange({
         id: "bob",
-        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+        transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
 
       await drain()
@@ -609,11 +607,11 @@ describe("Exchange", () => {
       const bridge = new Bridge({ codec: cborCodec })
       const exchange1 = createExchange({
         id: "alice",
-        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+        transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
       const exchange2 = createExchange({
         id: "bob",
-        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+        transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
 
       await drain()
@@ -640,11 +638,11 @@ describe("Exchange", () => {
       const bridge = new Bridge({ codec: cborCodec })
       const exchange1 = createExchange({
         id: "alice",
-        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+        transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
       const exchange2 = createExchange({
         id: "bob",
-        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+        transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
 
       await drain()
@@ -661,7 +659,7 @@ describe("Exchange", () => {
 
       // Reconnect — add a new transport on the same bridge
       await exchange2.addTransport(
-        new BridgeTransport({ transportType: "bob", bridge }),
+        new BridgeTransport({ transportId: "bob", bridge }),
       )
       await drain()
 
@@ -679,11 +677,11 @@ describe("Exchange", () => {
       const bridge = new Bridge({ codec: cborCodec })
       const exchange1 = createExchange({
         id: "alice",
-        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+        transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
       const exchange2 = createExchange({
         id: "bob",
-        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+        transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
 
       // Alice creates a doc
@@ -709,7 +707,7 @@ describe("Exchange", () => {
 
       // Reconnect
       await exchange2.addTransport(
-        new BridgeTransport({ transportType: "bob", bridge }),
+        new BridgeTransport({ transportId: "bob", bridge }),
       )
       await drain()
 
@@ -726,12 +724,12 @@ describe("Exchange", () => {
       const bridge = new Bridge({ codec: cborCodec })
       const exchange1 = createExchange({
         id: "alice",
-        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+        transports: [createBridgeTransport({ transportId: "alice", bridge })],
         departureTimeout: 0,
       })
       const exchange2 = createExchange({
         id: "bob",
-        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+        transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
 
       await drain()
@@ -759,14 +757,12 @@ describe("Exchange", () => {
         const bridge = new Bridge({ codec: cborCodec })
         const exchange1 = createExchange({
           id: "alice",
-          transports: [
-            createBridgeTransport({ transportType: "alice", bridge }),
-          ],
+          transports: [createBridgeTransport({ transportId: "alice", bridge })],
           departureTimeout: 5_000,
         })
         const exchange2 = createExchange({
           id: "bob",
-          transports: [createBridgeTransport({ transportType: "bob", bridge })],
+          transports: [createBridgeTransport({ transportId: "bob", bridge })],
         })
 
         // Flush zero-delay timers only (microtask rounds) — does NOT advance clock
@@ -810,14 +806,12 @@ describe("Exchange", () => {
         const bridge = new Bridge({ codec: cborCodec })
         const exchange1 = createExchange({
           id: "alice",
-          transports: [
-            createBridgeTransport({ transportType: "alice", bridge }),
-          ],
+          transports: [createBridgeTransport({ transportId: "alice", bridge })],
           departureTimeout: 5_000,
         })
         const exchange2 = createExchange({
           id: "bob",
-          transports: [createBridgeTransport({ transportType: "bob", bridge })],
+          transports: [createBridgeTransport({ transportId: "bob", bridge })],
         })
 
         await vi.advanceTimersByTimeAsync(0)
@@ -835,7 +829,7 @@ describe("Exchange", () => {
 
         // Reconnect before the departure timer fires
         await exchange2.addTransport(
-          new BridgeTransport({ transportType: "bob", bridge }),
+          new BridgeTransport({ transportId: "bob", bridge }),
         )
         await vi.advanceTimersByTimeAsync(0)
 
@@ -1044,11 +1038,11 @@ describe("Exchange", () => {
       const bridge = new Bridge({ codec: cborCodec })
       const exchangeA = createExchange({
         id: "alice",
-        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+        transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
       const exchangeB = createExchange({
         id: "bob",
-        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+        transports: [createBridgeTransport({ transportId: "bob", bridge })],
         resolve: () => Defer(),
       })
 
@@ -1070,12 +1064,12 @@ describe("Exchange", () => {
 
       const _exchange1 = createExchange({
         id: "alice",
-        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+        transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
 
       const exchange2 = createExchange({
         id: "bob",
-        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+        transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
       exchange2.register({
         canConnect: () => false,
@@ -1092,12 +1086,12 @@ describe("Exchange", () => {
 
       const _exchange1 = createExchange({
         id: "alice",
-        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+        transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
 
       const exchange2 = createExchange({
         id: "bob",
-        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+        transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
       exchange2.register({
         canConnect: () => undefined,
@@ -1116,11 +1110,11 @@ describe("Exchange", () => {
 
       const alice = new Exchange({
         id: "alice",
-        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+        transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
       const bob = new Exchange({
         id: "bob",
-        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+        transports: [createBridgeTransport({ transportId: "bob", bridge })],
       })
       activeExchanges.push(alice, bob)
 
@@ -1135,7 +1129,7 @@ describe("Exchange", () => {
       const bridge = new Bridge({ codec: cborCodec })
       const alice = new Exchange({
         id: "alice",
-        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+        transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
       activeExchanges.push(alice)
       expect(alice.getPeerFeatures("bob")).toBeUndefined()

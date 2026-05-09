@@ -14,7 +14,7 @@
 // Usage:
 //   const bridge = new Bridge({ codec: cborCodec })
 //   const exchangeA = new Exchange({
-//     transports: [createBridgeTransport({ transportType: "peer-a", bridge })],
+//     transports: [createBridgeTransport({ transportId: "peer-a", bridge })],
 //   })
 
 import type {
@@ -22,7 +22,6 @@ import type {
   ChannelMsg,
   GeneratedChannel,
   TransportFactory,
-  TransportType,
 } from "@kyneta/transport"
 import { Transport } from "@kyneta/transport"
 import {
@@ -62,7 +61,8 @@ export type BridgeParams = {
 }
 
 /**
- * In-process byte router connecting multiple `BridgeTransport`s.
+ * In-process byte router connecting multiple `BridgeTransport`s,
+ * keyed by each transport's unique `transportId`.
  *
  * Channel-level sends produce alias-aware encoded bytes via the wire-layer
  * transformer and call `routeBytes`. The convenience `routeMessage` API
@@ -70,7 +70,7 @@ export type BridgeParams = {
  * bypass channel sends.
  */
 export class Bridge {
-  readonly transports = new Map<TransportType, BridgeTransport>()
+  readonly transports = new Map<string, BridgeTransport>()
   readonly codec: BridgeCodec
 
   constructor(params: BridgeParams) {
@@ -78,14 +78,14 @@ export class Bridge {
   }
 
   addTransport(transport: BridgeTransport): void {
-    if (!transport.transportType) {
-      throw new Error("can't add transport without transport type")
+    if (!transport.transportId) {
+      throw new Error("can't add transport without transport id")
     }
-    this.transports.set(transport.transportType, transport)
+    this.transports.set(transport.transportId, transport)
   }
 
-  removeTransport(transportType: TransportType): void {
-    this.transports.delete(transportType)
+  removeTransport(transportId: string): void {
+    this.transports.delete(transportId)
   }
 
   /**
@@ -96,13 +96,13 @@ export class Bridge {
    * Used by `BridgeTransport`'s channel send path.
    */
   routeBytes(
-    fromTransportType: TransportType,
-    toTransportType: TransportType,
+    fromTransportId: string,
+    toTransportId: string,
     bytes: Uint8Array,
   ): void {
-    const toTransport = this.transports.get(toTransportType)
+    const toTransport = this.transports.get(toTransportId)
     if (!toTransport) return
-    toTransport.deliverBytes(fromTransportType, bytes)
+    toTransport.deliverBytes(fromTransportId, bytes)
   }
 
   /**
@@ -115,15 +115,15 @@ export class Bridge {
    * fields. Production code should always send through a channel.
    */
   routeMessage(
-    fromTransportType: TransportType,
-    toTransportType: TransportType,
+    fromTransportId: string,
+    toTransportId: string,
     message: ChannelMsg,
   ): void {
     const bytes = this.codec.encode(message)
-    this.routeBytes(fromTransportType, toTransportType, bytes)
+    this.routeBytes(fromTransportId, toTransportId, bytes)
   }
 
-  get transportTypes(): Set<TransportType> {
+  get transportIds(): Set<string> {
     return new Set(this.transports.keys())
   }
 }
@@ -133,15 +133,17 @@ export class Bridge {
 // ---------------------------------------------------------------------------
 
 type BridgeTransportContext = {
-  targetTransportType: TransportType
+  targetTransportId: string
 }
 
 export type BridgeTransportParams = {
-  transportType: TransportType
+  /** Unique identifier for this transport instance (e.g. "peer-a", "server"). */
+  transportId: string
   /**
-   * Unique identifier for this adapter instance. Defaults to transportType.
+   * Transport type category. Defaults to "bridge".
+   * Stored in ChannelMeta for informational purposes.
    */
-  transportId?: string
+  transportType?: string
   bridge: Bridge
 }
 
@@ -154,23 +156,23 @@ export type BridgeTransportParams = {
  * ```typescript
  * const bridge = new Bridge({ codec: cborCodec })
  * const exchangeA = new Exchange({
- *   transports: [createBridgeTransport({ transportType: "peer-a", bridge })],
+ *   transports: [createBridgeTransport({ transportId: "peer-a", bridge })],
  * })
  * ```
  */
 export class BridgeTransport extends Transport<BridgeTransportContext> {
   readonly bridge: Bridge
 
-  // Track which remote adapter each channel connects to.
-  private channelToAdapter = new Map<ChannelId, TransportType>()
-  private adapterToChannel = new Map<TransportType, ChannelId>()
+  // Track which remote transport each channel connects to.
+  private channelToAdapter = new Map<ChannelId, string>()
+  private adapterToChannel = new Map<string, ChannelId>()
 
   // Per-channel alias state. Created with the channel; lives until removal.
   // Keyed by channelId.
   private aliasStateByChannel = new Map<ChannelId, AliasState>()
 
-  constructor({ transportType, transportId, bridge }: BridgeTransportParams) {
-    super({ transportType, transportId: transportId ?? transportType })
+  constructor({ transportId, transportType, bridge }: BridgeTransportParams) {
+    super({ transportType: transportType ?? "bridge", transportId })
     this.bridge = bridge
   }
 
@@ -178,7 +180,7 @@ export class BridgeTransport extends Transport<BridgeTransportContext> {
     return {
       transportType: this.transportType,
       send: msg => {
-        const channelId = this.adapterToChannel.get(context.targetTransportType)
+        const channelId = this.adapterToChannel.get(context.targetTransportId)
         if (channelId === undefined) return
 
         const state =
@@ -188,8 +190,8 @@ export class BridgeTransport extends Transport<BridgeTransportContext> {
 
         const bytes = encodeWireMessage(wire)
         this.bridge.routeBytes(
-          this.transportType,
-          context.targetTransportType,
+          this.transportId,
+          context.targetTransportId,
           bytes,
         )
       },
@@ -203,14 +205,14 @@ export class BridgeTransport extends Transport<BridgeTransportContext> {
     this.bridge.addTransport(this)
 
     // Phase 1: Create all channels (no establishment yet).
-    for (const [transportType, adapter] of this.bridge.transports) {
-      if (transportType !== this.transportType) {
-        adapter.createChannelTo(this.transportType)
+    for (const [transportId, adapter] of this.bridge.transports) {
+      if (transportId !== this.transportId) {
+        adapter.createChannelTo(this.transportId)
       }
     }
-    for (const transportType of this.bridge.transports.keys()) {
-      if (transportType !== this.transportType) {
-        this.createChannelTo(transportType)
+    for (const transportId of this.bridge.transports.keys()) {
+      if (transportId !== this.transportId) {
+        this.createChannelTo(transportId)
       }
     }
 
@@ -221,12 +223,12 @@ export class BridgeTransport extends Transport<BridgeTransportContext> {
   }
 
   async onStop(): Promise<void> {
-    for (const [transportType, adapter] of this.bridge.transports) {
-      if (transportType !== this.transportType) {
-        adapter.removeChannelTo(this.transportType)
+    for (const [transportId, adapter] of this.bridge.transports) {
+      if (transportId !== this.transportId) {
+        adapter.removeChannelTo(this.transportId)
       }
     }
-    this.bridge.removeTransport(this.transportType)
+    this.bridge.removeTransport(this.transportId)
 
     for (const channelId of this.channelToAdapter.keys()) {
       this.removeChannel(channelId)
@@ -236,20 +238,20 @@ export class BridgeTransport extends Transport<BridgeTransportContext> {
     this.adapterToChannel.clear()
   }
 
-  createChannelTo(targetTransportType: TransportType): void {
-    if (this.adapterToChannel.has(targetTransportType)) return
-    const channel = this.addChannel({ targetTransportType })
-    this.channelToAdapter.set(channel.channelId, targetTransportType)
-    this.adapterToChannel.set(targetTransportType, channel.channelId)
+  createChannelTo(targetTransportId: string): void {
+    if (this.adapterToChannel.has(targetTransportId)) return
+    const channel = this.addChannel({ targetTransportId })
+    this.channelToAdapter.set(channel.channelId, targetTransportId)
+    this.adapterToChannel.set(targetTransportId, channel.channelId)
     this.aliasStateByChannel.set(channel.channelId, emptyAliasState())
   }
 
-  removeChannelTo(targetTransportType: TransportType): void {
-    const channelId = this.adapterToChannel.get(targetTransportType)
+  removeChannelTo(targetTransportId: string): void {
+    const channelId = this.adapterToChannel.get(targetTransportId)
     if (channelId !== undefined) {
       this.removeChannel(channelId)
       this.channelToAdapter.delete(channelId)
-      this.adapterToChannel.delete(targetTransportType)
+      this.adapterToChannel.delete(targetTransportId)
       this.aliasStateByChannel.delete(channelId)
     }
   }
@@ -261,8 +263,8 @@ export class BridgeTransport extends Transport<BridgeTransportContext> {
    * transformer, and delivers each resolved message asynchronously
    * via `queueMicrotask()`.
    */
-  deliverBytes(fromTransportType: TransportType, bytes: Uint8Array): void {
-    const channelId = this.adapterToChannel.get(fromTransportType)
+  deliverBytes(fromTransportId: string, bytes: Uint8Array): void {
+    const channelId = this.adapterToChannel.get(fromTransportId)
     if (channelId === undefined) return
 
     const channel = this.channels.get(channelId)
@@ -295,7 +297,7 @@ export class BridgeTransport extends Transport<BridgeTransportContext> {
  * ```typescript
  * const bridge = new Bridge({ codec: cborCodec })
  * const exchangeA = new Exchange({
- *   transports: [createBridgeTransport({ transportType: "peer-a", bridge })],
+ *   transports: [createBridgeTransport({ transportId: "peer-a", bridge })],
  * })
  * ```
  */

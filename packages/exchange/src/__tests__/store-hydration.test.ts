@@ -216,7 +216,7 @@ describe("Exchange storage persistence", () => {
     // Exchange A (source) — has the doc
     const exchangeA = createExchange({
       id: "peer-a",
-      transports: [createBridgeTransport({ transportType: "side-a", bridge })],
+      transports: [createBridgeTransport({ transportId: "side-a", bridge })],
     })
     const docA = exchangeA.get("doc-1", TestDoc)
     change(docA, d => {
@@ -227,7 +227,7 @@ describe("Exchange storage persistence", () => {
     // Exchange B (sink) — has storage, discovers doc from A
     const exchangeB = createExchange({
       id: "peer-b",
-      transports: [createBridgeTransport({ transportType: "side-b", bridge })],
+      transports: [createBridgeTransport({ transportId: "side-b", bridge })],
       stores: [backend],
       resolve: () => Replicate(),
     })

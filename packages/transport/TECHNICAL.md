@@ -170,6 +170,8 @@ Source: `packages/transport/src/transport.ts` → `TransportFactory`.
 
 In-process testing is provided by `@kyneta/bridge-transport` (`packages/exchange/transports/bridge`). Consumers import directly from `@kyneta/bridge-transport`. See that package's docs for usage.
 
+Bridge transports are identified by `transportId` (a unique instance name, e.g. `"peer-a"`) — not `transportType`, which defaults to `"bridge"` for all bridge instances. The `Bridge` class routes messages by `transportId`; the `Bridge.transportIds` accessor returns the set of registered instance IDs.
+
 The bridge transport lives outside `@kyneta/transport` because it needs the alias transformer from `@kyneta/wire` (Phase 4 of the v1 alias work), and `@kyneta/transport` cannot depend on `@kyneta/wire` without creating a circular peer-dep — `@kyneta/wire` already peer-depends on `@kyneta/transport` for shared message types.
 
 ## Wire-format mechanics live in transports

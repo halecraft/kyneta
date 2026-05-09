@@ -106,11 +106,11 @@ describe("initial content via change() syncs to peers", () => {
 
     const exchangeA = createExchange({
       id: "alice",
-      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
     })
     const exchangeB = createExchange({
       id: "bob",
-      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportId: "bob", bridge })],
     })
 
     // Alice creates a doc and applies initial content via change()
@@ -147,11 +147,11 @@ describe("snapshot import preserves ref identity", () => {
 
     const exchangeA = createExchange({
       id: "alice",
-      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
     })
     const exchangeB = createExchange({
       id: "bob",
-      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportId: "bob", bridge })],
     })
 
     const docA = exchangeA.get("doc-1", SimpleDoc)
@@ -176,11 +176,11 @@ describe("snapshot import preserves ref identity", () => {
 
     const exchangeA = createExchange({
       id: "alice",
-      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
     })
     const exchangeB = createExchange({
       id: "bob",
-      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportId: "bob", bridge })],
     })
 
     const docB = exchangeB.get("doc-1", SimpleDoc)
@@ -209,11 +209,11 @@ describe("ephemeral stale rejection", () => {
 
     const exchangeA = createExchange({
       id: "alice",
-      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
     })
     const exchangeB = createExchange({
       id: "bob",
-      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportId: "bob", bridge })],
     })
 
     // Alice sets initial presence
@@ -282,12 +282,12 @@ describe("collaborative sync uses deltas when sender is ahead", () => {
 
     const exchangeA = createExchange({
       id: "alice",
-      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
       schemas: [LoroDoc],
     })
     const exchangeB = createExchange({
       id: "bob",
-      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportId: "bob", bridge })],
       schemas: [LoroDoc],
     })
 
@@ -330,11 +330,11 @@ describe("universal version comparison rejects stale offers for all strategies",
 
     const exchangeA = createExchange({
       id: "alice",
-      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
     })
     const exchangeB = createExchange({
       id: "bob",
-      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportId: "bob", bridge })],
     })
 
     // Both create the same doc
@@ -410,14 +410,14 @@ describe("plain replica snapshot import falls back to replicaFactory.fromSnapsho
     const exchangeA = createExchange({
       id: "alice",
       transports: [
-        createBridgeTransport({ transportType: "alice", bridge: bridgeAR }),
+        createBridgeTransport({ transportId: "alice", bridge: bridgeAR }),
       ],
     })
 
     const relay = createExchange({
       id: "relay",
       transports: [
-        createBridgeTransport({ transportType: "relay-a", bridge: bridgeAR }),
+        createBridgeTransport({ transportId: "relay-a", bridge: bridgeAR }),
       ],
       resolve: () => Replicate(),
     })
@@ -438,13 +438,13 @@ describe("plain replica snapshot import falls back to replicaFactory.fromSnapsho
     // Phase 2: Bob connects to relay AFTER Alice wrote
     const bridgeRB = new Bridge({ codec: cborCodec })
     await relay.addTransport(
-      createBridgeTransport({ transportType: "relay-b", bridge: bridgeRB })(),
+      createBridgeTransport({ transportId: "relay-b", bridge: bridgeRB })(),
     )
 
     const exchangeB = createExchange({
       id: "bob",
       transports: [
-        createBridgeTransport({ transportType: "bob", bridge: bridgeRB }),
+        createBridgeTransport({ transportId: "bob", bridge: bridgeRB }),
       ],
       resolve: (docId: string) => {
         if (docId === "config") return Interpret(SequentialDoc)
@@ -494,12 +494,12 @@ describe("schema hash compatibility", () => {
 
     const exchangeA = createExchange({
       id: "alice",
-      transports: [createBridgeTransport({ transportType: "alice", bridge })],
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
       schemas: [SchemaA],
     })
     const exchangeB = createExchange({
       id: "bob",
-      transports: [createBridgeTransport({ transportType: "bob", bridge })],
+      transports: [createBridgeTransport({ transportId: "bob", bridge })],
       schemas: [SchemaB],
     })
 
@@ -537,7 +537,7 @@ describe("schema hash compatibility", () => {
     const exchangeA = createExchange({
       id: "alice",
       transports: [
-        createBridgeTransport({ transportType: "alice", bridge: bridgeAR }),
+        createBridgeTransport({ transportId: "alice", bridge: bridgeAR }),
       ],
       schemas: [TodoDoc],
     })
@@ -545,8 +545,8 @@ describe("schema hash compatibility", () => {
     const relay = createExchange({
       id: "relay",
       transports: [
-        createBridgeTransport({ transportType: "relay-a", bridge: bridgeAR }),
-        createBridgeTransport({ transportType: "relay-c", bridge: bridgeRC }),
+        createBridgeTransport({ transportId: "relay-a", bridge: bridgeAR }),
+        createBridgeTransport({ transportId: "relay-c", bridge: bridgeRC }),
       ],
       replicas: [loro.replica()],
       resolve: () => Replicate(),
@@ -555,7 +555,7 @@ describe("schema hash compatibility", () => {
     const exchangeC = createExchange({
       id: "charlie",
       transports: [
-        createBridgeTransport({ transportType: "charlie", bridge: bridgeRC }),
+        createBridgeTransport({ transportId: "charlie", bridge: bridgeRC }),
       ],
       schemas: [TodoDoc],
       resolve: () => Interpret(TodoDoc),

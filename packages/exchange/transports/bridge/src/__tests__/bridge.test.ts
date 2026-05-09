@@ -33,8 +33,8 @@ describe("BridgeTransport", () => {
       onChannelReceive: (_id, msg) => receivedByB.push(msg),
     })
 
-    const adapterA = new BridgeTransport({ transportType: "peer-a", bridge })
-    const adapterB = new BridgeTransport({ transportType: "peer-b", bridge })
+    const adapterA = new BridgeTransport({ transportId: "peer-a", bridge })
+    const adapterB = new BridgeTransport({ transportId: "peer-b", bridge })
 
     adapterA._initialize(ctxA)
     await adapterA._start()
@@ -67,7 +67,7 @@ describe("BridgeTransport", () => {
   it("stops cleanly and removes from bridge", async () => {
     const bridge = new Bridge({ codec: cborCodec })
 
-    const adapterA = new BridgeTransport({ transportType: "peer-a", bridge })
+    const adapterA = new BridgeTransport({ transportId: "peer-a", bridge })
     adapterA._initialize(createTransportContext())
     await adapterA._start()
 
@@ -82,8 +82,8 @@ describe("BridgeTransport", () => {
 
     const establishedChannels: number[] = []
 
-    const adapterA = new BridgeTransport({ transportType: "peer-a", bridge })
-    const adapterB = new BridgeTransport({ transportType: "peer-b", bridge })
+    const adapterA = new BridgeTransport({ transportId: "peer-a", bridge })
+    const adapterB = new BridgeTransport({ transportId: "peer-b", bridge })
 
     adapterA._initialize(
       createTransportContext({
@@ -119,8 +119,8 @@ describe("BridgeTransport", () => {
       onChannelReceive: (_id, msg) => receivedByB.push(msg),
     })
 
-    const adapterA = new BridgeTransport({ transportType: "peer-a", bridge })
-    const adapterB = new BridgeTransport({ transportType: "peer-b", bridge })
+    const adapterA = new BridgeTransport({ transportId: "peer-a", bridge })
+    const adapterB = new BridgeTransport({ transportId: "peer-b", bridge })
 
     adapterA._initialize(ctxA)
     await adapterA._start()

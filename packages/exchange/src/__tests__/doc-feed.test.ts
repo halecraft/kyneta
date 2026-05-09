@@ -264,14 +264,14 @@ describe("exchange.documents", () => {
 
       const exchangeA = createExchange({
         id: "alice",
-        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+        transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
 
       const changes: DocChange[] = []
 
       const exchangeB = createExchange({
         id: "bob",
-        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+        transports: [createBridgeTransport({ transportId: "bob", bridge })],
         resolve: () => Defer(),
       })
 
@@ -298,12 +298,12 @@ describe("exchange.documents", () => {
 
       const exchangeA = createExchange({
         id: "alice",
-        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+        transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
 
       const exchangeB = createExchange({
         id: "bob",
-        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+        transports: [createBridgeTransport({ transportId: "bob", bridge })],
         resolve: () => Defer(),
       })
 
@@ -393,12 +393,12 @@ describe("exchange.documents", () => {
 
       const exchangeA = createExchange({
         id: "alice",
-        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+        transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
 
       const exchangeB = createExchange({
         id: "bob",
-        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+        transports: [createBridgeTransport({ transportId: "bob", bridge })],
         resolve: () => Defer(),
       })
 
@@ -505,12 +505,12 @@ describe("exchange.documents", () => {
 
       const exchangeA = createExchange({
         id: "alice",
-        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+        transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
 
       const exchangeB = createExchange({
         id: "bob",
-        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+        transports: [createBridgeTransport({ transportId: "bob", bridge })],
         resolve: () => Defer(),
       })
 
@@ -546,12 +546,12 @@ describe("exchange.documents", () => {
 
       const exchangeA = createExchange({
         id: "alice",
-        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+        transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
 
       const exchangeB = createExchange({
         id: "bob",
-        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+        transports: [createBridgeTransport({ transportId: "bob", bridge })],
         schemas: [TestDoc],
       })
 
@@ -576,12 +576,12 @@ describe("exchange.documents", () => {
 
       const exchangeA = createExchange({
         id: "alice",
-        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+        transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
 
       const exchangeB = createExchange({
         id: "bob",
-        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+        transports: [createBridgeTransport({ transportId: "bob", bridge })],
         schemas: [CollabDoc],
       })
 
@@ -609,12 +609,12 @@ describe("exchange.documents", () => {
 
       const exchangeA = createExchange({
         id: "alice",
-        transports: [createBridgeTransport({ transportType: "alice", bridge })],
+        transports: [createBridgeTransport({ transportId: "alice", bridge })],
       })
 
       const exchangeB = createExchange({
         id: "bob",
-        transports: [createBridgeTransport({ transportType: "bob", bridge })],
+        transports: [createBridgeTransport({ transportId: "bob", bridge })],
         schemas: [CollabDoc],
       })
 

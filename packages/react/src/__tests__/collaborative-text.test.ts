@@ -49,7 +49,7 @@ function createPeer(
 ): { exchange: Exchange; doc: any } {
   const exchange = new Exchange({
     id: peerId,
-    transports: [createBridgeTransport({ transportType: peerId, bridge })],
+    transports: [createBridgeTransport({ transportId: peerId, bridge })],
     schemas: [NoteDoc],
   })
   active.push(exchange)

@@ -18,11 +18,11 @@ import { Exchange } from "@kyneta/exchange"
 const bridge = new Bridge({ codec: cborCodec })
 
 const exchangeA = new Exchange({
-  transports: [createBridgeTransport({ transportType: "peer-a", bridge })],
+  transports: [createBridgeTransport({ transportId: "peer-a", bridge })],
 })
 
 const exchangeB = new Exchange({
-  transports: [createBridgeTransport({ transportType: "peer-b", bridge })],
+  transports: [createBridgeTransport({ transportId: "peer-b", bridge })],
 })
 ```
 

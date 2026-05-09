@@ -77,12 +77,12 @@ describe("cohort governance predicate", () => {
 
     const server = createExchange({
       id: "server",
-      transports: [createBridgeTransport({ transportType: "server", bridge })],
+      transports: [createBridgeTransport({ transportId: "server", bridge })],
     })
 
     const client = createExchange({
       id: "client",
-      transports: [createBridgeTransport({ transportType: "client", bridge })],
+      transports: [createBridgeTransport({ transportId: "client", bridge })],
     })
 
     const docServer = server.get("doc-1", TestDoc)
@@ -121,8 +121,8 @@ describe("cohort governance predicate", () => {
     const server = createExchange({
       id: { peerId: "server", type: "service" },
       transports: [
-        createBridgeTransport({ transportType: "server-r", bridge: bridgeSR }),
-        createBridgeTransport({ transportType: "server-b", bridge: bridgeSB }),
+        createBridgeTransport({ transportId: "server-r", bridge: bridgeSR }),
+        createBridgeTransport({ transportId: "server-b", bridge: bridgeSB }),
       ],
       cohort: (_docId, peer) => (peer.type === "service" ? true : false),
     })
@@ -130,14 +130,14 @@ describe("cohort governance predicate", () => {
     const relay = createExchange({
       id: { peerId: "relay", type: "service" },
       transports: [
-        createBridgeTransport({ transportType: "relay", bridge: bridgeSR }),
+        createBridgeTransport({ transportId: "relay", bridge: bridgeSR }),
       ],
     })
 
     const browser = createExchange({
       id: { peerId: "browser", type: "user" },
       transports: [
-        createBridgeTransport({ transportType: "browser", bridge: bridgeSB }),
+        createBridgeTransport({ transportId: "browser", bridge: bridgeSB }),
       ],
     })
 
@@ -187,13 +187,13 @@ describe("cohort governance predicate", () => {
 
     const server = createExchange({
       id: { peerId: "server", type: "service" },
-      transports: [createBridgeTransport({ transportType: "server", bridge })],
+      transports: [createBridgeTransport({ transportId: "server", bridge })],
       cohort: (_docId, peer) => (peer.type === "service" ? true : false),
     })
 
     const client = createExchange({
       id: { peerId: "client", type: "user" },
-      transports: [createBridgeTransport({ transportType: "client", bridge })],
+      transports: [createBridgeTransport({ transportId: "client", bridge })],
     })
 
     const docServer = server.get("doc-1", TestDoc)
@@ -247,13 +247,13 @@ describe("cohort governance predicate", () => {
 
     const server = createExchange({
       id: { peerId: "server", type: "service" },
-      transports: [createBridgeTransport({ transportType: "server", bridge })],
+      transports: [createBridgeTransport({ transportId: "server", bridge })],
       cohort: () => true,
     })
 
     const client = createExchange({
       id: { peerId: "client", type: "user" },
-      transports: [createBridgeTransport({ transportType: "client", bridge })],
+      transports: [createBridgeTransport({ transportId: "client", bridge })],
     })
 
     const docServer = server.get("doc-1", TestDoc)
@@ -297,13 +297,13 @@ describe("cohort governance predicate", () => {
     // Only the "durable" doc has cohort protection; "ephemeral" does not.
     const server = createExchange({
       id: { peerId: "server", type: "service" },
-      transports: [createBridgeTransport({ transportType: "server", bridge })],
+      transports: [createBridgeTransport({ transportId: "server", bridge })],
       cohort: (docId, _peer) => (docId === "durable" ? true : false),
     })
 
     const client = createExchange({
       id: { peerId: "client", type: "service" },
-      transports: [createBridgeTransport({ transportType: "client", bridge })],
+      transports: [createBridgeTransport({ transportId: "client", bridge })],
     })
 
     const durableServer = server.get("durable", TestDoc)
@@ -345,13 +345,13 @@ describe("cohort governance predicate", () => {
 
     const server = createExchange({
       id: { peerId: "server", type: "service" },
-      transports: [createBridgeTransport({ transportType: "server", bridge })],
+      transports: [createBridgeTransport({ transportId: "server", bridge })],
       cohort: () => false,
     })
 
     const client = createExchange({
       id: { peerId: "client", type: "user" },
-      transports: [createBridgeTransport({ transportType: "client", bridge })],
+      transports: [createBridgeTransport({ transportId: "client", bridge })],
     })
 
     const docServer = server.get("doc-1", TestDoc)
