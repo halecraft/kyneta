@@ -294,6 +294,10 @@ export class SseClientTransport extends Transport<void> {
           this.#serverChannel = undefined
         }
 
+        // Fresh reassembler for the new connection — stale fragments from
+        // the old connection must not collide with new fragments.
+        this.#reassembler.reset()
+
         this.#serverChannel = this.addChannel()
 
         // No "ready" handshake — establish immediately
@@ -423,6 +427,8 @@ export class SseClientTransport extends Transport<void> {
 
   protected generate(): GeneratedChannel {
     const nextFrameId = createFrameIdCounter()
+    // New channel = fresh alias state; reset on (re)connect.
+    this.#aliasState = emptyAliasState()
     return {
       transportType: this.transportType,
       send: (msg: ChannelMsg) => {
@@ -597,10 +603,16 @@ export class SseClientTransport extends Transport<void> {
           throw abortError
         }
 
-        // If max attempts reached, throw the last error
+        // If max attempts reached, log and stop — don't throw.
+        // The send callback is synchronous and uses `void`, so
+        // a throw here would be an unhandled promise rejection.
         if (attempt >= maxAttempts) {
           this.#currentRetryAbortController = undefined
-          throw error
+          console.error(
+            `[SseClientTransport] Failed to send message after ${attempt} attempts:`,
+            (error as Error).message,
+          )
+          return
         }
 
         // Calculate delay with exponential backoff and jitter

@@ -169,6 +169,16 @@ export class FragmentReassembler {
   }
 
   /**
+   * Reset the reassembler to its initial state.
+   *
+   * Clears all pending timeout timers and batch state without disposing.
+   * After reset, the reassembler is ready to accept new frames.
+   */
+  reset(): void {
+    this.#collector.reset()
+  }
+
+  /**
    * Clean up all resources.
    *
    * Cancels all pending timeout timers and clears batch state.

@@ -223,6 +223,10 @@ export class WebsocketClientTransport extends Transport<void> {
           this.#serverChannel = undefined
         }
 
+        // Fresh reassembler for the new connection — stale fragments from
+        // the old connection must not collide with new fragments.
+        this.#reassembler.reset()
+
         this.#serverChannel = this.addChannel()
 
         // Establish immediately — the server already signaled ready

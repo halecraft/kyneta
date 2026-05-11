@@ -306,6 +306,24 @@ export class FragmentCollector<T> {
     this.#totalSize = 0
   }
 
+  /**
+   * Reset the collector to its initial state.
+   *
+   * Clears all pending timeout timers and batch state without disposing.
+   * After reset, the collector is ready to accept new fragments — unlike
+   * {@link dispose}, this does not mark the collector as disposed, so
+   * subsequent `addFragment` calls will succeed.
+   */
+  reset(): void {
+    for (const batch of this.#batches.values()) {
+      if (batch.timerId !== undefined) {
+        this.#timer.clearTimeout(batch.timerId)
+      }
+    }
+    this.#batches.clear()
+    this.#totalSize = 0
+  }
+
   /** Number of in-flight frames currently being tracked. */
   get pendingFrameCount(): number {
     return this.#batches.size
