@@ -1,0 +1,83 @@
+/* Collaborative Counter — minimal, clean styling */
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  max-width: 480px;
+  margin: 40px auto;
+  padding: 0 20px;
+  color: #222;
+  text-align: center;
+}
+
+h1 {
+  margin-bottom: 24px;
+  font-size: 1.4em;
+}
+
+.sync-indicator {
+  font-size: 14px;
+  margin-left: 8px;
+}
+
+/* ── Counter display ──────────────────────────────────────────────────── */
+
+.counter-display {
+  margin: 32px 0;
+}
+
+.counter-value {
+  font-size: 96px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #333;
+  user-select: none;
+}
+
+/* ── Buttons ──────────────────────────────────────────────────────────── */
+
+.counter-buttons {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  margin-bottom: 32px;
+}
+
+.btn {
+  width: 64px;
+  height: 64px;
+  border: 2px solid #ddd;
+  border-radius: 12px;
+  background: #fafafa;
+  font-size: 28px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn:hover {
+  background: #f0f0f0;
+  border-color: #bbb;
+}
+
+.btn:active {
+  background: #e0e0e0;
+}
+
+.btn-plus {
+  color: #2a7d2a;
+}
+
+.btn-minus {
+  color: #c0392b;
+}
+
+/* ── Hint ─────────────────────────────────────────────────────────────── */
+
+.hint {
+  color: #888;
+  font-size: 12px;
+  margin-top: 20px;
+  line-height: 1.5;
+}

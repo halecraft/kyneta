@@ -184,6 +184,7 @@ A plain JS substrate is built into `@kyneta/schema` — no external package need
 | [`todo-react`](./examples/todo-react) | Same domain, React bindings — proves the sync layer is framework-agnostic |
 | [`bumper-cars`](./examples/bumper-cars) | Heterogeneous documents in one Exchange — collaborative CRDTs, authoritative server state, and ephemeral presence side by side |
 | [`unix-socket-sync`](./examples/unix-socket-sync) | Leaderless TUI config sync over Unix sockets — N identical processes, one socket path, Loro CRDT convergence |
+| [`prisma-counter`](./examples/prisma-counter) | Collaborative Loro counter with Prisma/Postgres persistence — survives server restart |
 
 ## Getting Started
 

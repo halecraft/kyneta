@@ -1,0 +1,30 @@
+// @kyneta/prisma-counter — canonical Prisma schema for the counter example.
+//
+// Uses the model fragment from @kyneta/prisma-store. The datasource
+// reads from DATABASE_URL in the environment — point this at a
+// Postgres instance (see README for Docker one-liner).
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model KynetaMeta {
+  docId String @id @map("doc_id")
+  data  Json
+  @@map("kyneta_meta")
+}
+
+model KynetaRecord {
+  docId   String  @map("doc_id")
+  seq     Int
+  kind    String
+  payload String?
+  blob    Bytes?
+  @@id([docId, seq])
+  @@map("kyneta_records")
+}

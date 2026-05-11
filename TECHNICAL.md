@@ -141,6 +141,8 @@ Two additional test suites live outside the main package graph:
 
 **`examples/unix-socket-sync`** — Minimal demonstration of `createUnixSocketPeer` — two processes sharing a socket path, leaderless role negotiation, bidirectional sync.
 
+**`examples/prisma-counter`** — Collaborative Loro counter with Prisma + Postgres persistence. Demonstrates wiring `@kyneta/prisma-store` into an Exchange, Prisma migrations for the `KynetaMeta`/`KynetaRecord` tables, and server-restart resilience. Uses Vite middleware + WebSocket, same pattern as `todo-react`.
+
 ---
 
 ## Development
@@ -243,6 +245,7 @@ kyneta/
 │   ├── todo-react/           # Loro + WebSocket + React
 │   ├── bumper-cars/          # Ephemeral + collaborative hybrid
 │   └── unix-socket-sync/     # createUnixSocketPeer demo
+│   └── prisma-counter/       # Prisma + Postgres persistence demo
 │
 ├── internal/                 # unpublished shared utilities
 │   └── bun-server/           # shared Bun build + static serving for examples

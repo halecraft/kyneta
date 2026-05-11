@@ -1,0 +1,35 @@
+{
+  "name": "example-prisma-counter",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/server.ts",
+    "generate": "prisma generate",
+    "migrate": "prisma migrate dev --name init"
+  },
+  "dependencies": {
+    "@kyneta/exchange": "workspace:^",
+    "@kyneta/loro-schema": "workspace:^",
+    "@kyneta/prisma-store": "workspace:^",
+    "@kyneta/react": "workspace:^",
+    "@kyneta/schema": "workspace:^",
+    "@kyneta/websocket-transport": "workspace:^",
+    "@prisma/client": "^6.0.0",
+    "loro-crdt": "^1.10.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "ws": "^8"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@types/ws": "^8",
+    "@vitejs/plugin-react": "^4.5.2",
+    "prisma": "^6.0.0",
+    "tsx": "^4.19.4",
+    "typescript": "^5.9.2",
+    "vite": "^6",
+    "vite-plugin-wasm": "^3.6.0"
+  }
+}
