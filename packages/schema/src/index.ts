@@ -369,6 +369,8 @@ export type {
   Durability,
   Replica,
   ReplicaFactory,
+  ReplicaFactoryLike,
+  ReplicaLike,
   ReplicaType,
   Substrate,
   SubstrateFactory,

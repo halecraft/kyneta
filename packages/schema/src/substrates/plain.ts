@@ -521,8 +521,11 @@ export function createPlainReplica<V extends Version>(
       return core.baseVersion()
     },
 
-    advance(to: V): void {
-      core.advance(to, (batches: Op[][]) => {
+    advance(to: Version): void {
+      // The ReplicaLike contract uses `Version` for variance safety.
+      // The synchronizer always pairs replicas with matching factories,
+      // so the runtime type is always the correct concrete V.
+      core.advance(to as V, (batches: Op[][]) => {
         // Project trimmed ops onto the base state.
         for (const batch of batches) {
           for (const op of batch) {
@@ -538,8 +541,9 @@ export function createPlainReplica<V extends Version>(
       return core.exportEntirety()
     },
 
-    exportSince(since: V): SubstratePayload | null {
-      return core.exportSince(since)
+    exportSince(since: Version): SubstratePayload | null {
+      // Same variance-safety rationale as advance() above.
+      return core.exportSince(since as V)
     },
 
     merge(payload: SubstratePayload, _origin?: string): void {

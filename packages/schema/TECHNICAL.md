@@ -252,15 +252,22 @@ This is the three-tier participation model:
 
 Source: `packages/schema/src/substrate.ts`.
 
-Two interfaces, orthogonal concerns:
+Three interfaces, connected by the variance-safe `-Like` convention:
 
 ```
-interface Replica<V> {
-  version(): V
+interface ReplicaLike {
+  version(): Version
+  baseVersion(): Version
   exportEntirety(): SubstratePayload
-  exportSince(since: V | undefined): SubstratePayload
+  exportSince(since: Version): SubstratePayload | null
+  advance(to: Version): void
   merge(payload: SubstratePayload, origin?: string): void
-  [BACKING_DOC]: unknown
+}
+
+interface Replica<V> extends ReplicaLike {
+  version(): V
+  baseVersion(): V
+  // exportSince, advance, merge inherited from ReplicaLike
 }
 
 interface Substrate<V> extends Replica<V> {
@@ -271,13 +278,22 @@ interface Substrate<V> extends Replica<V> {
 }
 ```
 
-Every substrate exposes the same five replica methods:
+**`ReplicaLike`** is the minimal replication contract — what the synchronizer needs. All version-typed positions use the base `Version` type so the synchronizer can hold heterogeneous replicas in a single `Map` without variance escapes. Named after the TypeScript `-Like` convention (`PromiseLike`, `ArrayLike`): a structural interface that the full `Replica<V>` satisfies.
 
-- `version()` → the current state's version (substrate-specific type `V`).
+**`Replica<V>`** extends `ReplicaLike` with concrete version types. External consumers (binding targets, factories) use this for compile-time version-type safety on return values (`version(): V`, `baseVersion(): V`). Input methods (`exportSince`, `advance`) inherit the wider `Version` parameter type from `ReplicaLike`.
+
+**`ReplicaFactoryLike`** / **`ReplicaFactory<V>`** follow the same pattern: a variance-safe structural interface and a narrow extension with concrete return types.
+
+The split exists because TypeScript treats generics as invariant: `Replica<LoroVersion>` is NOT assignable to `Replica<Version>`, even though `LoroVersion extends Version`. The `-Like` interfaces solve this by using `Version` in all positions, making them assignable from any concrete `Replica<V>`.
+
+Every replica exposes six methods:
+
+- `version()` → the current state's version.
+- `baseVersion()` → the earliest version retained (trimmed history starts here).
 - `exportEntirety()` → full state as an opaque payload.
-- `exportSince(since)` → delta relative to the given version, or entirety if delta is not applicable.
+- `exportSince(since)` → delta relative to the given version, or `null` if not possible.
+- `advance(to)` → trim history up to the given version.
 - `merge(payload, origin?)` → fold an incoming payload into local state. `origin` is propagated through the changefeed.
-- `[BACKING_DOC]` → symbol-keyed accessor for the underlying runtime container.
 
 A `Substrate` adds interpretation:
 

@@ -33,8 +33,8 @@ import {
   type Interpret,
   type Ref,
   type Reject,
-  type Replica,
-  type ReplicaFactory,
+  type ReplicaFactoryLike,
+  type ReplicaLike,
   type ReplicaType,
   type Replicate,
   type Schema as SchemaNode,
@@ -594,7 +594,7 @@ export class Exchange {
    */
   #replicateDoc(
     docId: DocId,
-    replicaFactory: ReplicaFactory<any>,
+    replicaFactory: ReplicaFactoryLike,
     syncProtocol: SyncProtocol,
     schemaHash: string,
   ): void {
@@ -688,8 +688,8 @@ export class Exchange {
    */
   async #hydrateAndRegister(
     docId: DocId,
-    replica: Replica<any>,
-    replicaFactory: ReplicaFactory<any>,
+    replica: ReplicaLike,
+    replicaFactory: ReplicaFactoryLike,
     syncProtocol: SyncProtocol,
     schemaHash: string,
     mode: "interpret" | "replicate",
@@ -892,13 +892,13 @@ export class Exchange {
   replicate(docId: DocId): void
   replicate(
     docId: DocId,
-    replicaFactory: ReplicaFactory<any>,
+    replicaFactory: ReplicaFactoryLike,
     syncProtocol: SyncProtocol,
     schemaHash: string,
   ): void
   replicate(
     docId: DocId,
-    replicaFactory?: ReplicaFactory<any>,
+    replicaFactory?: ReplicaFactoryLike,
     syncProtocol?: SyncProtocol,
     schemaHash?: string,
   ): void {

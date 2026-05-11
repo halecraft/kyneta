@@ -19,8 +19,8 @@ import type { ReactiveMap, ReactiveMapHandle } from "@kyneta/changefeed"
 import { createReactiveMap } from "@kyneta/changefeed"
 import type {
   DocMetadata,
-  Replica,
-  ReplicaFactory,
+  ReplicaFactoryLike,
+  ReplicaLike,
   ReplicaType,
   Substrate,
   SubstratePayload,
@@ -75,8 +75,8 @@ import type { DocChange, DocInfo, PeerChange, ReadyState } from "./types.js"
  */
 type DocRuntimeBase = {
   docId: DocId
-  replica: Replica<any>
-  replicaFactory: ReplicaFactory<any>
+  replica: ReplicaLike
+  replicaFactory: ReplicaFactoryLike
   syncProtocol: SyncProtocol
   schemaHash: string
 }
@@ -91,7 +91,7 @@ type DocRuntimeBase = {
 export type DocRuntime =
   | (DocRuntimeBase & {
       mode: "interpret"
-      replica: Substrate<any> // narrows Replica to Substrate
+      replica: Substrate<Version> // narrows Replica to Substrate
     })
   | (DocRuntimeBase & {
       mode: "replicate"
@@ -186,8 +186,8 @@ type VersionGapResult =
  * - outbound uses `current.compare(parsed)`
  */
 function classifyVersionGap(
-  replica: Replica<any>,
-  replicaFactory: ReplicaFactory<any>,
+  replica: ReplicaLike,
+  replicaFactory: ReplicaFactoryLike,
   serializedVersion: string,
   compare: (
     parsed: Version,
@@ -221,8 +221,8 @@ function classifyVersionGap(
  * - `"ahead"` / `"concurrent"` → remote peer has data we may need to import
  */
 function resolveInboundVersionGap(
-  replica: Replica<any>,
-  replicaFactory: ReplicaFactory<any>,
+  replica: ReplicaLike,
+  replicaFactory: ReplicaFactoryLike,
   serializedVersion: string,
 ): VersionGapResult {
   return classifyVersionGap(
@@ -243,8 +243,8 @@ function resolveInboundVersionGap(
  * - `"ahead"` / `"concurrent"` → we have data the peer is missing
  */
 function resolveOutboundVersionGap(
-  replica: Replica<any>,
-  replicaFactory: ReplicaFactory<any>,
+  replica: ReplicaLike,
+  replicaFactory: ReplicaFactoryLike,
   serializedVersion: string,
 ): VersionGapResult {
   return classifyVersionGap(
@@ -338,7 +338,10 @@ export class Synchronizer {
    * Backward-compat getter — exposes `documents` and `peers` from the
    * sync model for test access via `synchronizer.model.documents`.
    */
-  get model(): { documents: Map<DocId, DocEntry>; peers: Map<PeerId, any> } {
+  get model(): {
+    documents: Map<DocId, DocEntry>
+    peers: Map<PeerId, unknown>
+  } {
     return {
       documents: this.#syncModel.documents,
       peers: this.#syncModel.peers,

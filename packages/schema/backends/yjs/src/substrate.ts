@@ -28,6 +28,7 @@ import type {
   Substrate,
   SubstrateFactory,
   SubstratePayload,
+  Version,
   WritableContext,
 } from "@kyneta/schema"
 import {
@@ -221,9 +222,10 @@ export function createYjsSubstrate(
       }
     },
 
-    exportSince(since: YjsVersion): SubstratePayload | null {
+    exportSince(since: Version): SubstratePayload | null {
       try {
-        const bytes = Y.encodeStateAsUpdate(doc, since.sv)
+        // ReplicaLike variance: signature uses Version, runtime type is always YjsVersion.
+        const bytes = Y.encodeStateAsUpdate(doc, (since as YjsVersion).sv)
         return { kind: "since", encoding: "binary", data: bytes }
       } catch {
         return null
@@ -370,7 +372,7 @@ export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
       return currentBase
     },
 
-    advance(to: YjsVersion): void {
+    advance(to: Version): void {
       const baseCmp = currentBase.compare(to)
       if (baseCmp === "ahead") {
         throw new Error("advance(): target is behind base version")
@@ -400,9 +402,15 @@ export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
       }
     },
 
-    exportSince(since: YjsVersion): SubstratePayload | null {
+    exportSince(since: Version): SubstratePayload | null {
       try {
-        const bytes = Y.encodeStateAsUpdate(currentDoc, since.sv)
+        // The ReplicaLike contract uses the base `Version` type for variance
+        // safety. At runtime the synchronizer always passes a YjsVersion from
+        // this replica's own factory — the cast is sound.
+        const bytes = Y.encodeStateAsUpdate(
+          currentDoc,
+          (since as YjsVersion).sv,
+        )
         return { kind: "since", encoding: "binary", data: bytes }
       } catch {
         return null

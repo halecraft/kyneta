@@ -18,7 +18,7 @@ import type { Substrate, SubstratePayload, Version } from "./substrate.js"
  * @throws If the ref does not have a [SUBSTRATE] property (e.g. child refs,
  *   or refs not created by createDoc/exchange.get).
  */
-function getSubstrate(ref: object): Substrate<any> {
+function getSubstrate(ref: object): Substrate<Version> {
   const substrate = (ref as any)[SUBSTRATE]
   if (!substrate) {
     throw new Error(

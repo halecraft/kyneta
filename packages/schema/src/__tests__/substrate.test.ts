@@ -997,4 +997,24 @@ describe("requiresBidirectionalSync", () => {
   it("ephemeral (concurrent + snapshot) does not require bidirectional", () => {
     expect(requiresBidirectionalSync(SYNC_EPHEMERAL)).toBe(false)
   })
+
+  // ===========================================================================
+  // ReplicaLike structural satisfaction
+  // ===========================================================================
+
+  describe("ReplicaLike — variance-safe structural contract", () => {
+    it("plain replica satisfies ReplicaLike", () => {
+      const replica = plainReplicaFactory.createEmpty()
+      // Compile-time check: Replica<PlainVersion> is assignable to ReplicaLike
+      const like: import("../substrate.js").ReplicaLike = replica
+      expect(like.version().serialize()).toBeDefined()
+    })
+
+    it("plain replica factory satisfies ReplicaFactoryLike", () => {
+      // Compile-time check: ReplicaFactory<PlainVersion> is assignable to ReplicaFactoryLike
+      const like: import("../substrate.js").ReplicaFactoryLike =
+        plainReplicaFactory
+      expect(like.replicaType).toEqual(["plain", 1, 0])
+    })
+  })
 })

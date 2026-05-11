@@ -18,7 +18,7 @@ import type { NativeMap } from "./native.js"
 import { SUBSTRATE } from "./native.js"
 import type { DocRef } from "./ref.js"
 import type { Schema as SchemaType } from "./schema.js"
-import type { Substrate, SubstratePayload } from "./substrate.js"
+import type { Substrate, SubstratePayload, Version } from "./substrate.js"
 
 // ---------------------------------------------------------------------------
 // createRef — internal core: schema + substrate → ref
@@ -38,7 +38,10 @@ import type { Substrate, SubstratePayload } from "./substrate.js"
  * @param substrate - A pre-built substrate (from factory.create or factory.fromEntirety)
  * @returns A full-stack ref (opaque — cast at call site)
  */
-export function createRef(schema: SchemaType, substrate: Substrate<any>): any {
+export function createRef(
+  schema: SchemaType,
+  substrate: Substrate<Version>,
+): any {
   // The `as any` on the builder avoids TS2589 — interpret's fluent API
   // produces deeply recursive types when S is the abstract SchemaType.
   // The public createDoc signature provides the correct DocRef<S, N>

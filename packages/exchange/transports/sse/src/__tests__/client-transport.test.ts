@@ -13,16 +13,16 @@
 //      The send callback is synchronous and uses `void` to fire async
 //      POSTs, so any thrown error escapes the promise chain.
 
-import { describe, expect, it, vi } from "vitest"
-import { SseClientTransport } from "../client-transport.js"
+import { SYNC_AUTHORITATIVE } from "@kyneta/schema"
 import type {
   ChannelMsg,
   PeerIdentityDetails,
   TransportContext,
 } from "@kyneta/transport"
-import type { SseClientOptions } from "../client-transport.js"
 import * as wireModule from "@kyneta/wire"
-import { SYNC_AUTHORITATIVE } from "@kyneta/schema"
+import { describe, expect, it, vi } from "vitest"
+import type { SseClientOptions } from "../client-transport.js"
+import { SseClientTransport } from "../client-transport.js"
 
 // ---------------------------------------------------------------------------
 // Mock helpers
@@ -34,7 +34,9 @@ const testIdentity: PeerIdentityDetails = {
   type: "user",
 }
 
-function createContext(overrides?: Partial<TransportContext>): TransportContext {
+function createContext(
+  overrides?: Partial<TransportContext>,
+): TransportContext {
   return {
     identity: testIdentity,
     onChannelReceive: vi.fn(),
@@ -161,7 +163,9 @@ describe("SseClientTransport — unhandled rejections", () => {
     const oldFetch = globalThis.fetch
     globalThis.fetch = vi
       .fn()
-      .mockRejectedValue(new Error("Network failure")) as unknown as typeof globalThis.fetch
+      .mockRejectedValue(
+        new Error("Network failure"),
+      ) as unknown as typeof globalThis.fetch
 
     const oldEventSource = (globalThis as Record<string, unknown>).EventSource
     ;(globalThis as Record<string, unknown>).EventSource = MockEventSource
@@ -190,7 +194,9 @@ describe("SseClientTransport — unhandled rejections", () => {
 
       // Set EventSource to OPEN so the guard doesn't block sends
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const es = (transport as any)["#eventSource"] as MockEventSource | undefined
+      const es = (transport as any)["#eventSource"] as
+        | MockEventSource
+        | undefined
       if (es) {
         es.readyState = 1
       }

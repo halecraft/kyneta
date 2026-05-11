@@ -164,35 +164,23 @@ export interface SubstratePayload {
 }
 
 // ---------------------------------------------------------------------------
-// Replica<V> — replication surface (schema-free)
+// ReplicaLike — variance-safe replica contract (no type parameter)
 // ---------------------------------------------------------------------------
 
 /**
- * The replication surface of a document.
+ * The minimal replica contract — what the synchronizer needs.
  *
- * A Replica holds the state needed for convergent state transfer between
- * peers: version tracking, snapshot export, incremental delta export,
- * and delta import. It does NOT provide schema-driven reads, writes, or
- * the changefeed — those require the full `Substrate`.
+ * All version-typed positions use the base {@link Version} type so the
+ * synchronizer can hold heterogeneous replicas in a single `Map` without
+ * variance escapes. Concrete replicas narrow the return types via
+ * {@link Replica}, which extends this interface.
  *
- * Two responsibilities:
- * 1. Track versioning via Version
- * 2. Export/import state for replication (sync, storage, relay)
- *
- * Replicas are the minimal capability for conduit participants:
- * - Storage adapters use replicas for compaction (accumulate deltas,
- *   export a consolidated snapshot).
- * - Routing servers use replicas for per-peer delta computation
- *   (accumulate state from multiple peers, export deltas relative
- *   to each downstream peer's version).
- *
- * For causal substrates (Loro, Yjs), creating a replica requires the
- * CRDT runtime but NOT a schema. For authoritative/LWW substrates, a
- * replica is a plain JS object with an op log — no external runtime.
+ * Named after the `-Like` convention (`PromiseLike`, `ArrayLike`):
+ * a structural interface that the full `Replica<V>` satisfies.
  */
-export interface Replica<V extends Version = Version> {
+export interface ReplicaLike {
   /** Current version marker. */
-  version(): V
+  version(): Version
 
   /**
    * The earliest version this replica can serve incremental exports for.
@@ -204,7 +192,7 @@ export interface Replica<V extends Version = Version> {
    *
    * `exportSince(v)` returns `null` for `v < baseVersion()`.
    */
-  baseVersion(): V
+  baseVersion(): Version
 
   /**
    * Trim history, advancing the base as far as possible without exceeding `to`.
@@ -225,7 +213,7 @@ export interface Replica<V extends Version = Version> {
    * guarantees no peer is stranded because the base never exceeds the
    * safe frontier.
    */
-  advance(to: V): void
+  advance(to: Version): void
 
   /**
    * Self-sufficient payload — everything needed to construct an
@@ -249,7 +237,7 @@ export interface Replica<V extends Version = Version> {
    *
    * Always produces `{ kind: "since", ... }` when non-null.
    */
-  exportSince(since: V): SubstratePayload | null
+  exportSince(since: Version): SubstratePayload | null
 
   /**
    * Merge a payload into this live replica.
@@ -270,6 +258,57 @@ export interface Replica<V extends Version = Version> {
    * no changefeed exists — merge only updates internal state and version.
    */
   merge(payload: SubstratePayload, origin?: string): void
+}
+
+// ---------------------------------------------------------------------------
+// Replica<V> — replication surface (schema-free)
+// ---------------------------------------------------------------------------
+
+/**
+ * The replication surface of a document.
+ *
+ * Extends {@link ReplicaLike} with concrete version types. External
+ * consumers use this for compile-time version-type safety; the
+ * synchronizer uses the wider {@link ReplicaLike} to avoid variance
+ * issues with heterogeneous replica maps.
+ *
+ * A Replica holds the state needed for convergent state transfer between
+ * peers: version tracking, snapshot export, incremental delta export,
+ * and delta import. It does NOT provide schema-driven reads, writes, or
+ * the changefeed — those require the full `Substrate`.
+ *
+ * Two responsibilities:
+ * 1. Track versioning via Version
+ * 2. Export/import state for replication (sync, storage, relay)
+ *
+ * Replicas are the minimal capability for conduit participants:
+ * - Storage adapters use replicas for compaction (accumulate deltas,
+ *   export a consolidated snapshot).
+ * - Routing servers use replicas for per-peer delta computation
+ *   (accumulate state from multiple peers, export deltas relative
+ *   to each downstream peer's version).
+ *
+ * For causal substrates (Loro, Yjs), creating a replica requires the
+ * CRDT runtime but NOT a schema. For authoritative/LWW substrates, a
+ * replica is a plain JS object with an op log — no external runtime.
+ */
+export interface Replica<V extends Version = Version> extends ReplicaLike {
+  /** Current version marker. */
+  version(): V
+
+  /**
+   * The earliest version this replica can serve incremental exports for.
+   *
+   * Initially the zero version (no history trimmed). After `advance(to)`,
+   * this returns the version at which retained history begins.
+   *
+   * Invariant: `baseVersion() ≤ version()` (via `compare`).
+   *
+   * `exportSince(v)` returns `null` for `v < baseVersion()`.
+   */
+  baseVersion(): V
+
+  // exportSince, advance, merge inherited from ReplicaLike (accept Version)
 }
 
 // ---------------------------------------------------------------------------
@@ -454,11 +493,43 @@ export type DocMetadata = {
 }
 
 // ---------------------------------------------------------------------------
+// ReplicaFactoryLike — variance-safe factory contract (no type parameter)
+// ---------------------------------------------------------------------------
+
+/**
+ * The minimal replica-factory contract — what the synchronizer needs.
+ *
+ * Named after the `-Like` convention: a structural interface that
+ * {@link ReplicaFactory} satisfies.
+ */
+export interface ReplicaFactoryLike {
+  /** Identifies the binary format this factory produces and consumes. */
+  readonly replicaType: ReplicaType
+
+  /** Create a fresh, empty replica. No schema needed. */
+  createEmpty(): ReplicaLike
+
+  /**
+   * Construct a replica from a self-sufficient payload.
+   *
+   * The payload must have been produced by `exportEntirety()` on a
+   * compatible replica or substrate. No schema needed — the payload
+   * is self-describing for replication purposes.
+   */
+  fromEntirety(payload: SubstratePayload): ReplicaLike
+
+  /** Deserialize a version from its string representation. */
+  parseVersion(serialized: string): Version
+}
+
+// ---------------------------------------------------------------------------
 // ReplicaFactory<V> — schema-free construction
 // ---------------------------------------------------------------------------
 
 /**
  * Factory for constructing replicas without a schema.
+ *
+ * Extends {@link ReplicaFactoryLike} with concrete version types.
  *
  * This is the minimal factory needed by conduit participants (storage
  * adapters, routing servers). It constructs headless replicas that
@@ -473,7 +544,8 @@ export type DocMetadata = {
  * For Plain: `createEmpty()` creates a fresh store with an empty op log.
  * `fromEntirety()` parses the JSON state image into a store.
  */
-export interface ReplicaFactory<V extends Version = Version> {
+export interface ReplicaFactory<V extends Version = Version>
+  extends ReplicaFactoryLike {
   /** Identifies the binary format this factory produces and consumes. */
   readonly replicaType: ReplicaType
 

@@ -30,6 +30,7 @@ import {
   type Substrate,
   type SubstrateFactory,
   type SubstratePayload,
+  type Version,
   type WritableContext,
   Zero,
 } from "@kyneta/schema"
@@ -314,9 +315,13 @@ export function createLoroSubstrate(
       }
     },
 
-    exportSince(since: LoroVersion): SubstratePayload | null {
+    exportSince(since: Version): SubstratePayload | null {
       try {
-        const bytes = doc.export({ mode: "update", from: since.vv })
+        // ReplicaLike variance: signature uses Version, runtime type is always LoroVersion.
+        const bytes = doc.export({
+          mode: "update",
+          from: (since as LoroVersion).vv,
+        })
         return { kind: "since", encoding: "binary", data: bytes }
       } catch {
         return null
@@ -417,7 +422,7 @@ export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
       return new LoroVersion(currentDoc.shallowSinceVV())
     },
 
-    advance(to: LoroVersion): void {
+    advance(to: Version): void {
       const base = this.baseVersion()
       const cmp = base.compare(to)
       if (cmp === "ahead") {
@@ -428,7 +433,7 @@ export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
         throw new Error(`advance(): target is ahead of current version`)
       }
       // Convert VV to frontiers for the shallow-snapshot API.
-      const frontiers = currentDoc.vvToFrontiers(to.vv)
+      const frontiers = currentDoc.vvToFrontiers((to as LoroVersion).vv)
       // Export a shallow snapshot at the target frontiers.
       const bytes = currentDoc.export({
         mode: "shallow-snapshot",
@@ -447,9 +452,15 @@ export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
       }
     },
 
-    exportSince(since: LoroVersion): SubstratePayload | null {
+    exportSince(since: Version): SubstratePayload | null {
       try {
-        const bytes = currentDoc.export({ mode: "update", from: since.vv })
+        // The ReplicaLike contract uses the base `Version` type for variance
+        // safety. At runtime the synchronizer always passes a LoroVersion from
+        // this replica's own factory — the cast is sound.
+        const bytes = currentDoc.export({
+          mode: "update",
+          from: (since as LoroVersion).vv,
+        })
         return { kind: "since", encoding: "binary", data: bytes }
       } catch {
         return null

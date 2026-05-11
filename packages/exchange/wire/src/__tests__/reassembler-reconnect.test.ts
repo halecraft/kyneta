@@ -15,9 +15,9 @@
 // before the new connection starts receiving fragments.
 
 import { describe, expect, it } from "vitest"
-import { TextReassembler } from "../text-reassembler.js"
-import { encodeTextFrame, TEXT_WIRE_VERSION } from "../text-frame.js"
 import { fragment } from "../frame-types.js"
+import { encodeTextFrame, TEXT_WIRE_VERSION } from "../text-frame.js"
+import { TextReassembler } from "../text-reassembler.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
