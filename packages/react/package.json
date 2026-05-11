@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/react",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Thin React bindings over @kyneta/schema + @kyneta/exchange",
   "author": "Duane Johnson",
   "license": "MIT",
@@ -35,9 +35,9 @@
     "verify": "verify"
   },
   "peerDependencies": {
-    "@kyneta/changefeed": "^1.4.0",
-    "@kyneta/exchange": "^1.4.0",
-    "@kyneta/schema": "^1.4.0",
+    "@kyneta/changefeed": "^1.5.0",
+    "@kyneta/exchange": "^1.5.0",
+    "@kyneta/schema": "^1.5.0",
     "react": ">=18"
   },
   "devDependencies": {

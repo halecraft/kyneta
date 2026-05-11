@@ -4,9 +4,9 @@
 //
 //   ┌──────────┬──────────┬───────────────────────────────────────────┐
 //   │ Version  │   Type   │           Payload Length                  │
-//   │ (1 byte) │ (1 byte) │         (4 bytes, big-endian)            │
+//   │ (1 byte) │ (1 byte) │         (4 bytes, big-endian)             │
 //   ├──────────┴──────────┴───────────────────────────────────────────┤
-//   │  [if fragment: frameId(2B) + index(2B) + total(2B)             │
+//   │  [if fragment: frameId(2B) + index(2B) + total(2B)              │
 //   │                + totalSize(4B)]                                 │
 //   ├─────────────────────────────────────────────────────────────────┤
 //   │  Payload (codec-encoded bytes)                                  │
