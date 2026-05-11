@@ -36,6 +36,7 @@ type Workspace = {
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 const ROOT = resolve(import.meta.dirname, "..")
+const RELEASE_REMOTES = ["origin", "github"]
 
 function rootPath(p: string): string {
 	return resolve(ROOT, p)
@@ -305,15 +306,22 @@ function publish(dryRun: boolean): void {
 	checkNpmAuth()
 
 	// 1. Build
-	console.log("Step 1/3: Building all packages...\n")
+	console.log("Step 1/4: Building all packages...\n")
 	run("pnpm build")
 
 	// 2. Test
-	console.log("\nStep 2/3: Running tests...\n")
+	console.log("\nStep 2/4: Running tests...\n")
 	run("pnpm test")
 
+	if (workspace.publishable.length === 0) {
+		console.log("No publishable packages found. Nothing to publish.\n")
+		return
+	}
+
+	const version = workspace.publishable[0].version
+
 	// 3. Publish in tier order
-	console.log("\nStep 3/3: Publishing in dependency order...\n")
+	console.log("\nStep 3/4: Publishing in dependency order...\n")
 	const published: string[] = []
 	const failed: string[] = []
 
@@ -349,6 +357,49 @@ function publish(dryRun: boolean): void {
 		console.log(`  Failed (${failed.length}): ${failed.join(", ")}`)
 		process.exit(1)
 	}
+
+	// 4. Tag the release
+	const tagName = `v${version}`
+	console.log(`\nStep 4/4: Tagging release as ${tagName}...\n`)
+
+	if (dryRun) {
+		run(`git tag ${tagName}`, { dryRun })
+		for (const remote of RELEASE_REMOTES) {
+			run(`git push ${remote} ${tagName}`, { dryRun })
+		}
+	} else {
+		const existingTag = execSync(`git tag -l "${tagName}"`, {
+			cwd: ROOT,
+			encoding: "utf8",
+		}).trim()
+
+		if (existingTag) {
+			const tagCommit = execSync(`git rev-list -n 1 "${tagName}"`, {
+				cwd: ROOT,
+				encoding: "utf8",
+			}).trim()
+			const headCommit = execSync("git rev-parse HEAD", {
+				cwd: ROOT,
+				encoding: "utf8",
+			}).trim()
+
+			if (tagCommit === headCommit) {
+				console.log(`  Tag ${tagName} already exists on HEAD, skipping.`)
+			} else {
+				console.error(
+					`Error: tag ${tagName} already exists on commit ${tagCommit.slice(0, 8)}, but HEAD is ${headCommit.slice(0, 8)}.`,
+				)
+				console.error("Delete the existing tag or use a different version.")
+				process.exit(1)
+			}
+		} else {
+			run(`git tag ${tagName}`)
+			for (const remote of RELEASE_REMOTES) {
+				run(`git push ${remote} ${tagName}`)
+			}
+		}
+	}
+
 	console.log()
 }
 
