@@ -22,9 +22,14 @@ import { CHANGEFEED, createChangefeed } from "./changefeed.js"
  * A callable changefeed over a `ReadonlyMap<K, V>` with lifted
  * collection accessors.
  *
- * `reactiveMap()` returns the current `ReadonlyMap<K, V>`.
+ * `reactiveMap()` returns a **snapshot** — a shallow copy of the
+ * current `ReadonlyMap<K, V>`. Each call produces a new `Map` instance,
+ * so external-store consumers (e.g. `useSyncExternalStore`) can detect
+ * changes via reference identity.
+ *
+ * `.current` returns the **live** map — the same instance every time.
  * `.get()`, `.has()`, `.keys()`, `.size`, and `[Symbol.iterator]()`
- * delegate to the internal map — no need to unwrap `.current` first.
+ * delegate to the live internal map — no need to unwrap `.current` first.
  *
  * Extends `CallableChangefeed` — assignable anywhere a
  * `CallableChangefeed<ReadonlyMap<K, V>, C>` or `Changefeed` is expected.
@@ -82,8 +87,9 @@ export interface ReactiveMapHandle<K, V, C extends ChangeBase> {
  * handle.set("alice", aliceInfo)
  * handle.emit({ changes: [{ type: "peer-joined", peer: aliceInfo }] })
  *
- * peers()          // ReadonlyMap with one entry
- * peers.get("alice")  // aliceInfo
+ * peers()          // ReadonlyMap snapshot (shallow copy)
+ * peers.current    // live map (same instance always)
+ * peers.get("alice")  // aliceInfo (reads live map)
  * peers.size       // 1
  * ```
  */
@@ -94,13 +100,19 @@ export function createReactiveMap<K, V, C extends ChangeBase = ChangeBase>(): [
   const map = new Map<K, V>()
 
   // Create the base changefeed + emit pair.
-  // The thunk reads the same Map instance — never reassigned.
-  const [feed, emit] = createChangefeed<ReadonlyMap<K, V>, C>(() => map)
+  // The thunk returns a shallow copy — each call produces a new Map.
+  // This gives the callable snapshot semantics: external-store consumers
+  // (e.g. useSyncExternalStore) detect identity changes when contents
+  // change.  The live map is still available via .current and the
+  // lifted accessors.
+  const [feed, emit] = createChangefeed<ReadonlyMap<K, V>, C>(
+    () => new Map(map),
+  )
 
   // Build the callable function-object.
   // We construct it manually (rather than using createCallable) so we
   // can attach the collection accessors in one pass.
-  const callable: any = () => map as ReadonlyMap<K, V>
+  const callable: any = () => new Map(map) as ReadonlyMap<K, V>
 
   // ── Changefeed protocol ──
 

@@ -4,6 +4,7 @@
 // rendering cycle via useSyncExternalStore. Thin tests — the core
 // logic is already covered by store.test.ts (Tier 1).
 
+import { createReactiveMap } from "@kyneta/changefeed"
 import { change, createDoc, Schema } from "@kyneta/schema/basic"
 import { act, renderHook } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
@@ -109,5 +110,33 @@ describe("useValue", () => {
     // Transition: ref → null (should not throw, should unsubscribe)
     rerender({ ref: null as any })
     expect(result.current).toBe(null)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// useValue with ReactiveMap
+// ---------------------------------------------------------------------------
+
+describe("useValue with ReactiveMap", () => {
+  it("renders initial empty map", () => {
+    const [map] = createReactiveMap<string, number>()
+    const { result } = renderHook(() => useValue(map))
+    expect(result.current).toBeInstanceOf(Map)
+    expect(result.current.size).toBe(0)
+  })
+
+  it("re-renders after mutation + emit", () => {
+    const [map, handle] = createReactiveMap<string, number>()
+    const { result } = renderHook(() => useValue(map))
+
+    expect(result.current.size).toBe(0)
+
+    act(() => {
+      handle.set("a", 1)
+      handle.emit({ changes: [{ type: "set" }] })
+    })
+
+    expect(result.current.size).toBe(1)
+    expect(result.current.get("a")).toBe(1)
   })
 })

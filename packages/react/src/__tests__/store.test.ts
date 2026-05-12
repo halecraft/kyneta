@@ -5,6 +5,7 @@
 // no jsdom, fast execution.
 
 import type { SyncRef } from "@kyneta/exchange"
+import { createReactiveMap } from "@kyneta/changefeed"
 import { change, createDoc, Schema } from "@kyneta/schema/basic"
 import { describe, expect, it, vi } from "vitest"
 import {
@@ -206,6 +207,49 @@ describe("createChangefeedStore", () => {
     expect(store.getSnapshot()).toBe("only-b")
 
     unsubB()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// createChangefeedStore with ReactiveMap
+// ---------------------------------------------------------------------------
+
+describe("createChangefeedStore with ReactiveMap", () => {
+  it("returns initial snapshot of empty map", () => {
+    const [map] = createReactiveMap<string, number>()
+    const store = createChangefeedStore(map)
+    const snapshot = store.getSnapshot()
+    expect(snapshot).toBeInstanceOf(Map)
+    expect(snapshot.size).toBe(0)
+  })
+
+  it("snapshot identity changes after mutation + emit", () => {
+    const [map, handle] = createReactiveMap<string, number>()
+    const store = createChangefeedStore(map)
+    const unsub = store.subscribe(() => {})
+
+    const before = store.getSnapshot()
+
+    handle.set("a", 1)
+    handle.emit({ changes: [{ type: "set" }] })
+
+    const after = store.getSnapshot()
+    expect(after).not.toBe(before)
+    expect(after.get("a")).toBe(1)
+
+    unsub()
+  })
+
+  it("getSnapshot returns stable reference between emits", () => {
+    const [map, handle] = createReactiveMap<string, number>()
+    const store = createChangefeedStore(map)
+    const unsub = store.subscribe(() => {})
+
+    const snap1 = store.getSnapshot()
+    const snap2 = store.getSnapshot()
+    expect(snap1).toBe(snap2)
+
+    unsub()
   })
 })
 

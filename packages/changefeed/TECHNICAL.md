@@ -148,6 +148,20 @@ handle.emit({ changes: [{ type: "replaced", entries: incoming }] })
 
 One emit, one changeset, one subscriber invocation per subscriber — instead of N+1.
 
+### Snapshot semantics
+
+`reactiveMap()` and `reactiveMap.current` serve different consumers:
+
+| Access | Returns | Identity | Use case |
+|--------|---------|----------|----------|
+| `reactiveMap()` | Shallow copy (`new Map(map)`) | New reference each call | External-store consumers (`useSyncExternalStore`, Svelte stores, Solid signals) |
+| `reactiveMap.current` | The live internal `Map` | Same reference always | Imperative reads inside subscriber callbacks |
+| `.get()`, `.has()`, `.size`, iteration | Reads from live map | N/A | Ergonomic access without unwrapping |
+
+The callable returns a **snapshot** — a new `Map` on each call. This mirrors how schema product/sequence refs work: `ref()` allocates a fresh plain object so that external-store consumers (React's `useSyncExternalStore`, Svelte stores, Solid signals) detect changes via reference identity (`Object.is`). Without snapshot semantics, `useValue(reactiveMap)` would never trigger a re-render because the same `Map` reference would be compared equal.
+
+`.current` returns the **live** map — the same instance every time. This matches the `ChangefeedProtocol.current` contract ("the current value, always live") and is useful for imperative code that reads map state during subscriber callbacks.
+
 ### What a `ReactiveMap` is NOT
 
 - **Not a store in the reactive-library sense.** There is no derived state, no selectors, no memoization. It is literally a map with a changefeed.

@@ -166,6 +166,8 @@ getSnapshot = () => snapshot
 
 Between `[CHANGEFEED]` firings, `getSnapshot()` returns the same object. `React.memo(child, (prev, next) => prev === next)` works correctly. A `useMemo(() => compute(value), [value])` remains stable.
 
+This relies on an implicit contract: **`ref()` must return a new reference when the underlying value has changed.** Schema product refs satisfy this by allocating a fresh `{}` on each call; sequence refs allocate a fresh `[]`; scalars return primitives (compared by value). `ReactiveMap` satisfies this by returning `new Map(map)` — a shallow copy — on each call, while `.current` remains the live map for imperative use.
+
 ### Eager snapshot on mount
 
 The initial snapshot is computed synchronously during `createChangefeedStore` construction. There is no `null` / loading state — the ref always has a current value (that's the `[CHANGEFEED]` contract). Applications that need a loading indicator use `useSyncStatus` for sync progress, not `useValue` state.

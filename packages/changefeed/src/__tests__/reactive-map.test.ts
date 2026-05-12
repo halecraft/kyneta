@@ -53,10 +53,34 @@ describe("call signature", () => {
     expect(snapshot.get("a")).toBe(1)
   })
 
-  it(".current returns the same map as calling", () => {
+  it(".current returns the live map; callable returns a snapshot copy", () => {
     const [map, handle] = createReactiveMap<string, number, TestChange>()
     handle.set("x", 42)
-    expect(map.current).toBe(map())
+    // .current is the live map (same reference every time)
+    expect(map.current).toBe(map.current)
+    // callable returns a snapshot (new Map each call)
+    expect(map()).not.toBe(map.current)
+    // But contents are equal
+    expect(map()).toEqual(map.current)
+  })
+
+  it("successive map() calls return distinct references", () => {
+    const [map, handle] = createReactiveMap<string, number, TestChange>()
+    handle.set("a", 1)
+    expect(map()).not.toBe(map())
+  })
+
+  it("snapshot is isolated from later mutations", () => {
+    const [map, handle] = createReactiveMap<string, number, TestChange>()
+    handle.set("a", 1)
+    const snapshot = map()
+    expect(snapshot.get("a")).toBe(1)
+
+    // Mutate the live map — snapshot should be unaffected
+    handle.set("a", 99)
+    handle.delete("a")
+    expect(snapshot.get("a")).toBe(1)
+    expect(map.current.get("a")).toBeUndefined()
   })
 })
 
