@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/sql-store-core",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Pure helpers shared by SQL-family Store backends for @kyneta/exchange",
   "author": "Duane Johnson",
   "license": "MIT",
@@ -35,8 +35,8 @@
     "verify": "verify"
   },
   "peerDependencies": {
-    "@kyneta/exchange": "^1.5.0",
-    "@kyneta/schema": "^1.5.0"
+    "@kyneta/exchange": "^1.5.1",
+    "@kyneta/schema": "^1.5.1"
   },
   "devDependencies": {
     "@kyneta/exchange": "workspace:^",

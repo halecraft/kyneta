@@ -1,3 +1,41 @@
+# 1.5.1
+
+  Fixes:
+  - Schema: correct sum (discriminated union) interpretation — fix `NATIVE` double-define crash, Loro path resolution across sum boundaries, read-only interior types for sum variant fields
+  - Changefeed: `ReactiveMap` callable returns snapshot copy for `useSyncExternalStore` compatibility
+
+# 1.5.0
+
+  Store — SQL store family (4 new packages):
+  - @kyneta/sqlite-store: SQLite persistence backend via sync `SqliteAdapter` (`better-sqlite3`, `bun:sqlite`); atomic meta+record writes
+  - @kyneta/postgres-store: Postgres persistence with async `createPostgresStore` factory, schema validation against `information_schema`, JSONB metadata
+  - @kyneta/prisma-store: Prisma ORM adapter — plug an existing `PrismaClient` for teams that have standardized on Prisma
+  - @kyneta/sql-store-core: shared pure helpers (`toRow`/`fromRow`, `planAppend`/`planReplace`) and `failOnNthCall` fault-injection test utility
+
+  Wire — protocol v1:
+  - Compact binary format: 6-byte header, numeric `u16` frame IDs, removed transport prefix and unused hash byte
+  - DocId/schemaHash aliasing: receiver-meaningful integer aliases negotiated via `present`; per-message overhead reduced from ~45 bytes to ≤15 bytes
+  - Wire-feature negotiation: `WireFeatures` map in `establish` for forward-compatible capability advertisement
+  - Delivery-mode taxonomy: three named modes (muxed, streamed, datagram) — streamed and datagram implementation-deferred
+  - Identifier length caps: `DOC_ID_MAX_UTF8_BYTES = 512`, `SCHEMA_HASH_MAX_UTF8_BYTES = 256` with typed rejection errors
+  - Codec collapse: deleted `cborCodec`/`textCodec` as `ChannelMsg ↔ bytes` codecs; SSE integrated into alias-aware pipeline
+
+  Exchange:
+  - Cohort governance: `canCompact` predicate distinguishes durability-critical peers from ephemeral ones for compaction-safe replication
+  - @kyneta/bridge-transport — new package: extracted from `@kyneta/transport` with codec-faithful message routing (all bridge-driven tests now exercise the production wire path)
+  - Bridge routing by `transportId` instead of `transportType`
+
+  Schema:
+  - Variance-safe replica types: `Replica<V>`/`ReplicaFactory<V>` split into `ReplicaLike`/`ReplicaFactoryLike`, eliminating `any` casts in the synchronizer
+
+  Fixes:
+  - Transport: reset reassembler and alias state on reconnect; prevent unhandled rejections in SSE POST retry path
+
+  Housekeeping:
+  - @kyneta/random — new package: secure-context-free random ID primitives extracted from scattered implementations
+  - Consolidated test packages into `@kyneta/test-integration` with SQLite integration suite
+  - Example: `prisma-counter` — collaborative Loro counter with Prisma/Postgres persistence
+
 # 1.4.0
 
   Exchange — architecture overhaul:
