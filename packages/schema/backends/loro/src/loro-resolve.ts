@@ -213,7 +213,9 @@ export function resolveContainer(
   // Only string (key) segments contribute — index segments are structural
   // and don't participate in identity-keying.
   let absPath = ""
-  for (const seg of path.segments) {
+  const segments = path.segments
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i] as Segment
     const nextSchema = advanceSchema(schema, seg)
 
     // Compute identity for this step if binding is provided and the
@@ -227,6 +229,19 @@ export function resolveContainer(
 
     current = stepIntoLoro(current, schema, nextSchema, seg, identity)
     schema = nextSchema
+
+    // Sum boundary: remaining segments resolve via plain JS property
+    // access. Sound because sum variants are PlainSchema — no Loro
+    // containers inside sums.
+    if (schema[KIND] === "sum") {
+      for (let j = i + 1; j < segments.length; j++) {
+        const remaining = segments[j] as Segment
+        current = (current as Record<string, unknown> | undefined)?.[
+          remaining.resolve() as string
+        ]
+      }
+      return { container: current, schema }
+    }
   }
   return { container: current, schema }
 }

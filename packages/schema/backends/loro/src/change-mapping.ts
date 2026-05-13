@@ -151,7 +151,9 @@ export function changeToDiff(
     }
   }
 
-  // Resolve the schema at the target path for structured insert handling
+  // Invariant: no sum schema mid-walk. Non-replace change types cannot
+  // originate from sum-interior paths (PlainSchema excludes all CRDT
+  // types); replace changes are dispatched early above.
   let targetSchema = schema
   for (const seg of path.segments) {
     targetSchema = advanceSchema(targetSchema, seg)
@@ -700,7 +702,8 @@ export function batchToOps(
       }
       leafSchema = s
     } catch {
-      // Schema walk failed — fall back to untyped dispatch
+      // Fall back to untyped dispatch. Sum-interior paths land here
+      // because sums are opaque values, not walkable schema nodes.
     }
     const change = diffToChange(event.diff, binding, leafSchema)
     if (change) {

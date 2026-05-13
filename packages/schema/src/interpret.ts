@@ -698,9 +698,10 @@ function interpretImpl<Ctx, A>(
           return interpretImpl(variantSchema, interp, ctx, resolvedPath)
         }
       }
-      const sumResult = interp.sum(ctx, resolvedPath, schema, variants)
-      attachNative(sumResult, ctx, schema, resolvedPath)
-      return sumResult
+      // No attachNative: the dispatched variant already carries [NATIVE]
+      // from its own interpreter case. A sum has no container of its own;
+      // the fallback bare carrier intentionally omits [NATIVE].
+      return interp.sum(ctx, resolvedPath, schema, variants)
     }
 
     case "text": {

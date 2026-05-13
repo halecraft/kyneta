@@ -1774,6 +1774,20 @@ describe("type-level: Ref<S> for discriminated sums (hybrid discriminant)", () =
     type Remaining = Exclude<TypeField, "text" | "image">
     expectTypeOf<Remaining>().toEqualTypeOf<never>()
   })
+
+  it("non-discriminant field has NO .set() — sum interiors are read-only", () => {
+    type Result = Ref<typeof _discUnionSchema>
+    type TextVariant = Extract<Result, { readonly type: "text" }>
+    type BodyField = TextVariant extends { readonly body: infer B } ? B : never
+    type HasSet = BodyField extends { set: any } ? true : false
+    expectTypeOf<HasSet>().toEqualTypeOf<false>()
+  })
+
+  it("union ref itself has .set() for whole-value replacement", () => {
+    type Result = Ref<typeof _discUnionSchema>
+    type HasSet = Result extends { set: (value: infer P) => void } ? P : never
+    expectTypeOf<HasSet>().not.toEqualTypeOf<never>()
+  })
 })
 
 describe("type-level: Ref<S> for nullable sums", () => {
@@ -1844,6 +1858,19 @@ describe("type-level: Writable<S> for sums", () => {
     type Result = Writable<typeof _discUnionSchema>
     type TypeField = Result extends { readonly type: infer T } ? T : never
     expectTypeOf<TypeField>().toEqualTypeOf<"text" | "image">()
+  })
+
+  it("Writable non-discriminant fields are Plain (read-only)", () => {
+    type Result = Writable<typeof _discUnionSchema>
+    type TextVariant = Extract<Result, { readonly type: "text" }>
+    type BodyField = TextVariant extends { readonly body: infer B } ? B : never
+    expectTypeOf<BodyField>().toEqualTypeOf<string>()
+  })
+
+  it("Writable union has .set() for whole-value replacement", () => {
+    type Result = Writable<typeof _discUnionSchema>
+    type HasSet = Result extends { set: (value: infer P) => void } ? P : never
+    expectTypeOf<HasSet>().not.toEqualTypeOf<never>()
   })
 })
 

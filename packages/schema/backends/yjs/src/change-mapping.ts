@@ -746,6 +746,9 @@ function resolveSchemaAtPath(rootSchema: SchemaNode, path: Path): SchemaNode {
   let schema = rootSchema
   for (const seg of path.segments) {
     schema = advanceSchema(schema, seg)
+    // Sum variants are always PlainSchema — cannot advance further.
+    // Return early; remaining segments address plain JSON values.
+    if (schema[KIND] === "sum") return schema
   }
   return schema
 }

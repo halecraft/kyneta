@@ -28,18 +28,19 @@
 import type { ChangeBase } from "../change.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
-import type {
-  CounterSchema,
-  MapSchema,
-  MovableSequenceSchema,
-  ProductSchema,
-  RichTextSchema,
-  ScalarSchema,
-  SequenceSchema,
-  SetSchema,
-  SumSchema,
-  TextSchema,
-  TreeSchema,
+import {
+  type CounterSchema,
+  KIND,
+  type MapSchema,
+  type MovableSequenceSchema,
+  type ProductSchema,
+  type RichTextSchema,
+  type ScalarSchema,
+  type SequenceSchema,
+  type SetSchema,
+  type SumSchema,
+  type TextSchema,
+  type TreeSchema,
 } from "../schema.js"
 
 import type { HasCaching, HasNavigation } from "./bottom.js"
@@ -151,6 +152,11 @@ function ensureCacheWiring(
 /**
  * Registers an invalidation handler at the given path.
  *
+ * If a handler already exists at this path key, the new handler is
+ * composed with it (both fire on invalidation). Sum fields require
+ * this: parent and variant products share a path key, so both
+ * handlers must fire.
+ *
  * If `handlers` is null (read-only stack, no prepare pipeline),
  * this is a no-op — invalidation will only happen via direct
  * `ref[INVALIDATE](change)` calls.
@@ -161,7 +167,16 @@ function registerCacheHandler(
   handler: (change: ChangeBase) => void,
 ): void {
   if (handlers) {
-    handlers.set(path.key, handler)
+    const existing = handlers.get(path.key)
+    if (existing) {
+      // Compose: fire both the existing and new handler.
+      handlers.set(path.key, (change: ChangeBase) => {
+        existing(change)
+        handler(change)
+      })
+    } else {
+      handlers.set(path.key, handler)
+    }
   }
 }
 
@@ -266,6 +281,17 @@ export function withCaching<A extends HasNavigation>(
       // Register in the prepare pipeline (writable stacks only)
       const handlers = ensureCacheWiring(ctx)
       registerCacheHandler(handlers, path, invalidateProduct)
+
+      // Unlike normal product fields (stable ref identity), variant switching
+      // changes the ref entirely. Register parent invalidation at each sum
+      // field's path so the cached ref is discarded on variant replacement.
+      for (const key of Object.keys(schema.fields)) {
+        const fieldSchema = schema.fields[key]
+        if (fieldSchema && (fieldSchema as any)[KIND] === "sum") {
+          const fieldPath = path.field(key)
+          registerCacheHandler(handlers, fieldPath, invalidateProduct)
+        }
+      }
 
       return result as A & HasCaching
     },

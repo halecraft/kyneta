@@ -25,7 +25,7 @@ import type {
   Schema as SchemaNode,
   Segment,
 } from "@kyneta/schema"
-import { advanceSchema } from "@kyneta/schema"
+import { advanceSchema, KIND } from "@kyneta/schema"
 import * as Y from "yjs"
 
 // ---------------------------------------------------------------------------
@@ -133,6 +133,20 @@ export function resolveYjsType(
 
     current = stepIntoYjs(current, seg, identity)
     schema = nextSchema
+
+    // Sum variants are always PlainSchema — no CRDT containers inside.
+    // Once we land on a sum, resolve remaining segments via plain JS
+    // property access on the (JSON) value.
+    if (schema[KIND] === "sum" && i + 1 < path.length) {
+      for (let j = i + 1; j < path.length; j++) {
+        const remaining = path.segments[j]
+        if (!remaining) throw new Error(`Missing segment at index ${j}`)
+        current = (current as Record<string, unknown>)?.[
+          remaining.resolve() as string
+        ]
+      }
+      return { resolved: current, schema }
+    }
   }
 
   return { resolved: current, schema }

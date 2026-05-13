@@ -87,6 +87,8 @@ The fold accumulator is `(currentContainer, currentSchema, absPath)`. At each st
 1. `advanceSchema(schema, segment)` → pure schema descent (from `@kyneta/schema`). Produces the child schema.
 2. `stepIntoLoro(container, currentSchema, childSchema, segment, binding?)` → Loro-specific: dispatches on the container's Loro kind and the child schema's `[KIND]`, returning the child container or scalar.
 
+**Sum boundary.** When the fold reaches a sum schema, the fold terminates: the current container holds the sum's JSON value (stored as a plain value via `_props` or a parent map), and any remaining path segments are resolved via plain JS property access on that JSON value. This is sound because sum variants are always `PlainSchema` — no Loro containers exist inside sums. The sum boundary is the point where Loro-typed navigation yields to plain JavaScript value navigation.
+
 ### `stepFromDoc` — root dispatch
 
 The root case is different because `LoroDoc` is not itself a container. `stepFromDoc(doc, fieldSchema, key)` reads the field schema's `[KIND]` and calls the matching typed accessor:
@@ -227,6 +229,8 @@ change(doc, d => { d.title.insert(0, "hi"); d.items.push(x) })
 | `"tree"` | `TreeDiff` with create/move/delete |
 | `"replace"` | Container-level replacement (varies by kind) |
 | `"increment"` | `CounterDiff` with delta |
+
+Non-replace change types (`text`, `sequence`, `map`, `increment`) cannot originate from sum-interior paths because sum variants are constrained to `PlainSchema`. The `advanceSchema` throw on sums is unreachable for these change types.
 
 `mergePendingGroups` is a pure optimisation: when a transaction mutates multiple fields of the same struct (`d.settings.a.set(1); d.settings.b.set(2)`), both preparations target the same `LoroMap` with a single-key `MapDiff`. Merging them reduces N `applyDiff` calls to one.
 

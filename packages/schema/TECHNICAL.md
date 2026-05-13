@@ -313,6 +313,10 @@ Mutations don't `merge` immediately. They accumulate in a prepare pipeline that:
 
 This is how `change(doc, d => { d.title("hi"); d.items.push(x); })` becomes one atomic changefeed emission, not two.
 
+### Path resolution and sum boundaries
+
+`resolveContainer` in substrate backends (e.g. `loro-resolve.ts`) handles sum boundaries by switching to plain JS property navigation for remaining path segments once a `sum` schema node is encountered. This is sound because sum variants are always `PlainSchema` — no Loro containers (or other CRDT containers) exist inside sums. The Yjs backend's `resolveYjsType` follows the same pattern. When `advanceSchema` reaches a sum, remaining segments are resolved via plain `obj[key]` access rather than substrate-specific container descent.
+
 ### Version vector algebra
 
 Source: `packages/schema/src/version-vector.ts`.
@@ -390,8 +394,10 @@ Pre-built layers compose fluently via `InterpretBuilder.with(layer).done()`:
 | 2. Navigation | `withNavigation` | Structural descent (`.fieldName`, `.index(i)`, `.key(k)`) |
 | 3. Readable | `withReadable` | `.current`, `()`, `read(path)` — requires navigation |
 | 4. Addressing | `withAddressing` | Stable identity: `[ADDRESS_TABLE]` — requires navigation |
-| 5. Caching | `withCaching` | `INVALIDATE` + identity-preserving memoization — interposes above readable |
+| 5. Caching | `withCaching` | `INVALIDATE` + identity-preserving memoization — interposes above readable. `registerCacheHandler` **composes** handlers at the same path key (rather than overwriting), which is critical for sum fields where the parent product and the variant product both register handlers at the same path — both must fire on invalidation. |
 | 6. Writable | `withWritable` | Mutation primitives: `REMOVE`, `TRANSACT`, `insert`, `delete`, `replace`, `increment`, text/sequence builders |
+
+**`WritableDiscriminantProductRef`** — the writable surface for discriminated unions. For a `DiscriminatedSumSchema<D, V>`, the writable ref exposes all fields (discriminant and non-discriminant) as `Plain<F[K]>` — that is, **read-only** values. Non-discriminant fields are callable (you can read them) but carry no `.set()`. The only mutation primitive is `.set()` on the union ref itself (via `ProductRef`) for whole-value replacement. This follows from sum interiors being opaque LWW values: variant fields are not independently addressable CRDT positions, and individual field mutation would violate the atomic replacement semantics of `lww-tag-replaced`.
 
 Plus the orthogonal observation layer:
 
@@ -443,6 +449,8 @@ The 11 interpreter cases fall into four structural categories. The first three a
 **`text` and `richtext` straddle two families.** They are indexed for writable (share `at()` and the retain/insert/delete instruction stream with sequence/movable) but leaf for readable, navigation, and changefeed (return `string` / delta directly, not a fold over children). Characters are not independently addressable refs.
 
 The `Interpreter` interface retains separate cases per kind — the sharing is internal to the built-in transformers. Substrate authors implement one case per kind; they never see the shared helpers.
+
+**`attachNative` is intentionally skipped for sums in `interpretImpl`.** Sums are structurally transparent — the result carrier is the dispatched variant's carrier, which already has the correct `[NATIVE]` from its own interpreter case (product, scalar, etc.). Calling `attachNative` on the sum would double-define the property, crashing in substrates where the product resolves to a real container but the sum resolves to `undefined` (`configurable: false` + different value → `TypeError`).
 
 ### `NativeMap` and the escape hatch
 

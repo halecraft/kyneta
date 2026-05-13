@@ -354,6 +354,20 @@ describe("writable: discriminated sum", () => {
 
     expect(typeof (doc as any).item.body).toBe("function")
   })
+
+  it(".set() switches variant and re-dispatches cached field", () => {
+    const store = { item: { type: "text", body: "hello" } }
+    const ctx = plainContext(store)
+    const doc = interpret(schema, ctx).with(readable).with(writable).done()
+
+    expect((doc as any).item.type).toBe("text")
+    expect((doc as any).item.body()).toBe("hello")
+
+    ;(doc as any).item.set({ type: "image", url: "pic.png" })
+
+    expect((doc as any).item.type).toBe("image")
+    expect((doc as any).item.url()).toBe("pic.png")
+  })
 })
 
 // ---------------------------------------------------------------------------

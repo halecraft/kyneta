@@ -137,13 +137,20 @@ export type Wrap<T, M extends RefMode, Native = unknown> = M extends "rwc"
 // ---------------------------------------------------------------------------
 
 /**
- * Produces a hybrid product ref where the discriminant field `D` resolves to
- * its `Plain<S>` value (a raw string literal), while all other fields remain
- * full recursive `SchemaRef<S, M, N>` refs.
+ * Produces a hybrid product ref for a discriminated union variant.
+ *
+ * The discriminant field `D` resolves to its `Plain<S>` value (a raw string
+ * literal). All other fields are `Readable<F[K]>` — callable for reading
+ * but without `.set()`. The only write operation is `.set()` on the union
+ * ref itself (via `ProductRef`) for whole-value replacement.
+ *
+ * Sum interiors are read-only because sums are opaque LWW values — variant
+ * fields are not independently addressable CRDT positions. Individual field
+ * mutation would violate the atomic replacement semantics of `lww-tag-replaced`.
  *
  * This enables standard TypeScript discriminated union narrowing:
  * ```ts
- * if (ref.type === "text") { ref.body.set("hello") } // TS narrows
+ * if (ref.type === "text") { console.log(ref.body()) } // TS narrows
  * ```
  *
  * TS homomorphic mapped types distribute over union type arguments, so
@@ -157,10 +164,10 @@ export type DiscriminantProductRef<
   N extends NativeMap = UnknownNativeMap,
 > = Wrap<
   (() => { [K in keyof F]: Plain<F[K]> }) & {
-    readonly [K in keyof F]: K extends D ? Plain<F[K]> : SchemaRef<F[K], M, N>
+    readonly [K in keyof F]: K extends D ? Plain<F[K]> : Readable<F[K]>
   } & ProductRef<{ [K in keyof F]: Plain<F[K]> }>,
   M,
-  N["struct"]
+  N["sum"]
 >
 
 // ---------------------------------------------------------------------------

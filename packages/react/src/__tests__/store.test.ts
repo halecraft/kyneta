@@ -4,8 +4,8 @@
 // Uses createDoc + change() from @kyneta/schema/basic — no renderHook,
 // no jsdom, fast execution.
 
-import type { SyncRef } from "@kyneta/exchange"
 import { createReactiveMap } from "@kyneta/changefeed"
+import type { SyncRef } from "@kyneta/exchange"
 import { change, createDoc, Schema } from "@kyneta/schema/basic"
 import { describe, expect, it, vi } from "vitest"
 import {
@@ -241,7 +241,7 @@ describe("createChangefeedStore with ReactiveMap", () => {
   })
 
   it("getSnapshot returns stable reference between emits", () => {
-    const [map, handle] = createReactiveMap<string, number>()
+    const [map] = createReactiveMap<string, number>()
     const store = createChangefeedStore(map)
     const unsub = store.subscribe(() => {})
 

@@ -56,19 +56,15 @@ import {
 // ---------------------------------------------------------------------------
 
 /**
- * Produces a hybrid writable product ref where the discriminant field `D`
- * resolves to its `Plain<S>` value (a raw string literal), while all other
- * fields remain full recursive `Writable<S>` refs.
+ * Writable surface for a discriminated union variant.
  *
- * Enables standard TypeScript discriminated union narrowing on writable refs.
- * The discriminant field has no `.set()` — preventing store corruption from
- * mutating the discriminant independently of the variant structure.
+ * All fields are `Plain<F[K]>` (read-only values); the only write
+ * operation is `.set()` for whole-value replacement via `ProductRef`.
+ *
+ * See `DiscriminantProductRef` in `ref.ts` for the design rationale.
  */
-type WritableDiscriminantProductRef<
-  F extends Record<string, Schema>,
-  D extends string,
-> = {
-  readonly [K in keyof F]: K extends D ? Plain<F[K]> : Writable<F[K]>
+type WritableDiscriminantProductRef<F extends Record<string, Schema>> = {
+  readonly [K in keyof F]: Plain<F[K]>
 } & ProductRef<{ [K in keyof F]: Plain<F[K]> }>
 
 // ---------------------------------------------------------------------------
@@ -487,11 +483,8 @@ export type Writable<S extends Schema> =
                           ]
                           ? ScalarRef<Plain<Inner> | null>
                           : Writable<V[number]>
-                        : S extends DiscriminatedSumSchema<infer D, infer V>
-                          ? WritableDiscriminantProductRef<
-                              V[number]["fields"],
-                              D
-                            >
+                        : S extends DiscriminatedSumSchema<infer _D, infer V>
+                          ? WritableDiscriminantProductRef<V[number]["fields"]>
                           : unknown
 
 // ---------------------------------------------------------------------------
