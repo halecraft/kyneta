@@ -40,6 +40,8 @@ export const Index: IndexStatic = { by, join } as IndexStatic
 export {
   Collection,
   type CollectionChange,
+  type IntegrationStep,
+  integrate,
 } from "./collection.js"
 // SecondaryIndex — the Gₚ (grouping) operator
 export type {
@@ -66,6 +68,7 @@ export {
 // ZSet — the abelian group
 export {
   add,
+  diff,
   entries,
   fromKeys,
   isEmpty,

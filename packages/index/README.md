@@ -87,7 +87,7 @@ const byOwner = Index.by(allTasks, field(ref => ref.ownerId))
 byOwner.get("alice")
 ```
 
-`Source.of` returns a `Source` — a composable stream — so `union`, `filter`, and `map` all work before you ever materialize a `Collection`.
+`Source.of` returns a `Source` — a composable stream — so `union`, `filter`, and `map` all work before you ever materialize a `Collection`. `Source.union` is safe under overlapping keys: `Collection` refcounts the contributions and only retracts the entry when every upstream has removed it.
 
 ## Subscribe to changes
 
@@ -172,13 +172,20 @@ Every source feeds into `Collection.from(source)` the same way.
 Sources are composable. Filter, merge, or remap *before* creating a collection:
 
 ```ts
-// Only active tasks
-const active = Source.filter(source, (key, ref) => ref.status() === "active")
+// Only active tasks. Pass a `watch` argument when the predicate reads
+// a mutable field — the filter re-evaluates when that field changes.
+const active = Source.filter(
+  source,
+  (key, ref) => ref.status() === "active",
+  (key, ref, onChange) => subscribeNode(ref.status, onChange),
+)
 
-// Merge tasks from two exchanges
+// Merge tasks from two exchanges. Overlapping keys are safe — Collection
+// tracks raw refcount and only removes an entry when ALL upstreams retract it.
 const merged = Source.union(sourceA, sourceB)
 
-// Remap keys (return null to filter out)
+// Remap keys (return null to filter out). Non-injective remaps (multiple
+// source keys → one target key) also refcount correctly through Collection.
 const prefixed = Source.map(source, key => `org:${key}`)
 ```
 
@@ -214,7 +221,7 @@ Index.by(tasks)
 | `Source.fromExchange(exchange, bound, mapping?)` | Exchange-backed — returns `[source, handle]` |
 | `Source.fromRecord(recordRef)` | Record ref adapter |
 | `Source.fromList(listRef, keyFn)` | List ref adapter |
-| `Source.filter(source, pred)` | Filter entries |
+| `Source.filter(source, pred, watch?)` | Filter entries. `watch` re-evaluates `pred` on mutable-value changes. |
 | `Source.union(a, b)` | Merge two sources |
 | `Source.map(source, fn)` | Remap keys |
 

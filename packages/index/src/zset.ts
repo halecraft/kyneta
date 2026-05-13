@@ -71,6 +71,14 @@ export function entries(z: ZSet): Iterable<[string, number]> {
   return z
 }
 
+/** ZSet expression of `new − old`: transition delta between two memberships. */
+export function diff(
+  oldKeys: Iterable<string>,
+  newKeys: Iterable<string>,
+): ZSet {
+  return add(fromKeys(newKeys), negate(fromKeys(oldKeys)))
+}
+
 // Convenience
 
 /** Create a ℤ-set from an iterable of keys, each with weight +1. */

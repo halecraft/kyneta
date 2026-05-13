@@ -18,8 +18,8 @@ import type {
 import { CHANGEFEED, createReactiveMap } from "@kyneta/changefeed"
 import type { Collection, CollectionChange } from "./collection.js"
 import type { KeySpec } from "./key-spec.js"
-import type { ZSet } from "./zset.js"
-import { add, fromKeys, isEmpty, negate } from "./zset.js"
+import { createWatcherTable } from "./watcher-table.js"
+import { diff, isEmpty } from "./zset.js"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -52,14 +52,6 @@ export interface SecondaryIndex<V>
 }
 
 // ---------------------------------------------------------------------------
-// regroupDelta — functional core (pure)
-// ---------------------------------------------------------------------------
-
-function regroupDelta(oldKeys: string[], newKeys: string[]): ZSet {
-  return add(fromKeys(newKeys), negate(fromKeys(oldKeys)))
-}
-
-// ---------------------------------------------------------------------------
 // Index.by — the single constructor
 // ---------------------------------------------------------------------------
 
@@ -76,8 +68,13 @@ function by<V>(
   const groups = new Map<string, Set<string>>()
   // entryKey → current list of groupKeys
   const entryGroups = new Map<string, string[]>()
-  // entryKey → watcher unsubscribe
-  const entryUnsubs = new Map<string, () => void>()
+  // entryKey → entry value, with watcher lifecycle (regroup hook)
+  const entryWatchers = createWatcherTable<V>((entryKey, value) => {
+    if (!spec.watch) return () => {}
+    return spec.watch(entryKey, value, () => {
+      handleRegroup(entryKey, value)
+    })
+  })
   // Subscribers for the index-level changefeed
   const subscribers = new Set<(changeset: Changeset<IndexChange>) => void>()
   // Track derived group views for cleanup on dispose
@@ -117,13 +114,7 @@ function by<V>(
       changes.push({ type: "group-added", groupKey: gk, entryKey })
     }
 
-    // Install per-entry watcher if provided
-    if (spec.watch) {
-      const unsub = spec.watch(entryKey, value, () => {
-        handleRegroup(entryKey, value)
-      })
-      entryUnsubs.set(entryKey, unsub)
-    }
+    entryWatchers.add(entryKey, value)
 
     return changes
   }
@@ -138,12 +129,7 @@ function by<V>(
       changes.push({ type: "group-removed", groupKey: gk, entryKey })
     }
 
-    // Unsubscribe per-entry watcher
-    const unsub = entryUnsubs.get(entryKey)
-    if (unsub) {
-      unsub()
-      entryUnsubs.delete(entryKey)
-    }
+    entryWatchers.remove(entryKey)
 
     return changes
   }
@@ -152,11 +138,11 @@ function by<V>(
     const oldKeys = entryGroups.get(entryKey) ?? []
     const newKeys = spec.groupKeys(entryKey, value)
 
-    // Use regroupDelta (FC) to compute the ZSet diff
-    const delta = regroupDelta(oldKeys, newKeys)
+    const delta = diff(oldKeys, newKeys)
     if (isEmpty(delta)) return
 
-    // Apply structural changes — removals first, then additions
+    // Removals before additions so subscribers see the entry leave its old
+    // group before joining the new one (paired regroup invariant).
     const changes: IndexChange[] = []
     for (const [gk, weight] of delta) {
       if (weight < 0) {
@@ -293,10 +279,7 @@ function by<V>(
 
     dispose(): void {
       collectionUnsub()
-      for (const unsub of entryUnsubs.values()) {
-        unsub()
-      }
-      entryUnsubs.clear()
+      entryWatchers.clear()
       // Tear down all derived group views
       for (const unsub of derivedUnsubs) {
         unsub()

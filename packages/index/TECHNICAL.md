@@ -4,7 +4,7 @@
 > **Role**: DBSP-grounded reactive indexing over keyed collections. A three-layer pipeline — `Source` (consumer-stateless delta producer) → `Collection` (stateful ℐ integrator, *is* a `Changefeed`) → `SecondaryIndex` / `JoinIndex` (grouping + join operators) — with all internal algebra computed on ℤ-sets.
 > **Depends on**: `@kyneta/changefeed`
 > **Depended on by**: Application code that builds live, queryable views over document collections (exchange-backed or otherwise).
-> **Canonical symbols**: `Source`, `SourceEvent`, `SourceHandle`, `ExchangeSourceHandle`, `SourceMapping`, `FlatMapOptions`, `Collection`, `CollectionChange`, `SecondaryIndex`, `IndexChange`, `JoinIndex`, `KeySpec`, `field`, `keys`, `Index`, `Index.by`, `Index.join`, `ZSet`, `add`, `negate`, `single`, `zero`, `positive`, `isEmpty`, `entries`, `fromKeys`, `toAdded`, `toRemoved`
+> **Canonical symbols**: `Source`, `SourceEvent`, `SourceHandle`, `ExchangeSourceHandle`, `SourceMapping`, `FlatMapOptions`, `Collection`, `CollectionChange`, `integrate`, `IntegrationStep`, `SecondaryIndex`, `IndexChange`, `JoinIndex`, `KeySpec`, `field`, `keys`, `Index`, `Index.by`, `Index.join`, `ZSet`, `add`, `negate`, `single`, `zero`, `positive`, `diff`, `isEmpty`, `entries`, `fromKeys`, `toAdded`, `toRemoved`, `createWatcherTable`, `WatcherTable`
 > **Key invariant(s)**:
 > 1. Every operator's internal representation is a ℤ-set (`ReadonlyMap<string, number>` with no zero-weight entries). Public change types (`CollectionChange`, `IndexChange`) are projections, not the internal form.
 > 2. `Source` has no `current`, no `[CHANGEFEED]`, no mutable surface exposed to consumers. `Collection` is the gate into the reactive world — the one operator that carries state and satisfies the changefeed protocol.
@@ -92,12 +92,27 @@ const authored = Index.join(byAuthor, byId)
 
 `authored` updates incrementally whenever `todos` or `authors` change — every stage propagates a ℤ-set delta, never a recomputation.
 
+### Equivariance under composition
+
+Every operator in this package satisfies an **equivariance law** with respect to the underlying state algebra: for a transformation `f: S → S'` lifted from a single-source pipeline to a derived one, there must exist a delta-translation `f̂: (s, c) → c'*` such that `f(s ⊕ c) = f(s) ⊕' f̂(s, c)`. The integrator (`Collection`) and the grouping operator (`SecondaryIndex`) consult state to emit transitions — they *are* the equivariance witness for the operators upstream of them.
+
+| Operator | Equivariance witness |
+|---|---|
+| `Source.filter(s, pred)` | Stable under predicate; for mutable-value predicates, supply the optional `watch` argument so re-evaluation fires on internal mutation. |
+| `Source.union(a, b)` | The dual-weight `Collection` integrator. Overlapping keys produce weight > 1 in the snapshot/delta; partial retraction decrements weight. |
+| `Source.map(s, fn)` | The dual-weight `Collection` integrator. Non-injective `fn` accumulates weight at the target key. |
+| `Source.flatMap(outer, fn)` | Internal `WatcherTable<Source<Inner>>` reads inner snapshots at outer-removal time to synthesize correct retractions. |
+| `Index.by(coll, spec)` | `KeySpec.watch` re-evaluates `groupKeys` on field mutation, emitting paired remove-from-old + add-to-new transitions. |
+| `Index.join(L, R)` | Full recomputation via `createTraversalView` (correct but `O(group_size × event_rate)`). |
+
+Operators that produce raw weighted deltas (`Source.union`, non-injective `Source.map`) are correct **only when composed downstream of `Collection`**. Standalone subscribers to such combinators see raw multiplicity in the delta stream; the `clampedWeight` projection happens inside `Collection.from`.
+
 ### What this package is NOT
 
 - **Not a database.** There are no persistent indexes, no query planner, no storage. Everything lives in memory, keyed off the inputs.
 - **Not a SQL engine.** `Index.join` is a reactive operator, not a query DSL. There is no plan, no optimizer, no relational algebra surface.
 - **Not ordered.** Collections and indexes are keyed maps. Ordered collections are `Schema.list` / `MovableList` — different concerns.
-- **Not a deduplicator.** Positive weights > 1 in a ℤ-set are allowed algebraically, but `Collection` projects to `Map<string, V>` — the second `set` for a key replaces the first. Applications needing multiplicity live below the `Collection` boundary at the ℤ-set layer.
+- **A dual-weight integrator, not a deduplicator.** `Collection` tracks raw ℤ-set multiplicity (`weight`) internally and projects to set-membership at the `CollectionChange` boundary (the clamped presence signal). Weight > 1 — produced by `Source.union` with overlapping keys, by non-injective `Source.map`, or by `Source.flatMap` with a custom colliding `keyFn` — is preserved across operator composition; partial retractions decrement the refcount rather than destroying state. `added` fires on the `0 → positive` transition; `removed` fires on `positive → 0`. The materialized `Map<string, V>` reflects keys currently at positive weight; the value for a key in collision is the first-seen value (deterministic but not addressable). Vocabulary (`weight` / `clampedWeight`) is borrowed from `experimental/perspective/LEARNINGS.md` — same DBSP-multiplicity-collapse bug class, same fix.
 
 ---
 
@@ -151,7 +166,8 @@ Source: `packages/index/src/source.ts`.
 ```ts
 interface Source<V> {
   subscribe(cb: (event: SourceEvent<V>) => void): () => void
-  snapshot(): ReadonlyMap<string, V>
+  snapshot(): ReadonlyMap<string, V>      // value-map projection (weight 1 per present key)
+  snapshotZSet(): SourceEvent<V>          // weighted snapshot — preserves multiplicity
   dispose(): void
 }
 
@@ -161,7 +177,9 @@ interface SourceEvent<V> {
 }
 ```
 
-Three methods. That's it. No `current`, no `[CHANGEFEED]`, no mutation surface. Consumers subscribe to a stream of ℤ-set deltas and optionally take a bootstrap snapshot. Adapters internally hold mutable state (known-keys map, item subscriptions, exchange references) but that state is invisible to the consumer.
+Four methods. No `current`, no `[CHANGEFEED]`, no mutation surface. Consumers subscribe to a stream of ℤ-set deltas; bootstrap goes through `snapshotZSet()` (the *integrated* form, same shape as a `SourceEvent`) so multiplicity from upstreams that can produce weight > 1 (`union`, non-injective `map`, custom-keyFn `flatMap`) flows correctly into `Collection`'s refcounted integrator. The simpler `snapshot()` returns the value map only — convenient for application code, but lossy across overlapping-key composition.
+
+Adapters internally hold mutable state (known-keys map, item subscriptions, exchange references) but that state is invisible to the consumer. The "consumer-stateless" property describes the *interface*, not the implementation — most adapters use `createWatcherTable` (`src/watcher-table.ts`) internally.
 
 ### Why not a `Changefeed`
 
@@ -246,13 +264,15 @@ Collection.from<V>(source: Source<V>): Collection<V>
 
 `Collection.from` is the **only** way to construct a `Collection`. It:
 
-1. Takes `source.snapshot()` as the initial state. (ℐ at t=0.)
+1. Bootstraps from `source.snapshotZSet()` — the *weighted* snapshot. Initial `weight` ZSet is seeded with multiplicity preserved across overlapping upstreams. (ℐ at t=0.)
 2. Subscribes to source deltas.
-3. For each event, applies removals first (so a remove+add on the same key works cleanly), then adds.
-4. Emits a `Changeset<CollectionChange>` containing the projected add/remove list.
+3. For each event, calls the pure `integrate(weights, event)` function (`src/collection.ts` → `integrate`), which returns `{ weights, valueUpdates, valueDeletes, transitions }`.
+4. The imperative shell applies `valueUpdates` / `valueDeletes` to the `ReactiveMap` and emits the `transitions` as a `Changeset<CollectionChange>`.
 5. Exposes the standard `ReactiveMap` surface: `.get`, `.has`, `.keys`, `.size`, `[Symbol.iterator]`, `.subscribe`, `.current`, `[CHANGEFEED]`.
 
-`Collection` is the **integrator**: the ℤ-set deltas from the source accumulate into materialized state. Before `Collection`, the pipeline is deltas-only; after, it's state + deltas.
+`Collection` is the **dual-weight integrator**: it tracks raw ZSet multiplicity (`weight`) internally and emits transitions only on `clampedWeight` boundaries (`0 ↔ positive`). Before `Collection`, the pipeline is deltas-only; after, it's state + deltas + correct refcounted composition.
+
+The pure `integrate` function is exported and independently unit-tested (`src/__tests__/collection.test.ts → describe "integrate (functional core)"`) — empty delta is a no-op, `0 → +1` emits `added`, `+1 → +2` does not emit (refreshes value), `+2 → +1` does not emit, `+1 → 0` emits `removed`, paired remove+add in one delta orders removed before added.
 
 ### Why a `ReactiveMap`
 
@@ -367,14 +387,16 @@ A `KeySpec<V>` tells `Index.by` how to derive group keys from a value. Three com
 | Type | File | Role |
 |------|------|------|
 | `ZSet` | `src/zset.ts` | `ReadonlyMap<string, number>` — the universal change type. |
-| `zero` / `single` / `add` / `negate` / `positive` / `isEmpty` / `entries` / `fromKeys` / `toAdded` / `toRemoved` | `src/zset.ts` | Pure ℤ-set operators. |
+| `zero` / `single` / `add` / `negate` / `positive` / `diff` / `isEmpty` / `entries` / `fromKeys` / `toAdded` / `toRemoved` | `src/zset.ts` | Pure ℤ-set operators. `diff(old, new) = new − old` is the abelian-group transition delta. |
 | `Source<V>` | `src/source.ts` | Consumer-stateless producer contract. |
 | `SourceEvent<V>` | `src/source.ts` | `{ delta, values }` — one emission. |
 | `SourceHandle<V>` / `ExchangeSourceHandle<V>` / `SourceMapping` / `FlatMapOptions` | `src/source.ts` | Producer-side and config types. |
 | `Source` | `src/source.ts` | Namespace: `.create`, `.fromRecord`, `.fromList`, `.fromExchange`, `.of`, `.flatMap`. |
-| `Collection<V>` | `src/collection.ts` | The ℐ integrator — `ReactiveMap<string, V, CollectionChange>` + `dispose`. |
-| `CollectionChange` | `src/collection.ts` | `{ type: "added" \| "removed", key }`. |
+| `Collection<V>` | `src/collection.ts` | The ℐ integrator — `ReactiveMap<string, V, CollectionChange>` + `dispose`. Dual-weight internally. |
+| `CollectionChange` | `src/collection.ts` | `{ type: "added" \| "removed", key }`. Emitted on `clampedWeight` transitions only. |
 | `Collection.from` | `src/collection.ts` | Sole constructor. |
+| `integrate` / `IntegrationStep<V>` | `src/collection.ts` | Pure functional core: `(weights, event) → { weights, valueUpdates, valueDeletes, transitions }`. |
+| `WatcherTable<V>` / `createWatcherTable` | `src/watcher-table.ts` | Per-key install/teardown discipline. Used by `fromList`, `flatMap`, `filter`, `Index.by`. |
 | `SecondaryIndex<V>` | `src/index-impl.ts` | The Gₚ grouping operator. |
 | `IndexChange` | `src/index-impl.ts` | Projected change type. |
 | `JoinIndex<L, R>` | `src/join.ts` | The bilinear join operator. |
@@ -386,10 +408,11 @@ A `KeySpec<V>` tells `Index.by` how to derive group keys from a value. Three com
 | File | Lines | Role |
 |------|-------|------|
 | `src/index.ts` | 79 | Public barrel. Exports `Source`, `Collection`, `SecondaryIndex`, `JoinIndex`, `Index`, `ZSet` + operators, `KeySpec` helpers. |
-| `src/zset.ts` | 101 | `ZSet` type + pure abelian-group operators. |
-| `src/source.ts` | 798 | `Source` contract + five constructors + `flatMap`. The largest file — adapter construction, subscription discipline, re-entrancy handling. |
-| `src/collection.ts` | 87 | `Collection.from` — subscribe to a source, maintain a `ReactiveMap`, project ℤ-set deltas to `CollectionChange`. |
-| `src/index-impl.ts` | 315 | `Index.by` → `SecondaryIndex` — grouping with structural + reactive watchers. |
+| `src/zset.ts` | ~115 | `ZSet` type + pure abelian-group operators (incl. `diff`). |
+| `src/source.ts` | ~870 | `Source` contract (`subscribe` / `snapshot` / `snapshotZSet` / `dispose`) + five constructors + four combinators (`filter` with optional `watch`, `union`, `map`, `flatMap`). |
+| `src/collection.ts` | ~155 | `Collection.from` — dual-weight integrator. Pure `integrate()` + imperative shell. |
+| `src/watcher-table.ts` | ~75 | `createWatcherTable` — per-key install/teardown helper shared by `fromList`, `flatMap`, `filter`, `Index.by`. |
+| `src/index-impl.ts` | ~310 | `Index.by` → `SecondaryIndex` — grouping with structural + reactive watchers (uses `WatcherTable`). |
 | `src/join.ts` | 176 | `Index.join` → `JoinIndex` — bilinear incremental join. |
 | `src/key-spec.ts` | 106 | `KeySpec` type, `field`, `keys`. |
 | `src/__tests__/zset.test.ts` | 195 | Abelian-group laws: associativity, commutativity, identity, inverse; `positive` / `negate` / `fromKeys` / `entries`. |
@@ -405,4 +428,4 @@ A `KeySpec<V>` tells `Index.by` how to derive group keys from a value. Three com
 
 Every test is pure JS — no `Schema.bind` requirement beyond what `Source.of` / `Source.fromList` exercise, no real substrates needed for the core ℤ-set algebra. Adapter tests use in-memory exchanges (`Bridge` + `BridgeTransport` from `@kyneta/bridge-transport`) and the plain substrate from `@kyneta/schema`. Algebraic-law tests assert the abelian-group properties directly on constructed `ZSet` values.
 
-**Tests**: 143 passed, 0 skipped across 8 files (`zset.test.ts`: ~30 by convention; `source.test.ts`: 30; `index.test.ts`: 27; `join.test.ts`: 13; `key-spec.test.ts`: 11; plus `collection.test.ts`, `flatmap.test.ts`, `source-of.test.ts`). Run with `cd packages/index && pnpm exec vitest run`.
+**Tests**: 158 passed, 0 skipped across 8 files (`zset.test.ts`: ~30; `source.test.ts`: 38 — includes filter-watch + non-injective map weight-trajectory; `index.test.ts`: 27; `join.test.ts`: 13; `key-spec.test.ts`: 11; `collection.test.ts`: 22 — includes union/map equivariance + `integrate` functional-core tests; plus `flatmap.test.ts`, `source-of.test.ts`). Run with `cd packages/index && pnpm exec vitest run`.

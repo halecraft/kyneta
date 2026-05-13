@@ -11,6 +11,7 @@
 
 import type { BoundSchema } from "@kyneta/schema"
 import { subscribeNode } from "@kyneta/schema"
+import { createWatcherTable } from "./watcher-table.js"
 import type { ZSet } from "./zset.js"
 import { add, isEmpty, single, zero } from "./zset.js"
 
@@ -37,6 +38,14 @@ export interface Source<V> {
   subscribe(cb: (event: SourceEvent<V>) => void): () => void
   /** Snapshot: current entries as a map (for bootstrap). */
   snapshot(): ReadonlyMap<string, V>
+  /**
+   * Weighted snapshot: current entries as a SourceEvent — a ZSet of
+   * integrated weights plus values. Adapters that produce weight 1 per key
+   * use the default {@link defaultSnapshotZSet}; combinators that can
+   * produce multiplicity > 1 (`union`, non-injective `map`, `flatMap`)
+   * override to preserve refcounts through bootstrap.
+   */
+  snapshotZSet(): SourceEvent<V>
   /** Tear down internal subscriptions if any. */
   dispose(): void
 }
@@ -75,6 +84,16 @@ export interface ExchangeSourceHandle<V> {
 export interface FlatMapOptions {
   /** Derive the flat key from outer and inner keys. Default: `outerKey + "\0" + innerKey`. */
   key?: (outerKey: string, innerKey: string) => string
+}
+
+// ---------------------------------------------------------------------------
+// defaultSnapshotZSet — for adapters where every present key has weight 1
+// ---------------------------------------------------------------------------
+
+function defaultSnapshotZSet<V>(snap: ReadonlyMap<string, V>): SourceEvent<V> {
+  const delta = new Map<string, number>()
+  for (const key of snap.keys()) delta.set(key, 1)
+  return { delta, values: snap }
 }
 
 // ---------------------------------------------------------------------------
@@ -141,6 +160,9 @@ function create<V>(): [Source<V>, SourceHandle<V>] {
     subscribe,
     snapshot(): ReadonlyMap<string, V> {
       return new Map(entries)
+    },
+    snapshotZSet(): SourceEvent<V> {
+      return defaultSnapshotZSet(entries)
     },
     dispose(): void {
       clear()
@@ -222,6 +244,9 @@ function fromRecord<V>(recordRef: any): Source<V> {
       }
       return result
     },
+    snapshotZSet(): SourceEvent<V> {
+      return defaultSnapshotZSet(this.snapshot())
+    },
     dispose(): void {
       unsub()
       clear()
@@ -235,49 +260,29 @@ function fromRecord<V>(recordRef: any): Source<V> {
 
 function fromList<V>(listRef: any, keyFn: (itemRef: V) => any): Source<V> {
   const { emit, subscribe, clear } = createSourceEmitter<V>()
-  // key → itemRef
-  const keyToRef = new Map<string, V>()
-  // key → unsubscribe for per-item key watcher
-  const itemUnsubs = new Map<string, () => void>()
-
-  // Subscribe to a single item's key ref for re-keying.
-  function watchItemKey(itemRef: V, currentKey: string): void {
+  const items = createWatcherTable<V>((currentKey, itemRef) => {
     const keyRef = keyFn(itemRef)
-    const unsub = subscribeNode(keyRef, () => {
+    return subscribeNode(keyRef, () => {
       const newKey: string = keyRef()
       if (newKey === currentKey) return
 
-      // Remove old key, add new key
-      keyToRef.delete(currentKey)
-      const oldUnsub = itemUnsubs.get(currentKey)
-      if (oldUnsub) {
-        oldUnsub()
-        itemUnsubs.delete(currentKey)
-      }
+      // Re-install the watcher under the new key so its closure captures it.
+      items.remove(currentKey)
+      items.add(newKey, itemRef)
 
-      keyToRef.set(newKey, itemRef)
-
-      // Re-watch under new key
-      watchItemKey(itemRef, newKey)
-
-      // Emit paired delta
       const delta = add(single(currentKey, -1), single(newKey, 1))
       const values = new Map<string, V>()
       values.set(newKey, itemRef)
       emit(createSourceEvent(delta, values))
     })
-    itemUnsubs.set(currentKey, unsub)
-  }
+  })
 
-  // Bootstrap initial entries
   for (const itemRef of listRef) {
     const keyRef = keyFn(itemRef as V)
     const key: string = keyRef()
-    keyToRef.set(key, itemRef as V)
-    watchItemKey(itemRef as V, key)
+    items.add(key, itemRef as V)
   }
 
-  // Subscribe to structural changes on the list ref
   const listUnsub = subscribeNode(listRef, () => {
     const currentKeys = new Set<string>()
     const currentByKey = new Map<string, V>()
@@ -289,7 +294,7 @@ function fromList<V>(listRef: any, keyFn: (itemRef: V) => any): Source<V> {
       currentByKey.set(key, itemRef as V)
     }
 
-    const knownKeySet = new Set(keyToRef.keys())
+    const knownKeySet = new Set(items.keys())
 
     let delta = zero()
     const values = new Map<string, V>()
@@ -298,12 +303,7 @@ function fromList<V>(listRef: any, keyFn: (itemRef: V) => any): Source<V> {
     for (const key of knownKeySet) {
       if (!currentKeys.has(key)) {
         delta = add(delta, single(key, -1))
-        keyToRef.delete(key)
-        const unsub = itemUnsubs.get(key)
-        if (unsub) {
-          unsub()
-          itemUnsubs.delete(key)
-        }
+        items.remove(key)
       }
     }
 
@@ -313,8 +313,7 @@ function fromList<V>(listRef: any, keyFn: (itemRef: V) => any): Source<V> {
         const itemRef = currentByKey.get(key)!
         delta = add(delta, single(key, 1))
         values.set(key, itemRef)
-        keyToRef.set(key, itemRef)
-        watchItemKey(itemRef, key)
+        items.add(key, itemRef)
       }
     }
 
@@ -326,14 +325,14 @@ function fromList<V>(listRef: any, keyFn: (itemRef: V) => any): Source<V> {
   return {
     subscribe,
     snapshot(): ReadonlyMap<string, V> {
-      return new Map(keyToRef)
+      return new Map(items.entries())
+    },
+    snapshotZSet(): SourceEvent<V> {
+      return defaultSnapshotZSet(this.snapshot())
     },
     dispose(): void {
       listUnsub()
-      for (const unsub of itemUnsubs.values()) {
-        unsub()
-      }
-      itemUnsubs.clear()
+      items.clear()
       clear()
     },
   }
@@ -419,6 +418,9 @@ function fromExchange<V>(
     snapshot(): ReadonlyMap<string, V> {
       return new Map(entries)
     },
+    snapshotZSet(): SourceEvent<V> {
+      return defaultSnapshotZSet(entries)
+    },
     dispose(): void {
       unsubscribeDocs()
       clear()
@@ -462,44 +464,88 @@ function fromExchange<V>(
 function filter<V>(
   source: Source<V>,
   pred: (key: string, value: V) => boolean,
+  watch?: (key: string, value: V, onChange: () => void) => () => void,
 ): Source<V> {
-  return {
-    subscribe(cb: (event: SourceEvent<V>) => void): () => void {
-      return source.subscribe(event => {
-        let delta = zero()
-        const values = new Map<string, V>()
+  const { emit, subscribe, clear } = createSourceEmitter<V>()
 
-        for (const [key, weight] of event.delta) {
-          if (weight > 0) {
-            const value = event.values.get(key)!
-            if (pred(key, value)) {
-              delta = add(delta, single(key, weight))
-              values.set(key, value)
-            }
-          } else {
-            // For removals, we need to check if the key was previously accepted.
-            // Since we're stateless at the filter layer, we pass through all removals —
-            // the downstream Collection will no-op if the key wasn't present.
-            delta = add(delta, single(key, weight))
-          }
-        }
-
-        if (!isEmpty(delta)) {
-          cb(createSourceEvent(delta, values))
-        }
-      })
-    },
-    snapshot(): ReadonlyMap<string, V> {
-      const base = source.snapshot()
-      const result = new Map<string, V>()
-      for (const [key, value] of base) {
-        if (pred(key, value)) {
-          result.set(key, value)
-        }
+  // Stored value is what the predicate is re-evaluated against when the
+  // watcher fires — for mutable-value predicates, this captures the
+  // post-mutation state because `value` is the same reference as upstream.
+  const admitted = createWatcherTable<V>((key, value) => {
+    if (!watch) return () => {}
+    return watch(key, value, () => {
+      const stillAdmitted = admitted.get(key)
+      if (stillAdmitted === undefined) return
+      if (!pred(key, stillAdmitted)) {
+        admitted.remove(key)
+        emit(createSourceEvent(single(key, -1), new Map()))
       }
-      return result
+    })
+  })
+
+  // Bootstrap-install watchers for predicate-passing entries that already
+  // exist upstream — otherwise their post-construction mutations would slip
+  // past the filter.
+  const bootstrap = source.snapshotZSet()
+  for (const [key, weight] of bootstrap.delta) {
+    if (weight <= 0) continue
+    const value = bootstrap.values.get(key)
+    if (value !== undefined && pred(key, value)) {
+      admitted.add(key, value)
+    }
+  }
+
+  const upstreamUnsub = source.subscribe(event => {
+    let delta = zero()
+    const values = new Map<string, V>()
+
+    for (const [key, weight] of event.delta) {
+      if (weight > 0) {
+        const value = event.values.get(key)!
+        if (pred(key, value)) {
+          // Install before emit: a subscriber that synchronously mutates the
+          // value in response to `added` must find the watcher already armed.
+          admitted.add(key, value)
+          delta = add(delta, single(key, weight))
+          values.set(key, value)
+        }
+      } else {
+        if (admitted.has(key)) {
+          admitted.remove(key)
+          delta = add(delta, single(key, weight))
+        }
+        // else: upstream removal of a never-admitted key — nothing to forward.
+      }
+    }
+
+    if (!isEmpty(delta)) {
+      emit(createSourceEvent(delta, values))
+    }
+  })
+
+  return {
+    subscribe,
+    snapshot(): ReadonlyMap<string, V> {
+      return new Map(admitted.entries())
+    },
+    snapshotZSet(): SourceEvent<V> {
+      // Project upstream weights through the admitted set — preserves
+      // multiplicity for keys we're tracking, drops the rest.
+      const upstream = source.snapshotZSet()
+      const delta = new Map<string, number>()
+      const values = new Map<string, V>()
+      for (const [key, weight] of upstream.delta) {
+        if (!admitted.has(key)) continue
+        delta.set(key, weight)
+        const v = upstream.values.get(key)
+        if (v !== undefined) values.set(key, v)
+      }
+      return { delta, values }
     },
     dispose(): void {
+      upstreamUnsub()
+      admitted.clear()
+      clear()
       source.dispose()
     },
   }
@@ -527,6 +573,18 @@ function union<V>(a: Source<V>, b: Source<V>): Source<V> {
         }
       }
       return result
+    },
+    snapshotZSet(): SourceEvent<V> {
+      // ZSet-sum preserves multiplicity across overlapping keys. Value
+      // merge is first-wins; presence downstream is decided by the refcount,
+      // not by which value won.
+      const sa = a.snapshotZSet()
+      const sb = b.snapshotZSet()
+      const delta = add(sa.delta, sb.delta)
+      const values = new Map<string, V>()
+      for (const [k, v] of sa.values) values.set(k, v)
+      for (const [k, v] of sb.values) if (!values.has(k)) values.set(k, v)
+      return { delta, values }
     },
     dispose(): void {
       a.dispose()
@@ -575,6 +633,21 @@ function map<V>(
       }
       return result
     },
+    snapshotZSet(): SourceEvent<V> {
+      // Accumulate weights at remapped keys — non-injective fn produces
+      // weight > 1, which the refcounted integrator downstream preserves.
+      const upstream = source.snapshotZSet()
+      let delta = zero()
+      const values = new Map<string, V>()
+      for (const [key, weight] of upstream.delta) {
+        const newKey = fn(key)
+        if (newKey === null) continue
+        delta = add(delta, single(newKey, weight))
+        const v = upstream.values.get(key)
+        if (v !== undefined && !values.has(newKey)) values.set(newKey, v)
+      }
+      return { delta, values }
+    },
     dispose(): void {
       source.dispose()
     },
@@ -617,21 +690,19 @@ function flatMap<Outer, Inner>(
   const keyFn = options?.key ?? defaultFlatMapKey
   const { emit, subscribe, clear } = createSourceEmitter<Inner>()
 
-  // outerKey → { innerSource, innerUnsub }
-  const inners = new Map<
-    string,
-    { innerSource: Source<Inner>; innerUnsub: () => void }
-  >()
+  // innerSource.dispose() is called by removeInner *before* the WatcherTable
+  // teardown — removal needs to read the inner snapshot to synthesize
+  // retractions, which would be empty if we disposed first.
+  const inners = createWatcherTable<Source<Inner>>((outerKey, innerSource) => {
+    return innerSource.subscribe(event => {
+      emit(remapEvent(event, outerKey, keyFn))
+    })
+  })
 
   function addInner(outerKey: string, outerValue: Outer): void {
     const innerSource = fn(outerKey, outerValue)
-
-    // Subscribe before snapshot to avoid missing events in the gap
-    const innerUnsub = innerSource.subscribe(event => {
-      emit(remapEvent(event, outerKey, keyFn))
-    })
-
-    inners.set(outerKey, { innerSource, innerUnsub })
+    // Subscribe before snapshot to avoid missing events in the gap.
+    inners.add(outerKey, innerSource)
 
     // Emit inner snapshot as additions
     const snap = innerSource.snapshot()
@@ -648,11 +719,11 @@ function flatMap<Outer, Inner>(
   }
 
   function removeInner(outerKey: string): void {
-    const entry = inners.get(outerKey)
-    if (!entry) return
+    const innerSource = inners.get(outerKey)
+    if (!innerSource) return
 
     // Snapshot inner source to discover current keys for retraction
-    const snap = entry.innerSource.snapshot()
+    const snap = innerSource.snapshot()
     if (snap.size > 0) {
       let delta = zero()
       for (const [innerKey] of snap) {
@@ -662,9 +733,8 @@ function flatMap<Outer, Inner>(
       emit(createSourceEvent(delta, new Map()))
     }
 
-    entry.innerUnsub()
-    entry.innerSource.dispose()
-    inners.delete(outerKey)
+    inners.remove(outerKey)
+    innerSource.dispose()
   }
 
   // Bootstrap from outer snapshot
@@ -672,10 +742,7 @@ function flatMap<Outer, Inner>(
   for (const [outerKey, outerValue] of outerSnap) {
     // During bootstrap, create inner sources but don't emit — snapshot() handles it
     const innerSource = fn(outerKey, outerValue)
-    const innerUnsub = innerSource.subscribe(event => {
-      emit(remapEvent(event, outerKey, keyFn))
-    })
-    inners.set(outerKey, { innerSource, innerUnsub })
+    inners.add(outerKey, innerSource)
   }
 
   // Subscribe to outer for dynamic lifecycle
@@ -695,7 +762,7 @@ function flatMap<Outer, Inner>(
     snapshot(): ReadonlyMap<string, Inner> {
       // Lazy: iterate all inner sources and remap keys on the fly
       const result = new Map<string, Inner>()
-      for (const [outerKey, { innerSource }] of inners) {
+      for (const [outerKey, innerSource] of inners.entries()) {
         const snap = innerSource.snapshot()
         for (const [innerKey, value] of snap) {
           result.set(keyFn(outerKey, innerKey), value)
@@ -703,11 +770,27 @@ function flatMap<Outer, Inner>(
       }
       return result
     },
+    snapshotZSet(): SourceEvent<Inner> {
+      // ZSet-sum every inner source's weighted snapshot under its flat-key
+      // remap. Custom keyFns that produce collisions across outers preserve
+      // multiplicity.
+      let delta = zero()
+      const values = new Map<string, Inner>()
+      for (const [outerKey, innerSource] of inners.entries()) {
+        const innerSnap = innerSource.snapshotZSet()
+        for (const [innerKey, weight] of innerSnap.delta) {
+          const flatKey = keyFn(outerKey, innerKey)
+          delta = add(delta, single(flatKey, weight))
+          const v = innerSnap.values.get(innerKey)
+          if (v !== undefined && !values.has(flatKey)) values.set(flatKey, v)
+        }
+      }
+      return { delta, values }
+    },
     dispose(): void {
       outerUnsub()
       outer.dispose()
-      for (const { innerUnsub, innerSource } of inners.values()) {
-        innerUnsub()
+      for (const innerSource of inners.values()) {
         innerSource.dispose()
       }
       inners.clear()
@@ -763,6 +846,7 @@ export interface SourceStatic {
   filter<V>(
     source: Source<V>,
     pred: (key: string, value: V) => boolean,
+    watch?: (key: string, value: V, onChange: () => void) => () => void,
   ): Source<V>
   union<V>(a: Source<V>, b: Source<V>): Source<V>
   map<V>(source: Source<V>, fn: (key: string) => string | null): Source<V>

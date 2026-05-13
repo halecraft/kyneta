@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { Collection } from "../collection.js"
 import type { SourceEvent } from "../source.js"
 import { Source } from "../source.js"
 import { toAdded, toRemoved } from "../zset.js"
@@ -375,5 +376,41 @@ describe("Source.flatMap", () => {
     expect(events).toHaveLength(1)
     expect(events[0].delta.get("a\0v")).toBe(1)
     expect(events[0].values.get("a\0v")).toBe("keep-yes")
+  })
+
+  it("custom keyFn collisions are refcounted through Collection", () => {
+    // A keyFn that ignores the outer entirely produces colliding flat keys
+    // for the same inner key across different outers — the integrator must
+    // preserve multiplicity so partial retraction does not destroy state.
+    const [outer, outerHandle] = Source.create<number>()
+    const innerHandles = new Map<
+      string,
+      ReturnType<typeof Source.create<string>>[1]
+    >()
+
+    const flat = Source.flatMap(
+      outer,
+      key => {
+        const [innerSource, innerHandle] = Source.create<string>()
+        innerHandles.set(key, innerHandle)
+        return innerSource
+      },
+      { key: (_outerKey, innerKey) => innerKey }, // collision: outer-agnostic
+    )
+    const coll = Collection.from(flat)
+
+    outerHandle.set("p1", 1)
+    outerHandle.set("p2", 2)
+    innerHandles.get("p1")!.set("shared", "from-p1")
+    innerHandles.get("p2")!.set("shared", "from-p2")
+
+    expect(coll.has("shared")).toBe(true)
+
+    // Remove p1's inner contribution → p2 still contributes → still present
+    innerHandles.get("p1")!.delete("shared")
+    expect(coll.has("shared")).toBe(true)
+
+    innerHandles.get("p2")!.delete("shared")
+    expect(coll.has("shared")).toBe(false)
   })
 })

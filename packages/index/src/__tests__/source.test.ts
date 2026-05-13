@@ -1,5 +1,6 @@
 import { change, createDoc, json, Schema } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
+import { Collection } from "../collection.js"
 import type { SourceEvent } from "../source.js"
 import { Source } from "../source.js"
 import { toAdded, toRemoved } from "../zset.js"
@@ -397,6 +398,99 @@ describe("Source.filter", () => {
     handle.set("a", 1)
     expect(events).toHaveLength(0)
   })
+
+  // -------------------------------------------------------------------------
+  // Equivariance: filter with watch for mutable-value predicates
+  // -------------------------------------------------------------------------
+
+  // Helper: a mutable value plus a tiny notifier. Subscribers fire on `mutate`.
+  function makeNotifier<T extends object>(initial: T) {
+    const listeners = new Set<() => void>()
+    const value = { ...initial }
+    return {
+      value,
+      mutate(patch: Partial<T>): void {
+        Object.assign(value, patch)
+        for (const cb of listeners) cb()
+      },
+      watch(_k: string, _v: typeof value, onChange: () => void): () => void {
+        listeners.add(onChange)
+        return () => listeners.delete(onChange)
+      },
+    }
+  }
+
+  it("(live transition) watch re-evaluates predicate on internal mutation", () => {
+    type Entry = { status: string }
+    const [source, handle] = Source.create<Entry>()
+    const notifierFor = new Map<
+      string,
+      ReturnType<typeof makeNotifier<Entry>>
+    >()
+
+    const filtered = Source.filter(
+      source,
+      (_k, v) => v.status === "active",
+      (k, _v, onChange) => notifierFor.get(k)!.watch(k, _v, onChange),
+    )
+
+    const coll = Collection.from(filtered)
+
+    const n = makeNotifier<Entry>({ status: "active" })
+    notifierFor.set("e1", n)
+    handle.set("e1", n.value)
+
+    expect(coll.has("e1")).toBe(true)
+
+    // Mutate value internally — no source.set call
+    n.mutate({ status: "inactive" })
+
+    expect(coll.has("e1")).toBe(false)
+  })
+
+  it("(bootstrap watcher install) admitted snapshot entries get watchers", () => {
+    type Entry = { status: string }
+    const [source, handle] = Source.create<Entry>()
+    const notifierFor = new Map<
+      string,
+      ReturnType<typeof makeNotifier<Entry>>
+    >()
+
+    // Seed entry BEFORE constructing filter
+    const n = makeNotifier<Entry>({ status: "active" })
+    notifierFor.set("e1", n)
+    handle.set("e1", n.value)
+
+    const filtered = Source.filter(
+      source,
+      (_k, v) => v.status === "active",
+      (k, _v, onChange) => notifierFor.get(k)!.watch(k, _v, onChange),
+    )
+    const coll = Collection.from(filtered)
+
+    expect(coll.has("e1")).toBe(true)
+
+    n.mutate({ status: "inactive" })
+
+    // Bootstrap-time watcher must have been installed so this mutation retracts
+    expect(coll.has("e1")).toBe(false)
+  })
+
+  it("(no watch) silently misses internal mutations — documents precondition", () => {
+    type Entry = { status: string }
+    const [source, handle] = Source.create<Entry>()
+    const filtered = Source.filter(source, (_k, v) => v.status === "active")
+    const coll = Collection.from(filtered)
+
+    const val: Entry = { status: "active" }
+    handle.set("e1", val)
+    expect(coll.has("e1")).toBe(true)
+
+    val.status = "inactive" // mutation invisible to filter without watch
+
+    // Without watch, filter cannot detect the transition
+    expect(coll.has("e1")).toBe(true)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -495,6 +589,26 @@ describe("Source.map", () => {
     expect(events).toHaveLength(1)
     expect(events[0].delta.get("ns:x")).toBe(1)
     expect(events[0].values.get("ns:x")).toBe(42)
+  })
+
+  it("non-injective map → Collection: weight trajectory 0→1→2→1→0 emits exactly one added + one removed", async () => {
+    const { Collection: Coll } = await import("../collection.js")
+    const [source, handle] = Source.create<number>()
+    const merged = Source.map(source, () => "merged")
+    const coll = Coll.from(merged)
+
+    const changes: { type: string; key: string }[] = []
+    coll.subscribe(cs => changes.push(...cs.changes))
+
+    handle.set("k1", 10) // weight: 0 → 1, emit added
+    handle.set("k2", 20) // weight: 1 → 2, no emission
+    handle.delete("k1") // weight: 2 → 1, no emission
+    handle.delete("k2") // weight: 1 → 0, emit removed
+
+    expect(changes).toEqual([
+      { type: "added", key: "merged" },
+      { type: "removed", key: "merged" },
+    ])
   })
 
   it("dispose propagates", () => {
