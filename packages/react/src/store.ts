@@ -7,9 +7,10 @@
 // Zero React imports. Independently testable with createDoc + change().
 //
 // createChangefeedStore(ref) — subscribes to a ref's [CHANGEFEED],
-//   caches the snapshot for referential stability, dispatches deep
-//   (subscribeTree) for composite refs and shallow (subscribe) for
-//   leaf refs.
+//   caches the snapshot for referential stability. Dispatches deep
+//   (subscribeTree) for schema-issued refs (every schema ref carries
+//   TreeChangefeedProtocol) and shallow (subscribe) for universal-protocol
+//   sources like ReactiveMap.
 //
 // createSyncStore(syncRef) — subscribes to SyncRef.onReadyStateChange(),
 //   caches readyStates for referential stability.
@@ -17,7 +18,7 @@
 import type { ChangeBase, ChangefeedProtocol } from "@kyneta/changefeed"
 import { CHANGEFEED } from "@kyneta/changefeed"
 import type { ReadyState, SyncRef } from "@kyneta/exchange"
-import { hasComposedChangefeed } from "@kyneta/schema"
+import { hasTreeChangefeed } from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
 // ExternalStore — the useSyncExternalStore contract
@@ -42,7 +43,10 @@ export interface ExternalStore<T> {
 /**
  * A ref that is both callable (returns Plain<S>) and carries a
  * [CHANGEFEED]. Every Ref<S> from the standard interpreter stack
- * satisfies this constraint.
+ * satisfies this constraint, as do primitive `@kyneta/changefeed`
+ * sources like `createReactiveMap`. The store dispatches via
+ * `subscribeTree` when available (schema refs) or `subscribe`
+ * otherwise (universal sources).
  *
  * The call signature `(...args: any[]) => any` allows ReturnType<R>
  * to recover Plain<S> without threading generics through HasChangefeed.
@@ -62,12 +66,18 @@ export type CallableRef = ((...args: any[]) => any) & {
  * - On changefeed notification, recomputes the snapshot and caches it.
  * - `getSnapshot()` returns the cached value — stable identity unless
  *   a real change occurred.
- * - For composite refs (products, sequences, maps), subscribes via
- *   `subscribeTree` (deep — fires on any descendant change).
- * - For leaf refs (scalars, text, counters), subscribes via `subscribe`
- *   (node-level — fires only on own-path changes).
+ * - For schema-issued refs (every schema ref carries
+ *   `TreeChangefeedProtocol`), subscribes via `subscribeTree`
+ *   (deep — fires on own-path + descendants).
+ * - For primitive universal-protocol sources (e.g. `createReactiveMap`
+ *   from `@kyneta/changefeed`), subscribes via `subscribe`.
  *
- * @param ref - A callable ref with [CHANGEFEED] (any Ref<S>).
+ * The branch discriminates between these two genuinely different shapes
+ * at runtime via `hasTreeChangefeed`, which also narrows statically so
+ * `subscribeTree` is type-safe with no cast.
+ *
+ * @param ref - A callable ref with [CHANGEFEED] (any Ref<S> or
+ *   primitive universal source).
  * @returns An ExternalStore whose snapshot is ReturnType<typeof ref>.
  */
 export function createChangefeedStore<R extends CallableRef>(
@@ -76,18 +86,16 @@ export function createChangefeedStore<R extends CallableRef>(
   // Eagerly compute initial snapshot.
   let snapshot: ReturnType<R> = ref()
 
-  const cf = ref[CHANGEFEED]
-
-  // Choose deep (subscribeTree) for composites, shallow (subscribe) for leaves.
-  const doSubscribe = hasComposedChangefeed(ref)
-    ? (cb: () => void) => (cf as any).subscribeTree(() => cb())
-    : (cb: () => void) => cf.subscribe(() => cb())
-
   const subscribe = (onStoreChange: () => void): (() => void) => {
-    return doSubscribe(() => {
+    const tick = (): void => {
       snapshot = ref()
       onStoreChange()
-    })
+    }
+    return hasTreeChangefeed(ref)
+      ? // Inside this branch, ref[CHANGEFEED] is statically
+        // TreeChangefeedProtocol, so subscribeTree is type-safe.
+        ref[CHANGEFEED].subscribeTree(tick)
+      : ref[CHANGEFEED].subscribe(tick)
   }
 
   const getSnapshot = (): ReturnType<R> => snapshot

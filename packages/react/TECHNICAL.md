@@ -181,16 +181,16 @@ The initial snapshot is computed synchronously during `createChangefeedStore` co
 
 ## Deep vs shallow subscription
 
-Source: `packages/react/src/store.ts` → `hasComposedChangefeed(ref)` check.
+Source: `packages/react/src/store.ts` → `hasTreeChangefeed(ref)` check.
 
 `createChangefeedStore` inspects the ref's `[CHANGEFEED]` to decide how to subscribe:
 
 | Ref kind | Subscription | Fires on |
 |----------|--------------|----------|
-| Composite (product, sequence, map, set, tree, movable) | `subscribeTree(cb)` | Any descendant change |
-| Leaf (scalar, text, counter) | `subscribe(cb)` | This node's changes only |
+| Schema-issued ref (every leaf and composite post-1.6.0) | `subscribeTree(cb)` | Own-path + any descendant change |
+| Primitive universal-protocol source (e.g. `createReactiveMap`) | `subscribe(cb)` | Own-path changes only |
 
-Composite refs carry `ComposedChangefeedProtocol` with `subscribeTree`. Leaf refs have only `ChangefeedProtocol` with `subscribe`. `hasComposedChangefeed` from `@kyneta/schema` is the runtime check.
+Every schema-issued ref carries `TreeChangefeedProtocol` with `subscribeTree` — for leaves, `subscribeTree` is the trivial own-path lift (a leaf is a tree of size 1). Primitive sources from `@kyneta/changefeed` (like `createReactiveMap`) carry only the universal `ChangefeedProtocol` and have no `subscribeTree`. `hasTreeChangefeed` from `@kyneta/schema` is the runtime discriminator; it also doubles as a static type narrower, so the dispatch branch is cast-free.
 
 Deep-by-default is the right behaviour for application code — a React component rendering a todo item wants to re-render when the todo's `text`, `done`, or any nested field changes. Opting into shallow subscription is rare; applications that need it can use `subscribeNode` directly and wire `useSyncExternalStore` themselves.
 

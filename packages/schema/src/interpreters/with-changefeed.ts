@@ -5,9 +5,10 @@
 // that produces refs with HasRead (filled [CALL] slot) and attaches
 // [CHANGEFEED] to every node:
 //
-// - Leaf refs (scalar, text, counter) get a plain Changefeed
-// - Composite refs (product, sequence, map) get a ComposedChangefeed
-//   with subscribeTree for tree-level observation
+// - Every schema-issued ref (leaves and composites alike) carries a
+//   TreeChangefeedProtocol — `subscribe` for own-path delivery and
+//   `subscribeTree` for own-path + descendant delivery with relative
+//   paths. For a leaf, `subscribeTree` is the trivial own-path lift.
 //
 // The Changefeed protocol defines a Moore machine: .current (output
 // function) + .subscribe (transition observer). A Moore machine with
@@ -32,18 +33,13 @@
 // See .plans/navigation-layer.md §Phase 2, Task 2.2b.
 
 import type { HasChangefeed } from "@kyneta/changefeed"
-import { CHANGEFEED, hasChangefeed } from "@kyneta/changefeed"
+import { CHANGEFEED } from "@kyneta/changefeed"
 import type { DispatcherHandle, Lease } from "@kyneta/machine"
 import { createDispatcher } from "@kyneta/machine"
 import type { ChangeBase } from "../change.js"
 import { isReplaceChange } from "../change.js"
-import type {
-  ChangefeedProtocol,
-  Changeset,
-  ComposedChangefeedProtocol,
-  Op,
-} from "../changefeed.js"
-import { hasComposedChangefeed } from "../changefeed.js"
+import type { Changeset, Op, TreeChangefeedProtocol } from "../changefeed.js"
+import { hasTreeChangefeed } from "../changefeed.js"
 import { isPropertyHost } from "../guards.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
@@ -79,9 +75,7 @@ import { CALL } from "./bottom.js"
  */
 export function attachChangefeed(
   target: object,
-  cf:
-    | ChangefeedProtocol<unknown, ChangeBase>
-    | ComposedChangefeedProtocol<unknown, ChangeBase>,
+  cf: TreeChangefeedProtocol<unknown, ChangeBase>,
 ): asserts target is HasChangefeed {
   Object.defineProperty(target, CHANGEFEED, {
     value: cf,
@@ -162,6 +156,81 @@ export function deliverNotifications(
       const changeset: Changeset<ChangeBase> = { changes, origin }
       for (const cb of set) cb(changeset)
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shape-grammar helpers — pure transforms over Changeset shape
+// ---------------------------------------------------------------------------
+
+/**
+ * Lift a `Changeset<C>` to `Changeset<Op<C>>` by wrapping each change
+ * with a constant path.
+ *
+ * Used wherever a leaf-shaped (own-path) changeset needs to be promoted
+ * to tree-shaped (addressed Op) delivery: leaf `subscribeTree`,
+ * composite own-path fan-out into tree subscribers.
+ *
+ * Pure, table-testable. Exported for tests; not re-exported from index.
+ */
+export function liftToOps<C extends ChangeBase>(
+  cs: Changeset<C>,
+  path: Path,
+): Changeset<Op<C>> {
+  return {
+    changes: cs.changes.map(change => ({ path, change })),
+    origin: cs.origin,
+  }
+}
+
+/**
+ * Re-prefix a `Changeset<Op<C>>` by concatenating `prefix` onto each
+ * event's existing path.
+ *
+ * Used at composite child-tree propagation sites: every event from a
+ * child's `subscribeTree` carries a relative path; the parent needs to
+ * prepend the child's slot (`.field(key)` / `.item(index)`) before
+ * forwarding to its own tree subscribers.
+ *
+ * Pure, table-testable. Exported for tests; not re-exported from index.
+ */
+export function prefixOps<C extends ChangeBase>(
+  cs: Changeset<Op<C>>,
+  prefix: Path,
+): Changeset<Op<C>> {
+  return {
+    changes: cs.changes.map(event => ({
+      path: prefix.concat(event.path),
+      change: event.change,
+    })),
+    origin: cs.origin,
+  }
+}
+
+/**
+ * Fan an own-path `Changeset<ChangeBase>` out to a node's shallow and
+ * tree subscriber sets.
+ *
+ * Tree subscribers receive a single shared `liftToOps` invocation per
+ * flush (O(|changes| + N) instead of O(N × |changes|) per-subscriber
+ * wrapping). The `.size > 0` checks preserve the micro-optimization of
+ * avoiding iterator allocation on empty sets.
+ *
+ * Used by every factory (leaf + product + sequence + map) to deliver
+ * own-path notifications uniformly.
+ */
+function fanOutOwnPath(
+  cs: Changeset<ChangeBase>,
+  path: Path,
+  shallowSubs: Set<(cs: Changeset<ChangeBase>) => void>,
+  treeSubs: Set<(cs: Changeset<Op>) => void>,
+): void {
+  if (shallowSubs.size > 0) {
+    for (const cb of shallowSubs) cb(cs)
+  }
+  if (treeSubs.size > 0) {
+    const lifted = liftToOps(cs, path.root())
+    for (const cb of treeSubs) cb(lifted)
   }
 }
 
@@ -302,7 +371,7 @@ function ensurePrepareWiring(
   // mutations since the last drain) still calls `originalFlush(origin)`
   // — preserving the invariant that substrate-level flush always runs.
   const handle = createDispatcher<ChangefeedMsg>(
-    (msg) => {
+    msg => {
       if (msg.type === "accumulate") {
         accumulator.push(msg.op)
         return
@@ -441,47 +510,58 @@ function firePopulatedListeners(
 }
 
 /**
- * Create a `ChangefeedProtocol<boolean>` for the `isPopulated` property at a path.
+ * Create a `TreeChangefeedProtocol<boolean>` for the `isPopulated`
+ * property at a path.
  *
  * - `.current` reads from the populated set (true if this path key is in the set)
  * - `.subscribe` fires exactly once when the path transitions from
  *   unpopulated to populated. If already populated at subscribe time,
  *   the callback fires immediately (via microtask for consistency).
+ * - `.subscribeTree` is the trivial own-path lift: the populated event
+ *   has no payload (changes is empty by construction), so the delivered
+ *   `Changeset<Op>` has an empty changes array; only `origin` is
+ *   load-bearing. Provided so the facade `subscribe` works universally
+ *   on `ref.isPopulated` carriers without a method-set check.
  */
 function createPopulatedChangefeed(
   path: Path,
   populated: Set<string>,
   populatedListeners: Map<string, Set<() => void>>,
-): ChangefeedProtocol<boolean, ChangeBase> {
+): TreeChangefeedProtocol<boolean, ChangeBase> {
   const key = path.key
+
+  const subscribe = (
+    callback: (changeset: Changeset<ChangeBase>) => void,
+  ): (() => void) => {
+    // Already populated — fire immediately via microtask
+    if (populated.has(key)) {
+      Promise.resolve().then(() =>
+        callback({ changes: [], origin: "populated" }),
+      )
+      return () => {}
+    }
+
+    // Not yet populated — register a one-shot listener
+    let set = populatedListeners.get(key)
+    if (!set) {
+      set = new Set()
+      populatedListeners.set(key, set)
+    }
+    const handler = () => callback({ changes: [], origin: "populated" })
+    set.add(handler)
+    return () => {
+      set?.delete(handler)
+      if (set?.size === 0) populatedListeners.delete(key)
+    }
+  }
 
   return {
     get current(): boolean {
       return populated.has(key)
     },
-    subscribe(
-      callback: (changeset: Changeset<ChangeBase>) => void,
-    ): () => void {
-      // Already populated — fire immediately via microtask
-      if (populated.has(key)) {
-        Promise.resolve().then(() =>
-          callback({ changes: [], origin: "populated" }),
-        )
-        return () => {}
-      }
-
-      // Not yet populated — register a one-shot listener
-      let set = populatedListeners.get(key)
-      if (!set) {
-        set = new Set()
-        populatedListeners.set(key, set)
-      }
-      const handler = () => callback({ changes: [], origin: "populated" })
-      set.add(handler)
-      return () => {
-        set?.delete(handler)
-        if (set?.size === 0) populatedListeners.delete(key)
-      }
+    subscribe,
+    subscribeTree(cb) {
+      return subscribe(cs => cb(liftToOps(cs, path.root())))
     },
   }
 }
@@ -560,32 +640,50 @@ function getPopulatedState(ctx: RefContext): {
 // ---------------------------------------------------------------------------
 
 /**
- * Creates a leaf ChangefeedProtocol (no children, no subscribeTree).
- * `subscribe` fires on any change at this path.
+ * Builds the `TreeChangefeedProtocol` for a structurally-leaf node.
  *
- * Subscribers receive batched `Changeset` objects directly from
- * the flush cycle — no per-change wrapping needed.
+ * Parallel structure with composite factories: shared `shallowSubs` /
+ * `treeSubs` sets, one own-path listener registered via `listenAtPath`
+ * that delegates fan-out to `fanOutOwnPath`. The leaf's `subscribeTree`
+ * is the trivial own-path → Op lift with `path.root()` as the relative
+ * path (a leaf is a tree of size 1).
+ *
+ * The factory name retains "Leaf" because it refers to the *input*
+ * (leaf-shaped carrier), not the output protocol.
  */
 function createLeafChangefeed(
   listeners: Map<string, Set<(changeset: Changeset<ChangeBase>) => void>>,
   path: Path,
   readCurrent: () => unknown,
-): ChangefeedProtocol<unknown, ChangeBase> {
+): TreeChangefeedProtocol<unknown, ChangeBase> {
+  const shallowSubs = new Set<(cs: Changeset<ChangeBase>) => void>()
+  const treeSubs = new Set<(cs: Changeset<Op>) => void>()
+
+  listenAtPath(listeners, path, cs => {
+    fanOutOwnPath(cs, path, shallowSubs, treeSubs)
+  })
+
   return {
     get current() {
       return readCurrent()
     },
-    subscribe(
-      callback: (changeset: Changeset<ChangeBase>) => void,
-    ): () => void {
-      // The listener receives Changeset directly from flush — pass through
-      return listenAtPath(listeners, path, callback)
+    subscribe(cb) {
+      shallowSubs.add(cb)
+      return () => {
+        shallowSubs.delete(cb)
+      }
+    },
+    subscribeTree(cb) {
+      treeSubs.add(cb)
+      return () => {
+        treeSubs.delete(cb)
+      }
     },
   }
 }
 
 /**
- * Creates a ComposedChangefeedProtocol for a product (struct) node.
+ * Creates a TreeChangefeedProtocol for a product (struct) node.
  *
  * - `subscribe` fires only on changes at this node's own path.
  * - `subscribeTree` fires for all descendant changes with relative
@@ -605,7 +703,7 @@ function createProductChangefeed(
   readCurrent: () => unknown,
   productRef: object,
   fieldKeys: readonly string[],
-): ComposedChangefeedProtocol<unknown, ChangeBase> {
+): TreeChangefeedProtocol<unknown, ChangeBase> {
   // Per-node shallow subscribers (node-level) — receive Changeset
   const shallowSubs = new Set<(changeset: Changeset<ChangeBase>) => void>()
   // Per-node tree subscribers — receive Changeset<Op>
@@ -613,21 +711,8 @@ function createProductChangefeed(
 
   // Register in the listener map for own-path changes.
   // Receives a Changeset (possibly with multiple changes) from flush.
-  listenAtPath(listeners, path, (changeset: Changeset<ChangeBase>) => {
-    if (shallowSubs.size > 0) {
-      for (const cb of shallowSubs) cb(changeset)
-    }
-    // Tree subscribers also see own-path changes with path []
-    if (treeSubs.size > 0) {
-      const treeChangeset: Changeset<Op> = {
-        changes: changeset.changes.map(change => ({
-          path: path.root(),
-          change,
-        })),
-        origin: changeset.origin,
-      }
-      for (const cb of treeSubs) cb(treeChangeset)
-    }
+  listenAtPath(listeners, path, cs => {
+    fanOutOwnPath(cs, path, shallowSubs, treeSubs)
   })
 
   // Subscribe to children lazily on first subscribeTree call
@@ -642,37 +727,19 @@ function createProductChangefeed(
       // instead of raw field thunks. Raw thunks create new carriers
       // and fire onRefCreated, overwriting address table entries.
       const child = (productRef as any)[key]
-      if (!hasChangefeed(child)) continue
+      // Use the schema-extension guard, not `hasChangefeed`: it narrows
+      // to `HasTreeChangefeed` statically, so the subscribeTree call below
+      // needs no cast. The runtime check still skips non-refs (missing/
+      // undefined fields, primitive sub-properties).
+      if (!hasTreeChangefeed(child)) continue
 
       const prefix = path.root().field(key)
 
-      if (hasComposedChangefeed(child)) {
-        // Composite child — subscribe to its tree, re-prefix events
-        child[CHANGEFEED].subscribeTree((changeset: Changeset<Op>) => {
-          if (treeSubs.size === 0) return
-          const propagated: Changeset<Op> = {
-            changes: changeset.changes.map(event => ({
-              path: prefix.concat(event.path),
-              change: event.change,
-            })),
-            origin: changeset.origin,
-          }
-          for (const cb of treeSubs) cb(propagated)
-        })
-      } else {
-        // Leaf child — subscribe to its shallow stream
-        child[CHANGEFEED].subscribe((changeset: Changeset<ChangeBase>) => {
-          if (treeSubs.size === 0) return
-          const propagated: Changeset<Op> = {
-            changes: changeset.changes.map(change => ({
-              path: prefix,
-              change,
-            })),
-            origin: changeset.origin,
-          }
-          for (const cb of treeSubs) cb(propagated)
-        })
-      }
+      child[CHANGEFEED].subscribeTree((changeset: Changeset<Op>) => {
+        if (treeSubs.size === 0) return
+        const propagated = prefixOps(changeset, prefix)
+        for (const cb of treeSubs) cb(propagated)
+      })
     }
   }
 
@@ -699,7 +766,7 @@ function createProductChangefeed(
 }
 
 /**
- * Creates a ComposedChangefeedProtocol for a sequence (list) node.
+ * Creates a TreeChangefeedProtocol for a sequence (list) node.
  *
  * - `subscribe` fires on SequenceChange at this path (structural changes).
  * - `subscribeTree` fires for structural changes (with path []) AND
@@ -715,7 +782,7 @@ function createSequenceChangefeed(
   readCurrent: () => unknown,
   getItemRef: (index: number) => unknown,
   getLength: () => number,
-): ComposedChangefeedProtocol<unknown, ChangeBase> {
+): TreeChangefeedProtocol<unknown, ChangeBase> {
   const shallowSubs = new Set<(changeset: Changeset<ChangeBase>) => void>()
   const treeSubs = new Set<(changeset: Changeset<Op>) => void>()
 
@@ -752,7 +819,10 @@ function createSequenceChangefeed(
 
   function subscribeToItem(index: number): void {
     const child = getItemRef(index)
-    if (!child || !hasChangefeed(child)) return
+    // `hasTreeChangefeed` narrows for a cast-free subscribeTree call.
+    // The leading null-guard handles missing/undefined items (e.g.
+    // sparse sequences during reorders) — narrowing alone wouldn't.
+    if (!child || !hasTreeChangefeed(child)) return
 
     // Determine a stable key for this subscription.
     // With addressing: use the address ID (stable across structural changes).
@@ -775,34 +845,13 @@ function createSequenceChangefeed(
     // current index after advancement — the prefix is live.
     const prefix = path.root().item(index)
 
-    let unsub: () => void
-    if (hasComposedChangefeed(child)) {
-      unsub = child[CHANGEFEED].subscribeTree((changeset: Changeset<Op>) => {
+    const unsub = child[CHANGEFEED].subscribeTree(
+      (changeset: Changeset<Op>) => {
         if (treeSubs.size === 0) return
-        const propagated: Changeset<Op> = {
-          changes: changeset.changes.map(event => ({
-            path: prefix.concat(event.path),
-            change: event.change,
-          })),
-          origin: changeset.origin,
-        }
+        const propagated = prefixOps(changeset, prefix)
         for (const cb of treeSubs) cb(propagated)
-      })
-    } else {
-      unsub = child[CHANGEFEED].subscribe(
-        (changeset: Changeset<ChangeBase>) => {
-          if (treeSubs.size === 0) return
-          const propagated: Changeset<Op> = {
-            changes: changeset.changes.map(change => ({
-              path: prefix,
-              change,
-            })),
-            origin: changeset.origin,
-          }
-          for (const cb of treeSubs) cb(propagated)
-        },
-      )
-    }
+      },
+    )
     itemUnsubs.set(subKey, unsub)
   }
 
@@ -862,26 +911,10 @@ function createSequenceChangefeed(
 
   // Register in the listener map for own-path changes.
   // Receives a Changeset (possibly with multiple changes) from flush.
-  listenAtPath(listeners, path, (changeset: Changeset<ChangeBase>) => {
-    // Fire shallow subscribers
-    if (shallowSubs.size > 0) {
-      for (const cb of shallowSubs) cb(changeset)
-    }
-
-    // Tree subscribers see own-path structural changes with path []
-    if (treeSubs.size > 0) {
-      const treeChangeset: Changeset<Op> = {
-        changes: changeset.changes.map(change => ({
-          path: path.root(),
-          change,
-        })),
-        origin: changeset.origin,
-      }
-      for (const cb of treeSubs) cb(treeChangeset)
-    }
-
+  listenAtPath(listeners, path, cs => {
+    fanOutOwnPath(cs, path, shallowSubs, treeSubs)
     // Rebuild item subscriptions after structural change
-    handleStructuralChange(changeset)
+    handleStructuralChange(cs)
   })
 
   let initialWiringDone = false
@@ -918,7 +951,7 @@ function createSequenceChangefeed(
 }
 
 /**
- * Creates a ComposedChangefeedProtocol for a map (record) node.
+ * Creates a TreeChangefeedProtocol for a map (record) node.
  *
  * Similar to sequence but keyed by string instead of number.
  * Dynamic subscription management for map entries.
@@ -929,7 +962,7 @@ function createMapChangefeed(
   readCurrent: () => unknown,
   getEntryRef: (key: string) => unknown,
   getKeys: () => string[],
-): ComposedChangefeedProtocol<unknown, ChangeBase> {
+): TreeChangefeedProtocol<unknown, ChangeBase> {
   const shallowSubs = new Set<(changeset: Changeset<ChangeBase>) => void>()
   const treeSubs = new Set<(changeset: Changeset<Op>) => void>()
 
@@ -940,41 +973,23 @@ function createMapChangefeed(
     if (existing) existing()
 
     const child = getEntryRef(key)
-    if (!child || !hasChangefeed(child)) {
+    // `hasTreeChangefeed` narrows for a cast-free subscribeTree call;
+    // the null-guard skips missing entries (e.g. just-deleted keys
+    // observed mid-rebuild).
+    if (!child || !hasTreeChangefeed(child)) {
       entryUnsubs.delete(key)
       return
     }
 
     const prefix = path.root().field(key)
 
-    let unsub: () => void
-    if (hasComposedChangefeed(child)) {
-      unsub = child[CHANGEFEED].subscribeTree((changeset: Changeset<Op>) => {
+    const unsub = child[CHANGEFEED].subscribeTree(
+      (changeset: Changeset<Op>) => {
         if (treeSubs.size === 0) return
-        const propagated: Changeset<Op> = {
-          changes: changeset.changes.map(event => ({
-            path: prefix.concat(event.path),
-            change: event.change,
-          })),
-          origin: changeset.origin,
-        }
+        const propagated = prefixOps(changeset, prefix)
         for (const cb of treeSubs) cb(propagated)
-      })
-    } else {
-      unsub = child[CHANGEFEED].subscribe(
-        (changeset: Changeset<ChangeBase>) => {
-          if (treeSubs.size === 0) return
-          const propagated: Changeset<Op> = {
-            changes: changeset.changes.map(change => ({
-              path: prefix,
-              change,
-            })),
-            origin: changeset.origin,
-          }
-          for (const cb of treeSubs) cb(propagated)
-        },
-      )
-    }
+      },
+    )
     entryUnsubs.set(key, unsub)
   }
 
@@ -994,23 +1009,9 @@ function createMapChangefeed(
 
   // Register in the listener map for own-path changes.
   // Receives a Changeset (possibly with multiple changes) from flush.
-  listenAtPath(listeners, path, (changeset: Changeset<ChangeBase>) => {
-    if (shallowSubs.size > 0) {
-      for (const cb of shallowSubs) cb(changeset)
-    }
-
-    if (treeSubs.size > 0) {
-      const treeChangeset: Changeset<Op> = {
-        changes: changeset.changes.map(change => ({
-          path: path.root(),
-          change,
-        })),
-        origin: changeset.origin,
-      }
-      for (const cb of treeSubs) cb(treeChangeset)
-    }
-
-    handleStructuralChange(changeset)
+  listenAtPath(listeners, path, cs => {
+    fanOutOwnPath(cs, path, shallowSubs, treeSubs)
+    handleStructuralChange(cs)
   })
 
   let initialWiringDone = false
@@ -1053,12 +1054,10 @@ function createMapChangefeed(
  * An interpreter transformer that attaches `[CHANGEFEED]` to every ref
  * produced by the base interpreter.
  *
- * - **Leaf refs** (scalar, text, counter) get a plain `ChangefeedProtocol`:
- *   `subscribe` fires on any change dispatched at that path.
- *
- * - **Composite refs** (product, sequence, map) get a `ComposedChangefeedProtocol`:
+ * - **Every schema-issued ref** (leaves and composites alike) gets a
+ *   `TreeChangefeedProtocol`:
  *   `subscribe` fires only for changes at the node's own path (node-level).
- *   `subscribeTree` fires for all descendant changes with relative
+ *   `subscribeTree` fires for own-path AND descendant changes with relative
  *   paths (tree-level), making it a strict superset of `subscribe`.
  *
  * Notification flows through the changefeed tree, not flat subscriber maps.
@@ -1116,9 +1115,7 @@ function wireChangefeed(
   createCf: (
     listeners: Map<string, Set<(changeset: Changeset<ChangeBase>) => void>>,
     path: Path,
-  ) =>
-    | ChangefeedProtocol<unknown, ChangeBase>
-    | ComposedChangefeedProtocol<unknown, ChangeBase>,
+  ) => TreeChangefeedProtocol<unknown, ChangeBase>,
 ): void {
   if (isPropertyHost(result)) {
     const listeners = ensurePrepareWiring(ctx)
@@ -1273,7 +1270,7 @@ export function withChangefeed<A extends HasRead>(
     },
 
     // --- Set ------------------------------------------------------------------
-    // Delegate like map — attach a composed changefeed.
+    // Delegate like map — attach a tree-observable changefeed.
     set(
       ctx: RefContext,
       path: Path,
@@ -1318,7 +1315,7 @@ export function withChangefeed<A extends HasRead>(
     },
 
     // --- Movable --------------------------------------------------------------
-    // Delegate like sequence — attach a composed changefeed.
+    // Delegate like sequence — attach a tree-observable changefeed.
     movable(
       ctx: RefContext,
       path: Path,

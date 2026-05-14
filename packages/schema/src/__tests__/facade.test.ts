@@ -998,11 +998,67 @@ describe("subscribe: basic behavior", () => {
     expect(() => subscribe({} as any, () => {})).toThrow("[CHANGEFEED]")
   })
 
-  it("throws on leaf ref (no subscribe — use subscribeNode)", () => {
+  // -------------------------------------------------------------------------
+  // subscribe(leaf) — universal contract (no leaf-vs-composite bifurcation)
+  // -------------------------------------------------------------------------
+
+  it("subscribe(leaf) delivers Changeset<Op> with empty relative path", () => {
     const { doc } = createChatDoc()
-    expect(() => subscribe(doc.settings.darkMode, () => {})).toThrow(
-      "composite ref",
-    )
+    const changesets: Changeset<Op>[] = []
+
+    subscribe(doc.settings.darkMode, cs => changesets.push(cs))
+    doc.settings.darkMode.set(true)
+
+    expect(changesets).toHaveLength(1)
+    expect(changesets[0]?.changes).toHaveLength(1)
+    // The op's path is the empty relative path (path.root() at the leaf).
+    expect(changesets[0]?.changes[0]?.path.segments).toHaveLength(0)
+    // The wrapped change matches the original mutation shape.
+    const change0 = changesets[0]?.changes[0]?.change as { type: string }
+    expect(change0?.type).toBe("replace")
+  })
+
+  it("subscribe(leaf) and subscribeNode(leaf) fire identically for the same mutations", () => {
+    const { doc } = createChatDoc()
+    const treeFires: Changeset<Op>[] = []
+    const nodeFires: Changeset[] = []
+
+    subscribe(doc.count, cs => treeFires.push(cs))
+    subscribeNode(doc.count, cs => nodeFires.push(cs))
+
+    doc.count.increment(1)
+    doc.count.increment(2)
+    doc.count.increment(3)
+
+    expect(treeFires).toHaveLength(3)
+    expect(nodeFires).toHaveLength(3)
+    // Per-changeset: same number of changes, same origin.
+    for (let i = 0; i < 3; i++) {
+      expect(treeFires[i]?.changes).toHaveLength(
+        nodeFires[i]?.changes.length ?? -1,
+      )
+      expect(treeFires[i]?.origin).toBe(nodeFires[i]?.origin)
+    }
+  })
+
+  it("subscribe(ref.isPopulated, cb) fires when the path becomes populated", async () => {
+    const { doc } = createChatDoc({
+      // Override the seed so settings.fontSize starts unpopulated.
+      settings: { darkMode: false } as Record<string, unknown>,
+    })
+    const changesets: Changeset<Op>[] = []
+
+    subscribe(doc.settings.fontSize.isPopulated, cs => changesets.push(cs))
+
+    // Mutate to trigger populated transition.
+    doc.settings.fontSize.set(16)
+
+    expect(changesets).toHaveLength(1)
+    // The populated event has no payload — its semantic is the fact of
+    // firing, not a per-Op delta. So `changes` is empty by construction
+    // and only `origin` is load-bearing.
+    expect(changesets[0]?.changes).toHaveLength(0)
+    expect(changesets[0]?.origin).toBe("populated")
   })
 })
 

@@ -3,7 +3,7 @@
 // "Mutation during notification delivery is not supported." This suite
 // verifies the new drain-to-quiescence semantics:
 //
-// - subscribe/subscribeNode callbacks may freely call change()/applyChanges()
+// - subscribe / subscribeNode callbacks may freely call change()/applyChanges()
 // - substrate writes remain synchronous (subsequent reads see new state)
 // - cross-doc cascades share a lease and are budget-bounded
 // - standalone substrates use private leases (cross-substrate cascade
@@ -11,6 +11,7 @@
 
 import { BudgetExhaustedError, createLease } from "@kyneta/machine"
 import { describe, expect, it } from "vitest"
+import { subscribe } from "../facade/observe.js"
 import {
   change,
   createRef,
@@ -21,9 +22,10 @@ import {
   Schema,
   writable,
 } from "../index.js"
-import { subscribeNode } from "../facade/observe.js"
-import { createPlainSubstrate } from "../substrates/plain.js"
-import { plainVersionStrategy } from "../substrates/plain.js"
+import {
+  createPlainSubstrate,
+  plainVersionStrategy,
+} from "../substrates/plain.js"
 
 function buildPlainDoc<S extends ReturnType<typeof Schema.struct>>(
   schema: S,
@@ -46,10 +48,10 @@ describe("with-changefeed: same-doc re-entry", () => {
     const doc = buildPlainDoc(schema, { x: 0, y: 0 })
 
     let yFired = 0
-    subscribeNode(doc.y, () => {
+    subscribe(doc.y, () => {
       yFired++
     })
-    subscribeNode(doc.x, () => {
+    subscribe(doc.x, () => {
       change(doc, (d: any) => {
         d.y.set(99)
       })
@@ -66,7 +68,7 @@ describe("with-changefeed: same-doc re-entry", () => {
     expect(yFired).toBe(1)
   })
 
-  it("subscribeNode callback on a leaf that re-mutates the same leaf does not throw", () => {
+  it("subscribe callback on a leaf that re-mutates the same leaf does not throw", () => {
     const schema = Schema.struct({
       counter: Schema.number(),
     })
@@ -76,7 +78,7 @@ describe("with-changefeed: same-doc re-entry", () => {
     let secondSeen: number | undefined
     let invocations = 0
 
-    subscribeNode(doc.counter, () => {
+    subscribe(doc.counter, () => {
       invocations++
       const current = doc.counter()
       if (invocations === 1) {
@@ -107,7 +109,7 @@ describe("with-changefeed: same-doc re-entry", () => {
     const doc = buildPlainDoc(schema, { a: 0, b: 0 })
 
     let observed: { a: number; b: number } | undefined
-    subscribeNode(doc.a, () => {
+    subscribe(doc.a, () => {
       // Re-entrant write to b; immediately read both. Substrate writes
       // are synchronous in `change()`, so b must already be 7 here.
       change(doc, (d: any) => {
@@ -138,12 +140,12 @@ describe("with-changefeed: cross-doc cascade with shared lease", () => {
     const docB = createRef(schemaB, substrateB, { lease: sharedLease })
 
     // Genuinely oscillating: each side toggles whenever the other moves.
-    subscribeNode(docA.v, () => {
+    subscribe(docA.v, () => {
       change(docB, (d: any) => {
         d.v.set(docB.v() + 1)
       })
     })
-    subscribeNode(docB.v, () => {
+    subscribe(docB.v, () => {
       change(docA, (d: any) => {
         d.v.set(docA.v() + 1)
       })
@@ -181,13 +183,13 @@ describe("with-changefeed: cross-doc cascade with shared lease", () => {
     // hit — limit oscillation depth via a counter ceiling. In practice
     // each private lease's default budget (100k) bounds this.
     let hops = 0
-    subscribeNode(docA.v, () => {
+    subscribe(docA.v, () => {
       if (hops++ > 50) return
       change(docB, (d: any) => {
         d.v.set(docB.v() + 1)
       })
     })
-    subscribeNode(docB.v, () => {
+    subscribe(docB.v, () => {
       if (hops++ > 50) return
       change(docA, (d: any) => {
         d.v.set(docA.v() + 1)
@@ -221,7 +223,7 @@ describe("with-changefeed: structural integrity under re-entry", () => {
     // No re-entry; just confirm the no-mutation flush path is reached
     // by exercising the dispatcher end-to-end.
     let aFires = 0
-    subscribeNode(doc.a, () => {
+    subscribe(doc.a, () => {
       aFires++
     })
 

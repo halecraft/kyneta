@@ -1698,9 +1698,12 @@ describe("type-level: fluent results are accepted by facade functions", () => {
       .with(observation)
       .done()
 
-    // subscribe requires HasComposedChangefeed on composite refs
-    // doc is a product ref — should be accepted
+    // subscribe accepts any schema-issued ref (HasTreeChangefeed).
+    // Composites first: doc is a product ref.
     expectTypeOf(subscribe).toBeCallableWith(doc, () => {})
+    // Leaves now also satisfy the contract — subscribeTree is the
+    // trivial own-path lift, a leaf is a tree of size 1.
+    expectTypeOf(subscribe).toBeCallableWith(doc.x, () => {})
   })
 })
 

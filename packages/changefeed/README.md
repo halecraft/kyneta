@@ -8,7 +8,7 @@ A **changefeed** is a reactive value with a current state and a stream of future
 
 The protocol is expressed through a single well-known symbol: `CHANGEFEED` (`Symbol.for("kyneta:changefeed")`). Any object carrying this symbol participates in the reactive protocol — schema-interpreted refs, local state, peer lifecycle feeds, or anything else.
 
-This package contains the **contract only** — zero dependencies, no schema, no interpreters, no paths. Schema-specific extensions (`Op`, `ComposedChangefeedProtocol`, tree observation) live in `@kyneta/schema`, which depends on this package.
+This package contains the **contract only** — zero dependencies, no schema, no interpreters, no paths. Schema-specific extensions (`Op`, `TreeChangefeedProtocol`, tree observation) live in `@kyneta/schema`, which depends on this package.
 
 ## Install
 
@@ -119,9 +119,9 @@ Creates a protocol object that never emits changes — useful for static data so
 |---|---|
 | `ChangeBase` | `TextChange`, `MapChange`, `SequenceChange`, ... |
 | `Changeset<C>` | `Op<C>` (addressed delta with `Path`) |
-| `ChangefeedProtocol<S, C>` | `ComposedChangefeedProtocol<S, C>` (adds `subscribeTree`) |
-| `Changefeed<S, C>` | `HasComposedChangefeed<S, C>` |
-| `hasChangefeed()` | `hasComposedChangefeed()`, `getOrCreateChangefeed()` |
+| `ChangefeedProtocol<S, C>` | `TreeChangefeedProtocol<S, C>` (adds `subscribeTree`) |
+| `Changefeed<S, C>` | `HasTreeChangefeed<S, C>` |
+| `hasChangefeed()` | `hasTreeChangefeed()`, `getOrCreateChangefeed()` |
 | `createChangefeed()`, `createCallable()` | `expandMapOpsToLeaves()` |
 
 Consumers import the contract from `@kyneta/changefeed` directly — schema does **not** re-export contract symbols. The import path tells the truth about the dependency.

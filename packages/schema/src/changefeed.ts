@@ -8,9 +8,9 @@
 // What lives here:
 // - Op<C> — addressed delta (requires Path from interpret.ts)
 // - expandMapOpsToLeaves() — map op expansion (requires Op, ReplaceChange)
-// - ComposedChangefeedProtocol<S, C> — tree-level observation (requires Op)
-// - HasComposedChangefeed<S, C> — marker for composed changefeed
-// - hasComposedChangefeed() — type guard for composed changefeed
+// - TreeChangefeedProtocol<S, C> — tree-level observation (requires Op)
+// - HasTreeChangefeed<S, C> — marker for tree-changefeed carriers
+// - hasTreeChangefeed() — type guard for tree-changefeed carriers
 // - getOrCreateChangefeed() — WeakMap-based caching for lazy protocol creation
 
 import type { ChangeBase } from "@kyneta/changefeed"
@@ -158,44 +158,42 @@ function resolveSchemaKindAtPath(
 }
 
 // ---------------------------------------------------------------------------
-// Compositional changefeed — tree-level observation
+// Tree-observable changefeed — schema-specific extension
 // ---------------------------------------------------------------------------
 
 /**
- * Extension of `ChangefeedProtocol` for tree-structured (composite) refs.
+ * The schema-specific extension of `ChangefeedProtocol` that adds
+ * `subscribeTree` — observe own-path + descendants with relative paths.
+ *
+ * Every schema-issued changefeed (leaves and composites alike)
+ * implements this. For a composite ref, `subscribeTree` aggregates
+ * own-path changes with children's tree-streams (paths prefixed
+ * appropriately). For a leaf ref, `subscribeTree` is the trivial
+ * own-path lift: every change is delivered as a single `Op` whose
+ * `path` is the leaf's registry-aware root (empty relative path).
+ * A leaf is a tree of size 1.
  *
  * `subscribe` remains node-level — it fires only for changes at this
- * node's own path (e.g., `SequenceChange` for lists, `ReplaceChange`
- * for products).
- *
- * `subscribeTree` fires for all descendant changes with relative
- * paths, making it a strict superset of `subscribe` (tree
- * subscribers also see own-path changes with `path: []`).
- *
- * Both `subscribe` and `subscribeTree` deliver `Changeset` batches.
- * `subscribeTree` delivers `Changeset<Op<C>>` — each entry
- * in the batch carries the relative path where the change occurred.
- *
- * Only composite refs (products, sequences, maps) implement this.
- * Leaf refs (scalars, text, counters) implement plain `ChangefeedProtocol`.
+ * node's own path. Both `subscribe` and `subscribeTree` deliver
+ * `Changeset` batches. `subscribeTree` delivers `Changeset<Op<C>>`,
+ * where each event in the batch carries the relative path where the
+ * change occurred.
  */
-export interface ComposedChangefeedProtocol<
-  S,
-  C extends ChangeBase = ChangeBase,
-> extends ChangefeedProtocol<S, C> {
+export interface TreeChangefeedProtocol<S, C extends ChangeBase = ChangeBase>
+  extends ChangefeedProtocol<S, C> {
   /** Subscribe to changes at this node and all descendants. */
   subscribeTree(callback: (changeset: Changeset<Op<C>>) => void): () => void
 }
 
 /**
- * An object that carries a composed changefeed protocol under the
- * `[CHANGEFEED]` symbol — i.e. a composite ref with tree-level observation.
+ * An object that carries a tree-observable changefeed protocol under
+ * the `[CHANGEFEED]` symbol — every schema-issued ref satisfies this.
  */
-export interface HasComposedChangefeed<
+export interface HasTreeChangefeed<
   S = unknown,
   A extends ChangeBase = ChangeBase,
 > {
-  readonly [CHANGEFEED]: ComposedChangefeedProtocol<S, A>
+  readonly [CHANGEFEED]: TreeChangefeedProtocol<S, A>
 }
 
 // ---------------------------------------------------------------------------
@@ -241,17 +239,22 @@ export function getOrCreateChangefeed<S, A extends ChangeBase>(
 }
 
 // ---------------------------------------------------------------------------
-// Type guard — composed changefeed
+// Type guard — tree-observable changefeed
 // ---------------------------------------------------------------------------
 
 /**
  * Returns `true` if `value` has a `[CHANGEFEED]` property whose value
- * has a `subscribeTree` method — i.e. it implements `HasComposedChangefeed`.
+ * has a `subscribeTree` method — i.e. it implements `HasTreeChangefeed`.
+ *
+ * Returns `true` for every schema-issued ref (leaves and composites);
+ * the guard's purpose is distinguishing schema-issued changefeeds from
+ * primitive `createChangefeed()` sources, which carry only the
+ * universal `ChangefeedProtocol` and have no `subscribeTree`.
  */
-export function hasComposedChangefeed<
+export function hasTreeChangefeed<
   S = unknown,
   A extends ChangeBase = ChangeBase,
->(value: unknown): value is HasComposedChangefeed<S, A> {
+>(value: unknown): value is HasTreeChangefeed<S, A> {
   if (!hasChangefeed(value)) return false
   const cf = value[CHANGEFEED]
   return typeof (cf as any).subscribeTree === "function"

@@ -11,8 +11,8 @@ import type {
 } from "../index.js"
 import {
   bottomInterpreter,
-  hasComposedChangefeed,
   hasTransact,
+  hasTreeChangefeed,
   interpret,
   observation,
   plainContext,
@@ -126,8 +126,8 @@ describe("fluent: interpret(schema, ctx).with(...).done()", () => {
 
     // Observable — leaf and composite
     expect(hasChangefeed(doc.title)).toBe(true)
-    expect(hasComposedChangefeed(doc.settings)).toBe(true)
-    expect(hasComposedChangefeed(doc.messages)).toBe(true)
+    expect(hasTreeChangefeed(doc.settings)).toBe(true)
+    expect(hasTreeChangefeed(doc.messages)).toBe(true)
 
     // subscribeTree works
     const events: Op[] = []

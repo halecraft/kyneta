@@ -1,6 +1,8 @@
+import type { ChangeBase, Changeset } from "@kyneta/changefeed"
 import { describe, expect, it } from "vitest"
 import type { Op } from "../index.js"
 import { planNotifications } from "../index.js"
+import { liftToOps, prefixOps } from "../interpreters/with-changefeed.js"
 import type { Path } from "../path.js"
 import { RawPath } from "../path.js"
 
@@ -134,6 +136,127 @@ describe("planNotifications: grouping", () => {
     for (const path of paths) {
       expect(plan.grouped.get(path.key)).toHaveLength(3)
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// liftToOps: shape grammar — raise Changeset<C> to Changeset<Op<C>>
+// ---------------------------------------------------------------------------
+
+describe("liftToOps: wraps each change with the given path", () => {
+  it("empty changeset → empty result, origin preserved", () => {
+    const cs: Changeset<ChangeBase> = { changes: [], origin: "populated" }
+    const lifted = liftToOps(cs, RawPath.empty)
+    expect(lifted.changes).toHaveLength(0)
+    expect(lifted.origin).toBe("populated")
+  })
+
+  it("single-change changeset → one Op with the supplied path", () => {
+    const path = RawPath.empty.field("title")
+    const cs: Changeset<ChangeBase> = { changes: [{ type: "text" }] }
+    const lifted = liftToOps(cs, path)
+    expect(lifted.changes).toHaveLength(1)
+    expect(lifted.changes[0]?.path).toBe(path)
+    expect(lifted.changes[0]?.change.type).toBe("text")
+  })
+
+  it("multi-change changeset → N Ops, all sharing the path", () => {
+    const path = RawPath.empty.field("counter")
+    const cs: Changeset<ChangeBase> = {
+      changes: [
+        { type: "increment" },
+        { type: "increment" },
+        { type: "replace" },
+      ],
+    }
+    const lifted = liftToOps(cs, path)
+    expect(lifted.changes).toHaveLength(3)
+    for (const op of lifted.changes) {
+      expect(op.path).toBe(path)
+    }
+    expect(lifted.changes.map(op => op.change.type)).toEqual([
+      "increment",
+      "increment",
+      "replace",
+    ])
+  })
+
+  it("origin is preserved across the lift", () => {
+    const cs: Changeset<ChangeBase> = {
+      changes: [{ type: "replace" }],
+      origin: "test-origin",
+    }
+    const lifted = liftToOps(cs, RawPath.empty.field("x"))
+    expect(lifted.origin).toBe("test-origin")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// prefixOps: re-prefix Changeset<Op<C>> by prepending to each event's path
+// ---------------------------------------------------------------------------
+
+describe("prefixOps: re-prefixes each event's path", () => {
+  it("empty changeset → empty result, origin preserved", () => {
+    const cs: Changeset<Op> = { changes: [], origin: "sync" }
+    const prefixed = prefixOps(cs, RawPath.empty.field("settings"))
+    expect(prefixed.changes).toHaveLength(0)
+    expect(prefixed.origin).toBe("sync")
+  })
+
+  // Locks in the leaf-child invariant for composite tree propagation:
+  // a leaf descendant fires with `path.root()`, so the parent's prefix
+  // concatenation must yield the prefix unchanged.
+  it("identity when each event's path is empty (leaf-child case)", () => {
+    const prefix = RawPath.empty.field("settings")
+    const cs: Changeset<Op> = {
+      changes: [
+        { path: RawPath.empty, change: { type: "replace" } },
+        { path: RawPath.empty, change: { type: "replace" } },
+      ],
+    }
+    const prefixed = prefixOps(cs, prefix)
+    expect(prefixed.changes).toHaveLength(2)
+    for (const op of prefixed.changes) {
+      expect(op.path.key).toBe(prefix.key)
+    }
+  })
+
+  it("nested descendant path is prepended (composite-child case)", () => {
+    const prefix = RawPath.empty.field("settings")
+    const innerPath = RawPath.empty.field("darkMode")
+    const expectedKey = prefix.field("darkMode").key
+    const cs: Changeset<Op> = {
+      changes: [{ path: innerPath, change: { type: "replace" } }],
+    }
+    const prefixed = prefixOps(cs, prefix)
+    expect(prefixed.changes).toHaveLength(1)
+    expect(prefixed.changes[0]?.path.key).toBe(expectedKey)
+  })
+
+  it("multi-event changeset: each event independently prefixed", () => {
+    const prefix = RawPath.empty.field("items").item(0)
+    const cs: Changeset<Op> = {
+      changes: [
+        { path: RawPath.empty.field("title"), change: { type: "text" } },
+        { path: RawPath.empty.field("body"), change: { type: "text" } },
+        { path: RawPath.empty, change: { type: "replace" } },
+      ],
+    }
+    const prefixed = prefixOps(cs, prefix)
+    expect(prefixed.changes.map(op => op.path.key)).toEqual([
+      prefix.field("title").key,
+      prefix.field("body").key,
+      prefix.key,
+    ])
+  })
+
+  it("origin is preserved across the re-prefix", () => {
+    const cs: Changeset<Op> = {
+      changes: [{ path: RawPath.empty, change: { type: "replace" } }],
+      origin: "undo",
+    }
+    const prefixed = prefixOps(cs, RawPath.empty.field("x"))
+    expect(prefixed.origin).toBe("undo")
   })
 })
 

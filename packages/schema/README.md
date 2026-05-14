@@ -138,7 +138,14 @@ const unsub = subscribe(doc, (changeset) => {
   }
 })
 
-// Node-level — fires only for changes at this exact ref
+// `subscribe` works on leaves too — a leaf is a tree of size 1, so the
+// delivered `Op.path` is the empty relative path.
+subscribe(doc.count, (changeset) => {
+  console.log(changeset.changes[0].path.segments) // []
+})
+
+// Node-level — explicit shallow opt-in; delivers Changeset<ChangeBase>
+// without paths, for when you don't need the tree shape.
 subscribeNode(doc.count, (changeset) => {
   console.log(changeset.origin) // "sync", "undo", etc.
 })

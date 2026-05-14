@@ -11,7 +11,7 @@ import type { Op } from "../index.js"
 import {
   change,
   expandMapOpsToLeaves,
-  hasComposedChangefeed,
+  hasTreeChangefeed,
   interpret,
   observation,
   plainContext,
@@ -255,36 +255,39 @@ describe("changefeed: exact-path subscription", () => {
 })
 
 // ===========================================================================
-// Compositional tests — hasComposedChangefeed, subscribeTree
+// Compositional tests — hasTreeChangefeed, subscribeTree
 // ===========================================================================
 
-describe("changefeed: composed changefeed type guards", () => {
-  it("leaf refs produce Changefeed, not ComposedChangefeed", () => {
+describe("changefeed: tree-changefeed type guards", () => {
+  it("every schema-issued ref carries TreeChangefeed (subscribeTree)", () => {
     const { doc } = createChatDoc()
+    // Leaves now also satisfy the composed-changefeed guard — their
+    // `subscribeTree` is the trivial own-path lift with `path.root()`
+    // as the relative path (a leaf is a tree of size 1).
     expect(hasChangefeed(doc.title)).toBe(true)
-    expect(hasComposedChangefeed(doc.title)).toBe(false)
+    expect(hasTreeChangefeed(doc.title)).toBe(true)
 
     expect(hasChangefeed(doc.count)).toBe(true)
-    expect(hasComposedChangefeed(doc.count)).toBe(false)
+    expect(hasTreeChangefeed(doc.count)).toBe(true)
 
     expect(hasChangefeed(doc.settings.darkMode)).toBe(true)
-    expect(hasComposedChangefeed(doc.settings.darkMode)).toBe(false)
+    expect(hasTreeChangefeed(doc.settings.darkMode)).toBe(true)
   })
 
-  it("product refs produce ComposedChangefeed", () => {
+  it("product refs produce TreeChangefeed", () => {
     const { doc } = createChatDoc()
-    expect(hasComposedChangefeed(doc.settings)).toBe(true)
-    expect(hasComposedChangefeed(doc)).toBe(true)
+    expect(hasTreeChangefeed(doc.settings)).toBe(true)
+    expect(hasTreeChangefeed(doc)).toBe(true)
   })
 
-  it("sequence refs produce ComposedChangefeed", () => {
+  it("sequence refs produce TreeChangefeed", () => {
     const { doc } = createChatDoc()
-    expect(hasComposedChangefeed(doc.messages)).toBe(true)
+    expect(hasTreeChangefeed(doc.messages)).toBe(true)
   })
 
-  it("map refs produce ComposedChangefeed", () => {
+  it("map refs produce TreeChangefeed", () => {
     const { doc } = createChatDoc()
-    expect(hasComposedChangefeed(doc.metadata)).toBe(true)
+    expect(hasTreeChangefeed(doc.metadata)).toBe(true)
   })
 })
 
@@ -1042,7 +1045,7 @@ describe("changefeed: edge cases", () => {
     expect(changesets[0]?.changes[0]?.type).toBe("replace")
   })
 
-  it("empty sequence has ComposedChangefeed", () => {
+  it("empty sequence has TreeChangefeed", () => {
     const schema = Schema.struct({
       items: Schema.list(Schema.string()),
     })
@@ -1054,10 +1057,10 @@ describe("changefeed: edge cases", () => {
       .with(observation)
       .done()
 
-    expect(hasComposedChangefeed(doc.items)).toBe(true)
+    expect(hasTreeChangefeed(doc.items)).toBe(true)
   })
 
-  it("empty map has ComposedChangefeed", () => {
+  it("empty map has TreeChangefeed", () => {
     const schema = Schema.struct({
       labels: Schema.record(Schema.string()),
     })
@@ -1069,7 +1072,7 @@ describe("changefeed: edge cases", () => {
       .with(observation)
       .done()
 
-    expect(hasComposedChangefeed(doc.labels)).toBe(true)
+    expect(hasTreeChangefeed(doc.labels)).toBe(true)
   })
 
   it("changeset wraps a single change (degenerate changeset)", () => {

@@ -10,8 +10,9 @@
 //   whose history names both layers.
 
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
+import type { Lease } from "@kyneta/machine"
 import { createLease } from "@kyneta/machine"
-import { change, json, Schema, subscribeNode } from "@kyneta/schema"
+import { change, json, Schema, subscribe } from "@kyneta/schema"
 import { afterEach, describe, expect, it } from "vitest"
 import {
   Exchange,
@@ -52,11 +53,7 @@ const PresenceSchema = Schema.struct({
 })
 const PresenceDoc = json.bind(PresenceSchema)
 
-function makeMesh(leases?: {
-  alice?: Parameters<typeof createExchange>[0]["lease"]
-  bob?: Parameters<typeof createExchange>[0]["lease"]
-  carol?: Parameters<typeof createExchange>[0]["lease"]
-}) {
+function makeMesh(leases?: { alice?: Lease; bob?: Lease; carol?: Lease }) {
   const bridgeAB = new Bridge()
   const bridgeBC = new Bridge()
 
@@ -127,16 +124,16 @@ describe("doc-layer re-entry: same-doc inside a peer-event subscriber", () => {
 })
 
 describe("doc-layer re-entry: whole-stack tick-induced cascade", () => {
-  it("subscribeNode callback on docA writes docA again; sub-tick drains in the same outer dispatch", async () => {
+  it("subscribe callback on docA writes docA again; sub-tick drains in the same outer dispatch", async () => {
     const { exchangeA } = makeMesh()
     const docA = exchangeA.get("room", PresenceDoc)
 
     // When version changes, bump scratch.
     let scratchFires = 0
-    subscribeNode(docA.scratch, () => {
+    subscribe(docA.scratch, () => {
       scratchFires++
     })
-    subscribeNode(docA.version, () => {
+    subscribe(docA.version, () => {
       change(docA, (d: any) => {
         d.scratch.set(d.scratch() + 1)
       })
@@ -166,12 +163,12 @@ describe("doc-layer re-entry: budget exhaustion spans synchronizer + changefeed"
     const docA = exchange.get("docA", PresenceDoc)
     const docB = exchange.get("docB", PresenceDoc)
 
-    subscribeNode(docA.version, () => {
+    subscribe(docA.version, () => {
       change(docB, (d: any) => {
         d.version.set(d.version() + 1)
       })
     })
-    subscribeNode(docB.version, () => {
+    subscribe(docB.version, () => {
       change(docA, (d: any) => {
         d.version.set(d.version() + 1)
       })
@@ -188,9 +185,9 @@ describe("doc-layer re-entry: budget exhaustion spans synchronizer + changefeed"
 
     expect(error).toBeDefined()
     const labels = new Set(
-      (error as { lease?: { history?: { label: string }[] } }).lease?.history?.map(
-        h => h.label,
-      ) ?? [],
+      (
+        error as { lease?: { history?: { label: string }[] } }
+      ).lease?.history?.map(h => h.label) ?? [],
     )
     expect(labels.has("changefeed")).toBe(true)
   })

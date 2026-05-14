@@ -75,15 +75,15 @@ export {
   treeChange,
 } from "./change.js"
 export type {
-  ComposedChangefeedProtocol,
-  HasComposedChangefeed,
+  HasTreeChangefeed,
   Op,
+  TreeChangefeedProtocol,
 } from "./changefeed.js"
 // Changefeed — schema-specific extensions (contract symbols live in @kyneta/changefeed)
 export {
   expandMapOpsToLeaves,
   getOrCreateChangefeed,
-  hasComposedChangefeed,
+  hasTreeChangefeed,
 } from "./changefeed.js"
 export type { MergeFn } from "./combinators.js"
 // Interpreter composition combinators

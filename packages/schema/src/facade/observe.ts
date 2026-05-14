@@ -10,15 +10,20 @@
 // for node-level observation. This follows the MobX/Valtio pattern
 // (deep is the default) and the principle of least surprise.
 //
-// The protocol layer uses different vocabulary:
-// `Changefeed.subscribe` (node-level) and `ComposedChangefeed.subscribeTree`
-// (tree-level). The facade translates between developer-facing and
-// protocol-level naming.
+// `subscribe` is universal across schema refs: the leaf case delivers a
+// degenerate tree-stream with empty relative paths (a leaf is a tree of
+// size 1).
+//
+// Note the facade-vs-protocol vocabulary inversion: facade `subscribe`
+// is deep delivery (`Changeset<Op>`); the protocol-level
+// `ChangefeedProtocol.subscribe` is own-path delivery
+// (`Changeset<ChangeBase>`). The facade hides this; power users
+// reaching directly into `ref[CHANGEFEED]` should know it.
 
 import type { Changeset } from "@kyneta/changefeed"
 import { CHANGEFEED, hasChangefeed } from "@kyneta/changefeed"
 import type { Op } from "../changefeed.js"
-import { hasComposedChangefeed } from "../changefeed.js"
+import { hasTreeChangefeed } from "../changefeed.js"
 
 // ---------------------------------------------------------------------------
 // subscribe — observe changes at a ref and all descendants (deep default)
@@ -32,12 +37,10 @@ import { hasComposedChangefeed } from "../changefeed.js"
  * `Op` carrying a relative `path` from the subscription point to
  * where the change occurred.
  *
- * Only works on composite refs (products, sequences, maps) — leaf
- * refs do not support tree-level observation. For leaf observation,
- * use `subscribeNode`.
- *
- * `subscribe` is a strict superset of `subscribeNode` — subscribers
- * also see own-path changes with `path: []`.
+ * Works on any schema-issued ref. Delivers `Changeset<Op>` describing
+ * own-path + every descendant. For a leaf, descendants are empty and
+ * each `Op.path` is the empty relative path. `subscribe` is a strict
+ * superset of `subscribeNode`.
  *
  * ```ts
  * const unsub = subscribe(doc, (changeset) => {
@@ -47,28 +50,22 @@ import { hasComposedChangefeed } from "../changefeed.js"
  * })
  * ```
  *
- * @param ref - A composite ref with a `[CHANGEFEED]` symbol that
+ * @param ref - A schema-issued ref with a `[CHANGEFEED]` symbol that
  *   includes `subscribeTree` (from `withChangefeed`).
  * @param callback - Called with a `Changeset<Op>` on each notification.
  * @returns An unsubscribe function.
  *
- * @throws If `ref` does not have a `[CHANGEFEED]` symbol.
- * @throws If `ref` is a leaf (use `subscribeNode` instead).
+ * @throws If `ref` does not have a `[CHANGEFEED]` symbol carrying
+ *   `subscribeTree` — i.e. it isn't a schema-issued ref.
  */
 export function subscribe(
   ref: unknown,
   callback: (changeset: Changeset<Op>) => void,
 ): () => void {
-  if (!hasChangefeed(ref)) {
+  if (!hasTreeChangefeed(ref)) {
     throw new Error(
-      "subscribe() requires a ref with [CHANGEFEED]. " +
-        "Use a ref produced by interpret() with withChangefeed.",
-    )
-  }
-  if (!hasComposedChangefeed(ref)) {
-    throw new Error(
-      "subscribe() requires a composite ref (product, sequence, or map). " +
-        "Leaf refs only support subscribeNode(), not subscribe().",
+      "subscribe() requires a schema-issued ref with [CHANGEFEED] carrying " +
+        "subscribeTree. Use a ref produced by interpret() with withChangefeed.",
     )
   }
   return ref[CHANGEFEED].subscribeTree(callback)
