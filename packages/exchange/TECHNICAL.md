@@ -145,22 +145,27 @@ Neither program calls the other. Neither program imports the other. The *only* c
 
 ### Serialized dispatch
 
-The Synchronizer owns **one** pending-input queue containing items tagged `session` or `sync`. Inbound inputs — channel events from transports, local doc mutations, wire messages — all enter this queue. The dispatch loop pulls items one at a time, routes to the appropriate program, executes the returned effects, and continues until the queue is empty.
+The Synchronizer hosts two `ObservableHandle`s — one per program — and a third dispatcher, the **outer coordinator**, built on `createDispatcher` from `@kyneta/machine`. All inbound inputs (channel events from transports, local doc mutations, wire messages, internal cross-program `sync-event` effects) route through the outer coordinator's single pending queue. The coordinator pops each msg, dispatches it to the appropriate program handle, then dispatches a `tick`. The tick re-enters the queue; if more `route` messages arrived during program processing (or during emit-* subscriber callbacks), they are interleaved in arrival order. The drain runs to quiescence — until the queue is empty.
 
-This serialization is the reason there are no lock primitives anywhere in the package. A user callback fired from an `ensure-doc` effect may call `exchange.get(...)` or `doc.title.insert(...)` — those calls enqueue inputs rather than recurse, so even re-entrant paths converge. Re-entrancy ordering matches dispatch ordering, which matches the order the queue received inputs.
+All three dispatchers (outer, session, sync) share one `Lease`. A subscriber-induced A↔B cascade between session and sync is bounded by `lease.budget`; a runaway cascade raises `BudgetExhaustedError` with a small history ring buffer for diagnosis.
+
+This serialization is the reason there are no lock primitives anywhere in the package. A user callback fired from an `ensure-doc` effect (or any other) may call `exchange.get(...)`, `doc.title.insert(...)`, or `room.participants.delete(...)` — those calls enqueue inputs rather than recurse, and the outer coordinator's drain-to-quiescence loop catches the re-entry. **Re-entrant paths converge at every layer**: inputs converge via the per-handle pending queues; tick-induced re-entry from subscribers converges via the outer coordinator's loop; the shared `Lease` bounds the whole cascade.
 
 ### Quiescence drain
 
-Notifications accumulate during dispatch. Four drain methods fire in order at quiescence:
+Reactive outputs (peer events, doc events, ready-state changes, state-advanced docs) are accumulated as model state on the two pure programs. A `tick-quiescent` message is self-dispatched by the outer coordinator after each `route`; its handler drains the accumulated state into `emit-*` effects, which the executor interprets as `emit` calls on the corresponding `ReactiveMap`s and listener sets.
 
-| Drain | Scope | Pattern |
-|-------|-------|---------|
-| `#drainOutbound()` | Outbound wire envelopes | Shift-loop — the queue can grow during sends if a transport synchronously receives |
-| `#drainReadyStateChanges()` | Docs whose ready state flipped this cycle | Snapshot-then-clear |
-| `#drainStateAdvanced()` | Docs whose state advanced (drives persistence) | Snapshot-then-clear |
-| `#drainPeerEvents()` | `PeerChange` emissions to the peers `ReactiveMap` | Snapshot-then-clear |
+| Effect | Scope | Pattern |
+|--------|-------|---------|
+| `emit-peer-events` (Session) | `PeerChange` emissions to the peers `ReactiveMap` | model.pendingPeerEvents → effect → executor rebuilds map + emits |
+| `emit-ready-state-changes` (Sync) | Docs whose ready state flipped this cycle | model.pendingReadyStateDocIds → effect → executor fires listeners |
+| `emit-state-advanced` (Sync) | Docs whose state advanced (drives persistence) | model.pendingStateAdvancedDocIds → effect → executor fires listeners |
+| `emit-doc-events` (Sync) | `DocChange` emissions to the documents `ReactiveMap` | model.pendingDocEvents → effect → executor rebuilds map + emits |
+| `#drainOutboundOnce` (shell) | Outbound wire envelopes | Shift-loop — the queue can grow during sends if a transport synchronously receives |
 
-Snapshot-then-clear: copy the pending set, reset the field to empty, then iterate the copy. If a subscriber's handler re-enqueues dispatch and produces more changes, they accumulate into a fresh empty set — and run on the *next* quiescence, not this one.
+Outbound coalescing remains a shell-only concern (transport routing + channelId selection) and is not modelled as program state. The outer coordinator's `tick` handler flushes `#outboundQueue` after both programs' tick handlers run.
+
+There is no longer a "second world" of accumulator drains outside the algebra — every reactive output is a Mealy effect.
 
 ### What the programs are NOT
 

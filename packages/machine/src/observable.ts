@@ -10,6 +10,7 @@
 // listener fires after each update. The microtask-batched delivery from
 // ClientStateMachine is unnecessary complexity that no consumer depends on.
 
+import { createDispatcher, type Lease } from "./dispatcher.js"
 import type { Dispatch, Program } from "./machine.js"
 
 // ---------------------------------------------------------------------------
@@ -121,11 +122,10 @@ export interface ObservableHandle<Msg, Model> {
 export function createObservableProgram<Msg, Model, Fx>(
   program: Program<Msg, Model, Fx>,
   executor: (effect: Fx, dispatch: Dispatch<Msg>) => void,
+  options?: { lease?: Lease; label?: string },
 ): ObservableHandle<Msg, Model> {
   let state: Model
   let isRunning = true
-  const pending: Msg[] = []
-  let isDispatching = false
   const listeners = new Set<TransitionListener<Model>>()
 
   // --------------------------------------------------------------------------
@@ -154,27 +154,23 @@ export function createObservableProgram<Msg, Model, Fx>(
   // Dispatch
   // --------------------------------------------------------------------------
 
+  const handle = createDispatcher<Msg>(
+    (msg, redispatch) => {
+      if (!isRunning) return
+      const prev = state
+      const [newModel, ...effects] = program.update(msg, state)
+      state = newModel
+      notifyTransition(prev, state)
+      for (const effect of effects) {
+        executor(effect, redispatch)
+      }
+    },
+    { lease: options?.lease, label: options?.label ?? "observable" },
+  )
+
   function dispatch(msg: Msg): void {
     if (!isRunning) return
-
-    pending.push(msg)
-    if (isDispatching) return
-
-    isDispatching = true
-    try {
-      while (pending.length > 0) {
-        const next = pending.shift()!
-        const prev = state
-        const [newModel, ...effects] = program.update(next, state)
-        state = newModel
-        notifyTransition(prev, state)
-        for (const effect of effects) {
-          executor(effect, dispatch)
-        }
-      }
-    } finally {
-      isDispatching = false
-    }
+    handle.dispatch(msg)
   }
 
   // --------------------------------------------------------------------------

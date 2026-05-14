@@ -6,17 +6,22 @@
 // - Sync program: manages document convergence — present, interest, offer,
 //   dismiss — and per-peer document sync states.
 //
-// Neither program calls the other. The shell orchestrates by forwarding
-// `sync-event` effects from the session program into the sync program.
-//
-// It manages:
-// - Dispatching inputs to both update functions
-// - Executing effects (side effects) produced by the update functions
-// - Adapter lifecycle and message routing
-// - Substrate interactions (export, import) on behalf of the pure models
+// Both pure programs are hosted by `createObservableProgram` (from
+// @kyneta/machine) sharing a single `Lease`. An outer coordinator —
+// itself a `createDispatcher` — owns cross-program input ordering and
+// drives `tick/quiescent` self-messages until the cascade reaches a
+// output-phase level.
 
 import type { ReactiveMap, ReactiveMapHandle } from "@kyneta/changefeed"
 import { createReactiveMap } from "@kyneta/changefeed"
+import {
+  createDispatcher,
+  createLease,
+  createObservableProgram,
+  type DispatcherHandle,
+  type Lease,
+  type ObservableHandle,
+} from "@kyneta/machine"
 import type {
   DocMetadata,
   ReplicaFactoryLike,
@@ -48,8 +53,6 @@ import {
   type SessionEffect,
   type SessionInput,
   type SessionModel,
-  type SessionNotification,
-  type SessionUpdate,
 } from "./session-program.js"
 import {
   createSyncUpdate,
@@ -58,8 +61,6 @@ import {
   type SyncEffect,
   type SyncInput,
   type SyncModel,
-  type SyncNotification,
-  type SyncUpdate,
 } from "./sync-program.js"
 import { TransportManager } from "./transport/transport-manager.js"
 import type { DocChange, DocInfo, PeerChange, ReadyState } from "./types.js"
@@ -82,30 +83,26 @@ type DocRuntimeBase = {
 }
 
 /**
- * Runtime state for a document — discriminated by participation mode.
- *
- * The only difference between modes is the narrowed `replica` type:
- * `Substrate` (interpret) vs `Replica` (replicate). The mode discriminant
- * exists solely to narrow the type, not to carry extra baggage.
+ * Discriminated by participation mode so the `mode === "interpret"`
+ * branch can narrow `replica` to `Substrate<Version>` — the only
+ * functional difference between modes. The discriminant carries no
+ * other baggage.
  */
 export type DocRuntime =
   | (DocRuntimeBase & {
       mode: "interpret"
-      replica: Substrate<Version> // narrows Replica to Substrate
+      replica: Substrate<Version>
     })
   | (DocRuntimeBase & {
       mode: "replicate"
     })
 
 /**
- * Callback invoked by `ensure-doc` — ensures a document exists locally.
+ * Fired by the `ensure-doc` effect when a peer announces an unknown doc.
  *
- * Fired during effect execution when a peer announces an unknown doc.
- * The Exchange auto-resolves schemas or delegates to `resolve`.
- *
- * **Must be idempotent.** Batched ensure effects may fire for a doc that
- * a sibling effect's cascade has already created. Implementations must
- * check for existing state and return early (first writer wins).
+ * **Must be idempotent.** A doc may be announced by multiple peers in the
+ * same dispatch cycle, producing one `ensure-doc` effect each. The first
+ * caller to register state wins; subsequent ones must return early.
  */
 export type DocCreationCallback = (
   docId: DocId,
@@ -117,12 +114,9 @@ export type DocCreationCallback = (
 ) => void
 
 /**
- * Callback invoked by `ensure-doc-dismissed` — ensures a dismissed
- * doc is handled locally.
+ * Fired by the `ensure-doc-dismissed` effect when a peer dismisses a doc.
  *
- * The Exchange handles cleanup via dismiss().
- *
- * **Must be idempotent.** First writer wins.
+ * **Must be idempotent** — same rationale as `DocCreationCallback`.
  */
 export type DocDismissedCallback = (
   docId: DocId,
@@ -131,10 +125,10 @@ export type DocDismissedCallback = (
 ) => void
 
 /**
- * Epoch boundary predicate — decides whether to accept a compaction-induced
- * entirety reset for a document that already has local state.
- *
- * Returns `true` to accept (reset local state), `false` to reject (diverge).
+ * Consulted when an incoming entirety payload would overwrite a doc that
+ * has already synced with at least one peer (a likely compaction-induced
+ * reset). Returns `true` to accept the reset, `false` to keep local state
+ * and diverge from compacted peers.
  */
 export type EpochBoundaryPredicate = (
   docId: DocId,
@@ -157,6 +151,11 @@ export type SynchronizerParams = {
    * Defaults to `{ alias: true }` for v1.
    */
   selfFeatures?: WireFeatures
+  /**
+   * Optional shared dispatch budget. If omitted, the Synchronizer
+   * creates its own private lease.
+   */
+  lease?: Lease
 }
 
 // ---------------------------------------------------------------------------
@@ -173,17 +172,9 @@ type VersionGapResult =
     }
 
 /**
- * Shared version-gap classifier used by the semantic inbound/outbound helpers.
- *
- * This centralizes the common mechanics:
- * - parse the serialized version string
- * - read the replica's current version
- * - run the supplied comparison
- * - classify the result as parse-error, no-gap, or actionable gap
- *
- * The comparison direction remains the responsibility of the wrapper:
- * - inbound uses `parsed.compare(current)`
- * - outbound uses `current.compare(parsed)`
+ * Common parse + compare + classify pipeline. Comparison *direction* is
+ * the caller's responsibility — see `resolveInboundVersionGap` and
+ * `resolveOutboundVersionGap` for the two specializations.
  */
 function classifyVersionGap(
   replica: ReplicaLike,
@@ -212,13 +203,9 @@ function classifyVersionGap(
 }
 
 /**
- * Compare an incoming peer version against our current replica version.
- *
- * Semantics:
- * - parse incoming serialized version
- * - compare `incoming.compare(current)`
- * - `"behind"` / `"equal"` → no action needed
- * - `"ahead"` / `"concurrent"` → remote peer has data we may need to import
+ * Inbound: compare `incoming` against `current`. `ahead`/`concurrent`
+ * means the peer has data we may need to import; `behind`/`equal` means
+ * the offer is stale — no action.
  */
 function resolveInboundVersionGap(
   replica: ReplicaLike,
@@ -234,13 +221,9 @@ function resolveInboundVersionGap(
 }
 
 /**
- * Compare our current replica version against a peer's declared version.
- *
- * Semantics:
- * - parse peer serialized version
- * - compare `current.compare(peerKnown)`
- * - `"behind"` / `"equal"` → nothing useful to send
- * - `"ahead"` / `"concurrent"` → we have data the peer is missing
+ * Outbound: compare `current` against the peer's declared version.
+ * `ahead`/`concurrent` means we have data the peer is missing — emit
+ * the offer; `behind`/`equal` means there's nothing useful to send.
  */
 function resolveOutboundVersionGap(
   replica: ReplicaLike,
@@ -256,6 +239,14 @@ function resolveOutboundVersionGap(
 }
 
 // ---------------------------------------------------------------------------
+// Outer coordinator message
+// ---------------------------------------------------------------------------
+
+type OuterMsg =
+  | { type: "route"; input: SessionInput | SyncInput }
+  | { type: "tick" }
+
+// ---------------------------------------------------------------------------
 // Synchronizer
 // ---------------------------------------------------------------------------
 
@@ -263,76 +254,51 @@ export class Synchronizer {
   readonly identity: PeerIdentityDetails
   readonly transports: TransportManager
 
-  readonly #sessionUpdate: SessionUpdate
-  readonly #syncUpdate: SyncUpdate
+  readonly #lease: Lease
+  readonly #departureTimeout: number
+  readonly #selfFeatures: WireFeatures | undefined
+
+  #sessionHandle: ObservableHandle<SessionInput, SessionModel>
+  #syncHandle: ObservableHandle<SyncInput, SyncModel>
+  #outerHandle: DispatcherHandle<OuterMsg>
+
   readonly #docRuntimes = new Map<DocId, DocRuntime>()
   readonly #docCreationCallback?: DocCreationCallback
   readonly #docDismissedCallback?: DocDismissedCallback
 
   /**
-   * Dirty doc IDs accumulated during a dispatch cycle from
-   * `notify/state-advanced` notifications. Drained at quiescence
-   * to fire `onStateAdvanced` listeners — only docs whose state
-   * actually advanced (local mutation or network import).
-   *
-   * Context: jj:smmulzkm (unified persistence via notify/state-advanced)
-   */
-  readonly #dirtyStateAdvanced: Set<DocId> = new Set()
-
-  /**
-   * Outbound message queue — accumulated during dispatch, flushed at quiescence.
-   * This batches outbound messages to avoid interleaving with model updates.
+   * Outbound message queue — accumulated during dispatch, flushed at
+   * quiescence by the outer coordinator's tick. Carries channelId
+   * routing + transport-selection knowledge that the pure programs do
+   * not have.
    */
   readonly #outboundQueue: AddressedEnvelope[] = []
-
-  /**
-   * Dirty doc IDs accumulated during a dispatch cycle from Notification
-   * co-products. Drained at quiescence to emit targeted ready-state
-   * changes — only docs whose peer sync state actually changed.
-   */
-  readonly #dirtyDocIds: Set<DocId> = new Set()
-
-  /**
-   * Work queue for serialized async dispatch.
-   * Ensures inputs are processed one at a time and outbound messages
-   * are flushed at quiescence (after all pending dispatches complete).
-   */
-  #dispatching = false
-  #pendingInputs: (SessionInput | SyncInput)[] = []
-
-  #sessionModel: SessionModel
-  #syncModel: SyncModel
 
   // Departure timers — shell-managed side effects from session program
   #departureTimers = new Map<PeerId, ReturnType<typeof setTimeout>>()
 
-  // Peer lifecycle — event accumulation and changefeed
-  #pendingPeerEvents: PeerChange[] = []
+  // Peer lifecycle — changefeed
   #peerHandle: ReactiveMapHandle<
     PeerId,
     PeerIdentityDetails,
     PeerChange
   > | null = null
 
-  // Document lifecycle — event accumulation and changefeed
-  #pendingDocEvents: DocChange[] = []
+  // Document lifecycle — changefeed
   #docHandle: ReactiveMapHandle<DocId, DocInfo, DocChange> | null = null
 
-  // Event emitter for ready state changes
+  // Ready-state listeners
   readonly #readyStateListeners = new Set<
     (docId: DocId, readyStates: ReadyState[]) => void
   >()
 
-  /**
-   * Listeners for state-advanced events. Fired at quiescence when
-   * a document's state has advanced — either from a local mutation
-   * or a network import. The Exchange subscribes to persist deltas.
-   *
-   * Context: jj:smmulzkm (unified persistence via notify/state-advanced)
-   */
+  // State-advanced listeners
   readonly #stateAdvancedListeners = new Set<(docId: DocId) => void>()
 
   readonly #canReset: EpochBoundaryPredicate
+  readonly #canConnect?: (peer: PeerIdentityDetails) => boolean
+  readonly #canShare: (docId: DocId, peer: PeerIdentityDetails) => boolean
+  readonly #canAccept: (docId: DocId, peer: PeerIdentityDetails) => boolean
 
   /**
    * Backward-compat getter — exposes `documents` and `peers` from the
@@ -342,9 +308,10 @@ export class Synchronizer {
     documents: Map<DocId, DocEntry>
     peers: Map<PeerId, unknown>
   } {
+    const sync = this.#syncHandle.getState()
     return {
-      documents: this.#syncModel.documents,
-      peers: this.#syncModel.peers,
+      documents: sync.documents,
+      peers: sync.peers,
     }
   }
 
@@ -359,22 +326,20 @@ export class Synchronizer {
     onEnsureDocDismissed,
     departureTimeout,
     selfFeatures,
+    lease,
   }: SynchronizerParams) {
     this.identity = identity
-
-    this.#sessionUpdate = createSessionUpdate({ canConnect })
-    this.#syncUpdate = createSyncUpdate({ canShare, canAccept })
+    this.#departureTimeout = departureTimeout ?? 30_000
+    this.#selfFeatures = selfFeatures
     this.#canReset = canReset
+    this.#canConnect = canConnect
+    this.#canShare = canShare
+    this.#canAccept = canAccept
     this.#docCreationCallback = onEnsureDoc
     this.#docDismissedCallback = onEnsureDocDismissed
-
-    // Initialize models
-    this.#sessionModel = initSession(
-      this.identity,
-      departureTimeout ?? 30_000,
-      selfFeatures,
-    )
-    this.#syncModel = initSync(this.identity)
+    this.#lease = lease ?? createLease()
+    ;[this.#sessionHandle, this.#syncHandle, this.#outerHandle] =
+      this.#buildHandles()
 
     // Create adapter context
     const transportContext = {
@@ -401,50 +366,107 @@ export class Synchronizer {
   }
 
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+  // HANDLE CONSTRUCTION
+  // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+  #buildHandles(): [
+    ObservableHandle<SessionInput, SessionModel>,
+    ObservableHandle<SyncInput, SyncModel>,
+    DispatcherHandle<OuterMsg>,
+  ] {
+    const sessionProgram = {
+      init: [
+        initSession(this.identity, this.#departureTimeout, this.#selfFeatures),
+      ] as [SessionModel],
+      update: createSessionUpdate({ canConnect: this.#canConnect }),
+    }
+    const sessionHandle = createObservableProgram(
+      sessionProgram,
+      (effect, _dispatch) => this.#executeSessionEffect(effect),
+      { lease: this.#lease, label: "synchronizer:session" },
+    )
+
+    const syncProgram = {
+      init: [initSync(this.identity)] as [SyncModel],
+      update: createSyncUpdate({
+        canShare: this.#canShare,
+        canAccept: this.#canAccept,
+      }),
+    }
+    const syncHandle = createObservableProgram(
+      syncProgram,
+      (effect, _dispatch) => this.#executeSyncEffect(effect),
+      { lease: this.#lease, label: "synchronizer:sync" },
+    )
+
+    // The outer coordinator owns cross-program input ordering: a
+    // session `sync-event` effect re-enters as a `route` here rather
+    // than dispatching directly into syncHandle, so user-dispatched
+    // inputs and cross-program inputs interleave in arrival order.
+    // It also drives ticks — and because it is itself a dispatcher,
+    // ticks that produce more `route` msgs (via subscriber re-entry)
+    // converge in the same drain.
+    const outerHandle = createDispatcher<OuterMsg>(
+      (msg, dispatch) => {
+        if (msg.type === "route") {
+          if (msg.input.type.startsWith("sess/")) {
+            sessionHandle.dispatch(msg.input as SessionInput)
+          } else {
+            syncHandle.dispatch(msg.input as SyncInput)
+          }
+          dispatch({ type: "tick" })
+        } else {
+          // Outbound flushes last so subscribers fired by the emit-*
+          // effects observe the model→world ordering implied by their
+          // events (e.g., a ready-state listener that reads peer state
+          // sees it after the program update committed).
+          sessionHandle.dispatch({ type: "sess/tick-quiescent" })
+          syncHandle.dispatch({ type: "sync/tick-quiescent" })
+          this.#drainOutboundOnce()
+        }
+      },
+      { lease: this.#lease, label: "synchronizer:outer" },
+    )
+
+    return [sessionHandle, syncHandle, outerHandle]
+  }
+
+  // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
   // PUBLIC API — Document management
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
   /**
-   * Wire features advertised by a remote peer.
-   *
-   * Returns the features from the first established channel for the peer,
-   * or `undefined` if the peer is not yet established or advertised no
-   * features. For multi-channel peers, all channels' advertised features
-   * are expected to match (peers are identified by `peerId`, and a peer
-   * advertises one feature set per identity).
+   * Multi-channel peers advertise one feature set per identity. Any
+   * established channel for the peer is authoritative; returns the first
+   * one found, or `undefined` if the peer is unestablished.
    */
   getPeerFeatures(peerId: PeerId): WireFeatures | undefined {
-    const peer = this.#sessionModel.peers.get(peerId)
+    const session = this.#sessionHandle.getState()
+    const peer = session.peers.get(peerId)
     if (!peer) return undefined
     for (const channelId of peer.channels) {
-      const entry = this.#sessionModel.channels.get(channelId)
+      const entry = session.channels.get(channelId)
       if (entry?.peerFeatures) return entry.peerFeatures
     }
     return undefined
   }
 
   /**
-   * Register a document runtime with the synchronizer.
-   *
-   * Called by Exchange.get() or Exchange.replicate() after creating
-   * the substrate/replica. The synchronizer tracks the runtime and
-   * dispatches doc-ensure to begin sync.
+   * Track a doc-runtime and announce the doc to peers via `doc-ensure`.
+   * Called by Exchange.get() / Exchange.replicate() after the
+   * substrate/replica is created.
    */
   registerDoc(runtime: DocRuntime): void {
-    // Accumulate doc event — detect promotion (deferred → interpret/replicate)
-    // vs first-time creation. Check model before dispatching sync/doc-ensure,
-    // which will update the model.
-    const existing = this.#syncModel.documents.get(runtime.docId)
+    const sync = this.#syncHandle.getState()
+    const existing = sync.documents.get(runtime.docId)
+    // The promoted-vs-created distinction depends on the *pre-dispatch*
+    // model state; capture it before #docRuntimes mutates and the
+    // dispatch updates sync.documents.
+    let event: DocChange | undefined
     if (existing?.mode === "deferred") {
-      this.#pendingDocEvents.push({
-        type: "doc-promoted",
-        docId: runtime.docId,
-      })
+      event = { type: "doc-promoted", docId: runtime.docId }
     } else if (!this.#docRuntimes.has(runtime.docId)) {
-      this.#pendingDocEvents.push({
-        type: "doc-created",
-        docId: runtime.docId,
-      })
+      event = { type: "doc-created", docId: runtime.docId }
     }
 
     this.#docRuntimes.set(runtime.docId, runtime)
@@ -457,15 +479,14 @@ export class Synchronizer {
       replicaType: runtime.replicaFactory.replicaType,
       syncProtocol: runtime.syncProtocol,
       schemaHash: runtime.schemaHash,
+      event,
     })
   }
 
   /**
-   * Register a deferred document — routing participation only, no replica.
-   *
-   * The document will be added to `model.documents` with `mode: "deferred"`.
-   * It participates in routing (`present` messages) but does not send
-   * `interest` or handle `offer`/`interest` messages.
+   * Register a doc as deferred — participates in routing (peers learn it
+   * exists via `present`) but does not exchange data. Promoted to
+   * interpret/replicate later by a subsequent `registerDoc`.
    */
   deferDoc(
     docId: DocId,
@@ -473,11 +494,10 @@ export class Synchronizer {
     syncProtocol: SyncProtocol,
     schemaHash: string,
   ): void {
-    // Only accumulate if the doc doesn't already exist in the model —
-    // handleDocDefer no-ops when the doc is already tracked.
-    if (!this.#syncModel.documents.has(docId)) {
-      this.#pendingDocEvents.push({ type: "doc-deferred", docId })
-    }
+    const sync = this.#syncHandle.getState()
+    const event: DocChange | undefined = !sync.documents.has(docId)
+      ? { type: "doc-deferred", docId }
+      : undefined
 
     this.#dispatchSync({
       type: "sync/doc-defer",
@@ -485,18 +505,12 @@ export class Synchronizer {
       replicaType,
       syncProtocol,
       schemaHash,
+      event,
     })
   }
 
-  /**
-   * Get the metadata for a document in the synchronizer model.
-   *
-   * Returns `undefined` if the doc is not in the model. Used by the
-   * Exchange to retrieve discovery metadata for deferred docs during
-   * promotion.
-   */
   getDocMetadata(docId: DocId): DocMetadata | undefined {
-    const entry = this.#syncModel.documents.get(docId)
+    const entry = this.#syncHandle.getState().documents.get(docId)
     if (!entry) return undefined
     return {
       replicaType: entry.replicaType,
@@ -506,15 +520,9 @@ export class Synchronizer {
   }
 
   /**
-   * Notify the synchronizer of a local change to a document.
-   *
-   * Triggers push to synced peers based on sync protocol.
-   *
-   * **Normally called automatically** by the Exchange's changefeed
-   * subscription — you do NOT need to call this after `change()`.
-   *
-   * Call this directly only when mutating the substrate outside of
-   * `change()`, e.g. via `unwrap(ref)` which bypasses the changefeed.
+   * Normally fired automatically by the Exchange's changefeed
+   * subscription after `change(doc, ...)`. Call directly only when
+   * mutating the substrate outside the changefeed (e.g., via `unwrap`).
    */
   notifyLocalChange(docId: DocId): void {
     const runtime = this.#docRuntimes.get(docId)
@@ -527,25 +535,19 @@ export class Synchronizer {
     })
   }
 
-  /**
-   * Get the runtime for a document.
-   */
   getDocRuntime(docId: DocId): DocRuntime | undefined {
     return this.#docRuntimes.get(docId)
   }
 
   /**
-   * Compute the least common version (LCV) for a document across all
-   * synced peers. The LCV is the greatest version that is ≤ every
-   * synced peer's last known version — the safe trim point.
+   * Greatest version that is ≤ every synced peer's last-known version —
+   * the safe trim point for `advance()`. The local version is excluded
+   * deliberately: the LCV represents "what every remote has," so
+   * including local state would raise it past what peers actually have
+   * and strand them on subsequent syncs.
    *
-   * Returns `null` if no peers are synced for this doc (nothing to
-   * trim against), or if the doc doesn't exist.
-   *
-   * The local version is excluded — the LCV represents "what all
-   * remote participants have." Including the local version would
-   * raise the LCV incorrectly when the local node has advanced
-   * past what it's pushed to peers.
+   * Returns `null` when no peers are synced (nothing to bound against)
+   * or the doc is unknown.
    */
   leastCommonVersion(
     docId: DocId,
@@ -556,7 +558,7 @@ export class Synchronizer {
 
     let lcv: Version | null = null
 
-    for (const [, peerState] of this.#syncModel.peers) {
+    for (const [, peerState] of this.#syncHandle.getState().peers) {
       const docSync = peerState.docSyncStates.get(docId)
       if (!docSync || docSync.status !== "synced") continue
       if (peerFilter && !peerFilter(peerState.identity, docId)) continue
@@ -567,8 +569,8 @@ export class Synchronizer {
           docSync.lastKnownVersion,
         )
       } catch {
-        // Skip peers with unparseable versions (shouldn't happen in
-        // normal operation, but defensive against corrupted state).
+        // Unparseable peer versions are excluded so a single corrupted
+        // entry can't poison the LCV for the rest of the cohort.
         continue
       }
 
@@ -578,64 +580,64 @@ export class Synchronizer {
     return lcv
   }
 
-  /**
-   * Check if a document exists in the synchronizer.
-   */
   hasDoc(docId: DocId): boolean {
     return this.#docRuntimes.has(docId)
   }
 
-  /**
-   * Remove a document from the synchronizer (internal, no peer notification).
-   */
   async removeDocument(docId: DocId): Promise<void> {
-    if (this.#docRuntimes.has(docId) || this.#syncModel.documents.has(docId)) {
-      this.#pendingDocEvents.push({ type: "doc-removed", docId })
-    }
+    const sync = this.#syncHandle.getState()
+    const event: DocChange | undefined =
+      this.#docRuntimes.has(docId) || sync.documents.has(docId)
+        ? { type: "doc-removed", docId }
+        : undefined
+    // Runtime must be deleted before the dispatch: emit-doc-events
+    // rebuilds the doc map from #docRuntimes, so a live entry here
+    // would re-introduce the doc the event is meant to remove.
     this.#docRuntimes.delete(docId)
     this.#dispatchSync({
       type: "sync/doc-delete",
       docId,
+      event,
     })
   }
 
-  /**
-   * Dismiss a document — remove locally and broadcast `dismiss` to peers.
-   */
   dismissDocument(docId: DocId): void {
-    if (this.#docRuntimes.has(docId) || this.#syncModel.documents.has(docId)) {
-      this.#pendingDocEvents.push({ type: "doc-removed", docId })
-    }
+    const sync = this.#syncHandle.getState()
+    const event: DocChange | undefined =
+      this.#docRuntimes.has(docId) || sync.documents.has(docId)
+        ? { type: "doc-removed", docId }
+        : undefined
+    // See removeDocument: runtime delete must precede the dispatch.
     this.#docRuntimes.delete(docId)
     this.#dispatchSync({
       type: "sync/doc-dismiss",
       docId,
+      event,
     })
   }
 
-  /**
-   * Suspend a document — leave the sync graph but keep the runtime.
-   *
-   * Dispatches `sync/doc-dismiss` (removes from model, broadcasts wire
-   * dismiss) but does NOT delete from `#docRuntimes`. The runtime survives
-   * so `resumeDocument()` can re-register with the current version.
-   */
   suspendDocument(docId: DocId): void {
-    if (this.#docRuntimes.has(docId) || this.#syncModel.documents.has(docId)) {
-      this.#pendingDocEvents.push({ type: "doc-suspended", docId })
-    }
+    const sync = this.#syncHandle.getState()
+    const event: DocChange | undefined =
+      this.#docRuntimes.has(docId) || sync.documents.has(docId)
+        ? { type: "doc-suspended", docId }
+        : undefined
+    // Runtime survives — `resume()` re-registers from it. Emit-doc-events
+    // computes `suspended: !sync.documents.has(docId)`; folding the event
+    // into doc-dismiss is what makes sync.documents lose the doc before
+    // the emit rebuild reads it, so `suspended: true` is visible.
     this.#dispatchSync({
       type: "sync/doc-dismiss",
       docId,
+      event,
     })
   }
 
   /**
-   * Resume a suspended document — re-enter the sync graph.
-   *
-   * Reads the surviving `DocRuntime` from `#docRuntimes` and re-dispatches
-   * `sync/doc-ensure` with the current version. Peers receive `present` +
-   * `interest` and delta-sync from the suspended version.
+   * Rejoin the sync graph using the surviving runtime's current version.
+   * Peers receive `present` + `interest` and delta-sync from the
+   * suspended version, so any drift accumulated during suspension is
+   * reconciled rather than overwritten.
    */
   resumeDocument(docId: DocId): void {
     const runtime = this.#docRuntimes.get(docId)
@@ -645,7 +647,6 @@ export class Synchronizer {
           `The document may have been destroyed.`,
       )
     }
-    this.#pendingDocEvents.push({ type: "doc-resumed", docId })
     this.#dispatchSync({
       type: "sync/doc-ensure",
       docId: runtime.docId,
@@ -654,6 +655,7 @@ export class Synchronizer {
       replicaType: runtime.replicaFactory.replicaType,
       syncProtocol: runtime.syncProtocol,
       schemaHash: runtime.schemaHash,
+      event: { type: "doc-resumed", docId },
     })
   }
 
@@ -661,13 +663,10 @@ export class Synchronizer {
   // PUBLIC API — Ready state
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
-  /**
-   * Get current ready states for a document.
-   */
   getReadyStates(docId: DocId): ReadyState[] {
     const states: ReadyState[] = []
 
-    for (const [_peerId, peerState] of this.#syncModel.peers) {
+    for (const [_peerId, peerState] of this.#syncHandle.getState().peers) {
       const docSync = peerState.docSyncStates.get(docId)
       if (docSync) {
         states.push({
@@ -686,11 +685,7 @@ export class Synchronizer {
     return states
   }
 
-  /**
-   * Wait until a document is synced with at least one peer.
-   */
   async waitUntilReady(docId: DocId, timeoutMs = 30000): Promise<void> {
-    // Check if already ready
     if (this.#isReady(docId)) return
 
     return new Promise<void>((resolve, reject) => {
@@ -724,16 +719,12 @@ export class Synchronizer {
   }
 
   /**
-   * Subscribe to state-advanced events.
-   *
-   * The callback fires once per docId at quiescence when the document's
-   * state has advanced — either from a local mutation (changefeed →
-   * notifyLocalChange → handleLocalDocChange) or a network import
-   * (handleOffer → import-doc-data → handleDocImported).
-   *
-   * Returns an unsubscribe function.
-   *
-   * Context: jj:smmulzkm (unified persistence via notify/state-advanced)
+   * Fires once per docId at quiescence when the document's state has
+   * advanced — from a local mutation (changefeed → notifyLocalChange)
+   * or a network import (handleOffer → import-doc-data → handleDocImported).
+   * Coalescing is intentional: multiple advances within one dispatch
+   * cycle produce a single notification so persistence reads the full
+   * delta once instead of re-exporting per change.
    */
   onStateAdvanced(cb: (docId: DocId) => void): () => void {
     this.#stateAdvancedListeners.add(cb)
@@ -750,13 +741,13 @@ export class Synchronizer {
   }
 
   #isReady(docId: DocId): boolean {
-    for (const [peerId, peerState] of this.#syncModel.peers) {
+    const session = this.#sessionHandle.getState()
+    for (const [peerId, peerState] of this.#syncHandle.getState().peers) {
       const docSync = peerState.docSyncStates.get(docId)
       if (!docSync) continue
 
       if (docSync.status === "synced" || docSync.status === "absent") {
-        // Check if peer is connected (has channels in session model)
-        const sessionPeer = this.#sessionModel.peers.get(peerId)
+        const sessionPeer = session.peers.get(peerId)
         if (sessionPeer && sessionPeer.channels.size > 0) {
           return true
         }
@@ -794,31 +785,28 @@ export class Synchronizer {
   }
 
   reset(): void {
-    this.#emitSyntheticDocRemovedEvents()
-    this.#emitSyntheticDepartedEvents()
+    this.#emitSyntheticOnTeardown()
     this.#clearDepartureTimers()
-    this.#docRuntimes.clear()
-    this.#sessionModel = initSession(
-      this.identity,
-      this.#sessionModel.departureTimeout,
-    )
-    this.#syncModel = initSync(this.identity)
+    this.#sessionHandle.dispose()
+    this.#syncHandle.dispose()
+    ;[this.#sessionHandle, this.#syncHandle, this.#outerHandle] =
+      this.#buildHandles()
     this.transports.reset()
   }
 
   async shutdown(): Promise<void> {
-    // Send depart to all connected peers
     this.#sendDepartToAllPeers()
-    this.#drainOutbound() // Flush depart messages to transports
-    await this.transports.flush() // Wait for transports to deliver
-    this.#emitSyntheticDocRemovedEvents()
-    this.#emitSyntheticDepartedEvents()
+    // transports.flush() drains the transport layer, not #outboundQueue
+    // — without this explicit drain the depart envelopes never reach
+    // the transport and peers don't see the departure before close.
+    this.#drainOutboundOnce()
+    await this.transports.flush()
+    this.#emitSyntheticOnTeardown()
     this.#clearDepartureTimers()
-    this.#sessionModel = initSession(
-      this.identity,
-      this.#sessionModel.departureTimeout,
-    )
-    this.#syncModel = initSync(this.identity)
+    this.#sessionHandle.dispose()
+    this.#syncHandle.dispose()
+    ;[this.#sessionHandle, this.#syncHandle, this.#outerHandle] =
+      this.#buildHandles()
     await this.transports.shutdown()
   }
 
@@ -866,7 +854,7 @@ export class Synchronizer {
       })
     } else {
       // Sync message — resolve channel → peer
-      const entry = this.#sessionModel.channels.get(channelId)
+      const entry = this.#sessionHandle.getState().channels.get(channelId)
       if (!entry?.remoteIdentity) return // not established, drop
       this.#dispatchSync({
         type: "sync/message-received",
@@ -884,128 +872,15 @@ export class Synchronizer {
   }
 
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-  // DISPATCH — serialized input processing with quiescence flush
+  // DISPATCH — all entry points route through the outer coordinator
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
   #dispatchSession(input: SessionInput): void {
-    this.#pendingInputs.push(input)
-    this.#drainPending()
+    this.#outerHandle.dispatch({ type: "route", input })
   }
 
   #dispatchSync(input: SyncInput): void {
-    this.#pendingInputs.push(input)
-    this.#drainPending()
-  }
-
-  #drainPending(): void {
-    if (this.#dispatching) return
-
-    this.#dispatching = true
-    try {
-      while (this.#pendingInputs.length > 0) {
-        const input = this.#pendingInputs.shift()
-        if (!input) break
-        if (input.type.startsWith("sess/")) {
-          this.#processSessionInput(input as SessionInput)
-        } else {
-          this.#processSyncInput(input as SyncInput)
-        }
-      }
-
-      // Quiescence — drain all accumulators. Each drain snapshots its
-      // buffer, clears the field, then pushes to listeners/transports.
-      this.#drainOutbound()
-      this.#drainReadyStateChanges()
-      this.#drainStateAdvanced()
-      this.#drainPeerEvents()
-      this.#drainDocEvents()
-    } finally {
-      this.#dispatching = false
-    }
-  }
-
-  #processSessionInput(input: SessionInput): void {
-    const [newModel, effect, notification] = this.#sessionUpdate(
-      input,
-      this.#sessionModel,
-    )
-    this.#sessionModel = newModel
-    if (notification) this.#accumulateSessionNotification(notification)
-    if (effect) this.#executeSessionEffect(effect)
-  }
-
-  #processSyncInput(input: SyncInput): void {
-    const [newModel, effect, notification] = this.#syncUpdate(
-      input,
-      this.#syncModel,
-    )
-    this.#syncModel = newModel
-    if (notification) this.#accumulateSyncNotification(notification)
-    if (effect) this.#executeSyncEffect(effect)
-  }
-
-  // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-  // NOTIFICATION ACCUMULATION
-  // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-
-  #accumulateSessionNotification(notification: SessionNotification): void {
-    switch (notification.type) {
-      case "notify/peer-established":
-        this.#pendingPeerEvents.push({
-          type: "peer-established",
-          peer: notification.peer,
-        })
-        break
-      case "notify/peer-disconnected":
-        this.#pendingPeerEvents.push({
-          type: "peer-disconnected",
-          peer: notification.peer,
-        })
-        break
-      case "notify/peer-reconnected":
-        this.#pendingPeerEvents.push({
-          type: "peer-reconnected",
-          peer: notification.peer,
-        })
-        break
-      case "notify/peer-departed":
-        this.#pendingPeerEvents.push({
-          type: "peer-departed",
-          peer: notification.peer,
-        })
-        break
-      case "notify/warning":
-        console.warn(notification.message)
-        break
-      case "notify/batch":
-        for (const sub of notification.notifications) {
-          this.#accumulateSessionNotification(sub)
-        }
-        break
-    }
-  }
-
-  #accumulateSyncNotification(notification: SyncNotification): void {
-    switch (notification.type) {
-      case "notify/ready-state-changed":
-        for (const docId of notification.docIds) {
-          this.#dirtyDocIds.add(docId)
-        }
-        break
-      case "notify/state-advanced":
-        for (const docId of notification.docIds) {
-          this.#dirtyStateAdvanced.add(docId)
-        }
-        break
-      case "notify/warning":
-        console.warn(notification.message)
-        break
-      case "notify/batch":
-        for (const sub of notification.notifications) {
-          this.#accumulateSyncNotification(sub)
-        }
-        break
-    }
+    this.#outerHandle.dispatch({ type: "route", input })
   }
 
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -1015,7 +890,6 @@ export class Synchronizer {
   #executeSessionEffect(effect: SessionEffect): void {
     switch (effect.type) {
       case "send": {
-        // Send lifecycle message to a specific channel via the outbound queue
         this.#outboundQueue.push({
           toChannelIds: [effect.to],
           message: effect.message,
@@ -1023,16 +897,15 @@ export class Synchronizer {
         break
       }
       case "reject-channel":
-        // Reject the connection by dispatching channel-removed to clean up
-        // the session model. The transport channel is not explicitly closed
-        // — it will time out or be cleaned up by the transport layer.
-        this.#pendingInputs.push({
+        // Re-route through the outer (rather than touching the session
+        // queue directly) so the synthetic channel-removed interleaves
+        // with any other pending input in arrival order.
+        this.#dispatchSession({
           type: "sess/channel-removed",
           channelId: effect.channelId,
         })
         break
       case "start-departure-timer": {
-        // Clear any existing timer for this peer
         const existing = this.#departureTimers.get(effect.peerId)
         if (existing) clearTimeout(existing)
         const timer = setTimeout(() => {
@@ -1054,13 +927,17 @@ export class Synchronizer {
         break
       }
       case "sync-event":
-        // Forward to sync program — enqueue so it's processed in the current drain
-        this.#pendingInputs.push(effect.event)
+        // Direct sync-handle dispatch would skip the outer's queue and
+        // reorder relative to concurrently-dispatched user inputs;
+        // routing through the outer is what keeps cross-program inputs
+        // in arrival order.
+        this.#dispatchSync(effect.event)
         break
-      case "batch":
-        for (const sub of effect.effects) {
-          this.#executeSessionEffect(sub)
-        }
+      case "emit-peer-events":
+        this.#emitPeerEvents(effect.events)
+        break
+      case "warning":
+        console.warn(effect.message)
         break
     }
   }
@@ -1105,9 +982,6 @@ export class Synchronizer {
         this.#executeImportDocData(effect)
         break
       case "ensure-doc":
-        // Ensure semantics — callback must be idempotent (first writer wins).
-        // Reentrant dispatch from the callback (e.g. registerDoc → doc-ensure)
-        // is queued in #pendingInputs and processed before quiescence.
         this.#docCreationCallback?.(
           effect.docId,
           effect.peer,
@@ -1118,14 +992,19 @@ export class Synchronizer {
         )
         break
       case "ensure-doc-dismissed":
-        // Ensure semantics — callback must be idempotent (first writer wins).
-        // The Exchange handles cleanup via dismiss().
         this.#docDismissedCallback?.(effect.docId, effect.peer, "remote")
         break
-      case "batch":
-        for (const sub of effect.effects) {
-          this.#executeSyncEffect(sub)
-        }
+      case "emit-doc-events":
+        this.#emitDocEvents(effect.events)
+        break
+      case "emit-ready-state-changes":
+        this.#emitReadyStateChanges(effect.docIds)
+        break
+      case "emit-state-advanced":
+        this.#emitStateAdvanced(effect.docIds)
+        break
+      case "warning":
+        console.warn(effect.message)
         break
     }
   }
@@ -1134,12 +1013,8 @@ export class Synchronizer {
   // PEER→CHANNEL RESOLUTION
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
-  /**
-   * Resolve a PeerId to channel IDs via the session model and enqueue
-   * a sync message for delivery.
-   */
   #sendToPeer(peerId: PeerId, message: SyncMsg): void {
-    const peer = this.#sessionModel.peers.get(peerId)
+    const peer = this.#sessionHandle.getState().peers.get(peerId)
     if (!peer || peer.channels.size === 0) return // disconnected, drop
 
     const toChannelIds: ChannelId[] = Array.from(peer.channels)
@@ -1154,24 +1029,13 @@ export class Synchronizer {
   // SEND OFFER — build and queue outbound offer for a document
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
-  /**
-   * Build and queue an outbound offer for a document to a specific peer.
-   *
-   * Version-gap planning happens via `resolveOutboundVersionGap()`.
-   * Effect execution stays here in the shell: warnings, payload export,
-   * and outbound queue mutation.
-   *
-   * No mode branching needed — `replica` exists on both modes.
-   * For interpreted docs, `runtime.replica` is the `Substrate` itself
-   * (since `Substrate extends Replica`).
-   */
   #executeSendOfferToPeer(
     peerId: PeerId,
     docId: DocId,
     sinceVersion?: string,
     reciprocate?: boolean,
   ): void {
-    const peer = this.#sessionModel.peers.get(peerId)
+    const peer = this.#sessionHandle.getState().peers.get(peerId)
     if (!peer || peer.channels.size === 0) return
 
     const runtime = this.#docRuntimes.get(docId)
@@ -1217,9 +1081,10 @@ export class Synchronizer {
         case "gap": {
           const payload = runtime.replica.exportSince(gap.parsed)
           if (!payload) {
-            // exportSince returned null — the peer's version is behind
-            // the replica's base (history was trimmed via advance()).
-            // Fall back to exportEntirety() so the peer can reset.
+            // exportSince returns null when the peer's version is older
+            // than our replica's base (history has been trimmed via
+            // advance()). Falling back to entirety lets the peer reset
+            // to our current state rather than diverge.
             enqueueOffer(runtime.replica.exportEntirety())
             return
           }
@@ -1237,13 +1102,6 @@ export class Synchronizer {
   // IMPORT DOC DATA — merge inbound data and notify model on success
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
-  /**
-   * Import document data from a peer and notify the model on success.
-   *
-   * Version-gap planning happens via `resolveInboundVersionGap()`.
-   * Effect execution stays here in the shell: warnings, merge, and
-   * follow-up dispatch.
-   */
   #executeImportDocData(effect: {
     type: "import-doc-data"
     docId: DocId
@@ -1275,20 +1133,15 @@ export class Synchronizer {
         break
     }
 
-    // --- Epoch boundary detection ---
-    // If this doc has previously synced with any peer and the incoming
-    // payload is an entirety, this may be a compaction-induced reset
-    // (the sender trimmed history past our version). Consult the epoch
-    // boundary policy before proceeding.
-    //
-    // We distinguish initial sync from compaction reset by checking
-    // whether ANY peer has reached "synced" status for this doc.
-    // Initial sync (first entirety from any peer) skips the policy —
-    // the existing merge path handles it correctly. Subsequent entirety
-    // payloads after the doc has been synced trigger the policy.
+    // Epoch boundary detection: an entirety payload arriving for a doc
+    // that has *already* synced with some peer signals a compaction-
+    // induced reset (the sender trimmed history past our version). The
+    // first-ever entirety is initial sync — the normal merge path
+    // handles that; subsequent entireties go through the policy.
     const isEntirety = effect.payload.kind === "entirety"
+    const sync = this.#syncHandle.getState()
     const hasEverSynced = (() => {
-      for (const [, peerState] of this.#syncModel.peers) {
+      for (const [, peerState] of sync.peers) {
         const docSync = peerState.docSyncStates.get(effect.docId)
         if (docSync && docSync.status === "synced") return true
       }
@@ -1296,8 +1149,7 @@ export class Synchronizer {
     })()
 
     if (isEntirety && hasEverSynced) {
-      // Look up the peer identity for the policy predicate.
-      const peerState = this.#syncModel.peers.get(effect.fromPeerId)
+      const peerState = sync.peers.get(effect.fromPeerId)
       const peerIdentity = peerState?.identity ?? {
         peerId: effect.fromPeerId,
       }
@@ -1309,17 +1161,18 @@ export class Synchronizer {
       )
 
       if (!accept) {
-        // Rejected — keep local state, diverge from compacted peers.
+        // Reject keeps local state — the doc diverges from the
+        // compacted peers until governance reconciles or a new
+        // entirety is accepted.
         return
       }
 
-      // Accepted — for CRDT replicas, replace the replica entirely
-      // (not doc.import(), which would merge and preserve local ops
-      // that reference trimmed causal anchors). For plain replicas,
-      // merge() already handles entirety correctly (decomposes to
-      // ReplaceChange ops).
       if (runtime.mode === "replicate") {
-        // Headless replica — replace with a fresh one from the entirety.
+        // Headless replicas must replace the whole replica via
+        // fromEntirety. A plain `merge()` would preserve local ops
+        // whose causal anchors were trimmed, leaving the replica in
+        // an inconsistent state. Interpreted substrates fall through
+        // to merge — entirety decomposes correctly there.
         try {
           runtime.replica = runtime.replicaFactory.fromEntirety(effect.payload)
         } catch (err) {
@@ -1339,16 +1192,11 @@ export class Synchronizer {
         })
         return
       }
-      // For interpreted substrates, fall through to normal merge —
-      // plain substrates handle entirety correctly via executeBatch.
     }
 
     try {
       runtime.replica.merge(effect.payload, "sync")
     } catch (err) {
-      // Import failed — log and continue. A common cause is replica type
-      // mismatch: e.g. Loro binary data fed to a Yjs decoder after switching
-      // CRDT backends. Check for stale clients sending incompatible data.
       console.warn(
         `[exchange] import failed for doc '${effect.docId}'. ` +
           `If you recently switched CRDT backends, stale clients may be sending incompatible data.`,
@@ -1357,7 +1205,6 @@ export class Synchronizer {
       return
     }
 
-    // Notify the model of successful import
     const newVersion = runtime.replica.version().serialize()
     this.#dispatchSync({
       type: "sync/doc-imported",
@@ -1368,10 +1215,10 @@ export class Synchronizer {
   }
 
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-  // OUTBOUND — flush accumulated messages
+  // OUTBOUND — flush accumulated envelopes
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
-  #drainOutbound(): void {
+  #drainOutboundOnce(): void {
     while (this.#outboundQueue.length > 0) {
       const envelope = this.#outboundQueue.shift()
       if (!envelope) break
@@ -1380,115 +1227,74 @@ export class Synchronizer {
   }
 
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-  // READY STATE — emit changes after quiescence
+  // EMIT HANDLERS — interpret emit-* effects against ReactiveMaps / listeners
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
-  /**
-   * Drain accumulated peer lifecycle events at quiescence.
-   *
-   * Follows the snapshot-then-clear pattern: snapshot the pending events,
-   * reset the field, then rebuild the peer map from the model and emit.
-   * The field is clean before any subscriber code runs.
-   *
-   * Context: jj:qpurktzy (peer lifecycle feed)
-   */
-  #drainPeerEvents(): void {
-    const events = this.#pendingPeerEvents
-    this.#pendingPeerEvents = []
-
+  #emitPeerEvents(events: readonly PeerChange[]): void {
     if (events.length === 0) return
+    if (!this.#peerHandle) return
 
     // Rebuild peer map from session model (source of truth for presence)
-    if (!this.#peerHandle) return
     this.#peerHandle.clear()
-    for (const [peerId, sessionPeer] of this.#sessionModel.peers) {
+    for (const [peerId, sessionPeer] of this.#sessionHandle.getState().peers) {
       this.#peerHandle.set(peerId, sessionPeer.identity)
     }
 
-    // Emit to subscribers
-    this.#peerHandle.emit({ changes: events })
+    this.#peerHandle.emit({ changes: [...events] })
   }
 
-  /**
-   * Drain accumulated document lifecycle events at quiescence.
-   *
-   * Follows the same snapshot-then-clear pattern as `#drainPeerEvents()`:
-   * snapshot pending events, reset the field, rebuild the doc map from
-   * the two sources of truth (`#docRuntimes` + deferred entries in
-   * `syncModel.documents`), then emit.
-   */
-  #drainDocEvents(): void {
-    const events = this.#pendingDocEvents
-    this.#pendingDocEvents = []
-
+  #emitDocEvents(events: readonly DocChange[]): void {
     if (events.length === 0) return
-
     if (!this.#docHandle) return
+
     this.#docHandle.clear()
 
     // Rebuild from #docRuntimes (interpret + replicate docs)
+    const sync = this.#syncHandle.getState()
     for (const [docId, runtime] of this.#docRuntimes) {
-      const suspended = !this.#syncModel.documents.has(docId)
+      const suspended = !sync.documents.has(docId)
       this.#docHandle.set(docId, { mode: runtime.mode, suspended })
     }
 
     // Merge deferred docs from syncModel (no runtime, only model entry)
-    for (const [docId, entry] of this.#syncModel.documents) {
+    for (const [docId, entry] of sync.documents) {
       if (entry.mode === "deferred") {
         this.#docHandle.set(docId, { mode: "deferred", suspended: false })
       }
     }
 
-    // Emit to subscribers
-    this.#docHandle.emit({ changes: events })
+    this.#docHandle.emit({ changes: [...events] })
   }
 
-  /**
-   * Emit synthetic `doc-removed` events for all tracked documents.
-   * Called during `reset()` and `shutdown()` — symmetric with
-   * `#emitSyntheticDepartedEvents()`.
-   */
-  #emitSyntheticDocRemovedEvents(): void {
-    if (!this.#docHandle) return
+  #emitReadyStateChanges(docIds: readonly DocId[]): void {
+    if (this.#readyStateListeners.size === 0 || docIds.length === 0) return
 
-    const docIds = new Set<DocId>()
-    for (const docId of this.#docRuntimes.keys()) {
-      docIds.add(docId)
+    for (const docId of docIds) {
+      if (!this.#docRuntimes.has(docId)) continue
+      const readyStates = this.getReadyStates(docId)
+      for (const listener of this.#readyStateListeners) {
+        listener(docId, readyStates)
+      }
     }
-    for (const [docId, entry] of this.#syncModel.documents) {
-      if (entry.mode === "deferred") docIds.add(docId)
-    }
-
-    if (docIds.size === 0) return
-
-    const events: DocChange[] = Array.from(docIds).map(docId => ({
-      type: "doc-removed" as const,
-      docId,
-    }))
-
-    this.#docHandle.clear()
-    this.#docHandle.emit({ changes: events })
   }
 
-  #emitSyntheticDepartedEvents(): void {
-    if (this.#sessionModel.peers.size === 0 || !this.#peerHandle) return
+  #emitStateAdvanced(docIds: readonly DocId[]): void {
+    if (this.#stateAdvancedListeners.size === 0 || docIds.length === 0) return
 
-    const events: PeerChange[] = Array.from(
-      this.#sessionModel.peers.values(),
-    ).map(peer => ({ type: "peer-departed" as const, peer: peer.identity }))
-
-    // Clear peer map (consistent with the about-to-be-wiped model)
-    this.#peerHandle.clear()
-
-    this.#peerHandle.emit({ changes: events })
+    for (const docId of docIds) {
+      if (!this.#docRuntimes.has(docId)) continue
+      for (const listener of this.#stateAdvancedListeners) {
+        listener(docId)
+      }
+    }
   }
 
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-  // SHUTDOWN HELPERS
+  // SHUTDOWN / RESET HELPERS
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
   #sendDepartToAllPeers(): void {
-    for (const [_peerId, peer] of this.#sessionModel.peers) {
+    for (const [_peerId, peer] of this.#sessionHandle.getState().peers) {
       for (const channelId of peer.channels) {
         this.#outboundQueue.push({
           toChannelIds: [channelId],
@@ -1505,50 +1311,39 @@ export class Synchronizer {
     this.#departureTimers.clear()
   }
 
-  // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-  // STATE ADVANCED — emit persistence events after quiescence
-  // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-
   /**
-   * Emit state-advanced events for docs touched this dispatch cycle.
-   * Fires listeners at quiescence — multiple imports in one cycle
-   * produce one event per docId.
+   * Run the teardown emit cascade through the algebra so subscribers
+   * see doc-removed / peer-departed events before the handles are
+   * disposed.
    *
-   * Context: jj:smmulzkm (unified persistence via notify/state-advanced)
+   * The docIds snapshot must be taken before `#docRuntimes` is cleared;
+   * the clear itself must happen before the dispatch, because
+   * `#emitDocEvents` rebuilds the doc map from `#docRuntimes` and a
+   * live entry there would re-introduce the doc the event is meant to
+   * remove.
    */
-  #drainStateAdvanced(): void {
-    const docIds = new Set(this.#dirtyStateAdvanced)
-    this.#dirtyStateAdvanced.clear()
+  #emitSyntheticOnTeardown(): void {
+    const sync = this.#syncHandle.getState()
 
-    if (this.#stateAdvancedListeners.size === 0 || docIds.size === 0) return
-
-    for (const docId of docIds) {
-      // Only emit if we still track this doc (it may have been removed
-      // during the same dispatch cycle).
-      if (!this.#docRuntimes.has(docId)) continue
-
-      for (const listener of this.#stateAdvancedListeners) {
-        listener(docId)
+    const docIds: DocId[] = []
+    for (const docId of this.#docRuntimes.keys()) docIds.push(docId)
+    for (const [docId, entry] of sync.documents) {
+      if (entry.mode === "deferred" && !this.#docRuntimes.has(docId)) {
+        docIds.push(docId)
       }
     }
-  }
 
-  #drainReadyStateChanges(): void {
-    const docIds = new Set(this.#dirtyDocIds)
-    this.#dirtyDocIds.clear()
+    this.#docRuntimes.clear()
 
-    if (this.#readyStateListeners.size === 0 || docIds.size === 0) return
+    if (docIds.length > 0) {
+      this.#dispatchSync({
+        type: "sync/synthetic-doc-removed-all",
+        docIds,
+      })
+    }
 
-    // Emit only for docs whose peer sync state was touched this cycle.
-    for (const docId of docIds) {
-      // Only emit if we still track this doc (it may have been removed
-      // during the same dispatch cycle).
-      if (!this.#docRuntimes.has(docId)) continue
-
-      const readyStates = this.getReadyStates(docId)
-      for (const listener of this.#readyStateListeners) {
-        listener(docId, readyStates)
-      }
+    if (this.#sessionHandle.getState().peers.size > 0) {
+      this.#dispatchSession({ type: "sess/synthetic-depart-all" })
     }
   }
 }

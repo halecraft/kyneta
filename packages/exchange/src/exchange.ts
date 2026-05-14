@@ -22,8 +22,8 @@
 //   sync(doc).waitForSync()
 
 import type { ReactiveMap } from "@kyneta/changefeed"
-import type { ObservableHandle } from "@kyneta/machine"
-import { createObservableProgram } from "@kyneta/machine"
+import type { Lease, ObservableHandle } from "@kyneta/machine"
+import { createLease, createObservableProgram } from "@kyneta/machine"
 import {
   type BoundReplica,
   type BoundSchema,
@@ -188,6 +188,14 @@ export type ExchangeParams = {
    * @default 30_000
    */
   departureTimeout?: number
+
+  /**
+   * Optional pre-existing dispatch budget. If omitted, the Exchange
+   * creates a private lease. Pass an explicit lease only when
+   * coordinating multiple Exchanges in the same synchronous call
+   * stack (e.g., test harnesses).
+   */
+  lease?: Lease
 } & Policy
 
 // ---------------------------------------------------------------------------
@@ -271,6 +279,7 @@ export class Exchange {
     replicas = DEFAULT_REPLICAS,
     departureTimeout,
     onStoreError,
+    lease,
     ...policyFields
   }: ExchangeParams) {
     // Resolve peer identity from id: string | PeerIdentityInput
@@ -312,6 +321,7 @@ export class Exchange {
       canConnect: this.#governance.canConnect.bind(this.#governance),
       canReset: this.#governance.canReset.bind(this.#governance),
       departureTimeout,
+      lease: lease ?? createLease(),
 
       onEnsureDoc: (
         docId,

@@ -12,6 +12,7 @@
 //   - In map with channels.size === 0  →  disconnected (preserved)
 //   - Absent from map  →  departed (deleted)
 
+import type { Program } from "@kyneta/machine"
 import type {
   ChannelId,
   LifecycleMsg,
@@ -20,8 +21,8 @@ import type {
   TransportType,
   WireFeatures,
 } from "@kyneta/transport"
-import { collapse, type Transition } from "./program-types.js"
 import type { SyncInput } from "./sync-program.js"
+import type { PeerChange } from "./types.js"
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 // STATE
@@ -55,6 +56,13 @@ export type SessionModel = {
   channels: Map<ChannelId, ChannelEntry>
   peers: Map<PeerId, SessionPeer>
   departureTimeout: number // ms, 0 = immediate departure
+  /**
+   * Accumulated peer lifecycle events awaiting drain at quiescence.
+   * Populated by handlers, drained by `sess/tick-quiescent` into an
+   * `emit-peer-events` effect. Replaces the shell's old
+   * `#pendingPeerEvents` accumulator.
+   */
+  pendingPeerEvents: readonly PeerChange[]
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -76,6 +84,8 @@ export type SessionInput =
       message: LifecycleMsg
     }
   | { type: "sess/departure-timer-expired"; peerId: PeerId }
+  | { type: "sess/tick-quiescent" }
+  | { type: "sess/synthetic-depart-all" }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 // EFFECTS
@@ -87,34 +97,19 @@ export type SessionEffect =
   | { type: "start-departure-timer"; peerId: PeerId; delayMs: number }
   | { type: "cancel-departure-timer"; peerId: PeerId }
   | { type: "sync-event"; event: SyncInput }
-  | { type: "batch"; effects: SessionEffect[] }
-
-// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-// NOTIFICATIONS
-// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-
-export type SessionNotification =
-  | { type: "notify/peer-established"; peer: PeerIdentityDetails }
-  | { type: "notify/peer-disconnected"; peer: PeerIdentityDetails }
-  | { type: "notify/peer-reconnected"; peer: PeerIdentityDetails }
-  | { type: "notify/peer-departed"; peer: PeerIdentityDetails }
-  | { type: "notify/warning"; message: string }
-  | { type: "notify/batch"; notifications: SessionNotification[] }
+  | { type: "emit-peer-events"; events: readonly PeerChange[] }
+  | { type: "warning"; message: string }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 // UPDATE SIGNATURE
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
-export type SessionTransition = Transition<
-  SessionModel,
-  SessionEffect,
-  SessionNotification
->
-
 export type SessionUpdate = (
   input: SessionInput,
   model: SessionModel,
-) => SessionTransition
+) => [SessionModel, ...SessionEffect[]]
+
+export type SessionProgram = Program<SessionInput, SessionModel, SessionEffect>
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 // INIT
@@ -131,24 +126,12 @@ export function initSession(
     channels: new Map(),
     peers: new Map(),
     departureTimeout,
+    pendingPeerEvents: [],
   }
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-// BATCH HELPERS
-// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-
-const batchEffects = (...fx: (SessionEffect | undefined)[]) =>
-  collapse<SessionEffect>(fx, effects => ({ type: "batch", effects }))
-
-const batchNotifications = (...ns: (SessionNotification | undefined)[]) =>
-  collapse<SessionNotification>(ns, notifications => ({
-    type: "notify/batch",
-    notifications,
-  }))
-
-// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-// PEER TRANSITION — structural pairing of sync-event + notification
+// PEER TRANSITION — structural pairing of sync-event + peer-change
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
 type PeerTransitionKind =
@@ -158,18 +141,18 @@ type PeerTransitionKind =
   | "departed"
 
 /**
- * Build the sync-event effect and notification that always co-occur
+ * Build the sync-event effect and PeerChange that always co-occur
  * when a peer transitions.
  *
- * Every peer lifecycle change in the session program produces exactly
- * one sync-event (for the sync program) and one notification (for
- * external subscribers). This combinator encodes that structural
- * invariant — callers cannot accidentally omit one half of the pair.
+ * Every peer lifecycle change produces exactly one sync-event (for the
+ * sync program) and one peer-change appended to `pendingPeerEvents`.
+ * This combinator encodes that structural invariant — callers cannot
+ * accidentally omit one half of the pair.
  */
 function peerTransition(
   kind: PeerTransitionKind,
   peer: PeerIdentityDetails,
-): { effect: SessionEffect; notification: SessionNotification } {
+): { syncEffect: SessionEffect; change: PeerChange } {
   const peerId = peer.peerId
 
   const syncEvent: SyncInput =
@@ -180,8 +163,8 @@ function peerTransition(
         : { type: "sync/peer-departed", peerId }
 
   return {
-    effect: { type: "sync-event", event: syncEvent },
-    notification: { type: `notify/peer-${kind}`, peer },
+    syncEffect: { type: "sync-event", event: syncEvent },
+    change: { type: `peer-${kind}`, peer },
   }
 }
 
@@ -193,10 +176,10 @@ function detectPeerIdentityWarning(
   model: SessionModel,
   fromChannelId: ChannelId,
   remotePeerId: PeerId,
-): SessionNotification | undefined {
+): SessionEffect | undefined {
   if (remotePeerId === model.identity.peerId) {
     return {
-      type: "notify/warning",
+      type: "warning",
       message: `[exchange] self-connection detected — remote peer "${remotePeerId}" has the same peerId as this exchange. This will cause sync failures. Ensure server and client have different peerIds.`,
     }
   }
@@ -206,7 +189,7 @@ function detectPeerIdentityWarning(
     otherChannels.delete(fromChannelId)
     if (otherChannels.size > 0) {
       return {
-        type: "notify/warning",
+        type: "warning",
         message: `[exchange] duplicate peerId "${remotePeerId}" — peer already has ${otherChannels.size} active channel(s). Two participants sharing the same peerId will corrupt CRDT state. Ensure each browser tab / client has a unique peerId.`,
       }
     }
@@ -221,13 +204,13 @@ function detectPeerIdentityWarning(
 /**
  * Called when a channel becomes fully established (both sides have
  * exchanged `establish` messages). Determines the peer lifecycle
- * transition and emits appropriate effects/notifications.
+ * transition and emits appropriate effects.
  */
 function completeEstablish(
   channelId: ChannelId,
   channelEntry: ChannelEntry,
   model: SessionModel,
-): SessionTransition {
+): [SessionModel, ...SessionEffect[]] {
   const remoteIdentity = channelEntry.remoteIdentity
   if (!remoteIdentity) return [model]
   const remotePeerId = remoteIdentity.peerId
@@ -235,8 +218,8 @@ function completeEstablish(
   const existingPeer = model.peers.get(remotePeerId)
   const peers = new Map(model.peers)
 
-  let effect: SessionEffect | undefined
-  let notification: SessionNotification | undefined
+  const effects: SessionEffect[] = []
+  let nextModel: SessionModel = model
 
   if (!existingPeer) {
     // New peer — first time we've seen this peerId
@@ -247,9 +230,13 @@ function completeEstablish(
     }
     peers.set(remotePeerId, newPeer)
 
-    const transition = peerTransition("established", remoteIdentity)
-    effect = transition.effect
-    notification = transition.notification
+    const { syncEffect, change } = peerTransition("established", remoteIdentity)
+    nextModel = {
+      ...model,
+      peers,
+      pendingPeerEvents: [...model.pendingPeerEvents, change],
+    }
+    effects.push(syncEffect)
   } else if (existingPeer.channels.size === 0) {
     // Reconnecting peer — was disconnected, now has a channel again
     const channels = new Set(existingPeer.channels)
@@ -261,12 +248,16 @@ function completeEstablish(
       departing: false, // clear departing flag on reconnect
     })
 
-    const transition = peerTransition("reconnected", remoteIdentity)
-    effect = batchEffects(
+    const { syncEffect, change } = peerTransition("reconnected", remoteIdentity)
+    nextModel = {
+      ...model,
+      peers,
+      pendingPeerEvents: [...model.pendingPeerEvents, change],
+    }
+    effects.push(
       { type: "cancel-departure-timer", peerId: remotePeerId },
-      transition.effect,
+      syncEffect,
     )
-    notification = transition.notification
   } else {
     // Additional channel for an already-connected peer — no lifecycle change
     const channels = new Set(existingPeer.channels)
@@ -275,12 +266,13 @@ function completeEstablish(
       ...existingPeer,
       channels,
     })
+    nextModel = { ...model, peers }
   }
 
   const warning = detectPeerIdentityWarning(model, channelId, remotePeerId)
-  const finalNotification = batchNotifications(notification, warning)
+  if (warning) effects.push(warning)
 
-  return [{ ...model, peers }, effect, finalNotification]
+  return [nextModel, ...effects]
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -294,7 +286,7 @@ function handleChannelAdded(
     transportType: TransportType
   },
   model: SessionModel,
-): SessionTransition {
+): [SessionModel, ...SessionEffect[]] {
   const channels = new Map(model.channels)
   channels.set(input.channelId, {
     channelId: input.channelId,
@@ -308,7 +300,7 @@ function handleChannelAdded(
 function handleChannelEstablish(
   input: { type: "sess/channel-establish"; channelId: ChannelId },
   model: SessionModel,
-): SessionTransition {
+): [SessionModel, ...SessionEffect[]] {
   const entry = model.channels.get(input.channelId)
   if (!entry || entry.localEstablishSent) return [model]
 
@@ -329,12 +321,12 @@ function handleChannelEstablish(
 
   // Check if channel is now fully established
   if (updatedEntry.localEstablishSent && updatedEntry.remoteIdentity) {
-    const [finalModel, establishEffect, notification] = completeEstablish(
+    const [finalModel, ...establishEffects] = completeEstablish(
       input.channelId,
       updatedEntry,
       updatedModel,
     )
-    return [finalModel, batchEffects(sendEffect, establishEffect), notification]
+    return [finalModel, sendEffect, ...establishEffects]
   }
 
   return [updatedModel, sendEffect]
@@ -349,7 +341,7 @@ function handleEstablishReceived(
   },
   model: SessionModel,
   canConnect?: (peer: PeerIdentityDetails) => boolean,
-): SessionTransition {
+): [SessionModel, ...SessionEffect[]] {
   const entry = model.channels.get(fromChannelId)
   if (!entry) return [model]
 
@@ -388,12 +380,12 @@ function handleEstablishReceived(
 
   // Channel is now fully established (both flags set)
   if (updatedEntry.localEstablishSent && updatedEntry.remoteIdentity) {
-    const [finalModel, establishEffect, notification] = completeEstablish(
+    const [finalModel, ...establishEffects] = completeEstablish(
       fromChannelId,
       updatedEntry,
       updatedModel,
     )
-    return [finalModel, batchEffects(echoEffect, establishEffect), notification]
+    return [finalModel, echoEffect, ...establishEffects]
   }
 
   // This branch is unreachable given the assignments above, but
@@ -404,7 +396,7 @@ function handleEstablishReceived(
 function handleDepartReceived(
   fromChannelId: ChannelId,
   model: SessionModel,
-): SessionTransition {
+): [SessionModel, ...SessionEffect[]] {
   const entry = model.channels.get(fromChannelId)
   if (!entry) return [model]
 
@@ -420,8 +412,15 @@ function handleDepartReceived(
   // If peer currently has 0 channels (already disconnected), delete immediately
   if (existingPeer.channels.size === 0) {
     peers.delete(remotePeerId)
-    const { effect, notification } = peerTransition("departed", remoteIdentity)
-    return [{ ...model, peers }, effect, notification]
+    const { syncEffect, change } = peerTransition("departed", remoteIdentity)
+    return [
+      {
+        ...model,
+        peers,
+        pendingPeerEvents: [...model.pendingPeerEvents, change],
+      },
+      syncEffect,
+    ]
   }
 
   // Otherwise just mark the peer as departing — cleanup on channel-removed
@@ -432,7 +431,7 @@ function handleDepartReceived(
 function handleChannelRemoved(
   input: { type: "sess/channel-removed"; channelId: ChannelId },
   model: SessionModel,
-): SessionTransition {
+): [SessionModel, ...SessionEffect[]] {
   const entry = model.channels.get(input.channelId)
   if (!entry) return [model]
 
@@ -459,27 +458,40 @@ function handleChannelRemoved(
     if (existingPeer.departing || model.departureTimeout === 0) {
       // Peer sent depart, or immediate departure mode — remove now
       peers.delete(remotePeerId)
-      const { effect, notification } = peerTransition(
+      const { syncEffect, change } = peerTransition(
         "departed",
         existingPeer.identity,
       )
-      return [{ ...model, channels, peers }, effect, notification]
+      return [
+        {
+          ...model,
+          channels,
+          peers,
+          pendingPeerEvents: [...model.pendingPeerEvents, change],
+        },
+        syncEffect,
+      ]
     }
 
     // Grace period — keep peer in model with empty channels
     peers.set(remotePeerId, { ...existingPeer, channels: peerChannels })
-    const { effect, notification } = peerTransition(
+    const { syncEffect, change } = peerTransition(
       "disconnected",
       existingPeer.identity,
     )
     return [
-      { ...model, channels, peers },
-      batchEffects(effect, {
+      {
+        ...model,
+        channels,
+        peers,
+        pendingPeerEvents: [...model.pendingPeerEvents, change],
+      },
+      syncEffect,
+      {
         type: "start-departure-timer",
         peerId: remotePeerId,
         delayMs: model.departureTimeout,
-      }),
-      notification,
+      },
     ]
   }
 
@@ -491,7 +503,7 @@ function handleChannelRemoved(
 function handleDepartureTimerExpired(
   input: { type: "sess/departure-timer-expired"; peerId: PeerId },
   model: SessionModel,
-): SessionTransition {
+): [SessionModel, ...SessionEffect[]] {
   const existingPeer = model.peers.get(input.peerId)
   if (!existingPeer) return [model]
 
@@ -501,11 +513,51 @@ function handleDepartureTimerExpired(
   // Delete the peer
   const peers = new Map(model.peers)
   peers.delete(input.peerId)
-  const { effect, notification } = peerTransition(
+  const { syncEffect, change } = peerTransition(
     "departed",
     existingPeer.identity,
   )
-  return [{ ...model, peers }, effect, notification]
+  return [
+    {
+      ...model,
+      peers,
+      pendingPeerEvents: [...model.pendingPeerEvents, change],
+    },
+    syncEffect,
+  ]
+}
+
+function handleTickQuiescent(
+  model: SessionModel,
+): [SessionModel, ...SessionEffect[]] {
+  if (model.pendingPeerEvents.length === 0) return [model]
+  const effect: SessionEffect = {
+    type: "emit-peer-events",
+    events: model.pendingPeerEvents,
+  }
+  return [{ ...model, pendingPeerEvents: [] }, effect]
+}
+
+function handleSyntheticDepartAll(
+  model: SessionModel,
+): [SessionModel, ...SessionEffect[]] {
+  if (model.peers.size === 0) {
+    return [model]
+  }
+  // Synthesize peer-departed events for every peer in the model and
+  // append them to pendingPeerEvents. The tick handler (fired by the
+  // outer coordinator after this input) drains them into an emit-effect.
+  const synthetic: PeerChange[] = []
+  for (const peer of model.peers.values()) {
+    synthetic.push({ type: "peer-departed", peer: peer.identity })
+  }
+  return [
+    {
+      ...model,
+      peers: new Map(),
+      pendingPeerEvents: [...model.pendingPeerEvents, ...synthetic],
+    },
+  ]
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -520,7 +572,7 @@ function handleMessageReceived(
   },
   model: SessionModel,
   canConnect?: (peer: PeerIdentityDetails) => boolean,
-): SessionTransition {
+): [SessionModel, ...SessionEffect[]] {
   switch (input.message.type) {
     case "establish":
       return handleEstablishReceived(
@@ -550,7 +602,7 @@ export function createSessionUpdate(
   return function update(
     input: SessionInput,
     model: SessionModel,
-  ): SessionTransition {
+  ): [SessionModel, ...SessionEffect[]] {
     switch (input.type) {
       case "sess/channel-added":
         return handleChannelAdded(input, model)
@@ -562,6 +614,10 @@ export function createSessionUpdate(
         return handleMessageReceived(input, model, canConnect)
       case "sess/departure-timer-expired":
         return handleDepartureTimerExpired(input, model)
+      case "sess/tick-quiescent":
+        return handleTickQuiescent(model)
+      case "sess/synthetic-depart-all":
+        return handleSyntheticDepartAll(model)
     }
   }
 }

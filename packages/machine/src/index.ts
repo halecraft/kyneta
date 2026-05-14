@@ -8,9 +8,19 @@
 // It accepts a custom executor for data effects and provides state
 // observation: subscribeToTransitions, waitForState, waitForStatus.
 
+export type {
+  DispatcherHandle,
+  DispatcherOptions,
+  Lease,
+  LeaseOptions,
+} from "./dispatcher.js"
+export {
+  BudgetExhaustedError,
+  createDispatcher,
+  createLease,
+} from "./dispatcher.js"
 export type { Dispatch, Disposer, Effect, Program } from "./machine.js"
 export { runtime } from "./machine.js"
-
 export type {
   ObservableHandle,
   StateTransition,

@@ -120,8 +120,8 @@ export type {
   SessionEffect,
   SessionInput,
   SessionModel,
-  SessionNotification,
   SessionPeer,
+  SessionProgram,
   SessionUpdate,
 } from "./session-program.js"
 export { createSessionUpdate, initSession } from "./session-program.js"
@@ -135,8 +135,8 @@ export type {
   SyncEffect,
   SyncInput,
   SyncModel,
-  SyncNotification,
   SyncPeerState,
+  SyncProgram,
   SyncUpdate,
 } from "./sync-program.js"
 export { createSyncUpdate, initSync } from "./sync-program.js"

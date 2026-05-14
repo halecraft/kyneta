@@ -12,7 +12,6 @@ import {
   initSync,
   type SyncEffect,
   type SyncModel,
-  type SyncNotification,
   type SyncUpdate,
 } from "../sync-program.js"
 
@@ -37,19 +36,18 @@ function makeUpdate(params?: {
   return createSyncUpdate(params)
 }
 
-function flattenEffects(effect: SyncEffect | undefined): SyncEffect[] {
-  if (!effect) return []
-  if (effect.type === "batch") return effect.effects.flatMap(flattenEffects)
-  return [effect]
-}
-
-function flattenNotifications(
-  notification: SyncNotification | undefined,
-): SyncNotification[] {
-  if (!notification) return []
-  if (notification.type === "notify/batch")
-    return notification.notifications.flatMap(flattenNotifications)
-  return [notification]
+/**
+ * Run `update` with the given input and split the result into model
+ * and effects. Replaces the old `flattenEffects` (no more `batch`
+ * combinator; the algebra is variadic).
+ */
+function applyUpdate(
+  update: SyncUpdate,
+  input: Parameters<SyncUpdate>[0],
+  model: SyncModel,
+): [SyncModel, SyncEffect[]] {
+  const [m, ...fx] = update(input, model)
+  return [m, fx]
 }
 
 /** Add a peer to the model (simulates sync/peer-available). */
@@ -58,12 +56,12 @@ function addPeer(
   model: SyncModel,
   peerId: string,
   identity: any,
-): [SyncModel, SyncEffect[], SyncNotification[]] {
-  const [m, e, n] = update(
+): [SyncModel, SyncEffect[]] {
+  return applyUpdate(
+    update,
     { type: "sync/peer-available", peerId, identity },
     model,
   )
-  return [m, flattenEffects(e), flattenNotifications(n)]
 }
 
 /** Register a document via sync/doc-ensure. */
@@ -78,8 +76,9 @@ function ensureDoc(
     schemaHash?: string
     supportedHashes?: readonly string[]
   },
-): [SyncModel, SyncEffect[], SyncNotification[]] {
-  const [m, e, n] = update(
+): [SyncModel, SyncEffect[]] {
+  return applyUpdate(
+    update,
     {
       type: "sync/doc-ensure",
       docId,
@@ -92,7 +91,6 @@ function ensureDoc(
     },
     model,
   )
-  return [m, flattenEffects(e), flattenNotifications(n)]
 }
 
 /** Register a deferred document via sync/doc-defer. */
@@ -103,8 +101,9 @@ function deferDoc(
   opts?: {
     syncProtocol?: SyncProtocol
   },
-): [SyncModel, SyncEffect[], SyncNotification[]] {
-  const [m, e, n] = update(
+): [SyncModel, SyncEffect[]] {
+  return applyUpdate(
+    update,
     {
       type: "sync/doc-defer",
       docId,
@@ -114,7 +113,6 @@ function deferDoc(
     },
     model,
   )
-  return [m, flattenEffects(e), flattenNotifications(n)]
 }
 
 /** Send a message-received input and flatten results. */
@@ -123,12 +121,12 @@ function receiveMessage(
   model: SyncModel,
   from: string,
   message: any,
-): [SyncModel, SyncEffect[], SyncNotification[]] {
-  const [m, e, n] = update(
+): [SyncModel, SyncEffect[]] {
+  return applyUpdate(
+    update,
     { type: "sync/message-received", from, message },
     model,
   )
-  return [m, flattenEffects(e), flattenNotifications(n)]
 }
 
 /** Find effects of a given type from a flat list. */
@@ -137,14 +135,6 @@ function effectsOfType<T extends SyncEffect["type"]>(
   type: T,
 ): Extract<SyncEffect, { type: T }>[] {
   return effects.filter(e => e.type === type) as any
-}
-
-/** Find notifications of a given type from a flat list. */
-function notificationsOfType<T extends SyncNotification["type"]>(
-  notifications: SyncNotification[],
-  type: T,
-): Extract<SyncNotification, { type: T }>[] {
-  return notifications.filter(n => n.type === type) as any
 }
 
 // ---------------------------------------------------------------------------
@@ -297,33 +287,26 @@ describe("sync-program", () => {
         model,
       )
 
-      const [, , n] = update(
+      const [m2] = applyUpdate(
+        update,
         { type: "sync/peer-unavailable", peerId: "bob" },
         model,
       )
-      const notifs = flattenNotifications(n)
 
-      const readyChanges = notificationsOfType(
-        notifs,
-        "notify/ready-state-changed",
-      )
-      expect(readyChanges.length).toBe(1)
-      expect(defined(readyChanges[0]).docIds.has("doc-1")).toBe(true)
+      expect(m2.pendingReadyStateDocIds).toContain("doc-1")
     })
 
     it("no-op for unknown peer", () => {
       const update = makeUpdate()
       const model = initSync(alice)
-      const [m2, e, n] = update(
+      const [m2, effects] = applyUpdate(
+        update,
         { type: "sync/peer-unavailable", peerId: "unknown" },
         model,
       )
-      const effects = flattenEffects(e)
-      const notifications = flattenNotifications(n)
 
       expect(m2).toBe(model) // reference equality — no change
       expect(effects.length).toBe(0)
-      expect(notifications.length).toBe(0)
     })
   })
 
@@ -357,35 +340,26 @@ describe("sync-program", () => {
         model,
       )
 
-      const [, , notifs] = (() => {
-        const [m, e, n] = update(
-          { type: "sync/peer-departed", peerId: "bob" },
-          model,
-        )
-        return [m, flattenEffects(e), flattenNotifications(n)]
-      })()
-
-      const readyChanges = notificationsOfType(
-        notifs,
-        "notify/ready-state-changed",
+      const [m2] = applyUpdate(
+        update,
+        { type: "sync/peer-departed", peerId: "bob" },
+        model,
       )
-      expect(readyChanges.length).toBe(1)
-      expect(defined(readyChanges[0]).docIds.has("doc-1")).toBe(true)
+
+      expect(m2.pendingReadyStateDocIds).toContain("doc-1")
     })
 
     it("no-op for unknown peer", () => {
       const update = makeUpdate()
       const model = initSync(alice)
-      const [m2, e, n] = update(
+      const [m2, effects] = applyUpdate(
+        update,
         { type: "sync/peer-departed", peerId: "unknown" },
         model,
       )
-      const effects = flattenEffects(e)
-      const notifications = flattenNotifications(n)
 
       expect(m2).toBe(model)
       expect(effects.length).toBe(0)
-      expect(notifications.length).toBe(0)
     })
   })
 
@@ -647,7 +621,7 @@ describe("sync-program", () => {
       ;[model] = addPeer(update, model, "bob", bob)
       ;[model] = ensureDoc(update, model, "doc-1")
 
-      const [, effects, notifications] = receiveMessage(update, model, "bob", {
+      const [, effects] = receiveMessage(update, model, "bob", {
         type: "present",
         docs: [
           {
@@ -659,7 +633,7 @@ describe("sync-program", () => {
         ],
       })
 
-      const warnings = notificationsOfType(notifications, "notify/warning")
+      const warnings = effectsOfType(effects, "warning")
       expect(warnings.length).toBe(1)
       expect(defined(warnings[0]).message).toContain("replica type mismatch")
 
@@ -674,7 +648,7 @@ describe("sync-program", () => {
       ;[model] = addPeer(update, model, "bob", bob)
       ;[model] = ensureDoc(update, model, "doc-1")
 
-      const [, effects, notifications] = receiveMessage(update, model, "bob", {
+      const [, effects] = receiveMessage(update, model, "bob", {
         type: "present",
         docs: [
           {
@@ -686,7 +660,7 @@ describe("sync-program", () => {
         ],
       })
 
-      const warnings = notificationsOfType(notifications, "notify/warning")
+      const warnings = effectsOfType(effects, "warning")
       expect(warnings.length).toBe(1)
       expect(defined(warnings[0]).message).toContain("schema hash mismatch")
 
@@ -705,7 +679,7 @@ describe("sync-program", () => {
       })
 
       // Remote peer has hash "v1" but supports "v1"
-      const [, effects, notifications] = receiveMessage(update, model, "bob", {
+      const [, effects] = receiveMessage(update, model, "bob", {
         type: "present",
         docs: [
           {
@@ -719,7 +693,7 @@ describe("sync-program", () => {
       })
 
       // Should NOT produce warnings — hashes overlap at "v1"
-      const warnings = notificationsOfType(notifications, "notify/warning")
+      const warnings = effectsOfType(effects, "warning")
       expect(warnings.length).toBe(0)
 
       // Should send interest (sync proceeds)
@@ -735,7 +709,7 @@ describe("sync-program", () => {
       ;[model] = ensureDoc(update, model, "doc-1")
 
       // Remote peer sends same schemaHash, no supportedHashes field
-      const [, effects, notifications] = receiveMessage(update, model, "bob", {
+      const [, effects] = receiveMessage(update, model, "bob", {
         type: "present",
         docs: [
           {
@@ -749,7 +723,7 @@ describe("sync-program", () => {
       })
 
       // Should proceed (exact match on primary hash)
-      const warnings = notificationsOfType(notifications, "notify/warning")
+      const warnings = effectsOfType(effects, "warning")
       expect(warnings.length).toBe(0)
 
       const sends = effectsOfType(effects, "send-to-peer")
@@ -767,7 +741,7 @@ describe("sync-program", () => {
       })
 
       // Remote peer supports only v1 — no overlap with local [v2, v3]
-      const [, effects, notifications] = receiveMessage(update, model, "bob", {
+      const [, effects] = receiveMessage(update, model, "bob", {
         type: "present",
         docs: [
           {
@@ -780,7 +754,7 @@ describe("sync-program", () => {
         ],
       })
 
-      const warnings = notificationsOfType(notifications, "notify/warning")
+      const warnings = effectsOfType(effects, "warning")
       expect(warnings.length).toBe(1)
       expect(defined(warnings[0]).message).toContain("schema hash mismatch")
 
@@ -796,7 +770,7 @@ describe("sync-program", () => {
         syncProtocol: SYNC_COLLABORATIVE,
       })
 
-      const [, effects, notifications] = receiveMessage(update, model, "bob", {
+      const [, effects] = receiveMessage(update, model, "bob", {
         type: "present",
         docs: [
           {
@@ -808,7 +782,7 @@ describe("sync-program", () => {
         ],
       })
 
-      const warnings = notificationsOfType(notifications, "notify/warning")
+      const warnings = effectsOfType(effects, "warning")
       expect(warnings.length).toBe(1)
       expect(defined(warnings[0]).message).toContain("syncProtocol mismatch")
 
@@ -1141,17 +1115,12 @@ describe("sync-program", () => {
       ;[model] = addPeer(update, model, "bob", bob)
       ;[model] = ensureDoc(update, model, "doc-1")
 
-      const [, , notifications] = receiveMessage(update, model, "bob", {
+      const [m2] = receiveMessage(update, model, "bob", {
         type: "dismiss",
         docId: "doc-1",
       })
 
-      const readyChanges = notificationsOfType(
-        notifications,
-        "notify/ready-state-changed",
-      )
-      expect(readyChanges.length).toBe(1)
-      expect(defined(readyChanges[0]).docIds.has("doc-1")).toBe(true)
+      expect(m2.pendingReadyStateDocIds).toContain("doc-1")
     })
   })
 
@@ -1191,11 +1160,11 @@ describe("sync-program", () => {
         model,
       )
 
-      const [, e] = update(
+      const [, effects] = applyUpdate(
+        update,
         { type: "sync/local-doc-change", docId: "doc-1", version: "v3" },
         model,
       )
-      const effects = flattenEffects(e)
 
       const offers = effectsOfType(effects, "send-offers")
       expect(offers.length).toBe(1)
@@ -1224,11 +1193,11 @@ describe("sync-program", () => {
         model,
       )
 
-      const [, e] = update(
+      const [, effects] = applyUpdate(
+        update,
         { type: "sync/local-doc-change", docId: "doc-1", version: "v3" },
         model,
       )
-      const effects = flattenEffects(e)
 
       // Interest-based routing: only bob (synced) receives the push, not carol
       const offers = effectsOfType(effects, "send-offers")
@@ -1238,23 +1207,18 @@ describe("sync-program", () => {
       expect(defined(offers[0]).sinceVersion).toBeUndefined() // snapshot-only = no delta
     })
 
-    it("emits state-advanced notification", () => {
+    it("emits state-advanced via model.pendingStateAdvancedDocIds", () => {
       const update = makeUpdate()
       let model = initSync(alice)
       ;[model] = ensureDoc(update, model, "doc-1")
 
-      const [, , n] = update(
+      const [m2] = applyUpdate(
+        update,
         { type: "sync/local-doc-change", docId: "doc-1", version: "v2" },
         model,
       )
-      const notifications = flattenNotifications(n)
 
-      const advanced = notificationsOfType(
-        notifications,
-        "notify/state-advanced",
-      )
-      expect(advanced.length).toBe(1)
-      expect(defined(advanced[0]).docIds.has("doc-1")).toBe(true)
+      expect(m2.pendingStateAdvancedDocIds).toContain("doc-1")
     })
   })
 
@@ -1284,11 +1248,11 @@ describe("sync-program", () => {
       ;[model] = addPeer(update, model, "carol", carol)
       ;[model] = ensureDoc(update, model, "doc-1")
 
-      const [m2, e] = update(
+      const [m2, effects] = applyUpdate(
+        update,
         { type: "sync/doc-dismiss", docId: "doc-1" },
         model,
       )
-      const effects = flattenEffects(e)
 
       expect(m2.documents.has("doc-1")).toBe(false)
 
@@ -1360,7 +1324,8 @@ describe("sync-program", () => {
       )
 
       // Now import from bob again — should relay to carol but not back to bob
-      const [, e] = update(
+      const [, effects] = applyUpdate(
+        update,
         {
           type: "sync/doc-imported",
           docId: "doc-1",
@@ -1369,7 +1334,6 @@ describe("sync-program", () => {
         },
         model,
       )
-      const effects = flattenEffects(e)
 
       const offers = effectsOfType(effects, "send-offers")
       expect(offers.length).toBe(1)
@@ -1377,13 +1341,14 @@ describe("sync-program", () => {
       expect(defined(offers[0]).to).not.toContain("bob") // excluded sender
     })
 
-    it("emits readyStateChanged and stateAdvanced", () => {
+    it("emits readyStateChanged and stateAdvanced via model fields", () => {
       const update = makeUpdate()
       let model = initSync(alice)
       ;[model] = addPeer(update, model, "bob", bob)
       ;[model] = ensureDoc(update, model, "doc-1")
 
-      const [, , n] = update(
+      const [m2] = applyUpdate(
+        update,
         {
           type: "sync/doc-imported",
           docId: "doc-1",
@@ -1392,21 +1357,9 @@ describe("sync-program", () => {
         },
         model,
       )
-      const notifications = flattenNotifications(n)
 
-      const readyChanges = notificationsOfType(
-        notifications,
-        "notify/ready-state-changed",
-      )
-      expect(readyChanges.length).toBe(1)
-      expect(defined(readyChanges[0]).docIds.has("doc-1")).toBe(true)
-
-      const advanced = notificationsOfType(
-        notifications,
-        "notify/state-advanced",
-      )
-      expect(advanced.length).toBe(1)
-      expect(defined(advanced[0]).docIds.has("doc-1")).toBe(true)
+      expect(m2.pendingReadyStateDocIds).toContain("doc-1")
+      expect(m2.pendingStateAdvancedDocIds).toContain("doc-1")
     })
   })
 
@@ -1450,11 +1403,11 @@ describe("sync-program", () => {
         syncProtocol: SYNC_EPHEMERAL,
       })
 
-      const [, e] = update(
+      const [, effects] = applyUpdate(
+        update,
         { type: "sync/local-doc-change", docId: "doc-1", version: "v2" },
         model,
       )
-      const effects = flattenEffects(e)
 
       const offers = effectsOfType(effects, "send-offers")
       if (offers.length > 0) {

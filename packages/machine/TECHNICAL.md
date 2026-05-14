@@ -4,7 +4,7 @@
 > **Role**: Pure state-transition algebra with effect outputs, plus two runtimes that interpret it.
 > **Depends on**: *(none — zero runtime dependencies)*
 > **Depended on by**: `@kyneta/transport`, `@kyneta/websocket-transport`, `@kyneta/sse-transport`, `@kyneta/unix-socket-transport`
-> **Canonical symbols**: `Program<Msg, Model, Fx>`, `Effect<Msg>`, `Dispatch<Msg>`, `runtime`, `createObservableProgram`, `ObservableHandle<Msg, Model>`, `StateTransition<S>`
+> **Canonical symbols**: `Program<Msg, Model, Fx>`, `Effect<Msg>`, `Dispatch<Msg>`, `runtime`, `createObservableProgram`, `ObservableHandle<Msg, Model>`, `StateTransition<S>`, `createDispatcher`, `Lease`, `createLease`, `BudgetExhaustedError`
 > **Key invariant(s)**: `Program.update(msg, model)` is pure — given the same inputs it returns the same `[model, ...effects]` and touches nothing else. All I/O happens when a runtime interprets the returned effects.
 
 A library for writing stateful protocol logic as data. You describe how inputs change state and what side-effects should run; a small runtime turns that description into a live, dispatchable thing.
@@ -32,6 +32,9 @@ Used by every `@kyneta/exchange` transport package to model connection lifecycle
 | `Fx` | The generic effect parameter. Defaults to `Effect<Msg>` (closure effects); can be any data type with a custom executor. | `Effect<Msg>` specifically — `Fx` is the type parameter |
 | `runtime` | The closure-effect interpreter. Runs a `Program<Msg, Model>`. | `createObservableProgram`, which takes a custom executor |
 | `createObservableProgram` | The data-effect interpreter. Runs a `Program<Msg, Model, Fx>` given a user-supplied `executor`. | `runtime`, which only interprets closure effects |
+| `createDispatcher` | Drain-to-quiescence dispatch primitive. Wraps a handler in a re-entrant queue with shared-lease budget tracking. `createObservableProgram` is built on it. | A queue type — `DispatcherHandle` is the public surface. |
+| `Lease` | Shared iteration budget across cooperating dispatchers — bounds runaway cascades that span multiple machines. Plain mutable record; no methods. | An ownership token in the linear-types sense. |
+| `BudgetExhaustedError` | Thrown when a single drain (depth 1 → 0) exceeds `lease.budget` iterations. Carries `label` and a small history ring buffer for diagnosis. | A timeout error — it's about iteration count, not wall-clock time. |
 | Mealy machine | State machine whose output depends on `(state, input)`. `update` returns both next state *and* effects, so effects depend on the input message, not just the state. | Moore machine (output depends on state alone — that's what `@kyneta/changefeed` is) |
 
 ---
@@ -101,7 +104,28 @@ Both are defined in `packages/machine/src/machine.ts` (`runtime`, 88 LOC) and `p
 
 ### Dispatch ordering
 
-Both runtimes queue re-entrant dispatches. An effect that calls `dispatch(msg2)` during its own execution does *not* recursively re-enter `update`; the message is appended to a queue and processed after the current dispatch cycle completes (source: `packages/machine/src/machine.ts` `runtime`, `packages/machine/src/observable.ts` `dispatch`). This is required for determinism — without it, the relative ordering of effects from one message vs messages triggered by those effects would depend on stack depth.
+Both runtimes queue re-entrant dispatches. An effect that calls `dispatch(msg2)` during its own execution does *not* recursively re-enter `update`; the message is appended to a queue and processed after the current dispatch cycle completes (source: `packages/machine/src/machine.ts` `runtime`, `packages/machine/src/dispatcher.ts` `createDispatcher`). This is required for determinism — without it, the relative ordering of effects from one message vs messages triggered by those effects would depend on stack depth.
+
+### Drain to quiescence and shared leases
+
+`createDispatcher` is the underlying primitive that `createObservableProgram` is built on. It wraps a handler in a drain-to-quiescence loop with two pieces of bookkeeping:
+
+- A **pending queue** that re-entrant `dispatch(msg)` calls land in. The outer loop pops from this queue until empty, ensuring all cascaded work resolves before the dispatch returns.
+- A **lease** — a shared iteration counter, re-entry depth, and ring-buffer history record. Multiple dispatchers can share one lease so a cascade that bounces across them counts toward a single budget.
+
+```ts
+const lease = createLease({ budget: 100_000 })
+
+const handleA = createDispatcher(handlerA, { lease, label: "A" })
+const handleB = createDispatcher(handlerB, { lease, label: "B" })
+// A and B's combined cascade is bounded by lease.budget.
+```
+
+When `lease.iterations > lease.budget`, the dispatcher throws `BudgetExhaustedError` carrying the lease snapshot and label. The history ring buffer (default capacity 32) records `{label, type}` of recent messages — useful for diagnosing the cascade shape.
+
+A dispatcher with no caller-supplied lease creates its own private lease — standalone behaviour is identical to the previous inline drain loop in `createObservableProgram`.
+
+`createObservableProgram(program, executor, { lease?, label? })` accepts an optional shared lease. Two `ObservableHandle`s that share a lease participate in one budget across their cross-dispatched cascades.
 
 ### Error handling
 
@@ -120,19 +144,24 @@ Transition listeners that throw are caught and swallowed (source: `packages/mach
 | `ObservableHandle<Msg, Model>` | `src/observable.ts` | The surface of a running observable program. |
 | `StateTransition<S>` | `src/observable.ts` | `{ from, to, timestamp }` — event type for transition listeners. |
 | `TransitionListener<S>` | `src/observable.ts` | `(transition) => void`. |
+| `DispatcherHandle<Msg>` | `src/dispatcher.ts` | `{ dispatch, queueDepth }` — the surface of a `createDispatcher`. |
+| `Lease` | `src/dispatcher.ts` | `{ depth, iterations, budget, history, historyCapacity }` — shared cascade budget. |
+| `BudgetExhaustedError` | `src/dispatcher.ts` | Thrown by `createDispatcher` when iterations exceed budget. |
 
 ## File Map
 
-| File | Lines | Role |
-|------|-------|------|
-| `src/index.ts` | 19 | Public exports. |
-| `src/machine.ts` | 88 | `Program`, `Effect`, `Dispatch`, `Disposer`, `runtime`. |
-| `src/observable.ts` | 270 | `ObservableHandle`, `StateTransition`, `createObservableProgram`, wait-for helpers. |
-| `src/__tests__/machine.test.ts` | 371 | Pure tests for `runtime` and re-entrant dispatch. |
-| `src/__tests__/observable.test.ts` | 563 | Pure tests for `createObservableProgram`, observation API, wait-for with fake timers. |
+| File | Role |
+|------|------|
+| `src/index.ts` | Public exports. |
+| `src/machine.ts` | `Program`, `Effect`, `Dispatch`, `Disposer`, `runtime`. |
+| `src/dispatcher.ts` | `createDispatcher`, `Lease`, `createLease`, `BudgetExhaustedError`. The shared drain-to-quiescence primitive. |
+| `src/observable.ts` | `ObservableHandle`, `StateTransition`, `createObservableProgram`. Built on `createDispatcher`. |
+| `src/__tests__/machine.test.ts` | Pure tests for `runtime` and re-entrant dispatch. |
+| `src/__tests__/dispatcher.test.ts` | Pure tests for `createDispatcher`, lease sharing, and `BudgetExhaustedError`. |
+| `src/__tests__/observable.test.ts` | Pure tests for `createObservableProgram`, observation API, wait-for with fake timers. |
 
 ## Testing
 
 Every test in this package is pure: no real timers (`vi.useFakeTimers` where needed), no sockets, no filesystem. A `Program` is tested by calling `update(msg, model)` and asserting on the returned `[model, ...effects]` tuple. A running observable program is tested by dispatching messages, inspecting the `executor` call log, and asserting on recorded transitions.
 
-**Tests**: 45 passed, 0 skipped across 2 files (`machine.test.ts`: 15, `observable.test.ts`: 30). Run with `cd packages/machine && pnpm exec vitest run`.
+**Tests**: 53 passed, 0 skipped across 3 files (`machine.test.ts`: 15, `observable.test.ts`: 30, `dispatcher.test.ts`: 8). Run with `cd packages/machine && pnpm exec vitest run`.

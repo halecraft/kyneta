@@ -6,9 +6,9 @@ import {
   initSession,
   type SessionEffect,
   type SessionModel,
-  type SessionNotification,
   type SessionUpdate,
 } from "../session-program.js"
+import type { PeerChange } from "../types.js"
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -29,21 +29,17 @@ const alice = { peerId: "alice", type: "user" as const }
 const bob = { peerId: "bob", type: "user" as const }
 const carol = { peerId: "carol", type: "user" as const }
 
-// Helper to flatten batch effects
-function flattenEffects(effect: SessionEffect | undefined): SessionEffect[] {
-  if (!effect) return []
-  if (effect.type === "batch") return effect.effects.flatMap(flattenEffects)
-  return [effect]
-}
-
-// Helper to flatten batch notifications
-function flattenNotifications(
-  notification: SessionNotification | undefined,
-): SessionNotification[] {
-  if (!notification) return []
-  if (notification.type === "notify/batch")
-    return notification.notifications.flatMap(flattenNotifications)
-  return [notification]
+/**
+ * Run an update and split the result into model + effects. The algebra
+ * is variadic now — no `batch` combinator to flatten.
+ */
+function applyUpdate(
+  update: SessionUpdate,
+  input: Parameters<SessionUpdate>[0],
+  model: SessionModel,
+): [SessionModel, SessionEffect[]] {
+  const [m, ...fx] = update(input, model)
+  return [m, fx]
 }
 
 // Helper to establish a channel (sends establish, receives establish back)
@@ -52,25 +48,25 @@ function establishChannel(
   model: SessionModel,
   channelId: number,
   remoteIdentity: { peerId: string; type: "user" | "bot" | "service" },
-): [SessionModel, SessionEffect[], SessionNotification[]] {
+): [SessionModel, SessionEffect[], readonly PeerChange[]] {
   const allEffects: SessionEffect[] = []
-  const allNotifications: SessionNotification[] = []
 
-  // Step 1: channel-added
-  let [m, e, n] = update(
+  let [m, fx] = applyUpdate(
+    update,
     { type: "sess/channel-added", channelId, transportType: "test" },
     model,
   )
-  allEffects.push(...flattenEffects(e))
-  allNotifications.push(...flattenNotifications(n))
+  allEffects.push(...fx)
 
-  // Step 2: channel-establish (local side sends)
-  ;[m, e, n] = update({ type: "sess/channel-establish", channelId }, m)
-  allEffects.push(...flattenEffects(e))
-  allNotifications.push(...flattenNotifications(n))
+  ;[m, fx] = applyUpdate(
+    update,
+    { type: "sess/channel-establish", channelId },
+    m,
+  )
+  allEffects.push(...fx)
 
-  // Step 3: receive establish from remote
-  ;[m, e, n] = update(
+  ;[m, fx] = applyUpdate(
+    update,
     {
       type: "sess/message-received",
       fromChannelId: channelId,
@@ -78,10 +74,9 @@ function establishChannel(
     },
     m,
   )
-  allEffects.push(...flattenEffects(e))
-  allNotifications.push(...flattenNotifications(n))
+  allEffects.push(...fx)
 
-  return [m, allEffects, allNotifications]
+  return [m, allEffects, m.pendingPeerEvents]
 }
 
 // ---------------------------------------------------------------------------
@@ -123,7 +118,7 @@ describe("session-program", () => {
       const update = makeUpdate()
       const model = initSession(alice)
 
-      const [m, effect, notification] = update(
+      const [m, ...fx] = update(
         { type: "sess/channel-added", channelId: 1, transportType: "test" },
         model,
       )
@@ -136,9 +131,9 @@ describe("session-program", () => {
       expect(entry.remoteIdentity).toBeUndefined()
       expect(entry.transportType).toBe("test")
 
-      // No effects or notifications from just adding
-      expect(effect).toBeUndefined()
-      expect(notification).toBeUndefined()
+      // No effects or pending peer events from just adding
+      expect(fx).toHaveLength(0)
+      expect(m.pendingPeerEvents).toHaveLength(0)
 
       // Peers unchanged
       expect(m.peers.size).toBe(0)
@@ -155,7 +150,7 @@ describe("session-program", () => {
       )
 
       // Now trigger establish
-      const [m, effect, notification] = update(
+      const [m, ...effects] = update(
         { type: "sess/channel-establish", channelId: 1 },
         model,
       )
@@ -165,7 +160,6 @@ describe("session-program", () => {
       expect(entry.localEstablishSent).toBe(true)
 
       // Should emit a send effect with our identity and v1 default features
-      const effects = flattenEffects(effect)
       expect(effects).toHaveLength(1)
       expect(effects[0]).toEqual({
         type: "send",
@@ -177,8 +171,8 @@ describe("session-program", () => {
         },
       })
 
-      // No notification yet — handshake not complete
-      expect(notification).toBeUndefined()
+      // No peer-events yet — handshake not complete
+      expect(m.pendingPeerEvents).toHaveLength(0)
     })
 
     it("receiving establish echoes back and completes handshake", () => {
@@ -192,7 +186,7 @@ describe("session-program", () => {
       )
       ;[model] = update({ type: "sess/channel-establish", channelId: 1 }, model)
 
-      const [m, effect, notification] = update(
+      const [m, ...effects] = update(
         {
           type: "sess/message-received",
           fromChannelId: 1,
@@ -214,7 +208,6 @@ describe("session-program", () => {
       expect(peer.departing).toBe(false)
 
       // Effects: echo establish back + sync/peer-available
-      const effects = flattenEffects(effect)
       const echoEffect = effects.find(
         e =>
           e.type === "send" &&
@@ -223,10 +216,9 @@ describe("session-program", () => {
       )
       expect(echoEffect).toBeDefined()
 
-      // Notification: peer-established
-      const notifications = flattenNotifications(notification)
-      expect(notifications).toContainEqual({
-        type: "notify/peer-established",
+      // Peer-established appended to pendingPeerEvents
+      expect(m.pendingPeerEvents).toContainEqual({
+        type: "peer-established",
         peer: bob,
       })
     })
@@ -236,7 +228,7 @@ describe("session-program", () => {
       const model = initSession(alice)
 
       // This is the standard flow: add → establish → receive establish
-      const [m, allEffects, allNotifications] = establishChannel(
+      const [m, allEffects, peerEvents] = establishChannel(
         update,
         model,
         1,
@@ -252,9 +244,9 @@ describe("session-program", () => {
       expect(m.peers.has("bob")).toBe(true)
       expect(defined(m.peers.get("bob")).channels.has(1)).toBe(true)
 
-      // peer-established notification emitted
-      expect(allNotifications).toContainEqual({
-        type: "notify/peer-established",
+      // peer-established appended to pendingPeerEvents
+      expect(peerEvents).toContainEqual({
+        type: "peer-established",
         peer: bob,
       })
 
@@ -281,7 +273,7 @@ describe("session-program", () => {
       )
 
       // Step 2: receive establish from remote BEFORE local channel-establish
-      const [m, effect, notification] = update(
+      const [m, ...effects] = update(
         {
           type: "sess/message-received",
           fromChannelId: 1,
@@ -302,7 +294,6 @@ describe("session-program", () => {
       expect(peer.channels.has(1)).toBe(true)
 
       // An echo establish is sent back, carrying v1 default features
-      const effects = flattenEffects(effect)
       expect(effects).toContainEqual({
         type: "send",
         to: 1,
@@ -313,10 +304,9 @@ describe("session-program", () => {
         },
       })
 
-      // peer-established notification
-      const notifications = flattenNotifications(notification)
-      expect(notifications).toContainEqual({
-        type: "notify/peer-established",
+      // peer-established appended to pendingPeerEvents
+      expect(m.pendingPeerEvents).toContainEqual({
+        type: "peer-established",
         peer: bob,
       })
     })
@@ -329,7 +319,7 @@ describe("session-program", () => {
       ;[model] = establishChannel(update, model, 1, bob)
 
       // Send another establish from bob on channel 1
-      const [m, effect, notification] = update(
+      const [m, ...effects] = update(
         {
           type: "sess/message-received",
           fromChannelId: 1,
@@ -340,8 +330,7 @@ describe("session-program", () => {
 
       // Model is unchanged (reference equality)
       expect(m).toBe(model)
-      expect(effect).toBeUndefined()
-      expect(notification).toBeUndefined()
+      expect(effects).toHaveLength(0)
     })
 
     it("duplicate channel-establish is a no-op", () => {
@@ -355,14 +344,14 @@ describe("session-program", () => {
       ;[model] = update({ type: "sess/channel-establish", channelId: 1 }, model)
 
       // Second channel-establish — localEstablishSent is already true
-      const [m, effect] = update(
+      const [m, ...effects] = update(
         { type: "sess/channel-establish", channelId: 1 },
         model,
       )
 
       // Returns same model reference
       expect(m).toBe(model)
-      expect(effect).toBeUndefined()
+      expect(effects).toHaveLength(0)
     })
   })
 
@@ -375,11 +364,11 @@ describe("session-program", () => {
       const update = makeUpdate()
       const model = initSession(alice)
 
-      const [m, , allNotifications] = establishChannel(update, model, 1, bob)
+      const [m, , peerEvents] = establishChannel(update, model, 1, bob)
 
       expect(m.peers.has("bob")).toBe(true)
-      expect(allNotifications).toContainEqual({
-        type: "notify/peer-established",
+      expect(peerEvents).toContainEqual({
+        type: "peer-established",
         peer: bob,
       })
     })
@@ -408,8 +397,8 @@ describe("session-program", () => {
       // Establish first channel with bob
       ;[model] = establishChannel(update, model, 1, bob)
 
-      // Establish second channel with bob — collect only these effects/notifications
-      const [m, allEffects, allNotifications] = establishChannel(
+      // Establish second channel with bob — collect only these effects/peer events
+      const [m, allEffects, peerEvents] = establishChannel(
         update,
         model,
         2,
@@ -422,11 +411,16 @@ describe("session-program", () => {
       expect(peer.channels.has(1)).toBe(true)
       expect(peer.channels.has(2)).toBe(true)
 
-      // No peer-established notification for the second channel
-      const joinNotifications = allNotifications.filter(
-        n => n.type === "notify/peer-established",
+      // No peer-established event added by the second channel (model already
+      // had peer-established from the first; the second channel must NOT
+      // append another peer-established for the same peer).
+      const established = peerEvents.filter(
+        ev => ev.type === "peer-established",
       )
-      expect(joinNotifications).toHaveLength(0)
+      // After two establishChannel calls the first one produced one
+      // peer-established. The pending events accumulate across handler
+      // calls — so we expect exactly 1 (from establishChannel #1).
+      expect(established).toHaveLength(1)
 
       // No sync/peer-available for the second channel
       const syncAvailable = allEffects.filter(
@@ -453,7 +447,8 @@ describe("session-program", () => {
       ;[model] = establishChannel(update, model, 2, bob)
 
       // Remove one channel
-      const [m, effect, notification] = update(
+      const prevPending = model.pendingPeerEvents.length
+      const [m, ...effects] = update(
         { type: "sess/channel-removed", channelId: 1 },
         model,
       )
@@ -467,9 +462,9 @@ describe("session-program", () => {
       expect(peer.channels.size).toBe(1)
       expect(peer.channels.has(2)).toBe(true)
 
-      // No lifecycle effects or notifications
-      expect(effect).toBeUndefined()
-      expect(notification).toBeUndefined()
+      // No lifecycle effects produced and no new peer events appended
+      expect(effects).toHaveLength(0)
+      expect(m.pendingPeerEvents.length).toBe(prevPending)
     })
 
     it("channel-removed for unestablished channel: no peer event", () => {
@@ -483,7 +478,7 @@ describe("session-program", () => {
       )
 
       // Remove it
-      const [m, effect, notification] = update(
+      const [m, ...effects] = update(
         { type: "sess/channel-removed", channelId: 1 },
         model,
       )
@@ -492,9 +487,9 @@ describe("session-program", () => {
       expect(m.channels.size).toBe(0)
       expect(m.peers.size).toBe(0)
 
-      // No effects or notifications
-      expect(effect).toBeUndefined()
-      expect(notification).toBeUndefined()
+      // No effects or pending peer events
+      expect(effects).toHaveLength(0)
+      expect(m.pendingPeerEvents).toHaveLength(0)
     })
 
     it("channel-removed last channel, no depart, timeout > 0: peer-disconnected + start-departure-timer", () => {
@@ -505,7 +500,7 @@ describe("session-program", () => {
       ;[model] = establishChannel(update, model, 1, bob)
 
       // Remove the last channel
-      const [m, effect, notification] = update(
+      const [m, ...effects] = update(
         { type: "sess/channel-removed", channelId: 1 },
         model,
       )
@@ -516,14 +511,13 @@ describe("session-program", () => {
       expect(peer.channels.size).toBe(0)
       expect(peer.identity).toEqual(bob)
 
-      // Notification: peer-disconnected
-      expect(notification).toEqual({
-        type: "notify/peer-disconnected",
+      // peer-disconnected appended to pendingPeerEvents
+      expect(m.pendingPeerEvents).toContainEqual({
+        type: "peer-disconnected",
         peer: bob,
       })
 
       // Effects: sync/peer-unavailable + start-departure-timer
-      const effects = flattenEffects(effect)
       expect(effects).toContainEqual({
         type: "sync-event",
         event: { type: "sync/peer-unavailable", peerId: "bob" },
@@ -543,7 +537,7 @@ describe("session-program", () => {
       ;[model] = establishChannel(update, model, 1, bob)
 
       // Remove the last channel
-      const [m, effect, notification] = update(
+      const [m, ...effects] = update(
         { type: "sess/channel-removed", channelId: 1 },
         model,
       )
@@ -552,14 +546,13 @@ describe("session-program", () => {
       expect(m.peers.has("bob")).toBe(false)
       expect(m.peers.size).toBe(0)
 
-      // Notification: peer-departed
-      expect(notification).toEqual({
-        type: "notify/peer-departed",
+      // peer-departed appended to pendingPeerEvents
+      expect(m.pendingPeerEvents).toContainEqual({
+        type: "peer-departed",
         peer: bob,
       })
 
       // Effect: sync/peer-departed
-      const effects = flattenEffects(effect)
       expect(effects).toContainEqual({
         type: "sync-event",
         event: { type: "sync/peer-departed", peerId: "bob" },
@@ -576,14 +569,13 @@ describe("session-program", () => {
       const update = makeUpdate()
       const model = initSession(alice)
 
-      const [m, effect, notification] = update(
+      const [m, ...effects] = update(
         { type: "sess/channel-removed", channelId: 999 },
         model,
       )
 
       expect(m).toBe(model)
-      expect(effect).toBeUndefined()
-      expect(notification).toBeUndefined()
+      expect(effects).toHaveLength(0)
     })
   })
 
@@ -605,7 +597,7 @@ describe("session-program", () => {
       expect(defined(model.peers.get("bob")).channels.size).toBe(0)
 
       // Fire departure timer
-      const [m, effect, notification] = update(
+      const [m, ...effects] = update(
         { type: "sess/departure-timer-expired", peerId: "bob" },
         model,
       )
@@ -615,15 +607,14 @@ describe("session-program", () => {
       expect(m.peers.size).toBe(0)
 
       // Effect: sync/peer-departed
-      const effects = flattenEffects(effect)
       expect(effects).toContainEqual({
         type: "sync-event",
         event: { type: "sync/peer-departed", peerId: "bob" },
       })
 
-      // Notification: peer-departed
-      expect(notification).toEqual({
-        type: "notify/peer-departed",
+      // peer-departed appended to pendingPeerEvents
+      expect(m.pendingPeerEvents).toContainEqual({
+        type: "peer-departed",
         peer: bob,
       })
     })
@@ -645,15 +636,14 @@ describe("session-program", () => {
       expect(defined(model.peers.get("bob")).channels.size).toBe(1)
 
       // Fire stale departure timer
-      const [m, effect, notification] = update(
+      const [m, ...effects] = update(
         { type: "sess/departure-timer-expired", peerId: "bob" },
         model,
       )
 
       // Model unchanged
       expect(m).toBe(model)
-      expect(effect).toBeUndefined()
-      expect(notification).toBeUndefined()
+      expect(effects).toHaveLength(0)
 
       // Peer still exists
       expect(m.peers.has("bob")).toBe(true)
@@ -664,14 +654,13 @@ describe("session-program", () => {
       const update = makeUpdate()
       const model = initSession(alice)
 
-      const [m, effect, notification] = update(
+      const [m, ...effects] = update(
         { type: "sess/departure-timer-expired", peerId: "nobody" },
         model,
       )
 
       expect(m).toBe(model)
-      expect(effect).toBeUndefined()
-      expect(notification).toBeUndefined()
+      expect(effects).toHaveLength(0)
     })
   })
 
@@ -694,7 +683,7 @@ describe("session-program", () => {
       expect(defined(model.peers.get("bob")).channels.size).toBe(0)
 
       // Establish on channel 2 (reconnection)
-      const [m, allEffects, allNotifications] = establishChannel(
+      const [m, allEffects, peerEvents] = establishChannel(
         update,
         model,
         2,
@@ -708,9 +697,9 @@ describe("session-program", () => {
       expect(peer.channels.has(2)).toBe(true)
       expect(peer.departing).toBe(false)
 
-      // Notification: peer-reconnected
-      expect(allNotifications).toContainEqual({
-        type: "notify/peer-reconnected",
+      // peer-reconnected appended to pendingPeerEvents
+      expect(peerEvents).toContainEqual({
+        type: "peer-reconnected",
         peer: bob,
       })
 
@@ -760,7 +749,8 @@ describe("session-program", () => {
       ;[model] = establishChannel(update, model, 1, bob)
 
       // Bob sends depart on channel 1
-      const [departModel, departEffect, departNotification] = update(
+      const beforeDepart = model.pendingPeerEvents.length
+      const [departModel, ...departEffects] = update(
         {
           type: "sess/message-received",
           fromChannelId: 1,
@@ -772,13 +762,13 @@ describe("session-program", () => {
       // Peer is marked as departing
       expect(defined(departModel.peers.get("bob")).departing).toBe(true)
 
-      // No immediate effects or notifications from just receiving depart
+      // No immediate effects or new pending peer events from just receiving depart
       // (peer still has channels)
-      expect(departEffect).toBeUndefined()
-      expect(departNotification).toBeUndefined()
+      expect(departEffects).toHaveLength(0)
+      expect(departModel.pendingPeerEvents.length).toBe(beforeDepart)
 
       // Now remove the channel
-      const [m, effect, notification] = update(
+      const [m, ...effects] = update(
         { type: "sess/channel-removed", channelId: 1 },
         departModel,
       )
@@ -786,14 +776,13 @@ describe("session-program", () => {
       // Peer deleted immediately (departing = true)
       expect(m.peers.has("bob")).toBe(false)
 
-      // Notification: peer-departed (NOT peer-disconnected)
-      expect(notification).toEqual({
-        type: "notify/peer-departed",
+      // peer-departed appended to pendingPeerEvents (NOT peer-disconnected)
+      expect(m.pendingPeerEvents).toContainEqual({
+        type: "peer-departed",
         peer: bob,
       })
 
       // Effect: sync/peer-departed
-      const effects = flattenEffects(effect)
       expect(effects).toContainEqual({
         type: "sync-event",
         event: { type: "sync/peer-departed", peerId: "bob" },
@@ -830,17 +819,16 @@ describe("session-program", () => {
       expect(defined(model.peers.get("bob")).channels.size).toBe(1)
 
       // Remove channel 20 — last channel, departing=true → immediate departure
-      const [m, effect, notification] = update(
+      const [m, ...effects] = update(
         { type: "sess/channel-removed", channelId: 20 },
         model,
       )
 
       expect(m.peers.has("bob")).toBe(false)
-      expect(notification).toEqual({
-        type: "notify/peer-departed",
+      expect(m.pendingPeerEvents).toContainEqual({
+        type: "peer-departed",
         peer: bob,
       })
-      const effects = flattenEffects(effect)
       expect(effects).toContainEqual({
         type: "sync-event",
         event: { type: "sync/peer-departed", peerId: "bob" },
@@ -851,7 +839,7 @@ describe("session-program", () => {
       const update = makeUpdate()
       const model = initSession(alice)
 
-      const [m, effect, notification] = update(
+      const [m, ...effects] = update(
         {
           type: "sess/message-received",
           fromChannelId: 999,
@@ -861,8 +849,7 @@ describe("session-program", () => {
       )
 
       expect(m).toBe(model)
-      expect(effect).toBeUndefined()
-      expect(notification).toBeUndefined()
+      expect(effects).toHaveLength(0)
     })
 
     it("depart on unestablished channel is a no-op", () => {
@@ -874,7 +861,7 @@ describe("session-program", () => {
         model,
       )
 
-      const [_m, effect, notification] = update(
+      const [_m, ...effects] = update(
         {
           type: "sess/message-received",
           fromChannelId: 1,
@@ -884,8 +871,7 @@ describe("session-program", () => {
       )
 
       // No remoteIdentity set → returns unchanged
-      expect(effect).toBeUndefined()
-      expect(notification).toBeUndefined()
+      expect(effects).toHaveLength(0)
     })
   })
 
@@ -900,20 +886,13 @@ describe("session-program", () => {
 
       // Establish a channel where the remote claims to be alice too
       const selfAlice = { peerId: "alice", type: "user" as const }
-      const [, , allNotifications] = establishChannel(
-        update,
-        model,
-        1,
-        selfAlice,
-      )
+      const [, allEffects] = establishChannel(update, model, 1, selfAlice)
 
-      const warnings = allNotifications.filter(n => n.type === "notify/warning")
+      const warnings = allEffects.filter(e => e.type === "warning")
       expect(warnings.length).toBeGreaterThanOrEqual(1)
       expect(
         warnings.some(
-          w =>
-            w.type === "notify/warning" &&
-            w.message.includes("self-connection"),
+          w => w.type === "warning" && w.message.includes("self-connection"),
         ),
       ).toBe(true)
     })
@@ -926,15 +905,13 @@ describe("session-program", () => {
       ;[model] = establishChannel(update, model, 1, bob)
 
       // Establish bob on channel 2 — should warn about duplicate peerId
-      const [, , allNotifications] = establishChannel(update, model, 2, bob)
+      const [, allEffects] = establishChannel(update, model, 2, bob)
 
-      const warnings = allNotifications.filter(n => n.type === "notify/warning")
+      const warnings = allEffects.filter(e => e.type === "warning")
       expect(warnings.length).toBeGreaterThanOrEqual(1)
       expect(
         warnings.some(
-          w =>
-            w.type === "notify/warning" &&
-            w.message.includes("duplicate peerId"),
+          w => w.type === "warning" && w.message.includes("duplicate peerId"),
         ),
       ).toBe(true)
     })
@@ -958,17 +935,17 @@ describe("session-program", () => {
       expect(model.peers.has("carol")).toBe(true)
 
       // Remove bob's channel
-      const [m, _effect, notification] = update(
-        { type: "sess/channel-removed", channelId: 1 },
-        model,
-      )
+      const beforeRemove = model.pendingPeerEvents.length
+      const [m] = update({ type: "sess/channel-removed", channelId: 1 }, model)
 
       // Bob disconnected, carol unaffected
       expect(defined(m.peers.get("bob")).channels.size).toBe(0)
       expect(defined(m.peers.get("carol")).channels.size).toBe(1)
 
-      expect(notification).toEqual({
-        type: "notify/peer-disconnected",
+      // Newly-appended pendingPeerEvents include peer-disconnected for bob
+      const newEvents = m.pendingPeerEvents.slice(beforeRemove)
+      expect(newEvents).toContainEqual({
+        type: "peer-disconnected",
         peer: bob,
       })
     })
@@ -1060,7 +1037,7 @@ describe("session-program", () => {
       ;[model] = update({ type: "sess/channel-establish", channelId: 1 }, model)
 
       // Step 3: receive establish from remote — should be rejected
-      const [model4, effect] = update(
+      const [model4, ...effects] = update(
         {
           type: "sess/message-received",
           fromChannelId: 1,
@@ -1070,8 +1047,6 @@ describe("session-program", () => {
       )
 
       // Should produce a reject-channel effect
-      expect(effect).toBeDefined()
-      const effects = flattenEffects(effect)
       const rejectEffects = effects.filter(e => e.type === "reject-channel")
       expect(rejectEffects.length).toBe(1)
 
@@ -1085,21 +1060,14 @@ describe("session-program", () => {
       })
 
       const model = initSession(alice)
-      const [m, _effects, notifications] = establishChannel(
-        update,
-        model,
-        1,
-        bob,
-      )
+      const [m, _effects, peerEvents] = establishChannel(update, model, 1, bob)
 
       // Peer was added
       expect(m.peers.size).toBe(1)
       expect(m.peers.has("bob")).toBe(true)
 
-      // peer-established notification fired
-      const established = notifications.filter(
-        n => n.type === "notify/peer-established",
-      )
+      // peer-established appended to pendingPeerEvents
+      const established = peerEvents.filter(e => e.type === "peer-established")
       expect(established.length).toBe(1)
     })
 

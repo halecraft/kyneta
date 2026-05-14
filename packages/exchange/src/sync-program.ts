@@ -8,6 +8,7 @@
 // connection state. It speaks only in terms of peers and documents.
 // The shell resolves PeerId → ChannelId when interpreting effects.
 
+import type { Program } from "@kyneta/machine"
 import type {
   ReplicaType,
   SubstratePayload,
@@ -27,8 +28,7 @@ import type {
   PresentMsg,
   SyncMsg,
 } from "@kyneta/transport"
-import { collapse, type Transition } from "./program-types.js"
-import type { PeerDocSyncState } from "./types.js"
+import type { DocChange, PeerDocSyncState } from "./types.js"
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 // STATE
@@ -85,6 +85,26 @@ export type SyncModel = {
 
   /** Peer state tracking for sync optimization */
   peers: Map<PeerId, SyncPeerState>
+
+  /** Doc lifecycle events queued for emission at quiescence. */
+  pendingDocEvents: readonly DocChange[]
+
+  /**
+   * Doc-ids whose peer sync status changed. Dedup-by-presence — listeners
+   * must receive at most one ready-state change per docId per cycle even
+   * if multiple peers' states flipped (consumers rebuild the full state
+   * from `getReadyStates(docId)` on receipt).
+   */
+  pendingReadyStateDocIds: readonly DocId[]
+
+  /**
+   * Doc-ids whose state advanced (local mutation or remote import).
+   * Dedup-by-presence — `onStateAdvanced` fires at most once per docId
+   * per cycle. The persistence layer reads the full delta from the
+   * replica on receipt, so duplicate firings would re-export the same
+   * delta wastefully.
+   */
+  pendingStateAdvancedDocIds: readonly DocId[]
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -112,6 +132,13 @@ export type SyncInput =
       syncProtocol: SyncProtocol
       schemaHash: string
       supportedHashes?: readonly string[]
+      /**
+       * Optional shell-detected doc-event to append to pendingDocEvents
+       * atomically with this input. Used by the synchronizer to fold the
+       * doc-event queue and the sync-model update into a single drain
+       * cycle — so emit-doc-events at quiescence sees the final state.
+       */
+      event?: DocChange
     }
   | {
       type: "sync/doc-defer"
@@ -120,16 +147,20 @@ export type SyncInput =
       syncProtocol: SyncProtocol
       schemaHash: string
       supportedHashes?: readonly string[]
+      event?: DocChange
     }
   | { type: "sync/local-doc-change"; docId: DocId; version: string }
-  | { type: "sync/doc-delete"; docId: DocId }
-  | { type: "sync/doc-dismiss"; docId: DocId }
+  | { type: "sync/doc-delete"; docId: DocId; event?: DocChange }
+  | { type: "sync/doc-dismiss"; docId: DocId; event?: DocChange }
   | {
       type: "sync/doc-imported"
       docId: DocId
       version: string
       fromPeerId: PeerId
     }
+  | { type: "sync/queue-doc-event"; event: DocChange }
+  | { type: "sync/tick-quiescent" }
+  | { type: "sync/synthetic-doc-removed-all"; docIds: readonly DocId[] }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 // EFFECTS (what needs to happen in the world)
@@ -177,59 +208,46 @@ export type SyncEffect =
       docId: DocId
       peer: PeerIdentityDetails
     }
-  | { type: "batch"; effects: SyncEffect[] }
-
-// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-// NOTIFICATIONS (observations about what changed)
-// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-
-/**
- * Notifications are observations about model transitions. Unlike effects,
- * they do not change the world — they declare what changed so the shell
- * can inform external listeners without diffing the model.
- */
-export type SyncNotification =
-  | { type: "notify/ready-state-changed"; docIds: ReadonlySet<DocId> }
-  | { type: "notify/state-advanced"; docIds: ReadonlySet<DocId> }
-  | { type: "notify/warning"; message: string }
-  | { type: "notify/batch"; notifications: SyncNotification[] }
+  | { type: "emit-doc-events"; events: readonly DocChange[] }
+  | { type: "emit-ready-state-changes"; docIds: readonly DocId[] }
+  | { type: "emit-state-advanced"; docIds: readonly DocId[] }
+  | { type: "warning"; message: string }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 // UPDATE SIGNATURE
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
-export type SyncTransition = Transition<SyncModel, SyncEffect, SyncNotification>
+export type SyncUpdate = (
+  input: SyncInput,
+  model: SyncModel,
+) => [SyncModel, ...SyncEffect[]]
 
-export type SyncUpdate = (input: SyncInput, model: SyncModel) => SyncTransition
+export type SyncProgram = Program<SyncInput, SyncModel, SyncEffect>
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-// UTILITIES — batching & notifications
+// HELPERS — pending-list mutation with dedup-by-presence
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
-const batchEffects = (...fx: (SyncEffect | undefined)[]) =>
-  collapse<SyncEffect>(fx, effects => ({ type: "batch", effects }))
-
-const batchNotifications = (...ns: (SyncNotification | undefined)[]) =>
-  collapse<SyncNotification>(ns, notifications => ({
-    type: "notify/batch",
-    notifications,
-  }))
-
-/**
- * Convenience: construct a ready-state-changed notification for one or
- * more docIds.
- */
-function readyStateChanged(...docIds: DocId[]): SyncNotification {
-  return { type: "notify/ready-state-changed", docIds: new Set(docIds) }
+function appendUniqueDocId(
+  list: readonly DocId[],
+  docId: DocId,
+): readonly DocId[] {
+  if (list.includes(docId)) return list
+  return [...list, docId]
 }
 
-/**
- * Convenience: construct a state-advanced notification for one or more
- * docIds. Emitted when a document's state advances — either from a
- * local mutation or a network import.
- */
-function stateAdvanced(...docIds: DocId[]): SyncNotification {
-  return { type: "notify/state-advanced", docIds: new Set(docIds) }
+function appendUniqueDocIds(
+  list: readonly DocId[],
+  docIds: Iterable<DocId>,
+): readonly DocId[] {
+  let result = list
+  for (const id of docIds) {
+    if (!result.includes(id)) {
+      if (result === list) result = [...list]
+      ;(result as DocId[]).push(id)
+    }
+  }
+  return result
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -457,6 +475,9 @@ export function initSync(identity: PeerIdentityDetails): SyncModel {
     identity,
     documents: new Map(),
     peers: new Map(),
+    pendingDocEvents: [],
+    pendingReadyStateDocIds: [],
+    pendingStateAdvancedDocIds: [],
   }
 }
 
@@ -479,7 +500,7 @@ const defaultParams: CreateSyncUpdateParams = {
 /**
  * Creates the sync update function.
  *
- * The returned function is the pure TEA update: (input, model) → [model, effect?, notification?].
+ * The returned function is the pure TEA update: (input, model) → [model, ...effects].
  * The `canShare` and `canAccept` predicates control information flow:
  * - `canShare`: gates all outbound messages (present, push, relay)
  * - `canAccept`: gates inbound data import (offers)
@@ -489,7 +510,10 @@ export function createSyncUpdate(
 ): SyncUpdate {
   const { canShare, canAccept } = { ...defaultParams, ...params }
 
-  return function update(input: SyncInput, model: SyncModel): SyncTransition {
+  return function update(
+    input: SyncInput,
+    model: SyncModel,
+  ): [SyncModel, ...SyncEffect[]] {
     switch (input.type) {
       case "sync/peer-available":
         return handlePeerAvailable(
@@ -522,6 +546,17 @@ export function createSyncUpdate(
         return handleDocDismiss(input, model, canShare)
       case "sync/doc-imported":
         return handleDocImported(input, model, canShare)
+      case "sync/queue-doc-event":
+        return [
+          {
+            ...model,
+            pendingDocEvents: [...model.pendingDocEvents, input.event],
+          },
+        ]
+      case "sync/tick-quiescent":
+        return handleTickQuiescent(model)
+      case "sync/synthetic-doc-removed-all":
+        return handleSyntheticDocRemovedAll(input, model)
     }
   }
 }
@@ -536,7 +571,7 @@ function handleMessageReceived(
   model: SyncModel,
   canShare: SyncPredicate,
   canAccept: SyncPredicate,
-): SyncTransition {
+): [SyncModel, ...SyncEffect[]] {
   switch (message.type) {
     case "present":
       return handlePresent(from, message, model, canShare)
@@ -563,7 +598,7 @@ function handlePeerAvailable(
   identity: PeerIdentityDetails,
   model: SyncModel,
   canShare: SyncPredicate,
-): SyncTransition {
+): [SyncModel, ...SyncEffect[]] {
   const peers = new Map(model.peers)
   const existingPeer = peers.get(peerId)
 
@@ -582,48 +617,64 @@ function handlePeerAvailable(
 
   const present = buildPresent(docIds, peerId, updatedModel)
 
-  return [updatedModel, present]
+  return present ? [updatedModel, present] : [updatedModel]
 }
 
 /**
  * A peer has become unavailable (last channel removed, no depart).
- * Preserve docSyncStates for reconnection. Emit readyStateChanged
- * for all docs this peer had sync state for.
+ * Preserve docSyncStates for reconnection. Mark ready-state dirty for
+ * all docs this peer had sync state for.
  */
 function handlePeerUnavailable(
   peerId: PeerId,
   model: SyncModel,
-): SyncTransition {
+): [SyncModel, ...SyncEffect[]] {
   const peerState = model.peers.get(peerId)
   if (!peerState) return [model]
 
   // Do NOT delete peer from model — preserve docSyncStates for reconnection
-  let notification: SyncNotification | undefined
   if (peerState.docSyncStates.size > 0) {
-    notification = readyStateChanged(...peerState.docSyncStates.keys())
+    return [
+      {
+        ...model,
+        pendingReadyStateDocIds: appendUniqueDocIds(
+          model.pendingReadyStateDocIds,
+          peerState.docSyncStates.keys(),
+        ),
+      },
+    ]
   }
-
-  return [model, undefined, notification]
+  return [model]
 }
 
 /**
  * A peer is gone (depart received, or departure timer expired).
- * Delete peer from model entirely. Emit readyStateChanged for all
+ * Delete peer from model entirely. Mark ready-state dirty for all
  * docs this peer had sync state for.
  */
-function handlePeerDeparted(peerId: PeerId, model: SyncModel): SyncTransition {
+function handlePeerDeparted(
+  peerId: PeerId,
+  model: SyncModel,
+): [SyncModel, ...SyncEffect[]] {
   const peerState = model.peers.get(peerId)
   if (!peerState) return [model]
 
   const peers = new Map(model.peers)
   peers.delete(peerId)
 
-  let notification: SyncNotification | undefined
   if (peerState.docSyncStates.size > 0) {
-    notification = readyStateChanged(...peerState.docSyncStates.keys())
+    return [
+      {
+        ...model,
+        peers,
+        pendingReadyStateDocIds: appendUniqueDocIds(
+          model.pendingReadyStateDocIds,
+          peerState.docSyncStates.keys(),
+        ),
+      },
+    ]
   }
-
-  return [{ ...model, peers }, undefined, notification]
+  return [{ ...model, peers }]
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -634,7 +685,7 @@ function handleDocEnsure(
   msg: Extract<SyncInput, { type: "sync/doc-ensure" }>,
   model: SyncModel,
   canShare: SyncPredicate,
-): SyncTransition {
+): [SyncModel, ...SyncEffect[]] {
   const existing = model.documents.get(msg.docId)
   if (existing) {
     if (existing.mode !== "deferred") return [model]
@@ -660,7 +711,13 @@ function handleDocEnsure(
   // We send both present (so peers learn we have the doc) and interest
   // (so peers send us their state). This is essential for docs created
   // via onDocDiscovered — the local doc is empty and needs to pull data.
-  const updatedModel: SyncModel = { ...model, documents }
+  const updatedModel: SyncModel = {
+    ...model,
+    documents,
+    pendingDocEvents: msg.event
+      ? [...model.pendingDocEvents, msg.event]
+      : model.pendingDocEvents,
+  }
   const { peerIds, present } = announceDoc(
     msg.docId,
     msg.replicaType,
@@ -686,14 +743,15 @@ function handleDocEnsure(
     },
   }
 
-  return [updatedModel, batchEffects(present, interest)]
+  if (present) return [updatedModel, present, interest]
+  return [updatedModel, interest]
 }
 
 function handleDocDefer(
   msg: Extract<SyncInput, { type: "sync/doc-defer" }>,
   model: SyncModel,
   canShare: SyncPredicate,
-): SyncTransition {
+): [SyncModel, ...SyncEffect[]] {
   if (model.documents.has(msg.docId)) return [model]
 
   const entry: DocEntry = {
@@ -709,7 +767,13 @@ function handleDocDefer(
   const documents = new Map(model.documents)
   documents.set(msg.docId, entry)
 
-  const updatedModel: SyncModel = { ...model, documents }
+  const updatedModel: SyncModel = {
+    ...model,
+    documents,
+    pendingDocEvents: msg.event
+      ? [...model.pendingDocEvents, msg.event]
+      : model.pendingDocEvents,
+  }
   const { present } = announceDoc(
     msg.docId,
     msg.replicaType,
@@ -720,14 +784,14 @@ function handleDocDefer(
     msg.supportedHashes,
   )
 
-  return [updatedModel, present]
+  return present ? [updatedModel, present] : [updatedModel]
 }
 
 function handleLocalDocChange(
   msg: Extract<SyncInput, { type: "sync/local-doc-change" }>,
   model: SyncModel,
   canShare: SyncPredicate,
-): SyncTransition {
+): [SyncModel, ...SyncEffect[]] {
   const docEntry = model.documents.get(msg.docId)
   if (!docEntry) return [model]
 
@@ -738,23 +802,39 @@ function handleLocalDocChange(
   // Push to peers based on sync protocol
   const effect = buildPush(msg.docId, docEntry, model, canShare)
 
-  return [{ ...model, documents }, effect, stateAdvanced(msg.docId)]
+  const nextModel: SyncModel = {
+    ...model,
+    documents,
+    pendingStateAdvancedDocIds: appendUniqueDocId(
+      model.pendingStateAdvancedDocIds,
+      msg.docId,
+    ),
+  }
+  return effect ? [nextModel, effect] : [nextModel]
 }
 
 function handleDocDelete(
   msg: Extract<SyncInput, { type: "sync/doc-delete" }>,
   model: SyncModel,
-): SyncTransition {
+): [SyncModel, ...SyncEffect[]] {
   const documents = new Map(model.documents)
   documents.delete(msg.docId)
-  return [{ ...model, documents }]
+  return [
+    {
+      ...model,
+      documents,
+      pendingDocEvents: msg.event
+        ? [...model.pendingDocEvents, msg.event]
+        : model.pendingDocEvents,
+    },
+  ]
 }
 
 function handleDocDismiss(
   msg: Extract<SyncInput, { type: "sync/doc-dismiss" }>,
   model: SyncModel,
   canShare: SyncPredicate,
-): SyncTransition {
+): [SyncModel, ...SyncEffect[]] {
   const documents = new Map(model.documents)
   documents.delete(msg.docId)
 
@@ -762,23 +842,31 @@ function handleDocDismiss(
   const allPeers = getAvailablePeers(model)
   const peerIds = filterPeersByShare(model, allPeers, msg.docId, canShare)
 
-  const effect: SyncEffect | undefined =
-    peerIds.length > 0
-      ? {
-          type: "send-to-peers",
-          to: peerIds,
-          message: { type: "dismiss", docId: msg.docId },
-        }
-      : undefined
+  const nextModel: SyncModel = {
+    ...model,
+    documents,
+    pendingDocEvents: msg.event
+      ? [...model.pendingDocEvents, msg.event]
+      : model.pendingDocEvents,
+  }
 
-  return [{ ...model, documents }, effect]
+  if (peerIds.length === 0) return [nextModel]
+
+  return [
+    nextModel,
+    {
+      type: "send-to-peers",
+      to: peerIds,
+      message: { type: "dismiss", docId: msg.docId },
+    },
+  ]
 }
 
 function handleDocImported(
   msg: Extract<SyncInput, { type: "sync/doc-imported" }>,
   model: SyncModel,
   canShare: SyncPredicate,
-): SyncTransition {
+): [SyncModel, ...SyncEffect[]] {
   const docEntry = model.documents.get(msg.docId)
   if (!docEntry) return [model]
 
@@ -794,7 +882,7 @@ function handleDocImported(
   // Update peer sync state
   const peers = new Map(model.peers)
   const peerState = peers.get(msg.fromPeerId)
-  let notification: SyncNotification | undefined
+  let pendingReadyStateDocIds = model.pendingReadyStateDocIds
   if (peerState) {
     const docSyncStates = new Map(peerState.docSyncStates)
     docSyncStates.set(msg.docId, {
@@ -803,15 +891,84 @@ function handleDocImported(
       lastUpdated: new Date(),
     })
     peers.set(msg.fromPeerId, { ...peerState, docSyncStates })
-    notification = batchNotifications(
-      readyStateChanged(msg.docId),
-      stateAdvanced(msg.docId),
+    pendingReadyStateDocIds = appendUniqueDocId(
+      pendingReadyStateDocIds,
+      msg.docId,
     )
-  } else {
-    notification = stateAdvanced(msg.docId)
   }
 
-  return [{ ...model, documents, peers }, effect, notification]
+  const nextModel: SyncModel = {
+    ...model,
+    documents,
+    peers,
+    pendingReadyStateDocIds,
+    pendingStateAdvancedDocIds: appendUniqueDocId(
+      model.pendingStateAdvancedDocIds,
+      msg.docId,
+    ),
+  }
+  return effect ? [nextModel, effect] : [nextModel]
+}
+
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+// HANDLER: Tick / synthetic
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+function handleTickQuiescent(model: SyncModel): [SyncModel, ...SyncEffect[]] {
+  const effects: SyncEffect[] = []
+
+  // Order: ready-state → state-advanced → doc-events.
+  // (peer-events emit lives in the session program's tick.)
+  if (model.pendingReadyStateDocIds.length > 0) {
+    effects.push({
+      type: "emit-ready-state-changes",
+      docIds: model.pendingReadyStateDocIds,
+    })
+  }
+  if (model.pendingStateAdvancedDocIds.length > 0) {
+    effects.push({
+      type: "emit-state-advanced",
+      docIds: model.pendingStateAdvancedDocIds,
+    })
+  }
+  if (model.pendingDocEvents.length > 0) {
+    effects.push({
+      type: "emit-doc-events",
+      events: model.pendingDocEvents,
+    })
+  }
+
+  if (effects.length === 0) return [model]
+
+  return [
+    {
+      ...model,
+      pendingReadyStateDocIds: [],
+      pendingStateAdvancedDocIds: [],
+      pendingDocEvents: [],
+    },
+    ...effects,
+  ]
+}
+
+function handleSyntheticDocRemovedAll(
+  msg: Extract<SyncInput, { type: "sync/synthetic-doc-removed-all" }>,
+  model: SyncModel,
+): [SyncModel, ...SyncEffect[]] {
+  if (msg.docIds.length === 0) return [model]
+  const synthetic: DocChange[] = msg.docIds.map(docId => ({
+    type: "doc-removed",
+    docId,
+  }))
+  // Clear the documents map; the synthetic events describe the full
+  // set of removals about to be visible.
+  return [
+    {
+      ...model,
+      documents: new Map(),
+      pendingDocEvents: [...model.pendingDocEvents, ...synthetic],
+    },
+  ]
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -823,12 +980,11 @@ function handlePresent(
   message: PresentMsg,
   model: SyncModel,
   canShare: SyncPredicate,
-): SyncTransition {
+): [SyncModel, ...SyncEffect[]] {
   const peerState = model.peers.get(from)
   if (!peerState) return [model]
 
   const effects: SyncEffect[] = []
-  const warnings: SyncNotification[] = []
 
   for (const {
     docId,
@@ -841,8 +997,8 @@ function handlePresent(
     if (docEntry) {
       // Known doc — validate replicaType compatibility
       if (!replicaTypesCompatible(docEntry.replicaType, replicaType)) {
-        warnings.push({
-          type: "notify/warning",
+        effects.push({
+          type: "warning",
           message:
             `[exchange] replica type mismatch for doc '${docId}': ` +
             `local [${docEntry.replicaType}] vs remote [${replicaType}] — skipping sync`,
@@ -864,8 +1020,8 @@ function handlePresent(
         }
       }
       if (!compatible) {
-        warnings.push({
-          type: "notify/warning",
+        effects.push({
+          type: "warning",
           message:
             `[exchange] schema hash mismatch for doc '${docId}': ` +
             `local '${docEntry.schemaHash}' vs remote '${schemaHash}' — skipping sync`,
@@ -878,8 +1034,8 @@ function handlePresent(
         docEntry.syncProtocol.delivery !== syncProtocol.delivery ||
         docEntry.syncProtocol.durability !== syncProtocol.durability
       ) {
-        warnings.push({
-          type: "notify/warning",
+        effects.push({
+          type: "warning",
           message:
             `[exchange] syncProtocol mismatch for doc '${docId}': ` +
             `local ${JSON.stringify(docEntry.syncProtocol)} vs remote ${JSON.stringify(syncProtocol)} — skipping sync`,
@@ -917,7 +1073,7 @@ function handlePresent(
     }
   }
 
-  return [model, batchEffects(...effects), batchNotifications(...warnings)]
+  return [model, ...effects]
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -928,7 +1084,7 @@ function handleInterest(
   from: PeerId,
   message: InterestMsg,
   model: SyncModel,
-): SyncTransition {
+): [SyncModel, ...SyncEffect[]] {
   const peerState = model.peers.get(from)
   if (!peerState) return [model]
 
@@ -949,7 +1105,7 @@ function handleInterestForKnownDoc(
   message: InterestMsg,
   docEntry: DocEntry,
   model: SyncModel,
-): SyncTransition {
+): [SyncModel, ...SyncEffect[]] {
   const peerState = model.peers.get(fromPeerId)
   if (!peerState) return [model]
 
@@ -964,11 +1120,17 @@ function handleInterestForKnownDoc(
   })
   peers.set(fromPeerId, { ...peerState, docSyncStates })
 
-  const notification: SyncNotification | undefined = readyStateChanged(
-    message.docId,
-  )
-
-  return [{ ...model, peers }, batchEffects(...effects), notification]
+  return [
+    {
+      ...model,
+      peers,
+      pendingReadyStateDocIds: appendUniqueDocId(
+        model.pendingReadyStateDocIds,
+        message.docId,
+      ),
+    },
+    ...effects,
+  ]
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -980,7 +1142,7 @@ function handleOffer(
   message: OfferMsg,
   model: SyncModel,
   canAccept: SyncPredicate,
-): SyncTransition {
+): [SyncModel, ...SyncEffect[]] {
   const peerState = model.peers.get(from)
   if (!peerState) return [model]
 
@@ -1021,7 +1183,7 @@ function handleOffer(
     })
   }
 
-  return [model, batchEffects(...effects)]
+  return [model, ...effects]
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -1032,7 +1194,7 @@ function handleDismiss(
   from: PeerId,
   message: DismissMsg,
   model: SyncModel,
-): SyncTransition {
+): [SyncModel, ...SyncEffect[]] {
   const peerState = model.peers.get(from)
   if (!peerState) return [model]
 
@@ -1042,11 +1204,19 @@ function handleDismiss(
   docSyncStates.delete(message.docId)
   peers.set(from, { ...peerState, docSyncStates })
 
-  const effect: SyncEffect = {
-    type: "ensure-doc-dismissed",
-    docId: message.docId,
-    peer: peerState.identity,
-  }
-
-  return [{ ...model, peers }, effect, readyStateChanged(message.docId)]
+  return [
+    {
+      ...model,
+      peers,
+      pendingReadyStateDocIds: appendUniqueDocId(
+        model.pendingReadyStateDocIds,
+        message.docId,
+      ),
+    },
+    {
+      type: "ensure-doc-dismissed",
+      docId: message.docId,
+      peer: peerState.identity,
+    },
+  ]
 }
