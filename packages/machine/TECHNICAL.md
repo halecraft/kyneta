@@ -127,6 +127,11 @@ A dispatcher with no caller-supplied lease creates its own private lease — sta
 
 `createObservableProgram(program, executor, { lease?, label? })` accepts an optional shared lease. Two `ObservableHandle`s that share a lease participate in one budget across their cross-dispatched cascades.
 
+Canonical consumers in the workspace:
+
+- `@kyneta/exchange`'s `Synchronizer` (`jj:qlvnvxox`) — `"synchronizer:session"`, `"synchronizer:sync"`, `"synchronizer:outer"` label entries.
+- `@kyneta/schema`'s `with-changefeed` (`jj:yksllknw`) — `"changefeed"` label entries from each per-doc dispatcher. When the host is an `Exchange`, the per-doc dispatcher inherits the Exchange's `Lease`, so a doc-layer cascade and a synchronizer-layer cascade are bounded by one shared budget.
+
 ### Error handling
 
 Transition listeners that throw are caught and swallowed (source: `packages/machine/src/observable.ts` `notifyTransition`). Effects that throw propagate up through `dispatch`; the runtime does not catch them. This is deliberate — effect errors are programmer errors that should surface, while observer errors must not break dispatch for other observers.

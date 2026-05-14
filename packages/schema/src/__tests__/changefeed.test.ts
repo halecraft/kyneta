@@ -1300,7 +1300,7 @@ describe("changefeed: flush boundary enforcement", () => {
     }).toThrow("subscriber boom")
   })
 
-  it("re-entrant change() during notification delivery throws descriptive error", () => {
+  it("re-entrant change() during notification delivery succeeds and drains in a fresh sub-tick", () => {
     const store = { x: 0, y: 0 }
     const schema = Schema.struct({
       x: Schema.number(),
@@ -1313,19 +1313,32 @@ describe("changefeed: flush boundary enforcement", () => {
       .with(observation)
       .done()
 
-    // Subscribe to x; when x changes, try to mutate y via change()
+    // Subscribe to x; when x changes, mutate y via change().
+    // Pre-1.6.0 this threw "Mutation during notification delivery is not
+    // supported." Post-1.6.0 the per-context dispatcher drains the
+    // re-entrant change in a fresh sub-tick: both writes land, both
+    // subscribers fire, and subsequent reads see the new state.
+    let xFired = 0
+    let yFired = 0
     getChangefeed(doc.x).subscribe(() => {
+      xFired++
       change(doc, (d: any) => {
         d.y.set(99)
       })
     })
+    getChangefeed(doc.y).subscribe(() => {
+      yFired++
+    })
 
-    // The outer change() should throw with a descriptive message
-    // about notification delivery, not "No active transaction to abort".
     expect(() => {
       change(doc, (d: any) => {
         d.x.set(42)
       })
-    }).toThrow(/notification delivery/)
+    }).not.toThrow()
+
+    expect(doc.x()).toBe(42)
+    expect(doc.y()).toBe(99)
+    expect(xFired).toBe(1)
+    expect(yFired).toBe(1)
   })
 })

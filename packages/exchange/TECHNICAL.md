@@ -347,6 +347,12 @@ Remote `offer` messages go through `substrate.merge(payload, "sync")`. The subst
 
 The origin propagation is the substrate's responsibility (every substrate in `@kyneta/schema` correctly threads it through `executeBatch` and `deliverNotifications`). The sync-side check is *this* package's responsibility.
 
+### Same-doc re-entry inside subscribers (post-1.6.0)
+
+`change(doc, fn)` called from inside a `subscribe(doc, ...)` / `subscribeNode(doc.field, ...)` callback no longer requires `queueMicrotask` (`jj:yksllknw`). The per-doc changefeed dispatcher in `@kyneta/schema` shares the Exchange's `Lease` (`jj:qlvnvxox` extended this slice), so re-entrant doc-layer mutations drain in a fresh sub-tick of the same outer dispatch call, while the cascade is budget-bounded.
+
+This closes the third instance of the "one-pass-only drain" structural flaw called out in `jj:qlvnvxox`'s Learnings — input-phase synchronizer (#1), output-phase synchronizer (#2), and now the doc layer (#3). A `BudgetExhaustedError` emitted anywhere in the stack carries history entries labeled `"synchronizer:session"`, `"synchronizer:sync"`, `"synchronizer:outer"`, and `"changefeed"` — the label set is the cascade topology.
+
 ### What the local-write path is NOT
 
 - **Not synchronous with send.** `change(doc, fn)` returns as soon as the substrate's `onFlush` completes. The wire `offer` fires in the next quiescence drain, which may be the same tick or later depending on re-entrant dispatch.

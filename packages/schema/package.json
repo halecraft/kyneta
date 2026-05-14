@@ -43,6 +43,7 @@
   },
   "dependencies": {
     "@kyneta/changefeed": "workspace:^",
+    "@kyneta/machine": "workspace:^",
     "@kyneta/random": "workspace:^"
   },
   "devDependencies": {

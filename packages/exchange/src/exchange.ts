@@ -260,6 +260,11 @@ export class Exchange {
   readonly #governance: Governance
   readonly #capabilities: Capabilities
   readonly #synchronizer: Synchronizer
+  /** Cooperating cascade budget. Shared with the Synchronizer (created in
+   *  jj:qlvnvxox) and with every per-doc changefeed dispatcher (jj:yksllknw)
+   *  so cross-doc A→B→A cascades and tick-induced re-entry are bounded by
+   *  one budget. Defaults to a fresh `createLease()` if none was provided. */
+  readonly #lease: Lease
   readonly peers: ReactiveMap<PeerId, PeerIdentityDetails, PeerChange>
   readonly documents: ReactiveMap<DocId, DocInfo, DocChange>
   readonly #docCache = new Map<DocId, DocCacheEntry>()
@@ -288,6 +293,11 @@ export class Exchange {
     this.peerId = peerId
 
     this.#stores = stores
+
+    // Resolve the shared cascade budget once. Same instance is passed
+    // to the Synchronizer below and to every per-doc createRef call so
+    // doc-layer dispatchers cooperate with the synchronizer.
+    this.#lease = lease ?? createLease()
 
     const fullIdentity: PeerIdentityDetails =
       typeof id === "string"
@@ -321,7 +331,7 @@ export class Exchange {
       canConnect: this.#governance.canConnect.bind(this.#governance),
       canReset: this.#governance.canReset.bind(this.#governance),
       departureTimeout,
-      lease: lease ?? createLease(),
+      lease: this.#lease,
 
       onEnsureDoc: (
         docId,
@@ -547,7 +557,9 @@ export class Exchange {
     // ── Shared prefix: create substrate, build ref, wire metadata ──
     const substrate = factory.create(bound.schema)
 
-    const ref: any = createRef(bound.schema, substrate)
+    const ref: any = createRef(bound.schema, substrate, {
+      lease: this.#lease,
+    })
 
     registerSync(ref, {
       peerId: this.peerId,

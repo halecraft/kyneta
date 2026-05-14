@@ -19,9 +19,12 @@
 //   .current still works. Valid static Moore machine.
 //
 // Notification flow (read-write only): the transformer wraps ctx.prepare
-// to accumulate {path, change} entries without firing subscribers. It
-// wraps ctx.flush to group accumulated entries by path and deliver one
-// Changeset per subscriber.
+// to apply changes synchronously (substrate write + populated mark) and
+// dispatch an `accumulate` Msg into a per-context dispatcher. It wraps
+// ctx.flush to dispatch a `flush` Msg. The dispatcher's drain-to-quiescence
+// loop catches re-entrant `change()` calls from inside subscriber
+// callbacks: substrate writes still happen synchronously, and the new
+// accumulator entries produce a fresh Changeset in a subsequent sub-tick.
 //
 // Compose: withChangefeed(withWritable(withCaching(withReadable(withNavigation(bottom)))))
 // Or read-only: withChangefeed(withCaching(withReadable(withNavigation(bottom))))
@@ -30,6 +33,8 @@
 
 import type { HasChangefeed } from "@kyneta/changefeed"
 import { CHANGEFEED, hasChangefeed } from "@kyneta/changefeed"
+import type { DispatcherHandle, Lease } from "@kyneta/machine"
+import { createDispatcher } from "@kyneta/machine"
 import type { ChangeBase } from "../change.js"
 import { isReplaceChange } from "../change.js"
 import type {
@@ -169,8 +174,6 @@ export function deliverNotifications(
  *
  * - `listeners`: path-keyed map of subscriber callbacks. Each changefeed
  *   factory registers its own listener here via `listenAtPath`.
- * - `pending`: accumulated `Op` entries from `prepare` calls,
- *   drained by `flush`.
  * - `originalPrepare` / `originalFlush`: the unwrapped methods, called
  *   before/after the changefeed layer's logic.
  * - `populated`: monotonic set of path keys that have received at least
@@ -178,18 +181,36 @@ export function deliverNotifications(
  *   on substrate reset). Used by `isPopulated` changefeeds.
  * - `populatedListeners`: callbacks waiting for a specific path key to
  *   become populated. Fired at most once per path key, then removed.
+ *
+ * The notification accumulator (`Op[]`) is encapsulated inside the
+ * dispatcher handler's closure — it is no longer persisted on this state
+ * record. Likewise, no `isFlushing` flag: re-entrant `change()` calls from
+ * inside subscriber delivery enqueue an `accumulate` Msg back into the
+ * per-context dispatcher and drain in a fresh sub-tick.
  */
 interface ContextWiringState {
   readonly listeners: Map<
     string,
     Set<(changeset: Changeset<ChangeBase>) => void>
   >
-  readonly pending: Op[]
   readonly originalPrepare: (path: Path, change: ChangeBase) => void
   readonly originalFlush: (origin?: string) => void
   readonly populated: Set<string>
   readonly populatedListeners: Map<string, Set<() => void>>
+  readonly handle: DispatcherHandle<ChangefeedMsg>
 }
+
+/**
+ * Internal dispatcher message type for the per-context notification
+ * pipeline. Not exported — fully encapsulated inside `with-changefeed.ts`.
+ *
+ * - `accumulate`: a `prepare` call observed a substrate mutation; queue
+ *   its `Op` for the next flush.
+ * - `flush`: a `flush` call requested commit + notification delivery.
+ */
+type ChangefeedMsg =
+  | { type: "accumulate"; op: Op }
+  | { type: "flush"; origin: string | undefined }
 
 /**
  * Returns `true` if `ctx` has `prepare` and `flush` methods — i.e. it's
@@ -224,13 +245,21 @@ const contextState = new WeakMap<RefContext, ContextWiringState>()
  * valid static Moore machines (.current works, .subscribe is a no-op).
  *
  * On read-write stacks:
- * - `prepare` wrapping: after the inner prepare (store mutation), appends
- *   `{path, change}` to the pending accumulator. No notification fires.
- * - `flush` wrapping: calls `planNotifications` (pure) to group changes
- *   by path, then calls the inner flush (so the substrate's version and
- *   log are up-to-date), then `deliverNotifications` (imperative) to fire
- *   listeners. Clears the accumulator before any side effects for
- *   re-entrancy safety.
+ * - `prepare` wrapping: synchronously calls the inner prepare (substrate
+ *   write), marks the path populated, then dispatches an `accumulate`
+ *   Msg into the per-context dispatcher to queue this Op for notification.
+ * - `flush` wrapping: dispatches a `flush` Msg. The dispatcher's handler
+ *   snapshots the queued accumulator, calls `planNotifications` (pure),
+ *   calls the inner flush (so the substrate's version and log are
+ *   up-to-date), then `deliverNotifications` (imperative) to fire
+ *   listeners. Re-entrant `change()` calls from inside a subscriber land
+ *   back in `wrappedPrepare`, which dispatches another `accumulate` Msg.
+ *   The dispatcher's drain-to-quiescence loop catches it and the next
+ *   `flush` dispatch processes it in a fresh sub-tick.
+ *
+ * The lease — if attached on `ctx.lease` before this function runs — is
+ * shared with the Exchange and Synchronizer, so cross-doc cascades and
+ * tick-induced re-entry are bounded by one cooperating budget.
  */
 
 // WeakMap for read-only contexts: each gets its own orphaned listener
@@ -260,60 +289,64 @@ function ensurePrepareWiring(
     string,
     Set<(changeset: Changeset<ChangeBase>) => void>
   >()
-  const pending: Op[] = []
+  const accumulator: Op[] = []
   const populated = new Set<string>()
   const populatedListeners = new Map<string, Set<() => void>>()
   const originalPrepare = ctx.prepare
   const originalFlush = ctx.flush
-  let isFlushing = false
 
-  // Wrapped prepare: apply change to store, accumulate for flush,
-  // and mark the path (and all ancestor paths) as populated.
-  // The isFlushing guard prevents re-entrant mutations during
-  // notification delivery — a phase-separation invariant.
+  // Per-context dispatcher. Re-entrant `change()` calls from inside
+  // subscriber delivery dispatch `accumulate` Msgs back into this same
+  // dispatcher; the drain-to-quiescence loop processes them in fresh
+  // sub-ticks. A `flush` Msg whose `accumulator.length === 0` (no
+  // mutations since the last drain) still calls `originalFlush(origin)`
+  // — preserving the invariant that substrate-level flush always runs.
+  const handle = createDispatcher<ChangefeedMsg>(
+    (msg) => {
+      if (msg.type === "accumulate") {
+        accumulator.push(msg.op)
+        return
+      }
+      // msg.type === "flush"
+      if (accumulator.length === 0) {
+        originalFlush(msg.origin)
+        return
+      }
+      const plan = planNotifications(accumulator)
+      accumulator.length = 0
+      // Commit to the substrate first so version() and delta() reflect
+      // the just-flushed operations when subscribers read them.
+      originalFlush(msg.origin)
+      deliverNotifications(plan, listeners, msg.origin)
+    },
+    {
+      lease: (ctx as { lease?: Lease }).lease,
+      label: "changefeed",
+    },
+  )
+
+  // Wrapped prepare: apply change to substrate synchronously, mark
+  // populated synchronously, then dispatch the accumulate Msg. Substrate
+  // writes are guaranteed visible to subsequent reads inside the same
+  // outer `change()` call.
   const wrappedPrepare = (path: Path, change: ChangeBase): void => {
-    if (isFlushing) {
-      throw new Error(
-        "Mutation during notification delivery is not supported. " +
-          "Defer the change() call (e.g., via queueMicrotask).",
-      )
-    }
     // Resolve raw paths to addressed paths so that path.key matches
     // the identity-stable keys used by changefeed listeners and cache
     // invalidation handlers. Idempotent for already-addressed paths.
-    const rootPath = (ctx as any)?.rootPath
+    const rootPath = (ctx as { rootPath?: unknown }).rootPath
     const resolved =
       rootPath instanceof AddressedPath
         ? resolveToAddressed(path, rootPath.registry)
         : path
     originalPrepare(resolved, change)
-    pending.push({ path: resolved, change })
     markPopulated(resolved, populated, populatedListeners)
+    handle.dispatch({ type: "accumulate", op: { path: resolved, change } })
   }
 
-  // Wrapped flush: plan notifications (pure), commit via inner flush
-  // (so substrate version/log are up-to-date), then deliver notifications.
-  // Order matters: subscribers may call version(doc) or delta(doc, ...)
-  // inside their callbacks, so the substrate must be committed first.
+  // Wrapped flush: dispatch a flush Msg. The handler enforces the order
+  // (originalFlush → deliverNotifications) inside the dispatcher's drain.
   const wrappedFlush = (origin?: string): void => {
-    if (pending.length > 0) {
-      const plan = planNotifications(pending)
-      // Clear accumulator before any side effects — re-entrancy safety
-      pending.length = 0
-
-      // Commit to the substrate first so version() and delta() reflect
-      // the just-flushed operations when subscribers read them.
-      originalFlush(origin)
-
-      isFlushing = true
-      try {
-        deliverNotifications(plan, listeners, origin)
-      } finally {
-        isFlushing = false
-      }
-    } else {
-      originalFlush(origin)
-    }
+    handle.dispatch({ type: "flush", origin })
   }
 
   ctx.prepare = wrappedPrepare
@@ -321,11 +354,11 @@ function ensurePrepareWiring(
 
   state = {
     listeners,
-    pending,
     originalPrepare,
     originalFlush,
     populated,
     populatedListeners,
+    handle,
   }
   contextState.set(ctx, state)
   return listeners

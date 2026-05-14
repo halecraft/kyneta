@@ -490,8 +490,29 @@ For testing and reasoning, `step(state, change)` → `state` is the pure transit
 ### What the write path is NOT
 
 - **Not reactive under `fn`.** Reads inside `change(doc, fn)` return values as they were at transaction start. Writes accumulate; they are not visible to the next read within the same transaction (unless `fn` reads from the proxy, which reflects accumulated writes — that depends on substrate-specific optimism).
-- **Not async.** `change()` is synchronous. The substrate's writes happen synchronously during `fn`; notifications fire synchronously at commit.
+- **Not async.** `change()` is synchronous. The substrate's writes happen synchronously during `fn`. Notifications for the originating transaction fire synchronously at commit; re-entrant `change()` calls from inside a subscriber land in the per-context dispatcher's pending queue and produce a separate `Changeset` in a fresh sub-tick of the same outer call — still synchronous from the caller's perspective.
 - **Not an effect system.** Side effects inside `fn` (network calls, DOM writes) run where they are called. Only the substrate-writable mutations are captured.
+
+### Re-entrant `change()` inside subscriber callbacks (drain-to-quiescence)
+
+Subscriber callbacks may mutate freely. `change()` invoked from inside `subscribe(doc, ...)` or `subscribeNode(doc.field, ...)` does *not* throw — `with-changefeed`'s per-context dispatcher (from `@kyneta/machine`'s `createDispatcher`) enqueues an `accumulate` Msg and the drain-to-quiescence loop processes it in a fresh sub-tick.
+
+Substrate writes inside the re-entrant `change()` remain **synchronous** — subsequent reads see the new state. The sub-tick's mutations produce their own `Changeset` once the inner `change()` commits, delivered to subscribers after the originating Changeset.
+
+When the host is an `Exchange`, every per-doc dispatcher shares the Exchange's `Lease` with the Synchronizer. Cross-doc A→B→A cascades, and tick-induced re-entry through the synchronizer, are bounded by one cooperating budget. A runaway oscillation throws `BudgetExhaustedError` whose history mixes `"synchronizer:*"` and `"changefeed"` label entries — the label set is the cascade topology.
+
+See `@kyneta/machine`'s TECHNICAL.md §"Drain to quiescence and shared leases" for the primitive.
+
+### Subscriber visibility of mid-batch re-entry
+
+`deliverNotifications` iterates subscribers `[S1, S2, S3]`. If S1 calls `change(doc, ...)` synchronously, S1's substrate writes land *before* S2 fires. S2 receives the `Changeset` describing the originating transaction, but reads from a substrate that already includes S1's mutations.
+
+Two guidances:
+
+- The `Changeset` you receive describes the transaction that triggered your callback.
+- The substrate state you read reflects everything up to now, including re-entrant writes from earlier subscribers in the same deliver batch.
+
+To derive "pure pre-mutation state," consume the `Changeset` semantically; do not infer it by reading the substrate. This was always true in spirit — subscribers run after substrate commit — and the dispatcher refactor only changes whether re-entry from S1 succeeds (now) or throws (pre-1.6.0).
 
 ---
 
@@ -520,6 +541,8 @@ Two pure functions form the notification engine:
 2. `deliverNotifications(plan, subscribers)` → fires each subscriber exactly once per transaction with the appropriate changeset.
 
 This is how a transaction that modifies `doc.items[0].title` and `doc.items[0].count` delivers one changeset to `subscribe(doc)` (two ops), one to `subscribe(doc.items)` (two ops), one to `subscribe(doc.items[0])` (two ops), and one each to `subscribe(doc.items[0].title)` / `subscribe(doc.items[0].count)` (one op each) — all synchronously, all deduplicated.
+
+The per-context dispatcher (`createDispatcher<ChangefeedMsg>` inside `ensurePrepareWiring`) is what makes re-entrant `change()` calls from inside a subscriber safe: each call dispatches an `accumulate` Msg that drains in a fresh sub-tick. See [Re-entrant `change()` inside subscriber callbacks](#re-entrant-change-inside-subscriber-callbacks-drain-to-quiescence).
 
 ### `expandMapOpsToLeaves`
 

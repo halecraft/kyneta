@@ -610,8 +610,8 @@ importers:
   packages/exchange/transports/sse:
     dependencies:
       '@kyneta/random':
-        specifier: workspace:^
-        version: link:../../../random
+        specifier: ^1.5.2
+        version: 1.5.2
     devDependencies:
       '@kyneta/exchange':
         specifier: workspace:^
@@ -650,8 +650,8 @@ importers:
   packages/exchange/transports/unix-socket:
     dependencies:
       '@kyneta/random':
-        specifier: workspace:^
-        version: link:../../../random
+        specifier: ^1.5.2
+        version: 1.5.2
     devDependencies:
       '@kyneta/exchange':
         specifier: workspace:^
@@ -714,8 +714,8 @@ importers:
   packages/exchange/transports/websocket:
     dependencies:
       '@kyneta/random':
-        specifier: workspace:^
-        version: link:../../../random
+        specifier: ^1.5.2
+        version: 1.5.2
     devDependencies:
       '@kyneta/exchange':
         specifier: workspace:^
@@ -866,6 +866,9 @@ importers:
       '@kyneta/changefeed':
         specifier: workspace:^
         version: link:../changefeed
+      '@kyneta/machine':
+        specifier: workspace:^
+        version: link:../machine
       '@kyneta/random':
         specifier: workspace:^
         version: link:../random
@@ -1976,6 +1979,9 @@ packages:
   '@koa/cors@5.0.0':
     resolution: {integrity: sha512-x/iUDjcS90W69PryLDIMgFyV21YLTnG9zOpPXS7Bkt2b8AsY3zZsIpOLBkYr9fBcF3HbkKaER5hOBZLfpLgYNw==}
     engines: {node: '>= 14.0.0'}
+
+  '@kyneta/random@1.5.2':
+    resolution: {integrity: sha512-+ibu3Sa6V86pGh+7rpLy1fWlZxGYmZujZmvznoXF8A3AuX98fjHJX8Uz19nB+rkiSgTaZdboE+upEH77EfKfkA==}
 
   '@manypkg/find-root@1.1.0':
     resolution: {integrity: sha512-mki5uBvhHzO8kYYix/WRy2WX8S3B5wdVSc9D6KcU5lQNglP2yt58/VfLuAK49glRXChosY8ap2oJ1qgma3GUVA==}
@@ -5628,6 +5634,8 @@ snapshots:
   '@koa/cors@5.0.0':
     dependencies:
       vary: 1.1.2
+
+  '@kyneta/random@1.5.2': {}
 
   '@manypkg/find-root@1.1.0':
     dependencies:

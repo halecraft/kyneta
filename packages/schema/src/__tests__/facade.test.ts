@@ -758,32 +758,49 @@ describe("change: changefeed integration", () => {
 // Re-entrancy: subscriber-triggered mutations during notification
 // ===========================================================================
 //
-// The flush pipeline clears its pending accumulator BEFORE delivering
-// notifications. This means a subscriber can safely trigger new mutations
-// (auto-commit, change(), or applyChanges()) without corrupting the
-// outer notification cycle. These tests verify that invariant.
+// Post-1.6.0: subscriber callbacks may mutate freely. The per-context
+// dispatcher enqueues re-entrant `accumulate` Msgs back into its own
+// pending queue and drains them in fresh sub-ticks of the same outer
+// dispatch call. Substrate writes inside `change()` remain synchronous
+// — subsequent reads see the new state. These tests verify the new
+// drain-to-quiescence semantics.
 
-describe("re-entrancy: mutation during notification is forbidden", () => {
-  it("auto-commit inside subscriber throws flush boundary error", () => {
+describe("re-entrancy: mutation during notification drains to quiescence", () => {
+  it("auto-commit inside subscriber lands and fires the corresponding subscriber", () => {
     const { doc } = createChatDoc()
 
+    let fontSizeFired = 0
+    getChangefeed(doc.settings.fontSize).subscribe(() => {
+      fontSizeFired++
+    })
     getChangefeed(doc.settings.darkMode).subscribe(() => {
-      // Re-entrant auto-commit: triggers prepare nested inside
-      // the outer flush's deliverNotifications loop.
+      // Re-entrant auto-commit: dispatched into the per-context dispatcher
+      // and drained in a fresh sub-tick.
       doc.settings.fontSize.set(24)
     })
 
-    // The outer change() should propagate the flush boundary error
     expect(() => {
       change(doc, d => {
         d.settings.darkMode.set(true)
       })
-    }).toThrow(/notification delivery/)
+    }).not.toThrow()
+
+    expect(doc.settings.darkMode()).toBe(true)
+    expect(doc.settings.fontSize()).toBe(24)
+    expect(fontSizeFired).toBe(1)
   })
 
-  it("change() inside subscriber throws flush boundary error", () => {
+  it("change() inside subscriber lands; sub-tick Changeset is delivered", () => {
     const { doc } = createChatDoc()
 
+    let fontSizeFired = 0
+    let countFired = 0
+    getChangefeed(doc.settings.fontSize).subscribe(() => {
+      fontSizeFired++
+    })
+    getChangefeed(doc.count).subscribe(() => {
+      countFired++
+    })
     getChangefeed(doc.settings.darkMode).subscribe(() => {
       change(doc, d => {
         d.settings.fontSize.set(20)
@@ -795,12 +812,22 @@ describe("re-entrancy: mutation during notification is forbidden", () => {
       change(doc, d => {
         d.settings.darkMode.set(true)
       })
-    }).toThrow(/notification delivery/)
+    }).not.toThrow()
+
+    expect(doc.settings.darkMode()).toBe(true)
+    expect(doc.settings.fontSize()).toBe(20)
+    expect(doc.count()).toBe(5)
+    expect(fontSizeFired).toBe(1)
+    expect(countFired).toBe(1)
   })
 
-  it("applyChanges() inside subscriber throws flush boundary error", () => {
+  it("applyChanges() inside subscriber lands; sub-tick Changeset is delivered", () => {
     const { doc } = createChatDoc()
 
+    let countFired = 0
+    getChangefeed(doc.count).subscribe(() => {
+      countFired++
+    })
     getChangefeed(doc.settings.darkMode).subscribe(() => {
       applyChanges(doc, [
         {
@@ -814,15 +841,28 @@ describe("re-entrancy: mutation during notification is forbidden", () => {
       change(doc, d => {
         d.settings.darkMode.set(true)
       })
-    }).toThrow(/notification delivery/)
+    }).not.toThrow()
+
+    expect(doc.settings.darkMode()).toBe(true)
+    expect(doc.count()).toBe(10)
+    expect(countFired).toBe(1)
   })
 
-  it("chained re-entrancy: subscriber triggers mutation throws flush boundary error", () => {
+  it("chained re-entrancy: sub-tick mutations cascade through their own subscribers", () => {
     const { doc } = createChatDoc()
 
-    // Chain: darkMode notification → fontSize mutation (which would
-    // trigger another subscriber). The first re-entrant mutation
-    // should throw before reaching the second.
+    // Chain: darkMode subscriber writes fontSize → fontSize subscriber
+    // writes count. The dispatcher drains both sub-ticks within the
+    // outer change() call.
+    let fontSizeFired = 0
+    let countFired = 0
+    getChangefeed(doc.settings.fontSize).subscribe(() => {
+      fontSizeFired++
+      doc.count.increment(7)
+    })
+    getChangefeed(doc.count).subscribe(() => {
+      countFired++
+    })
     getChangefeed(doc.settings.darkMode).subscribe(() => {
       doc.settings.fontSize.set(18)
     })
@@ -831,29 +871,30 @@ describe("re-entrancy: mutation during notification is forbidden", () => {
       change(doc, d => {
         d.settings.darkMode.set(true)
       })
-    }).toThrow(/notification delivery/)
+    }).not.toThrow()
+
+    expect(doc.settings.darkMode()).toBe(true)
+    expect(doc.settings.fontSize()).toBe(18)
+    expect(doc.count()).toBe(7)
+    expect(fontSizeFired).toBe(1)
+    expect(countFired).toBe(1)
   })
 
-  it("outer mutation is applied even when re-entrant subscriber throws", () => {
+  it("outer mutation and re-entrant mutation are both applied", () => {
     const { doc } = createChatDoc()
 
     getChangefeed(doc.settings.darkMode).subscribe(() => {
       doc.count.increment(1)
     })
 
-    // The outer change throws because the subscriber tries to mutate
-    // during flush, but the outer mutation (darkMode.set) was already
-    // applied to the store during the prepare phase.
     expect(() => {
       change(doc, d => {
         d.settings.darkMode.set(true)
       })
-    }).toThrow(/notification delivery/)
+    }).not.toThrow()
 
-    // The outer mutation was applied (prepare ran before flush)
     expect(doc.settings.darkMode()).toBe(true)
-    // The re-entrant mutation was NOT applied
-    expect(doc.count()).toBe(0)
+    expect(doc.count()).toBe(1)
   })
 })
 

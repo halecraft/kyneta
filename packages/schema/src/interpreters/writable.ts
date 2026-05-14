@@ -19,6 +19,8 @@
 // See .plans/interpreter-decomposition.md §Phase 4.
 // See .plans/apply-changes.md §Phase 4.
 
+import type { Lease } from "@kyneta/machine"
+
 import type { Op } from "../changefeed.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 
@@ -191,6 +193,13 @@ export interface WritableContext extends RefContext {
   /** Discard buffered changes without applying. */
   abort(): void
   readonly inTransaction: boolean
+  /** Optional shared cascade budget. When the changefeed layer wires its
+   *  per-context dispatcher in `ensurePrepareWiring`, it threads this lease
+   *  through so that cross-doc and tick-induced re-entry across cooperating
+   *  dispatchers share one budget. Attached by `createRef({ lease })` before
+   *  interpretation runs; absent on standalone substrates, in which case
+   *  the dispatcher creates its own private lease. */
+  lease?: Lease
 }
 
 // ---------------------------------------------------------------------------
