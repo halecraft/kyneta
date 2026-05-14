@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/prisma-store",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "Prisma-based storage backend for @kyneta/exchange",
   "author": "Duane Johnson",
   "license": "MIT",
@@ -37,9 +37,9 @@
     "verify": "verify"
   },
   "peerDependencies": {
-    "@kyneta/exchange": "^1.5.1",
-    "@kyneta/schema": "^1.5.1",
-    "@kyneta/sql-store-core": "^1.5.1",
+    "@kyneta/exchange": "^1.5.2",
+    "@kyneta/schema": "^1.5.2",
+    "@kyneta/sql-store-core": "^1.5.2",
     "@prisma/client": "^5.0.0 || ^6.0.0"
   },
   "devDependencies": {

@@ -1,3 +1,16 @@
+# 1.5.2
+
+  Fixes (no action required):
+  - Index: materialized views built from `Source.union`, `Source.map`, or `Source.filter` no longer silently lose entries under composition. Three classes of bug are closed: (1) `Source.union` retracting a key that exists in both upstreams used to delete the entry instead of decrementing its refcount; (2) `Source.map` with a non-injective key function (multiple source keys → same target key) had the same problem; (3) `Source.filter` with a predicate that depends on a mutable value never re-evaluated, so entries never entered or left the filtered view as values changed. `Collection` now refcounts internally — existing combinators just start behaving correctly, no code change needed.
+  - Exchange: mutations performed inside `exchange.peers` / peer-event subscribers (e.g., reacting to `peer-departed` by writing a doc) now propagate to remaining peers. Previously the mutation reached the local store but the sync input was stranded until the next external event triggered another dispatch pass.
+
+  Additions (opt-in):
+  - `Source.filter(source, pred, { watch })`: pass a `watch` function to re-evaluate the predicate when the watched portion of a value mutates — same contract as `KeySpec.watch` on `Index.by`. Use this whenever your filter predicate reads a field that can change after the entry is created. Without `watch`, filters still behave as before (fine for immutable values).
+  - `Source.snapshotZSet()`: returns current state as a `SourceEvent` (delta + values) preserving ZSet multiplicity. For adapter and combinator authors who need the raw integrated ZSet; the existing weight-collapsed `snapshot()` is unchanged.
+
+  Internal:
+  - `@kyneta/machine`: extracted `createDispatcher` and `Lease` primitives; Synchronizer rewritten as a faithful `Program<Msg, Model, Fx>` with accumulator drains absorbed into the algebra. No public API change — this is the substrate that enabled the Exchange fix above.
+
 # 1.5.1
 
   Fixes:
