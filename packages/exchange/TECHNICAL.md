@@ -147,13 +147,15 @@ Neither program calls the other. Neither program imports the other. The *only* c
 
 The Synchronizer hosts two `ObservableHandle`s — one per program — and a third dispatcher, the **outer coordinator**, built on `createDispatcher` from `@kyneta/machine`. All inbound inputs (channel events from transports, local doc mutations, wire messages, internal cross-program `sync-event` effects) route through the outer coordinator's single pending queue. The coordinator pops each msg, dispatches it to the appropriate program handle, then dispatches a `tick`. The tick re-enters the queue; if more `route` messages arrived during program processing (or during emit-* subscriber callbacks), they are interleaved in arrival order. The drain runs to quiescence — until the queue is empty.
 
-All three dispatchers (outer, session, sync) share one `Lease`. A subscriber-induced A↔B cascade between session and sync is bounded by `lease.budget`; a runaway cascade raises `BudgetExhaustedError` with a small history ring buffer for diagnosis.
+All three dispatchers (outer, session, sync) share one `Lease`. A subscriber-induced A↔B cascade between session and sync is bounded by `lease.budget`; a runaway cascade raises `BudgetExhaustedError` whose message carries the cascade's entry-point stack, a label-type histogram, and a recent-event tail — see `@kyneta/machine`'s TECHNICAL.md for the projection shapes (`jj:tozwpvuu`).
+
+The outer coordinator coalesces pending ticks: every `route` queues at most one `tick` (held in a closure-scoped `tickPending` flag), since the tick-quiescent handlers are idempotent when their accumulators are empty. This bounds the iteration count of long cascades by ~⅓ and keeps the diagnostic histogram dominated by *route* and *changefeed* entries rather than tick housekeeping. The flag is cleared at the start of tick processing so a subscriber-induced re-entry inside `emit-*` effects can correctly queue a fresh tick.
 
 This serialization is the reason there are no lock primitives anywhere in the package. A user callback fired from an `ensure-doc` effect (or any other) may call `exchange.get(...)`, `doc.title.insert(...)`, or `room.participants.delete(...)` — those calls enqueue inputs rather than recurse, and the outer coordinator's drain-to-quiescence loop catches the re-entry. **Re-entrant paths converge at every layer**: inputs converge via the per-handle pending queues; tick-induced re-entry from subscribers converges via the outer coordinator's loop; the shared `Lease` bounds the whole cascade.
 
 ### Quiescence drain
 
-Reactive outputs (peer events, doc events, ready-state changes, state-advanced docs) are accumulated as model state on the two pure programs. A `tick-quiescent` message is self-dispatched by the outer coordinator after each `route`; its handler drains the accumulated state into `emit-*` effects, which the executor interprets as `emit` calls on the corresponding `ReactiveMap`s and listener sets.
+Reactive outputs (peer events, doc events, ready-state changes, state-advanced docs) are accumulated as model state on the two pure programs. A `tick-quiescent` message is self-dispatched by the outer coordinator after a `route` — at most one tick is pending in the outer queue at any time, not one per route (`jj:tozwpvuu`); the dispatched tick's handler drains the accumulated state into `emit-*` effects, which the executor interprets as `emit` calls on the corresponding `ReactiveMap`s and listener sets.
 
 | Effect | Scope | Pattern |
 |--------|-------|---------|

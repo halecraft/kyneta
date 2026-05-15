@@ -121,7 +121,13 @@ const handleB = createDispatcher(handlerB, { lease, label: "B" })
 // A and B's combined cascade is bounded by lease.budget.
 ```
 
-When `lease.iterations > lease.budget`, the dispatcher throws `BudgetExhaustedError` carrying the lease snapshot and label. The history ring buffer (default capacity 32) records `{label, type}` of recent messages — useful for diagnosing the cascade shape.
+When `lease.iterations > lease.budget`, the dispatcher throws `BudgetExhaustedError` carrying the lease snapshot and label. The error renders three diagnostic projections (`jj:tozwpvuu`):
+
+- `cascade entered from:` — a JS stack snapshot of the frame that opened the drain (`lease.depth` transitioning 0→1). For client-side cascades this is typically a userland `change()` / `push()` / `set()` call; for server-side cascades it's typically a transport boundary like `WebSocketConnection.#handleMessage`. Both are useful anchors for finding the cascade's source.
+- `top message types:` — a width-aware histogram of `${label}:${type}` keys, sorted by count, top-5 displayed. The label set encodes the cascade *topology*; the count distribution names the *hot path* (e.g. a `changefeed:flush` row at 45% of iterations points the user at the busy subscriber, even if the recent-tail window evicted it).
+- `recent (N):` — a bounded ring-buffer tail of `{label, type}` entries (default capacity 32). Order-preserving; cumulatively dominated by the histogram for runaway cascades.
+
+The diagnostic projections share one mutation site (`recordDispatch(lease, label, type)`), so the history and histogram stay coherent and future instrumentation lands in one place.
 
 A dispatcher with no caller-supplied lease creates its own private lease — standalone behaviour is identical to the previous inline drain loop in `createObservableProgram`.
 
@@ -150,7 +156,7 @@ Transition listeners that throw are caught and swallowed (source: `packages/mach
 | `StateTransition<S>` | `src/observable.ts` | `{ from, to, timestamp }` — event type for transition listeners. |
 | `TransitionListener<S>` | `src/observable.ts` | `(transition) => void`. |
 | `DispatcherHandle<Msg>` | `src/dispatcher.ts` | `{ dispatch, queueDepth }` — the surface of a `createDispatcher`. |
-| `Lease` | `src/dispatcher.ts` | `{ depth, iterations, budget, history, historyCapacity }` — shared cascade budget. |
+| `Lease` | `src/dispatcher.ts` | `{ depth, iterations, budget, history, historyCapacity, counts, originStack }` — shared cascade budget plus diagnostic projections (`counts` histogram, `originStack` entry-point frame). |
 | `BudgetExhaustedError` | `src/dispatcher.ts` | Thrown by `createDispatcher` when iterations exceed budget. |
 
 ## File Map

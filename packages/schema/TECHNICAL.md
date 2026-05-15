@@ -499,7 +499,7 @@ Subscriber callbacks may mutate freely. `change()` invoked from inside `subscrib
 
 Substrate writes inside the re-entrant `change()` remain **synchronous** — subsequent reads see the new state. The sub-tick's mutations produce their own `Changeset` once the inner `change()` commits, delivered to subscribers after the originating Changeset.
 
-When the host is an `Exchange`, every per-doc dispatcher shares the Exchange's `Lease` with the Synchronizer. Cross-doc A→B→A cascades, and tick-induced re-entry through the synchronizer, are bounded by one cooperating budget. A runaway oscillation throws `BudgetExhaustedError` whose history mixes `"synchronizer:*"` and `"changefeed"` label entries — the label set is the cascade topology.
+When the host is an `Exchange`, every per-doc dispatcher shares the Exchange's `Lease` with the Synchronizer. Cross-doc A→B→A cascades, and tick-induced re-entry through the synchronizer, are bounded by one cooperating budget. A runaway oscillation throws `BudgetExhaustedError` whose message names the cascade's entry-point frame, a top-N message-type histogram, and a recent-event tail — the label histogram is the cascade *topology* and the count distribution names the *hot path*, so users can locate the responsible subscriber without ad-hoc instrumentation (`jj:tozwpvuu`).
 
 See `@kyneta/machine`'s TECHNICAL.md §"Drain to quiescence and shared leases" for the primitive.
 

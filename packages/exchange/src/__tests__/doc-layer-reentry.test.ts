@@ -190,5 +190,24 @@ describe("doc-layer re-entry: budget exhaustion spans synchronizer + changefeed"
       ).lease?.history?.map(h => h.label) ?? [],
     )
     expect(labels.has("changefeed")).toBe(true)
+
+    // The error must carry the cascade's entry point and a label
+    // histogram — the "label set is the cascade topology" claim from
+    // `packages/schema/TECHNICAL.md` is observable through these
+    // projections, not just the bounded history tail.
+    const err = error as {
+      message: string
+      lease: {
+        originStack: string | undefined
+        counts: Map<string, number>
+      }
+    }
+    expect(err.lease.originStack).toBeDefined()
+    expect(err.lease.originStack).toContain("doc-layer-reentry.test")
+    expect(err.message).toContain("top message types:")
+    const changefeedCount =
+      [...err.lease.counts.keys()].filter(k => k.startsWith("changefeed:"))
+        .length
+    expect(changefeedCount).toBeGreaterThan(0)
   })
 })

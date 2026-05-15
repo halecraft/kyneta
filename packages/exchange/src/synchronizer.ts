@@ -406,6 +406,21 @@ export class Synchronizer {
     // It also drives ticks — and because it is itself a dispatcher,
     // ticks that produce more `route` msgs (via subscriber re-entry)
     // converge in the same drain.
+    //
+    // `tickPending` is closure-scoped imperative state. It coalesces a
+    // burst of routes into at most one queued tick — the tick-quiescent
+    // handlers are idempotent (`session-program.ts:handleTickQuiescent`,
+    // `sync-program.ts:handleTickQuiescent` both early-return when their
+    // accumulators are empty), so coalescing is semantics-preserving and
+    // bounds the iteration count of long cascades by ~⅓.
+    //
+    // This is structurally inconsistent with `jj:qlvnvxox`'s thesis that
+    // accumulator state lives inside the algebra; promoting the outer
+    // coordinator from `createDispatcher` to a `Program<OuterMsg,
+    // {tickPending: boolean}, OuterEffect>` would put this in the model.
+    // Out of scope for `jj:tozwpvuu`; follow up if the flag accretes
+    // siblings.
+    let tickPending = false
     const outerHandle = createDispatcher<OuterMsg>(
       (msg, dispatch) => {
         if (msg.type === "route") {
@@ -414,8 +429,16 @@ export class Synchronizer {
           } else {
             syncHandle.dispatch(msg.input as SyncInput)
           }
-          dispatch({ type: "tick" })
+          if (!tickPending) {
+            tickPending = true
+            dispatch({ type: "tick" })
+          }
         } else {
+          // Clear *before* the tick-quiescent dispatches so a subscriber
+          // inside an emit-* effect that issues a new route can queue a
+          // fresh tick — preserving the `peer-event-reentry.test.ts`
+          // "tick-induced" guarantee.
+          tickPending = false
           // Outbound flushes last so subscribers fired by the emit-*
           // effects observe the model→world ordering implied by their
           // events (e.g., a ready-state listener that reads peer state
