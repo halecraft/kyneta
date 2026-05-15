@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/transport",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "description": "Transport infrastructure — base class, channel types, message vocabulary, and client utilities for @kyneta/exchange",
   "author": "Duane Johnson",
   "license": "MIT",
@@ -34,14 +34,17 @@
     "test": "verify logic",
     "verify": "verify"
   },
+  "dependencies": {
+    "@kyneta/random": "workspace:^"
+  },
   "peerDependencies": {
-    "@kyneta/machine": "^1.5.2",
-    "@kyneta/schema": "^1.5.2"
+    "@kyneta/machine": "workspace:^",
+    "@kyneta/schema": "workspace:^"
   },
   "devDependencies": {
     "@kyneta/machine": "workspace:^",
     "@kyneta/schema": "workspace:^",
-    "tsdown": "^0.21.9",
+    "tsdown": "^0.22.0",
     "typescript": "^5.9.2",
     "vitest": "^4.0.17"
   }

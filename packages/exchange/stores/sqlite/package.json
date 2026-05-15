@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/sqlite-store",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "description": "SQLite storage backend for @kyneta/exchange — universal persistent storage",
   "author": "Duane Johnson",
   "license": "MIT",
@@ -35,9 +35,9 @@
     "verify": "verify"
   },
   "peerDependencies": {
-    "@kyneta/exchange": "^1.5.2",
-    "@kyneta/schema": "^1.5.2",
-    "@kyneta/sql-store-core": "^1.5.2"
+    "@kyneta/exchange": "workspace:^",
+    "@kyneta/schema": "workspace:^",
+    "@kyneta/sql-store-core": "workspace:^"
   },
   "devDependencies": {
     "@kyneta/exchange": "workspace:^",
@@ -46,7 +46,7 @@
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22",
     "better-sqlite3": "^11.9.1",
-    "tsdown": "^0.21.9",
+    "tsdown": "^0.22.0",
     "typescript": "^5.9.2",
     "vitest": "^4.0.17"
   }

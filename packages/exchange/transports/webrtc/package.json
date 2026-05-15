@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/webrtc-transport",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "description": "WebRTC data channel transport for @kyneta/exchange — BYODC (Bring Your Own Data Channel) with DataChannelLike interface",
   "author": "Duane Johnson",
   "license": "MIT",
@@ -30,8 +30,8 @@
     "verify": "verify"
   },
   "peerDependencies": {
-    "@kyneta/transport": "^1.5.2",
-    "@kyneta/wire": "^1.5.2"
+    "@kyneta/transport": "workspace:^",
+    "@kyneta/wire": "workspace:^"
   },
   "devDependencies": {
     "@kyneta/exchange": "workspace:^",
@@ -39,7 +39,7 @@
     "@kyneta/transport": "workspace:^",
     "@kyneta/wire": "workspace:^",
     "@types/node": "^22",
-    "tsdown": "^0.21.9",
+    "tsdown": "^0.22.0",
     "typescript": "^5.9.2",
     "vitest": "^4.0.17"
   }

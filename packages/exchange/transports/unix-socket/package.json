@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/unix-socket-transport",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "description": "Unix domain socket transport for @kyneta/exchange — stream-oriented server-to-server transport with StreamFrameParser",
   "author": "Duane Johnson",
   "license": "MIT",
@@ -30,10 +30,9 @@
     "verify": "verify"
   },
   "peerDependencies": {
-    "@kyneta/machine": "^1.5.2",
-    "@kyneta/random": "^1.5.2",
-    "@kyneta/transport": "^1.5.2",
-    "@kyneta/wire": "^1.5.2"
+    "@kyneta/machine": "workspace:^",
+    "@kyneta/transport": "workspace:^",
+    "@kyneta/wire": "workspace:^"
   },
   "devDependencies": {
     "@kyneta/exchange": "workspace:^",
@@ -43,7 +42,7 @@
     "@kyneta/wire": "workspace:^",
     "@types/node": "^22",
     "bun-types": "latest",
-    "tsdown": "^0.21.9",
+    "tsdown": "^0.22.0",
     "typescript": "^5.9.2",
     "vitest": "^4.0.17"
   }

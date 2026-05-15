@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/react",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "description": "Thin React bindings over @kyneta/schema + @kyneta/exchange",
   "author": "Duane Johnson",
   "license": "MIT",
@@ -35,9 +35,9 @@
     "verify": "verify"
   },
   "peerDependencies": {
-    "@kyneta/changefeed": "^1.5.2",
-    "@kyneta/exchange": "^1.5.2",
-    "@kyneta/schema": "^1.5.2",
+    "@kyneta/changefeed": "workspace:^",
+    "@kyneta/exchange": "workspace:^",
+    "@kyneta/schema": "workspace:^",
     "react": ">=18"
   },
   "devDependencies": {
@@ -53,7 +53,7 @@
     "@types/react": "^19.1.8",
     "jsdom": "^26.1.0",
     "react": "^19.1.0",
-    "tsdown": "^0.21.9",
+    "tsdown": "^0.22.0",
     "typescript": "^5.9.2",
     "vitest": "^4.0.17"
   }

@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/index",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "description": "Catalog, secondary indexes, and reactive joins over document collections",
   "author": "Duane Johnson",
   "license": "MIT",
@@ -38,7 +38,7 @@
     "@kyneta/changefeed": "workspace:^"
   },
   "peerDependencies": {
-    "@kyneta/schema": "^1.5.2"
+    "@kyneta/schema": "workspace:^"
   },
   "peerDependenciesMeta": {
     "@kyneta/exchange": {
@@ -48,7 +48,7 @@
   "devDependencies": {
     "@kyneta/exchange": "workspace:^",
     "@kyneta/schema": "workspace:^",
-    "tsdown": "^0.21.9",
+    "tsdown": "^0.22.0",
     "typescript": "^5.9.2",
     "vitest": "^4.0.17"
   }

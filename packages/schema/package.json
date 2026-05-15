@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/schema",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "description": "Schema interpreter algebra — pure structure, pluggable interpretations",
   "author": "Duane Johnson",
   "license": "MIT",
@@ -48,7 +48,7 @@
   },
   "devDependencies": {
     "@kyneta/changefeed": "workspace:^",
-    "tsdown": "^0.21.9",
+    "tsdown": "^0.22.0",
     "typescript": "^5.9.2",
     "vitest": "^4.0.17"
   }

@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/indexeddb-store",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "description": "IndexedDB storage backend for @kyneta/exchange — browser-side persistent storage",
   "author": "Duane Johnson",
   "license": "MIT",
@@ -35,14 +35,14 @@
     "verify": "verify"
   },
   "peerDependencies": {
-    "@kyneta/exchange": "^1.5.2",
-    "@kyneta/schema": "^1.5.2"
+    "@kyneta/exchange": "workspace:^",
+    "@kyneta/schema": "workspace:^"
   },
   "devDependencies": {
     "@kyneta/exchange": "workspace:^",
     "@kyneta/schema": "workspace:^",
     "fake-indexeddb": "^6.0.0",
-    "tsdown": "^0.21.9",
+    "tsdown": "^0.22.0",
     "typescript": "^5.9.2",
     "vitest": "^4.0.17"
   }

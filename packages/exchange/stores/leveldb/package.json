@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/leveldb-store",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "description": "LevelDB storage backend for @kyneta/exchange — server-side persistent storage",
   "author": "Duane Johnson",
   "license": "MIT",
@@ -35,8 +35,8 @@
     "verify": "verify"
   },
   "peerDependencies": {
-    "@kyneta/exchange": "^1.5.2",
-    "@kyneta/schema": "^1.5.2"
+    "@kyneta/exchange": "workspace:^",
+    "@kyneta/schema": "workspace:^"
   },
   "dependencies": {
     "classic-level": "^1.4.1"
@@ -45,7 +45,7 @@
     "@kyneta/exchange": "workspace:^",
     "@kyneta/schema": "workspace:^",
     "@types/node": "^22",
-    "tsdown": "^0.21.9",
+    "tsdown": "^0.22.0",
     "typescript": "^5.9.2",
     "vitest": "^4.0.17"
   }

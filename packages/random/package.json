@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/random",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "description": "Secure-context-free random ID primitives for the kyneta monorepo",
   "author": "Duane Johnson",
   "license": "MIT",
@@ -35,7 +35,7 @@
     "verify": "verify"
   },
   "devDependencies": {
-    "tsdown": "^0.21.9",
+    "tsdown": "^0.22.0",
     "typescript": "^5.9.2",
     "vitest": "^4.0.17"
   }

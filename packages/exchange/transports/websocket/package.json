@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/websocket-transport",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "description": "Websocket network adapter for @kyneta/exchange — browser, server, and Bun integration",
   "author": "Duane Johnson",
   "license": "MIT",
@@ -38,10 +38,9 @@
     "verify": "verify"
   },
   "peerDependencies": {
-    "@kyneta/machine": "^1.5.2",
-    "@kyneta/random": "^1.5.2",
-    "@kyneta/transport": "^1.5.2",
-    "@kyneta/wire": "^1.5.2"
+    "@kyneta/machine": "workspace:^",
+    "@kyneta/transport": "workspace:^",
+    "@kyneta/wire": "workspace:^"
   },
   "devDependencies": {
     "@kyneta/exchange": "workspace:^",
@@ -51,7 +50,7 @@
     "@kyneta/wire": "workspace:^",
     "@types/node": "^22",
     "bun-types": "latest",
-    "tsdown": "^0.21.9",
+    "tsdown": "^0.22.0",
     "typescript": "^5.9.2",
     "vitest": "^4.0.17"
   }

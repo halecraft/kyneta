@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/cast",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "description": "Compiled delta-driven web framework",
   "author": "Duane Johnson",
   "license": "MIT",
@@ -106,7 +106,7 @@
     "@types/jsdom": "^21.1.7",
     "@typescript/native-preview": "7.0.0-dev.20260103.1",
     "jsdom": "^26.1.0",
-    "tsdown": "^0.21.9",
+    "tsdown": "^0.22.0",
     "typescript": "^5.9.2",
     "vite": "^6.1.1",
     "vitest": "^4.0.17"

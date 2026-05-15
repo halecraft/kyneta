@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/postgres-store",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "description": "Postgres storage backend for @kyneta/exchange",
   "author": "Duane Johnson",
   "license": "MIT",
@@ -37,9 +37,9 @@
     "verify": "verify"
   },
   "peerDependencies": {
-    "@kyneta/exchange": "^1.5.2",
-    "@kyneta/schema": "^1.5.2",
-    "@kyneta/sql-store-core": "^1.5.2",
+    "@kyneta/exchange": "workspace:^",
+    "@kyneta/schema": "workspace:^",
+    "@kyneta/sql-store-core": "workspace:^",
     "pg": "^8.11.0"
   },
   "devDependencies": {
@@ -49,7 +49,7 @@
     "@types/node": "^22",
     "@types/pg": "^8.11.0",
     "pg": "^8.13.0",
-    "tsdown": "^0.21.9",
+    "tsdown": "^0.22.0",
     "typescript": "^5.9.2",
     "vitest": "^4.0.17"
   }

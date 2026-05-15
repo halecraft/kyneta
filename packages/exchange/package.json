@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/exchange",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "description": "Substrate-agnostic state exchange — sync for any @kyneta/schema substrate",
   "author": "Duane Johnson",
   "license": "MIT",
@@ -38,8 +38,8 @@
     "verify": "verify"
   },
   "peerDependencies": {
-    "@kyneta/changefeed": "^1.5.2",
-    "@kyneta/schema": "^1.5.2"
+    "@kyneta/changefeed": "workspace:^",
+    "@kyneta/schema": "workspace:^"
   },
   "dependencies": {
     "@kyneta/machine": "workspace:*",
@@ -54,7 +54,7 @@
     "@kyneta/wire": "workspace:^",
     "@kyneta/yjs-schema": "workspace:^",
     "loro-crdt": "^1.10.0",
-    "tsdown": "^0.21.9",
+    "tsdown": "^0.22.0",
     "typescript": "^5.9.2",
     "vitest": "^4.0.17",
     "yjs": "^13.6.30"

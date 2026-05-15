@@ -221,13 +221,10 @@ function bump(version: string, groupNames: string[]): void {
 		dirs.push(...pkgs)
 	}
 
-	// Build name → version map for peer dependency updates
-	const nameVersionMap = new Map<string, string>()
-	for (const pkg of dirs) {
-		nameVersionMap.set(pkg.name, version)
-	}
-
-	// 1. Bump versions in target packages
+	// Bump versions in target packages. Workspace-internal dependents use
+	// `workspace:^` everywhere (deps, devDeps, peerDeps), so cross-package
+	// ranges resolve to the new version automatically. `pnpm publish`
+	// rewrites `workspace:^` to `^<version>` in the published tarball.
 	console.log(`\nBumping to ${version}:\n`)
 	for (const pkg of dirs) {
 		const pkgPath = `${pkg.path}/package.json`
@@ -238,44 +235,7 @@ function bump(version: string, groupNames: string[]): void {
 		console.log(`  ${pkg.name}: ${oldVersion} → ${version}`)
 	}
 
-	// 2. Update peerDependency ranges across ALL workspace packages
-	console.log(`\nUpdating peer dependency ranges:\n`)
-	let peerUpdates = 0
-	for (const wsPkg of workspace.all) {
-		const jsonPath = `${wsPkg.path}/package.json`
-		const pkgJson = readJson(jsonPath)
-		const peers = pkgJson.peerDependencies as
-			| Record<string, string>
-			| undefined
-		if (!peers) continue
-
-		let changed = false
-		for (const [name, newVersion] of nameVersionMap) {
-			if (name in peers) {
-				const oldRange = peers[name]
-				const newRange = `^${newVersion}`
-				if (oldRange !== newRange) {
-					peers[name] = newRange
-					console.log(
-						`  ${wsPkg.path}/package.json: ${name} ${oldRange} → ${newRange}`,
-					)
-					changed = true
-					peerUpdates++
-				}
-			}
-		}
-		if (changed) {
-			writeJson(jsonPath, pkgJson)
-		}
-	}
-
-	if (peerUpdates === 0) {
-		console.log("  (no peer dependency ranges changed)")
-	}
-
-	console.log(
-		`\nDone. Bumped ${dirs.length} package(s), updated ${peerUpdates} peer dep range(s).\n`,
-	)
+	console.log(`\nDone. Bumped ${dirs.length} package(s).\n`)
 }
 
 // ── publish ─────────────────────────────────────────────────────────────────
@@ -463,7 +423,9 @@ Usage:
   bun scripts/release.ts status
 
 Commands:
-  bump      Set version for packages in the specified group(s) and update peer dep ranges.
+  bump      Set version for packages in the specified group(s). Workspace-internal
+            ranges (deps, devDeps, peerDeps) all use "workspace:^" and follow
+            automatically — pnpm publish rewrites them in the tarball.
   publish   Build, test, and publish all packages in dependency order.
   status    Show local vs. npm registry versions for all packages.
 
