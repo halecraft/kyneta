@@ -88,7 +88,11 @@ const ADDRESS_TABLE_SYM = Symbol.for("kyneta:addressTable")
  *   the invalidation handler fires.
  */
 interface CacheWiringState {
-  readonly handlers: Map<string, (change: ChangeBase) => void>
+  // Outer key: path where the handler fires. Inner key: registrant's own
+  // path (the product/sequence/etc. that owns the handler). Re-registration
+  // from the same registrant replaces — so re-interpretation of a sum's
+  // current variant doesn't accrete dead handlers.
+  readonly handlers: Map<string, Map<string, (change: ChangeBase) => void>>
   readonly originalPrepare: (path: Path, change: ChangeBase) => void
 }
 
@@ -125,20 +129,24 @@ function hasPrepare(ctx: RefContext): ctx is RefContext & {
  */
 function ensureCacheWiring(
   ctx: RefContext,
-): Map<string, (change: ChangeBase) => void> | null {
+): Map<string, Map<string, (change: ChangeBase) => void>> | null {
   if (!hasPrepare(ctx)) return null
 
   let state = cacheContextState.get(ctx)
   if (state) return state.handlers
 
-  const handlers = new Map<string, (change: ChangeBase) => void>()
+  const handlers = new Map<
+    string,
+    Map<string, (change: ChangeBase) => void>
+  >()
   const originalPrepare = ctx.prepare
 
   // Wrapped prepare: invalidate cache at path, then forward.
   const wrappedPrepare = (path: Path, change: ChangeBase): void => {
-    const key = path.key
-    const handler = handlers.get(key)
-    if (handler) handler(change)
+    const inner = handlers.get(path.key)
+    if (inner) {
+      for (const h of inner.values()) h(change)
+    }
     originalPrepare(path, change)
   }
 
@@ -150,34 +158,33 @@ function ensureCacheWiring(
 }
 
 /**
- * Registers an invalidation handler at the given path.
+ * Registers an invalidation handler at `atPath`, keyed by `registrantPath`.
  *
- * If a handler already exists at this path key, the new handler is
- * composed with it (both fire on invalidation). Sum fields require
- * this: parent and variant products share a path key, so both
- * handlers must fire.
+ * Multiple registrants can share an `atPath`: parent and variant products
+ * both register at a sum field's path. Re-registration from the same
+ * `registrantPath` replaces the previous handler — so re-interpreting the
+ * sum's current variant after a cache flush doesn't accrete dead handlers,
+ * and storing them in a left-folded closure (the prior shape) wouldn't
+ * blow the stack via composed recursion.
  *
- * If `handlers` is null (read-only stack, no prepare pipeline),
- * this is a no-op — invalidation will only happen via direct
+ * `handlers === null` denotes a read-only stack (no prepare pipeline);
+ * registration is a no-op there — invalidation runs only via direct
  * `ref[INVALIDATE](change)` calls.
  */
 function registerCacheHandler(
-  handlers: Map<string, (change: ChangeBase) => void> | null,
-  path: Path,
+  handlers: Map<string, Map<string, (change: ChangeBase) => void>> | null,
+  registrantPath: Path,
+  atPath: Path,
   handler: (change: ChangeBase) => void,
 ): void {
-  if (handlers) {
-    const existing = handlers.get(path.key)
-    if (existing) {
-      // Compose: fire both the existing and new handler.
-      handlers.set(path.key, (change: ChangeBase) => {
-        existing(change)
-        handler(change)
-      })
-    } else {
-      handlers.set(path.key, handler)
-    }
+  if (!handlers) return
+  const atKey = atPath.key
+  let inner = handlers.get(atKey)
+  if (!inner) {
+    inner = new Map()
+    handlers.set(atKey, inner)
   }
+  inner.set(registrantPath.key, handler)
 }
 
 // ---------------------------------------------------------------------------
@@ -280,7 +287,7 @@ export function withCaching<A extends HasNavigation>(
 
       // Register in the prepare pipeline (writable stacks only)
       const handlers = ensureCacheWiring(ctx)
-      registerCacheHandler(handlers, path, invalidateProduct)
+      registerCacheHandler(handlers, path, path, invalidateProduct)
 
       // Unlike normal product fields (stable ref identity), variant switching
       // changes the ref entirely. Register parent invalidation at each sum
@@ -289,7 +296,7 @@ export function withCaching<A extends HasNavigation>(
         const fieldSchema = schema.fields[key]
         if (fieldSchema && (fieldSchema as any)[KIND] === "sum") {
           const fieldPath = path.field(key)
-          registerCacheHandler(handlers, fieldPath, invalidateProduct)
+          registerCacheHandler(handlers, path, fieldPath, invalidateProduct)
         }
       }
 
@@ -312,7 +319,7 @@ export function withCaching<A extends HasNavigation>(
         ADDRESS_TABLE_SYM,
         INVALIDATE,
         (p, handler) =>
-          registerCacheHandler(ensureCacheWiring(ctx), p, handler),
+          registerCacheHandler(ensureCacheWiring(ctx), p, p, handler),
       )
       return result as A & HasCaching
     },
@@ -333,7 +340,7 @@ export function withCaching<A extends HasNavigation>(
         ADDRESS_TABLE_SYM,
         INVALIDATE,
         (p, handler) =>
-          registerCacheHandler(ensureCacheWiring(ctx), p, handler),
+          registerCacheHandler(ensureCacheWiring(ctx), p, p, handler),
       )
       return result as A & HasCaching
     },
@@ -382,7 +389,7 @@ export function withCaching<A extends HasNavigation>(
         ADDRESS_TABLE_SYM,
         INVALIDATE,
         (p, handler) =>
-          registerCacheHandler(ensureCacheWiring(ctx), p, handler),
+          registerCacheHandler(ensureCacheWiring(ctx), p, p, handler),
       )
       return result as A & HasCaching
     },
@@ -417,7 +424,7 @@ export function withCaching<A extends HasNavigation>(
         ADDRESS_TABLE_SYM,
         INVALIDATE,
         (p, handler) =>
-          registerCacheHandler(ensureCacheWiring(ctx), p, handler),
+          registerCacheHandler(ensureCacheWiring(ctx), p, p, handler),
       )
       return result as A & HasCaching
     },
