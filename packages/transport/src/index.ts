@@ -75,6 +75,12 @@ export { Transport } from "./transport.js"
 export type { StateTransition, TransitionListener } from "@kyneta/machine"
 
 // ---------------------------------------------------------------------------
+// Random — re-exported from @kyneta/random
+// ---------------------------------------------------------------------------
+
+export { randomPeerId } from "@kyneta/random"
+
+// ---------------------------------------------------------------------------
 // Reconnection utilities
 // ---------------------------------------------------------------------------
 

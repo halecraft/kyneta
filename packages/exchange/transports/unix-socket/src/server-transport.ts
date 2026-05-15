@@ -11,9 +11,8 @@
 // No "ready" handshake — UDS connections are bidirectionally ready
 // immediately. The client calls `establishChannel` directly after connect.
 
-import { randomPeerId } from "@kyneta/random"
 import type { ChannelMsg, GeneratedChannel, PeerId } from "@kyneta/transport"
-import { Transport } from "@kyneta/transport"
+import { randomPeerId, Transport } from "@kyneta/transport"
 import { UnixSocketConnection } from "./connection.js"
 import { listen, type UnixSocketListener } from "./listen.js"
 import type { UnixSocket } from "./types.js"

@@ -28,9 +28,8 @@
 // Ported from @loro-extended/adapter-websocket's WsServerNetworkAdapter with
 // kyneta naming conventions and the kyneta 5-message protocol.
 
-import { randomPeerId } from "@kyneta/random"
 import type { ChannelMsg, GeneratedChannel, PeerId } from "@kyneta/transport"
-import { Transport } from "@kyneta/transport"
+import { randomPeerId, Transport } from "@kyneta/transport"
 import {
   DEFAULT_FRAGMENT_THRESHOLD,
   WebsocketConnection,

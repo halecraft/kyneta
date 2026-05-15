@@ -22,6 +22,7 @@ describe("@kyneta/exchange re-exports from @kyneta/transport", () => {
     "isEstablished",
     "isLifecycleMsg",
     "isSyncMsg",
+    "randomPeerId",
   ] as const
 
   for (const name of transportValues) {

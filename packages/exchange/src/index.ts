@@ -105,6 +105,7 @@ export {
   computeBackoffDelay,
   DEFAULT_RECONNECT,
   type ReconnectOptions,
+  randomPeerId,
   type StateTransition,
   type TransitionListener,
   Transport,
