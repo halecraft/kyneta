@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/cast",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "Compiled delta-driven web framework",
   "author": "Duane Johnson",
   "license": "MIT",

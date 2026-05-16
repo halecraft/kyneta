@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/changefeed",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "Universal reactive contract — a Moore machine identified by [CHANGEFEED]",
   "author": "Duane Johnson",
   "license": "MIT",

@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/react",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "Thin React bindings over @kyneta/schema + @kyneta/exchange",
   "author": "Duane Johnson",
   "license": "MIT",

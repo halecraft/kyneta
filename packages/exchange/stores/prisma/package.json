@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/prisma-store",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "Prisma-based storage backend for @kyneta/exchange",
   "author": "Duane Johnson",
   "license": "MIT",

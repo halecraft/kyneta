@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/indexeddb-store",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "IndexedDB storage backend for @kyneta/exchange — browser-side persistent storage",
   "author": "Duane Johnson",
   "license": "MIT",

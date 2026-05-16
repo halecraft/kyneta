@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/sql-store-core",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "Pure helpers shared by SQL-family Store backends for @kyneta/exchange",
   "author": "Duane Johnson",
   "license": "MIT",

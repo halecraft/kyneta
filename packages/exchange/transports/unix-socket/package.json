@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/unix-socket-transport",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "Unix domain socket transport for @kyneta/exchange — stream-oriented server-to-server transport with StreamFrameParser",
   "author": "Duane Johnson",
   "license": "MIT",

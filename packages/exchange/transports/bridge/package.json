@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/bridge-transport",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "In-process transport for @kyneta/exchange — codec-faithful + alias-aware delivery for testing multi-peer scenarios in a single process",
   "author": "Duane Johnson",
   "license": "MIT",
