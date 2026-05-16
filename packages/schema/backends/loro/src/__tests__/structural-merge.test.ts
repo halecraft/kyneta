@@ -184,8 +184,8 @@ describe("structural merge protocol (Loro)", () => {
     const state2 = sub2.exportEntirety()
 
     // Cross-merge — should not throw
-    sub1.merge(state2, "sync")
-    sub2.merge(state1, "sync")
+    sub1.merge(state2, { origin: "sync" })
+    sub2.merge(state1, { origin: "sync" })
   })
 
   it("loro.bind() factory produces merge-compatible substrates", () => {
@@ -206,8 +206,8 @@ describe("structural merge protocol (Loro)", () => {
     // Cross-merge — should not throw
     const stateA = subA.exportEntirety()
     const stateB = subB.exportEntirety()
-    subA.merge(stateB, "sync")
-    subB.merge(stateA, "sync")
+    subA.merge(stateB, { origin: "sync" })
+    subB.merge(stateA, { origin: "sync" })
 
     // No crash, no data loss
   })

@@ -607,4 +607,51 @@ describe("YjsSubstrate", () => {
       expect(parsed.compare(v)).toBe("equal")
     })
   })
+
+  // -------------------------------------------------------------------------
+  // Re-entrant write during merge replay
+  // -------------------------------------------------------------------------
+  //
+  // A subscriber that calls `change(doc, ...)` while delivering a sync
+  // merge must reach Yjs — otherwise the substrate stalls and the
+  // subscriber loops on stale state until the lease budget trips.
+  // Context: jj:qpultxsw.
+
+  describe("re-entrant write during merge replay", () => {
+    it("subscriber's local change() inside a merge-replay batch lands in Yjs", async () => {
+      const docA = createDoc(yjs.bind(SimpleSchema))
+      const docB = createDoc(yjs.bind(SimpleSchema))
+
+      change(docA, (d: any) => {
+        d.title.insert(0, "seed")
+      })
+      merge(docB, exportEntirety(docA), { origin: "sync" })
+
+      // On the first replay-driven update, the subscriber writes once
+      // to an unrelated field. The write must hit Yjs; the guard
+      // ensures we don't re-enter on subsequent flushes.
+      let writes = 0
+      subscribe(docB.title, () => {
+        if (writes === 0 && (docB.title() as string) === "seedmore") {
+          writes++
+          change(docB, (d: any) => {
+            d.count.set(42)
+          })
+        }
+      })
+
+      const v0 = version(docB)
+      change(docA, (d: any) => {
+        d.title.insert((d.title() as string).length, "more")
+      })
+      const delta = exportSince(docA, v0)!
+      merge(docB, delta, { origin: "sync" })
+
+      await new Promise<void>(r => queueMicrotask(r))
+
+      expect(docB.title()).toBe("seedmore")
+      expect(docB.count()).toBe(42)
+      expect(writes).toBe(1)
+    })
+  })
 })

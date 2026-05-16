@@ -61,6 +61,7 @@ import type {
   TextSchema,
   TreeSchema,
 } from "../schema.js"
+import type { BatchOptions } from "../substrate.js"
 
 import type { HasRead } from "./bottom.js"
 import { CALL } from "./bottom.js"
@@ -140,7 +141,9 @@ export function planNotifications(pending: readonly Op[]): NotificationPlan {
  *
  * @param plan - The notification plan from `planNotifications`.
  * @param listeners - The path-keyed listener map (from `ensurePrepareWiring`).
- * @param origin - Optional provenance tag attached to each emitted `Changeset`.
+ * @param options - Optional `BatchOptions`. `options?.origin` is attached
+ *   to each emitted `Changeset` as the app-level label;
+ *   `options?.replay` is attached as the structural directive.
  */
 export function deliverNotifications(
   plan: NotificationPlan,
@@ -148,12 +151,16 @@ export function deliverNotifications(
     string,
     Set<(changeset: Changeset<ChangeBase>) => void>
   >,
-  origin?: string,
+  options?: BatchOptions,
 ): void {
   for (const [key, changes] of plan.grouped) {
     const set = listeners.get(key)
     if (set && set.size > 0) {
-      const changeset: Changeset<ChangeBase> = { changes, origin }
+      const changeset: Changeset<ChangeBase> = {
+        changes,
+        origin: options?.origin,
+        replay: options?.replay,
+      }
       for (const cb of set) cb(changeset)
     }
   }
@@ -180,6 +187,7 @@ export function liftToOps<C extends ChangeBase>(
   return {
     changes: cs.changes.map(change => ({ path, change })),
     origin: cs.origin,
+    replay: cs.replay,
   }
 }
 
@@ -204,6 +212,7 @@ export function prefixOps<C extends ChangeBase>(
       change: event.change,
     })),
     origin: cs.origin,
+    replay: cs.replay,
   }
 }
 
@@ -262,8 +271,12 @@ interface ContextWiringState {
     string,
     Set<(changeset: Changeset<ChangeBase>) => void>
   >
-  readonly originalPrepare: (path: Path, change: ChangeBase) => void
-  readonly originalFlush: (origin?: string) => void
+  readonly originalPrepare: (
+    path: Path,
+    change: ChangeBase,
+    options?: BatchOptions,
+  ) => void
+  readonly originalFlush: (options?: BatchOptions) => void
   readonly populated: Set<string>
   readonly populatedListeners: Map<string, Set<() => void>>
   readonly handle: DispatcherHandle<ChangefeedMsg>
@@ -274,12 +287,16 @@ interface ContextWiringState {
  * pipeline. Not exported — fully encapsulated inside `with-changefeed.ts`.
  *
  * - `accumulate`: a `prepare` call observed a substrate mutation; queue
- *   its `Op` for the next flush.
+ *   its `Op` for the next flush. The substrate write happens synchronously
+ *   in `wrappedPrepare` *before* this Msg is dispatched, so the accumulate
+ *   Msg carries no options — it's a pure notification-side concern.
  * - `flush`: a `flush` call requested commit + notification delivery.
+ *   Carries `options` so the resulting `Changeset` surfaces both `origin`
+ *   and `replay` to subscribers.
  */
 type ChangefeedMsg =
   | { type: "accumulate"; op: Op }
-  | { type: "flush"; origin: string | undefined }
+  | { type: "flush"; options: BatchOptions | undefined }
 
 /**
  * Returns `true` if `ctx` has `prepare` and `flush` methods — i.e. it's
@@ -288,8 +305,8 @@ type ChangefeedMsg =
  * participating in the prepare pipeline when composed with `withWritable`.
  */
 function hasPreparePipeline(ctx: RefContext): ctx is RefContext & {
-  prepare: (path: Path, change: ChangeBase) => void
-  flush: (origin?: string) => void
+  prepare: (path: Path, change: ChangeBase, options?: BatchOptions) => void
+  flush: (options?: BatchOptions) => void
 } {
   return (
     "prepare" in ctx &&
@@ -368,7 +385,7 @@ function ensurePrepareWiring(
   // subscriber delivery dispatch `accumulate` Msgs back into this same
   // dispatcher; the drain-to-quiescence loop processes them in fresh
   // sub-ticks. A `flush` Msg whose `accumulator.length === 0` (no
-  // mutations since the last drain) still calls `originalFlush(origin)`
+  // mutations since the last drain) still calls `originalFlush(options)`
   // — preserving the invariant that substrate-level flush always runs.
   const handle = createDispatcher<ChangefeedMsg>(
     msg => {
@@ -378,15 +395,15 @@ function ensurePrepareWiring(
       }
       // msg.type === "flush"
       if (accumulator.length === 0) {
-        originalFlush(msg.origin)
+        originalFlush(msg.options)
         return
       }
       const plan = planNotifications(accumulator)
       accumulator.length = 0
       // Commit to the substrate first so version() and delta() reflect
       // the just-flushed operations when subscribers read them.
-      originalFlush(msg.origin)
-      deliverNotifications(plan, listeners, msg.origin)
+      originalFlush(msg.options)
+      deliverNotifications(plan, listeners, msg.options)
     },
     {
       lease: (ctx as { lease?: Lease }).lease,
@@ -394,11 +411,16 @@ function ensurePrepareWiring(
     },
   )
 
-  // Wrapped prepare: apply change to substrate synchronously, mark
-  // populated synchronously, then dispatch the accumulate Msg. Substrate
-  // writes are guaranteed visible to subsequent reads inside the same
-  // outer `change()` call.
-  const wrappedPrepare = (path: Path, change: ChangeBase): void => {
+  // Wrapped prepare: apply change to substrate synchronously (forwarding
+  // `options` so the substrate sees `replay` at write time), mark populated
+  // synchronously, then dispatch the accumulate Msg. The accumulate Msg
+  // carries no options — notification-side `origin`/`replay` ride on the
+  // subsequent `flush` Msg.
+  const wrappedPrepare = (
+    path: Path,
+    change: ChangeBase,
+    options?: BatchOptions,
+  ): void => {
     // Resolve raw paths to addressed paths so that path.key matches
     // the identity-stable keys used by changefeed listeners and cache
     // invalidation handlers. Idempotent for already-addressed paths.
@@ -407,15 +429,16 @@ function ensurePrepareWiring(
       rootPath instanceof AddressedPath
         ? resolveToAddressed(path, rootPath.registry)
         : path
-    originalPrepare(resolved, change)
+    originalPrepare(resolved, change, options)
     markPopulated(resolved, populated, populatedListeners)
     handle.dispatch({ type: "accumulate", op: { path: resolved, change } })
   }
 
-  // Wrapped flush: dispatch a flush Msg. The handler enforces the order
-  // (originalFlush → deliverNotifications) inside the dispatcher's drain.
-  const wrappedFlush = (origin?: string): void => {
-    handle.dispatch({ type: "flush", origin })
+  // Wrapped flush: dispatch a flush Msg carrying the full options. The
+  // handler enforces the order (originalFlush → deliverNotifications)
+  // inside the dispatcher's drain.
+  const wrappedFlush = (options?: BatchOptions): void => {
+    handle.dispatch({ type: "flush", options })
   }
 
   ctx.prepare = wrappedPrepare

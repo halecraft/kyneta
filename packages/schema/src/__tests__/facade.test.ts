@@ -578,6 +578,27 @@ describe("applyChanges: origin tagging", () => {
       RawPath.empty.field("darkMode").key,
     )
   })
+
+  // Guards the documented `applyChanges(doc, ops, { origin: "sync" })`
+  // pattern in the README. If the schema layer ever grew origin-string
+  // branching (the bug this slice exists to retire), this test would
+  // catch the substrate-write being skipped.
+  it("applyChanges with origin 'sync' lands the change in the substrate", () => {
+    const { doc } = createChatDoc()
+
+    applyChanges(
+      doc,
+      [
+        {
+          path: RawPath.empty.field("settings").field("darkMode"),
+          change: replaceChange(true),
+        },
+      ],
+      { origin: "sync" },
+    )
+
+    expect(doc.settings.darkMode()).toBe(true)
+  })
 })
 
 // ===========================================================================

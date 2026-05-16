@@ -159,14 +159,14 @@ Schema composed changefeed emits Changeset<Op>            (5)
                   sync/message-received { offer }
                      │
                      ▼
-               substrate.merge(payload, "sync")            (9)
+               substrate.merge(payload, { origin: "sync" }) (9)
                      │
                      ├─ Y.applyUpdate → observeDeep fires
                      ▼
-               changefeed emits Changeset with origin="sync" (10)
+               changefeed emits Changeset (origin="sync", replay=true) (10)
                      │
                      ├──► remote React useValue re-renders
-                     └──► exchange subscriber: origin === "sync" → skip (no re-broadcast)
+                     └──► exchange subscriber: changeset.replay → skip (no re-broadcast)
 ```
 
 Ten numbered steps cross eight packages — `@kyneta/react`, `@kyneta/cast`, `@kyneta/schema`, `@kyneta/yjs-schema`, `@kyneta/changefeed`, `@kyneta/exchange`, `@kyneta/wire`, `@kyneta/websocket-transport` — with `@kyneta/transport` and `@kyneta/machine` providing abstract scaffolding underneath. Every boundary is one of the protocols above: a schema `Change`, a substrate `SubstratePayload`, a transport `ChannelMsg`, a wire `Frame`, a changefeed `Changeset`. No package reaches across two boundaries.

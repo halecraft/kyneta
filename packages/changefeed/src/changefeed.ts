@@ -41,9 +41,14 @@ export const CHANGEFEED: unique symbol = Symbol.for("kyneta:changefeed") as any
  *
  * - Auto-commit produces a degenerate changeset of one change.
  * - Transactions and `applyChanges` produce multi-change batches.
- * - `origin` carries provenance for the entire batch (e.g. "sync",
- *   "undo", "local"). Individual changes do not carry provenance —
- *   the batch does.
+ * - `origin` is an *application-level label* — opaque to the framework.
+ *   Apps may use it freely (`"sync"`, `"undo"`, `"local"`, anything).
+ *   The schema package and the exchange never branch on its value.
+ * - `replay` is a *structural directive* set by kyneta-internal layers.
+ *   `true` iff the batch represents state authored elsewhere (substrate
+ *   event bridge, `merge` payload, version travel). Layered consumers
+ *   (e.g. the exchange's echo filter) use `replay` to discriminate
+ *   "echo from sync" from "local write" without piggy-backing on origin.
  *
  * The subscriber API always receives a `Changeset`, making it uniform
  * regardless of how the changes were produced.
@@ -51,8 +56,11 @@ export const CHANGEFEED: unique symbol = Symbol.for("kyneta:changefeed") as any
 export interface Changeset<C = ChangeBase> {
   /** The individual changes in this batch. */
   readonly changes: readonly C[]
-  /** Provenance of the batch (e.g. "sync", "undo", "local"). */
+  /** App-level provenance label (e.g. "sync", "undo", "local"). */
   readonly origin?: string
+  /** Structural: true iff this batch is replaying state authored
+   *  elsewhere (substrate event bridge, merge payload). */
+  readonly replay?: boolean
 }
 
 // ---------------------------------------------------------------------------

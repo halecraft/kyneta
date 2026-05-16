@@ -877,7 +877,7 @@ describe("changefeed: batched notification", () => {
 
     ctx.beginTransaction()
     doc.x.set(42)
-    ctx.commit("sync")
+    ctx.commit({ origin: "sync" })
 
     expect(xChangesets).toHaveLength(1)
     expect(xChangesets[0]?.origin).toBe("sync")
@@ -901,7 +901,7 @@ describe("changefeed: batched notification", () => {
 
     ctx.beginTransaction()
     doc.settings.darkMode.set(true)
-    ctx.commit("undo")
+    ctx.commit({ origin: "undo" })
 
     // Tree changeset propagated from child — should carry the origin
     expect(treeChangesets).toHaveLength(1)

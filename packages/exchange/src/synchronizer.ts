@@ -1218,7 +1218,7 @@ export class Synchronizer {
     }
 
     try {
-      runtime.replica.merge(effect.payload, "sync")
+      runtime.replica.merge(effect.payload, { origin: "sync" })
     } catch (err) {
       console.warn(
         `[exchange] import failed for doc '${effect.docId}'. ` +

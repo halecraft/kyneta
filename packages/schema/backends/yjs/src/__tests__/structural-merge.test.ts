@@ -383,8 +383,8 @@ describe("structural merge protocol (Yjs)", () => {
     // Bidirectional merge — should not throw
     const payloadA = subA.exportEntirety()
     const payloadB = subB.exportEntirety()
-    subA.merge(payloadB, "sync")
-    subB.merge(payloadA, "sync")
+    subA.merge(payloadB, { origin: "sync" })
+    subB.merge(payloadA, { origin: "sync" })
 
     // Both converge
     const rootA = docA.getMap("root")

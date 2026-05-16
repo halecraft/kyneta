@@ -584,7 +584,10 @@ export class Exchange {
         "interpret",
       ).then(() => {
         subscribe(ref, changeset => {
-          if (changeset.origin === "sync") return
+          // Filter on the structural `replay` flag — not the `origin`
+          // label string — so foreign-origin merges still don't echo
+          // and `change(doc, fn, { origin: "sync" })` still broadcasts.
+          if (changeset.replay) return
           this.#synchronizer.notifyLocalChange(docId)
         })
       })
@@ -600,7 +603,9 @@ export class Exchange {
       })
 
       subscribe(ref, changeset => {
-        if (changeset.origin === "sync") return
+        // See companion subscriber above for the replay-vs-origin
+        // rationale; identical filter.
+        if (changeset.replay) return
         this.#synchronizer.notifyLocalChange(docId)
       })
     }
@@ -731,7 +736,7 @@ export class Exchange {
           for await (const record of backend.loadAll(docId)) {
             if (record.kind === "entry") {
               try {
-                replica.merge(record.payload, "sync")
+                replica.merge(record.payload, { origin: "sync" })
                 hadStoredEntries = true
               } catch (err) {
                 console.warn(

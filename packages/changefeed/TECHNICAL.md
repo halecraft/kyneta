@@ -100,18 +100,21 @@ The split between `ChangefeedProtocol` and `Changefeed` exists so that producers
 Every callback receives a `Changeset<C>`, never a bare change (source: `packages/changefeed/src/changefeed.ts` → `Changeset`, `ChangefeedProtocol.subscribe`). A changeset is:
 
 ```
-{ changes: readonly C[], origin?: string }
+{ changes: readonly C[], origin?: string, replay?: boolean }
 ```
 
 Auto-commit produces a degenerate changeset of one. Transactions and `applyChanges` in `@kyneta/schema` produce multi-change batches. The subscriber API is uniform across both cases.
 
-`origin` carries provenance for the **whole batch**, not per-change. Individual changes carry only their `type` discriminant. This is why `@kyneta/exchange` can ask "did this change come from sync or from local?" by checking `changeset.origin === "sync"` on a single field rather than iterating.
+`origin` carries the **app-level provenance label** for the whole batch — pure free vocabulary for application code. Individual changes carry only their `type` discriminant. The schema layer and the exchange never branch on `origin`'s value; if a label like `"sync"` arrives, it surfaces to subscribers unchanged.
+
+`replay` is the **structural directive** set by kyneta-internal layers — true iff this batch represents state authored elsewhere (substrate event bridge, `merge` payload, version travel). Layered consumers that need to discriminate "echo from sync" from "local write" (e.g. the exchange's auto-subscribe filter at `packages/exchange/src/exchange.ts`) read `replay` rather than parsing the `origin` string. User-facing entry points (`change`, `applyChanges`) never set `replay: true` — only substrate event bridges and `merge` paths do. Context: jj:qpultxsw.
 
 ### What `Changeset.origin` is NOT
 
-- **Not a peer ID.** Origin is a categorical provenance string (`"local"`, `"sync"`, `"undo"`, `"migration"`), not a sender identity.
+- **Not a peer ID.** Origin is a categorical provenance label (`"local"`, `"sync"`, `"undo"`, `"migration"`), not a sender identity.
 - **Not required.** Many changesets emit without origin. Subscribers that filter on origin must handle `undefined`.
 - **Not per-change.** Each change in the batch shares the same origin. If a mixed-origin batch were needed, it would have to be split into multiple emits.
+- **Not a structural discriminator.** Origin is for app-facing UI/logging. The framework's "is this a replay" decision is on `replay`, not on origin-string-matching.
 
 ---
 

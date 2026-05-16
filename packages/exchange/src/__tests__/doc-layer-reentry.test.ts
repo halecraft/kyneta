@@ -205,9 +205,9 @@ describe("doc-layer re-entry: budget exhaustion spans synchronizer + changefeed"
     expect(err.lease.originStack).toBeDefined()
     expect(err.lease.originStack).toContain("doc-layer-reentry.test")
     expect(err.message).toContain("top message types:")
-    const changefeedCount =
-      [...err.lease.counts.keys()].filter(k => k.startsWith("changefeed:"))
-        .length
+    const changefeedCount = [...err.lease.counts.keys()].filter(k =>
+      k.startsWith("changefeed:"),
+    ).length
     expect(changefeedCount).toBeGreaterThan(0)
   })
 })

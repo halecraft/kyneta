@@ -364,6 +364,7 @@ export {
 } from "./step.js"
 // Substrate — state management, versioning, and transfer semantics
 export type {
+  BatchOptions,
   Delivery,
   DocMetadata,
   Durability,

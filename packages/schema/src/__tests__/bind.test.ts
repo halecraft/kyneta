@@ -303,7 +303,7 @@ describe("ephemeral binding target", () => {
       encoding: "json",
       data: JSON.stringify({ title: "LWW merged", count: 42 }),
     }
-    substrate.merge(entirety, "sync")
+    substrate.merge(entirety, { origin: "sync" })
 
     const ts = (substrate.version() as TimestampVersion).timestamp
     expect(ts).toBeGreaterThan(0)

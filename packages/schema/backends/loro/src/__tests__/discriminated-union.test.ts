@@ -120,7 +120,7 @@ describe("discriminated union on Loro substrate", () => {
     const substrateB = loroSubstrateFactory.create(DocSchema)
     const docB = interpretSubstrate(DocSchema, substrateB)
 
-    substrateB.merge(substrateA.exportEntirety(), "sync")
+    substrateB.merge(substrateA.exportEntirety(), { origin: "sync" })
     const sinceVV = substrateB.version()
 
     change(docA, (d: any) => {
@@ -129,7 +129,7 @@ describe("discriminated union on Loro substrate", () => {
 
     const delta = substrateA.exportSince(sinceVV)
     expect(delta).toBeDefined()
-    if (delta) substrateB.merge(delta, "sync")
+    if (delta) substrateB.merge(delta, { origin: "sync" })
 
     expect(docB.content.type).toBe("image")
     expect((docB.content as any).url()).toBe("synced.png")

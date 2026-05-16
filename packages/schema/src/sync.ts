@@ -6,7 +6,12 @@
 // the root ref — no WeakMaps needed.
 
 import { SUBSTRATE } from "./native.js"
-import type { Substrate, SubstratePayload, Version } from "./substrate.js"
+import type {
+  BatchOptions,
+  Substrate,
+  SubstratePayload,
+  Version,
+} from "./substrate.js"
 
 // ---------------------------------------------------------------------------
 // getSubstrate — internal helper
@@ -92,17 +97,21 @@ export function exportSince(
  * Import a delta or snapshot payload into a live document.
  *
  * After import, the changefeed fires for all subscribers — the event
- * bridge handles this automatically.
+ * bridge handles this automatically. The emitted `Changeset` carries
+ * `replay: true` so layered consumers (e.g. the exchange's echo filter)
+ * can distinguish merge replays from local writes.
  *
  * @param ref - A root ref created by `createDoc()` or `exchange.get()`
  * @param payload - The delta or snapshot payload to import
- * @param origin - Optional provenance tag for the changeset
+ * @param options - Optional `BatchOptions`. `options.origin` is the
+ *   app-level label propagated to subscribers; `options.replay` is
+ *   ignored (the substrate forces `replay: true` internally).
  * @throws If the ref has no `[SUBSTRATE]`
  */
 export function merge(
   ref: object,
   payload: SubstratePayload,
-  origin?: string,
+  options?: BatchOptions,
 ): void {
-  getSubstrate(ref).merge(payload, origin)
+  getSubstrate(ref).merge(payload, options)
 }

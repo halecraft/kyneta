@@ -82,7 +82,8 @@ export function change<D extends object>(
   ctx.beginTransaction()
   try {
     fn(ref)
-    return ctx.commit(options?.origin)
+    // User-facing entry: never set `replay`. Origin propagates as a label.
+    return ctx.commit(options ? { origin: options.origin } : undefined)
   } catch (e) {
     if (ctx.inTransaction) ctx.abort()
     throw e
@@ -142,7 +143,8 @@ export function applyChanges(
   // Empty ops → no-op. No prepare, no flush, no notification.
   if (ops.length === 0) return ops
 
-  executeBatch(ctx, ops, options?.origin)
+  // User-facing entry: never set `replay`. Origin propagates as a label.
+  executeBatch(ctx, ops, options ? { origin: options.origin } : undefined)
   return ops
 }
 

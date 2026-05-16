@@ -248,7 +248,7 @@ describe("delta sync", () => {
     // Export delta and import into B
     const delta = substrateA.exportSince(sinceVV)
     expect(delta).not.toBeNull()
-    substrateB.merge(delta!, "sync")
+    substrateB.merge(delta!, { origin: "sync" })
 
     // B should now have A's state
     expect(substrateB.reader.read(RawPath.empty.field("title"))).toBe("Hello!")
@@ -282,8 +282,8 @@ describe("concurrent sync", () => {
     // Bidirectional sync
     const deltaAtoB = substrateA.exportSince(substrateB.version())
     const deltaBtoA = substrateB.exportSince(substrateA.version())
-    if (deltaAtoB) substrateB.merge(deltaAtoB, "sync")
-    if (deltaBtoA) substrateA.merge(deltaBtoA, "sync")
+    if (deltaAtoB) substrateB.merge(deltaAtoB, { origin: "sync" })
+    if (deltaBtoA) substrateA.merge(deltaBtoA, { origin: "sync" })
 
     // Both should have converged
     expect(substrateA.reader.read(RawPath.empty.field("title"))).toBe("A")
@@ -314,7 +314,7 @@ describe("changefeed fires on merge", () => {
     // Mutate A, then sync to B
     change(docA, d => d.title.insert(0, "Remote"))
     const delta = substrateA.exportSince(sinceVV)!
-    substrateB.merge(delta, "sync")
+    substrateB.merge(delta, { origin: "sync" })
 
     // B's subscriber should have fired
     expect(received.length).toBeGreaterThanOrEqual(1)
@@ -334,7 +334,7 @@ describe("changefeed fires on merge", () => {
       d.items.push({ name: "Buy milk", done: false })
     })
     const snapshot = substrateA.exportEntirety()
-    substrateB.merge(snapshot, "sync")
+    substrateB.merge(snapshot, { origin: "sync" })
 
     // Verify B has the item
     expect([...docB.items]).toHaveLength(1)
@@ -355,7 +355,7 @@ describe("changefeed fires on merge", () => {
 
     // Sync the toggle to B
     const delta = substrateA.exportSince(sinceVV)!
-    substrateB.merge(delta, "sync")
+    substrateB.merge(delta, { origin: "sync" })
 
     // B should see the updated value
     expect(itemB.done()).toBe(true)
@@ -378,7 +378,7 @@ describe("changefeed fires on merge", () => {
       d.items.push({ name: "Buy milk", done: false })
     })
     const snapshot = substrateA.exportEntirety()
-    substrateB.merge(snapshot, "sync")
+    substrateB.merge(snapshot, { origin: "sync" })
 
     const itemB = [...docB.items][0] as any
     const sinceVV = substrateB.version()
@@ -400,7 +400,7 @@ describe("changefeed fires on merge", () => {
 
     // Sync to B
     const delta = substrateA.exportSince(sinceVV)!
-    substrateB.merge(delta, "sync")
+    substrateB.merge(delta, { origin: "sync" })
 
     // Both field-level changefeeds should have fired
     expect(nameChanges.length).toBeGreaterThanOrEqual(1)
@@ -425,7 +425,7 @@ describe("changefeed fires on merge", () => {
     change(docA, (d: any) => {
       d.items.push({ name: "Task", done: false })
     })
-    substrateB.merge(substrateA.exportEntirety(), "sync")
+    substrateB.merge(substrateA.exportEntirety(), { origin: "sync" })
 
     const sinceVV = substrateB.version()
 
@@ -447,7 +447,7 @@ describe("changefeed fires on merge", () => {
     const unsub = cf.subscribe((cs: unknown) => fieldChanges.push(cs))
 
     const delta = substrateA.exportSince(sinceVV)!
-    substrateB.merge(delta, "sync")
+    substrateB.merge(delta, { origin: "sync" })
 
     // The inbound path should have reached the same leaf path
     // (proven by the field-level changefeed firing)
@@ -482,7 +482,7 @@ describe("changefeed fires on merge", () => {
 
     // Sync to B
     const delta = substrateA.exportSince(sinceVV)!
-    substrateB.merge(delta, "sync")
+    substrateB.merge(delta, { origin: "sync" })
 
     // B's subscriber should have fired
     expect(received.length).toBeGreaterThanOrEqual(1)
@@ -515,7 +515,7 @@ describe("changefeed fires on merge", () => {
     })
 
     const delta = substrateA.exportSince(sinceVV)!
-    substrateB.merge(delta, "sync")
+    substrateB.merge(delta, { origin: "sync" })
 
     expect(treeFireCount).toBeGreaterThanOrEqual(1)
     expect((docB as any).peers()).toEqual({ alice: true })
@@ -546,7 +546,7 @@ describe("changefeed fires on merge", () => {
     })
 
     const delta = substrateA.exportSince(sinceVV)!
-    substrateB.merge(delta, "sync")
+    substrateB.merge(delta, { origin: "sync" })
 
     expect(treeFireCount).toBeGreaterThanOrEqual(1)
     expect((docB as any).theme()).toBe("dark")
@@ -592,7 +592,7 @@ describe("outbound: multi-key struct mutation batching", () => {
     change(docA, (d: any) => {
       d.items.push({ name: "initial", done: false })
     })
-    substrateB.merge(substrateA.exportEntirety(), "sync")
+    substrateB.merge(substrateA.exportEntirety(), { origin: "sync" })
 
     const sinceVV = substrateB.version()
 
@@ -605,7 +605,7 @@ describe("outbound: multi-key struct mutation batching", () => {
 
     // Sync to B
     const delta = substrateA.exportSince(sinceVV)!
-    substrateB.merge(delta, "sync")
+    substrateB.merge(delta, { origin: "sync" })
 
     const itemB = [...docB.items][0] as any
     expect(itemB.name()).toBe("updated")
@@ -767,6 +767,58 @@ describe("nested structure", () => {
     expect(doc.items.at(0)?.name()).toBe("First")
     expect(doc.items.at(1)?.name()).toBe("Second")
     expect(doc.items.at(1)?.done()).toBe(true)
+  })
+})
+
+// ===========================================================================
+// Re-entrant write inside merge-replay subscriber
+// ===========================================================================
+//
+// A subscriber that calls `change(doc, ...)` while delivering a sync
+// merge must reach Loro — otherwise the substrate stalls and the
+// subscriber loops on stale state until the lease budget trips.
+// Context: jj:qpultxsw.
+
+describe("re-entrant write during merge replay", () => {
+  it("subscriber's local change() inside a merge-replay batch lands in Loro", async () => {
+    const substrateA = loroSubstrateFactory.create(TestSchema)
+    const docA = interpretSubstrate(TestSchema, substrateA)
+
+    const substrateB = loroSubstrateFactory.create(TestSchema)
+    const docB = interpretSubstrate(TestSchema, substrateB)
+
+    // Seed A and sync to B so both peers start from a common state.
+    change(docA, (d: any) => {
+      d.title.insert(0, "seed")
+    })
+    substrateB.merge(substrateA.exportEntirety(), { origin: "sync" })
+
+    // On the first replay-driven update, the subscriber writes once
+    // to an unrelated field. The write must hit Loro; the guard
+    // ensures we don't re-enter the loop on subsequent flushes.
+    let writes = 0
+    subscribe(docB.title, () => {
+      if (writes === 0 && docB.title() === "seedmore") {
+        writes++
+        change(docB, (d: any) => {
+          d.theme.set("echoed")
+        })
+      }
+    })
+
+    const v0 = substrateB.version()
+    change(docA, (d: any) => {
+      d.title.insert(d.title().length, "more")
+    })
+    const delta = substrateA.exportSince(v0 as LoroVersion)!
+    substrateB.merge(delta, { origin: "sync" })
+
+    // Drain microtasks so the inner change()'s sub-tick lands.
+    await new Promise<void>(r => queueMicrotask(r))
+
+    expect(docB.title()).toBe("seedmore")
+    expect(docB.theme()).toBe("echoed")
+    expect(writes).toBe(1)
   })
 })
 

@@ -256,8 +256,13 @@ export interface ReplicaLike {
    * For a full Substrate, merge also fires the changefeed so that
    * subscribers observe the incoming mutations. For a bare Replica,
    * no changefeed exists — merge only updates internal state and version.
+   *
+   * Accepts `options?: BatchOptions`. The substrate internally sets
+   * `replay: true` on the resulting `executeBatch` so the changefeed's
+   * `Changeset.replay` field surfaces "this batch was authored
+   * elsewhere" to consumers like the exchange's echo filter.
    */
-  merge(payload: SubstratePayload, origin?: string): void
+  merge(payload: SubstratePayload, options?: BatchOptions): void
 }
 
 // ---------------------------------------------------------------------------
@@ -312,6 +317,40 @@ export interface Replica<V extends Version = Version> extends ReplicaLike {
 }
 
 // ---------------------------------------------------------------------------
+// BatchOptions — provenance + replay directive for an executeBatch call
+// ---------------------------------------------------------------------------
+
+/**
+ * Batch-level metadata threaded through the prepare/flush pipeline.
+ *
+ * Two fields with distinct purposes:
+ *
+ * - `origin` — opaque application-level label. Propagates to
+ *   `Changeset.origin` so subscribers can distinguish where a batch
+ *   came from (e.g. `"sync"`, `"undo"`, `"local"`). The schema package
+ *   and the exchange never branch on its value; it is *free vocabulary*
+ *   for app code.
+ *
+ * - `replay` — kyneta-internal structural directive. `true` iff this
+ *   batch represents state authored elsewhere (substrate event bridge,
+ *   `merge()`, version travel). Substrates with external mutation paths
+ *   (Loro, Yjs) skip native-side work when `replay: true` — the native
+ *   state already absorbed the change. The exchange's auto-subscribe
+ *   uses `replay` to discriminate "echo from sync" from "local write."
+ *   User-facing APIs (`change`, `applyChanges`) never construct
+ *   `replay: true`.
+ *
+ * Context: jj:qpultxsw (origin-aware prepare).
+ */
+export interface BatchOptions {
+  /** App-level provenance label. Propagates to `Changeset.origin`. */
+  readonly origin?: string
+  /** Kyneta-internal directive: this batch is replaying state authored
+   *  elsewhere. Set by substrate event bridges and `merge` paths. */
+  readonly replay?: boolean
+}
+
+// ---------------------------------------------------------------------------
 // SubstratePrepare — mutation primitives for the WritableContext
 // ---------------------------------------------------------------------------
 
@@ -322,6 +361,14 @@ export interface Replica<V extends Version = Version> extends ReplicaLike {
  * `onFlush` is called once per flush cycle, after the changefeed layer
  * has delivered notifications to subscribers.
  *
+ * Both methods accept `options?: BatchOptions`:
+ * - `options?.origin` is opaque label, substrate-passthrough only (Loro
+ *   uses it for commit messages; plain ignores).
+ * - `options?.replay === true` means "this batch represents state
+ *   authored elsewhere; substrates with external mutation paths skip
+ *   native-side work." The plain substrate ignores `replay` because it
+ *   has no out-of-band mutation path.
+ *
  * These are the ground floor of the prepare/flush pipeline. Caching and
  * changefeed layers wrap them — the substrate never needs to know about
  * those layers.
@@ -331,7 +378,7 @@ export interface SubstratePrepare {
   readonly reader: Reader
 
   /** Apply a single (path, change) to the backing state. */
-  prepare(path: Path, change: ChangeBase): void
+  prepare(path: Path, change: ChangeBase, options?: BatchOptions): void
 
   /**
    * Called once per flush cycle after all prepares and before changefeed
@@ -339,7 +386,7 @@ export interface SubstratePrepare {
    *
    * For PlainSubstrate: bumps version, appends to operation log.
    */
-  onFlush(origin?: string): void
+  onFlush(options?: BatchOptions): void
 }
 
 // ---------------------------------------------------------------------------

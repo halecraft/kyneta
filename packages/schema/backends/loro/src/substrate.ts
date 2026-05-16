@@ -3,15 +3,25 @@
 // Implements Substrate<LoroVersion> with:
 // - applyDiff-based local writes (prepare accumulates diffs, onFlush applies)
 // - Persistent doc.subscribe() event bridge for external changes
-// - Two re-entrancy guards: inOurCommit and inEventHandler
+// - One re-entrancy guard: `inOurCommit` (suppresses event-bridge
+//   reprocessing of commits we just issued ourselves).
 //
 // The event bridge contract: wrapping a LoroDoc in a kyneta substrate
 // means subscribing to the kyneta doc observes ALL mutations to the
 // underlying LoroDoc, regardless of source (local kyneta writes,
 // merge, external doc.import, external raw Loro API mutations).
+//
+// `prepare` and `onFlush` accept `BatchOptions` and branch on
+// `options?.replay`. The event bridge constructs the replay batch via
+// `executeBatch(ctx, ops, { origin, replay: true })`; substrate-side
+// work (applyDiff, commit) is skipped when `replay` is true because the
+// native LoroDoc already absorbed the change. This makes `prepare` and
+// `onFlush` total functions of their declared inputs — no hidden
+// ambient state for the substrate-write decision. Context: jj:qpultxsw.
 
 import {
   BACKING_DOC,
+  type BatchOptions,
   buildWritableContext,
   type ChangeBase,
   deriveSchemaBinding,
@@ -163,16 +173,11 @@ export function createLoroSubstrate(
   // (🦜:) cross-references within the group.
   const pendingGroups: [ContainerID, Diff | JsonDiff][][] = []
 
-  // Re-entrancy guard: set true around doc.commit() inside onFlush.
-  // When doc.commit() fires Loro events with by:"local", the subscriber
-  // sees inOurCommit === true and ignores them (changefeed already
-  // captured these ops via wrappedPrepare).
+  // Set true around our own doc.commit() so the subscriber ignores the
+  // resulting by:"local" event (changefeed already captured those ops
+  // via wrappedPrepare). Orthogonal to BatchOptions.replay, which
+  // handles inbound discrimination of replays from local writes.
   let inOurCommit = false
-
-  // Re-entrancy guard: set true around executeBatch inside the subscriber.
-  // Prevents substrate.prepare from accumulating diffs (changes already
-  // applied by Loro) and substrate.onFlush from calling applyDiff/commit.
-  let inEventHandler = false
 
   // Stashed origin from merge for the subscriber to pick up.
   let pendingImportOrigin: string | undefined
@@ -201,47 +206,50 @@ export function createLoroSubstrate(
       )
     },
 
-    prepare(path: Path, change: ChangeBase): void {
-      if (!inEventHandler) {
-        // Local write: convert Change → Loro Diff, accumulate as a group.
-        // No Loro side effects — mutations happen at flush time.
-        // Each group must be applied as a single applyDiff() call to
-        // preserve JsonContainerID (🦜:) cross-references.
-        const group = changeToDiff(path, change, schema, doc, binding)
-        if (group.length > 0) {
-          pendingGroups.push(group)
-        }
+    prepare(path: Path, change: ChangeBase, options?: BatchOptions): void {
+      if (options?.replay) {
+        // Loro already has these ops (the bridge is replaying them
+        // through kyneta solely so the changefeed layer can deliver
+        // notifications — wrappedPrepare buffered the op upstream).
+        return
       }
-      // During event handler replay: no-op on Loro side.
-      // wrappedPrepare (changefeed layer) still buffers the op.
+      // Local write: convert Change → Loro Diff, accumulate as a group.
+      // No Loro side effects — mutations happen at flush time.
+      // Each group must be applied as a single applyDiff() call to
+      // preserve JsonContainerID (🦜:) cross-references.
+      const group = changeToDiff(path, change, schema, doc, binding)
+      if (group.length > 0) {
+        pendingGroups.push(group)
+      }
     },
 
-    onFlush(origin?: string): void {
-      if (!inEventHandler) {
-        // Local write: apply accumulated diff groups, then commit.
-        if (pendingGroups.length > 0) {
-          // Merge single-element MapDiff groups targeting the same
-          // ContainerID into one group. This composes N per-leaf replace
-          // ops into a single per-container map update — the inverse of
-          // expandMapOpsToLeaves on the inbound path.
-          const merged = mergePendingGroups(pendingGroups)
-          for (const group of merged) {
-            doc.applyDiff(group as any)
-          }
-          pendingGroups.length = 0
-        }
-        if (origin !== undefined) {
-          doc.setNextCommitMessage(origin)
-        }
-        inOurCommit = true
-        try {
-          doc.commit()
-        } finally {
-          inOurCommit = false
-        }
+    onFlush(options?: BatchOptions): void {
+      if (options?.replay) {
+        // Loro already committed; wrappedFlush still delivers
+        // notifications upstream.
+        return
       }
-      // During event handler replay: no-op on Loro side.
-      // wrappedFlush (changefeed layer) still delivers notifications.
+      // Local write: apply accumulated diff groups, then commit.
+      if (pendingGroups.length > 0) {
+        // Merge single-element MapDiff groups targeting the same
+        // ContainerID into one group. This composes N per-leaf replace
+        // ops into a single per-container map update — the inverse of
+        // expandMapOpsToLeaves on the inbound path.
+        const merged = mergePendingGroups(pendingGroups)
+        for (const group of merged) {
+          doc.applyDiff(group as any)
+        }
+        pendingGroups.length = 0
+      }
+      if (options?.origin !== undefined) {
+        doc.setNextCommitMessage(options.origin)
+      }
+      inOurCommit = true
+      try {
+        doc.commit()
+      } finally {
+        inOurCommit = false
+      }
     },
 
     context(): WritableContext {
@@ -328,7 +336,7 @@ export function createLoroSubstrate(
       }
     },
 
-    merge(payload: SubstratePayload, origin?: string): void {
+    merge(payload: SubstratePayload, options?: BatchOptions): void {
       if (
         payload.encoding !== "binary" ||
         !(payload.data instanceof Uint8Array)
@@ -339,14 +347,14 @@ export function createLoroSubstrate(
         )
       }
       // Stash origin for the subscriber to pick up
-      pendingImportOrigin = origin
+      pendingImportOrigin = options?.origin
       try {
         doc.import(payload.data)
       } finally {
         pendingImportOrigin = undefined
       }
       // That's it — the doc.subscribe() handler bridges events to the
-      // changefeed via executeBatch.
+      // changefeed via executeBatch with `replay: true`.
     },
   }
 
@@ -376,15 +384,10 @@ export function createLoroSubstrate(
     // Lazily ensure the context is built
     const ctx = substrate.context()
 
-    // Feed through executeBatch for changefeed delivery.
-    // The inEventHandler guard prevents prepare/onFlush from doing
-    // Loro-side work (changes are already applied).
-    inEventHandler = true
-    try {
-      executeBatch(ctx, ops, origin)
-    } finally {
-      inEventHandler = false
-    }
+    // `replay: true` tells substrate.prepare/onFlush to skip native-side
+    // work (Loro has already absorbed these ops via doc.import) and
+    // surfaces on the Changeset for downstream filters (exchange echo).
+    executeBatch(ctx, ops, { origin, replay: true })
   })
 
   return substrate as Substrate<LoroVersion>
@@ -467,7 +470,7 @@ export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
       }
     },
 
-    merge(payload: SubstratePayload, _origin?: string): void {
+    merge(payload: SubstratePayload, _options?: BatchOptions): void {
       if (
         payload.encoding !== "binary" ||
         !(payload.data instanceof Uint8Array)

@@ -35,7 +35,7 @@ Imported by every other Kyneta package that touches documents: the CRDT backends
 | `[KIND]` | `Symbol("kyneta:kind")` — runtime discriminant on every schema node. Narrows in TypeScript via structural matching. | A string tag, a class `instanceof` check |
 | `[LAWS]` | `Symbol("kyneta:laws")` — phantom type-level composition-law accumulator. Never populated at runtime. Tags are algebraic properties of the merge semantics: `"lww"`, `"additive"`, `"positional-ot"`, `"positional-ot-move"`, `"tree-move"`, `"lww-per-key"`, `"lww-tag-replaced"`, `"add-wins-per-key"`. | A capability flag on the runtime object |
 | `PlainSchema` | The subset of `Schema` that excludes all CRDT kinds (`text`, `counter`, `set`, `tree`, `movable`, `richtext`). Used where a plain-JSON substrate is the only option (inside `.json()`, sum variants). | `Schema` — `PlainSchema ⊂ Schema` |
-| `Substrate<V>` | State-management + transfer interface: `version()`, `exportEntirety()`, `exportSince(since?)`, `merge(payload, origin?)`, `context()`, plus `reader()`, `writable()`, `prepare()`. `V` is the substrate's version type (Lamport vector, Loro version, wall clock, …). | A database, a backend — this is an *interface* the backends implement |
+| `Substrate<V>` | State-management + transfer interface: `version()`, `exportEntirety()`, `exportSince(since?)`, `merge(payload, options?)`, `context()`, plus `reader()`, `writable()`, `prepare()`. `V` is the substrate's version type (Lamport vector, Loro version, wall clock, …). | A database, a backend — this is an *interface* the backends implement |
 | `Replica<V>` | The replication surface *alone* — `version`, `exportEntirety`, `exportSince`, `merge`. No schema knowledge. | `Substrate<V>`, which adds `reader`, `writable`, `prepare`, and schema awareness |
 | `ReplicaFactory<V>` / `SubstrateFactory<V>` | Constructors for replicas / substrates. Every `SubstrateFactory` exposes a `replica` accessor yielding a `ReplicaFactory`. | A runtime singleton — factories are reusable and stateless |
 | `BindingTarget<AllowedLaws, N>` | A fixed `(substrate factory, sync protocol, allowed laws)` bundle. Named targets: `json` (authoritative, all laws), `ephemeral` (LWW-family only), `loro` (CRDT laws), `yjs` (Yjs-supported laws). Each exposes `.bind(schema)` → `BoundSchema` and `.replica()` → `BoundReplica`. | `SubstrateFactory` — the target *wraps* a factory; it is not one |
@@ -261,7 +261,7 @@ interface ReplicaLike {
   exportEntirety(): SubstratePayload
   exportSince(since: Version): SubstratePayload | null
   advance(to: Version): void
-  merge(payload: SubstratePayload, origin?: string): void
+  merge(payload: SubstratePayload, options?: BatchOptions): void
 }
 
 interface Replica<V> extends ReplicaLike {
@@ -293,7 +293,7 @@ Every replica exposes six methods:
 - `exportEntirety()` → full state as an opaque payload.
 - `exportSince(since)` → delta relative to the given version, or `null` if not possible.
 - `advance(to)` → trim history up to the given version.
-- `merge(payload, origin?)` → fold an incoming payload into local state. `origin` is propagated through the changefeed.
+- `merge(payload, options?)` → fold an incoming payload into local state. `options.origin` propagates through the changefeed as an app-level label; the substrate forces `replay: true` on the resulting `Changeset` so layered consumers (e.g. the exchange's echo filter) can discriminate the merge from a local write.
 
 A `Substrate` adds interpretation:
 
@@ -507,12 +507,24 @@ See `@kyneta/machine`'s TECHNICAL.md §"Drain to quiescence and shared leases" f
 
 `deliverNotifications` iterates subscribers `[S1, S2, S3]`. If S1 calls `change(doc, ...)` synchronously, S1's substrate writes land *before* S2 fires. S2 receives the `Changeset` describing the originating transaction, but reads from a substrate that already includes S1's mutations.
 
+This invariant holds uniformly across substrates — plain, Loro, Yjs — including when the outer batch is a **replay** batch from a substrate event bridge (e.g. an incoming sync merge). S1's local re-entrant write inside the replay-batch delivery is *not* a replay (the user code constructs a normal `change(doc, ...)` with no `replay` flag), so the substrate's `prepare`/`onFlush` apply it natively. Pre-fix this case was the source of a hidden invariant hole on CRDT substrates: an `inEventHandler`/`inOurTransaction` global flag wrapped the entire event-bridge call and caused the substrate to silently drop S1's write. Resolved by threading `BatchOptions.replay` as a typed parameter; see [§Origin vs replay](#origin-vs-replay).
+
 Two guidances:
 
 - The `Changeset` you receive describes the transaction that triggered your callback.
 - The substrate state you read reflects everything up to now, including re-entrant writes from earlier subscribers in the same deliver batch.
 
 To derive "pure pre-mutation state," consume the `Changeset` semantically; do not infer it by reading the substrate. This was always true in spirit — subscribers run after substrate commit — and the dispatcher refactor only changes whether re-entry from S1 succeeds (now) or throws (pre-1.6.0).
+
+### Origin vs replay
+
+Two distinct concepts ride on every batch through `executeBatch → ctx.prepare → ctx.flush → substrate.prepare → substrate.onFlush`, carried by the typed `BatchOptions { origin?, replay? }` parameter:
+
+- **`origin`** — opaque application-level label. Propagates to `Changeset.origin` so subscribers can categorize batches (`"local"`, `"sync"`, `"undo"`, `"migration"` — or anything else). The schema layer and the exchange **never branch on origin's value**. It is *free vocabulary* for app code.
+
+- **`replay`** — kyneta-internal structural directive. `true` iff the batch represents state authored elsewhere: substrate event bridge replaying `doc.import`, a `merge` payload, or version travel. Substrates with external mutation paths (Loro, Yjs) skip native-side work in `prepare`/`onFlush` when `replay: true` (the native state already absorbed the change); the changefeed layer still delivers `Changeset` notifications, and surfaces `replay: true` to subscribers. The plain substrate ignores `replay` in `prepare` because it has no out-of-band mutation path. **User-facing APIs (`change`, `applyChanges`) never construct `replay: true`** — only substrate event bridges and `merge` paths do.
+
+Layered consumers that need to discriminate "echo from sync" from "local write" — notably `@kyneta/exchange`'s auto-subscribe filter — read `Changeset.replay` rather than parsing the `origin` string. This closes a fragile string-collision surface where `change(doc, fn, { origin: "sync" })` was accidentally suppressed and `doc.import(payload, "from-some-other-pubsub")` would echo to peers. Context: jj:qpultxsw.
 
 ---
 

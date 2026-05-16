@@ -42,6 +42,7 @@ import {
   type TextSchema,
   type TreeSchema,
 } from "../schema.js"
+import type { BatchOptions } from "../substrate.js"
 
 import type { HasCaching, HasNavigation } from "./bottom.js"
 import { installKeyedCaching } from "./keyed-helpers.js"
@@ -93,7 +94,11 @@ interface CacheWiringState {
   // from the same registrant replaces — so re-interpretation of a sum's
   // current variant doesn't accrete dead handlers.
   readonly handlers: Map<string, Map<string, (change: ChangeBase) => void>>
-  readonly originalPrepare: (path: Path, change: ChangeBase) => void
+  readonly originalPrepare: (
+    path: Path,
+    change: ChangeBase,
+    options?: BatchOptions,
+  ) => void
 }
 
 // WeakMap ensures a single prepare wrapper per context object,
@@ -108,7 +113,7 @@ const cacheContextState = new WeakMap<object, CacheWiringState>()
  * `withWritable`.
  */
 function hasPrepare(ctx: RefContext): ctx is RefContext & {
-  prepare: (path: Path, change: ChangeBase) => void
+  prepare: (path: Path, change: ChangeBase, options?: BatchOptions) => void
 } {
   return "prepare" in ctx && typeof (ctx as any).prepare === "function"
 }
@@ -135,19 +140,20 @@ function ensureCacheWiring(
   let state = cacheContextState.get(ctx)
   if (state) return state.handlers
 
-  const handlers = new Map<
-    string,
-    Map<string, (change: ChangeBase) => void>
-  >()
+  const handlers = new Map<string, Map<string, (change: ChangeBase) => void>>()
   const originalPrepare = ctx.prepare
 
   // Wrapped prepare: invalidate cache at path, then forward.
-  const wrappedPrepare = (path: Path, change: ChangeBase): void => {
+  const wrappedPrepare = (
+    path: Path,
+    change: ChangeBase,
+    options?: BatchOptions,
+  ): void => {
     const inner = handlers.get(path.key)
     if (inner) {
       for (const h of inner.values()) h(change)
     }
-    originalPrepare(path, change)
+    originalPrepare(path, change, options)
   }
 
   ctx.prepare = wrappedPrepare
@@ -185,6 +191,21 @@ function registerCacheHandler(
     handlers.set(atKey, inner)
   }
   inner.set(registrantPath.key, handler)
+}
+
+/**
+ * @internal Test-only: number of distinct cache-handler registrants at
+ * `atPathKey` for the given context. Lets regression tests assert the
+ * registry stays bounded across many re-interpretations (the historical
+ * bug accreted handlers in a composed closure chain instead of keying
+ * by registrant). Not part of the public API.
+ */
+export function __getCacheHandlerCountAtPath(
+  ctx: object,
+  atPathKey: string,
+): number {
+  const state = cacheContextState.get(ctx)
+  return state?.handlers.get(atPathKey)?.size ?? 0
 }
 
 // ---------------------------------------------------------------------------

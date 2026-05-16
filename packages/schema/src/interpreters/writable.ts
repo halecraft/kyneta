@@ -45,7 +45,7 @@ import type {
   TextSchema,
   TreeSchema,
 } from "../schema.js"
-import type { SubstratePrepare } from "../substrate.js"
+import type { BatchOptions, SubstratePrepare } from "../substrate.js"
 import { installKeyedWriteOps } from "./keyed-helpers.js"
 import {
   installListWriteOps,
@@ -177,19 +177,22 @@ export function hasRemove(value: unknown): value is HasRemove {
  */
 export interface WritableContext extends RefContext {
   /** Apply a single change: invalidate caches + mutate store. No notification.
-   *  Mutable — caching and changefeed layers wrap this at interpretation time. */
-  prepare: (path: Path, change: ChangeBase) => void
+   *  Mutable — caching and changefeed layers wrap this at interpretation time.
+   *  `options` carries batch-level provenance (`origin`) and the kyneta-internal
+   *  `replay` directive (set by substrate event bridges / merge paths). */
+  prepare: (path: Path, change: ChangeBase, options?: BatchOptions) => void
   /** Deliver accumulated notifications as a single Changeset per subscriber.
    *  Mutable — the changefeed layer wraps this at interpretation time. */
-  flush: (origin?: string) => void
+  flush: (options?: BatchOptions) => void
   /** Convenience: outside a transaction, calls executeBatch with one change.
    *  During a transaction, buffers the change for later commit. */
   readonly dispatch: (path: Path, change: ChangeBase) => void
   /** Enter a transaction — dispatch buffers until commit/abort. */
   beginTransaction(): void
   /** Apply buffered changes via executeBatch, return the list.
-   *  Accepts an optional origin for the emitted Changeset. */
-  commit(origin?: string): Op[]
+   *  Accepts optional `BatchOptions` (carrying `origin` for the emitted
+   *  Changeset). User-facing entry points never set `replay`. */
+  commit(options?: BatchOptions): Op[]
   /** Discard buffered changes without applying. */
   abort(): void
   readonly inTransaction: boolean
@@ -209,10 +212,10 @@ export interface WritableContext extends RefContext {
 /**
  * The single primitive that composes `prepare` and `flush`.
  *
- * Calls `ctx.prepare(path, change)` for each change in the batch
- * (invalidate caches + mutate store + accumulate notification entries),
- * then calls `ctx.flush(origin)` once to deliver all accumulated
- * notifications as a single `Changeset` per subscriber.
+ * Calls `ctx.prepare(path, change, options)` for each change in the
+ * batch (invalidate caches + mutate store + accumulate notification
+ * entries), then calls `ctx.flush(options)` once to deliver all
+ * accumulated notifications as a single `Changeset` per subscriber.
  *
  * **Invariant:** Must not be called while `ctx.inTransaction` is true.
  * Doing so would mutate the store while the transaction expects it
@@ -221,13 +224,14 @@ export interface WritableContext extends RefContext {
  *
  * All entry points collapse to this primitive:
  * - `dispatch(path, change)` = `executeBatch(ctx, [{ path, change }])`
- * - `commit(origin?)` = copy+clear buffer, end transaction, `executeBatch`
- * - `applyChanges(ref, ops, { origin })` = `executeBatch(ctx, ops, origin)`
+ * - `commit(options?)` = copy+clear buffer, end transaction, `executeBatch`
+ * - `applyChanges(ref, ops, { origin })` = `executeBatch(ctx, ops, { origin })`
+ * - Substrate event bridges = `executeBatch(ctx, ops, { origin, replay: true })`
  */
 export function executeBatch(
   ctx: WritableContext,
   changes: readonly Op[],
-  origin?: string,
+  options?: BatchOptions,
 ): void {
   if (ctx.inTransaction) {
     throw new Error(
@@ -236,9 +240,9 @@ export function executeBatch(
     )
   }
   for (const { path, change } of changes) {
-    ctx.prepare(path, change)
+    ctx.prepare(path, change, options)
   }
-  ctx.flush(origin)
+  ctx.flush(options)
 }
 
 // ---------------------------------------------------------------------------
@@ -249,14 +253,14 @@ export function executeBatch(
  * Builds a WritableContext around a substrate's mutation primitives.
  *
  * The substrate provides the ground floor of the prepare/flush pipeline:
- * - `substrate.prepare(path, change)` — apply change to backing state
- * - `substrate.onFlush(origin?)` — called after all prepares + notification
+ * - `substrate.prepare(path, change, options?)` — apply change to backing state
+ * - `substrate.onFlush(options?)` — called after all prepares + notification
  *   delivery (no-op for PlainSubstrate; version tracking in Phase 2)
  *
  * The context adds transaction coordination on top:
  * - `dispatch(path, change)` — auto-commit or buffer
  * - `beginTransaction()` / `commit()` / `abort()` — transaction lifecycle
- * - `executeBatch(ctx, changes, origin?)` — prepare × N + flush × 1
+ * - `executeBatch(ctx, changes, options?)` — prepare × N + flush × 1
  *
  * Caching and changefeed layers wrap `ctx.prepare` and `ctx.flush` at
  * interpretation time — the substrate never needs to know about them.
@@ -277,15 +281,19 @@ export function buildWritableContext(
   // Layers like withChangefeed wrap this to accumulate notification
   // entries; layers like withCaching wrap this to invalidate
   // caches at the target path.
-  const prepare = (path: Path, change: ChangeBase): void => {
-    substrate.prepare(path, change)
+  const prepare = (
+    path: Path,
+    change: ChangeBase,
+    options?: BatchOptions,
+  ): void => {
+    substrate.prepare(path, change, options)
   }
 
   // Base flush: delegate to the substrate's onFlush.
   // The changefeed layer wraps this to deliver accumulated Changeset
   // batches to subscribers before calling through to the substrate.
-  const flush = (_origin?: string): void => {
-    substrate.onFlush(_origin)
+  const flush = (options?: BatchOptions): void => {
+    substrate.onFlush(options)
   }
 
   // Dispatch is transaction-aware:
@@ -319,7 +327,7 @@ export function buildWritableContext(
   // - flush is called once (deliver Changeset batch to subscribers)
   // The transaction must be ended BEFORE executeBatch because
   // executeBatch guards against being called during a transaction.
-  const commit = (origin?: string): Op[] => {
+  const commit = (options?: BatchOptions): Op[] => {
     if (!inTransaction) {
       throw new Error("No active transaction to commit")
     }
@@ -327,7 +335,7 @@ export function buildWritableContext(
     pending.length = 0
     inTransaction = false
 
-    executeBatch(ctx, flushed, origin)
+    executeBatch(ctx, flushed, options)
 
     return flushed
   }

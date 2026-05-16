@@ -321,16 +321,16 @@ The `resolveLease` pure core is independently tested. Storage keys (`key`, `key 
 
 Source: `src/synchronizer.ts` → `#wireLocalChanges`, `src/exchange.ts` → changefeed subscription.
 
-Every local mutation — `change(doc, fn)`, direct writes on a ref, `applyChanges` — flows through the substrate's changefeed. The Synchronizer subscribes once per `DocRuntime` and filters by `origin`:
+Every local mutation — `change(doc, fn)`, direct writes on a ref, `applyChanges` — flows through the substrate's changefeed. The Synchronizer subscribes once per `DocRuntime` and filters by the structural `replay` flag:
 
 ```
 change(doc, d => d.title.insert(0, "hi"))
   │
   ├─ substrate.prepare → applyChangeToYjs / applyDiff / etc.
-  │  onFlush → changefeed emits Changeset with origin: "local"
+  │  onFlush → changefeed emits Changeset with origin: undefined, replay: undefined
   │
-  ├─ Synchronizer's subscriber checks origin:
-  │    if (origin === "sync") return   // echo from remote import; skip
+  ├─ Synchronizer's subscriber checks replay:
+  │    if (changeset.replay) return   // echo from remote import; skip
   │    else dispatch sync/local-doc-change
   │
   ├─ sync program update:
@@ -345,9 +345,11 @@ change(doc, d => d.title.insert(0, "hi"))
 
 ### Echo prevention
 
-Remote `offer` messages go through `substrate.merge(payload, "sync")`. The substrate propagates `"sync"` as the `origin` on every `Changeset` emitted during that merge. The Synchronizer's subscriber checks `changeset.origin === "sync"` and **skips** `notifyLocalChange(docId)`. Without this skip, every incoming `offer` would re-emit a local `offer` back to all peers — an infinite feedback loop.
+Remote `offer` messages go through `substrate.merge(payload, { origin: "sync" })`. The substrate's event bridge replays the merge through `executeBatch(ctx, ops, { origin: "sync", replay: true })`, so every `Changeset` emitted during that merge carries `replay: true`. The Synchronizer's subscriber checks `changeset.replay` and **skips** `notifyLocalChange(docId)`. Without this skip, every incoming `offer` would re-emit a local `offer` back to all peers — an infinite feedback loop.
 
-The origin propagation is the substrate's responsibility (every substrate in `@kyneta/schema` correctly threads it through `executeBatch` and `deliverNotifications`). The sync-side check is *this* package's responsibility.
+Pre-1.6.x the filter checked `changeset.origin === "sync"` — fragile because `origin` is a free-vocabulary app label, so a `change(doc, fn, { origin: "sync" })` happened to be suppressed (wrong), and a `doc.import(payload, "from-some-other-pubsub")` would echo back to peers (also wrong). `replay` is a structural directive set by substrate event bridges and `merge` paths — apps never construct it, the schema layer never reads `origin`'s value, and the discrimination is correct regardless of what labels apps use. Context: jj:qpultxsw.
+
+The `replay` propagation is the substrate's responsibility (every substrate in `@kyneta/schema` correctly threads it through `executeBatch` and `deliverNotifications`). The sync-side check is *this* package's responsibility.
 
 ### Same-doc re-entry inside subscribers (post-1.6.0)
 

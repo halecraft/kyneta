@@ -3,18 +3,27 @@
 // Implements Substrate<YjsVersion> with:
 // - Imperative local writes (prepare accumulates, onFlush applies in transact)
 // - Persistent observeDeep event bridge for external changes
-// - Single re-entrancy guard + transaction.origin check
+// - Transaction-origin filter (`KYNETA_ORIGIN`) to ignore our own writes.
 //
 // The event bridge contract: wrapping a Y.Doc in a kyneta substrate
 // means subscribing to the kyneta doc observes ALL mutations to the
 // underlying Y.Doc, regardless of source (local kyneta writes,
 // merge, external Y.applyUpdate, external raw Yjs API mutations).
 //
+// `prepare` and `onFlush` accept `BatchOptions` and branch on
+// `options?.replay`. The event bridge constructs the replay batch via
+// `executeBatch(ctx, ops, { origin, replay: true })`; substrate-side
+// work (transact, write) is skipped when `replay` is true because the
+// native Y.Doc already absorbed the change. This makes `prepare` and
+// `onFlush` total functions of their declared inputs — no hidden
+// ambient state for the substrate-write decision. Context: jj:qpultxsw.
+//
 // Identity-keying: when a SchemaBinding is provided, all Y.Map key
 // lookups and writes use the identity hash instead of the field name.
 // The binding is threaded to the reader, event bridge, and write path.
 
 import type {
+  BatchOptions,
   ChangeBase,
   Path,
   PositionCapable,
@@ -85,12 +94,6 @@ export function createYjsSubstrate(
   // Accumulated changes from prepare(), drained by onFlush().
   const pendingChanges: Array<{ path: Path; change: ChangeBase }> = []
 
-  // Re-entrancy guard: set true around our doc.transact() in onFlush
-  // AND around executeBatch in the event bridge. When true, prepare()
-  // skips Yjs-side work (changes are already applied by Yjs or about
-  // to be), and onFlush() skips transact/commit.
-  let inOurTransaction = false
-
   // Stashed origin from merge for the event bridge to pick up.
   let pendingMergeOrigin: string | undefined
 
@@ -118,34 +121,33 @@ export function createYjsSubstrate(
 
     reader: reader,
 
-    prepare(path: Path, change: ChangeBase): void {
-      if (!inOurTransaction) {
-        // Local write: accumulate for flush.
-        // No Yjs side effects — mutations happen at flush time.
-        pendingChanges.push({ path, change })
+    prepare(path: Path, change: ChangeBase, options?: BatchOptions): void {
+      if (options?.replay) {
+        // Yjs already has these ops (the bridge is replaying them
+        // through kyneta solely so the changefeed layer can deliver
+        // notifications — wrappedPrepare buffered the op upstream).
+        return
       }
-      // During event handler replay: no-op on Yjs side.
-      // wrappedPrepare (changefeed layer) still buffers the op.
+      // Mutations happen in onFlush inside a single Yjs transaction.
+      pendingChanges.push({ path, change })
     },
 
-    onFlush(_origin?: string): void {
-      if (!inOurTransaction && pendingChanges.length > 0) {
-        // Local write: apply accumulated changes within a single
-        // Yjs transaction tagged with our origin for echo suppression.
-        inOurTransaction = true
-        try {
-          doc.transact(() => {
-            for (const { path, change } of pendingChanges) {
-              applyChangeToYjs(rootMap, schema, path, change, binding)
-            }
-          }, KYNETA_ORIGIN)
-          pendingChanges.length = 0
-        } finally {
-          inOurTransaction = false
-        }
+    onFlush(options?: BatchOptions): void {
+      if (options?.replay) {
+        // Yjs already committed; wrappedFlush still delivers
+        // notifications upstream.
+        return
       }
-      // During event handler replay: no-op on Yjs side.
-      // wrappedFlush (changefeed layer) still delivers notifications.
+      if (pendingChanges.length === 0) return
+      // The KYNETA_ORIGIN tag lets the observeDeep bridge below
+      // recognise and skip the events we generate here, so the
+      // changefeed isn't fired twice for the same write.
+      doc.transact(() => {
+        for (const { path, change } of pendingChanges) {
+          applyChangeToYjs(rootMap, schema, path, change, binding)
+        }
+      }, KYNETA_ORIGIN)
+      pendingChanges.length = 0
     },
 
     context(): WritableContext {
@@ -232,7 +234,7 @@ export function createYjsSubstrate(
       }
     },
 
-    merge(payload: SubstratePayload, origin?: string): void {
+    merge(payload: SubstratePayload, options?: BatchOptions): void {
       if (
         payload.encoding !== "binary" ||
         !(payload.data instanceof Uint8Array)
@@ -243,14 +245,14 @@ export function createYjsSubstrate(
         )
       }
       // Stash origin for the event bridge to pick up
-      pendingMergeOrigin = origin
+      pendingMergeOrigin = options?.origin
       try {
-        Y.applyUpdate(doc, payload.data, origin ?? "remote")
+        Y.applyUpdate(doc, payload.data, options?.origin ?? "remote")
       } finally {
         pendingMergeOrigin = undefined
       }
       // That's it — the observeDeep handler bridges events to the
-      // changefeed via executeBatch.
+      // changefeed via executeBatch with `replay: true`.
     },
   }
 
@@ -283,15 +285,10 @@ export function createYjsSubstrate(
     // Lazily ensure the context is built
     const ctx = substrate.context()
 
-    // Feed through executeBatch for changefeed delivery.
-    // The inOurTransaction guard prevents prepare/onFlush from doing
-    // Yjs-side work — the changes are already applied by Yjs.
-    inOurTransaction = true
-    try {
-      executeBatch(ctx, ops, origin)
-    } finally {
-      inOurTransaction = false
-    }
+    // `replay: true` tells substrate.prepare/onFlush to skip native-side
+    // work (Yjs has already absorbed these ops via Y.applyUpdate) and
+    // surfaces on the Changeset for downstream filters (exchange echo).
+    executeBatch(ctx, ops, { origin, replay: true })
   })
 
   // For local mutations (KYNETA_ORIGIN): the observeDeep handler returns
@@ -417,7 +414,7 @@ export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
       }
     },
 
-    merge(payload: SubstratePayload, _origin?: string): void {
+    merge(payload: SubstratePayload, _options?: BatchOptions): void {
       if (
         payload.encoding !== "binary" ||
         !(payload.data instanceof Uint8Array)

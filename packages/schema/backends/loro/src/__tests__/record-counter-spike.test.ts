@@ -137,7 +137,7 @@ describe("record-of-struct (plain baseline)", () => {
     })
     const delta = exportSince(docA, v0)
     expect(delta).not.toBeNull()
-    merge(docB, delta!, "sync")
+    merge(docB, delta!, { origin: "sync" })
 
     expect(docB.scores()).toEqual({
       alice: { name: "Alice", color: "#FF0000", points: 3 },
@@ -278,7 +278,7 @@ describe("record-of-struct-with-counter (bumper-cars scoreboard)", () => {
 
     const delta = exportSince(docA, v0)
     expect(delta).not.toBeNull()
-    merge(docB, delta!, "sync")
+    merge(docB, delta!, { origin: "sync" })
 
     expect(docB.scores()).toEqual({
       alice: { name: "Alice", color: "#FF0000", bumps: 3 },
@@ -299,7 +299,7 @@ describe("record-of-struct-with-counter (bumper-cars scoreboard)", () => {
     })
 
     const snapshot = exportEntirety(docA)
-    merge(docB, snapshot, "sync")
+    merge(docB, snapshot, { origin: "sync" })
 
     // Both peers increment concurrently
     const vA = version(docA)
@@ -311,12 +311,12 @@ describe("record-of-struct-with-counter (bumper-cars scoreboard)", () => {
     // Sync A → B
     const deltaAB = exportSince(docA, vB)
     expect(deltaAB).not.toBeNull()
-    merge(docB, deltaAB!, "sync")
+    merge(docB, deltaAB!, { origin: "sync" })
 
     // Sync B → A
     const deltaBA = exportSince(docB, vA)
     expect(deltaBA).not.toBeNull()
-    merge(docA, deltaBA!, "sync")
+    merge(docA, deltaBA!, { origin: "sync" })
 
     // Both converge: 3 + 7 = 10 (counters sum, not overwrite)
     expect((docA as any).scores.at("alice").bumps()).toBe(10)
@@ -336,8 +336,8 @@ describe("record-of-struct-with-counter (bumper-cars scoreboard)", () => {
 
     // Sync server → both clients
     const snapshot = exportEntirety(server)
-    merge(clientA, snapshot, "sync")
-    merge(clientB, snapshot, "sync")
+    merge(clientA, snapshot, { origin: "sync" })
+    merge(clientB, snapshot, { origin: "sync" })
 
     // Server detects collision: peerA scored
     const v0A = version(clientA)
@@ -349,8 +349,8 @@ describe("record-of-struct-with-counter (bumper-cars scoreboard)", () => {
 
     // Sync server → both clients
     const delta1 = exportSince(server, v0A)
-    merge(clientA, delta1!, "sync")
-    merge(clientB, delta1!, "sync")
+    merge(clientA, delta1!, { origin: "sync" })
+    merge(clientB, delta1!, { origin: "sync" })
 
     expect((clientA as any).scores.at("peerA").bumps()).toBe(1)
     expect((clientB as any).scores.at("peerA").bumps()).toBe(1)
@@ -366,8 +366,8 @@ describe("record-of-struct-with-counter (bumper-cars scoreboard)", () => {
     })
 
     const delta2 = exportSince(server, v1A)
-    merge(clientA, delta2!, "sync")
-    merge(clientB, delta2!, "sync")
+    merge(clientA, delta2!, { origin: "sync" })
+    merge(clientB, delta2!, { origin: "sync" })
 
     // Final state
     const expected = {
@@ -463,7 +463,7 @@ describe("list-of-struct-with-counter (generality check)", () => {
     })
 
     const delta = exportSince(docA, v0)
-    merge(docB, delta!, "sync")
+    merge(docB, delta!, { origin: "sync" })
 
     expect(docB.players.length).toBe(1)
     expect((docB as any).players.at(0).name()).toBe("Alice")
@@ -547,7 +547,7 @@ describe("text-inside-struct-inside-record (generality check)", () => {
     })
 
     const delta = exportSince(docA, v0)
-    merge(docB, delta!, "sync")
+    merge(docB, delta!, { origin: "sync" })
 
     expect((docB as any).profiles.at("alice").bio()).toBe("Collaborative bio")
   })
@@ -561,7 +561,7 @@ describe("text-inside-struct-inside-record (generality check)", () => {
       d.profiles.set("alice", { displayName: "Alice" })
     })
     const snapshot = exportEntirety(docA)
-    merge(docB, snapshot, "sync")
+    merge(docB, snapshot, { origin: "sync" })
 
     // Both peers edit concurrently
     const vA = version(docA)
@@ -577,8 +577,8 @@ describe("text-inside-struct-inside-record (generality check)", () => {
     // Sync both ways
     const deltaAB = exportSince(docA, vB)
     const deltaBA = exportSince(docB, vA)
-    merge(docB, deltaAB!, "sync")
-    merge(docA, deltaBA!, "sync")
+    merge(docB, deltaAB!, { origin: "sync" })
+    merge(docA, deltaBA!, { origin: "sync" })
 
     // Both converge to the same value (order depends on peer IDs)
     expect((docA as any).profiles.at("alice").bio()).toBe(

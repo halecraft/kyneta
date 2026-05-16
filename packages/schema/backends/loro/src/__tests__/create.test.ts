@@ -261,7 +261,7 @@ describe("sync primitives", () => {
     const delta = exportSince(docA, v0)
     expect(delta).not.toBeNull()
 
-    merge(docB, delta!, "sync")
+    merge(docB, delta!, { origin: "sync" })
 
     expect(docB.title()).toBe("Hello")
     expect(docB.count()).toBe(5)
@@ -278,7 +278,7 @@ describe("sync primitives", () => {
 
     change(docA, (d: any) => d.title.insert(0, "Remote"))
     const delta = exportSince(docA, v0)!
-    merge(docB, delta, "sync")
+    merge(docB, delta, { origin: "sync" })
 
     expect(received.length).toBeGreaterThanOrEqual(1)
   })
@@ -326,7 +326,7 @@ describe("full workflow", () => {
     // Sync A → B via delta
     const delta = exportSince(docA, version(docB))
     expect(delta).not.toBeNull()
-    merge(docB, delta!, "sync")
+    merge(docB, delta!, { origin: "sync" })
 
     // B observed the change
     expect(bChanges.length).toBeGreaterThanOrEqual(1)

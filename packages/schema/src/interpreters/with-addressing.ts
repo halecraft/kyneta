@@ -58,6 +58,7 @@ import type {
   TextSchema,
   TreeSchema,
 } from "../schema.js"
+import type { BatchOptions } from "../substrate.js"
 import type { HasNavigation } from "./bottom.js"
 import { installKeyedAddressing } from "./keyed-helpers.js"
 import { installSequenceAddressing } from "./sequence-helpers.js"
@@ -87,13 +88,17 @@ export const ADDRESS_TABLE: unique symbol = Symbol.for(
 
 interface AddressingState {
   readonly handlers: Map<string, (change: ChangeBase) => void>
-  readonly originalPrepare: (path: Path, change: ChangeBase) => void
+  readonly originalPrepare: (
+    path: Path,
+    change: ChangeBase,
+    options?: BatchOptions,
+  ) => void
 }
 
 const addressingContextState = new WeakMap<object, AddressingState>()
 
 function hasPrepare(ctx: RefContext): ctx is RefContext & {
-  prepare: (path: Path, change: ChangeBase) => void
+  prepare: (path: Path, change: ChangeBase, options?: BatchOptions) => void
 } {
   return "prepare" in ctx && typeof (ctx as any).prepare === "function"
 }
@@ -119,11 +124,15 @@ function ensureAddressingWiring(
   const handlers = new Map<string, (change: ChangeBase) => void>()
   const originalPrepare = ctx.prepare
 
-  const wrappedPrepare = (path: Path, change: ChangeBase): void => {
+  const wrappedPrepare = (
+    path: Path,
+    change: ChangeBase,
+    options?: BatchOptions,
+  ): void => {
     const key = path.key
     const handler = handlers.get(key)
     if (handler) handler(change)
-    originalPrepare(path, change)
+    originalPrepare(path, change, options)
   }
 
   ctx.prepare = wrappedPrepare

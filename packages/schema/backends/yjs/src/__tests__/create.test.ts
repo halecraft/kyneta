@@ -477,7 +477,7 @@ describe("sync primitives", () => {
         receivedOrigins.push(changeset.origin)
       })
 
-      merge(doc2, exportSince(doc1, v2Before)!, "my-sync-origin")
+      merge(doc2, exportSince(doc1, v2Before)!, { origin: "my-sync-origin" })
 
       expect(receivedOrigins).toContain("my-sync-origin")
     })

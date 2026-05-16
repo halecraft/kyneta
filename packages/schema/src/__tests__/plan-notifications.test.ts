@@ -189,6 +189,18 @@ describe("liftToOps: wraps each change with the given path", () => {
     const lifted = liftToOps(cs, RawPath.empty.field("x"))
     expect(lifted.origin).toBe("test-origin")
   })
+
+  // The exchange's auto-subscribe filter reads `replay` off the tree-
+  // subscriber changeset; if this strips it, foreign-origin merges echo.
+  it("replay is preserved across the lift", () => {
+    const cs: Changeset<ChangeBase> = {
+      changes: [{ type: "replace" }],
+      origin: "external",
+      replay: true,
+    }
+    const lifted = liftToOps(cs, RawPath.empty.field("x"))
+    expect(lifted.replay).toBe(true)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -257,6 +269,18 @@ describe("prefixOps: re-prefixes each event's path", () => {
     }
     const prefixed = prefixOps(cs, RawPath.empty.field("x"))
     expect(prefixed.origin).toBe("undo")
+  })
+
+  // The exchange's auto-subscribe filter reads `replay` off the tree-
+  // subscriber changeset; descendant propagation must not strip it.
+  it("replay is preserved across the re-prefix", () => {
+    const cs: Changeset<Op> = {
+      changes: [{ path: RawPath.empty, change: { type: "replace" } }],
+      origin: "external",
+      replay: true,
+    }
+    const prefixed = prefixOps(cs, RawPath.empty.field("x"))
+    expect(prefixed.replay).toBe(true)
   })
 })
 

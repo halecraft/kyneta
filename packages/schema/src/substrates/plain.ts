@@ -50,6 +50,7 @@ import {
 import { applyChange, type PlainState, plainReader } from "../reader.js"
 import type { Schema as SchemaNode } from "../schema.js"
 import type {
+  BatchOptions,
   Replica,
   ReplicaFactory,
   Substrate,
@@ -189,12 +190,16 @@ export function createPlainSubstrate<V extends Version>(
 
     reader: reader,
 
-    prepare(path: Path, change: ChangeBase): void {
+    prepare(path: Path, change: ChangeBase, _options?: BatchOptions): void {
+      // Plain has no event bridge / external mutation path, so the
+      // replay-vs-local distinction doesn't matter for the substrate
+      // write itself. The flag still flows to subscribers via
+      // Changeset.replay (set in `merge` below).
       applyChange(doc, path, change)
       replicaCore.pendingOps.push({ path, change })
     },
 
-    onFlush(_origin?: string): void {
+    onFlush(_options?: BatchOptions): void {
       replicaCore.flush()
     },
 
@@ -256,7 +261,7 @@ export function createPlainSubstrate<V extends Version>(
       return replicaCore.exportSince(since)
     },
 
-    merge(payload: SubstratePayload, origin?: string): void {
+    merge(payload: SubstratePayload, options?: BatchOptions): void {
       if (payload.encoding !== "json" || typeof payload.data !== "string") {
         throw new Error(
           "PlainSubstrate.merge expects JSON-encoded payloads. " +
@@ -265,6 +270,13 @@ export function createPlainSubstrate<V extends Version>(
       }
 
       const ctx = substrate.context()
+      // A merge replays authored-elsewhere state; surface `replay: true`
+      // so layered consumers (exchange echo filter) can short-circuit
+      // without parsing the origin label.
+      const replayOptions: BatchOptions = {
+        origin: options?.origin,
+        replay: true,
+      }
 
       if (payload.kind === "entirety") {
         // State image — decompose to ReplaceChange ops and apply through
@@ -272,7 +284,7 @@ export function createPlainSubstrate<V extends Version>(
         // observe the transition.
         const ops = stateImageToOps(payload.data)
         if (ops.length > 0) {
-          executeBatch(ctx, ops, origin)
+          executeBatch(ctx, ops, replayOptions)
         }
       } else {
         // Batched op array — each inner array is one flush cycle.
@@ -282,7 +294,7 @@ export function createPlainSubstrate<V extends Version>(
         for (const batch of batches) {
           if (batch.length === 0) continue
           const ops = deserializeOps(batch)
-          executeBatch(ctx, ops, origin)
+          executeBatch(ctx, ops, replayOptions)
         }
       }
     },
@@ -546,7 +558,7 @@ export function createPlainReplica<V extends Version>(
       return core.exportSince(since as V)
     },
 
-    merge(payload: SubstratePayload, _origin?: string): void {
+    merge(payload: SubstratePayload, _options?: BatchOptions): void {
       if (payload.encoding !== "json" || typeof payload.data !== "string") {
         throw new Error(
           "PlainReplica.merge expects JSON-encoded payloads. " +

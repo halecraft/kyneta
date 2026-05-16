@@ -5,7 +5,7 @@
 > **Depends on**: `@kyneta/schema` (peer), `@kyneta/changefeed` (peer), `loro-crdt` (peer)
 > **Depended on by**: `@kyneta/exchange` (dev), `@kyneta/react` (dev), `@kyneta/cast` (dev), application code that wants collaborative documents
 > **Canonical symbols**: `loro` (binding target: `loro.bind`, `loro.replica`), `LoroLaws`, `LoroNativeMap`, `createLoroSubstrate`, `loroSubstrateFactory`, `loroReplicaFactory`, `LoroVersion`, `LoroPosition`, `loroReader`, `resolveContainer`, `stepIntoLoro`, `PROPS_KEY`, `changeToDiff`, `batchToOps`, `hasKind`, `isLoroContainer`, `isLoroDoc`, `fromLoroSide`, `toLoroSide`
-> **Key invariant(s)**: Subscribing to the kyneta doc observes **every** mutation to the underlying `LoroDoc`, regardless of source — local writes, `merge()`, `doc.import()`, or raw Loro API calls. The persistent `doc.subscribe()` event bridge is the enforcement mechanism; two re-entrancy guards (`inOurCommit`, `inEventHandler`) prevent double-notification.
+> **Key invariant(s)**: Subscribing to the kyneta doc observes **every** mutation to the underlying `LoroDoc`, regardless of source — local writes, `merge()`, `doc.import()`, or raw Loro API calls. The persistent `doc.subscribe()` event bridge is the enforcement mechanism; the substrate discriminates "local vs. replay" via `BatchOptions.replay` (typed parameter on every `prepare`/`onFlush` call), and one re-entrancy guard (`inOurCommit`) prevents the bridge from reprocessing commits we just issued ourselves.
 
 The Loro backend for Kyneta. Hands you a substrate instance — stored state, versioning, export/import, and a `Reader` — in exchange for a `LoroDoc`. Every ref produced by the interpreter stack reads through schema-guided container resolution; every write produces a `Diff` applied via `doc.applyDiff`; every Loro-visible mutation surfaces as a `Changeset` on the kyneta changefeed.
 
@@ -41,7 +41,8 @@ Consumed by applications that bind schemas with `loro.bind(schema)`. Not importe
 | `batchToOps` | Inverse: turn Loro event-emitted `Diff[]` (after `doc.import` or external mutation) into kyneta `Op[]`. | `changeToDiff` — opposite direction |
 | `loroReader` | `Reader` implementation that reads by resolving the container at `path` and extracting its value. | Substrate state — the reader is a live view |
 | `applyDiff` | Loro's bulk-write API. The substrate prepares `Diff[]` during `prepare()` and applies them in one call during `onFlush`. | `doc.import` — imports a binary update; `applyDiff` applies structural diffs |
-| `inOurCommit` / `inEventHandler` | Two boolean guards on the substrate. The first suppresses event-bridge reprocessing when we applied the diff ourselves; the second suppresses recursive `applyDiff` calls from event handlers. | Mutex locks — these are single-threaded flags |
+| `inOurCommit` | Single boolean guard on the substrate. Set true around our own `doc.commit()` so the event-bridge subscriber skips reprocessing `batch.by === "local"` events we already captured via `wrappedPrepare`. Local to `onFlush`; does not escape into user-reachable code. | A mutex lock — this is a single-threaded flag |
+| `BatchOptions { origin, replay }` | The typed parameter threaded through `executeBatch → ctx.prepare → ctx.flush → substrate.prepare → substrate.onFlush`. `origin` is an opaque app-level label; `replay: true` means "this batch replays state authored elsewhere — skip native-side work." Constructed by the event bridge for `merge`/`doc.import` replays. Retires the earlier global `inEventHandler` flag. | `Changeset` — `BatchOptions` is the inbound directive; `Changeset` is the outbound notification |
 | Identity hash | Content-addressed 128-bit hex derived from `(path, generation)` via FNV-1a-128. The Loro container key for every product-field boundary. | A field name |
 | `SchemaBinding` | `{ forward: Map<string, Hash>, backward: Map<Hash, string> }` from `@kyneta/schema`. Threaded through `resolveContainer` so every key lookup uses identity, not name. | A validation rule |
 
@@ -267,14 +268,15 @@ The persistent `doc.subscribe()` callback is the enforcement mechanism for the k
 The handler:
 
 1. If `inOurCommit` is true → skip (we already notified during `prepare`).
-2. Otherwise, set `inEventHandler = true` to block recursive `applyDiff` calls from triggering the handler again.
+2. Skip `batch.by === "checkout"` events — version travel, not mutations.
 3. Call `batchToOps(event.diffs, schema, binding)` → pure conversion from Loro `Diff[]` to kyneta `Op[]`.
-4. Dispatch the ops through the interpreter stack's notification pipeline.
-5. Clear `inEventHandler`.
+4. Dispatch via `executeBatch(ctx, ops, { origin, replay: true })`. The `replay: true` directive tells `substrate.prepare` and `substrate.onFlush` to skip native-side work (the LoroDoc already absorbed these changes via `doc.import`); the changefeed layer still delivers `Changeset` notifications, and the `Changeset` surfaces `replay: true` to subscribers (e.g. the exchange's echo filter).
 
-### Why two guards
+### Why `inOurCommit`
 
-`inOurCommit` prevents the event bridge from double-notifying when *we* applied the diff. `inEventHandler` prevents a subscriber — who during its callback might happen to trigger another `applyDiff` through some indirect path — from recursively re-entering the bridge within the same tick. The two flags address independent failure modes; neither subsumes the other.
+`inOurCommit` prevents the event bridge from double-notifying when *we* applied the diff. It's local to `onFlush` — set true around `doc.commit()`, cleared in `finally`. The flag does not escape into user-reachable code.
+
+The earlier `inEventHandler` flag (which protected substrate-write skipping during event-bridge replay) was retired in favor of `BatchOptions.replay`: the event bridge passes `{ replay: true }` to `executeBatch`, and the substrate's `prepare`/`onFlush` discriminate on that typed parameter rather than on an ambient global. This closes a previously latent invariant hole — a re-entrant `change(doc, ...)` from inside a subscriber on a replay batch now correctly lands in the substrate (replay=false on the inner batch), where pre-fix the global flag swallowed the write. Context: jj:qpultxsw.
 
 ### What the event bridge is NOT
 

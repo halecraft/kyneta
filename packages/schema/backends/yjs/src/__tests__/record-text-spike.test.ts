@@ -147,7 +147,7 @@ describe("record-of-struct (plain baseline)", () => {
 
     const delta = exportSince(docA, v0)
     expect(delta).not.toBeNull()
-    merge(docB, delta!, "sync")
+    merge(docB, delta!, { origin: "sync" })
 
     expect(docB.profiles()).toEqual({
       alice: { displayName: "Alice", age: 30 },
@@ -304,7 +304,7 @@ describe("text-inside-struct-inside-record", () => {
 
     const delta = exportSince(docA, v0)
     expect(delta).not.toBeNull()
-    merge(docB, delta!, "sync")
+    merge(docB, delta!, { origin: "sync" })
 
     expect(docB.profiles()).toEqual({
       alice: { displayName: "Alice", bio: "Hello from A" },
@@ -342,8 +342,8 @@ describe("text-inside-struct-inside-record", () => {
     const deltaBA = exportSince(docB, vA)
     expect(deltaAB).not.toBeNull()
     expect(deltaBA).not.toBeNull()
-    merge(docB, deltaAB!, "sync")
-    merge(docA, deltaBA!, "sync")
+    merge(docB, deltaAB!, { origin: "sync" })
+    merge(docA, deltaBA!, { origin: "sync" })
 
     // Both converge to the same value (order depends on client IDs)
     expect((docA as any).profiles.at("alice").bio()).toBe(
@@ -429,7 +429,7 @@ describe("text-inside-struct-inside-list", () => {
 
     const delta = exportSince(docA, v0)
     expect(delta).not.toBeNull()
-    merge(docB, delta!, "sync")
+    merge(docB, delta!, { origin: "sync" })
 
     expect(docB.players.length).toBe(1)
     expect((docB as any).players.at(0).name()).toBe("Alice")

@@ -423,7 +423,7 @@ describe("Round-trip replication", () => {
 
     // Export the delta and import into B
     const delta = substrateA.exportSince(f0)!
-    substrateB.merge(delta, "sync")
+    substrateB.merge(delta, { origin: "sync" })
 
     // Snapshots should match
     expect(snapshotOf(substrateB)).toEqual(snapshotOf(substrateA))
@@ -449,7 +449,7 @@ describe("Round-trip replication", () => {
 
     // Import into B
     const delta = substrateA.exportSince(f0)!
-    substrateB.merge(delta, "sync")
+    substrateB.merge(delta, { origin: "sync" })
 
     // Changefeed should have fired with origin "sync"
     expect(received.length).toBeGreaterThanOrEqual(1)
@@ -519,7 +519,7 @@ describe("merge with entirety payload (PlainSubstrate)", () => {
         items: [],
       }),
     }
-    substrate.merge(entirety, "sync")
+    substrate.merge(entirety, { origin: "sync" })
 
     const snap = snapshotOf(substrate)
     expect(snap.title).toBe("Replaced")
@@ -546,7 +546,7 @@ describe("merge with entirety payload (PlainSubstrate)", () => {
         items: [],
       }),
     }
-    substrate.merge(entirety, "sync")
+    substrate.merge(entirety, { origin: "sync" })
 
     // The ref object is still the same identity
     expect(refBefore).toBe(doc)
@@ -571,7 +571,7 @@ describe("merge with entirety payload (PlainSubstrate)", () => {
         items: [],
       }),
     }
-    substrate.merge(entirety, "sync")
+    substrate.merge(entirety, { origin: "sync" })
 
     expect(received.length).toBeGreaterThanOrEqual(1)
     for (const cs of received) {

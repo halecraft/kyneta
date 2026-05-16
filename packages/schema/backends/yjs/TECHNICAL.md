@@ -81,7 +81,7 @@ The two backends implement the same `Substrate<V>` contract and share the overal
 | Container discrimination | `.kind()` method (strings: `"Map"`, `"Text"`, `"List"`, …) | `instanceof Y.Map`, `instanceof Y.Array`, `instanceof Y.Text` |
 | Why | Loro containers are WASM handles; `instanceof` is unreliable across module boundaries | Yjs shared types are native JS classes; `instanceof` is stable |
 | Write commit | Accumulate `Diff[]` in `prepare`, apply via `doc.applyDiff` in `onFlush` | Imperative mutations inside `Y.transact` in `onFlush` (origin-tagged) |
-| Event bridge | `doc.subscribe` + `inOurCommit` / `inEventHandler` guards | `observeDeep` + transaction-origin check + single re-entrancy guard |
+| Event bridge | `doc.subscribe` + `inOurCommit` guard + `BatchOptions.replay` directive | `observeDeep` + `transaction.origin === KYNETA_ORIGIN` filter + `BatchOptions.replay` directive |
 | Structural identity | Identity hash as Loro container key | Identity hash as `Y.Map` key within the root `Y.Map` |
 | Structural creation | Lazy — creation happens on first typed accessor call | Eager — `ensureContainers` walks the schema on upgrade |
 | Structural client ID | Not needed (Loro has no equivalent concern) | `STRUCTURAL_YJS_CLIENT_ID = 0` during `ensureContainers` |
