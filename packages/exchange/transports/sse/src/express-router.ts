@@ -2,9 +2,9 @@
 //
 // Creates Express routes that integrate with SseServerTransport:
 // - GET endpoint for clients to establish SSE connections
-// - POST endpoint for clients to send text wire frame messages
+// - POST endpoint for clients to send binary wire frame messages
 //
-// The POST endpoint accepts text/plain bodies containing text wire frames.
+// The POST endpoint accepts application/octet-stream bodies (binary frames).
 // The GET endpoint sends text wire frames as SSE data events.
 //
 // Design: Imperative Shell — delegates POST body parsing to
@@ -66,9 +66,9 @@ export interface SseExpressRouterOptions {
  *
  * ## Wire Format
  *
- * The POST endpoint accepts text/plain bodies containing text wire frames
- * (JSON arrays with "1c"/"1f" prefix). The SSE endpoint sends text wire
- * frames as `data:` events. Both directions use the same encoding.
+ * The POST endpoint accepts application/octet-stream bodies containing binary
+ * wire frames. The SSE endpoint sends text wire frames as `data:` events.
+ * The two directions use different encodings (binary POST, text SSE).
  *
  * @param adapter The SseServerTransport instance
  * @param options Configuration options for the router
@@ -114,7 +114,7 @@ export function createSseExpressRouter(
 
   router.post(
     syncPath,
-    express.text({ type: "text/plain", limit: "1mb" }),
+    express.raw({ type: "application/octet-stream", limit: "1mb" }),
     (req: Request, res: Response) => {
       // Extract peerId from request
       const peerId = getPeerIdFromSyncRequest(req)
@@ -132,15 +132,16 @@ export function createSseExpressRouter(
         return
       }
 
-      // Ensure we have text data
-      if (typeof req.body !== "string") {
-        res.status(400).json({ error: "Expected text body" })
+      // Ensure we have binary data
+      if (!(req.body instanceof Uint8Array)) {
+        res.status(400).json({ error: "Expected binary body" })
         return
       }
 
       // Connection owns the full inbound pipeline:
-      // text frame → TextReassembler → decodeTextWireMessage → applyInboundAliasing → ChannelMsg
-      const result = connection.handlePostBody(req.body)
+      // Uint8Array → Pipeline.receive() → ChannelMsg
+      const body = req.body as Uint8Array<ArrayBuffer>
+      const result = connection.handlePostBody(body)
 
       // Imperative shell: execute side effects based on result
       if (result.type === "messages") {

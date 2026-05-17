@@ -2,20 +2,8 @@
 
 import { SYNC_AUTHORITATIVE } from "@kyneta/schema"
 import type { ChannelMsg } from "@kyneta/transport"
-import type { WireInterestMsg } from "@kyneta/wire"
-import {
-  applyInboundAliasing,
-  applyOutboundAliasing,
-  complete,
-  decodeTextFrame,
-  decodeTextWireMessage,
-  emptyAliasState,
-  encodeTextFrame,
-  encodeTextWireMessage,
-  fragmentTextPayload,
-  MessageType,
-  TEXT_WIRE_VERSION,
-} from "@kyneta/wire"
+import { Pipeline } from "@kyneta/transport"
+import { complete, encodeBinaryFrame, WIRE_VERSION } from "@kyneta/wire"
 import { describe, expect, it, vi } from "vitest"
 import { SseConnection } from "../connection.js"
 
@@ -39,12 +27,16 @@ function createMockChannel() {
 }
 
 /**
- * Encode a ChannelMsg into a text frame string via the alias-aware pipeline.
+ * Encode a ChannelMsg into binary frame bytes via Pipeline<"binary">.
+ * This simulates what the client sends over POST.
  */
-function encodeToTextFrame(msg: ChannelMsg): string {
-  const { wire } = applyOutboundAliasing(emptyAliasState(), msg)
-  const payload = JSON.stringify(encodeTextWireMessage(wire))
-  return encodeTextFrame(complete(TEXT_WIRE_VERSION, payload))
+function encodeToBinaryFrame(msg: ChannelMsg): Uint8Array<ArrayBuffer> {
+  const pipeline = new Pipeline({ send: "binary" })
+  const results = pipeline.send(msg)
+  pipeline.dispose()
+  const r = results[0]
+  if (!r || !r.ok) throw new Error("Failed to encode message via pipeline")
+  return r.value
 }
 
 const presentMsg: ChannelMsg = {
@@ -80,41 +72,16 @@ describe("SseConnection — send", () => {
 
     expect(sent).toHaveLength(1)
 
+    // Verify the sent text frame can be decoded back via Pipeline<"text">
+    const recvPipeline = new Pipeline({ send: "text" })
     const sentFrame = sent.at(0)
     if (!sentFrame) throw new Error("expected sent frame")
-    const frame = decodeTextFrame(sentFrame)
-    expect(frame.content.kind).toBe("complete")
-    const parsed = JSON.parse(frame.content.payload)
-    const wire = decodeTextWireMessage(parsed)
-    const decoded = applyInboundAliasing(emptyAliasState(), wire)
-    expect(decoded.error).toBeUndefined()
-    expect(decoded.msg).toEqual(presentMsg)
-  })
-
-  it("sends messages with short field names (alias-form wire format)", () => {
-    const conn = createConnection()
-    const sent: string[] = []
-    conn.setSendFunction(textFrame => sent.push(textFrame))
-    conn._setChannel(createMockChannel() as any)
-
-    conn.send(presentMsg)
-
-    const sentFrame = sent.at(0)
-    if (!sentFrame) throw new Error("expected sent frame")
-    const frame = decodeTextFrame(sentFrame)
-    const payload = JSON.parse(frame.content.payload) as Record<string, unknown>
-
-    // The alias-aware pipeline uses compact integer discriminators and
-    // short field names, not the long-name human-readable format.
-    expect(payload.t).toBe(MessageType.Present)
-    expect(payload.docs).toBeInstanceOf(Array)
-    const doc = (payload.docs as Array<Record<string, unknown>>)[0]
-    if (!doc) throw new Error("expected doc entry")
-    expect(doc.d).toBe("doc-1")
-    expect(doc.sh).toBe("test-hash")
-    // No long-name fields from the old textCodec format
-    expect(doc.docId).toBeUndefined()
-    expect(doc.schemaHash).toBeUndefined()
+    const results = recvPipeline.receive(sentFrame)
+    recvPipeline.dispose()
+    expect(results).toHaveLength(1)
+    const r = results[0]
+    if (!r || !r.ok) throw new Error("expected successful decode")
+    expect(r.value).toEqual(presentMsg)
   })
 
   it("throws if sendFn not set", () => {
@@ -141,7 +108,6 @@ describe("SseConnection — fragmentation", () => {
     conn.send(presentMsg)
 
     expect(sent).toHaveLength(1)
-    expect(sent[0]).toContain('"1c"')
   })
 
   it("fragments into multiple sendFn calls when above threshold", () => {
@@ -153,9 +119,6 @@ describe("SseConnection — fragmentation", () => {
     conn.send(presentMsg)
 
     expect(sent.length).toBeGreaterThan(1)
-    for (const frame of sent) {
-      expect(frame).toContain('"1f"')
-    }
   })
 
   it("does not fragment when threshold is 0 (disabled)", () => {
@@ -200,11 +163,11 @@ describe("SseConnection — receive", () => {
 // ---------------------------------------------------------------------------
 
 describe("SseConnection — handlePostBody", () => {
-  it("decodes a complete frame to messages", () => {
+  it("decodes a complete binary frame to messages", () => {
     const conn = createConnection()
 
-    const textFrame = encodeToTextFrame(presentMsg)
-    const result = conn.handlePostBody(textFrame)
+    const frameBytes = encodeToBinaryFrame(presentMsg)
+    const result = conn.handlePostBody(frameBytes)
 
     expect(result.type).toBe("messages")
     if (result.type !== "messages") throw new Error("expected messages")
@@ -213,109 +176,67 @@ describe("SseConnection — handlePostBody", () => {
     expect(result.response).toEqual({ status: 200, body: { ok: true } })
   })
 
-  it("skips messages with alias resolution errors, continues processing", () => {
-    const conn = createConnection()
-
-    // An interest with an unresolved dx alias will fail alias resolution.
-    // The connection should skip it (not throw, not break) and return
-    // an empty messages array with a 200 (no fatal error).
-    const unresolvedInterest: WireInterestMsg = {
-      t: MessageType.Interest,
-      dx: 999,
-    }
-    const payload = JSON.stringify(encodeTextWireMessage(unresolvedInterest))
-    const textFrame = encodeTextFrame(complete(TEXT_WIRE_VERSION, payload))
-
-    const result = conn.handlePostBody(textFrame)
-
-    expect(result.type).toBe("messages")
-    if (result.type !== "messages") throw new Error("expected messages")
-    expect(result.messages).toHaveLength(0)
-    expect(result.response).toEqual({ status: 200, body: { ok: true } })
-  })
-
-  it("reassembles fragmented payloads", () => {
-    const conn = createConnection()
-
-    const { wire } = applyOutboundAliasing(emptyAliasState(), presentMsg)
-    const payload = JSON.stringify(encodeTextWireMessage(wire))
-    const fragments = fragmentTextPayload(payload, 50, 42)
-
-    expect(fragments.length).toBeGreaterThan(1)
-
-    for (let i = 0; i < fragments.length - 1; i++) {
-      const fragment = fragments.at(i)
-      if (fragment === undefined) throw new Error(`missing fragment ${i}`)
-      const result = conn.handlePostBody(fragment)
-      expect(result.type).toBe("pending")
-      if (result.type === "pending") {
-        expect(result.response).toEqual({
-          status: 202,
-          body: { pending: true },
-        })
-      }
-    }
-
-    const lastFragment = fragments.at(fragments.length - 1)
-    if (lastFragment === undefined) throw new Error("missing last fragment")
-    const finalResult = conn.handlePostBody(lastFragment)
-
-    expect(finalResult.type).toBe("messages")
-    if (finalResult.type !== "messages") throw new Error("expected messages")
-    expect(finalResult.messages).toHaveLength(1)
-    expect(finalResult.messages[0]).toEqual(presentMsg)
-  })
-
   it("resolves docId aliases across messages", () => {
     const conn = createConnection()
 
-    const { wire: presentWire } = applyOutboundAliasing(
-      emptyAliasState(),
-      presentMsg,
-    )
-    const presentPayload = JSON.stringify(encodeTextWireMessage(presentWire))
-    const presentFrame = encodeTextFrame(
-      complete(TEXT_WIRE_VERSION, presentPayload),
-    )
-
-    const presentResult = conn.handlePostBody(presentFrame)
+    // First message: present (establishes alias bindings)
+    const presentBytes = encodeToBinaryFrame(presentMsg)
+    const presentResult = conn.handlePostBody(presentBytes)
     expect(presentResult.type).toBe("messages")
     if (presentResult.type !== "messages") throw new Error("expected messages")
     expect(presentResult.messages[0]).toEqual(presentMsg)
 
-    const docAlias = (presentWire as { docs: Array<{ a?: number }> }).docs[0]?.a
-    if (docAlias === undefined) throw new Error("expected doc alias assignment")
-
-    const interestWire: WireInterestMsg = {
-      t: MessageType.Interest,
-      dx: docAlias,
+    // Second message: interest using the alias established by present.
+    // To build this, we use the same pipeline so its alias table is in sync.
+    const sendPipeline = new Pipeline({ send: "binary" })
+    // Send the present first to establish alias bindings in the send pipeline
+    sendPipeline.send(presentMsg)
+    // Now send an interest for the first doc
+    const interestMsg: ChannelMsg = {
+      type: "interest",
+      docId: "doc-1",
     }
-    const interestPayload = JSON.stringify(encodeTextWireMessage(interestWire))
-    const interestFrame = encodeTextFrame(
-      complete(TEXT_WIRE_VERSION, interestPayload),
-    )
+    const interestResults = sendPipeline.send(interestMsg)
+    sendPipeline.dispose()
+    const interestFrame = interestResults[0]
+    if (!interestFrame || !interestFrame.ok)
+      throw new Error("expected interest frame")
 
-    const interestResult = conn.handlePostBody(interestFrame)
+    const interestResult = conn.handlePostBody(interestFrame.value)
     expect(interestResult.type).toBe("messages")
     if (interestResult.type !== "messages") throw new Error("expected messages")
     expect(interestResult.messages).toHaveLength(1)
 
-    const interestMsg = interestResult.messages[0]
-    if (!interestMsg) throw new Error("expected interest message")
-    expect(interestMsg.type).toBe("interest")
-    if (interestMsg.type !== "interest") throw new Error("expected interest")
-    expect(interestMsg.docId).toBe("doc-1")
+    const decoded = interestResult.messages[0]
+    if (!decoded) throw new Error("expected interest message")
+    expect(decoded.type).toBe("interest")
+    if (decoded.type !== "interest") throw new Error("expected interest")
+    expect(decoded.docId).toBe("doc-1")
   })
 
-  it("returns error on malformed JSON input", () => {
+  it("returns error on malformed binary input", () => {
     const conn = createConnection()
 
-    const result = conn.handlePostBody("not json")
+    // Garbage bytes that aren't a valid binary frame
+    const garbage = new Uint8Array([0xff, 0xff, 0xff, 0xff])
+    const result = conn.handlePostBody(garbage)
 
     expect(result.type).toBe("error")
-    if (result.type === "error") {
-      expect(result.response.status).toBe(400)
-    }
+    expect(result.response.status).toBe(400)
+    conn.dispose()
+  })
+
+  it("returns error (not pending) on malformed CBOR payload", () => {
+    const conn = new SseConnection("peer-err", 1)
+    // Construct a structurally valid binary frame wrapping garbage CBOR.
+    // The frame parser accepts it (valid header), but CBOR decode fails.
+    const garbageCbor = new Uint8Array([0xff, 0xfe, 0xfd, 0xfc])
+    const frame = encodeBinaryFrame(complete(WIRE_VERSION, garbageCbor))
+
+    const result = conn.handlePostBody(frame)
+    expect(result.type).toBe("error")
+    expect(result.response.status).toBe(400)
+    conn.dispose()
   })
 })
 

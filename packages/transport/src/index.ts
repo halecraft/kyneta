@@ -89,3 +89,16 @@ export {
   DEFAULT_RECONNECT,
   type ReconnectOptions,
 } from "./reconnect.js"
+
+// ---------------------------------------------------------------------------
+// Wire pipeline
+// ---------------------------------------------------------------------------
+
+export { Pipeline, type WireOpts } from "./pipeline.js"
+export type { Encoding, PayloadOf } from "./pipeline-core.js"
+
+// ---------------------------------------------------------------------------
+// Frame stream parser — byte stream → binary frames
+// ---------------------------------------------------------------------------
+
+export { FrameStreamParser } from "./frame-stream-parser.js"

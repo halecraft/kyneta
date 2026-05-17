@@ -1,7 +1,7 @@
 // Binary frame encode/decode tests.
 //
 // Verifies the 6-byte frame header (version + type + Uint32 payload length)
-// for both complete and fragment frames, using the alias-aware wire pipeline.
+// for both complete and fragment frames, using wire-level message fixtures.
 // Batching is orthogonal to framing — not tested here.
 
 import {
@@ -9,12 +9,6 @@ import {
   SYNC_COLLABORATIVE,
   SYNC_EPHEMERAL,
 } from "@kyneta/schema"
-import type {
-  ChannelMsg,
-  InterestMsg,
-  OfferMsg,
-  PresentMsg,
-} from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
 import {
   BinaryFrameType,
@@ -28,13 +22,15 @@ import {
   FrameDecodeError,
 } from "../frame.js"
 import { complete, fragment, isComplete, isFragment } from "../frame-types.js"
+import { decodeWireMessage, encodeWireMessage } from "../index.js"
+import type { WireMessage } from "../wire-types.js"
 import {
-  applyInboundAliasing,
-  applyOutboundAliasing,
-  decodeWireMessage,
-  emptyAliasState,
-  encodeWireMessage,
-} from "../index.js"
+  departWire,
+  establishWire,
+  interestWire,
+  offerWire,
+  presentWire,
+} from "./__helpers__/wire-fixtures.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -51,24 +47,20 @@ function readHeader(frame: Uint8Array) {
 }
 
 /**
- * Encode a ChannelMsg into a binary frame via the alias-aware pipeline:
- * ChannelMsg → applyOutboundAliasing → WireMessage → encodeWireMessage → binary frame.
+ * Encode a WireMessage into a binary frame:
+ * WireMessage → encodeWireMessage → binary frame.
  */
-function encodeViaAlias(msg: ChannelMsg): Uint8Array<ArrayBuffer> {
-  const state = emptyAliasState()
-  const { wire } = applyOutboundAliasing(state, msg)
+function encodeToFrame(wire: WireMessage): Uint8Array<ArrayBuffer> {
   const payload = encodeWireMessage(wire)
   return encodeBinaryFrame(complete(WIRE_VERSION, payload))
 }
 
 /**
- * Decode a binary frame payload back to a ChannelMsg via the alias-aware pipeline:
- * binary frame payload → decodeWireMessage → WireMessage → applyInboundAliasing → ChannelMsg.
+ * Decode a binary frame payload back to a WireMessage:
+ * binary frame payload → decodeWireMessage → WireMessage.
  */
-function decodeViaAlias(payload: Uint8Array): ChannelMsg | undefined {
-  const wire = decodeWireMessage(payload)
-  const { msg } = applyInboundAliasing(emptyAliasState(), wire)
-  return msg
+function decodeFromFrame(payload: Uint8Array): WireMessage {
+  return decodeWireMessage(payload)
 }
 
 // ---------------------------------------------------------------------------
@@ -77,18 +69,15 @@ function decodeViaAlias(payload: Uint8Array): ChannelMsg | undefined {
 
 describe("Binary frame — complete", () => {
   it("encodes a complete frame with correct 6-byte header", () => {
-    const msg: PresentMsg = {
-      type: "present",
-      docs: [
-        {
-          docId: "doc-1",
-          schemaHash: "00test",
-          replicaType: ["plain", 1, 0] as const,
-          syncProtocol: SYNC_AUTHORITATIVE,
-        },
-      ],
-    }
-    const frame = encodeViaAlias(msg)
+    const wire = presentWire([
+      {
+        docId: "doc-1",
+        schemaHash: "00test",
+        replicaType: ["plain", 1, 0],
+        syncProtocol: SYNC_AUTHORITATIVE,
+      },
+    ])
+    const frame = encodeToFrame(wire)
 
     expect(frame).toBeInstanceOf(Uint8Array)
     expect(frame.length).toBeGreaterThan(HEADER_SIZE)
@@ -100,108 +89,107 @@ describe("Binary frame — complete", () => {
   })
 
   it("round-trips a present message", () => {
-    const msg: PresentMsg = {
-      type: "present",
-      docs: [
-        {
-          docId: "a",
-          schemaHash: "00test",
-          replicaType: ["plain", 1, 0] as const,
-          syncProtocol: SYNC_AUTHORITATIVE,
-        },
-        {
-          docId: "b",
-          schemaHash: "00test",
-          replicaType: ["yjs", 1, 0] as const,
-          syncProtocol: SYNC_COLLABORATIVE,
-        },
-        {
-          docId: "c",
-          schemaHash: "00test",
-          replicaType: ["loro", 1, 0] as const,
-          syncProtocol: SYNC_EPHEMERAL,
-        },
-      ],
-    }
-    const encoded = encodeViaAlias(msg)
+    const wire = presentWire([
+      {
+        docId: "a",
+        schemaHash: "00test",
+        replicaType: ["plain", 1, 0],
+        syncProtocol: SYNC_AUTHORITATIVE,
+      },
+      {
+        docId: "b",
+        schemaHash: "00test",
+        replicaType: ["yjs", 1, 0],
+        syncProtocol: SYNC_COLLABORATIVE,
+      },
+      {
+        docId: "c",
+        schemaHash: "00test",
+        replicaType: ["loro", 1, 0],
+        syncProtocol: SYNC_EPHEMERAL,
+      },
+    ])
+    const encoded = encodeToFrame(wire)
     const frame = decodeBinaryFrame(encoded)
 
     expect(isComplete(frame)).toBe(true)
     expect(frame.version).toBe(WIRE_VERSION)
     expect(frame.hash).toBeNull()
 
-    const decoded = decodeViaAlias(frame.content.payload)
-    expect(decoded).toEqual(msg)
+    const decoded = decodeFromFrame(frame.content.payload)
+    expect(decoded).toEqual(wire)
   })
 
   it("round-trips an interest message", () => {
-    const msg: InterestMsg = {
-      type: "interest",
+    const wire = interestWire({
       docId: "doc-xyz",
       version: "42",
       reciprocate: true,
-    }
-    const encoded = encodeViaAlias(msg)
+    })
+    const encoded = encodeToFrame(wire)
     const frame = decodeBinaryFrame(encoded)
-    const decoded = decodeViaAlias(frame.content.payload)
+    const decoded = decodeFromFrame(frame.content.payload)
 
-    expect(decoded).toEqual(msg)
+    expect(decoded).toEqual(wire)
   })
 
   it("round-trips an offer with binary payload", () => {
     const binaryData = new Uint8Array([10, 20, 30, 40, 50])
-    const msg: OfferMsg = {
-      type: "offer",
+    const wire = offerWire({
       docId: "doc-1",
-      payload: { kind: "entirety", encoding: "binary", data: binaryData },
+      kind: "entirety",
+      encoding: "binary",
+      data: binaryData,
       version: "7",
-    }
-    const encoded = encodeViaAlias(msg)
+    })
+    const encoded = encodeToFrame(wire)
     const frame = decodeBinaryFrame(encoded)
-    const decoded = decodeViaAlias(frame.content.payload) as OfferMsg
+    const decoded = decodeFromFrame(frame.content.payload)
 
-    expect(decoded.type).toBe("offer")
-    expect(decoded.payload.encoding).toBe("binary")
-    expect(decoded.payload.data).toBeInstanceOf(Uint8Array)
-    expect(decoded.payload.data).toEqual(binaryData)
+    expect(decoded.t).toBe(wire.t)
+    if (decoded.t === 0x12) {
+      expect(decoded.pe).toBe(wire.pe)
+      expect(decoded.d).toBeInstanceOf(Uint8Array)
+      expect(decoded.d).toEqual(binaryData)
+    }
   })
 
   it("round-trips an offer with JSON payload", () => {
-    const msg: OfferMsg = {
-      type: "offer",
+    const wire = offerWire({
       docId: "doc-2",
-      payload: { kind: "since", encoding: "json", data: '{"key":"value"}' },
+      kind: "since",
+      encoding: "json",
+      data: '{"key":"value"}',
       version: "3",
       reciprocate: false,
-    }
-    const encoded = encodeViaAlias(msg)
+    })
+    const encoded = encodeToFrame(wire)
     const frame = decodeBinaryFrame(encoded)
-    const decoded = decodeViaAlias(frame.content.payload)
+    const decoded = decodeFromFrame(frame.content.payload)
 
-    expect(decoded).toEqual(msg)
+    expect(decoded).toEqual(wire)
   })
 
   it("round-trips establish", () => {
-    const msg: ChannelMsg = {
-      type: "establish",
-      identity: { peerId: "peer-1", name: "Alice", type: "user" },
-    }
-    const encoded = encodeViaAlias(msg)
+    const wire = establishWire({
+      peerId: "peer-1",
+      name: "Alice",
+      type: "user",
+    })
+    const encoded = encodeToFrame(wire)
     const frame = decodeBinaryFrame(encoded)
-    const decoded = decodeViaAlias(frame.content.payload)
+    const decoded = decodeFromFrame(frame.content.payload)
 
-    expect(decoded).toEqual(msg)
+    expect(decoded).toEqual(wire)
   })
 
   it("round-trips depart", () => {
-    const msg: ChannelMsg = {
-      type: "depart",
-    }
-    const encoded = encodeViaAlias(msg)
+    const wire = departWire()
+    const encoded = encodeToFrame(wire)
     const frame = decodeBinaryFrame(encoded)
-    const decoded = decodeViaAlias(frame.content.payload)
+    const decoded = decodeFromFrame(frame.content.payload)
 
-    expect(decoded?.type).toBe("depart")
+    expect(decoded.t).toBe(wire.t)
   })
 })
 
@@ -211,23 +199,19 @@ describe("Binary frame — complete", () => {
 
 describe("Binary frame — batch (via complete frame)", () => {
   it("encodes a batch as individual complete frames", () => {
-    const msgs: ChannelMsg[] = [
-      {
-        type: "present",
-        docs: [
-          {
-            docId: "d1",
-            schemaHash: "00test",
-            replicaType: ["plain", 1, 0] as const,
-            syncProtocol: SYNC_AUTHORITATIVE,
-          },
-        ],
-      },
-      { type: "interest", docId: "d1", version: "0" },
+    const wires: WireMessage[] = [
+      presentWire([
+        {
+          docId: "d1",
+          schemaHash: "00test",
+          replicaType: ["plain", 1, 0],
+          syncProtocol: SYNC_AUTHORITATIVE,
+        },
+      ]),
+      interestWire({ docId: "d1", version: "0" }),
     ]
 
-    // Encode each message individually via the alias-aware pipeline
-    const frames = msgs.map(msg => encodeViaAlias(msg))
+    const frames = wires.map(w => encodeToFrame(w))
 
     // Each frame should have a valid complete header
     for (const frame of frames) {
@@ -238,66 +222,58 @@ describe("Binary frame — batch (via complete frame)", () => {
   })
 
   it("round-trips a batch of mixed messages", () => {
-    const msgs: ChannelMsg[] = [
-      {
-        type: "establish",
-        identity: { peerId: "p1", name: "One", type: "user" },
-      },
-      {
-        type: "present",
-        docs: [
-          {
-            docId: "d1",
-            schemaHash: "00test",
-            replicaType: ["plain", 1, 0] as const,
-            syncProtocol: SYNC_AUTHORITATIVE,
-          },
-          {
-            docId: "d2",
-            schemaHash: "00test",
-            replicaType: ["yjs", 1, 0] as const,
-            syncProtocol: SYNC_COLLABORATIVE,
-          },
-        ],
-      },
-      { type: "interest", docId: "d1", version: "5", reciprocate: true },
-      {
-        type: "offer",
-        docId: "d1",
-        payload: {
-          kind: "since",
-          encoding: "binary",
-          data: new Uint8Array([1, 2, 3]),
+    const wires: WireMessage[] = [
+      establishWire({ peerId: "p1", name: "One", type: "user" }),
+      presentWire([
+        {
+          docId: "d1",
+          schemaHash: "00test",
+          replicaType: ["plain", 1, 0],
+          syncProtocol: SYNC_AUTHORITATIVE,
         },
+        {
+          docId: "d2",
+          schemaHash: "00test",
+          replicaType: ["yjs", 1, 0],
+          syncProtocol: SYNC_COLLABORATIVE,
+        },
+      ]),
+      interestWire({ docId: "d1", version: "5", reciprocate: true }),
+      offerWire({
+        docId: "d1",
+        kind: "since",
+        encoding: "binary",
+        data: new Uint8Array([1, 2, 3]),
         version: "6",
         reciprocate: false,
-      },
+      }),
     ]
 
-    // Encode each message individually via the alias-aware pipeline
-    const frames = msgs.map(msg => encodeViaAlias(msg))
+    const frames = wires.map(w => encodeToFrame(w))
 
     // Decode each frame and verify
     const decoded = frames.map(frame => {
       const decodedFrame = decodeBinaryFrame(frame)
       expect(isComplete(decodedFrame)).toBe(true)
-      return decodeViaAlias(decodedFrame.content.payload)
+      return decodeFromFrame(decodedFrame.content.payload)
     })
 
     expect(decoded).toHaveLength(4)
-    expect(decoded[0]?.type).toBe("establish")
-    expect(decoded[1]?.type).toBe("present")
-    expect(decoded[2]?.type).toBe("interest")
-    expect(decoded[3]?.type).toBe("offer")
+    expect(decoded[0]?.t).toBe(0x01) // Establish
+    expect(decoded[1]?.t).toBe(0x10) // Present
+    expect(decoded[2]?.t).toBe(0x11) // Interest
+    expect(decoded[3]?.t).toBe(0x12) // Offer
 
-    const offer = decoded[3] as OfferMsg
-    expect(offer.payload.data).toEqual(new Uint8Array([1, 2, 3]))
+    const offer = decoded[3]
+    if (offer && offer.t === 0x12) {
+      expect(offer.d).toEqual(new Uint8Array([1, 2, 3]))
+    }
   })
 
   it("round-trips an empty batch (no frames produced)", () => {
     // An empty batch produces no frames — this is valid and expected.
-    const msgs: ChannelMsg[] = []
-    const frames = msgs.map(msg => encodeViaAlias(msg))
+    const wires: WireMessage[] = []
+    const frames = wires.map(w => encodeToFrame(w))
     expect(frames).toEqual([])
   })
 })
@@ -385,19 +361,14 @@ describe("Binary frame — fragment", () => {
 
 describe("Binary frame — encodeBinaryFrame generic", () => {
   it("encodes a complete frame from Frame<Uint8Array>", () => {
-    const msg: PresentMsg = {
-      type: "present",
-      docs: [
-        {
-          docId: "x",
-          schemaHash: "00test",
-          replicaType: ["plain", 1, 0] as const,
-          syncProtocol: SYNC_AUTHORITATIVE,
-        },
-      ],
-    }
-    const state = emptyAliasState()
-    const { wire } = applyOutboundAliasing(state, msg)
+    const wire = presentWire([
+      {
+        docId: "x",
+        schemaHash: "00test",
+        replicaType: ["plain", 1, 0],
+        syncProtocol: SYNC_AUTHORITATIVE,
+      },
+    ])
     const payload = encodeWireMessage(wire)
     const frame = complete(WIRE_VERSION, payload)
     const encoded = encodeBinaryFrame(frame)
@@ -503,26 +474,23 @@ describe("Binary frame — error handling", () => {
 
 describe("Binary frame — edge cases", () => {
   it("normalizes Buffer subclass input", () => {
-    const msg: PresentMsg = {
-      type: "present",
-      docs: [
-        {
-          docId: "test",
-          schemaHash: "00test",
-          replicaType: ["plain", 1, 0] as const,
-          syncProtocol: SYNC_AUTHORITATIVE,
-        },
-      ],
-    }
-    const encoded = encodeViaAlias(msg)
+    const wire = presentWire([
+      {
+        docId: "test",
+        schemaHash: "00test",
+        replicaType: ["plain", 1, 0],
+        syncProtocol: SYNC_AUTHORITATIVE,
+      },
+    ])
+    const encoded = encodeToFrame(wire)
 
     // Create a copy via ArrayBuffer (simulates Buffer → Uint8Array path)
     const copy = new Uint8Array(encoded.buffer.slice(0))
     const frame = decodeBinaryFrame(copy)
 
     expect(isComplete(frame)).toBe(true)
-    const decoded = decodeViaAlias(frame.content.payload)
-    expect(decoded).toEqual(msg)
+    const decoded = decodeFromFrame(frame.content.payload)
+    expect(decoded).toEqual(wire)
   })
 
   it("complete frame with empty payload is valid (header-only)", () => {

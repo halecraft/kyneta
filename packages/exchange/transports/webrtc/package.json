@@ -30,8 +30,7 @@
     "verify": "verify"
   },
   "peerDependencies": {
-    "@kyneta/transport": "workspace:^",
-    "@kyneta/wire": "workspace:^"
+    "@kyneta/transport": "workspace:^"
   },
   "devDependencies": {
     "@kyneta/exchange": "workspace:^",

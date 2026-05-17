@@ -9,7 +9,6 @@
 
 export {
   createSseClient,
-  DEFAULT_FRAGMENT_THRESHOLD,
   type DisconnectReason,
   type SseClientLifecycleEvents,
   type SseClientOptions,

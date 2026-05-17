@@ -23,8 +23,10 @@ import {
   HEADER_SIZE,
   WIRE_VERSION,
 } from "./constants.js"
+import type { WireCodec } from "./fragment-generic.js"
 import type { Frame } from "./frame-types.js"
 import { complete, fragment as fragmentFrame } from "./frame-types.js"
+import { decodeWireMessage, encodeWireMessage } from "./wire-message-helpers.js"
 
 // ---------------------------------------------------------------------------
 // Encoding — generic
@@ -93,9 +95,14 @@ export function encodeBinaryFrame(
  *
  * @throws FrameDecodeError if the frame is malformed
  */
-export function decodeBinaryFrame(data: Uint8Array): Frame<Uint8Array> {
+export function decodeBinaryFrame(
+  data: Uint8Array,
+): Frame<Uint8Array<ArrayBuffer>> {
   // Normalize Buffer subclasses (Bun/Node may provide these)
-  const frame = data.constructor === Uint8Array ? data : new Uint8Array(data)
+  const frame: Uint8Array<ArrayBuffer> =
+    data.buffer instanceof ArrayBuffer && data.constructor === Uint8Array
+      ? (data as Uint8Array<ArrayBuffer>)
+      : new Uint8Array(data)
 
   if (frame.length < HEADER_SIZE) {
     throw new FrameDecodeError(
@@ -190,4 +197,41 @@ export class FrameDecodeError extends Error {
   ) {
     super(message)
   }
+}
+
+// ---------------------------------------------------------------------------
+// Uint8Array concatenation helper
+// ---------------------------------------------------------------------------
+
+function concatUint8Arrays(
+  chunks: readonly Uint8Array[],
+): Uint8Array<ArrayBuffer> {
+  let totalLength = 0
+  for (const chunk of chunks) {
+    totalLength += chunk.length
+  }
+  const result = new Uint8Array(totalLength)
+  let offset = 0
+  for (const chunk of chunks) {
+    result.set(chunk, offset)
+    offset += chunk.length
+  }
+  return result
+}
+
+// ---------------------------------------------------------------------------
+// Binary codec record
+// ---------------------------------------------------------------------------
+
+export const BINARY_CODEC: WireCodec<Uint8Array<ArrayBuffer>> = {
+  wireVersion: WIRE_VERSION,
+  maxPayload: 0xffffffff,
+  sizeOf: (c: Uint8Array) => c.length,
+  concatenate: concatUint8Arrays,
+  slice: (b: Uint8Array<ArrayBuffer>, start: number, end: number) =>
+    b.subarray(start, end),
+  encodeFrame: encodeBinaryFrame,
+  decodeFrame: decodeBinaryFrame,
+  encodeWire: encodeWireMessage,
+  decodeWire: decodeWireMessage,
 }

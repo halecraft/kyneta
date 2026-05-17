@@ -35,7 +35,8 @@
     "verify": "verify"
   },
   "dependencies": {
-    "@kyneta/random": "workspace:^"
+    "@kyneta/random": "workspace:^",
+    "@kyneta/wire": "workspace:^"
   },
   "peerDependencies": {
     "@kyneta/machine": "workspace:^",

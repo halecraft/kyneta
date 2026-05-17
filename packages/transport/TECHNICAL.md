@@ -1,15 +1,13 @@
 # @kyneta/transport — Technical Reference
 
 > **Package**: `@kyneta/transport`
-> **Role**: The abstract transport contract — an `abstract class Transport<G>`, the channel lifecycle, the six-message protocol vocabulary, identity types, and the in-process test bridge that every real transport (websocket, sse, webrtc, unix-socket) implements against.
-> **Depends on**: `@kyneta/machine`, `@kyneta/schema`
-> **Depended on by**: `@kyneta/exchange`, `@kyneta/websocket-transport`, `@kyneta/sse-transport`, `@kyneta/unix-socket-transport`, `@kyneta/webrtc-transport`
-> **Canonical symbols**: `Transport<G>`, `TransportFactory`, `TransportContext`, `Channel`, `ConnectedChannel`, `EstablishedChannel`, `GeneratedChannel`, `ChannelDirectory<G>`, `ChannelMsg`, `LifecycleMsg`, `SyncMsg`, `EstablishMsg`, `DepartMsg`, `PresentMsg`, `InterestMsg`, `OfferMsg`, `DismissMsg`, `AddressedEnvelope`, `ReturnEnvelope`, `PeerIdentityDetails`, `WireFeatures`, `computeBackoffDelay`, `DEFAULT_RECONNECT`
+> **Role**: The abstract transport contract — an `abstract class Transport<G>`, the channel lifecycle, the six-message protocol vocabulary, identity types, the wire pipeline (`Pipeline<S, R>`), alias transformer, stream frame parser, and reconnection utilities.
+> **Depends on**: `@kyneta/wire` (workspace), `@kyneta/machine`, `@kyneta/schema`
+> **Depended on by**: `@kyneta/exchange`, `@kyneta/websocket-transport`, `@kyneta/sse-transport`, `@kyneta/unix-socket-transport`, `@kyneta/webrtc-transport`, `@kyneta/bridge-transport`
+> **Canonical symbols**: `Transport<G>`, `TransportFactory`, `TransportContext`, `Channel`, `ConnectedChannel`, `EstablishedChannel`, `GeneratedChannel`, `ChannelDirectory<G>`, `ChannelMsg`, `LifecycleMsg`, `SyncMsg`, `EstablishMsg`, `DepartMsg`, `PresentMsg`, `InterestMsg`, `OfferMsg`, `DismissMsg`, `AddressedEnvelope`, `ReturnEnvelope`, `PeerIdentityDetails`, `WireFeatures`, `Pipeline`, `Encoding`, `PayloadOf`, `WireOpts`, `FrameStreamParser`, `computeBackoffDelay`, `DEFAULT_RECONNECT`. Re-exports: `Result`, `Ok`, `Err`, `ok`, `err`, `WireError`.
+> **Key invariant(s)**: The protocol is exactly six messages. Two lifecycle (`establish`, `depart`) for channel presence, four sync (`present`, `interest`, `offer`, `dismiss`) for document exchange. The `Pipeline` is the single wire orchestrator — all concrete transports use it rather than calling `@kyneta/wire` directly.
 
-`Bridge`, `BridgeTransport`, and `createBridgeTransport` moved to `@kyneta/bridge-transport` in the v1 alias work — they need to import the alias transformer from `@kyneta/wire`, which would create a circular peer-dep if they remained in `@kyneta/transport`.
-> **Key invariant(s)**: The protocol is exactly six messages. Two lifecycle (`establish`, `depart`) for channel presence, four sync (`present`, `interest`, `offer`, `dismiss`) for document exchange. Nothing in `@kyneta/transport` knows what a substrate is — `SubstratePayload` is carried as an opaque field on `OfferMsg`.
-
-A small kit of shared types and one abstract base class that every concrete transport extends. It fixes the shape of a channel, the vocabulary of messages, and the split between "channel created" / "channel connected" / "channel established" — so that the runtime in `@kyneta/exchange` can drive any transport without caring whether bytes flow over a WebSocket, an SSE stream, a Unix socket, or an in-process bridge.
+A small kit of shared types, one abstract base class, and one wire pipeline that every concrete transport extends and uses. It fixes the shape of a channel, the vocabulary of messages, the split between "channel created" / "channel connected" / "channel established", and the `ChannelMsg ↔ wire` transformation — so that the runtime in `@kyneta/exchange` can drive any transport without caring whether bytes flow over a WebSocket, an SSE stream, a Unix socket, or an in-process bridge.
 
 Imported by `@kyneta/exchange` (which owns the sync runtime) and by every concrete transport package. Application code never imports from here directly.
 
@@ -21,6 +19,8 @@ Imported by `@kyneta/exchange` (which owns the sync runtime) and by every concre
 - What does a channel's lifecycle look like? → [Channel lifecycle](#channel-lifecycle)
 - How do I write a new transport? → [Writing a transport](#writing-a-transport)
 - Why a `TransportFactory` instead of a `Transport` instance? → [Factories, not instances](#factories-not-instances)
+- How does the wire pipeline work? → [Wire pipeline](#wire-pipeline)
+- What is `FrameStreamParser` for? → [Stream-substrate boundary discovery](#stream-substrate-boundary-discovery)
 - How do I test two peers without real network? → [`BridgeTransport` (moved)](#bridgetransport-moved) — in `@kyneta/bridge-transport`
 - What is `computeBackoffDelay` for? → [Reconnection utilities](#reconnection-utilities)
 
@@ -34,14 +34,14 @@ Imported by `@kyneta/exchange` (which owns the sync runtime) and by every concre
 | `ConnectedChannel` | A generated channel that now has a `channelId` and an `onReceive` handler but has not completed `establish`. May only send `LifecycleMsg`. | `EstablishedChannel` |
 | `EstablishedChannel` | A connected channel that has completed the `establish` handshake and knows its remote `peerId`. May only send `SyncMsg`. | `ConnectedChannel` |
 | `ChannelDirectory<G>` | The per-transport map from `channelId` to `Channel`, owner of the monotonic channel-ID counter. | A service discovery, a routing table — it is local to one transport instance |
-| `ChannelMsg` | `LifecycleMsg \| SyncMsg` — every message that ever crosses the wire. | A wire frame (wrapped separately by `@kyneta/wire`) |
-| `LifecycleMsg` | `EstablishMsg \| DepartMsg`. | Sync messages — cannot carry document payloads |
-| `SyncMsg` | `PresentMsg \| InterestMsg \| OfferMsg \| DismissMsg`. | Lifecycle messages — cannot be sent before `establish` completes |
+| `ChannelMsg` | `LifecycleMsg \| SyncMsg` — every message that ever crosses the wire. | A wire frame (wrapped separately by the Pipeline) |
+| `Pipeline<S, R>` | The single wire pipeline: `ChannelMsg → alias → encode → fragment → wire pieces` (send) and the reverse (receive). | A UNIX pipe, a CI/CD pipeline |
+| `Encoding` | `"binary" \| "text"` — determines the wire substrate type. | Character encoding (UTF-8, etc.) |
+| `PayloadOf<E>` | `{ binary: Uint8Array; text: string }[E]` — the wire piece type for a given encoding. | A message payload |
+| `FrameStreamParser` | Stateful byte-stream → binary-frame extractor for stream-oriented transports. | `Reassembler`, which handles fragmentation (orthogonal concern) |
 | `AddressedEnvelope` | `{ toChannelIds: number[], message: ChannelMsg }` — an outbound message plus routing. | `ReturnEnvelope`, which is the inbound counterpart |
-| `ReturnEnvelope` | `{ fromChannelId: number, message: ChannelMsg }` — an inbound message plus source. | `AddressedEnvelope` |
 | `TransportFactory` | `() => AnyTransport` — a zero-arg function returning a fresh transport instance. | A `Transport` instance itself |
 | `TransportContext` | The callback bundle the exchange injects via `_initialize` (identity + four callbacks). | A Node.js context, a React context |
-| `PeerIdentityDetails` | `{ peerId, name?, type: "user" \| "bot" \| "service" }` — carried inside every `EstablishMsg`. | A `PeerId` alone (just the string) |
 
 ---
 
@@ -54,6 +54,7 @@ A transport is:
 1. An **abstract base class** (`Transport<G>` in `packages/transport/src/transport.ts`) that owns a `ChannelDirectory`, a lifecycle state machine (`created → initialized → started → stopped`), and `_initialize` / `_start` / `_stop` / `_send` internal methods the exchange calls.
 2. A **channel abstraction** (`packages/transport/src/channel.ts`) that narrows what can be sent based on state: a `ConnectedChannel`'s `send` accepts only `LifecycleMsg`; an `EstablishedChannel`'s `send` accepts only `SyncMsg`.
 3. A **fixed message vocabulary** (`packages/transport/src/messages.ts`) used by every transport and understood by the runtime without per-transport knowledge.
+4. A **wire pipeline** (`Pipeline<S, R>` in `packages/transport/src/pipeline.ts`) that handles the `ChannelMsg ↔ wire` transformation — alias resolution, codec invocation, fragmentation, validation.
 
 The generic parameter `G` is the transport's own per-channel context (e.g. the browser `WebSocket` object, a `{ targetTransportType }` for the bridge). `@kyneta/transport` never inspects it — only the concrete subclass's `generate(context: G)` does.
 
@@ -93,9 +94,8 @@ Exactly six messages (source: `packages/transport/src/messages.ts`). Two groups:
 
 ### What "message" means here (and does NOT mean)
 
-- **Not a wire frame.** `ChannelMsg` is the abstract shape. `@kyneta/wire` wraps a `ChannelMsg` (or batch) in a `Frame<T>` with a codec (CBOR or JSON). A transport sends frames, not messages directly.
+- **Not a wire frame.** `ChannelMsg` is the abstract shape. The `Pipeline` transforms it through aliasing, codec encoding, and framing before it reaches the wire. A transport sends wire pieces, not messages directly.
 - **Not addressed.** A `ChannelMsg` has no `to` or `from` field. Routing information lives in `AddressedEnvelope` / `ReturnEnvelope`, or implicitly in the channel the message flowed through.
-- **Not versioned at the transport layer.** Protocol-version negotiation is a substrate or application concern. The message vocabulary is whatever this package exports at build time.
 
 ### Why `OfferMsg.payload` is opaque
 
@@ -107,7 +107,7 @@ Exactly six messages (source: `packages/transport/src/messages.ts`). Two groups:
 
 A channel moves through three states (source: `packages/transport/src/channel.ts`):
 
-```
+```/dev/null/channel-lifecycle.txt#L1-3
 Generated  ──generate()──►  Connected  ──establish handshake──►  Established
 ```
 
@@ -130,7 +130,7 @@ The `Transport<G>` base class enforces a four-state lifecycle (source: `packages
 | `started` | `_start()` calls `onStart()`; channels may now be added | `_stop` |
 | `stopped` | `_stop()` calls `onStop()` and clears the directory | terminal; re-initialization is allowed (for HMR) |
 
-`addChannel`, `removeChannel`, and `establishChannel` throw outside the `started` state. This is why a transport cannot emit messages before the exchange has wired it up, and why concrete subclasses can safely call `addChannel` from their `onStart()` override.
+`addChannel`, `removeChannel`, and `establishChannel` throw outside the `started` state.
 
 ### `generate` vs `addChannel`
 
@@ -154,8 +154,6 @@ Everything else — the lifecycle state machine, channel directory, the six-mess
 
 Every transport package exports `createXxxTransport(params): TransportFactory` rather than returning an instance directly. A factory is a zero-arg function that constructs a fresh `Transport`. The exchange calls it on construction and again on reset (e.g. React StrictMode double-mount). Passing an instance would share mutable state across lifecycles; passing a factory guarantees a clean slate.
 
-Source: `packages/transport/src/transport.ts` → `TransportFactory`.
-
 ### What the base class gives you for free
 
 - Channel-ID issuance (monotonic counter in `ChannelDirectory`).
@@ -170,23 +168,87 @@ Source: `packages/transport/src/transport.ts` → `TransportFactory`.
 
 In-process testing is provided by `@kyneta/bridge-transport` (`packages/exchange/transports/bridge`). Consumers import directly from `@kyneta/bridge-transport`. See that package's docs for usage.
 
-Bridge transports are identified by `transportId` (a unique instance name, e.g. `"peer-a"`) — not `transportType`, which defaults to `"bridge"` for all bridge instances. The `Bridge` class routes messages by `transportId`; the `Bridge.transportIds` accessor returns the set of registered instance IDs.
+The bridge transport lives outside `@kyneta/transport` for historical reasons — it was originally extracted to break a circular peer-dependency when `@kyneta/wire` had a peer-dep on `@kyneta/transport`. That cycle is now resolved (wire is a leaf, transport depends on wire), but the bridge remains in its own package because it has grown its own test surface and is a natural boundary.
 
-The bridge transport lives outside `@kyneta/transport` because it needs the alias transformer from `@kyneta/wire` (Phase 4 of the v1 alias work), and `@kyneta/transport` cannot depend on `@kyneta/wire` without creating a circular peer-dep — `@kyneta/wire` already peer-depends on `@kyneta/transport` for shared message types.
+---
 
-## Wire-format mechanics live in transports
+## Canonical symbols
 
-Wire-encoding concerns (codec invocation, fragmentation, alias state, future hash verification, future compression) live inside each transport's `Channel.send` / `Channel.receive` path — not in the synchronizer. The synchronizer trades in `ChannelMsg`; only the transport ever forms or parses bytes.
+| Symbol | Source | Role |
+|--------|--------|------|
+| `Pipeline<S, R>` | `src/pipeline.ts` | The single wire pipeline. `S` = send encoding, `R` = receive encoding. |
+| `Encoding` | `src/pipeline-core.ts` | `"binary" \| "text"`. |
+| `PayloadOf<E>` | `src/pipeline-core.ts` | `{ binary: Uint8Array; text: string }[E]`. |
+| `WireOpts` | `src/pipeline.ts` | Optional pipeline configuration (threshold, reassembly limits, `onError`). |
+| `FrameStreamParser` | `src/frame-stream-parser.ts` | Stateful byte-stream → binary-frame extractor. |
 
-Per-channel state for wire-format features is held as private fields on the transport's Channel implementation:
+Re-exports from `@kyneta/wire`:
 
-- `frameId` counter (today, in every binary transport).
-- `aliasState` (v1, see `@kyneta/wire` → `alias-table.ts`).
-- Future: hash-verifier state, compression dictionary, encryption layer.
+| Symbol | Original source | Role |
+|--------|----------------|------|
+| `Result<T, E>`, `Ok<T>`, `Err<E>` | `wire/src/result.ts` | Typed success/failure union. |
+| `ok`, `err` | `wire/src/result.ts` | Constructors. |
+| `WireError` | `wire/src/wire-error.ts` | Discriminated union of all pipeline errors. |
 
-Each transport calls `@kyneta/wire`'s pure transformers adjacent to its codec invocation. Lifecycle is automatic: state is created with the channel and dies with the channel — no parallel-keyed map to keep in sync with the session model.
+---
 
-The synchronizer never sees `WireMessage`, never participates in alias decisions, and never pushes wire-format state into transports. Future wire-format work attaches at the same per-channel location.
+## Wire pipeline
+
+Source: `packages/transport/src/pipeline.ts`, `packages/transport/src/pipeline-core.ts`.
+
+### Alias-table architecture
+
+The alias transformer (`applyOutboundAliasing` / `applyInboundAliasing` in `src/alias-table.ts`) is the single `ChannelMsg ⇄ WireMessage` conversion layer. It compresses repeated doc IDs and schema hashes into integer aliases that are learned by both peers during the `present` phase. The `AliasState` record tracks both outbound (doc → alias) and inbound (alias → doc) mappings.
+
+Alias state is owned per-Pipeline (and therefore per-channel). When a channel closes, its aliases are discarded. This is why there is no parallel-keyed map to keep in sync — the alias lifecycle is the channel lifecycle.
+
+### FC/IS split
+
+The pipeline follows a functional core / imperative shell design:
+
+- **Functional core**: `sendStep` and `receiveStep` (in `pipeline-core.ts`) are pure step functions. They take immutable state and return new state + a list of `Result<T, WireError>` outputs.
+- **Imperative shell**: `Pipeline` (in `pipeline.ts`) owns mutable state (alias table, reassembler, frame ID counter) and delegates all logic to the step functions. It also routes errors through the `onError` callback for observability.
+
+### Pipeline lifecycle
+
+```/dev/null/pipeline-lifecycle.txt#L1-7
+ChannelMsg ──► applyOutboundAliasing ──► WireMessage
+                                          │
+                encodeWire ──► payload ──► fragment if > threshold
+                                          │
+                encodeFrame ──► wire pieces ──► transport.send()
+
+wire piece ──► reassembler ──► decodeWire ──► applyInboundAliasing ──► ChannelMsg
+```
+
+`pipeline.send(msg)` returns `Result<PayloadOf<S>, WireError>[]` — zero or more wire pieces (one for unfragmented, many for fragmented). `pipeline.receive(piece)` returns `Result<ChannelMsg, WireError>[]` — zero (fragment pending) or one (complete message).
+
+### Asymmetric `AliasState` invariant
+
+For asymmetric pipelines (SSE: send text, receive binary), the alias table is shared across both directions. Both `sendStep` and `receiveStep` read and write the same `AliasState`. This works because alias assignments are deterministic and both peers learn aliases through the same `present` messages regardless of the encoding used in each direction.
+
+---
+
+## Stream-substrate boundary discovery
+
+Source: `packages/transport/src/frame-stream-parser.ts`, `packages/transport/src/frame-stream-parser-core.ts`.
+
+Unix sockets and any stream-oriented transport deliver bytes as a coalesced stream. Writes may merge; reads deliver arbitrary chunks. `FrameStreamParser` is the stateful class that extracts complete binary frames from the stream:
+
+```/dev/null/frame-stream-parser-api.txt#L1-4
+const parser = new FrameStreamParser()
+const frames: Result<Uint8Array, WireError>[] = parser.feed(chunk)
+// Each frame in `frames` is ok(complete binary wire frame)
+parser.reset()
+```
+
+Internally, `feedBytesStep(state, chunk)` is the pure step function (FC/IS pattern). `StreamParserState` is a two-phase discriminated union: `{ phase: "header" }` while the 6-byte header accumulates, then `{ phase: "payload" }` while the declared payload accumulates. When a payload completes, the parser emits the full frame bytes (header + payload) and resets to `"header"`.
+
+### What stream framing is NOT
+
+- **Not a decoder.** `FrameStreamParser` emits raw frame bytes; the caller pipes them through the pipeline's `receive` method.
+- **Not a fragment collector.** Stream framing and payload fragmentation are orthogonal — a Unix-socket transport uses stream framing because it has no gateway cap, and does not use fragmentation at all.
+- **Not a parser for the text pipeline.** SSE has its own event-boundary framing; the text pipeline uses `Pipeline.receive` directly on each event's `data:` field.
 
 ---
 
@@ -221,6 +283,11 @@ Scheduling (`setTimeout`, retry on failure) happens inside each concrete transpo
 | `AddressedEnvelope` / `ReturnEnvelope` | `src/messages.ts` | Outbound / inbound routing wrappers. |
 | `PeerIdentityDetails` | `src/types.ts` | `{ peerId, name?, type }`. |
 | `PeerId` / `DocId` / `ChannelId` / `TransportType` | `src/types.ts` | String / string / number / string identity aliases. |
+| `Pipeline<S, R>` | `src/pipeline.ts` | The single wire pipeline. |
+| `WireOpts` | `src/pipeline.ts` | Pipeline configuration. |
+| `Encoding` / `PayloadOf<E>` | `src/pipeline-core.ts` | Encoding discriminant and payload type mapping. |
+| `FrameStreamParser` | `src/frame-stream-parser.ts` | Byte-stream → binary-frame extractor. |
+| `AliasState` / `applyOutboundAliasing` / `applyInboundAliasing` / `emptyAliasState` | `src/alias-table.ts` | Alias transformer (internal to pipeline). |
 | `ReconnectOptions` / `DEFAULT_RECONNECT` / `computeBackoffDelay` | `src/reconnect.ts` | Pure backoff math. |
 | `StateTransition` / `TransitionListener` | re-exported from `@kyneta/machine` | Surfaced for consumers observing client-program state. |
 
@@ -228,17 +295,21 @@ Scheduling (`setTimeout`, retry on failure) happens inside each concrete transpo
 
 | File | Lines | Role |
 |------|-------|------|
-| `src/index.ts` | 91 | Public exports. |
-| `src/types.ts` | 32 | Identity type aliases and `PeerIdentityDetails`. |
-| `src/messages.ts` | 165 | The six-message vocabulary, unions, type guards, envelopes. |
-| `src/channel.ts` | 115 | Channel lifecycle types and `isEstablished` guard. |
-| `src/channel-directory.ts` | 79 | `ChannelDirectory<G>` — channel store with monotonic ID issuance. |
-| `src/transport.ts` | 266 | `Transport<G>` abstract class, lifecycle, internal `_initialize` / `_start` / `_stop` / `_send`. |
-| `src/reconnect.ts` | 53 | `computeBackoffDelay`, `DEFAULT_RECONNECT`. |
-| `src/__tests__/transport.test.ts` | — | Lifecycle tests against a minimal in-test `TestAdapter`. BridgeTransport-using tests live in `@kyneta/bridge-transport`. |
+| `src/index.ts` | ~110 | Public exports + re-exports from `@kyneta/wire`. |
+| `src/types.ts` | ~32 | Identity type aliases and `PeerIdentityDetails`. |
+| `src/messages.ts` | ~165 | The six-message vocabulary, unions, type guards, envelopes. |
+| `src/channel.ts` | ~115 | Channel lifecycle types and `isEstablished` guard. |
+| `src/channel-directory.ts` | ~79 | `ChannelDirectory<G>` — channel store with monotonic ID issuance. |
+| `src/transport.ts` | ~266 | `Transport<G>` abstract class, lifecycle, internal `_initialize` / `_start` / `_stop` / `_send`. |
+| `src/pipeline.ts` | ~115 | `Pipeline<S, R>` — imperative shell wrapping step functions. |
+| `src/pipeline-core.ts` | ~130 | `sendStep` / `receiveStep` — pure step functions (functional core). |
+| `src/alias-table.ts` | ~510 | `AliasState`, `applyOutboundAliasing`, `applyInboundAliasing` — ChannelMsg ↔ WireMessage. |
+| `src/frame-stream-parser.ts` | ~30 | `FrameStreamParser` — imperative shell for stream parsing. |
+| `src/frame-stream-parser-core.ts` | ~155 | `feedBytesStep` — pure stream frame extraction. |
+| `src/reconnect.ts` | ~53 | `computeBackoffDelay`, `DEFAULT_RECONNECT`. |
 
 ## Testing
 
-Tests run in-process using a minimal in-test `TestAdapter`. The bridge transport now lives in `@kyneta/bridge-transport` and has its own test suite. Real transport packages (`websocket`, `sse`, `unix-socket`, `webrtc`, `bridge`) maintain their own test suites with their own integration harnesses; this package's tests only exercise the abstract contract.
+Tests run in-process using a minimal in-test `TestAdapter`. The bridge transport now lives in `@kyneta/bridge-transport` and has its own test suite. Real transport packages maintain their own test suites with their own integration harnesses; this package's tests only exercise the abstract contract.
 
-**Tests**: 8 passed, 0 skipped across 1 file (`transport.test.ts`: 8). Run with `cd packages/transport && pnpm exec vitest run`.
+Run with `cd packages/transport && pnpm exec vitest run`.

@@ -14,8 +14,13 @@
 // Fragments carry JSON substring chunks. The receiver concatenates
 // chunks in index order and JSON.parse the result.
 
+import type { WireCodec } from "./fragment-generic.js"
 import type { Frame } from "./frame-types.js"
 import { complete, fragment } from "./frame-types.js"
+import {
+  decodeTextWireMessage,
+  encodeTextWireMessage,
+} from "./wire-message-helpers.js"
 
 // ---------------------------------------------------------------------------
 // Version
@@ -192,56 +197,6 @@ export function decodeTextFrame(wire: string): Frame<string> {
 }
 
 // ---------------------------------------------------------------------------
-// Text fragmentation
-// ---------------------------------------------------------------------------
-
-/**
- * Fragment a JSON payload string into multiple text frame strings.
- *
- * Each returned string is a complete, self-describing text fragment
- * frame (valid JSON) that can be sent independently. The receiver
- * collects fragments by frameId and concatenates the chunks in index
- * order to reconstruct the original payload string.
- *
- * @param payload - The JSON string to fragment (e.g. from JSON.stringify(codec.encode(msg)))
- * @param maxChunkSize - Maximum character length of each chunk
- * @param frameId - Caller-owned frame identifier grouping fragments
- * @returns Array of text frame JSON strings, one per fragment
- */
-export function fragmentTextPayload(
-  payload: string,
-  maxChunkSize: number,
-  frameId: number,
-): string[] {
-  if (maxChunkSize <= 0) {
-    throw new Error("maxChunkSize must be positive")
-  }
-
-  const totalSize = payload.length
-  const total = Math.ceil(totalSize / maxChunkSize)
-  const result: string[] = []
-
-  for (let i = 0; i < total; i++) {
-    const chunkStart = i * maxChunkSize
-    const chunkEnd = Math.min(chunkStart + maxChunkSize, totalSize)
-    const chunk = payload.slice(chunkStart, chunkEnd)
-
-    const frame = fragment(
-      TEXT_WIRE_VERSION,
-      frameId,
-      i,
-      total,
-      totalSize,
-      chunk,
-    )
-
-    result.push(encodeTextFrame(frame))
-  }
-
-  return result
-}
-
-// ---------------------------------------------------------------------------
 // Error type
 // ---------------------------------------------------------------------------
 
@@ -271,4 +226,20 @@ export class TextFrameDecodeError extends Error {
   ) {
     super(message)
   }
+}
+
+// ---------------------------------------------------------------------------
+// Text codec record
+// ---------------------------------------------------------------------------
+
+export const TEXT_CODEC: WireCodec<string> = {
+  wireVersion: TEXT_WIRE_VERSION,
+  maxPayload: 0x7fffffff,
+  sizeOf: (s: string) => s.length,
+  concatenate: (chunks: readonly string[]) => chunks.join(""),
+  slice: (s: string, start: number, end: number) => s.slice(start, end),
+  encodeFrame: encodeTextFrame,
+  decodeFrame: decodeTextFrame,
+  encodeWire: encodeTextWireMessage,
+  decodeWire: decodeTextWireMessage,
 }

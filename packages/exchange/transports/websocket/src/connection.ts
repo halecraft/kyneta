@@ -1,7 +1,7 @@
 // connection — WebsocketConnection for server-side peer connections.
 //
-// Wraps a Socket + CBOR codec + FragmentReassembler to provide
-// send/receive for ChannelMsg over a single Websocket connection.
+// Wraps a Socket + Pipeline to provide send/receive for ChannelMsg
+// over a single Websocket connection.
 //
 // Used by WebsocketServerTransport to manage individual client connections.
 // The client adapter handles its own encoding/decoding inline since it
@@ -11,16 +11,7 @@
 // kyneta naming conventions and the kyneta wire format.
 
 import type { Channel, ChannelMsg, PeerId } from "@kyneta/transport"
-import {
-  type AliasState,
-  applyInboundAliasing,
-  applyOutboundAliasing,
-  createFrameIdCounter,
-  decodeBinaryWires,
-  emptyAliasState,
-  encodeWireFrameAndSend,
-  FragmentReassembler,
-} from "@kyneta/wire"
+import { Pipeline } from "@kyneta/transport"
 import type { Socket } from "./types.js"
 
 /**
@@ -59,14 +50,7 @@ export class WebsocketConnection {
   #channel: Channel | null = null
   #started = false
 
-  // Fragmentation support
-  readonly #fragmentThreshold: number
-  readonly #reassembler: FragmentReassembler
-  #nextFrameId = createFrameIdCounter()
-
-  // Per-channel alias state (Phase 4). Captures features from establish
-  // messages flowing through; gates dx/shx emissions on mutualAlias.
-  #aliasState: AliasState = emptyAliasState()
+  #pipeline: Pipeline<"binary">
 
   constructor(
     peerId: PeerId,
@@ -77,14 +61,13 @@ export class WebsocketConnection {
     this.peerId = peerId
     this.channelId = channelId
     this.#socket = socket
-    this.#fragmentThreshold =
-      config?.fragmentThreshold ?? DEFAULT_FRAGMENT_THRESHOLD
-    this.#reassembler = new FragmentReassembler({
-      timeoutMs: 10_000,
-      onTimeout: (frameId: number) => {
-        console.warn(
-          `[WebsocketConnection] Fragment batch timed out: ${frameId}`,
-        )
+    this.#pipeline = new Pipeline({
+      send: "binary",
+      opts: {
+        threshold: config?.fragmentThreshold ?? DEFAULT_FRAGMENT_THRESHOLD,
+        reassemblyTimeoutMs: 10_000,
+        onError: (e, dir) =>
+          console.warn(`[WebsocketConnection] wire error (${dir}):`, e),
       },
     })
   }
@@ -130,19 +113,10 @@ export class WebsocketConnection {
    * → socket.send().
    */
   send(msg: ChannelMsg): void {
-    if (this.#socket.readyState !== "open") {
-      return
+    if (this.#socket.readyState !== "open") return
+    for (const r of this.#pipeline.send(msg)) {
+      if (r.ok) this.#socket.send(r.value)
     }
-
-    const { state, wire } = applyOutboundAliasing(this.#aliasState, msg)
-    this.#aliasState = state
-
-    encodeWireFrameAndSend(
-      wire,
-      data => this.#socket.send(data),
-      this.#fragmentThreshold,
-      this.#nextFrameId,
-    )
   }
 
   /**
@@ -163,7 +137,7 @@ export class WebsocketConnection {
    * Close the connection and clean up resources.
    */
   close(code?: number, reason?: string): void {
-    this.#reassembler.dispose()
+    this.#pipeline.dispose()
     this.#socket.close(code, reason)
   }
 
@@ -181,24 +155,13 @@ export class WebsocketConnection {
       return
     }
 
-    // Binary path: reassemble → wire → alias transformer → ChannelMsg.
+    // Binary path: pipeline.receive → ChannelMsg
     try {
-      const wires = decodeBinaryWires(data, this.#reassembler)
-      if (!wires) return
-      for (const wire of wires) {
-        const result = applyInboundAliasing(this.#aliasState, wire)
-        this.#aliasState = result.state
-        if (result.error || !result.msg) {
-          console.warn(
-            "[WebsocketConnection] alias resolution failed:",
-            result.error,
-          )
-          continue
-        }
-        this.#handleChannelMessage(result.msg)
+      for (const r of this.#pipeline.receive(data)) {
+        if (r.ok) this.#handleChannelMessage(r.value)
       }
     } catch (error) {
-      console.error("Failed to decode wire message:", error)
+      console.error("Failed to process wire message:", error)
     }
   }
 

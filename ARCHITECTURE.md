@@ -58,8 +58,8 @@ Kyneta is a framework for collaborative, substrate-agnostic documents. You defin
 | `@kyneta/machine` | Pure Mealy-machine algebra + two runtimes. | `Program<Msg, Model, Fx>`, `runtime`, `createObservableProgram` |
 | `@kyneta/schema` | Schema grammar, substrate/replica contracts, interpreter stack, migrations, position algebra. | `Schema`, `Substrate<V>`, `bind()`, `Ref<S>`, `Migration`, `Position` |
 | `@kyneta/loro-schema` / `@kyneta/yjs-schema` | CRDT substrate implementations — Loro and Yjs respectively. | `loro.bind()`, `yjs.bind()`, `LoroVersion`, `YjsVersion` |
-| `@kyneta/transport` | Abstract transport contract, channel lifecycle, six-message protocol vocabulary. | `Transport<G>`, `Channel`, `ChannelMsg` |
-| `@kyneta/wire` | Universal wire format — `Frame<T>`, binary CBOR codec, text JSON codec, fragmentation, stream framing. | `Frame<T>`, `cborCodec`, `textCodec`, `FragmentCollector<T>`, `feedBytes` |
+| `@kyneta/transport` | Abstract transport contract, channel lifecycle, six-message protocol vocabulary, wire pipeline, alias transformer, frame-stream parser. | `Transport<G>`, `Channel`, `ChannelMsg`, `Pipeline`, `FrameStreamParser` |
+| `@kyneta/wire` | Universal wire format — `Frame<T>`, binary CBOR codec, text JSON codec, generic fragmentation, reassembly, validation. | `Frame<T>`, `BINARY_CODEC`, `TEXT_CODEC`, `Reassembler<T>`, `fragmentGeneric<T>`, `validateWireMessage` |
 | `@kyneta/bridge-transport` | In-process transport for testing — codec-faithful + alias-aware delivery. | `Bridge`, `BridgeTransport`, `createBridgeTransport` |
 | `@kyneta/websocket-transport` | WebSocket transport (browser, server, Bun, service-to-service). Binary CBOR wire. | `createWebsocketClient`, `WebsocketServerTransport` |
 | `@kyneta/sse-transport` | Server-Sent Events transport — asymmetric transport, symmetric text encoding. | `createSseClient`, `SseServerTransport`, `createSseExpressRouter` |

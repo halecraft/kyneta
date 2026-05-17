@@ -23,11 +23,12 @@ export {
 
 export {
   createWebsocketClient,
-  DEFAULT_FRAGMENT_THRESHOLD,
   type WebsocketClientLifecycleEvents,
   type WebsocketClientOptions,
   WebsocketClientTransport,
 } from "./client-transport.js"
+
+export { DEFAULT_FRAGMENT_THRESHOLD } from "./connection.js"
 
 // ---------------------------------------------------------------------------
 // Shared types

@@ -1,8 +1,8 @@
-// bridge-adapter — in-process transport with alias-aware delivery.
+// bridge-adapter — in-process transport with Pipeline-based delivery.
 //
-// BridgeTransport is a real transport that runs the alias-aware pipeline
-// end-to-end and applies the docId/schemaHash alias transformer at the
-// channel send/receive boundary — exactly like every other binary
+// BridgeTransport is a real transport that runs the full wire pipeline
+// (aliasing, framing, fragmentation) end-to-end via per-channel
+// Pipeline<"binary"> instances — exactly like every other binary
 // transport. Async delivery is preserved via `queueMicrotask()` to keep
 // test behavior representative of real network adapters.
 //
@@ -17,15 +17,7 @@ import type {
   GeneratedChannel,
   TransportFactory,
 } from "@kyneta/transport"
-import { Transport } from "@kyneta/transport"
-import {
-  type AliasState,
-  applyInboundAliasing,
-  applyOutboundAliasing,
-  decodeWireMessage,
-  emptyAliasState,
-  encodeWireMessage,
-} from "@kyneta/wire"
+import { Pipeline, Transport } from "@kyneta/transport"
 
 // ---------------------------------------------------------------------------
 // Bridge — message router connecting multiple BridgeTransports in-process
@@ -35,8 +27,8 @@ import {
  * In-process byte router connecting multiple `BridgeTransport`s,
  * keyed by each transport's unique `transportId`.
  *
- * Channel-level sends produce alias-aware encoded bytes via the wire-layer
- * transformer and call `routeBytes`.
+ * Channel-level sends route through per-channel `Pipeline<"binary">`
+ * instances and call `routeBytes`.
  */
 export class Bridge {
   readonly transports = new Map<string, BridgeTransport>()
@@ -62,7 +54,7 @@ export class Bridge {
   routeBytes(
     fromTransportId: string,
     toTransportId: string,
-    bytes: Uint8Array,
+    bytes: Uint8Array<ArrayBuffer>,
   ): void {
     const toTransport = this.transports.get(toTransportId)
     if (!toTransport) return
@@ -94,9 +86,9 @@ export type BridgeTransportParams = {
 }
 
 /**
- * In-memory transport that runs the alias-aware pipeline end-to-end.
- * Tests that use this transport exercise the same wire path as
- * production transports.
+ * In-memory transport that runs the full wire pipeline end-to-end
+ * via per-channel `Pipeline<"binary">` instances. Tests that use this
+ * transport exercise the same wire path as production transports.
  *
  * @example
  * ```typescript
@@ -113,9 +105,9 @@ export class BridgeTransport extends Transport<BridgeTransportContext> {
   private channelToAdapter = new Map<ChannelId, string>()
   private adapterToChannel = new Map<string, ChannelId>()
 
-  // Per-channel alias state. Created with the channel; lives until removal.
+  // Per-channel pipeline. Created with the channel; lives until removal.
   // Keyed by channelId.
-  private aliasStateByChannel = new Map<ChannelId, AliasState>()
+  private pipelineByChannel = new Map<ChannelId, Pipeline<"binary">>()
 
   constructor({ transportId, transportType, bridge }: BridgeTransportParams) {
     super({ transportType: transportType ?? "bridge", transportId })
@@ -128,18 +120,17 @@ export class BridgeTransport extends Transport<BridgeTransportContext> {
       send: msg => {
         const channelId = this.adapterToChannel.get(context.targetTransportId)
         if (channelId === undefined) return
-
-        const state =
-          this.aliasStateByChannel.get(channelId) ?? emptyAliasState()
-        const { state: nextState, wire } = applyOutboundAliasing(state, msg)
-        this.aliasStateByChannel.set(channelId, nextState)
-
-        const bytes = encodeWireMessage(wire)
-        this.bridge.routeBytes(
-          this.transportId,
-          context.targetTransportId,
-          bytes,
-        )
+        const pipeline = this.pipelineByChannel.get(channelId)
+        if (!pipeline) return
+        for (const r of pipeline.send(msg)) {
+          if (r.ok) {
+            this.bridge.routeBytes(
+              this.transportId,
+              context.targetTransportId,
+              r.value,
+            )
+          }
+        }
       },
       stop: () => {
         // Cleanup handled by removeChannel.
@@ -178,8 +169,11 @@ export class BridgeTransport extends Transport<BridgeTransportContext> {
 
     for (const channelId of this.channelToAdapter.keys()) {
       this.removeChannel(channelId)
-      this.aliasStateByChannel.delete(channelId)
     }
+    for (const pipeline of this.pipelineByChannel.values()) {
+      pipeline.dispose()
+    }
+    this.pipelineByChannel.clear()
     this.channelToAdapter.clear()
     this.adapterToChannel.clear()
   }
@@ -189,7 +183,17 @@ export class BridgeTransport extends Transport<BridgeTransportContext> {
     const channel = this.addChannel({ targetTransportId })
     this.channelToAdapter.set(channel.channelId, targetTransportId)
     this.adapterToChannel.set(targetTransportId, channel.channelId)
-    this.aliasStateByChannel.set(channel.channelId, emptyAliasState())
+    this.pipelineByChannel.set(
+      channel.channelId,
+      new Pipeline({
+        send: "binary",
+        opts: {
+          threshold: 100 * 1024,
+          onError: (e, dir) =>
+            console.warn(`[BridgeTransport] wire error (${dir}):`, e),
+        },
+      }),
+    )
   }
 
   removeChannelTo(targetTransportId: string): void {
@@ -198,37 +202,33 @@ export class BridgeTransport extends Transport<BridgeTransportContext> {
       this.removeChannel(channelId)
       this.channelToAdapter.delete(channelId)
       this.adapterToChannel.delete(targetTransportId)
-      this.aliasStateByChannel.delete(channelId)
+      this.pipelineByChannel.get(channelId)?.dispose()
+      this.pipelineByChannel.delete(channelId)
     }
   }
 
   /**
    * Deliver encoded bytes to the appropriate channel.
    *
-   * Decodes via `decodeWireMessage`, applies the inbound alias
-   * transformer, and delivers each resolved message asynchronously
-   * via `queueMicrotask()`.
+   * Routes through the per-channel `Pipeline.receive()` which handles
+   * decoding, deframing, reassembly, and alias resolution. Delivers
+   * each resolved message asynchronously via `queueMicrotask()`.
    */
-  deliverBytes(fromTransportId: string, bytes: Uint8Array): void {
+  deliverBytes(fromTransportId: string, bytes: Uint8Array<ArrayBuffer>): void {
     const channelId = this.adapterToChannel.get(fromTransportId)
     if (channelId === undefined) return
-
     const channel = this.channels.get(channelId)
     if (!channel) return
-
-    const wire = decodeWireMessage(bytes)
-    const state = this.aliasStateByChannel.get(channelId) ?? emptyAliasState()
-    const result = applyInboundAliasing(state, wire)
-    this.aliasStateByChannel.set(channelId, result.state)
-
-    if (result.error || !result.msg) {
-      console.warn("[BridgeTransport] alias resolution failed:", result.error)
-      return
+    const pipeline = this.pipelineByChannel.get(channelId)
+    if (!pipeline) return
+    for (const r of pipeline.receive(bytes)) {
+      if (r.ok) {
+        const msg = r.value
+        queueMicrotask(() => {
+          channel.onReceive(msg)
+        })
+      }
     }
-    const msg = result.msg
-    queueMicrotask(() => {
-      channel.onReceive(msg)
-    })
   }
 }
 

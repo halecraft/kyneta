@@ -2,12 +2,12 @@
 
 > **Package**: `@kyneta/websocket-transport`
 > **Role**: WebSocket transport for `@kyneta/exchange` — browser client, server, Bun integration, and service-to-service client. Alias-aware binary pipeline (`applyOutboundAliasing → encodeWireMessage → binary frame`) on the wire, a pure Mealy-machine client lifecycle, and a server-sent `"ready"` gate that makes the handshake race-free.
-> **Depends on**: `@kyneta/machine`, `@kyneta/transport`, `@kyneta/wire` (all peer)
+> **Depends on**: `@kyneta/machine`, `@kyneta/transport` (all peer)
 > **Depended on by**: `@kyneta/exchange` (through application configuration), `tests/integration`
 > **Canonical symbols**: `createWebsocketClient`, `WebsocketClientTransport`, `WebsocketClientOptions`, `WebsocketServerTransport`, `WebsocketServerTransportOptions`, `WebsocketConnection`, `WebsocketConnectionConfig`, `createServiceWebsocketClient`, `createWsClientProgram`, `WsClientMsg`, `WsClientEffect`, `WebsocketClientState`, `Socket`, `WebSocketLike`, `WebSocketConstructor`, `wrapStandardWebsocket`, `wrapNodeWebsocket`, `wrapBunWebsocket`, `BunWebsocketData`, `READY_STATE`, `DEFAULT_FRAGMENT_THRESHOLD`
 > **Key invariant(s)**: The client creates its exchange channel only after the *server* has sent a text `"ready"` signal — never on `socket.onopen` alone. This is why the client lifecycle has five states (`disconnected → connecting → connected → ready → reconnecting`) rather than four.
 
-A WebSocket transport kit with three entry points — `./browser` (browser-to-server), `./server` (server accept + service-to-service), and `./bun` (Bun-specific wrapper). All three share one wire format (alias-aware binary pipeline via `@kyneta/wire`) and one client state machine (`createWsClientProgram`).
+A WebSocket transport kit with three entry points — `./browser` (browser-to-server), `./server` (server accept + service-to-service), and `./bun` (Bun-specific wrapper). All three share one wire format (binary `Pipeline` from `@kyneta/transport`) and one client state machine (`createWsClientProgram`).
 
 Imported by applications via the `transports: [...]` array on `new Exchange(...)`. Application code calls `createWebsocketClient({ url, WebSocket })` or `new WebsocketServerTransport()` and hands the result to the exchange.
 
@@ -39,7 +39,7 @@ Imported by applications via the `transports: [...]` array on `new Exchange(...)
 | `wrapBunWebsocket` | Adapter from Bun's `ServerWebSocket` to `Socket`. Stores handlers in `ws.data`. | `wrapStandardWebsocket` |
 | `wrapNodeWebsocket` | Adapter from Node's `ws` `WebSocket` (server side) to `Socket`. | `wrapStandardWebsocket`, which is the simpler browser-spec case |
 | `BunWebsocketData` | The shape that `Bun.serve<BunWebsocketData>({...})` stores in `ws.data` so per-socket callbacks can reach their handlers. | Application state per connection |
-| `DEFAULT_FRAGMENT_THRESHOLD` | Byte threshold above which a payload is fragmented by `@kyneta/wire`. | A WebSocket protocol-level fragment (`FIN`/`continuation`) — this is application-level |
+| `DEFAULT_FRAGMENT_THRESHOLD` | Byte threshold above which a payload is fragmented by the `Pipeline`. | A WebSocket protocol-level fragment (`FIN`/`continuation`) — this is application-level |
 | `createServiceWebsocketClient` | Backend-only client factory that accepts HTTP headers (e.g. `Authorization`) during upgrade. | `createWebsocketClient` (browser-safe; no headers) |
 
 ---
@@ -48,7 +48,7 @@ Imported by applications via the `transports: [...]` array on `new Exchange(...)
 
 **Thesis**: one WebSocket-shaped wire, three runtime environments, and a pure state machine keeps the client's reconnect logic testable without mocks.
 
-The package is structured around a single shared wire format (alias-aware binary pipeline via `@kyneta/wire`) and a single shared client state machine (`createWsClientProgram`). The three entry points only differ in which constructor/wrapper they expose:
+The package is structured around a single shared wire format (`new Pipeline({ send: "binary" })` from `@kyneta/transport`) and a single shared client state machine (`createWsClientProgram`). The three entry points only differ in which constructor/wrapper they expose:
 
 | Entry | Concrete transport | Consumers |
 |-------|--------------------|-----------|
@@ -56,7 +56,7 @@ The package is structured around a single shared wire format (alias-aware binary
 | `./server` | `WebsocketServerTransport` + `createServiceWebsocketClient` | Node/Bun servers, service-to-service |
 | `./bun` | `wrapBunWebsocket` + `BunWebsocketData` | Bun's `Bun.serve<T>` callback style |
 
-All four runtime situations (browser client, Bun server, Node server, server-to-server client) produce and consume bytes in the same `@kyneta/wire` alias-aware binary pipeline: `ChannelMsg → applyOutboundAliasing → encodeWireMessage → encodeBinaryFrame → socket.send`, reversed on receive through `decodeBinaryFrame + FragmentReassembler → decodeWireMessage → applyInboundAliasing`.
+All four runtime situations (browser client, Bun server, Node server, server-to-server client) produce and consume bytes through the same `Pipeline` from `@kyneta/transport`: `pipeline.send(msg) → Result<Uint8Array, WireError>[] → socket.send()`, reversed on receive through `pipeline.receive(piece) → Result<ChannelMsg, WireError>[]`.
 
 ### What this transport is NOT
 
@@ -223,7 +223,7 @@ const exchange = new Exchange({
 | `WebsocketClientTransport` | `src/client-transport.ts` | The client `Transport<...>` subclass. Runs the client program via `createObservableProgram`. |
 | `WebsocketClientOptions` | `src/client-transport.ts` | `{ url, WebSocket, headers?, reconnect?, fragmentThreshold?, ... }`. |
 | `WebsocketClientLifecycleEvents` | `src/client-transport.ts` | Observable lifecycle event shape. |
-| `DEFAULT_FRAGMENT_THRESHOLD` | `src/client-transport.ts` / `src/connection.ts` | Byte threshold for `@kyneta/wire` fragmentation. |
+| `DEFAULT_FRAGMENT_THRESHOLD` | `src/client-transport.ts` / `src/connection.ts` | Byte threshold for `Pipeline` fragmentation. |
 | `createWebsocketClient` | `src/client-transport.ts` | `TransportFactory` for browser-facing clients. |
 | `createServiceWebsocketClient` | `src/service-client.ts` | `TransportFactory` for backend clients with headers. |
 | `WebsocketServerTransport` | `src/server-transport.ts` | The server `Transport<...>` subclass. Owns many connections. |

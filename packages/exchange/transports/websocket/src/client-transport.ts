@@ -20,17 +20,7 @@ import type {
   PeerId,
   TransportFactory,
 } from "@kyneta/transport"
-import { Transport } from "@kyneta/transport"
-import {
-  type AliasState,
-  applyInboundAliasing,
-  applyOutboundAliasing,
-  createFrameIdCounter,
-  decodeBinaryWires,
-  emptyAliasState,
-  encodeWireFrameAndSend,
-  FragmentReassembler,
-} from "@kyneta/wire"
+import { Pipeline, Transport } from "@kyneta/transport"
 import {
   createWsClientProgram,
   type WsClientEffect,
@@ -64,7 +54,7 @@ export type {
  * Default fragment threshold in bytes.
  * AWS API Gateway has a 128KB limit, so 100KB provides a safe margin.
  */
-export const DEFAULT_FRAGMENT_THRESHOLD = 100 * 1024
+const DEFAULT_FRAGMENT_THRESHOLD = 100 * 1024
 
 /**
  * Options for the Websocket client transport (browser connections).
@@ -165,21 +155,20 @@ export class WebsocketClientTransport extends Transport<void> {
   #keepaliveTimer?: ReturnType<typeof setInterval>
   #reconnectTimer?: ReturnType<typeof setTimeout>
 
-  // Fragmentation
-  readonly #fragmentThreshold: number
-  readonly #reassembler: FragmentReassembler
-
-  // Per-channel alias state (Phase 4). Single channel per client.
-  #aliasState: AliasState = emptyAliasState()
+  #pipeline: Pipeline<"binary">
 
   constructor(options: WebsocketClientOptions) {
     super({ transportType: "websocket-client" })
     this.#options = options
     this.#WebSocketImpl = options.WebSocket
-    this.#fragmentThreshold =
-      options.fragmentThreshold ?? DEFAULT_FRAGMENT_THRESHOLD
-    this.#reassembler = new FragmentReassembler({
-      timeoutMs: 10_000,
+    this.#pipeline = new Pipeline({
+      send: "binary",
+      opts: {
+        threshold: options.fragmentThreshold ?? DEFAULT_FRAGMENT_THRESHOLD,
+        reassemblyTimeoutMs: 10_000,
+        onError: (e, dir) =>
+          console.warn(`[WebsocketClient] wire error (${dir}):`, e),
+      },
     })
 
     const program = createWsClientProgram({
@@ -223,9 +212,9 @@ export class WebsocketClientTransport extends Transport<void> {
           this.#serverChannel = undefined
         }
 
-        // Fresh reassembler for the new connection — stale fragments from
-        // the old connection must not collide with new fragments.
-        this.#reassembler.reset()
+        // Fresh pipeline state for the new connection — stale fragments
+        // and alias state from the old connection must not carry over.
+        this.#pipeline.reset()
 
         this.#serverChannel = this.addChannel()
 
@@ -401,22 +390,11 @@ export class WebsocketClientTransport extends Transport<void> {
       return
     }
 
-    // Handle binary messages through shared decode pipeline
+    // Handle binary messages through pipeline
     if (data instanceof ArrayBuffer) {
       try {
-        const wires = decodeBinaryWires(new Uint8Array(data), this.#reassembler)
-        if (!wires) return
-        for (const wire of wires) {
-          const result = applyInboundAliasing(this.#aliasState, wire)
-          this.#aliasState = result.state
-          if (result.error || !result.msg) {
-            console.warn(
-              "[WebsocketClient] alias resolution failed:",
-              result.error,
-            )
-            continue
-          }
-          this.#handleChannelMessage(result.msg)
+        for (const r of this.#pipeline.receive(new Uint8Array(data))) {
+          if (r.ok) this.#handleChannelMessage(r.value)
         }
       } catch (error) {
         console.error("Failed to decode message:", error)
@@ -497,6 +475,11 @@ export class WebsocketClientTransport extends Transport<void> {
         this.#options.lifecycle?.onReady?.()
         wasConnectedBefore = true
       }
+
+      // Reset on intentional disconnect (stop)
+      if (to.status === "disconnected" && to.reason?.type === "intentional") {
+        wasConnectedBefore = false
+      }
     })
   }
 
@@ -552,26 +535,15 @@ export class WebsocketClientTransport extends Transport<void> {
   // ==========================================================================
 
   protected generate(): GeneratedChannel {
-    const nextFrameId = createFrameIdCounter()
-    // New channel = fresh alias state; reset on (re)connect.
-    this.#aliasState = emptyAliasState()
+    this.#pipeline.reset()
     return {
       transportType: this.transportType,
       send: (msg: ChannelMsg) => {
         const socket = this.#socket
-        if (!socket || socket.readyState !== READY_STATE.OPEN) {
-          return
+        if (!socket || socket.readyState !== READY_STATE.OPEN) return
+        for (const r of this.#pipeline.send(msg)) {
+          if (r.ok) socket.send(new Uint8Array(r.value).buffer)
         }
-
-        const { state, wire } = applyOutboundAliasing(this.#aliasState, msg)
-        this.#aliasState = state
-
-        encodeWireFrameAndSend(
-          wire,
-          data => socket.send(new Uint8Array(data).buffer),
-          this.#fragmentThreshold,
-          nextFrameId,
-        )
       },
       stop: () => {
         // Don't call disconnect here — channel.stop() is called when
@@ -592,7 +564,7 @@ export class WebsocketClientTransport extends Transport<void> {
   }
 
   async onStop(): Promise<void> {
-    this.#reassembler.dispose()
+    this.#pipeline.dispose()
     this.#handle.dispatch({ type: "stop" })
   }
 }

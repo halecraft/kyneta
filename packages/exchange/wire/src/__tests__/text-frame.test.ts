@@ -2,40 +2,30 @@
 //
 // Verifies the text wire format: 2-char prefix ("Vx" where V=version,
 // x=type/hash via case), JSON array envelope, fragment fields,
-// fragmentTextPayload splitting, and end-to-end with TextReassembler.
+// and convenience encode/decode functions.
+//
+// Wire fixtures construct WireMessage values directly, bypassing the
+// alias layer (which lives in @kyneta/transport).
 
-import {
-  SYNC_AUTHORITATIVE,
-  SYNC_COLLABORATIVE,
-  SYNC_EPHEMERAL,
-} from "@kyneta/schema"
-import type { ChannelMsg, OfferMsg, PresentMsg } from "@kyneta/transport"
+import { SYNC_AUTHORITATIVE, SYNC_COLLABORATIVE } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import { complete, fragment, isComplete, isFragment } from "../frame-types.js"
-import {
-  applyInboundAliasing,
-  applyOutboundAliasing,
-  decodeTextWireMessage,
-  emptyAliasState,
-  encodeTextWireMessage,
-} from "../index.js"
+import { decodeTextWireMessage, encodeTextWireMessage } from "../index.js"
 import {
   decodeTextFrame,
   encodeTextFrame,
-  fragmentTextPayload,
   TEXT_WIRE_VERSION,
   TextFrameDecodeError,
 } from "../text-frame.js"
-import { TextReassembler } from "../text-reassembler.js"
+import type { WireMessage } from "../wire-types.js"
+import { offerWire, presentWire } from "./__helpers__/wire-fixtures.js"
 
 // ---------------------------------------------------------------------------
 // Helper
 // ---------------------------------------------------------------------------
 
-function encodeViaAlias(msg: ChannelMsg): string {
-  const state = emptyAliasState()
-  const { wire } = applyOutboundAliasing(state, msg)
-  const payload = JSON.stringify(encodeTextWireMessage(wire))
+function encodeToFrame(wire: WireMessage): string {
+  const payload = encodeTextWireMessage(wire)
   return encodeTextFrame(complete(TEXT_WIRE_VERSION, payload))
 }
 
@@ -198,414 +188,47 @@ describe("Text frame — fragment round-trip", () => {
 })
 
 // ---------------------------------------------------------------------------
-// fragmentTextPayload
-// ---------------------------------------------------------------------------
-
-describe("fragmentTextPayload", () => {
-  it("splits a payload into correct number of fragments", () => {
-    const payload = "abcdefghij" // 10 chars
-    const fragments = fragmentTextPayload(payload, 3, 1)
-
-    // ceil(10/3) = 4 fragments
-    expect(fragments.length).toBe(4)
-  })
-
-  it("each fragment is valid JSON", () => {
-    const payload =
-      '{"type":"present","docs":[{"docId":"a"},{"docId":"b"},{"docId":"c"},{"docId":"d"},{"docId":"e"},{"docId":"f"}]}'
-    const fragments = fragmentTextPayload(payload, 10, 1)
-
-    for (const frag of fragments) {
-      expect(() => JSON.parse(frag)).not.toThrow()
-    }
-  })
-
-  it("all fragments share the same frameId", () => {
-    const payload = "abcdefghijklmnopqrstuvwxyz" // 26 chars
-    const fragments = fragmentTextPayload(payload, 5, 1)
-
-    const frameIds = new Set<number>()
-    for (const frag of fragments) {
-      const frame = decodeTextFrame(frag)
-      if (frame.content.kind === "fragment") {
-        frameIds.add(frame.content.frameId)
-      }
-    }
-
-    expect(frameIds.size).toBe(1)
-  })
-
-  it("fragments have correct index, total, and totalSize", () => {
-    const payload = "0123456789" // 10 chars
-    const fragments = fragmentTextPayload(payload, 3, 1)
-    // 4 fragments: "012", "345", "678", "9"
-
-    for (let i = 0; i < fragments.length; i++) {
-      const frag = fragments.at(i)
-      if (!frag) throw new Error(`Missing fragment at index ${i}`)
-      const frame = decodeTextFrame(frag)
-      expect(frame.content.kind).toBe("fragment")
-      if (frame.content.kind === "fragment") {
-        expect(frame.content.index).toBe(i)
-        expect(frame.content.total).toBe(4)
-        expect(frame.content.totalSize).toBe(10)
-      }
-    }
-  })
-
-  it("concatenated chunks reconstruct the original payload", () => {
-    const payload =
-      '{"type":"offer","docId":"doc-1","payload":{"encoding":"json","data":"hello"},"version":"1"}'
-    const fragments = fragmentTextPayload(payload, 20, 1)
-
-    const chunks: string[] = []
-    for (const frag of fragments) {
-      const frame = decodeTextFrame(frag)
-      if (frame.content.kind === "fragment") {
-        chunks[frame.content.index] = frame.content.payload
-      }
-    }
-
-    const reassembled = chunks.join("")
-    expect(reassembled).toBe(payload)
-  })
-
-  it("handles single-chunk fragmentation (payload smaller than maxChunkSize)", () => {
-    const payload = "tiny"
-    const fragments = fragmentTextPayload(payload, 100, 1)
-
-    expect(fragments.length).toBe(1)
-
-    const first = fragments.at(0)
-    if (!first) throw new Error("Expected at least one fragment")
-    const frame = decodeTextFrame(first)
-    if (frame.content.kind === "fragment") {
-      expect(frame.content.index).toBe(0)
-      expect(frame.content.total).toBe(1)
-      expect(frame.content.totalSize).toBe(4)
-      expect(frame.content.payload).toBe("tiny")
-    }
-  })
-
-  it("handles exact chunk boundary", () => {
-    const payload = "abcdef" // 6 chars, chunkSize 3 → exactly 2 chunks
-    const fragments = fragmentTextPayload(payload, 3, 1)
-
-    expect(fragments.length).toBe(2)
-
-    const chunks: string[] = []
-    for (const frag of fragments) {
-      const frame = decodeTextFrame(frag)
-      if (frame.content.kind === "fragment") {
-        chunks[frame.content.index] = frame.content.payload
-      }
-    }
-
-    expect(chunks[0]).toBe("abc")
-    expect(chunks[1]).toBe("def")
-  })
-
-  it("throws on zero maxChunkSize", () => {
-    expect(() => fragmentTextPayload("abc", 0, 1)).toThrow(
-      "maxChunkSize must be positive",
-    )
-  })
-
-  it("throws on negative maxChunkSize", () => {
-    expect(() => fragmentTextPayload("abc", -1, 1)).toThrow(
-      "maxChunkSize must be positive",
-    )
-  })
-})
-
-// ---------------------------------------------------------------------------
 // Convenience functions
 // ---------------------------------------------------------------------------
 
 describe("Text frame — convenience functions", () => {
-  it("encodeViaAlias encodes a single message", () => {
-    const msg: PresentMsg = {
-      type: "present",
-      docs: [
-        {
-          docId: "doc-1",
-          schemaHash: "00test",
-          replicaType: ["plain", 1, 0] as const,
-          syncProtocol: SYNC_AUTHORITATIVE,
-        },
-        {
-          docId: "doc-2",
-          schemaHash: "00test",
-          replicaType: ["yjs", 1, 0] as const,
-          syncProtocol: SYNC_COLLABORATIVE,
-        },
-      ],
-    }
-    const wire = encodeViaAlias(msg)
+  it("encodeToFrame encodes a present message", () => {
+    const wireMsg = presentWire([
+      {
+        docId: "doc-1",
+        schemaHash: "00test",
+        replicaType: ["plain", 1, 0] as const,
+        syncProtocol: SYNC_AUTHORITATIVE,
+      },
+      {
+        docId: "doc-2",
+        schemaHash: "00test",
+        replicaType: ["yjs", 1, 0] as const,
+        syncProtocol: SYNC_COLLABORATIVE,
+      },
+    ])
+    const encoded = encodeToFrame(wireMsg)
 
-    const frame = decodeTextFrame(wire)
+    const frame = decodeTextFrame(encoded)
     expect(isComplete(frame)).toBe(true)
 
-    const wireMsg = decodeTextWireMessage(JSON.parse(frame.content.payload))
-    const { msg: decoded } = applyInboundAliasing(emptyAliasState(), wireMsg)
-    expect(decoded).toEqual(msg)
+    const decoded = decodeTextWireMessage(frame.content.payload)
+    expect(decoded).toEqual(wireMsg)
   })
 
-  it("encodeViaAlias handles offer with binary payload", () => {
-    const msg: OfferMsg = {
-      type: "offer",
+  it("encodeToFrame handles offer with binary payload", () => {
+    const wireMsg = offerWire({
       docId: "doc-1",
-      payload: {
-        kind: "entirety",
-        encoding: "binary",
-        data: new Uint8Array([1, 2, 3]),
-      },
+      kind: "entirety",
+      encoding: "binary",
+      data: new Uint8Array([1, 2, 3]),
       version: "1",
-    }
-    const wire = encodeViaAlias(msg)
-    const frame = decodeTextFrame(wire)
-
-    const wireMsg = decodeTextWireMessage(JSON.parse(frame.content.payload))
-    const { msg: decoded } = applyInboundAliasing(emptyAliasState(), wireMsg)
-    const offer = decoded as OfferMsg
-
-    expect(offer.payload.encoding).toBe("binary")
-    expect(offer.payload.data).toBeInstanceOf(Uint8Array)
-    expect(offer.payload.data).toEqual(new Uint8Array([1, 2, 3]))
-  })
-})
-
-// ---------------------------------------------------------------------------
-// End-to-end: fragment → TextReassembler → decode
-// ---------------------------------------------------------------------------
-
-describe("Text frame — end-to-end with TextReassembler", () => {
-  it("single message: encode → fragment → reassemble → decode", () => {
-    const msg: OfferMsg = {
-      type: "offer",
-      docId: "doc-large",
-      payload: {
-        kind: "entirety",
-        encoding: "json",
-        data: JSON.stringify({
-          items: Array.from({ length: 100 }, (_, i) => `item-${i}`),
-        }),
-      },
-      version: "42",
-    }
-
-    // Encode through alias pipeline to wire form, then JSON-stringify
-    const aliasState = emptyAliasState()
-    const { wire } = applyOutboundAliasing(aliasState, msg)
-    const payload = JSON.stringify(encodeTextWireMessage(wire))
-
-    // Fragment into small chunks
-    const fragments = fragmentTextPayload(payload, 50, 1)
-    expect(fragments.length).toBeGreaterThan(1)
-
-    // Feed to reassembler
-    const reassembler = new TextReassembler({ timeoutMs: 5000 })
-    const firstFrag = fragments.at(0)
-    if (!firstFrag) throw new Error("Expected at least one fragment")
-    let result = reassembler.receive(firstFrag)
-
-    for (let i = 1; i < fragments.length; i++) {
-      const frag = fragments.at(i)
-      if (!frag) throw new Error(`Missing fragment at index ${i}`)
-      result = reassembler.receive(frag)
-    }
-
-    expect(result.status).toBe("complete")
-    if (result.status === "complete") {
-      expect(isComplete(result.frame)).toBe(true)
-      const wireMsg = decodeTextWireMessage(
-        JSON.parse(result.frame.content.payload),
-      )
-      const { msg: decoded } = applyInboundAliasing(emptyAliasState(), wireMsg)
-      const offer = decoded as OfferMsg
-      expect(offer.type).toBe("offer")
-      expect(offer.docId).toBe("doc-large")
-      expect(offer.version).toBe("42")
-    }
-
-    reassembler.dispose()
-  })
-
-  it("batch: encode → fragment → reassemble → decode", () => {
-    const msgs: ChannelMsg[] = [
-      {
-        type: "present",
-        docs: [
-          {
-            docId: "a",
-            schemaHash: "00test",
-            replicaType: ["plain", 1, 0] as const,
-            syncProtocol: SYNC_AUTHORITATIVE,
-          },
-          {
-            docId: "b",
-            schemaHash: "00test",
-            replicaType: ["yjs", 1, 0] as const,
-            syncProtocol: SYNC_COLLABORATIVE,
-          },
-          {
-            docId: "c",
-            schemaHash: "00test",
-            replicaType: ["loro", 1, 0] as const,
-            syncProtocol: SYNC_EPHEMERAL,
-          },
-        ],
-      },
-      {
-        type: "offer",
-        docId: "d",
-        payload: {
-          kind: "since",
-          encoding: "binary",
-          data: new Uint8Array([10, 20, 30]),
-        },
-        version: "1",
-        reciprocate: true,
-      },
-    ]
-
-    // Encode each message through alias pipeline, collect wire messages
-    const aliasState = emptyAliasState()
-    const wireMsgs = msgs.map(m => {
-      const { wire } = applyOutboundAliasing(aliasState, m)
-      return encodeTextWireMessage(wire)
     })
-    const payload = JSON.stringify(wireMsgs)
-    const fragments = fragmentTextPayload(payload, 30, 1)
-    expect(fragments.length).toBeGreaterThan(1)
+    const encoded = encodeToFrame(wireMsg)
+    const frame = decodeTextFrame(encoded)
 
-    const reassembler = new TextReassembler({ timeoutMs: 5000 })
-    const firstFrag = fragments.at(0)
-    if (!firstFrag) throw new Error("Expected at least one fragment")
-    let result = reassembler.receive(firstFrag)
-
-    for (let i = 1; i < fragments.length; i++) {
-      const frag = fragments.at(i)
-      if (!frag) throw new Error(`Missing fragment at index ${i}`)
-      result = reassembler.receive(frag)
-    }
-
-    expect(result.status).toBe("complete")
-    if (result.status === "complete") {
-      const wireArr = JSON.parse(result.frame.content.payload) as unknown[]
-      expect(wireArr).toHaveLength(2)
-      const decoded = wireArr.map(w => {
-        const wireMsg = decodeTextWireMessage(w)
-        const { msg } = applyInboundAliasing(emptyAliasState(), wireMsg)
-        return msg
-      })
-      expect(decoded[0]?.type).toBe("present")
-      const offer = decoded[1] as OfferMsg
-      expect(offer.payload.data).toEqual(new Uint8Array([10, 20, 30]))
-    }
-
-    reassembler.dispose()
-  })
-
-  it("out-of-order fragment delivery reassembles correctly", () => {
-    const payload = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" // 26 chars
-    const fragments = fragmentTextPayload(payload, 5, 1) // 6 fragments
-    expect(fragments.length).toBe(6)
-
-    // Shuffle: deliver in reverse order
-    const shuffled = [...fragments].reverse()
-
-    const reassembler = new TextReassembler({ timeoutMs: 5000 })
-    const firstShuffled = shuffled.at(0)
-    if (!firstShuffled)
-      throw new Error("Expected at least one shuffled fragment")
-    let finalResult = reassembler.receive(firstShuffled)
-
-    for (let i = 1; i < shuffled.length; i++) {
-      const frag = shuffled.at(i)
-      if (!frag) throw new Error(`Missing shuffled fragment at index ${i}`)
-      const result = reassembler.receive(frag)
-      if (result.status === "complete") {
-        finalResult = result
-      }
-    }
-
-    expect(finalResult.status).toBe("complete")
-    if (finalResult.status === "complete") {
-      expect(finalResult.frame.content.payload).toBe(payload)
-    }
-
-    reassembler.dispose()
-  })
-
-  it("complete frames pass through reassembler without collection", () => {
-    const msg: PresentMsg = {
-      type: "present",
-      docs: [
-        {
-          docId: "x",
-          schemaHash: "00test",
-          replicaType: ["plain", 1, 0] as const,
-          syncProtocol: SYNC_AUTHORITATIVE,
-        },
-      ],
-    }
-    const wire = encodeViaAlias(msg)
-
-    const reassembler = new TextReassembler({ timeoutMs: 5000 })
-    const result = reassembler.receive(wire)
-
-    expect(result.status).toBe("complete")
-    if (result.status === "complete") {
-      expect(isComplete(result.frame)).toBe(true)
-      const wireMsg = decodeTextWireMessage(
-        JSON.parse(result.frame.content.payload),
-      )
-      const { msg: decoded } = applyInboundAliasing(emptyAliasState(), wireMsg)
-      expect(decoded).toEqual(msg)
-    }
-
-    reassembler.dispose()
-  })
-
-  it("interleaved fragment streams from two sources", () => {
-    const payload1 = "AAAAABBBBBCCCCC" // 15 chars
-    const payload2 = "1111122222" // 10 chars
-
-    const frags1 = fragmentTextPayload(payload1, 5, 1) // 3 fragments
-    const frags2 = fragmentTextPayload(payload2, 5, 2) // 2 fragments
-
-    const reassembler = new TextReassembler({ timeoutMs: 5000 })
-
-    // Interleave: f1[0], f2[0], f1[1], f2[1], f1[2]
-    const f1_0 = frags1.at(0)
-    if (!f1_0) throw new Error("Missing frags1[0]")
-    const f2_0 = frags2.at(0)
-    if (!f2_0) throw new Error("Missing frags2[0]")
-    const f1_1 = frags1.at(1)
-    if (!f1_1) throw new Error("Missing frags1[1]")
-    const f2_1 = frags2.at(1)
-    if (!f2_1) throw new Error("Missing frags2[1]")
-    const f1_2 = frags1.at(2)
-    if (!f1_2) throw new Error("Missing frags1[2]")
-
-    reassembler.receive(f1_0)
-    reassembler.receive(f2_0)
-    reassembler.receive(f1_1)
-
-    const r2 = reassembler.receive(f2_1)
-    expect(r2.status).toBe("complete")
-    if (r2.status === "complete") {
-      expect(r2.frame.content.payload).toBe(payload2)
-    }
-
-    const r1 = reassembler.receive(f1_2)
-    expect(r1.status).toBe("complete")
-    if (r1.status === "complete") {
-      expect(r1.frame.content.payload).toBe(payload1)
-    }
-
-    reassembler.dispose()
+    const decoded = decodeTextWireMessage(frame.content.payload)
+    expect(decoded).toEqual(wireMsg)
   })
 })
 

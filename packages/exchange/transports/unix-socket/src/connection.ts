@@ -1,37 +1,24 @@
 // connection — UnixSocketConnection for stream-oriented peer connections.
 //
-// Wraps a UnixSocket + CBOR codec + StreamFrameParser to provide
+// Wraps a Pipeline<"binary"> + FrameStreamParser to provide
 // send/receive for ChannelMsg over a single unix socket connection.
 //
 // Unlike WebsocketConnection (message-oriented), this connection uses:
-// - Send: encodeComplete(cborCodec, msg) → socket.write(frameBytes) with backpressure queue
-// - Receive: feedBytes(parserState, chunk) → decodeBinaryFrame → cborCodec.decode
+// - Send: Pipeline.send(msg) → socket.write(frameBytes) with backpressure queue
+// - Receive: FrameStreamParser.feed(chunk) → Pipeline.receive(frame) → ChannelMsg
 //
-// No fragmentation layer — UDS has no message size limits.
+// No fragmentation layer — UDS has no message size limits (threshold: Infinity).
 // No transport prefix bytes — stream framing handles message boundaries.
 // No "ready" handshake — UDS connections are bidirectionally ready immediately.
 //
 // FC/IS boundary:
-// - feedBytes (pure) produces frames from the byte stream
+// - FrameStreamParser (imperative wrapper) produces frames from the byte stream
+// - Pipeline (imperative wrapper) handles aliasing + encode/decode
 // - connection.#handleData (imperative) dispatches decoded messages
 // - The write queue is imperative state; encoding is pure
 
 import type { Channel, ChannelMsg } from "@kyneta/transport"
-import {
-  type AliasState,
-  applyInboundAliasing,
-  applyOutboundAliasing,
-  complete,
-  decodeBinaryFrame,
-  decodeWireMessage,
-  emptyAliasState,
-  encodeBinaryFrame,
-  encodeWireMessage,
-  feedBytes,
-  initialParserState,
-  type StreamParserState,
-  WIRE_VERSION,
-} from "@kyneta/wire"
+import { FrameStreamParser, Pipeline } from "@kyneta/transport"
 import type { UnixSocket } from "./types.js"
 
 // ---------------------------------------------------------------------------
@@ -45,8 +32,9 @@ import type { UnixSocket } from "./types.js"
  * for one connected peer. Created by `UnixSocketServerTransport` on
  * incoming connections and by `UnixSocketClientTransport` on connect.
  *
- * The connection uses the CBOR codec for binary transport and the
- * StreamFrameParser for extracting frames from the byte stream.
+ * The connection uses Pipeline<"binary"> for the full wire pipeline
+ * (alias resolution, CBOR encoding, framing) and FrameStreamParser
+ * for extracting frames from the byte stream.
  */
 export class UnixSocketConnection {
   readonly peerId: string
@@ -57,20 +45,25 @@ export class UnixSocketConnection {
   #started = false
   #closed = false
 
-  // Stream frame parser state (functional core)
-  #parserState: StreamParserState = initialParserState()
+  // Wire pipeline (alias + CBOR + framing)
+  #pipeline: Pipeline<"binary">
+
+  // Stream frame parser (byte stream → frames)
+  #parser: FrameStreamParser
 
   // Backpressure write queue
   #writeQueue: Uint8Array[] = []
   #draining = false
 
-  // Per-channel alias state (Phase 4).
-  #aliasState: AliasState = emptyAliasState()
-
   constructor(peerId: string, channelId: number, socket: UnixSocket) {
     this.peerId = peerId
     this.channelId = channelId
     this.#socket = socket
+    this.#pipeline = new Pipeline({
+      send: "binary",
+      opts: { threshold: Infinity },
+    })
+    this.#parser = new FrameStreamParser()
   }
 
   // ==========================================================================
@@ -115,7 +108,7 @@ export class UnixSocketConnection {
   /**
    * Send a ChannelMsg through the unix socket.
    *
-   * Encodes via CBOR codec → binary frame → socket.write().
+   * Encodes via Pipeline<"binary"> → socket.write().
    * If socket.write() returns false (backpressure), the frame is queued
    * and flushed when the drain event fires.
    */
@@ -124,23 +117,22 @@ export class UnixSocketConnection {
       return
     }
 
-    const { state, wire } = applyOutboundAliasing(this.#aliasState, msg)
-    this.#aliasState = state
-    const payload = encodeWireMessage(wire)
-    const frameBytes = encodeBinaryFrame(complete(WIRE_VERSION, payload))
+    for (const r of this.#pipeline.send(msg)) {
+      if (!r.ok) continue
 
-    if (this.#draining) {
-      // Already under backpressure — queue the frame
-      this.#writeQueue.push(frameBytes)
-      return
-    }
+      // Write the framed bytes with backpressure handling
+      if (this.#draining) {
+        this.#writeQueue.push(r.value)
+        return
+      }
 
-    const ok = this.#socket.write(frameBytes)
-    if (!ok) {
-      // Kernel buffer is full — enter draining mode
-      // The frame was accepted by the OS but the buffer is now full.
-      // Queue subsequent frames until drain fires.
-      this.#draining = true
+      const ok = this.#socket.write(r.value)
+      if (!ok) {
+        // Kernel buffer is full — enter draining mode
+        // The frame was accepted by the OS but the buffer is now full.
+        // Queue subsequent frames until drain fires.
+        this.#draining = true
+      }
     }
   }
 
@@ -154,6 +146,7 @@ export class UnixSocketConnection {
     this.#closed = true
     this.#writeQueue = []
     this.#draining = false
+    this.#pipeline.dispose()
     this.#socket.end()
   }
 
@@ -164,44 +157,19 @@ export class UnixSocketConnection {
   /**
    * Handle incoming data from the socket.
    *
-   * Feeds raw bytes through the StreamFrameParser (pure step function),
-   * then decodes each extracted frame via decodeBinaryFrame + cborCodec.
+   * Feeds raw bytes through the FrameStreamParser, then each extracted
+   * frame through Pipeline.receive() to decode and resolve aliases.
    */
   #handleData(chunk: Uint8Array): void {
     if (this.#closed) {
       return
     }
 
-    const result = feedBytes(this.#parserState, chunk)
-    this.#parserState = result.state
+    for (const frame of this.#parser.feed(chunk)) {
+      if (!frame.ok) continue
 
-    for (const frame of result.frames) {
-      try {
-        const decoded = decodeBinaryFrame(frame)
-        if (decoded.content.kind !== "complete") {
-          // Stream transports don't use fragmentation — ignore fragment frames
-          console.warn(
-            `[UnixSocketConnection] Unexpected fragment frame from peer ${this.peerId}`,
-          )
-          continue
-        }
-
-        const wire = decodeWireMessage(decoded.content.payload)
-        const aliasResult = applyInboundAliasing(this.#aliasState, wire)
-        this.#aliasState = aliasResult.state
-        if (aliasResult.error || !aliasResult.msg) {
-          console.warn(
-            `[UnixSocketConnection] alias resolution failed for peer ${this.peerId}:`,
-            aliasResult.error,
-          )
-          continue
-        }
-        this.#handleChannelMessage(aliasResult.msg)
-      } catch (error) {
-        console.error(
-          `[UnixSocketConnection] Failed to decode frame from peer ${this.peerId}:`,
-          error,
-        )
+      for (const r of this.#pipeline.receive(frame.value)) {
+        if (r.ok) this.#handleChannelMessage(r.value)
       }
     }
   }

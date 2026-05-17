@@ -6,17 +6,18 @@
 // unknown-alias error path.
 
 import { SYNC_AUTHORITATIVE } from "@kyneta/schema"
-import type { EstablishMsg, InterestMsg, PresentMsg } from "@kyneta/transport"
+import {
+  DOC_ID_MAX_UTF8_BYTES,
+  encodeWireMessage,
+  SCHEMA_HASH_MAX_UTF8_BYTES,
+} from "@kyneta/wire"
 import { describe, expect, it } from "vitest"
 import {
   applyInboundAliasing,
   applyOutboundAliasing,
   emptyAliasState,
 } from "../alias-table.js"
-import {
-  DOC_ID_MAX_UTF8_BYTES,
-  SCHEMA_HASH_MAX_UTF8_BYTES,
-} from "../constants.js"
+import type { EstablishMsg, InterestMsg, PresentMsg } from "../messages.js"
 
 const alice: EstablishMsg = {
   type: "establish",
@@ -44,19 +45,21 @@ const presentDoc1: PresentMsg = {
 
 describe("alias-table — establish snapshots features", () => {
   it("outbound establish snapshots selfFeatures", () => {
-    const { state } = applyOutboundAliasing(emptyAliasState(), alice)
+    const { state, result } = applyOutboundAliasing(emptyAliasState(), alice)
+    expect(result.ok).toBe(true)
     expect(state.selfFeatures).toEqual({ alias: true })
     expect(state.peerFeatures).toBeUndefined()
     expect(state.mutualAlias).toBe(false) // peer features unknown
   })
 
   it("inbound establish snapshots peerFeatures", () => {
-    const { state } = applyInboundAliasing(emptyAliasState(), {
+    const { state, result } = applyInboundAliasing(emptyAliasState(), {
       t: 0x01,
       id: "bob",
       y: "user",
       f: { a: true },
     } as any)
+    expect(result.ok).toBe(true)
     expect(state.peerFeatures).toEqual({ alias: true })
     expect(state.selfFeatures).toBeUndefined()
     expect(state.mutualAlias).toBe(false)
@@ -105,9 +108,11 @@ describe("alias-table — establish snapshots features", () => {
 
 describe("alias-table — present always announces aliases", () => {
   it("outbound present sets `a` (docId alias) and `sa` (schema alias) on first reference", () => {
-    const { wire } = applyOutboundAliasing(emptyAliasState(), presentDoc1)
-    expect(wire.t).toBe(0x10) // Present
-    const present = wire as any
+    const { result } = applyOutboundAliasing(emptyAliasState(), presentDoc1)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.t).toBe(0x10) // Present
+    const present = result.value as any
     expect(present.docs[0]).toMatchObject({
       d: "doc-1",
       a: 0,
@@ -120,9 +125,13 @@ describe("alias-table — present always announces aliases", () => {
     let state = emptyAliasState()
     const a = applyOutboundAliasing(state, presentDoc1)
     state = a.state
-    expect((a.wire as any).docs[0].a).toBe(0)
+    expect(a.result.ok).toBe(true)
+    if (!a.result.ok) return
+    expect((a.result.value as any).docs[0].a).toBe(0)
     const b = applyOutboundAliasing(state, presentDoc1)
-    expect((b.wire as any).docs[0].a).toBe(0)
+    expect(b.result.ok).toBe(true)
+    if (!b.result.ok) return
+    expect((b.result.value as any).docs[0].a).toBe(0)
     expect(state).toBe(b.state) // idempotent: state unchanged
   })
 
@@ -140,8 +149,10 @@ describe("alias-table — present always announces aliases", () => {
         },
       ],
     }
-    const result = applyOutboundAliasing(state, present2)
-    const docs = (result.wire as any).docs
+    const { result } = applyOutboundAliasing(state, present2)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const docs = (result.value as any).docs
     expect(docs[0].a).toBe(0)
     expect(docs[1].a).toBe(1)
     expect(docs[0].sa).toBe(0)
@@ -168,9 +179,11 @@ describe("alias-table — sync messages gate use on mutualAlias", () => {
     const state = setupMutual()
     expect(state.mutualAlias).toBe(true)
     const msg: InterestMsg = { type: "interest", docId: "doc-1" }
-    const { wire } = applyOutboundAliasing(state, msg)
-    expect((wire as any).dx).toBe(0)
-    expect((wire as any).doc).toBeUndefined()
+    const { result } = applyOutboundAliasing(state, msg)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect((result.value as any).dx).toBe(0)
+    expect((result.value as any).doc).toBeUndefined()
   })
 
   it("with mutualAlias off, outbound interest uses doc (full)", () => {
@@ -179,16 +192,20 @@ describe("alias-table — sync messages gate use on mutualAlias", () => {
     state = applyOutboundAliasing(state, alice).state
     state = applyOutboundAliasing(state, presentDoc1).state
     const msg: InterestMsg = { type: "interest", docId: "doc-1" }
-    const { wire } = applyOutboundAliasing(state, msg)
-    expect((wire as any).doc).toBe("doc-1")
-    expect((wire as any).dx).toBeUndefined()
+    const { result } = applyOutboundAliasing(state, msg)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect((result.value as any).doc).toBe("doc-1")
+    expect((result.value as any).dx).toBeUndefined()
   })
 
   it("with mutualAlias on, present-doc subsequent reference uses shx (schema alias)", () => {
     const state = setupMutual()
     // Second present for doc-1 (already aliased) — uses shx
-    const { wire } = applyOutboundAliasing(state, presentDoc1)
-    const entry = (wire as any).docs[0]
+    const { result } = applyOutboundAliasing(state, presentDoc1)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const entry = (result.value as any).docs[0]
     expect(entry.shx).toBe(0)
     expect(entry.sh).toBeUndefined()
     expect(entry.a).toBe(0)
@@ -203,31 +220,37 @@ describe("alias-table — round-trip", () => {
     // Both peers exchange establish first
     const aliceOut = applyOutboundAliasing(outState, alice)
     outState = aliceOut.state
-    const inboundResult = applyInboundAliasing(inState, aliceOut.wire)
+    expect(aliceOut.result.ok).toBe(true)
+    if (!aliceOut.result.ok) return
+    const inboundResult = applyInboundAliasing(inState, aliceOut.result.value)
     inState = inboundResult.state
 
     // Send a present from out to in
     const presentOut = applyOutboundAliasing(outState, presentDoc1)
     outState = presentOut.state
-    const presentIn = applyInboundAliasing(inState, presentOut.wire)
+    expect(presentOut.result.ok).toBe(true)
+    if (!presentOut.result.ok) return
+    const presentIn = applyInboundAliasing(inState, presentOut.result.value)
     inState = presentIn.state
-    expect(presentIn.error).toBeUndefined()
-    expect(presentIn.msg).toEqual(presentDoc1)
+    expect(presentIn.result.ok).toBe(true)
+    if (!presentIn.result.ok) return
+    expect(presentIn.result.value).toEqual(presentDoc1)
   })
 })
 
 describe("alias-table — unknown-alias error path", () => {
   it("inbound interest with unknown dx returns error, not throw", () => {
-    const result = applyInboundAliasing(emptyAliasState(), {
+    const { result } = applyInboundAliasing(emptyAliasState(), {
       t: 0x11, // Interest
       dx: 42,
     } as any)
-    expect(result.msg).toBeUndefined()
+    expect(result.ok).toBe(false)
+    if (result.ok) return
     expect(result.error).toEqual({ code: "unknown-doc-alias", alias: 42 })
   })
 
   it("inbound present with unknown shx returns error", () => {
-    const result = applyInboundAliasing(emptyAliasState(), {
+    const { result } = applyInboundAliasing(emptyAliasState(), {
       t: 0x10, // Present
       docs: [
         {
@@ -239,18 +262,20 @@ describe("alias-table — unknown-alias error path", () => {
         },
       ],
     } as any)
-    expect(result.msg).toBeUndefined()
+    expect(result.ok).toBe(false)
+    if (result.ok) return
     expect(result.error).toEqual({ code: "unknown-schema-alias", alias: 99 })
   })
 
   it("inbound interest with both doc and dx returns error", () => {
-    const result = applyInboundAliasing(emptyAliasState(), {
+    const { result } = applyInboundAliasing(emptyAliasState(), {
       t: 0x11,
       doc: "doc-1",
       dx: 5,
     } as any)
-    expect(result.msg).toBeUndefined()
-    expect(result.error?.code).toBe("missing-doc-id")
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error.code).toBe("missing-doc-id")
   })
 })
 
@@ -261,11 +286,12 @@ describe("alias-table — unknown-alias error path", () => {
 describe("alias-table — identifier length validation", () => {
   it("inbound interest with oversized docId returns doc-id-too-long error", () => {
     const docId = "a".repeat(DOC_ID_MAX_UTF8_BYTES + 1)
-    const result = applyInboundAliasing(emptyAliasState(), {
+    const { result } = applyInboundAliasing(emptyAliasState(), {
       t: 0x11, // Interest
       doc: docId,
     } as any)
-    expect(result.msg).toBeUndefined()
+    expect(result.ok).toBe(false)
+    if (result.ok) return
     expect(result.error).toEqual({
       code: "doc-id-too-long",
       message: `DocId exceeds ${DOC_ID_MAX_UTF8_BYTES} UTF-8 bytes (got ${DOC_ID_MAX_UTF8_BYTES + 1})`,
@@ -274,7 +300,7 @@ describe("alias-table — identifier length validation", () => {
 
   it("inbound present with oversized schemaHash returns schema-hash-too-long error", () => {
     const schemaHash = "h".repeat(SCHEMA_HASH_MAX_UTF8_BYTES + 1)
-    const result = applyInboundAliasing(emptyAliasState(), {
+    const { result } = applyInboundAliasing(emptyAliasState(), {
       t: 0x10, // Present
       docs: [
         {
@@ -286,7 +312,8 @@ describe("alias-table — identifier length validation", () => {
         },
       ],
     } as any)
-    expect(result.msg).toBeUndefined()
+    expect(result.ok).toBe(false)
+    if (result.ok) return
     expect(result.error).toEqual({
       code: "schema-hash-too-long",
       message: `SchemaHash exceeds ${SCHEMA_HASH_MAX_UTF8_BYTES} UTF-8 bytes (got ${SCHEMA_HASH_MAX_UTF8_BYTES + 1})`,
@@ -295,20 +322,21 @@ describe("alias-table — identifier length validation", () => {
 
   it("inbound docId at cap (512 bytes) resolves correctly", () => {
     const docId = "a".repeat(DOC_ID_MAX_UTF8_BYTES)
-    const result = applyInboundAliasing(emptyAliasState(), {
+    const { result } = applyInboundAliasing(emptyAliasState(), {
       t: 0x11, // Interest
       doc: docId,
     } as any)
-    expect(result.error).toBeUndefined()
-    expect(result.msg?.type).toBe("interest")
-    if (result.msg?.type === "interest") {
-      expect(result.msg.docId).toBe(docId)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.type).toBe("interest")
+    if (result.value.type === "interest") {
+      expect(result.value.docId).toBe(docId)
     }
   })
 
   it("inbound schemaHash at cap (256 bytes) resolves correctly", () => {
     const schemaHash = "h".repeat(SCHEMA_HASH_MAX_UTF8_BYTES)
-    const result = applyInboundAliasing(emptyAliasState(), {
+    const { result } = applyInboundAliasing(emptyAliasState(), {
       t: 0x10, // Present
       docs: [
         {
@@ -320,24 +348,26 @@ describe("alias-table — identifier length validation", () => {
         },
       ],
     } as any)
-    expect(result.error).toBeUndefined()
-    expect(result.msg?.type).toBe("present")
-    if (result.msg?.type === "present") {
-      expect(result.msg.docs[0]?.schemaHash).toBe(schemaHash)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.type).toBe("present")
+    if (result.value.type === "present") {
+      expect(result.value.docs[0]?.schemaHash).toBe(schemaHash)
     }
   })
 
   it("multi-byte UTF-8 docId at cap (512 bytes) resolves correctly", () => {
     // "ñ" is 2 UTF-8 bytes. 256 × 2 = 512 bytes.
     const docId = "ñ".repeat(256)
-    const result = applyInboundAliasing(emptyAliasState(), {
+    const { result } = applyInboundAliasing(emptyAliasState(), {
       t: 0x11, // Interest
       doc: docId,
     } as any)
-    expect(result.error).toBeUndefined()
-    expect(result.msg?.type).toBe("interest")
-    if (result.msg?.type === "interest") {
-      expect(result.msg.docId).toBe(docId)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.type).toBe("interest")
+    if (result.value.type === "interest") {
+      expect(result.value.docId).toBe(docId)
     }
   })
 
@@ -345,20 +375,19 @@ describe("alias-table — identifier length validation", () => {
     // "ñ" is 2 UTF-8 bytes. 256 × 2 = 512 bytes (at cap).
     // 257 × 2 = 514 bytes (over cap).
     const docId = "ñ".repeat(257)
-    const result = applyInboundAliasing(emptyAliasState(), {
+    const { result } = applyInboundAliasing(emptyAliasState(), {
       t: 0x11, // Interest
       doc: docId,
     } as any)
-    expect(result.msg).toBeUndefined()
-    expect(result.error?.code).toBe("doc-id-too-long")
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error.code).toBe("doc-id-too-long")
   })
 })
 
 // ---------------------------------------------------------------------------
-// Phase 5 — SchemaHash aliasing compaction win
+// SchemaHash aliasing compaction win
 // ---------------------------------------------------------------------------
-
-import { encodeWireMessage } from "../wire-message-helpers.js"
 
 describe("alias-table — schema-hash compaction", () => {
   function setupMutual(): ReturnType<typeof emptyAliasState> {
@@ -387,9 +416,13 @@ describe("alias-table — schema-hash compaction", () => {
         syncProtocol: SYNC_AUTHORITATIVE,
       })),
     }
-    const result = applyOutboundAliasing(state, present)
-    state = result.state
-    const docs = (result.wire as any).docs as Array<Record<string, unknown>>
+    const outResult = applyOutboundAliasing(state, present)
+    state = outResult.state
+    expect(outResult.result.ok).toBe(true)
+    if (!outResult.result.ok) return
+    const docs = (outResult.result.value as any).docs as Array<
+      Record<string, unknown>
+    >
 
     // Exactly one entry carries `sh` (the first), the rest carry `shx`.
     const hasSh = docs.filter(d => d.sh !== undefined).length
@@ -417,8 +450,10 @@ describe("alias-table — schema-hash compaction", () => {
         syncProtocol: SYNC_AUTHORITATIVE,
       })),
     }
-    const result = applyOutboundAliasing(state, present)
-    const bytes = encodeWireMessage(result.wire)
+    const { result } = applyOutboundAliasing(state, present)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const bytes = encodeWireMessage(result.value)
 
     // The schema hash appears at most once in the encoded bytes.
     const hashBytes = new TextEncoder().encode(longHash)
@@ -442,12 +477,16 @@ describe("alias-table — schema-hash compaction", () => {
     // Establish mutual.
     const aliceOut = applyOutboundAliasing(outState, alice)
     outState = aliceOut.state
-    const bobInbound = applyInboundAliasing(inState, aliceOut.wire)
+    expect(aliceOut.result.ok).toBe(true)
+    if (!aliceOut.result.ok) return
+    const bobInbound = applyInboundAliasing(inState, aliceOut.result.value)
     inState = bobInbound.state
     const bobOut = applyOutboundAliasing(emptyAliasState(), bob)
-    const aliceInbound = applyInboundAliasing(outState, bobOut.wire)
+    expect(bobOut.result.ok).toBe(true)
+    if (!bobOut.result.ok) return
+    const aliceInbound = applyInboundAliasing(outState, bobOut.result.value)
     outState = aliceInbound.state
-    inState = applyInboundAliasing(inState, aliceOut.wire).state // (no-op)
+    inState = applyInboundAliasing(inState, aliceOut.result.value).state // (no-op)
 
     // Send a present with shared schema — twice — so second present
     // uses shx-only on every entry.
@@ -470,22 +509,29 @@ describe("alias-table — schema-hash compaction", () => {
     }
     const r1 = applyOutboundAliasing(outState, present)
     outState = r1.state
-    const i1 = applyInboundAliasing(inState, r1.wire)
+    expect(r1.result.ok).toBe(true)
+    if (!r1.result.ok) return
+    const i1 = applyInboundAliasing(inState, r1.result.value)
     inState = i1.state
-    expect(i1.msg).toEqual(present)
+    expect(i1.result.ok).toBe(true)
+    if (!i1.result.ok) return
+    expect(i1.result.value).toEqual(present)
 
     // Second send — schema is already aliased; entries should use shx
     // on the wire but still resolve to "shared" on the receiver.
     const r2 = applyOutboundAliasing(outState, present)
     outState = r2.state
-    const wireDocs = (r2.wire as any).docs
+    expect(r2.result.ok).toBe(true)
+    if (!r2.result.ok) return
+    const wireDocs = (r2.result.value as any).docs
     expect(wireDocs[0].sh).toBeUndefined()
     expect(wireDocs[0].shx).toBe(0)
     expect(wireDocs[1].shx).toBe(0)
 
-    const i2 = applyInboundAliasing(inState, r2.wire)
+    const i2 = applyInboundAliasing(inState, r2.result.value)
     inState = i2.state
-    expect(i2.error).toBeUndefined()
-    expect(i2.msg).toEqual(present)
+    expect(i2.result.ok).toBe(true)
+    if (!i2.result.ok) return
+    expect(i2.result.value).toEqual(present)
   })
 })

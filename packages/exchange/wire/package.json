@@ -37,11 +37,7 @@
   "dependencies": {
     "@kyneta/schema": "workspace:^"
   },
-  "peerDependencies": {
-    "@kyneta/transport": "workspace:^"
-  },
   "devDependencies": {
-    "@kyneta/transport": "workspace:^",
     "tsdown": "^0.22.0",
     "typescript": "^5.9.2",
     "vitest": "^4.0.17"

@@ -1,25 +1,21 @@
 // wire-message-helpers — encode/decode pre-formed WireMessage values.
 //
-// The alias transformer (`alias-table.ts`) operates on `WireMessage`
-// directly. These helpers handle the byte-level encoding without going
-// through `toWireFormat` / `fromWireFormat` (which assume `ChannelMsg`
-// shape and have no notion of alias-form).
-//
-// Use these from each transport's `Channel.send` / `Channel.receive`
-// adjacent to the alias transformer:
-//
-//   const { state, wire } = applyOutboundAliasing(this.#aliasState, msg)
-//   const bytes = encodeWireMessage(wire)
-//   sendFn(bytes)
-//
-//   const wire = decodeWireMessage(bytes)
-//   const { state, msg, error } = applyInboundAliasing(this.#aliasState, wire)
-//   if (error) { logger.warn(error); return }
-//   onChannelReceive(this.channelId, msg)
+// The alias transformer (in @kyneta/transport) operates on WireMessage
+// directly. These helpers handle the byte-level encoding (CBOR for
+// binary, JSON for text) at the WireMessage boundary — callers that
+// already hold a WireMessage (e.g. after alias resolution) use these
+// instead of going through the full Pipeline.
 
 import { type CBORType, decodeCBOR, encodeCBOR } from "./cbor-encoding.js"
 import { FrameDecodeError } from "./frame.js"
+import {
+  validateWireMessage,
+  WireValidationFailure,
+} from "./validate-wire-message.js"
 import type { WireMessage } from "./wire-types.js"
+
+export type { WireValidationError } from "./validate-wire-message.js"
+export { WireValidationFailure } from "./validate-wire-message.js"
 
 /**
  * Recursively convert a plain JS object to a CBOR-encodable Map.
@@ -83,9 +79,12 @@ export function decodeWireMessage(data: Uint8Array): WireMessage {
   try {
     const decoded = decodeCBOR(data)
     const obj = mapToObject(decoded)
-    return obj as WireMessage
+    const result = validateWireMessage(obj)
+    if (!result.ok) throw new WireValidationFailure(result.error)
+    return result.value
   } catch (error) {
     if (error instanceof FrameDecodeError) throw error
+    if (error instanceof WireValidationFailure) throw error
     throw new Error(
       `Failed to decode wire message: ${error instanceof Error ? error.message : String(error)}`,
     )
@@ -93,23 +92,31 @@ export function decodeWireMessage(data: Uint8Array): WireMessage {
 }
 
 /**
- * Encode a pre-formed `WireMessage` to a JSON-safe object (text wire form).
+ * Encode a pre-formed `WireMessage` to a JSON string (text wire form).
+ *
+ * Symmetric with `encodeWireMessage` (binary → `Uint8Array`):
+ * text → `string`.
  *
  * Skips the `ChannelMsg → WireMessage` step. The `WireMessage` shape uses
  * short field names (`t`, `d`, `sh`, `dx`, etc.) — for text-codec parity
  * with binary, the text wire form mirrors the same compact shape rather
  * than the long-name `ChannelMsg` shape.
  */
-export function encodeTextWireMessage(wire: WireMessage): unknown {
-  // Convert any Uint8Array payloads to base64 for JSON safety.
-  return wireToJsonSafe(wire)
+export function encodeTextWireMessage(wire: WireMessage): string {
+  return JSON.stringify(wireToJsonSafe(wire))
 }
 
 /**
- * Decode a JSON-safe value (text wire form) to a `WireMessage`.
+ * Decode a JSON string (text wire form) to a `WireMessage`.
+ *
+ * Symmetric with `decodeWireMessage` (binary `Uint8Array` → `WireMessage`):
+ * text `string` → `WireMessage`.
  */
-export function decodeTextWireMessage(obj: unknown): WireMessage {
-  return wireFromJsonSafe(obj) as WireMessage
+export function decodeTextWireMessage(text: string): WireMessage {
+  const obj = wireFromJsonSafe(JSON.parse(text))
+  const result = validateWireMessage(obj)
+  if (!result.ok) throw new WireValidationFailure(result.error)
+  return result.value
 }
 
 function wireToJsonSafe(value: unknown): unknown {

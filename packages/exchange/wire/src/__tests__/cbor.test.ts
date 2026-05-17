@@ -1,53 +1,56 @@
-// Wire pipeline tests — round-trip all message types through the
-// alias-aware pipeline.
+// Wire CBOR codec tests — round-trip all WireMessage types through
+// encodeWireMessage → decodeWireMessage.
 //
-// Verifies that every ChannelMsg variant survives
-// applyOutboundAliasing → encodeWireMessage → decodeWireMessage →
-// applyInboundAliasing, including OfferMsg with both "json" and
-// "binary" SubstratePayload encodings.
+// Verifies that every WireMessage variant survives CBOR encode/decode,
+// including WireOfferMsg with both "json" and "binary" payload encodings.
+// Alias resolution is transport's concern, tested separately.
 
 import {
   SYNC_AUTHORITATIVE,
   SYNC_COLLABORATIVE,
   SYNC_EPHEMERAL,
 } from "@kyneta/schema"
-import type {
-  ChannelMsg,
-  DepartMsg,
-  DismissMsg,
-  EstablishMsg,
-  InterestMsg,
-  OfferMsg,
-  PresentMsg,
-} from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
 import {
-  applyInboundAliasing,
-  applyOutboundAliasing,
-  decodeWireMessage,
-  emptyAliasState,
-  encodeWireMessage,
-} from "../index.js"
-import type { WireMessage } from "../wire-types.js"
+  DOC_ID_MAX_UTF8_BYTES,
+  SCHEMA_HASH_MAX_UTF8_BYTES,
+} from "../constants.js"
 import {
+  decodeWireMessage,
+  encodeWireMessage,
+  validateDocId,
+  validateSchemaHash,
+  WireValidationFailure,
+} from "../index.js"
+import type {
+  WireEstablishMsg,
+  WireInterestMsg,
+  WireMessage,
+  WireOfferMsg,
+  WirePresentMsg,
+} from "../wire-types.js"
+import {
+  MessageType,
+  PayloadEncoding,
   SyncProtocolWireToProtocol,
   syncProtocolToWire,
 } from "../wire-types.js"
+import {
+  departWire,
+  dismissWire,
+  establishWire,
+  interestWire,
+  offerWire,
+  presentWire,
+} from "./__helpers__/wire-fixtures.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function roundTripViaAlias(msg: ChannelMsg): ChannelMsg {
-  const state = emptyAliasState()
-  const { wire } = applyOutboundAliasing(state, msg)
+function roundTrip(wire: WireMessage): WireMessage {
   const bytes = encodeWireMessage(wire)
-  const decoded = decodeWireMessage(bytes)
-  const result = applyInboundAliasing(emptyAliasState(), decoded)
-  if (result.error)
-    throw new Error(`Alias resolution failed: ${result.error.code}`)
-  if (!result.msg) throw new Error("Alias resolution produced no message")
-  return result.msg
+  return decodeWireMessage(bytes)
 }
 
 // ---------------------------------------------------------------------------
@@ -56,54 +59,40 @@ function roundTripViaAlias(msg: ChannelMsg): ChannelMsg {
 
 describe("CBOR codec — lifecycle messages", () => {
   it("round-trips establish with full identity", () => {
-    const msg: EstablishMsg = {
-      type: "establish",
-      identity: {
-        peerId: "peer-alice-123",
-        name: "Alice",
-        type: "user",
-      },
-    }
-    const decoded = roundTripViaAlias(msg)
-    expect(decoded).toEqual(msg)
+    const wire = establishWire({
+      peerId: "peer-alice-123",
+      name: "Alice",
+      type: "user",
+    })
+    const decoded = roundTrip(wire)
+    expect(decoded).toEqual(wire)
   })
 
   it("round-trips establish without optional name", () => {
-    const msg: EstablishMsg = {
-      type: "establish",
-      identity: {
-        peerId: "bot-42",
-        type: "bot",
-      },
-    }
-    const decoded = roundTripViaAlias(msg)
-    expect(decoded.type).toBe("establish")
-    const identity = (decoded as EstablishMsg).identity
-    expect(identity.peerId).toBe("bot-42")
-    expect(identity.type).toBe("bot")
+    const wire = establishWire({ peerId: "bot-42", type: "bot" })
+    const decoded = roundTrip(wire)
+    expect(decoded.t).toBe(MessageType.Establish)
+    const est = decoded as WireEstablishMsg
+    expect(est.id).toBe("bot-42")
+    expect(est.y).toBe("bot")
     // name should be absent (undefined), not null or empty string
-    expect(identity.name).toBeUndefined()
+    expect(est.n).toBeUndefined()
   })
 
   it("round-trips establish with service identity", () => {
-    const msg: EstablishMsg = {
-      type: "establish",
-      identity: {
-        peerId: "service-backend",
-        name: "Backend Service",
-        type: "service",
-      },
-    }
-    const decoded = roundTripViaAlias(msg)
-    expect(decoded).toEqual(msg)
+    const wire = establishWire({
+      peerId: "service-backend",
+      name: "Backend Service",
+      type: "service",
+    })
+    const decoded = roundTrip(wire)
+    expect(decoded).toEqual(wire)
   })
 
   it("round-trips depart", () => {
-    const msg: DepartMsg = {
-      type: "depart",
-    }
-    const decoded = roundTripViaAlias(msg)
-    expect(decoded).toEqual(msg)
+    const wire = departWire()
+    const decoded = roundTrip(wire)
+    expect(decoded).toEqual(wire)
   })
 })
 
@@ -113,119 +102,102 @@ describe("CBOR codec — lifecycle messages", () => {
 
 describe("CBOR codec — present", () => {
   it("round-trips present with multiple docIds", () => {
-    const msg: PresentMsg = {
-      type: "present",
-      docs: [
-        {
-          docId: "doc-1",
-          schemaHash: "00test",
-          replicaType: ["plain", 1, 0] as const,
-          syncProtocol: SYNC_AUTHORITATIVE,
-        },
-        {
-          docId: "doc-2",
-          schemaHash: "00test",
-          replicaType: ["yjs", 1, 0] as const,
-          syncProtocol: SYNC_COLLABORATIVE,
-        },
-        {
-          docId: "doc-3",
-          schemaHash: "00test",
-          replicaType: ["loro", 1, 0] as const,
-          syncProtocol: SYNC_EPHEMERAL,
-        },
-      ],
-    }
-    const decoded = roundTripViaAlias(msg)
-    expect(decoded).toEqual(msg)
+    const wire = presentWire([
+      {
+        docId: "doc-1",
+        schemaHash: "00test",
+        replicaType: ["plain", 1, 0] as const,
+        syncProtocol: SYNC_AUTHORITATIVE,
+      },
+      {
+        docId: "doc-2",
+        schemaHash: "00test",
+        replicaType: ["yjs", 1, 0] as const,
+        syncProtocol: SYNC_COLLABORATIVE,
+      },
+      {
+        docId: "doc-3",
+        schemaHash: "00test",
+        replicaType: ["loro", 1, 0] as const,
+        syncProtocol: SYNC_EPHEMERAL,
+      },
+    ])
+    const decoded = roundTrip(wire)
+    expect(decoded).toEqual(wire)
   })
 
   it("round-trips present with empty docIds", () => {
-    const msg: PresentMsg = {
-      type: "present",
-      docs: [],
-    }
-    const decoded = roundTripViaAlias(msg)
-    expect(decoded).toEqual(msg)
+    const wire = presentWire([])
+    const decoded = roundTrip(wire)
+    expect(decoded).toEqual(wire)
   })
 })
 
 describe("CBOR codec — interest", () => {
   it("round-trips interest with version and reciprocate", () => {
-    const msg: InterestMsg = {
-      type: "interest",
+    const wire = interestWire({
       docId: "doc-abc",
       version: "42",
       reciprocate: true,
-    }
-    const decoded = roundTripViaAlias(msg)
-    expect(decoded).toEqual(msg)
+    })
+    const decoded = roundTrip(wire)
+    expect(decoded).toEqual(wire)
   })
 
   it("round-trips interest without optional fields", () => {
-    const msg: InterestMsg = {
-      type: "interest",
-      docId: "doc-xyz",
-    }
-    const decoded = roundTripViaAlias(msg)
-    expect(decoded.type).toBe("interest")
-    const interest = decoded as InterestMsg
-    expect(interest.docId).toBe("doc-xyz")
-    expect(interest.version).toBeUndefined()
-    expect(interest.reciprocate).toBeUndefined()
+    const wire = interestWire({ docId: "doc-xyz" })
+    const decoded = roundTrip(wire)
+    expect(decoded.t).toBe(MessageType.Interest)
+    const interest = decoded as WireInterestMsg
+    expect(interest.doc).toBe("doc-xyz")
+    expect(interest.v).toBeUndefined()
+    expect(interest.r).toBeUndefined()
   })
 
   it("round-trips interest with reciprocate=false", () => {
-    const msg: InterestMsg = {
-      type: "interest",
+    const wire = interestWire({
       docId: "doc-1",
       version: "7",
       reciprocate: false,
-    }
-    const decoded = roundTripViaAlias(msg)
-    expect(decoded).toEqual(msg)
+    })
+    const decoded = roundTrip(wire)
+    expect(decoded).toEqual(wire)
   })
 })
 
 describe("CBOR codec — offer", () => {
   it("round-trips offer with JSON payload (snapshot)", () => {
-    const msg: OfferMsg = {
-      type: "offer",
+    const wire = offerWire({
       docId: "doc-config",
-      payload: {
-        kind: "entirety",
-        encoding: "json",
-        data: JSON.stringify({ title: "Hello", count: 42 }),
-      },
+      kind: "entirety",
+      encoding: "json",
+      data: JSON.stringify({ title: "Hello", count: 42 }),
       version: "5",
-    }
-    const decoded = roundTripViaAlias(msg)
-    expect(decoded).toEqual(msg)
+    })
+    const decoded = roundTrip(wire)
+    expect(decoded).toEqual(wire)
   })
 
   it("round-trips offer with binary payload (delta)", () => {
     const binaryData = new Uint8Array([0x00, 0x01, 0x02, 0xff, 0xfe, 0xfd])
-    const msg: OfferMsg = {
-      type: "offer",
+    const wire = offerWire({
       docId: "doc-crdt",
-      payload: {
-        kind: "since",
-        encoding: "binary",
-        data: binaryData,
-      },
+      kind: "since",
+      encoding: "binary",
+      data: binaryData,
       version: "AQ==:3",
       reciprocate: true,
-    }
-    const decoded = roundTripViaAlias(msg) as OfferMsg
-    expect(decoded.type).toBe("offer")
-    expect(decoded.docId).toBe("doc-crdt")
-    expect(decoded.payload.encoding).toBe("binary")
-    expect(decoded.version).toBe("AQ==:3")
-    expect(decoded.reciprocate).toBe(true)
+    })
+    const decoded = roundTrip(wire) as WireOfferMsg
+    expect(decoded.t).toBe(MessageType.Offer)
+    expect(decoded.doc).toBe("doc-crdt")
+    expect(decoded.pe).toBe(PayloadEncoding.Binary)
+    expect(decoded.v).toBe("AQ==:3")
+    expect(decoded.r).toBe(true)
 
     // Uint8Array should survive wire round-trip natively
-    expect(decoded.payload.data).toBeInstanceOf(Uint8Array)
-    expect(decoded.payload.data).toEqual(binaryData)
+    expect(decoded.d).toBeInstanceOf(Uint8Array)
+    expect(decoded.d).toEqual(binaryData)
   })
 
   it("round-trips offer with large binary payload", () => {
@@ -235,34 +207,28 @@ describe("CBOR codec — offer", () => {
       largeData[i] = i % 256
     }
 
-    const msg: OfferMsg = {
-      type: "offer",
+    const wire = offerWire({
       docId: "doc-large",
-      payload: {
-        kind: "entirety",
-        encoding: "binary",
-        data: largeData,
-      },
+      kind: "entirety",
+      encoding: "binary",
+      data: largeData,
       version: "100",
-    }
-    const decoded = roundTripViaAlias(msg) as OfferMsg
-    expect(decoded.payload.data).toBeInstanceOf(Uint8Array)
-    expect(decoded.payload.data).toEqual(largeData)
+    })
+    const decoded = roundTrip(wire) as WireOfferMsg
+    expect(decoded.d).toBeInstanceOf(Uint8Array)
+    expect(decoded.d).toEqual(largeData)
   })
 
   it("round-trips offer without optional reciprocate", () => {
-    const msg: OfferMsg = {
-      type: "offer",
+    const wire = offerWire({
       docId: "doc-1",
-      payload: {
-        kind: "entirety",
-        encoding: "json",
-        data: "{}",
-      },
+      kind: "entirety",
+      encoding: "json",
+      data: "{}",
       version: "1",
-    }
-    const decoded = roundTripViaAlias(msg) as OfferMsg
-    expect(decoded.reciprocate).toBeUndefined()
+    })
+    const decoded = roundTrip(wire) as WireOfferMsg
+    expect(decoded.r).toBeUndefined()
   })
 })
 
@@ -272,89 +238,67 @@ describe("CBOR codec — offer", () => {
 
 describe("CBOR codec — dismiss", () => {
   it("round-trips dismiss message", () => {
-    const msg: DismissMsg = {
-      type: "dismiss",
-      docId: "doc-to-leave",
-    }
-    const decoded = roundTripViaAlias(msg)
-    expect(decoded).toEqual(msg)
+    const wire = dismissWire("doc-to-leave")
+    const decoded = roundTrip(wire)
+    expect(decoded).toEqual(wire)
   })
 })
 
 // ---------------------------------------------------------------------------
-// Batch encoding
+// Batch encoding (each message independently round-tripped)
 // ---------------------------------------------------------------------------
 
 describe("CBOR codec — batch", () => {
   it("round-trips a batch of mixed message types", () => {
-    const msgs: ChannelMsg[] = [
-      {
-        type: "establish",
-        identity: { peerId: "p1", name: "Peer One", type: "user" },
-      },
-      {
-        type: "present",
-        docs: [
-          {
-            docId: "d1",
-            schemaHash: "00test",
-            replicaType: ["plain", 1, 0] as const,
-            syncProtocol: SYNC_AUTHORITATIVE,
-          },
-          {
-            docId: "d2",
-            schemaHash: "00test",
-            replicaType: ["yjs", 1, 0] as const,
-            syncProtocol: SYNC_COLLABORATIVE,
-          },
-        ],
-      },
-      {
-        type: "interest",
-        docId: "d1",
-        version: "0",
-        reciprocate: true,
-      },
-      {
-        type: "offer",
-        docId: "d1",
-        payload: {
-          kind: "since",
-          encoding: "binary",
-          data: new Uint8Array([1, 2, 3]),
+    const wires: WireMessage[] = [
+      establishWire({ peerId: "p1", name: "Peer One", type: "user" }),
+      presentWire([
+        {
+          docId: "d1",
+          schemaHash: "00test",
+          replicaType: ["plain", 1, 0] as const,
+          syncProtocol: SYNC_AUTHORITATIVE,
         },
+        {
+          docId: "d2",
+          schemaHash: "00test",
+          replicaType: ["yjs", 1, 0] as const,
+          syncProtocol: SYNC_COLLABORATIVE,
+        },
+      ]),
+      interestWire({ docId: "d1", version: "0", reciprocate: true }),
+      offerWire({
+        docId: "d1",
+        kind: "since",
+        encoding: "binary",
+        data: new Uint8Array([1, 2, 3]),
         version: "2",
         reciprocate: false,
-      },
-      {
-        type: "dismiss",
-        docId: "d1",
-      },
-      {
-        type: "depart",
-      },
+      }),
+      dismissWire("d1"),
+      departWire(),
     ]
 
-    const decoded = msgs.map(m => roundTripViaAlias(m))
+    const decoded = wires.map(w => roundTrip(w))
     expect(decoded).toHaveLength(6)
-    expect(decoded[0]?.type).toBe("establish")
-    expect(decoded[1]?.type).toBe("present")
-    expect(decoded[2]?.type).toBe("interest")
-    expect(decoded[3]?.type).toBe("offer")
-    expect(decoded[4]?.type).toBe("dismiss")
-    expect(decoded[5]?.type).toBe("depart")
+    expect(decoded[0]?.t).toBe(MessageType.Establish)
+    expect(decoded[1]?.t).toBe(MessageType.Present)
+    expect(decoded[2]?.t).toBe(MessageType.Interest)
+    expect(decoded[3]?.t).toBe(MessageType.Offer)
+    expect(decoded[4]?.t).toBe(MessageType.Dismiss)
+    expect(decoded[5]?.t).toBe(MessageType.Depart)
 
     // Verify deep equality
-    expect(decoded[0]).toEqual(msgs[0])
-    expect(decoded[1]).toEqual(msgs[1])
-    expect(decoded[2]).toEqual(msgs[2])
-    expect(decoded[3]).toEqual(msgs[3])
-    expect(decoded[4]).toEqual(msgs[4])
-    expect(decoded[5]).toEqual(msgs[5])
+    expect(decoded[0]).toEqual(wires[0])
+    expect(decoded[1]).toEqual(wires[1])
+    expect(decoded[2]).toEqual(wires[2])
+    expect(decoded[3]).toEqual(wires[3])
+    expect(decoded[4]).toEqual(wires[4])
+    expect(decoded[5]).toEqual(wires[5])
   })
 
   it("round-trips an empty batch", () => {
-    const decoded = ([] as ChannelMsg[]).map(m => roundTripViaAlias(m))
+    const decoded = ([] as WireMessage[]).map(w => roundTrip(w))
     expect(decoded).toEqual([])
   })
 })
@@ -373,18 +317,15 @@ describe("CBOR codec — error handling", () => {
     expect(() => decodeWireMessage(new Uint8Array(0))).toThrow()
   })
 
-  it("throws on unknown message type discriminator", () => {
+  it("rejects unknown message type discriminator at decode", () => {
     // Craft a valid CBOR payload with an unrecognized type discriminator.
     // This simulates receiving a message from a newer protocol version.
     const wire = { t: 0xff } as unknown as WireMessage
     const encoded = encodeWireMessage(wire)
-    const decoded = decodeWireMessage(encoded)
-    expect(() => applyInboundAliasing(emptyAliasState(), decoded)).toThrow(
-      "Unknown wire message type: 255",
-    )
+    expect(() => decodeWireMessage(encoded)).toThrow(WireValidationFailure)
   })
 
-  it("throws on unknown payload kind in offer message", () => {
+  it("rejects unknown payload kind in offer at decode", () => {
     const wire = {
       t: 0x12, // Offer
       doc: "d1",
@@ -394,13 +335,10 @@ describe("CBOR codec — error handling", () => {
       v: "1",
     } as unknown as WireMessage
     const encoded = encodeWireMessage(wire)
-    const decoded = decodeWireMessage(encoded)
-    expect(() => applyInboundAliasing(emptyAliasState(), decoded)).toThrow(
-      "Unknown wire payload kind: 153",
-    )
+    expect(() => decodeWireMessage(encoded)).toThrow(WireValidationFailure)
   })
 
-  it("throws on unknown payload encoding in offer message", () => {
+  it("rejects unknown payload encoding in offer at decode", () => {
     const wire = {
       t: 0x12, // Offer
       doc: "d1",
@@ -410,10 +348,7 @@ describe("CBOR codec — error handling", () => {
       v: "1",
     } as unknown as WireMessage
     const encoded = encodeWireMessage(wire)
-    const decoded = decodeWireMessage(encoded)
-    expect(() => applyInboundAliasing(emptyAliasState(), decoded)).toThrow(
-      "Unknown wire payload encoding: 153",
-    )
+    expect(() => decodeWireMessage(encoded)).toThrow(WireValidationFailure)
   })
 })
 
@@ -423,70 +358,55 @@ describe("CBOR codec — error handling", () => {
 
 describe("CBOR codec — multi-byte UTF-8", () => {
   it("round-trips offer with emoji in JSON payload", () => {
-    const msg: OfferMsg = {
-      type: "offer",
+    const wire = offerWire({
       docId: "game:hand:player1",
-      payload: {
-        kind: "entirety",
-        encoding: "json",
-        data: JSON.stringify({ glyph: "🔥", name: "fire", tags: ["💧", "🪨"] }),
-      },
+      kind: "entirety",
+      encoding: "json",
+      data: JSON.stringify({ glyph: "🔥", name: "fire", tags: ["💧", "🪨"] }),
       version: "1",
-    }
-    const decoded = roundTripViaAlias(msg)
-    expect(decoded).toEqual(msg)
+    })
+    const decoded = roundTrip(wire)
+    expect(decoded).toEqual(wire)
   })
 
   it("round-trips offer with CJK characters in JSON payload", () => {
-    const msg: OfferMsg = {
-      type: "offer",
+    const wire = offerWire({
       docId: "doc-i18n",
-      payload: {
-        kind: "entirety",
-        encoding: "json",
-        data: JSON.stringify({ title: "日本語テスト", count: 42 }),
-      },
+      kind: "entirety",
+      encoding: "json",
+      data: JSON.stringify({ title: "日本語テスト", count: 42 }),
       version: "3",
-    }
-    const decoded = roundTripViaAlias(msg)
-    expect(decoded).toEqual(msg)
+    })
+    const decoded = roundTrip(wire)
+    expect(decoded).toEqual(wire)
   })
 
   it("round-trips establish with non-ASCII peer name", () => {
-    const msg: EstablishMsg = {
-      type: "establish",
-      identity: {
-        peerId: "peer-jp-1",
-        name: "日本語ユーザー",
-        type: "user",
-      },
-    }
-    const decoded = roundTripViaAlias(msg)
-    expect(decoded).toEqual(msg)
+    const wire = establishWire({
+      peerId: "peer-jp-1",
+      name: "日本語ユーザー",
+      type: "user",
+    })
+    const decoded = roundTrip(wire)
+    expect(decoded).toEqual(wire)
   })
 
   it("round-trips batch containing messages with non-ASCII fields", () => {
-    const msgs: ChannelMsg[] = [
-      {
-        type: "establish",
-        identity: { peerId: "p1", name: "André", type: "user" },
-      },
-      {
-        type: "offer",
+    const wires: WireMessage[] = [
+      establishWire({ peerId: "p1", name: "André", type: "user" }),
+      offerWire({
         docId: "doc-emoji",
-        payload: {
-          kind: "entirety",
-          encoding: "json",
-          data: JSON.stringify({ emoji: "🔥💧🪨💨🌀", café: true }),
-        },
+        kind: "entirety",
+        encoding: "json",
+        data: JSON.stringify({ emoji: "🔥💧🪨💨🌀", café: true }),
         version: "1",
-      },
+      }),
     ]
 
-    const decoded = msgs.map(m => roundTripViaAlias(m))
+    const decoded = wires.map(w => roundTrip(w))
     expect(decoded).toHaveLength(2)
-    expect(decoded[0]).toEqual(msgs[0])
-    expect(decoded[1]).toEqual(msgs[1])
+    expect(decoded[0]).toEqual(wires[0])
+    expect(decoded[1]).toEqual(wires[1])
   })
 })
 
@@ -509,20 +429,22 @@ describe("SyncProtocol wire round-trip", () => {
 })
 
 // ---------------------------------------------------------------------------
-// Identifier length caps (Phase 1)
+// Identifier length caps
+//
+// The CBOR codec itself does not enforce identifier length caps — that
+// responsibility belongs to the transport alias layer. These tests
+// verify the validateDocId / validateSchemaHash validators directly,
+// and confirm that CBOR encode/decode faithfully preserves identifiers
+// at the boundary length.
 // ---------------------------------------------------------------------------
-
-import {
-  DOC_ID_MAX_UTF8_BYTES,
-  SCHEMA_HASH_MAX_UTF8_BYTES,
-} from "../constants.js"
 
 describe("CBOR codec — identifier length caps", () => {
   it("accepts a docId exactly at the UTF-8 byte cap", () => {
     const docId = "a".repeat(DOC_ID_MAX_UTF8_BYTES)
-    const msg: InterestMsg = { type: "interest", docId }
-    const decoded = roundTripViaAlias(msg) as InterestMsg
-    expect(decoded.docId).toEqual(docId)
+    expect(validateDocId(docId)).toBeNull()
+    const wire = interestWire({ docId })
+    const decoded = roundTrip(wire) as WireInterestMsg
+    expect(decoded.doc).toEqual(docId)
   })
 
   it("accepts a docId one byte under the cap with a 4-byte UTF-8 codepoint", () => {
@@ -532,15 +454,17 @@ describe("CBOR codec — identifier length caps", () => {
     expect(new TextEncoder().encode(docId).byteLength).toBe(
       DOC_ID_MAX_UTF8_BYTES,
     )
-    const msg: InterestMsg = { type: "interest", docId }
-    const decoded = roundTripViaAlias(msg) as InterestMsg
-    expect(decoded.docId).toEqual(docId)
+    expect(validateDocId(docId)).toBeNull()
+    const wire = interestWire({ docId })
+    const decoded = roundTrip(wire) as WireInterestMsg
+    expect(decoded.doc).toEqual(docId)
   })
 
   it("rejects a docId one byte over the cap with a typed error", () => {
     const docId = "a".repeat(DOC_ID_MAX_UTF8_BYTES + 1)
-    const msg: InterestMsg = { type: "interest", docId }
-    expect(() => roundTripViaAlias(msg)).toThrow("doc-id-too-long")
+    const error = validateDocId(docId)
+    expect(error).not.toBeNull()
+    expect(error?.code).toBe("doc-id-too-long")
   })
 
   it("rejects a multi-byte UTF-8 docId one byte over the cap", () => {
@@ -549,100 +473,84 @@ describe("CBOR codec — identifier length caps", () => {
     expect(new TextEncoder().encode(docId).byteLength).toBe(
       DOC_ID_MAX_UTF8_BYTES + 1,
     )
-    const msg: InterestMsg = { type: "interest", docId }
-    expect(() => roundTripViaAlias(msg)).toThrow("doc-id-too-long")
+    const error = validateDocId(docId)
+    expect(error).not.toBeNull()
+    expect(error?.code).toBe("doc-id-too-long")
   })
 
   it("accepts a schemaHash at the cap and rejects one byte over", () => {
     const okHash = "h".repeat(SCHEMA_HASH_MAX_UTF8_BYTES)
     const overHash = "h".repeat(SCHEMA_HASH_MAX_UTF8_BYTES + 1)
-    const okMsg: PresentMsg = {
-      type: "present",
-      docs: [
-        {
-          docId: "doc-1",
-          schemaHash: okHash,
-          replicaType: ["plain", 1, 0] as const,
-          syncProtocol: SYNC_AUTHORITATIVE,
-        },
-      ],
-    }
-    const overMsg: PresentMsg = {
-      type: "present",
-      docs: [
-        {
-          docId: "doc-1",
-          schemaHash: overHash,
-          replicaType: ["plain", 1, 0] as const,
-          syncProtocol: SYNC_AUTHORITATIVE,
-        },
-      ],
-    }
-    const decoded = roundTripViaAlias(okMsg) as PresentMsg
-    expect(decoded.docs[0]?.schemaHash).toEqual(okHash)
 
-    expect(() => roundTripViaAlias(overMsg)).toThrow("schema-hash-too-long")
+    // Accept: at the cap
+    expect(validateSchemaHash(okHash)).toBeNull()
+    const wire = presentWire([
+      {
+        docId: "doc-1",
+        schemaHash: okHash,
+        replicaType: ["plain", 1, 0] as const,
+        syncProtocol: SYNC_AUTHORITATIVE,
+      },
+    ])
+    const decoded = roundTrip(wire) as WirePresentMsg
+    expect(decoded.docs[0]?.sh).toEqual(okHash)
+
+    // Reject: one byte over
+    const error = validateSchemaHash(overHash)
+    expect(error).not.toBeNull()
+    expect(error?.code).toBe("schema-hash-too-long")
   })
 
   it("rejects an oversize docId on offer and dismiss", () => {
     const big = "a".repeat(DOC_ID_MAX_UTF8_BYTES + 1)
-    const offerMsg: OfferMsg = {
-      type: "offer",
-      docId: big,
-      payload: { kind: "entirety", encoding: "json", data: "{}" },
-      version: "v",
-    }
-    const dismissMsg: DismissMsg = { type: "dismiss", docId: big }
-    expect(() => roundTripViaAlias(offerMsg)).toThrow("doc-id-too-long")
-    expect(() => roundTripViaAlias(dismissMsg)).toThrow("doc-id-too-long")
+    const offerError = validateDocId(big)
+    expect(offerError).not.toBeNull()
+    expect(offerError?.code).toBe("doc-id-too-long")
+
+    const dismissError = validateDocId(big)
+    expect(dismissError).not.toBeNull()
+    expect(dismissError?.code).toBe("doc-id-too-long")
   })
 })
 
 // ---------------------------------------------------------------------------
-// WireFeatures round-trip (Phase 2)
+// WireFeatures round-trip
 // ---------------------------------------------------------------------------
 
 describe("CBOR codec — WireFeatures negotiation", () => {
   it("round-trips establish with all features advertised", () => {
-    const msg: EstablishMsg = {
-      type: "establish",
-      identity: { peerId: "alice", type: "user" },
+    const wire = establishWire({
+      peerId: "alice",
+      type: "user",
       features: { alias: true, streamed: true, datagram: true },
-    }
-    const decoded = roundTripViaAlias(msg) as EstablishMsg
-    expect(decoded.features).toEqual({
-      alias: true,
-      streamed: true,
-      datagram: true,
     })
+    const decoded = roundTrip(wire) as WireEstablishMsg
+    expect(decoded.f).toEqual({ a: true, s: true, d: true })
   })
 
   it("round-trips establish with only alias advertised", () => {
-    const msg: EstablishMsg = {
-      type: "establish",
-      identity: { peerId: "alice", type: "user" },
+    const wire = establishWire({
+      peerId: "alice",
+      type: "user",
       features: { alias: true },
-    }
-    const decoded = roundTripViaAlias(msg) as EstablishMsg
-    expect(decoded.features).toEqual({ alias: true })
+    })
+    const decoded = roundTrip(wire) as WireEstablishMsg
+    expect(decoded.f).toEqual({ a: true })
   })
 
   it("round-trips establish with no features (legacy peer)", () => {
-    const msg: EstablishMsg = {
-      type: "establish",
-      identity: { peerId: "alice", type: "user" },
-    }
-    const decoded = roundTripViaAlias(msg) as EstablishMsg
-    expect(decoded.features).toBeUndefined()
+    const wire = establishWire({ peerId: "alice", type: "user" })
+    const decoded = roundTrip(wire) as WireEstablishMsg
+    expect(decoded.f).toBeUndefined()
   })
 
   it("round-trips establish with explicit-false features", () => {
-    const msg: EstablishMsg = {
-      type: "establish",
-      identity: { peerId: "alice", type: "user" },
+    const wire = establishWire({
+      peerId: "alice",
+      type: "user",
       features: { alias: false, streamed: false },
-    }
-    const decoded = roundTripViaAlias(msg) as EstablishMsg
-    expect(decoded.features).toEqual({ alias: false, streamed: false })
+    })
+    const decoded = roundTrip(wire) as WireEstablishMsg
+    expect(decoded.f).toEqual({ a: false, s: false })
   })
 })

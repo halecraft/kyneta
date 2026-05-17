@@ -2,12 +2,12 @@
 
 > **Package**: `@kyneta/unix-socket-transport`
 > **Role**: Unix domain socket transport for `@kyneta/exchange` — stream-oriented framing with backpressure, a pure client lifecycle, a pure leaderless-peer negotiator, and runtime-neutral `UnixSocket` wrappers for Node and Bun.
-> **Depends on**: `@kyneta/machine`, `@kyneta/transport`, `@kyneta/wire` (all peer)
+> **Depends on**: `@kyneta/machine`, `@kyneta/transport` (all peer)
 > **Depended on by**: `@kyneta/exchange` (through application configuration)
 > **Canonical symbols**: `createUnixSocketClient`, `UnixSocketClientTransport`, `UnixSocketClientOptions`, `UnixSocketServerTransport`, `UnixSocketServerOptions`, `UnixSocketListener`, `UnixSocketConnection`, `connect`, `listen`, `createUnixSocketPeer`, `UnixSocketPeer`, `UnixSocketPeerOptions`, `createPeerProgram`, `PeerMsg`, `PeerEffect`, `PeerModel`, `createUnixSocketClientProgram`, `UnixSocketClientMsg`, `UnixSocketClientEffect`, `UnixSocketClientState`, `UnixSocket`, `wrapNodeUnixSocket`, `wrapBunUnixSocket`, `ProbeResult`
-> **Key invariant(s)**: Unix sockets are byte streams, not message streams — every outbound payload is length-prefixed by the binary frame header and every inbound chunk flows through `feedBytes` from `@kyneta/wire`. There is no fragmentation layer (no gateway cap); a single message is one frame regardless of size.
+> **Key invariant(s)**: Unix sockets are byte streams, not message streams — every outbound payload is length-prefixed by the binary frame header and every inbound chunk flows through `FrameStreamParser` from `@kyneta/transport`. There is no fragmentation layer (no gateway cap); a single message is one frame regardless of size.
 
-A Unix-domain-socket transport kit for server-to-server sync. It runs the same alias-aware binary pipeline as the WebSocket and WebRTC transports, but replaces message-oriented framing with pure stream framing (`feedBytes` / `StreamParserState`) because stream transports coalesce writes and split reads at arbitrary boundaries.
+A Unix-domain-socket transport kit for server-to-server sync. It runs the same binary `Pipeline` (from `@kyneta/transport`) as the WebSocket and WebRTC transports, but replaces message-oriented framing with `FrameStreamParser` (from `@kyneta/transport`) because stream transports coalesce writes and split reads at arbitrary boundaries.
 
 Imported by server-side applications that want sync to flow over a local filesystem socket rather than a TCP connection. The package also exports a leaderless-peer negotiator so two processes sharing a socket path can cooperate without either being pre-designated the server.
 
@@ -15,7 +15,7 @@ Imported by server-side applications that want sync to flow over a local filesys
 
 ## Questions this document answers
 
-- Why stream framing instead of `@kyneta/wire`'s fragment protocol? → [Stream framing, not fragmentation](#stream-framing-not-fragmentation)
+- Why stream framing instead of `the `Pipeline`'s fragment protocol? → [Stream framing, not fragmentation](#stream-framing-not-fragmentation)
 - What does "leaderless topology" mean and when do I want it? → [Leaderless peer negotiation](#leaderless-peer-negotiation)
 - How does backpressure work? → [Backpressure and the write queue](#backpressure-and-the-write-queue)
 - What does the client state machine look like? → [Client state machine](#client-state-machine)
@@ -38,7 +38,7 @@ Imported by server-side applications that want sync to flow over a local filesys
 | `PeerEffect` | Inspectable data describing an I/O action the peer needs (`probe`, `start-listener`, `start-connector`, `remove-transport`, `delay-then-probe`). | An `Effect<Msg>` closure |
 | `UnixSocketClientEffect` | Inspectable data for client-side I/O (`connect`, `close-connection`, `add-channel-and-establish`, `remove-channel`, `start-reconnect-timer`, `cancel-reconnect-timer`). | `PeerEffect` |
 | Backpressure | `write()` returns `false` — kernel buffer is full. Caller waits for `onDrain` before resuming. | A timeout, a rate-limit |
-| `feedBytes` | Pure stream-frame parser from `@kyneta/wire`. Takes accumulated state + a chunk; returns new state + extracted frames. | `FragmentReassembler` — stream framing and fragment reassembly are orthogonal |
+| `feedBytes` | Pure stream-frame parser from `@kyneta/transport` (`FrameStreamParser`). Takes accumulated state + a chunk; returns new state + extracted frames. | `FragmentReassembler` — stream framing and fragment reassembly are orthogonal |
 
 ---
 
@@ -50,14 +50,14 @@ Two structural differences from the WebSocket transport:
 
 | Dimension | WebSocket | Unix socket |
 |-----------|-----------|-------------|
-| Framing | Protocol-native (WebSocket frame) | Application-level (`@kyneta/wire` binary header + `feedBytes`) |
+| Framing | Protocol-native (WebSocket frame) | Application-level (binary frame header + `FrameStreamParser`) |
 | Coalescing | Impossible — each WS message is atomic | Normal — writes may merge; reads may split |
 | Size limit | Gateway-imposed (e.g. AWS 128 KB) | None — kernel buffer only, drained via backpressure |
 | Fragmentation | Required above gateway cap | Not used — one frame per message, any size |
 | Topology | Client ↔ Server | Leaderless peer (optional) or Client ↔ Server |
 | Ready gate | Yes (server sends `"ready"`) | No (stream is bidirectionally ready on connect) |
 
-All else — the alias-aware binary pipeline, the `createObservableProgram` runtime, the exchange's six-message protocol, the channel lifecycle — is identical.
+All else — the binary `Pipeline` (from `@kyneta/transport`), the `createObservableProgram` runtime, the exchange's six-message protocol, the channel lifecycle — is identical.
 
 ### What this transport is NOT
 
@@ -106,14 +106,14 @@ There is no `fragmentPayload` call. Every message is one complete frame with a 6
 
 ### Why no fragmentation layer
 
-Cloud gateways (AWS API Gateway, Cloudflare Workers) enforce per-message size caps — that is why `@kyneta/wire` ships a fragmentation protocol and why the WebSocket transport uses it. Unix sockets have no such gateway. The only limit is the kernel send buffer, which is drained via backpressure, not exceeded.
+Cloud gateways (AWS API Gateway, Cloudflare Workers) enforce per-message size caps — that is why `@kyneta/transport`'s `Pipeline` includes a fragmentation layer and why the WebSocket transport uses it. Unix sockets have no such gateway. The only limit is the kernel send buffer, which is drained via backpressure, not exceeded.
 
 Adding fragmentation here would be dead weight: every message would pay the 28-byte fragment overhead with nothing to gain.
 
 ### What stream framing is NOT
 
 - **Not a decoder.** `feedBytes` emits raw frame bytes; the pipeline feeds them into `decodeBinaryFrame` + `decodeWireMessage`.
-- **Not a fragment reassembler.** The `FragmentReassembler` from `@kyneta/wire` is not used here. Stream framing and payload fragmentation address different problems.
+- **Not a fragment reassembler.** The `Pipeline`'s fragment reassembler is not used here (threshold = 0). Stream framing and payload fragmentation address different problems.
 - **Not lossy.** Unix sockets are reliable; if the kernel buffer overflows, `write` returns `false` and the producer waits. `feedBytes` never drops bytes.
 
 ---
@@ -252,26 +252,20 @@ const exchange = new Exchange({ transports: [peer] })
 
 ## Wire pipeline
 
-Identical to the WebSocket transport's alias-aware binary pipeline, minus the fragmentation layer:
+Uses `new Pipeline({ send: "binary" })` from `@kyneta/transport`, with no fragmentation (threshold = 0). The stream framing layer (`FrameStreamParser`) extracts complete frames from the byte stream before feeding them to the pipeline:
 
-```
+```/dev/null/unix-socket-pipeline.txt#L1-9
 Outbound:
   ChannelMsg
-    └─ applyOutboundAliasing ──► WireMessage
-       └─ encodeWireMessage ──► Uint8Array
-          └─ encodeBinaryFrame(complete(...)) ──► framed bytes
-             └─ UnixSocket.write (with backpressure queue)
+    └─ pipeline.send(msg) → Result<Uint8Array, WireError>[]
+       └─ UnixSocket.write(piece) (with backpressure queue)
 
 Inbound:
   onData(chunk)
-    └─ feedBytes(parserState, chunk) ──► frames
-       └─ decodeBinaryFrame(frame)
-          └─ decodeWireMessage(payload) ──► WireMessage
-             └─ applyInboundAliasing ──► ChannelMsg[]
-                └─ onChannelReceive
+    └─ frameStreamParser.feed(chunk) → Result<Uint8Array, WireError>[]
+       └─ pipeline.receive(frame) → Result<ChannelMsg, WireError>[]
+          └─ onChannelReceive(channelId, msg)
 ```
-
-The `WIRE_VERSION`, `HEADER_SIZE`, and binary frame type constants all come from `@kyneta/wire` — no Unix-socket-specific protocol.
 
 ---
 

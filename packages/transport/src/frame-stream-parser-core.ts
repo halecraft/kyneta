@@ -1,23 +1,14 @@
-// stream-frame-parser — pure step function for extracting binary frames from a byte stream.
+// frame-stream-parser-core — pure step function for extracting binary frames
+// from a byte stream, returning Result-shaped outputs.
 //
-// Unix domain sockets (and any stream-oriented transport) deliver bytes
-// as a continuous stream — writes coalesce, reads deliver arbitrary chunks.
-// This parser accumulates bytes and extracts complete binary frames using
-// the 6-byte header's payload length field.
+// Extracts length-prefixed binary frames from a continuous byte stream.
+// Each successfully extracted frame is wrapped in ok(); future version/size
+// checks will return err().
 //
-// FC/IS design: feedBytes is the functional core (pure, no side effects,
-// no mutation of inputs). The transport's data handler is the imperative
-// shell that calls feedBytes on each data event and dispatches the
-// resulting frames.
-//
-// The parser handles:
-// - Single complete frame in one chunk
-// - Frame split across multiple chunks (partial header, partial payload)
-// - Multiple frames in one chunk (write coalescing)
-// - Empty chunks (no-op)
-// - Arbitrary chunk boundaries
+// FC/IS design: feedBytesStep is the functional core (pure, no side effects,
+// no mutation of inputs). FrameStreamParser is the imperative shell.
 
-import { HEADER_SIZE } from "./constants.js"
+import { HEADER_SIZE, ok, type Result, type WireError } from "@kyneta/wire"
 
 // ---------------------------------------------------------------------------
 // Parser state
@@ -46,7 +37,7 @@ export type StreamParserState =
  * Create a fresh parser state in the "header" phase.
  *
  * Call this once when setting up a new stream connection. Pass the
- * returned state to `feedBytes` on each data event.
+ * returned state to `feedBytesStep` on each data event.
  */
 export function initialParserState(): StreamParserState {
   return {
@@ -63,11 +54,11 @@ export function initialParserState(): StreamParserState {
 /**
  * Result of feeding bytes into the parser.
  */
-export interface FeedBytesResult {
-  /** The new parser state (pass to the next feedBytes call). */
+export interface FeedBytesStepResult {
+  /** The new parser state (pass to the next feedBytesStep call). */
   state: StreamParserState
   /** Zero or more complete frames extracted from the stream. */
-  frames: Uint8Array[]
+  frames: readonly Result<Uint8Array, WireError>[]
 }
 
 /**
@@ -77,21 +68,21 @@ export interface FeedBytesResult {
  * new parser state and any complete frames extracted from the stream.
  *
  * This is the functional core for stream-oriented binary transports.
- * The imperative shell (the transport's data handler) calls this on
- * each data event and dispatches the resulting frames.
+ * The imperative shell (FrameStreamParser) calls this on each data
+ * event and dispatches the resulting frames.
  *
  * Each emitted frame is a complete binary wire frame (header + payload),
- * ready to pass directly to `decodeBinaryFrame`.
+ * wrapped in `ok()`, ready to pass directly to `decodeBinaryFrame`.
  *
- * @param state - Current parser state (from `initialParserState()` or previous `feedBytes` call)
+ * @param state - Current parser state (from `initialParserState()` or previous call)
  * @param chunk - New bytes from the stream (may be empty)
- * @returns New state and any complete frames
+ * @returns New state and any complete frames (each wrapped in Result)
  */
-export function feedBytes(
+export function feedBytesStep(
   state: StreamParserState,
   chunk: Uint8Array,
-): FeedBytesResult {
-  const frames: Uint8Array[] = []
+): FeedBytesStepResult {
+  const frames: Result<Uint8Array, WireError>[] = []
   let pos = 0
   let current = state
 
@@ -122,7 +113,7 @@ export function feedBytes(
           // Edge case: zero-length payload — emit header-only frame immediately
           const frame = new Uint8Array(HEADER_SIZE)
           frame.set(headerBuffer)
-          frames.push(frame)
+          frames.push(ok(frame))
           current = {
             phase: "header",
             buffer: new Uint8Array(HEADER_SIZE),
@@ -160,7 +151,7 @@ export function feedBytes(
         const frame = new Uint8Array(HEADER_SIZE + current.payloadLength)
         frame.set(current.header, 0)
         frame.set(current.buffer, HEADER_SIZE)
-        frames.push(frame)
+        frames.push(ok(frame))
 
         current = {
           phase: "header",

@@ -1,6 +1,6 @@
 // connection — SseConnection for server-side peer connections.
 //
-// Wraps a TextReassembler + alias-aware pipeline to provide send/receive
+// Wraps a Pipeline<"text", "binary"> to provide send/receive
 // for ChannelMsg over a single SSE connection.
 //
 // Used by SseServerTransport to manage individual client connections.
@@ -11,22 +11,13 @@
 // integrations just wrap them in SSE syntax:
 //   Express: res.write(`data: ${textFrame}\n\n`)
 //   Hono:    stream.writeSSE({ data: textFrame })
+//
+// Asymmetric encoding:
+//   send direction: text (SSE data events → EventSource)
+//   receive direction: binary (POST body → Uint8Array)
 
 import type { Channel, ChannelMsg, PeerId } from "@kyneta/transport"
-import {
-  type AliasState,
-  applyInboundAliasing,
-  applyOutboundAliasing,
-  complete,
-  createFrameIdCounter,
-  decodeTextWires,
-  emptyAliasState,
-  encodeTextFrame,
-  encodeTextWireMessage,
-  fragmentTextPayload,
-  TEXT_WIRE_VERSION,
-  TextReassembler,
-} from "@kyneta/wire"
+import { Pipeline } from "@kyneta/transport"
 
 // ---------------------------------------------------------------------------
 // Result types
@@ -41,7 +32,7 @@ export interface SsePostResponse {
 }
 
 /**
- * Result of parsing a text POST body.
+ * Result of parsing a POST body.
  *
  * Discriminated union describing what happened:
  * - "messages": Complete message(s) decoded, ready to deliver
@@ -78,10 +69,9 @@ export interface SseConnectionConfig {
  * resolution for one connected client. Created by
  * `SseServerTransport.registerConnection()`.
  *
- * The connection uses the alias-aware text pipeline — the same
- * `applyOutboundAliasing` / `applyInboundAliasing` transformer that
- * every other transport uses. This means SSE now participates in
- * docId/schemaHash aliasing just like binary transports.
+ * Uses Pipeline<"text", "binary"> — asymmetric encoding:
+ * - Send (text): ChannelMsg → text frame → SSE data event
+ * - Receive (binary): POST body (Uint8Array) → ChannelMsg
  */
 export class SseConnection {
   readonly peerId: PeerId
@@ -91,30 +81,23 @@ export class SseConnection {
   #sendFn: ((textFrame: string) => void) | null = null
   #onDisconnect: (() => void) | null = null
 
-  // Fragmentation support
-  readonly #fragmentThreshold: number
-  #nextFrameId = createFrameIdCounter()
-
-  // Alias-aware pipeline state
-  #aliasState: AliasState = emptyAliasState()
-
-  /**
-   * Text reassembler for handling fragmented POST bodies.
-   * Each connection has its own reassembler to track in-flight fragment batches.
-   */
-  readonly reassembler: TextReassembler
+  // Asymmetric wire pipeline: send text, receive binary
+  #pipeline: Pipeline<"text", "binary">
 
   constructor(peerId: PeerId, channelId: number, config?: SseConnectionConfig) {
     this.peerId = peerId
     this.channelId = channelId
-    this.#fragmentThreshold =
-      config?.fragmentThreshold ?? DEFAULT_FRAGMENT_THRESHOLD
-    this.reassembler = new TextReassembler({
-      timeoutMs: 10_000,
-      onTimeout: (frameId: number) => {
-        console.warn(
-          `[SseConnection] Fragment batch timed out for peer ${peerId}: ${frameId}`,
-        )
+    this.#pipeline = new Pipeline({
+      send: "text",
+      receive: "binary",
+      opts: {
+        threshold: config?.fragmentThreshold ?? DEFAULT_FRAGMENT_THRESHOLD,
+        reassemblyTimeoutMs: 10_000,
+        onError: (e, dir) =>
+          console.warn(
+            `[SseConnection] wire error (${dir}) for peer ${peerId}:`,
+            e,
+          ),
       },
     })
   }
@@ -160,10 +143,10 @@ export class SseConnection {
   /**
    * Send a ChannelMsg to the peer through the SSE stream.
    *
-   * Runs the alias-aware outbound pipeline:
-   *   ChannelMsg → applyOutboundAliasing → WireMessage → encodeTextWireMessage → text frame → sendFn()
+   * Runs the Pipeline<"text"> send path:
+   *   ChannelMsg → Pipeline.send() → text frame(s) → sendFn()
    *
-   * Fragmentation is transparent to callers — the connection splits
+   * Fragmentation is transparent to callers — the pipeline splits
    * large frames into multiple sendFn calls automatically.
    */
   send(msg: ChannelMsg): void {
@@ -173,65 +156,44 @@ export class SseConnection {
       )
     }
 
-    const { state, wire } = applyOutboundAliasing(this.#aliasState, msg)
-    this.#aliasState = state
-
-    const payload = JSON.stringify(encodeTextWireMessage(wire))
-
-    const textFrame = encodeTextFrame(complete(TEXT_WIRE_VERSION, payload))
-
-    if (
-      this.#fragmentThreshold > 0 &&
-      textFrame.length > this.#fragmentThreshold
-    ) {
-      const fragments = fragmentTextPayload(
-        payload,
-        this.#fragmentThreshold,
-        this.#nextFrameId(),
-      )
-      for (const fragment of fragments) {
-        this.#sendFn(fragment)
-      }
-    } else {
-      this.#sendFn(textFrame)
+    for (const r of this.#pipeline.send(msg)) {
+      if (r.ok) this.#sendFn(r.value)
     }
   }
 
   /**
-   * Handle an inbound POST body through the full alias-aware inbound pipeline.
+   * Handle an inbound POST body through the Pipeline<"binary"> receive path.
    *
-   * Pipeline: text frame → TextReassembler → decodeTextWireMessage → applyInboundAliasing → ChannelMsg
+   * Pipeline: Uint8Array → Pipeline.receive() → ChannelMsg[]
    *
-   * Messages that fail alias resolution are silently skipped (logged and
-   * dropped) — the connection continues processing remaining messages.
-   * This matches the error-dropping behavior of every other transport.
+   * Messages that fail alias resolution or wire-message validation are
+   * surfaced as `type: "error"` results — the connection continues
+   * processing remaining messages. This matches the error-dropping
+   * behavior of every other transport.
    *
-   * @param body - Text wire frame string (JSON array with "1c"/"1f" prefix)
-   * @returns Result describing what happened
+   * @param body - Binary POST body (Uint8Array)
+   * @returns Discriminated result: `"messages"`, `"pending"`, or `"error"`
    */
-  handlePostBody(body: string): SsePostResult {
+  handlePostBody(body: Uint8Array<ArrayBuffer>): SsePostResult {
     try {
-      const wires = decodeTextWires(this.reassembler, body)
-      if (wires === null) {
+      const messages: ChannelMsg[] = []
+      let hadError = false
+      for (const r of this.#pipeline.receive(body)) {
+        if (r.ok) messages.push(r.value)
+        else hadError = true
+      }
+
+      if (hadError && messages.length === 0) {
         return {
-          type: "pending",
-          response: { status: 202, body: { pending: true } },
+          type: "error",
+          response: { status: 400, body: { error: "decode_failed" } },
         }
       }
 
-      const messages: ChannelMsg[] = []
-      for (const wire of wires) {
-        const result = applyInboundAliasing(this.#aliasState, wire)
-        this.#aliasState = result.state
-        if (result.error) {
-          console.warn(
-            `[SseConnection] alias resolution failed for peer ${this.peerId}:`,
-            result.error,
-          )
-          continue
-        }
-        if (result.msg) {
-          messages.push(result.msg)
+      if (messages.length === 0) {
+        return {
+          type: "pending",
+          response: { status: 202, body: { pending: true } },
         }
       }
 
@@ -276,6 +238,6 @@ export class SseConnection {
    * Must be called when the connection is closed to prevent timer leaks.
    */
   dispose(): void {
-    this.reassembler.dispose()
+    this.#pipeline.dispose()
   }
 }

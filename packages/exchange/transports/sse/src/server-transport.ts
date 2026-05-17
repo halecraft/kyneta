@@ -164,7 +164,7 @@ export class SseServerTransport extends Transport<PeerId> {
   /**
    * Unregister a peer connection.
    *
-   * Removes the channel, disposes the connection's reassembler,
+   * Removes the channel, disposes the connection's pipeline,
    * and cleans up tracking state. Called automatically when the
    * client disconnects (via req.on("close")) or manually.
    *

@@ -2,12 +2,12 @@
 
 > **Package**: `@kyneta/webrtc-transport`
 > **Role**: WebRTC data-channel transport for `@kyneta/exchange` — attaches to application-owned data channels and runs the same alias-aware binary pipeline as the WebSocket transport over them. "Bring Your Own Data Channel" (BYODC).
-> **Depends on**: `@kyneta/transport`, `@kyneta/wire` (both peer)
+> **Depends on**: `@kyneta/transport` (peer)
 > **Depended on by**: `@kyneta/exchange` (through application configuration)
 > **Canonical symbols**: `WebrtcTransport`, `createWebrtcTransport`, `WebrtcTransportOptions`, `DataChannelLike`, `DEFAULT_FRAGMENT_THRESHOLD`
 > **Key invariant(s)**: The transport never creates, negotiates, or closes a data channel. It only *attaches* to channels the application provides via `attachDataChannel(remotePeerId, channel)` and *detaches* via `detachDataChannel(remotePeerId)`. Closing the data channel, tearing down `RTCPeerConnection`, handling ICE, and running signalling are all the application's job.
 
-A tiny WebRTC transport kit. It accepts any object satisfying a five-member `DataChannelLike` interface, runs `ChannelMsg` through the same `@kyneta/wire` alias-aware binary pipeline used by the WebSocket transport, and stays completely out of the signalling layer. Native `RTCDataChannel` satisfies `DataChannelLike` structurally with zero wrapping; `simple-peer` and other libraries conform through ~20 lines of bridge code.
+A tiny WebRTC transport kit. It accepts any object satisfying a five-member `DataChannelLike` interface, runs `ChannelMsg` through the same binary `Pipeline` (from `@kyneta/transport`) used by the WebSocket transport, and stays completely out of the signalling layer. Native `RTCDataChannel` satisfies `DataChannelLike` structurally with zero wrapping; `simple-peer` and other libraries conform through ~20 lines of bridge code.
 
 Imported by applications that have already established a peer-to-peer connection via their own signalling infrastructure and now want document sync to flow over the existing data channel.
 
@@ -58,9 +58,9 @@ None of that has anything to do with document sync, and none of it is generaliza
 | Close data channel | Application |
 | Close peer connection | Application |
 | Attach sync traffic to the data channel | This transport |
-| CBOR encode / decode | This transport (via `@kyneta/wire`) |
-| Fragment / reassemble | This transport (via `@kyneta/wire`) |
-| Apply alias transformer | This transport (via `@kyneta/wire`) |
+| CBOR encode / decode | This transport (via `Pipeline` from `@kyneta/transport`) |
+| Fragment / reassemble | This transport (via `Pipeline` from `@kyneta/transport`) |
+| Apply alias transformer | This transport (via `Pipeline` from `@kyneta/transport`) |
 | Run the six-message protocol | `@kyneta/exchange` (through this transport) |
 
 `detachDataChannel(remotePeerId)` is explicit about its boundary: it removes the four event listeners, drops the reassembler, and removes the `ConnectedChannel` from the exchange — **but it does not call `channel.close()`**. The application may keep using the data channel for other purposes, or may close it later as part of its own teardown.
@@ -119,25 +119,21 @@ A `simple-peer` bridge is ~20 lines: map `"open"` / `"close"` / `"error"` / `"da
 
 ## Wire pipeline
 
-Source: `packages/exchange/transports/webrtc/src/webrtc-transport.ts`. Identical to the WebSocket transport's alias-aware binary pipeline, differing only in the threshold constant.
+Source: `packages/exchange/transports/webrtc/src/webrtc-transport.ts`. Uses `new Pipeline({ send: "binary" })` — identical to the WebSocket transport, differing only in the threshold constant.
 
-```
+```/dev/null/webrtc-pipeline.txt#L1-7
 Outbound:
   ChannelMsg
-    └─ applyOutboundAliasing
-       └─ encodeWireMessage
-          └─ encodeWireFrameAndSend (fragment if > threshold)
-             └─ channel.send(Uint8Array)
+    └─ pipeline.send(msg) → Result<Uint8Array, WireError>[]
+       └─ channel.send(piece) per ok piece
 
 Inbound:
   event.data (ArrayBuffer | Uint8Array)
-    └─ FragmentReassembler (per-channel, per-peer)
-       └─ decodeBinaryWires
-          └─ ChannelMsg[]
-             └─ onChannelReceive(channelId, msg)
+    └─ pipeline.receive(piece) → Result<ChannelMsg, WireError>[]
+       └─ onChannelReceive(channelId, msg) per ok result
 ```
 
-One `FragmentReassembler` per attached channel — fragments from different peers cannot interleave because each peer has its own channel and its own reassembler. The reassembler's default timeout and concurrency limits are inherited from `@kyneta/wire`.
+One `Pipeline` per attached channel — fragments from different peers cannot interleave because each peer has its own channel and its own pipeline (with its own reassembler).
 
 ### Readiness gating
 
@@ -161,7 +157,7 @@ This differs from the WebSocket transport's 100 KB default, which targets AWS AP
 ### What fragmentation is NOT (here)
 
 - **Not an SCTP feature.** SCTP does its own fragmentation below our layer. Our fragmentation exists because SCTP *rejects* (not splits) messages above its negotiated max-size at the application API level.
-- **Not ordered across fragment IDs.** As in `@kyneta/wire` generally, fragments of *different* frame IDs may interleave; fragments of the *same* ID must all arrive.
+- **Not ordered across fragment IDs.** As in the wire format generally, fragments of *different* frame IDs may interleave; fragments of the *same* ID must all arrive.
 
 ---
 

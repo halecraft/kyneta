@@ -1,8 +1,8 @@
 // alias-table — pure ChannelMsg ⇄ WireMessage transformer with alias state.
 //
 // Two pure functions form the FC/IS contract:
-//   applyOutboundAliasing(state, msg) → { state, wire }
-//   applyInboundAliasing(state, wire) → { state, msg | error }
+//   applyOutboundAliasing(state, msg) → { state, result: Result<WireMessage> }
+//   applyInboundAliasing(state, wire) → { state, result: Result<ChannelMsg> }
 //
 // State carries:
 //   - bidirectional alias maps (outbound assignments + inbound records) for
@@ -24,6 +24,25 @@
 //     `state.mutualAlias === true` — only emitted once both sides have
 //     advertised support.
 
+import {
+  type Alias,
+  type AliasResolutionError,
+  MessageType,
+  PayloadEncodingToString,
+  PayloadKindToString,
+  StringToPayloadEncoding,
+  StringToPayloadKind,
+  SyncProtocolWireToProtocol,
+  syncProtocolToWire,
+  validateDocId,
+  validateSchemaHash,
+  type WireDismissMsg,
+  type WireEstablishMsg,
+  type WireInterestMsg,
+  type WireMessage,
+  type WireOfferMsg,
+  type WirePresentMsg,
+} from "@kyneta/wire"
 import type {
   ChannelMsg,
   DismissMsg,
@@ -32,25 +51,11 @@ import type {
   OfferMsg,
   PresentMsg,
   WireFeatures,
-} from "@kyneta/transport"
-import { validateDocId, validateSchemaHash } from "./validate-identifiers.js"
-import {
-  MessageType,
-  PayloadEncodingToString,
-  PayloadKindToString,
-  StringToPayloadEncoding,
-  StringToPayloadKind,
-  SyncProtocolWireToProtocol,
-  syncProtocolToWire,
-  type WireDismissMsg,
-  type WireEstablishMsg,
-  type WireInterestMsg,
-  type WireMessage,
-  type WireOfferMsg,
-  type WirePresentMsg,
-} from "./wire-types.js"
+} from "./messages.js"
 
-export type Alias = number
+export type { Alias } from "@kyneta/wire"
+
+import { err, ok, type Result } from "@kyneta/wire"
 
 export type AliasState = {
   /** Outbound: docId → alias I've assigned. */
@@ -72,14 +77,6 @@ export type AliasState = {
   /** Derived: per-feature AND of self & peer; false until both establish. */
   mutualAlias: boolean
 }
-
-export type AliasResolutionError =
-  | { code: "unknown-doc-alias"; alias: Alias }
-  | { code: "unknown-schema-alias"; alias: Alias }
-  | { code: "missing-doc-id"; reason: string }
-  | { code: "missing-schema-hash"; reason: string }
-  | { code: "doc-id-too-long"; message: string }
-  | { code: "schema-hash-too-long"; message: string }
 
 export function emptyAliasState(): AliasState {
   return {
@@ -196,41 +193,41 @@ function recordInboundSchemaAlias(
 export function applyOutboundAliasing(
   state: AliasState,
   msg: ChannelMsg,
-): { state: AliasState; wire: WireMessage } {
+): { state: AliasState; result: Result<WireMessage, AliasResolutionError> } {
   switch (msg.type) {
     case "establish": {
-      const m = msg as EstablishMsg
       const newState: AliasState = {
         ...state,
-        selfFeatures: m.features,
-        mutualAlias: deriveMutualAlias(m.features, state.peerFeatures),
+        selfFeatures: msg.features,
+        mutualAlias: deriveMutualAlias(msg.features, state.peerFeatures),
       }
       const wire: WireEstablishMsg = {
         t: MessageType.Establish,
-        id: m.identity.peerId,
-        n: m.identity.name,
-        y: m.identity.type,
+        id: msg.identity.peerId,
+        n: msg.identity.name,
+        y: msg.identity.type,
       }
-      if (m.features !== undefined) {
+      if (msg.features !== undefined) {
         wire.f = {}
-        if (m.features.alias !== undefined) wire.f.a = m.features.alias
-        if (m.features.streamed !== undefined) wire.f.s = m.features.streamed
-        if (m.features.datagram !== undefined) wire.f.d = m.features.datagram
+        if (msg.features.alias !== undefined) wire.f.a = msg.features.alias
+        if (msg.features.streamed !== undefined)
+          wire.f.s = msg.features.streamed
+        if (msg.features.datagram !== undefined)
+          wire.f.d = msg.features.datagram
       }
-      return { state: newState, wire }
+      return { state: newState, result: ok(wire) }
     }
 
     case "depart":
       return {
         state,
-        wire: { t: MessageType.Depart },
+        result: ok({ t: MessageType.Depart }),
       }
 
     case "present": {
-      const m = msg as PresentMsg
       let s = state
       const docs: WirePresentMsg["docs"] = []
-      for (const d of m.docs) {
+      for (const d of msg.docs) {
         // Always assign / look up a docId alias and emit it as `a`
         // (announcement) regardless of mutualAlias.
         const docAssign = getOrAssignOutboundDocAlias(s, d.docId)
@@ -260,60 +257,69 @@ export function applyOutboundAliasing(
         }
         docs.push(entry)
       }
-      return { state: s, wire: { t: MessageType.Present, docs } }
+      return { state: s, result: ok({ t: MessageType.Present, docs }) }
     }
 
     case "interest": {
-      const m = msg as InterestMsg
       const wire: WireInterestMsg = { t: MessageType.Interest }
-      const aliasInfo = state.outboundAliasByDoc.get(m.docId)
+      const aliasInfo = state.outboundAliasByDoc.get(msg.docId)
       if (aliasInfo !== undefined && state.mutualAlias) {
         wire.dx = aliasInfo
       } else {
-        wire.doc = m.docId
+        wire.doc = msg.docId
       }
-      if (m.version !== undefined) wire.v = m.version
-      if (m.reciprocate !== undefined) wire.r = m.reciprocate
-      return { state, wire }
+      if (msg.version !== undefined) wire.v = msg.version
+      if (msg.reciprocate !== undefined) wire.r = msg.reciprocate
+      return { state, result: ok(wire) }
     }
 
     case "offer": {
-      const m = msg as OfferMsg
-      const pk = StringToPayloadKind[m.payload.kind]
+      const pk = StringToPayloadKind[msg.payload.kind]
       if (pk === undefined) {
-        throw new Error(`Unknown payload kind: ${m.payload.kind}`)
+        return {
+          state,
+          result: err({
+            code: "unknown-payload-kind",
+            value: msg.payload.kind,
+          }),
+        }
       }
-      const pe = StringToPayloadEncoding[m.payload.encoding]
+      const pe = StringToPayloadEncoding[msg.payload.encoding]
       if (pe === undefined) {
-        throw new Error(`Unknown payload encoding: ${m.payload.encoding}`)
+        return {
+          state,
+          result: err({
+            code: "unknown-payload-encoding",
+            value: msg.payload.encoding,
+          }),
+        }
       }
       const wire: WireOfferMsg = {
         t: MessageType.Offer,
         pk,
         pe,
-        d: m.payload.data,
-        v: m.version,
+        d: msg.payload.data,
+        v: msg.version,
       }
-      const aliasInfo = state.outboundAliasByDoc.get(m.docId)
+      const aliasInfo = state.outboundAliasByDoc.get(msg.docId)
       if (aliasInfo !== undefined && state.mutualAlias) {
         wire.dx = aliasInfo
       } else {
-        wire.doc = m.docId
+        wire.doc = msg.docId
       }
-      if (m.reciprocate !== undefined) wire.r = m.reciprocate
-      return { state, wire }
+      if (msg.reciprocate !== undefined) wire.r = msg.reciprocate
+      return { state, result: ok(wire) }
     }
 
     case "dismiss": {
-      const m = msg as DismissMsg
       const wire: WireDismissMsg = { t: MessageType.Dismiss }
-      const aliasInfo = state.outboundAliasByDoc.get(m.docId)
+      const aliasInfo = state.outboundAliasByDoc.get(msg.docId)
       if (aliasInfo !== undefined && state.mutualAlias) {
         wire.dx = aliasInfo
       } else {
-        wire.doc = m.docId
+        wire.doc = msg.docId
       }
-      return { state, wire }
+      return { state, result: ok(wire) }
     }
   }
 }
@@ -336,15 +342,14 @@ export function applyOutboundAliasing(
 export function applyInboundAliasing(
   state: AliasState,
   wire: WireMessage,
-): { state: AliasState; msg?: ChannelMsg; error?: AliasResolutionError } {
+): { state: AliasState; result: Result<ChannelMsg, AliasResolutionError> } {
   switch (wire.t) {
     case MessageType.Establish: {
-      const w = wire as WireEstablishMsg
-      const features: WireFeatures | undefined = w.f
+      const features: WireFeatures | undefined = wire.f
         ? {
-            ...(w.f.a !== undefined ? { alias: w.f.a } : {}),
-            ...(w.f.s !== undefined ? { streamed: w.f.s } : {}),
-            ...(w.f.d !== undefined ? { datagram: w.f.d } : {}),
+            ...(wire.f.a !== undefined ? { alias: wire.f.a } : {}),
+            ...(wire.f.s !== undefined ? { streamed: wire.f.s } : {}),
+            ...(wire.f.d !== undefined ? { datagram: wire.f.d } : {}),
           }
         : undefined
       const newState: AliasState = {
@@ -354,23 +359,25 @@ export function applyInboundAliasing(
       }
       const msg: EstablishMsg = {
         type: "establish",
-        identity: { peerId: w.id, name: w.n, type: w.y },
+        identity: { peerId: wire.id, name: wire.n, type: wire.y },
       }
       if (features !== undefined) msg.features = features
-      return { state: newState, msg }
+      return { state: newState, result: ok(msg) }
     }
 
     case MessageType.Depart:
-      return { state, msg: { type: "depart" } }
+      return { state, result: ok({ type: "depart" }) }
 
     case MessageType.Present: {
-      const w = wire as WirePresentMsg
       let s = state
       const docs: PresentMsg["docs"] = []
-      for (const d of w.docs) {
+      for (const d of wire.docs) {
         const syncProtocol = SyncProtocolWireToProtocol[d.ms]
         if (!syncProtocol) {
-          throw new Error(`Unknown wire sync protocol: ${d.ms}`)
+          return {
+            state: s,
+            result: err({ code: "unknown-sync-protocol", value: d.ms }),
+          }
         }
 
         // Record peer's docId alias announcement (always present in v1).
@@ -390,23 +397,23 @@ export function applyInboundAliasing(
           if (resolved === undefined) {
             return {
               state: s,
-              error: { code: "unknown-schema-alias", alias: d.shx },
+              result: err({ code: "unknown-schema-alias", alias: d.shx }),
             }
           }
           schemaHash = resolved
         } else {
           return {
             state: s,
-            error: {
+            result: err({
               code: "missing-schema-hash",
               reason: "Present doc entry has neither sh nor shx",
-            },
+            }),
           }
         }
 
         // Validate schema hash byte length after resolution.
         const shErr = validateSchemaHash(schemaHash)
-        if (shErr) return { state: s, error: shErr }
+        if (shErr) return { state: s, result: err(shErr) }
 
         docs.push({
           docId: d.d,
@@ -416,57 +423,67 @@ export function applyInboundAliasing(
           ...(d.shs ? { supportedHashes: d.shs } : undefined),
         })
       }
-      return { state: s, msg: { type: "present", docs } }
+      return { state: s, result: ok({ type: "present", docs }) }
     }
 
     case MessageType.Interest: {
-      const w = wire as WireInterestMsg
-      const result = resolveDocId(s_get_inbound(state), w.doc, w.dx)
-      if ("error" in result) return { state, error: result.error }
-      const docErr = validateDocId(result.docId)
-      if (docErr) return { state, error: docErr }
-      const msg: InterestMsg = { type: "interest", docId: result.docId }
-      if (w.v !== undefined) msg.version = w.v
-      if (w.r !== undefined) msg.reciprocate = w.r
-      return { state, msg }
+      const docResult = resolveDocId(s_get_inbound(state), wire.doc, wire.dx)
+      if ("error" in docResult) return { state, result: err(docResult.error) }
+      const docErr = validateDocId(docResult.docId)
+      if (docErr) return { state, result: err(docErr) }
+      const msg: InterestMsg = { type: "interest", docId: docResult.docId }
+      if (wire.v !== undefined) msg.version = wire.v
+      if (wire.r !== undefined) msg.reciprocate = wire.r
+      return { state, result: ok(msg) }
     }
 
     case MessageType.Offer: {
-      const w = wire as WireOfferMsg
-      const result = resolveDocId(s_get_inbound(state), w.doc, w.dx)
-      if ("error" in result) return { state, error: result.error }
-      const docErr = validateDocId(result.docId)
-      if (docErr) return { state, error: docErr }
-      const kind = PayloadKindToString[w.pk as keyof typeof PayloadKindToString]
+      const docResult = resolveDocId(s_get_inbound(state), wire.doc, wire.dx)
+      if ("error" in docResult) return { state, result: err(docResult.error) }
+      const docErr = validateDocId(docResult.docId)
+      if (docErr) return { state, result: err(docErr) }
+      const kind =
+        PayloadKindToString[wire.pk as keyof typeof PayloadKindToString]
       const encoding =
-        PayloadEncodingToString[w.pe as keyof typeof PayloadEncodingToString]
+        PayloadEncodingToString[wire.pe as keyof typeof PayloadEncodingToString]
       if (!kind) {
-        throw new Error(`Unknown wire payload kind: ${w.pk}`)
+        return {
+          state,
+          result: err({ code: "unknown-payload-kind", value: wire.pk }),
+        }
       }
       if (!encoding) {
-        throw new Error(`Unknown wire payload encoding: ${w.pe}`)
+        return {
+          state,
+          result: err({ code: "unknown-payload-encoding", value: wire.pe }),
+        }
       }
       const msg: OfferMsg = {
         type: "offer",
-        docId: result.docId,
-        payload: { kind, encoding, data: w.d },
-        version: w.v,
+        docId: docResult.docId,
+        payload: { kind, encoding, data: wire.d },
+        version: wire.v,
       }
-      if (w.r !== undefined) msg.reciprocate = w.r
-      return { state, msg }
+      if (wire.r !== undefined) msg.reciprocate = wire.r
+      return { state, result: ok(msg) }
     }
 
     case MessageType.Dismiss: {
-      const w = wire as WireDismissMsg
-      const result = resolveDocId(s_get_inbound(state), w.doc, w.dx)
-      if ("error" in result) return { state, error: result.error }
-      const docErr = validateDocId(result.docId)
-      if (docErr) return { state, error: docErr }
-      return { state, msg: { type: "dismiss", docId: result.docId } }
+      const docResult = resolveDocId(s_get_inbound(state), wire.doc, wire.dx)
+      if ("error" in docResult) return { state, result: err(docResult.error) }
+      const docErr = validateDocId(docResult.docId)
+      if (docErr) return { state, result: err(docErr) }
+      return { state, result: ok({ type: "dismiss", docId: docResult.docId }) }
     }
 
     default:
-      throw new Error(`Unknown wire message type: ${(wire as WireMessage).t}`)
+      return {
+        state,
+        result: err({
+          code: "unknown-message-type",
+          value: (wire as WireMessage).t,
+        }),
+      }
   }
 }
 

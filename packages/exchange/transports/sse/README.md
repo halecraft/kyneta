@@ -180,12 +180,12 @@ await adapter.waitForStatus("connected", { timeoutMs: 5000 })
 
 ## Wire Format
 
-Both directions use the `@kyneta/wire` text pipeline — symmetric encoding with asymmetric transport:
+Asymmetric wire encoding — text frames downstream (SSE), binary CBOR upstream (POST):
 
 | Direction | Transport | Wire format |
 |-----------|-----------|-------------|
-| Client → Server | HTTP POST (`text/plain`) | Text frame (`["0c", <payload>]`) |
-| Server → Client | SSE `data:` event | Text frame (`["0c", <payload>]`) |
+| Client → Server | HTTP POST (`application/octet-stream`) | Binary CBOR frame |
+| Server → Client | SSE `data:` event | Text frame (`["1c", <payload>]`) |
 
 ### Text Frames
 
@@ -316,8 +316,8 @@ connection.setSendFunction((textFrame) => {
 │  │          SseServerAdapter                         │   │
 │  │  ┌────────────────────────────────────────────┐   │   │
 │  │  │ SseConnection (per peer)                   │   │   │
-│  │  │ - TextReassembler (handles fragmented POST)│   │   │
-│  │  │ - textCodec encoding (handles outbound SSE)│   │   │
+│  │  │ - Pipeline (asymmetric encode/decode)    │   │   │
+│  │  │ - Pipeline handles send/receive framing  │   │   │
 │  │  │ - Channel reference                        │   │   │
 │  │  └────────────────────────────────────────────┘   │   │
 │  └───────────────────────────────────────────────────┘   │

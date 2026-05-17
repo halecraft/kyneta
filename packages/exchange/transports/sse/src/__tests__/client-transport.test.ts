@@ -19,7 +19,7 @@ import type {
   PeerIdentityDetails,
   TransportContext,
 } from "@kyneta/transport"
-import * as wireModule from "@kyneta/wire"
+import { Pipeline } from "@kyneta/transport"
 import { describe, expect, it, vi } from "vitest"
 import type { SseClientOptions } from "../client-transport.js"
 import { SseClientTransport } from "../client-transport.js"
@@ -79,15 +79,13 @@ class MockEventSource {
 // Alias state reset on reconnect
 // ---------------------------------------------------------------------------
 
-describe("SseClientTransport — alias state on reconnect", () => {
-  it("resets alias state when generating a new channel", async () => {
-    // Each call to generate() must produce a send function with a fresh
-    // alias table. We verify this by spying on `emptyAliasState`: after
-    // two addChannel() calls (simulating initial connect + reconnect),
-    // the spy should count 3 invocations — 1 from the constructor field
-    // initializer, plus 1 per generate().
+describe("SseClientTransport — pipeline reset on reconnect", () => {
+  it("resets pipeline state when generating a new channel", async () => {
+    // Each call to generate() must call pipeline.reset() to ensure
+    // a fresh alias table and reassembler state for the new connection.
+    // We verify this by spying on Pipeline.prototype.reset.
 
-    const spy = vi.spyOn(wireModule, "emptyAliasState")
+    const spy = vi.spyOn(Pipeline.prototype, "reset")
 
     const oldEventSource = (globalThis as Record<string, unknown>).EventSource
     ;(globalThis as Record<string, unknown>).EventSource = MockEventSource
@@ -106,30 +104,27 @@ describe("SseClientTransport — alias state on reconnect", () => {
       }
 
       const transport = new SseClientTransport(options)
-      // Constructor field init: #aliasState = emptyAliasState()
       const afterConstructor = spy.mock.calls.length
 
       const ctx = createContext()
       transport._initialize(ctx)
       await transport._start()
 
-      // Connection 1: addChannel calls generate()
-      // addChannel and generate() are protected; use any-cast in tests.
+      // Connection 1: addChannel calls generate() which calls pipeline.reset()
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const channel1 = (transport as any).addChannel()
       const afterFirstAddChannel = spy.mock.calls.length
 
       // Simulate reconnect: remove old channel, add new one
-      // removeChannel is also protected.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ;(transport as any).removeChannel(channel1.channelId)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ;(transport as any).addChannel()
       const afterSecondAddChannel = spy.mock.calls.length
 
-      expect(afterConstructor).toBe(1) // field init only
-      expect(afterFirstAddChannel).toBe(2) // + 1 from first generate()
-      expect(afterSecondAddChannel).toBe(3) // + 1 from second generate()
+      expect(afterConstructor).toBe(0) // no reset in constructor
+      expect(afterFirstAddChannel).toBe(1) // +1 from first generate()
+      expect(afterSecondAddChannel).toBe(2) // +1 from second generate()
     } finally {
       spy.mockRestore()
       globalThis.fetch = oldFetch

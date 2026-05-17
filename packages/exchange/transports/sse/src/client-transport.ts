@@ -17,8 +17,7 @@
 // - Pure Mealy machine for connection lifecycle (client-program.ts)
 // - Exponential backoff reconnection with jitter
 // - POST retry with exponential backoff
-// - Text-level fragmentation for large payloads
-// - Inbound TextReassembler for fragmented SSE messages
+// - Pipeline-managed fragmentation and reassembly
 // - Observable connection state via subscribeToTransitions()
 //
 // The connection handshake:
@@ -43,21 +42,7 @@ import type {
   PeerId,
   TransportFactory,
 } from "@kyneta/transport"
-import { Transport } from "@kyneta/transport"
-import {
-  type AliasState,
-  applyInboundAliasing,
-  applyOutboundAliasing,
-  complete,
-  createFrameIdCounter,
-  decodeTextWires,
-  emptyAliasState,
-  encodeTextFrame,
-  encodeTextWireMessage,
-  fragmentTextPayload,
-  TEXT_WIRE_VERSION,
-  TextReassembler,
-} from "@kyneta/wire"
+import { Pipeline, Transport } from "@kyneta/transport"
 import {
   createSseClientProgram,
   type SseClientEffect,
@@ -81,7 +66,7 @@ export type { DisconnectReason, SseClientLifecycleEvents, SseClientState }
  * 60K chars provides a safety margin below typical 100KB body-parser limits,
  * accounting for JSON overhead and potential base64 expansion.
  */
-export const DEFAULT_FRAGMENT_THRESHOLD = 60_000
+const DEFAULT_FRAGMENT_THRESHOLD = 60_000
 
 /**
  * Options for the SSE client adapter.
@@ -176,14 +161,8 @@ export class SseClientTransport extends Transport<void> {
   #serverChannel?: Channel
   #reconnectTimer?: ReturnType<typeof setTimeout>
 
-  // Fragmentation
-  readonly #fragmentThreshold: number
-
-  // Alias-aware pipeline state — tracks alias bindings per connection
-  #aliasState: AliasState = emptyAliasState()
-
-  // Inbound reassembly for fragmented SSE messages from server
-  readonly #reassembler: TextReassembler
+  // Asymmetric wire pipeline: send binary (POST), receive text (SSE)
+  #pipeline: Pipeline<"binary", "text">
 
   // POST retry
   #currentRetryAbortController?: AbortController
@@ -191,10 +170,15 @@ export class SseClientTransport extends Transport<void> {
   constructor(options: SseClientOptions) {
     super({ transportType: "sse-client" })
     this.#options = options
-    this.#fragmentThreshold =
-      options.fragmentThreshold ?? DEFAULT_FRAGMENT_THRESHOLD
-    this.#reassembler = new TextReassembler({
-      timeoutMs: 10_000,
+    this.#pipeline = new Pipeline({
+      send: "binary",
+      receive: "text",
+      opts: {
+        threshold: options.fragmentThreshold ?? DEFAULT_FRAGMENT_THRESHOLD,
+        reassemblyTimeoutMs: 10_000,
+        onError: (e, dir) =>
+          console.warn(`[SseClientTransport] wire error (${dir}):`, e),
+      },
     })
 
     // Create the program with a placeholder URL — the executor resolves the
@@ -294,9 +278,9 @@ export class SseClientTransport extends Transport<void> {
           this.#serverChannel = undefined
         }
 
-        // Fresh reassembler for the new connection — stale fragments from
-        // the old connection must not collide with new fragments.
-        this.#reassembler.reset()
+        // Fresh pipeline for the new connection — stale fragments and alias
+        // state from the old connection must not collide with the new one.
+        this.#pipeline.reset()
 
         this.#serverChannel = this.addChannel()
 
@@ -426,9 +410,8 @@ export class SseClientTransport extends Transport<void> {
   // ==========================================================================
 
   protected generate(): GeneratedChannel {
-    const nextFrameId = createFrameIdCounter()
-    // New channel = fresh alias state; reset on (re)connect.
-    this.#aliasState = emptyAliasState()
+    // Fresh pipeline state for the new channel/connection.
+    this.#pipeline.reset()
     return {
       transportType: this.transportType,
       send: (msg: ChannelMsg) => {
@@ -448,34 +431,10 @@ export class SseClientTransport extends Transport<void> {
             ? this.#options.postUrl(this.#peerId)
             : this.#options.postUrl
 
-        // Alias-aware outbound: ChannelMsg → AliasWireMessage
-        const { state: nextState, wire } = applyOutboundAliasing(
-          this.#aliasState,
-          msg,
-        )
-        this.#aliasState = nextState
-
-        // AliasWireMessage → JSON-safe object → JSON string
-        const payload = JSON.stringify(encodeTextWireMessage(wire))
-
-        // JSON string → text frame
-        const textFrame = encodeTextFrame(complete(TEXT_WIRE_VERSION, payload))
-
-        // Fragment large payloads
-        if (
-          this.#fragmentThreshold > 0 &&
-          textFrame.length > this.#fragmentThreshold
-        ) {
-          const fragments = fragmentTextPayload(
-            payload,
-            this.#fragmentThreshold,
-            nextFrameId(),
-          )
-          for (const fragment of fragments) {
-            void this.#sendTextWithRetry(resolvedPostUrl, fragment)
-          }
-        } else {
-          void this.#sendTextWithRetry(resolvedPostUrl, textFrame)
+        // Pipeline<"binary"> send: ChannelMsg → Uint8Array frame(s)
+        for (const r of this.#pipeline.send(msg)) {
+          if (!r.ok) continue
+          void this.#sendBinaryWithRetry(resolvedPostUrl, r.value)
         }
       },
       stop: () => {
@@ -497,7 +456,7 @@ export class SseClientTransport extends Transport<void> {
   }
 
   async onStop(): Promise<void> {
-    this.#reassembler.dispose()
+    this.#pipeline.dispose()
     this.#handle.dispatch({ type: "stop" })
   }
 
@@ -509,35 +468,32 @@ export class SseClientTransport extends Transport<void> {
    * Handle incoming SSE message.
    *
    * Each SSE `data:` event contains a text wire frame string.
-   * Feed it through the TextReassembler, then through the alias-aware
-   * inbound pipeline to resolve aliases and deliver ChannelMsgs.
+   * Feed it through Pipeline<"text">.receive() to decode and
+   * resolve aliases, then deliver ChannelMsgs.
    */
   #handleMessage(event: MessageEvent): void {
     if (!this.#serverChannel) {
       return
     }
 
-    const data = event.data
-    if (typeof data !== "string") {
+    const data =
+      typeof event.data === "string" ? event.data : String(event.data)
+
+    if (data === "ready") {
+      // "ready" is a handshake signal, not a wire message
       return
     }
 
-    // Text wire → AliasWireMessage[] (complete batches only)
-    const wires = decodeTextWires(this.#reassembler, data)
-    if (!wires) {
-      // Still assembling fragments, or reassembly error already logged
-      return
+    for (const r of this.#pipeline.receive(data)) {
+      if (r.ok) this.#handleChannelMessage(r.value)
     }
+  }
 
-    for (const wire of wires) {
-      const result = applyInboundAliasing(this.#aliasState, wire)
-      this.#aliasState = result.state
-      if (result.error || !result.msg) {
-        console.warn("[sse-client] alias resolution failed:", result.error)
-        continue
-      }
-      this.#serverChannel?.onReceive(result.msg)
-    }
+  /**
+   * Deliver a decoded ChannelMsg to the server channel.
+   */
+  #handleChannelMessage(msg: ChannelMsg): void {
+    this.#serverChannel?.onReceive(msg)
   }
 
   // ==========================================================================
@@ -545,9 +501,12 @@ export class SseClientTransport extends Transport<void> {
   // ==========================================================================
 
   /**
-   * Send a text frame via POST with retry logic.
+   * Send a binary frame via POST with retry logic.
    */
-  async #sendTextWithRetry(url: string, textFrame: string): Promise<void> {
+  async #sendBinaryWithRetry(
+    url: string,
+    body: Uint8Array<ArrayBuffer>,
+  ): Promise<void> {
     let attempt = 0
     const postRetryOpts = {
       ...DEFAULT_POST_RETRY,
@@ -568,10 +527,10 @@ export class SseClientTransport extends Transport<void> {
         const response = await fetch(url, {
           method: "POST",
           headers: {
-            "Content-Type": "text/plain",
+            "Content-Type": "application/octet-stream",
             "X-Peer-Id": this.#peerId,
           },
-          body: textFrame,
+          body,
           signal: this.#currentRetryAbortController.signal,
         })
 

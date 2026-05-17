@@ -2,12 +2,12 @@
 
 > **Package**: `@kyneta/sse-transport`
 > **Role**: Server-Sent Events transport for `@kyneta/exchange` — asymmetric transport (SSE downstream, HTTP POST upstream) with a symmetric text wire format. Framework-agnostic server core plus a ready-made Express router.
-> **Depends on**: `@kyneta/machine`, `@kyneta/transport`, `@kyneta/wire` (all peer)
+> **Depends on**: `@kyneta/machine`, `@kyneta/transport` (all peer)
 > **Depended on by**: `@kyneta/exchange` (through application configuration)
 > **Canonical symbols**: `createSseClient`, `SseClientTransport`, `SseClientOptions`, `SseServerTransport`, `SseServerTransportOptions`, `SseConnection`, `SseConnectionConfig`, `createSseClientProgram`, `SseClientMsg`, `SseClientEffect`, `SseClientState`, `parseTextPostBody`, `SsePostResult`, `SsePostResponse`, `createSseExpressRouter`, `SseExpressRouterOptions`, `DEFAULT_FRAGMENT_THRESHOLD`
-> **Key invariant(s)**: The wire is asymmetric but the encoding is symmetric — both directions use `@kyneta/wire`'s alias-aware text pipeline (`applyOutboundAliasing → encodeTextWireMessage → text frame`). SSE carries server→client bytes via `EventSource`'s `data:` field; client→server bytes are POSTed to a paired endpoint. The server never `send`s out-of-band; clients never receive via POST.
+> **Key invariant(s)**: The wire uses asymmetric encoding — the server sends text frames downstream (SSE `data:` field) and receives binary CBOR uploads (`application/octet-stream` POST). The `Pipeline` from `@kyneta/transport` handles this via `new Pipeline({ send: "text", receive: "binary" })` on the server and `new Pipeline({ send: "binary", receive: "text" })` on the client. The server never `send`s out-of-band; clients never receive via POST.
 
-An SSE transport kit with three entry points — `./client` (browser `EventSource` + `fetch` POST), `./server` (framework-agnostic server core), and `./express` (ready-made Express router + re-exports of the server core). All three share one wire format (alias-aware text pipeline via `@kyneta/wire`) and one client state machine (`createSseClientProgram`).
+An SSE transport kit with three entry points — `./client` (browser `EventSource` + `fetch` POST), `./server` (framework-agnostic server core), and `./express` (ready-made Express router + re-exports of the server core). All three share one client state machine (`createSseClientProgram`) and use the asymmetric `Pipeline` from `@kyneta/transport`.
 
 Imported by applications via the `transports: [...]` array on `new Exchange(...)`. Application code calls `createSseClient({ url, postUrl })` for clients, or mounts `createSseExpressRouter({ transport })` into an Express app for servers.
 
@@ -29,14 +29,14 @@ Imported by applications via the `transports: [...]` array on `new Exchange(...)
 | SSE | Server-Sent Events — the `text/event-stream` protocol consumed by `EventSource` in browsers. | WebSockets, long polling, HTTP/2 server push |
 | `SseClientTransport` | The client-side `Transport<...>` subclass. Owns one `EventSource` (downstream) and issues `fetch` POSTs (upstream). | `SseServerTransport` |
 | `SseServerTransport` | The server-side `Transport<...>` subclass. Accepts registrations via `registerConnection(peerId, sendFn)` and dispatches POST bodies via `deliverPostBody(peerId, body)`. | `SseConnection`, which is one accepted connection on the server |
-| `SseConnection` | One accepted peer on the server side. Owns the per-connection `TextReassembler` and channel. | `SseClientTransport` |
+| `SseConnection` | One accepted peer on the server side. Owns the per-connection `Pipeline<"text", "binary">` and channel. | `SseClientTransport` |
 | `sendFn` | `(textFrame: string) => void` — a pre-encoded wire-frame sender the framework integration hands to `registerConnection`. The transport never holds an Express `res` or a Bun stream directly. | `socket.send` — this is one level of abstraction higher |
 | `createSseClientProgram` | Factory returning a pure `Program<SseClientMsg, SseClientState, SseClientEffect>`. | `SseClientTransport`, which is the imperative shell that *runs* the program |
 | `SseClientEffect` | Inspectable data describing an I/O action (`create-event-source`, `close-event-source`, `start-reconnect-timer`, `abort-pending-posts`, etc.). | An `Effect<Msg>` closure — these effects are data |
-| `parseTextPostBody` | Pure function that runs an incoming POST body through a connection's `TextReassembler` and returns a discriminated `SsePostResult`. | A framework handler — the caller still has to write the response |
+| `handlePostBody` | Method on `SseConnection` that runs an incoming binary POST body through the `Pipeline` receive path and returns a discriminated `SsePostResult`. | A framework handler — the caller still has to write the response |
 | `SsePostResult` | `{ type: "messages", ... } \| { type: "pending", ... } \| { type: "error", ... }` — tells the framework adapter what to do. | An HTTP response object |
 | `SsePostResponse` | `{ status: 200 \| 202 \| 400, body: ... }` — the data the framework should respond with. | The actual HTTP response — still the framework's job to send |
-| `TextReassembler` | Per-connection text-fragment reassembler from `@kyneta/wire`. | A protocol-level parser — it only reassembles fragments of one payload |
+| `Pipeline` | Per-connection wire pipeline from `@kyneta/transport`. Handles alias resolution, encoding, framing, fragmentation, and reassembly. | A protocol-level parser — it only reassembles fragments of one payload |
 | `DEFAULT_FRAGMENT_THRESHOLD` | Character threshold (`60_000`) above which an outbound payload is fragmented. | A WebSocket-layer fragmentation boundary — this is application-level |
 
 ---
@@ -50,9 +50,9 @@ Two HTTP endpoints per connection (exact URLs are application choices; defaults 
 | Direction | Endpoint | Method | Framing |
 |-----------|----------|--------|---------|
 | Server → client | `/sse` (`url`) | `GET` with `Accept: text/event-stream` | `data: <text frame>\n\n` per SSE spec |
-| Client → server | `/sse/post` (`postUrl`) | `POST`, `Content-Type: text/plain` | Body is a single text frame string |
+| Client → server | `/sse/post` (`postUrl`) | `POST`, `Content-Type: application/octet-stream` | Body is binary CBOR |
 
-The text frame format is the same in both directions: a JSON array or object with a `"0c"`/`"0f"` prefix (see `@kyneta/wire` → `encodeTextFrame` / `decodeTextFrame`). Binary `SubstratePayload` bytes ride through base64-encoded by the text pipeline.
+The server sends text frames downstream; the client uploads binary CBOR. This asymmetry is handled by the `Pipeline`: the server uses `new Pipeline({ send: "text", receive: "binary" })` and the client uses `new Pipeline({ send: "binary", receive: "text" })`.
 
 ### What this transport is NOT
 
@@ -96,7 +96,7 @@ The framework wraps the text frame in whatever SSE syntax its runtime requires:
 | Bun / raw `http` | `(text) => controller.enqueue(encoder.encode(`data: ${text}\n\n`))` |
 | Test | `(text) => recorded.push(text)` |
 
-Source: `packages/exchange/transports/sse/src/connection.ts` → `SseConnection.#sendFn`. The transport aliases and encodes outbound messages through `@kyneta/wire`'s alias-aware text pipeline, then calls `sendFn` with the pre-encoded text frame (or fragmented variant for large payloads), staying ignorant of the response object.
+Source: `packages/exchange/transports/sse/src/connection.ts` → `SseConnection.#sendFn`. The transport aliases and encodes outbound messages through `the `Pipeline` from `@kyneta/transport`, then calls `sendFn` with the pre-encoded text frame (or fragmented variant for large payloads), staying ignorant of the response object.
 
 ### What `sendFn` is NOT
 
@@ -122,8 +122,25 @@ On the server, the framework integration mounts two routes:
 ### What `parseTextPostBody` is NOT
 
 - **Not an HTTP handler.** It never calls `res.send()` or returns a `Response`. It returns data; the framework sends the HTTP response.
-- **Not a decoder.** It delegates to the `TextReassembler` and the text pipeline (`decodeTextWireMessage`); it only orchestrates them and maps outcomes to the `SsePostResult` variants.
-- **Not stateful across calls.** State lives on the connection's `TextReassembler`. The function itself is a pure mapping.
+- **Not a decoder.** It delegates to the `Pipeline` receive path; it only maps outcomes to `SsePostResult` variants.
+- **Not stateful across calls.** State lives in the `Pipeline`. The method is a thin mapping.
+
+---
+
+## Asymmetric encoding
+
+SSE is the only transport with asymmetric encoding. The server sends text (JSON wire messages in SSE `data:` fields) and receives binary (CBOR-encoded `application/octet-stream` POST bodies). The client is the mirror: it sends binary and receives text.
+
+This asymmetry is fully handled by the `Pipeline` type parameter:
+
+| Side | Pipeline shape | Send type | Receive type |
+|------|----------------|-----------|--------|
+| Server | `Pipeline<"text", "binary">` | `string` (text frame) | `Uint8Array` (binary CBOR) |
+| Client | `Pipeline<"binary", "text">` | `Uint8Array` (binary CBOR) | `string` (text frame) |
+
+The alias table is shared across both directions within a single pipeline instance. Alias assignments made during outbound `present` encoding are available for inbound alias resolution, and vice versa. This works because alias learning is deterministic — both peers learn the same aliases from the same `present` messages.
+
+The switch from symmetric text (`text/plain` POST) to asymmetric binary POST (`application/octet-stream`) happened in wire-format v2. Binary CBOR uploads are more compact and avoid the base64 overhead that the text codec imposes on `SubstratePayload` binary data.
 
 ---
 
@@ -220,7 +237,7 @@ if (result.type === "messages") {
 | `createSseClient` | `src/client-transport.ts` | `TransportFactory` for browser clients. |
 | `SseServerTransport` | `src/server-transport.ts` | Server `Transport<...>` subclass. Owns many `SseConnection`s. |
 | `SseServerTransportOptions` | `src/server-transport.ts` | Server construction options. |
-| `SseConnection` | `src/connection.ts` | Per-peer server-side connection. Owns `TextReassembler` + channel. |
+| `SseConnection` | `src/connection.ts` | Per-peer server-side connection. Owns `Pipeline<"text", "binary">` + channel. |
 | `SseConnectionConfig` | `src/connection.ts` | Per-connection options (fragment threshold). |
 | `createSseClientProgram` | `src/client-program.ts` | Factory for the pure client `Program`. |
 | `SseClientMsg` / `SseClientEffect` / `SseClientProgramOptions` | `src/client-program.ts` | Program's messages, effects, options. |
@@ -243,7 +260,7 @@ if (result.type === "messages") {
 | `src/client-program.ts` | 207 | Pure `createSseClientProgram` Mealy machine. |
 | `src/client-transport.ts` | 653 | Imperative shell: runs the program, owns `EventSource` + POST queue + `AbortController`s. |
 | `src/server-transport.ts` | 225 | Server-side `Transport<...>`: `registerConnection`, `deliverPostBody`, dispatch to `SseConnection`. |
-| `src/connection.ts` | 181 | Per-connection text pipeline + `TextReassembler` + channel ownership. |
+| `src/connection.ts` | ~220 | Per-connection asymmetric `Pipeline` + channel ownership. |
 | `src/sse-handler.ts` | 116 | Pure `parseTextPostBody` + result types — the functional core. |
 | `src/express-router.ts` | 231 | Express `Router` factory mounting both endpoints with peer-ID negotiation. |
 | `src/__tests__/client-program.test.ts` | 513 | Pure tests: every state transition and effect asserted on data. No `EventSource`. |

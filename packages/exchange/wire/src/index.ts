@@ -1,20 +1,13 @@
-// @kyneta/wire — wire format, framing, and fragmentation.
+// @kyneta/wire — wire format primitives: framing, fragmentation, codecs.
+//
+// Pure leaf package — no runtime dependency on @kyneta/transport.
 //
 // Universal Frame<T> abstraction: every message is a frame. A frame
 // carries a version, optional hash, and content (Complete or Fragment).
 // Binary: Frame<Uint8Array>. Text: Frame<string>.
 //
-// Single alias-aware pipeline for @kyneta/transport's 6-message protocol
-// (establish, depart, present, interest, offer, dismiss):
-//
-// Binary transports (WebSocket, WebRTC, Unix Socket, Bridge):
-//   applyOutboundAliasing → encodeWireMessage → binary frame → fragmentation → FragmentReassembler
-//
-// Text transports (SSE):
-//   applyOutboundAliasing → encodeTextWireMessage → text frame → fragmentation → TextReassembler
-//
 // Shared: FragmentCollector<T> — generic stateful fragment collection
-// with FC/IS design (pure decideFragment + imperative shell).
+// (pure decideFragment + imperative shell).
 
 // ---------------------------------------------------------------------------
 // Frame types — universal frame abstraction
@@ -44,6 +37,8 @@ export {
   SyncProtocolWireToProtocol,
   type SyncProtocolWireValue,
   syncProtocolToWire,
+  type WireDepartMsg,
+  type WireDismissMsg,
   type WireEstablishMsg,
   type WireFeaturesCompact,
   type WireInterestMsg,
@@ -68,10 +63,11 @@ export {
 } from "./constants.js"
 
 // ---------------------------------------------------------------------------
-// Frame — 6-byte header encoding/decoding
+// Frame — 6-byte header encoding/decoding (binary substrate)
 // ---------------------------------------------------------------------------
 
 export {
+  BINARY_CODEC,
   decodeBinaryFrame,
   encodeBinaryFrame,
   FrameDecodeError,
@@ -79,28 +75,30 @@ export {
 } from "./frame.js"
 
 // ---------------------------------------------------------------------------
-// Text frame — 2-char prefix encoding/decoding
+// Text frame — 2-char prefix encoding/decoding (text substrate)
 // ---------------------------------------------------------------------------
 
 export {
   decodeTextFrame,
   encodeTextFrame,
-  fragmentTextPayload,
+  TEXT_CODEC,
   TEXT_WIRE_VERSION,
   TextFrameDecodeError,
   type TextFrameDecodeErrorCode,
 } from "./text-frame.js"
 
 // ---------------------------------------------------------------------------
-// Fragment — transport-level payload fragmentation
+// Fragment generic — substrate-agnostic fragmentation and codec interfaces
 // ---------------------------------------------------------------------------
 
 export {
-  calculateFragmentationOverhead,
   createFrameIdCounter,
-  fragmentPayload,
-  shouldFragment,
-} from "./fragment.js"
+  FRAGMENT_TOTAL_MAX,
+  type FragmentResult,
+  fragmentGeneric,
+  type SubstrateOps,
+  type WireCodec,
+} from "./fragment-generic.js"
 
 // ---------------------------------------------------------------------------
 // Fragment collector — generic stateful fragment collection
@@ -118,47 +116,15 @@ export {
 } from "./fragment-collector.js"
 
 // ---------------------------------------------------------------------------
-// Reassembler — stateful fragment reassembly (binary wrapper)
+// Reassembler generic — substrate-agnostic fragment reassembly
 // ---------------------------------------------------------------------------
 
 export {
-  FragmentReassembler,
   type ReassembleError,
   type ReassembleResult,
+  Reassembler,
   type ReassemblerConfig,
-} from "./reassembler.js"
-
-// ---------------------------------------------------------------------------
-// Binary transport helpers — shared encode/decode for binary and text transports
-// ---------------------------------------------------------------------------
-
-export {
-  decodeBinaryWires,
-  decodeTextWires,
-  encodeWireFrameAndSend,
-} from "./binary-transport.js"
-
-// ---------------------------------------------------------------------------
-// Text reassembler — stateful fragment reassembly (text wrapper)
-// ---------------------------------------------------------------------------
-
-export {
-  type TextReassembleError,
-  type TextReassembleResult,
-  TextReassembler,
-  type TextReassemblerConfig,
-} from "./text-reassembler.js"
-
-// ---------------------------------------------------------------------------
-// Stream frame parser — byte stream → binary frames (for stream transports)
-// ---------------------------------------------------------------------------
-
-export {
-  type FeedBytesResult,
-  feedBytes,
-  initialParserState,
-  type StreamParserState,
-} from "./stream-frame-parser.js"
+} from "./reassembler-generic.js"
 
 // ---------------------------------------------------------------------------
 // Identifier validation — UTF-8 byte length caps
@@ -172,17 +138,10 @@ export {
 } from "./validate-identifiers.js"
 
 // ---------------------------------------------------------------------------
-// Alias table — pure ChannelMsg ⇄ WireMessage transformer
+// Alias error types — lifted for WireError's alias-resolution-failed variant
 // ---------------------------------------------------------------------------
 
-export {
-  type Alias,
-  type AliasResolutionError,
-  type AliasState,
-  applyInboundAliasing,
-  applyOutboundAliasing,
-  emptyAliasState,
-} from "./alias-table.js"
+export type { Alias, AliasResolutionError } from "./alias-error.js"
 
 // ---------------------------------------------------------------------------
 // Wire-message helpers — bypass ChannelMsg ⇄ WireMessage conversion
@@ -194,3 +153,25 @@ export {
   encodeTextWireMessage,
   encodeWireMessage,
 } from "./wire-message-helpers.js"
+
+// ---------------------------------------------------------------------------
+// Wire-message validation — runtime shape checks for decoded WireMessage
+// ---------------------------------------------------------------------------
+
+export {
+  validateWireMessage,
+  type WireValidationError,
+  WireValidationFailure,
+} from "./validate-wire-message.js"
+
+// ---------------------------------------------------------------------------
+// Wire error — discriminated union of all wire-pipeline errors
+// ---------------------------------------------------------------------------
+
+export type { WireError } from "./wire-error.js"
+
+// ---------------------------------------------------------------------------
+// Result type — discriminated union for fallible operations
+// ---------------------------------------------------------------------------
+
+export { type Err, err, type Ok, ok, type Result } from "./result.js"

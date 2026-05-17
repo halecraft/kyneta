@@ -742,9 +742,6 @@ importers:
         specifier: workspace:^
         version: link:../../schema
     devDependencies:
-      '@kyneta/transport':
-        specifier: workspace:^
-        version: link:../../transport
       tsdown:
         specifier: ^0.22.0
         version: 0.22.0(@typescript/native-preview@7.0.0-dev.20260322.1)(tsx@4.21.0)(typescript@5.9.3)(unrun@0.2.36)
@@ -921,6 +918,9 @@ importers:
       '@kyneta/random':
         specifier: workspace:^
         version: link:../random
+      '@kyneta/wire':
+        specifier: workspace:^
+        version: link:../exchange/wire
     devDependencies:
       '@kyneta/machine':
         specifier: workspace:^

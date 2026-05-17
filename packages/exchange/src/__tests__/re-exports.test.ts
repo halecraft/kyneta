@@ -33,8 +33,13 @@ describe("@kyneta/exchange re-exports from @kyneta/transport", () => {
     })
   }
 
-  it("every value export from @kyneta/transport is available in @kyneta/exchange", () => {
-    const transportKeys = Object.keys(transport)
+  it("every consumer-facing value export from @kyneta/transport is available in @kyneta/exchange", () => {
+    // Pipeline and FrameStreamParser are transport-authoring internals
+    // for concrete transport implementations, not exchange consumers.
+    const authoringOnly = new Set(["Pipeline", "FrameStreamParser"])
+    const transportKeys = Object.keys(transport).filter(
+      k => !authoringOnly.has(k),
+    )
     const exchangeKeys = new Set(Object.keys(exchange))
     const missing = transportKeys.filter(k => !exchangeKeys.has(k))
     expect(missing).toEqual([])

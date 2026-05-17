@@ -114,8 +114,8 @@ A plain JS substrate is built into `@kyneta/schema` — no external package need
 | Package | Description | Tests |
 |---------|-------------|-------|
 | [`@kyneta/exchange`](./packages/exchange) | Substrate-agnostic state exchange. Four named binding targets (`json`, `ephemeral`, `loro`, `yjs`) with fixed sync protocols over a six-message sync protocol. Hosts heterogeneous documents — Loro CRDTs, Yjs CRDTs, plain JS, ephemeral presence — in one sync network. | 420 |
-| [`@kyneta/transport`](./packages/transport) | Transport infrastructure — base class, channel types, message vocabulary, and client utilities. | 8 |
-| [`@kyneta/wire`](./packages/exchange/wire) | Wire format codecs, framing, and fragmentation. CBOR and JSON codecs, 6-byte binary frames, and a fragmentation protocol for cloud WebSocket gateways. | 233 |
+| [`@kyneta/transport`](./packages/transport) | Transport infrastructure — base class, channel types, message vocabulary, wire pipeline, alias transformer, and client utilities. | 41 |
+| [`@kyneta/wire`](./packages/exchange/wire) | Wire format codecs, framing, generic fragmentation, reassembly, and validation. CBOR binary codec, JSON text codec, `Reassembler<T>`, and substrate-agnostic `fragmentGeneric<T>`. | 232 |
 
 ### Transports
 

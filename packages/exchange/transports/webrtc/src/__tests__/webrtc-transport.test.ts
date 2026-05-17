@@ -5,15 +5,7 @@
 // channel management.
 
 import type { ChannelMsg } from "@kyneta/transport"
-import {
-  applyOutboundAliasing,
-  complete,
-  emptyAliasState,
-  encodeBinaryFrame,
-  encodeWireMessage,
-  fragmentPayload,
-  WIRE_VERSION,
-} from "@kyneta/wire"
+import { Pipeline } from "@kyneta/transport"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { WebrtcTransport } from "../webrtc-transport.js"
 import { MockDataChannel } from "./mock-data-channel.js"
@@ -54,12 +46,14 @@ const TEST_MSG: ChannelMsg = {
   identity: { peerId: "remote", name: "R", type: "user" },
 }
 
-/** Encode a ChannelMsg through the alias-aware pipeline. */
+/** Encode a ChannelMsg through the wire pipeline to a binary frame. */
 function encodeViaAlias(msg: ChannelMsg): Uint8Array<ArrayBuffer> {
-  const state = emptyAliasState()
-  const { wire } = applyOutboundAliasing(state, msg)
-  const payload = encodeWireMessage(wire)
-  return encodeBinaryFrame(complete(WIRE_VERSION, payload))
+  const pipeline = new Pipeline({ send: "binary" })
+  const results = pipeline.send(msg)
+  pipeline.dispose()
+  const first = results[0]
+  if (!first || !first.ok) throw new Error("Pipeline send failed")
+  return first.value
 }
 
 // ---------------------------------------------------------------------------
@@ -343,28 +337,36 @@ describe("Fragmentation", () => {
       },
     }
 
-    const encoded = encodeViaAlias(largeMsg)
-    const fragments = fragmentPayload(encoded, 50, 1)
+    // Use a Pipeline to produce properly-framed fragments (same as
+    // the transport's send path). Tiny threshold forces fragmentation.
+    const sendPipeline = new Pipeline<"binary">({
+      send: "binary",
+      opts: { threshold: 50 },
+    })
+    const fragments = sendPipeline.send(largeMsg).filter(r => r.ok)
     expect(fragments.length).toBeGreaterThan(1)
+    sendPipeline.dispose()
 
     // Emit all but the last fragment — should NOT trigger receive yet
     for (let i = 0; i < fragments.length - 1; i++) {
       const frag = fragments.at(i)
-      if (!frag) throw new Error(`expected fragment at index ${i}`)
-      const ab = frag.buffer.slice(
-        frag.byteOffset,
-        frag.byteOffset + frag.byteLength,
+      if (!frag || !frag.ok)
+        throw new Error(`expected ok fragment at index ${i}`)
+      const ab = frag.value.buffer.slice(
+        frag.value.byteOffset,
+        frag.value.byteOffset + frag.value.byteLength,
       )
       dc.emit("message", { data: ab })
     }
     expect(ctx.onChannelReceive).not.toHaveBeenCalled()
 
     // Emit the last fragment — should complete reassembly
-    const lastFrag = fragments.at(-1)
-    if (!lastFrag) throw new Error("expected last fragment to exist")
-    const ab = lastFrag.buffer.slice(
-      lastFrag.byteOffset,
-      lastFrag.byteOffset + lastFrag.byteLength,
+    const lastResult = fragments.at(-1)
+    if (!lastResult || !lastResult.ok)
+      throw new Error("expected last fragment to exist and be ok")
+    const ab = lastResult.value.buffer.slice(
+      lastResult.value.byteOffset,
+      lastResult.value.byteOffset + lastResult.value.byteLength,
     )
     dc.emit("message", { data: ab })
 

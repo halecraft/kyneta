@@ -1,74 +1,58 @@
-// Text codec tests — round-trip all message types via the alias-aware pipeline.
+// Text codec tests — round-trip all WireMessage types through
+// encodeTextWireMessage → decodeTextWireMessage.
 //
-// Verifies that every ChannelMsg variant survives the full pipeline:
-//   applyOutboundAliasing → encodeTextWireMessage → decodeTextWireMessage → applyInboundAliasing
-//
-// Special attention to SubstratePayload handling: binary payloads must be
-// base64-encoded transparently, while JSON payloads pass through as-is.
-//
-// The alias-aware pipeline works with JSON-safe objects via encodeTextWireMessage.
+// Verifies that every WireMessage variant survives text (JSON) encode/decode,
+// including WireOfferMsg with both "json" and "binary" payload encodings.
+// Binary payloads are base64-encoded transparently; JSON payloads pass through.
+// Alias resolution is transport's concern, tested separately.
 
 import {
   SYNC_AUTHORITATIVE,
   SYNC_COLLABORATIVE,
   SYNC_EPHEMERAL,
 } from "@kyneta/schema"
-import type {
-  ChannelMsg,
-  DepartMsg,
-  DismissMsg,
-  EstablishMsg,
-  InterestMsg,
-  OfferMsg,
-  PresentMsg,
-} from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
 import {
-  applyInboundAliasing,
-  applyOutboundAliasing,
+  DOC_ID_MAX_UTF8_BYTES,
+  SCHEMA_HASH_MAX_UTF8_BYTES,
+} from "../constants.js"
+import {
   decodeTextWireMessage,
-  emptyAliasState,
   encodeTextWireMessage,
+  validateDocId,
+  validateSchemaHash,
+  WireValidationFailure,
 } from "../index.js"
-import type { WireMessage } from "../wire-types.js"
+import type {
+  WireEstablishMsg,
+  WireInterestMsg,
+  WireMessage,
+  WireOfferMsg,
+} from "../wire-types.js"
+import { MessageType, PayloadEncoding } from "../wire-types.js"
+import {
+  departWire,
+  dismissWire,
+  establishWire,
+  interestWire,
+  offerWire,
+  presentWire,
+} from "./__helpers__/wire-fixtures.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function roundTripViaAlias(msg: ChannelMsg): ChannelMsg {
-  const state = emptyAliasState()
-  const { wire } = applyOutboundAliasing(state, msg)
-  const encoded = encodeTextWireMessage(wire)
-  const decoded = decodeTextWireMessage(encoded)
-  const result = applyInboundAliasing(emptyAliasState(), decoded)
-  if (result.error)
-    throw new Error(`Alias resolution failed: ${result.error.code}`)
-  if (!result.msg) throw new Error("Alias resolution produced no message")
-  return result.msg
+function roundTrip(wire: WireMessage): WireMessage {
+  const text = encodeTextWireMessage(wire)
+  return decodeTextWireMessage(text)
 }
 
-function roundTripBatchViaAlias(msgs: ChannelMsg[]): ChannelMsg[] {
-  let outState = emptyAliasState()
-  const encodedWires: unknown[] = []
-  for (const msg of msgs) {
-    const { state, wire } = applyOutboundAliasing(outState, msg)
-    outState = state
-    encodedWires.push(encodeTextWireMessage(wire))
-  }
-
-  let inState = emptyAliasState()
-  const decoded: ChannelMsg[] = []
-  for (const encoded of encodedWires) {
-    const wire = decodeTextWireMessage(encoded)
-    const result = applyInboundAliasing(inState, wire)
-    if (result.error)
-      throw new Error(`Alias resolution failed: ${result.error.code}`)
-    if (!result.msg) throw new Error("Alias resolution produced no message")
-    inState = result.state
-    decoded.push(result.msg)
-  }
-  return decoded
+function roundTripBatch(wires: WireMessage[]): WireMessage[] {
+  return wires.map(w => {
+    const text = encodeTextWireMessage(w)
+    return decodeTextWireMessage(text)
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -77,51 +61,39 @@ function roundTripBatchViaAlias(msgs: ChannelMsg[]): ChannelMsg[] {
 
 describe("Text codec — lifecycle messages", () => {
   it("round-trips establish with full identity", () => {
-    const msg: EstablishMsg = {
-      type: "establish",
-      identity: {
-        peerId: "peer-alice-123",
-        name: "Alice",
-        type: "user",
-      },
-    }
-    const decoded = roundTripViaAlias(msg)
-    expect(decoded).toEqual(msg)
+    const wire = establishWire({
+      peerId: "peer-alice-123",
+      name: "Alice",
+      type: "user",
+    })
+    const decoded = roundTrip(wire)
+    expect(decoded).toEqual(wire)
   })
 
   it("round-trips establish without optional name", () => {
-    const msg: EstablishMsg = {
-      type: "establish",
-      identity: {
-        peerId: "bot-42",
-        type: "bot",
-      },
-    }
-    const decoded = roundTripViaAlias(msg)
-    expect(decoded.type).toBe("establish")
-    const identity = (decoded as EstablishMsg).identity
-    expect(identity.peerId).toBe("bot-42")
-    expect(identity.type).toBe("bot")
-    // The alias-aware pipeline preserves undefined fields (no JSON round-trip)
-    expect(identity.name).toBeUndefined()
+    const wire = establishWire({ peerId: "bot-42", type: "bot" })
+    const decoded = roundTrip(wire)
+    expect(decoded.t).toBe(MessageType.Establish)
+    const est = decoded as WireEstablishMsg
+    expect(est.id).toBe("bot-42")
+    expect(est.y).toBe("bot")
+    // name should be absent (undefined), not null or empty string
+    expect(est.n).toBeUndefined()
   })
 
   it("round-trips depart", () => {
-    const msg: DepartMsg = {
-      type: "depart",
-    }
-    const decoded = roundTripViaAlias(msg)
-    expect(decoded).toEqual(msg)
+    const wire = departWire()
+    const decoded = roundTrip(wire)
+    expect(decoded).toEqual(wire)
   })
 
   it("uses compact integer discriminators (not human-readable type strings)", () => {
-    const msg: EstablishMsg = {
-      type: "establish",
-      identity: { peerId: "p1", type: "user" },
-    }
-    const { wire } = applyOutboundAliasing(emptyAliasState(), msg)
-    const encoded = encodeTextWireMessage(wire) as Record<string, unknown>
-    // The alias-aware path uses integer discriminators (e.g. 0x01 for establish)
+    const wire = establishWire({ peerId: "p1", type: "user" })
+    const encoded = JSON.parse(encodeTextWireMessage(wire)) as Record<
+      string,
+      unknown
+    >
+    // The wire form uses integer discriminators (e.g. 0x01 for establish)
     expect(encoded.t).toBe(0x01)
     expect(encoded.id).toBe("p1")
     expect(encoded.y).toBe("user")
@@ -134,161 +106,140 @@ describe("Text codec — lifecycle messages", () => {
 
 describe("Text codec — present", () => {
   it("round-trips present with multiple docIds", () => {
-    const msg: PresentMsg = {
-      type: "present",
-      docs: [
-        {
-          docId: "doc-1",
-          schemaHash: "00test",
-          replicaType: ["plain", 1, 0] as const,
-          syncProtocol: SYNC_AUTHORITATIVE,
-        },
-        {
-          docId: "doc-2",
-          schemaHash: "00test",
-          replicaType: ["yjs", 1, 0] as const,
-          syncProtocol: SYNC_COLLABORATIVE,
-        },
-        {
-          docId: "doc-3",
-          schemaHash: "00test",
-          replicaType: ["loro", 1, 0] as const,
-          syncProtocol: SYNC_EPHEMERAL,
-        },
-      ],
-    }
-    const decoded = roundTripViaAlias(msg)
-    expect(decoded).toEqual(msg)
+    const wire = presentWire([
+      {
+        docId: "doc-1",
+        schemaHash: "00test",
+        replicaType: ["plain", 1, 0] as const,
+        syncProtocol: SYNC_AUTHORITATIVE,
+      },
+      {
+        docId: "doc-2",
+        schemaHash: "00test",
+        replicaType: ["yjs", 1, 0] as const,
+        syncProtocol: SYNC_COLLABORATIVE,
+      },
+      {
+        docId: "doc-3",
+        schemaHash: "00test",
+        replicaType: ["loro", 1, 0] as const,
+        syncProtocol: SYNC_EPHEMERAL,
+      },
+    ])
+    const decoded = roundTrip(wire)
+    expect(decoded).toEqual(wire)
   })
 
   it("round-trips present with empty docIds", () => {
-    const msg: PresentMsg = {
-      type: "present",
-      docs: [],
-    }
-    const decoded = roundTripViaAlias(msg)
-    expect(decoded).toEqual(msg)
+    const wire = presentWire([])
+    const decoded = roundTrip(wire)
+    expect(decoded).toEqual(wire)
   })
 })
 
 describe("Text codec — interest", () => {
   it("round-trips interest with version and reciprocate", () => {
-    const msg: InterestMsg = {
-      type: "interest",
+    const wire = interestWire({
       docId: "doc-abc",
       version: "42",
       reciprocate: true,
-    }
-    const decoded = roundTripViaAlias(msg)
-    expect(decoded).toEqual(msg)
+    })
+    const decoded = roundTrip(wire)
+    expect(decoded).toEqual(wire)
   })
 
   it("round-trips interest without optional fields", () => {
-    const msg: InterestMsg = {
-      type: "interest",
-      docId: "doc-xyz",
-    }
-    const decoded = roundTripViaAlias(msg)
-    expect(decoded.type).toBe("interest")
-    const interest = decoded as InterestMsg
-    expect(interest.docId).toBe("doc-xyz")
-    expect("version" in interest).toBe(false)
-    expect("reciprocate" in interest).toBe(false)
+    const wire = interestWire({ docId: "doc-xyz" })
+    const decoded = roundTrip(wire)
+    expect(decoded.t).toBe(MessageType.Interest)
+    const interest = decoded as WireInterestMsg
+    expect(interest.doc).toBe("doc-xyz")
+    expect(interest.v).toBeUndefined()
+    expect(interest.r).toBeUndefined()
   })
 
   it("round-trips interest with reciprocate=false", () => {
-    const msg: InterestMsg = {
-      type: "interest",
+    const wire = interestWire({
       docId: "doc-1",
       version: "7",
       reciprocate: false,
-    }
-    const decoded = roundTripViaAlias(msg)
-    expect(decoded).toEqual(msg)
+    })
+    const decoded = roundTrip(wire)
+    expect(decoded).toEqual(wire)
   })
 })
 
 describe("Text codec — offer", () => {
   it("round-trips offer with JSON payload (snapshot)", () => {
-    const msg: OfferMsg = {
-      type: "offer",
+    const wire = offerWire({
       docId: "doc-config",
-      payload: {
-        kind: "entirety",
-        encoding: "json",
-        data: JSON.stringify({ title: "Hello", count: 42 }),
-      },
+      kind: "entirety",
+      encoding: "json",
+      data: JSON.stringify({ title: "Hello", count: 42 }),
       version: "5",
-    }
-    const decoded = roundTripViaAlias(msg)
-    expect(decoded).toEqual(msg)
+    })
+    const decoded = roundTrip(wire)
+    expect(decoded).toEqual(wire)
   })
 
   it("JSON payload data passes through without base64 encoding", () => {
     const jsonData = JSON.stringify({ key: "value" })
-    const msg: OfferMsg = {
-      type: "offer",
+    const wire = offerWire({
       docId: "doc-1",
-      payload: {
-        kind: "entirety",
-        encoding: "json",
-        data: jsonData,
-      },
+      kind: "entirety",
+      encoding: "json",
+      data: jsonData,
       version: "1",
-    }
-
-    const { wire } = applyOutboundAliasing(emptyAliasState(), msg)
-    const encoded = encodeTextWireMessage(wire) as Record<string, unknown>
+    })
+    const encoded = JSON.parse(encodeTextWireMessage(wire)) as Record<
+      string,
+      unknown
+    >
 
     // The data should be the original string, not base64
     expect(encoded.d).toBe(jsonData)
     // Encoding is an integer discriminator in the wire format
-    expect(encoded.pe).toBe(0) // PayloadEncoding.Json
+    expect(encoded.pe).toBe(PayloadEncoding.Json)
   })
 
   it("round-trips offer with binary payload (delta)", () => {
     const binaryData = new Uint8Array([0x00, 0x01, 0x02, 0xff, 0xfe, 0xfd])
-    const msg: OfferMsg = {
-      type: "offer",
+    const wire = offerWire({
       docId: "doc-crdt",
-      payload: {
-        kind: "since",
-        encoding: "binary",
-        data: binaryData,
-      },
+      kind: "since",
+      encoding: "binary",
+      data: binaryData,
       version: "AQ==:3",
       reciprocate: true,
-    }
-    const decoded = roundTripViaAlias(msg) as OfferMsg
-    expect(decoded.type).toBe("offer")
-    expect(decoded.docId).toBe("doc-crdt")
-    expect(decoded.payload.encoding).toBe("binary")
-    expect(decoded.version).toBe("AQ==:3")
-    expect(decoded.reciprocate).toBe(true)
+    })
+    const decoded = roundTrip(wire) as WireOfferMsg
+    expect(decoded.t).toBe(MessageType.Offer)
+    expect(decoded.doc).toBe("doc-crdt")
+    expect(decoded.pe).toBe(PayloadEncoding.Binary)
+    expect(decoded.v).toBe("AQ==:3")
+    expect(decoded.r).toBe(true)
 
     // Uint8Array should survive the round-trip via base64
-    expect(decoded.payload.data).toBeInstanceOf(Uint8Array)
-    expect(decoded.payload.data).toEqual(binaryData)
+    expect(decoded.d).toBeInstanceOf(Uint8Array)
+    expect(decoded.d).toEqual(binaryData)
   })
 
   it("binary payload data is base64-encoded in the JSON-safe output", () => {
     const binaryData = new Uint8Array([72, 101, 108, 108, 111]) // "Hello" in ASCII
-    const msg: OfferMsg = {
-      type: "offer",
+    const wire = offerWire({
       docId: "doc-1",
-      payload: {
-        kind: "entirety",
-        encoding: "binary",
-        data: binaryData,
-      },
+      kind: "entirety",
+      encoding: "binary",
+      data: binaryData,
       version: "1",
-    }
-
-    const { wire } = applyOutboundAliasing(emptyAliasState(), msg)
-    const encoded = encodeTextWireMessage(wire) as Record<string, unknown>
+    })
+    const encoded = JSON.parse(encodeTextWireMessage(wire)) as Record<
+      string,
+      unknown
+    >
 
     // The data should be wrapped in { __bytes: "..." } for JSON safety
-    expect(encoded.pe).toBe(1) // PayloadEncoding.Binary
+    expect(encoded.pe).toBe(PayloadEncoding.Binary)
     const d = encoded.d as Record<string, unknown>
     expect(typeof d.__bytes).toBe("string")
     // btoa("Hello") === "SGVsbG8="
@@ -302,34 +253,28 @@ describe("Text codec — offer", () => {
       largeData[i] = i % 256
     }
 
-    const msg: OfferMsg = {
-      type: "offer",
+    const wire = offerWire({
       docId: "doc-large",
-      payload: {
-        kind: "entirety",
-        encoding: "binary",
-        data: largeData,
-      },
+      kind: "entirety",
+      encoding: "binary",
+      data: largeData,
       version: "100",
-    }
-    const decoded = roundTripViaAlias(msg) as OfferMsg
-    expect(decoded.payload.data).toBeInstanceOf(Uint8Array)
-    expect(decoded.payload.data).toEqual(largeData)
+    })
+    const decoded = roundTrip(wire) as WireOfferMsg
+    expect(decoded.d).toBeInstanceOf(Uint8Array)
+    expect(decoded.d).toEqual(largeData)
   })
 
   it("round-trips offer without optional reciprocate", () => {
-    const msg: OfferMsg = {
-      type: "offer",
+    const wire = offerWire({
       docId: "doc-1",
-      payload: {
-        kind: "entirety",
-        encoding: "json",
-        data: "{}",
-      },
+      kind: "entirety",
+      encoding: "json",
+      data: "{}",
       version: "1",
-    }
-    const decoded = roundTripViaAlias(msg) as OfferMsg
-    expect("reciprocate" in decoded).toBe(false)
+    })
+    const decoded = roundTrip(wire) as WireOfferMsg
+    expect(decoded.r).toBeUndefined()
   })
 })
 
@@ -339,86 +284,67 @@ describe("Text codec — offer", () => {
 
 describe("Text codec — dismiss", () => {
   it("round-trips dismiss message", () => {
-    const msg: DismissMsg = {
-      type: "dismiss",
-      docId: "doc-to-leave",
-    }
-    const decoded = roundTripViaAlias(msg)
-    expect(decoded).toEqual(msg)
+    const wire = dismissWire("doc-to-leave")
+    const decoded = roundTrip(wire)
+    expect(decoded).toEqual(wire)
   })
 })
 
 // ---------------------------------------------------------------------------
-// Batch encoding
+// Batch encoding (each message independently round-tripped)
 // ---------------------------------------------------------------------------
 
 describe("Text codec — batch", () => {
   it("round-trips a batch of mixed message types", () => {
-    const msgs: ChannelMsg[] = [
-      {
-        type: "establish",
-        identity: { peerId: "p1", name: "Peer One", type: "user" },
-      },
-      {
-        type: "depart",
-      },
-      {
-        type: "present",
-        docs: [
-          {
-            docId: "d1",
-            schemaHash: "00test",
-            replicaType: ["plain", 1, 0] as const,
-            syncProtocol: SYNC_AUTHORITATIVE,
-          },
-          {
-            docId: "d2",
-            schemaHash: "00test",
-            replicaType: ["yjs", 1, 0] as const,
-            syncProtocol: SYNC_COLLABORATIVE,
-          },
-        ],
-      },
-      {
-        type: "interest",
-        docId: "d1",
-        version: "0",
-        reciprocate: true,
-      },
-      {
-        type: "offer",
-        docId: "d1",
-        payload: {
-          kind: "since",
-          encoding: "binary",
-          data: new Uint8Array([1, 2, 3]),
+    const wires: WireMessage[] = [
+      establishWire({ peerId: "p1", name: "Peer One", type: "user" }),
+      departWire(),
+      presentWire([
+        {
+          docId: "d1",
+          schemaHash: "00test",
+          replicaType: ["plain", 1, 0] as const,
+          syncProtocol: SYNC_AUTHORITATIVE,
         },
+        {
+          docId: "d2",
+          schemaHash: "00test",
+          replicaType: ["yjs", 1, 0] as const,
+          syncProtocol: SYNC_COLLABORATIVE,
+        },
+      ]),
+      interestWire({ docId: "d1", version: "0", reciprocate: true }),
+      offerWire({
+        docId: "d1",
+        kind: "since",
+        encoding: "binary",
+        data: new Uint8Array([1, 2, 3]),
         version: "2",
         reciprocate: false,
-      },
-      {
-        type: "dismiss",
-        docId: "d1",
-      },
+      }),
+      dismissWire("d1"),
     ]
 
-    const decoded = roundTripBatchViaAlias(msgs)
+    const decoded = roundTripBatch(wires)
     expect(decoded).toHaveLength(6)
-    expect(decoded[0]?.type).toBe("establish")
-    expect(decoded[1]?.type).toBe("depart")
-    expect(decoded[2]?.type).toBe("present")
-    expect(decoded[3]?.type).toBe("interest")
-    expect(decoded[4]?.type).toBe("offer")
-    expect(decoded[5]?.type).toBe("dismiss")
+    expect(decoded[0]?.t).toBe(MessageType.Establish)
+    expect(decoded[1]?.t).toBe(MessageType.Depart)
+    expect(decoded[2]?.t).toBe(MessageType.Present)
+    expect(decoded[3]?.t).toBe(MessageType.Interest)
+    expect(decoded[4]?.t).toBe(MessageType.Offer)
+    expect(decoded[5]?.t).toBe(MessageType.Dismiss)
 
-    // Verify the offer's binary payload survived
-    const decodedOffer = decoded[4] as OfferMsg
-    expect(decodedOffer.payload.data).toBeInstanceOf(Uint8Array)
-    expect(decodedOffer.payload.data).toEqual(new Uint8Array([1, 2, 3]))
+    // Verify deep equality (binary offers use base64 round-trip)
+    expect(decoded[0]).toEqual(wires[0])
+    expect(decoded[1]).toEqual(wires[1])
+    expect(decoded[2]).toEqual(wires[2])
+    expect(decoded[3]).toEqual(wires[3])
+    expect(decoded[4]).toEqual(wires[4])
+    expect(decoded[5]).toEqual(wires[5])
   })
 
   it("round-trips an empty batch", () => {
-    const decoded = roundTripBatchViaAlias([])
+    const decoded = roundTripBatch([])
     expect(decoded).toEqual([])
   })
 })
@@ -429,29 +355,21 @@ describe("Text codec — batch", () => {
 
 describe("Text codec — error handling", () => {
   it("throws on unknown message type", () => {
-    const bad = { t: 0xff, data: 123 } as unknown as WireMessage
-    expect(() => applyInboundAliasing(emptyAliasState(), bad)).toThrow(
-      "Unknown wire message type",
-    )
+    const bad = JSON.stringify({ t: 0xff, data: 123 })
+    expect(() => decodeTextWireMessage(bad)).toThrow(WireValidationFailure)
   })
 
   it("throws on unknown message type in batch", () => {
-    const bad = { t: 0xff } as unknown as WireMessage
-    expect(() => applyInboundAliasing(emptyAliasState(), bad)).toThrow(
-      "Unknown wire message type",
-    )
+    const bad = JSON.stringify({ t: 0xff })
+    expect(() => decodeTextWireMessage(bad)).toThrow(WireValidationFailure)
   })
 
   it("throws on null input", () => {
-    expect(() =>
-      applyInboundAliasing(emptyAliasState(), null as never),
-    ).toThrow()
+    expect(() => decodeTextWireMessage("null")).toThrow()
   })
 
   it("throws on non-object input", () => {
-    expect(() =>
-      applyInboundAliasing(emptyAliasState(), "not an object" as never),
-    ).toThrow()
+    expect(() => decodeTextWireMessage('"not an object"')).toThrow()
   })
 })
 
@@ -461,101 +379,62 @@ describe("Text codec — error handling", () => {
 
 describe("Text codec — JSON-safe output", () => {
   it("encode output survives JSON.stringify → JSON.parse round-trip", () => {
-    const msg: OfferMsg = {
-      type: "offer",
+    const wire = offerWire({
       docId: "doc-1",
-      payload: {
-        kind: "entirety",
-        encoding: "binary",
-        data: new Uint8Array([1, 2, 3, 4, 5]),
-      },
+      kind: "entirety",
+      encoding: "binary",
+      data: new Uint8Array([1, 2, 3, 4, 5]),
       version: "1",
-    }
+    })
 
-    const { wire } = applyOutboundAliasing(emptyAliasState(), msg)
     const encoded = encodeTextWireMessage(wire)
-    // Simulate going through JSON serialization (as a text frame would)
-    const serialized = JSON.stringify(encoded)
-    const deserialized = JSON.parse(serialized)
-    const decoded = decodeTextWireMessage(deserialized)
-    const result = applyInboundAliasing(emptyAliasState(), decoded)
-    if (result.error)
-      throw new Error(`Alias resolution failed: ${result.error.code}`)
-    const offer = result.msg as OfferMsg
+    // encodeTextWireMessage returns a string — a round-trip through
+    // JSON serialization is simply: the string IS the serialized form.
+    const decoded = decodeTextWireMessage(encoded)
+    const offer = decoded as WireOfferMsg
 
-    expect(offer.payload.data).toBeInstanceOf(Uint8Array)
-    expect(offer.payload.data).toEqual(new Uint8Array([1, 2, 3, 4, 5]))
+    expect(offer.d).toBeInstanceOf(Uint8Array)
+    expect(offer.d).toEqual(new Uint8Array([1, 2, 3, 4, 5]))
   })
 
   it("encode(batch) output survives JSON.stringify → JSON.parse round-trip", () => {
-    const msgs: ChannelMsg[] = [
-      {
-        type: "present",
-        docs: [
-          {
-            docId: "a",
-            schemaHash: "00test",
-            replicaType: ["plain", 1, 0] as const,
-            syncProtocol: SYNC_AUTHORITATIVE,
-          },
-        ],
-      },
-      {
-        type: "offer",
-        docId: "b",
-        payload: {
-          kind: "since",
-          encoding: "binary",
-          data: new Uint8Array([10, 20]),
+    const wires: WireMessage[] = [
+      presentWire([
+        {
+          docId: "a",
+          schemaHash: "00test",
+          replicaType: ["plain", 1, 0] as const,
+          syncProtocol: SYNC_AUTHORITATIVE,
         },
+      ]),
+      offerWire({
+        docId: "b",
+        kind: "since",
+        encoding: "binary",
+        data: new Uint8Array([10, 20]),
         version: "1",
-      },
+      }),
     ]
 
-    let outState = emptyAliasState()
-    const encodedWires: unknown[] = []
-    for (const msg of msgs) {
-      const { state, wire } = applyOutboundAliasing(outState, msg)
-      outState = state
-      encodedWires.push(encodeTextWireMessage(wire))
-    }
-
-    const serialized = JSON.stringify(encodedWires)
-    const deserialized = JSON.parse(serialized) as unknown[]
-
-    let inState = emptyAliasState()
-    const decoded: ChannelMsg[] = []
-    for (const encoded of deserialized) {
-      const wire = decodeTextWireMessage(encoded)
-      const result = applyInboundAliasing(inState, wire)
-      if (result.error)
-        throw new Error(`Alias resolution failed: ${result.error.code}`)
-      inState = result.state
-      if (result.msg) decoded.push(result.msg)
-    }
-
+    const decoded = roundTripBatch(wires)
     expect(decoded).toHaveLength(2)
-    expect(decoded[0]?.type).toBe("present")
-    const offer = decoded[1] as OfferMsg
-    expect(offer.payload.data).toEqual(new Uint8Array([10, 20]))
+    expect(decoded[0]?.t).toBe(MessageType.Present)
+    const offer = decoded[1] as WireOfferMsg
+    expect(offer.d).toEqual(new Uint8Array([10, 20]))
   })
 })
 
 // ---------------------------------------------------------------------------
-// Identifier length caps (Phase 1)
+// Identifier length caps
 // ---------------------------------------------------------------------------
-
-import {
-  DOC_ID_MAX_UTF8_BYTES,
-  SCHEMA_HASH_MAX_UTF8_BYTES,
-} from "../constants.js"
 
 describe("Text codec — identifier length caps", () => {
   it("accepts a docId at the UTF-8 byte cap", () => {
     const docId = "a".repeat(DOC_ID_MAX_UTF8_BYTES)
-    const msg: InterestMsg = { type: "interest", docId }
-    const decoded = roundTripViaAlias(msg) as InterestMsg
-    expect(decoded.docId).toEqual(docId)
+    expect(validateDocId(docId)).toBeNull()
+    const wire = interestWire({ docId })
+    const decoded = roundTrip(wire) as WireInterestMsg
+    expect(decoded.doc).toEqual(docId)
   })
 
   it("accepts a docId at the cap built from a 4-byte UTF-8 codepoint", () => {
@@ -563,81 +442,55 @@ describe("Text codec — identifier length caps", () => {
     expect(new TextEncoder().encode(docId).byteLength).toBe(
       DOC_ID_MAX_UTF8_BYTES,
     )
-    const msg: InterestMsg = { type: "interest", docId }
-    const decoded = roundTripViaAlias(msg) as InterestMsg
-    expect(decoded.docId).toEqual(docId)
+    expect(validateDocId(docId)).toBeNull()
+    const wire = interestWire({ docId })
+    const decoded = roundTrip(wire) as WireInterestMsg
+    expect(decoded.doc).toEqual(docId)
   })
 
-  it("rejects a docId one byte over the cap", () => {
+  it("rejects a docId one byte over the cap with a typed error", () => {
     const docId = "a".repeat(DOC_ID_MAX_UTF8_BYTES + 1)
-    const msg: InterestMsg = { type: "interest", docId }
-    const { wire } = applyOutboundAliasing(emptyAliasState(), msg)
-    const encoded = encodeTextWireMessage(wire)
-    const decoded = decodeTextWireMessage(encoded)
-    const result = applyInboundAliasing(emptyAliasState(), decoded)
-    expect(result.error).toBeDefined()
-    expect(result.error?.code).toBe("doc-id-too-long")
-    expect(result.msg).toBeUndefined()
+    const error = validateDocId(docId)
+    expect(error).not.toBeNull()
+    expect(error?.code).toBe("doc-id-too-long")
   })
 
   it("rejects a schemaHash over the cap with a typed error", () => {
     const big = "h".repeat(SCHEMA_HASH_MAX_UTF8_BYTES + 1)
-    const msg: PresentMsg = {
-      type: "present",
-      docs: [
-        {
-          docId: "doc-1",
-          schemaHash: big,
-          replicaType: ["plain", 1, 0] as const,
-          syncProtocol: SYNC_AUTHORITATIVE,
-        },
-      ],
-    }
-    const { wire } = applyOutboundAliasing(emptyAliasState(), msg)
-    const encoded = encodeTextWireMessage(wire)
-    const decoded = decodeTextWireMessage(encoded)
-    const result = applyInboundAliasing(emptyAliasState(), decoded)
-    expect(result.error).toBeDefined()
-    expect(result.error?.code).toBe("schema-hash-too-long")
-    expect(result.msg).toBeUndefined()
+    const error = validateSchemaHash(big)
+    expect(error).not.toBeNull()
+    expect(error?.code).toBe("schema-hash-too-long")
   })
 })
 
 // ---------------------------------------------------------------------------
-// WireFeatures round-trip (Phase 2)
+// WireFeatures round-trip
 // ---------------------------------------------------------------------------
 
 describe("Text codec — WireFeatures negotiation", () => {
   it("round-trips establish with all features advertised", () => {
-    const msg: EstablishMsg = {
-      type: "establish",
-      identity: { peerId: "alice", type: "user" },
+    const wire = establishWire({
+      peerId: "alice",
+      type: "user",
       features: { alias: true, streamed: true, datagram: true },
-    }
-    const decoded = roundTripViaAlias(msg) as EstablishMsg
-    expect(decoded.features).toEqual({
-      alias: true,
-      streamed: true,
-      datagram: true,
     })
+    const decoded = roundTrip(wire) as WireEstablishMsg
+    expect(decoded.f).toEqual({ a: true, s: true, d: true })
   })
 
   it("round-trips establish with no features (legacy peer)", () => {
-    const msg: EstablishMsg = {
-      type: "establish",
-      identity: { peerId: "alice", type: "user" },
-    }
-    const decoded = roundTripViaAlias(msg) as EstablishMsg
-    expect(decoded.features).toBeUndefined()
+    const wire = establishWire({ peerId: "alice", type: "user" })
+    const decoded = roundTrip(wire) as WireEstablishMsg
+    expect(decoded.f).toBeUndefined()
   })
 
   it("round-trips establish with partial features", () => {
-    const msg: EstablishMsg = {
-      type: "establish",
-      identity: { peerId: "alice", type: "user" },
+    const wire = establishWire({
+      peerId: "alice",
+      type: "user",
       features: { alias: true },
-    }
-    const decoded = roundTripViaAlias(msg) as EstablishMsg
-    expect(decoded.features).toEqual({ alias: true })
+    })
+    const decoded = roundTrip(wire) as WireEstablishMsg
+    expect(decoded.f).toEqual({ a: true })
   })
 })

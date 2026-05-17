@@ -1,30 +1,20 @@
 // connection.test — unit tests for UnixSocketConnection.
 //
 // Tests the behavioral contracts of the connection:
-// 1. Send produces valid binary frames (round-trip through StreamFrameParser)
+// 1. Send produces valid binary frames (round-trip through FrameStreamParser + Pipeline)
 // 2. Receive delivers decoded messages via channel.onReceive
 // 3. Backpressure: write queue + drain flush + ordering
 // 4. Close: idempotent, prevents further send/receive
 // 5. Error resilience: invalid frames, missing channel
 //
 // Chunk-splitting scenarios (partial header, partial payload, boundary
-// crossing) are NOT tested here — that's feedBytes's contract, thoroughly
-// covered in stream-frame-parser.test.ts. The connection is a thin
-// imperative shell over feedBytes; we test the glue, not the parser.
+// crossing) are NOT tested here — that's FrameStreamParser's contract,
+// thoroughly covered in frame-stream-parser.test.ts. The connection is a
+// thin imperative shell over FrameStreamParser + Pipeline; we test the glue.
 
 import { SYNC_AUTHORITATIVE } from "@kyneta/schema"
 import type { ChannelMsg, PresentMsg } from "@kyneta/transport"
-import {
-  applyOutboundAliasing,
-  complete,
-  decodeBinaryFrame,
-  emptyAliasState,
-  encodeBinaryFrame,
-  encodeWireMessage,
-  feedBytes,
-  initialParserState,
-  WIRE_VERSION,
-} from "@kyneta/wire"
+import { FrameStreamParser, Pipeline } from "@kyneta/transport"
 import { describe, expect, it, vi } from "vitest"
 import { UnixSocketConnection } from "../connection.js"
 import { MockUnixSocket } from "./mock-unix-socket.js"
@@ -47,11 +37,13 @@ function makePresent(docId: string): PresentMsg {
   }
 }
 
-function encodeViaAlias(msg: ChannelMsg): Uint8Array<ArrayBuffer> {
-  const state = emptyAliasState()
-  const { wire } = applyOutboundAliasing(state, msg)
-  const payload = encodeWireMessage(wire)
-  return encodeBinaryFrame(complete(WIRE_VERSION, payload))
+function encodeViaAlias(msg: ChannelMsg): Uint8Array {
+  const pipeline = new Pipeline({ send: "binary" })
+  const results = pipeline.send(msg)
+  pipeline.dispose()
+  const r = results[0]
+  if (!r || !r.ok) throw new Error("Failed to encode message via pipeline")
+  return r.value
 }
 
 function createMockChannel() {
@@ -97,7 +89,7 @@ describe("UnixSocketConnection", () => {
   // Send
   // ========================================================================
 
-  it("send produces bytes that round-trip through StreamFrameParser", () => {
+  it("send produces bytes that round-trip through FrameStreamParser + Pipeline", () => {
     const { socket, connection } = createStartedConnection()
 
     const msg = makePresent("doc-roundtrip")
@@ -107,20 +99,22 @@ describe("UnixSocketConnection", () => {
     const writtenBytes = socket.write.mock.calls.at(0)?.at(0)
     if (!writtenBytes) throw new Error("expected written bytes")
 
-    // Parse the written bytes through the same pipeline the receiver uses
-    const result = feedBytes(initialParserState(), writtenBytes)
-    expect(result.frames).toHaveLength(1)
+    // Parse the written bytes through FrameStreamParser + Pipeline (same as receiver)
+    const parser = new FrameStreamParser()
+    const frames = parser.feed(writtenBytes)
+    expect(frames).toHaveLength(1)
 
-    const frame = result.frames.at(0)
-    if (!frame) throw new Error("expected a frame")
-    const decoded = decodeBinaryFrame(frame)
-    expect(decoded.content.kind).toBe("complete")
-    if (decoded.content.kind === "complete") {
-      // Round-trip: the connection applies outbound aliasing, so the
-      // wire message includes alias-announcement fields. We verify
-      // the frame is structurally valid rather than comparing payloads.
-      expect(decoded.content.payload).toBeInstanceOf(Uint8Array)
-    }
+    const frame = frames[0]
+    if (!frame || !frame.ok) throw new Error("expected a valid frame")
+
+    // Decode through a receive pipeline
+    const recvPipeline = new Pipeline({ send: "binary" })
+    const results = recvPipeline.receive(frame.value)
+    recvPipeline.dispose()
+    expect(results).toHaveLength(1)
+    const r = results[0]
+    if (!r || !r.ok) throw new Error("expected successful decode")
+    expect(r.value).toEqual(msg)
   })
 
   // ========================================================================
@@ -312,11 +306,13 @@ describe("UnixSocketConnection", () => {
   // Error resilience
   // ========================================================================
 
-  it("logs error and continues when frame contains invalid CBOR", () => {
+  it("silently drops invalid CBOR frames and continues operating", () => {
     const { socket, received } = createStartedConnection()
-    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {})
 
-    // Valid 6-byte header with payloadLength=14, followed by garbage payload
+    // Valid 6-byte header with payloadLength=14, followed by garbage payload.
+    // The FrameStreamParser extracts the frame, but Pipeline.receive()
+    // fails to decode the garbage CBOR — the error Result is silently
+    // skipped (no message delivered).
     const garbage = new Uint8Array(20)
     const view = new DataView(garbage.buffer)
     view.setUint8(0, 1) // version
@@ -326,14 +322,11 @@ describe("UnixSocketConnection", () => {
 
     socket.emitData(garbage)
 
-    expect(consoleSpy).toHaveBeenCalled()
     expect(received).toHaveLength(0)
 
     // Connection still works after the error
     socket.emitData(encodeViaAlias(makePresent("after-error")))
     expect(received).toHaveLength(1)
-
-    consoleSpy.mockRestore()
   })
 
   it("logs error when message arrives with no channel set", () => {

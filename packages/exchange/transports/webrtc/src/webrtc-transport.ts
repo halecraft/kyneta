@@ -4,9 +4,9 @@
 // connections (signaling, ICE, media streams). This transport attaches
 // to already-established data channels for kyneta document sync.
 //
-// Uses the shared binary pipeline from @kyneta/wire (same as WebSocket):
-//   encodeBinaryAndSend — outbound: encode → fragment → sendFn
-//   decodeBinaryMessages — inbound: reassemble → decode → ChannelMsg[]
+// Uses the shared Pipeline from @kyneta/transport (same as WebSocket):
+//   pipeline.send(msg) — outbound: alias → encode → fragment
+//   pipeline.receive(data) — inbound: reassemble → decode → alias → ChannelMsg
 //
 // The transport accepts any object satisfying `DataChannelLike` — a
 // 5-member interface that native RTCDataChannel satisfies structurally
@@ -18,17 +18,7 @@ import type {
   GeneratedChannel,
   TransportFactory,
 } from "@kyneta/transport"
-import { Transport } from "@kyneta/transport"
-import {
-  type AliasState,
-  applyInboundAliasing,
-  applyOutboundAliasing,
-  createFrameIdCounter,
-  decodeBinaryWires,
-  emptyAliasState,
-  encodeWireFrameAndSend,
-  FragmentReassembler,
-} from "@kyneta/wire"
+import { Pipeline, Transport } from "@kyneta/transport"
 import type { DataChannelLike } from "./data-channel-like.js"
 
 // ---------------------------------------------------------------------------
@@ -82,10 +72,7 @@ type AttachedChannel = {
   remotePeerId: string
   channel: DataChannelLike
   channelId: ChannelId | null
-  reassembler: FragmentReassembler
-  nextFrameId: () => number
-  /** Per-channel alias state (Phase 4). */
-  aliasState: AliasState
+  pipeline: Pipeline<"binary">
   cleanup: () => void
 }
 
@@ -164,17 +151,10 @@ export class WebrtcTransport extends Transport<DataChannelContext> {
       transportType: this.transportType,
       send: (msg: ChannelMsg) => {
         const attached = this.#attachedChannels.get(context.remotePeerId)
-        if (!attached || channel.readyState !== "open") {
-          return
+        if (!attached || channel.readyState !== "open") return
+        for (const r of attached.pipeline.send(msg)) {
+          if (r.ok) channel.send(r.value)
         }
-        const { state, wire } = applyOutboundAliasing(attached.aliasState, msg)
-        attached.aliasState = state
-        encodeWireFrameAndSend(
-          wire,
-          data => channel.send(data),
-          this.#fragmentThreshold,
-          attached.nextFrameId,
-        )
       },
       stop: () => {
         // Cleanup is handled by detachDataChannel().
@@ -234,8 +214,19 @@ export class WebrtcTransport extends Transport<DataChannelContext> {
     // ArrayBuffer and Uint8Array regardless.
     channel.binaryType = "arraybuffer"
 
-    // Create reassembler for this data channel
-    const reassembler = new FragmentReassembler({ timeoutMs: 10_000 })
+    // Create pipeline for this data channel
+    const pipeline = new Pipeline<"binary">({
+      send: "binary",
+      opts: {
+        threshold: this.#fragmentThreshold,
+        reassemblyTimeoutMs: 10_000,
+        onError: (e, dir) =>
+          console.warn(
+            `[webrtc-transport] wire error (${dir}) for peer ${remotePeerId}:`,
+            e,
+          ),
+      },
+    })
 
     // Event handlers — stored as named functions for removeEventListener
     const onOpen = () => {
@@ -273,9 +264,7 @@ export class WebrtcTransport extends Transport<DataChannelContext> {
       remotePeerId,
       channel,
       channelId: null,
-      reassembler,
-      nextFrameId: createFrameIdCounter(),
-      aliasState: emptyAliasState(),
+      pipeline,
       cleanup,
     }
     this.#attachedChannels.set(remotePeerId, attached)
@@ -304,8 +293,8 @@ export class WebrtcTransport extends Transport<DataChannelContext> {
     // Remove the sync channel if it exists
     this.#removeSyncChannel(remotePeerId)
 
-    // Dispose the reassembler to clean up timers
-    attached.reassembler.dispose()
+    // Dispose the pipeline to clean up timers and state
+    attached.pipeline.dispose()
 
     // Remove event listeners from the data channel
     attached.cleanup()
@@ -387,13 +376,18 @@ export class WebrtcTransport extends Transport<DataChannelContext> {
     const syncChannel = this.channels.get(attached.channelId)
     if (!syncChannel) return
 
-    // Extract bytes — robust to both ArrayBuffer and Uint8Array
+    // Extract bytes — robust to both ArrayBuffer and Uint8Array.
+    // Both paths produce Uint8Array<ArrayBuffer> for the pipeline.
     const raw = event.data
-    const bytes =
+    const bytes: Uint8Array<ArrayBuffer> | null =
       raw instanceof ArrayBuffer
         ? new Uint8Array(raw)
         : raw instanceof Uint8Array
-          ? raw
+          ? new Uint8Array(
+              raw.buffer as ArrayBuffer,
+              raw.byteOffset,
+              raw.byteLength,
+            )
           : null
 
     if (!bytes) {
@@ -402,19 +396,8 @@ export class WebrtcTransport extends Transport<DataChannelContext> {
     }
 
     try {
-      const wires = decodeBinaryWires(bytes, attached.reassembler)
-      if (!wires) return
-      for (const wire of wires) {
-        const result = applyInboundAliasing(attached.aliasState, wire)
-        attached.aliasState = result.state
-        if (result.error || !result.msg) {
-          console.warn(
-            `[webrtc-transport] alias resolution failed for peer ${remotePeerId}:`,
-            result.error,
-          )
-          continue
-        }
-        syncChannel.onReceive(result.msg)
+      for (const r of attached.pipeline.receive(bytes)) {
+        if (r.ok) syncChannel.onReceive(r.value)
       }
     } catch (error) {
       console.error(

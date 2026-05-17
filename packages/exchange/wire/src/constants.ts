@@ -3,14 +3,14 @@
 // Defines the binary protocol framing: version byte, type byte,
 // header size, and fragment layout sizes.
 //
-// Version 1 — compact header (no hash algo byte), numeric frame IDs,
-// no transport prefix layer.
+// Version 2 — 6-byte header (version + type + u32 payload length),
+// numeric frame IDs, substrate-agnostic fragmentation.
 
 // ---------------------------------------------------------------------------
 // Frame header
 // ---------------------------------------------------------------------------
 
-export const WIRE_VERSION = 1
+export const WIRE_VERSION = 2
 
 /**
  * Frame header size in bytes:

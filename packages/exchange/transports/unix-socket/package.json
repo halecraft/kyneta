@@ -31,8 +31,7 @@
   },
   "peerDependencies": {
     "@kyneta/machine": "workspace:^",
-    "@kyneta/transport": "workspace:^",
-    "@kyneta/wire": "workspace:^"
+    "@kyneta/transport": "workspace:^"
   },
   "devDependencies": {
     "@kyneta/exchange": "workspace:^",
