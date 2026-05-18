@@ -107,7 +107,7 @@ describe("SseClientTransport — pipeline reset on reconnect", () => {
       const afterConstructor = spy.mock.calls.length
 
       const ctx = createContext()
-      transport._initialize(ctx)
+      await transport._initialize(ctx)
       await transport._start()
 
       // Connection 1: addChannel calls generate() which calls pipeline.reset()
@@ -180,7 +180,7 @@ describe("SseClientTransport — unhandled rejections", () => {
       const transport = new SseClientTransport(options)
       const ctx = createContext()
 
-      transport._initialize(ctx)
+      await transport._initialize(ctx)
       await transport._start()
 
       // addChannel is protected; use any-cast.

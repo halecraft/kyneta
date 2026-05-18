@@ -73,7 +73,7 @@ function createTransportContext(
  */
 async function startTransport(transport: WebsocketClientTransport) {
   const ctx = createTransportContext()
-  transport._initialize(ctx)
+  await transport._initialize(ctx)
   await transport._start()
 }
 

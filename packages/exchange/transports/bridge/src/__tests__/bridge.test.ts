@@ -32,9 +32,9 @@ describe("BridgeTransport", () => {
     const adapterA = new BridgeTransport({ transportId: "peer-a", bridge })
     const adapterB = new BridgeTransport({ transportId: "peer-b", bridge })
 
-    adapterA._initialize(ctxA)
+    await adapterA._initialize(ctxA)
     await adapterA._start()
-    adapterB._initialize(ctxB)
+    await adapterB._initialize(ctxB)
     await adapterB._start()
 
     expect(bridge.transports.size).toBe(2)
@@ -44,7 +44,7 @@ describe("BridgeTransport", () => {
     const bridge = new Bridge()
 
     const adapterA = new BridgeTransport({ transportId: "peer-a", bridge })
-    adapterA._initialize(createTransportContext())
+    await adapterA._initialize(createTransportContext())
     await adapterA._start()
 
     expect(bridge.transports.size).toBe(1)
@@ -61,7 +61,7 @@ describe("BridgeTransport", () => {
     const adapterA = new BridgeTransport({ transportId: "peer-a", bridge })
     const adapterB = new BridgeTransport({ transportId: "peer-b", bridge })
 
-    adapterA._initialize(
+    await adapterA._initialize(
       createTransportContext({
         identity: { peerId: "peer-a", type: "user" },
         onChannelEstablish: channel =>
@@ -70,7 +70,7 @@ describe("BridgeTransport", () => {
     )
     await adapterA._start()
 
-    adapterB._initialize(
+    await adapterB._initialize(
       createTransportContext({
         identity: { peerId: "peer-b", type: "user" },
         onChannelEstablish: channel =>
@@ -99,41 +99,40 @@ describe("BridgeTransport", () => {
     }
 
     const received: ChannelMsg[] = []
+    let resolveReceived!: () => void
     const receivedPromise = new Promise<void>(resolve => {
-      const ctxB = createTransportContext({
-        identity: { peerId: "peer-b", type: "user" },
-        onChannelReceive: (_channelId, message) => {
-          received.push(message)
-          resolve()
-        },
-      })
+      resolveReceived = resolve
+    })
 
-      const ctxA = createTransportContext({
-        identity: { peerId: "peer-a", type: "user" },
-      })
+    const ctxB = createTransportContext({
+      identity: { peerId: "peer-b", type: "user" },
+      onChannelReceive: (_channelId, message) => {
+        received.push(message)
+        resolveReceived()
+      },
+    })
 
-      const adapterA = new BridgeTransport({ transportId: "peer-a", bridge })
-      const adapterB = new BridgeTransport({ transportId: "peer-b", bridge })
+    const ctxA = createTransportContext({
+      identity: { peerId: "peer-a", type: "user" },
+    })
 
-      adapterA._initialize(ctxA)
-      adapterA
-        ._start()
-        .then(() => {
-          adapterB._initialize(ctxB)
-          return adapterB._start()
-        })
-        .then(() => {
-          // Get the channelId for A→B
-          const channelIds: number[] = []
-          for (const ch of adapterA.channels) {
-            channelIds.push(ch.channelId)
-          }
-          // Send the large offer through A's channel to B
-          adapterA._send({
-            toChannelIds: channelIds,
-            message: offer,
-          })
-        })
+    const adapterA = new BridgeTransport({ transportId: "peer-a", bridge })
+    const adapterB = new BridgeTransport({ transportId: "peer-b", bridge })
+
+    await adapterA._initialize(ctxA)
+    await adapterA._start()
+    await adapterB._initialize(ctxB)
+    await adapterB._start()
+
+    // Get the channelId for A→B
+    const channelIds: number[] = []
+    for (const ch of adapterA.channels) {
+      channelIds.push(ch.channelId)
+    }
+    // Send the large offer through A's channel to B
+    adapterA._send({
+      toChannelIds: channelIds,
+      message: offer,
     })
 
     await receivedPromise

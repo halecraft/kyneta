@@ -35,7 +35,7 @@ async function initializeTransport(
   transport: WebrtcTransport,
   ctx = createContext(),
 ) {
-  transport._initialize(ctx)
+  await transport._initialize(ctx)
   await transport._start()
   return ctx
 }

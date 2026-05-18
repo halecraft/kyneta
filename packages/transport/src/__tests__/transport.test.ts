@@ -70,7 +70,7 @@ describe("Transport lifecycle", () => {
     const ctx = createTransportContext()
 
     // Initialize
-    adapter._initialize(ctx)
+    await adapter._initialize(ctx)
 
     // Start
     await adapter._start()
@@ -86,10 +86,10 @@ describe("Transport lifecycle", () => {
     await expect(adapter._start()).rejects.toThrow("Cannot start")
   })
 
-  it("cannot add channel before starting", () => {
+  it("cannot add channel before starting", async () => {
     const adapter = new TestAdapter()
     const ctx = createTransportContext()
-    adapter._initialize(ctx)
+    await adapter._initialize(ctx)
 
     // addChannel is protected, so we test via a subclass that exposes it
     class ExposedAdapter extends TestAdapter {
@@ -99,7 +99,7 @@ describe("Transport lifecycle", () => {
     }
 
     const exposed = new ExposedAdapter()
-    exposed._initialize(ctx)
+    await exposed._initialize(ctx)
     // not started yet
     expect(() => exposed.tryAddChannel()).toThrow("must be 'started'")
   })
@@ -127,7 +127,7 @@ describe("Transport lifecycle", () => {
       transportId: "send-test",
     })
     const ctx = createTransportContext()
-    adapter._initialize(ctx)
+    await adapter._initialize(ctx)
     await adapter._start()
 
     // Get the channel that was created during onStart
@@ -147,7 +147,7 @@ describe("Transport lifecycle", () => {
 
   it("_send returns 0 for non-existent channel IDs", async () => {
     const adapter = new TestAdapter()
-    adapter._initialize(createTransportContext())
+    await adapter._initialize(createTransportContext())
     await adapter._start()
 
     const msg: ChannelMsg = {
@@ -157,5 +157,19 @@ describe("Transport lifecycle", () => {
 
     const sent = adapter._send({ toChannelIds: [9999], message: msg })
     expect(sent).toBe(0)
+  })
+
+  it("calls onStop() during re-initialization to avoid resource leaks", async () => {
+    const adapter = new TestAdapter()
+    const ctx = createTransportContext()
+
+    await adapter._initialize(ctx)
+    await adapter._start()
+    expect(adapter.stopped).toBe(false) // not stopped yet
+
+    // Re-initialize (HMR path) — should first stop the adapter to clean up
+    await adapter._initialize(ctx)
+
+    expect(adapter.stopped).toBe(true)
   })
 })

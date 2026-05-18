@@ -192,12 +192,13 @@ export abstract class Transport<G> {
   // INTERNAL API - For Synchronizer / TransportManager
   // ============================================================================
 
-  _initialize(context: TransportContext): void {
+  async _initialize(context: TransportContext): Promise<void> {
     // Allow re-initialization (handles HMR)
     if (
       this.#lifecycle.state === "initialized" ||
       this.#lifecycle.state === "started"
     ) {
+      await this.onStop()
       this.channels.reset()
       this.#lifecycle = { state: "stopped" }
     }

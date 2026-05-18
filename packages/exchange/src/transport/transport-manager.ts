@@ -31,9 +31,10 @@ export class TransportManager {
     this.#context = context
     this.#onReset = onReset
 
-    // Initialize provided adapters synchronously
+    // Initialize provided adapters — for fresh transports this resolves
+    // immediately; re-initialized transports await onStop() cleanup.
     for (const transport of transports) {
-      this.#initializeTransport(transport)
+      void this.#initializeTransport(transport)
     }
 
     // Note: Adapters are NOT started here. Call startAll() after construction
@@ -51,8 +52,8 @@ export class TransportManager {
     }
   }
 
-  #initializeTransport(transport: AnyTransport): void {
-    transport._initialize(this.#context)
+  async #initializeTransport(transport: AnyTransport): Promise<void> {
+    await transport._initialize(this.#context)
     this.#transports.set(transport.transportId, transport)
   }
 
@@ -86,7 +87,7 @@ export class TransportManager {
       return
     }
 
-    this.#initializeTransport(transport)
+    await this.#initializeTransport(transport)
     await transport._start()
   }
 
