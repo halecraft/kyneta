@@ -195,4 +195,31 @@ describe("Transport lifecycle", () => {
     const ch3 = dir1.create({ label: "c" }, vi.fn())
     expect(ch3.channelId).toBe(2)
   })
+
+  it("establishChannel throws if channel is not in connected state", async () => {
+    const ctx = createTransportContext()
+
+    class ExposedAdapter extends TestAdapter {
+      tryAddChannel() {
+        return this.addChannel({ label: "test" })
+      }
+      tryEstablishChannel(channelId: number) {
+        return this.establishChannel(channelId)
+      }
+    }
+
+    const exposed = new ExposedAdapter()
+    await exposed._initialize(ctx)
+    await exposed._start()
+
+    const channel = exposed.tryAddChannel()
+    expect(channel.type).toBe("connected")
+
+    // Simulate the channel having transitioned to established elsewhere
+    ;(channel as unknown as { type: string }).type = "established"
+
+    expect(() => exposed.tryEstablishChannel(channel.channelId)).toThrow(
+      "expected 'connected'",
+    )
+  })
 })

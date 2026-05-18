@@ -155,10 +155,13 @@ export abstract class Transport<G> {
       throw new Error(`can't establish channel ${channelId}: channel not found`)
     }
 
-    // Only establish if channel is still in connected state
-    if (channel.type === "connected") {
-      lifecycle.onChannelEstablish(channel)
+    if (channel.type !== "connected") {
+      throw new Error(
+        `can't establish channel ${channelId}: expected 'connected' state, got '${channel.type}'`,
+      )
     }
+
+    lifecycle.onChannelEstablish(channel)
   }
 
   /**
