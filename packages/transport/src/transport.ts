@@ -260,8 +260,13 @@ export abstract class Transport<G> {
     for (const toChannelId of envelope.toChannelIds) {
       const channel = this.channels.get(toChannelId)
       if (channel) {
-        channel.send(envelope.message)
-        sentCount++
+        try {
+          channel.send(envelope.message)
+          sentCount++
+        } catch {
+          // Channel threw — continue fan-out to remaining channels.
+          // Do not re-throw; partial failure is expected for best-effort delivery.
+        }
       }
     }
 

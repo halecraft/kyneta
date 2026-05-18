@@ -146,6 +146,67 @@ describe("Transport lifecycle", () => {
     expect(sendFn).toHaveBeenCalledWith(msg)
   })
 
+  it("_send continues fan-out when one channel throws", async () => {
+    const sendFnA = vi.fn(() => {
+      throw new Error("channel A broken")
+    })
+    const sendFnB = vi.fn()
+
+    class FanOutAdapter extends Transport<void> {
+      #callCount = 0
+
+      generate(): GeneratedChannel {
+        this.#callCount++
+        if (this.#callCount === 1) {
+          return {
+            transportType: this.transportType,
+            send: sendFnA,
+            stop: vi.fn(),
+          }
+        }
+        return {
+          transportType: this.transportType,
+          send: sendFnB,
+          stop: vi.fn(),
+        }
+      }
+
+      async onStart(): Promise<void> {
+        this.addChannel(undefined)
+        this.addChannel(undefined)
+      }
+
+      async onStop(): Promise<void> {}
+    }
+
+    const adapter = new FanOutAdapter({
+      transportType: "fanout",
+      transportId: "fanout",
+    })
+    const ctx = createTransportContext()
+    await adapter._initialize(ctx)
+    await adapter._start()
+
+    const channels = [...adapter.channels]
+    const chAId = channels[0]?.channelId
+    const chBId = channels[1]?.channelId
+    expect(chAId).toBe(1)
+    expect(chBId).toBe(2)
+
+    const msg: ChannelMsg = {
+      type: "establish",
+      identity: testIdentity,
+    }
+
+    adapter._send({
+      toChannelIds: [chAId, chBId] as number[],
+      message: msg,
+    })
+
+    expect(sendFnA).toHaveBeenCalledWith(msg)
+    expect(sendFnB).toHaveBeenCalledWith(msg)
+  })
+
   it("_send returns 0 for non-existent channel IDs", async () => {
     const adapter = new TestAdapter()
     await adapter._initialize(createTransportContext())
