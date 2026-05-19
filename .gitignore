@@ -5,3 +5,5 @@ vendor
 /**/*.db
 .env
 .jj-plan
+.claude
+.codegraph
