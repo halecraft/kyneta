@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/webrtc-transport",
-  "version": "1.6.1",
+  "version": "1.7.0",
   "description": "WebRTC data channel transport for @kyneta/exchange — BYODC (Bring Your Own Data Channel) with DataChannelLike interface",
   "author": "Duane Johnson",
   "license": "MIT",

@@ -1,3 +1,84 @@
+# 1.7.0
+
+  Schema — tree and set algebras realized end-to-end:
+  - `Schema.tree` now works end-to-end on Loro. The write API ships `.create(id, parent, index, data?)`, `.move(id, parent, index)`, and `.delete(id)`; reads expose `.roots`, `.node(id)`, depth-first iteration, and a callable snapshot. Subscribers on `tree.node(id).field` receive precise notifications. Previously a manually-constructed `TreeChange` failed with *"unsupported change type 'tree'"* and Loro events at tree nodes arrived at the changefeed without their `TreeID`.
+  - `Schema.set` is now value-addressed end-to-end. `SetRef<I>` exposes `.has(value)`, `.add(value)`, `.delete(value)`, `.clear()`, `.size`, `[Symbol.iterator]` over plain values, and is callable returning `Plain<I>[]`. For object-typed items, `.has(value)` uses content equality. There are no per-member child refs — sets are ref-layer leaf-shaped, not keyed-shaped.
+
+  **Breaking — schema type shapes:**
+  - `Plain<TreeSchema<I>>` is now `FlatTreeNode<Plain<I>>[]` (was incorrectly `Plain<I>`). `Zero` of a tree is `[]`. JSON-roundtrip a tree as a flat node array.
+  - `Plain<SetSchema<I>>` is now `Plain<I>[]` (was inconsistently `Plain<I>[]` at the type level but produced `Record<string, V>` at runtime). Storage, materialize, zero, and reader all agree on the array shape.
+  - `TreeSchema.nodeData` → `TreeSchema.item` for parity with every other container kind (`sequence.item`, `map.item`, `set.item`, `movable.item`).
+  - `tree-position` module → `doc-position`: `resolveTreePosition` → `resolveDocPosition`, `flattenTreePosition` → `flattenDocPosition`, `ResolvedTreePosition` → `ResolvedDocPosition`. The algebra operates over a rooted document, not arbitrary schema trees, and the rename frees "tree" for the CRDT primitive.
+  - Changefeed cluster: `subscribeTree` → `subscribeDescendants`, `TreeChangefeedProtocol` → `RecursiveChangefeedProtocol`, `HasTreeChangefeed` → `HasRecursiveChangefeed`, `hasTreeChangefeed` → `hasRecursiveChangefeed`. *This supersedes the `ComposedChangefeed*` → `TreeChangefeed*` rename from 1.6.0 — apologies for the consecutive churn; "Tree" is now reserved for the CRDT primitive, and `subscribe(Node|Descendants)` names the shallow/deep semantic without overloading the noun.*
+  - `Segment.role` renormalized: `"key" | "index"` → `"field" | "entry" | "index"` (declared product field / runtime string key / runtime numeric index). Identity-keying applies at `seg.role === "field"` boundaries — purely segment-local, no parent-kind sniff. `Path.node(id)` is sugar over `Path.entry(id)`; `Path.field(name)` is reserved for declared product field names. App code that goes through the schema API is unaffected; if you constructed `Path`/`Segment` values directly, update role tags.
+
+  Wire — protocol v2 (**protocol-breaking, lockstep upgrade required**):
+  - `WIRE_VERSION` 1 → 2. Binary fragmentation now slices unframed payload bytes rather than framed bytes, saving 6 bytes per fragmented message and eliminating the receiver's double-decode. v1 Fragment frames from older peers produce a typed `unsupported_version` error. Complete frames (the 99% case) remain byte-identical. **Both peers must upgrade in lockstep.**
+  - Asymmetric SSE encoding. Client uploads switch from JSON-over-text/plain to raw CBOR over `application/octet-stream`. Server downstream stays text JSON (substrate-forced). Eliminates the ~33% base64 bandwidth tax on `SubstratePayload.bytes`. Bundled with the SSE upgrade.
+  - Trust boundary at the decoder. Every wire message is now shape-validated after CBOR/JSON parse via `validateWireMessage`. Malformed or hostile peer messages surface as typed `invalid-wire-message` errors through `Pipeline.onError` instead of crashing the channel or corrupting CRDT state. Identifier byte-length caps are enforced at insert time on the alias map; feature gates in `establish` use strict `=== true`.
+
+  Wire / Transport — `Pipeline` unification:
+  - One `Pipeline<S, R>` class replaces seven near-mirror assembly sites across WebSocket, WebRTC, SSE, Unix socket, and Bridge transports. Per-transport send/receive collapses to three lines plus I/O. The same class covers both binary and text substrates and supports asymmetric encodings (the SSE case above). `@kyneta/wire` becomes a leaf — concrete transport packages now import wire-derived symbols via `@kyneta/transport`. No drift between transports.
+  - One `Reassembler<T>` replaces `FragmentReassembler` + `TextReassembler`; one `fragmentGeneric<T>` chunk loop replaces `fragmentPayload` + `fragmentTextPayload`.
+
+  Transport reliability fixes:
+  - 3-peer relay regression: synchronizer now owns the `channelId` namespace, fixing a regression in which relay topologies (peer A ↔ relay ↔ peer B + peer C) misrouted channel traffic.
+  - Wire text codec: UTF-16 surrogate-pair codepoints are now sliced correctly across fragment boundaries; previously, multi-byte characters at fragment splits could be corrupted.
+  - Wire version field: encoders now reject `version` values outside the encodable range up front.
+  - Wire text frame: stopped a redundant `JSON.stringify`/`JSON.parse` round-trip on the hot text-encoding path.
+  - Transport `_send` aborts on the first channel throw, instead of continuing to drive subsequent channels after a partial failure.
+  - Transport `establishChannel`: guard failures now propagate (previously failed silently).
+  - Transport channel directories: switched to an internal counter for channel IDs (previously vulnerable to ID collisions under concurrent open).
+  - Wire fragment collector: now verifies received size when the `complete` marker arrives, rejecting fragmented payloads that under-deliver.
+  - Transport `_initialize`: re-init no longer leaks reassembler timers, alias state, or pipeline state from the prior session.
+  - Transport frame stream parser: corrected fragmentation handling across stream-boundary discovery (Unix socket).
+  - Transport reconnect: proportional jittered backoff replaces fixed-interval retries; shared `tryReconnect` lifted to the base.
+  - WebSocket / SSE client transport: `wasConnectedBefore` is reset correctly across reconnect cycles.
+
+  Schema — foundations fixes:
+  - Schema-migration support: `supportedHashes` now walks the full schema (previously stopped at the first sum boundary, so peer-set negotiation under heterogeneous schema hashes was incomplete). Hardened internal symbols against accidental enumeration. Library FNV hash now matches the spec exactly. Validation closes several edge cases at schema-construction time.
+
+  Internal:
+  - `foldPath` hoisted to `@kyneta/schema` core: the schema-guided path-resolution fold that Loro and Yjs each implemented separately is now one parameterized function. Per-backend code reduces to a small `stepInto*` plus a wrapper. The identity-keying rule (`seg.role === "field"`) and the sum-boundary short-circuit live in one place — no drift surface.
+  - `PlainState` shadow is now the universal read surface for CRDT substrates: a single `plainReader(shadow)` covers every interpreter that needs to read substrate state, regardless of backend. Backend-specific readers retire.
+  - Generic `MaterializeResolver`: the CRDT → `PlainState` materialization driver lives in core; each backend supplies only the per-kind value-extraction tail.
+
+  Housekeeping:
+  - `dist` / Vitest interop fixed; devDeps unified via the pnpm catalog; dead exports removed.
+  - `bumper-cars` example: bugs fixed, type discipline restored, functional core fully pure.
+
+# 1.6.1
+
+  Fixes:
+  - Schema (discriminated unions): cache-invalidation handlers no longer accrete on repeated variant flips. Sum fields register invalidation handlers on both the parent product and the active variant product; the previous shape stored them in a left-folded closure keyed only by path, so re-interpreting a sum's current variant after each cache flush accumulated dead handlers (eventually risking a stack overflow via composed recursion). Handlers are now keyed by registrant path and replace on re-registration. No API change.
+  - Substrate event bridge (Loro / Yjs): re-entrant writes during event-bridge replay are no longer silently dropped. Previously, when a remote sync payload was merged and a user subscriber wrote back to the doc inside the replay, the write reached the changefeed layer but was dropped at the native CRDT — producing an infinite re-delivery loop bounded only by `BudgetExhaustedError`. The bridge now uses a structural `replay` flag instead of a global re-entrancy guard.
+  - Exchange echo suppression: `origin` is yours again. The Exchange previously used the string `"sync"` on `Changeset.origin` as its own control signal for suppressing local broadcast. This had two failure modes: (1) user code calling `change(doc, fn, { origin: "sync" })` accidentally suppressed broadcasts; (2) external Loro batches whose origin was not the literal string `"sync"` could echo back to peers. Echo suppression is now keyed on a structural `replay: true` flag in `BatchOptions`, leaving `origin` free for application use.
+
+  **Migration note (if affected):** if any code passed `origin: "sync"` to `change()` to suppress broadcast, switch to `change(ref, fn, { replay: true })`. Application-defined origin strings (`"local"`, `"undo"`, `"llm"`, etc.) work exactly as before and now reliably don't collide with internal sync behavior.
+
+  Diagnostics:
+  - `BudgetExhaustedError` is actionable. The error now carries (a) the cascade's entry-point stack frame — typically your `change()` site or the transport boundary that opened the dispatch — (b) a histogram of the top message types contributing to the cascade, and (c) tick-deduplicated history so the recent-events tail shows real subscriber-driven work instead of routing housekeeping. When you hit a runaway, the error tells you which subscriber pair is oscillating.
+
+  Internal:
+  - `BatchOptions { origin, replay }` replaces the bare `origin` string at the substrate `prepare/flush` boundary. No public API change for `change()` callers other than the new `replay` flag.
+
+# 1.6.0
+
+  Schema:
+  - Re-entrant `change()` inside subscribers now works. Calling `change(doc, ...)` (or `.set()`, `.push()`, `.delete()`, etc.) from inside a `subscribe(doc, ...)` or `subscribeNode(doc, ...)` callback no longer throws *"Mutation during notification delivery is not supported."* The substrate mutation is still synchronous (later reads in the same callback see the new state); subscribers receive a fresh `Changeset` in the next sub-tick of the same outer dispatch. You can delete any `queueMicrotask` wrappers around re-entrant `change()` calls.
+  - Cross-doc cascade detection. A→B→A→B oscillations across multiple docs in the same Exchange now share one bounded budget and raise `BudgetExhaustedError` with diagnostic history. Standalone substrates (created outside any Exchange) use a private lease, so cross-substrate cascade detection is opt-in.
+  - `subscribe(leafRef, cb)` now works on scalar / text / counter / richtext leaves — deep delivery on a leaf is vacuously the leaf's own changes. Previously this threw and required `subscribeNode` instead.
+
+  Breaking renames (schema-protocol level):
+  - `ComposedChangefeedProtocol` → `TreeChangefeedProtocol`
+  - `HasComposedChangefeed` → `HasTreeChangefeed`
+  - `hasComposedChangefeed` → `hasTreeChangefeed`
+
+  If your code only uses `subscribe` / `subscribeNode` / `change` you are unaffected. The rename matters if you wrote a custom integration that branched on these type guards (e.g., a custom React store). *Note: 1.7.0 renames these again to `RecursiveChangefeed*` / `subscribeDescendants` — if you can upgrade through both, skip this step.*
+
+  Housekeeping:
+  - Consolidated random-id primitives — SSE, Unix-socket, and WebSocket server transports now use `@kyneta/random` directly (re-exported from `@kyneta/transport`).
+
 # 1.5.2
 
   Fixes (no action required):
