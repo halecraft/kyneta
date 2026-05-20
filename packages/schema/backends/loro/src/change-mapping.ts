@@ -181,6 +181,20 @@ export function changeToDiff(
     case "increment":
       return [[targetCID, counterChangeToDiff(change as IncrementChange)]]
 
+    case "set-op":
+      // Sets (`Schema.set`) are rejected by `loro.bind` at compile time
+      // (`"add-wins-per-key"` is not in `LoroLaws`). This branch is
+      // unreachable from any bound Loro substrate today. Kept against
+      // the new `SetChange` vocabulary so a future law-set expansion
+      // doesn't have to invent the wire format from scratch — when that
+      // happens, encode `add[]` as Map updates keyed by member identity
+      // and `remove[]` as `updated[key] = undefined` (matching Loro's
+      // MapDiff delete convention; see mapChangeToDiff).
+      throw new Error(
+        "changeToDiff: 'set-op' is not yet supported by the Loro backend " +
+          "(Schema.set requires 'add-wins-per-key' which is not in LoroLaws).",
+      )
+
     default:
       throw new Error(`changeToDiff: unsupported change type "${change.type}"`)
   }

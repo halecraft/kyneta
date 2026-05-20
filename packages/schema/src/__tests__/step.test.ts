@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest"
 import {
   incrementChange,
+  isSameSetMember,
   mapChange,
   replaceChange,
   sequenceChange,
+  setOpChange,
   step,
   stepIncrement,
   stepMap,
   stepReplace,
   stepSequence,
+  stepSet,
   stepText,
   textChange,
 } from "../index.js"
@@ -211,5 +214,127 @@ describe("step: multi-action folding", () => {
     state = step(state, sequenceChange([{ retain: 1 }, { delete: 1 }]))
     state = step(state, sequenceChange([{ retain: 1 }, { insert: ["x"] }]))
     expect(state).toEqual(["a", "x", "c"])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// stepSet — value-addressed add/remove with normalized output
+// ---------------------------------------------------------------------------
+
+describe("stepSet", () => {
+  it("add-only over empty state", () => {
+    expect(stepSet<string>([], setOpChange(["a", "b"]))).toEqual(["a", "b"])
+  })
+
+  it("add-only over non-empty state appends in add[] order", () => {
+    expect(stepSet<string>(["a"], setOpChange(["b", "c"]))).toEqual([
+      "a",
+      "b",
+      "c",
+    ])
+  })
+
+  it("remove-only of present members", () => {
+    expect(
+      stepSet<string>(["a", "b", "c"], setOpChange(undefined, ["b"])),
+    ).toEqual(["a", "c"])
+  })
+
+  it("remove of an absent member is a no-op", () => {
+    expect(stepSet<string>(["a"], setOpChange(undefined, ["b"]))).toEqual(["a"])
+  })
+
+  it("add + remove disjoint applies both", () => {
+    expect(stepSet<string>(["a"], setOpChange(["b"], ["a"]))).toEqual(["b"])
+  })
+
+  it("overlap → remove-wins", () => {
+    // "x" appears in both add and remove — remove wins.
+    expect(stepSet<string>(["a"], setOpChange(["x"], ["x"]))).toEqual(["a"])
+  })
+
+  it("duplicates within add[] are idempotent", () => {
+    expect(stepSet<string>([], setOpChange(["a", "a", "b"]))).toEqual([
+      "a",
+      "b",
+    ])
+  })
+
+  it("duplicates within remove[] are idempotent", () => {
+    expect(
+      stepSet<string>(["a", "b"], setOpChange(undefined, ["a", "a"])),
+    ).toEqual(["b"])
+  })
+
+  it("add of an existing member is a no-op (preserves position)", () => {
+    // "a" already exists; re-adding does NOT re-append to the end.
+    expect(stepSet<string>(["a", "b"], setOpChange(["a"]))).toEqual(["a", "b"])
+  })
+
+  it("undefined add → no-op", () => {
+    expect(stepSet<string>(["a"], setOpChange(undefined, undefined))).toEqual([
+      "a",
+    ])
+  })
+
+  it("both fields undefined → no-op", () => {
+    expect(stepSet<string>(["a"], setOpChange())).toEqual(["a"])
+  })
+
+  it("existing members retain relative order", () => {
+    expect(stepSet<string>(["b", "a", "c"], setOpChange(["d"], ["a"]))).toEqual(
+      ["b", "c", "d"],
+    )
+  })
+
+  it("dispatches through step() via case 'set-op'", () => {
+    expect(step<string[]>(["a"], setOpChange(["b"]))).toEqual(["a", "b"])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// isSameSetMember — content equality for set membership
+// ---------------------------------------------------------------------------
+
+describe("isSameSetMember", () => {
+  it("primitives via Object.is (NaN === NaN)", () => {
+    expect(isSameSetMember(1, 1)).toBe(true)
+    expect(isSameSetMember("a", "a")).toBe(true)
+    expect(isSameSetMember(NaN, NaN)).toBe(true)
+    expect(isSameSetMember(null, null)).toBe(true)
+    expect(isSameSetMember(undefined, undefined)).toBe(true)
+  })
+
+  it("distinct primitives", () => {
+    expect(isSameSetMember(1, 2)).toBe(false)
+    expect(isSameSetMember("a", "b")).toBe(false)
+    expect(isSameSetMember(1, "1")).toBe(false)
+  })
+
+  it("shallow object equality", () => {
+    expect(isSameSetMember({ a: 1 }, { a: 1 })).toBe(true)
+    expect(isSameSetMember({ a: 1 }, { a: 2 })).toBe(false)
+    expect(isSameSetMember({ a: 1 }, { a: 1, b: 2 })).toBe(false)
+  })
+
+  it("nested object equality", () => {
+    expect(
+      isSameSetMember({ a: { b: { c: 1 } } }, { a: { b: { c: 1 } } }),
+    ).toBe(true)
+    expect(
+      isSameSetMember({ a: { b: { c: 1 } } }, { a: { b: { c: 2 } } }),
+    ).toBe(false)
+  })
+
+  it("array equality", () => {
+    expect(isSameSetMember([1, 2, 3], [1, 2, 3])).toBe(true)
+    expect(isSameSetMember([1, 2], [1, 2, 3])).toBe(false)
+    expect(isSameSetMember([1, 2, 3], [1, 3, 2])).toBe(false) // order matters
+  })
+
+  it("mixed types are not equal", () => {
+    expect(isSameSetMember([1, 2], { 0: 1, 1: 2 })).toBe(false)
+    expect(isSameSetMember(null, undefined)).toBe(false)
+    expect(isSameSetMember(null, {})).toBe(false)
   })
 })

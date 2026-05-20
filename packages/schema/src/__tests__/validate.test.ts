@@ -987,3 +987,52 @@ describe("validate: discriminated sum round-trip", () => {
     expect(validated).toEqual(result)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Set validation — array shape + uniqueness
+// ---------------------------------------------------------------------------
+
+describe("validate: set", () => {
+  const schema = Schema.struct({
+    tags: Schema.set(Schema.string()),
+  })
+
+  it("accepts an array of valid members", () => {
+    const result = validate(schema, { tags: ["alpha", "beta"] })
+    expect(result).toEqual({ tags: ["alpha", "beta"] })
+  })
+
+  it("accepts the empty set", () => {
+    const result = validate(schema, { tags: [] })
+    expect(result).toEqual({ tags: [] })
+  })
+
+  it("rejects Record-shaped sets (legacy storage)", () => {
+    expect(() => validateUntyped(schema, { tags: { alpha: "alpha" } })).toThrow(
+      /array/,
+    )
+  })
+
+  it("rejects a member that fails the item schema", () => {
+    expect(() => validateUntyped(schema, { tags: ["alpha", 42] })).toThrow(
+      /string/,
+    )
+  })
+
+  it("rejects duplicate members (uniqueness invariant)", () => {
+    expect(() => validateUntyped(schema, { tags: ["alpha", "alpha"] })).toThrow(
+      /unique/,
+    )
+  })
+
+  it("rejects structurally-equal object members as duplicates", () => {
+    const objectSetSchema = Schema.struct({
+      tags: Schema.set(Schema.struct({ name: Schema.string() })),
+    })
+    expect(() =>
+      validateUntyped(objectSetSchema, {
+        tags: [{ name: "a" }, { name: "a" }],
+      }),
+    ).toThrow(/unique/)
+  })
+})

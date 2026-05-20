@@ -92,13 +92,15 @@ export function expandMapOpsToLeaves(
     }
 
     // Determine whether to expand based on the schema kind at the op's path.
-    // Products → expand. Maps → preserve. Root (length 0) → always expand.
-    if (
-      op.path.length > 0 &&
-      resolveSchemaKindAtPath(schema, op.path) === "map"
-    ) {
-      result.push(op)
-      continue
+    // Products → expand. Maps → preserve. Sets → preserve (defense-in-depth;
+    // sets emit SetChange, so MapChange-at-a-set-path is unreachable
+    // post-refactor). Root (length 0) → always expand.
+    if (op.path.length > 0) {
+      const kindAtPath = resolveSchemaKindAtPath(schema, op.path)
+      if (kindAtPath === "map" || kindAtPath === "set") {
+        result.push(op)
+        continue
+      }
     }
 
     const mapChange = op.change as {
@@ -133,14 +135,22 @@ export function expandMapOpsToLeaves(
  * Walk the schema tree to the given path and return the structural kind.
  *
  * Returns `"product"` for structs (expand), `"map"` for records (preserve),
- * or `"other"` as a fallback (expand as safe default).
+ * `"set"` for sets (preserve as safety fallback — see below), or `"other"`
+ * as a fallback (expand as safe default).
+ *
+ * **Set handling:** Sets emit their own `SetChange` vocabulary via the
+ * writable transformer, so a `MapChange` reaching a set-keyed path is
+ * unreachable post-refactor. The `"set"` return exists so the caller
+ * (`expandMapOpsToLeaves`) preserves rather than expands in the
+ * defense-in-depth case — splitting a MapChange into per-key replaces at
+ * a set path would be incorrect.
  *
  * Pure function — no I/O, no mutation.
  */
 function resolveSchemaKindAtPath(
   schema: SchemaNode,
   path: Path,
-): "product" | "map" | "other" {
+): "product" | "map" | "set" | "other" {
   try {
     let current = schema
     // Walk each segment — we want the schema AT the path.
@@ -149,7 +159,8 @@ function resolveSchemaKindAtPath(
     }
     if (current[KIND] === "product" || current[KIND] === "tree")
       return "product"
-    if (current[KIND] === "map" || current[KIND] === "set") return "map"
+    if (current[KIND] === "map") return "map"
+    if (current[KIND] === "set") return "set"
     return "other"
   } catch {
     // Schema walk failed (e.g. sum mid-path, unknown field) — safe fallback

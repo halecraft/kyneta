@@ -16,9 +16,11 @@ import type {
   RichTextDelta,
   RichTextSpan,
   SequenceChange,
+  SetChange,
   TextChange,
   TreeChange,
 } from "./change.js"
+import { isSameSetMember } from "./guards.js"
 
 // ---------------------------------------------------------------------------
 // stepText — apply retain/insert/delete ops to a string
@@ -327,6 +329,58 @@ export function stepRichText(
 }
 
 // ---------------------------------------------------------------------------
+// stepSet — value-addressed add/remove over an array of set members
+// ---------------------------------------------------------------------------
+
+/**
+ * Applies a `SetChange` to a `T[]` set of members, producing a new array.
+ *
+ * **Total over arbitrary input.** `undefined` fields are treated as empty.
+ * Duplicate adds are idempotent; duplicate removes are idempotent.
+ *
+ * **Remove-wins on overlap.** Items appearing in both `add` and `remove`
+ * are removed. Mirrors `stepMap`'s asymmetric handling (delete-then-set
+ * means set-wins for map; SetChange's natural order is add-then-remove,
+ * giving remove-wins).
+ *
+ * **Output is normalized.** No duplicates (via `isSameSetMember`).
+ * Order: existing members retain relative position; new adds appended
+ * in `add[]` order; an add of an existing member is a no-op (preserves
+ * original position, does *not* re-append).
+ *
+ * ```
+ * stepSet(["a", "b"], { type: "set-op", add: ["c"], remove: ["a"] })
+ * → ["b", "c"]
+ * ```
+ */
+export function stepSet<T>(state: readonly T[], change: SetChange<T>): T[] {
+  const current = state ?? []
+  const adds = change.add ?? []
+  const removes = change.remove ?? []
+
+  // Remove-wins: build the effective add set excluding anything in remove.
+  const isRemoved = (v: unknown): boolean =>
+    removes.some(r => isSameSetMember(r, v))
+
+  const result: T[] = []
+  // 1. Retain existing members not in `remove`.
+  for (const member of current) {
+    if (!isRemoved(member)) {
+      result.push(member)
+    }
+  }
+  // 2. Append new adds (in `add[]` order), skipping anything already
+  // present in result or marked for removal. Adds that match a removed
+  // value are no-ops; adds that match a retained member are no-ops.
+  for (const candidate of adds) {
+    if (isRemoved(candidate)) continue
+    if (result.some(m => isSameSetMember(m, candidate))) continue
+    result.push(candidate)
+  }
+  return result
+}
+
+// ---------------------------------------------------------------------------
 // stepTree — apply tree instructions to a flat node array
 // ---------------------------------------------------------------------------
 
@@ -419,6 +473,9 @@ export function step<S>(state: S, action: ChangeBase): S {
 
     case "tree":
       return stepTree(state as unknown[], action as TreeChange) as S
+
+    case "set-op":
+      return stepSet(state as unknown[], action as SetChange) as S
 
     default:
       throw new Error(

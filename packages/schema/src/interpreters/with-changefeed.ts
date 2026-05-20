@@ -1293,7 +1293,9 @@ export function withChangefeed<A extends HasRead>(
     },
 
     // --- Set ------------------------------------------------------------------
-    // Delegate like map — attach a tree-observable changefeed.
+    // Sets are leaf-shaped: no per-member child refs, no per-key listener
+    // graph. Attach a leaf changefeed (same pattern as text/counter) — any
+    // SetChange at the set path invalidates the whole carrier.
     set(
       ctx: RefContext,
       path: Path,
@@ -1301,24 +1303,9 @@ export function withChangefeed<A extends HasRead>(
       item: (key: string) => A,
     ): A & HasChangefeed {
       const result = base.set(ctx, path, schema, item)
-      wireChangefeed(result, ctx, path, (listeners, p) => {
-        const resultAny = result as any
-        return createMapChangefeed(
-          listeners,
-          p,
-          () => (result as any)[CALL](),
-          (key: string) => {
-            if (typeof resultAny.at === "function") {
-              return resultAny.at(key)
-            }
-            throw new Error(
-              "withChangefeed: set ref missing .at() method. " +
-                "Ensure withNavigation is in the interpreter stack.",
-            )
-          },
-          () => ctx.reader.keys(p),
-        )
-      })
+      wireChangefeed(result, ctx, path, (listeners, p) =>
+        createLeafChangefeed(listeners, p, () => (result as any)[CALL]()),
+      )
       return result as A & HasChangefeed
     },
 

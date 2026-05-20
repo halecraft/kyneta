@@ -395,7 +395,9 @@ export function withCaching<A extends HasNavigation>(
     },
 
     // --- Set -------------------------------------------------------------------
-    // Delegate to address table for identity-preserving lookup (like map).
+    // Sets are leaf-shaped: no per-member child refs, so no address-table
+    // cache. Invalidation is whole-carrier — every call to `()` re-reads
+    // through `ctx.reader`. Pass through (same pattern as text/counter).
     set(
       ctx: RefContext,
       path: Path,
@@ -403,16 +405,7 @@ export function withCaching<A extends HasNavigation>(
       item: (key: string) => A & HasCaching,
     ): A & HasCaching {
       const baseItem = item as (key: string) => A
-      const result = base.set(ctx, path, schema, baseItem) as any
-      installKeyedCaching(
-        result,
-        path,
-        ADDRESS_TABLE_SYM,
-        INVALIDATE,
-        (p, handler) =>
-          registerCacheHandler(ensureCacheWiring(ctx), p, p, handler),
-      )
-      return result as A & HasCaching
+      return base.set(ctx, path, schema, baseItem) as A & HasCaching
     },
 
     // --- Tree ------------------------------------------------------------------

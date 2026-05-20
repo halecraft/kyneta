@@ -112,6 +112,8 @@ export const zeroInterpreter: Interpreter<void, unknown> = {
     return 0
   },
   set(): unknown {
+    // Matches `Plain<SetSchema<I>> = Plain<I>[]` — sets materialize as
+    // arrays, distinct from maps (which materialize as Records).
     return []
   },
   tree(

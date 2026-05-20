@@ -52,6 +52,7 @@ import {
   installRichTextWriteOps,
   installTextWriteOps,
 } from "./sequence-helpers.js"
+import { installSetWriteOps } from "./set-helpers.js"
 
 // ---------------------------------------------------------------------------
 // WritableDiscriminantProductRef — hybrid product ref for discriminated unions
@@ -433,6 +434,22 @@ export interface WritableMapRef<V = unknown> {
   clear(): void
 }
 
+/**
+ * Mutation-only interface for set refs. Added by `withWritable`.
+ *
+ * Sets are value-addressed — there is no `set(key, value)`. `add` is
+ * idempotent (no-op for an existing member, by content equality).
+ * `delete` returns the membership-before-delete (matches native
+ * `Set.prototype.delete` semantics).
+ *
+ * Reading is provided by `ReadableSetRef` from the readable interpreter.
+ */
+export interface WritableSetRef<V = unknown> {
+  add(value: V): void
+  delete(value: V): boolean
+  clear(): void
+}
+
 // ---------------------------------------------------------------------------
 // Type-level interpretations — schema type → TypeScript type
 // ---------------------------------------------------------------------------
@@ -473,7 +490,7 @@ export type Writable<S extends Schema> =
         ? RichTextRef
         : // --- First-class container types ---
           S extends SetSchema<infer I>
-          ? WritableMapRef<Plain<I>>
+          ? WritableSetRef<Plain<I>>
           : S extends TreeSchema<infer Inner>
             ? Writable<Inner>
             : S extends MovableSequenceSchema<infer _I>
@@ -678,7 +695,9 @@ export function withWritable<A>(
     },
 
     // --- Set ------------------------------------------------------------------
-    // Delegate like map.
+    // Sets are leaf-shaped: value-addressed `.add` / `.delete` / `.clear`
+    // emit `SetChange` via `installSetWriteOps`. Distinct from `map` —
+    // sets don't have key-addressed mutation.
 
     set(
       ctx: WritableContext,
@@ -687,7 +706,7 @@ export function withWritable<A>(
       item: (key: string) => A,
     ): A & HasTransact {
       const result = base.set(ctx, path, schema, item) as any
-      installKeyedWriteOps(result, ctx, path)
+      installSetWriteOps(result, ctx, path)
       attachTransact(result, ctx)
       return result
     },

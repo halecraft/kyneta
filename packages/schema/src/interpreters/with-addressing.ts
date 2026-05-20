@@ -467,26 +467,15 @@ export function withAddressing<A extends HasNavigation>(
     },
 
     // --- Set -------------------------------------------------------------------
-    // Hook into prepare for tombstoning on key deletion (like map).
+    // Sets are leaf-shaped: no per-member child refs, so no address table
+    // and no tombstoning. Pass through (same pattern as text/counter).
     set(
       ctx: RefContext,
       path: Path,
       schema: SetSchema,
       item: (key: string) => A,
     ): A {
-      const registry = getOrCreateRegistry(ctx)
-      const result = base.set(ctx, path, schema, item)
-      const mapPathKey = path.key
-      installKeyedAddressing(
-        result,
-        path,
-        ADDRESS_TABLE,
-        () => registry.getMapTable(mapPathKey),
-        (p, handler) =>
-          registerAddressingHandler(ensureAddressingWiring(ctx), p, handler),
-        handleMapChange as (table: unknown, change: unknown) => void,
-      )
-      return result
+      return base.set(ctx, path, schema, item)
     },
 
     // --- Tree ------------------------------------------------------------------

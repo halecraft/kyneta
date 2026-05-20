@@ -42,6 +42,7 @@ import type { HasNavigation, HasRead } from "./bottom.js"
 import { CALL } from "./bottom.js"
 import { installKeyedReadable } from "./keyed-helpers.js"
 import { installSequenceReadable } from "./sequence-helpers.js"
+import { installSetReadable } from "./set-helpers.js"
 
 // ---------------------------------------------------------------------------
 // withReadable — the reading transformer
@@ -185,6 +186,9 @@ export function withReadable<A extends HasNavigation>(
     },
 
     // --- Set -------------------------------------------------------------------
+    // Sets are leaf-shaped: `()` returns the plain array, `.has(value)`
+    // is content-equal membership, `.size` and `[Symbol.iterator]` over
+    // plain values. No `.at(value)`, no per-member child refs.
     set(
       ctx: RefContext,
       path: Path,
@@ -193,7 +197,7 @@ export function withReadable<A extends HasNavigation>(
     ): A & HasRead {
       const baseItem = item as (key: string) => A
       const result = base.set(ctx, path, schema, baseItem) as any
-      installKeyedReadable(result, ctx, path)
+      installSetReadable(result, ctx, path)
       return result as A & HasRead
     },
 

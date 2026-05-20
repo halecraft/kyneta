@@ -189,7 +189,9 @@ export function withNavigation<A extends HasCall>(
     },
 
     // --- Set -------------------------------------------------------------------
-    // Delegate like map — set has the same structural addressing surface.
+    // Sets are leaf-shaped: no `.at(value)`, no per-member child refs,
+    // no structural navigation surface. Pass through — the readable layer
+    // installs `.has`, `.size`, and `[Symbol.iterator]` directly.
     set(
       ctx: RefContext,
       path: Path,
@@ -197,9 +199,7 @@ export function withNavigation<A extends HasCall>(
       item: (key: string) => A & HasNavigation,
     ): A & HasNavigation {
       const baseItem = item as (key: string) => A
-      const result = base.set(ctx, path, schema, baseItem) as any
-      installKeyedNavigation(result, ctx, path, item)
-      return result as A & HasNavigation
+      return base.set(ctx, path, schema, baseItem) as A & HasNavigation
     },
 
     // --- Tree ------------------------------------------------------------------

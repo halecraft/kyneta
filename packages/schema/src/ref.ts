@@ -35,6 +35,8 @@
 //     — navigation + reading from ReadableSequenceRef, mutation from
 //     SequenceRef (which has no `.at()`, so no overload conflict)
 //   - Maps use `ReadableMapRef<SchemaRef<I, M, N>, Plain<I>> & WritableMapRef<Plain<I>>`
+//   - Sets use `ReadableSetRef<Plain<I>> & WritableSetRef<Plain<I>>` — leaf-shaped
+//     (no per-member child refs, no `.at(value)`)
 //   - `Wrap<T, M, Native>` intersects cross-cutting concerns per mode + HasNative<Native>
 //
 // See .plans/navigation-layer.md §Phase 3, Task 3.3.
@@ -46,6 +48,7 @@ import type {
   Readable,
   ReadableMapRef,
   ReadableSequenceRef,
+  ReadableSetRef,
 } from "./interpreters/readable.js"
 import type {
   CounterRef,
@@ -57,6 +60,7 @@ import type {
   SequenceRef,
   TextRef,
   WritableMapRef,
+  WritableSetRef,
 } from "./interpreters/writable.js"
 import type {
   HasNative,
@@ -225,11 +229,10 @@ export type SchemaRef<
             M,
             N["counter"]
           >
-        : // --- Set (map-like shape) ---
+        : // --- Set (leaf-shaped: value-addressed, no per-member child refs) ---
           S extends SetSchema<infer I>
           ? Wrap<
-              ReadableMapRef<Removable<SchemaRef<I, M, N>>, Plain<I>> &
-                WritableMapRef<Plain<I>>,
+              ReadableSetRef<Plain<I>> & WritableSetRef<Plain<I>>,
               M,
               N["set"]
             >

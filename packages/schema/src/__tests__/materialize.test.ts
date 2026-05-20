@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest"
-import type { MaterializeResolver } from "../index.js"
+import { describe, expect, expectTypeOf, it } from "vitest"
+import type { MaterializeResolver, Plain } from "../index.js"
 import { createMaterializeInterpreter, interpret, Schema } from "../index.js"
 import type { Path } from "../interpret.js"
 
@@ -162,5 +162,71 @@ describe("createMaterializeInterpreter", () => {
 
     const result = interpret(schema, interp, undefined)
     expect(result).toEqual({ data: { a: 7, b: 7 } })
+  })
+
+  // ── Set: array shape, distinct from map ─────────────────────────────────
+  // Set materializes to T[] (matching Plain<SetSchema<I>> = Plain<I>[]),
+  // NOT to Record<string, T>. This is the one place the catamorphism's
+  // separate `set` branch carries semantic weight vs. `map`.
+
+  it("set: empty resolver → []", () => {
+    const resolver = mockResolver()
+    const interp = createMaterializeInterpreter(resolver)
+    const schema = Schema.struct({ tags: Schema.set(Schema.string()) })
+
+    const result = interpret(schema, interp, undefined)
+    expect(result).toEqual({ tags: [] })
+    expect(Array.isArray((result as { tags: unknown }).tags)).toBe(true)
+  })
+
+  it("set: collects resolveKeys into array, item callback yields values", () => {
+    const resolver = mockResolver({
+      resolveKeys: () => ["alice", "bob"],
+      resolveValue: (path: Path) => path.segments.at(-1)?.resolve(),
+    })
+    const interp = createMaterializeInterpreter(resolver)
+    const schema = Schema.struct({ tags: Schema.set(Schema.string()) })
+
+    const result = interpret(schema, interp, undefined)
+    expect(result).toEqual({ tags: ["alice", "bob"] })
+    expect(Array.isArray((result as { tags: unknown }).tags)).toBe(true)
+  })
+
+  it("type-level: Plain<set> is an array, distinct from Plain<map>", () => {
+    const schema = Schema.struct({
+      tags: Schema.set(Schema.string()),
+      meta: Schema.record(Schema.string()),
+    })
+    expectTypeOf<Plain<typeof schema>>().toEqualTypeOf<{
+      tags: string[]
+      meta: { [key: string]: string }
+    }>()
+  })
+
+  // ── Regression: sequence and movable use the same array-collector ───────
+  // Phase 1 unified sequence/movable/set under shared collectArrayByLength /
+  // collectArrayByKeys helpers. These assertions catch a regression where
+  // any of the three diverges from array shape.
+
+  it("regression: sequence, movable, set all produce arrays", () => {
+    const resolver = mockResolver({
+      resolveLength: () => 2,
+      resolveKeys: () => ["x", "y"],
+      resolveValue: () => "v",
+    })
+    const interp = createMaterializeInterpreter(resolver)
+    const schema = Schema.struct({
+      seq: Schema.list(Schema.string()),
+      mov: Schema.movableList(Schema.string()),
+      set: Schema.set(Schema.string()),
+    })
+
+    const result = interpret(schema, interp, undefined) as Record<
+      string,
+      unknown
+    >
+    expect(Array.isArray(result.seq)).toBe(true)
+    expect(Array.isArray(result.mov)).toBe(true)
+    expect(Array.isArray(result.set)).toBe(true)
   })
 })

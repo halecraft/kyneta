@@ -118,6 +118,17 @@ export function applyChangeToYjs(
           `Attempted TreeChange at path [${pathToString(path)}].`,
       )
 
+    case "set-op":
+      // Sets (`Schema.set`) are rejected by `yjs.bind` at compile time
+      // (`"add-wins-per-key"` is not in `YjsLaws`). Unreachable from any
+      // bound Yjs substrate today; kept against the new `SetChange`
+      // vocabulary so future law-set expansion has a clear extension point.
+      throw new Error(
+        `Yjs substrate does not support "${change.type}" changes. ` +
+          `Schema.set requires "add-wins-per-key" which is not in YjsLaws. ` +
+          `Attempted SetChange at path [${pathToString(path)}].`,
+      )
+
     default:
       throw new Error(
         `applyChangeToYjs: unsupported change type "${change.type}"`,

@@ -15,6 +15,12 @@
 //    - **Container shape resolvers** (return structure metadata):
 //      resolveLength (sequence, movable), resolveKeys (map, set)
 //
+// Three "array-collector" cases — sequence, movable, set — share the
+// `collectArrayByLength` / `collectArrayByKeys` helpers and all produce
+// `Plain<I>[]`. The map case produces `Record<string, Plain<I>>`. The
+// shape distinction between set (array) and map (record) is the one
+// place the catamorphism's separate `set` branch carries semantic weight.
+//
 // Zero fallback is delegated to `zeroInterpreter` (for scalars with
 // constraint handling) and `Zero.structural` (for sum defaults). This
 // avoids duplicating default-value logic.
@@ -60,6 +66,37 @@ export interface MaterializeResolver {
 }
 
 // ---------------------------------------------------------------------------
+// collectArray — shared array-collection helpers
+// ---------------------------------------------------------------------------
+//
+// Three of the eleven interpreter cases — sequence, movable, set — all
+// produce a flat `T[]` from an item callback. They differ only in how
+// they enumerate children: by length (indexed) or by keys (set). Sharing
+// these helpers eliminates parallel implementations.
+
+function collectArrayByLength<T>(
+  length: number,
+  item: (index: number) => T,
+): T[] {
+  const result: T[] = new Array(length)
+  for (let i = 0; i < length; i++) {
+    result[i] = item(i)
+  }
+  return result
+}
+
+function collectArrayByKeys<T>(
+  keys: readonly string[],
+  item: (key: string) => T,
+): T[] {
+  const result: T[] = new Array(keys.length)
+  for (let i = 0; i < keys.length; i++) {
+    result[i] = item(keys[i] as string)
+  }
+  return result
+}
+
+// ---------------------------------------------------------------------------
 // createMaterializeInterpreter
 // ---------------------------------------------------------------------------
 
@@ -90,19 +127,14 @@ export function createMaterializeInterpreter(
       return result
     },
 
-    // 3. sequence — resolve length, iterate items
+    // 3. sequence — resolve length, collect items into array
     sequence(
       _ctx: undefined,
       path: Path,
       _schema: SequenceSchema,
       item: (index: number) => unknown,
     ): unknown {
-      const length = resolver.resolveLength(path)
-      const result: unknown[] = []
-      for (let i = 0; i < length; i++) {
-        result.push(item(i))
-      }
-      return result
+      return collectArrayByLength(resolver.resolveLength(path), item)
     },
 
     // 4. map — resolve keys, iterate items
@@ -165,19 +197,18 @@ export function createMaterializeInterpreter(
       return resolver.resolveCounter(path) ?? 0
     },
 
-    // 8. set — same pattern as map
+    // 8. set — collect into array (distinct from map, which produces a Record).
+    // The catamorphism's `set` branch carries semantic weight here:
+    // `Plain<SetSchema<I>> = Plain<I>[]` (not `Record<string, T>`).
+    // Iteration order is the resolver's `resolveKeys` order — opaque to
+    // the materializer but stable for a given doc state.
     set(
       _ctx: undefined,
       path: Path,
       _schema: SetSchema,
       item: (key: string) => unknown,
     ): unknown {
-      const keys = resolver.resolveKeys(path)
-      const result: Record<string, unknown> = {}
-      for (const key of keys) {
-        result[key] = item(key)
-      }
-      return result
+      return collectArrayByKeys(resolver.resolveKeys(path), item)
     },
 
     // 9. tree — container case, delegate via nodeData
@@ -190,19 +221,14 @@ export function createMaterializeInterpreter(
       return nodeData()
     },
 
-    // 10. movable — same pattern as sequence
+    // 10. movable — resolve length, collect items into array
     movable(
       _ctx: undefined,
       path: Path,
       _schema: MovableSequenceSchema,
       item: (index: number) => unknown,
     ): unknown {
-      const length = resolver.resolveLength(path)
-      const result: unknown[] = []
-      for (let i = 0; i < length; i++) {
-        result.push(item(i))
-      }
-      return result
+      return collectArrayByLength(resolver.resolveLength(path), item)
     },
 
     // 11. richtext — resolve rich text, default to []

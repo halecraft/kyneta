@@ -83,7 +83,7 @@ Schema.boolean()
 // CRDT kinds
 Schema.text()                        // collaborative text
 Schema.counter()                     // increment/decrement counter
-Schema.set(itemSchema)               // add-wins set
+Schema.set(itemSchema)               // add-wins set (value-addressed: .add(v), .has(v), .delete(v))
 Schema.tree(itemSchema)              // tree with move semantics
 Schema.movableList(itemSchema)       // ordered list with move
 Schema.richText({ bold: { expand: "after" } })  // collaborative rich text with marks
@@ -126,6 +126,15 @@ doc.labels.delete("bug")
 doc.labels.keys()           // string[]
 doc.labels.has("bug")       // boolean
 doc.labels()                // convert labels to plain JSON
+
+// Sets — value-addressed (no .at(value); members are not addressable)
+doc.tags.add("javascript")          // idempotent for an existing member
+doc.tags.has("javascript")           // boolean (structural content equality)
+doc.tags.delete("typescript")        // returns boolean (was present)
+doc.tags.clear()
+doc.tags.size                        // number
+for (const tag of doc.tags) { ... }  // iterate plain values
+doc.tags()                           // → string[]
 ```
 
 ## Observation

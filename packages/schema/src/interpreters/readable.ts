@@ -83,6 +83,30 @@ export interface ReadableMapRef<T = unknown, V = unknown>
 }
 
 /**
+ * An interface for readable set refs: callable + native-Set-like ergonomics.
+ *
+ * Sets are ref-layer **leaf-shaped** — there are no addressable per-member
+ * child refs, no `.at(value)`. Membership is content-equal (via
+ * `isSameSetMember`), not identity.
+ *
+ * - Call signature `(): V[]` returns a plain array snapshot — matches
+ *   `Plain<SetSchema<I>> = Plain<I>[]`.
+ * - `.has(value)` runs structural-equality membership check.
+ * - `.size` reports member count.
+ * - `[Symbol.iterator]` iterates plain values (not refs).
+ */
+export interface ReadableSetRef<V = unknown> {
+  /** Callable: returns a deep plain snapshot of the set as an array. */
+  (): V[]
+  /** Structural-equality membership query (uses `isSameSetMember`). */
+  has(value: V): boolean
+  /** Member count. */
+  readonly size: number
+  /** Iterates plain values in stored order. */
+  [Symbol.iterator](): IterableIterator<V>
+}
+
+/**
  * Computes the readable ref type for a given schema type.
  *
  * This is the type-level counterpart to `readableInterpreter`. Every
@@ -111,7 +135,7 @@ export type Readable<S extends Schema> =
         }
       : // --- First-class container types ---
         S extends SetSchema<infer I>
-        ? ReadableMapRef<Readable<I>, Plain<I>>
+        ? ReadableSetRef<Plain<I>>
         : S extends TreeSchema<infer Inner>
           ? Readable<Inner>
           : S extends MovableSequenceSchema<infer I>

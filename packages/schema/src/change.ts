@@ -100,6 +100,24 @@ export interface IncrementChange extends ChangeBase {
 }
 
 // ---------------------------------------------------------------------------
+// Set actions — value-addressed add/remove for `Schema.set` collections
+// ---------------------------------------------------------------------------
+//
+// Distinct from `MapChange`: sets are *values* not key→value pairs.
+// `add` introduces members; `remove` removes by value. The wire name
+// `"set-op"` avoids verb collision with `MapChange.set`.
+//
+// `stepSet` is total over arbitrary input — duplicate adds idempotent,
+// duplicate removes idempotent, overlapping add+remove resolves via
+// remove-wins (mirrors `stepMap`'s asymmetric set-wins handling).
+
+export interface SetChange<T = unknown> extends ChangeBase {
+  readonly type: "set-op"
+  readonly add?: readonly T[]
+  readonly remove?: readonly T[]
+}
+
+// ---------------------------------------------------------------------------
 // Rich text types — cursor-based with format/mark instructions
 // ---------------------------------------------------------------------------
 
@@ -139,6 +157,7 @@ export type BuiltinChange =
   | TextChange
   | SequenceChange
   | MapChange
+  | SetChange
   | ReplaceChange
   | TreeChange
   | IncrementChange
@@ -180,6 +199,10 @@ export function isIncrementChange(
   return action.type === "increment"
 }
 
+export function isSetOpChange(action: ChangeBase): action is SetChange {
+  return action.type === "set-op"
+}
+
 // ---------------------------------------------------------------------------
 // Action constructors — convenience factories
 // ---------------------------------------------------------------------------
@@ -215,6 +238,20 @@ export function treeChange(
 
 export function incrementChange(amount: number): IncrementChange {
   return { type: "increment", amount }
+}
+
+/**
+ * Construct a `SetChange` — a thin passthrough.
+ *
+ * No dedup, no normalization, no validation: `stepSet` is total over
+ * arbitrary input and handles duplicates / overlap / undefined fields.
+ * The invariant lives at the operation boundary, not the constructor.
+ */
+export function setOpChange<T>(
+  add?: readonly T[],
+  remove?: readonly T[],
+): SetChange<T> {
+  return { type: "set-op", add, remove }
 }
 
 export function richTextChange(

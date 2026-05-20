@@ -77,7 +77,7 @@ function createMapDoc(initialMetadata: Record<string, string>) {
   return { doc, store }
 }
 
-function createSetDoc(initialTags: Record<string, string>) {
+function createSetDoc(initialTags: string[]) {
   const store = { tags: initialTags }
   const ctx = plainContext(store)
   const doc = interpret(setSchema, ctx)
@@ -206,21 +206,34 @@ describe("[REMOVE]: maps", () => {
 })
 
 // ===========================================================================
-// Set entry self-removal
+// Set membership mutation
 // ===========================================================================
+//
+// Sets are leaf-shaped after the refactor — there are no per-member child
+// refs, so [REMOVE] on a member doesn't apply. Membership is mutated via
+// `.add(value)` / `.delete(value)` directly on the set ref.
 
-describe("[REMOVE]: sets", () => {
-  it("removes entry from parent set", () => {
-    const { doc } = createSetDoc({ urgent: "urgent", low: "low" })
+describe("set: value-addressed mutation", () => {
+  it("removes a member via .delete(value)", () => {
+    const { doc } = createSetDoc(["urgent", "low"])
 
-    const urgentRef = doc.tags.at("urgent")
-    expect(hasRemove(urgentRef)).toBe(true)
+    expect(doc.tags.has("urgent")).toBe(true)
+    expect(doc.tags.has("low")).toBe(true)
 
-    urgentRef[REMOVE]()
+    const wasPresent = doc.tags.delete("urgent")
 
+    expect(wasPresent).toBe(true)
     expect(doc.tags.has("urgent")).toBe(false)
     expect(doc.tags.has("low")).toBe(true)
-    expect(urgentRef.deleted).toBe(true)
+  })
+
+  it(".delete of a non-member returns false (no-op)", () => {
+    const { doc } = createSetDoc(["urgent"])
+
+    const wasPresent = doc.tags.delete("does-not-exist")
+
+    expect(wasPresent).toBe(false)
+    expect(doc.tags.has("urgent")).toBe(true)
   })
 })
 

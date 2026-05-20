@@ -84,40 +84,55 @@ describe("movable list has the same write surface as sequence", () => {
 // This test ensures the contract holds through the full interpreter stack.
 // ===========================================================================
 
-describe("set kind has the same write surface as map", () => {
-  const mapSchema = Schema.struct({
-    tags: Schema.record(Schema.string()),
-  })
+describe("set kind has a value-addressed write surface", () => {
+  // Sets are distinct from maps after the refactor: storage is `T[]`,
+  // mutation is value-addressed (`.add(v)`, `.delete(v)`, `.clear()`),
+  // and `.has(v)` is content-equal membership.
 
   const setSchema = Schema.struct({
     tags: Schema.set(Schema.string()),
   })
 
-  function createDoc(schema: any) {
-    const store = { tags: { alpha: "1" } }
+  function createSetDoc(initial: string[]) {
+    const store = { tags: initial }
     const ctx = plainContext(store)
     // Cast avoids TS2589 — same pattern as above and createRef().
-    const doc = (interpret as any)(schema, ctx)
+    const doc = (interpret as any)(setSchema, ctx)
       .with(readable)
       .with(writable)
       .done()
     return { store, doc }
   }
 
-  it("set/delete/clear produce identical store mutations", () => {
-    const m = createDoc(mapSchema)
-    const s = createDoc(setSchema)
+  it(".add appends a new member; storage is T[]", () => {
+    const { doc, store } = createSetDoc(["alpha"])
 
-    m.doc.tags.set("beta", "2")
-    s.doc.tags.set("beta", "2")
-    expect(m.store.tags).toEqual(s.store.tags)
+    doc.tags.add("beta")
+    expect(store.tags).toEqual(["alpha", "beta"])
+  })
 
-    m.doc.tags.delete("alpha")
-    s.doc.tags.delete("alpha")
-    expect(m.store.tags).toEqual(s.store.tags)
+  it(".add of an existing member is idempotent", () => {
+    const { doc, store } = createSetDoc(["alpha"])
 
-    m.doc.tags.clear()
-    s.doc.tags.clear()
-    expect(m.store.tags).toEqual(s.store.tags)
+    doc.tags.add("alpha")
+    expect(store.tags).toEqual(["alpha"])
+  })
+
+  it(".delete removes by value and returns boolean", () => {
+    const { doc, store } = createSetDoc(["alpha", "beta"])
+
+    const removed = doc.tags.delete("alpha")
+    expect(removed).toBe(true)
+    expect(store.tags).toEqual(["beta"])
+
+    const noop = doc.tags.delete("alpha")
+    expect(noop).toBe(false)
+  })
+
+  it(".clear empties the set", () => {
+    const { doc, store } = createSetDoc(["alpha", "beta"])
+
+    doc.tags.clear()
+    expect(store.tags).toEqual([])
   })
 })

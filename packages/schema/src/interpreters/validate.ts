@@ -10,7 +10,7 @@
 // - validate()    — throws the first error if any
 // - tryValidate() — returns a discriminated result with all errors
 
-import { isNonNullObject } from "../guards.js"
+import { isNonNullObject, isSameSetMember } from "../guards.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import { interpret } from "../interpret.js"
 import type { Plain } from "../interpreter-types.js"
@@ -367,15 +367,37 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
   ): unknown {
     const value = path.read(ctx.root)
 
-    if (!isNonNullObject(value) || Array.isArray(value)) {
-      ctx.errors.push(new SchemaValidationError(path.format(), "object", value))
+    if (!Array.isArray(value)) {
+      ctx.errors.push(new SchemaValidationError(path.format(), "array", value))
       return undefined
     }
 
-    const result: Record<string, unknown> = {}
-    for (const key of Object.keys(value as Record<string, unknown>)) {
-      result[key] = item(key)
+    // Validate each member via item(String(i)) — array indexing via
+    // string-numeric key (`arr["0"]` ≡ `arr[0]`) so the child path's
+    // field("0") segment correctly reads value[0].
+    const result: unknown[] = new Array(value.length)
+    for (let i = 0; i < value.length; i++) {
+      result[i] = item(String(i))
     }
+
+    // Enforce uniqueness — sets cannot contain two structurally-equal
+    // members. This is the single source of truth (via isSameSetMember)
+    // shared with stepSet and SetRef.has(value).
+    for (let i = 0; i < value.length; i++) {
+      for (let j = i + 1; j < value.length; j++) {
+        if (isSameSetMember(value[i], value[j])) {
+          ctx.errors.push(
+            new SchemaValidationError(
+              path.format(),
+              `unique set members (duplicate at index ${i} and ${j})`,
+              value,
+            ),
+          )
+          break
+        }
+      }
+    }
+
     return result
   },
 
@@ -465,7 +487,7 @@ function innerSchemaExpected(schema: Schema): string {
     case "counter":
       return "number (counter)"
     case "set":
-      return "object"
+      return "array"
     case "tree":
       return innerSchemaExpected(schema.nodeData)
     case "movable":

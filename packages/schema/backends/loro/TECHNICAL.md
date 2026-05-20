@@ -371,6 +371,8 @@ const Todo = loro.bind(Schema.struct({
 
 `loro.bind(schema)` returns a `BoundSchema<S, LoroNativeMap>`. Under the hood it delegates to `@kyneta/schema`'s `bind({ schema, factory: loroFactoryBuilder, syncProtocol: SYNC_COLLABORATIVE })`. The `LoroLaws` set (`"lww" | "additive" | "positional-ot" | "positional-ot-move" | "lww-per-key" | "tree-move" | "lww-tag-replaced"`) is applied as `RestrictLaws<S, LoroLaws>`, so binding a schema that requires a composition law Loro doesn't support (e.g. `"add-wins-per-key"` from `Schema.set()`) fails at compile time.
 
+**`Schema.set` is not supported by Loro.** The `case "set"` and `case "set-op"` branches in `change-mapping.ts` are unreachable from any bound Loro substrate (set schemas fail at compile time via the law restriction above). They are kept as explicit throws for defense-in-depth and as a clear extension point should `"add-wins-per-key"` ever be added to `LoroLaws`. See [§Set: value-addressed leaf](../../TECHNICAL.md#set-value-addressed-leaf) for the kyneta-level set semantics.
+
 `loro.replica()` produces a `BoundReplica<LoroVersion>` — the replication-only variant for sync conduits that don't need to interpret state.
 
 ### What `loro.bind` is NOT

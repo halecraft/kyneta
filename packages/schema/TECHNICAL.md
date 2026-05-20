@@ -129,6 +129,18 @@ Why `text`, `counter`, `set`, `tree`, `movable`, `richtext` are grammar nodes ra
 
 Each CRDT kind contributes to the `[LAWS]` phantom of every ancestor node. A `Schema.struct({ body: Schema.text() })` has `"positional-ot"` in its `[LAWS]` accumulator even though `struct` itself is structural. The tags are algebraic properties (`"lww"`, `"additive"`, `"positional-ot"`, `"positional-ot-move"`, `"tree-move"`, `"lww-per-key"`, `"lww-tag-replaced"`, `"add-wins-per-key"`), not kind names.
 
+### Set: value-addressed leaf
+
+`Schema.set(item)` is structurally distinct from `Schema.record(item)`. Where map is a key→value relation (`Record<string, V>` at the user surface), set is an unordered uniqued bag of values:
+
+- **`Plain<SetSchema<I>>` is `Plain<I>[]`.** The user-facing shape is an array, not a keyed record. Storage on the plain substrate is also `T[]`; `materialize.set` projects CRDT-backed storage to `T[]` for shadow construction.
+- **Change vocabulary is `SetChange { add, remove }`** — value-addressed, not key-addressed. Distinct from `MapChange { set, delete }`. On overlap (an item appears in both `add` and `remove`), **remove-wins** (mirrors `stepMap`'s asymmetric set-wins-on-set-then-delete).
+- **`stepSet` is total over arbitrary input** and produces normalized output: no duplicates (via `isSameSetMember`), stable order (existing members retain relative position; new adds appended in `add[]` order). The `setOpChange(add?, remove?)` constructor is a thin passthrough — the invariant lives at the operation boundary, not the constructor.
+- **`SetRef` is leaf-shaped at the ref layer.** The interface is `.has(value)`, `.add(value)`, `.delete(value)`, `.clear()`, `.size`, `[Symbol.iterator]` over plain values, and a callable returning `T[]`. **No `.at(value)` and no per-member child refs** — sets have no addressable positions, and writing through a member ref would silently violate the set's uniqueness invariant.
+- **Membership is content-equal** (via `isSameSetMember` in `guards.ts`) — single source of truth shared by `stepSet`, `validate`, and `SetRef.has(value)`. `Schema.set(Schema.struct({...}))` correctly recognises structurally-equal object members as duplicates; native JS `Set` (which uses identity equality for objects) is *not* used because it can't fulfil this contract.
+- **Native JS `Set<T>` is not the plain shape.** Three concrete reasons: (1) `JSON.stringify(new Set([1,2,3])) === "{}"` breaks the plain substrate's export/merge; (2) `new Set([1,2]) !== new Set([1,2])` — referential inequality breaks structural test comparisons and identity-based caching; (3) `Set.prototype.has` uses identity equality for objects. `SetRef` provides native-Set-like *ergonomics* at the ref boundary; storage stays JSON-compatible `T[]`.
+- **Currently plain-substrate-only.** Both `LoroLaws` and `YjsLaws` exclude `"add-wins-per-key"`, so `loro.bind(schema)` / `yjs.bind(schema)` reject any set-bearing schema at compile time. The `case "set-op"` branches in the Loro/Yjs change-mapping modules are intentionally unreachable today — they throw a clear "not supported" error and are kept against the new `SetChange` vocabulary in case the law restriction is dropped in the future.
+
 ### `PlainSchema`: the no-CRDT subset
 
 `PlainSchema` is `Schema` restricted to structural kinds. It appears in two places:
@@ -444,6 +456,8 @@ Source: `packages/schema/src/interpreters/materialize.ts`.
 
 The 11 interpreter cases partition into **container cases** (product, tree — structurally identical for all backends, no resolver calls) and **resolution cases** (the remaining 9, each calling one of the 6 resolver methods). Zero fallback is delegated to `zeroInterpreter` (scalars) and `Zero.structural` (sums), making the materializer the canonical consumer of zero defaults for CRDT substrates.
 
+Three resolution cases — `sequence`, `movable`, `set` — share an array-collection pattern, factored into `collectArrayByLength(length, item)` and `collectArrayByKeys(keys, item)`. Sequence and movable use the length-based helper; set uses the keys-based helper. All three produce `Plain<I>[]` — `materialize.set` is **not** identical to `materialize.map`: sets project to `T[]` while maps project to `Record<string, T>`. The catamorphism's separate `set` branch carries semantic weight here, even though the storage-layer key enumeration is the same as map's.
+
 Each backend provides a thin resolver factory (~50 lines): `createLoroResolver(doc, schema, binding)` and `createYjsResolver(rootMap, schema, binding)`. The closure-based design parallels `plainReader(state) → Reader` — the resolver closes over backend state, eliminating Ctx threading.
 
 ### What an `Interpreter` is NOT
@@ -459,11 +473,13 @@ The 11 interpreter cases fall into four structural categories. The first three a
 | Family | Cases | Shared helpers | Shared algebra |
 |--------|-------|---------------|----------------|
 | **Indexed** (positional) | `text`, `sequence`, `movable`, `richtext` | `sequence-helpers.ts` — `at()`, `installTextWriteOps`, `installListWriteOps`, `installRichTextWriteOps`, `installSequenceReadable`, `installSequenceNavigation`, `installSequenceAddressing`, `installSequenceCaching` | `Instruction`, `foldInstructions`, `transformIndex`, `advanceAddresses` |
-| **Keyed** (named) | `map`, `set` | `keyed-helpers.ts` — `installKeyedWriteOps`, `installKeyedReadable`, `installKeyedNavigation`, `installKeyedAddressing`, `installKeyedCaching` | `MapChange`, keyed addressing/tombstoning |
-| **Leaf** (terminal) | `scalar`, `text`, `counter`, `richtext` | `wireChangefeed` in `with-changefeed.ts` unifies changefeed boilerplate across all leaf and composite cases | `createLeafChangefeed` |
+| **Keyed** (named) | `map` | `keyed-helpers.ts` — `installKeyedWriteOps`, `installKeyedReadable`, `installKeyedNavigation`, `installKeyedAddressing`, `installKeyedCaching` | `MapChange`, keyed addressing/tombstoning |
+| **Leaf** (terminal) | `scalar`, `text`, `counter`, `richtext`, **`set`** | `wireChangefeed` in `with-changefeed.ts` unifies changefeed boilerplate; `set-helpers.ts` provides `installSetReadable` and `installSetWriteOps` for the value-addressed set surface | `createLeafChangefeed`, `SetChange`, `isSameSetMember` |
 | **Structural** (unique) | `product`, `sum`, `tree` | None — each has unique per-case logic | Product: schema-driven fields + discriminant. Sum: store-based variant dispatch. Tree: thin pass-through. |
 
 **`text` and `richtext` straddle two families.** They are indexed for writable (share `at()` and the retain/insert/delete instruction stream with sequence/movable) but leaf for readable, navigation, and changefeed (return `string` / delta directly, not a fold over children). Characters are not independently addressable refs.
+
+**`set` is leaf-shaped at the ref layer.** Although the catamorphism dispatches set children by string key (mirroring `map`), there are no per-member child refs at the user-facing API. The surface is `.has(value)`, `.add(value)`, `.delete(value)`, `.clear()`, `.size`, `[Symbol.iterator]`, callable returning `Plain<I>[]` — narrower than `map`'s, and value-addressed (no `.at(value)`). Invalidation is whole-carrier on any `SetChange` (same pattern as text/counter). See [§Set: value-addressed leaf](#set-value-addressed-leaf).
 
 The `Interpreter` interface retains separate cases per kind — the sharing is internal to the built-in transformers. Substrate authors implement one case per kind; they never see the shared helpers.
 
@@ -874,6 +890,10 @@ A Lamport vector. `versionVectorMeet` and `versionVectorCompare` operate on it d
 
 For ephemeral substrates: a single wall-clock number plus the peer ID. `merge` accepts the incoming value iff `timestamp > local.timestamp || (equal && peerId > local.peerId)`. Stale writes are rejected silently.
 
+### Wire-codec opacity
+
+The plain substrate's `serializeOps` / `deserializeOps` embed `Op.change` by reference — the change is JSON-stringified as-is and passed through `WireOfferMsg.d` (an opaque `string | Uint8Array` payload). The exchange wire codec never inspects schema-level change types; it carries them as JSON inside the substrate payload. Adding a new `ChangeBase` variant (e.g. `SetChange { type: "set-op" }`) is purely additive — no exchange codec change required. The only caveat is for out-of-monorepo consumers parsing the plain JSON wire format with a strict change-type whitelist: those need to extend their whitelist when new change variants land.
+
 ## The functional shadow
 
 CRDT substrates (Loro, Yjs) maintain a **shadow**: a `PlainState` object that serves as the canonical read surface for all interpreter-stack reads. The architecture separates four surfaces:
@@ -917,12 +937,13 @@ Source: `packages/schema/src/zero.ts`.
 
 - `string` → `""`, `number` → `0`, `boolean` → `false`, `null` → `null`, `bytes` → empty `Uint8Array`.
 - Product → each field's default.
-- Sequence / map / set → empty.
+- Sequence / movable → `[]`.
+- Map → `{}`.
+- Set → `[]` (matches `Plain<SetSchema<I>> = Plain<I>[]` — distinct from map, which is `Record<string, T>`).
 - Sum → first variant's default.
 - Text → empty text.
 - Counter → `0`.
 - Tree → single root node with `nodeData`'s default.
-- Movable → empty.
 
 `scalarDefault(kind)` is the scalar-only version. Used by `createDoc` when no initial state is supplied, by migrations' `setDefault` primitive, and by tests.
 

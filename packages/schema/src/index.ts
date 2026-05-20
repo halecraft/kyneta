@@ -45,6 +45,7 @@ export type {
   RichTextSpan,
   SequenceChange,
   SequenceInstruction,
+  SetChange,
   TextChange,
   TextInstruction,
   TextPatch,
@@ -61,6 +62,7 @@ export {
   isReplaceChange,
   isRichTextChange,
   isSequenceChange,
+  isSetOpChange,
   // Type guards
   isTextChange,
   isTreeChange,
@@ -68,6 +70,7 @@ export {
   replaceChange,
   richTextChange,
   sequenceChange,
+  setOpChange,
   // Constructors
   textChange,
   textInstructionsToPatches,
@@ -95,7 +98,7 @@ export { applyChanges, change, remove } from "./facade/change.js"
 // Facade — library-level observation protocol
 export { subscribe, subscribeNode } from "./facade/observe.js"
 // Guards — shared type-narrowing utilities
-export { isNonNullObject, isPropertyHost } from "./guards.js"
+export { isNonNullObject, isPropertyHost, isSameSetMember } from "./guards.js"
 export type {
   ChangefeedBrand,
   InterpretBuilder,
@@ -147,6 +150,7 @@ export type {
   Readable,
   ReadableMapRef,
   ReadableSequenceRef,
+  ReadableSetRef,
 } from "./interpreters/readable.js"
 // Positional algebra — cursor-positioning kernel
 export { at } from "./interpreters/sequence-helpers.js"
@@ -195,6 +199,7 @@ export type {
   Writable,
   WritableContext,
   WritableMapRef,
+  WritableSetRef,
 } from "./interpreters/writable.js"
 export {
   buildWritableContext,
@@ -361,6 +366,7 @@ export {
   stepReplace,
   stepRichText,
   stepSequence,
+  stepSet,
   stepText,
   stepTree,
 } from "./step.js"
