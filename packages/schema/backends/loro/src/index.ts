@@ -45,8 +45,8 @@ export { type LoroLaws, loro } from "./bind-loro.js"
 export { batchToOps, changeToDiff } from "./change-mapping.js"
 // Guards — shared Loro runtime type guards
 export { hasKind, isLoroContainer, isLoroDoc } from "./loro-guards.js"
-export type { ResolveResult } from "./loro-resolve.js"
-// Container resolution
+// Container resolution — `resolveContainer` returns `PathFoldResult` from
+// `@kyneta/schema` (consumers needing the type should import it from there).
 export { resolveContainer, stepIntoLoro } from "./loro-resolve.js"
 // NativeMap — the Loro functor
 export type { LoroNativeMap } from "./native-map.js"

@@ -34,9 +34,9 @@ import type {
   TextInstruction,
 } from "@kyneta/schema"
 import {
-  advanceSchema,
   expandMapOpsToLeaves,
   KIND,
+  pathSchema,
   RawPath,
   richTextChange,
 } from "@kyneta/schema"
@@ -213,7 +213,7 @@ function applySequenceChange(
   }
 
   // Resolve the item schema for structured insert detection
-  const targetSchema = resolveSchemaAtPath(rootSchema, path)
+  const targetSchema = pathSchema(rootSchema, path)
   const itemSchema = getItemSchema(targetSchema)
 
   let cursor = 0
@@ -253,7 +253,7 @@ function applyMapChange(
   }
 
   // Resolve the schema at this path for structured value detection
-  const targetSchema = resolveSchemaAtPath(rootSchema, path)
+  const targetSchema = pathSchema(rootSchema, path)
 
   // Apply deletes first
   if (change.delete) {
@@ -321,7 +321,7 @@ function applyReplaceChange(
     (lastSeg.role === "field" || lastSeg.role === "entry")
   ) {
     // Resolve schema for the target field for structured value detection
-    const targetSchema = resolveSchemaAtPath(rootSchema, path)
+    const targetSchema = pathSchema(rootSchema, path)
     const yjsValue = maybeCreateSharedType(change.value, targetSchema)
     // Identity-keying applies only at product-field boundaries; entry
     // segments use the runtime key as-is.
@@ -336,7 +336,7 @@ function applyReplaceChange(
     }
     parent.set(mapKey, yjsValue)
   } else if (parent instanceof Y.Array && lastSeg.role === "index") {
-    const targetSchema = resolveSchemaAtPath(rootSchema, path)
+    const targetSchema = pathSchema(rootSchema, path)
     const yjsValue = maybeCreateSharedType(change.value, targetSchema)
     parent.delete(resolved as number, 1)
     parent.insert(resolved as number, [yjsValue])
@@ -617,7 +617,7 @@ function eventToChange(
 ): ChangeBase | null {
   if (event.target instanceof Y.Text) {
     // Both text and richtext use Y.Text — resolve the schema to dispatch.
-    const schemaAtPath = resolveSchemaAtPath(rootSchema, kynetaPath)
+    const schemaAtPath = pathSchema(rootSchema, kynetaPath)
     if (schemaAtPath[KIND] === "richtext") {
       return richTextEventToChange(event)
     }
@@ -779,20 +779,6 @@ function extractEventValue(value: unknown): unknown {
 // ---------------------------------------------------------------------------
 // Schema helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Resolve the schema at a given path by walking through advanceSchema.
- */
-function resolveSchemaAtPath(rootSchema: SchemaNode, path: Path): SchemaNode {
-  let schema = rootSchema
-  for (const seg of path.segments) {
-    schema = advanceSchema(schema, seg)
-    // Sum variants are always PlainSchema — cannot advance further.
-    // Return early; remaining segments address plain JSON values.
-    if (schema[KIND] === "sum") return schema
-  }
-  return schema
-}
 
 /**
  * Get the item schema from a sequence schema, if available.

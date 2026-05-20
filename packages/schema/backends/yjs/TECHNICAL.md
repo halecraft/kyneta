@@ -32,8 +32,8 @@ Consumed by applications that bind schemas with `yjs.bind(schema)`. Not imported
 | `YjsNativeMap` | The `NativeMap` functor mapping schema kinds to Yjs shared types (`text → Y.Text`, `list → Y.Array`, `struct → Y.Map`, `map → Y.Map`). Slots for unsupported kinds are `undefined`. | A JS `Map` — this is a type-level functor |
 | `YjsVersion` | `@kyneta/schema`'s `Version` implementation wrapping a Yjs **snapshot** (state vector + delete set). | A bare state vector — SV-only versions cannot distinguish same-state from divergent-deletes |
 | `YjsPosition` | `Position` implementation wrapping `Y.RelativePosition`. Stateless `transform` — resolution queries the CRDT directly. | A numeric index |
-| `resolveYjsType` | Pure left-fold over path segments accumulating `(currentType, currentSchema)`. The navigation primitive for every read. | A cache lookup — resolution happens on every read |
-| `stepIntoYjs` | One step of `resolveYjsType`: given `(currentType, segment, identity?)`, return the child shared type or scalar. | `stepIntoLoro` from the Loro backend — same shape, different dispatch |
+| `resolveYjsType` | Thin wrapper over the core `foldPath(stepIntoYjs, ...)` primitive (from `@kyneta/schema`). The two semantic invariants (identity-keying, sum-boundary short-circuit) live in `@kyneta/schema/src/fold-path.ts`, not here. | A cache lookup — resolution happens on every read |
+| `stepIntoYjs` | The Yjs `PathStepper`: per-step substrate dispatch. Given `(current, _nextSchema, segment, identity)` returns the child shared type or scalar (the `_nextSchema` slot is unused; Yjs's `instanceof` dispatch doesn't look ahead). | `stepIntoLoro` from the Loro backend — both are `PathStepper` instances, both driven by `foldPath`; the dispatch is what differs |
 | `root Y.Map` | The single `Y.Map` at `doc.getMap("root")` that holds every schema field (shared types or plain values). | A per-field root container (that's the Loro model) |
 | `ensureContainers` | Conditionally creates shared types for every schema field. Idempotent. Uses structural client ID during creation. | `populate` — creates containers; populate fills them |
 | `applyChangeToYjs` | Pure-ish: apply a kyneta `Change` + path + schema to a Yjs shared type (inside an open transaction). | `changeToDiff` from Loro — Loro accumulates diffs then applies once; Yjs mutates incrementally inside `transact` |
@@ -77,6 +77,7 @@ The two backends implement the same `Substrate<V>` contract and share the overal
 
 | Concern | `@kyneta/loro-schema` | `@kyneta/yjs-schema` |
 |---------|-----------------------|----------------------|
+| Navigation fold | `foldPath(stepIntoLoro, ...)` from `@kyneta/schema` | `foldPath(stepIntoYjs, ...)` from `@kyneta/schema` |
 | Root layout | One Loro container per root field (typed accessors: `doc.getText(k)`, `doc.getMap(k)`, …) plus a reserved `_props` map for root scalars | One `Y.Map` at `doc.getMap("root")` holds *every* field (shared types and plain values alike) |
 | Container discrimination | `.kind()` method (strings: `"Map"`, `"Text"`, `"List"`, …) | `instanceof Y.Map`, `instanceof Y.Array`, `instanceof Y.Text` |
 | Why | Loro containers are WASM handles; `instanceof` is unreliable across module boundaries | Yjs shared types are native JS classes; `instanceof` is stable |
@@ -412,7 +413,7 @@ This is the same mechanism as the Loro backend, exercised with a narrower law se
 | `src/bind-yjs.ts` | 171 | `yjs.bind` / `yjs.replica` binding target; `YjsLaws`. |
 | `src/substrate.ts` | 499 | `YjsSubstrate`, factories, prepare/flush, `Y.transact` wrapping, `observeDeep` event bridge, origin-based suppression. |
 | `src/change-mapping.ts` | 666 | `applyChangeToYjs` (per kyneta change type → Yjs mutations) + `eventsToOps` (Yjs events → kyneta `Op[]`). |
-| `src/yjs-resolve.ts` | 126 | `resolveYjsType`, `stepIntoYjs`. |
+| `src/yjs-resolve.ts` | 88 | `stepIntoYjs`; `resolveYjsType` is a thin wrapper over the core `foldPath` primitive. |
 | `src/populate.ts` | 248 | `ensureContainers` (conditional structural creation) + `populate` (populate-then-attach). |
 | `src/reader.ts` | 131 | `yjsReader` — reads via `resolveYjsType` + per-type extraction. |
 | `src/version.ts` | 240 | `YjsVersion` (SV + delete set), two-part serialisation, legacy SV-only compat. |

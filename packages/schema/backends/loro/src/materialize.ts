@@ -40,64 +40,64 @@ function createLoroResolver(
 ): MaterializeResolver {
   return {
     resolveValue(path: Path): unknown {
-      const result = resolveContainer(doc, rootSchema, path, binding)
-      return extractValue(result.container)
+      const { resolved } = resolveContainer(doc, rootSchema, path, binding)
+      return extractValue(resolved)
     },
 
     resolveText(path: Path): string | undefined {
-      const { container } = resolveContainer(doc, rootSchema, path, binding)
-      if (hasKind(container) && container.kind() === "Text") {
-        return (container as any).toString() as string
+      const { resolved } = resolveContainer(doc, rootSchema, path, binding)
+      if (hasKind(resolved) && resolved.kind() === "Text") {
+        return (resolved as any).toString() as string
       }
-      const value = extractValue(container)
+      const value = extractValue(resolved)
       return typeof value === "string" ? value : undefined
     },
 
     resolveCounter(path: Path): number | undefined {
-      const { container } = resolveContainer(doc, rootSchema, path, binding)
-      if (hasKind(container) && container.kind() === "Counter") {
-        return (container as any).value as number
+      const { resolved } = resolveContainer(doc, rootSchema, path, binding)
+      if (hasKind(resolved) && resolved.kind() === "Counter") {
+        return (resolved as any).value as number
       }
-      const value = extractValue(container)
+      const value = extractValue(resolved)
       return typeof value === "number" ? value : undefined
     },
 
     resolveRichText(path: Path): RichTextDelta | undefined {
-      const { container } = resolveContainer(doc, rootSchema, path, binding)
-      if (hasKind(container) && container.kind() === "Text") {
-        const deltas = (container as any).toDelta() as Delta<string>[]
+      const { resolved } = resolveContainer(doc, rootSchema, path, binding)
+      if (hasKind(resolved) && resolved.kind() === "Text") {
+        const deltas = (resolved as any).toDelta() as Delta<string>[]
         return loroDeltaToRichTextDelta(deltas)
       }
       return undefined
     },
 
     resolveLength(path: Path): number {
-      const { container } = resolveContainer(doc, rootSchema, path, binding)
-      if (!hasKind(container)) {
-        return Array.isArray(container) ? container.length : 0
+      const { resolved } = resolveContainer(doc, rootSchema, path, binding)
+      if (!hasKind(resolved)) {
+        return Array.isArray(resolved) ? resolved.length : 0
       }
-      const kind = container.kind()
+      const kind = resolved.kind()
       if (kind === "List" || kind === "MovableList") {
-        return (container as any).length as number
+        return (resolved as any).length as number
       }
       return 0
     },
 
     resolveKeys(path: Path): string[] {
-      const { container } = resolveContainer(doc, rootSchema, path, binding)
-      if (!hasKind(container)) {
-        return isNonNullObject(container) ? Object.keys(container) : []
+      const { resolved } = resolveContainer(doc, rootSchema, path, binding)
+      if (!hasKind(resolved)) {
+        return isNonNullObject(resolved) ? Object.keys(resolved) : []
       }
-      if (container.kind() === "Map") {
-        return (container as any).keys() as string[]
+      if (resolved.kind() === "Map") {
+        return (resolved as any).keys() as string[]
       }
       return []
     },
 
     resolveForest(path: Path): readonly FlatTreeNodeTopology[] {
-      const { container } = resolveContainer(doc, rootSchema, path, binding)
-      if (!hasKind(container) || container.kind() !== "Tree") return []
-      const rows = (container as any).toArray() as Array<{
+      const { resolved } = resolveContainer(doc, rootSchema, path, binding)
+      if (!hasKind(resolved) || resolved.kind() !== "Tree") return []
+      const rows = (resolved as any).toArray() as Array<{
         id: string
         parent: string | null | undefined
         index: number

@@ -1,30 +1,26 @@
-// loro-resolve — Loro-specific container resolution.
+// loro-resolve — Loro-specific path resolution.
 //
-// Implements stepIntoLoro and resolveContainer for schema-guided
-// navigation of the Loro container tree.
-//
-// resolveContainer is a left-fold over path segments, accumulating
-// (currentContainer, currentSchema) at each step. This mirrors how
-// readByPath works for plain objects — but guided by the schema to
-// know which Loro API to call.
+// `stepIntoLoro` is the per-step substrate dispatch; `resolveContainer`
+// applies the core `foldPath` primitive (from `@kyneta/schema`) around
+// it. The semantic invariants of the fold — identity-keying at
+// product-field boundaries, sum-boundary short-circuit — live in
+// `fold-path.ts`, not here.
 //
 // The root case (LoroDoc) uses typed root container accessors
-// (doc.getMap, doc.getText, etc.) based on the schema's [KIND].
+// (doc.getMap, doc.getText, etc.) based on the next field's [KIND].
 // Non-root cases use generic container .get() methods with .kind()
 // for runtime type discrimination.
 //
 // Root scalar fields (non-container types like Schema.string()) are
 // stored in a single root LoroMap named PROPS_KEY ("_props"). This
 // avoids creating a separate root container per scalar field.
-//
-// Identity-keying: every product-field boundary uses the identity hash
-// (from SchemaBinding) instead of the field name as the Loro container
-// key. The binding is threaded through resolveContainer and stepIntoLoro.
 
 import {
-  advanceSchema,
+  foldPath,
   KIND,
   type Path,
+  type PathFoldResult,
+  type PathStepper,
   type SchemaBinding,
   type Schema as SchemaNode,
   type Segment,
@@ -135,33 +131,26 @@ function stepFromContainer(
 }
 
 // ---------------------------------------------------------------------------
-// stepIntoLoro — single step of the fold
+// stepIntoLoro — per-step substrate dispatch (PathStepper for Loro)
 // ---------------------------------------------------------------------------
 
 /**
  * Navigate one step deeper into the Loro container tree.
  *
  * If `current` is a LoroDoc (root), dispatches via the typed root
- * container accessors using the schema to determine the container type.
+ * container accessors using `nextSchema` to determine the container type.
  * The key used is the identity hash when provided.
  *
  * If `current` is a Loro container, dispatches via `.get()` using
  * `.kind()` for runtime type discrimination. For Maps, uses the
  * identity hash when provided.
- *
- * @param current - The current position (LoroDoc or a container)
- * @param _currentSchema - The schema at the current position (used for root dispatch)
- * @param nextSchema - The schema of the child being navigated to
- * @param segment - The path segment to follow
- * @param identity - Optional identity hash to use instead of the segment's resolved value
  */
-export function stepIntoLoro(
-  current: unknown,
-  _currentSchema: SchemaNode,
-  nextSchema: SchemaNode,
-  segment: Segment,
-  identity?: string,
-): unknown {
+export const stepIntoLoro: PathStepper = (
+  current,
+  nextSchema,
+  segment,
+  identity,
+) => {
   if (isLoroDoc(current)) {
     return stepFromDoc(
       current,
@@ -174,31 +163,18 @@ export function stepIntoLoro(
 }
 
 // ---------------------------------------------------------------------------
-// resolveContainer — full path resolution via left-fold
+// resolveContainer — full path resolution via foldPath
 // ---------------------------------------------------------------------------
-
-/**
- * Result of resolving a Loro container at a path — includes both the
- * container (or scalar value) and the schema at that position.
- */
-export interface ResolveResult {
-  readonly container: unknown
-  readonly schema: SchemaNode
-}
 
 /**
  * Resolve a Loro container (or scalar value) at the given path.
  *
- * Left-folds over path segments using `advanceSchema` for pure schema
- * descent and `stepIntoLoro` for Loro-specific container navigation.
+ * Thin wrapper around `foldPath(stepIntoLoro, ...)`. Returns the
+ * `PathFoldResult` shape from core — `{ resolved, schema }`.
  *
- * When a `binding` is provided, each step computes the absolute schema
- * path and looks up the identity hash from `binding.forward`. This
- * identity hash is used instead of the field name at every product-field
- * boundary (root and nested).
+ * When a `binding` is provided, every product-field boundary uses the
+ * identity hash from `binding.forward` instead of the field name.
  *
- * Returns both the Loro container (or scalar value) at the terminal
- * position and the schema at that position.
  * For an empty path, returns the doc itself with the root schema.
  */
 export function resolveContainer(
@@ -206,43 +182,6 @@ export function resolveContainer(
   rootSchema: SchemaNode,
   path: Path,
   binding?: SchemaBinding,
-): ResolveResult {
-  let current: unknown = doc
-  let schema = rootSchema
-  // Track the accumulated absolute schema path for identity lookup.
-  // Only string (key) segments contribute — index segments are structural
-  // and don't participate in identity-keying.
-  let absPath = ""
-  const segments = path.segments
-  for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i] as Segment
-    const nextSchema = advanceSchema(schema, seg)
-
-    // Identity-keying is a product-field-only concern (the binding is
-    // populated with declared field paths). The role check makes that
-    // predicate segment-local instead of relying on a parent-kind sniff.
-    let identity: string | undefined
-    if (binding && seg.role === "field") {
-      const segStr = seg.resolve() as string
-      absPath = absPath ? `${absPath}.${segStr}` : segStr
-      identity = binding.forward.get(absPath) as string | undefined
-    }
-
-    current = stepIntoLoro(current, schema, nextSchema, seg, identity)
-    schema = nextSchema
-
-    // Sum boundary: remaining segments resolve via plain JS property
-    // access. Sound because sum variants are PlainSchema — no Loro
-    // containers inside sums.
-    if (schema[KIND] === "sum") {
-      for (let j = i + 1; j < segments.length; j++) {
-        const remaining = segments[j] as Segment
-        current = (current as Record<string, unknown> | undefined)?.[
-          remaining.resolve() as string
-        ]
-      }
-      return { container: current, schema }
-    }
-  }
-  return { container: current, schema }
+): PathFoldResult {
+  return foldPath(doc, rootSchema, path, stepIntoLoro, binding)
 }

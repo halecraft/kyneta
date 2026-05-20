@@ -1,35 +1,29 @@
 // yjs-resolve — Yjs-specific path resolution.
 //
-// Implements stepIntoYjs and resolveYjsType for schema-guided
-// navigation of the Yjs shared type tree.
-//
-// resolveYjsType is a left-fold over path segments, accumulating
-// (currentType, currentSchema) at each step. This mirrors how
-// resolveContainer works for Loro — but uses `instanceof` for
-// runtime type discrimination instead of Loro's `.kind()` method.
+// `stepIntoYjs` is the per-step substrate dispatch; `resolveYjsType`
+// applies the core `foldPath` primitive (from `@kyneta/schema`) around
+// it. The semantic invariants of the fold — identity-keying at
+// product-field boundaries, sum-boundary short-circuit — live in
+// `fold-path.ts`, not here.
 //
 // Root container strategy: All schema fields are children of a single
 // root `Y.Map` obtained via `doc.getMap("root")`. This root map holds
 // shared types (Y.Text, Y.Array, Y.Map) and plain values uniformly.
 // Using a single root Y.Map enables one `observeDeep` call that
 // captures all mutations with correct relative paths.
-//
-// Identity-keying: when a SchemaBinding is provided, every product-field
-// boundary uses the identity hash (from binding.forward) instead of the
-// field name as the Y.Map key. The binding is threaded through
-// resolveYjsType and stepIntoYjs.
 
-import type {
-  Path,
-  SchemaBinding,
-  Schema as SchemaNode,
-  Segment,
+import {
+  foldPath,
+  type Path,
+  type PathFoldResult,
+  type PathStepper,
+  type SchemaBinding,
+  type Schema as SchemaNode,
 } from "@kyneta/schema"
-import { advanceSchema, KIND } from "@kyneta/schema"
 import * as Y from "yjs"
 
 // ---------------------------------------------------------------------------
-// stepIntoYjs — single step of the fold
+// stepIntoYjs — per-step substrate dispatch (PathStepper for Yjs)
 // ---------------------------------------------------------------------------
 
 /**
@@ -41,15 +35,16 @@ import * as Y from "yjs"
  * - `Y.Text` → terminal (cannot step further)
  * - Plain value → terminal (return `undefined`)
  *
- * @param current - The current position (a Yjs shared type or plain value)
- * @param segment - The path segment to follow
- * @param identity - Optional identity hash to use instead of the segment's resolved value
+ * `_nextSchema` is part of the `PathStepper` contract for Loro's root
+ * dispatch but is unused here — Yjs's `instanceof` dispatch doesn't
+ * need to look ahead at the next schema kind.
  */
-export function stepIntoYjs(
-  current: unknown,
-  segment: Segment,
-  identity?: string,
-): unknown {
+export const stepIntoYjs: PathStepper = (
+  current,
+  _nextSchema,
+  segment,
+  identity,
+) => {
   const resolved = segment.resolve()
 
   if (current instanceof Y.Map) {
@@ -69,86 +64,25 @@ export function stepIntoYjs(
 }
 
 // ---------------------------------------------------------------------------
-// resolveYjsType — full path resolution via left-fold
+// resolveYjsType — full path resolution via foldPath
 // ---------------------------------------------------------------------------
-
-/**
- * Result of resolving a Yjs shared type at a path.
- *
- * Includes both the resolved Yjs value and the schema at that position,
- * enabling callers to distinguish between schema kinds that map to the
- * same Yjs type (e.g. "text" vs "richtext" both use Y.Text).
- */
-export interface ResolvedYjs {
-  readonly resolved: unknown
-  readonly schema: SchemaNode
-}
 
 /**
  * Resolve a Yjs shared type (or plain value) at the given path.
  *
- * Left-folds over path segments using `advanceSchema` for pure schema
- * descent and `stepIntoYjs` for Yjs-specific navigation.
+ * Thin wrapper around `foldPath(stepIntoYjs, ...)`. Returns the
+ * `PathFoldResult` shape from core — `{ resolved, schema }`.
  *
- * When a `binding` is provided, each step computes the absolute schema
- * path and looks up the identity hash from `binding.forward`. This
- * identity hash is used instead of the field name at every product-field
- * boundary (root and nested).
+ * When a `binding` is provided, every product-field boundary uses the
+ * identity hash from `binding.forward` instead of the field name.
  *
- * Returns both the Yjs shared type (or plain value) and the schema at
- * the terminal position. For an empty path, returns the root map and
- * root schema.
- *
- * @param rootMap - The root `Y.Map` obtained via `doc.getMap("root")`
- * @param rootSchema - The root document schema
- * @param path - The path to resolve
- * @param binding - Optional SchemaBinding for identity-keyed navigation.
+ * For an empty path, returns the root map and root schema.
  */
 export function resolveYjsType(
   rootMap: Y.Map<any>,
   rootSchema: SchemaNode,
   path: Path,
   binding?: SchemaBinding,
-): ResolvedYjs {
-  let current: unknown = rootMap
-  let schema = rootSchema
-  // Track the accumulated absolute schema path for identity lookup.
-  // Only string (key) segments contribute — index segments are structural
-  // and don't participate in identity-keying.
-  let absPath = ""
-
-  for (let i = 0; i < path.length; i++) {
-    const seg = path.segments[i]
-    if (!seg) throw new Error(`Missing segment at index ${i}`)
-    const nextSchema = advanceSchema(schema, seg)
-
-    // Identity-keying is a product-field-only concern (the binding is
-    // populated with declared field paths). The role check makes that
-    // predicate segment-local instead of relying on a parent-kind sniff.
-    let identity: string | undefined
-    if (binding && seg.role === "field") {
-      const segStr = seg.resolve() as string
-      absPath = absPath ? `${absPath}.${segStr}` : segStr
-      identity = binding.forward.get(absPath) as string | undefined
-    }
-
-    current = stepIntoYjs(current, seg, identity)
-    schema = nextSchema
-
-    // Sum variants are always PlainSchema — no CRDT containers inside.
-    // Once we land on a sum, resolve remaining segments via plain JS
-    // property access on the (JSON) value.
-    if (schema[KIND] === "sum" && i + 1 < path.length) {
-      for (let j = i + 1; j < path.length; j++) {
-        const remaining = path.segments[j]
-        if (!remaining) throw new Error(`Missing segment at index ${j}`)
-        current = (current as Record<string, unknown>)?.[
-          remaining.resolve() as string
-        ]
-      }
-      return { resolved: current, schema }
-    }
-  }
-
-  return { resolved: current, schema }
+): PathFoldResult {
+  return foldPath(rootMap, rootSchema, path, stepIntoYjs, binding)
 }

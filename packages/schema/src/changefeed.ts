@@ -21,8 +21,9 @@ import {
   hasChangefeed,
 } from "@kyneta/changefeed"
 import type { ReplaceChange } from "./change.js"
+import { pathSchema } from "./fold-path.js"
 import type { Path } from "./interpret.js"
-import { advanceSchema, KIND, type Schema as SchemaNode } from "./schema.js"
+import { KIND, type Schema as SchemaNode } from "./schema.js"
 
 // ---------------------------------------------------------------------------
 // Re-exports from @kyneta/changefeed used by schema internals
@@ -156,18 +157,20 @@ function resolveSchemaKindAtPath(
   path: Path,
 ): "product" | "map" | "set" | "tree" | "other" {
   try {
-    let current = schema
-    // Walk each segment — we want the schema AT the path.
-    for (const segment of path.segments) {
-      current = advanceSchema(current, segment)
-    }
+    // Sum-interior paths return the sum schema (handled structurally by
+    // foldPath's short-circuit) — the kind classifier maps "sum" to
+    // "other" since the variant cannot be determined without a value.
+    // The try/catch still covers structural mismatches (unknown field,
+    // index-on-non-sequence) that `advanceSchema` throws on from inside
+    // `foldPath`.
+    const current = pathSchema(schema, path)
     if (current[KIND] === "product") return "product"
     if (current[KIND] === "map") return "map"
     if (current[KIND] === "set") return "set"
     if (current[KIND] === "tree") return "tree"
     return "other"
   } catch {
-    // Schema walk failed (e.g. sum mid-path, unknown field) — safe fallback
+    // Schema walk failed (e.g. unknown field) — safe fallback
     return "other"
   }
 }

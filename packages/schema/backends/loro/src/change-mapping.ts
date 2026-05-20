@@ -31,9 +31,9 @@ import type {
   TreeInstruction,
 } from "@kyneta/schema"
 import {
-  advanceSchema,
   expandMapOpsToLeaves,
   KIND,
+  pathSchema,
   RawPath,
   richTextChange,
   structuralKind,
@@ -125,7 +125,7 @@ export function changeToDiff(
   }
 
   // Resolve the target container
-  const { container: resolved } = resolveContainer(doc, schema, path, binding)
+  const { resolved } = resolveContainer(doc, schema, path, binding)
 
   // Get the ContainerID
   let targetCID: ContainerID
@@ -138,7 +138,7 @@ export function changeToDiff(
       throw new Error("changeToDiff: cannot create diff for root-level scalar")
     }
     const parentPath = path.slice(0, -1)
-    const { container: parentResolved } = resolveContainer(
+    const { resolved: parentResolved } = resolveContainer(
       doc,
       schema,
       parentPath,
@@ -155,11 +155,12 @@ export function changeToDiff(
 
   // Invariant: no sum schema mid-walk. Non-replace change types cannot
   // originate from sum-interior paths (PlainSchema excludes all CRDT
-  // types); replace changes are dispatched early above.
-  let targetSchema = schema
-  for (const seg of path.segments) {
-    targetSchema = advanceSchema(targetSchema, seg)
-  }
+  // types); replace changes are dispatched early above. If the invariant
+  // were violated, `pathSchema` would return the sum schema (instead of
+  // the prior behavior where `advanceSchema` would throw); the downstream
+  // switch then receives a sum schema for a non-replace change — same
+  // effective failure mode (malformed write), different surface.
+  const targetSchema = pathSchema(schema, path)
 
   switch (change.type) {
     case "text":
@@ -440,7 +441,7 @@ function replaceChangeToDiff(
   const lastSeg = path.segments[path.segments.length - 1]
   if (!lastSeg) throw new Error("replaceChangeToDiff: empty path")
   const parentPath = path.slice(0, -1)
-  const { container: parentResolved } = resolveContainer(
+  const { resolved: parentResolved } = resolveContainer(
     doc,
     schema,
     parentPath,
@@ -772,17 +773,9 @@ export function batchToOps(
   for (const event of batch.events) {
     const kynetaPath = loroPathToKynetaPath(event.path, schema, binding)
     // Resolve the leaf schema to distinguish text vs richtext diffs.
-    let leafSchema: SchemaNode | undefined
-    try {
-      let s = schema
-      for (const seg of kynetaPath.segments) {
-        s = advanceSchema(s, seg)
-      }
-      leafSchema = s
-    } catch {
-      // Fall back to untyped dispatch. Sum-interior paths land here
-      // because sums are opaque values, not walkable schema nodes.
-    }
+    // Sum-interior paths return the sum schema (foldPath's short-circuit
+    // takes over what the old try/catch handled by falling through).
+    const leafSchema: SchemaNode | undefined = pathSchema(schema, kynetaPath)
     const change = diffToChange(event.diff, binding, leafSchema)
     if (change) {
       ops.push({ path: kynetaPath, change })

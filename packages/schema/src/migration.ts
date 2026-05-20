@@ -14,6 +14,7 @@
 //
 // No substrate changes. No wire changes. Pure schema-level algebra.
 
+import { extendSchemaPathKey } from "./fold-path.js"
 import { computeSchemaHash, fnv1aHex } from "./hash.js"
 import {
   KIND,
@@ -942,7 +943,7 @@ function deriveBindingRecursive(
   inverse: Map<NodeIdentity, string>,
 ): void {
   for (const [fieldName, fieldSchema] of Object.entries(schema.fields)) {
-    const absolutePath = prefix ? `${prefix}.${fieldName}` : fieldName
+    const absolutePath = extendSchemaPathKey(prefix, fieldName)
     const origin = manifest[absolutePath]
 
     if (origin) {
@@ -1012,10 +1013,13 @@ function deriveNestedManifest(
   // Prefix all paths to produce absolute origins.
   const absoluteManifest: Record<string, IdentityOrigin> = {}
   for (const [relativePath, origin] of Object.entries(relativeManifest)) {
-    const absolutePath = `${nestingPrefix}.${relativePath}`
+    const absolutePath = extendSchemaPathKey(nestingPrefix, relativePath)
     // The originPath also needs to be absolute for identity derivation
     // to produce unique hashes across different nesting positions.
-    const absoluteOriginPath = `${nestingPrefix}.${origin.originPath}`
+    const absoluteOriginPath = extendSchemaPathKey(
+      nestingPrefix,
+      origin.originPath,
+    )
     absoluteManifest[absolutePath] = {
       originPath: absoluteOriginPath,
       generation: origin.generation,

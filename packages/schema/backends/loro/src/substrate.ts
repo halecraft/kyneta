@@ -287,7 +287,7 @@ export function createLoroSubstrate(
           if (path.segments.length === 0) return doc
           if (nodeSchema[KIND] === "scalar" || nodeSchema[KIND] === "sum")
             return undefined
-          return resolveContainer(doc, schema, path as any, binding).container
+          return resolveContainer(doc, schema, path as any, binding).resolved
         }
         // Attach positionResolver — used to create and decode LoroPositions
         // backed by Loro Cursors. Resolves the schema path to a LoroText
@@ -299,22 +299,22 @@ export function createLoroSubstrate(
           return {
             createPosition(index: number, side: Side) {
               // Resolve path to the LoroText container
-              const container = resolveContainer(
+              const resolved = resolveContainer(
                 doc,
                 schema,
                 path as any,
                 binding,
-              ).container
+              ).resolved
               if (
-                !container ||
-                typeof (container as any).getCursor !== "function"
+                !resolved ||
+                typeof (resolved as any).getCursor !== "function"
               ) {
                 throw new Error(
                   `positionResolver: path does not resolve to a LoroText`,
                 )
               }
               const loroSide = toLoroSide(side)
-              const cursor = (container as any).getCursor(index, loroSide) as
+              const cursor = (resolved as any).getCursor(index, loroSide) as
                 | Cursor
                 | undefined
               if (!cursor) {
@@ -336,17 +336,17 @@ export function createLoroSubstrate(
         // `TreeInstruction.create` ride through `applyDiff` as a no-op
         // duplicate against the same TreeID.
         ;(cachedCtx as any)[TREE_NODE_ALLOCATE] = (treePath: Path): string => {
-          const { container } = resolveContainer(doc, schema, treePath, binding)
+          const { resolved } = resolveContainer(doc, schema, treePath, binding)
           if (
-            !container ||
-            typeof (container as any).kind !== "function" ||
-            (container as any).kind() !== "Tree"
+            !resolved ||
+            typeof (resolved as any).kind !== "function" ||
+            (resolved as any).kind() !== "Tree"
           ) {
             throw new Error(
               "TREE_NODE_ALLOCATE: path does not resolve to a LoroTree container",
             )
           }
-          const node = (container as any).createNode() as { id: string }
+          const node = (resolved as any).createNode() as { id: string }
           return node.id
         }
       }

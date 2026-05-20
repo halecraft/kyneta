@@ -106,6 +106,14 @@ export type { CommitOptions } from "./facade/change.js"
 export { applyChanges, change, remove } from "./facade/change.js"
 // Facade — library-level observation protocol
 export { subscribe, subscribeNode } from "./facade/observe.js"
+// foldPath — schema-guided sibling of Path.read; the navigation primitive
+// every CRDT backend's path resolver composes around.
+export type { PathFoldResult, PathStepper } from "./fold-path.js"
+export {
+  extendSchemaPathKey,
+  foldPath,
+  pathSchema,
+} from "./fold-path.js"
 // Forest helpers — pure flat↔recursive projection for `Schema.tree`
 export type {
   FlatTreeNode,

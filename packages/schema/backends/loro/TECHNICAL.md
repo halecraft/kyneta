@@ -33,8 +33,8 @@ Consumed by applications that bind schemas with `loro.bind(schema)`. Not importe
 | `LoroNativeMap` | The `NativeMap` functor mapping schema kinds to Loro container types (`text → LoroText`, `list → LoroList`, `struct → LoroMap`, etc.). | A JS `Map` — this is a type-level functor, not a runtime object |
 | `LoroVersion` | `@kyneta/schema`'s `Version` implementation wrapping Loro's `VersionVector`. | Loro's `Frontiers` (DAG leaf ops for checkpoints) — `VersionVector` is the full peer-state vector used for sync diffing |
 | `LoroPosition` | `Position` implementation wrapping Loro's `Cursor`. Stateless `transform` — resolution queries the CRDT directly. | A numeric index |
-| `resolveContainer` | Pure left-fold over path segments accumulating `(currentContainer, currentSchema)`. The navigation primitive for every read. | A cache lookup — resolution happens on every read |
-| `stepIntoLoro` | One step of `resolveContainer`: given `(container, childSchema, key)`, return the child container or scalar value. | `stepFromDoc`, which is the root-level variant |
+| `resolveContainer` | Thin wrapper over the core `foldPath(stepIntoLoro, ...)` primitive (from `@kyneta/schema`). The two semantic invariants (identity-keying, sum-boundary short-circuit) live in `@kyneta/schema/src/fold-path.ts`, not here. | A cache lookup — resolution happens on every read |
+| `stepIntoLoro` | The Loro `PathStepper`: per-step substrate dispatch. Given `(current, nextSchema, segment, identity)` returns the child container or scalar. Driven by `foldPath`. | `stepFromDoc`, which is the root-level variant |
 | `stepFromDoc` | Root-level dispatch: given a `LoroDoc` and a field schema, return the typed root container (`doc.getMap(key)`, `doc.getText(key)`, etc.). | `stepIntoLoro` |
 | `PROPS_KEY` | The string `"_props"` — the reserved LoroMap key under which every root-level scalar and sum field is stored. | An application field name — reserved |
 | `changeToDiff` | Pure: turn a kyneta `Change` + path + schema into a `[ContainerID, Diff][]` tuple list. | Loro's own `Diff` construction — we translate from kyneta's vocabulary |
@@ -74,21 +74,18 @@ The interpreter stack (from `@kyneta/schema`) sits above. Loro sits below. This 
 
 ## Live navigation
 
-Every read (`doc.title()`, `doc.items.at(0).body()`, `ref.current`) resolves its container on demand by left-folding over the path. No preflight container cache, no materialized tree.
+Every read (`doc.title()`, `doc.items.at(0).body()`, `ref.current`) resolves its container on demand. No preflight container cache, no materialized tree.
 
 ```
 resolveContainer(doc, schema, path, binding) =
-  fold(stepIntoLoro, (doc, schema, []), path.segments)
+  foldPath(doc, schema, path, stepIntoLoro, binding)
 ```
 
 Source: `packages/schema/backends/loro/src/loro-resolve.ts`.
 
-The fold accumulator is `(currentContainer, currentSchema, absPath)`. At each step:
+`foldPath` is the schema-guided path-fold primitive in `@kyneta/schema` (see [§foldPath](../../TECHNICAL.md#foldpath--schema-guided-path-resolution)). It owns the fold skeleton, the identity-keying rule (only at `seg.role === "field"`), and the sum-boundary short-circuit. `stepIntoLoro` is the only Loro-specific piece: given `(current, nextSchema, segment, identity)` it dispatches on `isLoroDoc(current)` (root → `stepFromDoc`) or container `.kind()` (non-root), returning the child container or scalar.
 
-1. `advanceSchema(schema, segment)` → pure schema descent (from `@kyneta/schema`). Produces the child schema.
-2. `stepIntoLoro(container, currentSchema, childSchema, segment, binding?)` → Loro-specific: dispatches on the container's Loro kind and the child schema's `[KIND]`, returning the child container or scalar.
-
-**Sum boundary.** When the fold reaches a sum schema, the fold terminates: the current container holds the sum's JSON value (stored as a plain value via `_props` or a parent map), and any remaining path segments are resolved via plain JS property access on that JSON value. This is sound because sum variants are always `PlainSchema` — no Loro containers exist inside sums. The sum boundary is the point where Loro-typed navigation yields to plain JavaScript value navigation.
+**Sum boundary.** When the fold lands on a sum schema, `foldPath` short-circuits: the sum's JSON value (stored as a plain value via `_props` or a parent map) is descended via plain JS property access for any remaining segments. This is sound because sum variants are always `PlainSchema` — no Loro containers exist inside sums.
 
 ### `stepFromDoc` — root dispatch
 
@@ -109,7 +106,7 @@ The root case is different because `LoroDoc` is not itself a container. `stepFro
 
 ### Why live navigation
 
-**Note:** The reader no longer navigates live Loro containers for ordinary reads. All reads go through `plainReader(shadow)`, where `shadow` is a `PlainState` object maintained by the substrate (see [§The functional shadow](../../TECHNICAL.md#the-functional-shadow)). `resolveContainer` remains essential for three purposes: `nativeResolver` (escape hatch to raw Loro containers), `positionResolver` (cursor operations that require CRDT structure), and `changeToDiff` (translating kyneta `Change` values into Loro `Diff[]` during the write path).
+**Note:** The reader no longer navigates live Loro containers for ordinary reads. All reads go through `plainReader(shadow)`, where `shadow` is a `PlainState` object maintained by the substrate (see [§The functional shadow](../../TECHNICAL.md#the-functional-shadow)). `resolveContainer` remains essential for four purposes: `materializeLoroShadow` (the materializer that builds the shadow itself), `nativeResolver` (escape hatch to raw Loro containers), `positionResolver` (cursor operations that require CRDT structure), and `changeToDiff` (translating kyneta `Change` values into Loro `Diff[]` during the write path).
 
 The predecessor design held a static container map built at `bind()`. It broke three ways:
 
@@ -409,7 +406,7 @@ const Todo = loro.bind(Schema.struct({
 | `src/bind-loro.ts` | 174 | `loro.bind` / `loro.replica` binding target; `LoroLaws`. |
 | `src/substrate.ts` | 671 | `LoroSubstrate`, factories, prepare/flush, event bridge, `ensureLoroContainers`, `mergePendingGroups`. |
 | `src/change-mapping.ts` | 866 | Pure `changeToDiff` + `batchToOps` for every kyneta change type and every Loro container kind. |
-| `src/loro-resolve.ts` | 221 | `resolveContainer`, `stepIntoLoro`, `stepFromDoc`, `PROPS_KEY`. |
+| `src/loro-resolve.ts` | 187 | `stepIntoLoro`, `stepFromDoc`, `PROPS_KEY`; `resolveContainer` is a thin wrapper over the core `foldPath` primitive. |
 | `src/reader.ts` | 139 | `loroReader` — reads via `resolveContainer` + container-kind extraction. |
 | `src/loro-guards.ts` | 85 | `hasKind` / `isLoroContainer` / `isLoroDoc` runtime guards. |
 | `src/version.ts` | 103 | `LoroVersion` (wraps `VersionVector`). |
