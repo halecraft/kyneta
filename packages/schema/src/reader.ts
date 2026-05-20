@@ -223,6 +223,32 @@ function isFlatForestArray(arr: readonly unknown[]): boolean {
 // Change application
 // ---------------------------------------------------------------------------
 
+/**
+ * Replace the contents of `target` with the contents of `source`,
+ * preserving `target`'s object identity.
+ *
+ * Used by CRDT substrates' replay path: after `materializeXxxShadow`
+ * produces a fresh `PlainState` from the merged CRDT tree, this copies
+ * its keys onto the live shadow object so the existing `Reader` keeps
+ * working (the reader closes over the shadow's identity, not its
+ * current snapshot). Keys absent from `source` are deleted from
+ * `target`.
+ *
+ * O(|source| + |target|). Shallow only — nested values share
+ * references with `source`, which is fine here because the
+ * materialiser produces fresh trees per call.
+ */
+export function syncShadow(target: PlainState, source: PlainState): void {
+  for (const key of Object.keys(source)) {
+    target[key] = source[key]
+  }
+  for (const key of Object.keys(target)) {
+    if (!(key in source)) {
+      delete target[key]
+    }
+  }
+}
+
 export function applyChange(
   state: PlainState,
   path: Path,

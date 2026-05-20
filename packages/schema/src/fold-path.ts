@@ -5,9 +5,10 @@
 // substrate-native container tree, threading the schema and an optional
 // identity binding at each step. Backends supply only the per-step
 // substrate dispatch via a `PathStepper` — `foldPath` owns the fold
-// skeleton, the identity-keying rule, and the sum-boundary short-circuit.
+// skeleton, the identity-keying rule, and the sum/json-boundary
+// short-circuits.
 //
-// Two semantic invariants live here, in exactly one place:
+// Three semantic invariants live here, in exactly one place:
 //
 // 1. **Identity-keying at product-field boundaries only.** When
 //    `seg.role === "field"`, the absolute schema path is extended via
@@ -21,6 +22,13 @@
 //    by construction — no CRDT containers exist inside them — so the
 //    substrate has nothing to navigate past the sum boundary.
 //
+// 3. **JSON-boundary short-circuit.** When the fold lands on a schema
+//    carrying the `JSON_BOUNDARY` marker (struct.json/list.json/
+//    record.json), the entire subtree is stored as a single plain JSON
+//    value in the parent CRDT container. Like the sum case, all
+//    remaining segments descend via plain JS property access — there
+//    are no CRDT containers inside a json subtree to navigate.
+//
 // `pathSchema` is the schema-only specialization: `foldPath` with a no-op
 // stepper, returning only `.schema`. Used by callers that need the schema
 // at a path but not the substrate value (change-mapping target resolution,
@@ -29,7 +37,7 @@
 import type { SchemaBinding } from "./migration.js"
 import type { Path, Segment } from "./path.js"
 import type { Schema as SchemaNode } from "./schema.js"
-import { advanceSchema, KIND } from "./schema.js"
+import { advanceSchema, isJsonBoundary, KIND } from "./schema.js"
 
 // ---------------------------------------------------------------------------
 // PathStepper — backend-local single-step navigation
@@ -135,6 +143,21 @@ export function foldPath(
       }
       return { resolved: current, schema }
     }
+
+    // JSON boundary — struct.json/list.json/record.json. The entire
+    // subtree is stored as a plain JSON value in the parent CRDT
+    // container, so remaining segments descend via plain JS property
+    // access (works for both string keys and numeric indices: JS
+    // coerces `arr[0]` to `arr["0"]`). Symmetric with the sum case.
+    if (isJsonBoundary(schema)) {
+      for (let j = i + 1; j < segments.length; j++) {
+        const remaining = segments[j] as Segment
+        current = (current as Record<string, unknown> | undefined)?.[
+          remaining.resolve() as string
+        ]
+      }
+      return { resolved: current, schema }
+    }
   }
   return { resolved: current, schema }
 }
@@ -159,4 +182,64 @@ export function pathSchema(
   binding?: SchemaBinding,
 ): SchemaNode {
   return foldPath(undefined, rootSchema, path, () => undefined, binding).schema
+}
+
+// ---------------------------------------------------------------------------
+// findJsonBoundary — locate the nearest json-boundary ancestor along a path
+// ---------------------------------------------------------------------------
+
+/**
+ * Result of {@link findJsonBoundary}: the first json-boundary ancestor
+ * found while walking a path, expressed as the parent path (segments
+ * before the boundary) plus the segment that lands on the boundary.
+ *
+ * `prefixLength` is the index in `path.segments` of the boundary
+ * segment itself. The substrate uses this to slice off the parent
+ * path (segments `0..prefixLength`) for `resolveContainer` and to
+ * read the boundary key from `segments[prefixLength].resolve()`.
+ */
+export interface JsonBoundaryHit {
+  /** Index in `path.segments` of the segment that crosses the boundary. */
+  readonly prefixLength: number
+  /** The segment that crosses the boundary (its resolve() is the key in the parent container). */
+  readonly boundarySegment: Segment
+}
+
+/**
+ * Walk a path alongside its schema, returning the first position where
+ * the schema crosses a {@link JSON_BOUNDARY}-marked node, or `null` if
+ * no such boundary exists on this path.
+ *
+ * Substrate write paths call this once per `prepare` to decide whether
+ * the write targets a json subtree — if so, the write is routed to the
+ * coalescing buffer (which stages the full boundary value as a plain
+ * JSON write on the parent container) instead of generating nested
+ * CRDT mutations. Non-json paths take the direct write path.
+ */
+export function findJsonBoundary(
+  rootSchema: SchemaNode,
+  path: Path,
+  binding?: SchemaBinding,
+): JsonBoundaryHit | null {
+  let schema = rootSchema
+  let absPath = ""
+  const segments = path.segments
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i] as Segment
+    const nextSchema = advanceSchema(schema, seg)
+
+    if (binding && seg.role === "field") {
+      // Mirrors the absPath accumulation in `foldPath`. Kept here so
+      // a future identity-aware variant of findJsonBoundary can reuse
+      // the same lookup discipline; currently unused but harmless.
+      absPath = extendSchemaPathKey(absPath, seg.resolve() as string)
+      void absPath
+    }
+
+    if (isJsonBoundary(nextSchema)) {
+      return { prefixLength: i, boundarySegment: seg }
+    }
+    schema = nextSchema
+  }
+  return null
 }

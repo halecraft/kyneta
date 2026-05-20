@@ -81,7 +81,7 @@ The two backends implement the same `Substrate<V>` contract and share the overal
 | Root layout | One Loro container per root field (typed accessors: `doc.getText(k)`, `doc.getMap(k)`, …) plus a reserved `_props` map for root scalars | One `Y.Map` at `doc.getMap("root")` holds *every* field (shared types and plain values alike) |
 | Container discrimination | `.kind()` method (strings: `"Map"`, `"Text"`, `"List"`, …) | `instanceof Y.Map`, `instanceof Y.Array`, `instanceof Y.Text` |
 | Why | Loro containers are WASM handles; `instanceof` is unreliable across module boundaries | Yjs shared types are native JS classes; `instanceof` is stable |
-| Write commit | Accumulate `Diff[]` in `prepare`, apply via `doc.applyDiff` in `onFlush` | Imperative mutations inside `Y.transact` in `onFlush` (origin-tagged) |
+| Write commit | Eager `applyDiff` in `prepare` (plain MapDiff writes coalesce into a per-CID buffer drained in `afterBatch`; structural inserts apply immediately). `runBatch` brackets with a depth counter + single `doc.commit()` on outermost release | Eager imperative mutations inside the ambient `Y.transact` opened by `runBatch` (origin-tagged `KYNETA_ORIGIN`); Yjs's native transact nesting collapses re-entries for free |
 | Event bridge | `doc.subscribe` + `inOurCommit` guard + `BatchOptions.replay` directive | `observeDeep` + `transaction.origin === KYNETA_ORIGIN` filter + `BatchOptions.replay` directive |
 | Structural identity | Identity hash as Loro container key | Identity hash as `Y.Map` key within the root `Y.Map` |
 | Structural creation | Lazy — creation happens on first typed accessor call | Eager — `ensureContainers` walks the schema on upgrade |
@@ -232,25 +232,47 @@ One Yjs-specific wrinkle: because everything lives inside the single root `Y.Map
 
 ## The write path and populate-then-attach
 
-Source: `packages/schema/backends/yjs/src/substrate.ts` → `onFlush`; `src/change-mapping.ts` → `applyChangeToYjs`; `src/populate.ts` → `populate`.
+Source: `packages/schema/backends/yjs/src/substrate.ts` → `prepare` / `afterBatch` / `runBatch`; `src/change-mapping.ts` → `applyChangeToYjs`; `src/populate.ts` → `populate`.
 
-Yjs’s natural programming model is imperative: open a `Y.transact`, mutate shared types, close. Kyneta uses a two-phase write: `prepare` applies changes eagerly to the `PlainState` shadow (read-visible immediately) and buffers `(path, change)` pairs; `onFlush` replays the buffered changes as imperative Yjs mutations inside one `Y.transact` with an origin tag (sync-visible).
+Yjs's natural programming model is imperative: open a `Y.transact`, mutate shared types, close. Kyneta's write path advances **both** σ (the shadow, read-visible) AND λ (the live `Y.Doc` tree, sync-visible) inside the ambient `Y.transact` opened by `runBatch`. The projection law `σ ≡ Π(λ)` (the naturality condition of `materializeYjsShadow`) holds at every prepare boundary.
 
 ```
 change(doc, d => { d.title.insert(0, "hi"); d.items.push(x) })
   │
-  ├─ prepare phase (per mutation):
-  │    applyChange(shadow, path, change)    // eager, read-visible
-  │    accumulate (path, change) pairs       // buffered for flush
+  ├─ runBatch opens ONE Y.transact(doc, body, KYNETA_ORIGIN)
+  │   (re-entrant runBatch calls nest natively — Yjs collapses them
+  │   into the outermost transact; no depth counter needed)
   │
-  └─ flush phase (on commit):
-       doc.transact(() => {
-         for each (path, change) in accumulated:
-           applyChangeToYjs(rootMap, path, change, schema, binding)
-       }, OURS)                              // origin tag, sync-visible
+  ├─ prepare phase (per mutation, applies to both σ and λ EAGERLY):
+  │    1. applyChange(shadow, path, change)        ── σ advances
+  │    2. findJsonBoundary(path) ─► boundary?
+  │       ├─ yes: stage the full σ snapshot at the boundary key
+  │       │       in the json-boundary coalescing buffer
+  │       └─ no:  applyChangeToYjs(rootMap, ...)   ── λ advances
+  │
+  └─ afterBatch (local writes):
+       flushJsonBoundaryBuffer() — for each buffered entry:
+         Y.Map parent → target.set(key, value)
+         Y.Array parent → target.delete(index, 1); target.insert(index, [value])
+       (runs inside the still-open Y.transact)
+  │
+  └─ runBatch's transact closes — Yjs fires ONE observeDeep batch
+    covering all ops in the outermost logical action
 ```
 
 `applyChangeToYjs` is straightforward imperative mutation: resolve the target via `resolveYjsType`, then call `Y.Text.insert` / `Y.Array.insert` / `Y.Map.set` / etc. depending on the change type.
+
+### The json-boundary coalescing buffer
+
+Writes targeting a path that crosses a `struct.json` / `list.json` / `record.json` boundary stage the full σ-snapshot at the boundary segment in the parent CRDT container, instead of generating per-leaf imperative mutations against nested shared types (which don't exist — the entire subtree is stored as a plain JSON value). Repeated writes inside the same subtree overwrite the buffered entry (last-write-wins by σ snapshot); `afterBatch` drains the buffer into λ inside the still-open transact via `target.set(key, value)` (Y.Map parents) or `delete+insert` (Y.Array parents).
+
+Non-boundary writes bypass the buffer entirely and go straight to `applyChangeToYjs` during prepare — text, sequence, map, and replace changes all apply imperatively to their live targets.
+
+### Nested-transact collapse under re-entry
+
+Yjs's `Y.transact` natively collapses nesting: an inner `Y.transact` call inside an outer one runs as part of the outer transact and emits no separate `observeDeep` event. The substrate's `runBatch` just opens `Y.transact(work, KYNETA_ORIGIN)` without any depth counter — Yjs handles the collapse. Practical effect: a subscriber's re-entrant `change(doc, ...)` from inside `deliverNotifications` opens a nested transact that folds into the outer one, producing a single batched `observeDeep` for the whole logical user action. External Yjs providers (y-websocket, y-webrtc) ship one binary update per outermost `change(doc, fn)` — strictly fewer / smaller-equal updates than the pre-Phase-3 design.
+
+`BatchOptions.origin` (the app-level provenance label) flows through the kyneta `Changeset.origin` channel only — it never reaches Yjs's transact origin, which is always `KYNETA_ORIGIN` so the event-bridge handler can recognise and skip its own writes.
 
 ### Populate-then-attach for structural inserts
 

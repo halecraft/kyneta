@@ -1,8 +1,23 @@
 // substrate — YjsSubstrate implementation.
 //
 // Implements Substrate<YjsVersion> with:
-// - Imperative local writes (prepare accumulates, onFlush applies in transact)
-// - Persistent observeDeep event bridge for external changes
+// - Imperative-eager local writes: `prepare` advances both the shadow σ
+//   AND the native Y.Doc tree λ inside the ambient `Y.transact` opened
+//   by `runBatch`. The projection law `σ ≡ Π(λ)` holds at every prepare
+//   boundary — re-entrant subscribers reading either σ (via the Reader)
+//   or λ (via `unwrap`) see a coherent state.
+// - `runBatch(body)` opens one `Y.transact(doc, body, KYNETA_ORIGIN)` per
+//   outermost logical action. Yjs's native transact nesting collapses
+//   inner re-entrant transacts into the outer one for free — no depth
+//   counter needed (unlike Loro). External `observeDeep` consumers see
+//   exactly one batched event per outermost `change(doc, fn)`.
+// - JSON-boundary writes (struct.json/list.json/record.json subtrees)
+//   are buffered in a per-target-key coalescer and flushed in
+//   `afterBatch`. Non-boundary writes are applied directly to λ via
+//   `applyChangeToYjs`.
+// - `afterBatch` flushes the json-boundary coalescer on local writes
+//   and re-materialises σ from λ on replay.
+// - Persistent observeDeep event bridge for external changes.
 // - Transaction-origin filter (`KYNETA_ORIGIN`) to ignore our own writes.
 //
 // The event bridge contract: wrapping a Y.Doc in a kyneta substrate
@@ -10,12 +25,12 @@
 // underlying Y.Doc, regardless of source (local kyneta writes,
 // merge, external Y.applyUpdate, external raw Yjs API mutations).
 //
-// `prepare` and `onFlush` accept `BatchOptions` and branch on
+// `prepare` and `afterBatch` accept `BatchOptions` and branch on
 // `options?.replay`. The event bridge constructs the replay batch via
 // `executeBatch(ctx, ops, { origin, replay: true })`; substrate-side
 // work (transact, write) is skipped when `replay` is true because the
 // native Y.Doc already absorbed the change. This makes `prepare` and
-// `onFlush` total functions of their declared inputs — no hidden
+// `afterBatch` total functions of their declared inputs — no hidden
 // ambient state for the substrate-write decision. Context: jj:qpultxsw.
 //
 // Identity-keying: when a SchemaBinding is provided, all Y.Map key
@@ -47,8 +62,10 @@ import {
   buildWritableContext,
   deriveSchemaBinding,
   executeBatch,
+  findJsonBoundary,
   KIND,
   plainReader,
+  syncShadow,
 } from "@kyneta/schema"
 import * as Y from "yjs"
 import { applyChangeToYjs, eventsToOps } from "./change-mapping.js"
@@ -94,8 +111,16 @@ export function createYjsSubstrate(
 ): Substrate<YjsVersion> {
   // --- Closure-scoped state ---
 
-  // Accumulated changes from prepare(), drained by onFlush().
-  const pendingChanges: Array<{ path: Path; change: ChangeBase }> = []
+  // JSON-boundary coalescing buffer. Keyed by the target Y.Map and the
+  // boundary key — repeated writes inside the same struct.json /
+  // record.json subtree overwrite the entry with the latest σ value
+  // before `afterBatch` flushes it back into λ as a single
+  // `target.set(key, value)`. Non-boundary writes bypass the buffer
+  // entirely — they go straight to `applyChangeToYjs` in prepare.
+  const jsonBoundaryBuffer = new Map<
+    string,
+    { target: Y.Map<unknown> | Y.Array<unknown>; key: string | number; value: unknown }
+  >()
 
   // Stashed origin from merge for the event bridge to pick up.
   let pendingMergeOrigin: string | undefined
@@ -119,6 +144,95 @@ export function createYjsSubstrate(
   const shadow: PlainState = materializeYjsShadow(doc, schema, binding)
   const reader: Reader = plainReader(shadow)
 
+  // --- Coalescer helpers ---
+
+  /**
+   * Compute the identity-aware boundary key (or numeric index) for a
+   * json-boundary write at `prefixLength`. Mirrors the Loro substrate's
+   * `boundaryKey`; field segments inside a bound product get the
+   * identity hash, others pass through raw.
+   */
+  function boundaryKey(path: Path, prefixLength: number): string | number {
+    const seg = path.segments[prefixLength]!
+    if (seg.role === "field" && binding) {
+      const absPath = path.segments
+        .slice(0, prefixLength + 1)
+        .filter(s => s.role === "field")
+        .map(s => s.resolve() as string)
+        .join(".")
+      const identity = binding.forward.get(absPath) as string | undefined
+      if (identity) return identity
+    }
+    return seg.resolve() as string | number
+  }
+
+  /**
+   * Buffer a json-boundary write. The boundary value is the entire σ
+   * subtree at the boundary path — already updated by the preceding
+   * `applyChange(shadow, ...)`. Subsequent writes inside the same
+   * subtree overwrite this entry (last-write-wins by σ snapshot).
+   *
+   * Returns silently when the parent container can't be resolved
+   * (root-level json fields land in `rootMap` directly — Yjs's
+   * root is the rootMap, so the parentResolved is `rootMap`).
+   */
+  function stageJsonBoundaryWrite(path: Path, prefixLength: number): void {
+    const parentPath = path.slice(0, prefixLength)
+    const { resolved: parent } = resolveYjsType(
+      rootMap,
+      schema,
+      parentPath,
+      binding,
+    )
+    const boundaryPath = path.slice(0, prefixLength + 1)
+    const value = boundaryPath.read(shadow)
+    const key = boundaryKey(path, prefixLength)
+
+    // The target can be either a Y.Map (struct field, record entry,
+    // or rootMap) or a Y.Array (list/movable item). Both expose a
+    // shape we can stash and flush in `afterBatch`.
+    let target: Y.Map<unknown> | Y.Array<unknown>
+    if (parent instanceof Y.Map) {
+      target = parent
+    } else if (parent instanceof Y.Array) {
+      target = parent
+    } else {
+      throw new Error(
+        `yjs substrate: json-boundary write to unsupported parent type at path ${path.format()}`,
+      )
+    }
+
+    // Use the Yjs shared-type's stable identity for the buffer key
+    // when available; fall back to a unique sentinel for the
+    // ultra-rare case where `_item` is undefined (freshly-created
+    // shared types before they're attached). Combine with key/index
+    // for a unique slot — repeat writes to the same slot overwrite.
+    const targetId = `${(target as any)._item?.id?.client ?? "root"}:${(target as any)._item?.id?.clock ?? "root"}`
+    const slot = `${targetId}/${String(key)}`
+    jsonBoundaryBuffer.set(slot, { target, key, value })
+  }
+
+  /**
+   * Drain the json-boundary buffer into λ. Called from `afterBatch`
+   * inside the ambient `Y.transact` opened by `runBatch`. Each entry
+   * is applied as `target.set(key, value)` for Y.Map parents or as a
+   * delete+insert for Y.Array parents (Yjs Arrays don't have a
+   * `set(index, value)` primitive — replace = delete one + insert one).
+   */
+  function flushJsonBoundaryBuffer(): void {
+    if (jsonBoundaryBuffer.size === 0) return
+    for (const { target, key, value } of jsonBoundaryBuffer.values()) {
+      if (target instanceof Y.Map) {
+        target.set(String(key), value)
+      } else {
+        const index = key as number
+        target.delete(index, 1)
+        target.insert(index, [value])
+      }
+    }
+    jsonBoundaryBuffer.clear()
+  }
+
   // --- Substrate object ---
 
   const substrate = {
@@ -127,43 +241,62 @@ export function createYjsSubstrate(
     reader: reader,
 
     prepare(path: Path, change: ChangeBase, options?: BatchOptions): void {
-      // Local writes: apply eagerly to the shadow so reads are
-      // immediately consistent. Replay writes: skip — the shadow
-      // will be re-materialized from the Y.Doc in onFlush(replay).
-      if (!options?.replay) {
-        applyChange(shadow, path, change)
-      }
+      // Replay writes: λ has already absorbed these ops via
+      // Y.applyUpdate at the event-bridge call site; skip σ/λ
+      // advance — afterBatch(replay) rebuilds σ from λ in one
+      // Π pass.
+      if (options?.replay) return
 
-      if (options?.replay) {
+      // Local write — σ advances eagerly. CRDT-side writes happen
+      // inside the ambient Y.transact opened by runBatch (the
+      // substrate's `runBatch` wraps `executeBatch`'s prepare-loop +
+      // flush).
+      applyChange(shadow, path, change)
+
+      // JSON-boundary write: stage a full-value write at the
+      // boundary segment of the parent container. Coalesces with
+      // repeated writes inside the same subtree (last σ snapshot
+      // wins) and lands in λ on `afterBatch` flush.
+      const boundary = findJsonBoundary(schema, path, binding)
+      if (boundary !== null) {
+        stageJsonBoundaryWrite(path, boundary.prefixLength)
         return
       }
-      pendingChanges.push({ path, change })
+
+      // Non-boundary write: imperatively apply to λ inside the
+      // ambient Y.transact. The KYNETA_ORIGIN tag lets the
+      // observeDeep bridge below recognise and skip the events we
+      // generate here, so the changefeed isn't fired twice.
+      applyChangeToYjs(rootMap, schema, path, change, binding)
     },
 
-    onFlush(options?: BatchOptions): void {
+    afterBatch(options?: BatchOptions): void {
       if (options?.replay) {
-        // Re-materialize shadow from the Y.Doc (already committed).
-        const fresh = materializeYjsShadow(doc, schema, binding)
-        for (const key of Object.keys(fresh)) {
-          shadow[key] = fresh[key]
-        }
-        for (const key of Object.keys(shadow)) {
-          if (!(key in fresh)) {
-            delete shadow[key]
-          }
-        }
+        // CRDT merge is a lattice join — re-materialise σ from λ in
+        // one Π pass instead of replaying ops incrementally.
+        syncShadow(shadow, materializeYjsShadow(doc, schema, binding))
         return
       }
-      if (pendingChanges.length === 0) return
-      // The KYNETA_ORIGIN tag lets the observeDeep bridge below
-      // recognise and skip the events we generate here, so the
-      // changefeed isn't fired twice for the same write.
-      doc.transact(() => {
-        for (const { path, change } of pendingChanges) {
-          applyChangeToYjs(rootMap, schema, path, change, binding)
-        }
-      }, KYNETA_ORIGIN)
-      pendingChanges.length = 0
+      // Local write: drain the json-boundary coalescer. Runs inside
+      // the ambient Y.transact from `runBatch`; the transact closes
+      // when `runBatch`'s body returns, emitting one batched
+      // observeDeep event for the whole logical action.
+      flushJsonBoundaryBuffer()
+    },
+
+    runBatch(work: () => void, _options?: BatchOptions): void {
+      // Yjs's native transact nesting collapses inner re-entrant
+      // transacts into the outermost — exactly the "one batched
+      // event per outermost logical action" semantic we want. No
+      // depth counter needed.
+      //
+      // The KYNETA_ORIGIN tag (NOT `options?.origin`) is the Yjs-
+      // layer transaction origin: the observeDeep bridge skips
+      // transactions tagged with this origin because we already
+      // captured the ops via wrappedPrepare. The app-level
+      // `options?.origin` flows separately through the kyneta
+      // Changeset via the changefeed layer.
+      doc.transact(work, KYNETA_ORIGIN)
     },
 
     context(): WritableContext {
@@ -217,7 +350,22 @@ export function createYjsSubstrate(
     },
 
     version(): YjsVersion {
-      return YjsVersion.fromDeleteSet(doc, accumulatedDs)
+      // Derive the deleteSet from the live struct store on every read.
+      // Eager-prepare delivers notifications *inside* the ambient
+      // `Y.transact` opened by `runBatch`, which means `afterTransaction`
+      // (where `accumulatedDs` is incrementally updated) fires AFTER
+      // the changefeed's `notifyLocalChange → version()` call. Computing
+      // from the store picks up in-progress deletes too, so the
+      // exchange's auto-subscribe sees a version that already reflects
+      // the just-applied mutation. `accumulatedDs` remains for parity
+      // with the prior incremental tracking — currently unused on the
+      // version path but retained so external readers see a stable
+      // running aggregate if/when we re-introduce incremental access.
+      void accumulatedDs
+      return YjsVersion.fromDeleteSet(
+        doc,
+        Y.createDeleteSetFromStructStore(doc.store),
+      )
     },
 
     baseVersion(): YjsVersion {
@@ -301,7 +449,7 @@ export function createYjsSubstrate(
     // Lazily ensure the context is built
     const ctx = substrate.context()
 
-    // `replay: true` tells substrate.prepare/onFlush to skip native-side
+    // `replay: true` tells substrate.prepare/afterBatch to skip native-side
     // work (Yjs has already absorbed these ops via Y.applyUpdate) and
     // surfaces on the Changeset for downstream filters (exchange echo).
     executeBatch(ctx, ops, { origin, replay: true })
@@ -309,8 +457,8 @@ export function createYjsSubstrate(
 
   // For local mutations (KYNETA_ORIGIN): the observeDeep handler returns
   // early, so we merge the delete set via afterTransaction instead.
-  // afterTransaction fires inside doc.transact() — before onFlush returns
-  // — so accumulatedDs is up to date when the changefeed's
+  // afterTransaction fires inside doc.transact() — before runBatch's
+  // body returns — so accumulatedDs is up to date when the changefeed's
   // deliverNotifications → notifyLocalChange → version() fires.
   doc.on("afterTransaction", (transaction: Y.Transaction) => {
     if (

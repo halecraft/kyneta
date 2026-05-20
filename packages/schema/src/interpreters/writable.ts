@@ -191,6 +191,14 @@ export interface WritableContext extends RefContext {
   /** Deliver accumulated notifications as a single Changeset per subscriber.
    *  Mutable — the changefeed layer wraps this at interpretation time. */
   flush: (options?: BatchOptions) => void
+  /**
+   * Transaction-boundary bracket invoked by `executeBatch` around the
+   * prepare-loop-plus-flush block for local-write batches. The
+   * substrate's `runBatch?` (when implemented) drives this; the
+   * default invokes `work()` directly. Replay batches bypass the
+   * bracket entirely (substrates' native state already absorbed
+   * those changes via the event-bridge call site). */
+  readonly runBatch: (work: () => void, options?: BatchOptions) => void
   /** Convenience: outside a transaction, calls executeBatch with one change.
    *  During a transaction, buffers the change for later commit. */
   readonly dispatch: (path: Path, change: ChangeBase) => void
@@ -246,10 +254,21 @@ export function executeBatch(
         "Commit or abort the transaction first.",
     )
   }
-  for (const { path, change } of changes) {
-    ctx.prepare(path, change, options)
+  const work = (): void => {
+    for (const { path, change } of changes) {
+      ctx.prepare(path, change, options)
+    }
+    ctx.flush(options)
   }
-  ctx.flush(options)
+  // Replay batches bypass the substrate's transaction bracket — the
+  // native state has already absorbed these ops via the event-bridge
+  // call site (Loro: doc.import; Yjs: Y.applyUpdate). Wrapping in
+  // runBatch would open a stray transaction with nothing to commit.
+  if (options?.replay) {
+    work()
+  } else {
+    ctx.runBatch(work, options)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -261,13 +280,19 @@ export function executeBatch(
  *
  * The substrate provides the ground floor of the prepare/flush pipeline:
  * - `substrate.prepare(path, change, options?)` — apply change to backing state
- * - `substrate.onFlush(options?)` — called after all prepares + notification
- *   delivery (no-op for PlainSubstrate; version tracking in Phase 2)
+ * - `substrate.afterBatch(options?)` — post-batch lifecycle hook (no-op
+ *   for PlainSubstrate's local-write path beyond version tracking; CRDT
+ *   substrates use it to flush coalescing buffers / rematerialise shadow).
+ * - `substrate.runBatch?(body, options?)` — optional transaction-boundary
+ *   bracket installed around the prepare+flush loop for local writes.
+ *   When omitted (PlainSubstrate), the context's `runBatch` is the
+ *   trivial wrapper that just invokes the body.
  *
  * The context adds transaction coordination on top:
  * - `dispatch(path, change)` — auto-commit or buffer
  * - `beginTransaction()` / `commit()` / `abort()` — transaction lifecycle
- * - `executeBatch(ctx, changes, options?)` — prepare × N + flush × 1
+ * - `executeBatch(ctx, changes, options?)` — prepare × N + flush × 1,
+ *   wrapped in `ctx.runBatch` for local writes.
  *
  * Caching and changefeed layers wrap `ctx.prepare` and `ctx.flush` at
  * interpretation time — the substrate never needs to know about them.
@@ -296,12 +321,21 @@ export function buildWritableContext(
     substrate.prepare(path, change, options)
   }
 
-  // Base flush: delegate to the substrate's onFlush.
+  // Base flush: delegate to the substrate's afterBatch.
   // The changefeed layer wraps this to deliver accumulated Changeset
   // batches to subscribers before calling through to the substrate.
   const flush = (options?: BatchOptions): void => {
-    substrate.onFlush(options)
+    substrate.afterBatch(options)
   }
+
+  // Bake the runBatch dispatch once: substrates that implement
+  // `runBatch?` get their bracket; substrates that don't (Plain) get
+  // the trivial pass-through. One closure-time check, no per-call
+  // branching cost.
+  const substrateRunBatch = substrate.runBatch
+  const runBatch: WritableContext["runBatch"] = substrateRunBatch
+    ? (work, opts) => substrateRunBatch.call(substrate, work, opts)
+    : work => work()
 
   // Dispatch is transaction-aware:
   // - Outside a transaction (auto-commit): calls executeBatch with one
@@ -359,6 +393,7 @@ export function buildWritableContext(
     reader: substrate.reader,
     prepare,
     flush,
+    runBatch,
     dispatch,
     beginTransaction,
     commit,

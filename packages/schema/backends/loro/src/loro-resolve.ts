@@ -17,6 +17,7 @@
 
 import {
   foldPath,
+  isJsonBoundary,
   KIND,
   type Path,
   type PathFoldResult,
@@ -59,6 +60,13 @@ function stepFromDoc(
   fieldSchema: SchemaNode,
   key: string,
 ): unknown {
+  // JSON-boundary root fields (struct.json/list.json/record.json) live
+  // in the shared _props LoroMap as a single plain JSON value — no
+  // nested Loro container. The fold-path JSON_BOUNDARY short-circuit
+  // takes over for any remaining segments via plain-JS descent.
+  if (isJsonBoundary(fieldSchema)) {
+    return (doc.getMap(PROPS_KEY) as LoroMap).get(key)
+  }
   // Dispatch on the schema's [KIND] directly — no annotation unwrapping
   switch (fieldSchema[KIND]) {
     case "text":

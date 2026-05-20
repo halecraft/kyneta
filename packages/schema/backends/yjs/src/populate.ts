@@ -17,7 +17,7 @@
 // functions: ensureContainers, ensureRootField, ensureMapContainers.
 
 import type { SchemaBinding, Schema as SchemaNode } from "@kyneta/schema"
-import { KIND, STRUCTURAL_YJS_CLIENT_ID } from "@kyneta/schema"
+import { isJsonBoundary, KIND, STRUCTURAL_YJS_CLIENT_ID } from "@kyneta/schema"
 import * as Y from "yjs"
 
 // ---------------------------------------------------------------------------
@@ -123,6 +123,12 @@ function ensureRootField(
   // and necessary on hydrated docs (preserves existing data).
   if (rootMap.has(key)) return
 
+  // JSON-boundary fields (struct.json/list.json/record.json) store the
+  // subtree as a plain JSON value in the root Y.Map entry. We leave the
+  // entry absent at structural-init time; the first write materialises
+  // it with `rootMap.set(key, plainValue)`.
+  if (isJsonBoundary(fieldSchema)) return
+
   switch (fieldSchema[KIND]) {
     case "text":
     case "richtext":
@@ -195,6 +201,12 @@ function ensureMapContainers(
     const absPath = prefix ? `${prefix}.${key}` : key
     const identity = binding?.forward.get(absPath) as string | undefined
     const mapKey = identity ?? key
+
+    // JSON-boundary nested field: leave the entry absent, the first
+    // write will set the plain JSON value at this key.
+    if (isJsonBoundary(fieldSchema)) {
+      continue
+    }
 
     switch (fieldSchema[KIND]) {
       case "text":

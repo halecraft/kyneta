@@ -23,11 +23,18 @@ import {
 // Shared test schema
 // ===========================================================================
 
+// Items are CRDT-native nested structs (not `struct.json`) so that
+// per-field changefeeds on `items[i].done` and `items[i].name` exercise
+// the MapDiff coalescing path. The json-boundary storage model is
+// covered by its own dedicated suite in Phase 4 — a `done.set(true)`
+// inside a `struct.json` item is correctly a full-value list replace
+// that invalidates held refs to the prior item, which is incompatible
+// with the assertion style of this fixture.
 const TestSchema = Schema.struct({
   title: Schema.text(),
   count: Schema.counter(),
   items: Schema.list(
-    Schema.struct.json({
+    Schema.struct({
       name: Schema.string(),
       done: Schema.boolean(),
     }),
@@ -555,14 +562,17 @@ describe("changefeed fires on merge", () => {
 })
 
 // ===========================================================================
-// Outbound: mergePendingGroups
+// Outbound: multi-key struct mutation coalescing
 // ===========================================================================
 
 describe("outbound: multi-key struct mutation batching", () => {
   it("multi-key struct mutation produces correct state", () => {
-    // This test verifies that mergePendingGroups doesn't break
-    // correctness: setting 3 keys on the same struct in one transaction
-    // should produce the correct final state.
+    // The eager-prepare coalescing buffer (Phase 2) merges per-leaf
+    // plain MapDiff writes targeting the same LoroMap CID into one
+    // combined `updated` record, applied via a single `applyDiff` in
+    // `afterBatch`. This test verifies that the merge doesn't break
+    // correctness: setting multiple keys on the same struct in one
+    // transaction should produce the correct final state.
     const substrate = loroSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(TestSchema, substrate)
 

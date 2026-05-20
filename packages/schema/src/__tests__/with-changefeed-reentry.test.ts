@@ -124,6 +124,43 @@ describe("with-changefeed: same-doc re-entry", () => {
 
     expect(observed).toEqual({ a: 3, b: 7 })
   })
+
+  it("substrate-write timing: subscriber writes to a path created by an earlier re-entrant change()", () => {
+    // Reproduces the LLM-observer trace shape end-to-end:
+    // outer change fires a subscriber that pushes a new list item and
+    // synchronously writes to a field inside it. The write must land —
+    // pre-eager-prepare this scenario crashed on CRDT backends because
+    // the path resolved through σ but not λ.
+    const schema = Schema.struct({
+      events: Schema.list(
+        Schema.struct({ kind: Schema.string(), body: Schema.string() }),
+      ),
+    })
+    const doc = buildPlainDoc(schema, { events: [] })
+
+    subscribe(doc.events, () => {
+      // Fires once per outer push. On the first delivery, push a new
+      // skeleton and set its body field — both before the dispatcher
+      // drains.
+      if ((doc.events as any).length !== 1) return
+      change(doc, (d: any) => {
+        d.events.push({ kind: "assistant", body: "" })
+      })
+      // Subsequent write targets the just-pushed item. Must not throw.
+      change(doc, (d: any) => {
+        d.events.at(1).body.set("hello")
+      })
+    })
+
+    expect(() => {
+      change(doc, (d: any) => {
+        d.events.push({ kind: "user", body: "hi" })
+      })
+    }).not.toThrow()
+
+    expect((doc.events as any).length).toBe(2)
+    expect((doc.events as any).at(1).body()).toBe("hello")
+  })
 })
 
 describe("with-changefeed: cross-doc cascade with shared lease", () => {

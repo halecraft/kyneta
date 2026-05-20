@@ -392,16 +392,29 @@ export interface BatchOptions {
  * The mutation primitives a substrate exposes to the WritableContext.
  *
  * `prepare` applies a single addressed delta to the substrate's state.
- * `onFlush` is called once per flush cycle, after the changefeed layer
- * has delivered notifications to subscribers.
+ * `afterBatch` is a post-batch lifecycle hook — called once at the end
+ * of every `executeBatch`, for both local-write and replay batches. It
+ * is *not* a buffer-drain (the eager-prepare model removes prepare-time
+ * buffers); on CRDT substrates it now flushes coalescing buffers and
+ * re-materialises the shadow on replay.
  *
- * Both methods accept `options?: BatchOptions`:
+ * `runBatch` (optional) is the *transaction-boundary bracket* for local
+ * writes — it wraps the entire prepare-loop + flush block from
+ * `executeBatch`. CRDT substrates use this seam to install their native
+ * transaction primitive (Loro: a single `doc.commit()` after the body;
+ * Yjs: `Y.transact(doc, body, KYNETA_ORIGIN)`) at the right scope so
+ * external observers see one batched event per logical user action.
+ * Substrates that don't need a bracket (Plain) omit it; the caller
+ * falls back to invoking the body directly.
+ *
+ * All methods accept `options?: BatchOptions`:
  * - `options?.origin` is opaque label, substrate-passthrough only (Loro
  *   uses it for commit messages; plain ignores).
  * - `options?.replay === true` means "this batch represents state
  *   authored elsewhere; substrates with external mutation paths skip
  *   native-side work." The plain substrate ignores `replay` because it
- *   has no out-of-band mutation path.
+ *   has no out-of-band mutation path. Replay batches *bypass* `runBatch`
+ *   entirely — the bracket is for local writes only.
  *
  * These are the ground floor of the prepare/flush pipeline. Caching and
  * changefeed layers wrap them — the substrate never needs to know about
@@ -415,12 +428,36 @@ export interface SubstratePrepare {
   prepare(path: Path, change: ChangeBase, options?: BatchOptions): void
 
   /**
-   * Called once per flush cycle after all prepares and before changefeed
+   * Post-batch lifecycle hook — called once at the end of every
+   * `executeBatch`, after all prepares and before changefeed
    * notification delivery (so subscribers see the updated version/log).
    *
    * For PlainSubstrate: bumps version, appends to operation log.
+   * For CRDT substrates: flushes any prepare-time coalescing buffer
+   * on local writes; re-materialises the shadow from the native doc
+   * on replay.
    */
-  onFlush(options?: BatchOptions): void
+  afterBatch(options?: BatchOptions): void
+
+  /**
+   * Optional transaction-boundary bracket for local-write batches.
+   *
+   * `executeBatch` invokes `runBatch(work, options)` when present
+   * (skipping it for replay batches). `work` is the prepare-loop +
+   * `ctx.flush` block. CRDT substrates use this to install their
+   * native transaction primitive at the right scope:
+   *
+   * - Loro: increment a depth counter; on outermost release (depth
+   *   returns to 0) run `doc.commit()` once — collapses nested
+   *   `change()` re-entries into one Loro commit.
+   * - Yjs: `Y.transact(doc, work, KYNETA_ORIGIN)` — Yjs's native
+   *   transact nesting handles the collapse for free.
+   *
+   * Substrates that omit this method get the trivial default
+   * (caller just calls `work()`); PlainSubstrate is the canonical
+   * no-op case.
+   */
+  runBatch?(work: () => void, options?: BatchOptions): void
 }
 
 // ---------------------------------------------------------------------------
@@ -439,7 +476,7 @@ export interface SubstratePrepare {
  *
  * Responsibilities:
  * 1. Provide a readable reader + WritableContext for the interpreter stack
- *    (from SubstratePrepare: reader, prepare, onFlush)
+ *    (from SubstratePrepare: reader, prepare, afterBatch, runBatch?)
  * 2. Track versioning via Version (from Replica)
  * 3. Export/import state for replication (from Replica)
  *
@@ -620,7 +657,7 @@ export interface ReplicaFactoryLike {
  * walking, no container initialization. `fromSnapshot()` creates a
  * `LoroDoc()` and imports the payload. Both return replicas that
  * support `version()`, `exportSnapshot()`, `exportSince()`, and
- * `merge()` but NOT `store`, `prepare`, `onFlush`, or `context()`.
+ * `merge()` but NOT `store`, `prepare`, `afterBatch`, `runBatch?`, or `context()`.
  *
  * For Plain: `createEmpty()` creates a fresh store with an empty op log.
  * `fromEntirety()` parses the JSON state image into a store.

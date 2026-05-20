@@ -1,3 +1,16 @@
+# Unreleased
+
+  Schema — substrate write coherence unified across plain, Loro, and Yjs:
+  - The projection law `σ ≡ Π(λ)` (the naturality condition of the materialisation catamorphism) now holds at every `prepare` boundary across every substrate. CRDT backends advance both the shadow σ AND the native container tree λ inside `prepare`, instead of buffering λ until flush. The pre-1.8 `queueMicrotask` deferral pattern around re-entrant reads or writes from subscriber callbacks (workaround for the buffered-write hole on CRDT substrates) is no longer needed on any backend.
+  - **Loro: nested `change()` calls collapse into a single `doc.commit()` per outermost logical action.** A depth-counter `runBatch` bracket mirrors Yjs's `Y.transact` nesting manually; raw `LoroDoc` consumers (providers, persisters) see strictly fewer / smaller-equal commits than before. Outer-origin commit messages are preserved end-to-end — inner re-entrant origins still flow through the kyneta `Changeset.origin`, but only the outermost wins as the Loro commit message attribution.
+  - **`struct.json` / `list.json` / `record.json` now store their subtree as a single plain JSON value in the parent CRDT container.** A new `JSON_BOUNDARY = Symbol.for("kyneta:json-boundary")` runtime marker is stamped on the `.json()` factories; `foldPath` short-circuits at boundary segments via plain-JS descent (symmetric with the existing sum boundary); backend coalescers stage full-value writes at the boundary key. Previously these factories silently produced nested CRDT containers — the `.json()` modifier was a type-level intent only.
+
+  **Substrate contract:**
+  - `SubstratePrepare.onFlush` → `SubstratePrepare.afterBatch`. The method is a post-batch lifecycle hook on every `executeBatch`, not a buffer-drain — flushes coalescing buffers on local writes and re-materialises the shadow on replay.
+  - `SubstratePrepare.runBatch?` is a new optional transaction-bracket primitive that `executeBatch` invokes around the prepare-loop + flush block for local-write batches (replay batches bypass it). CRDT substrates install their native transaction primitive here.
+  - `WritableContext.runBatch` is the corresponding context-level callable installed by `buildWritableContext`.
+  - `syncShadow(target, source)` is the new shared helper used by both CRDT backends' replay paths to copy a fresh materialised shadow onto the substrate's live shadow without losing the reader's identity.
+
 # 1.7.0
 
   Schema — tree and set algebras realized end-to-end:

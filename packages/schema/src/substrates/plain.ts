@@ -6,7 +6,7 @@
 // oplog, just a plain JS object.
 //
 // `createPlainSubstrate(doc, strategy)` returns a full `Substrate<V>`
-// with version tracking via a shadow buffer in `prepare`/`onFlush`,
+// with version tracking via a shadow buffer in `prepare`/`afterBatch`,
 // plus `version`, `exportEntirety`, `exportSince`, `merge`.
 // `plainContext(doc)` is a shorthand that returns just the
 // `WritableContext` — convenient for tests that don't need the
@@ -199,7 +199,7 @@ export function createPlainSubstrate<V extends Version>(
       replicaCore.pendingOps.push({ path, change })
     },
 
-    onFlush(_options?: BatchOptions): void {
+    afterBatch(_options?: BatchOptions): void {
       replicaCore.flush()
     },
 

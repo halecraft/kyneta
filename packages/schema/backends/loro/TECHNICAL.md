@@ -206,24 +206,43 @@ if (hasKind(c) && c.kind() === "Text") { ... }
 
 ## The write path
 
-Source: `packages/schema/backends/loro/src/substrate.ts` → `LoroSubstrate.prepare` / `onFlush`; `src/change-mapping.ts` → `changeToDiff`.
+Source: `packages/schema/backends/loro/src/substrate.ts` → `LoroSubstrate.prepare` / `afterBatch` / `runBatch`; `src/change-mapping.ts` → `changeToDiff`.
 
 ```
 change(doc, d => { d.title.insert(0, "hi"); d.items.push(x) })
   │
-  ├─ prepare phase (per mutation):
-  │    kyneta Change (Text / Sequence / Map / Replace / Increment / Tree)
-  │      └─ changeToDiff(change, path, schema, binding) ──► [ContainerID, Diff][]
-  │         └─ accumulate into pending groups (one group per transaction step)
+  ├─ runBatch opens its commit bracket (depth 0→1)
   │
-  └─ flush phase (on commit):
+  ├─ prepare phase (per mutation, applies to both σ and λ EAGERLY):
+  │    1. applyChange(shadow, path, change)        ── σ advances
+  │    2. findJsonBoundary(path) ─► boundary?
+  │       ├─ yes: stage the full σ-snapshot at the boundary key
+  │       │       (MapDiff for map parents, ListDiff replace for list
+  │       │       parents) in the per-CID coalescing buffer
+  │       └─ no:  changeToDiff(...) ─► [ContainerID, Diff][]
+  │                ├─ single MapDiff, no JsonCID refs → coalesce
+  │                │   into buffer (merge `updated` by spread)
+  │                ├─ structural insert (multi-tuple, or single tuple
+  │                │   with 🦜:JsonContainerID) → flushBuffer() then
+  │                │   doc.applyDiff(group) immediately
+  │                └─ other (text / counter / non-structural seq) →
+  │                    doc.applyDiff(group) immediately
+  │
+  ├─ flush phase (afterBatch on local writes):
+  │    flushCoalesceBuffer() — apply each buffered MapDiff via
+  │    doc.applyDiff([[cid, {type:"map", updated}]])
+  │
+  └─ runBatch finally (depth 1→0):
+       outermostOrigin → doc.setNextCommitMessage(...) (if set)
        inOurCommit = true
-       └─ mergePendingGroups — fuse single-MapDiff groups on the same container
-          └─ for each group: doc.applyDiff(group)
+       └─ doc.commit() ── one commit per outermost change(); fires one
+                          doc.subscribe batch for the whole logical
+                          action (re-entrant change()s from
+                          subscribers collapse into the same commit)
        inOurCommit = false
 ```
 
-The write path is two-phase. During `prepare`, local mutations are applied eagerly to the `PlainState` shadow via `applyChange(shadow, path, change)` — making them immediately read-visible — while CRDT diffs are buffered. During `onFlush`, the buffered diffs are applied to the `LoroDoc` via `applyDiff`, making them sync-visible.
+The write path advances **both** σ (the shadow) and λ (the LoroDoc tree) at every prepare boundary. PlainSubstrate has σ ≡ λ; CRDT substrates generalise to the two-store product where `applyDiff` is called eagerly inside `prepare` (immediately for structural inserts, via the coalescing buffer for plain MapDiff writes that drain in `afterBatch`). The projection law `σ ≡ Π(λ)` (the naturality condition of `materializeLoroShadow`) is preserved at every prepare return.
 
 `changeToDiff` is **pure** (source: `src/change-mapping.ts`). Given a kyneta `Change` + path + schema + binding, it produces the Loro `Diff[]` that reproduces the change. It handles every built-in change type:
 
@@ -238,18 +257,49 @@ The write path is two-phase. During `prepare`, local mutations are applied eager
 
 Non-replace change types (`text`, `sequence`, `map`, `increment`) cannot originate from sum-interior paths because sum variants are constrained to `PlainSchema`. The `advanceSchema` throw on sums is unreachable for these change types.
 
-`mergePendingGroups` is a pure optimisation: when a transaction mutates multiple fields of the same struct (`d.settings.a.set(1); d.settings.b.set(2)`), both preparations target the same `LoroMap` with a single-key `MapDiff`. Merging them reduces N `applyDiff` calls to one.
+### The coalescing buffer
 
-### The `onFlush` commit
+When a transaction mutates multiple fields of the same struct (`d.settings.a.set(1); d.settings.b.set(2)`), each prepare produces a single-tuple `[ContainerID, MapDiff]` group with one key in `updated`. The per-CID coalescing buffer merges these via spread so all sibling-key writes flush as a single `doc.applyDiff([[cid, {type:"map", updated:{...}}]])` in `afterBatch`. Last-write-wins per key. Multi-tuple structural inserts (which carry `🦜:JsonContainerID` references that must stay intact for CID resolution) force-flush the buffer first and then apply immediately — never coalesce.
 
-`onFlush` runs once per transaction, after every prepared `Diff`:
+The buffer ALSO handles `struct.json` / `list.json` / `record.json` boundary writes: any write into a json subtree stages the full σ snapshot at the boundary segment in the parent CRDT container, instead of generating per-leaf diffs that would have to navigate non-existent nested CRDT containers. Map-shaped parents coalesce with sibling writes; list-shaped parents force-flush and apply a list-replace immediately (ListDiffs are positional, not key-addressed).
 
-1. `inOurCommit = true` — suppress the event bridge for this commit.
-2. `doc.applyDiff(groups)` for each merged group — Loro generates ops, advances the version vector.
-3. `inOurCommit = false`.
-4. Notifications produced during `prepare` are already delivered to subscribers by the interpreter stack; no additional notification fires from the event bridge for this commit (it was suppressed in step 1).
+### Nested-commit semantics under re-entry
 
-The suppression prevents double-notification: we know what changed because we caused it, and the interpreter-stack notification pipeline already fired.
+Loro's `doc.commit()` is a *global* drain — it commits every pending op in the doc's working copy regardless of which call site queued them. Naive bracket-per-`runBatch` would mean an inner re-entrant commit absorbed the outer's still-pending ops, dropped the outer commit message, and emitted two `doc.subscribe` events for one logical user action. To preserve "one batched event per outermost `change(doc, fn)`" — symmetric with Yjs's free `Y.transact` nesting — Loro's `runBatch` uses a closure-scoped depth counter:
+
+```ts
+let depth = 0
+let outermostOrigin: string | undefined
+
+runBatch(work, options) {
+  if (depth === 0) outermostOrigin = options?.origin
+  depth++
+  try { work() }
+  finally {
+    depth--
+    if (depth === 0) {
+      if (outermostOrigin !== undefined) doc.setNextCommitMessage(outermostOrigin)
+      outermostOrigin = undefined
+      inOurCommit = true
+      try { doc.commit() } finally { inOurCommit = false }
+    }
+  }
+}
+```
+
+Guarantees:
+
+- Exactly one `doc.commit()` per outermost `change(doc, fn)`, regardless of how many subscribers re-enter.
+- The outermost `BatchOptions.origin` wins as the Loro commit message attribution (visible on `change.message` in `doc.getAllChanges()` and on the per-commit `doc.subscribe` batch).
+- Inner re-entrant `BatchOptions.origin` values still flow through the kyneta `Changeset.origin` channel — only the Loro-layer commit-message attribution collapses.
+
+Raw `LoroDoc` consumers (providers, persisters): strictly fewer / smaller-equal commits than the pre-Phase-2 design (which emitted one commit per re-entrant `change()`). Wire traffic per logical user action shrinks; no new commits ever appear.
+
+### What the write path is NOT
+
+- **Not a streaming write.** Each transaction is at most a handful of `applyDiff` calls (structural inserts apply immediately; plain MapDiffs coalesce into one per container per batch).
+- **Not transactional in Loro's sense.** Loro has its own transaction semantics; kyneta's `change(doc, fn)` is an interpreter-stack transaction that commits a bundle of Loro writes atomically *from kyneta's perspective*. Loro ops can still interleave concurrently with other peers.
+- **Not reversible from the substrate.** There is no undo buffer in the substrate. Undo is an application concern.
 
 ### What the write path is NOT
 
@@ -279,11 +329,11 @@ The handler:
 
 ### Why `inOurCommit`
 
-`inOurCommit` prevents the event bridge from double-notifying when *we* applied the diff. It's local to `onFlush` — set true around `doc.commit()`, cleared in `finally`. The flag does not escape into user-reachable code.
+`inOurCommit` prevents the event bridge from double-notifying when *we* applied the diff. It is set true only around the single outermost `doc.commit()` inside `runBatch`'s depth-zero release, cleared in `finally`, so the event-bridge subscriber skips our own `batch.by === "local"` events for the entire logical write (outer + all re-entrant sub-changes). The flag does not escape into user-reachable code.
 
-The earlier `inEventHandler` flag (which protected substrate-write skipping during event-bridge replay) was retired in favor of `BatchOptions.replay`: the event bridge passes `{ replay: true }` to `executeBatch`, and the substrate's `prepare`/`onFlush` discriminate on that typed parameter rather than on an ambient global. This closes a previously latent invariant hole — a re-entrant `change(doc, ...)` from inside a subscriber on a replay batch now correctly lands in the substrate (replay=false on the inner batch), where pre-fix the global flag swallowed the write. Context: jj:qpultxsw.
+The earlier `inEventHandler` flag (which protected substrate-write skipping during event-bridge replay) was retired in favor of `BatchOptions.replay`: the event bridge passes `{ replay: true }` to `executeBatch`, and the substrate's `prepare`/`afterBatch` discriminate on that typed parameter rather than on an ambient global. This closes a previously latent invariant hole — a re-entrant `change(doc, ...)` from inside a subscriber on a replay batch now correctly lands in the substrate (replay=false on the inner batch), where pre-fix the global flag swallowed the write. Context: jj:qpultxsw.
 
-During replay, `onFlush` re-materializes the `PlainState` shadow from the `LoroDoc` via `materializeLoroShadow`, ensuring that `ctx.reader` — which reads through `plainReader(shadow)` — is consistent with the merged CRDT state for any subscriber callbacks that fire during notification delivery.
+During replay, `afterBatch` re-materialises the `PlainState` shadow from the `LoroDoc` via `materializeLoroShadow` (using the shared `syncShadow` helper from `@kyneta/schema`'s `reader`), ensuring that `ctx.reader` — which reads through `plainReader(shadow)` — is consistent with the merged CRDT state for any subscriber callbacks that fire during notification delivery. Replay is the only branch that re-materialises; on local writes σ already tracks each prepare incrementally.
 
 **Note:** `materializeLoroShadow` now uses the generic `createMaterializeInterpreter` from `@kyneta/schema` core with a Loro-specific `MaterializeResolver` (created by `createLoroResolver`), rather than defining a bespoke 370-line `loroMaterializeInterpreter`. The resolver (~50 lines) handles only CRDT-specific value extraction; all structural recursion and zero fallback is handled by the generic interpreter.
 

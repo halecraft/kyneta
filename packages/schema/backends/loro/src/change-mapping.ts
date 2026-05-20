@@ -4,13 +4,15 @@
 // batchToOps:   Loro LoroEventBatch → kyneta Op[]
 //
 // These are conceptual inverses at the kyneta↔Loro boundary.
-// changeToDiff is used by the substrate's `prepare` to accumulate diffs
-// for `applyDiff`. batchToOps is used by the `doc.subscribe()` event
-// bridge to translate Loro events into kyneta Ops for the changefeed.
+// changeToDiff is invoked by the substrate's `prepare` to produce the
+// diff group that the coalescer then dispatches against `applyDiff`
+// (immediately for structural inserts; merged into the per-CID
+// buffer for plain MapDiff writes). batchToOps is used by the
+// `doc.subscribe()` event bridge to translate Loro events into
+// kyneta Ops for the changefeed.
 //
 // Structured inserts use Loro's JsonContainerID format (🦜:cid:...)
-// to reference new containers within an applyDiff batch. See the
-// "Structured inserts via JsonContainerID" section in the plan.
+// to reference new containers within an applyDiff batch.
 
 import type {
   ChangeBase,
@@ -32,6 +34,7 @@ import type {
 } from "@kyneta/schema"
 import {
   expandMapOpsToLeaves,
+  isJsonBoundary,
   KIND,
   pathSchema,
   RawPath,
@@ -68,9 +71,12 @@ let syntheticCounter = 0
  * Generate a synthetic ContainerID for use within an applyDiff batch.
  * These are batch-local — Loro remaps them to real peer-scoped IDs.
  *
- * The counter is module-scoped for uniqueness across calls within the
- * same JS tick, but since applyDiff remaps all synthetic IDs anyway,
- * collisions between batches are harmless.
+ * The counter is module-scoped and intentionally unbounded: each
+ * `changeToDiff` call produces a self-contained group whose synthetic
+ * CIDs are remapped to real CIDs the moment `doc.applyDiff(group)`
+ * runs. There is no cross-call coalescing of synthetic CIDs — the
+ * eager-prepare write path applies each structural group inside the
+ * call that produced it.
  */
 function syntheticCID(
   containerType: "Map" | "List" | "Text" | "Counter" | "MovableList" | "Tree",
@@ -562,8 +568,15 @@ function kindToContainerType(
  *
  * For first-class types the value itself may be a primitive (number
  * for counter, string for text) but Loro still needs a container.
+ *
+ * **JSON-boundary exception**: schemas carrying the `JSON_BOUNDARY`
+ * marker (`struct.json`, `list.json`, `record.json`) are stored as a
+ * single plain JSON value in the parent container — no nested CRDT
+ * containers are created. The boundary itself takes the plain-value
+ * branch.
  */
 function needsContainer(_value: unknown, schema: SchemaNode): boolean {
+  if (isJsonBoundary(schema)) return false
   const kind = schema[KIND]
   switch (kind) {
     // First-class CRDT types — always need a Loro container

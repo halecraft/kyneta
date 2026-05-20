@@ -546,18 +546,27 @@ See `@kyneta/machine`'s TECHNICAL.md §"Drain to quiescence and shared leases" f
 
 ### Subscriber visibility of mid-batch re-entry
 
-`deliverNotifications` iterates subscribers `[S1, S2, S3]`. If S1 calls `change(doc, ...)` synchronously, S1's substrate writes land *before* S2 fires. S2 receives the `Changeset` describing the originating transaction, but reads from a substrate that already includes S1's mutations.
+`deliverNotifications` iterates subscribers `[S1, S2, S3]`. If S1 calls `change(doc, ...)` synchronously, S1's substrate writes land *before* S2 fires. S2 receives the `Changeset` describing the originating transaction, but reads from — and may write through — a substrate that already includes S1's mutations.
 
-This invariant is true **by construction** across all substrates — plain, Loro, Yjs — because CRDT substrates maintain a `PlainState` shadow as their read surface. `prepare` writes eagerly to the shadow via `applyChange`; the CRDT doc is updated later in `onFlush`. Since every substrate's reads go through the shadow, read-your-writes consistency requires no special coordination — a local write is immediately visible to any subsequent read within the same or later subscriber callback, regardless of whether the outer batch is a local write or a replay from the event bridge.
+This invariant is uniform across all substrates — plain, Loro, Yjs — because every substrate now advances **both** of its state stores in lockstep at prepare-time:
 
-When the outer batch is a **replay** batch from a substrate event bridge (e.g. an incoming sync merge), S1's local re-entrant write inside the replay-batch delivery is *not* a replay (the user code constructs a normal `change(doc, ...)` with no `replay` flag), so the substrate's `prepare`/`onFlush` apply it natively. Pre-fix this case was the source of a hidden invariant hole on CRDT substrates: an `inEventHandler`/`inOurTransaction` global flag wrapped the entire event-bridge call and caused the substrate to silently drop S1's write. Resolved by threading `BatchOptions.replay` as a typed parameter; see [§Origin vs replay](#origin-vs-replay).
+- σ (the shadow, the reader's view) advances eagerly via `applyChange(shadow, path, change)`.
+- λ (the native container tree, the change-mapping's view) advances eagerly too: PlainSubstrate has λ ≡ σ; CRDT substrates run their native mutation primitive immediately during `prepare` (Loro coalesces plain MapDiff writes and applies structural inserts on the spot; Yjs invokes `applyChangeToYjs` against the live `Y.Doc` inside the ambient transact opened by `runBatch`).
+
+Concretely, the projection law `σ ≡ Π(λ)` (the naturality condition of the materialisation catamorphism) holds at every prepare boundary. A re-entrant subscriber may either read through σ (via the Reader / the ref `[CALL]`) or write through λ (via re-entrant `change()`, which itself walks λ through `changeToDiff`/`applyChangeToYjs`) — both views are coherent.
+
+When the outer batch is a **replay** batch from a substrate event bridge (e.g. an incoming sync merge), S1's local re-entrant write inside the replay-batch delivery is *not* a replay (the user code constructs a normal `change(doc, ...)` with no `replay` flag), so the substrate's `prepare`/`afterBatch` apply it natively. Pre-fix this case was the source of a hidden invariant hole on CRDT substrates: an `inEventHandler`/`inOurTransaction` global flag wrapped the entire event-bridge call and caused the substrate to silently drop S1's write. Resolved by threading `BatchOptions.replay` as a typed parameter; see [§Origin vs replay](#origin-vs-replay).
 
 Two guidances:
 
 - The `Changeset` you receive describes the transaction that triggered your callback.
-- The substrate state you read reflects everything up to now, including re-entrant writes from earlier subscribers in the same deliver batch.
+- The substrate state you read (and can safely write through) reflects everything up to now, including re-entrant writes from earlier subscribers in the same deliver batch.
 
 To derive "pure pre-mutation state," consume the `Changeset` semantically; do not infer it by reading the substrate. This was always true in spirit — subscribers run after substrate commit — and the dispatcher refactor only changes whether re-entry from S1 succeeds (now) or throws (pre-1.6.0).
+
+### `runBatch` — substrate transaction bracketing
+
+`SubstratePrepare` optionally exposes a `runBatch(work, options)` method invoked by `executeBatch` around the prepare-loop-plus-flush block for local-write batches (replay batches bypass it — the substrate's native state already absorbed those ops at the event-bridge call site). CRDT backends use this seam to install their native transaction primitive at the right scope: Loro increments a depth counter and runs `doc.commit()` once on outermost release (collapsing nested re-entrant `change()`s into one commit); Yjs opens a single `Y.transact(doc, work, KYNETA_ORIGIN)` that Yjs's own transact nesting collapses for free. Substrates that don't need a bracket (PlainSubstrate) omit it; `buildWritableContext` installs the trivial pass-through wrapper for them. The net effect: every CRDT backend emits exactly one batched event per outermost logical `change(doc, fn)`, regardless of how deeply subscribers re-enter.
 
 ### Origin vs replay
 

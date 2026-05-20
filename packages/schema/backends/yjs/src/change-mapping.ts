@@ -35,6 +35,7 @@ import type {
 } from "@kyneta/schema"
 import {
   expandMapOpsToLeaves,
+  isJsonBoundary,
   KIND,
   pathSchema,
   RawPath,
@@ -365,6 +366,12 @@ function maybeCreateSharedType(
   schema: SchemaNode | undefined,
 ): unknown {
   if (schema === undefined) return value
+
+  // JSON-boundary schemas (struct.json/list.json/record.json) store
+  // their entire subtree as a plain JSON value in the parent Y.Map
+  // entry. Skip Y.Map/Y.Array materialisation and pass the value
+  // through unchanged — including nested objects/arrays underneath.
+  if (isJsonBoundary(schema)) return value
 
   switch (schema[KIND]) {
     // First-class text → Y.Text

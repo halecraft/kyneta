@@ -728,6 +728,7 @@ describe("writable: write-only stack", () => {
       reader: store,
       prepare: (path, change) => dispatched.push({ path, change }),
       flush: () => {},
+      runBatch: work => work(),
       dispatch: (path, change) => dispatched.push({ path, change }),
       beginTransaction: () => {},
       commit: () => [],
@@ -902,6 +903,7 @@ describe("writable: TRANSACT attachment", () => {
       reader: plainReader(store),
       prepare: (path, change) => dispatched.push({ path, change }),
       flush: () => {},
+      runBatch: work => work(),
       dispatch: (path, change) => dispatched.push({ path, change }),
       beginTransaction: () => {
         throw new Error("not implemented")

@@ -1,22 +1,31 @@
 // substrate — LoroSubstrate implementation.
 //
 // Implements Substrate<LoroVersion> with:
-// - applyDiff-based local writes (prepare accumulates diffs, onFlush applies)
-// - Persistent doc.subscribe() event bridge for external changes
+// - applyDiff-eager local writes: `prepare` advances both the shadow σ
+//   and the native container tree λ (via a coalescing buffer + direct
+//   applyDiff dispatch), satisfying the projection law `σ ≡ Π(λ)` at
+//   every prepare boundary.
+// - `runBatch` brackets the prepare-loop-plus-flush block with a single
+//   `doc.commit()` per outermost logical action (depth-counter design;
+//   inner re-entrant change()s collapse into the outer commit).
+// - `afterBatch` flushes the coalescing buffer on local writes; on
+//   replay it re-materialises σ from λ (CRDT merge is a lattice join
+//   that has no incremental σ-step decomposition).
+// - Persistent doc.subscribe() event bridge for external changes.
 // - One re-entrancy guard: `inOurCommit` (suppresses event-bridge
-//   reprocessing of commits we just issued ourselves).
+//   reprocessing of the single commit we just issued ourselves).
 //
 // The event bridge contract: wrapping a LoroDoc in a kyneta substrate
 // means subscribing to the kyneta doc observes ALL mutations to the
 // underlying LoroDoc, regardless of source (local kyneta writes,
 // merge, external doc.import, external raw Loro API mutations).
 //
-// `prepare` and `onFlush` accept `BatchOptions` and branch on
+// `prepare` and `afterBatch` accept `BatchOptions` and branch on
 // `options?.replay`. The event bridge constructs the replay batch via
 // `executeBatch(ctx, ops, { origin, replay: true })`; substrate-side
 // work (applyDiff, commit) is skipped when `replay` is true because the
 // native LoroDoc already absorbed the change. This makes `prepare` and
-// `onFlush` total functions of their declared inputs — no hidden
+// `afterBatch` total functions of their declared inputs — no hidden
 // ambient state for the substrate-write decision. Context: jj:qpultxsw.
 
 import {
@@ -27,6 +36,8 @@ import {
   type ChangeBase,
   deriveSchemaBinding,
   executeBatch,
+  findJsonBoundary,
+  isJsonBoundary,
   KIND,
   type MarkConfig,
   type Path,
@@ -43,6 +54,7 @@ import {
   type Substrate,
   type SubstrateFactory,
   type SubstratePayload,
+  syncShadow,
   TREE_NODE_ALLOCATE,
   type Version,
   type WritableContext,
@@ -52,91 +64,66 @@ import type {
   Diff,
   JsonDiff,
   LoroDoc as LoroDocType,
+  LoroMap,
+  Value,
 } from "loro-crdt"
 import { Cursor, LoroDoc } from "loro-crdt"
 import { batchToOps, changeToDiff } from "./change-mapping.js"
-import { resolveContainer } from "./loro-resolve.js"
+import { isLoroContainer } from "./loro-guards.js"
+import { PROPS_KEY, resolveContainer } from "./loro-resolve.js"
 import { materializeLoroShadow } from "./materialize.js"
 import { LoroPosition, toLoroSide } from "./position.js"
 import { LoroVersion } from "./version.js"
 
 // ---------------------------------------------------------------------------
-// mergePendingGroups — outbound leaf→container composition
+// JsonContainerID detection (used by the coalescer to gate structural inserts)
 // ---------------------------------------------------------------------------
-
-/**
- * Merge pending diff groups that target the same ContainerID with MapDiff.
- *
- * When a transaction sets multiple keys on the same struct (e.g.,
- * `d.settings.a.set(true); d.settings.b.set(0)`), each `prepare` call
- * produces a separate single-element group targeting the same LoroMap.
- * This function merges those into a single group with a combined
- * `updated` record, producing one `applyDiff` call per container.
- *
- * **Only merges** single-element groups whose sole tuple is a MapDiff
- * (type "map") with no `🦜:` (JsonContainerID) references in values.
- * Multi-element groups (structured inserts with cross-references) and
- * non-map diffs (text, list, counter) are never merged — they pass
- * through unchanged.
- */
-function mergePendingGroups(
-  groups: [ContainerID, Diff | JsonDiff][][],
-): [ContainerID, Diff | JsonDiff][][] {
-  if (groups.length <= 1) return groups
-
-  const result: [ContainerID, Diff | JsonDiff][][] = []
-  // Map from ContainerID → index in result where the merged group lives
-  const mergeTargets = new Map<ContainerID, number>()
-
-  for (const group of groups) {
-    // Only merge single-element groups with a MapDiff
-    if (group.length === 1) {
-      const [cid, diff] = group[0]
-      if (diff.type === "map" && !hasJsonContainerRef(diff)) {
-        const existingIdx = mergeTargets.get(cid)
-        if (existingIdx !== undefined) {
-          // Merge into existing group: combine `updated` records
-          const existing = result[existingIdx][0][1] as {
-            type: "map"
-            updated: Record<string, unknown>
-          }
-          const incoming = diff as {
-            type: "map"
-            updated: Record<string, unknown>
-          }
-          existing.updated = { ...existing.updated, ...incoming.updated }
-          continue
-        }
-        // First MapDiff for this CID — register as a merge target
-        // Clone the diff so we can mutate `updated` during merge
-        const cloned: [ContainerID, Diff | JsonDiff] = [
-          cid,
-          { type: "map", updated: { ...(diff as any).updated } } as
-            | Diff
-            | JsonDiff,
-        ]
-        mergeTargets.set(cid, result.length)
-        result.push([cloned])
-        continue
-      }
-    }
-    // Non-mergeable group — pass through
-    result.push(group)
-  }
-
-  return result
-}
 
 /**
  * Check if a MapDiff has any JsonContainerID references (`🦜:` prefix)
  * in its `updated` values. Groups with such references are structured
- * inserts that must stay intact for CID resolution.
+ * inserts that must stay intact for CID resolution — the coalescer
+ * routes them to the immediate-apply path with a buffer force-flush.
  */
 function hasJsonContainerRef(diff: Diff | JsonDiff): boolean {
   const updated = (diff as any).updated
   if (!updated) return false
   for (const value of Object.values(updated)) {
     if (typeof value === "string" && value.startsWith("🦜:")) return true
+  }
+  return false
+}
+
+/**
+ * Detect whether a single-tuple diff group represents a structural
+ * insert that introduces new container references into λ. Multi-tuple
+ * groups are always structural (additional tuples are the bodies of
+ * the inserted containers). Single-tuple groups are structural only
+ * if the diff carries a `🦜:` ref — a MapDiff field insertion or a
+ * ListDiff insert delta referring to a synthetic container.
+ *
+ * Used by the coalescer to decide when to force-flush buffered
+ * MapDiff state before applying the structural diff (so subsequent
+ * prepares' resolveContainer walks land on the up-to-date λ).
+ */
+function isStructuralGroup(
+  group: readonly [ContainerID, Diff | JsonDiff][],
+): boolean {
+  if (group.length === 0) return false
+  if (group.length > 1) return true
+  const [, diff] = group[0]
+  if (diff.type === "map") return hasJsonContainerRef(diff)
+  if (diff.type === "list") {
+    const deltas = (diff as any).diff as Array<Record<string, unknown>>
+    if (!deltas) return false
+    for (const delta of deltas) {
+      const inserts = (delta as { insert?: readonly unknown[] }).insert
+      if (!inserts) continue
+      for (const item of inserts) {
+        if (typeof item === "string" && item.startsWith("🦜:")) return true
+      }
+    }
+    return false
   }
   return false
 }
@@ -170,11 +157,27 @@ export function createLoroSubstrate(
 ): Substrate<LoroVersion> {
   // --- Closure-scoped state ---
 
-  // Accumulated diff groups from prepare(), drained by onFlush().
-  // Each group is the output of a single changeToDiff() call and must
-  // be applied as a single applyDiff() batch to preserve JsonContainerID
-  // (🦜:) cross-references within the group.
-  const pendingGroups: [ContainerID, Diff | JsonDiff][][] = []
+  // Coalescing buffer for plain MapDiff writes and json-boundary
+  // full-value writes. Each entry is a CID-scoped `updated` record
+  // (the same shape the underlying MapDiff carries). Inserts are
+  // FIFO; flushing iterates in insertion order so any prior state
+  // lands before downstream structural inserts that may build on it.
+  //
+  // Buffer entries hold the σ-derived value at the boundary key
+  // (which, for json-boundary writes, is the entire subtree as a
+  // plain JSON object — see Phase 1a). Last-write-wins per `key`
+  // within a CID — re-entrant writes overwrite earlier same-key
+  // entries by spread semantics.
+  const coalesceBuffer = new Map<ContainerID, Record<string, unknown>>()
+
+  // Depth counter for runBatch. Loro's `doc.commit()` is a *global*
+  // drain (commits every pending op regardless of which call site
+  // queued them — see the empirical probe in scratch/), so naive
+  // bracket-per-runBatch would lose outer-origin attribution and
+  // double-emit subscribe events. The counter mirrors Yjs's free
+  // transact nesting manually: only the outermost release commits.
+  let runBatchDepth = 0
+  let outermostOrigin: string | undefined
 
   // Set true around our own doc.commit() so the subscriber ignores the
   // resulting by:"local" event (changefeed already captured those ops
@@ -193,6 +196,121 @@ export function createLoroSubstrate(
   // it in sync with every mutation (local or replayed).
   const shadow: PlainState = materializeLoroShadow(doc, schema, binding)
   const reader = plainReader(shadow)
+
+  // --- Coalescer helpers ---
+
+  /**
+   * Merge a `{ key → value }` map into the buffered `updated` record
+   * for `cid`. Spread semantics → last write wins per key.
+   */
+  function coalesceMapDiff(
+    cid: ContainerID,
+    updated: Record<string, unknown>,
+  ): void {
+    const existing = coalesceBuffer.get(cid)
+    if (existing) {
+      Object.assign(existing, updated)
+    } else {
+      // Clone so the buffer owns its mutation surface (the source
+      // diff may be reused by future coalesces of the same shape).
+      coalesceBuffer.set(cid, { ...updated })
+    }
+  }
+
+  /**
+   * Flush every buffered MapDiff to the LoroDoc via `applyDiff` and
+   * clear the buffer. Order: insertion order (FIFO) so prerequisite
+   * state lands before any structural insert depending on it.
+   */
+  function flushCoalesceBuffer(): void {
+    if (coalesceBuffer.size === 0) return
+    for (const [cid, updated] of coalesceBuffer) {
+      doc.applyDiff([[cid, { type: "map", updated } as any]] as any)
+    }
+    coalesceBuffer.clear()
+  }
+
+  /**
+   * Compute the identity-aware key (or numeric index) at the boundary
+   * segment. Field segments inside a bound product get identity-keyed
+   * via the SchemaBinding; entry segments (record keys, set members,
+   * tree node ids) and index segments pass their raw resolution
+   * through.
+   */
+  function boundaryKey(path: Path, prefixLength: number): string | number {
+    const seg = path.segments[prefixLength]!
+    if (seg.role === "field" && binding) {
+      const absPath = path.segments
+        .slice(0, prefixLength + 1)
+        .filter(s => s.role === "field")
+        .map(s => s.resolve() as string)
+        .join(".")
+      const identity = binding.forward.get(absPath) as string | undefined
+      if (identity) return identity
+    }
+    return seg.resolve() as string | number
+  }
+
+  /**
+   * Apply a json-boundary write at `path` whose boundary value (the
+   * entire subtree under the JSON boundary segment) is already in σ
+   * after `applyChange`.
+   *
+   * Map-parent boundaries (struct fields, record entries) coalesce
+   * into the buffered MapDiff keyed by their parent CID — repeated
+   * writes inside the same subtree collapse into one `applyDiff` at
+   * flush. List-parent boundaries (sequence/movable items whose
+   * element schema is `struct.json` / `list.json`) flush the buffer
+   * and apply a ListDiff replace immediately, since ListDiffs cannot
+   * be coalesced via spread semantics. Both paths leave σ ≡ Π(λ)
+   * after the next applyDiff lands.
+   */
+  function applyJsonBoundaryWrite(path: Path, prefixLength: number): void {
+    const parentPath = path.slice(0, prefixLength)
+    const { resolved: parentResolved } = resolveContainer(
+      doc,
+      schema,
+      parentPath,
+      binding,
+    )
+    const boundaryPath = path.slice(0, prefixLength + 1)
+    const value = boundaryPath.read(shadow)
+    const key = boundaryKey(path, prefixLength)
+
+    if (isLoroContainer(parentResolved)) {
+      const kind = parentResolved.kind()
+      if (kind === "Map") {
+        coalesceMapDiff(parentResolved.id, {
+          [String(key)]: value as Value,
+        })
+        return
+      }
+      if (kind === "List" || kind === "MovableList") {
+        // ListDiff replace at the boundary index. Coalescing via the
+        // map buffer doesn't apply (list deltas are positional retain/
+        // delete/insert sequences, not key-addressed updates) — flush
+        // any buffered MapDiffs first so observable λ stays in step.
+        flushCoalesceBuffer()
+        const index = key as number
+        const deltas: Array<Record<string, unknown>> = []
+        if (index > 0) deltas.push({ retain: index })
+        deltas.push({ delete: 1 })
+        deltas.push({ insert: [value] })
+        doc.applyDiff([
+          [parentResolved.id, { type: "list", diff: deltas } as any],
+        ] as any)
+        return
+      }
+      throw new Error(
+        `loro substrate: json-boundary write to unsupported parent kind "${kind}" at path ${path.format()}`,
+      )
+    }
+
+    // Parent is the LoroDoc root — json-boundary root fields live in
+    // the shared `_props` LoroMap (symmetric with root scalars).
+    const propsCid = (doc.getMap(PROPS_KEY) as LoroMap).id as ContainerID
+    coalesceMapDiff(propsCid, { [String(key)]: value as Value })
+  }
 
   // --- Substrate object ---
 
@@ -213,65 +331,95 @@ export function createLoroSubstrate(
     },
 
     prepare(path: Path, change: ChangeBase, options?: BatchOptions): void {
-      // Local writes: apply eagerly to the shadow so reads are
-      // immediately consistent (the whole point of the shadow).
-      // Replay writes: skip — the shadow will be re-materialized
-      // from the CRDT doc in onFlush(replay), avoiding
-      // double-counting from overlapping structural + leaf diffs.
-      if (!options?.replay) {
-        applyChange(shadow, path, change)
-      }
+      // Replay writes: the native LoroDoc has already absorbed these
+      // ops via doc.import; skip σ/λ advance — afterBatch(replay)
+      // rebuilds σ from λ in one Π pass.
+      if (options?.replay) return
 
-      if (options?.replay) {
+      // Local write — σ advances eagerly so reads are immediately
+      // consistent regardless of where λ is in the bracket.
+      applyChange(shadow, path, change)
+
+      // JSON-boundary write: every write targeting a path that
+      // crosses a struct.json/list.json/record.json boundary is
+      // staged as a full-value write at the boundary segment in the
+      // parent CRDT container — using a MapDiff for map-shaped
+      // parents (coalesces with sibling writes) or a ListDiff
+      // replace for list-shaped parents (cannot coalesce via spread
+      // semantics; force-flushes any buffered MapDiffs first).
+      const boundary = findJsonBoundary(schema, path, binding)
+      if (boundary !== null) {
+        applyJsonBoundaryWrite(path, boundary.prefixLength)
         return
       }
-      // Local write: convert Change → Loro Diff, accumulate as a group.
-      // No Loro side effects — mutations happen at flush time.
-      // Each group must be applied as a single applyDiff() call to
-      // preserve JsonContainerID (🦜:) cross-references.
+
+      // Non-boundary write — translate to a Loro diff group.
       const group = changeToDiff(path, change, schema, doc, binding)
-      if (group.length > 0) {
-        pendingGroups.push(group)
+      if (group.length === 0) return
+
+      // Coalescable plain MapDiff: merge into the buffer. The
+      // multi-key struct mutation pattern (`d.struct.a.set(1);
+      // d.struct.b.set(2)`) collapses into one applyDiff at flush
+      // time.
+      if (group.length === 1) {
+        const [cid, diff] = group[0]
+        if (diff.type === "map" && !hasJsonContainerRef(diff)) {
+          const updated = (diff as { updated: Record<string, unknown> }).updated
+          coalesceMapDiff(cid, updated)
+          return
+        }
       }
+
+      // Structural inserts (multi-tuple groups, or single tuples
+      // carrying `🦜:` references) introduce new container refs into
+      // λ that subsequent prepares' resolveContainer walks may land
+      // on. Force-flush the coalesced MapDiffs first so observable λ
+      // is up to date before the structural diff lands.
+      if (isStructuralGroup(group)) {
+        flushCoalesceBuffer()
+      }
+      doc.applyDiff(group as any)
     },
 
-    onFlush(options?: BatchOptions): void {
+    afterBatch(options?: BatchOptions): void {
       if (options?.replay) {
-        // Loro already committed. Re-materialize the shadow from the
-        // CRDT doc so it reflects the merged state. We can't apply
-        // replay ops incrementally because batchToOps may emit
-        // overlapping structural + leaf diffs that double-count.
-        const fresh = materializeLoroShadow(doc, schema, binding)
-        for (const key of Object.keys(fresh)) {
-          shadow[key] = fresh[key]
-        }
-        for (const key of Object.keys(shadow)) {
-          if (!(key in fresh)) {
-            delete shadow[key]
-          }
-        }
+        // CRDT merge is a lattice join — `batchToOps` may emit
+        // overlapping structural + leaf diffs whose sequential σ-step
+        // composition would double-count. Re-materialise σ from λ in
+        // one Π pass instead.
+        syncShadow(shadow, materializeLoroShadow(doc, schema, binding))
         return
       }
-      // Local write: apply accumulated diff groups, then commit.
-      if (pendingGroups.length > 0) {
-        // Merge single-element MapDiff groups targeting the same
-        // ContainerID into one group. This composes N per-leaf replace
-        // ops into a single per-container map update — the inverse of
-        // expandMapOpsToLeaves on the inbound path.
-        const merged = mergePendingGroups(pendingGroups)
-        for (const group of merged) {
-          doc.applyDiff(group as any)
-        }
-        pendingGroups.length = 0
+      // Local write: drain the coalescing buffer. `runBatch` owns the
+      // commit boundary — we apply diffs here but do NOT commit.
+      flushCoalesceBuffer()
+    },
+
+    runBatch(work: () => void, options?: BatchOptions): void {
+      // Depth-counter bracket: outermost call sets the origin and
+      // commits once on release; inner re-entries (e.g. from a
+      // subscriber's change(doc, ...) inside deliverNotifications)
+      // accumulate ops into the same commit.
+      if (runBatchDepth === 0) {
+        outermostOrigin = options?.origin
       }
-      if (options?.origin !== undefined) {
-        doc.setNextCommitMessage(options.origin)
-      }
-      inOurCommit = true
+      runBatchDepth++
       try {
-        doc.commit()
+        work()
       } finally {
-        inOurCommit = false
+        runBatchDepth--
+        if (runBatchDepth === 0) {
+          if (outermostOrigin !== undefined) {
+            doc.setNextCommitMessage(outermostOrigin)
+          }
+          outermostOrigin = undefined
+          inOurCommit = true
+          try {
+            doc.commit()
+          } finally {
+            inOurCommit = false
+          }
+        }
       }
     },
 
@@ -330,11 +478,16 @@ export function createLoroSubstrate(
             },
           } satisfies PositionCapable
         }
-        // Create-then-record. Tree node ids must be peer-stamped for
-        // Loro's `tree-move` merge to work, so we materialize the node
-        // in Loro state here (during prepare) and let the recorded
-        // `TreeInstruction.create` ride through `applyDiff` as a no-op
-        // duplicate against the same TreeID.
+        // Create-then-record. The pattern this once pioneered — eager
+        // native mutation during prepare — is now universal across the
+        // substrate write path (applyDiff-eager prepare + coalescing
+        // buffer; see the module-doc header). Tree node ids retain
+        // their own niche because they must be peer-stamped for
+        // Loro's `tree-move` merge to work: we materialize the node
+        // here so the id we hand back to the kyneta interpreter is
+        // identical to the one Loro persists, and the subsequent
+        // `TreeInstruction.create` rides through `applyDiff` as an
+        // idempotent no-op against the same TreeID.
         ;(cachedCtx as any)[TREE_NODE_ALLOCATE] = (treePath: Path): string => {
           const { resolved } = resolveContainer(doc, schema, treePath, binding)
           if (
@@ -426,7 +579,7 @@ export function createLoroSubstrate(
     // Lazily ensure the context is built
     const ctx = substrate.context()
 
-    // `replay: true` tells substrate.prepare/onFlush to skip native-side
+    // `replay: true` tells substrate.prepare/afterBatch to skip native-side
     // work (Loro has already absorbed these ops via doc.import) and
     // surfaces on the Changeset for downstream filters (exchange echo).
     executeBatch(ctx, ops, { origin, replay: true })
@@ -703,6 +856,12 @@ export function ensureRootContainer(
   key: string,
   fieldSchema: SchemaNode,
 ): void {
+  // JSON-boundary root fields (struct.json/list.json/record.json) are
+  // stored as a single plain JSON value in the shared _props LoroMap.
+  // No typed root container is created; the materialiser's zero
+  // fallback covers absent boundaries, and the first write materialises
+  // the value via `_props.set(key, plainValue)`.
+  if (isJsonBoundary(fieldSchema)) return
   // Dispatch on the schema's [KIND] directly — no annotation unwrapping
   switch (fieldSchema[KIND]) {
     case "text":

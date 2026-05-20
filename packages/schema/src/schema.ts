@@ -30,6 +30,37 @@ export const KIND = Symbol.for("kyneta:kind")
 export type KindSymbol = typeof KIND
 
 // ---------------------------------------------------------------------------
+// JSON_BOUNDARY — runtime marker for `.json()` merge boundaries
+// ---------------------------------------------------------------------------
+
+/**
+ * Marks a schema node as a JSON merge boundary: the entire subtree
+ * below this node is stored as a single plain JSON value in the
+ * parent CRDT container, not as nested CRDT containers.
+ *
+ * Stamped at construction time on `struct.json`, `list.json`, and
+ * `record.json` factories. Backends consult it to suppress nested
+ * container creation (`needsContainer`/`maybeCreateSharedType`) and
+ * to short-circuit path resolution at the boundary
+ * (`foldPath`'s symmetric JSON descent).
+ *
+ * `Symbol.for` (not plain `Symbol`) for the same reason as
+ * {@link KIND}: dual-loaded copies of this module must share
+ * identity so cross-package reads see the same marker.
+ */
+export const JSON_BOUNDARY = Symbol.for("kyneta:json-boundary")
+export type JsonBoundarySymbol = typeof JSON_BOUNDARY
+
+/** Returns `true` if the schema carries the {@link JSON_BOUNDARY} marker. */
+export function isJsonBoundary(schema: unknown): boolean {
+  return (
+    schema !== null &&
+    typeof schema === "object" &&
+    (schema as Record<symbol, unknown>)[JSON_BOUNDARY] === true
+  )
+}
+
+// ---------------------------------------------------------------------------
 // LAWS — phantom composition-law accumulator (type-level only)
 // ---------------------------------------------------------------------------
 
@@ -702,7 +733,9 @@ function list<I extends Schema>(
 list.json = function listJson<I extends PlainSchema>(
   item: I,
 ): SequenceSchema<I, "lww"> {
-  return withPlainModifiers({ [KIND]: "sequence", item })
+  const schema = withPlainModifiers({ [KIND]: "sequence", item })
+  ;(schema as Record<symbol, unknown>)[JSON_BOUNDARY] = true
+  return schema
 }
 
 /**
@@ -724,7 +757,9 @@ function struct<F extends Record<string, Schema>>(
 struct.json = function structJson<F extends Record<string, PlainSchema>>(
   fields: F,
 ): ProductSchema<F, "lww"> {
-  return withPlainModifiers(product(fields))
+  const schema = withPlainModifiers(product(fields))
+  ;(schema as Record<symbol, unknown>)[JSON_BOUNDARY] = true
+  return schema
 }
 
 /**
@@ -746,7 +781,9 @@ function record<I extends Schema>(
 record.json = function recordJson<I extends PlainSchema>(
   item: I,
 ): MapSchema<I, "lww"> {
-  return withPlainModifiers({ [KIND]: "map", item })
+  const schema = withPlainModifiers({ [KIND]: "map", item })
+  ;(schema as Record<symbol, unknown>)[JSON_BOUNDARY] = true
+  return schema
 }
 
 // ---------------------------------------------------------------------------

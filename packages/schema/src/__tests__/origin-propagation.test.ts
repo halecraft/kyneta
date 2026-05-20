@@ -15,13 +15,19 @@ function stubContext(): {
   ctx: WritableContext
   prepare: ReturnType<typeof vi.fn>
   flush: ReturnType<typeof vi.fn>
+  runBatch: ReturnType<typeof vi.fn>
 } {
   const prepare = vi.fn()
   const flush = vi.fn()
+  // Trivial bracket: invoke body directly. The point of this stub is
+  // to observe (prepare, flush) options-propagation; the runBatch shape
+  // doesn't matter beyond "calls its body."
+  const runBatch = vi.fn((work: () => void) => work())
   const ctx = {
     reader: {} as any,
     prepare,
     flush,
+    runBatch,
     dispatch: vi.fn(),
     beginTransaction: vi.fn(),
     commit: vi.fn(),
@@ -30,7 +36,7 @@ function stubContext(): {
       return false
     },
   } as unknown as WritableContext
-  return { ctx, prepare, flush }
+  return { ctx, prepare, flush, runBatch }
 }
 
 describe("BatchOptions propagation through executeBatch", () => {

@@ -108,9 +108,10 @@ export { applyChanges, change, remove } from "./facade/change.js"
 export { subscribe, subscribeNode } from "./facade/observe.js"
 // foldPath — schema-guided sibling of Path.read; the navigation primitive
 // every CRDT backend's path resolver composes around.
-export type { PathFoldResult, PathStepper } from "./fold-path.js"
+export type { JsonBoundaryHit, PathFoldResult, PathStepper } from "./fold-path.js"
 export {
   extendSchemaPathKey,
+  findJsonBoundary,
   foldPath,
   pathSchema,
 } from "./fold-path.js"
@@ -341,6 +342,7 @@ export type {
 export {
   applyChange,
   plainReader,
+  syncShadow,
   writeByPath,
 } from "./reader.js"
 // Ref tier types — parameterized recursive refs for composed interpreter stacks
@@ -397,7 +399,9 @@ export type {
 export {
   advanceSchema,
   buildVariantMap,
+  isJsonBoundary,
   isNullableSum,
+  JSON_BOUNDARY,
   KIND,
   LAWS,
   Schema,
