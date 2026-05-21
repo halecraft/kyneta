@@ -40,6 +40,7 @@ import type { Op } from "../changefeed.js"
 import type { Path } from "../interpret.js"
 import type { WritableContext } from "../interpreters/writable.js"
 import { buildWritableContext, executeBatch } from "../interpreters/writable.js"
+import { deepClonePreState, invert } from "../inverse.js"
 import { RawPath } from "../path.js"
 import {
   decodePlainPosition,
@@ -51,6 +52,7 @@ import { applyChange, type PlainState, plainReader } from "../reader.js"
 import type { Schema as SchemaNode } from "../schema.js"
 import type {
   BatchOptions,
+  RecordInverseFn,
   Replica,
   ReplicaFactory,
   Substrate,
@@ -58,7 +60,11 @@ import type {
   SubstratePayload,
   Version,
 } from "../substrate.js"
-import { BACKING_DOC, TREE_NODE_ALLOCATE } from "../substrate.js"
+import {
+  BACKING_DOC,
+  RECORD_INVERSE,
+  TREE_NODE_ALLOCATE,
+} from "../substrate.js"
 import { Zero } from "../zero.js"
 
 // ---------------------------------------------------------------------------
@@ -190,11 +196,30 @@ export function createPlainSubstrate<V extends Version>(
 
     reader: reader,
 
-    prepare(path: Path, change: ChangeBase, _options?: BatchOptions): void {
+    prepare(path: Path, change: ChangeBase, options?: BatchOptions): void {
       // Plain has no event bridge / external mutation path, so the
       // replay-vs-local distinction doesn't matter for the substrate
       // write itself. The flag still flows to subscribers via
       // Changeset.replay (set in `merge` below).
+      //
+      // Inverse recording: under the normal handler, capture σ at the
+      // target path before the write, compute the reverse arrow in the
+      // change groupoid, and push it on the active runBatch frame's
+      // stack. Skipped when `options.compensating === true` — the
+      // change is itself an inverse being replayed during abort, and
+      // recording its inverse would loop. Also skipped on replay
+      // (afterBatch re-materialises σ from λ in one Π pass, so
+      // sequential inverse-step would double-count).
+      const record = (
+        options as
+          | (BatchOptions & { [RECORD_INVERSE]?: RecordInverseFn })
+          | undefined
+      )?.[RECORD_INVERSE]
+      if (record && !options?.compensating && !options?.replay) {
+        const pre = deepClonePreState(path.read(doc))
+        const inverse = invert(pre, change)
+        record(path, inverse)
+      }
       applyChange(doc, path, change)
       replicaCore.pendingOps.push({ path, change })
     },

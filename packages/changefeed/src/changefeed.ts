@@ -40,7 +40,7 @@ export const CHANGEFEED: unique symbol = Symbol.for("kyneta:changefeed") as any
  * It wraps one or more changes with optional batch-level metadata.
  *
  * - Auto-commit produces a degenerate changeset of one change.
- * - Transactions and `applyChanges` produce multi-change batches.
+ * - `change(doc, fn)` and `applyChanges` produce multi-change batches.
  * - `origin` is an *application-level label* — opaque to the framework.
  *   Apps may use it freely (`"sync"`, `"undo"`, `"local"`, anything).
  *   The schema package and the exchange never branch on its value.
@@ -49,6 +49,16 @@ export const CHANGEFEED: unique symbol = Symbol.for("kyneta:changefeed") as any
  *   event bridge, `merge` payload, version travel). Layered consumers
  *   (e.g. the exchange's echo filter) use `replay` to discriminate
  *   "echo from sync" from "local write" without piggy-backing on origin.
+ * - `aborted` is a *structural directive* set by the bracket primitive
+ *   when an outermost `change(doc, fn)` block threw and was wholly
+ *   compensated via inverse replay. The Changeset's op list contains
+ *   forward + inverse pairs that net to identity at every path. Inner
+ *   `change()`s that threw and were caught by an outer `change()`'s
+ *   try/catch produce a NON-aborted outermost Changeset — the absorbed
+ *   forward + inverse pair sits in the op list alongside surviving outer
+ *   ops, and consumers needing to identify absorbed inner aborts pair
+ *   the ops semantically. Default `undefined` (== falsy) for successful
+ *   batches and replay batches.
  *
  * The subscriber API always receives a `Changeset`, making it uniform
  * regardless of how the changes were produced.
@@ -61,6 +71,10 @@ export interface Changeset<C = ChangeBase> {
   /** Structural: true iff this batch is replaying state authored
    *  elsewhere (substrate event bridge, merge payload). */
   readonly replay?: boolean
+  /** Structural: true iff the outermost `change(doc, fn)` block threw
+   *  and was wholly compensated via inverse replay. The op list contains
+   *  forward + inverse pairs that net to identity. */
+  readonly aborted?: boolean
 }
 
 // ---------------------------------------------------------------------------

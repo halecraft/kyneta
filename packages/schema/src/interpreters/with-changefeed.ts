@@ -169,6 +169,7 @@ export function deliverNotifications(
         changes,
         origin: options?.origin,
         replay: options?.replay,
+        aborted: options?.aborted,
       }
       for (const cb of set) cb(changeset)
     }
@@ -197,6 +198,7 @@ export function liftToOps<C extends ChangeBase>(
     changes: cs.changes.map(change => ({ path, change })),
     origin: cs.origin,
     replay: cs.replay,
+    aborted: cs.aborted,
   }
 }
 
@@ -222,6 +224,7 @@ export function prefixOps<C extends ChangeBase>(
     })),
     origin: cs.origin,
     replay: cs.replay,
+    aborted: cs.aborted,
   }
 }
 
@@ -303,8 +306,15 @@ interface ContextWiringState {
  *   Carries `options` so the resulting `Changeset` surfaces both `origin`
  *   and `replay` to subscribers.
  */
+/**
+ * Sum-typed writer log entry — the change-Writer monad's log element.
+ * `compensating: true` discriminates inverse ops (run under the
+ * undo-replay handler) from forward ops.
+ */
+type AccumulatorEntry = { readonly op: Op; readonly compensating?: boolean }
+
 type ChangefeedMsg =
-  | { type: "accumulate"; op: Op }
+  | { type: "accumulate"; op: Op; compensating?: boolean }
   | { type: "flush"; options: BatchOptions | undefined }
 
 /**
@@ -384,7 +394,12 @@ function ensurePrepareWiring(
     string,
     Set<(changeset: Changeset<ChangeBase>) => void>
   >()
-  const accumulator: Op[] = []
+  // The change-Writer monad's log — sum-typed `Forward Op | Inverse Op`.
+  // `change(doc, fn)` slices this via FORWARD_OPS_MARKER/SINCE to recover
+  // its forward-only return value. planNotifications consumes the whole
+  // log (both forward and inverse entries) so subscribers see the full
+  // op trace on aborted Changesets.
+  const accumulator: AccumulatorEntry[] = []
   const populated = new Set<string>()
   const populatedListeners = new Map<string, Set<() => void>>()
   const originalPrepare = ctx.prepare
@@ -399,7 +414,7 @@ function ensurePrepareWiring(
   const handle = createDispatcher<ChangefeedMsg>(
     msg => {
       if (msg.type === "accumulate") {
-        accumulator.push(msg.op)
+        accumulator.push({ op: msg.op, compensating: msg.compensating })
         return
       }
       // msg.type === "flush"
@@ -407,7 +422,11 @@ function ensurePrepareWiring(
         originalFlush(msg.options)
         return
       }
-      const plan = planNotifications(accumulator)
+      // planNotifications consumes the whole log — both forward and
+      // inverse entries land in the delivered Changeset. Subscribers
+      // see the full op log on aborted Changesets (forward+inverse
+      // pairs that net to identity).
+      const plan = planNotifications(accumulator.map(e => e.op))
       accumulator.length = 0
       // Commit to the substrate first so version() and delta() reflect
       // the just-flushed operations when subscribers read them.
@@ -421,10 +440,11 @@ function ensurePrepareWiring(
   )
 
   // Wrapped prepare: apply change to substrate synchronously (forwarding
-  // `options` so the substrate sees `replay` at write time), mark populated
-  // synchronously, then dispatch the accumulate Msg. The accumulate Msg
-  // carries no options — notification-side `origin`/`replay` ride on the
-  // subsequent `flush` Msg.
+  // `options` so the substrate sees `replay`/`compensating` at write
+  // time), mark populated synchronously, then dispatch the accumulate
+  // Msg tagged with `compensating` so the writer log can discriminate
+  // forward from inverse entries. Notification-side `origin`/`replay`/
+  // `aborted` ride on the subsequent `flush` Msg.
   const wrappedPrepare = (
     path: Path,
     change: ChangeBase,
@@ -440,7 +460,11 @@ function ensurePrepareWiring(
         : path
     originalPrepare(resolved, change, options)
     markPopulated(resolved, populated, populatedListeners)
-    handle.dispatch({ type: "accumulate", op: { path: resolved, change } })
+    handle.dispatch({
+      type: "accumulate",
+      op: { path: resolved, change },
+      compensating: options?.compensating,
+    })
   }
 
   // Wrapped flush: dispatch a flush Msg carrying the full options. The
@@ -452,6 +476,11 @@ function ensurePrepareWiring(
 
   ctx.prepare = wrappedPrepare
   ctx.flush = wrappedFlush
+
+  // FORWARD_OPS_* accessors are owned by buildWritableContext (it
+  // maintains the writer log directly, so `change()` works on any
+  // stack with/without the observation layer). The changefeed
+  // accumulator here is a separate concern: notification grouping.
 
   state = {
     listeners,

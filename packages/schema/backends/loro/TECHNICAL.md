@@ -265,35 +265,24 @@ The buffer ALSO handles `struct.json` / `list.json` / `record.json` boundary wri
 
 ### Nested-commit semantics under re-entry
 
-Loro's `doc.commit()` is a *global* drain — it commits every pending op in the doc's working copy regardless of which call site queued them. Naive bracket-per-`runBatch` would mean an inner re-entrant commit absorbed the outer's still-pending ops, dropped the outer commit message, and emitted two `doc.subscribe` events for one logical user action. To preserve "one batched event per outermost `change(doc, fn)`" — symmetric with Yjs's free `Y.transact` nesting — Loro's `runBatch` uses a closure-scoped depth counter:
+Under the three-primitive substrate contract (jj:ryquprut), the Loro substrate no longer carries its own depth counter — ctx-level outermost detection (`frameStarts.length === 0`) handles invocation timing. The substrate `runBatch` is the minimal shape:
 
 ```ts
-let depth = 0
-let outermostOrigin: string | undefined
-
 runBatch(work, options) {
-  if (depth === 0) outermostOrigin = options?.origin
-  depth++
-  try { work() }
-  finally {
-    depth--
-    if (depth === 0) {
-      if (outermostOrigin !== undefined) doc.setNextCommitMessage(outermostOrigin)
-      outermostOrigin = undefined
-      inOurCommit = true
-      try { doc.commit() } finally { inOurCommit = false }
-    }
-  }
+  if (options?.origin !== undefined) doc.setNextCommitMessage(options.origin)
+  work()
+  inOurCommit = true
+  try { doc.commit() } finally { inOurCommit = false }
 }
 ```
 
-Guarantees:
+The ctx-level `WritableContext.runBatch` invokes `substrate.runBatch` only at the depth-0 transition. Within a single outermost `change(doc, fn)`, the substrate sees exactly one bracket: setNextCommitMessage → wrappedWork (prepares + flush + subscriber re-entry) → doc.commit. Inner ctx-level frames (nested `change()` inside `change()`'s `fn`) push/pop without re-entering substrate.runBatch — they just contribute prepares to the outer's pending applyDiff queue.
 
-- Exactly one `doc.commit()` per outermost `change(doc, fn)`, regardless of how many subscribers re-enter.
-- The outermost `BatchOptions.origin` wins as the Loro commit message attribution (visible on `change.message` in `doc.getAllChanges()` and on the per-commit `doc.subscribe` batch).
-- Inner re-entrant `BatchOptions.origin` values still flow through the kyneta `Changeset.origin` channel — only the Loro-layer commit-message attribution collapses.
+**Subscriber re-entry produces a separate outermost commit.** When a subscriber fires during the outer's `ctx.flush`, the outer's ctx frame has already popped, so the re-entrant `change()` sees `frameStarts.length === 0` again and opens its own outermost bracket — its own substrate.runBatch → its own `doc.commit()`. Each block is its own atomic abort unit; each gets its own commit. This is a deliberate semantic shift from the pre-jj:ryquprut depth-counter design (which collapsed re-entries into one commit). The trade-off: cleaner per-block abort semantics (each `change()` is an independent atomic action) at the cost of slightly chattier Loro commit attribution (one commit per `change()` block instead of one per logical user action with re-entries).
 
-Raw `LoroDoc` consumers (providers, persisters): strictly fewer / smaller-equal commits than the pre-Phase-2 design (which emitted one commit per re-entrant `change()`). Wire traffic per logical user action shrinks; no new commits ever appear.
+### Load-bearing Loro invariants
+
+`doc.applyDiff(group)` does NOT fire `doc.subscribe` events; only `doc.commit()` does. This is what lets the substrate apply diffs throughout `prepare` without emitting intermediate events — only the outermost `runBatch` release commits and emits the single batched event. If a future Loro version were to fire subscribe events on `applyDiff`, the eager-prepare model would need per-prepare suppression flags or a different structure. Flag this invariant explicitly so any future Loro upgrade triggers a review of this assumption.
 
 ### What the write path is NOT
 

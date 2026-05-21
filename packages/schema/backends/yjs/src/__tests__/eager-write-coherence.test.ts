@@ -29,11 +29,8 @@ import {
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
 import { materializeYjsShadow } from "../materialize.js"
-import {
-  createYjsSubstrate,
-  yjsSubstrateFactory,
-} from "../substrate.js"
 import { ensureContainers } from "../populate.js"
+import { createYjsSubstrate, yjsSubstrateFactory } from "../substrate.js"
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -198,9 +195,13 @@ describe("Yjs json-boundary storage", () => {
     const native = unwrap(doc) as Y.Doc
     const rootMap = native.getMap("root")
     const rootKeys: string[] = []
-    rootMap.forEach((_v, k) => rootKeys.push(k))
+    rootMap.forEach((_v, k) => {
+      rootKeys.push(k)
+    })
     expect(rootKeys.length).toBe(1)
-    const value = rootMap.get(rootKeys[0]!)
+    const key = rootKeys[0]
+    if (key === undefined) throw new Error("rootKeys[0] missing")
+    const value = rootMap.get(key)
     expect(value).toEqual({ tags: "prod", retries: 3 })
     expect(value instanceof Y.Map).toBe(false)
   })
@@ -235,9 +236,7 @@ describe("Yjs json-boundary storage", () => {
 
   it("record.json entries round-trip through the json-boundary path", () => {
     const schema = Schema.struct({
-      profiles: Schema.record.json(
-        Schema.struct({ email: Schema.string() }),
-      ),
+      profiles: Schema.record.json(Schema.struct({ email: Schema.string() })),
     })
     const { doc } = build(schema)
 
@@ -257,5 +256,66 @@ describe("Yjs json-boundary storage", () => {
       alice: { email: "alice@new.example.com" },
       bob: { email: "bob@example.com" },
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Three-primitive-substrate (jj:ryquprut): read-your-writes carries through
+// to Yjs; abort produces one batched native event with net-zero delta.
+// ---------------------------------------------------------------------------
+
+describe("Yjs three-primitive substrate (jj:ryquprut)", () => {
+  it("multi-push in one change() block appends in order against the CRDT", () => {
+    const schema = Schema.struct({
+      todos: Schema.list(Schema.string()),
+    })
+    const { doc } = build(schema)
+
+    change(doc, (d: any) => {
+      d.todos.push("a")
+      d.todos.push("b")
+      d.todos.push("c")
+    })
+
+    expect((doc.todos as any)()).toEqual(["a", "b", "c"])
+  })
+
+  it("abort restores state on outermost throw", () => {
+    const schema = Schema.struct({
+      a: Schema.string(),
+      b: Schema.string(),
+    })
+    const { doc } = build(schema)
+
+    expect(() => {
+      change(doc, (d: any) => {
+        d.a.set("set-a")
+        d.b.set("set-b")
+        throw new Error("abort")
+      })
+    }).toThrow("abort")
+
+    expect((doc.a as any)()).toBe("")
+    expect((doc.b as any)()).toBe("")
+  })
+
+  it("abort fires one Changeset with aborted: true on the Yjs stack", () => {
+    const schema = Schema.struct({ a: Schema.string() })
+    const { doc } = build(schema)
+
+    let aborted = false
+    subscribe(doc.a, (cs: any) => {
+      if (cs.aborted) aborted = true
+    })
+
+    expect(() => {
+      change(doc, (d: any) => {
+        d.a.set("hello")
+        throw new Error("abort")
+      })
+    }).toThrow("abort")
+
+    expect(aborted).toBe(true)
+    expect((doc.a as any)()).toBe("")
   })
 })

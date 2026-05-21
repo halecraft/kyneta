@@ -11,6 +11,7 @@ import type {
 } from "../index.js"
 import {
   bottomInterpreter,
+  change,
   hasRecursiveChangefeed,
   hasTransact,
   interpret,
@@ -145,11 +146,11 @@ describe("fluent: interpret(schema, ctx).with(...).done()", () => {
 })
 
 // ===========================================================================
-// Transaction integration
+// change() block integration
 // ===========================================================================
 
-describe("fluent: transactions", () => {
-  it("buffering, commit, and changefeed notification work through fluent-built refs", () => {
+describe("fluent: change() block", () => {
+  it("eager writes, batched delivery, and changefeed notification work through fluent-built refs", () => {
     const store = { x: 0, y: 0 }
     const ctx = plainContext(store)
     const doc = interpret(pointSchema, ctx)
@@ -164,19 +165,14 @@ describe("fluent: transactions", () => {
     const changes: unknown[] = []
     ;(doc.x as any)[CHANGEFEED].subscribe((c: unknown) => changes.push(c))
 
-    ctx.beginTransaction()
-    doc.x.set(10)
-    doc.y.set(20)
+    change(doc, d => {
+      d.x.set(10)
+      d.y.set(20)
+    })
 
-    // Buffered — store unchanged, no notifications
-    expect(store.x).toBe(0)
-    expect(store.y).toBe(0)
-    expect(changes).toHaveLength(0)
-
-    ctx.commit()
     expect(store.x).toBe(10)
     expect(store.y).toBe(20)
-    // Exactly 1 changeset delivered at commit time (batched)
+    // Exactly 1 changeset delivered at outermost release (batched)
     expect(changes).toHaveLength(1)
   })
 })

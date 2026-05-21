@@ -617,8 +617,8 @@ describe("changefeed: TRANSACT preserved", () => {
 // Transaction integration
 // ===========================================================================
 
-describe("changefeed: transaction integration", () => {
-  it("no subscriber notifications during transaction buffering", () => {
+describe("changefeed: change() block integration", () => {
+  it("multi-mutation change() block delivers one batched Changeset (not per-helper)", () => {
     const store = { x: 0, y: 0 }
     const schema = Schema.struct({
       x: Schema.number(),
@@ -634,17 +634,12 @@ describe("changefeed: transaction integration", () => {
     const xChangesets: Changeset[] = []
     getChangefeed(doc.x).subscribe(cs => xChangesets.push(cs))
 
-    ctx.beginTransaction()
-    doc.x.set(10)
-    doc.x.set(20)
+    change(doc, d => {
+      d.x.set(10)
+      d.x.set(20)
+    })
 
-    // The key invariant: ZERO notifications while buffering.
-    // Store is unchanged, so subscribers must not fire.
-    expect(store.x).toBe(0)
-    expect(xChangesets).toHaveLength(0)
-
-    ctx.commit()
-    // After commit, exactly ONE changeset with both changes (batched)
+    // One Changeset with both changes (depth-0 flush at outermost release)
     expect(store.x).toBe(20)
     expect(xChangesets).toHaveLength(1)
     expect(xChangesets[0]?.changes).toHaveLength(2)
@@ -652,24 +647,21 @@ describe("changefeed: transaction integration", () => {
     expect(xChangesets[0]?.changes[1]?.type).toBe("replace")
   })
 
-  it("no tree subscriber notifications during transaction buffering", () => {
-    const { ctx, doc } = createChatDoc()
+  it("tree subscribers fire once per outermost block with all descendant changes", () => {
+    const { doc } = createChatDoc()
     const treeChangesets: Changeset<Op>[] = []
     getChangefeed(doc.settings).subscribeDescendants?.(changeset => {
       treeChangesets.push(changeset)
     })
 
-    ctx.beginTransaction()
-    doc.settings.darkMode.set(true)
-    doc.settings.fontSize.set(18)
+    change(doc, d => {
+      d.settings.darkMode.set(true)
+      d.settings.fontSize.set(18)
+    })
 
-    // ZERO tree changesets while buffering
-    expect(treeChangesets).toHaveLength(0)
-
-    ctx.commit()
-    // After commit: each child path gets its own Changeset (1 change each)
-    // propagated via subscription composition from child → parent.
-    // darkMode and fontSize are at different paths, so 2 tree changesets.
+    // Each child path gets its own Changeset propagated via subscription
+    // composition from child → parent. darkMode and fontSize are at
+    // different paths, so 2 tree changesets.
     expect(treeChangesets).toHaveLength(2)
     const allEvents = treeChangesets.flatMap(cs => cs.changes)
     expect(allEvents).toHaveLength(2)
@@ -690,7 +682,7 @@ describe("changefeed: transaction integration", () => {
     expect(fontSizeEvents).toHaveLength(1)
   })
 
-  it("store buffers changes during transaction until commit", () => {
+  it("σ advances eagerly inside change() — store reflects writes during the block", () => {
     const store = { x: 0, y: 0 }
     const schema = Schema.struct({
       x: Schema.number(),
@@ -703,20 +695,20 @@ describe("changefeed: transaction integration", () => {
       .with(observation)
       .done()
 
-    ctx.beginTransaction()
-    doc.x.set(10)
-    doc.y.set(20)
+    const captured = change(doc, d => {
+      d.x.set(10)
+      // Read-your-writes: store already reflects this write
+      expect(store.x).toBe(10)
+      d.y.set(20)
+      expect(store.y).toBe(20)
+    })
 
-    expect(store.x).toBe(0)
-    expect(store.y).toBe(0)
-
-    const flushed = ctx.commit()
     expect(store.x).toBe(10)
     expect(store.y).toBe(20)
-    expect(flushed).toHaveLength(2)
+    expect(captured).toHaveLength(2)
   })
 
-  it("commit delivers exactly one Changeset per affected path", () => {
+  it("change() delivers exactly one Changeset per affected path", () => {
     const store = { x: 0, y: 0 }
     const schema = Schema.struct({
       x: Schema.number(),
@@ -732,52 +724,14 @@ describe("changefeed: transaction integration", () => {
     const xChangesets: Changeset[] = []
     getChangefeed(doc.x).subscribe(cs => xChangesets.push(cs))
 
-    ctx.beginTransaction()
-    doc.x.set(10)
-    // No notifications during buffering
-    expect(xChangesets).toHaveLength(0)
+    change(doc, d => {
+      d.x.set(10)
+    })
 
-    ctx.commit()
-    // Exactly 1 changeset with 1 change (batched delivery)
     expect(xChangesets).toHaveLength(1)
     expect(store.x).toBe(10)
     expect(xChangesets[0]?.changes).toHaveLength(1)
     expect(xChangesets[0]?.changes[0]?.type).toBe("replace")
-  })
-
-  it("transaction + subscribeDescendants: tree subscribers fire at commit time", () => {
-    const { ctx, doc } = createChatDoc()
-    const treeChangesets: Changeset<Op>[] = []
-    getChangefeed(doc.settings).subscribeDescendants?.(changeset => {
-      treeChangesets.push(changeset)
-    })
-
-    ctx.beginTransaction()
-    doc.settings.darkMode.set(true)
-    doc.settings.fontSize.set(18)
-    // No tree events during buffering
-    expect(treeChangesets).toHaveLength(0)
-
-    ctx.commit()
-    // Tree changesets propagated from children — one per child path
-    expect(treeChangesets).toHaveLength(2)
-    const allEvents = treeChangesets.flatMap(cs => cs.changes)
-    expect(allEvents).toHaveLength(2)
-
-    const darkModeEvents = allEvents.filter(
-      e =>
-        e.path.length === 1 &&
-        keySeg(e.path, 0).type === "key" &&
-        keySeg(e.path, 0).key === "darkMode",
-    )
-    const fontSizeEvents = allEvents.filter(
-      e =>
-        e.path.length === 1 &&
-        keySeg(e.path, 0).type === "key" &&
-        keySeg(e.path, 0).key === "fontSize",
-    )
-    expect(darkModeEvents).toHaveLength(1)
-    expect(fontSizeEvents).toHaveLength(1)
   })
 })
 
@@ -786,35 +740,8 @@ describe("changefeed: transaction integration", () => {
 // ===========================================================================
 
 describe("changefeed: batched notification", () => {
-  it("transaction commit delivers one Changeset with N changes to same-path subscriber", () => {
-    const store = { x: 0, y: 0 }
-    const schema = Schema.struct({
-      x: Schema.number(),
-      y: Schema.number(),
-    })
-    const ctx = plainContext(store)
-    const doc = interpret(schema, ctx)
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done()
-
-    const xChangesets: Changeset[] = []
-    getChangefeed(doc.x).subscribe(cs => xChangesets.push(cs))
-
-    ctx.beginTransaction()
-    doc.x.set(1)
-    doc.x.set(2)
-    doc.x.set(3)
-
-    expect(xChangesets).toHaveLength(0)
-
-    ctx.commit()
-    // 3 mutations to the same path → 1 Changeset with 3 changes
-    expect(xChangesets).toHaveLength(1)
-    expect(xChangesets[0]?.changes).toHaveLength(3)
-    expect(store.x).toBe(3)
-  })
+  // Same-path N-changes batching is owned by changeset-batching.test.ts;
+  // this section focuses on cross-path delivery and per-batch metadata.
 
   it("subscriber sees fully-applied state when Changeset arrives", () => {
     const store = { x: 0, y: 0 }
@@ -837,13 +764,15 @@ describe("changefeed: batched notification", () => {
       observedY = store.y
     })
 
-    ctx.beginTransaction()
-    doc.x.set(10)
-    doc.y.set(20)
-    ctx.commit()
+    change(doc, d => {
+      d.x.set(10)
+      d.y.set(20)
+    })
 
-    // The subscriber saw the fully-applied state (both x=10 and y=20),
-    // not the partially-applied state (x=10, y=0)
+    // The subscriber saw the fully-applied state (both x=10 and y=20).
+    // (Eager-σ now also means it saw the partial state if it had peeked
+    // mid-block, but the Changeset itself is delivered after both writes
+    // have landed.)
     expect(observedX).toBe(10)
     expect(observedY).toBe(20)
   })
@@ -859,7 +788,7 @@ describe("changefeed: batched notification", () => {
     expect(changesets[0]?.origin).toBeUndefined()
   })
 
-  it("origin tagging: commit(origin) attaches origin to emitted Changeset", () => {
+  it("origin tagging: change(_, _, { origin }) attaches origin to emitted Changeset", () => {
     const store = { x: 0, y: 0 }
     const schema = Schema.struct({
       x: Schema.number(),
@@ -875,9 +804,7 @@ describe("changefeed: batched notification", () => {
     const xChangesets: Changeset[] = []
     getChangefeed(doc.x).subscribe(cs => xChangesets.push(cs))
 
-    ctx.beginTransaction()
-    doc.x.set(42)
-    ctx.commit({ origin: "sync" })
+    change(doc, d => d.x.set(42), { origin: "sync" })
 
     expect(xChangesets).toHaveLength(1)
     expect(xChangesets[0]?.origin).toBe("sync")
@@ -894,16 +821,14 @@ describe("changefeed: batched notification", () => {
     expect(changesets[0]?.origin).toBeUndefined()
   })
 
-  it("origin tagging: tree subscribers receive origin from commit", () => {
-    const { ctx, doc } = createChatDoc()
+  it("origin tagging: tree subscribers receive origin from change()", () => {
+    const { doc } = createChatDoc()
     const treeChangesets: Changeset<Op>[] = []
     getChangefeed(doc.settings).subscribeDescendants?.(cs =>
       treeChangesets.push(cs),
     )
 
-    ctx.beginTransaction()
-    doc.settings.darkMode.set(true)
-    ctx.commit({ origin: "undo" })
+    change(doc, d => d.settings.darkMode.set(true), { origin: "undo" })
 
     // Tree changeset propagated from child — should carry the origin
     expect(treeChangesets).toHaveLength(1)
@@ -914,7 +839,7 @@ describe("changefeed: batched notification", () => {
     )
   })
 
-  it("multiple paths in one transaction: each path gets its own Changeset", () => {
+  it("multiple paths in one change() block: each path gets its own Changeset", () => {
     const store = { x: 0, y: 0 }
     const schema = Schema.struct({
       x: Schema.number(),
@@ -932,11 +857,11 @@ describe("changefeed: batched notification", () => {
     getChangefeed(doc.x).subscribe(cs => xChangesets.push(cs))
     getChangefeed(doc.y).subscribe(cs => yChangesets.push(cs))
 
-    ctx.beginTransaction()
-    doc.x.set(10)
-    doc.y.set(20)
-    doc.x.set(30)
-    ctx.commit()
+    change(doc, d => {
+      d.x.set(10)
+      d.y.set(20)
+      d.x.set(30)
+    })
 
     // x had 2 mutations → 1 changeset with 2 changes
     expect(xChangesets).toHaveLength(1)
@@ -964,10 +889,10 @@ describe("changefeed: batched notification", () => {
     const xChangesets: Changeset[] = []
     getChangefeed(doc.x).subscribe(cs => xChangesets.push(cs))
 
-    ctx.beginTransaction()
-    doc.x.set(10)
-    doc.y.set(20)
-    ctx.commit()
+    change(doc, d => {
+      d.x.set(10)
+      d.y.set(20)
+    })
 
     // x subscriber fires, y has no subscriber so no changeset created for it
     expect(xChangesets).toHaveLength(1)

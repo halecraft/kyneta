@@ -292,7 +292,11 @@ Source: `src/populate.ts` → `populate` (recursive), called from `applyChangeTo
 
 - **Not asynchronous.** `Y.transact` is synchronous; the entire flush completes within one tick.
 - **Not an `applyDiff`-style bulk operation.** Unlike Loro, Yjs has no single-call diff primitive. Mutations are imperative; the batching comes from `Y.transact`.
-- **Not reversible from the substrate.** Undo is an application concern (Yjs has its own `Y.UndoManager`; kyneta does not integrate it).
+- **Reversible via in-bracket inverse compensation** (post-jj:ryquprut). The kyneta `WritableContext.runBatch` records inverses on every `substrate.prepare` and replays them inside the same `Y.transact` if `fn` throws. External `observeDeep` consumers see one batched event whose ops net to zero. The kyneta-Changeset surfaces `aborted: true` to its subscribers. Yjs's own `Y.UndoManager` is orthogonal — it observes COMMITTED transactions and applies compensating commits AFTER the fact; the kyneta inverse-compensation path happens INSIDE the same transact, producing a single batched event instead of two.
+
+### Yjs lifecycle ordering inside the bracket
+
+Under the eager-prepare model, `afterTransaction` fires AFTER `deliverNotifications` — `runBatch` opens the transact, the body's `ctx.flush` triggers `deliverNotifications` *inside* the transact body, and `afterTransaction` doesn't fire until the body returns. Concrete consequence: hooking `afterTransaction` for state that subscribers need at delivery time will see stale data. This is why `version()` derives the deleteSet from `doc.store` on every call rather than maintaining a separately-accumulated deleteSet via `afterTransaction` (the `accumulatedDs` accumulator and its `afterTransaction` handler were retired in jj:ryquprut — the accumulator they maintained was already unused on the version path). Useful for anyone trying to wire other Yjs-lifecycle hooks into the bracket later.
 
 ---
 

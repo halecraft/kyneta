@@ -29,12 +29,6 @@ function stubContext(): {
     flush,
     runBatch,
     dispatch: vi.fn(),
-    beginTransaction: vi.fn(),
-    commit: vi.fn(),
-    abort: vi.fn(),
-    get inTransaction() {
-      return false
-    },
   } as unknown as WritableContext
   return { ctx, prepare, flush, runBatch }
 }

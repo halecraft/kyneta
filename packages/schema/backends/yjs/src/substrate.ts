@@ -45,6 +45,7 @@ import type {
   PositionCapable,
   ProductSchema,
   Reader,
+  RecordInverseFn,
   Replica,
   ReplicaFactory,
   SchemaBinding,
@@ -60,11 +61,14 @@ import {
   applyChange,
   BACKING_DOC,
   buildWritableContext,
+  deepClonePreState,
   deriveSchemaBinding,
   executeBatch,
   findJsonBoundary,
+  invert,
   KIND,
   plainReader,
+  RECORD_INVERSE,
   syncShadow,
 } from "@kyneta/schema"
 import * as Y from "yjs"
@@ -119,7 +123,11 @@ export function createYjsSubstrate(
   // entirely — they go straight to `applyChangeToYjs` in prepare.
   const jsonBoundaryBuffer = new Map<
     string,
-    { target: Y.Map<unknown> | Y.Array<unknown>; key: string | number; value: unknown }
+    {
+      target: Y.Map<unknown> | Y.Array<unknown>
+      key: string | number
+      value: unknown
+    }
   >()
 
   // Stashed origin from merge for the event bridge to pick up.
@@ -127,14 +135,6 @@ export function createYjsSubstrate(
 
   // Lazy-built WritableContext (same pattern as PlainSubstrate / LoroSubstrate).
   let cachedCtx: WritableContext | undefined
-
-  // Incremental delete set tracking.
-  // Initialized once from the struct store (O(n)), then maintained
-  // incrementally by merging each transaction's deleteSet (O(delta)).
-  // Note: DeleteSet class isn't exported from yjs's public entry point,
-  // so we infer the type from createDeleteSet's return type.
-  let accumulatedDs: ReturnType<typeof Y.createDeleteSet> =
-    Y.createDeleteSetFromStructStore(doc.store)
 
   // The root Y.Map — all schema fields are children of this single map.
   const rootMap = doc.getMap("root")
@@ -247,6 +247,21 @@ export function createYjsSubstrate(
       // Π pass.
       if (options?.replay) return
 
+      // Inverse recording under the normal handler. Capture σ at the
+      // target path before applyChange mutates the shadow; the
+      // recording closure pushes onto the active runBatch frame's
+      // stack. Skipped under the undo-replay handler (compensating).
+      const record = (
+        options as
+          | (BatchOptions & { [RECORD_INVERSE]?: RecordInverseFn })
+          | undefined
+      )?.[RECORD_INVERSE]
+      if (record && !options?.compensating) {
+        const pre = deepClonePreState(path.read(shadow))
+        const inverse = invert(pre, change)
+        record(path, inverse)
+      }
+
       // Local write — σ advances eagerly. CRDT-side writes happen
       // inside the ambient Y.transact opened by runBatch (the
       // substrate's `runBatch` wraps `executeBatch`'s prepare-loop +
@@ -352,16 +367,11 @@ export function createYjsSubstrate(
     version(): YjsVersion {
       // Derive the deleteSet from the live struct store on every read.
       // Eager-prepare delivers notifications *inside* the ambient
-      // `Y.transact` opened by `runBatch`, which means `afterTransaction`
-      // (where `accumulatedDs` is incrementally updated) fires AFTER
-      // the changefeed's `notifyLocalChange → version()` call. Computing
-      // from the store picks up in-progress deletes too, so the
-      // exchange's auto-subscribe sees a version that already reflects
-      // the just-applied mutation. `accumulatedDs` remains for parity
-      // with the prior incremental tracking — currently unused on the
-      // version path but retained so external readers see a stable
-      // running aggregate if/when we re-introduce incremental access.
-      void accumulatedDs
+      // `Y.transact` opened by `runBatch`, so `afterTransaction` fires
+      // AFTER the changefeed's notify pipeline. Computing from the
+      // store picks up in-progress deletes too, so the exchange's
+      // auto-subscribe sees a version that already reflects the
+      // just-applied mutation.
       return YjsVersion.fromDeleteSet(
         doc,
         Y.createDeleteSetFromStructStore(doc.store),
@@ -434,12 +444,6 @@ export function createYjsSubstrate(
       return
     }
 
-    // Update accumulated delete set BEFORE executeBatch, so version()
-    // reflects deletes when notifyLocalChange fires from the changefeed.
-    if (transaction.deleteSet.clients.size > 0) {
-      accumulatedDs = Y.mergeDeleteSets([accumulatedDs, transaction.deleteSet])
-    }
-
     // Determine origin: prefer stashed kyneta origin (from merge),
     // fall back to the transaction's origin if it's a string.
     const origin =
@@ -453,20 +457,6 @@ export function createYjsSubstrate(
     // work (Yjs has already absorbed these ops via Y.applyUpdate) and
     // surfaces on the Changeset for downstream filters (exchange echo).
     executeBatch(ctx, ops, { origin, replay: true })
-  })
-
-  // For local mutations (KYNETA_ORIGIN): the observeDeep handler returns
-  // early, so we merge the delete set via afterTransaction instead.
-  // afterTransaction fires inside doc.transact() — before runBatch's
-  // body returns — so accumulatedDs is up to date when the changefeed's
-  // deliverNotifications → notifyLocalChange → version() fires.
-  doc.on("afterTransaction", (transaction: Y.Transaction) => {
-    if (
-      transaction.origin === KYNETA_ORIGIN &&
-      transaction.deleteSet.clients.size > 0
-    ) {
-      accumulatedDs = Y.mergeDeleteSets([accumulatedDs, transaction.deleteSet])
-    }
   })
 
   return substrate as Substrate<YjsVersion>

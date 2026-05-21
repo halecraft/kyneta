@@ -34,9 +34,11 @@ import {
   type BatchOptions,
   buildWritableContext,
   type ChangeBase,
+  deepClonePreState,
   deriveSchemaBinding,
   executeBatch,
   findJsonBoundary,
+  invert,
   isJsonBoundary,
   KIND,
   type MarkConfig,
@@ -45,6 +47,8 @@ import {
   type PositionCapable,
   type ProductSchema,
   plainReader,
+  RECORD_INVERSE,
+  type RecordInverseFn,
   type Replica,
   type ReplicaFactory,
   type RichTextSchema,
@@ -169,15 +173,6 @@ export function createLoroSubstrate(
   // within a CID — re-entrant writes overwrite earlier same-key
   // entries by spread semantics.
   const coalesceBuffer = new Map<ContainerID, Record<string, unknown>>()
-
-  // Depth counter for runBatch. Loro's `doc.commit()` is a *global*
-  // drain (commits every pending op regardless of which call site
-  // queued them — see the empirical probe in scratch/), so naive
-  // bracket-per-runBatch would lose outer-origin attribution and
-  // double-emit subscribe events. The counter mirrors Yjs's free
-  // transact nesting manually: only the outermost release commits.
-  let runBatchDepth = 0
-  let outermostOrigin: string | undefined
 
   // Set true around our own doc.commit() so the subscriber ignores the
   // resulting by:"local" event (changefeed already captured those ops
@@ -336,6 +331,25 @@ export function createLoroSubstrate(
       // rebuilds σ from λ in one Π pass.
       if (options?.replay) return
 
+      // Inverse recording under the normal handler. Capture σ at the
+      // target path before applyChange mutates the shadow; the
+      // recording closure pushes onto the active runBatch frame's
+      // stack. Skipped under the undo-replay handler (compensating).
+      // For json-boundary writes the inverse is computed against the
+      // value at the change's target path inside the σ subtree — when
+      // the bracket later replays it under `compensating: true`, σ and
+      // λ both revert (naturality of Π over invert).
+      const record = (
+        options as
+          | (BatchOptions & { [RECORD_INVERSE]?: RecordInverseFn })
+          | undefined
+      )?.[RECORD_INVERSE]
+      if (record && !options?.compensating) {
+        const pre = deepClonePreState(path.read(shadow))
+        const inverse = invert(pre, change)
+        record(path, inverse)
+      }
+
       // Local write — σ advances eagerly so reads are immediately
       // consistent regardless of where λ is in the bracket.
       applyChange(shadow, path, change)
@@ -396,30 +410,18 @@ export function createLoroSubstrate(
     },
 
     runBatch(work: () => void, options?: BatchOptions): void {
-      // Depth-counter bracket: outermost call sets the origin and
-      // commits once on release; inner re-entries (e.g. from a
-      // subscriber's change(doc, ...) inside deliverNotifications)
-      // accumulate ops into the same commit.
-      if (runBatchDepth === 0) {
-        outermostOrigin = options?.origin
+      // Ctx-level outermost detection (frameStarts.length === 0)
+      // means substrate.runBatch is invoked at most once per outermost
+      // change(doc, fn). No per-substrate depth counter needed.
+      if (options?.origin !== undefined) {
+        doc.setNextCommitMessage(options.origin)
       }
-      runBatchDepth++
+      work()
+      inOurCommit = true
       try {
-        work()
+        doc.commit()
       } finally {
-        runBatchDepth--
-        if (runBatchDepth === 0) {
-          if (outermostOrigin !== undefined) {
-            doc.setNextCommitMessage(outermostOrigin)
-          }
-          outermostOrigin = undefined
-          inOurCommit = true
-          try {
-            doc.commit()
-          } finally {
-            inOurCommit = false
-          }
-        }
+        inOurCommit = false
       }
     },
 

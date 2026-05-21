@@ -18,6 +18,8 @@ import type { Op } from "../changefeed.js"
 import type { HasRemove, WritableContext } from "../interpreters/writable.js"
 import {
   executeBatch,
+  FORWARD_OPS_MARKER,
+  FORWARD_OPS_SINCE,
   hasTransact,
   REMOVE,
   TRANSACT,
@@ -49,8 +51,25 @@ export interface CommitOptions {
 // ---------------------------------------------------------------------------
 
 /**
- * Run a mutation function inside a transaction and return the captured
- * changes as `Op[]`.
+ * Run a mutation function inside the bracket primitive and return the
+ * captured forward changes as `Op[]`.
+ *
+ * Semantics:
+ * - **Read-your-writes inside the block.** σ advances eagerly on every
+ *   helper call, so subsequent reads see prior writes:
+ *   `d.todos.push("a"); d.todos.push("b")` appends in order.
+ * - **One Changeset per outermost block** per affected subscriber path.
+ *   Multi-helper blocks collapse into one batched Changeset.
+ * - **Atomic abort via inverse compensation.** If `fn` throws, every
+ *   change recorded in this block is undone inside the same commit by
+ *   replaying inverses LIFO. External observers see one batched native
+ *   event with net-zero delta and one Changeset with `aborted: true`.
+ *   The rethrow propagates after compensation.
+ *
+ * Implementation: thin `runWriter`/`execWriter` wrapper around
+ * `ctx.runBatch`. Snapshot the writer-log marker before `fn`, run `fn`,
+ * slice the new entries off the end (forward only — inverse entries
+ * from absorbed inner aborts are filtered out).
  *
  * ```ts
  * const ops = change(doc, d => {
@@ -65,7 +84,7 @@ export interface CommitOptions {
  * @param options - Optional metadata (e.g. `{ origin: "undo" }`).
  *
  * @throws If `ref` does not have a `[TRANSACT]` symbol.
- * @throws If a transaction is already active on this context.
+ * @throws Whatever `fn` throws (after inverse compensation completes).
  */
 export function change<D extends object>(
   ref: D,
@@ -79,15 +98,14 @@ export function change<D extends object>(
     )
   }
   const ctx: WritableContext = (ref as any)[TRANSACT]
-  ctx.beginTransaction()
-  try {
+  const opts = options ? { origin: options.origin } : undefined
+  let captured: Op[] = []
+  ctx.runBatch(() => {
+    const marker = ctx[FORWARD_OPS_MARKER]()
     fn(ref)
-    // User-facing entry: never set `replay`. Origin propagates as a label.
-    return ctx.commit(options ? { origin: options.origin } : undefined)
-  } catch (e) {
-    if (ctx.inTransaction) ctx.abort()
-    throw e
-  }
+    captured = ctx[FORWARD_OPS_SINCE](marker)
+  }, opts)
+  return captured
 }
 
 // ---------------------------------------------------------------------------
@@ -110,14 +128,11 @@ export function change<D extends object>(
  * applyChanges(docB, ops, { origin: "sync" })
  * ```
  *
- * Uses `executeBatch` under the hood — which calls `ctx.prepare` N
- * times (one per change) then `ctx.flush` once. The prepare pipeline
- * handles cache invalidation (via `withCaching`) and notification
- * accumulation (via `withChangefeed`) automatically.
- *
- * **Invariant:** Must not be called during an active transaction on
- * the same context. `executeBatch` throws if `ctx.inTransaction` is
- * true — commit or abort the transaction first.
+ * Routes through `executeBatch`, which opens its own `ctx.runBatch` for
+ * non-replay ops — that wrapper owns the depth-0 flush, so the whole
+ * batch delivers as one Changeset per affected subscriber. The prepare
+ * pipeline handles cache invalidation (via `withCaching`) and
+ * notification accumulation (via `withChangefeed`) automatically.
  *
  * @param ref - Any ref with a `[TRANSACT]` symbol (from `withWritable`).
  * @param ops - The changes to apply. May be empty (no-op).
@@ -125,7 +140,6 @@ export function change<D extends object>(
  * @returns The same `ops` array (pass-through for chaining).
  *
  * @throws If `ref` does not have a `[TRANSACT]` symbol.
- * @throws If called during an active transaction.
  */
 export function applyChanges(
   ref: object,

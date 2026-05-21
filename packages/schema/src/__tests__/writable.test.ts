@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest"
 import type { Ref, WritableContext } from "../index.js"
 import {
   bottomInterpreter,
+  change,
+  FORWARD_OPS_MARKER,
+  FORWARD_OPS_SINCE,
   hasTransact,
   interpret,
   plainContext,
@@ -166,7 +169,7 @@ describe("writable: product .set()", () => {
     expect(doc.settings.darkMode()).toBe(false)
   })
 
-  it(".set() inside transaction accumulates until commit", () => {
+  it(".set() inside change() applies eagerly; delivers one batched Op[]", () => {
     const store = {
       settings: { darkMode: false, fontSize: 14 },
       metadata: { version: 1 },
@@ -177,14 +180,12 @@ describe("writable: product .set()", () => {
       .with(writable)
       .done()
 
-    ctx.beginTransaction()
-    doc.settings.set({ darkMode: true, fontSize: 20 })
+    const flushed = change(doc, d => {
+      d.settings.set({ darkMode: true, fontSize: 20 })
+      // Eager-σ: read-your-writes inside the block
+      expect(store.settings).toEqual({ darkMode: true, fontSize: 20 })
+    })
 
-    // Not yet applied
-    expect(store.settings).toEqual({ darkMode: false, fontSize: 14 })
-
-    // Commit applies it
-    const flushed = ctx.commit()
     expect(store.settings).toEqual({ darkMode: true, fontSize: 20 })
     expect(flushed.length).toBe(1)
     expect(flushed[0].change.type).toBe("replace")
@@ -281,8 +282,8 @@ describe("writable: map ref", () => {
 // Batched mode
 // ---------------------------------------------------------------------------
 
-describe("writable: transactions", () => {
-  it("actions accumulate in transaction and do not apply until commit", () => {
+describe("writable: change() blocks", () => {
+  it("actions apply eagerly inside change(); one batched Op[] returned", () => {
     const store = { x: 0, y: 0 }
     const schema = Schema.struct({
       x: Schema.number(),
@@ -291,22 +292,17 @@ describe("writable: transactions", () => {
     const ctx = plainContext(store)
     const doc = interpret(schema, ctx).with(readable).with(writable).done()
 
-    ctx.beginTransaction()
-    doc.x.set(10)
-    doc.y.set(20)
+    const flushed = change(doc, d => {
+      d.x.set(10)
+      d.y.set(20)
+    })
 
-    // Not yet applied
-    expect(store.x).toBe(0)
-    expect(store.y).toBe(0)
-
-    // Commit
-    const flushed = ctx.commit()
     expect(store.x).toBe(10)
     expect(store.y).toBe(20)
     expect(flushed.length).toBe(2)
   })
 
-  it("dispatch applies immediately outside a transaction", () => {
+  it("dispatch applies immediately outside any change() block (auto-commit)", () => {
     const store = { x: 0 }
     const schema = Schema.struct({ x: Schema.number() })
     const ctx = plainContext(store)
@@ -730,10 +726,8 @@ describe("writable: write-only stack", () => {
       flush: () => {},
       runBatch: work => work(),
       dispatch: (path, change) => dispatched.push({ path, change }),
-      beginTransaction: () => {},
-      commit: () => [],
-      abort: () => {},
-      inTransaction: false,
+      [FORWARD_OPS_MARKER]: () => 0,
+      [FORWARD_OPS_SINCE]: () => [],
     }
     const ref = interpret(schema, writeOnlyInterpreter, ctx) as any
 
@@ -905,16 +899,8 @@ describe("writable: TRANSACT attachment", () => {
       flush: () => {},
       runBatch: work => work(),
       dispatch: (path, change) => dispatched.push({ path, change }),
-      beginTransaction: () => {
-        throw new Error("not implemented")
-      },
-      commit: () => {
-        throw new Error("not implemented")
-      },
-      abort: () => {
-        throw new Error("not implemented")
-      },
-      inTransaction: false,
+      [FORWARD_OPS_MARKER]: () => 0,
+      [FORWARD_OPS_SINCE]: () => [],
     }
     const ref = interpret(schema, writeOnlyInterpreter, ctx) as any
     // Write-only product ref has [TRANSACT] (child .n is not navigable

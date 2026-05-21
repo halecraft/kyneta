@@ -288,20 +288,26 @@ describe("applyChanges: basic behavior", () => {
     expect(events).toHaveLength(0)
   })
 
-  it("throws during active transaction", () => {
-    const { doc, ctx } = createChatDoc()
-    ctx.beginTransaction()
+  it("applyChanges nested inside a change() block contributes to the outer Changeset", () => {
+    const { doc } = createChatDoc()
+    const events: Changeset[] = []
+    getChangefeed(doc.settings.darkMode).subscribe(cs => events.push(cs))
 
-    expect(() =>
+    change(doc, d => {
+      d.settings.fontSize.set(20)
       applyChanges(doc, [
         {
           path: RawPath.empty.field("settings").field("darkMode"),
           change: replaceChange(true),
         },
-      ]),
-    ).toThrow("active transaction")
+      ])
+    })
 
-    ctx.abort()
+    // Nested applyChanges opens its own runBatch frame but the outer
+    // owns the depth-0 flush. darkMode subscriber receives one Changeset.
+    expect(events).toHaveLength(1)
+    expect(doc.settings.darkMode()).toBe(true)
+    expect(doc.settings.fontSize()).toBe(20)
   })
 })
 

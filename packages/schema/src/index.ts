@@ -88,7 +88,6 @@ export {
   getOrCreateChangefeed,
   hasRecursiveChangefeed,
 } from "./changefeed.js"
-
 // Create-doc — generic document construction for any substrate
 export { createDoc, createRef } from "./create-doc.js"
 export { describe } from "./describe.js"
@@ -108,7 +107,11 @@ export { applyChanges, change, remove } from "./facade/change.js"
 export { subscribe, subscribeNode } from "./facade/observe.js"
 // foldPath — schema-guided sibling of Path.read; the navigation primitive
 // every CRDT backend's path resolver composes around.
-export type { JsonBoundaryHit, PathFoldResult, PathStepper } from "./fold-path.js"
+export type {
+  JsonBoundaryHit,
+  PathFoldResult,
+  PathStepper,
+} from "./fold-path.js"
 export {
   extendSchemaPathKey,
   findJsonBoundary,
@@ -246,12 +249,27 @@ export type {
 export {
   buildWritableContext,
   executeBatch,
+  FORWARD_OPS_MARKER,
+  FORWARD_OPS_SINCE,
   hasRemove,
   hasTransact,
   REMOVE,
   TRANSACT,
   withWritable,
 } from "./interpreters/writable.js"
+// Inverse — reverse arrows for the change groupoid (atomic abort)
+export {
+  deepClonePreState,
+  invert,
+  invertIncrement,
+  invertMap,
+  invertReplace,
+  invertRichText,
+  invertSequence,
+  invertSet,
+  invertText,
+  invertTree,
+} from "./inverse.js"
 // Pre-built interpreter layers for fluent composition
 export {
   addressing,
@@ -428,6 +446,7 @@ export type {
   DocMetadata,
   Durability,
   HasTreeNodeAllocation,
+  RecordInverseFn,
   Replica,
   ReplicaFactory,
   ReplicaFactoryLike,
@@ -446,6 +465,7 @@ export {
   computeSchemaHash,
   HASH_ALGORITHM_VERSION,
   hasTreeNodeAllocation,
+  RECORD_INVERSE,
   replicaTypesCompatible,
   requiresBidirectionalSync,
   STRUCTURAL_YJS_CLIENT_ID,

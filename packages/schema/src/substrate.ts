@@ -357,7 +357,8 @@ export interface Replica<V extends Version = Version> extends ReplicaLike {
 /**
  * Batch-level metadata threaded through the prepare/flush pipeline.
  *
- * Two fields with distinct purposes:
+ * Four fields, two app-visible (origin, aborted) and two kyneta-internal
+ * (replay, compensating):
  *
  * - `origin` — opaque application-level label. Propagates to
  *   `Changeset.origin` so subscribers can distinguish where a batch
@@ -374,7 +375,36 @@ export interface Replica<V extends Version = Version> extends ReplicaLike {
  *   User-facing APIs (`change`, `applyChanges`) never construct
  *   `replay: true`.
  *
- * Context: jj:qpultxsw (origin-aware prepare).
+ * - `compensating` — kyneta-internal directive set when the prepare is
+ *   running under the **undo-replay handler** of the bracket primitive
+ *   (see Background §"Algebraic framing" in the plan: `ctx.runBatch`
+ *   is one bracket primitive with three handlers — substrate, flush,
+ *   inverse stack — and `compensating: true` signals "this prepare is
+ *   replaying an inverse, not applying a new forward change"). Substrates
+ *   skip inverse recording when set; recording an inverse of an inverse
+ *   would re-emit the original forward change and loop. Conceptually
+ *   it's not a property of the change but a "which handler am I under?"
+ *   signal. User-facing APIs never set it; only the abort path inside
+ *   `WritableContext.runBatch` sets it on the prepares it issues during
+ *   inverse replay.
+ *
+ * - `aborted` — kyneta-internal directive set by the outermost
+ *   `runBatch` catch path on its terminal `ctx.flush` call. Propagates
+ *   through `wrappedFlush` → `deliverNotifications` → `Changeset.aborted`.
+ *   `true` iff the outermost `change(doc, fn)` block threw and was wholly
+ *   compensated via inverse replay. Inner caught aborts produce a
+ *   NON-aborted outermost Changeset with mixed forward+inverse ops.
+ *   User-facing APIs never set it; only the outermost-catch path inside
+ *   `WritableContext.runBatch` sets it.
+ *
+ * `compensating` is the directive flag on the *prepare* of an inverse op;
+ * `aborted` is the directive flag on the *flush* that delivers the
+ * resulting Changeset. They are siblings, not synonyms — both end up
+ * `true` on a fully-aborted outermost batch, but a `compensating` op
+ * without an `aborted` flush is what an *inner* caught abort looks like
+ * from the outermost frame.
+ *
+ * Context: jj:qpultxsw (origin/replay), jj:ryquprut (compensating/aborted).
  */
 export interface BatchOptions {
   /** App-level provenance label. Propagates to `Changeset.origin`. */
@@ -382,7 +412,42 @@ export interface BatchOptions {
   /** Kyneta-internal directive: this batch is replaying state authored
    *  elsewhere. Set by substrate event bridges and `merge` paths. */
   readonly replay?: boolean
+  /** Kyneta-internal directive: this prepare is running under the
+   *  undo-replay handler of `WritableContext.runBatch`. Substrates skip
+   *  inverse recording. Set only by the abort path inside `runBatch`. */
+  readonly compensating?: boolean
+  /** Kyneta-internal directive: this flush delivers a Changeset whose
+   *  ops net to identity (forward + inverse pairs from a thrown outermost
+   *  `change(doc, fn)` block). Propagates to `Changeset.aborted`. Set
+   *  only by the outermost-catch path inside `runBatch`. */
+  readonly aborted?: boolean
 }
+
+// ---------------------------------------------------------------------------
+// RECORD_INVERSE — internal callback for substrate→bracket inverse recording
+// ---------------------------------------------------------------------------
+
+/**
+ * Internal-only symbol that `buildWritableContext` attaches to every
+ * `prepare` invocation's options. The substrate calls it after computing
+ * the inverse of a forward change, passing `(path, inverse)`. The
+ * receiving closure pushes onto the active runBatch frame's inverse stack.
+ *
+ * Not part of the public `BatchOptions` interface — substrates and the
+ * ctx wrapper coordinate through this symbol on the options bag, keeping
+ * the public surface clean.
+ *
+ * Context: jj:ryquprut (three-primitive substrate refactor).
+ */
+export const RECORD_INVERSE: unique symbol = Symbol.for(
+  "kyneta:record-inverse",
+) as any
+
+/**
+ * The shape of the inverse-recording callback threaded through prepare
+ * options under the `RECORD_INVERSE` symbol key.
+ */
+export type RecordInverseFn = (path: Path, inverse: ChangeBase) => void
 
 // ---------------------------------------------------------------------------
 // SubstratePrepare — mutation primitives for the WritableContext
