@@ -36,8 +36,8 @@ import type { HasChangefeed } from "@kyneta/changefeed"
 import { CHANGEFEED } from "@kyneta/changefeed"
 import type { DispatcherHandle, Lease } from "@kyneta/machine"
 import { createDispatcher } from "@kyneta/machine"
-import type { ChangeBase } from "../change.js"
-import { isReplaceChange } from "../change.js"
+import type { ChangeBase, TreeChange } from "../change.js"
+import { isReplaceChange, isTreeChange, treeChange } from "../change.js"
 import type {
   Changeset,
   Op,
@@ -228,6 +228,65 @@ export function prefixOps<C extends ChangeBase>(
     replay: cs.replay,
     aborted: cs.aborted,
     source: cs.source,
+  }
+}
+
+/**
+ * Forwarder-set delta calc for `createTreeChangefeed`. `move`
+ * instructions preserve TreeID identity, so they're ignored — only
+ * `create` / `delete` shift membership. A `create` + `delete` of the
+ * same id within one Changeset cancels: no forwarder is ever wired,
+ * because the node didn't exist long enough to need one.
+ *
+ * Pure, table-testable; exported for direct unit tests (not re-exported
+ * from index).
+ */
+export function planTreeMembershipUpdate(
+  cs: Changeset<ChangeBase>,
+  currentlyWired: ReadonlySet<string>,
+): {
+  readonly created: readonly string[]
+  readonly deleted: readonly string[]
+} {
+  const createdSet = new Set<string>()
+  const deletedSet = new Set<string>()
+  for (const change of cs.changes) {
+    if (!isTreeChange(change)) continue
+    for (const inst of (change as TreeChange).instructions) {
+      if (inst.action === "create") {
+        if (deletedSet.has(inst.target)) {
+          deletedSet.delete(inst.target)
+        } else {
+          createdSet.add(inst.target)
+        }
+      } else if (inst.action === "delete") {
+        if (createdSet.has(inst.target)) {
+          createdSet.delete(inst.target)
+        } else if (currentlyWired.has(inst.target)) {
+          deletedSet.add(inst.target)
+        }
+      }
+      // `move` preserves identity — no membership change.
+    }
+  }
+  return { created: [...createdSet], deleted: [...deletedSet] }
+}
+
+/**
+ * Synthetic `Changeset<ChangeBase>` for terminal-event delivery on a
+ * deleted tree node. Extracted as a first-class helper so the wire
+ * shape lives in one place — `createTreeChangefeed` dispatches it
+ * through the path-keyed listener channel; subscribers see the lifted
+ * `Changeset<Op>` form indistinguishable from a real own-path delivery.
+ *
+ * Pure, table-testable; subscribers pattern-match on
+ * `cs.changes[0].type === "tree" && instructions[0].action === "delete"`.
+ */
+export function synthesizeTreeDeleteTerminal(
+  id: string,
+): Changeset<ChangeBase> {
+  return {
+    changes: [treeChange([{ action: "delete", target: id }])],
   }
 }
 
@@ -1117,6 +1176,140 @@ function createMapChangefeed(
   }
 }
 
+/**
+ * Third instance of the dynamic-collection changefeed pattern (siblings
+ * `createSequenceChangefeed`, `createMapChangefeed`): own-path listener
+ * + per-key forwarder map + structural-change-driven wire/unwire. The
+ * three differ only in how keys behave and where structural events
+ * come from — see TECHNICAL.md §Dynamic-collection changefeed factories.
+ *
+ * Tree-specific properties this factory exploits:
+ *
+ * - **TreeIDs are CRDT-stable** — minted at create-time, never re-anchored
+ *   on structural change. So `move` is not a lifecycle event, no
+ *   address-table dance (sequence's), no dead-key detection (map's).
+ * - **`TreeChange.instructions` is an explicit create/delete stream** —
+ *   `planTreeMembershipUpdate` derives forwarder-set deltas without
+ *   inference.
+ * - **Identity-bearing keys justify terminal-on-delete** — a subscriber
+ *   on `d.tree.node(id)` holds a meaningful identity reference; map and
+ *   sequence subscribers do not, which is why neither emits a terminal.
+ */
+function createTreeChangefeed(
+  listeners: Map<string, Set<(changeset: Changeset<ChangeBase>) => void>>,
+  path: Path,
+  readCurrent: () => unknown,
+  getNodeRef: (id: string) => unknown,
+  getLiveIds: () => readonly string[],
+): RecursiveChangefeedProtocol<unknown, ChangeBase> {
+  const shallowSubs = new Set<(changeset: Changeset<ChangeBase>) => void>()
+  const treeSubs = new Set<(changeset: Changeset<Op>) => void>()
+  const nodeUnsubs = new Map<string, () => void>()
+
+  function tearDownForwarder(id: string): void {
+    const unsub = nodeUnsubs.get(id)
+    if (!unsub) return
+    unsub()
+    nodeUnsubs.delete(id)
+  }
+
+  function subscribeToNode(id: string): void {
+    if (nodeUnsubs.has(id)) return
+    const child = getNodeRef(id)
+    if (!child || !hasRecursiveChangefeed(child)) return
+
+    const prefix = path.root().node(id)
+
+    const unsub = child[CHANGEFEED].subscribeDescendants(
+      (changeset: Changeset<Op>) => {
+        if (treeSubs.size === 0) return
+        const propagated = prefixOps(changeset, prefix)
+        for (const cb of treeSubs) cb(propagated)
+      },
+    )
+    nodeUnsubs.set(id, unsub)
+  }
+
+  function deliverDeleteTerminal(id: string): void {
+    // Caller must tear down the parent forwarder first; otherwise the
+    // synthetic event leaks up via propagateUp and the doc-level
+    // subscriber receives a duplicate of the TreeChange.delete it
+    // already got via the tree's own-path delivery.
+    const nodeKey = path.node(id).key
+    const set = listeners.get(nodeKey)
+    if (set && set.size > 0) {
+      const synthetic = synthesizeTreeDeleteTerminal(id)
+      // Snapshot — a listener may unsubscribe itself on terminal.
+      for (const cb of [...set]) cb(synthetic)
+    }
+  }
+
+  function subscribeToAllNodes(): void {
+    for (const id of getLiveIds()) subscribeToNode(id)
+  }
+
+  listenAtPath(listeners, path, cs => {
+    fanOutOwnPath(cs, path, shallowSubs, treeSubs)
+
+    const wired = new Set(nodeUnsubs.keys())
+    const { created, deleted } = planTreeMembershipUpdate(cs, wired)
+
+    // Forwarders exist only to propagate UP to tree/doc-level
+    // subscribers; with none listening, there's nothing to wire.
+    if (treeSubs.size > 0) for (const id of created) subscribeToNode(id)
+
+    // Tear-down BEFORE terminal delivery — see `deliverDeleteTerminal`.
+    for (const id of deleted) tearDownForwarder(id)
+
+    // Independent scan: terminals fire for every delete-with-listeners,
+    // wired or not. A subscriber that touched only `d.tree.node(id)`
+    // (never the tree/doc) has no forwarder in `nodeUnsubs` but still
+    // needs to observe lifecycle-end on its node.
+    for (const change of cs.changes) {
+      if (!isTreeChange(change)) continue
+      for (const inst of change.instructions) {
+        if (inst.action === "delete") deliverDeleteTerminal(inst.target)
+      }
+    }
+  })
+
+  let initialWiringDone = false
+
+  return {
+    get current() {
+      return readCurrent()
+    },
+    subscribe(
+      callback: (changeset: Changeset<ChangeBase>) => void,
+    ): () => void {
+      shallowSubs.add(callback)
+      return () => {
+        shallowSubs.delete(callback)
+      }
+    },
+    subscribeDescendants(
+      callback: (changeset: Changeset<Op>) => void,
+    ): () => void {
+      if (!initialWiringDone) {
+        initialWiringDone = true
+        subscribeToAllNodes()
+      }
+      treeSubs.add(callback)
+      return () => {
+        treeSubs.delete(callback)
+        if (treeSubs.size === 0) {
+          // Last subscriber gone — no `deliverDeleteTerminal` here.
+          // Teardown-because-empty ≠ terminal-because-deleted: a later
+          // resubscribe on a still-live node must not see a phantom
+          // delete.
+          for (const id of [...nodeUnsubs.keys()]) tearDownForwarder(id)
+          initialWiringDone = false
+        }
+      }
+    },
+  }
+}
+
 // ---------------------------------------------------------------------------
 // withChangefeed — the interpreter transformer
 // ---------------------------------------------------------------------------
@@ -1358,11 +1551,8 @@ export function withChangefeed<A extends HasRead>(
     },
 
     // --- Tree -----------------------------------------------------------------
-    // The catamorphism's recursive descent through `nodes` attaches
-    // [CHANGEFEED] on each node's `data`; the tree carrier itself rides
-    // on top. Per-node subscriber fan-out (precise notifications at
-    // `tree.node(id).field`) is not yet implemented — subscribers
-    // currently receive the top-level `TreeChange` at the tree's path.
+    // See `createTreeChangefeed` for the per-TreeID fan-out + terminal-on-delete
+    // semantics; identical shape to sequence/map's wireChangefeed call.
     tree(
       ctx: RefContext,
       path: Path,
@@ -1371,6 +1561,15 @@ export function withChangefeed<A extends HasRead>(
       node: (id: string) => A,
     ): A & HasChangefeed {
       const result = base.tree(ctx, path, schema, nodes, node)
+      wireChangefeed(result, ctx, path, (listeners, p) =>
+        createTreeChangefeed(
+          listeners,
+          p,
+          () => (result as any)[CALL](),
+          (id: string) => node(id),
+          () => ctx.reader.forestTopology(p).map(n => n.id),
+        ),
+      )
       return result as A & HasChangefeed
     },
 

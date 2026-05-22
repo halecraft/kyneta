@@ -7,6 +7,9 @@
 // Mirrors `packages/schema/src/__tests__/tree-ref.test.ts` so the test
 // surface is symmetric across substrates.
 
+import type { Changeset } from "@kyneta/changefeed"
+import type { Op } from "@kyneta/schema"
+import { describe, expect, it } from "vitest"
 import {
   change,
   createDoc,
@@ -15,10 +18,10 @@ import {
   loro,
   merge,
   Schema,
+  subscribe,
   unwrap,
   version,
 } from "../index.js"
-import { describe, expect, it } from "vitest"
 
 const Outline = Schema.struct({
   tree: Schema.tree(Schema.struct({ label: Schema.string() })),
@@ -351,5 +354,47 @@ describe("Schema.tree on Loro: round-trip via binary sync (Phase 5)", () => {
     expect(docB.tree()).toEqual(docA.tree())
     expect((docB.tree as any).has(root)).toBe(true)
     expect((docB.tree as any).has(child)).toBe(false)
+  })
+})
+
+// ===========================================================================
+// Cross-substrate parity for the tree changefeed
+// ===========================================================================
+
+describe("Schema.tree on Loro: subscribe parity", () => {
+  it("doc-level subscriber receives TreeChange + per-node data ops on local create", () => {
+    // `with-changefeed.ts` is substrate-agnostic; pinning behavior here
+    // ensures the Loro substrate's prepare pipeline + addressing layer
+    // don't drop or reshape the events the schema layer dispatches.
+    const doc = createDoc(bound)
+    const changesets: Changeset<Op>[] = []
+    subscribe(doc as any, cs => changesets.push(cs))
+
+    let id = ""
+    change(doc, (d: any) => {
+      id = d.tree.create({ data: { label: "x" } })
+    })
+
+    const ops = changesets.flatMap(cs => cs.changes)
+    const treeOp = ops.find(op => op.change.type === "tree")
+    expect(treeOp).toBeDefined()
+    expect(
+      (
+        treeOp!.change as unknown as {
+          instructions: { action: string; target: string }[]
+        }
+      ).instructions[0],
+    ).toMatchObject({ action: "create", target: id })
+
+    // The per-node data op may be a MapChange or expanded ReplaceChange
+    // depending on the substrate's `expandMapOpsToLeaves` behavior.
+    const dataOp = ops.find(
+      op =>
+        op.path.length >= 2 &&
+        (op.change.type === "map" ||
+          (op.change.type === "replace" &&
+            (op.change as unknown as { value: unknown }).value === "x")),
+    )
+    expect(dataOp).toBeDefined()
   })
 })

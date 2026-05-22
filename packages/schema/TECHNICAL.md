@@ -4,10 +4,10 @@
 > **Role**: The schema interpreter algebra — one recursive grammar for document structure, a reactive observation surface (`[CHANGEFEED]` on every ref, with tree-level composed changefeeds for composites), a substrate boundary that separates state management from replication, a migration system that derives stable identity from structure, and a position algebra for cursor-stable text and sequences.
 > **Depends on**: `@kyneta/changefeed`
 > **Depended on by**: `@kyneta/exchange`, `@kyneta/loro-schema`, `@kyneta/yjs-schema`, `@kyneta/index`, `@kyneta/react`, `@kyneta/compiler`, `@kyneta/cast`, `@kyneta/transport`
-> **Canonical symbols**: `Schema`, `Schema.*` constructors, `KIND`, `LAWS`, `bind`, `BoundSchema`, `BoundReplica`, `BindingTarget`, `createBindingTarget`, `json`, `ephemeral`, `Interpret`, `Replicate`, `Defer`, `Reject`, `interpret`, `Interpreter`, `InterpreterLayer`, `createDoc`, `createRef`, `change`, `applyChanges`, `subscribe`, `subscribeNode`, `Substrate`, `SubstrateFactory`, `Replica`, `ReplicaFactory`, `SubstratePayload`, `Version`, `SyncProtocol`, `SYNC_AUTHORITATIVE`, `SYNC_COLLABORATIVE`, `SYNC_EPHEMERAL`, `requiresBidirectionalSync`, `computeSchemaHash`, `BACKING_DOC`, `Op`, `TreeChangefeedProtocol`, `Change`, `ChangeBase`, `TextChange`, `SequenceChange`, `MapChange`, `TreeChange`, `ReplaceChange`, `IncrementChange`, `RichTextChange`, `transformIndex`, `textInstructionsToPatches`, `Migration`, `MIGRATION_CHAIN`, `deriveIdentity`, `deriveManifest`, `deriveSchemaBinding`, `deriveTier`, `validateChain`, `Position`, `POSITION`, `PlainPosition`, `hasPosition`, `decodePlainPosition`, `Side`, `NATIVE`, `SUBSTRATE`, `NativeMap`, `unwrap`, `versionVectorMeet`, `versionVectorCompare`, `Zero`, `validate`, `tryValidate`, `SchemaValidationError`, `foldPath`, `pathSchema`, `PathStepper`, `PathFoldResult`, `extendSchemaPathKey`
+> **Canonical symbols**: `Schema`, `Schema.*` constructors, `KIND`, `LAWS`, `bind`, `BoundSchema`, `BoundReplica`, `BindingTarget`, `createBindingTarget`, `json`, `ephemeral`, `Interpret`, `Replicate`, `Defer`, `Reject`, `interpret`, `Interpreter`, `InterpreterLayer`, `createDoc`, `createRef`, `change`, `applyChanges`, `subscribe`, `subscribeNode`, `Substrate`, `SubstrateFactory`, `Replica`, `ReplicaFactory`, `SubstratePayload`, `Version`, `SyncProtocol`, `SYNC_AUTHORITATIVE`, `SYNC_COLLABORATIVE`, `SYNC_EPHEMERAL`, `requiresBidirectionalSync`, `computeSchemaHash`, `BACKING_DOC`, `Op`, `RecursiveChangefeedProtocol`, `Change`, `ChangeBase`, `TextChange`, `SequenceChange`, `MapChange`, `TreeChange`, `ReplaceChange`, `IncrementChange`, `RichTextChange`, `transformIndex`, `textInstructionsToPatches`, `Migration`, `MIGRATION_CHAIN`, `deriveIdentity`, `deriveManifest`, `deriveSchemaBinding`, `deriveTier`, `validateChain`, `Position`, `POSITION`, `PlainPosition`, `hasPosition`, `decodePlainPosition`, `Side`, `NATIVE`, `SUBSTRATE`, `NativeMap`, `unwrap`, `versionVectorMeet`, `versionVectorCompare`, `Zero`, `validate`, `tryValidate`, `SchemaValidationError`, `foldPath`, `pathSchema`, `PathStepper`, `PathFoldResult`, `extendSchemaPathKey`
 > **Key invariant(s)**: The schema grammar is one recursive type with eleven node kinds; substrates declare *closed* composition-law sets via phantom `[LAWS]` brands; `bind()` enforces law compatibility at compile time. Four named binding targets (`json`, `ephemeral`, `loro`, `yjs`) each bundle a substrate factory, a `SyncProtocol`, and a set of allowed laws. No runtime law dispatch; no open-world subtyping; no hidden backend coupling.
 
-The algebraic core of every document in Kyneta. You write a schema once — a tree of structural composites and CRDT leaves — and hand it to a substrate (plain JS, Loro, Yjs). The substrate stores state; the interpreter stack gives you a typed, navigable, writable reference (`Ref<S>`) over that state, with reactive observation baked in — every ref carries a `[CHANGEFEED]` that emits one `Changeset<Op>` per transaction covering own-path + descendants via `subscribeTree`. Migration primitives derive a content-addressed identity from the schema tree so that documents can evolve across schema versions without losing peer-to-peer identity.
+The algebraic core of every document in Kyneta. You write a schema once — a tree of structural composites and CRDT leaves — and hand it to a substrate (plain JS, Loro, Yjs). The substrate stores state; the interpreter stack gives you a typed, navigable, writable reference (`Ref<S>`) over that state, with reactive observation baked in — every ref carries a `[CHANGEFEED]` that emits one `Changeset<Op>` per transaction covering own-path + descendants via `subscribeDescendants`. Migration primitives derive a content-addressed identity from the schema tree so that documents can evolve across schema versions without losing peer-to-peer identity.
 
 Imported by every other Kyneta package that touches documents: the CRDT backends to implement `Substrate<V>`, the exchange to sync `SubstratePayload` blobs, the index to build live views, react to bind refs into hooks, compiler/cast to detect reactive references at compile time.
 
@@ -432,7 +432,7 @@ Plus the orthogonal observation layer:
 
 | Layer | Transformer | Adds |
 |-------|-------------|------|
-| Observation | `withChangefeed` | `subscribe`, `subscribeNode`, `TreeChangefeedProtocol<S>` |
+| Observation | `withChangefeed` | `subscribe`, `subscribeNode`, `RecursiveChangefeedProtocol<S>` |
 
 The canonical "everything" stack:
 
@@ -690,27 +690,27 @@ Both shapes are polymorphic combinators with a local condition; the new role is 
 
 Source: `packages/schema/src/changefeed.ts`, `src/interpreters/with-changefeed.ts`.
 
-Every schema-issued changefeed implements `TreeChangefeedProtocol` — the schema-specific extension of `@kyneta/changefeed`'s universal `ChangefeedProtocol`. It adds `subscribeTree`, which delivers own-path + every descendant in one `Changeset<Op>` where each `Op = { path, change }` carries the relative path from the subscription point.
+Every schema-issued changefeed implements `RecursiveChangefeedProtocol` — the schema-specific extension of `@kyneta/changefeed`'s universal `ChangefeedProtocol`. It adds `subscribeDescendants`, which delivers own-path + every descendant in one `Changeset<Op>` where each `Op = { path, change }` carries the relative path from the subscription point.
 
 ```
-interface TreeChangefeedProtocol<S, C> extends ChangefeedProtocol<S, C> {
+interface RecursiveChangefeedProtocol<S, C> extends ChangefeedProtocol<S, C> {
   current: Plain<S>
   subscribe(callback: (changeset: Changeset<C>) => void): () => void
-  subscribeTree(callback: (changeset: Changeset<Op<C>>) => void): () => void
+  subscribeDescendants(callback: (changeset: Changeset<Op<C>>) => void): () => void
 }
 ```
 
-For a composite ref, `subscribeTree` aggregates own-path changes with children's tree-streams (paths prefixed appropriately). For a leaf ref, `subscribeTree` is the trivial own-path lift: every change is delivered as a single `Op` whose `path` is the leaf's registry-aware root (empty relative path). A leaf is a tree of size 1.
+For a composite ref, `subscribeDescendants` aggregates own-path changes with children's tree-streams (paths prefixed appropriately). For a leaf ref, `subscribeDescendants` is the trivial own-path lift: every change is delivered as a single `Op` whose `path` is the leaf's registry-aware root (empty relative path). A leaf is a tree of size 1.
 
 `subscribe` (own-path only, `Changeset<C>` shape with no paths) is the lighter sibling. The two channels carry the same information for a leaf and different information for a composite (where own-path ⊊ tree).
 
 Facade vs. protocol vocabulary inversion: facade `subscribe` is deep delivery (`Changeset<Op>`); the protocol-level `ChangefeedProtocol.subscribe` is own-path delivery (`Changeset<ChangeBase>`). The facade hides this; power users reaching directly into `ref[CHANGEFEED]` should know it.
 
-> **Principle.** Facade-level entry points should hide protocol-method-set distinctions when the user's semantic is well-defined regardless of carrier kind. "Subscribe to changes under this ref" is well-defined for any reactive value; whether the value happens to have children is a structural concern, not an observation concern. Pre-1.6.0 the facade threw on `subscribe(leaf)` because leaves lacked `subscribeTree`; 1.6.0 retires that leak by lifting `subscribeTree` to every schema-issued changefeed.
+> **Principle.** Facade-level entry points should hide protocol-method-set distinctions when the user's semantic is well-defined regardless of carrier kind. "Subscribe to changes under this ref" is well-defined for any reactive value; whether the value happens to have children is a structural concern, not an observation concern. Pre-1.6.0 the facade threw on `subscribe(leaf)` because leaves lacked `subscribeDescendants`; 1.6.0 retires that leak by lifting `subscribeDescendants` to every schema-issued changefeed.
 
-**The pure helpers.** `liftToOps(cs, path): Changeset<Op<C>>` raises shape from `Changeset<C>` to `Changeset<Op<C>>` at a constant path; `prefixOps(cs, prefix): Changeset<Op<C>>` keeps shape and prepends a prefix to each event's existing path. Together they form the entire shape-grammar of the changefeed delivery pipeline: leaves' `subscribeTree`, composites' own-path → tree fan-out, and composites' child-tree propagation all decompose into one of these two transforms.
+**The pure helpers.** `liftToOps(cs, path): Changeset<Op<C>>` raises shape from `Changeset<C>` to `Changeset<Op<C>>` at a constant path; `prefixOps(cs, prefix): Changeset<Op<C>>` keeps shape and prepends a prefix to each event's existing path. Together they form the entire shape-grammar of the changefeed delivery pipeline: leaves' `subscribeDescendants`, composites' own-path → tree fan-out, and composites' child-tree propagation all decompose into one of these two transforms.
 
-`subscribe(ref, callback)` is the facade primitive that calls `subscribeTree` under the hood. `subscribeNode(ref, callback)` is the explicit shallow opt-in — fires only when the *specific node's* state changes, not its descendants.
+`subscribe(ref, callback)` is the facade primitive that calls `subscribeDescendants` under the hood. `subscribeNode(ref, callback)` is the explicit shallow opt-in — fires only when the *specific node's* state changes, not its descendants.
 
 ### `planNotifications` → `deliverNotifications`
 
@@ -726,6 +726,40 @@ The per-context dispatcher (`createDispatcher<ChangefeedMsg>` inside `ensurePrep
 ### `expandMapOpsToLeaves`
 
 A single `MapChange` (e.g. `replaceEntry("alice", {...})`) represents a structural operation on a `map` node. For subscribers on descendants of that map, the change has to be *expanded* into per-leaf `ReplaceChange` ops. `expandMapOpsToLeaves` does this pure expansion, used by `planNotifications`.
+
+### Dynamic-collection changefeed factories
+
+`createSequenceChangefeed`, `createMapChangefeed`, and `createTreeChangefeed` are three instances of one pattern: an **own-path listener** registered via `listenAtPath` + a **per-key forwarder map** holding `child[CHANGEFEED].subscribeDescendants(propagateUp)` unsubs + **structural-change-driven wire/unwire** triggered from the own-path callback.
+
+The three differ only in:
+
+| Factory | Key type | Key-stability source | Structural-change-instruction source |
+|---------|----------|----------------------|--------------------------------------|
+| `createSequenceChangefeed` | numeric index | `ADDRESS_TABLE` from `withAddressing` (stable address IDs) | `SequenceChange` instructions + `ReplaceChange` |
+| `createMapChangefeed` | string key | the key itself (LWW per key) | `MapChange.set` / `MapChange.delete` |
+| `createTreeChangefeed` | `TreeID` | the TreeID itself (CRDT-stable identifier) | `TreeChange.instructions` (`create` / `delete`; `move` preserves identity) |
+
+The dynamic-lookup property of `deliverNotifications` is what makes same-batch wiring correct in all three: when a parent's own-path callback fires `subscribeToChild(newKey)`, the new child's `listenAtPath` registration lands in the listener map mid-iteration; the next path the loop reaches finds the freshly-registered listener and fires it. This is the same invariant for sequence (`subscribeToItem`), map (`subscribeToEntry`), and tree (`subscribeToNode`).
+
+Tree is the cleanest instance of the pattern: TreeIDs are identity-bearing from the start (no address-table dance), and `TreeChange.instructions` is an explicit create/delete stream (no diff inference from `MapChange.delete` keys). Tree's structural-change handler is a two-line compose of the pure `planTreeMembershipUpdate` (the diff calc) + the impure wire/unwire loop — see `with-changefeed.ts:createTreeChangefeed`.
+
+### Terminal-on-delete
+
+`createTreeChangefeed` is the one dynamic-collection factory that synthesizes a **terminal event** before tearing down a per-node forwarder on deletion. When a `TreeChange.delete` removes a node, the per-node `treeSubs` receive one final `Changeset<Op>` containing the delete instruction at the node-relative path. After that delivery, the forwarder is torn down and the subscriber receives nothing further.
+
+The terminal payload is built by the pure `synthesizeTreeDeleteTerminal(prefix, id)` helper — pinned as a first-class artifact rather than inline-synthesized. Subscribers pattern-match on `cs.changes[0].change.type === "tree" && instructions[0].action === "delete"` to detect end-of-stream.
+
+The asymmetry with sequence and map is justified by **identity semantics**: TreeIDs are CRDT-stable identifiers (minted at create-time, never reused, never re-anchored on shifts), and a subscriber at `d.tree.node(id)` holds a meaningful identity reference. Map keys are user-chosen strings that can come and go without identity meaning (re-adding the same key creates "the same" entry); sequence items are positional and shift under structural change. Only tree carries the identity invariant that warrants a lifecycle-end signal.
+
+**Last-subscriber teardown is distinct from terminal-on-delete.** When `subscribeDescendants`'s unsub fires `treeSubs.size === 0`, the factory uses a private `tearDownForwarder` helper that bypasses `synthesizeTreeDeleteTerminal`. Conflating teardown-because-empty with terminal-because-deleted would emit phantom delete events to a (just-cleared) subscriber set on resubscribe scenarios — a correctness leak avoided by routing the two paths through different helpers.
+
+### Per-ref-instance listener multiplication
+
+Each call to the catamorphism's per-id child closure (sequence's `itemFn`, map's `itemFn`, tree's `nodeFn`) produces a fresh ref carrier. Each carrier's interpreter recursion calls `wireChangefeed` → `attachChangefeed` → its own `[CHANGEFEED]` protocol; each protocol's own-path listener registers a callback in the shared listener-Map entry at the same path key.
+
+So multiple ref instances at the same path → multiple callbacks → multiple fan-outs per flush. The listener-Map keyed by `path.key` is *shared* (via `listenAtPath`), but each ref instance is independent. Correct by construction — `Changeset` delivery to N callbacks at the same path key is exactly N invocations — but not free.
+
+Profiling memory or callback counts on tree-heavy docs (where re-accessing `d.tree.node(id)` in subscriber callbacks is common) may surface this as a future optimization target: catamorphism-side memoization keyed by `(parentPath, id)` would collapse the ref-instance count to one per id. Documented here to surface the property; not currently fixed.
 
 ---
 
@@ -1143,7 +1177,7 @@ Selection of the most-used types. Full list in [Canonical symbols](#canonical-sy
 | `RichTextDelta` | `src/change.ts` | Delta representation for rich text content. |
 | `RichTextRef` | `src/ref.ts` | Ref specialization for `richtext` schema kind. |
 | `Op` | `src/changefeed.ts` | `{ path, change }` — composed-feed notification. |
-| `TreeChangefeedProtocol<S>`, `HasTreeChangefeed<S>` | `src/changefeed.ts` | Tree-observation surface carried by every schema-issued ref. |
+| `RecursiveChangefeedProtocol<S>`, `HasRecursiveChangefeed<S>` | `src/changefeed.ts` | Tree-observation surface carried by every schema-issued ref. |
 | `Position`, `Side`, `HasPosition`, `PositionCapable`, `PlainPosition` | `src/position.ts` | Position algebra. |
 | `MigrationChain`, `MigrationStep`, `EpochStep`, `MigrationPrimitive`, `Droppable`, `T2Primitive`, `NonT2Primitive` | `src/migration.ts` | Migration types. |
 | `NodeIdentity`, `IdentityManifest`, `IdentityOrigin`, `SchemaBinding`, `TransformProof` | `src/migration.ts` | Identity types. |
@@ -1214,7 +1248,7 @@ dist/
 | `src/ref.ts` | ~150 | `Ref<S>`, `RRef<S>`, `RWRef<S>`, `DocRef<S>`, `Wrap`, `RefMode`. |
 | `src/position.ts` | ~300 | `Position`, `Side`, `POSITION`, `HasPosition`, `PlainPosition`, `decodePlainPosition`. |
 | `src/tree-position.ts` | ~620 | Tree-position algebra: `nodeSize`, `contentSize`, `isLeaf`, `resolveTreePosition`, `flattenTreePosition`, `ResolvedTreePosition`. Pure functions over `Reader` + `Schema` for flat↔tree position mapping (ProseMirror convention). |
-| `src/changefeed.ts` | ~150 | `Op`, `TreeChangefeedProtocol`, `HasTreeChangefeed`, `expandMapOpsToLeaves`. |
+| `src/changefeed.ts` | ~150 | `Op`, `RecursiveChangefeedProtocol`, `HasRecursiveChangefeed`, `expandMapOpsToLeaves`. |
 | `src/facade/change.ts` | ~250 | `change(ref, fn)`, `applyChanges`, `remove`, `CommitOptions`. |
 | `src/facade/observe.ts` | ~100 | `subscribe`, `subscribeNode`. |
 | `src/step.ts` | ~300 | Pure state transitions: `step`, per-change-type step functions. |

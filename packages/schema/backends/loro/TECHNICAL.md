@@ -291,6 +291,8 @@ The buffer ALSO handles `struct.json` / `list.json` / `record.json` boundary wri
 
 In practice: use `exportEntirety` / `exportSince` + `merge` for replication. The Loro substrate's event bridge translates incoming binary updates into kyneta `Op` events via `batchToOps`, so subscribers still see `TreeChange` deliveries for remote mutations — but the inbound path is binary, not Op-replay.
 
+Subscriber semantics (topology fan-out, per-node forwarders, terminal-on-delete) are substrate-agnostic and live in the schema-layer interpreter transformer. See `packages/schema/TECHNICAL.md` §Tree-observable changefeeds (§Dynamic-collection changefeed factories, §Terminal-on-delete).
+
 ### Nested-commit semantics under re-entry
 
 Under the three-primitive substrate contract (jj:ryquprut), the Loro substrate no longer carries its own depth counter — ctx-level outermost detection (`frameStarts.length === 0`) handles invocation timing. The substrate `runBatch` is the minimal shape:
