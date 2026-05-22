@@ -190,11 +190,14 @@ export function installTreeWriteOps(
           "WritableTreeRef.create: substrate does not implement TREE_NODE_ALLOCATE",
         )
       }
-      const id = ctx[TREE_NODE_ALLOCATE](path)
       const parent = opts?.parent ?? null
-      // Default index = append under the parent.
+      // Default index = append under the parent. Compute siblings BEFORE
+      // allocation so the substrate (e.g. Loro) can position the new
+      // node at the right index in a single native call instead of
+      // create-then-move.
       const siblings = readTopology().filter(n => n.parent === parent)
       const index = opts?.index ?? siblings.length
+      const id = ctx[TREE_NODE_ALLOCATE](path, parent, index)
       const instructions: TreeInstruction[] = [
         { action: "create", target: id, parent, index },
       ]

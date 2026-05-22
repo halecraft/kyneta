@@ -203,7 +203,7 @@ export function changeToDiff(
       )
 
     case "tree":
-      return treeChangeToDiff(targetCID, change as TreeChange)
+      return treeChangeToDiff(targetCID, change as TreeChange, doc)
 
     default:
       throw new Error(`changeToDiff: unsupported change type "${change.type}"`)
@@ -214,23 +214,44 @@ export function changeToDiff(
  * TreeChange → TreeDiff.
  *
  * Loro's `TreeDiffItem` carries fields we don't track in `TreeInstruction`
- * (`fractionalIndex`, `oldParent`, `oldIndex`) — Loro derives the real
- * values from its own state at `applyDiff` time, so placeholders are
- * safe to pass.
+ * (`fractionalIndex`, `oldParent`, `oldIndex`); Loro derives the real
+ * values from its own state at `applyDiff` time, so empty/undefined
+ * placeholders pass through the WASM decoder.
  *
- * For `create`, the node already exists in Loro because the substrate's
- * `[TREE_NODE_ALLOCATE]` runs `doc.getTree(...).createNode()` during
- * prepare to mint the id. The subsequent `applyDiff` create with that
- * same TreeID is idempotent on Loro's side, so we can record + emit
- * uniformly without a "skip create for already-allocated" branch.
+ * Local prepare vs. peer replay split for `create`:
+ *
+ * - On local prepare, the substrate's `[TREE_NODE_ALLOCATE]` has already
+ *   run `LoroTree.createNode(parent, index)` and the node exists at the
+ *   target position. Re-applying the `create` diff item against the
+ *   same TreeID is not idempotent in Loro — it panics with a
+ *   locking-order violation in `handler.rs:236` when the diff carries a
+ *   different parent than the node already has. We filter the create
+ *   item out by checking `tree.getNodeByID(target)` against the live
+ *   tree handle.
+ *
+ * - On peer replay (`applyChanges` on a remote doc, or merge-driven
+ *   batch replay), the node does NOT exist yet — `getNodeByID` returns
+ *   undefined, the filter is a no-op, and the create lands naturally.
+ *
+ * The kyneta-level `TreeChange.create` instruction always rides the
+ * changefeed (the schema-side write semantics don't change); only the
+ * Loro diff dispatch is conditional.
  */
 function treeChangeToDiff(
   targetCID: ContainerID,
   change: TreeChange,
+  doc: LoroDoc,
 ): [ContainerID, Diff | JsonDiff][] {
+  const tree = doc.getContainerById(targetCID) as
+    | { getNodeByID?: (id: string) => unknown }
+    | undefined
   const items: any[] = []
   for (const inst of change.instructions) {
     if (inst.action === "create") {
+      if (tree?.getNodeByID?.(inst.target) !== undefined) {
+        // Already created by TREE_NODE_ALLOCATE; skip the redundant diff.
+        continue
+      }
       items.push({
         target: inst.target,
         action: "create",
@@ -1047,7 +1068,21 @@ function counterDiffToChange(diff: CounterDiff): IncrementChange {
 }
 
 /**
- * TreeDiff → TreeChange (stub — tree support is future work)
+ * TreeDiff → TreeChange.
+ *
+ * Inverse of `treeChangeToDiff` for the structural fields. kyneta's
+ * `TreeInstruction` vocabulary is intentionally minimal:
+ * - `create` / `move` carry `(target, parent, index)`. Loro's
+ *   `fractionalIndex` is dropped — it's a substrate-internal detail
+ *   that doesn't survive the round trip and isn't needed by `stepTree`.
+ * - `delete` carries only `target`. Loro's `oldParent`/`oldIndex`
+ *   metadata is discarded because the plain shadow's `stepTree` only
+ *   needs the target to remove a node.
+ *
+ * The asymmetry is deliberate: kyneta's vocabulary stays stable across
+ * substrates that use fractional indexing (Loro) and those that don't
+ * (plain). Round-trip equality holds at the `doc.tree()` snapshot level,
+ * not at the raw instruction level.
  */
 function treeDiffToChange(diff: TreeDiff): TreeChange {
   const instructions: TreeInstruction[] = diff.diff.map(

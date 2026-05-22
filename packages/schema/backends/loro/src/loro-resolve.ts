@@ -131,8 +131,18 @@ function stepFromContainer(
     case "MovableList":
       return (container as LoroMovableList).get(resolved as number)
 
-    case "Tree":
-      return (container as any).getNodeByID(identity ?? (resolved as string))
+    case "Tree": {
+      // For Tree, an entry segment names a TreeID; we step into the node's
+      // `.data` (the per-node LoroMap) so subsequent product/map field
+      // segments dispatch as normal map navigation. `LoroTreeNode` itself
+      // is not a Loro container (no `.kind()`, its `.id` is a TreeID, not
+      // a ContainerID); only `node.data` is a true container. Returning
+      // `undefined` for an unknown/dead TreeID short-circuits foldPath.
+      const node = (container as any).getNodeByID(
+        identity ?? (resolved as string),
+      )
+      return node?.data
+    }
 
     default:
       throw new Error(

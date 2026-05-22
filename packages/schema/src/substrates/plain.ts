@@ -255,10 +255,16 @@ export function createPlainSubstrate<V extends Version>(
         }
         // Tree node id allocation — per-doc monotonic counter keyed by
         // the tree's path. Plain substrate offers no concurrent-move
-        // correctness guarantee (the price of being plain).
+        // correctness guarantee (the price of being plain). `parent`
+        // and `index` are accepted to match the capability signature but
+        // ignored — the create instruction's stepTree application
+        // positions the node.
         let nextTreeNodeCounter = 1
-        ;(cachedCtx as any)[TREE_NODE_ALLOCATE] = (treePath: { key: string }) =>
-          `tree-${treePath.key || "root"}-${nextTreeNodeCounter++}`
+        ;(cachedCtx as any)[TREE_NODE_ALLOCATE] = (
+          treePath: { key: string },
+          _parent?: string | null,
+          _index?: number,
+        ) => `tree-${treePath.key || "root"}-${nextTreeNodeCounter++}`
       }
       return cachedCtx
     },

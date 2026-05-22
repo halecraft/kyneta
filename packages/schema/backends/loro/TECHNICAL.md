@@ -104,6 +104,23 @@ The root case is different because `LoroDoc` is not itself a container. `stepFro
 
 `key` is the identity hash (see [Identity-keyed containers](#identity-keyed-containers)).
 
+### Tree node containers — step into `.data`
+
+The `Tree` case in `stepFromContainer` is the one container that doesn't simply hand back its child node. An entry segment that names a `TreeID` resolves via `LoroTree.getNodeByID(id)` to a `LoroTreeNode`, but **`LoroTreeNode` is not a Loro container**: it has no `.kind()` method, and its `.id` is a `TreeID` (`${counter}@${peerID}`), not a `ContainerID`. The only true Loro container reachable from a tree node is `node.data: LoroMap` — the per-node metadata map.
+
+The fold therefore steps into `node.data` on the Tree case:
+
+```ts
+case "Tree": {
+  const node = container.getNodeByID(id)
+  return node?.data  // LoroMap, the per-node metadata container
+}
+```
+
+This makes per-node field paths (`d.tree.node(id).label`) discriminate as normal map navigation: `.data` exposes `.kind() === "Map"` and a real `ContainerID`, so the next segment dispatches via the Map branch. Returning the raw `LoroTreeNode` would short-circuit `foldPath` to `undefined` at the next step (no `.kind()`) and route per-node MapChange writes to the parent `LoroTree`'s container ID — which Loro rejects (the WASM decoder panics with "Invalid diff type for tree container").
+
+The corollary for the `unwrap()` escape hatch: `unwrap(d.tree)` returns a `LoroTree`, but `unwrap(d.tree.node(id))` returns the node's `LoroMap` — not the `LoroTreeNode` wrapper. Callers that want the wrapper can recover it via `tree.getNodeByID(id)` on the LoroTree handle.
+
 ### Why live navigation
 
 **Note:** The reader no longer navigates live Loro containers for ordinary reads. All reads go through `plainReader(shadow)`, where `shadow` is a `PlainState` object maintained by the substrate (see [§The functional shadow](../../TECHNICAL.md#the-functional-shadow)). `resolveContainer` remains essential for four purposes: `materializeLoroShadow` (the materializer that builds the shadow itself), `nativeResolver` (escape hatch to raw Loro containers), `positionResolver` (cursor operations that require CRDT structure), and `changeToDiff` (translating kyneta `Change` values into Loro `Diff[]` during the write path).
@@ -250,7 +267,7 @@ The write path advances **both** σ (the shadow) and λ (the LoroDoc tree) at ev
 | `"text"` | `TextDiff` with retain/insert/delete runs |
 | `"sequence"` | `ListDiff` with splice ops |
 | `"map"` | `MapDiff` with `updated` record |
-| `"tree"` | `TreeDiff` with create/move/delete; `TREE_NODE_ALLOCATE` calls `doc.getTree(...).createNode().id` during prepare (create-then-record) so kyneta records carry real Loro `TreeID`s |
+| `"tree"` | `TreeDiff` with move/delete; **create items are filtered** because `TREE_NODE_ALLOCATE` calls `LoroTree.createNode(parent, index)` during prepare to mint a peer-stamped `TreeID` and position the node natively. Per-node data dispatches as `MapDiff` against `node.data` (the per-node `LoroMap`), not against the parent `LoroTree`. See [Tree write path](#tree-write-path) below. |
 | `"replace"` | Container-level replacement (varies by kind) |
 | `"increment"` | `CounterDiff` with delta |
 
@@ -261,6 +278,18 @@ Non-replace change types (`text`, `sequence`, `map`, `increment`) cannot origina
 When a transaction mutates multiple fields of the same struct (`d.settings.a.set(1); d.settings.b.set(2)`), each prepare produces a single-tuple `[ContainerID, MapDiff]` group with one key in `updated`. The per-CID coalescing buffer merges these via spread so all sibling-key writes flush as a single `doc.applyDiff([[cid, {type:"map", updated:{...}}]])` in `afterBatch`. Last-write-wins per key. Multi-tuple structural inserts (which carry `🦜:JsonContainerID` references that must stay intact for CID resolution) force-flush the buffer first and then apply immediately — never coalesce.
 
 The buffer ALSO handles `struct.json` / `list.json` / `record.json` boundary writes: any write into a json subtree stages the full σ snapshot at the boundary segment in the parent CRDT container, instead of generating per-leaf diffs that would have to navigate non-existent nested CRDT containers. Map-shaped parents coalesce with sibling writes; list-shaped parents force-flush and apply a list-replace immediately (ListDiffs are positional, not key-addressed).
+
+### Tree write path
+
+`Schema.tree` is the one CRDT kind where the kyneta and Loro write paths can't share a uniform `Change → Diff` translation. The substrate splits responsibility:
+
+- **Topology (create-then-position).** The `TREE_NODE_ALLOCATE` capability hook calls `LoroTree.createNode(parent, index)` during `prepare`, before any diff dispatches. The peer-stamped `TreeID` (`${counter}@${peerID}`) is returned synchronously so the kyneta interpreter can record it in the `TreeChange.create` instruction. Loro's native call positions the node fully (parent + index) in one shot — no follow-up move.
+- **`create` diff items are filtered.** `treeChangeToDiff` checks `tree.getNodeByID(target)` against the live tree. If the node already exists (the local-prepare case, after `TREE_NODE_ALLOCATE`), the create item is dropped — re-applying `create` against an extant `TreeID` panics Loro's WASM with a locking-order violation in `handler.rs:236`. `move` and `delete` items pass through unchanged.
+- **Per-node data writes target `node.data`'s CID.** When `d.tree.create({ data })` is called, the interpreter emits a `MapChange` at `path.node(id)`. `stepFromContainer`'s Tree case steps into `node.data` (a `LoroMap`), so `changeToDiff` resolves to the per-node map's `ContainerID` — not the parent `LoroTree`'s CID, which would be rejected by Loro.
+
+**Substrate-semantics consequence: tree topology does not travel through `applyChanges`.** Peer replay via kyneta's `Op` vocabulary is broken for tree creates by construction: a remote `TreeChange.create` instruction names a `TreeID` minted by another peer, and `applyDiff` rejects foreign `TreeID`s. Tree mutations replicate through Loro's **binary sync** (`exportSince` / `merge` / `doc.import`), which carries the native CRDT ops with peer attribution. Subsequent `move` / `delete` on a peer that has imported the binary sync work normally (the node already exists locally).
+
+In practice: use `exportEntirety` / `exportSince` + `merge` for replication. The Loro substrate's event bridge translates incoming binary updates into kyneta `Op` events via `batchToOps`, so subscribers still see `TreeChange` deliveries for remote mutations — but the inbound path is binary, not Op-replay.
 
 ### Nested-commit semantics under re-entry
 

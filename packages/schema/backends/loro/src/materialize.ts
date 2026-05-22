@@ -97,16 +97,30 @@ function createLoroResolver(
     resolveForest(path: Path): readonly FlatTreeNodeTopology[] {
       const { resolved } = resolveContainer(doc, rootSchema, path, binding)
       if (!hasKind(resolved) || resolved.kind() !== "Tree") return []
-      const rows = (resolved as any).toArray() as Array<{
+      // LoroTree.toArray() returns a NESTED `TreeNodeValue[]` (roots at
+      // top, descendants under `.children`). The kyneta topology contract
+      // is flat — walk depth-first and emit each node with its parent
+      // link so `forestTopology` consumers (materializer, tree-helpers
+      // navigation) see every node.
+      type NestedRow = {
         id: string
         parent: string | null | undefined
         index: number
-      }>
-      return rows.map(row => ({
-        id: row.id,
-        parent: row.parent ?? null,
-        index: row.index,
-      }))
+        children?: NestedRow[]
+      }
+      const flat: FlatTreeNodeTopology[] = []
+      const walk = (rows: NestedRow[], parent: string | null): void => {
+        for (const row of rows) {
+          flat.push({
+            id: row.id,
+            parent: row.parent ?? parent,
+            index: row.index,
+          })
+          if (row.children?.length) walk(row.children, row.id)
+        }
+      }
+      walk((resolved as any).toArray() as NestedRow[], null)
+      return flat
     },
   }
 }

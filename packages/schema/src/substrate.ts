@@ -83,6 +83,11 @@ export const BACKING_DOC = Symbol.for("kyneta:backingDoc")
  * it doesn't merge. Substrates that don't support trees (e.g. Yjs) don't
  * implement the symbol, and `installTreeWriteOps` throws if `.create` is
  * called on such a context.
+ *
+ * The optional `parent` and `index` arguments let substrates that
+ * natively position nodes at allocation time (Loro's `LoroTree.createNode`)
+ * do so in one shot, avoiding a redundant create-then-move dance in the
+ * write path. Substrates that mint pure ids (plain) ignore the args.
  */
 export const TREE_NODE_ALLOCATE: unique symbol = Symbol.for(
   "kyneta:tree-node-allocate",
@@ -90,7 +95,11 @@ export const TREE_NODE_ALLOCATE: unique symbol = Symbol.for(
 
 /** Marker for contexts that implement `TREE_NODE_ALLOCATE`. */
 export interface HasTreeNodeAllocation {
-  readonly [TREE_NODE_ALLOCATE]: (path: Path) => string
+  readonly [TREE_NODE_ALLOCATE]: (
+    path: Path,
+    parent?: string | null,
+    index?: number,
+  ) => string
 }
 
 export function hasTreeNodeAllocation(

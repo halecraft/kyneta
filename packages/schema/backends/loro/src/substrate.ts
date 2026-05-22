@@ -511,10 +511,19 @@ export function createLoroSubstrate(
         // their own niche because they must be peer-stamped for
         // Loro's `tree-move` merge to work: we materialize the node
         // here so the id we hand back to the kyneta interpreter is
-        // identical to the one Loro persists, and the subsequent
-        // `TreeInstruction.create` rides through `applyDiff` as an
-        // idempotent no-op against the same TreeID.
-        ;(cachedCtx as any)[TREE_NODE_ALLOCATE] = (treePath: Path): string => {
+        // identical to the one Loro persists.
+        //
+        // Position-at-allocation: `LoroTree.createNode(parent, index)`
+        // accepts a parent TreeID and index directly. Passing them in
+        // up-front avoids a subsequent applyDiff `create` against the
+        // same TreeID with a different parent (Loro panics with a
+        // locking-order violation on that path — see `treeChangeToDiff`
+        // for the diff-side filter that drops the redundant create).
+        ;(cachedCtx as any)[TREE_NODE_ALLOCATE] = (
+          treePath: Path,
+          parent?: string | null,
+          index?: number,
+        ): string => {
           const { resolved } = resolveContainer(doc, schema, treePath, binding)
           if (
             !resolved ||
@@ -525,7 +534,10 @@ export function createLoroSubstrate(
               "TREE_NODE_ALLOCATE: path does not resolve to a LoroTree container",
             )
           }
-          const node = (resolved as any).createNode() as { id: string }
+          const node = (resolved as any).createNode(
+            parent ?? undefined,
+            index,
+          ) as { id: string }
           return node.id
         }
       }
