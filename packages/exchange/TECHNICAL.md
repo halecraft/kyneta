@@ -243,6 +243,29 @@ For *known* docs (already in `DocRuntime`), all three metadata fields — `repli
 
 ---
 
+## `Line` — the CQRS bidirectional stream
+
+Source: `src/line.ts`.
+
+The `Line` class provides a reliable bidirectional message stream between two Exchange peers. It is implemented over two `json.bind()` authoritative documents (one outbox, one inbox) with sequence numbers and ack-based pruning.
+
+### The CQRS Pattern
+
+Bidirectional streams in component-based UI frameworks (like React) typically follow a Command Query Responsibility Segregation (CQRS) pattern:
+- **Sending (Command):** Highly distributed. Any button, form, or component might need to send a message.
+- **Receiving (Query/Event):** Highly centralized. Incoming messages are usually routed to a central store, a reducer, or a global state manager.
+
+To support this, `Line.protocol.open()` is **idempotent and reference-counted**. Multiple calls for the same `(topic, peerId)` return the exact same `Line` singleton instance.
+
+- **Shared Sending:** Because multiple components hold a reference to the same `Line` singleton, they can all call `line.send(msg)`. The `Line` safely multiplexes these into the shared outbox document.
+- **Exclusive Receiving:** The `Line` does *not* implement `[Symbol.asyncIterator]` directly. Instead, receiving is moved to an explicit, exclusive method: `line.consume()`. Calling `consume()` returns the `AsyncIterator`. Calling it a second time throws an error (`"Line is already being consumed"`). This mathematically guarantees that messages aren't accidentally load-balanced (stolen) across two React components that both try to iterate the line.
+
+### Lifecycle
+
+`line.close()` decrements the reference count. The underlying documents and policies are only torn down when the count reaches 0. `line.destroy()` forces the count to 0 and performs permanent teardown.
+
+---
+
 ## `exchange.get` — the four-case classifier
 
 Source: `src/exchange.ts` → `Exchange.get`.
@@ -643,13 +666,13 @@ const chatLine = Line.protocol({
 // Client
 const line = chatLine.open(exchange, peerId)
 await line.send({ text: "hello" })
-for await (const msg of line) {
+for await (const msg of line.consume()) {
   console.log(msg)
 }
 
 // Server
 chatLine.listen(exchange, async (incomingLine, peer) => {
-  for await (const msg of incomingLine) {
+  for await (const msg of incomingLine.consume()) {
     await incomingLine.send({ text: `echo: ${msg.text}` })
   }
 })

@@ -1,0 +1,955 @@
+
+> kyneta@1.0.0 verify /Users/duane/halecraft/kyneta
+> SKIP_BROTLI=1 turbo verify --filter='!@kyneta/perspective'
+
+• turbo 2.9.5
+
+   • Packages in scope: @kyneta/bridge-transport, @kyneta/bun-server, @kyneta/cast, @kyneta/changefeed, @kyneta/compiler, @kyneta/exchange, @kyneta/index, @kyneta/indexeddb-store, @kyneta/leveldb-store, @kyneta/loro-schema, @kyneta/machine, @kyneta/postgres-store, @kyneta/prisma-store, @kyneta/random, @kyneta/react, @kyneta/schema, @kyneta/sql-store-core, @kyneta/sqlite-store, @kyneta/sse-transport, @kyneta/test-integration, @kyneta/transport, @kyneta/unix-socket-transport, @kyneta/webrtc-transport, @kyneta/websocket-transport, @kyneta/wire, @kyneta/yjs-schema, example-bumper-cars, example-prisma-counter, example-todo, example-todo-react, example-unix-socket-sync
+   • Running verify in 31 packages
+   • Remote caching disabled
+
+@kyneta/machine:build: cache hit, replaying logs aac1f09e83cfee6e
+@kyneta/changefeed:build: cache hit, replaying logs fc454f1b0e9baa94
+@kyneta/machine:build: 
+@kyneta/machine:build: > @kyneta/machine@1.7.0 build /Users/duane/halecraft/kyneta/packages/machine
+@kyneta/machine:build: > tsdown
+@kyneta/machine:build: 
+@kyneta/machine:build: [34mℹ[39m [34mtsdown v0.22.0[39m powered by [38;2;255;126;23mrolldown v1.0.1[39m
+@kyneta/machine:build: [34mℹ[39m config file: [4m/Users/duane/halecraft/kyneta/packages/machine/tsdown.config.ts[24m 
+@kyneta/machine:build: [34mℹ[39m entry: [34msrc/index.ts[39m
+@kyneta/machine:build: [34mℹ[39m tsconfig: [34mtsconfig.json[39m
+@kyneta/machine:build: [34mℹ[39m Build start
+@kyneta/machine:build: [34mℹ[39m Cleaning 4 files
+@kyneta/machine:build: [34mℹ[39m [2mdist/[22m[1mindex.js[22m        [2m 8.82 kB[22m [2m│ gzip: 3.14 kB[22m
+@kyneta/machine:build: [34mℹ[39m [2mdist/[22mindex.js.map    [2m23.91 kB[22m [2m│ gzip: 7.17 kB[22m
+@kyneta/machine:build: [34mℹ[39m [2mdist/[22mindex.d.ts.map  [2m 1.99 kB[22m [2m│ gzip: 0.78 kB[22m
+@kyneta/machine:build: [34mℹ[39m [2mdist/[22m[32m[1mindex.d.ts[22m[39m      [2m 7.17 kB[22m [2m│ gzip: 2.60 kB[22m
+@kyneta/machine:build: [34mℹ[39m 4 files, total: 41.90 kB
+@kyneta/machine:build: [32m✔[39m Build complete in [32m253ms[39m
+@kyneta/changefeed:build: 
+@kyneta/changefeed:build: > @kyneta/changefeed@1.7.0 build /Users/duane/halecraft/kyneta/packages/changefeed
+@kyneta/changefeed:build: > tsdown
+@kyneta/changefeed:build: 
+@kyneta/changefeed:build: [34mℹ[39m [34mtsdown v0.22.0[39m powered by [38;2;255;126;23mrolldown v1.0.1[39m
+@kyneta/changefeed:build: [34mℹ[39m config file: [4m/Users/duane/halecraft/kyneta/packages/changefeed/tsdown.config.ts[24m 
+@kyneta/changefeed:build: [34mℹ[39m entry: [34msrc/index.ts[39m
+@kyneta/changefeed:build: [34mℹ[39m tsconfig: [34mtsconfig.json[39m
+@kyneta/changefeed:build: [34mℹ[39m Build start
+@kyneta/changefeed:build: [34mℹ[39m Cleaning 4 files
+@kyneta/changefeed:build: [34mℹ[39m [2mdist/[22m[1mindex.js[22m        [2m 5.58 kB[22m [2m│ gzip: 1.83 kB[22m
+@kyneta/changefeed:build: [34mℹ[39m [2mdist/[22mindex.js.map    [2m24.27 kB[22m [2m│ gzip: 6.96 kB[22m
+@kyneta/changefeed:build: [34mℹ[39m [2mdist/[22mindex.d.ts.map  [2m 2.43 kB[22m [2m│ gzip: 0.88 kB[22m
+@kyneta/changefeed:build: [34mℹ[39m [2mdist/[22m[32m[1mindex.d.ts[22m[39m      [2m13.72 kB[22m [2m│ gzip: 4.76 kB[22m
+@kyneta/changefeed:build: [34mℹ[39m 4 files, total: 46.00 kB
+@kyneta/changefeed:build: [32m✔[39m Build complete in [32m253ms[39m
+@kyneta/random:build: cache hit, replaying logs 51b0d96912462170
+@kyneta/random:build: 
+@kyneta/random:build: > @kyneta/random@1.7.0 build /Users/duane/halecraft/kyneta/packages/random
+@kyneta/random:build: > tsdown
+@kyneta/random:build: 
+@kyneta/random:build: [34mℹ[39m [34mtsdown v0.22.0[39m powered by [38;2;255;126;23mrolldown v1.0.1[39m
+@kyneta/random:build: [34mℹ[39m config file: [4m/Users/duane/halecraft/kyneta/packages/random/tsdown.config.ts[24m 
+@kyneta/random:build: [34mℹ[39m entry: [34msrc/index.ts[39m
+@kyneta/random:build: [34mℹ[39m tsconfig: [34mtsconfig.json[39m
+@kyneta/random:build: [34mℹ[39m Build start
+@kyneta/random:build: [34mℹ[39m Cleaning 4 files
+@kyneta/random:build: [34mℹ[39m [2mdist/[22m[1mindex.js[22m        [2m0.68 kB[22m [2m│ gzip: 0.43 kB[22m
+@kyneta/random:build: [34mℹ[39m [2mdist/[22mindex.js.map    [2m1.25 kB[22m [2m│ gzip: 0.71 kB[22m
+@kyneta/random:build: [34mℹ[39m [2mdist/[22mindex.d.ts.map  [2m0.15 kB[22m [2m│ gzip: 0.14 kB[22m
+@kyneta/random:build: [34mℹ[39m [2mdist/[22m[32m[1mindex.d.ts[22m[39m      [2m0.47 kB[22m [2m│ gzip: 0.29 kB[22m
+@kyneta/random:build: [34mℹ[39m 4 files, total: 2.55 kB
+@kyneta/random:build: [32m✔[39m Build complete in [32m329ms[39m
+@kyneta/machine:verify: cache hit, replaying logs f05dd44ed31acfbb
+@kyneta/machine:verify: 
+@kyneta/machine:verify: 
+@kyneta/machine:verify: > @kyneta/machine@1.7.0 verify /Users/duane/halecraft/kyneta/packages/machine
+@kyneta/machine:verify: > verify
+@kyneta/machine:verify: 
+@kyneta/machine:verify: [36m→[0m verifying [1mformat[0m
+@kyneta/machine:verify: [36m→[0m verifying [1mtypes[0m
+@kyneta/machine:verify: [36m→[0m verifying [1mlogic[0m
+@kyneta/machine:verify: [32m✓[0m [1mformat[0m verified [2m(passed 11 files, 4 warnings, [2m938ms[0m)[0m
+@kyneta/machine:verify: [32m✓[0m [1mtypes[0m verified [2m(passed, [2m739ms[0m)[0m
+@kyneta/machine:verify: [32m✓[0m [1mlogic[0m verified [2m(passed 62/62 tests, [2m564ms[0m)[0m
+@kyneta/machine:verify: [32m
+@kyneta/machine:verify: == verification: All correct ==[0m
+@kyneta/changefeed:verify: cache hit, replaying logs d2f7c6e3e9749dad
+@kyneta/changefeed:verify: 
+@kyneta/changefeed:verify: > @kyneta/changefeed@1.7.0 verify /Users/duane/halecraft/kyneta/packages/changefeed
+@kyneta/changefeed:verify: > verify
+@kyneta/changefeed:verify: 
+@kyneta/changefeed:verify: -> verifying format
+@kyneta/changefeed:verify: -> verifying types
+@kyneta/changefeed:verify: -> verifying logic
+@kyneta/changefeed:verify: OK format verified (passed 11 files, 344ms)
+@kyneta/changefeed:verify: OK types verified (passed, 368ms)
+@kyneta/changefeed:verify: OK logic verified (passed 49/49 tests, 369ms)
+@kyneta/changefeed:verify: 
+@kyneta/changefeed:verify: == verification: All correct ==
+@kyneta/random:verify: cache hit, replaying logs 8965c2dc894a3e58
+@kyneta/random:verify: 
+@kyneta/random:verify: 
+@kyneta/random:verify: > @kyneta/random@1.7.0 verify /Users/duane/halecraft/kyneta/packages/random
+@kyneta/random:verify: > verify
+@kyneta/random:verify: 
+@kyneta/random:verify: [36m→[0m verifying [1mformat[0m
+@kyneta/random:verify: [36m→[0m verifying [1mtypes[0m
+@kyneta/random:verify: [36m→[0m verifying [1mlogic[0m
+@kyneta/random:verify: [32m✓[0m [1mformat[0m verified [2m(passed 6 files, [2m1167ms[0m)[0m
+@kyneta/random:verify: [32m✓[0m [1mtypes[0m verified [2m(passed, [2m520ms[0m)[0m
+@kyneta/random:verify: [32m✓[0m [1mlogic[0m verified [2m(passed 5/5 tests, [2m527ms[0m)[0m
+@kyneta/random:verify: [32m
+@kyneta/random:verify: == verification: All correct ==[0m
+@kyneta/schema:build: cache hit, replaying logs f8ee03861526e2dc
+@kyneta/schema:build: 
+@kyneta/schema:build: 
+@kyneta/schema:build: > @kyneta/schema@1.7.0 build /Users/duane/halecraft/kyneta/packages/schema
+@kyneta/schema:build: > tsdown
+@kyneta/schema:build: 
+@kyneta/schema:build: [34mℹ[39m [34mtsdown v0.22.0[39m powered by [38;2;255;126;23mrolldown v1.0.1[39m
+@kyneta/schema:build: [34mℹ[39m config file: [4m/Users/duane/halecraft/kyneta/packages/schema/tsdown.config.ts[24m 
+@kyneta/schema:build: [34mℹ[39m entry: [34msrc/index.ts, src/basic/index.ts, src/testing/index.ts[39m
+@kyneta/schema:build: [34mℹ[39m tsconfig: [34mtsconfig.json[39m
+@kyneta/schema:build: [34mℹ[39m Build start
+@kyneta/schema:build: [34mℹ[39m Cleaning 23 files
+@kyneta/schema:build: [34mℹ[39m [2mdist/[22m[1mindex.js[22m                   [2m 33.06 kB[22m [2m│ gzip:   9.55 kB[22m
+@kyneta/schema:build: [34mℹ[39m [2mdist/[22m[1mtesting/index.js[22m           [2m  8.69 kB[22m [2m│ gzip:   1.33 kB[22m
+@kyneta/schema:build: [34mℹ[39m [2mdist/[22m[1mbasic/index.js[22m             [2m  2.81 kB[22m [2m│ gzip:   1.12 kB[22m
+@kyneta/schema:build: [34mℹ[39m [2mdist/[22m_shared/sync.js.map        [2m695.40 kB[22m [2m│ gzip: 163.26 kB[22m
+@kyneta/schema:build: [34mℹ[39m [2mdist/[22m_shared/sync.js            [2m247.60 kB[22m [2m│ gzip:  64.59 kB[22m
+@kyneta/schema:build: [34mℹ[39m [2mdist/[22mindex.js.map               [2m 78.29 kB[22m [2m│ gzip:  19.55 kB[22m
+@kyneta/schema:build: [34mℹ[39m [2mdist/[22m_shared/sync.d.ts.map      [2m 30.40 kB[22m [2m│ gzip:   7.95 kB[22m
+@kyneta/schema:build: [34mℹ[39m [2mdist/[22m_shared/change.js.map      [2m 27.50 kB[22m [2m│ gzip:   6.68 kB[22m
+@kyneta/schema:build: [34mℹ[39m [2mdist/[22mtesting/index.js.map       [2m 22.61 kB[22m [2m│ gzip:   3.90 kB[22m
+@kyneta/schema:build: [34mℹ[39m [2mdist/[22mindex.d.ts.map             [2m 10.39 kB[22m [2m│ gzip:   3.08 kB[22m
+@kyneta/schema:build: [34mℹ[39m [2mdist/[22m_shared/change.js          [2m  9.55 kB[22m [2m│ gzip:   2.85 kB[22m
+@kyneta/schema:build: [34mℹ[39m [2mdist/[22m_shared/position.d.ts.map  [2m  7.91 kB[22m [2m│ gzip:   2.20 kB[22m
+@kyneta/schema:build: [34mℹ[39m [2mdist/[22mbasic/index.js.map         [2m  6.91 kB[22m [2m│ gzip:   2.26 kB[22m
+@kyneta/schema:build: [34mℹ[39m [2mdist/[22mbasic/index.d.ts.map       [2m  0.44 kB[22m [2m│ gzip:   0.28 kB[22m
+@kyneta/schema:build: [34mℹ[39m [2mdist/[22mtesting/index.d.ts.map     [2m  0.43 kB[22m [2m│ gzip:   0.27 kB[22m
+@kyneta/schema:build: [34mℹ[39m [2mdist/[22m[32m[1mindex.d.ts[22m[39m                 [2m 65.52 kB[22m [2m│ gzip:  20.93 kB[22m
+@kyneta/schema:build: [34mℹ[39m [2mdist/[22m[32m[1mbasic/index.d.ts[22m[39m           [2m  2.85 kB[22m [2m│ gzip:   1.10 kB[22m
+@kyneta/schema:build: [34mℹ[39m [2mdist/[22m[32m[1mtesting/index.d.ts[22m[39m         [2m  1.29 kB[22m [2m│ gzip:   0.60 kB[22m
+@kyneta/schema:build: [34mℹ[39m [2mdist/[22m[32m_shared/sync.d.ts[39m          [2m147.49 kB[22m [2m│ gzip:  43.02 kB[22m
+@kyneta/schema:build: [34mℹ[39m [2mdist/[22m[32m_shared/position.d.ts[39m      [2m 29.87 kB[22m [2m│ gzip:   8.81 kB[22m
+@kyneta/schema:build: [34mℹ[39m 20 files, total: 1.43 MB
+@kyneta/schema:build: [32m✔[39m Build complete in [32m662ms[39m
+@kyneta/loro-schema:build: cache hit, replaying logs 847fd20036cde13e
+@kyneta/loro-schema:build: 
+@kyneta/loro-schema:build: 
+@kyneta/loro-schema:build: > @kyneta/loro-schema@1.7.0 build /Users/duane/halecraft/kyneta/packages/schema/backends/loro
+@kyneta/loro-schema:build: > tsdown
+@kyneta/loro-schema:build: 
+@kyneta/loro-schema:build: [34mℹ[39m [34mtsdown v0.22.0[39m powered by [38;2;255;126;23mrolldown v1.0.1[39m
+@kyneta/loro-schema:build: [34mℹ[39m config file: [4m/Users/duane/halecraft/kyneta/packages/schema/backends/loro/tsdown.config.ts[24m 
+@kyneta/loro-schema:build: [34mℹ[39m entry: [34msrc/index.ts[39m
+@kyneta/loro-schema:build: [34mℹ[39m tsconfig: [34mtsconfig.json[39m
+@kyneta/loro-schema:build: [34mℹ[39m Build start
+@kyneta/loro-schema:build: [34mℹ[39m Cleaning 4 files
+@kyneta/loro-schema:build: [34mℹ[39m [2mdist/[22m[1mindex.js[22m        [2m 55.45 kB[22m [2m│ gzip: 15.93 kB[22m
+@kyneta/loro-schema:build: [34mℹ[39m [2mdist/[22mindex.js.map    [2m129.62 kB[22m [2m│ gzip: 33.89 kB[22m
+@kyneta/loro-schema:build: [34mℹ[39m [2mdist/[22mindex.d.ts.map  [2m  2.01 kB[22m [2m│ gzip:  0.73 kB[22m
+@kyneta/loro-schema:build: [34mℹ[39m [2mdist/[22m[32m[1mindex.d.ts[22m[39m      [2m 10.73 kB[22m [2m│ gzip:  3.89 kB[22m
+@kyneta/loro-schema:build: [34mℹ[39m 4 files, total: 197.81 kB
+@kyneta/loro-schema:build: [32m✔[39m Build complete in [32m673ms[39m
+@kyneta/wire:build: cache hit, replaying logs be09f17ec57e1d74
+@kyneta/wire:build: 
+@kyneta/wire:build: 
+@kyneta/wire:build: > @kyneta/wire@1.7.0 build /Users/duane/halecraft/kyneta/packages/exchange/wire
+@kyneta/wire:build: > tsdown
+@kyneta/wire:build: 
+@kyneta/wire:build: [34mℹ[39m [34mtsdown v0.22.0[39m powered by [38;2;255;126;23mrolldown v1.0.1[39m
+@kyneta/wire:build: [34mℹ[39m config file: [4m/Users/duane/halecraft/kyneta/packages/exchange/wire/tsdown.config.ts[24m 
+@kyneta/wire:build: [34mℹ[39m entry: [34msrc/index.ts[39m
+@kyneta/wire:build: [34mℹ[39m tsconfig: [34mtsconfig.json[39m
+@kyneta/wire:build: [34mℹ[39m Build start
+@kyneta/wire:build: [34mℹ[39m Cleaning 4 files
+@kyneta/wire:build: [34mℹ[39m [2mdist/[22m[1mindex.js[22m        [2m 49.20 kB[22m [2m│ gzip: 12.82 kB[22m
+@kyneta/wire:build: [34mℹ[39m [2mdist/[22mindex.js.map    [2m124.34 kB[22m [2m│ gzip: 28.67 kB[22m
+@kyneta/wire:build: [34mℹ[39m [2mdist/[22mindex.d.ts.map  [2m  8.33 kB[22m [2m│ gzip:  2.49 kB[22m
+@kyneta/wire:build: [34mℹ[39m [2mdist/[22m[32m[1mindex.d.ts[22m[39m      [2m 31.15 kB[22m [2m│ gzip:  8.59 kB[22m
+@kyneta/wire:build: [34mℹ[39m 4 files, total: 213.02 kB
+@kyneta/wire:build: [32m✔[39m Build complete in [32m727ms[39m
+@kyneta/compiler:build: cache hit, replaying logs 4ad31fc441fdda45
+@kyneta/compiler:build: 
+@kyneta/compiler:build: 
+@kyneta/compiler:build: > @kyneta/compiler@1.7.0 build /Users/duane/halecraft/kyneta/experimental/compiler
+@kyneta/compiler:build: > tsdown
+@kyneta/compiler:build: 
+@kyneta/compiler:build: [34mℹ[39m [34mtsdown v0.22.0[39m powered by [38;2;255;126;23mrolldown v1.0.1[39m
+@kyneta/compiler:build: [34mℹ[39m config file: [4m/Users/duane/halecraft/kyneta/experimental/compiler/tsdown.config.ts[24m 
+@kyneta/compiler:build: [34mℹ[39m entry: [34msrc/index.ts, src/transforms.ts[39m
+@kyneta/compiler:build: [34mℹ[39m tsconfig: [34mtsconfig.json[39m
+@kyneta/compiler:build: [34mℹ[39m Build start
+@kyneta/compiler:build: [34mℹ[39m Cleaning 12 files
+@kyneta/compiler:build: [34mℹ[39m [2mdist/[22m[1mindex.js[22m              [2m 97.85 kB[22m [2m│ gzip: 26.49 kB[22m
+@kyneta/compiler:build: [34mℹ[39m [2mdist/[22m[1mtransforms.js[22m         [2m  4.54 kB[22m [2m│ gzip:  1.42 kB[22m
+@kyneta/compiler:build: [34mℹ[39m [2mdist/[22mindex.js.map          [2m213.04 kB[22m [2m│ gzip: 51.54 kB[22m
+@kyneta/compiler:build: [34mℹ[39m [2mdist/[22mir-D-RRlfqh.js.map    [2m 56.64 kB[22m [2m│ gzip: 13.99 kB[22m
+@kyneta/compiler:build: [34mℹ[39m [2mdist/[22mir-D-RRlfqh.js        [2m 17.80 kB[22m [2m│ gzip:  4.56 kB[22m
+@kyneta/compiler:build: [34mℹ[39m [2mdist/[22mir-B76axd6k.d.ts.map  [2m  9.12 kB[22m [2m│ gzip:  2.94 kB[22m
+@kyneta/compiler:build: [34mℹ[39m [2mdist/[22mtransforms.js.map     [2m  9.05 kB[22m [2m│ gzip:  2.60 kB[22m
+@kyneta/compiler:build: [34mℹ[39m [2mdist/[22mindex.d.ts.map        [2m  5.22 kB[22m [2m│ gzip:  1.85 kB[22m
+@kyneta/compiler:build: [34mℹ[39m [2mdist/[22mtransforms.d.ts.map   [2m  0.24 kB[22m [2m│ gzip:  0.17 kB[22m
+@kyneta/compiler:build: [34mℹ[39m [2mdist/[22m[32m[1mindex.d.ts[22m[39m            [2m 34.11 kB[22m [2m│ gzip: 10.35 kB[22m
+@kyneta/compiler:build: [34mℹ[39m [2mdist/[22m[32m[1mtransforms.d.ts[22m[39m       [2m  1.94 kB[22m [2m│ gzip:  0.79 kB[22m
+@kyneta/compiler:build: [34mℹ[39m [2mdist/[22m[32mir-B76axd6k.d.ts[39m      [2m 44.38 kB[22m [2m│ gzip: 12.52 kB[22m
+@kyneta/compiler:build: [34mℹ[39m 12 files, total: 493.93 kB
+@kyneta/compiler:build: [32m✔[39m Build complete in [32m766ms[39m
+@kyneta/schema:verify: cache hit, replaying logs 3268492b75108c70
+@kyneta/schema:verify: 
+@kyneta/schema:verify: 
+@kyneta/schema:verify: > @kyneta/schema@1.7.0 verify /Users/duane/halecraft/kyneta/packages/schema
+@kyneta/schema:verify: > verify
+@kyneta/schema:verify: 
+@kyneta/schema:verify: [36m→[0m verifying [1mformat[0m
+@kyneta/schema:verify: [36m→[0m verifying [1mtypes[0m
+@kyneta/schema:verify: [36m→[0m verifying [1mlogic[0m
+@kyneta/schema:verify: [32m✓[0m [1mformat[0m verified [2m(passed 108 files, [2m297ms[0m)[0m
+@kyneta/schema:verify: [32m✓[0m [1mtypes[0m verified [2m(passed, [2m527ms[0m)[0m
+@kyneta/schema:verify: [32m✓[0m [1mlogic[0m verified [2m(passed 2119/2119 tests (8 skipped), [2m3955ms[0m)[0m
+@kyneta/schema:verify: [32m
+@kyneta/schema:verify: == verification: All correct ==[0m
+@kyneta/yjs-schema:build: cache hit, replaying logs 4043620be2e7aa7b
+@kyneta/yjs-schema:build: 
+@kyneta/yjs-schema:build: 
+@kyneta/yjs-schema:build: > @kyneta/yjs-schema@1.7.0 build /Users/duane/halecraft/kyneta/packages/schema/backends/yjs
+@kyneta/yjs-schema:build: > tsdown
+@kyneta/yjs-schema:build: 
+@kyneta/yjs-schema:build: [34mℹ[39m [34mtsdown v0.22.0[39m powered by [38;2;255;126;23mrolldown v1.0.1[39m
+@kyneta/yjs-schema:build: [34mℹ[39m config file: [4m/Users/duane/halecraft/kyneta/packages/schema/backends/yjs/tsdown.config.ts[24m 
+@kyneta/yjs-schema:build: [34mℹ[39m entry: [34msrc/index.ts[39m
+@kyneta/yjs-schema:build: [34mℹ[39m tsconfig: [34mtsconfig.json[39m
+@kyneta/yjs-schema:build: [34mℹ[39m Build start
+@kyneta/yjs-schema:build: [34mℹ[39m Cleaning 4 files
+@kyneta/yjs-schema:build: [34mℹ[39m [2mdist/[22m[1mindex.js[22m        [2m 46.38 kB[22m [2m│ gzip: 13.17 kB[22m
+@kyneta/yjs-schema:build: [34mℹ[39m [2mdist/[22mindex.js.map    [2m108.20 kB[22m [2m│ gzip: 27.87 kB[22m
+@kyneta/yjs-schema:build: [34mℹ[39m [2mdist/[22mindex.d.ts.map  [2m  2.22 kB[22m [2m│ gzip:  0.79 kB[22m
+@kyneta/yjs-schema:build: [34mℹ[39m [2mdist/[22m[32m[1mindex.d.ts[22m[39m      [2m 12.59 kB[22m [2m│ gzip:  4.58 kB[22m
+@kyneta/yjs-schema:build: [34mℹ[39m 4 files, total: 169.39 kB
+@kyneta/yjs-schema:build: [32m✔[39m Build complete in [32m725ms[39m
+@kyneta/loro-schema:verify: cache hit, replaying logs 4e10ac392da67983
+@kyneta/loro-schema:verify: 
+@kyneta/loro-schema:verify: 
+@kyneta/loro-schema:verify: > @kyneta/loro-schema@1.7.0 verify /Users/duane/halecraft/kyneta/packages/schema/backends/loro
+@kyneta/loro-schema:verify: > verify
+@kyneta/loro-schema:verify: 
+@kyneta/loro-schema:verify: [36m→[0m verifying [1mformat[0m
+@kyneta/loro-schema:verify: [36m→[0m verifying [1mtypes[0m
+@kyneta/loro-schema:verify: [36m→[0m verifying [1mlogic[0m
+@kyneta/loro-schema:verify: [32m✓[0m [1mformat[0m verified [2m(passed 33 files, 52 warnings, [2m357ms[0m)[0m
+@kyneta/loro-schema:verify: [32m✓[0m [1mtypes[0m verified [2m(passed, [2m355ms[0m)[0m
+@kyneta/loro-schema:verify: [32m✓[0m [1mlogic[0m verified [2m(passed 216/216 tests (4 skipped), [2m2287ms[0m)[0m
+@kyneta/loro-schema:verify: [32m
+@kyneta/loro-schema:verify: == verification: All correct ==[0m
+@kyneta/transport:build: cache hit, replaying logs 146dc0249d2795da
+@kyneta/transport:build: 
+@kyneta/transport:build: 
+@kyneta/transport:build: > @kyneta/transport@1.7.0 build /Users/duane/halecraft/kyneta/packages/transport
+@kyneta/transport:build: > tsdown
+@kyneta/transport:build: 
+@kyneta/transport:build: [34mℹ[39m [34mtsdown v0.22.0[39m powered by [38;2;255;126;23mrolldown v1.0.1[39m
+@kyneta/transport:build: [34mℹ[39m config file: [4m/Users/duane/halecraft/kyneta/packages/transport/tsdown.config.ts[24m 
+@kyneta/transport:build: [34mℹ[39m entry: [34msrc/index.ts, src/testing/index.ts[39m
+@kyneta/transport:build: [34mℹ[39m tsconfig: [34mtsconfig.json[39m
+@kyneta/transport:build: [34mℹ[39m Build start
+@kyneta/transport:build: [34mℹ[39m Cleaning 12 files
+@kyneta/transport:build: [34mℹ[39m [2mdist/[22m[1mindex.js[22m                    [2m27.53 kB[22m [2m│ gzip:  7.48 kB[22m
+@kyneta/transport:build: [34mℹ[39m [2mdist/[22m[1mtesting/index.js[22m            [2m 1.08 kB[22m [2m│ gzip:  0.57 kB[22m
+@kyneta/transport:build: [34mℹ[39m [2mdist/[22mindex.js.map                [2m77.82 kB[22m [2m│ gzip: 19.88 kB[22m
+@kyneta/transport:build: [34mℹ[39m [2mdist/[22m_shared/transport.d.ts.map  [2m 3.51 kB[22m [2m│ gzip:  1.27 kB[22m
+@kyneta/transport:build: [34mℹ[39m [2mdist/[22mtesting/index.js.map        [2m 2.87 kB[22m [2m│ gzip:  1.15 kB[22m
+@kyneta/transport:build: [34mℹ[39m [2mdist/[22mindex.d.ts.map              [2m 1.27 kB[22m [2m│ gzip:  0.54 kB[22m
+@kyneta/transport:build: [34mℹ[39m [2mdist/[22mtesting/index.d.ts.map      [2m 0.37 kB[22m [2m│ gzip:  0.22 kB[22m
+@kyneta/transport:build: [34mℹ[39m [2mdist/[22m[32m[1mindex.d.ts[22m[39m                  [2m 5.00 kB[22m [2m│ gzip:  1.99 kB[22m
+@kyneta/transport:build: [34mℹ[39m [2mdist/[22m[32m[1mtesting/index.d.ts[22m[39m          [2m 1.53 kB[22m [2m│ gzip:  0.67 kB[22m
+@kyneta/transport:build: [34mℹ[39m [2mdist/[22m[32m_shared/transport.d.ts[39m      [2m12.97 kB[22m [2m│ gzip:  4.39 kB[22m
+@kyneta/transport:build: [34mℹ[39m 10 files, total: 133.95 kB
+@kyneta/transport:build: [32m✔[39m Build complete in [32m2378ms[39m
+@kyneta/wire:verify: cache hit, replaying logs 2b03dd38472bcdb9
+@kyneta/wire:verify: 
+@kyneta/wire:verify: 
+@kyneta/wire:verify: > @kyneta/wire@1.7.0 verify /Users/duane/halecraft/kyneta/packages/exchange/wire
+@kyneta/wire:verify: > verify
+@kyneta/wire:verify: 
+@kyneta/wire:verify: [36m→[0m verifying [1mformat[0m
+@kyneta/wire:verify: [36m→[0m verifying [1mtypes[0m
+@kyneta/wire:verify: [36m→[0m verifying [1mlogic[0m
+@kyneta/wire:verify: [32m✓[0m [1mformat[0m verified [2m(passed 30 files, [2m301ms[0m)[0m
+@kyneta/wire:verify: [32m✓[0m [1mtypes[0m verified [2m(passed, [2m329ms[0m)[0m
+@kyneta/wire:verify: [32m✓[0m [1mlogic[0m verified [2m(passed 238/238 tests, [2m2133ms[0m)[0m
+@kyneta/wire:verify: [32m
+@kyneta/wire:verify: == verification: All correct ==[0m
+@kyneta/compiler:verify: cache hit, replaying logs 4c5a176eb74af433
+@kyneta/compiler:verify: 
+@kyneta/compiler:verify: 
+@kyneta/compiler:verify: > @kyneta/compiler@1.7.0 verify /Users/duane/halecraft/kyneta/experimental/compiler
+@kyneta/compiler:verify: > verify
+@kyneta/compiler:verify: 
+@kyneta/compiler:verify: [36m→[0m verifying [1mformat[0m
+@kyneta/compiler:verify: [36m→[0m verifying [1mtypes[0m
+@kyneta/compiler:verify: [36m→[0m verifying [1mlogic[0m
+@kyneta/compiler:verify: [32m✓[0m [1mformat[0m verified [2m(passed 32 files, 19 warnings, [2m360ms[0m)[0m
+@kyneta/compiler:verify: [32m✓[0m [1mtypes[0m verified [2m(passed, [2m372ms[0m)[0m
+@kyneta/compiler:verify: [32m✓[0m [1mlogic[0m verified [2m(passed 547/547 tests, [2m14450ms[0m)[0m
+@kyneta/compiler:verify: [32m
+@kyneta/compiler:verify: == verification: All correct ==[0m
+@kyneta/cast:build: cache hit, replaying logs da3f58cf0f2c9f27
+@kyneta/cast:build: 
+@kyneta/cast:build: 
+@kyneta/cast:build: > @kyneta/cast@1.7.0 build /Users/duane/halecraft/kyneta/experimental/cast
+@kyneta/cast:build: > tsdown
+@kyneta/cast:build: 
+@kyneta/cast:build: [34mℹ[39m [34mtsdown v0.22.0[39m powered by [38;2;255;126;23mrolldown v1.0.1[39m
+@kyneta/cast:build: [34mℹ[39m config file: [4m/Users/duane/halecraft/kyneta/experimental/cast/tsdown.config.ts[24m 
+@kyneta/cast:build: [34mℹ[39m entry: [34msrc/index.ts, src/unplugin/index.ts, src/unplugin/adapters/vite.ts, src/unplugin/adapters/bun.ts, src/unplugin/adapters/farm.ts, src/unplugin/adapters/rollup.ts, src/unplugin/adapters/rolldown.ts, src/unplugin/adapters/esbuild.ts, src/vite/plugin.ts, src/runtime/index.ts, src/testing/index.ts[39m
+@kyneta/cast:build: [34mℹ[39m tsconfig: [34mtsconfig.json[39m
+@kyneta/cast:build: [34mℹ[39m Build start
+@kyneta/cast:build: [34mℹ[39m Cleaning 58 files
+@kyneta/yjs-schema:verify: cache hit, replaying logs f2438a7e86a5ecbd
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22m[1mindex.js[22m                             [2m  9.26 kB[22m [2m│ gzip:  3.19 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22m[1mtesting/index.js[22m                     [2m  5.01 kB[22m [2m│ gzip:  1.60 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22m[1munplugin/adapters/bun.js[22m             [2m  1.25 kB[22m [2m│ gzip:  0.68 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22m[1mruntime/index.js[22m                     [2m  0.56 kB[22m [2m│ gzip:  0.28 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22m[1munplugin/adapters/vite.js[22m            [2m  0.53 kB[22m [2m│ gzip:  0.32 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22m[1munplugin/adapters/esbuild.js[22m         [2m  0.52 kB[22m [2m│ gzip:  0.32 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22m[1munplugin/adapters/rolldown.js[22m        [2m  0.31 kB[22m [2m│ gzip:  0.20 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22m[1munplugin/adapters/rollup.js[22m          [2m  0.30 kB[22m [2m│ gzip:  0.20 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22m[1munplugin/adapters/farm.js[22m            [2m  0.29 kB[22m [2m│ gzip:  0.19 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22m[1mvite/plugin.js[22m                       [2m  0.15 kB[22m [2m│ gzip:  0.11 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22m[1munplugin/index.js[22m                    [2m  0.12 kB[22m [2m│ gzip:  0.10 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22mtransform-CmnJQsdm.js.map            [2m106.00 kB[22m [2m│ gzip: 24.17 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22mruntime-Bn3PVUwX.js.map              [2m 76.47 kB[22m [2m│ gzip: 18.58 kB[22m
+@kyneta/yjs-schema:verify: 
+@kyneta/yjs-schema:verify: 
+@kyneta/yjs-schema:verify: > @kyneta/yjs-schema@1.7.0 verify /Users/duane/halecraft/kyneta/packages/schema/backends/yjs
+@kyneta/yjs-schema:verify: > verify
+@kyneta/yjs-schema:verify: 
+@kyneta/yjs-schema:verify: [36m→[0m verifying [1mformat[0m
+@kyneta/yjs-schema:verify: [36m→[0m verifying [1mtypes[0m
+@kyneta/yjs-schema:verify: [36m→[0m verifying [1mlogic[0m
+@kyneta/yjs-schema:verify: [32m✓[0m [1mformat[0m verified [2m(passed 27 files, 37 warnings, [2m366ms[0m)[0m
+@kyneta/yjs-schema:verify: [32m✓[0m [1mtypes[0m verified [2m(passed, [2m364ms[0m)[0m
+@kyneta/yjs-schema:verify: [32m✓[0m [1mlogic[0m verified [2m(passed 205/205 tests (4 skipped), [2m2235ms[0m)[0m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22mtransform-CmnJQsdm.js                [2m 44.19 kB[22m [2m│ gzip: 10.69 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22munplugin/adapters/rollup.d.ts.map    [2m 41.17 kB[22m [2m│ gzip: 11.74 kB[22m
+@kyneta/yjs-schema:verify: [32m
+@kyneta/yjs-schema:verify: == verification: All correct ==[0m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22munplugin/adapters/farm.d.ts.map      [2m 35.43 kB[22m [2m│ gzip: 10.89 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22mruntime-Bn3PVUwX.js                  [2m 34.52 kB[22m [2m│ gzip:  8.91 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22mindex.js.map                         [2m 26.36 kB[22m [2m│ gzip:  7.92 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22msubscribe-BDWFXoy1.js.map            [2m 15.96 kB[22m [2m│ gzip:  5.10 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22munplugin-BHVy3e5U.js.map             [2m 11.06 kB[22m [2m│ gzip:  3.70 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22msubscribe-BDWFXoy1.js                [2m 10.52 kB[22m [2m│ gzip:  3.60 kB[22m
+@kyneta/bridge-transport:build: cache hit, replaying logs a66f6e5d2f99a57b
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22mtesting/index.js.map                 [2m  8.81 kB[22m [2m│ gzip:  2.57 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22munplugin-BHVy3e5U.js                 [2m  5.38 kB[22m [2m│ gzip:  2.11 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22merrors-CJiEaLFp.js.map               [2m  4.97 kB[22m [2m│ gzip:  1.70 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22merrors-CJiEaLFp.js                   [2m  3.62 kB[22m [2m│ gzip:  1.21 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22msubscribe-CYKRlK7W.d.ts.map          [2m  3.52 kB[22m [2m│ gzip:  1.31 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22mindex.d.ts.map                       [2m  2.86 kB[22m [2m│ gzip:  1.11 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22munplugin/adapters/bun.js.map         [2m  2.55 kB[22m [2m│ gzip:  1.23 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22mindex-DRyt4-6n.d.ts.map              [2m  1.20 kB[22m [2m│ gzip:  0.52 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22munplugin/adapters/farm.js.map        [2m  0.78 kB[22m [2m│ gzip:  0.41 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22mtesting/index.d.ts.map               [2m  0.70 kB[22m [2m│ gzip:  0.38 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22munplugin/adapters/vite.js.map        [2m  0.66 kB[22m [2m│ gzip:  0.36 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22munplugin/adapters/esbuild.js.map     [2m  0.64 kB[22m [2m│ gzip:  0.36 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22munplugin/adapters/rolldown.js.map    [2m  0.39 kB[22m [2m│ gzip:  0.24 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22munplugin/adapters/rollup.js.map      [2m  0.38 kB[22m [2m│ gzip:  0.24 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22munplugin/index.d.ts.map              [2m  0.31 kB[22m [2m│ gzip:  0.21 kB[22m
+@kyneta/bridge-transport:build: 
+@kyneta/bridge-transport:build: 
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22munplugin/adapters/bun.d.ts.map       [2m  0.16 kB[22m [2m│ gzip:  0.14 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22munplugin/adapters/rolldown.d.ts.map  [2m  0.13 kB[22m [2m│ gzip:  0.13 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22munplugin/adapters/esbuild.d.ts.map   [2m  0.13 kB[22m [2m│ gzip:  0.13 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22munplugin/adapters/vite.d.ts.map      [2m  0.13 kB[22m [2m│ gzip:  0.13 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22m[32m[1munplugin/adapters/rollup.d.ts[22m[39m        [2m 48.85 kB[22m [2m│ gzip: 10.54 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22m[32m[1munplugin/adapters/farm.d.ts[22m[39m          [2m 45.81 kB[22m [2m│ gzip: 12.76 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22m[32m[1mindex.d.ts[22m[39m                           [2m 12.65 kB[22m [2m│ gzip:  4.23 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22m[32m[1mtesting/index.d.ts[22m[39m                   [2m  4.27 kB[22m [2m│ gzip:  1.40 kB[22m
+@kyneta/bridge-transport:build: > @kyneta/bridge-transport@1.7.0 build /Users/duane/halecraft/kyneta/packages/exchange/transports/bridge
+@kyneta/bridge-transport:build: > tsdown
+@kyneta/bridge-transport:build: 
+@kyneta/bridge-transport:build: [34mℹ[39m [34mtsdown v0.22.0[39m powered by [38;2;255;126;23mrolldown v1.0.1[39m
+@kyneta/bridge-transport:build: [34mℹ[39m config file: [4m/Users/duane/halecraft/kyneta/packages/exchange/transports/bridge/tsdown.config.ts[24m 
+@kyneta/bridge-transport:build: [34mℹ[39m entry: [34msrc/index.ts[39m
+@kyneta/bridge-transport:build: [34mℹ[39m tsconfig: [34mtsconfig.json[39m
+@kyneta/bridge-transport:build: [34mℹ[39m Build start
+@kyneta/bridge-transport:build: [34mℹ[39m Cleaning 4 files
+@kyneta/bridge-transport:build: [34mℹ[39m [2mdist/[22m[1mindex.js[22m        [2m 5.26 kB[22m [2m│ gzip: 1.64 kB[22m
+@kyneta/bridge-transport:build: [34mℹ[39m [2mdist/[22mindex.js.map    [2m11.48 kB[22m [2m│ gzip: 3.45 kB[22m
+@kyneta/bridge-transport:build: [34mℹ[39m [2mdist/[22mindex.d.ts.map  [2m 0.90 kB[22m [2m│ gzip: 0.43 kB[22m
+@kyneta/bridge-transport:build: [34mℹ[39m [2mdist/[22m[32m[1mindex.d.ts[22m[39m      [2m 3.01 kB[22m [2m│ gzip: 1.15 kB[22m
+@kyneta/bridge-transport:build: [34mℹ[39m 4 files, total: 20.65 kB
+@kyneta/bridge-transport:build: [32m✔[39m Build complete in [32m481ms[39m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22m[32m[1munplugin/index.d.ts[22m[39m                  [2m  1.43 kB[22m [2m│ gzip:  0.65 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22m[32m[1mruntime/index.d.ts[22m[39m                   [2m  0.60 kB[22m [2m│ gzip:  0.28 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22m[32m[1munplugin/adapters/rolldown.d.ts[22m[39m      [2m  0.39 kB[22m [2m│ gzip:  0.23 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22m[32m[1munplugin/adapters/vite.d.ts[22m[39m          [2m  0.37 kB[22m [2m│ gzip:  0.23 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22m[32m[1munplugin/adapters/esbuild.d.ts[22m[39m       [2m  0.34 kB[22m [2m│ gzip:  0.22 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22m[32m[1munplugin/adapters/bun.d.ts[22m[39m           [2m  0.34 kB[22m [2m│ gzip:  0.23 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22m[32m[1mvite/plugin.d.ts[22m[39m                     [2m  0.27 kB[22m [2m│ gzip:  0.15 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22m[32msubscribe-CYKRlK7W.d.ts[39m              [2m 16.08 kB[22m [2m│ gzip:  5.22 kB[22m
+@kyneta/cast:build: [34mℹ[39m [2mdist/[22m[32mindex-DRyt4-6n.d.ts[39m                  [2m  8.34 kB[22m [2m│ gzip:  3.05 kB[22m
+@kyneta/cast:build: [34mℹ[39m 53 files, total: 597.04 kB
+@kyneta/cast:build: ../../node_modules/.pnpm/rollup@4.59.0/node_modules/rollup/dist/rollup.d.ts (2:56) [33m[IMPORT_IS_UNDEFINED] [0mImport `Decorator` will always be undefined because there is no matching export in '../../node_modules/.pnpm/@types+estree@1.0.8/node_modules/@types/estree/index.d.ts'
+@kyneta/cast:build:    [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m ../../node_modules/.pnpm/rollup@4.59.0/node_modules/rollup/dist/rollup.d.ts:2:57 [38;5;246m][0m
+@kyneta/cast:build:    [38;5;246m│[0m
+@kyneta/cast:build:  [38;5;246m2 │[0m [38;5;249mv[0m[38;5;249ma[0m[38;5;249mr[0m[38;5;249m [0m[38;5;249m_[0m[38;5;249m0[0m[38;5;249m [0m[38;5;249m=[0m[38;5;249m [0m[38;5;249m[[0m[38;5;249m9[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m([0m[38;5;249m)[0m[38;5;249m [0m[38;5;249m=[0m[38;5;249m>[0m[38;5;249m [0m[38;5;249m[[0m[38;5;249me[0m[38;5;249ms[0m[38;5;249mt[0m[38;5;249mr[0m[38;5;249me[0m[38;5;249me[0m[38;5;249m.[0m[38;5;249mE[0m[38;5;249mx[0m[38;5;249mp[0m[38;5;249mr[0m[38;5;249me[0m[38;5;249ms[0m[38;5;249ms[0m[38;5;249mi[0m[38;5;249mo[0m[38;5;249mn[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249me[0m[38;5;249ms[0m[38;5;249mt[0m[38;5;249mr[0m[38;5;249me[0m[38;5;249me[0m[38;5;249m.[0m[38;5;249mB[0m[38;5;249ma[0m[38;5;249ms[0m[38;5;249me[0m[38;5;249mN[0m[38;5;249mo[0m[38;5;249md[0m[38;5;249me[0m[38;5;249m,[0m[38;5;249m [0mestree.Decorator[38;5;249m,[0m[38;5;249m [0m[38;5;249me[0m[38;5;249ms[0m[38;5;249mt[0m[38;5;249mr[0m[38;5;249me[0m[38;5;249me[0m[38;5;249m.[0m[38;5;249mD[0m[38;5;249me[0m[38;5;249mc[0m[38;5;249mo[0m[38;5;249mr[0m[38;5;249ma[0m[38;5;249mt[0m[38;5;249mo[0m[38;5;249mr[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249me[0m[38;5;249ms[0m[38;5;249mt[0m[38;5;249mr[0m[38;5;249me[0m[38;5;249me[0m[38;5;249m.[0m[38;5;249mD[0m[38;5;249me[0m[38;5;249mc[0m[38;5;249mo[0m[38;5;249mr[0m[38;5;249ma[0m[38;5;249mt[0m[38;5;249mo[0m[38;5;249mr[0m[38;5;249m][0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m[[0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m][0m[38;5;249m,[0m[38;5;249m [0m[38;5;249ms[0m[38;5;249mi[0m[38;5;249md[0m[38;5;249me[0m[38;5;249mE[0m[38;5;249mf[0m[38;5;249mf[0m[38;5;249me[0m[38;5;249mc[0m[38;5;249mt[0m[38;5;249m([0m[38;5;249m_[0m[38;5;249m0[0m[38;5;249m)[0m[38;5;249m][0m[38;5;249m;[0m
+@kyneta/cast:build:  [38;5;240m  │[0m                                                         ────────┬───────  
+@kyneta/cast:build:  [38;5;240m  │[0m                                                                 ╰───────── 
+@kyneta/cast:build: [38;5;246m───╯[0m
+@kyneta/cast:build: 
+@kyneta/cast:build: ../../node_modules/.pnpm/rollup@4.59.0/node_modules/rollup/dist/rollup.d.ts (2:74) [33m[IMPORT_IS_UNDEFINED] [0mImport `Decorator` will always be undefined because there is no matching export in '../../node_modules/.pnpm/@types+estree@1.0.8/node_modules/@types/estree/index.d.ts'
+@kyneta/cast:build:    [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m ../../node_modules/.pnpm/rollup@4.59.0/node_modules/rollup/dist/rollup.d.ts:2:75 [38;5;246m][0m
+@kyneta/cast:build:    [38;5;246m│[0m
+@kyneta/cast:build:  [38;5;246m2 │[0m [38;5;249mv[0m[38;5;249ma[0m[38;5;249mr[0m[38;5;249m [0m[38;5;249m_[0m[38;5;249m0[0m[38;5;249m [0m[38;5;249m=[0m[38;5;249m [0m[38;5;249m[[0m[38;5;249m9[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m([0m[38;5;249m)[0m[38;5;249m [0m[38;5;249m=[0m[38;5;249m>[0m[38;5;249m [0m[38;5;249m[[0m[38;5;249me[0m[38;5;249ms[0m[38;5;249mt[0m[38;5;249mr[0m[38;5;249me[0m[38;5;249me[0m[38;5;249m.[0m[38;5;249mE[0m[38;5;249mx[0m[38;5;249mp[0m[38;5;249mr[0m[38;5;249me[0m[38;5;249ms[0m[38;5;249ms[0m[38;5;249mi[0m[38;5;249mo[0m[38;5;249mn[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249me[0m[38;5;249ms[0m[38;5;249mt[0m[38;5;249mr[0m[38;5;249me[0m[38;5;249me[0m[38;5;249m.[0m[38;5;249mB[0m[38;5;249ma[0m[38;5;249ms[0m[38;5;249me[0m[38;5;249mN[0m[38;5;249mo[0m[38;5;249md[0m[38;5;249me[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249me[0m[38;5;249ms[0m[38;5;249mt[0m[38;5;249mr[0m[38;5;249me[0m[38;5;249me[0m[38;5;249m.[0m[38;5;249mD[0m[38;5;249me[0m[38;5;249mc[0m[38;5;249mo[0m[38;5;249mr[0m[38;5;249ma[0m[38;5;249mt[0m[38;5;249mo[0m[38;5;249mr[0m[38;5;249m,[0m[38;5;249m [0mestree.Decorator[38;5;249m,[0m[38;5;249m [0m[38;5;249me[0m[38;5;249ms[0m[38;5;249mt[0m[38;5;249mr[0m[38;5;249me[0m[38;5;249me[0m[38;5;249m.[0m[38;5;249mD[0m[38;5;249me[0m[38;5;249mc[0m[38;5;249mo[0m[38;5;249mr[0m[38;5;249ma[0m[38;5;249mt[0m[38;5;249mo[0m[38;5;249mr[0m[38;5;249m][0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m[[0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m][0m[38;5;249m,[0m[38;5;249m [0m[38;5;249ms[0m[38;5;249mi[0m[38;5;249md[0m[38;5;249me[0m[38;5;249mE[0m[38;5;249mf[0m[38;5;249mf[0m[38;5;249me[0m[38;5;249mc[0m[38;5;249mt[0m[38;5;249m([0m[38;5;249m_[0m[38;5;249m0[0m[38;5;249m)[0m[38;5;249m][0m[38;5;249m;[0m
+@kyneta/cast:build:  [38;5;240m  │[0m                                                                           ────────┬───────  
+@kyneta/cast:build:  [38;5;240m  │[0m                                                                                   ╰───────── 
+@kyneta/cast:build: [38;5;246m───╯[0m
+@kyneta/cast:build: 
+@kyneta/cast:build: ../../node_modules/.pnpm/rollup@4.59.0/node_modules/rollup/dist/rollup.d.ts (2:92) [33m[IMPORT_IS_UNDEFINED] [0mImport `Decorator` will always be undefined because there is no matching export in '../../node_modules/.pnpm/@types+estree@1.0.8/node_modules/@types/estree/index.d.ts'
+@kyneta/cast:build:    [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m ../../node_modules/.pnpm/rollup@4.59.0/node_modules/rollup/dist/rollup.d.ts:2:93 [38;5;246m][0m
+@kyneta/cast:build:    [38;5;246m│[0m
+@kyneta/cast:build:  [38;5;246m2 │[0m [38;5;249mv[0m[38;5;249ma[0m[38;5;249mr[0m[38;5;249m [0m[38;5;249m_[0m[38;5;249m0[0m[38;5;249m [0m[38;5;249m=[0m[38;5;249m [0m[38;5;249m[[0m[38;5;249m9[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m([0m[38;5;249m)[0m[38;5;249m [0m[38;5;249m=[0m[38;5;249m>[0m[38;5;249m [0m[38;5;249m[[0m[38;5;249me[0m[38;5;249ms[0m[38;5;249mt[0m[38;5;249mr[0m[38;5;249me[0m[38;5;249me[0m[38;5;249m.[0m[38;5;249mE[0m[38;5;249mx[0m[38;5;249mp[0m[38;5;249mr[0m[38;5;249me[0m[38;5;249ms[0m[38;5;249ms[0m[38;5;249mi[0m[38;5;249mo[0m[38;5;249mn[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249me[0m[38;5;249ms[0m[38;5;249mt[0m[38;5;249mr[0m[38;5;249me[0m[38;5;249me[0m[38;5;249m.[0m[38;5;249mB[0m[38;5;249ma[0m[38;5;249ms[0m[38;5;249me[0m[38;5;249mN[0m[38;5;249mo[0m[38;5;249md[0m[38;5;249me[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249me[0m[38;5;249ms[0m[38;5;249mt[0m[38;5;249mr[0m[38;5;249me[0m[38;5;249me[0m[38;5;249m.[0m[38;5;249mD[0m[38;5;249me[0m[38;5;249mc[0m[38;5;249mo[0m[38;5;249mr[0m[38;5;249ma[0m[38;5;249mt[0m[38;5;249mo[0m[38;5;249mr[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249me[0m[38;5;249ms[0m[38;5;249mt[0m[38;5;249mr[0m[38;5;249me[0m[38;5;249me[0m[38;5;249m.[0m[38;5;249mD[0m[38;5;249me[0m[38;5;249mc[0m[38;5;249mo[0m[38;5;249mr[0m[38;5;249ma[0m[38;5;249mt[0m[38;5;249mo[0m[38;5;249mr[0m[38;5;249m,[0m[38;5;249m [0mestree.Decorator[38;5;249m][0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m[[0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249m"[0m[38;5;249m][0m[38;5;249m,[0m[38;5;249m [0m[38;5;249ms[0m[38;5;249mi[0m[38;5;249md[0m[38;5;249me[0m[38;5;249mE[0m[38;5;249mf[0m[38;5;249mf[0m[38;5;249me[0m[38;5;249mc[0m[38;5;249mt[0m[38;5;249m([0m[38;5;249m_[0m[38;5;249m0[0m[38;5;249m)[0m[38;5;249m][0m[38;5;249m;[0m
+@kyneta/transport:verify: cache hit, replaying logs 632dca891b6a8bb1
+@kyneta/cast:build:  [38;5;240m  │[0m                                                                                             ────────┬───────  
+@kyneta/cast:build:  [38;5;240m  │[0m                                                                                                     ╰───────── 
+@kyneta/cast:build: [38;5;246m───╯[0m
+@kyneta/cast:build: 
+@kyneta/cast:build: [32m✔[39m Build complete in [32m3026ms[39m
+@kyneta/transport:verify: 
+@kyneta/transport:verify: 
+@kyneta/transport:verify: > @kyneta/transport@1.7.0 verify /Users/duane/halecraft/kyneta/packages/transport
+@kyneta/transport:verify: > verify
+@kyneta/transport:verify: 
+@kyneta/transport:verify: [36m→[0m verifying [1mformat[0m
+@kyneta/transport:verify: [36m→[0m verifying [1mtypes[0m
+@kyneta/transport:verify: [36m→[0m verifying [1mlogic[0m
+@kyneta/transport:verify: [32m✓[0m [1mformat[0m verified [2m(passed 24 files, [2m189ms[0m)[0m
+@kyneta/transport:verify: [32m✓[0m [1mtypes[0m verified [2m(passed, [2m207ms[0m)[0m
+@kyneta/transport:verify: [32m✓[0m [1mlogic[0m verified [2m(passed 57/57 tests, [2m657ms[0m)[0m
+@kyneta/transport:verify: [32m
+@kyneta/transport:verify: == verification: All correct ==[0m
+@kyneta/bridge-transport:verify: cache hit, replaying logs 0d6178a2174a6999
+@kyneta/bridge-transport:verify: 
+@kyneta/bridge-transport:verify: 
+@kyneta/bridge-transport:verify: > @kyneta/bridge-transport@1.7.0 verify /Users/duane/halecraft/kyneta/packages/exchange/transports/bridge
+@kyneta/bridge-transport:verify: > verify
+@kyneta/bridge-transport:verify: 
+@kyneta/bridge-transport:verify: [36m→[0m verifying [1mformat[0m
+@kyneta/bridge-transport:verify: [36m→[0m verifying [1mtypes[0m
+@kyneta/bridge-transport:verify: [36m→[0m verifying [1mlogic[0m
+@kyneta/bridge-transport:verify: [32m✓[0m [1mformat[0m verified [2m(passed 8 files, [2m162ms[0m)[0m
+@kyneta/bridge-transport:verify: [32m✓[0m [1mtypes[0m verified [2m(passed, [2m174ms[0m)[0m
+@kyneta/bridge-transport:verify: [32m✓[0m [1mlogic[0m verified [2m(passed 4/4 tests, [2m1143ms[0m)[0m
+@kyneta/bridge-transport:verify: [32m
+@kyneta/bridge-transport:verify: == verification: All correct ==[0m
+@kyneta/exchange:build: cache hit, replaying logs d47af0db4b806874
+@kyneta/exchange:build: 
+@kyneta/exchange:build: 
+@kyneta/exchange:build: > @kyneta/exchange@1.7.0 build /Users/duane/halecraft/kyneta/packages/exchange
+@kyneta/exchange:build: > tsdown
+@kyneta/exchange:build: 
+@kyneta/exchange:build: [34mℹ[39m [34mtsdown v0.22.0[39m powered by [38;2;255;126;23mrolldown v1.0.1[39m
+@kyneta/exchange:build: [34mℹ[39m config file: [4m/Users/duane/halecraft/kyneta/packages/exchange/tsdown.config.ts[24m 
+@kyneta/exchange:build: [34mℹ[39m entry: [34msrc/index.ts, src/testing/index.ts[39m
+@kyneta/exchange:build: [34mℹ[39m tsconfig: [34mtsconfig.json[39m
+@kyneta/exchange:build: [34mℹ[39m Build start
+@kyneta/exchange:build: [34mℹ[39m Cleaning 11 files
+@kyneta/exchange:build: [34mℹ[39m [2mdist/[22m[1mindex.js[22m                 [2m122.85 kB[22m [2m│ gzip: 30.52 kB[22m
+@kyneta/exchange:build: [34mℹ[39m [2mdist/[22m[1mtesting/index.js[22m         [2m 12.76 kB[22m [2m│ gzip:  2.75 kB[22m
+@kyneta/exchange:build: [34mℹ[39m [2mdist/[22mindex.js.map             [2m309.67 kB[22m [2m│ gzip: 73.02 kB[22m
+@kyneta/exchange:build: [34mℹ[39m [2mdist/[22mtesting/index.js.map     [2m 32.34 kB[22m [2m│ gzip:  6.89 kB[22m
+@kyneta/exchange:build: [34mℹ[39m [2mdist/[22mindex.d.ts.map           [2m 14.65 kB[22m [2m│ gzip:  4.26 kB[22m
+@kyneta/exchange:build: [34mℹ[39m [2mdist/[22mstore-BhtBBpJB.d.ts.map  [2m  0.95 kB[22m [2m│ gzip:  0.42 kB[22m
+@kyneta/exchange:build: [34mℹ[39m [2mdist/[22mtesting/index.d.ts.map   [2m  0.88 kB[22m [2m│ gzip:  0.40 kB[22m
+@kyneta/exchange:build: [34mℹ[39m [2mdist/[22m[32m[1mindex.d.ts[22m[39m               [2m 63.77 kB[22m [2m│ gzip: 18.61 kB[22m
+@kyneta/exchange:build: [34mℹ[39m [2mdist/[22m[32m[1mtesting/index.d.ts[22m[39m       [2m  2.53 kB[22m [2m│ gzip:  1.07 kB[22m
+@kyneta/exchange:build: [34mℹ[39m [2mdist/[22m[32mstore-BhtBBpJB.d.ts[39m      [2m  5.84 kB[22m [2m│ gzip:  2.21 kB[22m
+@kyneta/exchange:build: [34mℹ[39m 10 files, total: 566.23 kB
+@kyneta/exchange:build: [32m✔[39m Build complete in [32m562ms[39m
+@kyneta/cast:verify: cache hit, replaying logs 94321ba09bb02ae3
+@kyneta/cast:verify: 
+@kyneta/cast:verify: 
+@kyneta/cast:verify: > @kyneta/cast@1.7.0 verify /Users/duane/halecraft/kyneta/experimental/cast
+@kyneta/cast:verify: > verify
+@kyneta/cast:verify: 
+@kyneta/cast:verify: [36m→[0m verifying [1mformat[0m
+@kyneta/cast:verify: [36m→[0m verifying [1mtypes[0m
+@kyneta/cast:verify: [36m→[0m verifying [1mlogic[0m
+@kyneta/cast:verify: [32m✓[0m [1mformat[0m verified [2m(passed 64 files, 5 warnings, [2m184ms[0m)[0m
+@kyneta/cast:verify: [32m✓[0m [1mtypes[0m verified [2m(passed, [2m474ms[0m)[0m
+@kyneta/cast:verify: [32m✓[0m [1mlogic[0m verified [2m(passed 634/634 tests, [2m7871ms[0m)[0m
+@kyneta/cast:verify: [32m
+@kyneta/cast:verify: == verification: All correct ==[0m
+@kyneta/react:build: cache hit, replaying logs c97014896f951f6e
+@kyneta/react:build: 
+@kyneta/react:build: 
+@kyneta/react:build: > @kyneta/react@1.7.0 build /Users/duane/halecraft/kyneta/packages/react
+@kyneta/react:build: > tsdown
+@kyneta/react:build: 
+@kyneta/react:build: [34mℹ[39m [34mtsdown v0.22.0[39m powered by [38;2;255;126;23mrolldown v1.0.1[39m
+@kyneta/react:build: [34mℹ[39m config file: [4m/Users/duane/halecraft/kyneta/packages/react/tsdown.config.ts[24m 
+@kyneta/react:build: [34mℹ[39m entry: [34msrc/index.ts[39m
+@kyneta/react:build: [34mℹ[39m tsconfig: [34mtsconfig.json[39m
+@kyneta/react:build: [34mℹ[39m Build start
+@kyneta/react:build: [34mℹ[39m Cleaning 4 files
+@kyneta/react:build: [34mℹ[39m [2mdist/[22m[1mindex.js[22m        [2m16.79 kB[22m [2m│ gzip:  5.79 kB[22m
+@kyneta/react:build: [34mℹ[39m [2mdist/[22mindex.js.map    [2m37.60 kB[22m [2m│ gzip: 10.83 kB[22m
+@kyneta/react:build: [34mℹ[39m [2mdist/[22mindex.d.ts.map  [2m 2.03 kB[22m [2m│ gzip:  0.80 kB[22m
+@kyneta/react:build: [34mℹ[39m [2mdist/[22m[32m[1mindex.d.ts[22m[39m      [2m15.40 kB[22m [2m│ gzip:  5.54 kB[22m
+@kyneta/react:build: [34mℹ[39m 4 files, total: 71.82 kB
+@kyneta/react:build: [32m✔[39m Build complete in [32m1208ms[39m
+@kyneta/leveldb-store:build: cache hit, replaying logs 72c9452eb6d93219
+@kyneta/leveldb-store:build: 
+@kyneta/leveldb-store:build: 
+@kyneta/leveldb-store:build: > @kyneta/leveldb-store@1.7.0 build /Users/duane/halecraft/kyneta/packages/exchange/stores/leveldb
+@kyneta/leveldb-store:build: > tsdown
+@kyneta/leveldb-store:build: 
+@kyneta/leveldb-store:build: [34mℹ[39m [34mtsdown v0.22.0[39m powered by [38;2;255;126;23mrolldown v1.0.1[39m
+@kyneta/leveldb-store:build: [34mℹ[39m config file: [4m/Users/duane/halecraft/kyneta/packages/exchange/stores/leveldb/tsdown.config.ts[24m 
+@kyneta/leveldb-store:build: [34mℹ[39m entry: [34msrc/index.ts[39m
+@kyneta/leveldb-store:build: [34mℹ[39m tsconfig: [34mtsconfig.json[39m
+@kyneta/leveldb-store:build: [34mℹ[39m Build start
+@kyneta/leveldb-store:build: [34mℹ[39m Cleaning 4 files
+@kyneta/leveldb-store:build: [34mℹ[39m [2mdist/[22m[1mindex.js[22m        [2m 5.74 kB[22m [2m│ gzip: 1.95 kB[22m
+@kyneta/leveldb-store:build: [34mℹ[39m [2mdist/[22mindex.js.map    [2m14.20 kB[22m [2m│ gzip: 4.34 kB[22m
+@kyneta/leveldb-store:build: [34mℹ[39m [2mdist/[22mindex.d.ts.map  [2m 0.63 kB[22m [2m│ gzip: 0.32 kB[22m
+@kyneta/leveldb-store:build: [34mℹ[39m [2mdist/[22m[32m[1mindex.d.ts[22m[39m      [2m 1.29 kB[22m [2m│ gzip: 0.59 kB[22m
+@kyneta/leveldb-store:build: [34mℹ[39m 4 files, total: 21.86 kB
+@kyneta/leveldb-store:build: [32m✔[39m Build complete in [32m1283ms[39m
+@kyneta/unix-socket-transport:build: cache hit, replaying logs 41c3357d06e6e7db
+@kyneta/unix-socket-transport:build: 
+@kyneta/unix-socket-transport:build: 
+@kyneta/unix-socket-transport:build: > @kyneta/unix-socket-transport@1.7.0 build /Users/duane/halecraft/kyneta/packages/exchange/transports/unix-socket
+@kyneta/unix-socket-transport:build: > tsdown
+@kyneta/unix-socket-transport:build: 
+@kyneta/unix-socket-transport:build: [34mℹ[39m [34mtsdown v0.22.0[39m powered by [38;2;255;126;23mrolldown v1.0.1[39m
+@kyneta/unix-socket-transport:build: [34mℹ[39m config file: [4m/Users/duane/halecraft/kyneta/packages/exchange/transports/unix-socket/tsdown.config.ts[24m 
+@kyneta/unix-socket-transport:build: [34mℹ[39m entry: [34msrc/index.ts[39m
+@kyneta/unix-socket-transport:build: [34mℹ[39m tsconfig: [34mtsconfig.json[39m
+@kyneta/unix-socket-transport:build: [34mℹ[39m Build start
+@kyneta/unix-socket-transport:build: [34mℹ[39m Cleaning 4 files
+@kyneta/unix-socket-transport:build: [34mℹ[39m [2mdist/[22m[1mindex.js[22m        [2m 27.64 kB[22m [2m│ gzip:  7.44 kB[22m
+@kyneta/unix-socket-transport:build: [34mℹ[39m [2mdist/[22mindex.js.map    [2m 74.07 kB[22m [2m│ gzip: 17.05 kB[22m
+@kyneta/unix-socket-transport:build: [34mℹ[39m [2mdist/[22mindex.d.ts.map  [2m 62.88 kB[22m [2m│ gzip: 18.92 kB[22m
+@kyneta/unix-socket-transport:build: [34mℹ[39m [2mdist/[22m[32m[1mindex.d.ts[22m[39m      [2m163.67 kB[22m [2m│ gzip: 48.19 kB[22m
+@kyneta/unix-socket-transport:build: [34mℹ[39m 4 files, total: 328.27 kB
+@kyneta/unix-socket-transport:build: [33m[INEFFECTIVE_DYNAMIC_IMPORT] [0msrc/types.ts is dynamically imported by src/connect.ts, src/listen.ts but also statically imported by src/index.ts, dynamic import will not move module into another chunk.
+@kyneta/unix-socket-transport:build: 
+@kyneta/unix-socket-transport:build: [32m✔[39m Build complete in [32m1933ms[39m
+@kyneta/websocket-transport:build: cache hit, replaying logs b9f5ea5ac086308b
+@kyneta/websocket-transport:build: 
+@kyneta/websocket-transport:build: 
+@kyneta/websocket-transport:build: > @kyneta/websocket-transport@1.7.0 build /Users/duane/halecraft/kyneta/packages/exchange/transports/websocket
+@kyneta/websocket-transport:build: > tsdown
+@kyneta/websocket-transport:build: 
+@kyneta/websocket-transport:build: [34mℹ[39m [34mtsdown v0.22.0[39m powered by [38;2;255;126;23mrolldown v1.0.1[39m
+@kyneta/websocket-transport:build: [34mℹ[39m config file: [4m/Users/duane/halecraft/kyneta/packages/exchange/transports/websocket/tsdown.config.ts[24m 
+@kyneta/websocket-transport:build: [34mℹ[39m entry: [34msrc/browser.ts, src/server.ts, src/bun.ts[39m
+@kyneta/websocket-transport:build: [34mℹ[39m tsconfig: [34mtsconfig.json[39m
+@kyneta/websocket-transport:build: [34mℹ[39m Build start
+@kyneta/websocket-transport:build: [34mℹ[39m Cleaning 17 files
+@kyneta/websocket-transport:build: [34mℹ[39m [2mdist/[22m[1mserver.js[22m                     [2m 5.47 kB[22m [2m│ gzip:  2.04 kB[22m
+@kyneta/websocket-transport:build: [34mℹ[39m [2mdist/[22m[1mbun.js[22m                        [2m 2.80 kB[22m [2m│ gzip:  0.99 kB[22m
+@kyneta/websocket-transport:build: [34mℹ[39m [2mdist/[22m[1mbrowser.js[22m                    [2m 0.30 kB[22m [2m│ gzip:  0.18 kB[22m
+@kyneta/websocket-transport:build: [34mℹ[39m [2mdist/[22mconnection-CZ4GeGgy.js.map    [2m57.62 kB[22m [2m│ gzip: 13.60 kB[22m
+@kyneta/websocket-transport:build: [34mℹ[39m [2mdist/[22mconnection-CZ4GeGgy.js        [2m19.12 kB[22m [2m│ gzip:  5.36 kB[22m
+@kyneta/websocket-transport:build: [34mℹ[39m [2mdist/[22mserver.js.map                 [2m12.37 kB[22m [2m│ gzip:  3.91 kB[22m
+@kyneta/websocket-transport:build: [34mℹ[39m [2mdist/[22mbun.js.map                    [2m 6.15 kB[22m [2m│ gzip:  1.89 kB[22m
+@kyneta/websocket-transport:build: [34mℹ[39m [2mdist/[22mtypes-c1S_xIRG.d.ts.map       [2m 1.88 kB[22m [2m│ gzip:  0.71 kB[22m
+@kyneta/websocket-transport:build: [34mℹ[39m [2mdist/[22mconnection-tP7pd_72.d.ts.map  [2m 1.52 kB[22m [2m│ gzip:  0.70 kB[22m
+@kyneta/websocket-transport:build: [34mℹ[39m [2mdist/[22mserver.d.ts.map               [2m 0.79 kB[22m [2m│ gzip:  0.41 kB[22m
+@kyneta/websocket-transport:build: [34mℹ[39m [2mdist/[22mbrowser.d.ts.map              [2m 0.58 kB[22m [2m│ gzip:  0.28 kB[22m
+@kyneta/websocket-transport:build: [34mℹ[39m [2mdist/[22mbun.d.ts.map                  [2m 0.56 kB[22m [2m│ gzip:  0.30 kB[22m
+@kyneta/websocket-transport:build: [34mℹ[39m [2mdist/[22m[32m[1mserver.d.ts[22m[39m                   [2m 5.63 kB[22m [2m│ gzip:  2.08 kB[22m
+@kyneta/websocket-transport:build: [34mℹ[39m [2mdist/[22m[32m[1mbun.d.ts[22m[39m                      [2m 3.07 kB[22m [2m│ gzip:  1.08 kB[22m
+@kyneta/websocket-transport:build: [34mℹ[39m [2mdist/[22m[32m[1mbrowser.d.ts[22m[39m                  [2m 2.44 kB[22m [2m│ gzip:  0.92 kB[22m
+@kyneta/websocket-transport:build: [34mℹ[39m [2mdist/[22m[32mtypes-c1S_xIRG.d.ts[39m           [2m 7.51 kB[22m [2m│ gzip:  2.48 kB[22m
+@kyneta/websocket-transport:build: [34mℹ[39m [2mdist/[22m[32mconnection-tP7pd_72.d.ts[39m      [2m 7.13 kB[22m [2m│ gzip:  2.59 kB[22m
+@kyneta/websocket-transport:build: [34mℹ[39m 17 files, total: 134.94 kB
+@kyneta/websocket-transport:build: [32m✔[39m Build complete in [32m1969ms[39m
+@kyneta/sse-transport:build: cache hit, replaying logs b68067bd52fae2eb
+@kyneta/sse-transport:build: 
+@kyneta/sse-transport:build: 
+@kyneta/sse-transport:build: > @kyneta/sse-transport@1.7.0 build /Users/duane/halecraft/kyneta/packages/exchange/transports/sse
+@kyneta/sse-transport:build: > tsdown
+@kyneta/sse-transport:build: 
+@kyneta/sse-transport:build: [34mℹ[39m [34mtsdown v0.22.0[39m powered by [38;2;255;126;23mrolldown v1.0.1[39m
+@kyneta/sse-transport:build: [34mℹ[39m config file: [4m/Users/duane/halecraft/kyneta/packages/exchange/transports/sse/tsdown.config.ts[24m 
+@kyneta/sse-transport:build: [34mℹ[39m entry: [34msrc/client.ts, src/server.ts, src/express.ts[39m
+@kyneta/sse-transport:build: [34mℹ[39m tsconfig: [34mtsconfig.json[39m
+@kyneta/sse-transport:build: [34mℹ[39m Build start
+@kyneta/sse-transport:build: [34mℹ[39m Cleaning 16 files
+@kyneta/sse-transport:build: [34mℹ[39m [2mdist/[22m[1mexpress.js[22m                          [2m934.85 kB[22m [2m│ gzip: 284.59 kB[22m
+@kyneta/sse-transport:build: [34mℹ[39m [2mdist/[22m[1mclient.js[22m                           [2m 13.21 kB[22m [2m│ gzip:   3.98 kB[22m
+@kyneta/sse-transport:build: [34mℹ[39m [2mdist/[22m[1mserver.js[22m                           [2m  0.20 kB[22m [2m│ gzip:   0.14 kB[22m
+@kyneta/sse-transport:build: [34mℹ[39m [2mdist/[22mexpress.js.map                      [2m832.27 kB[22m [2m│ gzip: 191.26 kB[22m
+@kyneta/sse-transport:build: [34mℹ[39m [2mdist/[22mclient.js.map                       [2m 34.08 kB[22m [2m│ gzip:   8.88 kB[22m
+@kyneta/sse-transport:build: [34mℹ[39m [2mdist/[22mserver-transport-CwEVpOpu.js.map    [2m 17.86 kB[22m [2m│ gzip:   5.30 kB[22m
+@kyneta/sse-transport:build: [34mℹ[39m [2mdist/[22mserver-transport-CwEVpOpu.js        [2m  8.45 kB[22m [2m│ gzip:   3.00 kB[22m
+@kyneta/sse-transport:build: [34mℹ[39m [2mdist/[22mserver-transport-PIK5bPSw.d.ts.map  [2m  1.47 kB[22m [2m│ gzip:   0.63 kB[22m
+@kyneta/sse-transport:build: [34mℹ[39m [2mdist/[22mclient.d.ts.map                     [2m  1.39 kB[22m [2m│ gzip:   0.57 kB[22m
+@kyneta/sse-transport:build: [34mℹ[39m [2mdist/[22mtypes-Bg1SdZ2w.d.ts.map             [2m  0.69 kB[22m [2m│ gzip:   0.36 kB[22m
+@kyneta/sse-transport:build: [34mℹ[39m [2mdist/[22mexpress.d.ts.map                    [2m  0.40 kB[22m [2m│ gzip:   0.25 kB[22m
+@kyneta/sse-transport:build: [34mℹ[39m [2mdist/[22m[32m[1mclient.d.ts[22m[39m                         [2m  5.09 kB[22m [2m│ gzip:   1.71 kB[22m
+@kyneta/sse-transport:build: [34mℹ[39m [2mdist/[22m[32m[1mexpress.d.ts[22m[39m                        [2m  2.81 kB[22m [2m│ gzip:   1.09 kB[22m
+@kyneta/sse-transport:build: [34mℹ[39m [2mdist/[22m[32m[1mserver.d.ts[22m[39m                         [2m  0.50 kB[22m [2m│ gzip:   0.23 kB[22m
+@kyneta/sse-transport:build: [34mℹ[39m [2mdist/[22m[32mserver-transport-PIK5bPSw.d.ts[39m      [2m  7.49 kB[22m [2m│ gzip:   2.66 kB[22m
+@kyneta/sse-transport:build: [34mℹ[39m [2mdist/[22m[32mtypes-Bg1SdZ2w.d.ts[39m                 [2m  2.40 kB[22m [2m│ gzip:   0.93 kB[22m
+@kyneta/sse-transport:build: [34mℹ[39m 16 files, total: 1.86 MB
+@kyneta/sse-transport:build: [32m✔[39m Build complete in [32m2004ms[39m
+@kyneta/exchange:verify: cache hit, replaying logs da25039597b2ffb5
+@kyneta/exchange:verify: 
+@kyneta/exchange:verify: 
+@kyneta/exchange:verify: > @kyneta/exchange@1.7.0 verify /Users/duane/halecraft/kyneta/packages/exchange
+@kyneta/exchange:verify: > verify
+@kyneta/exchange:verify: 
+@kyneta/exchange:verify: [36m→[0m verifying [1mformat[0m
+@kyneta/exchange:verify: [36m→[0m verifying [1mtypes[0m
+@kyneta/exchange:verify: [36m→[0m verifying [1mlogic[0m
+@kyneta/exchange:verify: [32m✓[0m [1mformat[0m verified [2m(passed 198 files, 18 warnings, [2m431ms[0m)[0m
+@kyneta/exchange:verify: [32m✓[0m [1mtypes[0m verified [2m(passed, [2m440ms[0m)[0m
+@kyneta/exchange:verify: [32m✓[0m [1mlogic[0m verified [2m(passed 482/482 tests, [2m7610ms[0m)[0m
+@kyneta/exchange:verify: [32m
+@kyneta/exchange:verify: == verification: All correct ==[0m
+@kyneta/sql-store-core:build: cache hit, replaying logs d106321a79cd32db
+@kyneta/sql-store-core:build: 
+@kyneta/sql-store-core:build: 
+@kyneta/sql-store-core:build: > @kyneta/sql-store-core@1.7.0 build /Users/duane/halecraft/kyneta/packages/exchange/stores/sql-core
+@kyneta/sql-store-core:build: > tsdown
+@kyneta/sql-store-core:build: 
+@kyneta/sql-store-core:build: [34mℹ[39m [34mtsdown v0.22.0[39m powered by [38;2;255;126;23mrolldown v1.0.1[39m
+@kyneta/sql-store-core:build: [34mℹ[39m config file: [4m/Users/duane/halecraft/kyneta/packages/exchange/stores/sql-core/tsdown.config.ts[24m 
+@kyneta/sql-store-core:build: [34mℹ[39m entry: [34msrc/index.ts[39m
+@kyneta/sql-store-core:build: [34mℹ[39m tsconfig: [34mtsconfig.json[39m
+@kyneta/sql-store-core:build: [34mℹ[39m Build start
+@kyneta/sql-store-core:build: [34mℹ[39m Cleaning 4 files
+@kyneta/sql-store-core:build: [34mℹ[39m [2mdist/[22m[1mindex.js[22m        [2m3.83 kB[22m [2m│ gzip: 1.66 kB[22m
+@kyneta/sql-store-core:build: [34mℹ[39m [2mdist/[22mindex.js.map    [2m9.88 kB[22m [2m│ gzip: 3.48 kB[22m
+@kyneta/sql-store-core:build: [34mℹ[39m [2mdist/[22mindex.d.ts.map  [2m1.10 kB[22m [2m│ gzip: 0.44 kB[22m
+@kyneta/sql-store-core:build: [34mℹ[39m [2mdist/[22m[32m[1mindex.d.ts[22m[39m      [2m2.92 kB[22m [2m│ gzip: 1.32 kB[22m
+@kyneta/sql-store-core:build: [34mℹ[39m 4 files, total: 17.73 kB
+@kyneta/sql-store-core:build: [32m✔[39m Build complete in [32m1081ms[39m
+@kyneta/webrtc-transport:build: cache hit, replaying logs c631d0e954517c7d
+@kyneta/webrtc-transport:build: 
+@kyneta/webrtc-transport:build: 
+@kyneta/webrtc-transport:build: > @kyneta/webrtc-transport@1.7.0 build /Users/duane/halecraft/kyneta/packages/exchange/transports/webrtc
+@kyneta/webrtc-transport:build: > tsdown
+@kyneta/webrtc-transport:build: 
+@kyneta/webrtc-transport:build: [34mℹ[39m [34mtsdown v0.22.0[39m powered by [38;2;255;126;23mrolldown v1.0.1[39m
+@kyneta/webrtc-transport:build: [34mℹ[39m config file: [4m/Users/duane/halecraft/kyneta/packages/exchange/transports/webrtc/tsdown.config.ts[24m 
+@kyneta/webrtc-transport:build: [34mℹ[39m entry: [34msrc/index.ts[39m
+@kyneta/webrtc-transport:build: [34mℹ[39m tsconfig: [34mtsconfig.json[39m
+@kyneta/webrtc-transport:build: [34mℹ[39m Build start
+@kyneta/webrtc-transport:build: [34mℹ[39m Cleaning 4 files
+@kyneta/webrtc-transport:build: [34mℹ[39m [2mdist/[22m[1mindex.js[22m        [2m 8.57 kB[22m [2m│ gzip: 2.73 kB[22m
+@kyneta/webrtc-transport:build: [34mℹ[39m [2mdist/[22mindex.js.map    [2m17.53 kB[22m [2m│ gzip: 4.94 kB[22m
+@kyneta/webrtc-transport:build: [34mℹ[39m [2mdist/[22mindex.d.ts.map  [2m 1.04 kB[22m [2m│ gzip: 0.50 kB[22m
+@kyneta/webrtc-transport:build: [34mℹ[39m [2mdist/[22m[32m[1mindex.d.ts[22m[39m      [2m 8.36 kB[22m [2m│ gzip: 2.92 kB[22m
+@kyneta/webrtc-transport:build: [34mℹ[39m 4 files, total: 35.51 kB
+@kyneta/webrtc-transport:build: [32m✔[39m Build complete in [32m1277ms[39m
+@kyneta/indexeddb-store:build: cache hit, replaying logs 6e3a622efb63304c
+@kyneta/indexeddb-store:build: 
+@kyneta/indexeddb-store:build: 
+@kyneta/indexeddb-store:build: > @kyneta/indexeddb-store@1.7.0 build /Users/duane/halecraft/kyneta/packages/exchange/stores/indexeddb
+@kyneta/indexeddb-store:build: > tsdown
+@kyneta/indexeddb-store:build: 
+@kyneta/indexeddb-store:build: [34mℹ[39m [34mtsdown v0.22.0[39m powered by [38;2;255;126;23mrolldown v1.0.1[39m
+@kyneta/indexeddb-store:build: [34mℹ[39m config file: [4m/Users/duane/halecraft/kyneta/packages/exchange/stores/indexeddb/tsdown.config.ts[24m 
+@kyneta/indexeddb-store:build: [34mℹ[39m entry: [34msrc/index.ts[39m
+@kyneta/indexeddb-store:build: [34mℹ[39m tsconfig: [34mtsconfig.json[39m
+@kyneta/indexeddb-store:build: [34mℹ[39m Build start
+@kyneta/indexeddb-store:build: [34mℹ[39m Cleaning 4 files
+@kyneta/indexeddb-store:build: [34mℹ[39m [2mdist/[22m[1mindex.js[22m        [2m 4.92 kB[22m [2m│ gzip: 1.58 kB[22m
+@kyneta/indexeddb-store:build: [34mℹ[39m [2mdist/[22mindex.js.map    [2m11.70 kB[22m [2m│ gzip: 3.36 kB[22m
+@kyneta/indexeddb-store:build: [34mℹ[39m [2mdist/[22mindex.d.ts.map  [2m 0.63 kB[22m [2m│ gzip: 0.29 kB[22m
+@kyneta/indexeddb-store:build: [34mℹ[39m [2mdist/[22m[32m[1mindex.d.ts[22m[39m      [2m 1.61 kB[22m [2m│ gzip: 0.72 kB[22m
+@kyneta/indexeddb-store:build: [34mℹ[39m 4 files, total: 18.85 kB
+@kyneta/indexeddb-store:build: [32m✔[39m Build complete in [32m933ms[39m
+@kyneta/index:build: cache hit, replaying logs d0bfc68e2fea06a7
+@kyneta/index:build: 
+@kyneta/index:build: 
+@kyneta/index:build: > @kyneta/index@1.7.0 build /Users/duane/halecraft/kyneta/packages/index
+@kyneta/index:build: > tsdown
+@kyneta/index:build: 
+@kyneta/index:build: [34mℹ[39m [34mtsdown v0.22.0[39m powered by [38;2;255;126;23mrolldown v1.0.1[39m
+@kyneta/index:build: [34mℹ[39m config file: [4m/Users/duane/halecraft/kyneta/packages/index/tsdown.config.ts[24m 
+@kyneta/index:build: [34mℹ[39m entry: [34msrc/index.ts[39m
+@kyneta/index:build: [34mℹ[39m tsconfig: [34mtsconfig.json[39m
+@kyneta/index:build: [34mℹ[39m Build start
+@kyneta/index:build: [34mℹ[39m Cleaning 4 files
+@kyneta/index:build: [34mℹ[39m [2mdist/[22m[1mindex.js[22m        [2m27.98 kB[22m [2m│ gzip:  5.95 kB[22m
+@kyneta/index:build: [34mℹ[39m [2mdist/[22mindex.js.map    [2m80.20 kB[22m [2m│ gzip: 17.78 kB[22m
+@kyneta/index:build: [34mℹ[39m [2mdist/[22mindex.d.ts.map  [2m 3.93 kB[22m [2m│ gzip:  1.27 kB[22m
+@kyneta/index:build: [34mℹ[39m [2mdist/[22m[32m[1mindex.d.ts[22m[39m      [2m 8.67 kB[22m [2m│ gzip:  2.85 kB[22m
+@kyneta/index:build: [34mℹ[39m 4 files, total: 120.79 kB
+@kyneta/index:build: [32m✔[39m Build complete in [32m804ms[39m
+@kyneta/react:verify: cache hit, replaying logs 7d8a1081b1f461b8
+@kyneta/react:verify: 
+@kyneta/react:verify: 
+@kyneta/react:verify: > @kyneta/react@1.7.0 verify /Users/duane/halecraft/kyneta/packages/react
+@kyneta/react:verify: > verify
+@kyneta/react:verify: 
+@kyneta/react:verify: [36m→[0m verifying [1mformat[0m
+@kyneta/react:verify: [36m→[0m verifying [1mtypes[0m
+@kyneta/react:verify: [36m→[0m verifying [1mlogic[0m
+@kyneta/react:verify: [32m✓[0m [1mformat[0m verified [2m(passed 20 files, [2m136ms[0m)[0m
+@kyneta/react:verify: [32m✓[0m [1mtypes[0m verified [2m(passed, [2m220ms[0m)[0m
+@kyneta/react:verify: [32m✓[0m [1mlogic[0m verified [2m(passed 89/89 tests, [2m2620ms[0m)[0m
+@kyneta/react:verify: [32m
+@kyneta/react:verify: == verification: All correct ==[0m
+@kyneta/leveldb-store:verify: cache hit, replaying logs 4aa8798643907c11
+@kyneta/leveldb-store:verify: 
+@kyneta/leveldb-store:verify: 
+@kyneta/leveldb-store:verify: > @kyneta/leveldb-store@1.7.0 verify /Users/duane/halecraft/kyneta/packages/exchange/stores/leveldb
+@kyneta/leveldb-store:verify: > verify
+@kyneta/leveldb-store:verify: 
+@kyneta/leveldb-store:verify: [36m→[0m verifying [1mformat[0m
+@kyneta/leveldb-store:verify: [36m→[0m verifying [1mtypes[0m
+@kyneta/leveldb-store:verify: [36m→[0m verifying [1mlogic[0m
+@kyneta/leveldb-store:verify: [32m✓[0m [1mformat[0m verified [2m(passed 7 files, 6 warnings, [2m146ms[0m)[0m
+@kyneta/leveldb-store:verify: [32m✓[0m [1mtypes[0m verified [2m(passed, [2m184ms[0m)[0m
+@kyneta/leveldb-store:verify: [32m✓[0m [1mlogic[0m verified [2m(passed 35/35 tests, [2m1422ms[0m)[0m
+@kyneta/leveldb-store:verify: [32m
+@kyneta/leveldb-store:verify: == verification: All correct ==[0m
+@kyneta/unix-socket-transport:verify: cache hit, replaying logs ce1f3bbc46759597
+@kyneta/unix-socket-transport:verify: 
+@kyneta/unix-socket-transport:verify: 
+@kyneta/unix-socket-transport:verify: > @kyneta/unix-socket-transport@1.7.0 verify /Users/duane/halecraft/kyneta/packages/exchange/transports/unix-socket
+@kyneta/unix-socket-transport:verify: > verify
+@kyneta/unix-socket-transport:verify: 
+@kyneta/unix-socket-transport:verify: [36m→[0m verifying [1mformat[0m
+@kyneta/unix-socket-transport:verify: [36m→[0m verifying [1mtypes[0m
+@kyneta/unix-socket-transport:verify: [36m→[0m verifying [1mlogic[0m
+@kyneta/unix-socket-transport:verify: [32m✓[0m [1mformat[0m verified [2m(passed 21 files, 4 warnings, [2m138ms[0m)[0m
+@kyneta/unix-socket-transport:verify: [32m✓[0m [1mtypes[0m verified [2m(passed, [2m176ms[0m)[0m
+@kyneta/unix-socket-transport:verify: [32m✓[0m [1mlogic[0m verified [2m(passed 82/82 tests, [2m1923ms[0m)[0m
+@kyneta/unix-socket-transport:verify: [32m
+@kyneta/unix-socket-transport:verify: == verification: All correct ==[0m
+example-bumper-cars:build: cache hit, replaying logs cdd4b49c4fc72e8e
+example-bumper-cars:build: 
+example-bumper-cars:build: 
+example-bumper-cars:build: > example-bumper-cars@ build /Users/duane/halecraft/kyneta/examples/bumper-cars
+example-bumper-cars:build: > bun src/build.ts
+example-bumper-cars:build: 
+example-bumper-cars:build:    /Users/duane/halecraft/kyneta/examples/bumper-cars/dist/chunk-p9sbqa3g.js (1346.2 KB)
+example-bumper-cars:build:    /Users/duane/halecraft/kyneta/examples/bumper-cars/dist/index.html (0.4 KB)
+example-bumper-cars:build:    /Users/duane/halecraft/kyneta/examples/bumper-cars/dist/chunk-7v48j745.css (4.9 KB)
+example-bumper-cars:build:    ⏭ brotli skipped — SKIP_BROTLI is set
+example-todo:build: cache hit, replaying logs 49062b7090614ede
+example-todo:build: 
+example-todo:build: 
+example-todo:build: > example-todo@ build /Users/duane/halecraft/kyneta/examples/todo
+example-todo:build: > bun src/build.ts
+example-todo:build: 
+example-todo:build: ✅ Client build succeeded:
+example-todo:build:    /Users/duane/halecraft/kyneta/examples/todo/dist/chunk-zjry8kvk.js (492.6 KB)
+example-todo:build:    /Users/duane/halecraft/kyneta/examples/todo/dist/index.html (0.4 KB)
+example-todo:build:    /Users/duane/halecraft/kyneta/examples/todo/dist/chunk-cwaqds0s.css (0.9 KB)
+example-todo:build:    /Users/duane/halecraft/kyneta/examples/todo/dist/loro_wasm_bg-a4b4pkpv.wasm (3151.4 KB)
+example-todo:build:    ⏭ brotli skipped — SKIP_BROTLI is set
+@kyneta/websocket-transport:verify: cache hit, replaying logs c992fd0d44e95434
+@kyneta/websocket-transport:verify: 
+@kyneta/websocket-transport:verify: 
+@kyneta/websocket-transport:verify: > @kyneta/websocket-transport@1.7.0 verify /Users/duane/halecraft/kyneta/packages/exchange/transports/websocket
+@kyneta/websocket-transport:verify: > verify
+@kyneta/websocket-transport:verify: 
+@kyneta/websocket-transport:verify: [36m→[0m verifying [1mformat[0m
+@kyneta/websocket-transport:verify: [36m→[0m verifying [1mtypes[0m
+@kyneta/websocket-transport:verify: [36m→[0m verifying [1mlogic[0m
+@kyneta/websocket-transport:verify: [32m✓[0m [1mformat[0m verified [2m(passed 16 files, [2m173ms[0m)[0m
+@kyneta/websocket-transport:verify: [32m✓[0m [1mtypes[0m verified [2m(passed, [2m180ms[0m)[0m
+@kyneta/websocket-transport:verify: [32m✓[0m [1mlogic[0m verified [2m(passed 56/56 tests, [2m1092ms[0m)[0m
+@kyneta/websocket-transport:verify: [32m
+@kyneta/websocket-transport:verify: == verification: All correct ==[0m
+@kyneta/sse-transport:verify: cache hit, replaying logs 0258b0de66df8600
+@kyneta/sse-transport:verify: 
+@kyneta/sse-transport:verify: 
+@kyneta/sse-transport:verify: > @kyneta/sse-transport@1.7.0 verify /Users/duane/halecraft/kyneta/packages/exchange/transports/sse
+@kyneta/sse-transport:verify: > verify
+@kyneta/sse-transport:verify: 
+@kyneta/sse-transport:verify: [36m→[0m verifying [1mformat[0m
+@kyneta/sse-transport:verify: [36m→[0m verifying [1mtypes[0m
+@kyneta/sse-transport:verify: [36m→[0m verifying [1mlogic[0m
+@kyneta/sse-transport:verify: [32m✓[0m [1mformat[0m verified [2m(passed 17 files, 3 warnings, [2m229ms[0m)[0m
+@kyneta/sse-transport:verify: [32m✓[0m [1mtypes[0m verified [2m(passed, [2m278ms[0m)[0m
+@kyneta/sse-transport:verify: [32m✓[0m [1mlogic[0m verified [2m(passed 47/47 tests, [2m1205ms[0m)[0m
+@kyneta/sse-transport:verify: [32m
+@kyneta/sse-transport:verify: == verification: All correct ==[0m
+@kyneta/sql-store-core:verify: cache hit, replaying logs 7e7b4074f74899a8
+@kyneta/sql-store-core:verify: 
+@kyneta/sql-store-core:verify: 
+@kyneta/sql-store-core:verify: > @kyneta/sql-store-core@1.7.0 verify /Users/duane/halecraft/kyneta/packages/exchange/stores/sql-core
+@kyneta/sql-store-core:verify: > verify
+@kyneta/sql-store-core:verify: 
+@kyneta/sql-store-core:verify: [36m→[0m verifying [1mformat[0m
+@kyneta/sql-store-core:verify: [36m→[0m verifying [1mtypes[0m
+@kyneta/sql-store-core:verify: [36m→[0m verifying [1mlogic[0m
+@kyneta/sql-store-core:verify: [32m✓[0m [1mformat[0m verified [2m(passed 7 files, [2m147ms[0m)[0m
+@kyneta/sql-store-core:verify: [32m✓[0m [1mtypes[0m verified [2m(passed, [2m145ms[0m)[0m
+@kyneta/sql-store-core:verify: [32m✓[0m [1mlogic[0m verified [2m(passed 27/27 tests, [2m1104ms[0m)[0m
+@kyneta/sql-store-core:verify: [32m
+@kyneta/sql-store-core:verify: == verification: All correct ==[0m
+@kyneta/prisma-store:build: cache hit, replaying logs 527668af2a08d285
+@kyneta/prisma-store:build: 
+@kyneta/prisma-store:build: 
+@kyneta/prisma-store:build: > @kyneta/prisma-store@1.7.0 build /Users/duane/halecraft/kyneta/packages/exchange/stores/prisma
+@kyneta/prisma-store:build: > tsdown
+@kyneta/prisma-store:build: 
+@kyneta/prisma-store:build: [34mℹ[39m [34mtsdown v0.22.0[39m powered by [38;2;255;126;23mrolldown v1.0.1[39m
+@kyneta/prisma-store:build: [34mℹ[39m config file: [4m/Users/duane/halecraft/kyneta/packages/exchange/stores/prisma/tsdown.config.ts[24m 
+@kyneta/prisma-store:build: [34mℹ[39m entry: [34msrc/index.ts[39m
+@kyneta/prisma-store:build: [34mℹ[39m tsconfig: [34mtsconfig.json[39m
+@kyneta/prisma-store:build: [34mℹ[39m Build start
+@kyneta/prisma-store:build: [34mℹ[39m Cleaning 4 files
+@kyneta/prisma-store:build: [34mℹ[39m [2mdist/[22m[1mindex.js[22m        [2m 4.33 kB[22m [2m│ gzip: 1.51 kB[22m
+@kyneta/prisma-store:build: [34mℹ[39m [2mdist/[22mindex.js.map    [2m12.54 kB[22m [2m│ gzip: 3.80 kB[22m
+@kyneta/prisma-store:build: [34mℹ[39m [2mdist/[22mindex.d.ts.map  [2m 0.61 kB[22m [2m│ gzip: 0.30 kB[22m
+@kyneta/prisma-store:build: [34mℹ[39m [2mdist/[22m[32m[1mindex.d.ts[22m[39m      [2m 1.26 kB[22m [2m│ gzip: 0.59 kB[22m
+@kyneta/prisma-store:build: [34mℹ[39m 4 files, total: 18.74 kB
+@kyneta/prisma-store:build: [32m✔[39m Build complete in [32m1069ms[39m
+@kyneta/sqlite-store:build: cache hit, replaying logs d9b8647e8e5b5872
+@kyneta/sqlite-store:build: 
+@kyneta/sqlite-store:build: 
+@kyneta/sqlite-store:build: > @kyneta/sqlite-store@1.7.0 build /Users/duane/halecraft/kyneta/packages/exchange/stores/sqlite
+@kyneta/sqlite-store:build: > tsdown
+@kyneta/sqlite-store:build: 
+@kyneta/sqlite-store:build: [34mℹ[39m [34mtsdown v0.22.0[39m powered by [38;2;255;126;23mrolldown v1.0.1[39m
+@kyneta/sqlite-store:build: [34mℹ[39m config file: [4m/Users/duane/halecraft/kyneta/packages/exchange/stores/sqlite/tsdown.config.ts[24m 
+@kyneta/sqlite-store:build: [34mℹ[39m entry: [34msrc/index.ts[39m
+@kyneta/sqlite-store:build: [34mℹ[39m tsconfig: [34mtsconfig.json[39m
+@kyneta/sqlite-store:build: [34mℹ[39m Build start
+@kyneta/sqlite-store:build: [34mℹ[39m Cleaning 4 files
+@kyneta/sqlite-store:build: [34mℹ[39m [2mdist/[22m[1mindex.js[22m        [2m 4.86 kB[22m [2m│ gzip: 1.49 kB[22m
+@kyneta/sqlite-store:build: [34mℹ[39m [2mdist/[22mindex.js.map    [2m13.45 kB[22m [2m│ gzip: 3.85 kB[22m
+@kyneta/sqlite-store:build: [34mℹ[39m [2mdist/[22mindex.d.ts.map  [2m 1.26 kB[22m [2m│ gzip: 0.51 kB[22m
+@kyneta/sqlite-store:build: [34mℹ[39m [2mdist/[22m[32m[1mindex.d.ts[22m[39m      [2m 3.11 kB[22m [2m│ gzip: 1.10 kB[22m
+@kyneta/sqlite-store:build: [34mℹ[39m 4 files, total: 22.69 kB
+@kyneta/sqlite-store:build: [32m✔[39m Build complete in [32m1424ms[39m
+@kyneta/postgres-store:build: cache hit, replaying logs 4c60746d8355249c
+@kyneta/postgres-store:build: 
+@kyneta/postgres-store:build: 
+@kyneta/postgres-store:build: > @kyneta/postgres-store@1.7.0 build /Users/duane/halecraft/kyneta/packages/exchange/stores/postgres
+@kyneta/postgres-store:build: > tsdown
+@kyneta/postgres-store:build: 
+@kyneta/postgres-store:build: [34mℹ[39m [34mtsdown v0.22.0[39m powered by [38;2;255;126;23mrolldown v1.0.1[39m
+@kyneta/postgres-store:build: [34mℹ[39m config file: [4m/Users/duane/halecraft/kyneta/packages/exchange/stores/postgres/tsdown.config.ts[24m 
+@kyneta/postgres-store:build: [34mℹ[39m entry: [34msrc/index.ts[39m
+@kyneta/postgres-store:build: [34mℹ[39m tsconfig: [34mtsconfig.json[39m
+@kyneta/postgres-store:build: [34mℹ[39m Build start
+@kyneta/postgres-store:build: [34mℹ[39m Cleaning 4 files
+@kyneta/postgres-store:build: [34mℹ[39m [2mdist/[22m[1mindex.js[22m        [2m 7.09 kB[22m [2m│ gzip: 2.50 kB[22m
+@kyneta/postgres-store:build: [34mℹ[39m [2mdist/[22mindex.js.map    [2m16.26 kB[22m [2m│ gzip: 5.28 kB[22m
+@kyneta/postgres-store:build: [34mℹ[39m [2mdist/[22mindex.d.ts.map  [2m 0.71 kB[22m [2m│ gzip: 0.34 kB[22m
+@kyneta/postgres-store:build: [34mℹ[39m [2mdist/[22m[32m[1mindex.d.ts[22m[39m      [2m 1.87 kB[22m [2m│ gzip: 0.90 kB[22m
+@kyneta/postgres-store:build: [34mℹ[39m 4 files, total: 25.94 kB
+@kyneta/postgres-store:build: [32m✔[39m Build complete in [32m1154ms[39m
+@kyneta/webrtc-transport:verify: cache hit, replaying logs da2bcc79b43bfb3c
+@kyneta/webrtc-transport:verify: 
+@kyneta/webrtc-transport:verify: 
+@kyneta/webrtc-transport:verify: > @kyneta/webrtc-transport@1.7.0 verify /Users/duane/halecraft/kyneta/packages/exchange/transports/webrtc
+@kyneta/webrtc-transport:verify: > verify
+@kyneta/webrtc-transport:verify: 
+@kyneta/webrtc-transport:verify: [36m→[0m verifying [1mformat[0m
+@kyneta/webrtc-transport:verify: [36m→[0m verifying [1mtypes[0m
+@kyneta/webrtc-transport:verify: [36m→[0m verifying [1mlogic[0m
+@kyneta/webrtc-transport:verify: [32m✓[0m [1mformat[0m verified [2m(passed 11 files, 5 warnings, [2m173ms[0m)[0m
+@kyneta/webrtc-transport:verify: [32m✓[0m [1mtypes[0m verified [2m(passed, [2m171ms[0m)[0m
+@kyneta/webrtc-transport:verify: [32m✓[0m [1mlogic[0m verified [2m(passed 27/27 tests, [2m914ms[0m)[0m
+@kyneta/webrtc-transport:verify: [32m
+@kyneta/webrtc-transport:verify: == verification: All correct ==[0m
+@kyneta/indexeddb-store:verify: cache hit, replaying logs 4cb5466c1202a4f8
+@kyneta/indexeddb-store:verify: 
+@kyneta/indexeddb-store:verify: 
+@kyneta/indexeddb-store:verify: > @kyneta/indexeddb-store@1.7.0 verify /Users/duane/halecraft/kyneta/packages/exchange/stores/indexeddb
+@kyneta/indexeddb-store:verify: > verify
+@kyneta/indexeddb-store:verify: 
+@kyneta/indexeddb-store:verify: [36m→[0m verifying [1mformat[0m
+@kyneta/indexeddb-store:verify: [36m→[0m verifying [1mtypes[0m
+@kyneta/indexeddb-store:verify: [36m→[0m verifying [1mlogic[0m
+@kyneta/indexeddb-store:verify: [32m✓[0m [1mformat[0m verified [2m(passed 8 files, [2m122ms[0m)[0m
+@kyneta/indexeddb-store:verify: [32m✓[0m [1mtypes[0m verified [2m(passed, [2m145ms[0m)[0m
+@kyneta/indexeddb-store:verify: [32m✓[0m [1mlogic[0m verified [2m(passed 24/24 tests, [2m1300ms[0m)[0m
+@kyneta/indexeddb-store:verify: [32m
+@kyneta/indexeddb-store:verify: == verification: All correct ==[0m
+@kyneta/index:verify: cache hit, replaying logs 7cdc33f52058d298
+@kyneta/index:verify: 
+@kyneta/index:verify: 
+@kyneta/index:verify: > @kyneta/index@1.7.0 verify /Users/duane/halecraft/kyneta/packages/index
+@kyneta/index:verify: > verify
+@kyneta/index:verify: 
+@kyneta/index:verify: [36m→[0m verifying [1mformat[0m
+@kyneta/index:verify: [36m→[0m verifying [1mtypes[0m
+@kyneta/index:verify: [36m→[0m verifying [1mlogic[0m
+@kyneta/index:verify: [32m✓[0m [1mformat[0m verified [2m(passed 22 files, 11 warnings, [2m168ms[0m)[0m
+@kyneta/index:verify: [32m✓[0m [1mtypes[0m verified [2m(passed, [2m171ms[0m)[0m
+@kyneta/index:verify: [32m✓[0m [1mlogic[0m verified [2m(passed 158/158 tests, [2m1166ms[0m)[0m
+@kyneta/index:verify: [32m
+@kyneta/index:verify: == verification: All correct ==[0m
+@kyneta/prisma-store:verify: cache hit, replaying logs 6b9d3fd261c916d7
+@kyneta/prisma-store:verify: 
+@kyneta/prisma-store:verify: 
+@kyneta/prisma-store:verify: > @kyneta/prisma-store@1.7.0 verify /Users/duane/halecraft/kyneta/packages/exchange/stores/prisma
+@kyneta/prisma-store:verify: > verify
+@kyneta/prisma-store:verify: 
+@kyneta/prisma-store:verify: [36m→[0m verifying [1mformat[0m
+@kyneta/prisma-store:verify: [36m→[0m verifying [1mtypes[0m
+@kyneta/prisma-store:verify: [36m→[0m verifying [1mlogic[0m
+@kyneta/prisma-store:verify: [32m✓[0m [1mformat[0m verified [2m(passed 7 files, [2m163ms[0m)[0m
+@kyneta/prisma-store:verify: [32m✓[0m [1mtypes[0m verified [2m(passed, [2m163ms[0m)[0m
+@kyneta/prisma-store:verify: [32m✓[0m [1mlogic[0m verified [2m(passed 8/8 tests, [2m708ms[0m)[0m
+@kyneta/prisma-store:verify: [32m
+@kyneta/prisma-store:verify: == verification: All correct ==[0m
+@kyneta/sqlite-store:verify: cache hit, replaying logs 7de8b13c47b74e7b
+@kyneta/sqlite-store:verify: 
+@kyneta/sqlite-store:verify: 
+@kyneta/sqlite-store:verify: > @kyneta/sqlite-store@1.7.0 verify /Users/duane/halecraft/kyneta/packages/exchange/stores/sqlite
+@kyneta/sqlite-store:verify: > verify
+@kyneta/sqlite-store:verify: 
+@kyneta/sqlite-store:verify: [36m→[0m verifying [1mformat[0m
+@kyneta/sqlite-store:verify: [36m→[0m verifying [1mtypes[0m
+@kyneta/sqlite-store:verify: [36m→[0m verifying [1mlogic[0m
+@kyneta/sqlite-store:verify: [32m✓[0m [1mformat[0m verified [2m(passed 7 files, [2m106ms[0m)[0m
+@kyneta/sqlite-store:verify: [32m✓[0m [1mtypes[0m verified [2m(passed, [2m154ms[0m)[0m
+@kyneta/sqlite-store:verify: [32m✓[0m [1mlogic[0m verified [2m(passed 26/26 tests, [2m623ms[0m)[0m
+@kyneta/sqlite-store:verify: [32m
+@kyneta/sqlite-store:verify: == verification: All correct ==[0m
+@kyneta/postgres-store:verify: cache hit, replaying logs 20530c033cf5430c
+@kyneta/postgres-store:verify: 
+@kyneta/postgres-store:verify: 
+@kyneta/postgres-store:verify: > @kyneta/postgres-store@1.7.0 verify /Users/duane/halecraft/kyneta/packages/exchange/stores/postgres
+@kyneta/postgres-store:verify: > verify
+@kyneta/postgres-store:verify: 
+@kyneta/postgres-store:verify: [36m→[0m verifying [1mformat[0m
+@kyneta/postgres-store:verify: [36m→[0m verifying [1mtypes[0m
+@kyneta/postgres-store:verify: [36m→[0m verifying [1mlogic[0m
+@kyneta/postgres-store:verify: [32m✓[0m [1mformat[0m verified [2m(passed 7 files, [2m134ms[0m)[0m
+@kyneta/postgres-store:verify: [32m✓[0m [1mtypes[0m verified [2m(passed, [2m148ms[0m)[0m
+@kyneta/postgres-store:verify: [32m✓[0m [1mlogic[0m verified [2m(passed, [2m926ms[0m)[0m
+@kyneta/postgres-store:verify: [32m
+@kyneta/postgres-store:verify: == verification: All correct ==[0m
+@kyneta/test-integration:verify: cache hit, replaying logs a1bc1e896fb29303
+@kyneta/test-integration:verify: 
+@kyneta/test-integration:verify: 
+@kyneta/test-integration:verify: > @kyneta/test-integration@ verify /Users/duane/halecraft/kyneta/tests/integration
+@kyneta/test-integration:verify: > verify
+@kyneta/test-integration:verify: 
+@kyneta/test-integration:verify: [36m→[0m verifying [1mformat[0m
+@kyneta/test-integration:verify: [36m→[0m verifying [1mtypes[0m
+@kyneta/test-integration:verify: [36m→[0m verifying [1mlogic[0m
+@kyneta/test-integration:verify: [36m→[0m verifying [1mlogic:logic-node[0m
+@kyneta/test-integration:verify: [36m→[0m verifying [1mlogic:logic-bun[0m
+@kyneta/test-integration:verify: [32m✓[0m [1mformat[0m verified [2m(passed 14 files, [2m132ms[0m)[0m
+@kyneta/test-integration:verify: [32m✓[0m [1mtypes[0m verified [2m(passed, [2m169ms[0m)[0m
+@kyneta/test-integration:verify: [32m✓[0m [1mlogic:logic-node[0m verified [2m(passed 7/7 tests (3 skipped), [2m1275ms[0m)[0m
+@kyneta/test-integration:verify: [32m✓[0m [1mlogic:logic-bun[0m verified [2m(passed, [2m1818ms[0m)[0m
+@kyneta/test-integration:verify: [32m✓[0m [1mlogic[0m verified [2m(all passed, [2m1818ms[0m)[0m
+@kyneta/test-integration:verify: [32m
+@kyneta/test-integration:verify: == verification: All correct ==[0m
+
+ Tasks:    51 successful, 51 total
+Cached:    51 cached, 51 total
+  Time:    63ms >>> FULL TURBO
+

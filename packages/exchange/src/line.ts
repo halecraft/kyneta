@@ -232,6 +232,8 @@ export class Line<SendMsg, RecvMsg> {
   #nextSeq = 1
   #lastProcessedSeq = 0
   #closed = false
+  #refCount = 1
+  #consumerAttached = false
 
   /** @internal — use `Line.protocol()` instead. */
   constructor(
@@ -312,19 +314,22 @@ export class Line<SendMsg, RecvMsg> {
   }
 
   // -----------------------------------------------------------------------
-  // Receive — async iterator
+  // Receive — exclusive consumer
   // -----------------------------------------------------------------------
 
   /**
-   * Async iterator yielding incoming messages in order.
+   * Consume the Line — returns an async iterator yielding incoming messages.
    *
-   * This is the sole receive API. All messages — including those that
-   * arrived before the Line was constructed (queued by `#processInbox()`
-   * in the constructor) — are available through the iterator.
+   * This is the sole receive API. A Line can only be consumed by one caller
+   * at a time. Calling `consume()` a second time throws an error.
    *
    * Completes (`{ done: true }`) when the Line is closed.
    */
-  [Symbol.asyncIterator](): AsyncIterableIterator<RecvMsg> {
+  consume(): AsyncIterableIterator<RecvMsg> {
+    if (this.#consumerAttached) {
+      throw new Error("Line is already being consumed")
+    }
+    this.#consumerAttached = true
     return this.#queue[Symbol.asyncIterator]()
   }
 
@@ -333,18 +338,22 @@ export class Line<SendMsg, RecvMsg> {
   // -----------------------------------------------------------------------
 
   /**
-   * Close the Line — local-only teardown.
+   * Close the Line — decrements the reference count.
    *
-   * Releases local resources (iterator, subscriptions, policy, registry)
-   * without mutating or deleting the underlying documents. The outbox
-   * and inbox documents remain in the Exchange, untouched and available
-   * for future resumption via `protocol.open()`.
+   * When the reference count reaches zero, releases local resources
+   * (iterator, subscriptions, policy, registry) without mutating or
+   * deleting the underlying documents. The outbox and inbox documents
+   * remain in the Exchange, untouched and available for future resumption
+   * via `protocol.open()`.
    *
    * Safe to call at any time — during shutdown, error handling, cleanup.
    * Never poisons the Line's documents for future use.
    */
   close(): void {
     if (this.#closed) return
+    this.#refCount--
+    if (this.#refCount > 0) return
+
     this.#closed = true
 
     this.#queue.close()
@@ -359,12 +368,13 @@ export class Line<SendMsg, RecvMsg> {
   /**
    * Destroy the Line — permanent teardown.
    *
-   * Calls `close()` (if not already closed) and then destroys both
-   * underlying documents from the Exchange and any configured stores.
-   * After `destroy()`, the Line cannot be resumed — `open()` would
-   * create a fresh Line starting at `seq: 1`.
+   * Forces the reference count to zero, calls `close()`, and then
+   * destroys both underlying documents from the Exchange and any
+   * configured stores. After `destroy()`, the Line cannot be resumed —
+   * `open()` would create a fresh Line starting at `seq: 1`.
    */
   destroy(): void {
+    this.#refCount = 1 // Force close to actually tear down
     this.close()
     this.#exchange.destroy(this.#outboxDocId)
     this.#exchange.destroy(this.#inboxDocId)
@@ -467,11 +477,10 @@ export class Line<SendMsg, RecvMsg> {
   ): Line<any, any> {
     // 1. Check for duplicate
     const key = registryKey(remotePeerId, topic)
-    if (getRegistry(exchange).has(key)) {
-      throw new Error(
-        `Line already open for peer "${remotePeerId}" on topic "${topic}". ` +
-          `Close the existing Line before opening a new one.`,
-      )
+    const existing = getRegistry(exchange).get(key)
+    if (existing) {
+      existing.#refCount++
+      return existing
     }
 
     // 2. Compute doc IDs
@@ -564,7 +573,7 @@ export class Line<SendMsg, RecvMsg> {
    * const listener = RPC.listen(exchange)
    * listener.onLine(line => {
    *   ;(async () => {
-   *     for await (const msg of line) { ... }
+   *     for await (const msg of line.consume()) { ... }
    *   })()
    * })
    * ```

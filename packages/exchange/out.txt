@@ -1,0 +1,19 @@
+
+> @kyneta/exchange@1.7.0 verify /Users/duane/halecraft/kyneta/packages/exchange
+> verify
+
+-> verifying format
+-> verifying types
+-> verifying logic
+OK format verified (passed 198 files, 18 warnings, 170ms)
+FAIL types failed (2 type errors, 210ms)
+BLOCK logic blocked (by types, 293ms)
+
+==== TYPES FAIL ====
+src/__tests__/line.test.ts(273,18): error TS7053: Element implicitly has an 'any' type because expression of type 'unique symbol' can't be used to index type 'Line<{ value: number; }, { value: number; }>'.
+  Property '[SymbolConstructor.asyncIterator]' does not exist on type 'Line<{ value: number; }, { value: number; }>'.
+src/__tests__/line.test.ts(335,18): error TS7053: Element implicitly has an 'any' type because expression of type 'unique symbol' can't be used to index type 'Line<{ value: number; }, { value: number; }>'.
+  Property '[SymbolConstructor.asyncIterator]' does not exist on type 'Line<{ value: number; }, { value: number; }>'.
+
+== verification: Failed ==
+ ELIFECYCLE  Command failed with exit code 1.

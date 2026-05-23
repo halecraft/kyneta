@@ -57,11 +57,11 @@ function createExchange(params: Partial<ExchangeParams> = {}): Exchange {
 
 /** Fire-and-forget drain of a Line's async iterator into an array. */
 function collect<T>(
-  line: { [Symbol.asyncIterator](): AsyncIterableIterator<T> },
+  line: { consume(): AsyncIterableIterator<T> },
   into: T[],
 ): void {
   ;(async () => {
-    for await (const msg of line) into.push(msg)
+    for await (const msg of line.consume()) into.push(msg)
   })()
 }
 
@@ -146,6 +146,134 @@ describe("doc ID utilities", () => {
 })
 
 // ---------------------------------------------------------------------------
+// CQRS shared session
+// ---------------------------------------------------------------------------
+
+describe("CQRS shared session", () => {
+  it("open() is idempotent and returns the same instance", async () => {
+    const bridge = new Bridge()
+    const exchangeA = createExchange({
+      id: "alice",
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
+    })
+
+    const Chat = Line.protocol({ topic: "chat", schema: SimpleSchema })
+
+    const line1 = Chat.open(exchangeA, "bob")
+    const line2 = Chat.open(exchangeA, "bob")
+
+    expect(line1).toBe(line2)
+  })
+
+  it("close() decrements refCount and delays teardown until 0", async () => {
+    const bridge = new Bridge()
+    const exchangeA = createExchange({
+      id: "alice",
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
+    })
+
+    const Chat = Line.protocol({ topic: "chat", schema: SimpleSchema })
+
+    const line1 = Chat.open(exchangeA, "bob")
+    const line2 = Chat.open(exchangeA, "bob")
+
+    expect(line1.closed).toBe(false)
+    line1.close()
+    expect(line1.closed).toBe(false) // Still alive because line2 holds a ref
+    line2.close()
+    expect(line1.closed).toBe(true) // Now fully closed
+  })
+
+  it("consume() throws if called twice", async () => {
+    const bridge = new Bridge()
+    const exchangeA = createExchange({
+      id: "alice",
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
+    })
+
+    const Chat = Line.protocol({ topic: "chat", schema: SimpleSchema })
+
+    const line = Chat.open(exchangeA, "bob")
+    const iter1 = line.consume()
+    expect(iter1).toBeDefined()
+
+    expect(() => line.consume()).toThrow("Line is already being consumed")
+  })
+
+  it("send() works from any reference holder", async () => {
+    const bridge = new Bridge()
+    const exchangeA = createExchange({
+      id: "alice",
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
+    })
+    const exchangeB = createExchange({
+      id: "bob",
+      transports: [createBridgeTransport({ transportId: "bob", bridge })],
+    })
+
+    await drain()
+
+    const Chat = Line.protocol({ topic: "chat", schema: SimpleSchema })
+
+    const aliceLine1 = Chat.open(exchangeA, "bob")
+    const aliceLine2 = Chat.open(exchangeA, "bob")
+
+    const bobMessages: any[] = []
+    const listener = Chat.listen(exchangeB)
+    listener.onLine(line => collect(line, bobMessages))
+
+    aliceLine1.send({ value: 1 })
+    aliceLine2.send({ value: 2 })
+
+    await drain()
+
+    expect(bobMessages).toEqual([{ value: 1 }, { value: 2 }])
+  })
+
+  it("re-opening after full close yields a new instance", async () => {
+    const bridge = new Bridge()
+    const exchangeA = createExchange({
+      id: "alice",
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
+    })
+
+    const Chat = Line.protocol({ topic: "chat", schema: SimpleSchema })
+
+    const line1 = Chat.open(exchangeA, "bob")
+    line1.close() // refCount hits 0, removed from registry
+
+    const line2 = Chat.open(exchangeA, "bob") // Should create fresh
+
+    expect(line1).not.toBe(line2)
+    expect(line1.closed).toBe(true)
+    expect(line2.closed).toBe(false)
+  })
+
+  it("destroy() terminates the line for all reference holders", async () => {
+    const bridge = new Bridge()
+    const exchangeA = createExchange({
+      id: "alice",
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
+    })
+
+    const Chat = Line.protocol({ topic: "chat", schema: SimpleSchema })
+
+    const line1 = Chat.open(exchangeA, "bob")
+    const line2 = Chat.open(exchangeA, "bob") // refCount is 2
+
+    line1.destroy() // Bypasses refCount
+
+    expect(line1.closed).toBe(true)
+    expect(line2.closed).toBe(true) // line2 shares the same instance
+
+    // Sending should now throw for the surviving reference holder
+    expect(() => line2.send({ value: 1 })).toThrow(
+      "Cannot send on a closed Line",
+    )
+  })
+})
+
+// ---------------------------------------------------------------------------
 // createLineDocSchema
 // ---------------------------------------------------------------------------
 
@@ -184,7 +312,7 @@ describe("symmetric Line send and receive via generator", () => {
     await drain()
 
     // Collect one message from Bob's iterator
-    const iter = lineB[Symbol.asyncIterator]()
+    const iter = lineB.consume()
     const result = await Promise.race([
       iter.next(),
       new Promise<{ value: undefined; done: true }>(r =>
@@ -246,7 +374,7 @@ describe("symmetric Line send and receive via generator", () => {
     const P = Line.protocol({ topic: "close-test", schema: SimpleSchema })
     const line = P.open(exchange, "bob")
 
-    const iter = line[Symbol.asyncIterator]()
+    const iter = line.consume()
     const pendingNext = iter.next()
 
     line.close()
@@ -404,19 +532,6 @@ describe("ack and pruning", () => {
 // ---------------------------------------------------------------------------
 
 describe("duplicate detection", () => {
-  it("throws when opening same peer+topic twice", () => {
-    const exchange = createExchange({
-      id: "alice",
-    })
-
-    const P = Line.protocol({ topic: "dup", schema: SimpleSchema })
-    const line = P.open(exchange, "bob")
-
-    expect(() => P.open(exchange, "bob")).toThrow(/already open/)
-
-    line.close()
-  })
-
   it("different topics succeed", () => {
     const exchange = createExchange({
       id: "alice",
@@ -657,7 +772,7 @@ describe("protocol.listen", () => {
     listener.onLine(line => {
       capturedServerLine = line
       ;(async () => {
-        for await (const msg of line) {
+        for await (const msg of line.consume()) {
           line.send({
             result: `${(msg as any).method}:done`,
             id: (msg as any).id,
@@ -1070,7 +1185,7 @@ describe("protocol.listen", () => {
     expect(capturedLine.peer).toBe("client")
 
     // Verify the queued message is available
-    const iter = capturedLine[Symbol.asyncIterator]()
+    const iter = capturedLine.consume()
     const result = await Promise.race([
       iter.next(),
       new Promise<{ value: undefined; done: true }>(r =>
