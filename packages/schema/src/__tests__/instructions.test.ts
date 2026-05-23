@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest"
 import {
   advanceAddresses,
   advanceIndex,
+  EarlyExit,
   foldInstructions,
   type Instruction,
 } from "../change.js"
@@ -61,7 +62,7 @@ describe("foldInstructions", () => {
     ])
   })
 
-  it("early exit via { done } stops processing", () => {
+  it("early exit via EarlyExit stops processing", () => {
     const instructions: Instruction[] = [
       { retain: 5 },
       { insert: { length: 10 } },
@@ -74,14 +75,14 @@ describe("foldInstructions", () => {
       },
       onInsert(acc, length) {
         // Early exit when we see the insert
-        return { done: acc + length }
+        return new EarlyExit(acc + length)
       },
       onDelete(acc) {
         return acc
       },
     })
 
-    // Should have accumulated retain(5) + insert(10) and stopped
+    // 5 (retain) + 10 (insert) = 15. The final retain: 5 is skipped.
     expect(result).toBe(15)
   })
 

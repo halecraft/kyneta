@@ -23,7 +23,7 @@ import type {
   SumVariants,
 } from "../interpret.js"
 import { dispatchSum } from "../interpret.js"
-import type { RefContext } from "../interpreter-types.js"
+import { INTERPRETER, type RefContext } from "../interpreter-types.js"
 import type {
   CounterSchema,
   MapSchema,
@@ -74,6 +74,7 @@ export function withNavigation<A extends HasCall>(
   base: Interpreter<RefContext, A>,
 ): Interpreter<RefContext, A & HasNavigation> {
   return {
+    [INTERPRETER]: true,
     // --- Scalar ---------------------------------------------------------------
     // No navigation needed for scalars — pass through.
     scalar(

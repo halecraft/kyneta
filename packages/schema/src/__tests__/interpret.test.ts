@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import type { Interpreter, Path } from "../index.js"
 import {
   createInterpreter,
+  INTERPRETER,
   interpret,
   KIND,
   plainInterpreter,
@@ -200,6 +201,7 @@ describe("interpret: path accumulation", () => {
     const paths: Array<{ kind: string; path: Path }> = []
 
     const pathTracker: Interpreter<void, unknown> = {
+      [INTERPRETER]: true,
       scalar(_ctx, path, schema) {
         paths.push({ kind: `scalar:${schema.scalarKind}`, path })
         return null

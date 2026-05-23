@@ -8,6 +8,7 @@
 
 import { isNonNullObject } from "../guards.js"
 import type { Interpreter, Path } from "../interpret.js"
+import { INTERPRETER } from "../interpreter-types.js"
 import type {
   CounterSchema,
   MapSchema,
@@ -50,6 +51,8 @@ import type {
  * and structural nodes — it reads from the same path regardless.
  */
 export const plainInterpreter: Interpreter<unknown, unknown> = {
+  [INTERPRETER]: true,
+
   scalar(ctx: unknown, path: Path, _schema: ScalarSchema): unknown {
     return path.read(ctx)
   },

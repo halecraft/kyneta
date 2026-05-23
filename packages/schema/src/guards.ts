@@ -22,6 +22,19 @@ export function isNonNullObject(
 }
 
 /**
+ * Returns `true` when `value` is a plain JSON object.
+ *
+ * This is a stricter version of `isNonNullObject` that also excludes arrays.
+ * Use this when you specifically need to verify that a value is a `{}` object
+ * (e.g. for map/product CRDT materialization).
+ */
+export function isPlainObject(
+  value: unknown,
+): value is Record<string, unknown> {
+  return isNonNullObject(value) && !Array.isArray(value)
+}
+
+/**
  * Returns `true` when `value` can host properties — i.e. it is a
  * non-null object OR a function.
  *

@@ -74,12 +74,8 @@ export function isLoroDoc(value: unknown): value is LoroDoc {
     value !== null &&
     value !== undefined &&
     typeof value === "object" &&
-    "getMap" in value &&
-    "getText" in value &&
-    "getList" in value &&
-    "getCounter" in value &&
-    "commit" in value &&
     "peerIdStr" in value &&
+    "commit" in value &&
     typeof (value as any).commit === "function"
   )
 }

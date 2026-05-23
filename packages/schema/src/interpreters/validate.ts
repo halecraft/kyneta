@@ -12,10 +12,11 @@
 
 import type { FlatTreeNode } from "../forest.js"
 import { validateForest } from "../forest.js"
-import { isNonNullObject, isSameSetMember } from "../guards.js"
+import { isPlainObject, isSameSetMember } from "../guards.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import { interpret } from "../interpret.js"
 import type { Plain } from "../interpreter-types.js"
+import { INTERPRETER } from "../interpreter-types.js"
 import { plainReader } from "../reader.js"
 import {
   type CounterSchema,
@@ -152,6 +153,8 @@ function scalarExpected(kind: string): string {
  * `ctx.errors`.
  */
 export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
+  [INTERPRETER]: true,
+
   scalar(ctx: ValidateContext, path: Path, schema: ScalarSchema): unknown {
     const value = path.read(ctx.root)
 
@@ -191,7 +194,7 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
   ): unknown {
     const value = path.read(ctx.root)
 
-    if (!isNonNullObject(value) || Array.isArray(value)) {
+    if (!isPlainObject(value)) {
       ctx.errors.push(new SchemaValidationError(path.format(), "object", value))
       return undefined
     }
@@ -229,7 +232,7 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
   ): unknown {
     const value = path.read(ctx.root)
 
-    if (!isNonNullObject(value) || Array.isArray(value)) {
+    if (!isPlainObject(value)) {
       ctx.errors.push(new SchemaValidationError(path.format(), "object", value))
       return undefined
     }
@@ -253,7 +256,7 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
       const value = path.read(ctx.root)
 
       // Must be an object
-      if (!isNonNullObject(value) || Array.isArray(value)) {
+      if (!isPlainObject(value)) {
         ctx.errors.push(
           new SchemaValidationError(path.format(), "object", value),
         )
@@ -467,12 +470,7 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
 
     for (let i = 0; i < value.length; i++) {
       const span = value[i]
-      if (
-        span === null ||
-        span === undefined ||
-        typeof span !== "object" ||
-        typeof (span as any).text !== "string"
-      ) {
+      if (!isPlainObject(span) || typeof (span as any).text !== "string") {
         ctx.errors.push(
           new SchemaValidationError(
             `${path.format()}[${i}]`,

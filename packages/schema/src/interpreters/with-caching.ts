@@ -32,7 +32,7 @@ import type {
   Path,
   SumVariants,
 } from "../interpret.js"
-import type { RefContext } from "../interpreter-types.js"
+import { INTERPRETER, type RefContext } from "../interpreter-types.js"
 import {
   type CounterSchema,
   KIND,
@@ -253,6 +253,7 @@ export function withCaching<A extends HasNavigation>(
   base: Interpreter<RefContext, A>,
 ): Interpreter<RefContext, A & HasCaching> {
   return {
+    [INTERPRETER]: true,
     // --- Scalar ---------------------------------------------------------------
     // No caching needed for scalars — pass through.
     scalar(ctx: RefContext, path: Path, schema: ScalarSchema): A & HasCaching {

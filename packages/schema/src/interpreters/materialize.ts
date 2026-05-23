@@ -33,6 +33,7 @@
 import type { RichTextDelta } from "../change.js"
 import { isNonNullObject } from "../guards.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
+import { INTERPRETER } from "../interpreter-types.js"
 import type { FlatTreeNodeTopology } from "../reader.js"
 import type {
   CounterSchema,
@@ -138,6 +139,8 @@ export function createMaterializeInterpreter(
   resolver: MaterializeResolver,
 ): Interpreter<MaterializeContext, unknown> {
   return {
+    [INTERPRETER]: true,
+
     // 1. scalar — resolve value, falling back to zeroInterpreter for defaults
     scalar(
       _ctx: MaterializeContext,

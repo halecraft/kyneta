@@ -28,7 +28,7 @@ import type {
   Path,
   SumVariants,
 } from "../interpret.js"
-import type { RefContext } from "../interpreter-types.js"
+import { INTERPRETER, type RefContext } from "../interpreter-types.js"
 import type {
   CounterSchema,
   MapSchema,
@@ -82,6 +82,7 @@ export function withReadable<A extends HasNavigation>(
   base: Interpreter<RefContext, A>,
 ): Interpreter<RefContext, A & HasRead> {
   return {
+    [INTERPRETER]: true,
     // --- Scalar ---------------------------------------------------------------
     scalar(ctx: RefContext, path: Path, schema: ScalarSchema): A & HasRead {
       const result = base.scalar(ctx, path, schema) as any

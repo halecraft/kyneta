@@ -293,10 +293,17 @@ export type Instruction =
 // ---------------------------------------------------------------------------
 
 /**
- * The result of a fold step. Return `S` to continue, or
- * `{ done: S }` for early exit.
+ * Early exit wrapper for `foldInstructions`.
  */
-export type FoldResult<S> = S | { readonly done: S }
+export class EarlyExit<S> {
+  constructor(public readonly value: S) {}
+}
+
+/**
+ * The result of a fold step. Return `S` to continue, or
+ * `new EarlyExit(S)` for early exit.
+ */
+export type FoldResult<S> = S | EarlyExit<S>
 
 /**
  * Visitor callbacks for `foldInstructions`. Each receives the
@@ -324,12 +331,8 @@ export interface InstructionFold<S> {
   ) => FoldResult<S>
 }
 
-function isDone<S>(result: FoldResult<S>): result is { readonly done: S } {
-  return (
-    result !== null &&
-    typeof result === "object" &&
-    "done" in (result as object)
-  )
+function isDone<S>(result: FoldResult<S>): result is EarlyExit<S> {
+  return result instanceof EarlyExit
 }
 
 /**
@@ -340,7 +343,7 @@ function isDone<S>(result: FoldResult<S>): result is { readonly done: S } {
  * - **target** advances on retain + insert
  *
  * The visitor receives both positions and the count/length for each
- * operation. Return `S` to continue or `{ done: S }` for early exit.
+ * operation. Return `S` to continue or `new EarlyExit(S)` for early exit.
  *
  * This is the shared primitive for position-tracking across text,
  * sequence, and cursor-advancement operations. It is NOT designed
@@ -359,26 +362,26 @@ export function foldInstructions<S>(
   for (const op of instructions) {
     if ("retain" in op) {
       const result = fold.onRetain(acc, op.retain, source, target)
-      if (isDone(result)) return result.done
+      if (isDone(result)) return result.value
       acc = result
       source += op.retain
       target += op.retain
     } else if ("format" in op) {
       // format ≡ retain positionally — same cursor math
       const result = fold.onRetain(acc, op.format, source, target)
-      if (isDone(result)) return result.done
+      if (isDone(result)) return result.value
       acc = result
       source += op.format
       target += op.format
     } else if ("insert" in op) {
       const length = op.insert.length
       const result = fold.onInsert(acc, length, source, target)
-      if (isDone(result)) return result.done
+      if (isDone(result)) return result.value
       acc = result
       target += length
     } else if ("delete" in op) {
       const result = fold.onDelete(acc, op.delete, source, target)
-      if (isDone(result)) return result.done
+      if (isDone(result)) return result.value
       acc = result
       source += op.delete
     }
@@ -419,9 +422,10 @@ export function advanceIndex(
         // If oldIndex falls within this retain range, it maps to
         // the corresponding position in the target.
         if (oldIndex >= source && oldIndex < source + count) {
-          return {
-            done: { resolved: true, result: target + (oldIndex - source) },
-          }
+          return new EarlyExit({
+            resolved: true,
+            result: target + (oldIndex - source),
+          })
         }
         return acc
       },
@@ -433,7 +437,7 @@ export function advanceIndex(
       onDelete(acc, count, source, _target) {
         // If oldIndex falls within this delete range, the item is dead.
         if (oldIndex >= source && oldIndex < source + count) {
-          return { done: { resolved: true, result: null } }
+          return new EarlyExit({ resolved: true, result: null })
         }
         return acc
       },
@@ -500,13 +504,11 @@ export function transformIndex(
     {
       onRetain(_acc, count, source, target) {
         if (index >= source && index < source + count) {
-          return {
-            done: {
-              result: target + (index - source),
-              source: source + count,
-              target: target + count,
-            },
-          }
+          return new EarlyExit({
+            result: target + (index - source),
+            source: source + count,
+            target: target + count,
+          })
         }
         return {
           result: undefined,
@@ -517,7 +519,11 @@ export function transformIndex(
       onInsert(_acc, length, source, target) {
         if (source === index && side === "left") {
           // Left-sticky: position stays before the insertion
-          return { done: { result: target, source, target: target + length } }
+          return new EarlyExit({
+            result: target,
+            source,
+            target: target + length,
+          })
         }
         // Right-sticky or insert not at gap position: let target accumulate
         return { result: undefined, source, target: target + length }
@@ -525,10 +531,13 @@ export function transformIndex(
       onDelete(_acc, count, source, target) {
         if (index >= source && index < source + count) {
           // Gap within deleted range collapses to target
-          return {
-            done: { result: target, source: source + count, target },
-          }
+          return new EarlyExit({
+            result: target,
+            source: source + count,
+            target,
+          })
         }
+        // Gap after deleted range: let source advance
         return { result: undefined, source: source + count, target }
       },
     },

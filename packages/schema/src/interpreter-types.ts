@@ -15,6 +15,19 @@ import type { PositionCapable } from "./position.js"
 import type { Reader } from "./reader.js"
 
 // ---------------------------------------------------------------------------
+// INTERPRETER — runtime marker for Interpreter instances
+// ---------------------------------------------------------------------------
+
+/**
+ * Unique symbol used to identify Interpreter instances at runtime.
+ * Uses `Symbol.for` so that multiple copies of this module (e.g. in
+ * different bundle chunks) share the same symbol identity.
+ */
+export const INTERPRETER: unique symbol = Symbol.for(
+  "kyneta:interpreter",
+) as any
+
+// ---------------------------------------------------------------------------
 // PlainFlatTreeNode — Plain-form flat-forest node (matches the shadow)
 // ---------------------------------------------------------------------------
 

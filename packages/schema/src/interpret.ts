@@ -18,6 +18,7 @@
 
 import type { HasChangefeed } from "@kyneta/changefeed"
 import { isNonNullObject } from "./guards.js"
+import { INTERPRETER } from "./interpreter-types.js"
 import type { HasRead } from "./interpreters/bottom.js"
 import { bottomInterpreter } from "./interpreters/bottom.js"
 import type { HasTransact } from "./interpreters/writable.js"
@@ -104,6 +105,8 @@ export interface FlatTreeNode<A> {
  * on the user-facing ref.
  */
 export interface Interpreter<Ctx, A> {
+  readonly [INTERPRETER]: true
+
   scalar(ctx: Ctx, path: Path, schema: ScalarSchema): A
 
   product(
@@ -487,20 +490,11 @@ export function interpret(
  * Returns true if `value` looks like an Interpreter (has all six case methods).
  */
 function isInterpreter(value: unknown): boolean {
-  if (value === null || value === undefined || typeof value !== "object")
-    return false
-  const obj = value as Record<string, unknown>
   return (
-    typeof obj.scalar === "function" &&
-    typeof obj.product === "function" &&
-    typeof obj.sequence === "function" &&
-    typeof obj.map === "function" &&
-    typeof obj.sum === "function" &&
-    typeof obj.text === "function" &&
-    typeof obj.counter === "function" &&
-    typeof obj.set === "function" &&
-    typeof obj.tree === "function" &&
-    typeof obj.movable === "function"
+    value !== null &&
+    value !== undefined &&
+    typeof value === "object" &&
+    INTERPRETER in value
   )
 }
 
@@ -762,6 +756,7 @@ export function createInterpreter<Ctx, A>(
   overrides: Partial<Interpreter<Ctx, A>> = {},
 ): Interpreter<Ctx, A> {
   return {
+    [INTERPRETER]: true,
     scalar:
       overrides.scalar ?? ((ctx, path, schema) => fallback(ctx, path, schema)),
     product:

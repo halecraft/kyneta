@@ -36,6 +36,7 @@ import type {
 import {
   expandMapOpsToLeaves,
   isJsonBoundary,
+  isPlainObject,
   KIND,
   pathSchema,
   RawPath,
@@ -407,12 +408,7 @@ function maybeCreateSharedType(
     }
 
     case "product": {
-      if (
-        value === null ||
-        value === undefined ||
-        typeof value !== "object" ||
-        Array.isArray(value)
-      ) {
+      if (!isPlainObject(value)) {
         return value
       }
       return createStructuredMap(value as Record<string, unknown>, schema)
@@ -430,12 +426,7 @@ function maybeCreateSharedType(
     }
 
     case "map": {
-      if (
-        value === null ||
-        value === undefined ||
-        typeof value !== "object" ||
-        Array.isArray(value)
-      ) {
+      if (!isPlainObject(value)) {
         return value
       }
       const map = new Y.Map()

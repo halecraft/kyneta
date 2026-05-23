@@ -27,7 +27,7 @@
 
 import type { ChangeBase } from "../change.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
-import type { RefContext } from "../interpreter-types.js"
+import { INTERPRETER, type RefContext } from "../interpreter-types.js"
 import { NATIVE } from "../native.js"
 import { POSITION } from "../position.js"
 import type {
@@ -252,6 +252,8 @@ export const bottomInterpreter: Interpreter<
   Partial<RefContext> | undefined,
   HasCall
 > = {
+  [INTERPRETER]: true,
+
   scalar(
     ctx: Partial<RefContext> | undefined,
     path: Path,

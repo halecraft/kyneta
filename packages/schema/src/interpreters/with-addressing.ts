@@ -42,7 +42,7 @@ import type {
   Path,
   SumVariants,
 } from "../interpret.js"
-import type { RefContext } from "../interpreter-types.js"
+import { INTERPRETER, type RefContext } from "../interpreter-types.js"
 import {
   AddressedPath,
   AddressTableRegistry,
@@ -384,6 +384,7 @@ export function withAddressing<A extends HasNavigation>(
   }
 
   return {
+    [INTERPRETER]: true,
     // --- Scalar ---------------------------------------------------------------
     scalar(ctx: RefContext, path: Path, schema: ScalarSchema): A {
       // Ensure registry is installed (in case scalar is the first node interpreted)

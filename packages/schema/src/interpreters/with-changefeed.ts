@@ -51,7 +51,7 @@ import type {
   Path,
   SumVariants,
 } from "../interpret.js"
-import type { RefContext } from "../interpreter-types.js"
+import { INTERPRETER, type RefContext } from "../interpreter-types.js"
 import {
   AddressedPath,
   resolveToAddressed,
@@ -1399,6 +1399,7 @@ export function withChangefeed<A extends HasRead>(
   base: Interpreter<RefContext, A>,
 ): Interpreter<RefContext, A & HasChangefeed> {
   return {
+    [INTERPRETER]: true,
     // --- Scalar ---------------------------------------------------------------
     scalar(
       ctx: RefContext,

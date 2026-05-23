@@ -17,6 +17,7 @@ import type {
   SumVariants,
 } from "./interpret.js"
 import { interpret } from "./interpret.js"
+import { INTERPRETER } from "./interpreter-types.js"
 import type {
   DiscriminatedSumSchema,
   ProductSchema,
@@ -66,6 +67,8 @@ export function scalarDefault(kind: ScalarKind): unknown {
 // ---------------------------------------------------------------------------
 
 export const zeroInterpreter: Interpreter<void, unknown> = {
+  [INTERPRETER]: true,
+
   scalar(_ctx: undefined, _path: Path, schema: ScalarSchema): unknown {
     if (schema.constraint !== undefined && schema.constraint.length > 0) {
       return schema.constraint[0]

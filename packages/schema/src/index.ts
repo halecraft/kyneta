@@ -132,7 +132,12 @@ export {
   validateForest,
 } from "./forest.js"
 // Guards — shared type-narrowing utilities
-export { isNonNullObject, isPropertyHost, isSameSetMember } from "./guards.js"
+export {
+  isNonNullObject,
+  isPlainObject,
+  isPropertyHost,
+  isSameSetMember,
+} from "./guards.js"
 export type {
   ChangefeedBrand,
   InterpretBuilder,
@@ -160,6 +165,7 @@ export type {
   PlainFlatTreeNode,
   RefContext,
 } from "./interpreter-types.js"
+export { INTERPRETER } from "./interpreter-types.js"
 export type {
   HasCaching,
   HasCall,

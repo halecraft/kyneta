@@ -28,12 +28,16 @@ import type {
   Path,
   SumVariants,
 } from "../interpret.js"
+import {
+  INTERPRETER,
+  type Plain,
+  type RefContext,
+} from "../interpreter-types.js"
 
 export type { Op }
 
 import type { ChangeBase } from "../change.js"
 import { incrementChange, replaceChange } from "../change.js"
-import type { Plain, RefContext } from "../interpreter-types.js"
 import type { PositionCapable } from "../position.js"
 import type {
   CounterSchema,
@@ -801,6 +805,7 @@ export function withWritable<A>(
   }
 
   return {
+    [INTERPRETER]: true,
     // --- Scalar ---------------------------------------------------------------
     // Add .set() to the base scalar ref.
     // Every node dispatches at its own path — no upward reference.
