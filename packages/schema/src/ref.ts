@@ -320,6 +320,15 @@ export type SchemaRef<
 // ---------------------------------------------------------------------------
 
 /**
+ * Helper to extract and preserve call signatures that `Omit` drops.
+ * `Omit` is implemented as `Pick<T, Exclude<keyof T, K>>`, and `keyof T`
+ * ignores call signatures. This helper restores them.
+ */
+type PreserveCall<T> = T extends (...args: infer A) => infer R
+  ? (...args: A) => R
+  : unknown
+
+/**
  * Root document ref type. Replaces the product-level `N["struct"]` native
  * type with `N["root"]` — e.g. `LoroDoc` instead of `LoroMap`.
  *
@@ -334,7 +343,9 @@ export type SchemaRef<
 export type DocRef<
   S extends Schema,
   N extends NativeMap = UnknownNativeMap,
-> = Omit<SchemaRef<S, "rwc", N>, typeof NATIVE> & HasNative<N["root"]>
+> = Omit<SchemaRef<S, "rwc", N>, typeof NATIVE> &
+  HasNative<N["root"]> &
+  PreserveCall<SchemaRef<S, "rwc", N>>
 
 // ---------------------------------------------------------------------------
 // Tier aliases — the user-facing ref types

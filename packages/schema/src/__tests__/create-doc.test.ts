@@ -28,6 +28,16 @@ describe("createDoc(json.bind(schema))", () => {
     expect(doc.items.length).toBe(0)
   })
 
+  it("root ref is callable and returns the plain object", () => {
+    const doc = createDoc(json.bind(TestSchema))
+    const plain = doc()
+    expect(plain).toEqual({
+      title: "",
+      count: 0,
+      items: [],
+    })
+  })
+
   it("supports change() mutations", () => {
     const doc = createDoc(json.bind(TestSchema))
     change(doc, (d: any) => {
