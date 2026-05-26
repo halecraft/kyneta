@@ -26,6 +26,8 @@
 //
 // See .jj-plan/01-cursor-stable-refs.md §Phase 2.
 
+import type { HasChangefeed } from "@kyneta/changefeed"
+import { CHANGEFEED } from "@kyneta/changefeed"
 import type { ChangeBase } from "../change.js"
 import {
   advanceAddresses,
@@ -44,6 +46,7 @@ import type {
 } from "../interpret.js"
 import { INTERPRETER, type RefContext } from "../interpreter-types.js"
 import {
+  type Address,
   AddressedPath,
   AddressTableRegistry,
   type IndexAddress,
@@ -86,6 +89,37 @@ import { hasTransact, REMOVE, TRANSACT } from "./writable.js"
 export const ADDRESS_TABLE: unique symbol = Symbol.for(
   "kyneta:addressTable",
 ) as any
+
+export const DELETED: unique symbol = Symbol.for("kyneta:deleted") as any
+
+/**
+ * Returns true if the ref has been deleted (its parent container was mutated
+ * to remove it). Returns false if the ref is alive, or if it is not a ref
+ * that tracks deletion (like a top-level document or product field).
+ */
+export function isDeleted(ref: unknown): boolean {
+  if (ref === null || ref === undefined) return false
+  const deletedCf = (ref as any)[DELETED]
+  if (!deletedCf) return false
+  return deletedCf() === true
+}
+
+/**
+ * Returns a callable that implements the `[CHANGEFEED]` protocol for the
+ * ref's deletion state. The callable returns a boolean (true if deleted).
+ * You can subscribe to it via `subscribeNode(deleted(ref), ...)`.
+ * Throws if the ref does not track deletion.
+ */
+export function deleted(
+  ref: unknown,
+): (() => boolean) & HasChangefeed<boolean> {
+  if (!ref || !(DELETED in (ref as object))) {
+    throw new Error(
+      "deleted() requires a ref that tracks deletion (e.g. a sequence item or map entry)",
+    )
+  }
+  return (ref as any)[DELETED]
+}
 
 // ---------------------------------------------------------------------------
 // Per-context state — prepare wrapping for address advancement
@@ -157,6 +191,15 @@ function registerAddressingHandler(
   }
 }
 
+function setDead(address: Address, dead: boolean): void {
+  if (address.dead !== dead) {
+    address.dead = dead
+    if (address.listeners) {
+      for (const cb of address.listeners) cb()
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Sequence address advancement
 // ---------------------------------------------------------------------------
@@ -172,7 +215,7 @@ function handleSequenceChange(
   if (isReplaceChange(change)) {
     // Replace: mark all addresses dead, clear the table
     for (const entry of table.byId.values()) {
-      entry.address.dead = true
+      setDead(entry.address, true)
     }
     table.byId.clear()
     table.byIndex.clear()
@@ -190,7 +233,14 @@ function handleSequenceChange(
   }
 
   // Advance all addresses in one pass
-  advanceAddresses(liveAddresses, change.instructions)
+  const deadAddresses = advanceAddresses(liveAddresses, change.instructions)
+  for (const addr of deadAddresses) {
+    // advanceAddresses already sets addr.dead = true, but we need to fire listeners.
+    // To keep it clean, we can just fire them here since we know they transitioned.
+    if (addr.listeners) {
+      for (const cb of addr.listeners) cb()
+    }
+  }
 
   // Rebuild byIndex from surviving (non-dead) addresses
   table.byIndex.clear()
@@ -213,7 +263,7 @@ function handleMapChange(table: MapAddressTable, change: ChangeBase): void {
   if (isReplaceChange(change)) {
     // Replace: mark all addresses dead
     for (const entry of table.byKey.values()) {
-      entry.address.dead = true
+      setDead(entry.address, true)
     }
     table.byKey.clear()
     return
@@ -226,7 +276,7 @@ function handleMapChange(table: MapAddressTable, change: ChangeBase): void {
     for (const key of change.delete) {
       const entry = table.byKey.get(key)
       if (entry) {
-        entry.address.dead = true
+        setDead(entry.address, true)
       }
     }
   }
@@ -235,8 +285,8 @@ function handleMapChange(table: MapAddressTable, change: ChangeBase): void {
   if (change.set) {
     for (const key of Object.keys(change.set)) {
       const entry = table.byKey.get(key)
-      if (entry?.address.dead) {
-        entry.address.dead = false
+      if (entry) {
+        setDead(entry.address, false)
       }
     }
   }
@@ -302,14 +352,44 @@ export function withAddressing<A extends HasNavigation>(
         const lastAddr = addrPath.lastAddress()
         if (!lastAddr) return // empty path (e.g. annotated reuse) — skip
 
-        // Attach `deleted` getter if the ref is an object
+        // Attach `[DELETED]` changefeed if the ref is an object
         if (isPropertyHost(ref)) {
-          Object.defineProperty(ref, "deleted", {
-            get() {
+          const deletedCf = {
+            get current() {
               return lastAddr.dead
             },
+            subscribe(cb: (cs: any) => void) {
+              if (!lastAddr.listeners) lastAddr.listeners = new Set()
+              const handler = () => cb({ changes: [], origin: "deleted" })
+              lastAddr.listeners.add(handler)
+              return () => {
+                lastAddr.listeners?.delete(handler)
+                if (lastAddr.listeners?.size === 0) {
+                  lastAddr.listeners = undefined
+                }
+              }
+            },
+            subscribeDescendants(cb: (cs: any) => void) {
+              return this.subscribe(cb)
+            },
+          }
+
+          const callable = function (this: unknown) {
+            return deletedCf.current
+          } as any
+
+          Object.defineProperty(callable, CHANGEFEED, {
+            value: deletedCf,
+            enumerable: false,
+            configurable: false,
+            writable: false,
+          })
+
+          Object.defineProperty(ref, DELETED, {
+            value: callable,
             enumerable: false,
             configurable: true,
+            writable: false,
           })
         }
 

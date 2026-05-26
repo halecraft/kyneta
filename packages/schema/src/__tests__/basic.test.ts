@@ -14,7 +14,7 @@ import {
   version,
 } from "../basic/index.js"
 import type { Op, SubstratePayload } from "../index.js"
-import { hasTransact, TRANSACT } from "../index.js"
+import { hasTransact, isPopulated, populated, TRANSACT } from "../index.js"
 
 // ===========================================================================
 // Shared fixtures
@@ -381,88 +381,88 @@ describe("WeakMap isolation", () => {
 describe("isPopulated", () => {
   it("starts false on a fresh doc", () => {
     const doc = createDoc(TestSchema)
-    expect(doc.isPopulated()).toBe(false)
-    expect(doc.title.isPopulated()).toBe(false)
-    expect(doc.count.isPopulated()).toBe(false)
-    expect(doc.items.isPopulated()).toBe(false)
-    expect(doc.theme.isPopulated()).toBe(false)
+    expect(isPopulated(doc)).toBe(false)
+    expect(isPopulated(doc.title)).toBe(false)
+    expect(isPopulated(doc.count)).toBe(false)
+    expect(isPopulated(doc.items)).toBe(false)
+    expect(isPopulated(doc.theme)).toBe(false)
   })
 
   it("flips true on leaf scalar mutation", () => {
     const doc = createDoc(TestSchema)
-    expect(doc.theme.isPopulated()).toBe(false)
+    expect(isPopulated(doc.theme)).toBe(false)
 
     change(doc, d => d.theme.set("dark"))
 
-    expect(doc.theme.isPopulated()).toBe(true)
+    expect(isPopulated(doc.theme)).toBe(true)
     // Other fields remain unpopulated
-    expect(doc.title.isPopulated()).toBe(false)
-    expect(doc.count.isPopulated()).toBe(false)
+    expect(isPopulated(doc.title)).toBe(false)
+    expect(isPopulated(doc.count)).toBe(false)
   })
 
   it("flips true on text annotation mutation", () => {
     const doc = createDoc(TestSchema)
-    expect(doc.title.isPopulated()).toBe(false)
+    expect(isPopulated(doc.title)).toBe(false)
 
     change(doc, d => d.title.insert(0, "Hello"))
 
-    expect(doc.title.isPopulated()).toBe(true)
+    expect(isPopulated(doc.title)).toBe(true)
   })
 
   it("flips true on counter annotation mutation", () => {
     const doc = createDoc(TestSchema)
-    expect(doc.count.isPopulated()).toBe(false)
+    expect(isPopulated(doc.count)).toBe(false)
 
     change(doc, d => d.count.increment(1))
 
-    expect(doc.count.isPopulated()).toBe(true)
+    expect(isPopulated(doc.count)).toBe(true)
   })
 
   it("flips true on sequence push", () => {
     const doc = createDoc(TestSchema)
-    expect(doc.items.isPopulated()).toBe(false)
+    expect(isPopulated(doc.items)).toBe(false)
 
     change(doc, d => d.items.push({ name: "Task", done: false }))
 
-    expect(doc.items.isPopulated()).toBe(true)
+    expect(isPopulated(doc.items)).toBe(true)
   })
 
   it("parent (doc) flips true when any child is mutated", () => {
     const doc = createDoc(TestSchema)
-    expect(doc.isPopulated()).toBe(false)
+    expect(isPopulated(doc)).toBe(false)
 
     change(doc, d => d.theme.set("light"))
 
     // Doc itself is populated because a descendant was mutated
-    expect(doc.isPopulated()).toBe(true)
+    expect(isPopulated(doc)).toBe(true)
     // The mutated child is populated
-    expect(doc.theme.isPopulated()).toBe(true)
+    expect(isPopulated(doc.theme)).toBe(true)
     // Other children remain unpopulated
-    expect(doc.title.isPopulated()).toBe(false)
+    expect(isPopulated(doc.title)).toBe(false)
   })
 
   it("never reverts to false after becoming true", () => {
     const doc = createDoc(TestSchema)
     change(doc, d => d.theme.set("dark"))
-    expect(doc.theme.isPopulated()).toBe(true)
+    expect(isPopulated(doc.theme)).toBe(true)
 
     // Another mutation doesn't change the boolean
     change(doc, d => d.theme.set("light"))
-    expect(doc.theme.isPopulated()).toBe(true)
+    expect(isPopulated(doc.theme)).toBe(true)
   })
 
   it("has [CHANGEFEED] for reactive detection", () => {
     const doc = createDoc(TestSchema)
-    expect(hasChangefeed(doc.isPopulated)).toBe(true)
-    expect(hasChangefeed(doc.title.isPopulated)).toBe(true)
+    expect(hasChangefeed(populated(doc))).toBe(true)
+    expect(hasChangefeed(populated(doc.title))).toBe(true)
   })
 
   it("changefeed fires on false → true transition", () => {
     const doc = createDoc(TestSchema)
     const events: boolean[] = []
 
-    doc.theme.isPopulated[CHANGEFEED].subscribe(() => {
-      events.push(doc.theme.isPopulated())
+    populated(doc.theme)[CHANGEFEED].subscribe(() => {
+      events.push(isPopulated(doc.theme))
     })
 
     change(doc, d => d.theme.set("dark"))
@@ -479,7 +479,7 @@ describe("isPopulated", () => {
     const docA = createDoc(TestSchema)
     const docB = createDoc(TestSchema)
 
-    expect(docB.theme.isPopulated()).toBe(false)
+    expect(isPopulated(docB.theme)).toBe(false)
 
     // Mutate docA
     change(docA, d => d.theme.set("synced"))
@@ -488,7 +488,7 @@ describe("isPopulated", () => {
     const ops = delta(docA, 1)
     applyChanges(docB, ops, { origin: "sync" })
 
-    expect(docB.theme.isPopulated()).toBe(true)
+    expect(isPopulated(docB.theme)).toBe(true)
     expect(docB.theme()).toBe("synced")
   })
 })

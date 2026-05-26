@@ -139,6 +139,7 @@ export type Address =
       readonly kind: "field"
       readonly key: string
       dead: boolean
+      listeners?: Set<() => void>
       readonly role: "field"
       resolve(): string
     }
@@ -146,6 +147,7 @@ export type Address =
       readonly kind: "entry"
       readonly key: string
       dead: boolean
+      listeners?: Set<() => void>
       readonly role: "entry"
       resolve(): string
     }
@@ -154,6 +156,7 @@ export type Address =
       readonly id: number
       index: number
       dead: boolean
+      listeners?: Set<() => void>
       readonly role: "index"
       resolve(): number
     }

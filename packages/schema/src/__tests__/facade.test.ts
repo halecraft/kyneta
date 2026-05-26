@@ -8,6 +8,7 @@ import {
   interpret,
   observation,
   plainContext,
+  populated,
   RawPath,
   readable,
   replaceChange,
@@ -1079,7 +1080,7 @@ describe("subscribe: basic behavior", () => {
     })
     const changesets: Changeset<Op>[] = []
 
-    subscribe(doc.settings.fontSize.isPopulated, cs => changesets.push(cs))
+    subscribe(populated(doc.settings.fontSize), cs => changesets.push(cs))
 
     // Mutate to trigger populated transition.
     doc.settings.fontSize.set(16)

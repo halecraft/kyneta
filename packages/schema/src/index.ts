@@ -217,6 +217,9 @@ export {
 // withAddressing — stable identity for all composite refs
 export {
   ADDRESS_TABLE,
+  DELETED,
+  deleted,
+  isDeleted,
   withAddressing,
 } from "./interpreters/with-addressing.js"
 // withCaching — interposition transformer (identity-preserving caching + INVALIDATE)
@@ -231,7 +234,10 @@ export type { NotificationPlan } from "./interpreters/with-changefeed.js"
 export {
   attachChangefeed,
   deliverNotifications,
+  isPopulated,
+  POPULATED,
   planNotifications,
+  populated,
   withChangefeed,
 } from "./interpreters/with-changefeed.js"
 // withNavigation — structural navigation (coalgebraic addressing, no reading)

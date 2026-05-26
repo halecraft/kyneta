@@ -130,12 +130,7 @@ export type Removable<T> = T & HasRemove
  * concern here propagates recursively to all nodes.
  */
 export type Wrap<T, M extends RefMode, Native = unknown> = M extends "rwc"
-  ? T &
-      HasTransact &
-      HasChangefeed &
-      HasNative<Native> & {
-        readonly isPopulated: (() => boolean) & HasChangefeed<boolean>
-      }
+  ? T & HasTransact & HasChangefeed & HasNative<Native>
   : T & HasTransact & HasNative<Native>
 
 // ---------------------------------------------------------------------------

@@ -75,6 +75,37 @@ import type { BatchOptions } from "../substrate.js"
 import type { HasRead } from "./bottom.js"
 import { CALL } from "./bottom.js"
 
+export const POPULATED: unique symbol = Symbol.for("kyneta:populated") as any
+
+/**
+ * Returns true if the ref has been populated (received at least one mutation).
+ * Returns false if it has not been populated, or if it is not a ref that tracks
+ * population.
+ */
+export function isPopulated(ref: unknown): boolean {
+  if (ref === null || ref === undefined) return false
+  const populatedCf = (ref as any)[POPULATED]
+  if (!populatedCf) return false
+  return populatedCf() === true
+}
+
+/**
+ * Returns a callable that implements the `[CHANGEFEED]` protocol for the
+ * ref's population state. The callable returns a boolean (true if populated).
+ * You can subscribe to it via `subscribeNode(populated(ref), ...)`.
+ * Throws if the ref does not track population.
+ */
+export function populated(
+  ref: unknown,
+): (() => boolean) & HasChangefeed<boolean> {
+  if (!ref || !(POPULATED in (ref as object))) {
+    throw new Error(
+      "populated() requires a ref that tracks population (e.g. a ref produced by withChangefeed)",
+    )
+  }
+  return (ref as any)[POPULATED]
+}
+
 // ---------------------------------------------------------------------------
 // Attach [CHANGEFEED] non-enumerably to any object
 // ---------------------------------------------------------------------------
@@ -721,7 +752,7 @@ function attachIsPopulated(
     configurable: false,
     writable: false,
   })
-  Object.defineProperty(target, "isPopulated", {
+  Object.defineProperty(target, POPULATED, {
     value: callable,
     enumerable: false,
     configurable: false,
