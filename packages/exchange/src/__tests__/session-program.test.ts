@@ -1,5 +1,6 @@
 // session-program — unit tests for the pure TEA update function.
 
+import { PROTOCOL_VERSION } from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
 import {
   createSessionUpdate,
@@ -48,6 +49,7 @@ function establishChannel(
   model: SessionModel,
   channelId: number,
   remoteIdentity: { peerId: string; type: "user" | "bot" | "service" },
+  protocolVersion: { major: number; minor: number } = PROTOCOL_VERSION,
 ): [SessionModel, SessionEffect[], readonly PeerChange[]] {
   const allEffects: SessionEffect[] = []
 
@@ -70,7 +72,7 @@ function establishChannel(
     {
       type: "sess/message-received",
       fromChannelId: channelId,
-      message: { type: "establish", identity: remoteIdentity },
+      message: { type: "establish", identity: remoteIdentity, protocolVersion },
     },
     m,
   )
@@ -168,6 +170,7 @@ describe("session-program", () => {
           type: "establish",
           identity: alice,
           features: { alias: true },
+          protocolVersion: PROTOCOL_VERSION,
         },
       })
 
@@ -190,7 +193,11 @@ describe("session-program", () => {
         {
           type: "sess/message-received",
           fromChannelId: 1,
-          message: { type: "establish", identity: bob },
+          message: {
+            type: "establish",
+            identity: bob,
+            protocolVersion: PROTOCOL_VERSION,
+          },
         },
         model,
       )
@@ -277,7 +284,11 @@ describe("session-program", () => {
         {
           type: "sess/message-received",
           fromChannelId: 1,
-          message: { type: "establish", identity: bob },
+          message: {
+            type: "establish",
+            identity: bob,
+            protocolVersion: PROTOCOL_VERSION,
+          },
         },
         model,
       )
@@ -301,6 +312,7 @@ describe("session-program", () => {
           type: "establish",
           identity: alice,
           features: { alias: true },
+          protocolVersion: PROTOCOL_VERSION,
         },
       })
 
@@ -323,7 +335,11 @@ describe("session-program", () => {
         {
           type: "sess/message-received",
           fromChannelId: 1,
-          message: { type: "establish", identity: bob },
+          message: {
+            type: "establish",
+            identity: bob,
+            protocolVersion: PROTOCOL_VERSION,
+          },
         },
         model,
       )
@@ -888,11 +904,11 @@ describe("session-program", () => {
       const selfAlice = { peerId: "alice", type: "user" as const }
       const [, allEffects] = establishChannel(update, model, 1, selfAlice)
 
-      const warnings = allEffects.filter(e => e.type === "warning")
+      const warnings = allEffects.filter(e => e.type === "diagnostic")
       expect(warnings.length).toBeGreaterThanOrEqual(1)
       expect(
         warnings.some(
-          w => w.type === "warning" && w.message.includes("self-connection"),
+          w => w.type === "diagnostic" && w.message.includes("self-connection"),
         ),
       ).toBe(true)
     })
@@ -907,13 +923,73 @@ describe("session-program", () => {
       // Establish bob on channel 2 — should warn about duplicate peerId
       const [, allEffects] = establishChannel(update, model, 2, bob)
 
-      const warnings = allEffects.filter(e => e.type === "warning")
+      const warnings = allEffects.filter(e => e.type === "diagnostic")
       expect(warnings.length).toBeGreaterThanOrEqual(1)
       expect(
         warnings.some(
-          w => w.type === "warning" && w.message.includes("duplicate peerId"),
+          w => w.type === "diagnostic" && w.message.includes("duplicate peerId"),
         ),
       ).toBe(true)
+    })
+  })
+
+  // =========================================================================
+  // protocol version detection (warn/error-only — never gates)
+  // =========================================================================
+
+  describe("protocol version detection", () => {
+    const diagnostics = (fx: SessionEffect[]) =>
+      fx.filter(
+        e => e.type === "diagnostic" && e.message.includes("protocol"),
+      )
+    const hasSyncEvent = (fx: SessionEffect[]) =>
+      fx.some(e => e.type === "sync-event")
+
+    it("no diagnostic and peer enters sync graph when version absent (default)", () => {
+      const update = makeUpdate()
+      const [, fx] = establishChannel(update, initSession(alice), 1, bob)
+      expect(diagnostics(fx)).toHaveLength(0)
+      expect(hasSyncEvent(fx)).toBe(true)
+    })
+
+    it("no diagnostic when peer is explicit (1,0)", () => {
+      const update = makeUpdate()
+      const [, fx] = establishChannel(update, initSession(alice), 1, bob, {
+        major: 1,
+        minor: 0,
+      })
+      expect(diagnostics(fx)).toHaveLength(0)
+    })
+
+    it("minor skew emits exactly one warning diagnostic, peer still syncs", () => {
+      const update = makeUpdate()
+      const [, fx] = establishChannel(update, initSession(alice), 1, bob, {
+        major: 1,
+        minor: 2,
+      })
+      const ds = diagnostics(fx)
+      expect(ds).toHaveLength(1)
+      expect(ds[0]).toMatchObject({ severity: "warning" })
+      expect(ds[0]?.type === "diagnostic" && ds[0].message).toContain(
+        "minor skew",
+      )
+      expect(hasSyncEvent(fx)).toBe(true)
+    })
+
+    it("major mismatch emits one error diagnostic but does NOT gate (sync-event still emitted)", () => {
+      const update = makeUpdate()
+      const [, fx] = establishChannel(update, initSession(alice), 1, bob, {
+        major: 2,
+        minor: 0,
+      })
+      const ds = diagnostics(fx)
+      expect(ds).toHaveLength(1)
+      expect(ds[0]).toMatchObject({ severity: "error" })
+      expect(ds[0]?.type === "diagnostic" && ds[0].message).toContain(
+        "major mismatch",
+      )
+      // The reserve-only / no-gate invariant: the peer still enters the sync graph.
+      expect(hasSyncEvent(fx)).toBe(true)
     })
   })
 
@@ -1041,7 +1117,11 @@ describe("session-program", () => {
         {
           type: "sess/message-received",
           fromChannelId: 1,
-          message: { type: "establish", identity: bob },
+          message: {
+            type: "establish",
+            identity: bob,
+            protocolVersion: PROTOCOL_VERSION,
+          },
         },
         model,
       )

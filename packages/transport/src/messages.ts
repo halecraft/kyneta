@@ -15,7 +15,7 @@
 // determines *when* and *how* they are sent, not their shape.
 
 import type { DocMetadata, SubstratePayload } from "@kyneta/schema"
-import type { DocId, PeerIdentityDetails } from "./types.js"
+import type { DocId, PeerIdentityDetails, ProtocolVersion } from "./types.js"
 
 // ---------------------------------------------------------------------------
 // Wire-feature negotiation (v1)
@@ -58,6 +58,14 @@ export type EstablishMsg = {
   type: "establish"
   identity: PeerIdentityDetails
   features?: WireFeatures
+  /**
+   * Sync wire-contract revision this peer implements (see `ProtocolVersion`).
+   * Required here, but optional on the wire (`pv`): the codec omits the
+   * default and re-defaults it on decode, so downstream code never handles
+   * an absent version while a baseline-`(1,0)` peer's bytes stay identical
+   * to a pre-protocolVersion peer's. ("complete in memory, sparse on the wire.")
+   */
+  protocolVersion: ProtocolVersion
 }
 
 /**

@@ -32,8 +32,10 @@ export type {
   DocId,
   PeerId,
   PeerIdentityDetails,
+  ProtocolVersion,
   TransportType,
 } from "@kyneta/transport"
+export { PROTOCOL_VERSION } from "@kyneta/transport"
 
 // ---------------------------------------------------------------------------
 // Schema binding — re-exported from @kyneta/schema for convenience

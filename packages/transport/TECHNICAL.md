@@ -84,7 +84,7 @@ Exactly six messages (source: `packages/transport/src/messages.ts`). Two groups:
 
 | Message | Group | Sender | Payload | Purpose |
 |---------|-------|--------|---------|---------|
-| `establish` | Lifecycle | Both peers, on connect | `{ identity: PeerIdentityDetails }` | Symmetric handshake — no request/response, both peers send |
+| `establish` | Lifecycle | Both peers, on connect | `{ identity, features?, protocolVersion? }` | Symmetric handshake — no request/response, both peers send |
 | `depart` | Lifecycle | Departing peer | `{}` | Intentional, explicit departure — the receiver skips any disconnect-grace timer |
 | `present` | Sync | Either peer | `{ docs: Array<{ docId, replicaType, syncMode, schemaHash, supportedHashes? }> }` | "I hold these documents" |
 | `interest` | Sync | Either peer | `{ docId, version?, reciprocate? }` | "I want this document; here is my version" |
@@ -102,6 +102,20 @@ Exactly six messages (source: `packages/transport/src/messages.ts`). Two groups:
 ### Why `OfferMsg.payload` is opaque
 
 `payload: SubstratePayload` is declared in `@kyneta/schema`. Its internal `kind` discriminant (`"entirety"` or `"since"`) is meaningful to the substrate, not to the transport. The exchange hands the payload to `substrate.merge(payload)` without inspection. This keeps `@kyneta/transport` free of any Loro / Yjs / JSON-specific logic — the same message vocabulary carries every substrate type.
+
+### `EstablishMsg.protocolVersion` and the three-tier model
+
+`EstablishMsg` carries a **required** `protocolVersion: ProtocolVersion` (`{ major, minor }`), the **sync wire-contract revision** a peer implements. `ProtocolVersion` and the `PROTOCOL_VERSION = { major: 1, minor: 0 }` constant live in `src/types.ts` — distinct from `@kyneta/wire`'s `WIRE_VERSION` (frame encoding) and `@kyneta/schema`'s `SyncMode` (per-doc policy). The field is *required in the logical domain* (every peer is some revision) but *sparse on the wire*: the alias transformer emits `pv` only when non-default, and the inbound transform defaults an absent `pv` back to `(1, 0)`. So a 2.0 peer's `establish` is byte-identical to one without the field, yet every parsed `EstablishMsg` carries a concrete version (proto3-style "complete in memory, sparse on the wire").
+
+Wire evolution is split across three mechanisms by how a peer must react to a difference:
+
+- **`WireFeatures`** — opt-in, negotiable capabilities; mutual-AND; a difference is **silent** (graceful no-op). Expresses any *additive* change.
+- **protocol `minor`** — non-negotiable backward-compatible refinements; a difference is a **warning** (diagnostic only).
+- **protocol `major`** — base abandonment; a difference is an **error** (no shared contract). This is the one thing `WireFeatures` structurally cannot express, which is why `protocolVersion` exists.
+
+`@kyneta/transport` only *declares* the type/constant and (de)serializes the field; the comparison rule and its diagnostics live in `@kyneta/exchange`'s session program (warn/error-only — never gates).
+
+**Establish negotiation-core invariant:** the part of `establish` carrying `id`, `y`, and `protocolVersion` is a permanent meta-contract, invariant across all protocol revisions. Future revisions may extend `establish` or change other messages but may never break a peer's ability to parse another peer's identity + `protocolVersion`.
 
 ---
 

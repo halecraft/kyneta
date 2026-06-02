@@ -13,14 +13,17 @@
 //   - Absent from map  →  departed (deleted)
 
 import type { Program } from "@kyneta/machine"
-import type {
-  ChannelId,
-  LifecycleMsg,
-  PeerId,
-  PeerIdentityDetails,
-  TransportType,
-  WireFeatures,
+import {
+  PROTOCOL_VERSION,
+  type ChannelId,
+  type LifecycleMsg,
+  type PeerId,
+  type PeerIdentityDetails,
+  type ProtocolVersion,
+  type TransportType,
+  type WireFeatures,
 } from "@kyneta/transport"
+import { classifyProtocolSkew } from "./protocol-version.js"
 import type { SyncInput } from "./sync-program.js"
 import type { PeerChange } from "./types.js"
 
@@ -40,6 +43,14 @@ export type ChannelEntry = {
    * advertises no features).
    */
   peerFeatures?: WireFeatures
+  /**
+   * Sync wire-contract revision of the remote peer. Optional for the same
+   * reason as `remoteIdentity` / `peerFeatures`: a `ChannelEntry` exists
+   * before the remote `establish` arrives. Once it does, this is always a
+   * concrete version — the wire-boundary defaults an absent `pv` to (1, 0),
+   * so "peer omitted it" never reaches here.
+   */
+  peerProtocolVersion?: ProtocolVersion
 }
 
 /** Per-peer state. */
@@ -98,7 +109,7 @@ export type SessionEffect =
   | { type: "cancel-departure-timer"; peerId: PeerId }
   | { type: "sync-event"; event: SyncInput }
   | { type: "emit-peer-events"; events: readonly PeerChange[] }
-  | { type: "warning"; message: string }
+  | { type: "diagnostic"; severity: "error" | "warning"; message: string }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 // UPDATE SIGNATURE
@@ -179,7 +190,8 @@ function detectPeerIdentityWarning(
 ): SessionEffect | undefined {
   if (remotePeerId === model.identity.peerId) {
     return {
-      type: "warning",
+      type: "diagnostic",
+      severity: "warning",
       message: `[exchange] self-connection detected — remote peer "${remotePeerId}" has the same peerId as this exchange. This will cause sync failures. Ensure server and client have different peerIds.`,
     }
   }
@@ -189,12 +201,57 @@ function detectPeerIdentityWarning(
     otherChannels.delete(fromChannelId)
     if (otherChannels.size > 0) {
       return {
-        type: "warning",
+        type: "diagnostic",
+        severity: "warning",
         message: `[exchange] duplicate peerId "${remotePeerId}" — peer already has ${otherChannels.size} active channel(s). Two participants sharing the same peerId will corrupt CRDT state. Ensure each browser tab / client has a unique peerId.`,
       }
     }
   }
   return undefined
+}
+
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+// PROTOCOL-VERSION DIAGNOSTIC
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+/**
+ * Mirrors `detectPeerIdentityWarning`: surfaces a problem with a peer at
+ * establish time, but **never gates** — the peer's sync graph entry is
+ * untouched, so an incompatible peer stays observable (data just won't
+ * converge). We intentionally do not invent a "visible-but-inert" peer
+ * state; the per-doc schema-hash mismatch path takes the same skip-don't-
+ * withhold stance.
+ *
+ * This build's own version is always `PROTOCOL_VERSION`, so while that is
+ * the only revision in existence only the `compatible` branch ever fires —
+ * the warning/error branches are reserve-only until a second revision
+ * ships, and refusing-to-sync on `major-mismatch` is deferred to that
+ * point (where it can be tested against a real second revision).
+ */
+function detectProtocolVersionDiagnostic(
+  peerProtocolVersion: ProtocolVersion | undefined,
+  remotePeerId: PeerId,
+): SessionEffect | undefined {
+  // Defensive: post-establish this is always concrete (the wire boundary
+  // defaults it), but `ChannelEntry` carries it optionally.
+  if (peerProtocolVersion === undefined) return undefined
+  const peer = `v${peerProtocolVersion.major}.${peerProtocolVersion.minor}`
+  switch (classifyProtocolSkew(PROTOCOL_VERSION, peerProtocolVersion)) {
+    case "compatible":
+      return undefined
+    case "minor-skew":
+      return {
+        type: "diagnostic",
+        severity: "warning",
+        message: `[exchange] protocol minor skew — peer "${remotePeerId}" at ${peer}, this peer at v${PROTOCOL_VERSION.major}.${PROTOCOL_VERSION.minor}; compatible, but behaviors may differ in refinements.`,
+      }
+    case "major-mismatch":
+      return {
+        type: "diagnostic",
+        severity: "error",
+        message: `[exchange] protocol major mismatch — peer "${remotePeerId}" at ${peer}, this peer at v${PROTOCOL_VERSION.major}.x; no shared sync wire-contract major, data will not converge with it.`,
+      }
+  }
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -272,6 +329,14 @@ function completeEstablish(
   const warning = detectPeerIdentityWarning(model, channelId, remotePeerId)
   if (warning) effects.push(warning)
 
+  // Diagnostic only — deliberately does not gate the sync graph entry above
+  // (see detectProtocolVersionDiagnostic). Context: jj:yukrpnwm
+  const protocolDiagnostic = detectProtocolVersionDiagnostic(
+    channelEntry.peerProtocolVersion,
+    remotePeerId,
+  )
+  if (protocolDiagnostic) effects.push(protocolDiagnostic)
+
   return [nextModel, ...effects]
 }
 
@@ -316,6 +381,7 @@ function handleChannelEstablish(
       type: "establish",
       identity: model.identity,
       features: model.selfFeatures,
+      protocolVersion: PROTOCOL_VERSION,
     },
   }
 
@@ -338,6 +404,7 @@ function handleEstablishReceived(
     type: "establish"
     identity: PeerIdentityDetails
     features?: WireFeatures
+    protocolVersion: ProtocolVersion
   },
   model: SessionModel,
   canConnect?: (peer: PeerIdentityDetails) => boolean,
@@ -355,12 +422,14 @@ function handleEstablishReceived(
   // (prevents infinite ping-pong)
   if (entry.localEstablishSent && entry.remoteIdentity) return [model]
 
-  // Set remoteIdentity, peerFeatures, and mark localEstablishSent = true
-  // (echoing establish back counts as our local send)
+  // localEstablishSent = true: echoing establish back (below) is our local
+  // send, so receiving + echoing in one step completes our half of the
+  // symmetric handshake.
   const updatedEntry: ChannelEntry = {
     ...entry,
     remoteIdentity: message.identity,
     peerFeatures: message.features,
+    peerProtocolVersion: message.protocolVersion,
     localEstablishSent: true,
   }
   const channels = new Map(model.channels)
@@ -375,6 +444,7 @@ function handleEstablishReceived(
       type: "establish",
       identity: model.identity,
       features: model.selfFeatures,
+      protocolVersion: PROTOCOL_VERSION,
     },
   }
 

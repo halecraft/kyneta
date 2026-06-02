@@ -5,7 +5,7 @@
 // channel management.
 
 import type { ChannelMsg } from "@kyneta/transport"
-import { Pipeline } from "@kyneta/transport"
+import { Pipeline, PROTOCOL_VERSION } from "@kyneta/transport"
 import { createTestTransportContext } from "@kyneta/transport/testing"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { WebrtcTransport } from "../webrtc-transport.js"
@@ -41,6 +41,7 @@ async function initializeTransport(
 const TEST_MSG: ChannelMsg = {
   type: "establish",
   identity: { peerId: "remote", name: "R", type: "user" },
+  protocolVersion: PROTOCOL_VERSION,
 }
 
 /** Encode a ChannelMsg through the wire pipeline to a binary frame. */
@@ -309,6 +310,7 @@ describe("Fragmentation", () => {
         name: `A Long Name ${"y".repeat(200)}`,
         type: "user",
       },
+      protocolVersion: PROTOCOL_VERSION,
     }
 
     syncChannel.send(largeMsg)
@@ -332,6 +334,7 @@ describe("Fragmentation", () => {
         name: `Name-${"w".repeat(200)}`,
         type: "user",
       },
+      protocolVersion: PROTOCOL_VERSION,
     }
 
     // Use a Pipeline to produce properly-framed fragments (same as

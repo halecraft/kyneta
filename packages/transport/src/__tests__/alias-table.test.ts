@@ -23,17 +23,20 @@ import type {
   PresentMsg,
   VacantMsg,
 } from "../messages.js"
+import { PROTOCOL_VERSION } from "../types.js"
 
 const alice: EstablishMsg = {
   type: "establish",
   identity: { peerId: "alice", type: "user" },
   features: { alias: true },
+  protocolVersion: PROTOCOL_VERSION,
 }
 
 const bob: EstablishMsg = {
   type: "establish",
   identity: { peerId: "bob", type: "user" },
   features: { alias: true },
+  protocolVersion: PROTOCOL_VERSION,
 }
 
 const presentDoc1: PresentMsg = {
@@ -108,6 +111,56 @@ describe("alias-table — establish snapshots features", () => {
       f: { a: true },
     } as any).state
     expect(state.mutualAlias).toBe(false)
+  })
+})
+
+describe("alias-table — establish protocolVersion (pv)", () => {
+  it("omits pv on the wire when absent (default peer)", () => {
+    const { result } = applyOutboundAliasing(emptyAliasState(), alice)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect((result.value as { pv?: unknown }).pv).toBeUndefined()
+  })
+
+  it("omits pv when explicitly the default (1,0)", () => {
+    const msg: EstablishMsg = { ...alice, protocolVersion: { major: 1, minor: 0 } }
+    const { result } = applyOutboundAliasing(emptyAliasState(), msg)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect((result.value as { pv?: unknown }).pv).toBeUndefined()
+  })
+
+  it("emits pv when non-default", () => {
+    const msg: EstablishMsg = { ...alice, protocolVersion: { major: 1, minor: 2 } }
+    const { result } = applyOutboundAliasing(emptyAliasState(), msg)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect((result.value as { pv?: unknown }).pv).toEqual([1, 2])
+  })
+
+  it("inbound surfaces protocolVersion when pv present, defaults to (1,0) otherwise", () => {
+    const withPv = applyInboundAliasing(emptyAliasState(), {
+      t: 0x01,
+      id: "bob",
+      y: "user",
+      pv: [2, 3],
+    } as any)
+    expect(withPv.result.ok).toBe(true)
+    if (withPv.result.ok)
+      expect((withPv.result.value as EstablishMsg).protocolVersion).toEqual({
+        major: 2,
+        minor: 3,
+      })
+
+    // Absent pv is defaulted at the wire boundary so the parsed message
+    // always carries a concrete version.
+    const without = applyInboundAliasing(emptyAliasState(), {
+      t: 0x01,
+      id: "bob",
+      y: "user",
+    } as any)
+    expect(without.result.ok).toBe(true)
+    if (without.result.ok)
+      expect((without.result.value as EstablishMsg).protocolVersion).toEqual(
+        PROTOCOL_VERSION,
+      )
   })
 })
 

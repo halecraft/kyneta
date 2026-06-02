@@ -1071,8 +1071,13 @@ export class Synchronizer {
       case "emit-peer-events":
         this.#emitPeerEvents(effect.events)
         break
-      case "warning":
-        console.warn(effect.message)
+      case "diagnostic":
+        // console for now; the `severity` discriminant is the seam for the
+        // planned structured onProtocolWarning callback (jj:wkwskqsy), where
+        // these protocol mismatches become a programmatic `kind` rather than
+        // a log line. Context: jj:yukrpnwm
+        if (effect.severity === "error") console.error(effect.message)
+        else console.warn(effect.message)
         break
     }
   }

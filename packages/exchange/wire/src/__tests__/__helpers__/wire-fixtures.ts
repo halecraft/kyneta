@@ -29,6 +29,7 @@ export function establishWire(opts: {
   type: "user" | "bot" | "service"
   name?: string
   features?: { alias?: boolean; streamed?: boolean; datagram?: boolean }
+  protocolVersion?: [number, number]
 }): WireEstablishMsg {
   const wire: WireEstablishMsg = {
     t: MessageType.Establish,
@@ -42,6 +43,7 @@ export function establishWire(opts: {
     if (opts.features.streamed !== undefined) wire.f.s = opts.features.streamed
     if (opts.features.datagram !== undefined) wire.f.d = opts.features.datagram
   }
+  if (opts.protocolVersion !== undefined) wire.pv = opts.protocolVersion
   return wire
 }
 

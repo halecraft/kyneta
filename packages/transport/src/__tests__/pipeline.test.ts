@@ -7,6 +7,7 @@ import type { Result, WireError } from "@kyneta/wire"
 import { describe, expect, it, vi } from "vitest"
 import type { ChannelMsg, EstablishMsg, OfferMsg } from "../messages.js"
 import { Pipeline } from "../pipeline.js"
+import { PROTOCOL_VERSION } from "../types.js"
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -16,6 +17,7 @@ const establishMsg: EstablishMsg = {
   type: "establish",
   identity: { peerId: "peer1", name: "Test", type: "user" },
   features: { alias: true },
+  protocolVersion: PROTOCOL_VERSION,
 }
 
 const largeOffer: OfferMsg = {
@@ -145,6 +147,7 @@ describe("Pipeline — asymmetric round-trip (SSE pair)", () => {
         type: "establish",
         identity: { peerId: "peer2", name: "Client", type: "user" },
         features: { alias: true },
+        protocolVersion: PROTOCOL_VERSION,
       }
 
       const clientOut = client.send(clientEstablish)

@@ -146,6 +146,48 @@ describe("establish (t: 0x01)", () => {
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.error.path).toEqual(["f", "a"])
   })
+
+  it("accepts establish with a valid pv pair", () => {
+    for (const pv of [
+      [1, 0],
+      [2, 1],
+    ]) {
+      const r = validateWireMessage({
+        t: MessageType.Establish,
+        id: "peer1",
+        y: "user",
+        pv,
+      })
+      expect(r.ok).toBe(true)
+    }
+  })
+
+  it("accepts establish with pv absent (forward-tolerant)", () => {
+    const r = validateWireMessage({ t: MessageType.Establish, id: "p", y: "user" })
+    expect(r.ok).toBe(true)
+  })
+
+  it("rejects malformed pv with path [pv]", () => {
+    for (const pv of [
+      [],
+      [1],
+      [1, 2, 3],
+      [0, 0],
+      [1, -1],
+      [1.5, 0],
+      ["1", 0],
+      1,
+    ]) {
+      const r = validateWireMessage({
+        t: MessageType.Establish,
+        id: "peer1",
+        y: "user",
+        pv,
+      })
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.error.path).toEqual(["pv"])
+    }
+  })
 })
 
 // ---------------------------------------------------------------------------

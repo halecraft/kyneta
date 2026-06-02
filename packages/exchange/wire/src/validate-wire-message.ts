@@ -116,6 +116,21 @@ function validateEstablish(
     if (obj.f.d !== undefined && !isBoolean(obj.f.d))
       return fail("f.d must be a boolean", ["f", "d"])
   }
+  if (obj.pv !== undefined) {
+    const pv = obj.pv
+    if (
+      !Array.isArray(pv) ||
+      pv.length !== 2 ||
+      !Number.isSafeInteger(pv[0]) ||
+      !Number.isSafeInteger(pv[1]) ||
+      (pv[0] as number) < 1 ||
+      (pv[1] as number) < 0
+    )
+      return fail(
+        "pv must be a [major, minor] integer pair (major>=1, minor>=0)",
+        ["pv"],
+      )
+  }
   return ok(obj as unknown as WireMessage)
 }
 

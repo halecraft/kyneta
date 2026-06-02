@@ -568,4 +568,21 @@ describe("CBOR codec — WireFeatures negotiation", () => {
     const decoded = roundTrip(wire) as WireEstablishMsg
     expect(decoded.f).toEqual({ a: false, s: false })
   })
+
+  it("round-trips establish with a non-default protocolVersion (pv)", () => {
+    // Exercises the pv emit path even though (1,0) peers omit it.
+    const wire = establishWire({
+      peerId: "alice",
+      type: "user",
+      protocolVersion: [2, 0],
+    })
+    const decoded = roundTrip(wire) as WireEstablishMsg
+    expect(decoded.pv).toEqual([2, 0])
+  })
+
+  it("round-trips establish without protocolVersion (default peer)", () => {
+    const wire = establishWire({ peerId: "alice", type: "user" })
+    const decoded = roundTrip(wire) as WireEstablishMsg
+    expect(decoded.pv).toBeUndefined()
+  })
 })

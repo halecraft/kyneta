@@ -193,6 +193,7 @@ export function syncModeToWire(
  *   sh  — schemaHash (string, 34-char hex, required in present doc entries)
  *   pk  — payload kind (PayloadKindValue)
  *   pe  — payload encoding (PayloadEncodingValue)
+ *   pv  — protocolVersion [major, minor] (establish, optional; absent ⇒ [1,0])
  */
 
 /**
@@ -213,6 +214,10 @@ export type WireEstablishMsg = {
   n?: string
   y: "user" | "bot" | "service"
   f?: WireFeaturesCompact
+  /** Sparse: absent ⇒ [1, 0], emitted only when non-default. The logical
+   *  counterpart is the *required* `protocolVersion` (`@kyneta/transport`),
+   *  re-defaulted from absence on decode. */
+  pv?: [number, number]
 }
 
 /** Compact wire format for depart. */

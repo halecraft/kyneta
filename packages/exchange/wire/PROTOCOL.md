@@ -1,6 +1,6 @@
 # Kyneta Wire Protocol Specification
 
-Wire protocol for `@kyneta/transport` message transport. Defines the universal `Frame<T>` abstraction, two encoding pipelines (binary and text), framing, fragmentation, and reassembly for the exchange's 6-message protocol.
+Wire protocol for `@kyneta/transport` message transport. Defines the universal `Frame<T>` abstraction, two encoding pipelines (binary and text), framing, fragmentation, and reassembly for the exchange's seven-message protocol.
 
 ## Overview
 
@@ -88,10 +88,16 @@ Implementation in `src/json.ts` — human-readable JSON with full type strings. 
 ```
 Offset  Size   Field
 ──────  ─────  ──────────────────
-0       1      Version (0x01)
+0       1      Version (WIRE_VERSION = 2 — frame encoding axis)
 1       1      Type (0x00 = complete, 0x01 = fragment)
 2       4      Payload length (Uint32 big-endian)
 ```
+
+> **Note — three distinct version axes.** This header byte is the *frame
+> encoding* version (`WIRE_VERSION = 2`). It is unrelated to the per-doc
+> `SyncMode` and to the establish `protocolVersion` (`pv`, the sync
+> wire-contract revision; see "Protocol Version Compatibility"). Do not
+> conflate them.
 
 The v1 framing tightening (jj:spwsxmoq) compacted the header from 7 bytes to 6 by removing the hash-algorithm byte (replaced by a future frame trailer when hash verification is added) and removed the single-byte transport prefix layer.
 
@@ -134,6 +140,7 @@ v1 has no transport-prefix layer. The frame type byte (offset 1 of the 6-byte he
 | `n` | name | `string` (optional) | establish |
 | `y` | type | `"user" \| "bot" \| "service"` | establish |
 | `f` | features | `WireFeatures` (compact map) | establish (optional) |
+| `pv` | protocolVersion | `[major, minor]` (two integers) | establish (optional; absent ⇒ `[1,0]`; emitted only when non-default) |
 | `docs` | docs | `Array<{d, a?, rt, ms, sh?, sa?, shx?, shs?}>` | present |
 | `doc` | docId | `string` (one of doc/dx required) | interest, offer, dismiss, vacant |
 | `dx` | docId alias | non-negative integer | interest, offer, dismiss, vacant (one of doc/dx required) |
@@ -165,6 +172,7 @@ Decoders MUST tolerate absent optional fields by applying these defaults:
 | `n` (name) | `undefined` | Optional display name |
 | `f` (features) | `undefined` | Treated as no features advertised — no alias/streamed/datagram |
 | `shs` (supported hashes) | `undefined` | Absent means just the primary hash |
+| `pv` (protocolVersion) | `[1, 0]` | Absent ⇒ peer supports only the 2.0 sync wire-contract |
 
 ### Binary Encoding Flow
 
@@ -375,6 +383,36 @@ A peer that omits `features` (or omits any field) is treated as not advertising 
 
 The current default for v1 is `{ alias: true }` (set in `SessionModel.selfFeatures`). Override via `Synchronizer`'s `selfFeatures` parameter to opt out.
 
+## Protocol Version Compatibility
+
+`establish` carries an optional `pv: [major, minor]` naming the **sync wire-contract revision** the peer implements — the revision of the message vocabulary, handshake choreography, and negotiation rules themselves. Distinct from `WIRE_VERSION` (frame encoding) and `SyncMode` (per-doc sync policy). Absent ⇒ `[1, 0]` (ratified); emitted only when non-default, so a 2.0 peer's `establish` is byte-identical to one without the field.
+
+### Three-tier compatibility model
+
+Wire evolution is split across three mechanisms by *how* peers must react to a difference:
+
+| Tier | Carries | On difference |
+|------|---------|---------------|
+| `WireFeatures` (`f`) | opt-in, negotiable capabilities | **silent** — mutual-AND; absent ⇒ graceful no-op (the empty set is always a safe common subset = the base contract) |
+| protocol `minor` | non-negotiable backward-compatible refinements (clarifications, deprecations, behavioral tightenings) | **warning** — purely diagnostic; minor is backward-compatible by definition |
+| protocol `major` | breaking change / base abandonment | **error** — no shared contract |
+
+`WireFeatures` expresses any *additive* change (even a coordinated bundle, used iff mutual, else the base). The one thing it structurally cannot express is *abandoning the base* (its model is `absent ⇒ false ⇒ fall back to base`) — that is the sole residual job of `pv`'s `major`. A single `(major, minor)` compared by a rule is therefore the correct shape; an array/set would only be needed for speaking two majors at once, which the discipline "graceful change is a feature; a major bump is an intentional partition" removes.
+
+### Comparison rule
+
+Computed identically on both peers (no extra round-trip), once per channel-establish:
+
+- peer `major !== self.major` → incompatible (error).
+- same major, peer `minor !== self.minor` → backward-compatible refinement (warning).
+- equal (or absent) → silent.
+
+At 2.0 a peer's self version is permanently `[1, 0]`, so among 2.0 peers only the silent branch fires; the warning/error branches are reachable only against a future non-`[1,0]` peer. Detection is **warn/error-only — it never gates**: an incompatible peer remains observable and enters the sync graph (data simply will not converge). Actually refusing to sync is deferred to the release that ships a real major-2 peer.
+
+### Establish negotiation-core invariant
+
+The part of `establish` carrying `id`, `y`, and `pv` is a **permanent meta-contract**, invariant across all protocol revisions. Future revisions may extend `establish` or change other messages but may never break a peer's ability to parse another peer's identity + `protocolVersion`. The establish validator stays tolerant of unknown fields.
+
 ## DocId and Schema Hash Aliasing
 
 Variable-length string identifiers (`doc`, `sh`) repeat heavily in steady-state sync. The QUIC connection-ID / HPACK pattern — receiver-meaningful indices replacing globally-meaningful identifiers — applies cleanly: a per-channel-direction alias table assigned via `present` lets later messages reference docs and schemas by short integers.
@@ -516,4 +554,4 @@ Shared:
 | Version | Changes |
 |---------|---------|
 | 0 | Pre-release. Unified `Frame<T>` architecture. 7-byte binary header. Single-byte transport prefixes. 8-byte string frameId, 4-byte index/total. |
-| 1 | **Current.** Compact 6-byte binary header (version, type, payloadLength); no hash-algorithm byte (deferred to frame trailer). Numeric uint16 frameId / index / total; uint32 totalSize. Removed transport-prefix layer. **DocId & schemaHash aliasing** with `a`/`dx`/`sa`/`shx` fields. **Wire features negotiation** in `establish` (`f` map; backward-compat). **Identifier length caps** (DocId 512 UTF-8 bytes; schemaHash 256). **Delivery-mode taxonomy** (muxed, streamed-deferred, datagram-deferred). **`vacant` message** (`0x14`) — additive negative-ack to interest; old peers reject the unknown discriminator harmlessly (set-membership), so it is wire-backward-compatible. |
+| 1 | **Current.** Compact 6-byte binary header (version, type, payloadLength); no hash-algorithm byte (deferred to frame trailer). Numeric uint16 frameId / index / total; uint32 totalSize. Removed transport-prefix layer. **DocId & schemaHash aliasing** with `a`/`dx`/`sa`/`shx` fields. **Wire features negotiation** in `establish` (`f` map; backward-compat). **Identifier length caps** (DocId 512 UTF-8 bytes; schemaHash 256). **Delivery-mode taxonomy** (muxed, streamed-deferred, datagram-deferred). **`vacant` message** (`0x14`) — additive negative-ack to interest; old peers reject the unknown discriminator harmlessly (set-membership), so it is wire-backward-compatible. **Establish `protocolVersion`** (`pv: [major, minor]`; absent ⇒ `[1,0]`; emitted only when non-default) — names the sync wire-contract revision, compared by the three-tier rule (features silent / minor warning / major error); additive and byte-identical for `[1,0]` peers. |

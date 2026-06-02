@@ -12,8 +12,10 @@ export type {
   DocId,
   PeerId,
   PeerIdentityDetails,
+  ProtocolVersion,
   TransportType,
 } from "./types.js"
+export { PROTOCOL_VERSION } from "./types.js"
 
 // ---------------------------------------------------------------------------
 // Message types — the protocol vocabulary

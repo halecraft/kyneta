@@ -11,7 +11,7 @@ import type {
   InterestMsg,
   PresentMsg,
 } from "@kyneta/transport"
-import { Pipeline } from "@kyneta/transport"
+import { Pipeline, PROTOCOL_VERSION } from "@kyneta/transport"
 import type { Result, WireError } from "@kyneta/wire"
 import { describe, expect, it } from "vitest"
 
@@ -50,12 +50,14 @@ const serverEstablish: EstablishMsg = {
   type: "establish",
   identity: { peerId: "server", name: "Server", type: "service" },
   features: { alias: true },
+  protocolVersion: PROTOCOL_VERSION,
 }
 
 const clientEstablish: EstablishMsg = {
   type: "establish",
   identity: { peerId: "client", name: "Client", type: "user" },
   features: { alias: true },
+  protocolVersion: PROTOCOL_VERSION,
 }
 
 // ---------------------------------------------------------------------------

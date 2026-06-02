@@ -8,7 +8,7 @@ import { ChannelDirectory } from "../channel-directory.js"
 import type { ChannelMsg } from "../messages.js"
 import { createTestTransportContext } from "../testing/transport-context.js"
 import { Transport } from "../transport.js"
-import type { PeerIdentityDetails } from "../types.js"
+import { PROTOCOL_VERSION, type PeerIdentityDetails } from "../types.js"
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -128,6 +128,7 @@ describe("Transport lifecycle", () => {
     const msg: ChannelMsg = {
       type: "establish",
       identity: testIdentity,
+      protocolVersion: PROTOCOL_VERSION,
     }
 
     const sent = adapter._send({ toChannelIds: [channelId], message: msg })
@@ -185,6 +186,7 @@ describe("Transport lifecycle", () => {
     const msg: ChannelMsg = {
       type: "establish",
       identity: testIdentity,
+      protocolVersion: PROTOCOL_VERSION,
     }
 
     adapter._send({
@@ -204,6 +206,7 @@ describe("Transport lifecycle", () => {
     const msg: ChannelMsg = {
       type: "establish",
       identity: testIdentity,
+      protocolVersion: PROTOCOL_VERSION,
     }
 
     const sent = adapter._send({ toChannelIds: [9999], message: msg })

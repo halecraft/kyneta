@@ -52,6 +52,7 @@ import type {
   PresentMsg,
   WireFeatures,
 } from "./messages.js"
+import { PROTOCOL_VERSION } from "./types.js"
 
 export type { Alias } from "@kyneta/wire"
 
@@ -215,6 +216,16 @@ export function applyOutboundAliasing(
         if (msg.features.datagram !== undefined)
           wire.f.d = msg.features.datagram
       }
+      // Omit pv at the default so a (1,0) peer's establish stays
+      // byte-identical to a pre-protocolVersion peer's — the same
+      // omit-default convention as `shs` and `WireFeatures`.
+      const pv = msg.protocolVersion
+      if (
+        pv.major !== PROTOCOL_VERSION.major ||
+        pv.minor !== PROTOCOL_VERSION.minor
+      ) {
+        wire.pv = [pv.major, pv.minor]
+      }
       return { state: newState, result: ok(wire) }
     }
 
@@ -371,6 +382,13 @@ export function applyInboundAliasing(
       const msg: EstablishMsg = {
         type: "establish",
         identity: { peerId: wire.id, name: wire.n, type: wire.y },
+        // Default an absent pv to PROTOCOL_VERSION at the wire boundary, so
+        // the parsed domain message always carries a concrete version
+        // (absent and explicit-(1,0) are indistinguishable downstream).
+        protocolVersion:
+          wire.pv !== undefined
+            ? { major: wire.pv[0], minor: wire.pv[1] }
+            : PROTOCOL_VERSION,
       }
       if (features !== undefined) msg.features = features
       return { state: newState, result: ok(msg) }

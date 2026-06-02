@@ -188,7 +188,7 @@ Source: `src/sync-program.ts` message handlers. The seven messages from `@kyneta
 
 | Message | Category | Direction | Payload | Semantic |
 |---------|----------|-----------|---------|----------|
-| `establish` | Lifecycle | Symmetric | `{ identity: PeerIdentityDetails }` | Peer identity exchange on connection. Both peers send. |
+| `establish` | Lifecycle | Symmetric | `{ identity, features?, protocolVersion? }` | Peer identity exchange on connection. Both peers send. `protocolVersion` drives establish-time compatibility detection (see below). |
 | `depart` | Lifecycle | One-way | `{}` | Explicit departure — the receiver skips the grace timer. |
 | `present` | Sync | One-way | `{ docs: Array<{ docId, replicaType, syncMode, schemaHash, supportedHashes? }> }` | "I have these documents." Filtered by `canShare`. |
 | `interest` | Sync | One-way | `{ docId, version?, reciprocate? }` | "I want this doc. Here's my version." `reciprocate` asks for the symmetric interest. |
@@ -196,7 +196,19 @@ Source: `src/sync-program.ts` message handlers. The seven messages from `@kyneta
 | `dismiss` | Sync | One-way | `{ docId }` | "I am leaving the sync graph for this doc." Dual of `present`. Receiver deletes its per-peer entry + fires `ensure-doc-dismissed`. |
 | `vacant` | Sync | Point-to-point | `{ docId }` | "You asked, but I don't have this doc and won't serve it." Produced by `declareVacant` from `onEnsureDoc`'s terminal non-serve branches; consumed by `handleVacant` (sets the peer `vacant`, emits **no** `ensure-doc-dismissed` — our replica survives). |
 
-The six are defined once in `@kyneta/transport`; the wire encoding is defined once in `@kyneta/wire`. This package implements the *semantics*.
+The seven are defined once in `@kyneta/transport`; the wire encoding is defined once in `@kyneta/wire`. This package implements the *semantics*.
+
+### Establish-time protocol-version compatibility
+
+`establish` carries a required `protocolVersion` (`{ major, minor }`, from `@kyneta/transport`) — sparse on the wire (absent `pv` ⇒ `PROTOCOL_VERSION = (1, 0)`, defaulted at the inbound transform). The session program records the peer's value on `ChannelEntry.peerProtocolVersion` (optional — unknown until the remote `establish` arrives) and, at `completeEstablish`, runs `detectProtocolVersionDiagnostic` alongside `detectPeerIdentityWarning`. The pure classifier `classifyProtocolSkew` (`src/protocol-version.ts`) is the comparison core:
+
+- differing `major` → `"major-mismatch"` → `diagnostic` effect with `severity: "error"`.
+- same major, differing `minor` → `"minor-skew"` → `diagnostic` with `severity: "warning"` (backward-compatible refinement; informational only).
+- equal / absent → silent.
+
+**Warn/error-only — it never gates.** The peer's `syncEffect` is emitted unchanged, so an incompatible peer remains observable and enters the sync graph (data simply will not converge). This deliberately avoids inventing a "visible-but-inert" peer state — the per-doc schema-hash mismatch path (`sync-program.ts`) already establishes the precedent of *skipping work*, never withholding the peer, so the frozen `SyncRef`/`peerStates` surface is untouched. A 2.0 peer's self version is permanently `(1, 0)`, so the error/warning branches are reserve-only until a real major-2 peer exists; actually refusing to sync is deferred to that release.
+
+The `SessionEffect` diagnostic is `{ type: "diagnostic"; severity: "error" | "warning"; message }` — the shell maps `severity` to `console.error`/`console.warn`. This severity shape is what the future structured `onProtocolWarning(docId, kind, severity, error)` callback will reuse. **Parity candidate:** `SyncEffect` still has a separate `{ type: "warning" }` (schema-hash / syncMode mismatches); unifying it to the `diagnostic` shape is a deliberate follow-up, not done here.
 
 ### Sync-mode dispatch
 
