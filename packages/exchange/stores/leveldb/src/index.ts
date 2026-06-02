@@ -176,6 +176,56 @@ function parseSeqNoFromRecordKey(key: string, docId: DocId): number {
 }
 
 // ---------------------------------------------------------------------------
+// Write planning — pure gather/plan/execute split (mirrors sql-core)
+// ---------------------------------------------------------------------------
+
+type BatchOp =
+  | { readonly type: "put"; readonly key: string; readonly value: Uint8Array }
+  | { readonly type: "del"; readonly key: string }
+
+// Pure StoreMeta JSON envelope, shared by the writers (append/replace) and the
+// reader (currentMeta). The store-format marker keeps its own JSON.stringify —
+// it serializes a StoreFormatVersion, not a StoreMeta.
+function encodeDocMeta(meta: StoreMeta): Uint8Array {
+  return encoder.encode(JSON.stringify(meta))
+}
+function decodeDocMeta(bytes: Uint8Array): StoreMeta {
+  return JSON.parse(decoder.decode(bytes)) as StoreMeta
+}
+
+/**
+ * Pure: validate the record against existing meta and return the LevelDB batch
+ * ops to write. Mirrors sql-core's `planAppend` (the gather/plan/execute split,
+ * jj:pzuytnvo). An entry record yields a single record `put`; a meta record
+ * adds the doc-meta index `put`, and the two commit together in one batch.
+ * `validateAppend` throws on an entry-before-meta violation — a pure,
+ * input-deterministic throw.
+ */
+function planAppend(
+  docId: DocId,
+  record: StoreRecord,
+  existingMeta: StoreMeta | null,
+  seq: number,
+): BatchOp[] {
+  const resolved = validateAppend(docId, record, existingMeta)
+  const ops: BatchOp[] = [
+    {
+      type: "put",
+      key: recordKey(docId, seq),
+      value: encodeStoreRecord(record),
+    },
+  ]
+  if (resolved !== null) {
+    ops.push({
+      type: "put",
+      key: docMetaKey(docId),
+      value: encodeDocMeta(resolved),
+    })
+  }
+  return ops
+}
+
+// ---------------------------------------------------------------------------
 // LevelDBStore
 // ---------------------------------------------------------------------------
 
@@ -183,10 +233,14 @@ export class LevelDBStore implements Store {
   readonly #db: ClassicLevel<string, Uint8Array>
   readonly #seqNos = new SeqNoTracker()
 
-  constructor(dbPath: string) {
-    this.#db = new ClassicLevel(dbPath, {
-      valueEncoding: "binary",
-    })
+  // Accepts a path (constructs a ClassicLevel) or an already-built handle. The
+  // handle form is the test seam for fault injection — production callers pass
+  // a path via `createLevelDBStore` / `open`. jj:pzuytnvo
+  constructor(dbPathOrDb: string | ClassicLevel<string, Uint8Array>) {
+    this.#db =
+      typeof dbPathOrDb === "string"
+        ? new ClassicLevel(dbPathOrDb, { valueEncoding: "binary" })
+        : dbPathOrDb
   }
 
   // -------------------------------------------------------------------------
@@ -196,7 +250,7 @@ export class LevelDBStore implements Store {
   async currentMeta(docId: DocId): Promise<StoreMeta | null> {
     try {
       const raw = await this.#db.get(docMetaKey(docId))
-      return JSON.parse(decoder.decode(raw)) as StoreMeta
+      return decodeDocMeta(raw)
     } catch (error: any) {
       if (error.code === "LEVEL_NOT_FOUND") return null
       throw error
@@ -205,15 +259,11 @@ export class LevelDBStore implements Store {
 
   async append(docId: DocId, record: StoreRecord): Promise<void> {
     const existingMeta = await this.currentMeta(docId)
-    const resolved = validateAppend(docId, record, existingMeta)
 
-    if (resolved !== null) {
-      await this.#db.put(
-        docMetaKey(docId),
-        encoder.encode(JSON.stringify(resolved)),
-      )
-    }
-
+    // SeqNoTracker.next advances the in-memory counter before the write lands.
+    // On a caught write failure the counter runs one ahead of disk → a benign
+    // sparse seqNo (records are range-scanned, not indexed contiguously); it
+    // self-heals on reopen via the cold-start seek. Context: jj:pzuytnvo.
     const seq = await this.#seqNos.next(docId, async () => {
       const prefix = recordPrefix(docId)
       for await (const key of this.#db.keys({
@@ -226,7 +276,11 @@ export class LevelDBStore implements Store {
       }
       return null
     })
-    await this.#db.put(recordKey(docId, seq), encodeStoreRecord(record))
+
+    // Single atomic batch: an entry append is a one-op batch (record only); a
+    // meta append commits the record and the doc-meta index together, so a
+    // crash never advances the index past its backing record. jj:pzuytnvo
+    await this.#db.batch(planAppend(docId, record, existingMeta, seq))
   }
 
   async *loadAll(docId: DocId): AsyncIterable<StoreRecord> {
@@ -257,10 +311,10 @@ export class LevelDBStore implements Store {
     }
 
     // Atomic batch: delete all existing records, write replacements, upsert meta
-    const ops: Array<
-      | { type: "del"; key: string }
-      | { type: "put"; key: string; value: Uint8Array }
-    > = keysToDelete.map(key => ({ type: "del" as const, key }))
+    const ops: BatchOp[] = keysToDelete.map(key => ({
+      type: "del" as const,
+      key,
+    }))
 
     for (let i = 0; i < records.length; i++) {
       ops.push({
@@ -273,7 +327,7 @@ export class LevelDBStore implements Store {
     ops.push({
       type: "put",
       key: docMetaKey(docId),
-      value: encoder.encode(JSON.stringify(resolved)),
+      value: encodeDocMeta(resolved),
     })
 
     await this.#db.batch(ops)
@@ -371,8 +425,10 @@ export class LevelDBStore implements Store {
   }
 
   /** Open the store and run the store-format gate. Used by `createLevelDBStore`. */
-  static async open(dbPath: string): Promise<Store> {
-    const store = new LevelDBStore(dbPath)
+  static async open(
+    dbPathOrDb: string | ClassicLevel<string, Uint8Array>,
+  ): Promise<Store> {
+    const store = new LevelDBStore(dbPathOrDb)
     try {
       await store.#assertFormat()
     } catch (error) {

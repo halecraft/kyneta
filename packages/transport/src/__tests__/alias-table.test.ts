@@ -122,14 +122,20 @@ describe("alias-table — establish protocolVersion (pv)", () => {
   })
 
   it("omits pv when explicitly the default (1,0)", () => {
-    const msg: EstablishMsg = { ...alice, protocolVersion: { major: 1, minor: 0 } }
+    const msg: EstablishMsg = {
+      ...alice,
+      protocolVersion: { major: 1, minor: 0 },
+    }
     const { result } = applyOutboundAliasing(emptyAliasState(), msg)
     expect(result.ok).toBe(true)
     if (result.ok) expect((result.value as { pv?: unknown }).pv).toBeUndefined()
   })
 
   it("emits pv when non-default", () => {
-    const msg: EstablishMsg = { ...alice, protocolVersion: { major: 1, minor: 2 } }
+    const msg: EstablishMsg = {
+      ...alice,
+      protocolVersion: { major: 1, minor: 2 },
+    }
     const { result } = applyOutboundAliasing(emptyAliasState(), msg)
     expect(result.ok).toBe(true)
     if (result.ok) expect((result.value as { pv?: unknown }).pv).toEqual([1, 2])

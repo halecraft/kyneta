@@ -5,7 +5,7 @@
 > **Depends on**: `classic-level`, `@kyneta/exchange` (peer), `@kyneta/schema` (peer)
 > **Depended on by**: Applications that run a long-lived server process and want on-disk persistence behind an `Exchange`.
 > **Canonical symbols**: `LevelDBStore`, `createLevelDBStore`, `encodeStoreRecord`, `decodeStoreRecord`
-> **Key invariant(s)**: Every `Store` method is either an atomic LevelDB operation (`put`, `batch`) or a prefix iteration — no read-modify-write races. `replace()` is a single `batch` that deletes every existing record for a doc and writes the replacements, so a crash cannot leave a partial state.
+> **Key invariant(s)**: Every `Store` method is either an atomic LevelDB operation (`put`, `batch`) or a prefix iteration — no read-modify-write races. Both `append()` and `replace()` commit through a single `batch`: a meta-record `append` writes the record and the doc-meta index together, and `replace()` deletes every existing record and writes the replacements — so a crash can never leave a partial state (the doc-meta index advanced past its backing record, or some deletes applied without the new records).
 
 An on-disk implementation of `@kyneta/exchange`'s `Store` interface. Maps the exchange's per-doc append / replace / load API onto LevelDB keys using a FoundationDB-style null-byte separator and a zero-padded monotonic `seqNo` per doc. The seqNo is cached in memory and lazily discovered on first append after a cold start via a single reverse-iterator seek.
 
@@ -71,7 +71,7 @@ Seven methods, each of which is either a single LevelDB op or a single prefix it
 
 | Method | LevelDB mapping |
 |--------|-----------------|
-| `append(docId, record: StoreRecord)` | If `record.kind === "meta"`: validate via `resolveMetaFromBatch`, `put(metaKey, JSON)` + `put(recordKey(seq), encoded)`. If `record.kind === "entry"`: require existing meta, `nextSeqNo` (cached or discovered) → single `put(recordKey(seq), encoded)` |
+| `append(docId, record: StoreRecord)` | Gather (existing meta, next seqNo) → pure `planAppend` → one atomic `batch`. A `meta` record: a `batch` of `{ put(recordKey(seq), encoded), put(docMetaKey, JSON) }`. An `entry` record: a one-op `batch` of `put(recordKey(seq), encoded)` (requires existing meta). Never two sequential writes. |
 | `loadAll(docId)` → `AsyncIterable<StoreRecord>` | `db.values({ gte: prefix, lt: prefix + "\xff" })` in key order |
 | `replace(docId, records: StoreRecord[])` | Collect existing record keys, issue one `batch` that deletes all and writes the replacements starting at `recordKey(0)` — atomic. Must contain at least one `meta` record; materialized index is updated. |
 | `delete(docId)` | Collect `[metaKey, ...recordKeys]`, one `batch` of `del`s — atomic |
@@ -127,13 +127,13 @@ Sixteen digits is enough for 10^16 appends per doc — far beyond any conceivabl
 
 ## SeqNo lifecycle
 
-Source: `packages/exchange/stores/leveldb/src/index.ts` → `#seqNos`, `#nextSeqNo`.
+Source: `packages/exchange/stores/leveldb/src/index.ts` → `#seqNos`; `packages/exchange/src/store/seq-tracker.ts` → `SeqNoTracker`.
 
-The store maintains `#seqNos: Map<DocId, number>` — the most recently used seqNo per doc, cached in memory. Three phases:
+The store delegates to a shared `SeqNoTracker` (`#seqNos`) — an in-memory `Map<DocId, number>` of the most recently used seqNo per doc, extracted so every backend shares one implementation. Three phases:
 
 | Phase | Mechanism |
 |-------|-----------|
-| Steady state | `#nextSeqNo(docId)` reads the cache, increments, writes back. One `put` per `append`. |
+| Steady state | `#seqNos.next(docId, discover)` reads the cache, increments, writes back. One write per `append` (a single `batch`). |
 | Cold start (first `append` to a doc after process restart) | Cache miss. Issue a single reverse-iterator seek: `db.keys({ gte: prefix, lt: prefix + "\xff", reverse: true, limit: 1 })`. Parse the one returned key to get `maxSeq`, cache `maxSeq + 1`. |
 | After `replace(docId, records)` | Batch atomically deletes every existing record and writes the replacements starting at `seqNo = 0`. Cache is reset to `records.length - 1`. |
 
@@ -144,6 +144,7 @@ The cold-start seek is **one** reverse iteration limited to one result. It is O(
 - **Not a write buffer.** Values are written straight through to LevelDB. The cache only holds the next seqNo to assign.
 - **Not consulted on reads.** `loadAll` iterates keys directly; the cache exists only to avoid a seek per append.
 - **Not shared across processes.** Single-writer assumption — another process appending to the same dbPath would fork the seqNo space and break ordering.
+- **Not invariably dense.** `next()` advances the in-memory counter *before* the `batch` lands. If a write fails and the process keeps running (a caught error, not a crash), the counter sits one ahead of disk, so the next append leaves a gap. This is harmless — `seqNo` is range-scanned, never indexed contiguously, and never escapes the backend — and it self-heals on reopen, where the cold-start seek re-seeds from the on-disk max. A gap is never a collision, since `next()` only increases and a skipped value is never reused within the process. (On a crash, the in-memory counter is gone entirely and is rebuilt from disk.)
 
 ---
 
@@ -165,6 +166,24 @@ A crash during the batch leaves either the old state (batch not committed) or th
 - **Not a compaction.** It is a caller-level operation. LevelDB's own SST compaction is independent and opaque.
 - **Not a transaction over metadata.** The materialized metadata index at `meta\x00{docId}` *is* updated as part of the same batch — the resolved `StoreMeta` from the replacement records is written atomically alongside the record keys.
 - **Not reversible.** Previous records are gone after the batch commits. The substrate is responsible for ensuring the replacement records constitute valid full state.
+
+---
+
+## `append` is one batch
+
+Source: `packages/exchange/stores/leveldb/src/index.ts` → `planAppend`, `append`.
+
+`append` follows the same gather → plan → execute split the SQL family uses (`sql-core`'s `planAppend`). The shell gathers state (existing meta via `currentMeta`, the next `seqNo`), the pure `planAppend(docId, record, existingMeta, seq)` validates and returns the `BatchOp[]` to write, and the shell commits them in one `db.batch`:
+
+- An **entry** record → a one-op `batch` (the record `put` only).
+- A **meta** record → a `batch` of the record `put` *and* the doc-meta index `put`.
+
+A meta-record append is exactly the path that establishes or changes a doc's identity (creation, a post-migration `schemaHash`, a replicaType/syncMode change). Committing both writes in one batch means a crash can never advance the materialized `doc-meta` index past its backing record — `currentMeta` and `loadAll` can never disagree about the doc's identity. The conformance suite's fault-injection atomicity property (`@kyneta/exchange/testing`) guards this: it arms a write fault mid-append and asserts no partial state survives.
+
+### What `append`'s atomicity is NOT
+
+- **Not multi-call.** There is no read-modify-write across two LevelDB operations; the single `batch` is the only write.
+- **Not dependent on op order.** `batch` is all-or-nothing, so the order of the record and doc-meta `put`s within it is immaterial.
 
 ---
 

@@ -11,6 +11,7 @@ import type { StoreRecord } from "@kyneta/exchange"
 import {
   collectAll,
   describeStore,
+  makeArmedFault,
   makeBinaryEntryRecord,
   makeEntryRecord,
   makeMetaRecord,
@@ -22,6 +23,7 @@ import {
   createLevelDBStore,
   decodeStoreRecord,
   encodeStoreRecord,
+  LevelDBStore,
 } from "../index.js"
 
 // ---------------------------------------------------------------------------
@@ -53,6 +55,39 @@ afterAll(() => {
 describeStore("LevelDBStore", () => createLevelDBStore(makeTmpDir()), {
   cleanup: async backend => {
     await backend.close()
+  },
+  // Atomicity property: wrap the raw ClassicLevel so the Nth write op fails.
+  // Op-weighting (put = 1, batch = ops.length) makes the harness's
+  // injectFault(2) land inside the meta-append's 2-op batch, so the throw fires
+  // before the atomic batch commits — nothing leaks. jj:pzuytnvo
+  faultFactory: async () => {
+    const dir = makeTmpDir()
+    const raw = new ClassicLevel<string, Uint8Array>(dir, {
+      valueEncoding: "binary",
+    })
+    const { proxy, arm } = makeArmedFault(raw, {
+      put: 1,
+      batch: ops => (ops as readonly unknown[]).length,
+    })
+    const store = await LevelDBStore.open(proxy)
+    return {
+      store,
+      injectFault: arm,
+      // LevelDB takes a single-process directory lock, so the fresh store
+      // cannot open a second handle on `dir` while `raw` is live — release it
+      // first, then reopen non-faulting on the same dir.
+      freshStore: async () => {
+        await raw.close()
+        return createLevelDBStore(dir)
+      },
+      cleanup: async () => {
+        try {
+          await raw.close()
+        } catch {
+          // already closed by freshStore
+        }
+      },
+    }
   },
 })
 

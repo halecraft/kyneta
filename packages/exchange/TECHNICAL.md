@@ -568,6 +568,8 @@ Applications pass zero or more stores in `ExchangeParams.stores`. Writes fan out
 
 The three SQL-family backends share pure helpers (`toRow`, `fromRow`, `planAppend`, `planReplace`, `failOnNthCall`) via `@kyneta/sql-store-core` — preserving round-trip portability of a `StoreRecord` stream across SQL backends. The in-memory store in `src/store/in-memory-store.ts` is used for tests and browser-ephemeral cases.
 
+For the conformance suite's fault-injection atomicity property, `@kyneta/exchange/testing` exports `makeArmedFault` — a shared op-weighted, deferred-arm write-fault primitive that a backend's `faultFactory` wraps around its write seam (LevelDB `put`/`batch` weighted by op count, etc.). It supersedes the per-backend hand-rolled wrappers and the construction-armed `failOnNthCall`; LevelDB consumes it today, with the remaining backends to migrate.
+
 ### Async-factory pattern for stores requiring async setup
 
 `Store` instances handed to `Exchange` must be ready by construction — the seven `Store` methods are all that the Exchange knows about; there is no lifecycle hook and no orchestration of readiness. Backends needing async setup (open a connection, validate a schema, probe connectivity) expose **async factory functions** returning `Promise<Store>`. The Exchange takes ready stores; readiness is a per-backend concern, surfacing curated errors at the right altitude.

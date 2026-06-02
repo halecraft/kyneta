@@ -628,10 +628,7 @@ export const SYNC_EPHEMERAL: SyncMode = {
  * False for authoritative (serialized + delta-capable) — request/response, not exchange.
  */
 export function requiresBidirectionalSync(mode: SyncMode): boolean {
-  return (
-    mode.writerModel === "concurrent" &&
-    mode.delivery === "delta-capable"
-  )
+  return mode.writerModel === "concurrent" && mode.delivery === "delta-capable"
 }
 
 // ---------------------------------------------------------------------------

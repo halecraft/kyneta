@@ -42,5 +42,7 @@ export const POSTGRES_SCHEMA_DDL = `
 
 /** Wipe the canonical tables. Useful for per-test isolation. */
 export async function truncateAll(pool: Pool): Promise<void> {
-  await pool.query(`TRUNCATE kyneta_records, kyneta_doc_meta, kyneta_store_meta`)
+  await pool.query(
+    `TRUNCATE kyneta_records, kyneta_doc_meta, kyneta_store_meta`,
+  )
 }

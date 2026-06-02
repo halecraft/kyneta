@@ -927,7 +927,8 @@ describe("session-program", () => {
       expect(warnings.length).toBeGreaterThanOrEqual(1)
       expect(
         warnings.some(
-          w => w.type === "diagnostic" && w.message.includes("duplicate peerId"),
+          w =>
+            w.type === "diagnostic" && w.message.includes("duplicate peerId"),
         ),
       ).toBe(true)
     })
@@ -939,9 +940,7 @@ describe("session-program", () => {
 
   describe("protocol version detection", () => {
     const diagnostics = (fx: SessionEffect[]) =>
-      fx.filter(
-        e => e.type === "diagnostic" && e.message.includes("protocol"),
-      )
+      fx.filter(e => e.type === "diagnostic" && e.message.includes("protocol"))
     const hasSyncEvent = (fx: SessionEffect[]) =>
       fx.some(e => e.type === "sync-event")
 

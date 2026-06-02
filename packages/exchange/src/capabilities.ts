@@ -62,10 +62,7 @@ function syncModeName(mode: SyncMode): string {
  * `SyncMode`. Two entries share a key iff they are replication-
  * compatible (same name, same major) and use the same sync mode.
  */
-function replicaKey(
-  replicaType: ReplicaType,
-  syncMode: SyncMode,
-): ReplicaKey {
+function replicaKey(replicaType: ReplicaType, syncMode: SyncMode): ReplicaKey {
   return `${replicaType[0]}:${replicaType[1]}:${syncModeName(syncMode)}`
 }
 

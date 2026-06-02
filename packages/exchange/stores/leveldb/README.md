@@ -103,7 +103,7 @@ Flags byte layout:
 
 ### Atomicity
 
-`replace()` uses LevelDB's batch operation to atomically delete all existing entries and write the single replacement. A concurrent reader never observes an empty intermediate state.
+Every write commits through a single LevelDB `batch`. `append()` of a metadata record commits the materialized index update and the record together, so a crash can never leave the `doc-meta` index advanced past its backing record (an entry-record append is a single record write). `replace()` atomically deletes all existing entries and writes the replacements. A concurrent reader never observes a partial intermediate state.
 
 ## Testing
 

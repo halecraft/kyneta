@@ -4,6 +4,7 @@
 // These utilities carry a vitest dependency and must NOT be
 // re-exported from the main "." barrel.
 
+export { type ArmedFault, makeArmedFault } from "./fault-injection.js"
 export {
   collectAll,
   type DescribeStoreOptions,

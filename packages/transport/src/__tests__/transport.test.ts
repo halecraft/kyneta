@@ -8,7 +8,7 @@ import { ChannelDirectory } from "../channel-directory.js"
 import type { ChannelMsg } from "../messages.js"
 import { createTestTransportContext } from "../testing/transport-context.js"
 import { Transport } from "../transport.js"
-import { PROTOCOL_VERSION, type PeerIdentityDetails } from "../types.js"
+import { type PeerIdentityDetails, PROTOCOL_VERSION } from "../types.js"
 
 // ---------------------------------------------------------------------------
 // Test helpers

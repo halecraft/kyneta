@@ -9,11 +9,7 @@
 // The shell resolves PeerId → ChannelId when interpreting effects.
 
 import type { Program } from "@kyneta/machine"
-import type {
-  ReplicaType,
-  SubstratePayload,
-  SyncMode,
-} from "@kyneta/schema"
+import type { ReplicaType, SubstratePayload, SyncMode } from "@kyneta/schema"
 import {
   replicaTypesCompatible,
   requiresBidirectionalSync,
@@ -553,10 +549,7 @@ function buildInterestResponse(
     })
 
     // CRDTs need bidirectional exchange — send interest back so the peer can receive our state too
-    if (
-      requiresBidirectionalSync(docEntry.syncMode) &&
-      message.reciprocate
-    ) {
+    if (requiresBidirectionalSync(docEntry.syncMode) && message.reciprocate) {
       effects.push({
         type: "send-to-peer",
         to: fromPeerId,

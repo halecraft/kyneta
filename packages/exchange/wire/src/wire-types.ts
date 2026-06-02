@@ -146,29 +146,21 @@ export const SyncModeWire = {
   Ephemeral: 0x02,
 } as const
 
-export type SyncModeWireValue =
-  (typeof SyncModeWire)[keyof typeof SyncModeWire]
+export type SyncModeWireValue = (typeof SyncModeWire)[keyof typeof SyncModeWire]
 
 /**
  * Reverse lookup: wire integer → SyncMode object.
  */
-export const SyncModeWireToMode: Record<
-  SyncModeWireValue,
-  SyncMode
-> = {
+export const SyncModeWireToMode: Record<SyncModeWireValue, SyncMode> = {
   [SyncModeWire.Collaborative]: SYNC_COLLABORATIVE,
   [SyncModeWire.Authoritative]: SYNC_AUTHORITATIVE,
   [SyncModeWire.Ephemeral]: SYNC_EPHEMERAL,
 }
 
 /** Forward lookup: SyncMode → wire integer discriminant. */
-export function syncModeToWire(
-  mode: SyncMode,
-): SyncModeWireValue {
-  if (mode.writerModel === "serialized")
-    return SyncModeWire.Authoritative
-  if (mode.delivery === "delta-capable")
-    return SyncModeWire.Collaborative
+export function syncModeToWire(mode: SyncMode): SyncModeWireValue {
+  if (mode.writerModel === "serialized") return SyncModeWire.Authoritative
+  if (mode.delivery === "delta-capable") return SyncModeWire.Collaborative
   return SyncModeWire.Ephemeral
 }
 

@@ -14,11 +14,11 @@
 
 import type { Program } from "@kyneta/machine"
 import {
-  PROTOCOL_VERSION,
   type ChannelId,
   type LifecycleMsg,
   type PeerId,
   type PeerIdentityDetails,
+  PROTOCOL_VERSION,
   type ProtocolVersion,
   type TransportType,
   type WireFeatures,

@@ -163,7 +163,11 @@ describe("establish (t: 0x01)", () => {
   })
 
   it("accepts establish with pv absent (forward-tolerant)", () => {
-    const r = validateWireMessage({ t: MessageType.Establish, id: "p", y: "user" })
+    const r = validateWireMessage({
+      t: MessageType.Establish,
+      id: "p",
+      y: "user",
+    })
     expect(r.ok).toBe(true)
   })
 
