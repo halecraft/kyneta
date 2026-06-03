@@ -29,6 +29,27 @@ function createTestDoc(initialText: string = "") {
 }
 
 // ---------------------------------------------------------------------------
+// Type-level regression lock — TextRefLike accepts a Ref<TextSchema> with no cast
+// ---------------------------------------------------------------------------
+
+describe("TextRefLike", () => {
+  it("accepts a text Ref<TextSchema> without a cast, and rejects non-text refs", () => {
+    const doc = createTestDoc("x")
+    // Positive — locks the widening: a real text ref is structurally a
+    // TextRefLike, no `as unknown as` cast. A compile error here (caught by
+    // tsc, which includes this file) means the gap reopened.
+    const ok: TextRefLike = doc.title
+    expect(typeof ok).toBe("function")
+
+    // Negative — locks narrowness: a number scalar ref must NOT be a TextRefLike.
+    const numbers = createDoc(Schema.struct({ count: Schema.number() }))
+    // @ts-expect-error a number scalar ref is not assignable to TextRefLike
+    const bad: TextRefLike = numbers.count
+    void bad
+  })
+})
+
+// ---------------------------------------------------------------------------
 // useText
 // ---------------------------------------------------------------------------
 
@@ -36,7 +57,7 @@ describe("useText", () => {
   it("returns a stable ref callback", () => {
     const doc = createTestDoc("hello")
     const { result, rerender } = renderHook(() =>
-      useText(doc.title as unknown as TextRefLike),
+      useText(doc.title),
     )
 
     const first = result.current
@@ -53,7 +74,7 @@ describe("useText", () => {
       const textarea = document.createElement("textarea")
 
       const { result } = renderHook(() =>
-        useText(doc.title as unknown as TextRefLike),
+        useText(doc.title),
       )
 
       // Simulate React calling the ref callback with the element
@@ -70,7 +91,7 @@ describe("useText", () => {
       textarea.value = "stale"
 
       const { result } = renderHook(() =>
-        useText(doc.title as unknown as TextRefLike),
+        useText(doc.title),
       )
 
       act(() => {
@@ -87,7 +108,7 @@ describe("useText", () => {
       const textarea = document.createElement("textarea")
 
       const { result } = renderHook(() =>
-        useText(doc.title as unknown as TextRefLike),
+        useText(doc.title),
       )
 
       // Attach
@@ -114,7 +135,7 @@ describe("useText", () => {
       const textarea = document.createElement("textarea")
 
       const { result } = renderHook(() =>
-        useText(doc.title as unknown as TextRefLike),
+        useText(doc.title),
       )
 
       act(() => {
@@ -146,7 +167,7 @@ describe("useText", () => {
       })
 
       const { result } = renderHook(() =>
-        useText(doc.title as unknown as TextRefLike),
+        useText(doc.title),
       )
 
       act(() => {
@@ -161,7 +182,7 @@ describe("useText", () => {
       const textarea = document.createElement("textarea")
 
       const { result } = renderHook(() =>
-        useText(doc.title as unknown as TextRefLike),
+        useText(doc.title),
       )
 
       act(() => {
@@ -185,7 +206,7 @@ describe("useText", () => {
       const textarea = document.createElement("textarea")
 
       const { result, rerender } = renderHook(
-        ({ textRef }) => useText(textRef as unknown as TextRefLike),
+        ({ textRef }) => useText(textRef),
         { initialProps: { textRef: doc1.title } },
       )
 

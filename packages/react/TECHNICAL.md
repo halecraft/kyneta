@@ -354,6 +354,12 @@ interface UseTextOptions {
 - **Not re-rendering on text changes.** The hook is write-only during text edits. Reads happen through `useValue(textRef)` or the DOM directly.
 - **Not tied to a specific text component.** `<input type="text">` and `<textarea>` both work. Any element matching the structural shape (having `value`, `selectionStart`, `selectionEnd`, `setRangeText`) could be bound.
 
+### Gotcha — why `useText(doc.body)` needs no cast
+
+`TextRefLike` is composed from canonical pieces — `(() => string) & TextRef & HasChangefeed` — not a hand-declared text-ref shape. The subtlety is the `[CHANGEFEED]` member: it requires only the **loose** `HasChangefeed` surface (`ChangefeedProtocol<unknown, ChangeBase>`), which is exactly what an interpreted ref statically carries. A ref's changefeed generics are *erased* by `@kyneta/schema`'s `Wrap` (it intersects `HasChangefeed` with no type arguments), so the static type of `someRef[CHANGEFEED]` is `ChangefeedProtocol<unknown, ChangeBase>` — **not** a text-specific `ChangefeedProtocol<string, TextChange>`.
+
+A `<string, TextChange>`-specific shim could therefore never match a real ref (its `.current: unknown` is not assignable to `string`), which is why callers historically wrote `as unknown as TextRefLike`. Matching the loose surface removes the cast for every caller; `attach` recovers the text-ness at runtime by narrowing each delivered change with `isTextChange`. There is **no** per-node changefeed generic to lean on — the loose `Changeset<ChangeBase>` is all the static type carries (the runtime `RecursiveChangefeedProtocol` is more specific but isn't reflected statically; see `schema/TECHNICAL.md`'s `RecursiveChangefeedProtocol` discussion).
+
 ---
 
 ## `diffText` — single contiguous edit detection
@@ -468,7 +474,7 @@ This is a convenience, not a hard coupling — direct imports from the upstream 
 | `createChangefeedStore` | `src/store.ts` | Pure factory: ref → `ExternalStore<Plain<S>>`. |
 | `createSyncStore` | `src/store.ts` | Pure factory: `SyncRef` → `ExternalStore<PeerSyncState[]>`. |
 | `createNullishStore` | `src/store.ts` | No-op store for `null` / `undefined`. |
-| `TextRefLike` | `src/text-adapter.ts` | Structural shape of a text ref for the adapter. |
+| `TextRefLike` | `src/text-adapter.ts` | Structural shape of a text ref for the adapter — `(() => string) & TextRef & HasChangefeed`. Matches the *loose* `[CHANGEFEED]` surface every interpreted ref carries, so any `Ref<TextSchema>` satisfies it without a cast. |
 | `AttachOptions` | `src/text-adapter.ts` | `{ undo?: "prevent" \| "browser" }`. |
 | `attach` | `src/text-adapter.ts` | Imperative bind: element + textRef → detach. |
 | `diffText` | `src/text-adapter.ts` | Pure: `(oldText, newText, cursorHint) → TextChange`. |

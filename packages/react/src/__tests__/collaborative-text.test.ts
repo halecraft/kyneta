@@ -12,7 +12,7 @@ import { Exchange } from "@kyneta/exchange"
 import { loro } from "@kyneta/loro-schema"
 import { batch, Schema } from "@kyneta/schema"
 import { afterEach, describe, expect, it } from "vitest"
-import { attach, type TextRefLike } from "../text-adapter.js"
+import { attach } from "../text-adapter.js"
 
 // ---------------------------------------------------------------------------
 // Schema — a document with a single collaborative text field
@@ -100,8 +100,8 @@ describe("collaborative text editing: two peers with attach()", () => {
     const textareaA = createTextarea()
     const textareaB = createTextarea()
 
-    const detachA = attach(textareaA, alice.doc.body as unknown as TextRefLike)
-    const detachB = attach(textareaB, bob.doc.body as unknown as TextRefLike)
+    const detachA = attach(textareaA, alice.doc.body)
+    const detachB = attach(textareaB, bob.doc.body)
 
     // Initial sync — both empty
     await drain()
@@ -131,8 +131,8 @@ describe("collaborative text editing: two peers with attach()", () => {
     const textareaA = createTextarea()
     const textareaB = createTextarea()
 
-    const detachA = attach(textareaA, alice.doc.body as unknown as TextRefLike)
-    const detachB = attach(textareaB, bob.doc.body as unknown as TextRefLike)
+    const detachA = attach(textareaA, alice.doc.body)
+    const detachB = attach(textareaB, bob.doc.body)
 
     await drain()
 
@@ -156,8 +156,8 @@ describe("collaborative text editing: two peers with attach()", () => {
     const textareaA = createTextarea()
     const textareaB = createTextarea()
 
-    const detachA = attach(textareaA, alice.doc.body as unknown as TextRefLike)
-    const detachB = attach(textareaB, bob.doc.body as unknown as TextRefLike)
+    const detachA = attach(textareaA, alice.doc.body)
+    const detachB = attach(textareaB, bob.doc.body)
 
     await drain()
 
@@ -194,8 +194,8 @@ describe("collaborative text editing: two peers with attach()", () => {
     })
     await drain()
 
-    const detachA = attach(textareaA, alice.doc.body as unknown as TextRefLike)
-    const detachB = attach(textareaB, bob.doc.body as unknown as TextRefLike)
+    const detachA = attach(textareaA, alice.doc.body)
+    const detachB = attach(textareaB, bob.doc.body)
 
     expect(textareaA.value).toBe("base")
     expect(textareaB.value).toBe("base")
@@ -238,8 +238,8 @@ describe("collaborative text editing: two peers with attach()", () => {
     })
     await drain()
 
-    const detachA = attach(textareaA, alice.doc.body as unknown as TextRefLike)
-    const detachB = attach(textareaB, bob.doc.body as unknown as TextRefLike)
+    const detachA = attach(textareaA, alice.doc.body)
+    const detachB = attach(textareaB, bob.doc.body)
 
     // Bob places cursor at position 4 (between "d" and "e")
     textareaB.selectionStart = 4
@@ -262,7 +262,7 @@ describe("collaborative text editing: two peers with attach()", () => {
     const alice = createPeer("alice", bridge)
 
     const textareaA = createTextarea()
-    const detachA = attach(textareaA, alice.doc.body as unknown as TextRefLike)
+    const detachA = attach(textareaA, alice.doc.body)
 
     await drain()
 
@@ -286,8 +286,8 @@ describe("collaborative text editing: two peers with attach()", () => {
     const textareaA = createTextarea()
     const textareaB = createTextarea()
 
-    const detachA = attach(textareaA, alice.doc.body as unknown as TextRefLike)
-    const detachB = attach(textareaB, bob.doc.body as unknown as TextRefLike)
+    const detachA = attach(textareaA, alice.doc.body)
+    const detachB = attach(textareaB, bob.doc.body)
 
     await drain()
 
@@ -318,8 +318,8 @@ describe("collaborative text editing: two peers with attach()", () => {
     const textareaA = createTextarea()
     const textareaB = createTextarea()
 
-    const detachA = attach(textareaA, alice.doc.body as unknown as TextRefLike)
-    const detachB = attach(textareaB, bob.doc.body as unknown as TextRefLike)
+    const detachA = attach(textareaA, alice.doc.body)
+    const detachB = attach(textareaB, bob.doc.body)
 
     await drain()
 

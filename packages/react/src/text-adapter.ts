@@ -19,12 +19,13 @@
 //
 // No React imports — this module is framework-agnostic.
 
-import { CHANGEFEED, type Changeset } from "@kyneta/changefeed"
+import { CHANGEFEED, type Changeset, type HasChangefeed } from "@kyneta/changefeed"
 import {
   batch,
   isTextChange,
   type TextChange,
   type TextInstruction,
+  type TextRef,
   textChange,
   textInstructionsToPatches,
   transformIndex,
@@ -36,23 +37,19 @@ import {
 
 /**
  * Structural type capturing the surface of a text `Ref<TextSchema>` that
- * the adapter consumes:
+ * the adapter consumes — composed from the canonical pieces rather than
+ * re-declared:
  *
- * - Callable: `ref()` returns the current string value.
- * - `[CHANGEFEED]`: subscribe to remote changes.
- * - `insert` / `delete` / `update`: mutation methods used inside `batch()`.
- *
- * Any `Ref<TextSchema>` from the standard interpreter stack satisfies this.
+ * - `() => string`: call the ref to read the current string value.
+ * - `TextRef`: the `insert` / `delete` / `update` mutation methods — the
+ *   single source of truth, imported from `@kyneta/schema`.
+ * - `HasChangefeed`: the `[CHANGEFEED]` surface to subscribe to changes.
+ *   This is the *loose* `ChangefeedProtocol<unknown, ChangeBase>` that every
+ *   interpreted ref actually carries (the changefeed generics are erased by
+ *   `Wrap`), so any `Ref<TextSchema>` satisfies this without a cast; `attach`
+ *   recovers the text-ness at runtime by narrowing with `isTextChange`.
  */
-export type TextRefLike = ((...args: any[]) => string) & {
-  readonly [CHANGEFEED]: import("@kyneta/changefeed").ChangefeedProtocol<
-    string,
-    TextChange
-  >
-  insert(index: number, content: string): void
-  delete(index: number, length: number): void
-  update(content: string): void
-}
+export type TextRefLike = (() => string) & TextRef & HasChangefeed
 
 // ===========================================================================
 // Functional Core

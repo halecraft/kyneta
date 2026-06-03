@@ -17,8 +17,14 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-import type { TextRefLike } from "@kyneta/react"
 import { useDocument, useSyncState, useText, useValue } from "@kyneta/react"
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react"
 import { TodoDoc } from "./schema.js"
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -45,24 +51,63 @@ function SyncIndicator({ doc }: { doc: object }) {
 
 function TodoItem({
   todoRef,
+  shouldFocus,
+  onFocused,
+  onEnter,
   onToggle,
   onRemove,
 }: {
   todoRef: any
+  shouldFocus: boolean
+  onFocused: () => void
+  onEnter: () => void
   onToggle: () => void
   onRemove: () => void
 }) {
   const done = useValue(todoRef.done) as boolean
-  const textInputRef = useText(todoRef.text as unknown as TextRefLike)
+  const bindText = useText(todoRef.text)
+  const inputEl = useRef<HTMLInputElement | null>(null)
+
+  // Compose useText's ref callback with our own node capture, so the same
+  // element both drives the CRDT binding and can be focused imperatively.
+  // Mirrors bindText's identity (it's stable while the text ref is), so we
+  // add no extra attach/detach churn.
+  const setInput = useCallback(
+    (el: HTMLInputElement | null) => {
+      inputEl.current = el
+      bindText(el)
+    },
+    [bindText],
+  )
+
+  // Focus this row's input when it's the freshly-created todo.
+  useEffect(() => {
+    if (!shouldFocus) return
+    inputEl.current?.focus()
+    onFocused()
+  }, [shouldFocus, onFocused])
+
+  const handleKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== "Enter") return
+    e.preventDefault()
+    // Empty field — nothing to submit; just leave the input.
+    if (e.currentTarget.value.trim() === "") {
+      e.currentTarget.blur()
+      return
+    }
+    // Submit: create the next todo and focus it, for rapid entry.
+    onEnter()
+  }
 
   return (
     <li>
       <input type="checkbox" checked={done} onChange={onToggle} />
       <input
-        ref={textInputRef}
+        ref={setInput}
         type="text"
         className={done ? "todo-text done" : "todo-text"}
         placeholder="What needs to be done?"
+        onKeyDown={handleKeyDown}
       />
       <button type="button" onClick={onRemove}>
         ×
@@ -81,14 +126,21 @@ export function App() {
     todos: readonly { text: string; done: boolean }[]
   }
 
+  // Index of the todo whose input should grab focus once it renders.
+  // Set when a todo is created (button or Enter), cleared after focusing.
+  const [focusIndex, setFocusIndex] = useState<number | null>(null)
+  const clearFocus = useCallback(() => setFocusIndex(null), [])
+
   // ─── Mutations ─────────────────────────────────────────────────────
 
-  const addTodo = () => {
-    // Push a new todo with empty text. The text field is a CRDT —
-    // the user types into the <input> bound via useText, which
-    // applies character-level edits directly to the CRDT.
+  const addTodo = useCallback(() => {
+    // Push a new todo with empty text. The text field is a CRDT — the user
+    // types into the <input> bound via useText, which applies character-level
+    // edits directly to the CRDT. The new item is appended, so it lands at
+    // the current end index; focus it so typing can start immediately.
+    setFocusIndex(todos.length)
     doc.todos.push({ text: "", done: false })
-  }
+  }, [doc, todos.length])
 
   const toggleTodo = (index: number) => {
     // Single mutation (read + set) — write directly, like addTodo/removeTodo.
@@ -119,6 +171,9 @@ export function App() {
           <TodoItem
             key={index}
             todoRef={doc.todos.at(index)}
+            shouldFocus={index === focusIndex}
+            onFocused={clearFocus}
+            onEnter={addTodo}
             onToggle={() => toggleTodo(index)}
             onRemove={() => removeTodo(index)}
           />

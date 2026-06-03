@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vitest"
 import {
   attach,
   diffText,
-  type TextRefLike,
   transformSelection,
 } from "../text-adapter.js"
 
@@ -195,7 +194,7 @@ describe("attach", () => {
       const doc = createTestDoc("Hello")
       const input = createMockInput()
 
-      const detach = attach(input, doc.title as unknown as TextRefLike)
+      const detach = attach(input, doc.title)
       expect(input.value).toBe("Hello")
       detach()
     })
@@ -204,7 +203,7 @@ describe("attach", () => {
       const doc = createTestDoc()
       const input = createMockInput("stale")
 
-      const detach = attach(input, doc.title as unknown as TextRefLike)
+      const detach = attach(input, doc.title)
       expect(input.value).toBe("")
       detach()
     })
@@ -213,7 +212,7 @@ describe("attach", () => {
       const doc = createTestDoc("Textarea content")
       const textarea = createMockTextarea()
 
-      const detach = attach(textarea, doc.title as unknown as TextRefLike)
+      const detach = attach(textarea, doc.title)
       expect(textarea.value).toBe("Textarea content")
       detach()
     })
@@ -224,7 +223,7 @@ describe("attach", () => {
       const doc = createTestDoc("abc")
       const input = createMockInput()
 
-      const detach = attach(input, doc.title as unknown as TextRefLike)
+      const detach = attach(input, doc.title)
       expect(input.value).toBe("abc")
 
       // Simulate user typing "X" at position 1: "abc" → "aXbc"
@@ -241,7 +240,7 @@ describe("attach", () => {
       const doc = createTestDoc("abc")
       const input = createMockInput()
 
-      const detach = attach(input, doc.title as unknown as TextRefLike)
+      const detach = attach(input, doc.title)
 
       // Simulate user deleting "b": "abc" → "ac"
       input.value = "ac"
@@ -257,7 +256,7 @@ describe("attach", () => {
       const doc = createTestDoc("abc")
       const input = createMockInput()
 
-      const detach = attach(input, doc.title as unknown as TextRefLike)
+      const detach = attach(input, doc.title)
 
       // Simulate replacing "b" with "XY": "abc" → "aXYc"
       input.value = "aXYc"
@@ -273,7 +272,7 @@ describe("attach", () => {
       const doc = createTestDoc("abc")
       const input = createMockInput()
 
-      const detach = attach(input, doc.title as unknown as TextRefLike)
+      const detach = attach(input, doc.title)
 
       // Dispatch input without changing value — should be a no-op
       input.dispatchEvent(new Event("input"))
@@ -288,7 +287,7 @@ describe("attach", () => {
       const doc = createTestDoc("abc")
       const input = createMockInput()
 
-      const detach = attach(input, doc.title as unknown as TextRefLike)
+      const detach = attach(input, doc.title)
       expect(input.value).toBe("abc")
 
       // Position cursor at end to verify it's preserved
@@ -308,7 +307,7 @@ describe("attach", () => {
       const doc = createTestDoc("abc")
       const input = createMockInput()
 
-      const detach = attach(input, doc.title as unknown as TextRefLike)
+      const detach = attach(input, doc.title)
 
       batch(doc, d => {
         d.title.delete(1, 1)
@@ -322,7 +321,7 @@ describe("attach", () => {
       const doc = createTestDoc("abc")
       const input = createMockInput()
 
-      const detach = attach(input, doc.title as unknown as TextRefLike)
+      const detach = attach(input, doc.title)
 
       // Place cursor at position 2
       input.selectionStart = 2
@@ -346,7 +345,7 @@ describe("attach", () => {
       const input = createMockInput()
       const setRangeTextSpy = vi.spyOn(input, "setRangeText")
 
-      const detach = attach(input, doc.title as unknown as TextRefLike)
+      const detach = attach(input, doc.title)
       // Reset spy after initial attach (which doesn't call setRangeText)
       setRangeTextSpy.mockClear()
 
@@ -373,7 +372,7 @@ describe("attach", () => {
       const doc = createTestDoc("abc")
       const input = createMockInput()
 
-      const detach = attach(input, doc.title as unknown as TextRefLike)
+      const detach = attach(input, doc.title)
 
       // Start composition
       input.dispatchEvent(new Event("compositionstart"))
@@ -402,7 +401,7 @@ describe("attach", () => {
     it("prevents undo (Cmd+Z) and redo (Shift+Cmd+Z) keystrokes by default", () => {
       const doc = createTestDoc("abc")
       const input = createMockInput()
-      const detach = attach(input, doc.title as unknown as TextRefLike)
+      const detach = attach(input, doc.title)
 
       // Cmd+Z (undo — lowercase z)
       const cmdZ = new KeyboardEvent("keydown", {
@@ -439,7 +438,7 @@ describe("attach", () => {
       const doc = createTestDoc("abc")
       const input = createMockInput()
 
-      const detach = attach(input, doc.title as unknown as TextRefLike)
+      const detach = attach(input, doc.title)
 
       const undoEvent = new InputEvent("beforeinput", {
         inputType: "historyUndo",
@@ -462,7 +461,7 @@ describe("attach", () => {
       const doc = createTestDoc("abc")
       const input = createMockInput()
 
-      const detach = attach(input, doc.title as unknown as TextRefLike, {
+      const detach = attach(input, doc.title, {
         undo: "browser",
       })
 
@@ -490,7 +489,7 @@ describe("attach", () => {
     it("preserves selection range through remote insert before selection", () => {
       const doc = createTestDoc("hello world")
       const input = createMockInput()
-      const detach = attach(input, doc.title as unknown as TextRefLike)
+      const detach = attach(input, doc.title)
 
       // Select "world" (positions 6-11)
       input.selectionStart = 6
@@ -513,7 +512,7 @@ describe("attach", () => {
       const doc = createTestDoc("abc")
       const input = createMockInput()
 
-      const detach = attach(input, doc.title as unknown as TextRefLike)
+      const detach = attach(input, doc.title)
       detach()
 
       // After detach, input events should not flow to the CRDT
@@ -535,7 +534,7 @@ describe("attach", () => {
       const doc = createTestDoc("abc")
       const input = createMockInput()
 
-      const detach = attach(input, doc.title as unknown as TextRefLike)
+      const detach = attach(input, doc.title)
       detach()
       expect(() => detach()).not.toThrow()
     })
