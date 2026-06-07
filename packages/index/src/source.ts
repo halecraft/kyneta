@@ -9,6 +9,7 @@
 // It is a subscription-only protocol. The gate into the reactive world
 // is `Collection.from(source)`.
 
+import type { ChangeBase, ReactiveMap } from "@kyneta/changefeed"
 import type { BoundSchema } from "@kyneta/schema"
 import { subscribeNode } from "@kyneta/schema"
 import { createWatcherTable } from "./watcher-table.js"
@@ -54,7 +55,15 @@ export interface Source<V> {
  * Producer-side handle for a manual source.
  */
 export interface SourceHandle<V> {
-  /** Insert or replace a value. Emits `added` delta only for new keys. */
+  /**
+   * Insert a value, or replace an existing key's value. **Membership-keyed**: a
+   * replace on an existing key is SILENT — no delta is emitted, so a downstream
+   * `Collection` keeps the prior value (the source's `snapshot()` and the
+   * materialized `Collection` then diverge). Suits set-once keys or stable live
+   * refs you mutate in place. For replaceable *plain* values (an LWW register of
+   * immutable data) use a `@kyneta/changefeed` `ReactiveMap` consumed via
+   * `Source.fromReactiveMap`. Context: jj:qwzkmzvy.
+   */
   set(key: string, value: V): void
   /** Remove a value by key. Emits `removed` delta if the key was present. */
   delete(key: string): void
@@ -84,6 +93,14 @@ export interface ExchangeSourceHandle<V> {
 export interface FlatMapOptions {
   /** Derive the flat key from outer and inner keys. Default: `outerKey + "\0" + innerKey`. */
   key?: (outerKey: string, innerKey: string) => string
+}
+
+/**
+ * Options for `Source.fromReactiveMap`.
+ */
+export interface ReactiveMapSourceOptions<V> {
+  /** Value equality used to detect in-place updates. Default `Object.is`. */
+  readonly equals?: (a: V, b: V) => boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -455,6 +472,100 @@ function fromExchange<V>(
   }
 
   return [source, handle]
+}
+
+// ---------------------------------------------------------------------------
+// Source.fromReactiveMap — changefeed ReactiveMap adapter
+// ---------------------------------------------------------------------------
+
+/**
+ * Pure functional core: diff a previously-seen value map against the current
+ * one into a remove-before-add pair of ℤ-set events. An in-place value change
+ * (same key, `!equals`) is the DBSP-faithful update — a retraction of the old
+ * row plus an insertion of the new — so such a key appears in BOTH the retract
+ * (`-1`) and the insert (`+1`, new value). Returns:
+ *   `[]`                no change
+ *   `[retract]`         pure removal(s)
+ *   `[insert]`          pure addition(s)
+ *   `[retract, insert]` removals/updates, then additions/updates
+ * The retract event always precedes the insert event so a downstream
+ * `Collection` applies the removal before the matching re-insert.
+ */
+export function diffValueMaps<V>(
+  known: ReadonlyMap<string, V>,
+  current: ReadonlyMap<string, V>,
+  equals: (a: V, b: V) => boolean,
+): SourceEvent<V>[] {
+  let retract: ZSet = zero()
+  let insert: ZSet = zero()
+  const insertValues = new Map<string, V>()
+
+  // Removals + the retraction half of in-place updates.
+  for (const [key, prev] of known) {
+    const now = current.get(key)
+    if (now === undefined || !equals(prev, now)) {
+      retract = add(retract, single(key, -1))
+    }
+  }
+  // Additions + the insertion half of in-place updates.
+  for (const [key, now] of current) {
+    const prev = known.get(key)
+    if (prev === undefined || !equals(prev, now)) {
+      insert = add(insert, single(key, 1))
+      insertValues.set(key, now)
+    }
+  }
+
+  const events: SourceEvent<V>[] = []
+  if (!isEmpty(retract)) events.push(createSourceEvent(retract, new Map()))
+  if (!isEmpty(insert)) events.push(createSourceEvent(insert, insertValues))
+  return events
+}
+
+/**
+ * Adapt a `@kyneta/changefeed` `ReactiveMap` (an LWW register-per-key) into a
+ * `Source<V>`. Bridges the framework's two integrators: the map's last-writer-
+ * wins value cells become a ℤ-set membership stream that `Collection`/`Index`
+ * can consume. In-place value updates are lowered to retract+insert (the
+ * Materialize/DBSP UPSERT envelope), so the ℤ-set core stays untouched.
+ *
+ * Vocabulary-agnostic: the changefeed payload is ignored; each notification
+ * re-diffs `map.current` (like `fromRecord`), so any `ReactiveMap` change type
+ * works uniformly. The adapter is a *reader* — `dispose()` unsubscribes but
+ * does NOT dispose the map. Context: jj:qwzkmzvy.
+ */
+function fromReactiveMap<V, C extends ChangeBase>(
+  map: ReactiveMap<string, V, C>,
+  options?: ReactiveMapSourceOptions<V>,
+): Source<V> {
+  const equals = options?.equals ?? Object.is
+  const { emit, subscribe, clear } = createSourceEmitter<V>()
+
+  // Last-seen value map — diffed against `map.current` on every notification.
+  let known = new Map<string, V>(map.current)
+
+  const unsub = map.subscribe(() => {
+    const current = map.current
+    for (const event of diffValueMaps(known, current, equals)) {
+      emit(event)
+    }
+    known = new Map(current)
+  })
+
+  return {
+    subscribe,
+    snapshot(): ReadonlyMap<string, V> {
+      return new Map(map.current)
+    },
+    snapshotZSet(): SourceEvent<V> {
+      return defaultSnapshotZSet(map.current)
+    },
+    dispose(): void {
+      unsub()
+      clear()
+      // NOT map.dispose(): the adapter reads the map; its owner tears it down.
+    },
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -843,6 +954,10 @@ export interface SourceStatic {
     bound: BoundSchema<any>,
     mapping?: SourceMapping,
   ): [Source<V>, ExchangeSourceHandle<V>]
+  fromReactiveMap<V, C extends ChangeBase>(
+    map: ReactiveMap<string, V, C>,
+    options?: ReactiveMapSourceOptions<V>,
+  ): Source<V>
   filter<V>(
     source: Source<V>,
     pred: (key: string, value: V) => boolean,
@@ -874,6 +989,7 @@ export const Source: SourceStatic = {
   fromRecord,
   fromList,
   fromExchange,
+  fromReactiveMap,
   filter,
   union,
   map,

@@ -4,7 +4,7 @@
 > **Role**: DBSP-grounded reactive indexing over keyed collections. A three-layer pipeline — `Source` (consumer-stateless delta producer) → `Collection` (stateful ℐ integrator, *is* a `Changefeed`) → `SecondaryIndex` / `JoinIndex` (grouping + join operators) — with all internal algebra computed on ℤ-sets.
 > **Depends on**: `@kyneta/changefeed`
 > **Depended on by**: Application code that builds live, queryable views over document collections (exchange-backed or otherwise).
-> **Canonical symbols**: `Source`, `SourceEvent`, `SourceHandle`, `ExchangeSourceHandle`, `SourceMapping`, `FlatMapOptions`, `Collection`, `CollectionChange`, `integrate`, `IntegrationStep`, `SecondaryIndex`, `IndexChange`, `JoinIndex`, `KeySpec`, `field`, `keys`, `Index`, `Index.by`, `Index.join`, `ZSet`, `add`, `negate`, `single`, `zero`, `positive`, `diff`, `isEmpty`, `entries`, `fromKeys`, `toAdded`, `toRemoved`, `createWatcherTable`, `WatcherTable`
+> **Canonical symbols**: `Source`, `SourceEvent`, `SourceHandle`, `ExchangeSourceHandle`, `SourceMapping`, `FlatMapOptions`, `ReactiveMapSourceOptions`, `diffValueMaps`, `Collection`, `CollectionChange`, `integrate`, `IntegrationStep`, `SecondaryIndex`, `IndexChange`, `JoinIndex`, `KeySpec`, `field`, `keys`, `Index`, `Index.by`, `Index.join`, `ZSet`, `add`, `negate`, `single`, `zero`, `positive`, `diff`, `isEmpty`, `entries`, `fromKeys`, `toAdded`, `toRemoved`, `createWatcherTable`, `WatcherTable`
 > **Key invariant(s)**:
 > 1. Every operator's internal representation is a ℤ-set (`ReadonlyMap<string, number>` with no zero-weight entries). Public change types (`CollectionChange`, `IndexChange`) are projections, not the internal form.
 > 2. `Source` has no `current`, no `[CHANGEFEED]`, no mutable surface exposed to consumers. `Collection` is the gate into the reactive world — the one operator that carries state and satisfies the changefeed protocol.
@@ -206,6 +206,7 @@ Adapters enforce this by tracking which keys they've already emitted. Consumers 
 | `Source.fromList(ref)` | A `@kyneta/schema` list ref. Entries are list items; keys are stable IDs derived from item identity. Updates via the schema's changefeed. | Item identity |
 | `Source.fromExchange(exchange, bound, mapping?)` | Every doc in `exchange.documents` matching `bound`. Returns `[Source, ExchangeSourceHandle]`. Handle exposes `createDoc(key)` and `delete(key)`. | `mapping.toKey(docId)` or the docId directly |
 | `Source.of(exchange, bound)` | Convenience: `Source.fromExchange` without a handle, using identity mapping. Read-only. | docId |
+| `Source.fromReactiveMap(map, options?)` | A `@kyneta/changefeed` `ReactiveMap` (LWW register-per-key). Bridges its current-value-per-key surface into the ℤ-set world; in-place updates lower to retract+insert. Read-only (the map's owner mutates it). | Map keys |
 
 ### `Source.fromList` and `Source.fromExchange` — subscription discipline
 
@@ -217,6 +218,23 @@ Both adapters subscribe to schema-level reactive feeds (`subscribeNode` for list
 4. Cleans up sub-subscriptions on `dispose()`.
 
 The subscription discipline is transparent to the consumer: once you hold a `Source<V>`, you see exactly the three methods.
+
+### `Source.fromReactiveMap` — bridging a changefeed `ReactiveMap`
+
+`@kyneta/changefeed`'s `ReactiveMap` is an LWW register-per-key (the surface behind `exchange.peers`, `Catalog`, and devtools' status maps). `fromReactiveMap` adapts it into a `Source<V>` so an LWW map can drive `Index.by` / `Index.join` — the bridge between the framework's two integrators.
+
+- **Re-diff, not payload-driven.** On each `map.subscribe` notification the adapter ignores the changeset and re-diffs `map.current` against the last-seen value map (exactly as `fromRecord` re-diffs `recordRef.keys()`). This is vocabulary-agnostic — `set`/`delete`, `peer-joined`/`peer-left`, `added`/`removed` all work, because the adapter never inspects the change type. The pure diff is the exported `diffValueMaps(known, current, equals)`.
+- **In-place updates lower to retract+insert.** A same-key/`!equals` value change emits a retraction (`-1`) then an insertion (`+1`, new value) — the DBSP/Materialize UPSERT envelope (an update is a delete of the old row + insert of the new). `integrate` already orders remove-before-add and the value refreshes; the ℤ-set core is untouched. `options.equals` (default `Object.is`) suppresses a redundant retract+insert when a re-set value is equal.
+- **Churn is confined to derived views.** Because an update is remove+add, a downstream `Collection`/`SecondaryIndex` subscriber sees `removed`+`added` even when the group-key is unchanged. The base `ReactiveMap` a renderer reads directly is unaffected. Consumers that must avoid churn read current values from the base map and use the index for membership/grouping only.
+- **Reader, not owner.** `dispose()` unsubscribes from the map's changefeed and clears the emitter; it does **not** dispose `map`. The map's owner tears it down.
+
+### The model boundary — membership over references, not tuple-domain DBSP
+
+This adapter exists because `@kyneta/index` keys its ℤ-set by *identity* (a string key), carrying the value in a side-table — the "keyed upsert/changelog" flavor (Materialize UPSERT, Kafka log compaction), **not** a ℤ-set over whole tuples. Consequences worth internalizing:
+
+- The ℤ-set tracks **membership + group-key transitions**; value *content* is observed through the (live, mutable) reference, never as a ℤ-set delta. For the schema-backed sources (`of`/`fromList`/`fromExchange`) the value *is* a live ref, so a field mutation is seen through the reference and a group-key change fires via the `KeySpec.watch` field watcher — no value-content delta is needed.
+- **Same-key/different-value does not coexist.** A key in collision holds one materialized value (first-seen-wins; see the dual-weight note above), unlike pure DBSP where `(k,v1)` and `(k,v2)` are distinct elements.
+- **`Source.create` is membership-keyed.** `SourceHandle.set` on an existing key is silent (no delta), so its `Collection` retains the prior value — fine for set-once keys or live refs, a trap for wholesale-replaced *plain* values. Such replaceable plain values belong in a `@kyneta/changefeed` `ReactiveMap`, bridged here.
 
 ### What `Source` constructors are NOT
 
@@ -390,8 +408,9 @@ A `KeySpec<V>` tells `Index.by` how to derive group keys from a value. Three com
 | `zero` / `single` / `add` / `negate` / `positive` / `diff` / `isEmpty` / `entries` / `fromKeys` / `toAdded` / `toRemoved` | `src/zset.ts` | Pure ℤ-set operators. `diff(old, new) = new − old` is the abelian-group transition delta. |
 | `Source<V>` | `src/source.ts` | Consumer-stateless producer contract. |
 | `SourceEvent<V>` | `src/source.ts` | `{ delta, values }` — one emission. |
-| `SourceHandle<V>` / `ExchangeSourceHandle<V>` / `SourceMapping` / `FlatMapOptions` | `src/source.ts` | Producer-side and config types. |
-| `Source` | `src/source.ts` | Namespace: `.create`, `.fromRecord`, `.fromList`, `.fromExchange`, `.of`, `.flatMap`. |
+| `SourceHandle<V>` / `ExchangeSourceHandle<V>` / `SourceMapping` / `FlatMapOptions` / `ReactiveMapSourceOptions<V>` | `src/source.ts` | Producer-side and config types. |
+| `diffValueMaps` | `src/source.ts` | Pure FC: previous vs current value map → remove-before-add `SourceEvent[]` (the `fromReactiveMap` retract+insert lowering). |
+| `Source` | `src/source.ts` | Namespace: `.create`, `.fromRecord`, `.fromList`, `.fromExchange`, `.fromReactiveMap`, `.of`, `.flatMap`. |
 | `Collection<V>` | `src/collection.ts` | The ℐ integrator — `ReactiveMap<string, V, CollectionChange>` + `dispose`. Dual-weight internally. |
 | `CollectionChange` | `src/collection.ts` | `{ type: "added" \| "removed", key }`. Emitted on `clampedWeight` transitions only. |
 | `Collection.from` | `src/collection.ts` | Sole constructor. |
@@ -409,7 +428,7 @@ A `KeySpec<V>` tells `Index.by` how to derive group keys from a value. Three com
 |------|-------|------|
 | `src/index.ts` | 79 | Public barrel. Exports `Source`, `Collection`, `SecondaryIndex`, `JoinIndex`, `Index`, `ZSet` + operators, `KeySpec` helpers. |
 | `src/zset.ts` | ~115 | `ZSet` type + pure abelian-group operators (incl. `diff`). |
-| `src/source.ts` | ~870 | `Source` contract (`subscribe` / `snapshot` / `snapshotZSet` / `dispose`) + five constructors + four combinators (`filter` with optional `watch`, `union`, `map`, `flatMap`). |
+| `src/source.ts` | ~1000 | `Source` contract (`subscribe` / `snapshot` / `snapshotZSet` / `dispose`) + six constructors (incl. `fromReactiveMap` + its pure `diffValueMaps`) + four combinators (`filter` with optional `watch`, `union`, `map`, `flatMap`). |
 | `src/collection.ts` | ~155 | `Collection.from` — dual-weight integrator. Pure `integrate()` + imperative shell. |
 | `src/watcher-table.ts` | ~75 | `createWatcherTable` — per-key install/teardown helper shared by `fromList`, `flatMap`, `filter`, `Index.by`. |
 | `src/index-impl.ts` | ~310 | `Index.by` → `SecondaryIndex` — grouping with structural + reactive watchers (uses `WatcherTable`). |
@@ -417,6 +436,7 @@ A `KeySpec<V>` tells `Index.by` how to derive group keys from a value. Three com
 | `src/key-spec.ts` | 106 | `KeySpec` type, `field`, `keys`. |
 | `src/__tests__/zset.test.ts` | 195 | Abelian-group laws: associativity, commutativity, identity, inverse; `positive` / `negate` / `fromKeys` / `entries`. |
 | `src/__tests__/source.test.ts` | 512 | All five constructors; bootstrap; delta emission; representational invariant; dispose. |
+| `src/__tests__/from-reactive-map.test.ts` | 207 | `Source.fromReactiveMap` — pure `diffValueMaps` (add/remove/update/no-op/mixed); Collection bootstrap + add/remove/in-place-update + `equals` suppression; `Index.by` regroup-on-update + stable-key refresh; reader-not-owner dispose. |
 | `src/__tests__/source-of.test.ts` | 481 | `Source.of` over exchange — full lifecycle under real doc mutations. |
 | `src/__tests__/flatmap.test.ts` | 379 | `Source.flatMap` — outer/inner permutations, key composition, inner-source disposal. |
 | `src/__tests__/collection.test.ts` | 166 | `Collection.from` — snapshot, deltas, remove-before-add ordering, disposal. |
@@ -438,4 +458,4 @@ Similarly, `replay`, `origin`, and `aborted` do not propagate through derived fe
 
 Every test is pure JS — no `Schema.bind` requirement beyond what `Source.of` / `Source.fromList` exercise, no real substrates needed for the core ℤ-set algebra. Adapter tests use in-memory exchanges (`Bridge` + `BridgeTransport` from `@kyneta/bridge-transport`) and the plain substrate from `@kyneta/schema`. Algebraic-law tests assert the abelian-group properties directly on constructed `ZSet` values.
 
-**Tests**: 158 passed, 0 skipped across 8 files (`zset.test.ts`: ~30; `source.test.ts`: 38 — includes filter-watch + non-injective map weight-trajectory; `index.test.ts`: 27; `join.test.ts`: 13; `key-spec.test.ts`: 11; `collection.test.ts`: 22 — includes union/map equivariance + `integrate` functional-core tests; plus `flatmap.test.ts`, `source-of.test.ts`). Run with `cd packages/index && pnpm exec vitest run`.
+**Tests**: 169 passed, 0 skipped across 9 files (`zset.test.ts`: ~30; `source.test.ts`: 38 — includes filter-watch + non-injective map weight-trajectory; `index.test.ts`: 27; `join.test.ts`: 13; `key-spec.test.ts`: 11; `collection.test.ts`: 22 — includes union/map equivariance + `integrate` functional-core tests; `from-reactive-map.test.ts`: 11 — `fromReactiveMap` + `diffValueMaps`; plus `flatmap.test.ts`, `source-of.test.ts`). Run with `cd packages/index && pnpm exec vitest run`.

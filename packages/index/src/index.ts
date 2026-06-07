@@ -58,8 +58,10 @@ export {
 } from "./key-spec.js"
 // Source — consumer-stateless delta producer
 export {
+  diffValueMaps,
   type ExchangeSourceHandle,
   type FlatMapOptions,
+  type ReactiveMapSourceOptions,
   Source,
   type SourceEvent,
   type SourceHandle,
