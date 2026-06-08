@@ -34,10 +34,21 @@ import {
   DEFAULT_FRAGMENT_THRESHOLD,
   WebsocketConnection,
 } from "./connection.js"
+import {
+  DEFAULT_DRAIN,
+  type DrainOptions,
+  type DrainResult,
+  planDrainSchedule,
+  type ResolvedDrainOptions,
+  resolveDrainOptions,
+} from "./drain.js"
 import type {
   WebsocketConnectionOptions,
   WebsocketConnectionResult,
 } from "./types.js"
+
+// Re-export the drain types so consumers can import them from `./server`.
+export type { DrainOptions, DrainResult } from "./drain.js"
 
 // ---------------------------------------------------------------------------
 // Options
@@ -53,6 +64,14 @@ export interface WebsocketServerTransportOptions {
    * Default: 100KB (safe for AWS API Gateway's 128KB limit)
    */
   fragmentThreshold?: number
+
+  /**
+   * Default options for {@link WebsocketServerTransport.drainConnections}.
+   * Configure the jitter window / close code / deadline once here so the
+   * deploy-time call can be a bare `await transport.drainConnections()`.
+   * Per-call options passed to `drainConnections` override these.
+   */
+  drain?: DrainOptions
 }
 
 // ---------------------------------------------------------------------------
@@ -82,11 +101,22 @@ export interface WebsocketServerTransportOptions {
 export class WebsocketServerTransport extends Transport<PeerId> {
   #connections = new Map<PeerId, WebsocketConnection>()
   readonly #fragmentThreshold: number
+  readonly #drainDefaults: DrainOptions
+
+  // Drain state. `#draining` is one-way (set true by drainConnections, reset
+  // only by onStop so a re-initialized transport accepts again). `#resolvedDrain`
+  // holds the close code/reason so the stop-accepting guard in handleConnection
+  // can refuse new sockets with the same code. `#onDrainComplete` is the
+  // map-empty signal an active drain awaits — fired from unregisterConnection.
+  #draining = false
+  #resolvedDrain: ResolvedDrainOptions | null = null
+  #onDrainComplete: (() => void) | undefined
 
   constructor(options?: WebsocketServerTransportOptions) {
     super({ transportType: "websocket-server" })
     this.#fragmentThreshold =
       options?.fragmentThreshold ?? DEFAULT_FRAGMENT_THRESHOLD
+    this.#drainDefaults = options?.drain ?? {}
   }
 
   // ==========================================================================
@@ -113,11 +143,98 @@ export class WebsocketServerTransport extends Transport<PeerId> {
   }
 
   async onStop(): Promise<void> {
-    // Disconnect all active connections
+    // Immediate hard-close fallback. The graceful path is drainConnections();
+    // after a drain this loop is a near-no-op because the map is already empty.
     for (const connection of this.#connections.values()) {
       connection.close(1001, "Server shutting down")
     }
     this.#connections.clear()
+    // Reset drain state so a re-initialized transport (e.g. HMR re-init, which
+    // routes through onStop) accepts connections again instead of refusing them.
+    this.#draining = false
+    this.#resolvedDrain = null
+  }
+
+  // ==========================================================================
+  // Graceful drain
+  // ==========================================================================
+
+  /** Whether a drain is in progress (new connections are being refused). */
+  get isDraining(): boolean {
+    return this.#draining
+  }
+
+  /**
+   * Gracefully drain all connections for a rolling deploy.
+   *
+   * Stops accepting new connections (see {@link handleConnection}), then closes
+   * each open connection at a jittered offset in `[0, windowMs)` so clients
+   * reconnect staggered rather than stampeding the next instance. Resolves when
+   * every socket has closed **or** the deadline elapses — the imperative shell
+   * around the pure {@link planDrainSchedule}.
+   *
+   * Call this in a SIGTERM handler *after* stopping the HTTP-layer upgrade and
+   * *before* `exchange.shutdown()`. Per-call `options` override the constructor
+   * `drain` defaults.
+   *
+   * @example
+   * ```typescript
+   * process.once("SIGTERM", async () => {
+   *   wss.close()                            // stop accepting (optional; guarded)
+   *   await transport.drainConnections()     // staggered close + await drain
+   *   await exchange.shutdown()
+   *   httpServer.close(() => process.exit(0))
+   * })
+   * ```
+   */
+  async drainConnections(options?: DrainOptions): Promise<DrainResult> {
+    const resolved = resolveDrainOptions(options, this.#drainDefaults)
+    this.#draining = true
+    this.#resolvedDrain = resolved
+
+    const snapshot = Array.from(this.#connections.keys())
+    if (snapshot.length === 0) {
+      return { closed: 0, remaining: 0, timedOut: false }
+    }
+
+    const schedule = planDrainSchedule(
+      snapshot,
+      resolved.windowMs,
+      resolved.randomFn,
+    )
+    const timers: ReturnType<typeof setTimeout>[] = []
+
+    return await new Promise<DrainResult>(resolve => {
+      let settled = false
+      const finish = (timedOut: boolean): void => {
+        if (settled) return
+        settled = true
+        for (const timer of timers) clearTimeout(timer)
+        this.#onDrainComplete = undefined
+        const remaining = this.#connections.size
+        resolve({ closed: snapshot.length - remaining, remaining, timedOut })
+      }
+
+      // Completion signal: each socket's onClose → unregisterConnection; when
+      // the connection map empties, this fires (no busy-polling).
+      this.#onDrainComplete = () => finish(false)
+
+      // Staggered closes — re-read the map at fire time in case the connection
+      // already departed on its own.
+      for (const step of schedule) {
+        timers.push(
+          setTimeout(() => {
+            this.#connections
+              .get(step.peerId)
+              ?.close(resolved.closeCode, resolved.closeReason)
+          }, step.delayMs),
+        )
+      }
+
+      // A half-open socket may never fire onClose, so the completion signal
+      // alone could hang forever — bound the wait with a deadline.
+      timers.push(setTimeout(() => finish(true), resolved.deadlineMs))
+    })
   }
 
   // ==========================================================================
@@ -156,6 +273,25 @@ export class WebsocketServerTransport extends Transport<PeerId> {
     options: WebsocketConnectionOptions,
   ): WebsocketConnectionResult {
     const { socket, peerId: providedPeerId } = options
+
+    // Stop-accepting backstop: once draining, refuse new connections at the
+    // transport layer even if the app's HTTP upgrade handler keeps accepting.
+    // This makes app-level stop-accepting an optimization, not a correctness
+    // requirement — no new sync channel is established, so the herd can't reform.
+    if (this.#draining) {
+      const code = this.#resolvedDrain?.closeCode ?? DEFAULT_DRAIN.closeCode
+      const reason =
+        this.#resolvedDrain?.closeReason ?? DEFAULT_DRAIN.closeReason
+      socket.close(code, reason)
+      return {
+        connection: {
+          peerId: providedPeerId ?? ("ws-refused" as PeerId),
+          channelId: -1,
+          close: () => {},
+        },
+        start: () => {},
+      }
+    }
 
     // Generate peer ID if not provided
     const peerId = providedPeerId ?? (`ws-${randomPeerId()}` as PeerId)
@@ -244,6 +380,16 @@ export class WebsocketServerTransport extends Transport<PeerId> {
     if (connection) {
       this.removeChannel(connection.channelId)
       this.#connections.delete(peerId)
+    }
+
+    // Signal an active drain once the last connection is gone. The finish()
+    // guard makes a redundant call (e.g. deadline racing the final close) inert.
+    if (
+      this.#draining &&
+      this.#onDrainComplete &&
+      this.#connections.size === 0
+    ) {
+      this.#onDrainComplete()
     }
   }
 

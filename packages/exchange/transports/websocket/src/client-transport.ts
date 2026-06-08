@@ -18,6 +18,7 @@ import type {
   ChannelMsg,
   GeneratedChannel,
   PeerId,
+  ReconnectOptions,
   TransportFactory,
 } from "@kyneta/transport"
 import { Pipeline, Transport } from "@kyneta/transport"
@@ -81,13 +82,13 @@ export interface WebsocketClientOptions {
    */
   headers?: Record<string, string>
 
-  /** Reconnection options. */
-  reconnect?: {
-    enabled?: boolean
-    maxAttempts?: number
-    baseDelay?: number
-    maxDelay?: number
-  }
+  /**
+   * Reconnection options (a partial — unset fields fall back to
+   * `DEFAULT_RECONNECT`). Note {@link createWebsocketClient} defaults
+   * `fullJitter` to `true` for browser clients; the raw transport leaves it
+   * `false`.
+   */
+  reconnect?: Partial<ReconnectOptions>
 
   /** Keepalive interval in ms (default: 30000). */
   keepaliveInterval?: number
@@ -583,6 +584,13 @@ export class WebsocketClientTransport extends Transport<void> {
  * Returns an `TransportFactory` — a closure that creates a fresh transport
  * instance when called. Pass directly to `Exchange({ transports: [...] })`.
  *
+ * Browser clients are the classic thundering-herd case — a rolling deploy
+ * disconnects every tab at once — so this factory defaults `reconnect.fullJitter`
+ * to `true`, spreading reconnects across the full backoff window. Pass
+ * `reconnect: { fullJitter: false }` to opt back into the additive default.
+ * (The raw `WebsocketClientTransport` and `createServiceWebsocketClient` keep
+ * the additive default unless opted in.)
+ *
  * @example
  * ```typescript
  * import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
@@ -599,5 +607,11 @@ export class WebsocketClientTransport extends Transport<void> {
 export function createWebsocketClient(
   options: WebsocketClientOptions,
 ): TransportFactory {
-  return () => new WebsocketClientTransport(options)
+  // fullJitter first, caller's reconnect spread last — so an explicit
+  // reconnect.fullJitter:false still wins over this browser-friendly default.
+  const merged: WebsocketClientOptions = {
+    ...options,
+    reconnect: { fullJitter: true, ...options.reconnect },
+  }
+  return () => new WebsocketClientTransport(merged)
 }

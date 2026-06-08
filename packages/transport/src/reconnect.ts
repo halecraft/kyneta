@@ -13,6 +13,21 @@ export interface ReconnectOptions {
   maxAttempts: number
   baseDelay: number
   maxDelay: number
+  /**
+   * Use AWS-style *full* jitter instead of the default additive 0–20 %.
+   *
+   * When `true`, the delay is `random * min(raw, maxDelay)` — spread across the
+   * whole `[0, cap)` range. This intentionally violates the "never reconnect
+   * faster than `baseDelay`" rule that the additive default upholds: a wide
+   * spread is exactly what you want when a *server-initiated* mass disconnect
+   * (a rolling deploy) resets every client's attempt counter to 0, but it is
+   * the wrong universal default — `DEFAULT_RECONNECT` sets it `false`.
+   *
+   * Required, like every other field: `ReconnectOptions` is the *resolved*
+   * config (materialized via `{ ...DEFAULT_RECONNECT, ...partial }`). Callers
+   * pass `Partial<ReconnectOptions>`, where it is optional.
+   */
+  fullJitter: boolean
 }
 
 export const DEFAULT_RECONNECT: ReconnectOptions = {
@@ -20,6 +35,7 @@ export const DEFAULT_RECONNECT: ReconnectOptions = {
   maxAttempts: 10,
   baseDelay: 1000,
   maxDelay: 30000,
+  fullJitter: false,
 }
 
 /**
@@ -39,16 +55,26 @@ export const JITTER_FRACTION = 0.2
  *
  * `random` is the externally-supplied `[0, 1)` source (typically `Math.random()`);
  * splitting it out of the function lets tests pin a deterministic delay.
- * Clamping to `maxDelay` happens *after* jitter so the jittered upper bound
- * cannot exceed `maxDelay`.
+ *
+ * Two jitter strategies:
+ * - **additive (default)**: `min(raw * (1 + random*0.2), maxDelay)` — adds 0–20 %
+ *   on top of the raw delay, clamped *after* jitter so the jittered upper bound
+ *   cannot exceed `maxDelay`. Never reconnects faster than `baseDelay`.
+ * - **full** (`fullJitter`): `random * min(raw, maxDelay)` — spread across the
+ *   whole `[0, cap)` range, which minimizes contention when many clients are
+ *   disconnected at once (see {@link ReconnectOptions.fullJitter}).
  */
 export function computeBackoffDelay(
   attempt: number,
   baseDelay: number,
   maxDelay: number,
   random: number,
+  fullJitter = false,
 ): number {
   const rawDelay = baseDelay * 2 ** (attempt - 1)
+  if (fullJitter) {
+    return random * Math.min(rawDelay, maxDelay)
+  }
   const jittered = rawDelay * (1 + random * JITTER_FRACTION)
   return Math.min(jittered, maxDelay)
 }
@@ -110,6 +136,7 @@ export function shouldReconnect(
     opts.baseDelay,
     opts.maxDelay,
     randomFn(),
+    opts.fullJitter,
   )
   return { reconnect: true, attempt, delayMs }
 }

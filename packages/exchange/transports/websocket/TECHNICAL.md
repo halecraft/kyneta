@@ -4,7 +4,7 @@
 > **Role**: WebSocket transport for `@kyneta/exchange` — browser client, server, Bun integration, and service-to-service client. Alias-aware binary pipeline (`applyOutboundAliasing → encodeWireMessage → binary frame`) on the wire, a pure Mealy-machine client lifecycle, and a server-sent `"ready"` gate that makes the handshake race-free.
 > **Depends on**: `@kyneta/machine`, `@kyneta/transport` (all peer)
 > **Depended on by**: `@kyneta/exchange` (through application configuration), `tests/integration`
-> **Canonical symbols**: `createWebsocketClient`, `WebsocketClientTransport`, `WebsocketClientOptions`, `WebsocketServerTransport`, `WebsocketServerTransportOptions`, `WebsocketConnection`, `WebsocketConnectionConfig`, `createServiceWebsocketClient`, `createWsClientProgram`, `WsClientMsg`, `WsClientEffect`, `WebsocketClientState`, `Socket`, `WebSocketLike`, `WebSocketConstructor`, `wrapStandardWebsocket`, `wrapNodeWebsocket`, `wrapBunWebsocket`, `BunWebsocketData`, `READY_STATE`, `DEFAULT_FRAGMENT_THRESHOLD`
+> **Canonical symbols**: `createWebsocketClient`, `WebsocketClientTransport`, `WebsocketClientOptions`, `WebsocketServerTransport`, `WebsocketServerTransportOptions`, `WebsocketConnection`, `WebsocketConnectionConfig`, `createServiceWebsocketClient`, `createWsClientProgram`, `WsClientMsg`, `WsClientEffect`, `WebsocketClientState`, `drainConnections`, `DrainOptions`, `DrainResult`, `planDrainSchedule`, `Socket`, `WebSocketLike`, `WebSocketConstructor`, `wrapStandardWebsocket`, `wrapNodeWebsocket`, `wrapBunWebsocket`, `BunWebsocketData`, `READY_STATE`, `DEFAULT_FRAGMENT_THRESHOLD`
 > **Key invariant(s)**: The client creates its exchange channel only after the *server* has sent a text `"ready"` signal — never on `socket.onopen` alone. This is why the client lifecycle has five states (`disconnected → connecting → connected → ready → reconnecting`) rather than four.
 
 A WebSocket transport kit with three entry points — `./browser` (browser-to-server), `./server` (server accept + service-to-service), and `./bun` (Bun-specific wrapper). All three share one wire format (binary `Pipeline` from `@kyneta/transport`) and one client state machine (`createWsClientProgram`).
@@ -60,7 +60,7 @@ All four runtime situations (browser client, Bun server, Node server, server-to-
 
 ### What this transport is NOT
 
-- **Not an HTTP server.** It does not provide upgrade-request handling — the application owns `Bun.serve` / `ws.Server` / Node's `http.Server`. The transport attaches to already-upgraded sockets via `addConnection(socket, peerId?)`.
+- **Not an HTTP server.** It does not provide upgrade-request handling — the application owns `Bun.serve` / `ws.Server` / Node's `http.Server`. The transport attaches to already-upgraded sockets via `handleConnection({ socket, peerId? })`, which returns `{ connection, start }`; the caller invokes `start()` to begin processing and send the `"ready"` signal.
 - **Not a reconnection library.** The reconnect logic is embedded in `createWsClientProgram` (backoff from `@kyneta/transport`, jitter injected for testability). Applications cannot disable it from the outside except by setting `reconnect: { enabled: false }` in `WebsocketClientOptions`.
 - **Not polyfilled.** The browser `WebSocket`, Node `ws`, and Bun `WebSocket` constructors are passed in by the caller. The transport never references `globalThis.WebSocket`.
 
@@ -129,7 +129,32 @@ Effects (`WsClientEffect`): `create-websocket`, `close-websocket`, `add-channel-
 
 ### Backoff
 
-Backoff uses `shouldReconnect` from `@kyneta/transport` (which internally calls `computeBackoffDelay`). The decision function returns either `{ reconnect: true, attempt, delayMs }` or `{ reconnect: false, cause }`; the program builds the websocket-specific state/effect tuple from the decision. Jitter is proportional (0–20% of the raw delay); the random source is `randomFn` on `WsClientProgramOptions` (default `Math.random`, pinned to `() => 0` in tests so delays are deterministic).
+Backoff uses `shouldReconnect` from `@kyneta/transport` (which internally calls `computeBackoffDelay`). The decision function returns either `{ reconnect: true, attempt, delayMs }` or `{ reconnect: false, cause }`; the program builds the websocket-specific state/effect tuple from the decision. The random source is `randomFn` on `WsClientProgramOptions` (default `Math.random`, pinned to `() => 0` in tests so delays are deterministic).
+
+Two jitter strategies exist (`ReconnectOptions.fullJitter`):
+
+- **additive (default)** — `min(raw × (1 + random×0.2), maxDelay)`: adds 0–20 % on top of the raw delay, never reconnecting faster than `baseDelay`. This is what SSE and unix-socket use, unchanged.
+- **full jitter** — `random × min(raw, maxDelay)`: spreads reconnects across the whole `[0, cap)` range. A server-initiated close resets the attempt counter to 0, so without full jitter every drained client would reconnect in the ~`baseDelay`..`baseDelay×1.2` window — a thundering herd. `createWebsocketClient` defaults `fullJitter` to `true` for exactly this reason; the raw `WebsocketClientTransport` and `createServiceWebsocketClient` leave it `false` unless opted in.
+
+---
+
+## Graceful drain
+
+`WebsocketServerTransport.drainConnections(options)` is the server-side half of a rolling-deploy shutdown: it closes open connections *staggered* across a jitter window so clients reconnect spread out rather than stampeding the next instance. It pairs with client-side full jitter (above).
+
+**Functional core / imperative shell.** `src/drain.ts` is pure: `planDrainSchedule(peerIds, windowMs, randomFn)` assigns each peer a close offset in `[0, windowMs)` (deterministic under a pinned `randomFn`, exactly like `computeBackoffDelay`), and `resolveDrainOptions(perCall, defaults)` merges per-call options over the constructor `drain` defaults over `DEFAULT_DRAIN`. `drainConnections` is the shell: it interprets the schedule with `setTimeout`, then awaits closure.
+
+**Construction-time defaults.** `WebsocketServerTransportOptions.drain?: DrainOptions` sets the window/code/reason/deadline once, so the deploy-time call can be a bare `await transport.drainConnections()`. This adopts the *config* half of "fold drain into `onStop()`" **without** the automatic half — see the note below.
+
+**Stop-accepting is a correctness backstop, not just a method.** `drainConnections` sets a one-way `#draining` flag; while set, `handleConnection` immediately closes any new socket and returns a no-op handle (never creating a channel). So app-level stop-accepting (closing the HTTP upgrade) is an *optimization* that avoids wasted handshakes — correctness (no new sync channel reforms the herd) holds even if the app forgets, e.g. during the racy window where a platform removes the pod from its Service endpoints around SIGTERM.
+
+**Completion signal.** Each socket's `onClose` already routes to `unregisterConnection`; that path notifies an active drain when the connection map empties — no busy-polling. `drainConnections` resolves on map-empty **or** a hard `deadlineMs`, reporting `{ closed, remaining, timedOut }`. The resolver is guarded so a deadline racing the final close cannot double-resolve.
+
+**Why explicit, not automatic in `onStop()`.** The `SIGTERM` handler and HTTP-layer stop-accepting are irreducibly app-owned (a library must not own process signals; the transport is not an HTTP server), so the app writes a shutdown handler regardless. Folding drain into `onStop()` would also be unsafe: `onStop()` runs on transport re-initialization (`Transport._initialize`) and `TransportManager.reset()`, so a multi-second drain would stall every HMR reload and corrupt reset semantics. `onStop()` therefore stays the immediate **hard-close fallback** (it resets `#draining` so a re-initialized transport accepts again); after a real drain its close loop is a near-no-op because the map is already empty. The forward-compatible evolution is an exchange-level `gracefulShutdown()` orchestrating a per-transport `drain()` — `drainConnections` is the primitive it would call.
+
+### Dueling resources
+
+The "second login with the same resource ID kicks the first offline, which reconnects and kicks the second…" flap **cannot occur by default**: the server mints a fresh random `ws-${randomPeerId()}` per accepted socket, so two live sockets never collide. The latent edge: the client reconnect decision is **code-agnostic** (it reconnects on any close code, including `1000`), so if an integration ever threads a *stable* transport peerId into `handleConnection`, the dedup-close → reconnect → dedup-close loop becomes possible. Flagged, not handled.
 
 ---
 
@@ -179,7 +204,7 @@ const server = new WebsocketServerTransport()
 Bun.serve<BunWebsocketData>({
   fetch(req, srv) { if (srv.upgrade(req, { data: { handlers: {} } })) return },
   websocket: {
-    open(ws)    { server.addConnection(wrapBunWebsocket(ws)) },
+    open(ws)    { server.handleConnection({ socket: wrapBunWebsocket(ws) }).start() },
     message(ws, data) { ws.data.handlers.onMessage?.(data) },
     close(ws, code, reason) { ws.data.handlers.onClose?.(code, reason) },
   },
@@ -194,7 +219,7 @@ import { WebSocketServer } from "ws"
 
 const server = new WebsocketServerTransport()
 const wss = new WebSocketServer({ port: 3000 })
-wss.on("connection", ws => server.addConnection(wrapNodeWebsocket(ws)))
+wss.on("connection", ws => server.handleConnection({ socket: wrapNodeWebsocket(ws) }).start())
 ```
 
 ### Service-to-service client
@@ -226,8 +251,10 @@ const exchange = new Exchange({
 | `DEFAULT_FRAGMENT_THRESHOLD` | `src/client-transport.ts` / `src/connection.ts` | Byte threshold for `Pipeline` fragmentation. |
 | `createWebsocketClient` | `src/client-transport.ts` | `TransportFactory` for browser-facing clients. |
 | `createServiceWebsocketClient` | `src/service-client.ts` | `TransportFactory` for backend clients with headers. |
-| `WebsocketServerTransport` | `src/server-transport.ts` | The server `Transport<...>` subclass. Owns many connections. |
-| `WebsocketServerTransportOptions` | `src/server-transport.ts` | Server construction options. |
+| `WebsocketServerTransport` | `src/server-transport.ts` | The server `Transport<...>` subclass. Owns many connections; `drainConnections()` + `isDraining`. |
+| `WebsocketServerTransportOptions` | `src/server-transport.ts` | Server construction options (`fragmentThreshold`, `drain`). |
+| `DrainOptions` / `DrainResult` | `src/drain.ts` (re-exported from `./server`) | Drain tuning + outcome `{ closed, remaining, timedOut }`. |
+| `planDrainSchedule` / `resolveDrainOptions` / `DEFAULT_DRAIN` | `src/drain.ts` | Pure schedule core + option merge + fallbacks. |
 | `WebsocketConnection` | `src/connection.ts` | One accepted peer connection on the server side. |
 | `WebsocketConnectionConfig` | `src/connection.ts` | Per-connection options. |
 | `createWsClientProgram` | `src/client-program.ts` | Factory for the pure client `Program`. |
@@ -246,20 +273,24 @@ const exchange = new Exchange({
 | File | Lines | Role |
 |------|-------|------|
 | `src/browser.ts` | 49 | `./browser` entry — client factory + client types. |
-| `src/server.ts` | 57 | `./server` entry — server transport + `createServiceWebsocketClient` + wrappers. |
+| `src/server.ts` | 59 | `./server` entry — server transport + drain types + `createServiceWebsocketClient` + wrappers. |
 | `src/bun.ts` | 24 | `./bun` entry — Bun wrapper + `BunWebsocketData`. |
 | `src/types.ts` | 378 | `Socket`, `WebSocketLike`, wrappers, `DisconnectReason`, state type. |
 | `src/client-program.ts` | 272 | Pure `createWsClientProgram` Mealy machine. |
-| `src/client-transport.ts` | 602 | Imperative shell: runs the program, owns the socket, runs the alias-aware binary pipeline, fragments. |
-| `src/server-transport.ts` | 280 | Server-side `Transport<...>`: accepts connections, dispatches to `WebsocketConnection`. |
+| `src/client-transport.ts` | 621 | Imperative shell: runs the program, owns the socket, runs the alias-aware binary pipeline, fragments. |
+| `src/server-transport.ts` | 406 | Server-side `Transport<...>`: accepts connections, dispatches to `WebsocketConnection`, owns graceful drain. |
+| `src/drain.ts` | 136 | Pure drain scheduling core: `planDrainSchedule`, `resolveDrainOptions`, `DrainOptions`/`DrainResult`, `DEFAULT_DRAIN`. |
 | `src/connection.ts` | 206 | Per-connection alias-aware binary pipeline + fragment reassembler + channel ownership. |
 | `src/service-client.ts` | 52 | `createServiceWebsocketClient` factory (headers). |
 | `src/bun-websocket.ts` | 163 | `wrapBunWebsocket` + `BunWebsocketData`. |
 | `src/__tests__/client-program.test.ts` | 760 | Pure tests: every state transition and effect asserted on data. No sockets. |
 | `src/__tests__/client-transport.test.ts` | 167 | Imperative-shell tests: socket creation, close, reconnect scheduling. |
+| `src/__tests__/drain.test.ts` | 81 | Pure tests for `planDrainSchedule` and `resolveDrainOptions`. |
+| `src/__tests__/server-transport.test.ts` | 101 | Drain + stop-accepting guard, driven with fake timers and `mock-socket.ts`. |
+| `src/__tests__/mock-socket.ts` | 55 | Minimal server-side `Socket` mock; `close()` fires `onClose` (the drain completion signal). |
 
 ## Testing
 
-`createWsClientProgram` is a pure `Program`, so `client-program.test.ts` dispatches messages and asserts on the returned `[state, ...effects]` tuple. No real sockets, no real timers (`vi.useFakeTimers` where time is relevant). `client-transport.test.ts` uses a minimal `WebSocketLike` stub to verify the imperative shell schedules the right effects.
+`createWsClientProgram` is a pure `Program`, so `client-program.test.ts` dispatches messages and asserts on the returned `[state, ...effects]` tuple. No real sockets, no real timers (`vi.useFakeTimers` where time is relevant). `client-transport.test.ts` uses a minimal `WebSocketLike` stub to verify the imperative shell schedules the right effects. The drain core is tested purely (`drain.test.ts`); `drainConnections` and the stop-accepting guard are tested in `server-transport.test.ts` with `vi.useFakeTimers()`, a pinned `randomFn`, and the `mock-socket.ts` helper (whose `close()` fires `onClose`, the signal the drain awaits).
 
-**Tests**: 56 passed, 0 skipped across 2 files (`client-program.test.ts`: 51, `client-transport.test.ts`: 5). Run with `cd packages/exchange/transports/websocket && pnpm exec vitest run`.
+**Tests**: 68 passed, 0 skipped across 4 files (`client-program.test.ts`: 51, `client-transport.test.ts`: 5, `drain.test.ts`: 7, `server-transport.test.ts`: 5). Run with `cd packages/exchange/transports/websocket && pnpm exec vitest run`.

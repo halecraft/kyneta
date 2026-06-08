@@ -235,6 +235,7 @@ interface Socket {
 | `reconnect.maxAttempts` | `10` | Maximum reconnection attempts before giving up. |
 | `reconnect.baseDelay` | `1000` | Base delay in ms for exponential backoff. |
 | `reconnect.maxDelay` | `30000` | Maximum delay cap in ms. |
+| `reconnect.fullJitter` | `true` via `createWebsocketClient`, else `false` | AWS-style full jitter (`random × min(raw, cap)`, spread across `[0, cap)`) instead of the additive 0–20 %. On by default for browser clients so a mass disconnect doesn't stampede the next instance. |
 | `keepaliveInterval` | `30000` | Interval in ms for keepalive ping frames. |
 | `fragmentThreshold` | `102400` | Payload size threshold for fragmentation (bytes). |
 | `headers` | — | Upgrade headers (`ServiceWebsocketClientOptions` only). |
@@ -244,6 +245,16 @@ interface Socket {
 | Option | Default | Description |
 |--------|---------|-------------|
 | `fragmentThreshold` | `102400` | Payload size threshold for fragmentation (bytes). |
+| `drain` | — | Default `DrainOptions` for `drainConnections()` (see [Graceful shutdown](#graceful-shutdown--rolling-deploys)). |
+
+### Server methods
+
+| Member | Description |
+|--------|-------------|
+| `drainConnections(options?): Promise<DrainResult>` | Gracefully drain for a rolling deploy — stop accepting, close connections staggered across a jitter window, resolve when all close or the deadline elapses. |
+| `isDraining: boolean` | Whether a drain is in progress (new connections are being refused). |
+
+`DrainOptions`: `{ windowMs?: number (5000), closeCode?: number (1001), closeReason?: string ("Server draining"), deadlineMs?: number (windowMs + 5000), randomFn?: () => number }`. `DrainResult`: `{ closed: number, remaining: number, timedOut: boolean }`.
 
 ### Fragment Thresholds by Environment
 
@@ -256,6 +267,44 @@ interface Socket {
 ### Keepalive
 
 The client sends text `"ping"` frames at the configured interval. The server responds with text `"pong"`. This keeps connections alive through proxies and load balancers that terminate idle connections.
+
+## Graceful shutdown / rolling deploys
+
+A deploy that hard-kills the process closes every WebSocket in the same instant; all clients then reconnect inside a narrow window and stampede the next instance. The fix is the standard recipe: **stop accepting → close staggered → drain → exit**, paired with full-jitter reconnect on the client.
+
+Run these steps **in order** from your own signal handler:
+
+```/dev/null/graceful-shutdown.ts#L1-20
+const transport = new WebsocketServerTransport({ drain: { windowMs: 3000 } })
+// …wire `transport.handleConnection({ socket })` into your upgrade handler…
+
+async function shutdown() {
+  // 1. Stop accepting new connections (HTTP-layer).
+  httpServer.removeListener("upgrade", onUpgrade) // Node + ws
+  wss.close()
+  // 2. Drain: staggered closes across the jitter window, await closure.
+  await transport.drainConnections()              // uses the constructor default
+  // 3. Flush + stop the exchange (hard-closes any stragglers).
+  await exchange.shutdown()
+  // 4. Close the HTTP server and exit.
+  httpServer.close(() => process.exit(0))
+}
+process.once("SIGTERM", () => void shutdown())
+process.once("SIGINT", () => void shutdown())
+```
+
+Under Bun, step 1 is `server.stop()` (stop accepting while keeping open sockets) instead of detaching an upgrade listener.
+
+**Two steps are irreducibly yours.** The transport cannot own them:
+
+- **The signal handler.** A library must not call `process.on("SIGTERM")` — it would fight your app, other libraries, and the test runner, with no defined ordering.
+- **HTTP-layer stop-accepting.** The transport is not an HTTP server; only your code owns the upgrade.
+
+**The transport backstops correctness, though.** Once `drainConnections()` is called, `isDraining` is true and any connection that still reaches `handleConnection` is refused (closed immediately, never registered). So step 1 is an **optimization** that avoids wasted handshakes during the racy window where a platform (e.g. Kubernetes) removes the pod from its Service endpoints around the same time SIGTERM lands — it is not load-bearing for correctness.
+
+**Constraint:** keep `windowMs`/`deadlineMs` comfortably **under** your platform's kill grace period (e.g. Kubernetes `terminationGracePeriodSeconds`, default 30 s), or the process is `SIGKILL`ed mid-drain.
+
+On the client, `createWebsocketClient` defaults `reconnect.fullJitter` to `true`, so the drained clients reconnect spread across the whole backoff window rather than bunched at `baseDelay`.
 
 ## Runtime Agnosticism
 

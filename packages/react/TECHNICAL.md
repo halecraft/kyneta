@@ -208,10 +208,10 @@ Deep-by-default is the right behaviour for application code — a React componen
 
 Source: `packages/react/src/exchange-context.tsx`.
 
-Standard React context for the `Exchange`:
+React context that *owns* the `Exchange`. It takes a `config` (an `ExchangeParams`), not a pre-built instance:
 
 ```tsx
-<ExchangeProvider exchange={myExchange}>
+<ExchangeProvider config={{ id: "my-peer", transports: [/* … */] }}>
   <App />
 </ExchangeProvider>
 
@@ -221,13 +221,15 @@ function SomeComponent() {
 }
 ```
 
+The Exchange is created lazily from `config` (`useMemo(() => new Exchange(config), [config])`) and torn down via `exchange.reset()` on unmount. Pass a **stable** `config` — define it outside render or memoize it — built from transport *factories* rather than live transports, so each mount (including StrictMode's double-mount) gets a fresh Exchange with fresh transports. For graceful async shutdown (flushing pending storage writes), call `exchange.shutdown()` before unmounting.
+
 `useExchange()` throws if called outside a provider — this is a programmer error that deserves to surface loudly rather than return `undefined` and fail later.
 
 ### What `ExchangeProvider` is NOT
 
-- **Not a DI container.** It provides *one* value (the `Exchange`). No factory, no scope, no configuration.
-- **Not a render wrapper.** It adds no DOM. Its return type is `children`.
-- **Not responsible for lifecycle.** The application creates the `Exchange` and holds it; the provider merely publishes it to descendants.
+- **Not a DI container.** It provides *one* value (the `Exchange`). No factory registry, no scope.
+- **Not a render wrapper.** It adds no DOM — it returns its `children` wrapped in a context provider.
+- **Not a "bring your own instance" provider.** It constructs the `Exchange` from `config` and owns its lifecycle: create on mount, `reset()` on unmount. The application supplies configuration, not a live instance.
 
 ---
 
@@ -236,7 +238,7 @@ function SomeComponent() {
 Source: `packages/react/src/use-document.ts`.
 
 ```ts
-useDocument<S>(bound: BoundSchema<S>, docId: DocId): Ref<S>
+useDocument<S>(docId: string, bound: BoundSchema<S>): Ref<S>
 ```
 
 Memoizes `exchange.get(docId, bound)` by `(exchange, docId, bound)`. Returns the same `Ref<S>` instance across renders while those three references are stable.

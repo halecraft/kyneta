@@ -288,12 +288,14 @@ Internally, `feedBytesStep(state, chunk)` is the pure step function (FC/IS patte
 
 | Export | Type | Purpose |
 |--------|------|---------|
-| `DEFAULT_RECONNECT` | `ReconnectOptions` | `{ enabled: true, maxAttempts: 10, baseDelay: 1000, maxDelay: 30000 }` |
-| `JITTER_FRACTION` | `number` | `0.2` — fraction of raw delay added as jitter (one-sided, never subtractive). |
-| `computeBackoffDelay(attempt, baseDelay, maxDelay, random)` | `(n, n, n, n) => number` | Pure: `min(rawDelay × (1 + random × JITTER_FRACTION), maxDelay)` where `rawDelay = baseDelay × 2^(attempt−1)`. `random ∈ [0, 1)`; jitter adds 0–20% of the raw delay. |
-| `shouldReconnect(opts, currentAttempt, randomFn)` | `(opts, n, () => n) => ReconnectDecision` | Pure decision function. Returns `{ reconnect: true, attempt, delayMs }` or `{ reconnect: false, cause }` where `cause` is `"disabled"` or `"max-attempts-exceeded"` (the latter carries `attempts`). Replaces the `tryReconnect` closures that used to be copy-pasted across each client transport. |
+| `DEFAULT_RECONNECT` | `ReconnectOptions` | `{ enabled: true, maxAttempts: 10, baseDelay: 1000, maxDelay: 30000, fullJitter: false }` |
+| `JITTER_FRACTION` | `number` | `0.2` — fraction of raw delay added as jitter in the additive strategy (one-sided, never subtractive). |
+| `computeBackoffDelay(attempt, baseDelay, maxDelay, random, fullJitter?)` | `(n, n, n, n, b?) => number` | Pure. Additive (default): `min(rawDelay × (1 + random × JITTER_FRACTION), maxDelay)`. Full jitter (`fullJitter`): `random × min(rawDelay, maxDelay)` — spread across `[0, cap)`. `rawDelay = baseDelay × 2^(attempt−1)`, `random ∈ [0, 1)`. |
+| `shouldReconnect(opts, currentAttempt, randomFn)` | `(opts, n, () => n) => ReconnectDecision` | Pure decision function. Returns `{ reconnect: true, attempt, delayMs }` or `{ reconnect: false, cause }` where `cause` is `"disabled"` or `"max-attempts-exceeded"` (the latter carries `attempts`). Threads `opts.fullJitter` into `computeBackoffDelay`. Replaces the `tryReconnect` closures that used to be copy-pasted across each client transport. |
 
 `ReconnectDecision` is a discriminated union with three variants — see the type definition for the full shape. The `cause` discriminant matters because callers build different `DisconnectReason` values in the two non-reconnect cases: when disabled, the caller passes through its original reason; when max-attempts is hit, the caller constructs `{ type: "max-retries-exceeded", attempts }`.
+
+`ReconnectOptions.fullJitter` is **opt-in** (default `false`) so SSE and unix-socket reconnect timing is unchanged; only `@kyneta/websocket-transport`'s `createWebsocketClient` defaults it on, because a server-initiated mass disconnect (rolling deploy) resets every client's attempt counter and needs a wide spread to avoid a thundering herd.
 
 Scheduling (`setTimeout`, retry on failure) happens inside each concrete transport's client program. `@kyneta/transport` owns the pure decision; the transports own per-effect-type tuple construction.
 

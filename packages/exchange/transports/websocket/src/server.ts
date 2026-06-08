@@ -9,6 +9,8 @@
 // ---------------------------------------------------------------------------
 
 export {
+  type DrainOptions,
+  type DrainResult,
   WebsocketServerTransport,
   type WebsocketServerTransportOptions,
 } from "./server-transport.js"
