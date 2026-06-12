@@ -17,9 +17,11 @@
 export type { ExchangeProviderProps } from "./exchange-context.js"
 export { ExchangeProvider, useExchange } from "./exchange-context.js"
 export type { CallableRef, ExternalStore } from "./store.js"
-// Store factories (Functional Core — framework-agnostic, independently testable)
+// Store factories (Functional Core — framework-agnostic, independently testable).
+// `createChangefeedStore` was removed in jj:smkurmok — `useValue` is now a
+// derivation of `useTracked` over `@kyneta/reactive`. The Sync stores remain
+// (they wrap SyncRef.onPeerSyncChange, not a changefeed).
 export {
-  createChangefeedStore,
   createDerivedSyncStore,
   createNullishStore,
   createSyncStore,
@@ -29,9 +31,12 @@ export type { AttachOptions, TextRefLike } from "./text-adapter.js"
 export { attach, diffText, transformSelection } from "./text-adapter.js"
 export { useDocReady } from "./use-doc-ready.js"
 export { useDocument } from "./use-document.js"
+// useSelector / useTracked — auto-tracked reactive reads over @kyneta/reactive
+export { useSelector } from "./use-selector.js"
 export { useSyncState } from "./use-sync-state.js"
 export type { UseTextOptions } from "./use-text.js"
 export { useText } from "./use-text.js"
+export { useTracked } from "./use-tracked.js"
 export { useValue } from "./use-value.js"
 
 // ---------------------------------------------------------------------------

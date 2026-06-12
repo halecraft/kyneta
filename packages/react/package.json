@@ -36,7 +36,8 @@
     "@kyneta/changefeed": "workspace:^",
     "@kyneta/exchange": "workspace:^",
     "@kyneta/schema": "workspace:^",
-    "react": ">=18"
+    "react": ">=18",
+    "@kyneta/reactive": "workspace:^"
   },
   "devDependencies": {
     "@kyneta/bridge-transport": "workspace:^",
@@ -53,6 +54,7 @@
     "react": "^19.1.0",
     "tsdown": "catalog:",
     "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "@kyneta/reactive": "workspace:^"
   }
 }

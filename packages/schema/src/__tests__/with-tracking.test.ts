@@ -171,9 +171,7 @@ describe("withTracking — tree aspect inference", () => {
     batch(doc, (d: any) => {
       id = d.outline.create({ data: { label: "n" } })
     })
-    const { deps } = withReadScope(() =>
-      (doc as any).outline.node(id).label(),
-    )
+    const { deps } = withReadScope(() => (doc as any).outline.node(id).label())
     expect(deps).toHaveLength(2)
     expect(deps.map(d => d.aspect).sort()).toEqual(["structure", "value"])
   })

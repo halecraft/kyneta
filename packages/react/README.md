@@ -106,9 +106,27 @@ const title = useValue(doc.title)
 const maybeValue = useValue(optionalRef) // null/undefined pass through
 ```
 
-**Subscription granularity:**
-- Composite refs (products, sequences, maps) subscribe deep via `subscribeTree` — any descendant change triggers a re-render.
-- Leaf refs (scalars, text, counters) subscribe at node level — only own-path changes trigger a re-render.
+`useValue` re-renders on any descendant change (it reads the whole value). To re-render *parsimoniously* — only when the part you use changes — reach for `useSelector`.
+
+### `useSelector(ref, select)`
+
+Projects a ref to a derived value and re-renders **only when the nodes `select` actually read change** — auto-tracked, no deps array, no `isEqual`. A `text` edit never re-renders a `done`-only selector, and nothing is materialized unless `select` asks for it.
+
+```tsx
+// Re-renders only when the visible set of todo refs changes (add/remove, or a
+// `done` flip crossing the filter) — NOT when a todo's text is edited.
+const visible = useSelector(doc.todos, todos =>
+  [...todos].filter(t => (filter === "all" ? true : t.done())),
+)
+```
+
+The `select` closure may freely close over props/state (e.g. a URL `filter`) with **no deps array** — it re-runs every render to follow the latest closure.
+
+### `useTracked(thunk)`
+
+The primitive behind `useValue`/`useSelector`. Runs an arbitrary `thunk` reading kyneta refs (and/or other reactives), auto-tracks its reads, and re-renders when they change. `useValue(ref) ≡ useTracked(() => ref())`; `useSelector(ref, fn) ≡ useTracked(() => fn(ref))`.
+
+Built on [`@kyneta/reactive`](../reactive); change detection is version-driven (no value comparison) and microtask-coalesced.
 
 ### `useDocReady(doc, opts?)`
 
@@ -157,8 +175,8 @@ From `@kyneta/exchange`: `Exchange`, `sync`, `hasSync`, `describeSyncStatus`, an
 
 The package follows a **Functional Core / Imperative Shell** pattern:
 
-- **Functional Core** (`src/store.ts`): Pure `createChangefeedStore(ref)` and `createSyncStore(syncRef)` functions translate from kyneta's reactive protocols into the `{ subscribe, getSnapshot }` contract. Zero React imports. Independently testable.
-- **Imperative Shell** (hooks): `useValue`, `useSyncState`, `useDocReady`, etc. are thin wrappers that feed the pure stores into React's `useSyncExternalStore`.
+- **Functional Core**: reactive change detection lives in [`@kyneta/reactive`](../reactive) (auto-tracked computations over the changefeed) and the React-free `src/store.ts` (the `SyncRef`-backed `createSyncStore` / `createDerivedSyncStore`). Zero React imports. Independently testable.
+- **Imperative Shell** (hooks): `useTracked`/`useSelector`/`useValue`, `useSyncState`, `useDocReady`, etc. are thin wrappers that feed reactives / pure stores into React's `useSyncExternalStore`.
 
 See [TECHNICAL.md](./TECHNICAL.md) for details on snapshot memoization, type recovery, and subscription strategy.
 

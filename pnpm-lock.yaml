@@ -861,6 +861,9 @@ importers:
       '@kyneta/loro-schema':
         specifier: workspace:^
         version: link:../schema/backends/loro
+      '@kyneta/reactive':
+        specifier: workspace:^
+        version: link:../reactive
       '@kyneta/schema':
         specifier: workspace:^
         version: link:../schema

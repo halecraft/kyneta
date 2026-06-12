@@ -1,21 +1,20 @@
 // use-value — reactive subscription to a ref's current plain value.
 //
-// useValue(ref) returns Plain<S> and re-renders when the ref changes.
-// The snapshot is memoized for referential equality — downstream
-// useMemo/React.memo see stable identity unless a real change occurred.
+// useValue(ref) returns Plain<S> and re-renders when the ref changes. It is a
+// derivation of useTracked (jj:smkurmok): `useValue(ref) ≡ useTracked(() =>
+// ref())` — the deep-aspect corner of auto-tracking. Reading `ref()` deeply
+// reports a `deep` dependency, so useValue re-renders on any descendant change
+// (the same contract as before), now with version-driven change detection
+// instead of a cached deep snapshot. Materialization (`ref()` → Plain<S>) is
+// intrinsic to useValue's contract; the foundation makes its change *detection*
+// exact, not its cost. To avoid materializing, project with `useSelector`.
 //
-// Uses a single conditional return type to handle null/undefined
-// passthrough without overload explosion:
-//   CallableRef → ReturnType<R>
-//   null → null
-//   undefined → undefined
+// Uses a single conditional return type to handle null/undefined passthrough:
+//   CallableRef → ReturnType<R>;  null → null;  undefined → undefined.
 
-import { useMemo, useSyncExternalStore } from "react"
-import {
-  type CallableRef,
-  createChangefeedStore,
-  createNullishStore,
-} from "./store.js"
+import { track } from "@kyneta/reactive"
+import type { CallableRef } from "./store.js"
+import { useTracked } from "./use-tracked.js"
 
 // ---------------------------------------------------------------------------
 // useValue
@@ -24,32 +23,16 @@ import {
 /**
  * Subscribe to a ref's current plain value.
  *
- * Returns `Plain<S>` — a plain JS snapshot — and re-renders when the
- * ref's changefeed fires. The snapshot is memoized: `getSnapshot()`
- * returns the same object reference until a real change occurs.
- *
- * For composite refs (products, sequences, maps), subscribes deep
- * (via `subscribeDescendants`) — re-renders on any descendant change.
- * For leaf refs (scalars, text, counters), subscribes at node level.
- *
- * Accepts `null` or `undefined` and returns them unchanged, with
- * stable hook call count (no conditional hook calls).
+ * Returns `Plain<S>` — a plain JS snapshot — and re-renders when the ref (or
+ * any descendant) changes. For composite refs this is a deep subscription;
+ * for leaf refs, own-node only. Accepts `null` / `undefined` and returns them
+ * unchanged (stable hook call count — the nullish case is handled inside the
+ * tracked thunk, not via a conditional hook).
  *
  * ```tsx
- * function TodoList({ doc }: { doc: Ref<typeof TodoSchema> }) {
- *   const value = useValue(doc)
- *   // value: { title: string, items: { text: string, done: boolean }[] }
- *   return <h1>{value.title}</h1>
- * }
- *
- * // Leaf subscription — only re-renders when title changes:
- * function Title({ doc }: { doc: Ref<typeof TodoSchema> }) {
- *   const title = useValue(doc.title)
- *   return <h1>{title}</h1>
- * }
- *
- * // Nullish passthrough:
- * const value = useValue(maybeRef) // null | undefined passes through
+ * const title = useValue(doc.title)        // string
+ * const todo  = useValue(doc.todos.at(0))  // { id, text, done } | undefined-safe
+ * const value = useValue(maybeRef)         // null | undefined passes through
  * ```
  *
  * @param ref - A callable ref with [CHANGEFEED], or null/undefined.
@@ -58,13 +41,10 @@ import {
 export function useValue<R extends CallableRef | null | undefined>(
   ref: R,
 ): R extends CallableRef ? ReturnType<R> : R {
-  const store = useMemo(
-    () =>
-      ref == null
-        ? createNullishStore(ref as null | undefined)
-        : createChangefeedStore(ref as CallableRef),
-    [ref],
-  )
-
-  return useSyncExternalStore(store.subscribe, store.getSnapshot) as any
+  // `track` reports plain HasChangefeed sources (ReactiveMap, index Collection)
+  // that don't self-report; for schema refs it is a no-op pass-through (they
+  // self-report deeply when called). Nullish passes through untracked.
+  return useTracked(() =>
+    ref == null ? (ref as unknown) : track(ref as CallableRef),
+  ) as R extends CallableRef ? ReturnType<R> : R
 }

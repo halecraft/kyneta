@@ -6,19 +6,12 @@
 //
 // Zero React imports. Independently testable with createDoc + batch().
 //
-// createChangefeedStore(ref) — subscribes to a ref's [CHANGEFEED],
-//   caches the snapshot for referential stability. Dispatches deep
-//   (subscribeDescendants) for schema-issued refs (every schema ref carries
-//   RecursiveChangefeedProtocol) and shallow (subscribe) for universal-protocol
-//   sources like ReactiveMap.
-//
 // createSyncStore(syncRef) — subscribes to SyncRef.onPeerSyncChange(),
 //   caches peerStates for referential stability.
 
 import type { ChangeBase, ChangefeedProtocol } from "@kyneta/changefeed"
 import { CHANGEFEED } from "@kyneta/changefeed"
 import type { PeerSyncState, SyncRef } from "@kyneta/exchange"
-import { hasRecursiveChangefeed } from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
 // ExternalStore — the useSyncExternalStore contract
@@ -37,16 +30,14 @@ export interface ExternalStore<T> {
 }
 
 // ---------------------------------------------------------------------------
-// CallableRef — the type constraint for useValue / createChangefeedStore
+// CallableRef — the type constraint for useValue
 // ---------------------------------------------------------------------------
 
 /**
  * A ref that is both callable (returns Plain<S>) and carries a
  * [CHANGEFEED]. Every Ref<S> from the standard interpreter stack
  * satisfies this constraint, as do primitive `@kyneta/changefeed`
- * sources like `createReactiveMap`. The store dispatches via
- * `subscribeDescendants` when available (schema refs) or `subscribe`
- * otherwise (universal sources).
+ * sources like `createReactiveMap` and a `@kyneta/reactive` `Reactive`.
  *
  * The call signature `(...args: any[]) => any` allows ReturnType<R>
  * to recover Plain<S> without threading generics through HasChangefeed.
@@ -55,53 +46,13 @@ export type CallableRef = ((...args: any[]) => any) & {
   readonly [CHANGEFEED]: ChangefeedProtocol<any, ChangeBase>
 }
 
-// ---------------------------------------------------------------------------
-// createChangefeedStore — CHANGEFEED → ExternalStore
-// ---------------------------------------------------------------------------
-
-/**
- * Create an external store backed by a ref's [CHANGEFEED].
- *
- * - Eagerly computes the initial snapshot via `ref()`.
- * - On changefeed notification, recomputes the snapshot and caches it.
- * - `getSnapshot()` returns the cached value — stable identity unless
- *   a real change occurred.
- * - For schema-issued refs (every schema ref carries
- *   `RecursiveChangefeedProtocol`), subscribes via `subscribeDescendants`
- *   (deep — fires on own-path + descendants).
- * - For primitive universal-protocol sources (e.g. `createReactiveMap`
- *   from `@kyneta/changefeed`), subscribes via `subscribe`.
- *
- * The branch discriminates between these two genuinely different shapes
- * at runtime via `hasRecursiveChangefeed`, which also narrows statically so
- * `subscribeDescendants` is type-safe with no cast.
- *
- * @param ref - A callable ref with [CHANGEFEED] (any Ref<S> or
- *   primitive universal source).
- * @returns An ExternalStore whose snapshot is ReturnType<typeof ref>.
- */
-export function createChangefeedStore<R extends CallableRef>(
-  ref: R,
-): ExternalStore<ReturnType<R>> {
-  // Eagerly compute initial snapshot.
-  let snapshot: ReturnType<R> = ref()
-
-  const subscribe = (onStoreChange: () => void): (() => void) => {
-    const tick = (): void => {
-      snapshot = ref()
-      onStoreChange()
-    }
-    return hasRecursiveChangefeed(ref)
-      ? // Inside this branch, ref[CHANGEFEED] is statically
-        // RecursiveChangefeedProtocol, so subscribeDescendants is type-safe.
-        ref[CHANGEFEED].subscribeDescendants(tick)
-      : ref[CHANGEFEED].subscribe(tick)
-  }
-
-  const getSnapshot = (): ReturnType<R> => snapshot
-
-  return { subscribe, getSnapshot }
-}
+// Note: `createChangefeedStore` (the previous CHANGEFEED → ExternalStore
+// adapter, a degenerate single-dependency reactive) was removed in jj:smkurmok.
+// Its deep/shallow `hasRecursiveChangefeed` dispatch is now generalized inside
+// `@kyneta/reactive`'s aspect → primitive resolution (jj:kpywvkpr); `useValue`
+// is now `useTracked(() => ref())`. `createSyncStore` / `createDerivedSyncStore`
+// remain — they wrap `SyncRef.onPeerSyncChange` (not a changefeed) and are not
+// subsumable by the reactive runtime.
 
 // ---------------------------------------------------------------------------
 // Nullish no-op store — stable singleton for null/undefined refs

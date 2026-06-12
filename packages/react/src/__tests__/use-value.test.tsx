@@ -1,8 +1,12 @@
 // use-value.test.tsx — Tier 2 React integration tests.
 //
-// Proves the useValue hook wires createChangefeedStore to React's
-// rendering cycle via useSyncExternalStore. Thin tests — the core
-// logic is already covered by store.test.ts (Tier 1).
+// Proves the useValue hook (now a derivation of useTracked over @kyneta/reactive,
+// jj:smkurmok) wires into React's rendering cycle via useSyncExternalStore.
+//
+// Timing note: useValue is now microtask-COALESCED (the reactive scheduler),
+// so a mutation re-renders on the next microtask rather than synchronously.
+// Mutation assertions therefore use `await act(async () => …)`. The value
+// contract (Plain<S>, deep reactivity, nullish passthrough) is unchanged.
 
 import { createReactiveMap } from "@kyneta/changefeed"
 import { batch, createDoc, Schema } from "@kyneta/schema/basic"
@@ -36,13 +40,13 @@ describe("useValue", () => {
     expect(result.current).toEqual({ title: "", count: 0 })
   })
 
-  it("re-renders on change", () => {
+  it("re-renders on change", async () => {
     const doc = createDoc(TestSchema)
     const { result } = renderHook(() => useValue(doc.title))
 
     expect(result.current).toBe("")
 
-    act(() => {
+    await act(async () => {
       batch(doc, d => {
         d.title.set("hello")
       })
@@ -51,11 +55,11 @@ describe("useValue", () => {
     expect(result.current).toBe("hello")
   })
 
-  it("re-renders composite on nested field change", () => {
+  it("re-renders composite on nested field change", async () => {
     const doc = createDoc(TestSchema)
     const { result } = renderHook(() => useValue(doc))
 
-    act(() => {
+    await act(async () => {
       batch(doc, d => {
         d.title.set("updated")
       })
@@ -86,7 +90,7 @@ describe("useValue", () => {
     })
   })
 
-  it("transitions from null to a ref and back", () => {
+  it("transitions from null to a ref and back", async () => {
     const doc = createDoc(TestSchema)
 
     const { result, rerender } = renderHook(({ ref }) => useValue(ref), {
@@ -100,7 +104,7 @@ describe("useValue", () => {
     expect(result.current).toBe("")
 
     // Mutation should cause re-render
-    act(() => {
+    await act(async () => {
       batch(doc, d => {
         d.title.set("alive")
       })
@@ -125,13 +129,13 @@ describe("useValue with ReactiveMap", () => {
     expect(result.current.size).toBe(0)
   })
 
-  it("re-renders after mutation + emit", () => {
+  it("re-renders after mutation + emit", async () => {
     const [map, handle] = createReactiveMap<string, number>()
     const { result } = renderHook(() => useValue(map))
 
     expect(result.current.size).toBe(0)
 
-    act(() => {
+    await act(async () => {
       handle.set("a", 1)
       handle.emit({ changes: [{ type: "set" }] })
     })
