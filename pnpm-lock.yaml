@@ -895,6 +895,24 @@ importers:
         specifier: 'catalog:'
         version: 4.1.4(@opentelemetry/api@1.9.0)(@types/node@25.6.0)(jsdom@26.1.0)(vite@7.3.2(@types/node@25.6.0)(jiti@2.7.0)(tsx@4.21.0))
 
+  packages/reactive:
+    devDependencies:
+      '@kyneta/changefeed':
+        specifier: workspace:^
+        version: link:../changefeed
+      '@kyneta/schema':
+        specifier: workspace:^
+        version: link:../schema
+      tsdown:
+        specifier: 'catalog:'
+        version: 0.22.0(@typescript/native-preview@7.0.0-dev.20260322.1)(tsx@4.21.0)(typescript@5.9.3)(unrun@0.2.36)
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.4(@opentelemetry/api@1.9.0)(@types/node@25.6.0)(jsdom@26.1.0)(vite@7.3.2(@types/node@25.6.0)(jiti@2.7.0)(tsx@4.21.0))
+
   packages/schema:
     dependencies:
       '@kyneta/changefeed':
@@ -5043,7 +5061,7 @@ snapshots:
       outdent: 0.5.0
       prettier: 2.8.8
       resolve-from: 5.0.0
-      semver: 7.7.4
+      semver: 7.8.0
 
   '@changesets/assemble-release-plan@6.0.9':
     dependencies:
@@ -5052,7 +5070,7 @@ snapshots:
       '@changesets/should-skip-package': 0.1.2
       '@changesets/types': 6.1.0
       '@manypkg/get-packages': 1.1.3
-      semver: 7.7.4
+      semver: 7.8.0
 
   '@changesets/changelog-git@0.2.1':
     dependencies:
@@ -5109,7 +5127,7 @@ snapshots:
       '@changesets/types': 6.1.0
       '@manypkg/get-packages': 1.1.3
       picocolors: 1.1.1
-      semver: 7.7.4
+      semver: 7.8.0
 
   '@changesets/get-release-plan@4.0.15':
     dependencies:

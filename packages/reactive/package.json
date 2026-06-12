@@ -1,0 +1,46 @@
+{
+  "name": "@kyneta/reactive",
+  "version": "1.8.0",
+  "description": "Fine-grained reactive computations over the changefeed — auto-tracked tree/point reactivity",
+  "author": "Duane Johnson",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/halecraft/kyneta",
+    "directory": "packages/reactive"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "test": "verify logic",
+    "verify": "verify"
+  },
+  "peerDependencies": {
+    "@kyneta/changefeed": "workspace:^",
+    "@kyneta/schema": "workspace:^"
+  },
+  "devDependencies": {
+    "@kyneta/changefeed": "workspace:^",
+    "@kyneta/schema": "workspace:^",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

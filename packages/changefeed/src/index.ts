@@ -26,3 +26,7 @@ export {
 // ReactiveMap — callable changefeed over a mutable Map
 export type { ReactiveMap, ReactiveMapHandle } from "./reactive-map.js"
 export { createReactiveMap } from "./reactive-map.js"
+// WatcherTable — generic per-key subscription-lifecycle helper (tier-0).
+// Used by @kyneta/index and @kyneta/reactive.
+export type { WatcherEntry, WatcherTable } from "./watcher-table.js"
+export { createWatcherTable } from "./watcher-table.js"
