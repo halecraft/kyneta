@@ -28,6 +28,7 @@ import { withCaching } from "./interpreters/with-caching.js"
 import { withChangefeed } from "./interpreters/with-changefeed.js"
 import { withNavigation } from "./interpreters/with-navigation.js"
 import { withReadable } from "./interpreters/with-readable.js"
+import { withTracking } from "./interpreters/with-tracking.js"
 import type { WritableContext } from "./interpreters/writable.js"
 import { withWritable } from "./interpreters/writable.js"
 
@@ -167,5 +168,31 @@ export const observation: InterpreterLayer<
   name: "observation",
   transform(base) {
     return withChangefeed(base)
+  },
+}
+
+// ---------------------------------------------------------------------------
+// tracking — read-dependency capture for reactive scopes
+// ---------------------------------------------------------------------------
+
+/**
+ * Tracking layer: read-instrumentation for the reactive runtime
+ * (`@kyneta/reactive`). Applied OUTERMOST (above observation) so every
+ * user-facing read routes through it first; when no tracking scope is
+ * active it is a one-guard passthrough.
+ *
+ * Carries no brand (`unknown`) — `& unknown` is identity, so it does not
+ * change `.done()` tier resolution. Composes on any read-capable stack.
+ *
+ * ```ts
+ * interpret(schema, ctx)
+ *   .with(readable).with(writable).with(observation).with(tracking)
+ *   .done()
+ * ```
+ */
+export const tracking: InterpreterLayer<RefContext, RefContext> = {
+  name: "tracking",
+  transform(base) {
+    return withTracking(base as any) as any
   },
 }

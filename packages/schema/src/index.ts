@@ -244,6 +244,8 @@ export {
 export { withNavigation } from "./interpreters/with-navigation.js"
 // withReadable — refinement transformer (reading only, requires navigation)
 export { withReadable } from "./interpreters/with-readable.js"
+// withTracking — read-dependency capture for reactive scopes (jj:kpywvkpr)
+export { withTracking } from "./interpreters/with-tracking.js"
 export type {
   CounterRef,
   HasRemove,
@@ -289,6 +291,7 @@ export {
   navigation,
   observation,
   readable,
+  tracking,
   writable,
 } from "./layers.js"
 // Migration — schema migration primitives and identity derivation
@@ -512,6 +515,18 @@ export {
   merge,
   version,
 } from "./sync.js"
+// Read tracking — dependency capture for reactive scopes (consumed by
+// @kyneta/reactive, jj:kpywvkpr). Pure scope stack + single `reportRead`
+// mutation; aspect vocabulary harmonizes with @kyneta/compiler's
+// DependencyClassification.
+export type { Aspect, Dependency } from "./tracking.js"
+export {
+  currentScope,
+  dependencyKey,
+  reportRead,
+  withoutTracking,
+  withReadScope,
+} from "./tracking.js"
 export type { HasNativeAny } from "./unwrap.js"
 // Unwrap — typed escape hatch for accessing the native container backing a ref
 export { unwrap } from "./unwrap.js"

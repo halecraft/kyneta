@@ -14,7 +14,7 @@ import type { Lease } from "@kyneta/machine"
 import { randomPeerId } from "@kyneta/random"
 import type { BoundSchema } from "./bind.js"
 import { interpret } from "./interpret.js"
-import { observation, readable, writable } from "./layers.js"
+import { observation, readable, tracking, writable } from "./layers.js"
 import type { NativeMap } from "./native.js"
 import { SUBSTRATE } from "./native.js"
 import type { DocRef } from "./ref.js"
@@ -74,6 +74,7 @@ export function createRef(
     .with(readable)
     .with(writable)
     .with(observation)
+    .with(tracking)
     .done()
   Object.defineProperty(ref, SUBSTRATE, {
     value: substrate,
