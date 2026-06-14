@@ -233,6 +233,10 @@ export function reactive<T>(thunk: () => T): Reactive<T> {
       return node.value
     },
     subscribe(cb: (cs: Changeset) => void): () => void {
+      if (node.disposed) {
+        node.disposed = false
+        trackNode(node)
+      }
       node.listeners.add(cb)
       return () => {
         node.listeners.delete(cb)
