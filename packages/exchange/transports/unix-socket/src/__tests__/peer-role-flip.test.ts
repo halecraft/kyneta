@@ -22,7 +22,14 @@ import { probe } from "../probe.js"
 
 function tmpSocketPath(): string {
   const id = crypto.randomBytes(8).toString("hex")
-  return path.join(os.tmpdir(), `kyneta-flip-${id}.sock`)
+  const tmp = os.tmpdir()
+  // macOS socket path limit is 104 characters. The test harness may
+  // set TMPDIR to a deeply nested path that exceeds this. Fall back
+  // to /tmp when the default tmpdir is too deep.
+  if (tmp.length + 30 > 104) {
+    return path.join("/tmp", `kyneta-flip-${id}.sock`)
+  }
+  return path.join(tmp, `kyneta-flip-${id}.sock`)
 }
 
 async function waitFor(

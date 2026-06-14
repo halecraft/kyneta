@@ -149,10 +149,9 @@ export type ExchangeParams = {
   id: string | PeerIdentityInput
 
   /**
-   * Adapter factories for network connectivity.
+   * Transport instances for network connectivity.
    *
-   * Each factory is called once during Exchange construction to create
-   * a fresh adapter instance. Use `create*` helpers for low-friction setup:
+   * Use `create*` helpers for low-friction setup:
    *
    * ```typescript
    * transports: [createWebsocketClient({ url: "ws://localhost:3000/ws" })]
@@ -256,7 +255,7 @@ type DocCacheEntry =
  *
  * const exchange = new Exchange({
  *   id: "alice",
- *   transports: [transportFactory], // e.g. createWebsocketClient(...)
+ *   transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
  *   stores: [createInMemoryStore()],
  * })
  *
