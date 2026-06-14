@@ -287,6 +287,38 @@ function AppRoot() {
 
 ---
 
+## `useChangefeed`
+
+Source: `packages/react/src/use-changefeed.ts`.
+
+```ts
+useChangefeed<T>(feed: Changefeed<T, any>): T
+```
+
+Subscribe to any `[CHANGEFEED]` source — a schema ref, `exchange.peers`, `exchange.documents`, or a standalone feed — and return its current value, re-rendering on each changeset.
+
+This is the general-purpose hook. Every other hook (`useValue`, `useSyncState`, `useDocReady`) is a specialization of this pattern: bridge a `[CHANGEFEED]`-shaped source into `useSyncExternalStore`. `useChangefeed` exposes the general case directly.
+
+```tsx
+// exchange.peers — a ReactiveMap
+const peers = useChangefeed(exchange.peers)
+// peers: ReadonlyMap<PeerId, PeerIdentityDetails>
+
+// exchange.documents
+const docs = useChangefeed(exchange.documents)
+
+// Schema ref (via changefeed() projector)
+import { changefeed } from "@kyneta/changefeed"
+const title = useChangefeed(changefeed(doc.title))
+```
+
+### What `useChangefeed` is NOT
+
+- **Not a replacement for `useValue`.** `useValue` handles deep subscription for composite refs and nullish guard. `useChangefeed` is the raw binding.
+- **Not `useTracked`.** `useChangefeed` subscribes to the whole changeset stream of a single feed. `useTracked` auto-tracks reads across multiple refs within a thunk.
+
+---
+
 ## `useDocument`
 
 Source: `packages/react/src/use-document.ts`.

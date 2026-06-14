@@ -29,6 +29,7 @@ export {
 // Text adapter (framework-agnostic textarea ↔ TextRef binding)
 export type { AttachOptions, TextRefLike } from "./text-adapter.js"
 export { attach, diffText, transformSelection } from "./text-adapter.js"
+export { useChangefeed } from "./use-changefeed.js"
 export { useDocReady } from "./use-doc-ready.js"
 export { useDocument } from "./use-document.js"
 export { useExchangeSingleton } from "./use-exchange-singleton.js"
@@ -44,7 +45,7 @@ export { useValue } from "./use-value.js"
 // Thin re-exports from @kyneta/changefeed
 // ---------------------------------------------------------------------------
 
-export type { Changeset } from "@kyneta/changefeed"
+export type { Changefeed, Changeset } from "@kyneta/changefeed"
 export { CHANGEFEED } from "@kyneta/changefeed"
 
 // ---------------------------------------------------------------------------
