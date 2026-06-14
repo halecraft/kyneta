@@ -67,7 +67,6 @@ export { ChannelDirectory } from "./channel-directory.js"
 export type {
   AnyTransport,
   TransportContext,
-  TransportFactory,
 } from "./transport.js"
 export { Transport } from "./transport.js"
 

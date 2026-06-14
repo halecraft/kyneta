@@ -12,12 +12,7 @@
 // 5-member interface that native RTCDataChannel satisfies structurally
 // and that libraries like simple-peer can conform to via a trivial bridge.
 
-import type {
-  ChannelId,
-  ChannelMsg,
-  GeneratedChannel,
-  TransportFactory,
-} from "@kyneta/transport"
+import type { ChannelId, ChannelMsg, GeneratedChannel } from "@kyneta/transport"
 import { Pipeline, Transport } from "@kyneta/transport"
 import type { DataChannelLike } from "./data-channel-like.js"
 
@@ -437,6 +432,6 @@ export class WebrtcTransport extends Transport<DataChannelContext> {
  */
 export function createWebrtcTransport(
   options?: WebrtcTransportOptions,
-): TransportFactory {
-  return () => new WebrtcTransport(options)
+): WebrtcTransport {
+  return new WebrtcTransport(options)
 }

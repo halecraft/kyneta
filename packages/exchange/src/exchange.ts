@@ -51,7 +51,6 @@ import type {
   DocId,
   PeerId,
   PeerIdentityDetails,
-  TransportFactory,
   WireFeatures,
 } from "@kyneta/transport"
 import type { Capabilities } from "./capabilities.js"
@@ -159,7 +158,7 @@ export type ExchangeParams = {
    * transports: [createWebsocketClient({ url: "ws://localhost:3000/ws" })]
    * ```
    */
-  transports?: TransportFactory[]
+  transports?: AnyTransport[]
 
   /**
    * Stores for persistent document storage.
@@ -352,7 +351,7 @@ export class Exchange {
     // synchronizer's update function.
     this.#synchronizer = new Synchronizer({
       identity: fullIdentity,
-      transports: transports.map(factory => factory()),
+      transports,
       canShare: this.#governance.canShare.bind(this.#governance),
       canAccept: this.#governance.canAccept.bind(this.#governance),
       canConnect: this.#governance.canConnect.bind(this.#governance),

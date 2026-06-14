@@ -1,11 +1,11 @@
 // peer — public factory for the leaderless unix socket peer.
 //
-// `createUnixSocketPeer(options)` returns a `TransportFactory` (augmented with
+// `createUnixSocketPeer(options)` returns a `UnixSocketPeerHandle` (augmented with
 // live `role` observation), consumed like any other transport via
 // `new Exchange({ transports: [peer] })`. The peer never receives or touches
 // the Exchange — it is a self-healing `Transport` (see peer-transport.ts).
 
-import type { TransportFactory } from "@kyneta/transport"
+import type { AnyTransport } from "@kyneta/transport"
 import type { PeerRole } from "./peer-program.js"
 import {
   type UnixSocketPeerOptions,
@@ -19,7 +19,7 @@ export type { UnixSocketPeerOptions } from "./peer-transport.js"
  * observation. Pass directly to `new Exchange({ transports: [peer] })`, then
  * read `peer.role` / `peer.subscribe(...)` for the negotiated role.
  */
-export type UnixSocketPeerHandle = TransportFactory & {
+export type UnixSocketPeerHandle = AnyTransport & {
   /** The current negotiated role (`"negotiating"` until the Exchange starts it). */
   readonly role: PeerRole
   /** Observe role transitions; returns an unsubscribe function. */
@@ -46,20 +46,5 @@ export type UnixSocketPeerHandle = TransportFactory & {
 export function createUnixSocketPeer(
   options: UnixSocketPeerOptions,
 ): UnixSocketPeerHandle {
-  let instance: UnixSocketPeerTransport | undefined
-
-  const handle = (() => {
-    instance = new UnixSocketPeerTransport(options)
-    return instance
-  }) as unknown as UnixSocketPeerHandle
-
-  Object.defineProperty(handle, "role", {
-    get: () => instance?.role ?? "negotiating",
-    enumerable: true,
-  })
-
-  handle.subscribe = (fn: (role: PeerRole) => void): (() => void) =>
-    instance?.subscribe(fn) ?? (() => {})
-
-  return handle
+  return new UnixSocketPeerTransport(options)
 }

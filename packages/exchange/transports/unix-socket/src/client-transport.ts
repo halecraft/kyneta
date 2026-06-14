@@ -6,7 +6,6 @@
 // leaderless peer); this class only wires the Transport lifecycle and exposes
 // connection-state observation.
 
-import type { TransportFactory } from "@kyneta/transport"
 import {
   type ConnectorDriver,
   createConnectorDriver,
@@ -110,6 +109,6 @@ export class UnixSocketClientTransport extends SocketTransport {
  */
 export function createUnixSocketClient(
   options: UnixSocketClientOptions,
-): TransportFactory {
-  return () => new UnixSocketClientTransport(options)
+): UnixSocketClientTransport {
+  return new UnixSocketClientTransport(options)
 }

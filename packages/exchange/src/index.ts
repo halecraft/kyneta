@@ -122,7 +122,6 @@ export { ChannelDirectory, isEstablished } from "@kyneta/transport"
 export type {
   AnyTransport,
   TransportContext,
-  TransportFactory,
 } from "@kyneta/transport"
 export {
   computeBackoffDelay,

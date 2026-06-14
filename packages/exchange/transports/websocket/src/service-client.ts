@@ -5,7 +5,6 @@
 // the `./browser` entry point. Backend code imports from `./server`;
 // browser code imports from `./browser`.
 
-import type { TransportFactory } from "@kyneta/transport"
 import {
   type WebsocketClientOptions,
   WebsocketClientTransport,
@@ -47,6 +46,6 @@ export type ServiceWebsocketClientOptions = WebsocketClientOptions
  */
 export function createServiceWebsocketClient(
   options: ServiceWebsocketClientOptions,
-): TransportFactory {
-  return () => new WebsocketClientTransport(options)
+): WebsocketClientTransport {
+  return new WebsocketClientTransport(options)
 }

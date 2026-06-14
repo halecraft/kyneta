@@ -19,7 +19,6 @@ import type {
   GeneratedChannel,
   PeerId,
   ReconnectOptions,
-  TransportFactory,
 } from "@kyneta/transport"
 import { Pipeline, Transport } from "@kyneta/transport"
 import {
@@ -606,12 +605,12 @@ export class WebsocketClientTransport extends Transport<void> {
  */
 export function createWebsocketClient(
   options: WebsocketClientOptions,
-): TransportFactory {
+): WebsocketClientTransport {
   // fullJitter first, caller's reconnect spread last — so an explicit
   // reconnect.fullJitter:false still wins over this browser-friendly default.
   const merged: WebsocketClientOptions = {
     ...options,
     reconnect: { fullJitter: true, ...options.reconnect },
   }
-  return () => new WebsocketClientTransport(merged)
+  return new WebsocketClientTransport(merged)
 }

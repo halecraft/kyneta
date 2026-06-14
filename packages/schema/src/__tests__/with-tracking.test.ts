@@ -154,9 +154,9 @@ const TreeTest = Schema.struct({
 describe("withTracking — tree aspect inference", () => {
   it("tree () reports a single deep dep (fold suppressed)", () => {
     const doc = createDoc(TreeTest)
-    let id = ""
+    let _id = ""
     batch(doc, (d: any) => {
-      id = d.outline.create({ data: { label: "root" } })
+      _id = d.outline.create({ data: { label: "root" } })
     })
     const { value, deps } = withReadScope(() => (doc as any).outline())
     expect(Array.isArray(value)).toBe(true)

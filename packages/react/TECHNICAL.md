@@ -216,12 +216,26 @@ The reactive runtime maps each captured dependency's *aspect* to the existing sc
 
 Source: `packages/react/src/exchange-context.tsx`.
 
-React context that *owns* the `Exchange`. It takes a `config` (an `ExchangeParams`), not a pre-built instance:
+React context that *receives* an `Exchange` instance and provides it to the subtree:
 
 ```tsx
-<ExchangeProvider config={{ id: "my-peer", transports: [/* … */] }}>
-  <App />
-</ExchangeProvider>
+import { Exchange } from "@kyneta/exchange"
+import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
+
+// Create the Exchange once at module scope — it owns persistent network
+// connections and must survive React lifecycle events like StrictMode remounts.
+const exchange = new Exchange({
+  id: "my-peer",
+  transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
+})
+
+function Root() {
+  return (
+    <ExchangeProvider exchange={exchange}>
+      <App />
+    </ExchangeProvider>
+  )
+}
 
 function SomeComponent() {
   const exchange = useExchange()
@@ -229,7 +243,39 @@ function SomeComponent() {
 }
 ```
 
-The Exchange is created lazily from `config` (`useMemo(() => new Exchange(config), [config])`) and torn down via `exchange.reset()` on unmount. Pass a **stable** `config` — define it outside render or memoize it — built from transport *factories* rather than live transports, so each mount (including StrictMode's double-mount) gets a fresh Exchange with fresh transports. For graceful async shutdown (flushing pending storage writes), call `exchange.shutdown()` before unmounting.
+### Why the Exchange must survive React's lifecycle
+
+An Exchange is a participant in a distributed protocol — it manages persistent network connections, sync state, and peer identity. Recreating an Exchange for the same `peerId` during a session is **fatal**: it may send a sync offer, be destroyed by React, and a new Exchange spinning up with the same `peerId` will receive replies meant for the previous instance, corrupting its distributed state.
+
+React's component model expects components to be safe to tear down and reconstruct. An Exchange is not. It should be created exactly once and live for the lifetime of the client.
+
+### Safe patterns
+
+**Module scope** (recommended): Create the Exchange outside the React tree so it survives all lifecycle events.
+
+**`useExchangeSingleton`** (for async dependencies): When you must wait for React state (e.g., an auth token) before creating the Exchange, use `useExchangeSingleton` from `@kyneta/react`. It guarantees exactly-once creation per `peerId` using a hidden module-level cache:
+
+```tsx
+import { useExchangeSingleton, ExchangeProvider } from "@kyneta/react"
+
+function AppRoot() {
+  const { token, user } = useAuth()
+  const peerId = user ? persistentPeerId(`app-${user.id}`) : null
+
+  const exchange = useExchangeSingleton(peerId, () => new Exchange({
+    id: peerId!,
+    transports: [createWebsocketClient({ url: `ws://.../?token=${token}` })],
+  }))
+
+  if (!exchange) return <LoadingSpinner />
+
+  return (
+    <ExchangeProvider exchange={exchange}>
+      <App />
+    </ExchangeProvider>
+  )
+}
+```
 
 `useExchange()` throws if called outside a provider — this is a programmer error that deserves to surface loudly rather than return `undefined` and fail later.
 
@@ -237,7 +283,7 @@ The Exchange is created lazily from `config` (`useMemo(() => new Exchange(config
 
 - **Not a DI container.** It provides *one* value (the `Exchange`). No factory registry, no scope.
 - **Not a render wrapper.** It adds no DOM — it returns its `children` wrapped in a context provider.
-- **Not a "bring your own instance" provider.** It constructs the `Exchange` from `config` and owns its lifecycle: create on mount, `reset()` on unmount. The application supplies configuration, not a live instance.
+- **Not an Exchange factory.** It does not construct or own the Exchange lifecycle. The application creates the Exchange and passes it in. This matches the pattern used by Redux (`<Provider store={store}>`), Apollo (`<ApolloProvider client={client}>`), and React Query (`<QueryClientProvider client={client}>`).
 
 ---
 

@@ -12,7 +12,7 @@
 
 import { createRoot } from "react-dom/client"
 import { ExchangeProvider } from "@kyneta/react"
-import { persistentPeerId } from "@kyneta/exchange"
+import { Exchange, persistentPeerId } from "@kyneta/exchange"
 import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
 import BumperCarsApp from "./client/bumper-cars-app.js"
 import "./index.css"
@@ -45,15 +45,15 @@ const initialColor = localStorage.getItem(COLOR_KEY)
 const rootEl = document.getElementById("root")
 if (!rootEl) throw new Error("#root not found")
 
+const exchange = new Exchange({
+  id: { peerId, name: initialName, type: "user" },
+  transports: [
+    createWebsocketClient({ url: `ws://${location.host}/ws`, WebSocket }),
+  ],
+})
+
 createRoot(rootEl).render(
-  <ExchangeProvider
-    config={{
-      id: { peerId, name: initialName, type: "user" },
-      transports: [
-        createWebsocketClient({ url: `ws://${location.host}/ws`, WebSocket }),
-      ],
-    }}
-  >
+  <ExchangeProvider exchange={exchange}>
     <BumperCarsApp initialName={initialName} initialColor={initialColor} />
   </ExchangeProvider>,
 )

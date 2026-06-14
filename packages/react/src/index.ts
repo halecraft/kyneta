@@ -31,6 +31,7 @@ export type { AttachOptions, TextRefLike } from "./text-adapter.js"
 export { attach, diffText, transformSelection } from "./text-adapter.js"
 export { useDocReady } from "./use-doc-ready.js"
 export { useDocument } from "./use-document.js"
+export { useExchangeSingleton } from "./use-exchange-singleton.js"
 // useSelector / useTracked — auto-tracked reactive reads over @kyneta/reactive
 export { useSelector } from "./use-selector.js"
 export { useSyncState } from "./use-sync-state.js"
@@ -84,7 +85,6 @@ export type {
   Policy,
   SyncRef,
   SyncStatusSummary,
-  TransportFactory,
 } from "@kyneta/exchange"
 export {
   AsyncQueue,

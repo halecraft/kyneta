@@ -184,7 +184,7 @@ async function createConnectedPair(opts?: {
 
   const serverExchange = createExchange({
     id: serverPeerId,
-    transports: [() => serverTransport],
+    transports: [serverTransport],
   })
 
   const clientTransport = new WebsocketClientTransport({
@@ -196,7 +196,7 @@ async function createConnectedPair(opts?: {
 
   const clientExchange = createExchange({
     id: clientPeerId,
-    transports: [() => clientTransport],
+    transports: [clientTransport],
   })
 
   // Wait for the client to be fully ready

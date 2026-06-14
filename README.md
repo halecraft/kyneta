@@ -27,7 +27,7 @@ const TodoDoc = loro.bind(
 
 // 2. Create an exchange, one per peer (or server/client)
 const exchange = new Exchange({
-  identity: { peerId: "alice" },
+  id: { peerId: "alice" },
   transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
 })
 

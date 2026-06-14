@@ -1234,7 +1234,7 @@ describe("relay via exchange.replicate()", () => {
     // Phase 2: Bob connects to relay AFTER Alice wrote
     const bridgeRB = new Bridge()
     await relay.addTransport(
-      createBridgeTransport({ transportId: "relay-b", bridge: bridgeRB })(),
+      createBridgeTransport({ transportId: "relay-b", bridge: bridgeRB }),
     )
 
     const exchangeB = createExchange({

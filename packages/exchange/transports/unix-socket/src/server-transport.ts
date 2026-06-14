@@ -35,6 +35,12 @@ export interface UnixSocketServerOptions {
  * Listens on a unix domain socket path and hosts one channel per accepted
  * connection. Pass via `new Exchange({ transports: [() => server] })`.
  */
+export function createUnixSocketServer(
+  options: UnixSocketServerOptions,
+): UnixSocketServerTransport {
+  return new UnixSocketServerTransport(options)
+}
+
 export class UnixSocketServerTransport extends SocketTransport {
   readonly #driver: ListenerDriver
 

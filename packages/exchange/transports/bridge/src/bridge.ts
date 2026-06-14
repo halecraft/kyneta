@@ -12,11 +12,7 @@
 //     transports: [createBridgeTransport({ transportId: "peer-a", bridge })],
 //   })
 
-import type {
-  ChannelId,
-  GeneratedChannel,
-  TransportFactory,
-} from "@kyneta/transport"
+import type { ChannelId, GeneratedChannel } from "@kyneta/transport"
 import { Pipeline, Transport } from "@kyneta/transport"
 
 // ---------------------------------------------------------------------------
@@ -257,6 +253,6 @@ export class BridgeTransport extends Transport<BridgeTransportContext> {
  */
 export function createBridgeTransport(
   params: BridgeTransportParams,
-): TransportFactory {
-  return () => new BridgeTransport(params)
+): BridgeTransport {
+  return new BridgeTransport(params)
 }

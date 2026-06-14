@@ -19,25 +19,6 @@ import type { ChannelId, PeerIdentityDetails, TransportType } from "./types.js"
 
 export type AnyTransport = Transport<any>
 
-/**
- * A zero-argument function that creates a fresh adapter instance.
- *
- * Adapters have a linear lifecycle (create → use → discard) and cannot
- * be restarted after `_stop()`. Passing factories instead of instances
- * ensures the Exchange can create fresh adapters on construction and
- * discard them on reset — no shared mutable state across lifecycles.
- *
- * Use the `create*` helper functions for low-friction configuration:
- * ```typescript
- * import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
- *
- * const exchange = new Exchange({
- *   transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
- * })
- * ```
- */
-export type TransportFactory = () => AnyTransport
-
 type AdapterParams = {
   transportType: TransportType
   /**

@@ -4,6 +4,7 @@
 // and that repeated calls with the same docId + BoundSchema return
 // the same ref identity.
 
+import { Exchange } from "@kyneta/exchange"
 import type { PlainState } from "@kyneta/schema"
 import { json, Schema, unwrap } from "@kyneta/schema"
 import { renderHook } from "@testing-library/react"
@@ -28,9 +29,9 @@ const TestDoc = json.bind(TestSchema)
 // ---------------------------------------------------------------------------
 
 function createWrapper() {
-  const config = { id: "test" }
+  const exchange = new Exchange({ id: "test" })
   return ({ children }: { children: ReactNode }) => (
-    <ExchangeProvider config={config}>{children}</ExchangeProvider>
+    <ExchangeProvider exchange={exchange}>{children}</ExchangeProvider>
   )
 }
 

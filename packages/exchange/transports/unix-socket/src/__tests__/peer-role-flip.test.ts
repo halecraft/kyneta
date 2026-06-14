@@ -86,7 +86,7 @@ describe("UnixSocketPeerTransport — leaderless healing", () => {
     const peerB = new UnixSocketPeerTransport({ path: socketPath })
     const exB = new Exchange({
       id: { peerId: "B", name: "B" },
-      transports: [() => peerB],
+      transports: [peerB],
     })
     exchanges.push(exB)
     await waitFor(() => peerB.role === "connector")

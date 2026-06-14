@@ -40,7 +40,6 @@ import type {
   ChannelMsg,
   GeneratedChannel,
   PeerId,
-  TransportFactory,
 } from "@kyneta/transport"
 import { Pipeline, Transport } from "@kyneta/transport"
 import {
@@ -641,6 +640,6 @@ export class SseClientTransport extends Transport<void> {
  * })
  * ```
  */
-export function createSseClient(options: SseClientOptions): TransportFactory {
-  return () => new SseClientTransport(options)
+export function createSseClient(options: SseClientOptions): SseClientTransport {
+  return new SseClientTransport(options)
 }
