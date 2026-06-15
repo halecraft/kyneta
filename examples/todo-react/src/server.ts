@@ -43,7 +43,7 @@ const serverTransport = new WebsocketServerTransport()
 
 const exchange = new Exchange({
   id: { peerId: "todo-react-server", name: "server" },
-  transports: [() => serverTransport],
+  transports: [serverTransport],
 
   /** Uncomment to add local storage persistence via LevelDB */
   // stores: [await createLevelDBStore("./todo.db")],

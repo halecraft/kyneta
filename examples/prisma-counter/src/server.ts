@@ -52,7 +52,7 @@ const serverTransport = new WebsocketServerTransport()
 
 const exchange = new Exchange({
   id: { peerId: "counter-server", name: "server" },
-  transports: [() => serverTransport],
+  transports: [serverTransport],
 
   /** Persist counter state to Postgres via Prisma */
   stores: [store],

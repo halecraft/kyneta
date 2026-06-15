@@ -48,7 +48,7 @@ const exchange = new Exchange({
     name: "bumper-cars-server",
     type: "service",
   },
-  transports: [() => serverTransport],
+  transports: [serverTransport],
   schemas: [PlayerInputDoc],
 
   // ── departureTimeout ─────────────────────────────────────────────
