@@ -67,11 +67,24 @@ import type {
   TreeSchema,
 } from "../schema.js"
 import type { BatchOptions } from "../substrate.js"
+import { currentScope, dependencyKey, reportRead } from "../tracking.js"
 import type { HasNavigation } from "./bottom.js"
 import { installKeyedAddressing } from "./keyed-helpers.js"
 import { installSequenceAddressing } from "./sequence-helpers.js"
 import type { WritableContext } from "./writable.js"
 import { hasTransact, REMOVE, TRANSACT } from "./writable.js"
+
+let nextDeletedId = 1
+const deletedIds = new WeakMap<object, number>()
+
+function getDeletedKey(callable: object): string {
+  let id = deletedIds.get(callable)
+  if (id === undefined) {
+    id = nextDeletedId++
+    deletedIds.set(callable, id)
+  }
+  return dependencyKey(`d${id}`, "value")
+}
 
 // ---------------------------------------------------------------------------
 // ADDRESS_TABLE symbol — discovery hook for withCaching (Phase 5)
@@ -112,8 +125,9 @@ export function isDeleted(ref: unknown): boolean {
  */
 export function deleted(
   ref: unknown,
-): (() => boolean) & HasChangefeed<boolean> {
-  if (!ref || !(DELETED in (ref as object))) {
+): ((() => boolean) & HasChangefeed<boolean>) | undefined {
+  if (ref === null || ref === undefined) return undefined
+  if (!(DELETED in (ref as object))) {
     throw new Error(
       "deleted() requires a ref that tracks deletion (e.g. a sequence item or map entry)",
     )
@@ -369,12 +383,16 @@ export function withAddressing<A extends HasNavigation>(
                 }
               }
             },
-            subscribeDescendants(cb: (cs: any) => void) {
-              return this.subscribe(cb)
-            },
           }
 
           const callable = function (this: unknown) {
+            if (currentScope()) {
+              reportRead({
+                key: getDeletedKey(callable),
+                aspect: "value",
+                ref: callable as any,
+              })
+            }
             return deletedCf.current
           } as any
 

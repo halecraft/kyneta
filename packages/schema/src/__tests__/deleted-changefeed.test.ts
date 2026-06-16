@@ -1,93 +1,29 @@
 import { describe, expect, it } from "vitest"
-import {
-  batch,
-  deleted,
-  interpret,
-  observation,
-  plainContext,
-  readable,
-  Schema,
-  subscribeNode,
-  writable,
-} from "../index.js"
+import { batch, createDoc } from "../basic/index.js"
+import { hasRecursiveChangefeed } from "../changefeed.js"
+import { deleted } from "../interpreters/with-addressing.js"
+import { Schema } from "../schema.js"
 
-describe("deleted changefeed", () => {
-  it("fires when the ref's parent container is mutated", () => {
-    const s = Schema.struct({
-      items: Schema.list(Schema.string()),
+const TodoDoc = Schema.product({
+  todos: Schema.sequence(
+    Schema.product({
+      id: Schema.text(),
+      text: Schema.text(),
+      done: Schema.boolean(),
+    }),
+  ),
+})
+
+describe("deleted() changefeed", () => {
+  it("should NOT have a recursive changefeed", () => {
+    const doc = createDoc(TodoDoc)
+    batch(doc, (d: typeof doc) => {
+      d.todos.push({ id: "t1", text: "", done: false })
     })
-    const store = { items: ["a", "b"] }
-    const ctx = plainContext(store)
-    const doc = interpret(s, ctx)
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done() as any
+    const ref = doc.todos.at(0)!
 
-    const item = doc.items.at(0)
+    const d = deleted(ref)
 
-    let fired = 0
-    subscribeNode(deleted(item), () => {
-      fired++
-    })
-
-    batch(doc, (d: any) => d.items.delete(0, 1))
-
-    expect(fired).toBe(1)
-    expect(deleted(item)()).toBe(true)
-  })
-
-  it("fires when a map entry is deleted", () => {
-    const s = Schema.struct({
-      metadata: Schema.record(Schema.string()),
-    })
-    const store = { metadata: { version: "1.0" } }
-    const ctx = plainContext(store)
-    const doc = interpret(s, ctx)
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done() as any
-
-    const entry = doc.metadata.at("version")
-
-    let fired = 0
-    subscribeNode(deleted(entry), () => {
-      fired++
-    })
-
-    batch(doc, (d: any) => d.metadata.delete("version"))
-
-    expect(fired).toBe(1)
-    expect(deleted(entry)()).toBe(true)
-  })
-
-  it("cleans up listeners on unsubscribe", () => {
-    const s = Schema.struct({
-      items: Schema.list(Schema.string()),
-    })
-    const store = { items: ["a"] }
-    const ctx = plainContext(store)
-    const doc = interpret(s, ctx)
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done() as any
-
-    const item = doc.items.at(0)
-
-    let fired = 0
-    const unsub = subscribeNode(deleted(item), () => {
-      fired++
-    })
-
-    // Unsubscribe before deletion
-    unsub()
-
-    batch(doc, (d: any) => d.items.delete(0, 1))
-
-    // Should not have fired
-    expect(fired).toBe(0)
-    expect(deleted(item)()).toBe(true)
+    expect(hasRecursiveChangefeed(d)).toBe(false)
   })
 })

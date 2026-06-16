@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/schema",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Schema interpreter algebra — pure structure, pluggable interpretations",
   "author": "Duane Johnson",
   "license": "MIT",
