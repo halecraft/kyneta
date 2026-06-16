@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/random",
-  "version": "1.8.0",
+  "version": "2.0.0",
   "description": "Secure-context-free random ID primitives for the kyneta monorepo",
   "author": "Duane Johnson",
   "license": "MIT",
