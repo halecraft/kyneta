@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { execSync } from "node:child_process"
-import { resolve } from "node:path"
+import { relative, resolve } from "node:path"
 import { computePublishTiers, deriveGroup } from "./release"
 
 // ── WorkspacePackage factory ────────────────────────────────────────────────
@@ -207,47 +207,65 @@ describe("computePublishTiers", () => {
 describe("release.ts status (integration)", () => {
 	const ROOT = resolve(import.meta.dirname, "..")
 
-	test("exits 0 and lists all publishable packages", () => {
+	test("lists every publishable package with its group", () => {
 		const output = execSync("bun scripts/release.ts status", {
 			cwd: ROOT,
 			encoding: "utf8",
 			timeout: 30_000,
 		})
 
-		const expected = [
-			"@kyneta/changefeed",
-			"@kyneta/schema",
-			"@kyneta/exchange",
-			"@kyneta/wire",
-			"@kyneta/react",
-			"@kyneta/loro-schema",
-			"@kyneta/yjs-schema",
-			"@kyneta/machine",
-			"@kyneta/transport",
-			"@kyneta/index",
-			"@kyneta/cast",
-			"@kyneta/compiler",
-			"@kyneta/leveldb-store",
-			"@kyneta/sse-transport",
-			"@kyneta/websocket-transport",
-			"@kyneta/unix-socket-transport",
-			"@kyneta/webrtc-transport",
-		]
+		// Dynamically discover the true set of publishable packages from
+		// pnpm — the same source of truth the release script uses.  This
+		// guarantees the test stays in sync with the workspace without
+		// manual maintenance.
+		const raw = execSync("pnpm ls -r --depth -1 --json", {
+			cwd: ROOT,
+			encoding: "utf8",
+			stdio: ["pipe", "pipe", "pipe"],
+		})
+		const entries = JSON.parse(raw) as Array<{
+			name: string
+			path: string
+			private?: boolean
+		}>
 
-		for (const name of expected) {
+		const publishable = new Set(
+			entries
+				.filter(
+					(e) =>
+						resolve(e.path) !== ROOT &&
+						!e.private,
+				)
+				.map((e) => e.name),
+		)
+
+		// Every publishable package MUST appear in the status output.
+		for (const name of publishable) {
 			expect(output).toContain(name)
 		}
 
-		// Groups should appear as section headers
-		for (const group of [
-			"core:",
-			"backends:",
-			"transport:",
-			"stores:",
-			"bindings:",
-			"experimental:",
-		]) {
-			expect(output).toContain(group)
+		// Derive which groups actually have publishable packages.
+		const representedGroups = new Set<string>()
+		for (const entry of entries) {
+			if (resolve(entry.path) === ROOT) continue
+			if (entry.private) continue
+			const relPath = relative(ROOT, resolve(entry.path))
+			representedGroups.add(deriveGroup(relPath))
+		}
+
+		// Every non-empty group must appear as a section header.
+		for (const group of representedGroups) {
+			expect(output).toContain(group + ":")
+		}
+
+		// Private packages must NOT appear in the output.
+		const privates = entries.filter(
+			(e) => resolve(e.path) !== ROOT && e.private,
+		)
+		for (const pkg of privates) {
+			expect(output).not.toContain(
+				`${pkg.name.padEnd(42)} local:`,
+			)
 		}
 	})
 })

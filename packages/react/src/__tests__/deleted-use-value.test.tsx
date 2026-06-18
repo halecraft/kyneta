@@ -1,15 +1,17 @@
+import { deleted, remove, Schema } from "@kyneta/schema"
+import { batch, createDoc } from "@kyneta/schema/basic"
+import { act, renderHook } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
-import { renderHook, act } from "@testing-library/react"
-import { createDoc, batch } from "@kyneta/schema/basic"
-import { Schema, deleted, remove } from "@kyneta/schema"
 import { useValue } from "../use-value.js"
 
 const TodoDoc = Schema.product({
-  todos: Schema.sequence(Schema.product({
-    id: Schema.text(),
-    text: Schema.text(),
-    done: Schema.scalar<boolean>(false)
-  }))
+  todos: Schema.sequence(
+    Schema.product({
+      id: Schema.text(),
+      text: Schema.text(),
+      done: Schema.scalar<boolean>(false),
+    }),
+  ),
 })
 
 const tick = () => new Promise<void>(resolve => queueMicrotask(resolve))
@@ -32,7 +34,9 @@ describe("useValue(deleted(ref))", () => {
     expect(renderCount).toBe(1)
 
     act(() => {
-      batch(doc, () => { remove(ref) })
+      batch(doc, () => {
+        remove(ref)
+      })
     })
     await tick()
 

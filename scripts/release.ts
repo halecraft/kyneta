@@ -207,6 +207,10 @@ function bump(version: string, groupNames: string[]): void {
 	const allGroupNames = [...workspace.groups.keys()].sort()
 
 	// Resolve group names to packages
+	if (groupNames.length === 0 || groupNames[0] === "") {
+		console.error("Error: no groups specified. Use 'all' to bump all groups.")
+		process.exit(1)
+	}
 	const resolvedNames =
 		groupNames[0] === "all" ? allGroupNames : groupNames
 	const dirs: WorkspacePackage[] = []
