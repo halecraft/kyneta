@@ -284,5 +284,4 @@ The practical consequence: Loro-backed documents and plain-JSON documents coexis
 
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — thesis, design principles, system invariants, package roles, dependency flow, todo vertical slice.
 - Each package's `TECHNICAL.md` — architecture, vocabulary, source-of-truth citations, file map.
-- `.jj-plan/` — plan documents for active work.
 - `papers/` — theory documents, design notes, and CCS specifications (for `@kyneta/perspective`).

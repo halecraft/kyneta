@@ -34,8 +34,6 @@ function isFlatForestArray(arr: readonly unknown[]): boolean {
 // The concrete type is determined by the root path (set on context by
 // withAddressing or defaulting to RawPath.empty), inherited by all
 // descendants via field()/item().
-//
-// See .jj-plan/01-cursor-stable-refs.md §Phase 1 (path: cursor-stable-refs).
 
 // ---------------------------------------------------------------------------
 // Segment — the minimal contract for a path segment

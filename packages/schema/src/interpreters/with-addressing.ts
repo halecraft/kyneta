@@ -23,8 +23,6 @@
 // - Sequences: index address (mutable index + stable ID)
 // - Maps: key address + tombstone tracking
 // - Products: key address (always stable, never dead)
-//
-// See .jj-plan/01-cursor-stable-refs.md §Phase 2.
 
 import type { HasChangefeed } from "@kyneta/changefeed"
 import { CHANGEFEED } from "@kyneta/changefeed"
