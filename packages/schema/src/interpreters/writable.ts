@@ -101,6 +101,7 @@ type WritableDiscriminantProductRef<F extends Record<string, Schema>> = {
  * Uses `Symbol.for` so multiple copies share the same identity.
  */
 export const TRANSACT: unique symbol = Symbol.for("kyneta:transact") as any
+export const PATH: unique symbol = Symbol.for("kyneta:path") as any
 
 /**
  * An object that carries a `[TRANSACT]` symbol referencing the
@@ -108,6 +109,7 @@ export const TRANSACT: unique symbol = Symbol.for("kyneta:transact") as any
  */
 export interface HasTransact {
   readonly [TRANSACT]: WritableContext
+  readonly [PATH]: Path
 }
 
 /**
@@ -794,9 +796,13 @@ export type Writable<S extends Schema> =
 export function withWritable<A>(
   base: Interpreter<RefContext, A>,
 ): Interpreter<WritableContext, A & HasTransact> {
-  // Helper: attach [TRANSACT] as a non-enumerable symbol property.
+  // Helper: attach [TRANSACT] and [PATH] as non-enumerable symbol properties.
   // Uses Object.defineProperty to bypass Proxy set traps on map refs.
-  function attachTransact(result: unknown, ctx: WritableContext): void {
+  function attachTransact(
+    result: unknown,
+    ctx: WritableContext,
+    path: Path,
+  ): void {
     if (
       result !== null &&
       result !== undefined &&
@@ -806,7 +812,11 @@ export function withWritable<A>(
         value: ctx,
         enumerable: false,
         configurable: true,
-        writable: false,
+      })
+      Object.defineProperty(result, PATH, {
+        value: path,
+        enumerable: false,
+        configurable: true,
       })
     }
   }
@@ -829,7 +839,7 @@ export function withWritable<A>(
         ctx.dispatch(path, change)
       }
 
-      attachTransact(result, ctx)
+      attachTransact(result, ctx, path)
       return result
     },
 
@@ -853,7 +863,7 @@ export function withWritable<A>(
         configurable: true,
       })
 
-      attachTransact(result, ctx)
+      attachTransact(result, ctx, path)
       return result
     },
 
@@ -867,7 +877,7 @@ export function withWritable<A>(
     ): A & HasTransact {
       const result = base.sequence(ctx, path, schema, item) as any
       installListWriteOps(result, ctx, path)
-      attachTransact(result, ctx)
+      attachTransact(result, ctx, path)
       return result
     },
 
@@ -881,7 +891,7 @@ export function withWritable<A>(
     ): A & HasTransact {
       const result = base.map(ctx, path, schema, item) as any
       installKeyedWriteOps(result, ctx, path)
-      attachTransact(result, ctx)
+      attachTransact(result, ctx, path)
       return result
     },
 
@@ -910,7 +920,7 @@ export function withWritable<A>(
     ): A & HasTransact {
       const result = base.text(ctx, path, schema) as any
       installTextWriteOps(result, ctx, path)
-      attachTransact(result, ctx)
+      attachTransact(result, ctx, path)
       return result
     },
 
@@ -932,7 +942,7 @@ export function withWritable<A>(
         ctx.dispatch(path, incrementChange(-n))
       }
 
-      attachTransact(result, ctx)
+      attachTransact(result, ctx, path)
       return result
     },
 
@@ -949,7 +959,7 @@ export function withWritable<A>(
     ): A & HasTransact {
       const result = base.set(ctx, path, schema, item) as any
       installSetWriteOps(result, ctx, path)
-      attachTransact(result, ctx)
+      attachTransact(result, ctx, path)
       return result
     },
 
@@ -966,7 +976,7 @@ export function withWritable<A>(
     ): A & HasTransact {
       const result = base.tree(ctx, path, schema, nodes, node) as any
       installTreeWriteOps(result, ctx, path)
-      attachTransact(result, ctx)
+      attachTransact(result, ctx, path)
       return result as A & HasTransact
     },
 
@@ -981,7 +991,7 @@ export function withWritable<A>(
     ): A & HasTransact {
       const result = base.movable(ctx, path, schema, item) as any
       installListWriteOps(result, ctx, path)
-      attachTransact(result, ctx)
+      attachTransact(result, ctx, path)
       return result
     },
 
@@ -994,7 +1004,7 @@ export function withWritable<A>(
     ): A & HasTransact {
       const result = base.richtext(ctx, path, schema) as any
       installRichTextWriteOps(result, ctx, path)
-      attachTransact(result, ctx)
+      attachTransact(result, ctx, path)
       return result
     },
   }

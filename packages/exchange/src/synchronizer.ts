@@ -242,30 +242,27 @@ function resolveInboundVersionGap(
   replicaFactory: ReplicaFactoryLike,
   serializedVersion: string,
 ): VersionGapResult {
-  return classifyVersionGap(
+  const result = classifyVersionGap(
     replica,
     replicaFactory,
     serializedVersion,
     (parsed, current) => parsed.compare(current),
   )
+  return result
 }
 
-/**
- * Outbound: compare `current` against the peer's declared version.
- * `ahead`/`concurrent` means we have data the peer is missing — emit
- * the offer; `behind`/`equal` means there's nothing useful to send.
- */
 function resolveOutboundVersionGap(
   replica: ReplicaLike,
   replicaFactory: ReplicaFactoryLike,
   serializedVersion: string,
 ): VersionGapResult {
-  return classifyVersionGap(
+  const result = classifyVersionGap(
     replica,
     replicaFactory,
     serializedVersion,
     (parsed, current) => current.compare(parsed),
   )
+  return result
 }
 
 // ---------------------------------------------------------------------------
@@ -1437,24 +1434,31 @@ export class Synchronizer {
         // whose causal anchors were trimmed, leaving the replica in
         // an inconsistent state. Interpreted substrates fall through
         // to merge — entirety decomposes correctly there.
-        try {
-          runtime.replica = runtime.replicaFactory.fromEntirety(effect.payload)
-        } catch (err) {
-          console.warn(
-            `[exchange] epoch boundary reset failed for doc '${effect.docId}'.`,
-            err,
-          )
+        // State-based CRDTs (CvRDTs) also fall through to merge —
+        // `fromEntirety` would replace local state entirely, losing
+        // concurrent field writes that the peer doesn't yet have.
+        if (runtime.replicaFactory.replicaType[0] !== "state") {
+          try {
+            runtime.replica = runtime.replicaFactory.fromEntirety(
+              effect.payload,
+            )
+          } catch (err) {
+            console.warn(
+              `[exchange] epoch boundary reset failed for doc '${effect.docId}'.`,
+              err,
+            )
+            return
+          }
+
+          const newVersion = runtime.replica.version().serialize()
+          this.#dispatchSync({
+            type: "sync/doc-imported",
+            docId: effect.docId,
+            version: newVersion,
+            fromPeerId: effect.fromPeerId,
+          })
           return
         }
-
-        const newVersion = runtime.replica.version().serialize()
-        this.#dispatchSync({
-          type: "sync/doc-imported",
-          docId: effect.docId,
-          version: newVersion,
-          fromPeerId: effect.fromPeerId,
-        })
-        return
       }
     }
 

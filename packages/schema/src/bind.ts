@@ -57,6 +57,10 @@ import {
   plainReplicaFactory,
   plainSubstrateFactory,
 } from "./substrates/plain.js"
+import {
+  stateReplicaFactory,
+  stateSubstrateFactory,
+} from "./substrates/state.js"
 
 // ---------------------------------------------------------------------------
 // FactoryBuilder — deferred factory construction with peer identity
@@ -495,5 +499,24 @@ export const ephemeral: BindingTarget<EphemeralLaws, PlainNativeMap> =
   createBindingTarget<EphemeralLaws, PlainNativeMap>({
     factory: () => lwwSubstrateFactory,
     replicaFactory: lwwReplicaFactory,
+    syncMode: SYNC_EPHEMERAL,
+  })
+
+// ---------------------------------------------------------------------------
+// state — the field-level LWW CvRDT binding target
+// ---------------------------------------------------------------------------
+
+/**
+ * The field-level LWW broadcast binding target.
+ *
+ * `state.bind(schema)` — Field-level LWW Map broadcast, snapshot-only delivery, transient.
+ * `state.replica()` — headless state replication.
+ *
+ * Only supports LWW-family composition laws. Concurrent field writes merge flawlessly.
+ */
+export const state: BindingTarget<EphemeralLaws, PlainNativeMap> =
+  createBindingTarget<EphemeralLaws, PlainNativeMap>({
+    factory: () => stateSubstrateFactory,
+    replicaFactory: stateReplicaFactory,
     syncMode: SYNC_EPHEMERAL,
   })

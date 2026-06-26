@@ -163,6 +163,7 @@ Each binding target declares its closed law set:
 |--------|------|-------------------|
 | `json` | `AllowedLaws = string` (all) | Authoritative — any law is fine because writes are serialized. |
 | `ephemeral` | `EphemeralLaws = "lww" \| "lww-per-key" \| "lww-tag-replaced"` | LWW-family only — no concurrent merge needed. |
+| `state` | `EphemeralLaws = "lww" \| "lww-per-key" \| "lww-tag-replaced"` | Field-level LWW Map (CvRDT) — concurrent merges for presence state. |
 | `loro` | `LoroLaws = "lww" \| "additive" \| "positional-ot" \| "positional-ot-move" \| "lww-per-key" \| "tree-move" \| "lww-tag-replaced"` | Full CRDT law set minus `"add-wins-per-key"`. |
 | `yjs` | `YjsLaws = "lww" \| "positional-ot" \| "lww-per-key" \| "lww-tag-replaced"` | Text and structural laws — no `"additive"`, `"positional-ot-move"`, `"tree-move"`, `"add-wins-per-key"`. |
 
@@ -182,26 +183,33 @@ No runtime dispatch, no substrate-specific error messages. The type system is th
 
 Source: `packages/schema/src/bind.ts`.
 
-### The four binding targets
+### The five binding targets
 
-Rather than parameterizing a generic namespace with a merge strategy, each substrate is a named `BindingTarget` — a fixed bundle of `(factory, syncMode, allowedLaws)`:
+Kyneta exports five pre-configured binding targets:
 
-| Target | Import | `SyncMode` | Allowed laws | Substrate |
+| Target | Package | `syncMode` | Allowed Laws | Mechanism |
 |--------|--------|----------------|--------------|-----------|
 | `json` | `@kyneta/schema` | `SYNC_AUTHORITATIVE` | all (`string`) | Plain JS objects, Lamport version |
-| `ephemeral` | `@kyneta/schema` | `SYNC_EPHEMERAL` | `EphemeralLaws` (`"lww"`, `"lww-per-key"`, `"lww-tag-replaced"`) | LWW substrate, wall-clock version |
+| `ephemeral` | `@kyneta/schema` | `SYNC_EPHEMERAL` | `EphemeralLaws` (`"lww"`, `"lww-per-key"`, `"lww-tag-replaced"`) | LWW substrate, wall-clock version, full document overwrite |
+| `state` | `@kyneta/schema` | `SYNC_EPHEMERAL` | `EphemeralLaws` (`"lww"`, `"lww-per-key"`, `"lww-tag-replaced"`) | State CvRDT, wall-clock version, field-level overwrite |
 | `loro` | `@kyneta/loro-schema` | `SYNC_COLLABORATIVE` | `LoroLaws` (full CRDT set minus `"add-wins-per-key"`) | Loro CRDT doc |
 | `yjs` | `@kyneta/yjs-schema` | `SYNC_COLLABORATIVE` | `YjsLaws` (text + structural laws) | Yjs doc |
+
+#### `ephemeral` vs `state`
+Both targets implement snapshot-only transient delivery via `SYNC_EPHEMERAL`, but they have radically different semantics:
+- `ephemeral`: A **Global LWW Register**. A write to any field bumps the global document timestamp. When peers sync, the peer with the newest timestamp overwrites the *entire* document. Useful when you explicitly want total state replacement.
+- `state`: A **Field-level LWW Map (CvRDT)**. The substrate maintains a `[Value, Timestamp]` tuple for every scalar leaf. When peers sync, the payloads merge concurrently field-by-field (`Highest T wins`). Useful for decentralized presence where multiple peers write to their own keys in a shared document without clobbering each other, without generating any op-log history bloat.
 
 Usage:
 
 ```
-import { json, ephemeral, Schema } from "@kyneta/schema"
+import { json, ephemeral, state, Schema } from "@kyneta/schema"
 import { loro } from "@kyneta/loro-schema"
 import { yjs } from "@kyneta/yjs-schema"
 
 const Config = json.bind(Schema.struct({ theme: Schema.string() }))
 const Cursor = ephemeral.bind(Schema.struct({ x: Schema.number(), y: Schema.number() }))
+const MeshPresence = state.bind(Schema.struct({ alice: Schema.string(), bob: Schema.string() }))
 const Todo = loro.bind(Schema.struct({ title: Schema.text(), done: Schema.boolean() }))
 const Note = yjs.bind(Schema.struct({ body: Schema.text() }))
 ```

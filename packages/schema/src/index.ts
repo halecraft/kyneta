@@ -26,6 +26,7 @@ export {
   json,
   Reject,
   Replicate,
+  state,
 } from "./bind.js"
 // Change types — the universal currency of change
 export type {
@@ -103,6 +104,8 @@ export {
 export type { CommitOptions } from "./facade/batch.js"
 // Facade — library-level change capture and declarative application
 export { applyChanges, batch, remove } from "./facade/batch.js"
+// Facade — metadata read
+export { lastUpdated } from "./facade/last-updated.js"
 // Facade — library-level observation protocol
 export { subscribe, subscribeNode } from "./facade/observe.js"
 // foldPath — schema-guided sibling of Path.read; the navigation primitive
@@ -506,6 +509,10 @@ export {
   plainReplicaFactory,
   plainSubstrateFactory,
 } from "./substrates/plain.js"
+export {
+  stateReplicaFactory,
+  stateSubstrateFactory,
+} from "./substrates/state.js"
 // Timestamp version — wall-clock version for LWW/ephemeral substrates
 export { TimestampVersion } from "./substrates/timestamp-version.js"
 // Sync — generic sync functions for any substrate (via ref[SUBSTRATE])

@@ -18,7 +18,7 @@ import type {
   SubstrateFactory,
   SyncMode,
 } from "@kyneta/schema"
-import { BoundReplica, ephemeral, json } from "@kyneta/schema"
+import { BoundReplica, ephemeral, json, state } from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
 // ReplicaKey — composite lookup key
@@ -85,6 +85,7 @@ function replicaKey(replicaType: ReplicaType, syncMode: SyncMode): ReplicaKey {
 export const DEFAULT_REPLICAS: readonly BoundReplica[] = [
   json.replica(),
   ephemeral.replica(),
+  state.replica(),
 ]
 
 // ---------------------------------------------------------------------------
