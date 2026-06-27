@@ -182,11 +182,24 @@ export type {
 export { composeGate, Governance } from "./governance.js"
 
 // ---------------------------------------------------------------------------
-// Exchange — the public API
+// Runtime — the local imperative shell (documents + stores + clock)
+// ---------------------------------------------------------------------------
+
+export type {
+  DocCacheEntry,
+  DocReadyInfo,
+  RuntimeHooks,
+  RuntimeParams,
+} from "./runtime.js"
+export { Runtime } from "./runtime.js"
+
+// ---------------------------------------------------------------------------
+// Exchange — the network shell (transports + peers + sync graph)
 // ---------------------------------------------------------------------------
 
 export type {
   Disposition,
+  ExchangeNetworkParams,
   ExchangeParams,
   PeerIdentityInput,
 } from "./exchange.js"

@@ -22,29 +22,25 @@
 //   sync(doc).waitForSync()
 
 import type { ReactiveMap } from "@kyneta/changefeed"
-import type { Lease, ObservableHandle } from "@kyneta/machine"
-import { createLease, createObservableProgram } from "@kyneta/machine"
-import {
-  type BoundReplica,
-  type BoundSchema,
-  createRef,
-  type Defer,
-  type DevtoolsHistory,
-  type DocRef,
-  type FactoryBuilder,
-  type Interpret,
-  type NativeMap,
-  type ProductSchema,
-  type Ref,
-  type Reject,
-  type ReplicaFactoryLike,
-  type ReplicaLike,
-  type ReplicaType,
-  type Replicate,
-  type Schema as SchemaNode,
-  type SyncMode,
-  subscribe,
-  type Version,
+import type { Lease } from "@kyneta/machine"
+import type {
+  BoundReplica,
+  BoundSchema,
+  Defer,
+  DevtoolsHistory,
+  DocRef,
+  FactoryBuilder,
+  Interpret,
+  NativeMap,
+  ProductSchema,
+  Ref,
+  Reject,
+  ReplicaFactoryLike,
+  ReplicaType,
+  Replicate,
+  Schema as SchemaNode,
+  SyncMode,
+  Version,
 } from "@kyneta/schema"
 import type {
   AnyTransport,
@@ -58,14 +54,8 @@ import { createCapabilities, DEFAULT_REPLICAS } from "./capabilities.js"
 import type { Policy } from "./governance.js"
 import { Governance } from "./governance.js"
 import type { ObsSink } from "./observe.js"
-import type { Store, StoreMeta } from "./store/store.js"
-import {
-  allDocsIdle,
-  type StoreEffect,
-  type StoreInput,
-  type StoreModel,
-  storeProgram,
-} from "./store/store-program.js"
+import { Runtime } from "./runtime.js"
+import type { Store } from "./store/store.js"
 import { registerSync } from "./sync.js"
 import { type DocRuntime, Synchronizer } from "./synchronizer.js"
 import type { DocChange, DocInfo, PeerChange } from "./types.js"
@@ -115,7 +105,35 @@ export type PeerIdentityInput = {
 }
 
 /**
- * Options for creating an Exchange.
+ * Network-only parameters for constructing an Exchange over a pre-existing
+ * {@link Runtime}. Used by the rare {@link Exchange} constructor overload:
+ *
+ * ```ts
+ * const runtime = new Runtime({ peerId: "alice", stores: [...] })
+ * const exchange = new Exchange(runtime, { transports: [...] })
+ * ```
+ *
+ * Excludes `id` (derived from `runtime.peerId`) and all local concerns
+ * (`stores`, `lease`, `tickInterval`, `onStoreError`) — those live in the Runtime.
+ */
+export type ExchangeNetworkParams = {
+  transports?: AnyTransport[]
+  schemas?: BoundSchema[]
+  replicas?: readonly BoundReplica[]
+  departureTimeout?: number
+} & Policy
+
+/**
+ * Options for creating an Exchange via the primary (flat) constructor.
+ *
+ * The Exchange is the **network shell** — it owns transports, peers,
+ * governance, and the sync graph. Local concerns (stores, lease, clock)
+ * are accepted here as flat fields and used to construct an internal
+ * {@link Runtime}. The Runtime is an implementation detail — users of
+ * this constructor never interact with it directly.
+ *
+ * For the rare case of wrapping a pre-constructed Runtime, use the
+ * second constructor overload: `new Exchange(runtime, networkParams)`.
  */
 export type ExchangeParams = {
   /**
@@ -162,12 +180,6 @@ export type ExchangeParams = {
   /**
    * Stores for persistent document storage.
    *
-   * Storage is a direct Exchange dependency — not an adapter, not a
-   * channel, not a participant in the sync protocol. The Exchange
-   * handles hydration (loading from storage on `get()`/`replicate()`)
-   * and persistence (saving on network imports and local changes)
-   * directly.
-   *
    * ```typescript
    * stores: [createInMemoryStore()]
    * ```
@@ -179,6 +191,14 @@ export type ExchangeParams = {
    * name, and error. Default: `console.warn`.
    */
   onStoreError?: (docId: DocId, operation: string, error: unknown) => void
+
+  /**
+   * Interval (ms) for the heartbeat tick that drives time-based substrate
+   * projections (e.g. `.decay()`). `0` disables the tick.
+   *
+   * @default 1000
+   */
+  tickInterval?: number
 
   /**
    * Declares document types this Exchange can interpret.
@@ -224,13 +244,10 @@ export type ExchangeParams = {
 } & Policy
 
 // ---------------------------------------------------------------------------
-// Doc cache entry
+// Doc cache entry — re-exported from Runtime for backward compatibility
 // ---------------------------------------------------------------------------
 
-type DocCacheEntry =
-  | { mode: "interpret"; ref: any; bound: BoundSchema; suspended?: boolean }
-  | { mode: "replicate"; suspended?: boolean }
-  | { mode: "deferred" }
+export type { DocCacheEntry } from "./runtime.js"
 
 // ---------------------------------------------------------------------------
 // Exchange
@@ -285,49 +302,89 @@ export class Exchange {
   readonly #governance: Governance
   readonly #capabilities: Capabilities
   readonly #synchronizer: Synchronizer
-  /** Cooperating cascade budget. Shared with the Synchronizer (created in
-   *  jj:qlvnvxox) and with every per-doc changefeed dispatcher (jj:yksllknw)
-   *  so cross-doc A→B→A cascades and tick-induced re-entry are bounded by
-   *  one budget. Defaults to a fresh `createLease()` if none was provided. */
-  readonly #lease: Lease
+
+  /** The local imperative shell — owns documents, stores, lease, clock. */
+  readonly #runtime: Runtime
+
   readonly peers: ReactiveMap<PeerId, PeerIdentityDetails, PeerChange>
   readonly documents: ReactiveMap<DocId, DocInfo, DocChange>
-  readonly #docCache = new Map<DocId, DocCacheEntry>()
-  readonly #stores: Store[]
 
-  /** Store-program handle — pure machine for store coordination. */
-  readonly #storeHandle: ObservableHandle<StoreInput, StoreModel> | null
+  /**
+   * **Primary path (90% case)** — construct an Exchange from flat params.
+   * The Exchange constructs its own {@link Runtime} internally from the
+   * local concerns (`stores`, `lease`, `tickInterval`, `onStoreError`).
+   *
+   * ```typescript
+   * new Exchange({ id: "alice", transports: [...], stores: [...] })
+   * ```
+   */
+  constructor(params: ExchangeParams)
 
-  /** In-flight hydration I/O tracked so flush()/shutdown() can await it. */
-  readonly #pendingHydrations = new Set<Promise<void>>()
+  /**
+   * **Rare path (10% case)** — wrap a pre-constructed {@link Runtime}.
+   * Use this when you need a standalone Runtime first (e.g. local-first
+   * app that later upgrades to networked), then attach networking.
+   *
+   * The `peerId` is derived from `runtime.peerId` — do not pass `id`.
+   *
+   * ```typescript
+   * const runtime = new Runtime({ peerId: "alice", stores: [...] })
+   * const exchange = new Exchange(runtime, { transports: [...] })
+   * ```
+   */
+  constructor(runtime: Runtime, params: ExchangeNetworkParams)
 
-  constructor({
-    id,
-    transports = [],
-    stores = [],
-    schemas = [],
-    replicas = DEFAULT_REPLICAS,
-    departureTimeout,
-    onStoreError,
-    lease,
-    ...policyFields
-  }: ExchangeParams) {
-    // Resolve peer identity from id: string | PeerIdentityInput
-    const peerId = typeof id === "string" ? id : id.peerId
-    validatePeerId(peerId)
+  constructor(
+    paramsOrRuntime: ExchangeParams | Runtime,
+    networkParams?: ExchangeNetworkParams,
+  ) {
+    const isRuntime = paramsOrRuntime instanceof Runtime
+
+    // ── Resolve peerId and Runtime ──
+    let peerId: string
+    if (isRuntime) {
+      this.#runtime = paramsOrRuntime
+      peerId = paramsOrRuntime.peerId
+    } else {
+      const params = paramsOrRuntime as ExchangeParams
+      const id = params.id
+      peerId = typeof id === "string" ? id : id.peerId
+      validatePeerId(peerId)
+      this.#runtime = new Runtime({
+        peerId,
+        stores: params.stores,
+        onStoreError: params.onStoreError,
+        lease: params.lease,
+        tickInterval: params.tickInterval,
+      })
+    }
     this.peerId = peerId
 
-    this.#stores = stores
+    // ── Extract network params (from flat params or network-only params) ──
+    const {
+      transports = [],
+      schemas = [],
+      replicas = DEFAULT_REPLICAS,
+      departureTimeout,
+      ...policyFields
+    } = (
+      isRuntime
+        ? (networkParams as ExchangeNetworkParams)
+        : (paramsOrRuntime as ExchangeParams)
+    ) as ExchangeNetworkParams & {
+      transports?: AnyTransport[]
+    }
 
-    // Resolve the shared cascade budget once. Same instance is passed
-    // to the Synchronizer below and to every per-doc createRef call so
-    // doc-layer dispatchers cooperate with the synchronizer.
-    this.#lease = lease ?? createLease()
-
-    const fullIdentity: PeerIdentityDetails =
-      typeof id === "string"
+    // ── Resolve full identity (for the Synchronizer) ──
+    const fullIdentity: PeerIdentityDetails = isRuntime
+      ? { peerId, type: "user" }
+      : typeof (paramsOrRuntime as ExchangeParams).id === "string"
         ? { peerId, type: "user" }
-        : { type: "user", ...id }
+        : {
+            type: "user",
+            ...((paramsOrRuntime as ExchangeParams).id as PeerIdentityInput),
+          }
+
     // ── Governance — must be initialized before the Synchronizer,
     // because the Synchronizer may call onEnsureDoc during
     // _start() if a transport immediately discovers peers.
@@ -341,13 +398,16 @@ export class Exchange {
       schemas,
       replicas: [...replicas],
       resolveFactory: (builder: FactoryBuilder<any>, bound: BoundSchema) =>
-        builder({ peerId: this.peerId, binding: bound.identityBinding }),
+        builder({ peerId, binding: bound.identityBinding }),
     })
 
     // Create synchronizer — call each factory to produce fresh adapter instances.
     // The canShare and canAccept predicates delegate to the live Governance,
     // so dynamically registered policies are visible without recreating the
     // synchronizer's update function.
+    //
+    // The Synchronizer shares the Runtime's lease so doc-layer dispatchers
+    // and the synchronizer cooperate under one cascade budget.
     this.#synchronizer = new Synchronizer({
       identity: fullIdentity,
       transports,
@@ -356,7 +416,7 @@ export class Exchange {
       canConnect: this.#governance.canConnect.bind(this.#governance),
       canReset: this.#governance.canReset.bind(this.#governance),
       departureTimeout,
-      lease: this.#lease,
+      lease: this.#runtime.lease,
 
       onEnsureDoc: (
         docId,
@@ -443,106 +503,56 @@ export class Exchange {
     this.peers = this.#synchronizer.createPeerFeed()
     this.documents = this.#synchronizer.createDocFeed()
 
-    // ── Store-program — pure machine for store coordination ──
-    if (this.#stores.length > 0) {
-      const errorHandler =
-        onStoreError ??
-        ((docId: DocId, operation: string, error: unknown) => {
-          console.warn(
-            `[exchange] store ${operation} failed for doc '${docId}':`,
-            error,
-          )
-        })
+    // ── Wire Runtime hooks → Synchronizer ──
+    // The Runtime fires these when local docs become ready, change, or
+    // are dismissed. The Exchange bridges them into the sync graph.
+    this.#runtime.setHooks({
+      onDocReady: info => {
+        this.#synchronizer.registerDoc({
+          mode: info.mode,
+          docId: info.docId,
+          replica: info.replica,
+          replicaFactory: info.replicaFactory,
+          syncMode: info.syncMode,
+          schemaHash: info.schemaHash,
+          ...(info.supportedHashes
+            ? { supportedHashes: info.supportedHashes }
+            : {}),
+        } as DocRuntime)
+      },
+      onDocChangeset: (docId, changeset) => {
+        // Observation tee — publish BOTH local and replay changesets
+        // (before the echo filter) so the doc layer sees every change.
+        this.#synchronizer.observeDocChangeset(docId, changeset)
+        // Filter on the structural `replay` flag — not the `origin`
+        // label string — so foreign-origin merges still don't echo
+        // and `batch(doc, fn, { origin: "sync" })` still broadcasts.
+        if (changeset.replay) return
+        this.#synchronizer.notifyLocalChange(docId)
+      },
+      onDocDestroyed: docId => {
+        this.#synchronizer.dismissDocument(docId)
+      },
+      onDocSuspended: docId => {
+        this.#synchronizer.suspendDocument(docId)
+      },
+      onDocResumed: docId => {
+        this.#synchronizer.resumeDocument(docId)
+      },
+    })
 
-      this.#storeHandle = createObservableProgram(
-        storeProgram,
-        (effect: StoreEffect, dispatch: (msg: StoreInput) => void) => {
-          switch (effect.type) {
-            case "persist-append": {
-              const { docId, records } = effect
-              Promise.all(
-                this.#stores.map(async store => {
-                  for (const record of records) {
-                    await store.append(docId, record)
-                  }
-                }),
-              ).then(
-                () => {
-                  let version = ""
-                  for (const r of records) {
-                    if (r.kind === "entry") version = r.version
-                  }
-                  dispatch({ type: "write-succeeded", docId, version })
-                },
-                error => dispatch({ type: "write-failed", docId, error }),
-              )
-              break
-            }
-            case "persist-replace": {
-              const { docId, records } = effect
-              Promise.all(
-                this.#stores.map(store => store.replace(docId, records)),
-              ).then(
-                () => {
-                  let version = ""
-                  for (const r of records) {
-                    if (r.kind === "entry") version = r.version
-                  }
-                  dispatch({ type: "write-succeeded", docId, version })
-                },
-                error => dispatch({ type: "write-failed", docId, error }),
-              )
-              break
-            }
-            case "persist-delete": {
-              const { docId } = effect
-              Promise.all(this.#stores.map(store => store.delete(docId))).then(
-                () => {}, // No write-succeeded for destroy
-                error => errorHandler(docId, "delete", error),
-              )
-              break
-            }
-            case "store-error": {
-              errorHandler(effect.docId, effect.operation, effect.error)
-              break
-            }
-          }
-        },
+    // ── Wire Synchronizer → Runtime (store delta saves) ──
+    // When the sync graph advances a doc's version (from network import
+    // or local change), the Runtime needs to persist the delta.
+    this.#synchronizer.onStateAdvanced((docId: DocId) => {
+      const docRuntime = this.#synchronizer.getDocRuntime(docId)
+      if (!docRuntime) return
+      this.#runtime.onStateAdvanced(
+        docId,
+        docRuntime.replica,
+        docRuntime.replicaFactory,
       )
-
-      // Always export since the CONFIRMED version (phase.version). This
-      // handles both the success and failure cases correctly:
-      // - Success: queued delta overlaps with the just-written entry, but
-      //   merge is idempotent — safe.
-      // - Failure: queued delta covers confirmed → current, which is the
-      //   full gap — correct.
-      this.#synchronizer.onStateAdvanced((docId: DocId) => {
-        if (!this.#storeHandle) return
-        const phase = this.#storeHandle.getState().docs.get(docId)
-        if (!phase) return // Not yet registered — still hydrating
-
-        const runtime = this.#synchronizer.getDocRuntime(docId)
-        if (!runtime) return
-
-        const confirmedVersion = phase.version
-        if (!confirmedVersion) return // Empty string = initial register, skip
-
-        const sinceVersion =
-          runtime.replicaFactory.parseVersion(confirmedVersion)
-        const delta = runtime.replica.exportSince(sinceVersion)
-        if (!delta) return // Version didn't actually advance — deduplication
-
-        const newVersion = runtime.replica.version().serialize()
-        this.#storeHandle.dispatch({
-          type: "state-advanced",
-          docId,
-          delta,
-          newVersion,
-        })
-      })
-    } else {
-      this.#storeHandle = null
-    }
+    })
   }
 
   /**
@@ -560,102 +570,36 @@ export class Exchange {
   }
 
   /**
-   * Internal document creation — creates an interpreted doc without
-   * registering the schema in the auto-resolve set.
+   * Internal document creation — delegates to the Runtime, then wires
+   * sync capabilities onto the returned ref.
    *
    * This is the single creation path for interpreted docs. Both the
    * public `get()` and internal `onEnsureDoc` paths delegate here.
    */
   #interpretDoc(docId: DocId, bound: BoundSchema): any {
-    // Ensure semantics: if this doc already exists in interpret mode,
-    // return the existing ref. First writer wins.
-    // Context: jj:mumrnvlk (stale-batch race in cmd/ensure-doc)
-    const cached = this.#docCache.get(docId)
-    if (cached && cached.mode === "interpret") {
-      return cached.ref
-    }
+    // The Runtime handles substrate creation, caching, hydration, and
+    // fires onDocReady (which the Exchange wires to registerDoc).
+    //
+    // Uses createInterpretDoc (non-generic) instead of get (generic) to
+    // avoid TS2589: #interpretDoc is called from both the generic #getImpl
+    // (precise types) and the non-generic onEnsureDoc callback. Since this
+    // method returns `any` and #getImpl supplies the precise return type via
+    // the Get call-signature, the non-generic internal path is correct.
+    const ref = this.#runtime.createInterpretDoc(docId, bound)
 
-    const factory = bound.factory({
-      peerId: this.peerId,
-      binding: bound.identityBinding,
-    })
-    const replicaType = factory.replica.replicaType
-    if (!this.#capabilities.supportsReplicaType(replicaType)) {
-      throw new Error(
-        `[exchange] Internal error: registerSchema did not register replicaType [${replicaType}]`,
-      )
-    }
-
-    // ── Shared prefix: create substrate, build ref, wire metadata ──
-    const substrate = factory.create(bound.schema)
-
-    const ref: any = createRef(bound.schema, substrate, {
-      lease: this.#lease,
-    })
-
+    // Wire sync capabilities onto the ref. This must happen after the
+    // Runtime creates the ref so sync() works immediately.
     registerSync(ref, {
       peerId: this.peerId,
       docId,
       synchronizer: this.#synchronizer,
     })
 
-    this.#docCache.set(docId, {
-      mode: "interpret",
-      ref,
-      bound,
-    })
-
-    // ── Divergent tail: store vs no-store ──
-    if (this.#stores.length > 0) {
-      const hydrationOp = this.#hydrateAndRegister(
-        docId,
-        substrate,
-        factory.replica,
-        bound.syncMode,
-        bound.schemaHash,
-        "interpret",
-        [...bound.supportedHashes],
-      ).then(() => {
-        subscribe(ref, changeset => {
-          // Observation tee — publish BOTH local and replay changesets
-          // (before the echo filter) so the doc layer sees every change.
-          this.#synchronizer.observeDocChangeset(docId, changeset)
-          // Filter on the structural `replay` flag — not the `origin`
-          // label string — so foreign-origin merges still don't echo
-          // and `batch(doc, fn, { origin: "sync" })` still broadcasts.
-          if (changeset.replay) return
-          this.#synchronizer.notifyLocalChange(docId)
-        })
-      })
-      this.#trackHydration(hydrationOp)
-    } else {
-      this.#synchronizer.registerDoc({
-        mode: "interpret",
-        docId,
-        replica: substrate,
-        replicaFactory: factory.replica,
-        syncMode: bound.syncMode,
-        schemaHash: bound.schemaHash,
-        supportedHashes: [...bound.supportedHashes],
-      })
-
-      subscribe(ref, changeset => {
-        this.#synchronizer.observeDocChangeset(docId, changeset)
-        // See companion subscriber above for the replay-vs-origin
-        // rationale; identical filter.
-        if (changeset.replay) return
-        this.#synchronizer.notifyLocalChange(docId)
-      })
-    }
-
     return ref
   }
 
   /**
-   * Internal document replication — creates a headless replicated doc.
-   *
-   * This is the single creation path for replicated docs. Both the
-   * public `replicate()` and internal `onEnsureDoc` paths delegate here.
+   * Internal document replication — delegates to the Runtime.
    */
   #replicateDoc(
     docId: DocId,
@@ -663,41 +607,13 @@ export class Exchange {
     syncMode: SyncMode,
     schemaHash: string,
   ): void {
-    // Ensure semantics: if this doc already exists in replicate mode,
-    // it was created by a sibling command's cascade. First writer wins.
-    const cached = this.#docCache.get(docId)
-    if (cached && cached.mode === "replicate") return
-
-    const replica = replicaFactory.createEmpty()
-
-    this.#docCache.set(docId, { mode: "replicate" })
-
-    if (this.#stores.length > 0) {
-      const hydrationOp = this.#hydrateAndRegister(
-        docId,
-        replica,
-        replicaFactory,
-        syncMode,
-        schemaHash,
-        "replicate",
-      )
-      this.#trackHydration(hydrationOp)
-    } else {
-      this.#synchronizer.registerDoc({
-        mode: "replicate",
-        docId,
-        replica,
-        replicaFactory,
-        syncMode,
-        schemaHash,
-      })
-    }
+    this.#runtime.replicate(docId, replicaFactory, syncMode, schemaHash)
   }
 
   /**
    * Defer a document — register it in the synchronizer as deferred
    * (participates in routing/present but not data exchange) and cache
-   * the deferred state locally.
+   * the deferred state in the Runtime.
    */
   #deferDoc(
     docId: DocId,
@@ -706,125 +622,7 @@ export class Exchange {
     schemaHash: string,
   ): void {
     this.#synchronizer.deferDoc(docId, replicaType, syncMode, schemaHash)
-    this.#docCache.set(docId, { mode: "deferred" })
-  }
-
-  // =========================================================================
-  // PRIVATE — Hydration tracking
-  // =========================================================================
-
-  /**
-   * Track an in-flight hydration promise so flush()/shutdown() can
-   * await all hydrations before settling.
-   */
-  #trackHydration(op: Promise<void>): void {
-    this.#pendingHydrations.add(op)
-    op.finally(() => {
-      this.#pendingHydrations.delete(op)
-    })
-  }
-
-  /**
-   * The loop handles the case where a hydration spawns another
-   * hydration (e.g. schema auto-promotion during onEnsureDoc).
-   */
-  async #awaitHydrations(): Promise<void> {
-    while (this.#pendingHydrations.size > 0) {
-      await Promise.all(this.#pendingHydrations)
-    }
-  }
-
-  // =========================================================================
-  // PRIVATE — Storage: hydrate & register
-  // =========================================================================
-
-  /**
-   * Async tail of get() and replicate() when stores are configured.
-   * The caller has already created the replica/substrate and cached
-   * the ref (if interpret mode).
-   *
-   * For interpret mode with structural clientID 0, `factory.create(schema)`
-   * produces structural ops at `(0, 0..N)` — identical to what any stored
-   * state has. Merging stored data into this substrate deduplicates the
-   * structural ops and applies application ops into the shared containers.
-   * No separate replica, no upgrade step, no merge-into-temp.
-   *
-   * Context: jj:ptyzqoul (structural merge protocol)
-   */
-  async #hydrateAndRegister(
-    docId: DocId,
-    replica: ReplicaLike,
-    replicaFactory: ReplicaFactoryLike,
-    syncMode: SyncMode,
-    schemaHash: string,
-    mode: "interpret" | "replicate",
-    supportedHashes?: readonly string[],
-  ): Promise<void> {
-    const meta: StoreMeta = {
-      replicaType: replicaFactory.replicaType,
-      syncMode,
-      schemaHash,
-    }
-
-    // First-hit semantics: use the first store that has data
-    let hadStoredEntries = false
-    for (const backend of this.#stores) {
-      try {
-        const existing = await backend.currentMeta(docId)
-        if (existing) {
-          for await (const record of backend.loadAll(docId)) {
-            if (record.kind === "entry") {
-              try {
-                replica.merge(record.payload, { origin: "sync" })
-                hadStoredEntries = true
-              } catch (err) {
-                console.warn(
-                  `[exchange] failed to merge stored entry for doc '${docId}':`,
-                  err,
-                )
-              }
-            }
-          }
-          break // First-hit: use first store that has the doc
-        }
-      } catch (error) {
-        console.warn(
-          `[exchange] store hydration failed for doc '${docId}':`,
-          error,
-        )
-      }
-    }
-
-    const handle = this.#storeHandle
-    if (handle) {
-      if (hadStoredEntries) {
-        handle.dispatch({
-          type: "hydrated",
-          docId,
-          version: replica.version().serialize(),
-        })
-      } else {
-        handle.dispatch({
-          type: "register",
-          docId,
-          meta,
-          entirety: replica.exportEntirety(),
-          version: replica.version().serialize(),
-        })
-      }
-    }
-
-    // Register with synchronizer — present/interest messages carry
-    // the hydrated version, not an empty one
-    this.#synchronizer.registerDoc({
-      mode,
-      docId,
-      replica,
-      replicaFactory,
-      syncMode,
-      schemaHash,
-      ...(supportedHashes ? { supportedHashes } : {}),
-    } as DocRuntime)
+    this.#runtime.markDeferred(docId)
   }
 
   // =========================================================================
@@ -885,8 +683,8 @@ export class Exchange {
    * `as never` cast bridges. See {@link Get} for the TS2589 rationale.
    */
   #getImpl<S extends SchemaNode>(docId: DocId, bound: BoundSchema<S>): Ref<S> {
-    // Check cache first
-    const cached = this.#docCache.get(docId)
+    // Check Runtime cache first
+    const cached = this.#runtime.getEntry(docId)
 
     if (cached) {
       if (cached.mode !== "deferred" && cached.suspended) {
@@ -915,7 +713,7 @@ export class Exchange {
         // Delete deferred entry and fall through to normal get() creation.
         // registerDoc() → doc-ensure handles the deferred→promoted transition
         // in the synchronizer model.
-        this.#docCache.delete(docId)
+        this.#runtime.deleteDeferred(docId)
       } else {
         // mode === "interpret" — validate BoundSchema match
         if (cached.bound !== bound) {
@@ -988,10 +786,10 @@ export class Exchange {
     schemaHash?: string,
   ): void {
     // Handle deferred promotion or throw on duplicate
-    const cached = this.#docCache.get(docId)
+    const cached = this.#runtime.getEntry(docId)
     if (cached?.mode === "deferred") {
       // Promote deferred → replicate
-      this.#docCache.delete(docId)
+      this.#runtime.deleteDeferred(docId)
       const metadata = this.#synchronizer.getDocMetadata(docId)
       if (!metadata) {
         throw new Error(
@@ -1038,7 +836,7 @@ export class Exchange {
    * @returns true if the document exists
    */
   has(docId: DocId): boolean {
-    return this.#docCache.has(docId)
+    return this.#runtime.has(docId)
   }
 
   /**
@@ -1084,24 +882,13 @@ export class Exchange {
 
     runtime.replica.advance(target)
 
-    if (this.#storeHandle) {
-      const meta: StoreMeta = {
-        replicaType: runtime.replicaFactory.replicaType,
-        syncMode: runtime.syncMode,
-        schemaHash: runtime.schemaHash,
-      }
-      this.#storeHandle.dispatch({
-        type: "compact",
-        docId,
-        meta,
-        entirety: runtime.replica.exportEntirety(),
-        newVersion: runtime.replica.version().serialize(),
-      })
-      await this.#storeHandle.waitForState((s: StoreModel) => {
-        const phase = s.docs.get(docId)
-        return !phase || phase.status === "idle"
-      })
-    }
+    await this.#runtime.compact(
+      docId,
+      runtime.replica,
+      runtime.replicaFactory,
+      runtime.syncMode,
+      runtime.schemaHash,
+    )
   }
 
   /**
@@ -1111,11 +898,7 @@ export class Exchange {
    * They can be promoted via `exchange.get()` or `exchange.replicate()`.
    */
   get deferred(): ReadonlySet<DocId> {
-    const result = new Set<DocId>()
-    for (const [docId, entry] of this.#docCache) {
-      if (entry.mode === "deferred") result.add(docId)
-    }
-    return result
+    return this.#runtime.deferred
   }
 
   /**
@@ -1125,11 +908,7 @@ export class Exchange {
    * the current state.
    */
   documentIds(): ReadonlySet<DocId> {
-    const result = new Set<DocId>()
-    for (const [docId, entry] of this.#docCache) {
-      if (entry.mode === "interpret") result.add(docId)
-    }
-    return result
+    return this.#runtime.documentIds()
   }
 
   /**
@@ -1140,7 +919,7 @@ export class Exchange {
    * Returns `undefined` if the document is not known.
    */
   getDocSchemaHash(docId: DocId): string | undefined {
-    const cached = this.#docCache.get(docId)
+    const cached = this.#runtime.getEntry(docId)
     if (!cached) return undefined
     if (cached.mode === "interpret") return cached.bound.schemaHash
     // For replicate/deferred, the schema hash lives in the synchronizer model.
@@ -1158,9 +937,7 @@ export class Exchange {
    * @param docId - The ID of the document to destroy
    */
   destroy(docId: DocId): void {
-    this.#docCache.delete(docId)
-    this.#synchronizer.dismissDocument(docId)
-    this.#storeHandle?.dispatch({ type: "destroy", docId })
+    this.#runtime.destroy(docId)
   }
 
   /**
@@ -1176,18 +953,7 @@ export class Exchange {
    * @param docId - The ID of the document to suspend
    */
   suspend(docId: DocId): void {
-    const cached = this.#docCache.get(docId)
-    if (!cached) {
-      throw new Error(`Document '${docId}' does not exist.`)
-    }
-    if (cached.mode === "deferred") {
-      throw new Error(`Cannot suspend deferred document '${docId}'.`)
-    }
-    if (cached.suspended) {
-      return // Already suspended — idempotent
-    }
-    cached.suspended = true
-    this.#synchronizer.suspendDocument(docId)
+    this.#runtime.suspend(docId)
   }
 
   /**
@@ -1200,17 +966,7 @@ export class Exchange {
    * @param docId - The ID of the document to resume
    */
   resume(docId: DocId): void {
-    const cached = this.#docCache.get(docId)
-    if (!cached) {
-      throw new Error(`Document '${docId}' does not exist.`)
-    }
-    if (cached.mode === "deferred" || !cached.suspended) {
-      throw new Error(
-        `Document '${docId}' is not suspended. Call suspend() first.`,
-      )
-    }
-    cached.suspended = false
-    this.#synchronizer.resumeDocument(docId)
+    this.#runtime.resume(docId)
   }
 
   /**
@@ -1234,8 +990,7 @@ export class Exchange {
       binding: bound.identityBinding,
     })
     const replicaType = factory.replica.replicaType
-    for (const [docId, entry] of this.#docCache) {
-      if (entry.mode !== "deferred") continue
+    for (const docId of this.#runtime.deferred) {
       const metadata = this.#synchronizer.getDocMetadata(docId)
       if (!metadata) continue
       // Check if the new schema matches the deferred doc's triple
@@ -1247,9 +1002,9 @@ export class Exchange {
         bound.syncMode.delivery === metadata.syncMode.delivery &&
         bound.syncMode.durability === metadata.syncMode.durability
       ) {
-        // Safe to mutate Map during iteration per ES spec.
-        // Delete the deferred entry, then #interpretDoc inserts the new one.
-        this.#docCache.delete(docId)
+        // Safe: Runtime.deleteDeferred removes from cache, then #interpretDoc
+        // inserts the new entry.
+        this.#runtime.deleteDeferred(docId)
         this.#interpretDoc(docId, bound)
       }
     }
@@ -1300,10 +1055,7 @@ export class Exchange {
    * plan to continue using the Exchange afterwards.
    */
   async flush(): Promise<void> {
-    await this.#awaitHydrations()
-    if (this.#storeHandle) {
-      await this.#storeHandle.waitForState(allDocsIdle)
-    }
+    await this.#runtime.flush()
     await this.#synchronizer.flush()
   }
 
@@ -1316,8 +1068,7 @@ export class Exchange {
    */
   reset(): void {
     const disposeErrors = this.#governance.clear()
-    this.#docCache.clear()
-    this.#storeHandle?.dispose()
+    this.#runtime.reset()
     this.#synchronizer.reset()
     rethrowErrors(disposeErrors)
   }
@@ -1330,17 +1081,9 @@ export class Exchange {
    * stores.
    */
   async shutdown(): Promise<void> {
-    await this.#awaitHydrations()
-    if (this.#storeHandle) {
-      await this.#storeHandle.waitForState(allDocsIdle)
-      this.#storeHandle.dispose()
-    }
+    await this.#runtime.shutdown()
     const disposeErrors = this.#governance.clear()
-    this.#docCache.clear()
     await this.#synchronizer.shutdown()
-    for (const backend of this.#stores) {
-      await backend.close()
-    }
     rethrowErrors(disposeErrors)
   }
 
@@ -1394,5 +1137,15 @@ export class Exchange {
   /** @internal */
   get synchronizer(): Synchronizer {
     return this.#synchronizer
+  }
+
+  /**
+   * The local imperative shell backing this Exchange.
+   *
+   * Exposed for advanced use cases (standalone document creation, direct
+   * store access, etc.). Most callers should use the Exchange API directly.
+   */
+  get runtime(): Runtime {
+    return this.#runtime
   }
 }
