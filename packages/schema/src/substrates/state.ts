@@ -181,7 +181,10 @@ function createStateReplicaCore(
 // createStateSubstrate
 // ---------------------------------------------------------------------------
 
-export function createStateSubstrate(tree: StateTree): Substrate<StateVersion> {
+export function createStateSubstrate(
+  tree: StateTree,
+  schema?: SchemaNode,
+): Substrate<StateVersion> {
   let currentTree = tree
   const core = createStateReplicaCore(
     () => currentTree,
@@ -194,7 +197,7 @@ export function createStateSubstrate(tree: StateTree): Substrate<StateVersion> {
   // Updated on every prepare (locally) and afterBatch (from merges).
   const shadow: PlainState = {}
   if (!isStateTuple(currentTree)) {
-    extractPlainState(currentTree, shadow)
+    extractPlainState(currentTree, shadow, schema, Date.now())
   }
   const reader = plainReader(shadow)
 
@@ -226,8 +229,12 @@ export function createStateSubstrate(tree: StateTree): Substrate<StateVersion> {
       applyChange(shadow, path, change)
 
       // Then, we apply the change to the StateTree so that ONLY
-      // the mutated fields get their timestamps bumped.
-      applyChangeToStateTree(currentTree, path, change, Date.now())
+      // the mutated fields get their timestamps bumped — UNLESS this
+      // is a projection (tick/decay), in which case the math stays
+      // untouched and only the local shadow moves.
+      if (!options?.projection) {
+        applyChangeToStateTree(currentTree, path, change, Date.now())
+      }
 
       // Record op for changefeed delivery
       core.pendingOps.push({ path, change })
@@ -236,12 +243,23 @@ export function createStateSubstrate(tree: StateTree): Substrate<StateVersion> {
     afterBatch(options?: BatchOptions): Op[][] {
       // Re-extract the shadow from the tree just in case the tree was mutated
       // out of band (e.g. by `merge()` calling `setTree()`).
-      if (options?.replay && !isStateTuple(currentTree)) {
-        extractPlainState(currentTree, shadow)
+      if (
+        options?.replay &&
+        !options?.projection &&
+        !isStateTuple(currentTree)
+      ) {
+        extractPlainState(currentTree, shadow, schema, Date.now())
       }
 
       const flushed = [...core.pendingOps]
-      core.flush()
+      // Projections (tick/decay) never bump the version — the StateTree
+      // math is untouched, so the network version must stay still.
+      if (!options?.projection) {
+        core.flush()
+      } else {
+        // Just drain pendingOps without bumping the version.
+        core.pendingOps.length = 0
+      }
       return flushed.length > 0 ? [flushed] : []
     },
 
@@ -314,6 +332,47 @@ export function createStateSubstrate(tree: StateTree): Substrate<StateVersion> {
       } else {
         throw new Error("StateSubstrate only accepts entirety payloads.")
       }
+    },
+
+    /**
+     * Heartbeat hook driven by the `Runtime` clock (see `tickInterval`).
+     *
+     * Re-projects the shadow with the upgraded schema-aware
+     * `extractPlainState`, which masks expired presence leaves with their
+     * structural zero. If any field transitioned to decayed, we route the
+     * updated shadow through the writable context's batch machinery as a
+     * `projection` prepare — this fires the changefeed so local
+     * subscribers (React components, etc.) refresh, while `replay: true`
+     * prevents the Exchange from broadcasting to peers.
+     *
+     * The `projection` flag tells `prepare` to skip
+     * `applyChangeToStateTree` and `afterBatch` to skip the version bump.
+     * The underlying `StateTree` math is never mutated, so the network
+     * never sees a synthesized "absent" write that could clobber a slower
+     * peer's still-valid value.
+     */
+    tick(now: number): void {
+      if (schema === undefined || isStateTuple(currentTree)) return
+      if (!cachedCtx) return // No writable context — bare substrate, no subscribers
+
+      // Snapshot the shadow before re-projection so we can detect changes.
+      const anyDecayed = extractPlainState(currentTree, shadow, schema, now)
+      if (!anyDecayed) return
+
+      // Route through the writable context's batch machinery so the
+      // changefeed fires for local subscribers. `projection: true` keeps
+      // the StateTree math and version clock untouched; `replay: true`
+      // tells the Exchange not to broadcast.
+      const ctx = cachedCtx
+      ctx.runBatch(
+        () => {
+          ctx.prepare(RawPath.empty, replaceChange(shadow), {
+            replay: true,
+            projection: true,
+          })
+        },
+        { replay: true, projection: true },
+      )
     },
   }
 
@@ -539,8 +598,9 @@ export const stateSubstrateFactory: SubstrateFactory<StateVersion> = {
     // We will do a recursive walk to insert structural zeros tagged with T=0.
     insertStructuralZeros(tree, defaults)
 
-    // 3. Create the substrate with the upgraded tree
-    const substrate = createStateSubstrate(tree)
+    // 3. Create the substrate with the upgraded tree AND schema.
+    // The schema is needed for `tick()` to know which fields have `decayMs`.
+    const substrate = createStateSubstrate(tree, schema)
 
     return substrate
   },

@@ -311,6 +311,11 @@ export function bind<S extends SchemaNode>(config: {
 }): BoundSchema<S> {
   const schemaHash = computeSchemaHash(config.schema)
 
+  // Validate sync-mode constraints: `.decay()` is structurally illegal on
+  // durable substrates (history cannot be retroactively forgotten).
+  // Runs before any other work so the error fires loudly at module load.
+  validateSyncModeConstraints(config.schema, config.syncMode)
+
   // Derive identity binding from the migration chain (if present).
   const chain = getMigrationChain(config.schema)
   let identityBinding: SchemaBinding
@@ -520,3 +525,85 @@ export const state: BindingTarget<EphemeralLaws, PlainNativeMap> =
     replicaFactory: stateReplicaFactory,
     syncMode: SYNC_EPHEMERAL,
   })
+
+// ---------------------------------------------------------------------------
+// validateSyncModeConstraints — reject `.decay()` on durable substrates
+// ---------------------------------------------------------------------------
+
+/**
+ * The maximum schema-graph traversal depth. Matches {@link MAX_CANON_DEPTH}:
+ * the grammar guarantees finite acyclic schemas, so this is only ever hit
+ * by adversarial `as any`-crafted cyclic graphs.
+ */
+const MAX_VALIDATE_DEPTH = 1000
+
+/**
+ * Recursively walk a schema graph, rejecting `.decay()` on non-ephemeral
+ * sync modes.
+ *
+ * `.decay()` is a projection-only property of the local shadow — it cannot
+ * retroactively forget durable history. Allowing it on a persistent
+ * substrate would be a math-vs-projection contradiction: the history log
+ * would still carry the timed-out value, but the shadow would pretend it
+ * was gone. We surface the contradiction loudly, at `bind()` time, rather
+ * than letting it manifest as a silent divergence later.
+ *
+ * Visited-set is intentionally omitted: legitimate shared-node DAGs (a
+ * `Schema.string()` reused across many fields) would false-positive.
+ * A depth cap converts cycles into a clear error instead.
+ */
+export function validateSyncModeConstraints(
+  schema: SchemaNode,
+  syncMode: SyncMode,
+): void {
+  const isEphemeral = syncMode.durability === "transient"
+  walk(schema, 0)
+
+  function walk(node: SchemaNode, depth: number): void {
+    if (depth > MAX_VALIDATE_DEPTH) {
+      throw new Error(
+        `validateSyncModeConstraints: schema nesting exceeds limit (${MAX_VALIDATE_DEPTH}) — cycle or pathological depth`,
+      )
+    }
+
+    if (!isEphemeral && (node as { decayMs?: number }).decayMs !== undefined) {
+      throw new Error(
+        "Durable and collaborative substrates do not support .decay(). " +
+          "Time-decay is ephemeral-only: the local shadow reverts to its " +
+          "structural zero after `decayMs`, but durable history cannot be " +
+          "retroactively forgotten. Bind this schema via `state` or " +
+          "`ephemeral` instead.",
+      )
+    }
+
+    switch (node[KIND]) {
+      case "product": {
+        const fields = (node as { fields: Record<string, SchemaNode> }).fields
+        for (const key of Object.keys(fields)) {
+          walk(fields[key] as SchemaNode, depth + 1)
+        }
+        return
+      }
+      case "sequence":
+      case "map":
+      case "set":
+      case "tree":
+      case "movable":
+        walk((node as { item: SchemaNode }).item, depth + 1)
+        return
+      case "sum": {
+        const variants = (node as { variants: readonly SchemaNode[] }).variants
+        for (const variant of variants) {
+          walk(variant, depth + 1)
+        }
+        return
+      }
+      case "richtext":
+        // marks are a fixed vocabulary, not a schema tree.
+        return
+      default:
+        // scalar, text, counter — leaves. No children to walk.
+        return
+    }
+  }
+}

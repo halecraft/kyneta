@@ -18,6 +18,20 @@ const TodoApp = Schema.struct({
 })
 
 describe("useSelector", () => {
+  it("throws a descriptive error if the selector returns a Kyneta Ref (reactivity footgun)", () => {
+    const doc = createDoc(TodoApp)
+
+    // Suppress React error boundary logging for this expected throw
+    const originalConsoleError = console.error
+    console.error = () => {}
+
+    expect(() => {
+      renderHook(() => useSelector(doc.todos, (todos: any) => todos))
+    }).toThrow(/useSelector must return a projected value/)
+
+    console.error = originalConsoleError
+  })
+
   it("PARSIMONY: re-renders on done flip + structural change, not on text edits", async () => {
     const doc = createDoc(TodoApp)
     batch(doc, (d: any) => {

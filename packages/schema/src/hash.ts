@@ -98,6 +98,13 @@ export function fnv1aHex(input: string): string {
  *     tuple wrapped as `["j", inner]` — the completeness fix, expressed
  *     as one more tag.
  *
+ * Note: `decayMs` is intentionally NOT part of the canonical hash. Decay
+ * is a local projection policy (it masks the `PlainState` shadow without
+ * touching the underlying `StateTree` math), so two schemas that differ
+ * only in `decayMs` are structurally identical and fully inter-mergeable.
+ * This allows rolling deployments and per-device decay preferences without
+ * breaking sync.
+ *
  * The `Canon` return type (`string | Canon[]`) compiler-enforces the
  * arrays-and-strings-only invariant: returning an object or a bare number
  * fails to typecheck.

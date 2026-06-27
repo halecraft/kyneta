@@ -14,6 +14,8 @@
 // payloads without schema knowledge.
 
 import type { PlainState } from "../reader.js"
+import { KIND, type Schema as SchemaNode } from "../schema.js"
+import { Zero } from "../zero.js"
 
 // ---------------------------------------------------------------------------
 // StateTuple & StateTree
@@ -104,35 +106,195 @@ export function mergeStateTree(local: StateTree, remote: StateTree): StateTree {
  *
  * Mutates `target` in place by projecting `tree` onto it, removing absent
  * keys and updating present ones.
+ *
+ * When `schema` and `now` are supplied, the projection is time-aware:
+ * any leaf whose `(schema.decayMs)` is set and whose tuple timestamp is
+ * older than `now - decayMs` is replaced with `Zero.structural(schema)`
+ * in the shadow. This is purely a projection — the underlying `StateTree`
+ * math is never mutated, so the version clock does not advance and the
+ * network never sees a synthesized "absent" write.
+ *
+ * Returns `true` if any field was masked by decay (used by the substrate's
+ * `tick()` to decide whether to fire the changefeed).
  */
-export function extractPlainState(tree: StateTree, target: PlainState): void {
+export function extractPlainState(
+  tree: StateTree,
+  target: PlainState,
+  schema?: SchemaNode,
+  now?: number,
+): boolean {
   if (isStateTuple(tree)) {
     throw new Error(
       "extractPlainState requires a root container, received a tuple",
     )
   }
 
-  const sourceObj = tree as Record<string, StateTree>
+  const { anyDecayed } = extractInto(
+    tree as Record<string, StateTree>,
+    target,
+    schema,
+    now,
+  )
+  return anyDecayed
+}
 
-  for (const key of Object.keys(sourceObj)) {
-    const child = sourceObj[key]
-    if (isStateTuple(child)) {
-      target[key] = child[0]
-    } else {
-      // It's a nested container.
+/**
+ * Inner recursion. Walks `source` (a StateTree container) alongside
+ * `schema` (when provided), projecting values into `target`.
+ */
+function extractInto(
+  source: Record<string, StateTree>,
+  target: PlainState,
+  schema: SchemaNode | undefined,
+  now: number | undefined,
+): { anyDecayed: boolean; maxTimestamp: number } {
+  let anyDecayed = false
+  let maxTimestamp = 0
+
+  let keys = Object.keys(source)
+
+  // For discriminated unions, we MUST extract the discriminant field first.
+  // Otherwise, if we extract sibling fields before the discriminant is updated in `target`,
+  // `childSchemaForKey` will resolve schemas using the old (or structural zero) discriminant value.
+  if (schema && schema[KIND] === "sum") {
+    const sumSchema = schema as any
+    if (sumSchema.discriminant !== undefined) {
+      const discKey = sumSchema.discriminant
+      keys = keys.sort((a, b) => {
+        if (a === discKey) return -1
+        if (b === discKey) return 1
+        return 0
+      })
+    }
+  }
+
+  for (const key of keys) {
+    const child = source[key]
+    if (!isStateTuple(child)) {
+      // Nested container. Resolve the child schema if we can.
+      const childSchema = schema
+        ? childSchemaForKey(schema, key, target)
+        : undefined
       if (typeof target[key] !== "object" || target[key] === null) {
         target[key] = {}
       }
-      extractPlainState(child, target[key] as PlainState)
+      const result = extractInto(
+        child,
+        target[key] as PlainState,
+        childSchema,
+        now,
+      )
+      if (result.anyDecayed) {
+        anyDecayed = true
+      }
+      maxTimestamp = Math.max(maxTimestamp, result.maxTimestamp)
+      continue
+    }
+
+    // Leaf tuple.
+    const childSchema = schema
+      ? childSchemaForKey(schema, key, target)
+      : undefined
+
+    maxTimestamp = Math.max(maxTimestamp, child[1])
+
+    const decayed =
+      childSchema !== undefined &&
+      now !== undefined &&
+      isExpired(childSchema, child, now)
+
+    if (decayed) {
+      target[key] = Zero.structural(childSchema)
+      anyDecayed = true
+    } else {
+      target[key] = child[0]
     }
   }
 
   // Remove keys that are in target but not in source.
   for (const key of Object.keys(target)) {
-    if (!(key in sourceObj)) {
+    if (!(key in source)) {
       delete target[key]
     }
   }
+
+  // Container decay: if this container schema has a decayMs and the latest
+  // tuple within it has expired, decay the entire container to its structural zero.
+  if (schema && now !== undefined) {
+    const decayMs = (schema as { decayMs?: number }).decayMs
+    if (
+      decayMs !== undefined &&
+      maxTimestamp > 0 &&
+      now - maxTimestamp > decayMs
+    ) {
+      // Reset the target to the structural zero of this container
+      const structuralZero = Zero.structural(schema) as Record<string, unknown>
+      for (const key of Object.keys(target)) delete target[key]
+      for (const [key, val] of Object.entries(structuralZero)) {
+        target[key] = val
+      }
+      anyDecayed = true
+    }
+  }
+
+  return { anyDecayed, maxTimestamp }
+}
+
+/**
+ * Given a container schema, resolve the schema node for the named child.
+ * `state` supports product (`fields`), map (`item`), and sum (`variantMap`).
+ * Other kinds have no keyed children and return `undefined`.
+ */
+function childSchemaForKey(
+  schema: SchemaNode,
+  key: string,
+  target: PlainState,
+): SchemaNode | undefined {
+  switch (schema[KIND]) {
+    case "product":
+      return (schema as { fields: Record<string, SchemaNode> }).fields[key]
+    case "map":
+      return (schema as { item: SchemaNode }).item
+    case "sum": {
+      const sumSchema = schema as any
+      if (sumSchema.discriminant !== undefined) {
+        // Discriminated union. Read the discriminant value from the target state.
+        const discValue = target[sumSchema.discriminant]
+        // If the discriminant value isn't populated in target yet, it means we might be extracting
+        // it right now! If the key IS the discriminant, we can just return the schema of the discriminant
+        // from the first variant (it's identical across all variants).
+        if (key === sumSchema.discriminant) {
+          const firstVariant = sumSchema.variants[0]
+          return firstVariant.fields[key]
+        }
+        if (
+          typeof discValue === "string" &&
+          discValue in sumSchema.variantMap
+        ) {
+          const variantSchema = sumSchema.variantMap[discValue]
+          // The nested field's schema is found on the active variant's fields
+          return variantSchema.fields?.[key]
+        }
+      }
+      return undefined
+    }
+    default:
+      return undefined
+  }
+}
+
+/**
+ * True if the schema declares `decayMs` and the tuple's timestamp has
+ * elapsed past the decay window measured from `now`.
+ */
+function isExpired(
+  schema: SchemaNode,
+  tuple: StateTuple,
+  now: number,
+): boolean {
+  const decayMs = (schema as { decayMs?: number }).decayMs
+  if (decayMs === undefined) return false
+  return now - tuple[1] > decayMs
 }
 
 // ---------------------------------------------------------------------------

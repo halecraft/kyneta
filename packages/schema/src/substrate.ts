@@ -456,6 +456,20 @@ export interface BatchOptions extends BatchMetadata {
    *  undo-replay handler of `WritableContext.runBatch`. Substrates skip
    *  inverse recording. Set only by the abort path inside `runBatch`. */
   readonly compensating?: boolean
+
+  /**
+   * Kyneta-internal directive: this prepare is a **local projection**
+   * (e.g. time-decay via `substrate.tick()`), not a real write.
+   *
+   * State substrates that maintain a separate `PlainState` shadow use
+   * this to skip mutating the underlying CRDT math (`applyChangeToStateTree`)
+   * and to skip bumping the version clock — only the local-facing shadow
+   * moves. Always paired with `replay: true` so the Exchange does not
+   * broadcast the projection to peers.
+   *
+   * Set only by `substrate.tick()`; never surfaces on user-facing writes.
+   */
+  readonly projection?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -600,6 +614,12 @@ export interface Substrate<V extends Version = Version>
 
   /** Build a WritableContext for this substrate. */
   context(): WritableContext
+
+  /**
+   * Optional pure function to advance time-based projections.
+   * If implemented, the Exchange will call this on a periodic interval.
+   */
+  tick?(now: number): void
 }
 
 // ---------------------------------------------------------------------------

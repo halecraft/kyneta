@@ -6,6 +6,7 @@
 // for it. No options: no `scope`, no `watch`, no `isEqual` — auto-tracking
 // (jj:vtpxvkyk + jj:kpywvkpr) subsumes them all.
 
+import { hasChangefeed } from "@kyneta/changefeed"
 import { useTracked } from "./use-tracked.js"
 
 /**
@@ -27,5 +28,12 @@ import { useTracked } from "./use-tracked.js"
  * @returns The selected value, recomputed when its dependencies change.
  */
 export function useSelector<R, T>(ref: R, select: (ref: R) => T): T {
-  return useTracked(() => select(ref))
+  const result = useTracked(() => select(ref))
+  if (result && hasChangefeed(result)) {
+    throw new Error(
+      "useSelector must return a projected value (or plain data), not a Kyneta Ref. " +
+        "Either read the fields you need inside the selector, or materialize the node via `t => t()`.",
+    )
+  }
+  return result
 }

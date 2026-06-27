@@ -153,8 +153,16 @@ export interface ScalarSchema<
   readonly scalarKind: K
   readonly constraint?: readonly V[]
   readonly [LAWS]?: Laws
+  /**
+   * Optional time-decay for ephemeral presence fields (state substrate).
+   * `decayMs` of N means: if no new write is observed within N ms, the
+   * local projection reverts to its structural zero. Only valid with
+   * `SYNC_EPHEMERAL`; binding `.decay()` to a durable substrate throws.
+   */
+  readonly decayMs?: number
 
   nullable(): NullableSumOf<ScalarSchema<K, V, Laws>, Laws>
+  decay(ms: number): ScalarSchema<K, V, Laws>
 }
 
 /**
@@ -189,6 +197,11 @@ export interface ProductSchema<
   readonly fields: Readonly<F>
   readonly discriminantKey?: string
   readonly [LAWS]?: Laws
+  /**
+   * Optional time-decay for ephemeral presence fields (state substrate).
+   * See {@link ScalarSchema.decayMs}.
+   */
+  readonly decayMs?: number
 
   // -- Migration methods (mixed in by product() via Object.assign) ----------
 
@@ -201,6 +214,7 @@ export interface ProductSchema<
   migrationBase(manifest: IdentityManifest): ProductSchema<F, Laws>
 
   nullable(): NullableSumOf<ProductSchema<F, Laws>, Laws>
+  decay(ms: number): ProductSchema<F, Laws>
 }
 
 // --- Sequence ----------------------------------------------------------------
@@ -212,8 +226,14 @@ export interface SequenceSchema<
   readonly [KIND]: "sequence"
   readonly item: I
   readonly [LAWS]?: Laws
+  /**
+   * Optional time-decay for ephemeral presence fields (state substrate).
+   * See {@link ScalarSchema.decayMs}.
+   */
+  readonly decayMs?: number
 
   nullable(): NullableSumOf<SequenceSchema<I, Laws>, Laws>
+  decay(ms: number): SequenceSchema<I, Laws>
 }
 
 // --- Map ---------------------------------------------------------------------
@@ -225,8 +245,14 @@ export interface MapSchema<
   readonly [KIND]: "map"
   readonly item: I
   readonly [LAWS]?: Laws
+  /**
+   * Optional time-decay for ephemeral presence fields (state substrate).
+   * See {@link ScalarSchema.decayMs}.
+   */
+  readonly decayMs?: number
 
   nullable(): NullableSumOf<MapSchema<I, Laws>, Laws>
+  decay(ms: number): MapSchema<I, Laws>
 }
 
 // --- Sum ---------------------------------------------------------------------
@@ -256,8 +282,14 @@ export interface PositionalSumSchema<
   readonly variants: V
   readonly discriminant?: undefined
   readonly [LAWS]?: Laws
+  /**
+   * Optional time-decay for ephemeral presence fields (state substrate).
+   * See {@link ScalarSchema.decayMs}.
+   */
+  readonly decayMs?: number
 
   nullable(): NullableSumOf<PositionalSumSchema<V, Laws>, Laws>
+  decay(ms: number): PositionalSumSchema<V, Laws>
 }
 
 export interface DiscriminatedSumSchema<
@@ -276,8 +308,14 @@ export interface DiscriminatedSumSchema<
    */
   readonly variantMap: Readonly<Record<string, PlainProductSchema>>
   readonly [LAWS]?: Laws
+  /**
+   * Optional time-decay for ephemeral presence fields (state substrate).
+   * See {@link ScalarSchema.decayMs}.
+   */
+  readonly decayMs?: number
 
   nullable(): NullableSumOf<DiscriminatedSumSchema<D, V, Laws>, Laws>
+  decay(ms: number): DiscriminatedSumSchema<D, V, Laws>
 }
 
 // --- Text --------------------------------------------------------------------
@@ -524,11 +562,17 @@ export interface NullableSumOf<S, Laws extends string = string> {
   readonly variants: readonly [ScalarSchema<"null">, S]
   readonly discriminant?: undefined
   readonly [LAWS]?: "lww-tag-replaced" | "lww" | Laws
+  /**
+   * Optional time-decay for ephemeral presence fields (state substrate).
+   * See {@link ScalarSchema.decayMs}.
+   */
+  readonly decayMs?: number
 
   nullable(): NullableSumOf<
     NullableSumOf<S, Laws>,
     "lww-tag-replaced" | "lww" | Laws
   >
+  decay(ms: number): NullableSumOf<S, Laws>
 }
 
 // ---------------------------------------------------------------------------
@@ -536,20 +580,33 @@ export interface NullableSumOf<S, Laws extends string = string> {
 // ---------------------------------------------------------------------------
 
 /**
- * Attach fluent `.nullable()` to a schema object at runtime.
+ * Attach fluent `.nullable()` and `.decay()` to a schema object at runtime.
  *
  * Only attached to schemas satisfying `PlainSchema` — the absence of
  * `.nullable()` from non-plain schemas (text, counter, set, tree,
  * movableList, richText) communicates incompatibility at the API surface.
  *
- * Type safety for callers is enforced by the `.nullable()` method
- * declared on the structural schema interfaces.
+ * Type safety for callers is enforced by the `.nullable()` / `.decay()`
+ * methods declared on the structural schema interfaces.
  */
 function withPlainModifiers(schema: any): any {
   Object.defineProperty(schema, "nullable", {
     value() {
       const result = sum([null_(), schema])
       return withPlainModifiers(result)
+    },
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  })
+  Object.defineProperty(schema, "decay", {
+    value(ms: number) {
+      // Clone the schema so the original is not mutated in place —
+      // schemas are values, not builders.
+      const clone = Object.create(Object.getPrototypeOf(schema))
+      Object.assign(clone, schema)
+      clone.decayMs = ms
+      return withPlainModifiers(clone)
     },
     enumerable: false,
     configurable: true,
