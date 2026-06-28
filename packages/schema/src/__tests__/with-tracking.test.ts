@@ -144,8 +144,46 @@ describe("withTracking — map aspect inference", () => {
 })
 
 // ---------------------------------------------------------------------------
-// Tree aspect inference
+// Sum aspect inference
 // ---------------------------------------------------------------------------
+//
+// Sums are structurally transparent at the tracking layer: withTracking's
+// `sum` case passes through to the base interpreter, and the dispatched
+// variant carrier is built through the full stack (including this layer),
+// so it reports its own reads. The Proxy installed by with-navigation
+// forwards every operation — including the `[CALL]` apply trap used by
+// `useValue` — to the currently active variant.
+//
+// The meaningful tracking contract for a sum is therefore:
+//   `node()` (the deep fold) reports a single `deep` dep against the ACTIVE
+//   variant carrier, exactly as a plain product would. The Proxy ensures
+//   that calling the SAME identity across a variant shift re-evaluates
+//   against the new variant, and useValue's `useTracked` re-runs the thunk
+//   (capturing the new carrier) when the deep subscription fires.
+
+const SumTest = Schema.struct({
+  node: Schema.discriminatedUnion("type", [
+    Schema.struct({ type: Schema.string("absent") }),
+    Schema.struct({ type: Schema.string("present"), value: Schema.number() }),
+  ]),
+})
+
+describe("withTracking — sum aspect inference", () => {
+  it("calling a sum ref reports a single deep dep against the active variant", () => {
+    const doc = createDoc(SumTest)
+    batch(doc, (d: any) => {
+      d.node.set({ type: "present", value: 42 })
+    })
+
+    const { deps, value } = withReadScope(() => (doc as any).node())
+
+    expect(value).toEqual({ type: "present", value: 42 })
+    // The sum Proxy forwards `()` to the active variant's `[CALL]`, which is
+    // wrapped by withTracking as a composite fold → a single `deep` dep.
+    expect(deps).toHaveLength(1)
+    expect(deps[0]!.aspect).toBe("deep")
+  })
+})
 
 const TreeTest = Schema.struct({
   outline: Schema.tree(Schema.struct({ label: Schema.string() })),

@@ -37,7 +37,7 @@ import type {
   TextSchema,
   TreeSchema,
 } from "../schema.js"
-import type { HasCall, HasNavigation } from "./bottom.js"
+import { type HasCall, type HasNavigation, makeCarrier } from "./bottom.js"
 import { installKeyedNavigation } from "./keyed-helpers.js"
 import { installSequenceNavigation } from "./sequence-helpers.js"
 import { installTreeNavigation } from "./tree-helpers.js"
@@ -159,22 +159,45 @@ export function withNavigation<A extends HasCall>(
     },
 
     // --- Sum -------------------------------------------------------------------
-    // Sum dispatch reads from the store to determine which variant.
-    // This is structural addressing — "which child position is active?"
+    // Sum dispatch uses "Sum Addressing" via a Proxy to maintain a stable identity.
+    // The Proxy late-binds to the currently active variant, which allows
+    // `useTracked` to seamlessly track variant shifts via `ctx.reader.read()`.
     sum(
       ctx: RefContext,
       path: Path,
       schema: SumSchema,
       variants: SumVariants<A & HasNavigation>,
     ): A & HasNavigation {
-      const value = ctx.reader.read(path)
-      const resolved = dispatchSum(value, schema, variants)
-      if (resolved !== undefined) {
-        return resolved
+      const getActive = (): A & HasNavigation => {
+        const value = ctx.reader.read(path)
+        const resolved = dispatchSum(value, schema, variants)
+        return (
+          resolved ??
+          (base.sum(ctx, path, schema, variants as SumVariants<A>) as A &
+            HasNavigation)
+        )
       }
-      // Fallback: produce a bare carrier (shouldn't happen with valid schemas)
-      const baseVariants = variants as SumVariants<A>
-      return base.sum(ctx, path, schema, baseVariants) as A & HasNavigation
+
+      return new Proxy(makeCarrier(), {
+        get(_target, prop) {
+          return Reflect.get(getActive(), prop)
+        },
+        has(_target, prop) {
+          return Reflect.has(getActive(), prop)
+        },
+        set(_target, prop, value) {
+          return Reflect.set(getActive(), prop, value)
+        },
+        ownKeys(_target) {
+          return Reflect.ownKeys(getActive())
+        },
+        getOwnPropertyDescriptor(_target, prop) {
+          return Reflect.getOwnPropertyDescriptor(getActive(), prop)
+        },
+        apply(_target, thisArg, argArray) {
+          return Reflect.apply(getActive() as any, thisArg, argArray)
+        },
+      }) as A & HasNavigation
     },
 
     // --- Text ------------------------------------------------------------------

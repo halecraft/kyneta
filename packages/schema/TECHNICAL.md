@@ -466,6 +466,22 @@ const ref = interpret(schema, ctx)
 
 Or equivalently, `createRef(schema, ctx)` which produces this stack.
 
+### Sum Addressing
+
+Kyneta schemas support discriminated unions (`Schema.discriminatedUnion`), positional unions (`Schema.union`), and nullable sugar (`.nullable()`). All sum types resolve dynamically to a specific active variant.
+
+However, Kyneta `Ref`s are designed to be stable, capable pointers to a topological location. If a `SumRef` bound eagerly to the active variant shape at creation time (e.g. producing an `AbsentRef`), it would become stale if the underlying CRDT data later shifted to a new variant (e.g. `PresentRef`). A React component holding that stale `AbsentRef` would fail to navigate the new fields, leading to incorrect runtime shapes and dropped data.
+
+To solve this, **Sum nodes use "Sum Addressing" via a stateless Proxy.** 
+Instead of returning a specific variant's carrier, `with-navigation` produces a Proxy that late-binds to the currently active variant on every property access (`Reflect.get(getActive(), prop)`). 
+
+- **Perfect Identity:** The `SumRef` never changes identity. It can be safely held across renders.
+- **Implicit Tracking:** The Proxy's `getActive()` closure executes `ctx.reader.read(path)` to evaluate the discriminant. This means any reactive computation (like `useTracked`) automatically subscribes to variant shifts simply by attempting to read a field on the sum.
+- **Type Compatibility:** The runtime Proxy correctly acts as a mathematical discriminated union, mirroring the TypeScript type signatures (where reading a non-existent field on the inactive variant gracefully returns `undefined`).
+- **Disparate Shapes:** The Proxy is strictly necessary for sums like `.nullable()`, where the `null` variant is a property-less scalar but the inner variant could be a rich composite (like a `Sequence` with `.at()`, `.length`, and iterators). A static carrier cannot model this safely.
+
+To prevent the Proxy from recalculating and instantiating the full nested carrier stack for every property access, `with-caching` wraps the `variants` thunks (`byKey` and `byIndex`) in a simple `Map`-based memoizer before passing them down to `with-navigation`. The result is a rock-solid, type-safe, and highly performant union dispatch mechanism.
+
 ### Materialization
 
 Source: `packages/schema/src/interpreters/materialize.ts`.

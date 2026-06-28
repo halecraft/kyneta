@@ -55,6 +55,39 @@ describe("useValue", () => {
     expect(result.current).toBe("hello")
   })
 
+  it("re-renders when a sum variant shifts (stale identity footgun fix)", async () => {
+    const doc = createDoc(
+      Schema.struct({
+        server: Schema.discriminatedUnion("type", [
+          Schema.struct({ type: Schema.string("absent") }),
+          Schema.struct({
+            type: Schema.string("present"),
+            peerId: Schema.string(),
+          }),
+        ]),
+      }),
+    )
+
+    // doc.server evaluates to a Proxy pointing to 'absent'
+    const serverRef = doc.server
+
+    // Render hook capturing the specific ref instance
+    const { result } = renderHook(() => useValue(serverRef))
+
+    // Initial state: absent
+    expect(result.current).toEqual({ type: "absent" })
+
+    // Shift to present variant
+    await act(async () => {
+      batch(doc, d => {
+        d.server.set({ type: "present", peerId: "123" })
+      })
+    })
+
+    // The SAME ref instance must resolve to the new shape + new properties
+    expect(result.current).toEqual({ type: "present", peerId: "123" })
+  })
+
   it("re-renders composite on nested field change", async () => {
     const doc = createDoc(TestSchema)
     const { result } = renderHook(() => useValue(doc))

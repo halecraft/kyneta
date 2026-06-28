@@ -33,19 +33,18 @@ import type {
   SumVariants,
 } from "../interpret.js"
 import { INTERPRETER, type RefContext } from "../interpreter-types.js"
-import {
-  type CounterSchema,
-  KIND,
-  type MapSchema,
-  type MovableSequenceSchema,
-  type ProductSchema,
-  type RichTextSchema,
-  type ScalarSchema,
-  type SequenceSchema,
-  type SetSchema,
-  type SumSchema,
-  type TextSchema,
-  type TreeSchema,
+import type {
+  CounterSchema,
+  MapSchema,
+  MovableSequenceSchema,
+  ProductSchema,
+  RichTextSchema,
+  ScalarSchema,
+  SequenceSchema,
+  SetSchema,
+  SumSchema,
+  TextSchema,
+  TreeSchema,
 } from "../schema.js"
 import type { BatchOptions } from "../substrate.js"
 
@@ -316,17 +315,6 @@ export function withCaching<A extends HasNavigation>(
       const handlers = ensureCacheWiring(ctx)
       registerCacheHandler(handlers, path, path, invalidateProduct)
 
-      // Unlike normal product fields (stable ref identity), variant switching
-      // changes the ref entirely. Register parent invalidation at each sum
-      // field's path so the cached ref is discarded on variant replacement.
-      for (const key of Object.keys(schema.fields)) {
-        const fieldSchema = schema.fields[key]
-        if (fieldSchema && (fieldSchema as any)[KIND] === "sum") {
-          const fieldPath = path.field(key)
-          registerCacheHandler(handlers, path, fieldPath, invalidateProduct)
-        }
-      }
-
       return result as A & HasCaching
     },
 
@@ -373,15 +361,49 @@ export function withCaching<A extends HasNavigation>(
     },
 
     // --- Sum -------------------------------------------------------------------
-    // Pass through — no caching for sum dispatch.
+    // Memoize the instantiation of the variant carriers.
+    // The `with-navigation` proxy will repeatedly access `variants` via `dispatchSum`
+    // on every read. Memoizing here ensures we don't recreate the full nested
+    // carrier stack every time a property is accessed on the sum proxy.
     sum(
       ctx: RefContext,
       path: Path,
       schema: SumSchema,
       variants: SumVariants<A & HasCaching>,
     ): A & HasCaching {
-      const baseVariants = variants as SumVariants<A>
-      return base.sum(ctx, path, schema, baseVariants) as A & HasCaching
+      const byKeyCache = new Map<string, A>()
+      const byIndexCache = new Map<number, A>()
+
+      const memoizedVariants: {
+        byKey?: (key: string) => A
+        byIndex?: (index: number) => A
+      } = {}
+
+      const byKeyResolver = variants.byKey
+      if (byKeyResolver) {
+        memoizedVariants.byKey = (key: string) => {
+          let cached = byKeyCache.get(key)
+          if (cached === undefined) {
+            cached = byKeyResolver(key) as A
+            byKeyCache.set(key, cached)
+          }
+          return cached
+        }
+      }
+
+      const byIndexResolver = variants.byIndex
+      if (byIndexResolver) {
+        memoizedVariants.byIndex = (index: number) => {
+          let cached = byIndexCache.get(index)
+          if (cached === undefined) {
+            cached = byIndexResolver(index) as A
+            byIndexCache.set(index, cached)
+          }
+          return cached
+        }
+      }
+
+      return base.sum(ctx, path, schema, memoizedVariants) as A & HasCaching
     },
 
     // --- Text ------------------------------------------------------------------

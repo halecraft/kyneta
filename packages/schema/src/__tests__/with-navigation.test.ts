@@ -253,6 +253,41 @@ describe("withNavigation: sum dispatch", () => {
     expect(Object.keys(doc.item)).toContain("url")
   })
 
+  it("sum addressing proxy perfectly tracks state shifts for discriminated unions", () => {
+    const schema = Schema.struct({
+      server: Schema.discriminatedUnion("type", [
+        Schema.struct({ type: Schema.string("absent") }),
+        Schema.struct({
+          type: Schema.string("present"),
+          peerId: Schema.string(),
+        }),
+      ]),
+    })
+    const store: any = { server: { type: "absent" } }
+    const ctx: RefContext = { reader: plainReader(store) }
+    const doc = interpret(schema, navInterp, ctx) as any
+
+    // Capture the ref identity
+    const serverRef = doc.server
+    expect(typeof serverRef).toBe("function")
+
+    // When absent, peerId is undefined on the proxy
+    expect(serverRef.peerId).toBeUndefined()
+    expect(serverRef.type).toBe("absent")
+
+    // Mutate the store directly
+    store.server = { type: "present", peerId: "1234" }
+
+    // Without `withCaching`, `doc.server` evaluates the getter to a fresh Proxy each time.
+    // To prove the identical proxy correctly forwards to the new active variant
+    // without tracking external identities, we check `serverRef` directly:
+    expect(typeof serverRef.peerId).toBe("function")
+    // Note: without withReadable, the primitive scalar doesn't have [CALL] yet.
+    // However, serverRef.type evaluates directly to the primitive because withNavigation
+    // intercepts discriminant fields.
+    expect(serverRef.type).toBe("present")
+  })
+
   it("nullable sum dispatches based on null/non-null", () => {
     const schema = Schema.struct({
       bio: Schema.string().nullable(),
@@ -271,6 +306,57 @@ describe("withNavigation: sum dispatch", () => {
     const doc2 = interpret(schema, navInterp, ctx2) as any
     // bio resolves to the null variant (a carrier)
     expect(typeof doc2.bio).toBe("function")
+  })
+
+  it("sum addressing proxy allows a .nullable() sequence ref to track across variant changes", () => {
+    const schema = Schema.struct({
+      maybeList: Schema.list(Schema.string()).nullable(),
+    })
+    const store: any = { maybeList: null }
+    const ctx: RefContext = { reader: plainReader(store) }
+    const doc = interpret(schema, navInterp, ctx) as any
+
+    const maybeListRef = doc.maybeList
+    expect(typeof maybeListRef).toBe("function")
+
+    // Array.from fails since the function isn't iterable
+    expect(typeof maybeListRef[Symbol.iterator]).toBe("undefined")
+
+    // Mutate store to an array
+    store.maybeList = ["a", "b"]
+
+    // Using the EXACT SAME ref identity, we can now iterate it like a sequence
+    expect(typeof maybeListRef[Symbol.iterator]).toBe("function")
+
+    // Spread iterator and map to values
+    const arr = [...maybeListRef]
+    expect(arr).toHaveLength(2)
+    expect(typeof arr[0]).toBe("function")
+  })
+
+  it("sum proxy dynamically updates ownKeys across variant shifts", () => {
+    const schema = Schema.struct({
+      server: Schema.discriminatedUnion("type", [
+        Schema.struct({ type: Schema.string("absent") }),
+        Schema.struct({
+          type: Schema.string("present"),
+          peerId: Schema.string(),
+        }),
+      ]),
+    })
+    const store: any = { server: { type: "absent" } }
+    const ctx: RefContext = { reader: plainReader(store) }
+    const doc = interpret(schema, navInterp, ctx) as any
+
+    const keysBefore = Object.keys(doc.server)
+    expect(keysBefore).toContain("type")
+    expect(keysBefore).not.toContain("peerId")
+
+    store.server = { type: "present", peerId: "123" }
+
+    const keysAfter = Object.keys(doc.server)
+    expect(keysAfter).toContain("type")
+    expect(keysAfter).toContain("peerId")
   })
 })
 
