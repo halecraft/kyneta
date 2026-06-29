@@ -1,4 +1,18 @@
-# Unreleased (2.0)
+# 2.1.0
+
+## Added
+
+- **`state` substrate**: A new State-based CRDT (CvRDT) substrate for field-level Last-Writer-Wins (LWW) presence. Unlike the `ephemeral` substrate (which overwrites the entire document on write), `state` merges concurrently field-by-field. This makes it ideal for decentralized presence where multiple peers write to their own keys without clobbering each other's data. (`jj:mnnnlnvm`)
+- **Passive presence timeouts ("state decay")**: The `state` substrate now supports `.decay(ms)` via the schema DSL (e.g. `Schema.string().decay(2000)`). If a peer drops without explicitly un-setting its presence, the `state` substrate performs a purely local sweep to automatically decay expired fields back to their structural zero. The decay is a local projection and securely prevents "zombie states" from persisting. (`jj:nxxwqosl`)
+- **Standalone `Runtime` export**: The local imperative shell has been extracted from `Exchange` into a new `Runtime` class. `Runtime` manages local document execution (Stores, Hydration, Changefeed Leases, and the new ticking clock) independently of the network. For purely local-first apps without any transports, you can now instantiate a `Runtime` instead of an `Exchange`. (`jj:vmrtlqsl`)
+
+## Fixed
+
+- **Reactive deletion tracking**: Fixed an issue where `isDeleted(ref)` / `deleted(ref)` would not trigger reactive re-renders when elements were deleted (e.g., from a sequence or map). (`jj:ttzlznnk`)
+- **Proxy-based sum addressing**: Replaced eager variant carrier objects with a stateless Proxy for all Kyneta sum types (`.nullable()`, `union`, `discriminatedUnion`). This resolves a stale identity footgun in React: components holding a `SumRef` across a variant shift (e.g., from `absent` to `present`) no longer read stale shapes. `useValue` and `useTracked` now automatically react to variant shifts, and `doc.someSum` maintains a single, mathematically stable object identity. (`jj:plvpyzkq`)
+- **Enforced `useSelector` reactivity**: `useSelector` now throws a descriptive runtime error if the selector accidentally returns a Kyneta `Ref` (which fails to trigger property reads and breaks reactivity), guiding developers to project the data or call `t => t()`. (`jj:nxxwqosl`)
+
+# 2.0.0
 
 **2.0 is a coordinated, breaking release.** All peers must upgrade together — 1.x ↔ 2.0 will not sync — and pre-2.0 on-disk stores belong to a prior epoch: both the schema-hash (`HASH_ALGORITHM_VERSION` → `"02"`) and the new store-format marker reset. Plan/design references are linked as `jj:<id>` for those who want the full rationale; the entries below carry what you need to upgrade.
 

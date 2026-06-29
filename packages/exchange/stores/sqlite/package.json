@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/sqlite-store",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "SQLite storage backend for @kyneta/exchange — universal persistent storage",
   "author": "Duane Johnson",
   "license": "MIT",
