@@ -15,9 +15,9 @@ import {
   ExchangeProvider,
   useDocument,
   useValue,
-  change,
   Schema,
 } from "@kyneta/react"
+import { Exchange } from "@kyneta/exchange"
 import { loro } from "@kyneta/loro-schema"
 
 // 1. Define your schema and bind to a substrate
@@ -29,16 +29,23 @@ const TodoSchema = Schema.struct({
 })
 const TodoDoc = loro.bind(TodoSchema)
 
-// 2. Wrap your app in ExchangeProvider
+// 2. Create the Exchange exactly once at module scope so it survives
+//    React lifecycle events (e.g. StrictMode remounts).
+const exchange = new Exchange({
+  id: "me",
+  transports: [/* your transport, e.g. createWebsocketClient(...) */],
+})
+
+// 3. Wrap your app in ExchangeProvider
 function Root() {
   return (
-    <ExchangeProvider config={{ adapters: [/* your adapter */] }}>
+    <ExchangeProvider exchange={exchange}>
       <App />
     </ExchangeProvider>
   )
 }
 
-// 3. Use hooks to read and mutate
+// 4. Use hooks to read and mutate
 function App() {
   const doc = useDocument("my-doc", TodoDoc)
   const value = useValue(doc)
@@ -69,14 +76,45 @@ function App() {
 
 ## API
 
-### `<ExchangeProvider config={...}>`
+### `<ExchangeProvider exchange={...}>`
 
-Provides an `Exchange` instance to the React subtree. Creates the exchange from `config` on mount, calls `exchange.reset()` on unmount.
+Provides an `Exchange` instance to the React subtree. The Exchange must be created **outside** the React component tree (e.g. at module scope) so it survives lifecycle events like StrictMode remounts — the provider neither constructs nor tears it down. Recreating an Exchange for the same `peerId` mid-session can corrupt distributed state and leak connections, so the provider guards against it; for the async-dependency case (e.g. waiting on an auth token before you know your identity), reach for `useExchangeSingleton`.
 
 ```tsx
-<ExchangeProvider config={{ adapters: [wsAdapter] }}>
-  <App />
-</ExchangeProvider>
+import { Exchange } from "@kyneta/exchange"
+import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
+
+// Create exactly once at module scope
+const exchange = new Exchange({
+  id: "my-peer",
+  transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
+})
+
+function Root() {
+  return (
+    <ExchangeProvider exchange={exchange}>
+      <App />
+    </ExchangeProvider>
+  )
+}
+```
+
+### `useExchangeSingleton(peerId, factory)`
+
+The async-dependency path. Instantiates an Exchange inside the React tree while still guaranteeing one instance per `peerId` — immune to React 18 StrictMode double-invocation. Pass `peerId` (or `null`/`undefined` while the identity is still loading) and a `factory` invoked at most once per peer; returns the `Exchange`, or `null` until `peerId` is available. Prefer module-scope construction above when you can.
+
+```tsx
+const exchange = useExchangeSingleton(user?.id, () => {
+  const id = user?.id
+  if (!id) throw new Error("user id required")
+  return new Exchange({ id, transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })] })
+})
+if (!exchange) return null
+return (
+  <ExchangeProvider exchange={exchange}>
+    <App />
+  </ExchangeProvider>
+)
 ```
 
 ### `useExchange()`
@@ -179,6 +217,78 @@ The package follows a **Functional Core / Imperative Shell** pattern:
 - **Imperative Shell** (hooks): `useTracked`/`useSelector`/`useValue`, `useSyncState`, `useDocReady`, etc. are thin wrappers that feed reactives / pure stores into React's `useSyncExternalStore`.
 
 See [TECHNICAL.md](./TECHNICAL.md) for details on snapshot memoization, type recovery, and subscription strategy.
+
+## Best Practices
+
+### Prefer `useSelector` over `useValue(doc)` for large documents
+
+`useValue(doc)` materializes the **entire document** — every field, every list item, every text node — into a plain JS snapshot on every render. For a small config doc this is fine. But for a document with a growing `turns` array, a `messages` log, or any unbounded collection, this serializes megabytes of data on every keystroke.
+
+Kyneta refs are **live**: you can traverse the schema and read individual nodes without any serialization. `doc.activeStudentTurnId()` reads one scalar. `doc.turns.at(0)?.role()` reads one field of one item. The ref never builds a full snapshot unless you call `()` on the root.
+
+`useSelector` exploits this: it auto-tracks exactly the nodes your `select` function reads, and re-renders **only** when those specific nodes change. A `text` edit in turn #5 never re-renders a `status`-only selector.
+
+**Avoid this — serializes the entire document on every change:**
+
+```tsx
+// ❌ Re-renders on ANY change anywhere in the document, materializing
+// every turn's full text content into a JS snapshot each time.
+function Conversation({ docRef }) {
+  const doc = useValue(docRef)
+  return <div>{doc.turns.at(0)?.content}</div>
+}
+```
+
+**Do this instead — reads only what it needs, re-renders only when those nodes change:**
+
+```tsx
+// ✅ Re-renders only when the active student turn's content changes.
+function StudentText({ docRef }) {
+  const text = useSelector(docRef, doc => {
+    const id = doc.activeStudentTurnId()
+    if (!id) return ''
+    for (const turn of doc.turns) {
+      if (turn.id() === id && turn.role() === 'student')
+        return turn.content.toString()
+    }
+    return ''
+  })
+  return <div>{text}</div>
+}
+
+// ✅ Independent selector — re-renders only on status changes,
+// NOT when student text is edited.
+function StatusBar({ docRef }) {
+  const status = useSelector(docRef, doc => doc.state().status)
+  return <Badge>{status}</Badge>
+}
+```
+
+**When `useValue` is appropriate:**
+
+- Small, bounded documents (config, settings, topology)
+- Leaf refs: `useValue(doc.title)` tracks only the `title` field
+- Prototyping (swap to `useSelector` when the document grows)
+
+### Subscribe to nested refs for targeted reactivity
+
+`useSelector` can accept any ref, not just the root. Subscribing to `doc.todos` tracks the list structure (add/remove) but not descendant text edits — perfect for a filter that only cares about `done` flags.
+
+```tsx
+const visible = useSelector(doc.todos, todos =>
+  [...todos].filter(t => t.done()),
+)
+```
+
+For a specific text field's insertions, subscribe directly to that ref:
+
+```tsx
+const chunk = useSelector(inferenceRef.response, response =>
+  response.toString().slice(lastLength),
+)
+```
+
+This fires only when `response` changes — not when `prompt` or `status` change on the same document.
 
 ## Compared to `@loro-extended/react`
 

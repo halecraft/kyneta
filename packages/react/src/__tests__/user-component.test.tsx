@@ -1,8 +1,8 @@
 import { deleted, remove, Schema } from "@kyneta/schema"
 import { batch, createDoc } from "@kyneta/schema/basic"
 import { act, render, screen } from "@testing-library/react"
-import React, { useMemo } from "react"
-import { describe, expect, it, vi } from "vitest"
+import { useMemo } from "react"
+import { describe, expect, it } from "vitest"
 import { useValue } from "../use-value.js"
 
 const TodoDoc = Schema.product({
@@ -10,7 +10,7 @@ const TodoDoc = Schema.product({
     Schema.product({
       id: Schema.text(),
       text: Schema.text(),
-      done: Schema.scalar<boolean>(false),
+      done: Schema.scalar("boolean"),
     }),
   ),
 })
@@ -27,7 +27,7 @@ function TodoItem({
   return (
     <li>
       <span data-testid="todo-id">{todoRef.id()}</span>
-      <button data-testid="remove-btn" onClick={onRemove}>
+      <button type="button" data-testid="remove-btn" onClick={onRemove}>
         X
       </button>
     </li>
