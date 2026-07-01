@@ -130,25 +130,45 @@ type AsymmetricProtocolOptions<C extends SchemaNode, S extends SchemaNode> = {
   server: S // what the server sends (= what the client receives)
 }
 
+// The shared/exclusive capabilities model
+// ---------------------------------------------------------------------------
+
 /**
- * A reified Line protocol — the schema pair + topic that both sides
- * must agree on to communicate. Created once at module scope, shared
- * between `open()` and `listen()`.
+ * The exclusive read capability for a Line.
  *
- * Generic parameter ordering: `LineProtocol<ClientMsg, ServerMsg>` names
- * the message types by who *sends* them. `open()` returns
- * `Line<ClientMsg, ServerMsg>` (client sends ClientMsg, receives ServerMsg).
- * `listen()` returns `LineListener<ServerMsg, ClientMsg>` (server sends
- * ServerMsg, receives ClientMsg).
+ * Acquired via `LineProtocol.claimReceiver()`. An `AsyncIterable` — iterate
+ * incoming messages with `for await (const msg of receiver)`. Only one
+ * iterator may be active at a time. Closing the receiver releases the claim
+ * and unhooks the inbox subscriptions, but does not close the sender or
+ * destroy the Line.
  */
-export interface LineProtocol<ClientMsg, ServerMsg> {
+export interface LineReceiver<RecvMsg> extends AsyncIterable<RecvMsg> {
   readonly topic: string
+  readonly peer: string
+  readonly closed: boolean
+  close(): void
+}
 
-  /** Open a Line to a specific peer as the client role. */
-  open(exchange: Exchange, peer: string): Line<ClientMsg, ServerMsg>
+/**
+ * The shared write capability for a Line.
+ *
+ * Acquired via `LineProtocol.sender()`. Safe to share across the application
+ * (e.g. concurrent RPC senders). Closing the sender decrements its refcount,
+ * cleaning up outbox resources when it reaches zero.
+ */
+export interface LineSender<SendMsg> {
+  readonly topic: string
+  readonly peer: string
+  readonly closed: boolean
+  send(msg: SendMsg): void
+  close(): void
+}
 
-  /** Listen for incoming Lines as the server role. */
-  listen(exchange: Exchange): LineListener<ServerMsg, ClientMsg>
+/**
+ * A handle to permanently destroy a Line.
+ */
+export interface LineManager {
+  destroy(): void
 }
 
 /**
@@ -157,8 +177,40 @@ export interface LineProtocol<ClientMsg, ServerMsg> {
  */
 export interface LineListener<SendMsg, RecvMsg> {
   readonly topic: string
-  onLine(cb: (line: Line<SendMsg, RecvMsg>) => void): () => void
+  onReceive(
+    cb: (
+      sender: LineSender<SendMsg>,
+      receiver: LineReceiver<RecvMsg>,
+      manager: LineManager,
+    ) => void,
+  ): () => void
   dispose(): void
+}
+
+/**
+ * A reified Line protocol — the schema pair + topic that both sides
+ * must agree on to communicate. Created once at module scope, shared
+ * between `sender()`, `claimReceiver()`, and `listen()`.
+ */
+export interface LineProtocol<ClientMsg, ServerMsg> {
+  readonly topic: string
+
+  /**
+   * Obtain the shared sender capability for this Line to a specific peer.
+   */
+  sender(exchange: Exchange, peer: string): LineSender<ClientMsg>
+
+  /**
+   * Exclusively claim the read queue for this Line from a specific peer.
+   * Throws if another component already holds the receiver.
+   */
+  claimReceiver(exchange: Exchange, peer: string): LineReceiver<ServerMsg>
+
+  /** permanently destroy a Line, its Outbox, and its Inbox. */
+  manager(exchange: Exchange, peer: string): LineManager
+
+  /** Listen for incoming Lines as the server role. */
+  listen(exchange: Exchange): LineListener<ServerMsg, ClientMsg>
 }
 
 // ---------------------------------------------------------------------------
@@ -206,8 +258,9 @@ function registryKey(remotePeerId: string, topic: string): string {
 /**
  * A reliable ordered bidirectional message stream between two Exchange peers.
  *
- * Use `Line.protocol(opts)` to create a protocol, then `protocol.open()`
- * or `protocol.listen()` to create Lines — do not construct directly.
+ * Use `Line.protocol(opts)` to create a protocol, then `protocol.sender()`,
+ * `protocol.claimReceiver()`, or `protocol.listen()` to obtain capabilities —
+ * do not construct directly.
  *
  * Generic strategy: parameterized over plain message types (`SendMsg`,
  * `RecvMsg`) — not schema types — to avoid deep recursive expansion of
@@ -218,7 +271,9 @@ function registryKey(remotePeerId: string, topic: string): string {
  * @typeParam SendMsg - plain type for messages this peer sends
  * @typeParam RecvMsg - plain type for messages this peer receives
  */
-export class Line<SendMsg, RecvMsg> {
+export class Line<SendMsg, RecvMsg>
+  implements LineSender<SendMsg>, LineReceiver<RecvMsg>, LineManager
+{
   readonly #exchange: Exchange
   readonly #topic: string
   readonly #remotePeerId: string
@@ -314,20 +369,19 @@ export class Line<SendMsg, RecvMsg> {
   }
 
   // -----------------------------------------------------------------------
-  // Receive — exclusive consumer
+  // Receive — exclusive async iterator
   // -----------------------------------------------------------------------
 
   /**
-   * Consume the Line — returns an async iterator yielding incoming messages.
-   *
-   * This is the sole receive API. A Line can only be consumed by one caller
-   * at a time. Calling `consume()` a second time throws an error.
+   * Iterate incoming messages. Returns an async iterator yielding messages
+   * as they arrive. This is the sole receive API — a Line can only be
+   * iterated by one caller at a time.
    *
    * Completes (`{ done: true }`) when the Line is closed.
    */
-  consume(): AsyncIterableIterator<RecvMsg> {
+  [Symbol.asyncIterator](): AsyncIterator<RecvMsg> {
     if (this.#consumerAttached) {
-      throw new Error("Line is already being consumed")
+      throw new Error("Line is already being iterated")
     }
     this.#consumerAttached = true
     return this.#queue[Symbol.asyncIterator]()
@@ -344,7 +398,7 @@ export class Line<SendMsg, RecvMsg> {
    * (iterator, subscriptions, policy, registry) without mutating or
    * deleting the underlying documents. The outbox and inbox documents
    * remain in the Exchange, untouched and available for future resumption
-   * via `protocol.open()`.
+   * via `protocol.sender()` or `protocol.claimReceiver()`.
    *
    * Safe to call at any time — during shutdown, error handling, cleanup.
    * Never poisons the Line's documents for future use.
@@ -463,7 +517,8 @@ export class Line<SendMsg, RecvMsg> {
    * `exchange.get()`, per-line policy registration, instance construction,
    * and registry insertion.
    *
-   * Called by `protocol.open()` and `protocol.listen()` — never directly
+   * Called by `protocol.sender()`, `protocol.claimReceiver()`,
+   * `protocol.manager()`, and `protocol.listen()` — never directly
    * by external consumers.
    *
    * @internal
@@ -566,14 +621,15 @@ export class Line<SendMsg, RecvMsg> {
    * })
    *
    * // Client side
-   * const line = RPC.open(exchange, "server-peer-id")
-   * line.send({ method: "ping", id: 1 })
+   * const sender = RPC.sender(exchange, "server-peer-id")
+   * const receiver = RPC.claimReceiver(exchange, "server-peer-id")
+   * sender.send({ method: "ping", id: 1 })
    *
    * // Server side
    * const listener = RPC.listen(exchange)
-   * listener.onLine(line => {
+   * listener.onReceive((sender, receiver) => {
    *   ;(async () => {
-   *     for await (const msg of line.consume()) { ... }
+   *     for await (const msg of receiver) { ... }
    *   })()
    * })
    * ```
@@ -601,9 +657,41 @@ export class Line<SendMsg, RecvMsg> {
     return {
       topic,
 
-      open(exchange: Exchange, peer: string): Line<any, any> {
+      sender(exchange: Exchange, peer: string): LineSender<any> {
         // Client role: sends clientBound, receives serverBound
         return Line.#create(exchange, topic, peer, clientBound, serverBound)
+      },
+
+      claimReceiver(exchange: Exchange, peer: string): LineReceiver<any> {
+        const line = Line.#create(
+          exchange,
+          topic,
+          peer,
+          clientBound,
+          serverBound,
+        )
+        return {
+          topic: line.topic,
+          peer: line.peer,
+          get closed() {
+            return line.closed
+          },
+          [Symbol.asyncIterator]: () => line[Symbol.asyncIterator](),
+          close: () => line.close(),
+        }
+      },
+
+      manager(exchange: Exchange, peer: string): LineManager {
+        const line = Line.#create(
+          exchange,
+          topic,
+          peer,
+          clientBound,
+          serverBound,
+        )
+        return {
+          destroy: () => line.destroy(),
+        }
       },
 
       listen(exchange: Exchange): LineListener<any, any> {
@@ -611,7 +699,13 @@ export class Line<SendMsg, RecvMsg> {
         //    Lines created synchronously during registerSchema (step 3)
         //    arrive before the caller has a chance to register onLine
         //    callbacks. We buffer them and replay on the first onLine call.
-        const callbacks = new Set<(line: Line<any, any>) => void>()
+        const callbacks = new Set<
+          (
+            sender: LineSender<any>,
+            receiver: LineReceiver<any>,
+            manager: LineManager,
+          ) => void
+        >()
         let pendingLines: Line<any, any>[] | null = []
         let listenerDisposed = false
 
@@ -628,9 +722,22 @@ export class Line<SendMsg, RecvMsg> {
 
         function notifyOrBuffer(line: Line<any, any>): void {
           if (callbacks.size > 0) {
+            const sender = line
+            const receiver = {
+              topic: line.topic,
+              peer: line.peer,
+              get closed() {
+                return line.closed
+              },
+              [Symbol.asyncIterator]: () => line[Symbol.asyncIterator](),
+              close: () => line.close(),
+            }
+            const manager = {
+              destroy: () => line.destroy(),
+            }
             for (const cb of callbacks) {
               try {
-                cb(line)
+                cb(sender, receiver, manager)
               } catch {
                 // Callback errors don't prevent other callbacks
               }
@@ -725,15 +832,34 @@ export class Line<SendMsg, RecvMsg> {
         return {
           topic,
 
-          onLine(cb: (line: Line<any, any>) => void): () => void {
+          onReceive(
+            cb: (
+              sender: LineSender<any>,
+              receiver: LineReceiver<any>,
+              manager: LineManager,
+            ) => void,
+          ): () => void {
             callbacks.add(cb)
             // Replay any Lines that arrived during listen() setup
             if (pendingLines && pendingLines.length > 0) {
               const toReplay = pendingLines
               pendingLines = null
               for (const line of toReplay) {
+                const sender = line
+                const receiver = {
+                  topic: line.topic,
+                  peer: line.peer,
+                  get closed() {
+                    return line.closed
+                  },
+                  [Symbol.asyncIterator]: () => line[Symbol.asyncIterator](),
+                  close: () => line.close(),
+                }
+                const manager = {
+                  destroy: () => line.destroy(),
+                }
                 try {
-                  cb(line)
+                  cb(sender, receiver, manager)
                 } catch {
                   // Callback errors don't prevent replay
                 }

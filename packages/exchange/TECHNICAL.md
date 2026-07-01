@@ -66,7 +66,7 @@ Imported by applications to construct the top-level sync graph; by `@kyneta/reac
 | Departure | A peer leaving the sync graph. Explicit (`depart` message), channel-drop + expired grace timer, or `destroy()` on a local doc. | Disconnection — channel drop without grace-timer expiry is *disconnection*, not departure |
 | Epoch boundary | A merge that discards local state and adopts an incoming entirety — triggered when a remote peer advances past our version via `advance(to)` / compaction. Gated by `Policy.canReset`. | `reset` on a durable log |
 | `Line` | A reliable bidirectional message stream between two peers, implemented as two authoritative documents (one per direction) with automatic seqno + ack pruning. | A socket, a channel, a queue |
-| `LineProtocol` | The reified schema pair + topic from `Line.protocol(opts)`. Exposes `open(peerId)` (client) and `listen(onLine)` (server). | `Line` — `LineProtocol` *creates* `Line`s |
+| `LineProtocol` | The reified schema pair + topic from `Line.protocol(opts)`. Exposes `sender(peerId)`, `claimReceiver(peerId)`, `manager(peerId)` (client), and `listen(onReceive)` (server). | `Line` — `LineProtocol` *creates* `Line` capabilities |
 | `persistentPeerId` | Browser-only helper: assigns each tab a unique `peerId` that survives reload, via a `localStorage` CAS-based lease protocol. | A cookie, a UUID generator |
 | `Store` | The persistence interface from this package. Methods: `append`, `loadAll`, `replace`, `delete`, `currentMeta`, `listDocIds`, `close`. A `Store` instance must be owned by exactly one `Exchange` for its entire lifetime. | A reactive store — this is an append/replace log. Not shared across exchanges. |
 | `StoreRecord` | Tagged union: `{ kind: "meta", meta: StoreMeta }` or `{ kind: "entry", payload: SubstratePayload, version: string }` — one durably-persisted record of doc state. | A `ChannelMsg` |
@@ -265,20 +265,21 @@ Source: `src/line.ts`.
 
 The `Line` class provides a reliable bidirectional message stream between two Exchange peers. It is implemented over two `json.bind()` authoritative documents (one outbox, one inbox) with sequence numbers and ack-based pruning.
 
-### The CQRS Pattern
+### The Capability Model
 
-Bidirectional streams in component-based UI frameworks (like React) typically follow a Command Query Responsibility Segregation (CQRS) pattern:
+Bidirectional streams in component-based UI frameworks (like React) follow a Command Query Responsibility Segregation (CQRS) pattern:
 - **Sending (Command):** Highly distributed. Any button, form, or component might need to send a message.
 - **Receiving (Query/Event):** Highly centralized. Incoming messages are usually routed to a central store, a reducer, or a global state manager.
 
-To support this, `Line.protocol.open()` is **idempotent and reference-counted**. Multiple calls for the same `(topic, peerId)` return the exact same `Line` singleton instance.
+`LineProtocol` exposes three capabilities:
 
-- **Shared Sending:** Because multiple components hold a reference to the same `Line` singleton, they can all call `line.send(msg)`. The `Line` safely multiplexes these into the shared outbox document.
-- **Exclusive Receiving:** The `Line` does *not* implement `[Symbol.asyncIterator]` directly. Instead, receiving is moved to an explicit, exclusive method: `line.consume()`. Calling `consume()` returns the `AsyncIterator`. Calling it a second time throws an error (`"Line is already being consumed"`). This mathematically guarantees that messages aren't accidentally load-balanced (stolen) across two React components that both try to iterate the line.
+- **`sender(exchange, peer)`** → `LineSender<SendMsg>` — the **shared write** capability. Reference-counted: multiple calls for the same `(topic, peerId)` return the same underlying `Line` instance. Any component can obtain a sender and call `send(msg)`. The Line safely multiplexes writes into the shared outbox document.
+- **`claimReceiver(exchange, peer)`** → `LineReceiver<RecvMsg>` — the **exclusive read** capability. `LineReceiver` extends `AsyncIterable`, so you iterate with `for await (const msg of receiver)`. Only one iterator may be active at a time — calling `[Symbol.asyncIterator]()` a second time throws (`"Line is already being iterated"`). This structurally guarantees that messages aren't accidentally load-balanced (stolen) across two components that both try to iterate the line.
+- **`manager(exchange, peer)`** → `LineManager` — permanent destruction via `destroy()`.
 
 ### Lifecycle
 
-`line.close()` decrements the reference count. The underlying documents and policies are only torn down when the count reaches 0. `line.destroy()` forces the count to 0 and performs permanent teardown.
+Each capability handle's `close()` decrements the reference count. The underlying documents and policies are only torn down when the count reaches 0. `manager.destroy()` forces the count to 0 and performs permanent teardown.
 
 ---
 
@@ -688,22 +689,25 @@ Source: `src/line.ts`.
 ```ts
 const chatLine = Line.protocol({
   topic: "chat",
-  send: ChatMessage,                // BoundSchema<S_send>
-  recv: ChatMessage,                 // BoundSchema<S_recv>
+  schema: ChatMessage,               // BoundSchema<S>
 })
 
 // Client
-const line = chatLine.open(exchange, peerId)
-await line.send({ text: "hello" })
-for await (const msg of line.consume()) {
+const sender = chatLine.sender(exchange, peerId)
+const receiver = chatLine.claimReceiver(exchange, peerId)
+sender.send({ text: "hello" })
+for await (const msg of receiver) {
   console.log(msg)
 }
 
 // Server
-chatLine.listen(exchange, async (incomingLine, peer) => {
-  for await (const msg of incomingLine.consume()) {
-    await incomingLine.send({ text: `echo: ${msg.text}` })
-  }
+const listener = chatLine.listen(exchange)
+listener.onReceive((sender, receiver) => {
+  ;(async () => {
+    for await (const msg of receiver) {
+      sender.send({ text: `echo: ${msg.text}` })
+    }
+  })()
 })
 ```
 
@@ -719,7 +723,7 @@ Properties:
 
 ### `LineProtocol`: reified protocol objects
 
-`Line.protocol(opts)` captures the `BoundSchema` pair + topic in one `LineProtocol` object. Both `open` and `listen` use those same references, ensuring each doc is interpreted exactly once — building `Line` instances from raw schemas would produce distinct `BoundSchema` values with the same hash, causing reference-equality conflicts in `exchange.get`.
+`Line.protocol(opts)` captures the `BoundSchema` pair + topic in one `LineProtocol` object. `sender()`, `claimReceiver()`, `manager()`, and `listen()` all use those same references, ensuring each doc is interpreted exactly once — building `Line` instances from raw schemas would produce distinct `BoundSchema` values with the same hash, causing reference-equality conflicts in `exchange.get`.
 
 ### What a `Line` is NOT
 

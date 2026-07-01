@@ -4,18 +4,6 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-catalogs:
-  default:
-    tsdown:
-      specifier: ^0.22.0
-      version: 0.22.0
-    typescript:
-      specifier: ^5.9.2
-      version: 5.9.3
-    vitest:
-      specifier: ^4.0.17
-      version: 4.1.4
-
 importers:
 
   .:
@@ -44,9 +32,6 @@ importers:
       prosemirror-view:
         specifier: ^1.41.8
         version: 1.41.8
-      ts-morph:
-        specifier: ^25.0.1
-        version: 25.0.1
       turbo:
         specifier: ^2.8.20
         version: 2.9.5
