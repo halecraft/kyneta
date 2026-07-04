@@ -2,7 +2,7 @@
 // (no Exchange, no network transports) with stores and the tick clock.
 
 import { type DocRef, json, Schema } from "@kyneta/schema"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { Runtime } from "../runtime.js"
 import { createInMemoryStore } from "../store/in-memory-store.js"
 
@@ -62,6 +62,58 @@ describe("Runtime (standalone, no Exchange)", () => {
 
     expect(doc2.title()).toBe("Buy milk")
     await runtime2.shutdown()
+  })
+
+  it("persists a mutation made after the initial flush (not just before it)", async () => {
+    const store = createInMemoryStore()
+
+    const runtime1 = new Runtime({ peerId: "alice", stores: [store] })
+    const doc1 = runtime1.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
+
+    // Let initial registration/hydration fully settle FIRST — this is the
+    // case the pre-fix code silently dropped, because no code path ever
+    // converted a post-ready local changeset into a persistence write for
+    // a standalone Runtime.
+    await runtime1.flush()
+
+    doc1.title.set("Buy milk")
+    await runtime1.flush()
+    await runtime1.shutdown()
+
+    const runtime2 = new Runtime({ peerId: "bob", stores: [store] })
+    const doc2 = runtime2.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
+    await runtime2.flush()
+
+    expect(doc2.title()).toBe("Buy milk")
+    await runtime2.shutdown()
+  })
+
+  it("persists a mutation on a doc with genuine prior stored data (the 'hydrated' branch)", async () => {
+    const store = createInMemoryStore()
+
+    // Generation 1: create + mutate + persist.
+    const runtime1 = new Runtime({ peerId: "alice", stores: [store] })
+    const doc1 = runtime1.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
+    doc1.title.set("Buy milk")
+    await runtime1.flush()
+    await runtime1.shutdown()
+
+    // Generation 2: reopen (hydrates via the "hydrated" branch, since prior
+    // stored data exists), mutate again, persist.
+    const runtime2 = new Runtime({ peerId: "alice", stores: [store] })
+    const doc2 = runtime2.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
+    await runtime2.flush() // let hydration settle before mutating
+    doc2.title.set("Buy milk and eggs")
+    await runtime2.flush()
+    await runtime2.shutdown()
+
+    // Generation 3: reopen and assert both mutations survived.
+    const runtime3 = new Runtime({ peerId: "alice", stores: [store] })
+    const doc3 = runtime3.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
+    await runtime3.flush()
+
+    expect(doc3.title()).toBe("Buy milk and eggs")
+    await runtime3.shutdown()
   })
 
   it("fires lifecycle hooks", () => {
@@ -159,6 +211,67 @@ describe("Runtime (standalone, no Exchange)", () => {
     expect(runtime.peerId).toBe("alice")
     runtime.shutdown()
   })
+
+  it("setHooks backfills onDocReady for pre-existing docs, exactly once", () => {
+    const runtime = new Runtime({ peerId: "alice" })
+
+    // Docs created BEFORE any hooks exist.
+    runtime.get("todo-1", TodoDoc)
+    const boundReplica = json.replica()
+    runtime.replicate(
+      "todo-2",
+      boundReplica.factory,
+      boundReplica.syncMode,
+      TodoDoc.schemaHash,
+    )
+
+    const readyCalls: { docId: string; mode: string }[] = []
+    runtime.setHooks({
+      onDocReady: info =>
+        readyCalls.push({ docId: info.docId, mode: info.mode }),
+    })
+
+    expect(readyCalls).toContainEqual({ docId: "todo-1", mode: "interpret" })
+    expect(readyCalls).toContainEqual({ docId: "todo-2", mode: "replicate" })
+    expect(readyCalls).toHaveLength(2)
+
+    // Calling setHooks again must not double-announce.
+    runtime.setHooks({
+      onDocReady: info =>
+        readyCalls.push({ docId: info.docId, mode: info.mode }),
+    })
+    expect(readyCalls).toHaveLength(2)
+
+    runtime.shutdown()
+  })
+
+  it("setHooks backfill never re-reads the Store (no hydration replay)", async () => {
+    const store = createInMemoryStore()
+    const loadAllSpy = vi.spyOn(store, "loadAll")
+    const currentMetaSpy = vi.spyOn(store, "currentMeta")
+
+    const runtime = new Runtime({ peerId: "alice", stores: [store] })
+    runtime.get("todo-1", TodoDoc)
+    await runtime.flush() // hydration settles before any hooks exist
+
+    const callsBeforeBackfill = {
+      loadAll: loadAllSpy.mock.calls.length,
+      currentMeta: currentMetaSpy.mock.calls.length,
+    }
+
+    const readyCalls: string[] = []
+    runtime.setHooks({ onDocReady: info => readyCalls.push(info.docId) })
+
+    expect(readyCalls).toEqual(["todo-1"])
+    // Backfilling an already-hydrated doc must not trigger any additional
+    // Store reads — #register has no reference to Store at all.
+    expect(loadAllSpy.mock.calls.length).toBe(callsBeforeBackfill.loadAll)
+    expect(currentMetaSpy.mock.calls.length).toBe(
+      callsBeforeBackfill.currentMeta,
+    )
+
+    await runtime.shutdown()
+  })
 })
 
 describe("Exchange with pre-constructed Runtime (rare overload)", () => {
@@ -194,6 +307,40 @@ describe("Exchange with pre-constructed Runtime (rare overload)", () => {
 
     expect(exchange.peerId).toBe("bob")
     expect(exchange.runtime.peerId).toBe("bob")
+
+    await exchange.shutdown()
+  })
+
+  it("backfills sync-graph registration for docs created on the Runtime before the Exchange existed", async () => {
+    const { Exchange } = await import("../exchange.js")
+    const store = createInMemoryStore()
+
+    const runtime = new Runtime({ peerId: "alice", stores: [store] })
+
+    // An interpret-mode doc and a replicate-mode doc, both created BEFORE
+    // any Exchange (and therefore any hooks) existed.
+    const doc1 = runtime.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
+    doc1.title.set("Hello")
+
+    const boundReplica = json.replica()
+    runtime.replicate(
+      "todo-2",
+      boundReplica.factory,
+      boundReplica.syncMode,
+      TodoDoc.schemaHash,
+    )
+
+    await runtime.flush()
+
+    // Before wrapping: neither doc is known to any sync graph (none exists
+    // yet), so there's nothing to assert here — the interesting assertion
+    // is what happens immediately AFTER wrapping.
+    const exchange = new Exchange(runtime, {})
+
+    // Both pre-existing docs must now be visible to the Exchange's sync
+    // graph — this is the registration the pre-fix code silently skipped.
+    expect(exchange.documents.has("todo-1")).toBe(true)
+    expect(exchange.documents.has("todo-2")).toBe(true)
 
     await exchange.shutdown()
   })

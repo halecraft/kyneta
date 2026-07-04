@@ -182,7 +182,13 @@ describe("Exchange storage persistence", () => {
     const entries = records.filter(
       (r): r is StoreRecord & { kind: "entry" } => r.kind === "entry",
     )
-    expect(entries.length).toBeGreaterThanOrEqual(2)
+    // Exactly one entirety (first boot) + one delta (the mutation) — NOT
+    // one delta per touched field. `deliverNotifications` fires one
+    // Changeset per touched top-level field, so a naive persistence path
+    // would double-write here; jj:mrlnmlus's `#persistIfAdvanced` dedupes
+    // on the target version to prevent this, closing a pre-existing gap
+    // this test's looser `toBeGreaterThanOrEqual` assertion had missed.
+    expect(entries).toHaveLength(2)
 
     // First entry: base entirety from first boot
     expect(entries[0]?.payload.kind).toBe("entirety")
@@ -240,6 +246,14 @@ describe("Exchange storage persistence", () => {
     const entries = records.filter(r => r.kind === "entry")
     // Should have at least one entry from the network import
     expect(entries.length).toBeGreaterThanOrEqual(1)
+
+    // jj:mrlnmlus — Exchange B is in `Replicate()` (headless) mode, which
+    // never wires a changefeed subscription (`#wireDocSubscription` is
+    // only called for interpret-mode docs), so the new local-changeset
+    // self-persist path added in Phase 2 cannot double-fire here. Remote
+    // import persistence flows exclusively through the Synchronizer's
+    // own `state-advanced` effect, untouched by this plan.
+    expect(entries).toHaveLength(1)
 
     await exchangeA.shutdown()
     await exchangeB.shutdown()

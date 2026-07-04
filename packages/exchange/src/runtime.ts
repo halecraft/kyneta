@@ -40,6 +40,7 @@ import type { DocId } from "@kyneta/transport"
 import type { Store, StoreMeta } from "./store/store.js"
 import {
   allDocsIdle,
+  type DocPhase,
   type StoreEffect,
   type StoreInput,
   type StoreModel,
@@ -66,15 +67,6 @@ type RuntimeGet = <S extends SchemaNode, N extends NativeMap>(
 ) => S extends ProductSchema ? DocRef<S, N> : Ref<S, N>
 
 // ---------------------------------------------------------------------------
-// DocCacheEntry — local document registry entry
-// ---------------------------------------------------------------------------
-
-export type DocCacheEntry =
-  | { mode: "interpret"; ref: any; bound: BoundSchema; suspended?: boolean }
-  | { mode: "replicate"; suspended?: boolean }
-  | { mode: "deferred" }
-
-// ---------------------------------------------------------------------------
 // RuntimeHooks — callbacks the Exchange wires for network participation
 // ---------------------------------------------------------------------------
 
@@ -94,6 +86,36 @@ export type DocReadyInfo = {
   schemaHash: string
   supportedHashes?: readonly string[]
 }
+
+// ---------------------------------------------------------------------------
+// DocCacheEntry — local document registry entry
+// ---------------------------------------------------------------------------
+
+/**
+ * `readyInfo` + `announced` let {@link Runtime.setHooks} safely backfill
+ * `onDocReady` for documents that already existed before hooks were
+ * attached (e.g. a standalone `Runtime` later wrapped in an `Exchange`).
+ * `readyInfo` is captured once, when the document first becomes ready
+ * (post-hydration, or immediately if no stores are configured); `announced`
+ * tracks whether `onDocReady` has actually fired for it yet, so repeated or
+ * out-of-order `setHooks` calls never double-announce. Context: jj:mrlnmlus.
+ */
+export type DocCacheEntry =
+  | {
+      mode: "interpret"
+      ref: any
+      bound: BoundSchema
+      readyInfo: DocReadyInfo
+      announced: boolean
+      suspended?: boolean
+    }
+  | {
+      mode: "replicate"
+      readyInfo: DocReadyInfo
+      announced: boolean
+      suspended?: boolean
+    }
+  | { mode: "deferred" }
 
 /**
  * Lifecycle hooks the Exchange implements to bridge the local Runtime
@@ -217,6 +239,19 @@ export class Runtime {
   /** In-flight hydration I/O tracked so flush()/shutdown() can await it. */
   readonly #pendingHydrations = new Set<Promise<void>>()
 
+  /**
+   * Doc-ids with a local (non-replay) changeset pending persistence,
+   * coalesced into one `#persistIfAdvanced` call per doc per microtask
+   * tick — mirrors the Synchronizer's own dirty-set-drained-at-quiescence
+   * pattern (`onStateAdvanced`'s doc comment: "Coalescing is intentional:
+   * multiple advances within one dispatch cycle produce a single
+   * notification"). Without this, a multi-field `batch()` — which fires
+   * one changeset per touched field — would persist the same starting
+   * delta once per field instead of once per batch. Context: jj:mrlnmlus.
+   */
+  readonly #dirtyLocalChanges = new Set<DocId>()
+  #localChangeDrain: Promise<void> | null = null
+
   /** Network hooks — set by Exchange. Undefined for standalone use. */
   #hooks: RuntimeHooks = {}
 
@@ -319,9 +354,22 @@ export class Runtime {
   /**
    * Set the lifecycle hooks. The Exchange calls this during construction
    * to bridge the Runtime into the Synchronizer.
+   *
+   * Backfills `onDocReady` for every already-live, non-deferred document
+   * in the cache — covers the "standalone Runtime later wrapped in an
+   * Exchange" path (`new Exchange(runtime, params)`), where documents
+   * created via `runtime.get()`/`runtime.replicate()` before this call
+   * fired `onDocReady` against the (then-empty) hook set and were never
+   * announced. `#register` is idempotent per entry, so this is safe
+   * regardless of call order or repeated `setHooks` calls. Context: jj:mrlnmlus.
    */
   setHooks(hooks: RuntimeHooks): void {
     this.#hooks = hooks
+    if (hooks.onDocReady) {
+      for (const [, entry] of this.#docCache) {
+        if (entry.mode !== "deferred") this.#register(entry)
+      }
+    }
   }
 
   // =========================================================================
@@ -493,9 +541,43 @@ export class Runtime {
    * has advanced (from network sync or local change). Dispatches a
    * delta-save into the store program.
    *
-   * No-op if no stores are configured.
+   * No-op if no stores are configured. Delegates to {@link Runtime.#persistIfAdvanced},
+   * which a standalone Runtime (no Exchange) also calls directly from its
+   * own local-changeset subscription — see {@link Runtime.#wireDocSubscription}.
+   * Safe to call redundantly for the same mutation from both paths: the
+   * store-program's confirmed-version dedup means whichever call reaches
+   * it first performs the real write, the other is a no-op. Context: jj:mrlnmlus.
    */
   onStateAdvanced(
+    docId: DocId,
+    replica: ReplicaLike,
+    replicaFactory: ReplicaFactoryLike,
+  ): void {
+    this.#persistIfAdvanced(docId, replica, replicaFactory)
+  }
+
+  /**
+   * Shared core of {@link Runtime.onStateAdvanced} — exports the delta
+   * since the store program's last confirmed version and dispatches a
+   * `state-advanced` write if the version actually moved. No-op if no
+   * stores are configured, if the doc hasn't finished its initial
+   * registration yet, or if there's nothing new to persist.
+   *
+   * Deduplicates on the *target* version, not just on an empty delta.
+   * Pre-existing gap, exposed (not caused) by this plan's new local-change
+   * call site: `deliverNotifications` fires one `Changeset` per touched
+   * top-level field in a `batch()`, so a multi-field batch synchronously
+   * triggers this method multiple times before the first dispatch's async
+   * write ever resolves — every one of those calls computes the same
+   * `exportSince(confirmedVersion)` delta, because the store-program's
+   * confirmed version hasn't advanced yet. An empty-delta check alone
+   * doesn't catch this (the delta is real, just redundant). Tracking the
+   * already-targeted version — both the in-flight `pendingVersion` and
+   * any versions already sitting in the `writing`-phase queue — closes it
+   * without touching the store-program's own Mealy-machine transitions.
+   * Context: jj:mrlnmlus.
+   */
+  #persistIfAdvanced(
     docId: DocId,
     replica: ReplicaLike,
     replicaFactory: ReplicaFactoryLike,
@@ -507,17 +589,33 @@ export class Runtime {
     const confirmedVersion = phase.version
     if (!confirmedVersion) return // Empty string = initial register, skip
 
+    const newVersion = replica.version().serialize()
+    if (this.#versionAlreadyTargeted(phase, newVersion)) return
+
     const sinceVersion = replicaFactory.parseVersion(confirmedVersion)
     const delta = replica.exportSince(sinceVersion)
     if (!delta) return // Version didn't actually advance — deduplication
 
-    const newVersion = replica.version().serialize()
     this.#storeHandle.dispatch({
       type: "state-advanced",
       docId,
       delta,
       newVersion,
     })
+  }
+
+  /**
+   * True if `newVersion` is already the in-flight write's target, or
+   * already queued behind it, for a `"writing"` phase.
+   */
+  #versionAlreadyTargeted(phase: DocPhase, newVersion: string): boolean {
+    if (phase.status !== "writing") return false
+    if (phase.pendingVersion === newVersion) return true
+    return (
+      phase.queued?.some(
+        q => q.type === "state-advanced" && q.newVersion === newVersion,
+      ) ?? false
+    )
   }
 
   /**
@@ -631,33 +729,41 @@ export class Runtime {
       lease: this.lease,
     })
 
-    this.#docCache.set(docId, {
+    const readyInfo: DocReadyInfo = {
+      docId,
+      mode: "interpret",
+      replica: substrate,
+      replicaFactory: factory.replica,
+      syncMode: bound.syncMode,
+      schemaHash: bound.schemaHash,
+      supportedHashes: [...bound.supportedHashes],
+    }
+
+    const entry: DocCacheEntry = {
       mode: "interpret",
       ref,
       bound,
-    })
+      readyInfo,
+      announced: false,
+    }
+    this.#docCache.set(docId, entry)
 
     // ── Divergent tail: store vs no-store ──
     if (this.#stores.length > 0) {
-      const hydrationOp = this.#hydrateAndRegister(
+      const hydrationOp = this.#hydrate(
         docId,
         substrate,
         factory.replica,
         bound.syncMode,
         bound.schemaHash,
-        "interpret",
-        [...bound.supportedHashes],
       ).then(() => {
+        this.#register(entry)
         this.#wireDocSubscription(docId, ref)
       })
       this.#trackHydration(hydrationOp)
     } else {
       // No stores — doc is immediately ready.
-      this.#fireDocReady(docId, "interpret", substrate, factory.replica, {
-        syncMode: bound.syncMode,
-        schemaHash: bound.schemaHash,
-        supportedHashes: [...bound.supportedHashes],
-      })
+      this.#register(entry)
       this.#wireDocSubscription(docId, ref)
     }
 
@@ -679,67 +785,122 @@ export class Runtime {
 
     const replica = replicaFactory.createEmpty()
 
-    this.#docCache.set(docId, { mode: "replicate" })
+    const readyInfo: DocReadyInfo = {
+      docId,
+      mode: "replicate",
+      replica,
+      replicaFactory,
+      syncMode,
+      schemaHash,
+    }
+
+    const entry: DocCacheEntry = {
+      mode: "replicate",
+      readyInfo,
+      announced: false,
+    }
+    this.#docCache.set(docId, entry)
 
     if (this.#stores.length > 0) {
-      const hydrationOp = this.#hydrateAndRegister(
+      const hydrationOp = this.#hydrate(
         docId,
         replica,
         replicaFactory,
         syncMode,
         schemaHash,
-        "replicate",
-      )
+      ).then(() => {
+        this.#register(entry)
+      })
       this.#trackHydration(hydrationOp)
     } else {
       // No stores — doc is immediately ready.
-      this.#fireDocReady(docId, "replicate", replica, replicaFactory, {
-        syncMode,
-        schemaHash,
-      })
+      this.#register(entry)
     }
   }
 
   /**
-   * Wire the changefeed subscription for a document and forward
-   * changesets to the hooks (Exchange wires these into the Synchronizer).
+   * Wire the changefeed subscription for a document: forwards changesets
+   * to the hooks (Exchange wires these into the Synchronizer), and
+   * self-persists local (non-replay) changesets unconditionally — so a
+   * standalone Runtime (no Exchange) durably persists its own mutations
+   * without depending on the Exchange's `Synchronizer → onStateAdvanced`
+   * wiring. Safe to run alongside that wiring: `#persistIfAdvanced` is
+   * idempotent per confirmed version, so whichever call reaches the store
+   * program first performs the real write and the other is a no-op.
+   *
+   * Marks the doc dirty and schedules a microtask-deferred, coalesced
+   * drain rather than persisting inline — a single `batch()` fires one
+   * changeset per touched field, so persisting on every changeset would
+   * export and dispatch the same starting delta once per field instead
+   * of once per batch. Context: jj:mrlnmlus.
    *
    * Called after hydration completes (or immediately if no stores).
    */
   #wireDocSubscription(docId: DocId, ref: any): void {
     subscribe(ref, changeset => {
       this.#hooks.onDocChangeset?.(docId, changeset)
+      if (!changeset.replay) {
+        this.#markLocalChangeDirty(docId)
+      }
     })
   }
 
   /**
-   * Fire the `onDocReady` hook with the document's sync metadata.
+   * Marks `docId` as having a pending local changeset, and schedules a
+   * microtask to drain the whole dirty set (once per microtask tick,
+   * regardless of how many docs/changesets accumulate before it runs).
    */
-  #fireDocReady(
-    docId: DocId,
-    mode: "interpret" | "replicate",
-    replica: ReplicaLike,
-    replicaFactory: ReplicaFactoryLike,
-    meta: {
-      syncMode: SyncMode
-      schemaHash: string
-      supportedHashes?: readonly string[]
-    },
-  ): void {
-    if (!this.#hooks.onDocReady) return
+  #markLocalChangeDirty(docId: DocId): void {
+    this.#dirtyLocalChanges.add(docId)
+    if (this.#localChangeDrain) return // Already scheduled this tick.
+    this.#localChangeDrain = Promise.resolve().then(() => {
+      this.#localChangeDrain = null
+      this.#drainLocalChanges()
+    })
+    this.#trackHydration(this.#localChangeDrain)
+  }
 
-    const info: DocReadyInfo = {
-      docId,
-      mode,
-      replica,
-      replicaFactory,
-      syncMode: meta.syncMode,
-      schemaHash: meta.schemaHash,
-      ...(meta.supportedHashes
-        ? { supportedHashes: meta.supportedHashes }
-        : {}),
+  /**
+   * Snapshot-then-clear the dirty set (so re-entrant local writes during
+   * the drain schedule a fresh drain rather than being lost), and persist
+   * each doc's current state at most once.
+   */
+  #drainLocalChanges(): void {
+    const docIds = [...this.#dirtyLocalChanges]
+    this.#dirtyLocalChanges.clear()
+    for (const docId of docIds) {
+      const entry = this.#docCache.get(docId)
+      if (entry && entry.mode !== "deferred") {
+        this.#persistIfAdvanced(
+          docId,
+          entry.readyInfo.replica,
+          entry.readyInfo.replicaFactory,
+        )
+      }
     }
-    this.#hooks.onDocReady(info)
+  }
+
+  /**
+   * Fire the `onDocReady` hook for a document, exactly once.
+   *
+   * No reference to any `Store` — structurally incapable of triggering a
+   * hydration replay. Safe to call for an already-announced entry (no-op)
+   * or for an entry that was hydrated before hooks existed (backfill via
+   * {@link setHooks}). This is the only method permitted to call
+   * `RuntimeHooks.onDocReady`. Context: jj:mrlnmlus.
+   *
+   * `announced` only flips to `true` once a hook is actually present and
+   * called — a doc created before any hooks exist (the standalone-Runtime
+   * case) must remain un-announced so `setHooks`'s later backfill still
+   * fires for it.
+   */
+  #register(
+    entry: Extract<DocCacheEntry, { mode: "interpret" | "replicate" }>,
+  ): void {
+    if (entry.announced) return
+    if (!this.#hooks.onDocReady) return
+    this.#hooks.onDocReady(entry.readyInfo)
+    entry.announced = true
   }
 
   // =========================================================================
@@ -760,27 +921,31 @@ export class Runtime {
   }
 
   // =========================================================================
-  // INTERNAL — Storage: hydrate & register
+  // INTERNAL — Storage: hydrate
   // =========================================================================
 
   /**
    * Async hydration — loads stored entries and merges them into the
-   * replica, then registers the doc in the store program and fires
-   * `onDocReady`.
+   * replica, then registers the doc in the store program.
+   *
+   * Storage I/O only — this method never fires `onDocReady`. It has no
+   * knowledge of hooks at all, which makes it structurally impossible to
+   * accidentally re-run hydration (and therefore double-`merge()` stored
+   * ops) while trying to announce an already-hydrated document. Callers
+   * call {@link Runtime.#register} separately, once hydration resolves.
+   * Context: jj:mrlnmlus.
    *
    * For interpret mode with structural clientID 0, `factory.create(schema)`
    * produces structural ops at `(0, 0..N)` — identical to what any stored
    * state has. Merging stored data deduplicates the structural ops and
    * applies application ops. No separate replica, no upgrade step.
    */
-  async #hydrateAndRegister(
+  async #hydrate(
     docId: DocId,
     replica: ReplicaLike,
     replicaFactory: ReplicaFactoryLike,
     syncMode: SyncMode,
     schemaHash: string,
-    mode: "interpret" | "replicate",
-    supportedHashes?: readonly string[],
   ): Promise<void> {
     const meta: StoreMeta = {
       replicaType: replicaFactory.replicaType,
@@ -835,13 +1000,6 @@ export class Runtime {
         })
       }
     }
-
-    // Fire ready hook — Exchange calls synchronizer.registerDoc here.
-    this.#fireDocReady(docId, mode, replica, replicaFactory, {
-      syncMode,
-      schemaHash,
-      ...(supportedHashes ? { supportedHashes } : {}),
-    })
   }
 
   // =========================================================================
