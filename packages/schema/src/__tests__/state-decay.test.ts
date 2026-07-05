@@ -167,7 +167,7 @@ describe("state substrate tick() decay sweep", () => {
    * then initialize its writable context (required for tick() to fire
    * the changefeed).
    */
-  function makeDecayedSubstrate(now: number) {
+  function makeDecayedSubstrate(_now: number) {
     const substrate = stateSubstrateFactory.fromEntirety(
       {
         kind: "entirety",

@@ -27,6 +27,7 @@ import {
   Schema,
   type Schema as SchemaNode,
   subscribe,
+  version,
 } from "@kyneta/schema"
 import type { DocId, PeerIdentityDetails } from "@kyneta/transport"
 import { AsyncQueue } from "./async-queue.js"
@@ -40,9 +41,10 @@ import type { Exchange } from "./exchange.js"
  * Build the invariant envelope schema for a Line document, parameterized
  * by the application's message schema.
  *
- * The envelope structure (`seq`, `ack`) is an implementation detail of the
- * `Line` class. External consumers interact with `send(msg)` and the async
- * iterator — they never see the envelope fields.
+ * The envelope structure (`seq`, `ackSeq`, `ackIncarnation`) is an implementation
+ * detail of the `Line` class. `ackIncarnation` uses `""` as a sentinel for "never acked".
+ * External consumers interact with `send(msg)` and the async iterator — they
+ * never see the envelope fields.
  */
 export function createLineDocSchema<S extends SchemaNode>(messageSchema: S) {
   return Schema.struct({
@@ -52,7 +54,8 @@ export function createLineDocSchema<S extends SchemaNode>(messageSchema: S) {
         payload: messageSchema,
       }),
     ),
-    ack: Schema.number(),
+    ackSeq: Schema.number(),
+    ackIncarnation: Schema.string(),
     nextSeq: Schema.number(),
   })
 }
@@ -286,6 +289,7 @@ export class Line<SendMsg, RecvMsg>
   readonly #unsubscribeInbox: () => void
   #nextSeq = 1
   #lastProcessedSeq = 0
+  #inboxIncarnation: string
   #closed = false
   #refCount = 1
   #consumerAttached = false
@@ -311,12 +315,20 @@ export class Line<SendMsg, RecvMsg>
     this.#disposePolicy = disposePolicy
     this.#queue = new AsyncQueue<RecvMsg>()
 
+    this.#inboxIncarnation = (version(inbox) as any).incarnation
+
     // Resume persisted protocol state from the outbox document.
     // Zero.structural defaults: Schema.number() → 0.
     // nextSeq 0 means the Line has never sent — start at 1.
     const persistedNextSeq = outbox.nextSeq() as number
     this.#nextSeq = persistedNextSeq || 1
-    this.#lastProcessedSeq = outbox.ack() as number
+
+    const ackIncarnation = outbox.ackIncarnation() as string
+    if (ackIncarnation === this.#inboxIncarnation) {
+      this.#lastProcessedSeq = outbox.ackSeq() as number
+    } else {
+      this.#lastProcessedSeq = 0
+    }
 
     // Scan for any existing messages (handles reconnection / late open)
     this.#processInbox()
@@ -361,8 +373,13 @@ export class Line<SendMsg, RecvMsg>
     if (this.#closed) {
       throw new Error("Cannot send on a closed Line")
     }
-    const seq = this.#nextSeq++
     batch(this.#outbox, (d: any) => {
+      // Always read from doc to handle sync updates (e.g. restart recovery)
+      const persistedNextSeq = (d.nextSeq() as number) || 1
+
+      const seq = persistedNextSeq
+
+      this.#nextSeq = seq + 1
       d.messages.push({ seq, payload: msg })
       d.nextSeq.set(this.#nextSeq)
     })
@@ -441,6 +458,13 @@ export class Line<SendMsg, RecvMsg>
   #processInbox(): void {
     if (this.#closed) return
 
+    const currentInboxIncarnation = (version(this.#inbox) as any).incarnation
+
+    if (currentInboxIncarnation !== this.#inboxIncarnation) {
+      this.#lastProcessedSeq = 0
+      this.#inboxIncarnation = currentInboxIncarnation
+    }
+
     // Read all messages from inbox — inbox is any-typed, so messages are any[]
     const messages: any[] = this.#inbox.messages()
 
@@ -458,7 +482,8 @@ export class Line<SendMsg, RecvMsg>
       if (advanced) {
         // Write ack to outbox
         batch(this.#outbox, (d: any) => {
-          d.ack.set(this.#lastProcessedSeq)
+          d.ackSeq.set(this.#lastProcessedSeq)
+          d.ackIncarnation.set(this.#inboxIncarnation)
         })
       }
     }
@@ -471,7 +496,12 @@ export class Line<SendMsg, RecvMsg>
   }
 
   #pruneOutbox(): void {
-    const remoteAck = this.#inbox.ack() as number
+    const currentOutboxIncarnation = (version(this.#outbox) as any).incarnation
+
+    const ackIncarnation = this.#inbox.ackIncarnation() as string
+    if (ackIncarnation !== currentOutboxIncarnation) return
+
+    const remoteAck = this.#inbox.ackSeq() as number
     if (remoteAck <= 0) return
 
     const messages: any[] = this.#outbox.messages()

@@ -424,7 +424,9 @@ export function createPlainSubstrate<V extends Version>(
         )
       }
 
-      const { incarnation, content } = parsePlainPayload(payload.data)
+      const { incarnation, versionValue, content } = parsePlainPayload(
+        payload.data,
+      )
 
       // Adopt the incoming incarnation if:
       // - We are DEFAULT (accept our first real identity), or
@@ -455,6 +457,9 @@ export function createPlainSubstrate<V extends Version>(
         const ops = stateImageToOps(content as Record<string, unknown>)
         if (ops.length > 0) {
           executeBatch(ctx, ops, replayOptions)
+        }
+        if (versionValue !== undefined) {
+          replicaCore.resetLog(versionValue)
         }
       } else {
         // Batched op array — each inner array is one flush cycle.
@@ -495,7 +500,7 @@ export function createPlainSubstrate<V extends Version>(
 function createPlainReplicaCore<V extends Version>(
   materialize: () => PlainState,
   strategy: VersionStrategy<V>,
-  adoptIncarnation?: (inc: string) => void,
+  _adoptIncarnation?: (inc: string) => void,
   getIncarnation?: () => string,
 ) {
   // Version log: log[i] = batch of Ops from flush cycle (baseOffset + i).
@@ -593,10 +598,20 @@ function createPlainReplicaCore<V extends Version>(
       baseOffset = targetOffset
     },
 
+    resetLog(newBaseOffset: number): void {
+      log.length = 0
+      baseOffset = newBaseOffset
+      cachedVersion = strategy.current(baseOffset)
+    },
+
     exportEntirety(): SubstratePayload {
       let dataStr: string
       if (getIncarnation) {
-        dataStr = JSON.stringify({ i: getIncarnation(), s: materialize() })
+        dataStr = JSON.stringify({
+          i: getIncarnation(),
+          v: baseOffset + log.length,
+          s: materialize(),
+        })
       } else {
         dataStr = JSON.stringify(materialize())
       }
@@ -759,7 +774,9 @@ export function createPlainReplica<V extends Version>(
         )
       }
 
-      const { incarnation, content } = parsePlainPayload(payload.data)
+      const { incarnation, versionValue, content } = parsePlainPayload(
+        payload.data,
+      )
       if (
         incarnation !== undefined &&
         getIncarnation &&
@@ -771,14 +788,30 @@ export function createPlainReplica<V extends Version>(
       }
 
       if (payload.kind === "entirety") {
-        // State image — decompose to ReplaceChange ops and append as
-        // a single batch. No applyChange, no step — just log it.
         const ops = stateImageToOps(content as Record<string, unknown>)
-        if (ops.length === 0) return
-        for (const op of ops) {
-          core.pendingOps.push(op)
+        if (versionValue !== undefined) {
+          // If we receive an entirety with an explicit version value (epoch boundary),
+          // we are adopting this entirely. We clear our log, project directly
+          // onto the base state, and synchronize our counter with the sender's.
+          // This prevents flush count inflation across incarnations.
+          for (const key of Object.keys(base)) {
+            delete base[key]
+          }
+          for (const op of ops) {
+            applyChange(base, op.path, op.change)
+          }
+          core.resetLog(versionValue)
+          cachedState = null
+        } else {
+          // Fallback for legacy payloads without versionValue:
+          // State image — decompose to ReplaceChange ops and append as
+          // a single batch. No applyChange, no step — just log it.
+          if (ops.length === 0) return
+          for (const op of ops) {
+            core.pendingOps.push(op)
+          }
+          core.flush()
         }
-        core.flush()
       } else {
         // Batched op array — each inner array is one flush cycle.
         // Replay one flush per batch to preserve version parity.
@@ -842,6 +875,7 @@ export function objectToReplaceOps(state: Record<string, unknown>): Op[] {
 
 export function parsePlainPayload(data: string): {
   incarnation: string | undefined
+  versionValue: number | undefined
   content: unknown
 } {
   const parsed = JSON.parse(data)
@@ -854,10 +888,11 @@ export function parsePlainPayload(data: string): {
     const raw = parsed as Record<string, unknown>
     return {
       incarnation: typeof raw.i === "string" ? raw.i : undefined,
+      versionValue: typeof raw.v === "number" ? raw.v : undefined,
       content: "s" in raw ? raw.s : raw.b,
     }
   }
-  return { incarnation: undefined, content: parsed }
+  return { incarnation: undefined, versionValue: undefined, content: parsed }
 }
 
 /**

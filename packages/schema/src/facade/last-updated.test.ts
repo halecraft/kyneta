@@ -17,7 +17,8 @@ describe("lastUpdated", () => {
 
     // initially they might be 0 due to structural zero initialization in state tree
     const initialTs = lastUpdated(doc.server)
-    expect(initialTs).toBeTypeOf("number")
+    const ts0 = initialTs as number
+    expect(ts0).toBeTypeOf("number")
 
     // wait a bit for timestamps to advance
     const start = Date.now()
@@ -25,9 +26,9 @@ describe("lastUpdated", () => {
 
     // update one field
     doc.server.peerId.set("peer-1")
-    const ts1 = lastUpdated(doc.server.peerId)
+    const ts1 = lastUpdated(doc.server.peerId) as number
     expect(ts1).toBeTypeOf("number")
-    expect(ts1).toBeGreaterThan(initialTs!)
+    expect(ts1).toBeGreaterThan(ts0)
 
     // container timestamp should be the same as the only updated field
     expect(lastUpdated(doc.server)).toBe(ts1)
@@ -36,9 +37,9 @@ describe("lastUpdated", () => {
 
     // update another field
     doc.server.appShellAttached.set(true)
-    const ts2 = lastUpdated(doc.server.appShellAttached)
+    const ts2 = lastUpdated(doc.server.appShellAttached) as number
     expect(ts2).toBeTypeOf("number")
-    expect(ts2).toBeGreaterThan(ts1!)
+    expect(ts2).toBeGreaterThan(ts1)
 
     // container timestamp should be the max (which is ts2)
     expect(lastUpdated(doc.server)).toBe(ts2)

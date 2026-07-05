@@ -20,7 +20,8 @@ describe("deleted() changefeed", () => {
     batch(doc, (d: typeof doc) => {
       d.todos.push({ id: "t1", text: "", done: false })
     })
-    const ref = doc.todos.at(0)!
+    const ref = doc.todos.at(0)
+    if (!ref) throw new Error("Expected todo at index 0")
 
     const d = deleted(ref)
 

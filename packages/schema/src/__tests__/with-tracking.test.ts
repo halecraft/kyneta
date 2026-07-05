@@ -181,7 +181,7 @@ describe("withTracking — sum aspect inference", () => {
     // The sum Proxy forwards `()` to the active variant's `[CALL]`, which is
     // wrapped by withTracking as a composite fold → a single `deep` dep.
     expect(deps).toHaveLength(1)
-    expect(deps[0]!.aspect).toBe("deep")
+    expect(deps[0]?.aspect).toBe("deep")
   })
 })
 
