@@ -353,6 +353,8 @@ For substrates whose `V` is a map of `PeerId → number` (Lamport-style vectors)
 
 Both are pure. Loro and Yjs substrates use these directly for their Lamport vectors; substrates with different version shapes (wall clock, Loro's opaque version) implement their own comparison.
 
+`PlainVersion` (the plain substrate's version, below) is **not** a version vector — it's a scalar (a monotonic integer) with an incarnation dimension bolted on for identity, not a per-peer map. `versionVectorMeet`/`versionVectorCompare` are for Loro/Yjs only; `PlainVersion` implements `compare`/`meet` directly.
+
 ---
 
 ## `schemaHash` and compatibility
@@ -1085,7 +1087,7 @@ These are the primitives `step`, `with-changefeed`, and `Position` build on.
 
 Source: `packages/schema/src/substrates/plain.ts`.
 
-The built-in substrate. Stores state as plain JS objects, tracks a Lamport version, and merges by total-order last-writer-wins. Used for:
+The built-in substrate. Stores state as plain JS objects, tracks a monotonic integer version scoped to an incarnation (see `PlainVersion` below), and merges by total-order last-writer-wins within an incarnation. Used for:
 
 - The default binding when no CRDT is needed (`Schema.string`, small configs, ephemeral UI state).
 - The LWW variant (`src/substrates/lww.ts` + `src/substrates/timestamp-version.ts`) for wall-clock-ordered ephemeral broadcasts.
@@ -1104,10 +1106,22 @@ Key functions:
 ### `PlainVersion`
 
 ```
-type PlainVersion = Record<PeerId, number>
+class PlainVersion {
+  constructor(value: number, incarnation: string)
+  readonly value: number
+  readonly incarnation: string
+}
 ```
 
-A Lamport vector. `versionVectorMeet` and `versionVectorCompare` operate on it directly. Every local write bumps the peer's component; `merge` increases each component to the max of local and incoming.
+A monotonic integer (`value`) carrying an `incarnation: string` — **not** a version vector (see [§Version vector algebra](#version-vector-algebra)). `serialize()` produces `"incarnation:value"`; `parseVersion` also accepts legacy bare-integer strings (e.g. `"5"`), which parse as belonging to `LEGACY_INCARNATION`.
+
+`compare()`:
+- Same incarnation → total order on `value` (`"behind" | "equal" | "ahead"`), same as a bare counter.
+- Different incarnations → `"concurrent"`, **unless** one side is `DEFAULT_INCARNATION` (see below), in which case DEFAULT is never reported ahead of REAL and REAL is never reported behind DEFAULT.
+
+`DEFAULT_INCARNATION` is the sentinel every newly created replica starts with — it has no identity yet because the replica contains only schema defaults (init ops). It acts as a *universal prefix*: a version carrying it compares against any REAL incarnation without ever producing a false `"concurrent"` on two independent peers' very first sync. The first real write (`flushCount > 1` in `createPlainVersionStrategy`) lazily mints a REAL incarnation via `randomHex(8)`; this is how a writer that restarts with no persisted store (fresh `DEFAULT_INCARNATION` → freshly-minted REAL incarnation) ends up `"concurrent"` against a peer's cached version from the writer's *previous* REAL incarnation — the receiver's existing `"concurrent"` → gap → entirety → `canReset` machinery (see `@kyneta/exchange`'s [Compaction and epoch boundaries](../exchange/TECHNICAL.md#compaction-and-epoch-boundaries)) handles the resync with zero sync-layer changes.
+
+`merge()` adopts an incoming incarnation (via the `adoptIncarnation` closure returned by `createPlainVersionStrategy`) when the incoming payload's declared incarnation differs from the current one and either the current one is still `DEFAULT_INCARNATION`, or the payload is an entirety (epoch-boundary reset). This makes the substrate's payload self-sufficient for identity-aware merge — analogous to Loro's binary oplog carrying actor IDs — without any new `Substrate<V>` interface method or sync-layer coordination: `parsePlainPayload` extracts `{ i, s|b }` on the receiving side, and `merge`/`fromEntirety`/`buildUpgrade` call sites handle adoption natively.
 
 ### `TimestampVersion`
 
@@ -1116,6 +1130,8 @@ For ephemeral substrates: a single wall-clock number plus the peer ID. `merge` a
 ### Wire-codec opacity
 
 The plain substrate's `serializeOps` / `deserializeOps` embed `Op.change` by reference — the change is JSON-stringified as-is and passed through `WireOfferMsg.d` (an opaque `string | Uint8Array` payload). The exchange wire codec never inspects schema-level change types; it carries them as JSON inside the substrate payload. Adding a new `ChangeBase` variant (e.g. `SetChange { type: "set-op" }`) is purely additive — no exchange codec change required. The only caveat is for out-of-monorepo consumers parsing the plain JSON wire format with a strict change-type whitelist: those need to extend their whitelist when new change variants land.
+
+Since incarnation support landed, the plain substrate's JSON payload also wraps its state/ops with an incarnation envelope — `{ i: string, s: PlainState }` for entirety, `{ i: string, b: SerializedOp[][] }` for since — produced by `exportEntirety`/`exportSince` and unwrapped by `parsePlainPayload` on merge. This is still opaque to the exchange wire codec (it's carried as an undifferentiated JSON string inside `SubstratePayload.data`); the envelope only matters to the plain substrate itself, making its payload self-sufficient for identity-aware merge, analogous to Loro's binary oplog carrying actor IDs. Legacy payloads (bare state object / bare op-batch array, no `i` field) still parse correctly via the same helper.
 
 ## The functional shadow
 

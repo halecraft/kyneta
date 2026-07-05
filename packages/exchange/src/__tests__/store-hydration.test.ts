@@ -204,7 +204,8 @@ describe("Exchange storage persistence", () => {
     for (const entry of entries) {
       replica.merge(entry.payload)
     }
-    const state = JSON.parse(replica.exportEntirety().data as string) as Record<
+    const state = ((JSON.parse(replica.exportEntirety().data as string) as any)
+      .s || JSON.parse(replica.exportEntirety().data as string)) as Record<
       string,
       unknown
     >

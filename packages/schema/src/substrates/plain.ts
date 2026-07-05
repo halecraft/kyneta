@@ -34,6 +34,7 @@
 // Context: jj:wmyomqzw (Phase 0), jj:wqoqzzpp (Phase 2), jj:umtmlpvn (version strategy extraction)
 // Context: jj:oyouvrss (Phase 1 — append-log replica, init ops, batched wire format)
 
+import { randomHex } from "@kyneta/random"
 import type { ChangeBase } from "../change.js"
 import { replaceChange } from "../change.js"
 import type { Op } from "../changefeed.js"
@@ -74,11 +75,19 @@ import { Zero } from "../zero.js"
  * mapping. This is the single axis of variation between Plain (monotonic
  * counter) and LWW (wall-clock timestamp) substrates.
  *
- * Three members, all pure:
+ * Three members:
  * - `zero` — the version for a replica with no state transitions.
  * - `current(flushCount)` — the version after N flush cycles.
  * - `logOffset(since)` — map a since-version to a log array index,
  *   or null if the version cannot be mapped (→ entirety fallback).
+ *
+ * The type itself is pure — no member mutates anything through this
+ * interface. But `createPlainVersionStrategy`'s concrete implementation for
+ * `PlainVersion` is per-replica *stateful*: it closes over a mutable
+ * `incarnation` string (lazily minted, and updatable via the accompanying
+ * `adoptIncarnation` closure returned alongside the strategy — see below).
+ * `timestampVersionStrategy` (LWW, in `lww.ts`) remains a genuinely stateless
+ * `VersionStrategy<TimestampVersion>` singleton, unaffected by this.
  */
 export type VersionStrategy<V extends Version> = {
   /** Version for a replica with no state transitions. */
@@ -105,11 +114,26 @@ export type VersionStrategy<V extends Version> = {
 // PlainVersion — monotonic integer version marker
 // ---------------------------------------------------------------------------
 
+// The sentinel incarnation assigned to all newly created plain replicas.
+// A DEFAULT incarnation is pluripotent: it has no identity yet because the
+// replica contains only schema defaults (init ops). Any version carrying
+// DEFAULT compares as "behind" a REAL incarnation and as "equal" to
+// another DEFAULT. The first real write (flushCount > 1) or the first
+// merge with a REAL incarnation upgrades the replica to a specific identity.
+export const DEFAULT_INCARNATION = "kyneta.default"
+
+// Legacy sentinel used when parsing bare integer version strings that
+// pre-date incarnation support. Treated as a REAL incarnation for comparison
+// purposes — it won't match any active incarnation.
+export const LEGACY_INCARNATION = "kyneta.legacy"
+
 export class PlainVersion implements Version {
   readonly #value: number
+  readonly #incarnation: string
 
-  constructor(value: number) {
+  constructor(value: number, incarnation: string) {
     this.#value = value
+    this.#incarnation = incarnation
   }
 
   /** The raw version integer. */
@@ -117,8 +141,12 @@ export class PlainVersion implements Version {
     return this.#value
   }
 
+  get incarnation(): string {
+    return this.#incarnation
+  }
+
   serialize(): string {
-    return String(this.#value)
+    return `${this.#incarnation}:${this.#value}`
   }
 
   compare(other: Version): "behind" | "equal" | "ahead" | "concurrent" {
@@ -127,7 +155,36 @@ export class PlainVersion implements Version {
         "PlainVersion can only be compared with another PlainVersion",
       )
     }
+
     const otherValue = other.#value
+    const thisDefault = this.#incarnation === DEFAULT_INCARNATION
+    const otherDefault = other.#incarnation === DEFAULT_INCARNATION
+
+    if (thisDefault && otherDefault) {
+      // Both are DEFAULT — no identity formed yet. Treat as totally ordered.
+      if (this.#value < otherValue) return "behind"
+      if (this.#value > otherValue) return "ahead"
+      return "equal"
+    }
+
+    if (thisDefault && !otherDefault) {
+      // We are DEFAULT, they are REAL. DEFAULT can never be ahead of REAL.
+      if (this.#value < otherValue) return "behind"
+      return "equal"
+    }
+
+    if (!thisDefault && otherDefault) {
+      // We are REAL, they are DEFAULT. REAL is never behind DEFAULT.
+      if (this.#value > otherValue) return "ahead"
+      return "equal"
+    }
+
+    // Both REAL. Different lineages are incomparable.
+    if (this.#incarnation !== other.#incarnation) {
+      return "concurrent"
+    }
+
+    // Same REAL incarnation — total order on value.
     if (this.#value < otherValue) return "behind"
     if (this.#value > otherValue) return "ahead"
     return "equal"
@@ -139,7 +196,39 @@ export class PlainVersion implements Version {
         "PlainVersion can only be meet'd with another PlainVersion",
       )
     }
-    return new PlainVersion(Math.min(this.#value, other.#value))
+
+    const thisDefault = this.#incarnation === DEFAULT_INCARNATION
+    const otherDefault = other.#incarnation === DEFAULT_INCARNATION
+
+    if (thisDefault && otherDefault) {
+      return new PlainVersion(
+        Math.min(this.#value, other.#value),
+        DEFAULT_INCARNATION,
+      )
+    }
+
+    if (thisDefault && !otherDefault) {
+      // DEFAULT vs REAL: REAL subsumes DEFAULT. Meet at REAL's root.
+      return new PlainVersion(0, other.#incarnation)
+    }
+
+    if (!thisDefault && otherDefault) {
+      return new PlainVersion(0, this.#incarnation)
+    }
+
+    // Both REAL. Different lineages have no shared history.
+    if (this.#incarnation !== other.#incarnation) {
+      const inc =
+        this.#incarnation < other.#incarnation
+          ? this.#incarnation
+          : other.#incarnation
+      return new PlainVersion(0, inc)
+    }
+
+    return new PlainVersion(
+      Math.min(this.#value, other.#value),
+      this.#incarnation,
+    )
   }
 }
 
@@ -147,10 +236,44 @@ export class PlainVersion implements Version {
 // plainVersionStrategy — the PlainVersion algebra
 // ---------------------------------------------------------------------------
 
-export const plainVersionStrategy: VersionStrategy<PlainVersion> = {
-  zero: new PlainVersion(0),
-  current: flushCount => new PlainVersion(flushCount),
-  logOffset: since => since.value,
+export function createPlainVersionStrategy(initialIncarnation: string): {
+  strategy: VersionStrategy<PlainVersion>
+  adoptIncarnation: (inc: string) => void
+  getIncarnation: () => string
+} {
+  let incarnation = initialIncarnation
+
+  const strategy: VersionStrategy<PlainVersion> = {
+    get zero() {
+      return new PlainVersion(0, incarnation)
+    },
+    current(flushCount: number) {
+      // Lazy mint: if we're still DEFAULT and this is the first real write
+      // (flushCount > 1 means more than just init ops), claim an identity.
+      if (incarnation === DEFAULT_INCARNATION && flushCount > 1) {
+        incarnation = randomHex(8)
+      }
+      return new PlainVersion(flushCount, incarnation)
+    },
+    logOffset(since: PlainVersion) {
+      // DEFAULT is the universal prefix — any incarnation can map it.
+      if (since.incarnation === DEFAULT_INCARNATION) {
+        return since.value
+      }
+      if (since.incarnation !== incarnation) {
+        return null
+      }
+      return since.value
+    },
+  }
+
+  return {
+    strategy,
+    adoptIncarnation: (inc: string) => {
+      incarnation = inc
+    },
+    getIncarnation: () => incarnation,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -176,12 +299,19 @@ export const plainVersionStrategy: VersionStrategy<PlainVersion> = {
 export function createPlainSubstrate<V extends Version>(
   doc: PlainState,
   strategy: VersionStrategy<V>,
+  adoptIncarnation?: (inc: string) => void,
+  getIncarnation?: () => string,
 ): Substrate<V> {
   const reader = plainReader(doc)
 
   // --- Shared replication core ---
   // Substrate passes `() => doc` because it eagerly mutates `doc` in prepare().
-  const replicaCore = createPlainReplicaCore(() => doc, strategy)
+  const replicaCore = createPlainReplicaCore(
+    () => doc,
+    strategy,
+    adoptIncarnation,
+    getIncarnation,
+  )
 
   // The WritableContext is built lazily and cached — the same context
   // is returned on every call to `context()`.
@@ -294,6 +424,21 @@ export function createPlainSubstrate<V extends Version>(
         )
       }
 
+      const { incarnation, content } = parsePlainPayload(payload.data)
+
+      // Adopt the incoming incarnation if:
+      // - We are DEFAULT (accept our first real identity), or
+      // - This is an entirety payload (epoch boundary reset)
+      if (
+        incarnation !== undefined &&
+        getIncarnation &&
+        incarnation !== getIncarnation() &&
+        (getIncarnation() === DEFAULT_INCARNATION ||
+          payload.kind === "entirety")
+      ) {
+        adoptIncarnation?.(incarnation)
+      }
+
       const ctx = substrate.context()
       // A merge replays authored-elsewhere state; surface `replay: true`
       // so layered consumers (exchange echo filter) can short-circuit
@@ -307,7 +452,7 @@ export function createPlainSubstrate<V extends Version>(
         // State image — decompose to ReplaceChange ops and apply through
         // the prepare/flush pipeline so the changefeed fires and refs
         // observe the transition.
-        const ops = stateImageToOps(payload.data)
+        const ops = stateImageToOps(content as Record<string, unknown>)
         if (ops.length > 0) {
           executeBatch(ctx, ops, replayOptions)
         }
@@ -315,7 +460,7 @@ export function createPlainSubstrate<V extends Version>(
         // Batched op array — each inner array is one flush cycle.
         // Apply each batch through the prepare/flush pipeline so that
         // version parity is preserved across export → merge → re-export.
-        const batches = JSON.parse(payload.data) as SerializedOp[][]
+        const batches = content as SerializedOp[][]
         for (const batch of batches) {
           if (batch.length === 0) continue
           const ops = deserializeOps(batch)
@@ -350,6 +495,8 @@ export function createPlainSubstrate<V extends Version>(
 function createPlainReplicaCore<V extends Version>(
   materialize: () => PlainState,
   strategy: VersionStrategy<V>,
+  adoptIncarnation?: (inc: string) => void,
+  getIncarnation?: () => string,
 ) {
   // Version log: log[i] = batch of Ops from flush cycle (baseOffset + i).
   // The absolute flush count is baseOffset + log.length.
@@ -447,10 +594,16 @@ function createPlainReplicaCore<V extends Version>(
     },
 
     exportEntirety(): SubstratePayload {
+      let dataStr: string
+      if (getIncarnation) {
+        dataStr = JSON.stringify({ i: getIncarnation(), s: materialize() })
+      } else {
+        dataStr = JSON.stringify(materialize())
+      }
       return {
         kind: "entirety",
         encoding: "json",
-        data: JSON.stringify(materialize()),
+        data: dataStr,
       }
     },
 
@@ -460,6 +613,7 @@ function createPlainReplicaCore<V extends Version>(
       // Strategy cannot map the version to a log index — fall back to
       // entirety. This is the TimestampVersion path: wall-clock timestamps
       // have no relationship to the op log array.
+      // Additionally, for PlainVersion, this is now triggered for cross-incarnation versions.
       if (offset === null) return this.exportEntirety()
 
       // Peer is behind the base — incremental export is not possible.
@@ -475,10 +629,17 @@ function createPlainReplicaCore<V extends Version>(
 
       const serializedBatches = batches.map(batch => serializeOps(batch))
 
+      let dataStr: string
+      if (getIncarnation) {
+        dataStr = JSON.stringify({ i: getIncarnation(), b: serializedBatches })
+      } else {
+        dataStr = JSON.stringify(serializedBatches)
+      }
+
       return {
         kind: "since",
         encoding: "json",
-        data: JSON.stringify(serializedBatches),
+        data: dataStr,
       }
     },
   }
@@ -505,6 +666,8 @@ function createPlainReplicaCore<V extends Version>(
  */
 export function createPlainReplica<V extends Version>(
   strategy: VersionStrategy<V>,
+  adoptIncarnation?: (inc: string) => void,
+  getIncarnation?: () => string,
 ): Replica<V> {
   // --- Mutable base state ---
   // After advance(), the base incorporates projected ops. Starts empty.
@@ -534,7 +697,12 @@ export function createPlainReplica<V extends Version>(
 
   // The core owns the log — the replica reads core.log for replay.
   // Single source of truth; no parallel data structure to keep in sync.
-  const core = createPlainReplicaCore(materialize, strategy)
+  const core = createPlainReplicaCore(
+    materialize,
+    strategy,
+    adoptIncarnation,
+    getIncarnation,
+  )
 
   // Wrap core.flush to invalidate the materialization cache.
   // Centralized: any path that flushes automatically invalidates —
@@ -591,10 +759,21 @@ export function createPlainReplica<V extends Version>(
         )
       }
 
+      const { incarnation, content } = parsePlainPayload(payload.data)
+      if (
+        incarnation !== undefined &&
+        getIncarnation &&
+        incarnation !== getIncarnation() &&
+        (getIncarnation() === DEFAULT_INCARNATION ||
+          payload.kind === "entirety")
+      ) {
+        adoptIncarnation?.(incarnation)
+      }
+
       if (payload.kind === "entirety") {
         // State image — decompose to ReplaceChange ops and append as
         // a single batch. No applyChange, no step — just log it.
-        const ops = stateImageToOps(payload.data)
+        const ops = stateImageToOps(content as Record<string, unknown>)
         if (ops.length === 0) return
         for (const op of ops) {
           core.pendingOps.push(op)
@@ -603,7 +782,7 @@ export function createPlainReplica<V extends Version>(
       } else {
         // Batched op array — each inner array is one flush cycle.
         // Replay one flush per batch to preserve version parity.
-        const batches = JSON.parse(payload.data) as SerializedOp[][]
+        const batches = content as SerializedOp[][]
         for (const batch of batches) {
           if (batch.length === 0) continue
           const ops = deserializeOps(batch)
@@ -635,7 +814,8 @@ export function createPlainReplica<V extends Version>(
  * ```
  */
 export function plainContext(doc: PlainState): WritableContext {
-  return createPlainSubstrate(doc, plainVersionStrategy).context()
+  const { strategy } = createPlainVersionStrategy("test")
+  return createPlainSubstrate(doc, strategy).context()
 }
 
 // ---------------------------------------------------------------------------
@@ -660,6 +840,26 @@ export function objectToReplaceOps(state: Record<string, unknown>): Op[] {
   return ops
 }
 
+export function parsePlainPayload(data: string): {
+  incarnation: string | undefined
+  content: unknown
+} {
+  const parsed = JSON.parse(data)
+  if (
+    parsed !== null &&
+    typeof parsed === "object" &&
+    "i" in parsed &&
+    ("s" in parsed || "b" in parsed)
+  ) {
+    const raw = parsed as Record<string, unknown>
+    return {
+      incarnation: typeof raw.i === "string" ? raw.i : undefined,
+      content: "s" in raw ? raw.s : raw.b,
+    }
+  }
+  return { incarnation: undefined, content: parsed }
+}
+
 /**
  * Parse a JSON state image and build one `ReplaceChange` op per top-level key.
  *
@@ -668,8 +868,8 @@ export function objectToReplaceOps(state: Record<string, unknown>): Op[] {
  * - `PlainReplica.merge` (entirety path — append to log)
  * - `buildPlainSubstrateFromEntirety` (cold-start construction)
  */
-function stateImageToOps(json: string): Op[] {
-  return objectToReplaceOps(JSON.parse(json) as Record<string, unknown>)
+function stateImageToOps(state: Record<string, unknown>): Op[] {
+  return objectToReplaceOps(state)
 }
 
 // ---------------------------------------------------------------------------
@@ -692,20 +892,37 @@ export function buildPlainSubstrateFromEntirety<V extends Version>(
   payload: SubstratePayload,
   schema: SchemaNode,
   strategy: VersionStrategy<V>,
+  adoptIncarnation?: (inc: string) => void,
+  getIncarnation?: () => string,
 ): Substrate<V> {
   if (payload.encoding !== "json" || typeof payload.data !== "string") {
     throw new Error(
       "PlainSubstrateFactory.fromEntirety only supports JSON-encoded payloads",
     )
   }
+
+  const { incarnation, content } = parsePlainPayload(payload.data)
+  if (
+    incarnation !== undefined &&
+    getIncarnation &&
+    incarnation !== getIncarnation()
+  ) {
+    adoptIncarnation?.(incarnation)
+  }
+
   // Plain substrates track version via log length — creating a fresh
   // substrate and applying ops via executeBatch advances the version
   // correctly. (CRDT substrates use the two-phase path instead because
   // their version is inherent in the document state.)
   const defaults = Zero.structural(schema) as Record<string, unknown>
   const doc = { ...defaults } as PlainState
-  const substrate = createPlainSubstrate(doc, strategy)
-  const ops = stateImageToOps(payload.data as string)
+  const substrate = createPlainSubstrate(
+    doc,
+    strategy,
+    adoptIncarnation,
+    getIncarnation,
+  )
+  const ops = stateImageToOps(content as Record<string, unknown>)
   if (ops.length > 0) {
     executeBatch(substrate.context(), ops)
   }
@@ -725,13 +942,15 @@ export function buildPlainSubstrateFromEntirety<V extends Version>(
 export function buildPlainReplicaFromEntirety<V extends Version>(
   payload: SubstratePayload,
   strategy: VersionStrategy<V>,
+  adoptIncarnation?: (inc: string) => void,
+  getIncarnation?: () => string,
 ): Replica<V> {
   if (payload.encoding !== "json" || typeof payload.data !== "string") {
     throw new Error(
       "PlainReplicaFactory.fromEntirety only supports JSON-encoded payloads",
     )
   }
-  const replica = createPlainReplica(strategy)
+  const replica = createPlainReplica(strategy, adoptIncarnation, getIncarnation)
   replica.merge(payload)
   return replica
 }
@@ -764,13 +983,20 @@ export function buildUpgrade<V extends Version>(
   replica: Replica<V>,
   schema: SchemaNode,
   strategy: VersionStrategy<V>,
+  adoptIncarnation?: (inc: string) => void,
+  getIncarnation?: () => string,
 ): Substrate<V> {
   const materializedState = (replica as any)[BACKING_DOC] as PlainState
 
   // Create a fresh doc seeded from the replica's materialized state.
   // The substrate owns this doc — the replica's state is not shared.
   const doc = { ...materializedState } as PlainState
-  const substrate = createPlainSubstrate(doc, strategy)
+  const substrate = createPlainSubstrate(
+    doc,
+    strategy,
+    adoptIncarnation,
+    getIncarnation,
+  )
 
   // Compute defaults and filter to keys not already present.
   const defaults = Zero.structural(schema) as Record<string, unknown>
@@ -818,22 +1044,40 @@ export const plainReplicaFactory: ReplicaFactory<PlainVersion> = {
   replicaType: ["plain", 1, 0] as const,
 
   createEmpty(): Replica<PlainVersion> {
-    return createPlainReplica(plainVersionStrategy)
+    const { strategy, adoptIncarnation, getIncarnation } =
+      createPlainVersionStrategy(DEFAULT_INCARNATION)
+    return createPlainReplica(strategy, adoptIncarnation, getIncarnation)
   },
 
   fromEntirety(payload: SubstratePayload): Replica<PlainVersion> {
-    return buildPlainReplicaFromEntirety(payload, plainVersionStrategy)
+    const { strategy, adoptIncarnation, getIncarnation } =
+      createPlainVersionStrategy(DEFAULT_INCARNATION)
+    return buildPlainReplicaFromEntirety(
+      payload,
+      strategy,
+      adoptIncarnation,
+      getIncarnation,
+    )
   },
 
   parseVersion(serialized: string): PlainVersion {
     if (serialized === "") {
       throw new Error(`Invalid PlainVersion value: (empty string)`)
     }
-    const n = Number(serialized)
+    const parts = serialized.split(":")
+    let inc: string
+    let n: number
+    if (parts.length === 2) {
+      inc = parts[0]
+      n = Number(parts[1])
+    } else {
+      inc = LEGACY_INCARNATION
+      n = Number(serialized)
+    }
     if (!Number.isFinite(n) || n < 0 || Math.floor(n) !== n) {
       throw new Error(`Invalid PlainVersion value: ${serialized}`)
     }
-    return new PlainVersion(n)
+    return new PlainVersion(n, inc)
   },
 }
 
@@ -855,14 +1099,25 @@ export const plainReplicaFactory: ReplicaFactory<PlainVersion> = {
  */
 export const plainSubstrateFactory: SubstrateFactory<PlainVersion> = {
   createReplica(): Replica<PlainVersion> {
-    return createPlainReplica(plainVersionStrategy)
+    const { strategy, adoptIncarnation, getIncarnation } =
+      createPlainVersionStrategy(DEFAULT_INCARNATION)
+    return createPlainReplica(strategy, adoptIncarnation, getIncarnation)
   },
 
   upgrade(
     replica: Replica<PlainVersion>,
     schema: SchemaNode,
   ): Substrate<PlainVersion> {
-    return buildUpgrade(replica, schema, plainVersionStrategy)
+    const inc = replica.version().incarnation
+    const { strategy, adoptIncarnation, getIncarnation } =
+      createPlainVersionStrategy(inc)
+    return buildUpgrade(
+      replica,
+      schema,
+      strategy,
+      adoptIncarnation,
+      getIncarnation,
+    )
   },
 
   create(schema: SchemaNode): Substrate<PlainVersion> {
@@ -873,10 +1128,14 @@ export const plainSubstrateFactory: SubstrateFactory<PlainVersion> = {
     payload: SubstratePayload,
     schema: SchemaNode,
   ): Substrate<PlainVersion> {
+    const { strategy, adoptIncarnation, getIncarnation } =
+      createPlainVersionStrategy(DEFAULT_INCARNATION)
     return buildPlainSubstrateFromEntirety(
       payload,
       schema,
-      plainVersionStrategy,
+      strategy,
+      adoptIncarnation,
+      getIncarnation,
     )
   },
 

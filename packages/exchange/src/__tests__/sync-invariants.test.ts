@@ -381,9 +381,9 @@ describe("universal version comparison rejects stale offers for all strategies",
   it("PlainVersion comparison: behind and equal skip import", () => {
     // Direct unit test for the version algebra used by authoritative strategy.
     // The universal check relies on this returning "behind"/"equal" to skip.
-    const v1 = new PlainVersion(1)
-    const v2 = new PlainVersion(2)
-    const v2b = new PlainVersion(2)
+    const v1 = new PlainVersion(1, "test")
+    const v2 = new PlainVersion(2, "test")
+    const v2b = new PlainVersion(2, "test")
 
     expect(v1.compare(v2)).toBe("behind")
     expect(v2.compare(v2b)).toBe("equal")

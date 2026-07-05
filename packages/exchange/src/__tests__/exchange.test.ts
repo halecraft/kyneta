@@ -306,7 +306,10 @@ describe("Exchange", () => {
 
         const snapshot = substrate.exportEntirety()
         expect(snapshot.encoding).toBe("json")
-        expect(JSON.parse(snapshot.data as string)).toEqual({
+        expect(
+          (JSON.parse(snapshot.data as string) as any).s ||
+            JSON.parse(snapshot.data as string),
+        ).toEqual({
           title: "Hi",
           count: 1,
         })
@@ -1150,6 +1153,75 @@ describe("Exchange", () => {
       })
       activeExchanges.push(alice)
       expect(alice.getPeerFeatures("bob")).toBeUndefined()
+    })
+  })
+
+  // =========================================================================
+  // Incarnated PlainVersion — writer restart with no persisted store
+  // =========================================================================
+
+  describe("writer restart (incarnated PlainVersion)", () => {
+    it("a same-peerId writer that restarts with no persisted store still delivers its writes", async () => {
+      const bridge = new Bridge()
+
+      // ── "Session 1" ── alice writes, bob syncs and caches sync state.
+      const aliceSession1 = createExchange({
+        id: "alice",
+        transports: [createBridgeTransport({ transportId: "alice-1", bridge })],
+      })
+      const bob = createExchange({
+        id: "bob",
+        transports: [createBridgeTransport({ transportId: "bob", bridge })],
+      })
+
+      const docA1 = aliceSession1.get("shared-doc", TestDoc)
+      batch(docA1, d => {
+        d.title.set("from session 1")
+        d.count.set(1)
+      })
+      await drain()
+
+      const docB = bob.get("shared-doc", TestDoc)
+      await sync(docB).waitForSync()
+      expect(docB.title()).toBe("from session 1")
+
+      // ── Involuntary disconnect ── no depart, so bob's cached sync state for
+      // alice survives (this is the scenario that exposes the bug: a bare
+      // version comparison would see the restarted writer's fresh version
+      // as "behind", not as a different lineage).
+      await aliceSession1.removeTransport("alice-1")
+      await drain()
+
+      // ── "Session 2" ── same peerId, brand-new Exchange (no persisted store),
+      // mirroring a real browser refresh. This mints a fresh substrate at
+      // DEFAULT_INCARNATION for "shared-doc", independent of session 1's.
+      const aliceSession2 = createExchange({
+        id: "alice",
+        transports: [createBridgeTransport({ transportId: "alice-2", bridge })],
+      })
+      const docA2 = aliceSession2.get("shared-doc", TestDoc)
+      await drain()
+
+      // The restarted writer produces new state.
+      batch(docA2, d => {
+        d.title.set("from session 2")
+        d.count.set(2)
+      })
+      await drain()
+
+      // Bob must receive it: "concurrent" version comparison (cross-incarnation)
+      // → gap → entirety fallback → canReset epoch-boundary accept → merge with
+      // incarnation adoption → subsequent comparisons match.
+      await sync(docB).waitForSync()
+      expect(docB.title()).toBe("from session 2")
+      expect(docB.count()).toBe(2)
+
+      // Further writes from session 2 continue to sync normally — proving the
+      // adopted incarnation is stable, not a one-shot fluke.
+      batch(docA2, d => d.count.set(3))
+      await drain()
+      await sync(docB).waitForSync()
+      expect(docB.count()).toBe(3)
     })
   })
 })

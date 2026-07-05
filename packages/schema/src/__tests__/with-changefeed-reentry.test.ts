@@ -24,7 +24,7 @@ import {
 } from "../index.js"
 import {
   createPlainSubstrate,
-  plainVersionStrategy,
+  createPlainVersionStrategy,
 } from "../substrates/plain.js"
 
 function buildPlainDoc<S extends ReturnType<typeof Schema.struct>>(
@@ -170,8 +170,14 @@ describe("with-changefeed: cross-doc cascade with shared lease", () => {
     const schemaA = Schema.struct({ v: Schema.number() })
     const schemaB = Schema.struct({ v: Schema.number() })
 
-    const substrateA = createPlainSubstrate({ v: 0 }, plainVersionStrategy)
-    const substrateB = createPlainSubstrate({ v: 0 }, plainVersionStrategy)
+    const substrateA = createPlainSubstrate(
+      { v: 0 },
+      createPlainVersionStrategy("testA").strategy,
+    )
+    const substrateB = createPlainSubstrate(
+      { v: 0 },
+      createPlainVersionStrategy("testB").strategy,
+    )
 
     const docA = createRef(schemaA, substrateA, { lease: sharedLease })
     const docB = createRef(schemaB, substrateB, { lease: sharedLease })

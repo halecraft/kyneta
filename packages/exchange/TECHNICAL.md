@@ -64,7 +64,7 @@ Imported by applications to construct the top-level sync graph; by `@kyneta/reac
 | `ready` latch | Monotonic doc-level readiness — `sync(doc).ready` flips `true` on first reconciliation (`synced` or `vacant`) and never regresses. Backed by the `reconciledIdentities` accumulator. | `PeerSyncState[]` (volatile); a web `readyState` (connection lifecycle) |
 | `present` / `interest` / `offer` / `dismiss` / `vacant` | The five sync messages from `@kyneta/transport`. `present` carries `syncMode: SyncMode` per doc entry; `vacant` is the terminal negative ack to interest. | Lifecycle messages (`establish`, `depart`) |
 | Departure | A peer leaving the sync graph. Explicit (`depart` message), channel-drop + expired grace timer, or `destroy()` on a local doc. | Disconnection — channel drop without grace-timer expiry is *disconnection*, not departure |
-| Epoch boundary | A merge that discards local state and adopts an incoming entirety — triggered when a remote peer advances past our version via `advance(to)` / compaction. Gated by `Policy.canReset`. | `reset` on a durable log |
+| Epoch boundary | A merge that discards local state and adopts an incoming entirety — triggered when a remote peer advances past our version via `advance(to)` / compaction, **or** when a `PlainVersion` incarnation mismatch (writer restart with no persisted store) makes the versions `"concurrent"`. Gated by `Policy.canReset`. | `reset` on a durable log |
 | `Line` | A reliable bidirectional message stream between two peers, implemented as two authoritative documents (one per direction) with automatic seqno + ack pruning. | A socket, a channel, a queue |
 | `LineProtocol` | The reified schema pair + topic from `Line.protocol(opts)`. Exposes `sender(peerId)`, `claimReceiver(peerId)`, `manager(peerId)` (client), and `listen(onReceive)` (server). | `Line` — `LineProtocol` *creates* `Line` capabilities |
 | `persistentPeerId` | Browser-only helper: assigns each tab a unique `peerId` that survives reload, via a `localStorage` CAS-based lease protocol. | A cookie, a UUID generator |
@@ -280,6 +280,12 @@ Bidirectional streams in component-based UI frameworks (like React) follow a Com
 ### Lifecycle
 
 Each capability handle's `close()` decrements the reference count. The underlying documents and policies are only torn down when the count reaches 0. `manager.destroy()` forces the count to 0 and performs permanent teardown.
+
+### Writer restarts and incarnation
+
+`Line`'s outbox/inbox documents are ordinary `json.bind()` (`SYNC_AUTHORITATIVE`) docs, so they're backed by `PlainVersion` — which carries an `incarnation` (see `@kyneta/schema`'s [`PlainVersion`](../schema/TECHNICAL.md#plainversion)). A writer that restarts with no persisted store (e.g. a browser refresh with the same `peerId`) mints a fresh incarnation, which compares as `"concurrent"` against a peer's cached version from the writer's previous incarnation — triggering resync via the existing epoch-boundary path (see [Compaction and epoch boundaries](#compaction-and-epoch-boundaries)) rather than being silently misclassified as stale. This is a `PlainVersion`-internal mechanism; `Line` and the sync layer above it require no changes to benefit from it.
+
+**Out of scope for this mechanism:** `Line`'s own per-`Exchange` registry caches a `Line` instance (and its in-memory sequence counters) keyed by `(remotePeerId, topic)`. That registry does not currently tear down or reset a cached `Line` across a peer's disconnect/reconnect — a separate, lower-level lifecycle gap tracked independently of `PlainVersion`'s incarnation mechanism.
 
 ---
 
@@ -740,6 +746,8 @@ Source: `src/sync-program.ts` → `handleOffer`, `governance.ts` → `canReset`.
 
 CRDT state grows monotonically. Eventually peers compact — discarding history ops and snapshotting current state. A post-compaction `exportSince(oldVersion)` may return an entirety payload rather than a delta, because the substrate no longer retains the history needed to compute the delta.
 
+A second, independent trigger produces the same `offer { payload: { kind: "entirety" } }` shape: for `SYNC_AUTHORITATIVE` (`json.bind()`) docs, a writer that restarts with no persisted store mints a fresh `PlainVersion` incarnation (see `@kyneta/schema`'s [`PlainVersion`](../schema/TECHNICAL.md#plainversion)). The receiver's cached version belongs to the writer's *previous* incarnation, so the comparison returns `"concurrent"` rather than `"behind"`/`"ahead"` — the sync program's existing gap-detection falls back to `exportSince` returning `null` → `exportEntirety()`, arriving at the exact same "entirety for a doc with existing local state" situation compaction produces. Same trigger (`entirety-after-sync`), same `canReset` gate, different root cause (identity discontinuity instead of history truncation).
+
 When the receiver encounters an entirety for a doc that already has local state, two things can happen:
 
 1. **Accept the reset.** Discard local state, adopt the incoming entirety. This is safe if the receiver's state was already ahead of compaction (all its ops are already in the sender's snapshot).
@@ -747,7 +755,7 @@ When the receiver encounters an entirety for a doc that already has local state,
 
 `Policy.canReset(docId, peer)` is the gate. It defaults to `true` (accept) for all sync modes. Applications that need to reject resets for specific docs or peers register a `canReset` policy.
 
-For durability guarantees, use the `cohort` predicate to prevent compaction past critical peers — this is strictly better than receiver-side rejection, which causes permanent divergence with no built-in reconciliation path. The cohort prevents the situation from arising: `Exchange.leastCommonVersion(docId)` computes the LCV over cohort members only, so `compact()` never advances past a cohort member's confirmed version. The default cohort (no policy) includes all synced peers, preserving backward compatibility.
+For durability guarantees, use the `cohort` predicate to prevent compaction past critical peers — this is strictly better than receiver-side rejection, which causes permanent divergence with no built-in reconciliation path. The cohort prevents the situation from arising: `Exchange.leastCommonVersion(docId)` computes the LCV over cohort members only, so `compact()` never advances past a cohort member's confirmed version. The default cohort (no policy) includes all synced peers, preserving backward compatibility. The cohort predicate does not help with the incarnation-driven trigger above — a writer restart with no persisted store is an identity discontinuity, not a version the cohort could have been ahead of.
 
 ### What an epoch boundary is NOT
 
