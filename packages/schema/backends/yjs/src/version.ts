@@ -19,6 +19,7 @@
 import type { Version } from "@kyneta/schema"
 import {
   base64ToUint8Array,
+  DEFAULT_EPOCH,
   uint8ArrayToBase64,
   versionVectorCompare,
   versionVectorMeet,
@@ -115,6 +116,16 @@ export class YjsVersion implements Version {
     this.sv = sv
     // If no snapshot provided, use sv as snapshot (backward compat / SV-only).
     this.snapshotBytes = snapshotBytes ?? sv
+  }
+
+  /**
+   * Yjs is a collaborative (CRDT) substrate — epochs are never minted
+   * automatically. `epoch` is always `DEFAULT_EPOCH` for the document's
+   * lifetime; new epochs require an explicit developer-invoked migration
+   * primitive (T3 migrations, not implemented here).
+   */
+  get epoch(): string {
+    return DEFAULT_EPOCH
   }
 
   /**

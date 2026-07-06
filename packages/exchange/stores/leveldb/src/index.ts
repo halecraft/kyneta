@@ -63,13 +63,19 @@ const STORE_FORMAT_VERSION: StoreFormatVersion = { major: 1, minor: 0 }
 //   bit 1: encoding         (0 = json, 1 = binary) — entry records only
 //   bit 2: data type        (0 = string, 1 = Uint8Array) — entry records only
 //   bit 3: record kind      (0 = entry, 1 = meta)
+//   bit 4: epoch present    (0 = absent/legacy, 1 = epoch segment follows version) — entry records only
 //   bit 7: future-format    (0 = current format, reserved)
 //
 // Meta records (bit 3 = 1):
 //   [1 byte flags] [remaining: JSON-encoded StoreMeta]
 //
 // Entry records (bit 3 = 0):
-//   [1 byte flags] [4 bytes version length BE] [N bytes version UTF-8] [remaining: payload data]
+//   [1 byte flags] [4 bytes version length BE] [N bytes version UTF-8]
+//   [4 bytes epoch length BE] [M bytes epoch UTF-8]   (only present if bit 4 is set)
+//   [remaining: payload data]
+//
+// The epoch segment is additive and gated by bit 4 so pre-epoch records
+// (bit 4 = 0) decode unchanged — no migration needed for existing stores.
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
@@ -93,18 +99,33 @@ export function encodeStoreRecord(record: StoreRecord): Uint8Array {
   const isDataBinary = payload.data instanceof Uint8Array
   if (isDataBinary) flags |= 0x04
 
+  const hasEpoch = payload.epoch !== undefined
+  if (hasEpoch) flags |= 0x10
+
   const versionBytes = encoder.encode(version)
+  const epochBytes = hasEpoch ? encoder.encode(payload.epoch) : undefined
   const dataBytes = isDataBinary
     ? (payload.data as Uint8Array)
     : encoder.encode(payload.data as string)
 
-  const buf = new Uint8Array(1 + 4 + versionBytes.length + dataBytes.length)
+  const epochSegmentLength = epochBytes ? 4 + epochBytes.length : 0
+  const buf = new Uint8Array(
+    1 + 4 + versionBytes.length + epochSegmentLength + dataBytes.length,
+  )
   const view = new DataView(buf.buffer)
 
   buf[0] = flags
   view.setUint32(1, versionBytes.length, false) // big-endian
   buf.set(versionBytes, 5)
-  buf.set(dataBytes, 5 + versionBytes.length)
+
+  let offset = 5 + versionBytes.length
+  if (epochBytes) {
+    view.setUint32(offset, epochBytes.length, false)
+    buf.set(epochBytes, offset + 4)
+    offset += 4 + epochBytes.length
+  }
+
+  buf.set(dataBytes, offset)
 
   return buf
 }
@@ -132,12 +153,20 @@ export function decodeStoreRecord(bytes: Uint8Array): StoreRecord {
   const kind = (flags & 0x01) !== 0 ? "since" : "entirety"
   const encoding = (flags & 0x02) !== 0 ? "binary" : "json"
   const isDataBinary = (flags & 0x04) !== 0
+  const hasEpoch = (flags & 0x10) !== 0
 
   const versionLen = view.getUint32(1, false)
   const version = decoder.decode(bytes.subarray(5, 5 + versionLen))
 
-  const dataStart = 5 + versionLen
-  const rawData = bytes.subarray(dataStart)
+  let offset = 5 + versionLen
+  let epoch: string | undefined
+  if (hasEpoch) {
+    const epochLen = view.getUint32(offset, false)
+    epoch = decoder.decode(bytes.subarray(offset + 4, offset + 4 + epochLen))
+    offset += 4 + epochLen
+  }
+
+  const rawData = bytes.subarray(offset)
 
   const data: string | Uint8Array = isDataBinary
     ? new Uint8Array(rawData)
@@ -145,7 +174,12 @@ export function decodeStoreRecord(bytes: Uint8Array): StoreRecord {
 
   return {
     kind: "entry",
-    payload: { kind, encoding, data },
+    payload: {
+      kind,
+      encoding,
+      data,
+      ...(epoch !== undefined ? { epoch } : {}),
+    },
     version,
   }
 }

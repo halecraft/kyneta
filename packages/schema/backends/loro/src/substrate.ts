@@ -41,6 +41,7 @@ import {
   type BatchOptions,
   buildWritableContext,
   type ChangeBase,
+  DEFAULT_EPOCH,
   DEVTOOLS_HISTORY,
   type DevtoolsHistory,
   type DevtoolsHistorySummary,
@@ -542,6 +543,7 @@ export function createLoroSubstrate(
         kind: "entirety",
         encoding: "binary",
         data: doc.export({ mode: "snapshot" }),
+        epoch: DEFAULT_EPOCH,
       }
     },
 
@@ -577,6 +579,20 @@ export function createLoroSubstrate(
       }
       // That's it — the doc.subscribe() handler bridges events to the
       // changefeed via executeBatch with `replay: true`.
+    },
+
+    resetFromEntirety(
+      payload: SubstratePayload,
+      _remoteVersion: Version,
+      options?: BatchOptions,
+    ): void {
+      // Loro never mints a new epoch automatically (see LoroVersion.epoch),
+      // so an epoch boundary never arises for this substrate today — this
+      // exists to satisfy the Substrate contract. CRDT merge (doc.import)
+      // is a idempotent, commutative set union; unlike Plain, there is no
+      // "discard local history" step to perform — union is always the
+      // correct absorption for an oplog CRDT, epoch boundary or not.
+      substrate.merge(payload, options)
     },
   }
 
@@ -726,6 +742,7 @@ export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
         kind: "entirety",
         encoding: "binary",
         data: currentDoc.export({ mode: "snapshot" }),
+        epoch: DEFAULT_EPOCH,
       }
     },
 
@@ -755,6 +772,17 @@ export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
         )
       }
       currentDoc.import(payload.data)
+    },
+
+    resetFromEntirety(
+      payload: SubstratePayload,
+      _remoteVersion: Version,
+      options?: BatchOptions,
+    ): void {
+      // See createLoroSubstrate's resetFromEntirety — CRDT merge (set
+      // union via doc.import) is always the correct absorption, epoch
+      // boundary or not, so this delegates to the routine merge path.
+      this.merge(payload, options)
     },
   } as Replica<LoroVersion>
 }

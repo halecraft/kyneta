@@ -24,8 +24,8 @@ import {
   createPlainReplica,
   createPlainSubstrate,
   createPlainVersionStrategy,
-  DEFAULT_INCARNATION,
-  LEGACY_INCARNATION,
+  DEFAULT_EPOCH,
+  LEGACY_EPOCH,
   parsePlainPayload,
 } from "../substrates/plain.js"
 
@@ -91,7 +91,7 @@ describe("PlainVersion", () => {
     expect(f5.compare(f1)).toBe("ahead")
   })
 
-  it("compare() never returns 'concurrent' for the same incarnation", () => {
+  it("compare() never returns 'concurrent' for the same epoch", () => {
     // Plain substrates have a total order — exhaustively check
     // a range of values to verify "concurrent" never appears.
     const values = [0, 1, 2, 5, 10, 100]
@@ -108,7 +108,7 @@ describe("PlainVersion", () => {
     }
   })
 
-  it("compare() returns 'concurrent' across two REAL incarnations, both directions", () => {
+  it("compare() returns 'concurrent' across two REAL epochs, both directions (safety fallback)", () => {
     const a1 = new PlainVersion(1, "inc-a")
     const a5 = new PlainVersion(5, "inc-a")
     const b1 = new PlainVersion(1, "inc-b")
@@ -120,9 +120,9 @@ describe("PlainVersion", () => {
     expect(a1.compare(b5)).toBe("concurrent")
   })
 
-  it("compare() is a total order when both sides are DEFAULT_INCARNATION", () => {
-    const d0 = new PlainVersion(0, DEFAULT_INCARNATION)
-    const d1 = new PlainVersion(1, DEFAULT_INCARNATION)
+  it("compare() is a total order when both sides are DEFAULT_EPOCH", () => {
+    const d0 = new PlainVersion(0, DEFAULT_EPOCH)
+    const d1 = new PlainVersion(1, DEFAULT_EPOCH)
 
     expect(d0.compare(d1)).toBe("behind")
     expect(d1.compare(d0)).toBe("ahead")
@@ -130,8 +130,8 @@ describe("PlainVersion", () => {
   })
 
   it("compare(): DEFAULT is never ahead of REAL, REAL is never behind DEFAULT", () => {
-    const def0 = new PlainVersion(0, DEFAULT_INCARNATION)
-    const def5 = new PlainVersion(5, DEFAULT_INCARNATION)
+    const def0 = new PlainVersion(0, DEFAULT_EPOCH)
+    const def5 = new PlainVersion(5, DEFAULT_EPOCH)
     const real1 = new PlainVersion(1, "inc-real")
     const real5 = new PlainVersion(5, "inc-real")
 
@@ -162,13 +162,13 @@ describe("PlainVersion", () => {
   it("parseVersion handles the legacy bare-integer format", () => {
     const v = plainSubstrateFactory.parseVersion("5")
     expect(v.value).toBe(5)
-    expect(v.incarnation).toBe(LEGACY_INCARNATION)
+    expect(v.epoch).toBe(LEGACY_EPOCH)
   })
 
-  it("parseVersion handles the new 'incarnation:value' format", () => {
+  it("parseVersion handles the new 'epoch:value' format", () => {
     const v = plainSubstrateFactory.parseVersion("abc123:5")
     expect(v.value).toBe(5)
-    expect(v.incarnation).toBe("abc123")
+    expect(v.epoch).toBe("abc123")
   })
 
   it("parseVersion rejects invalid input", () => {
@@ -229,7 +229,7 @@ describe("PlainVersion.meet()", () => {
     }
   })
 
-  it("cross-incarnation meet produces a deterministic zero at the lexicographically-min incarnation", () => {
+  it("cross-epoch meet produces a deterministic zero at the lexicographically-min epoch", () => {
     const a = new PlainVersion(5, "inc-a")
     const b = new PlainVersion(3, "inc-b")
 
@@ -238,22 +238,22 @@ describe("PlainVersion.meet()", () => {
 
     expect(ab.value).toBe(0)
     expect(ba.value).toBe(0)
-    // Commutative: both orders pick the same (lexicographically smaller) incarnation.
-    expect(ab.incarnation).toBe("inc-a")
-    expect(ba.incarnation).toBe("inc-a")
+    // Commutative: both orders pick the same (lexicographically smaller) epoch.
+    expect(ab.epoch).toBe("inc-a")
+    expect(ba.epoch).toBe("inc-a")
   })
 
-  it("DEFAULT-vs-REAL meet subsumes at the REAL incarnation's root", () => {
-    const def = new PlainVersion(3, DEFAULT_INCARNATION)
+  it("DEFAULT-vs-REAL meet subsumes at the REAL epoch's root", () => {
+    const def = new PlainVersion(3, DEFAULT_EPOCH)
     const real = new PlainVersion(7, "inc-real")
 
     const defReal = def.meet(real) as PlainVersion
     const realDef = real.meet(def) as PlainVersion
 
     expect(defReal.value).toBe(0)
-    expect(defReal.incarnation).toBe("inc-real")
+    expect(defReal.epoch).toBe("inc-real")
     expect(realDef.value).toBe(0)
-    expect(realDef.incarnation).toBe("inc-real")
+    expect(realDef.epoch).toBe("inc-real")
   })
 })
 
@@ -262,65 +262,64 @@ describe("PlainVersion.meet()", () => {
 // ===========================================================================
 
 describe("createPlainVersionStrategy", () => {
-  it("current(flushCount) embeds the strategy's incarnation", () => {
-    // A non-DEFAULT initial incarnation never lazy-mints — current() just
+  it("current(flushCount) embeds the strategy's epoch", () => {
+    // A non-DEFAULT initial epoch never lazy-mints — current() just
     // stamps every produced version with it, regardless of flushCount.
     const { strategy } = createPlainVersionStrategy("inc-fixed")
     const v1 = strategy.current(1)
     const v5 = strategy.current(5)
-    expect(v1.incarnation).toBe("inc-fixed")
+    expect(v1.epoch).toBe("inc-fixed")
     expect(v1.value).toBe(1)
-    expect(v5.incarnation).toBe("inc-fixed")
+    expect(v5.epoch).toBe("inc-fixed")
     expect(v5.value).toBe(5)
   })
 
-  it("logOffset returns null for a since-version from a different REAL incarnation", () => {
+  it("logOffset returns null for a since-version from a different REAL epoch", () => {
     const { strategy } = createPlainVersionStrategy("inc-a")
-    // Force past DEFAULT so the strategy's incarnation is REAL for this test's
-    // purposes — "inc-a" is already REAL (not DEFAULT_INCARNATION).
+    // Force past DEFAULT so the strategy's epoch is REAL for this test's
+    // purposes — "inc-a" is already REAL (not DEFAULT_EPOCH).
     const since = new PlainVersion(2, "inc-b")
     expect(strategy.logOffset(since)).toBeNull()
   })
 
-  it("logOffset returns the value for a same-incarnation since-version", () => {
+  it("logOffset returns the value for a same-epoch since-version", () => {
     const { strategy } = createPlainVersionStrategy("inc-a")
     const since = new PlainVersion(2, "inc-a")
     expect(strategy.logOffset(since)).toBe(2)
   })
 
-  it("logOffset treats DEFAULT_INCARNATION as a universal prefix regardless of current incarnation", () => {
+  it("logOffset treats DEFAULT_EPOCH as a universal prefix regardless of current epoch", () => {
     const { strategy } = createPlainVersionStrategy("inc-a")
-    const since = new PlainVersion(3, DEFAULT_INCARNATION)
+    const since = new PlainVersion(3, DEFAULT_EPOCH)
     expect(strategy.logOffset(since)).toBe(3)
   })
 
-  it("adoptIncarnation updates subsequent current()/zero output", () => {
-    const { strategy, adoptIncarnation } = createPlainVersionStrategy("inc-a")
-    expect(strategy.zero.incarnation).toBe("inc-a")
+  it("adoptEpoch updates subsequent current()/zero output", () => {
+    const { strategy, adoptEpoch } = createPlainVersionStrategy("inc-a")
+    expect(strategy.zero.epoch).toBe("inc-a")
 
-    adoptIncarnation("inc-b")
+    adoptEpoch("inc-b")
 
-    expect(strategy.zero.incarnation).toBe("inc-b")
-    expect(strategy.current(5).incarnation).toBe("inc-b")
+    expect(strategy.zero.epoch).toBe("inc-b")
+    expect(strategy.current(5).epoch).toBe("inc-b")
   })
 
-  it("getIncarnation reflects the live incarnation, including after lazy-mint", () => {
-    const { strategy, getIncarnation } =
-      createPlainVersionStrategy(DEFAULT_INCARNATION)
-    expect(getIncarnation()).toBe(DEFAULT_INCARNATION)
+  it("getEpoch reflects the live epoch, including after lazy-mint", () => {
+    const { strategy, getEpoch } = createPlainVersionStrategy(DEFAULT_EPOCH)
+    expect(getEpoch()).toBe(DEFAULT_EPOCH)
 
     // flushCount=1 is init-ops-only — stays DEFAULT.
     strategy.current(1)
-    expect(getIncarnation()).toBe(DEFAULT_INCARNATION)
+    expect(getEpoch()).toBe(DEFAULT_EPOCH)
 
-    // flushCount=2 is the first real write — lazily mints a REAL incarnation.
+    // flushCount=2 is the first real write — lazily mints a REAL epoch.
     strategy.current(2)
-    const minted = getIncarnation()
-    expect(minted).not.toBe(DEFAULT_INCARNATION)
+    const minted = getEpoch()
+    expect(minted).not.toBe(DEFAULT_EPOCH)
 
-    // The minted incarnation is stable across subsequent flushes.
+    // The minted epoch is stable across subsequent flushes.
     strategy.current(3)
-    expect(getIncarnation()).toBe(minted)
+    expect(getEpoch()).toBe(minted)
   })
 })
 
@@ -329,31 +328,31 @@ describe("createPlainVersionStrategy", () => {
 // ===========================================================================
 
 describe("parsePlainPayload", () => {
-  it("extracts { incarnation, content } from the new entirety envelope", () => {
+  it("extracts { epoch, content } from the new entirety envelope", () => {
     const data = JSON.stringify({ i: "inc-a", s: { title: "Hi" } })
-    const { incarnation, content } = parsePlainPayload(data)
-    expect(incarnation).toBe("inc-a")
+    const { epoch, content } = parsePlainPayload(data)
+    expect(epoch).toBe("inc-a")
     expect(content).toEqual({ title: "Hi" })
   })
 
-  it("extracts { incarnation, content } from the new since (batched-ops) envelope", () => {
+  it("extracts { epoch, content } from the new since (batched-ops) envelope", () => {
     const data = JSON.stringify({ i: "inc-a", b: [[{ foo: "bar" }]] })
-    const { incarnation, content } = parsePlainPayload(data)
-    expect(incarnation).toBe("inc-a")
+    const { epoch, content } = parsePlainPayload(data)
+    expect(epoch).toBe("inc-a")
     expect(content).toEqual([[{ foo: "bar" }]])
   })
 
-  it("returns { incarnation: undefined, content } for a legacy bare-object payload", () => {
+  it("returns { epoch: undefined, content } for a legacy bare-object payload", () => {
     const data = JSON.stringify({ title: "Hi" })
-    const { incarnation, content } = parsePlainPayload(data)
-    expect(incarnation).toBeUndefined()
+    const { epoch, content } = parsePlainPayload(data)
+    expect(epoch).toBeUndefined()
     expect(content).toEqual({ title: "Hi" })
   })
 
-  it("returns { incarnation: undefined, content } for a legacy bare-array payload", () => {
+  it("returns { epoch: undefined, content } for a legacy bare-array payload", () => {
     const data = JSON.stringify([[{ foo: "bar" }]])
-    const { incarnation, content } = parsePlainPayload(data)
-    expect(incarnation).toBeUndefined()
+    const { epoch, content } = parsePlainPayload(data)
+    expect(epoch).toBeUndefined()
     expect(content).toEqual([[{ foo: "bar" }]])
   })
 })
@@ -392,7 +391,7 @@ describe("PlainSubstrate lifecycle", () => {
     const f = substrate.version()
     expect(f.value).toBe(1)
     expect(f.serialize()).toBe(
-      `${(substrate.version() as PlainVersion).incarnation}:1`,
+      `${(substrate.version() as PlainVersion).epoch}:1`,
     )
   })
 
@@ -461,7 +460,7 @@ describe("PlainSubstrate lifecycle", () => {
       const payload = substrate.exportSince(
         new PlainVersion(
           prevVersion,
-          (substrate.version() as PlainVersion).incarnation,
+          (substrate.version() as PlainVersion).epoch,
         ),
       )
       if (payload) {
@@ -516,7 +515,7 @@ describe("PlainSubstrate lifecycle", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     const futureVersion = new PlainVersion(
       999,
-      (substrate.version() as PlainVersion).incarnation,
+      (substrate.version() as PlainVersion).epoch,
     )
     expect(substrate.exportSince(futureVersion)).toBeNull()
   })
@@ -874,7 +873,7 @@ describe("merge with entirety payload (PlainReplica)", () => {
     batch(doc, d => d.count.increment(5))
 
     const since = source.exportSince(
-      new PlainVersion(0, (source.version() as PlainVersion).incarnation),
+      new PlainVersion(0, (source.version() as PlainVersion).epoch),
     ) as any
     expect(since.kind).toBe("since")
     replica.merge(since)
@@ -943,19 +942,16 @@ describe("Epoch boundaries", () => {
 
     // Export from the new substrate works
     const snapshot2 = substrateB.exportEntirety()
-    expect((JSON.parse(snapshot2.data as string) as any).s.title).toBe(
-      "Source!",
-    )
+    expect((JSON.parse(snapshot2.data as string) as any).title).toBe("Source!")
 
     // Export delta since the snapshot epoch version
     const delta = substrateB.exportSince(
       new PlainVersion(
         vAfterSnapshot,
-        (substrateB.version() as PlainVersion).incarnation,
+        (substrateB.version() as PlainVersion).epoch,
       ),
     ) as any
-    const batches = ((JSON.parse(delta.data as string) as any).b ||
-      JSON.parse(delta.data as string)) as Op[][]
+    const batches = JSON.parse(delta.data as string) as Op[][]
     const ops = batches.flat()
     expect(ops.length).toBe(1)
     expect(ops[0]?.change.type).toBe("text")
@@ -1042,7 +1038,7 @@ describe("PlainReplica.advance()", () => {
 
     // Merge source ops into replica
     const delta = source.exportSince(
-      new PlainVersion(0, (source.version() as PlainVersion).incarnation),
+      new PlainVersion(0, (source.version() as PlainVersion).epoch),
     ) as any
     replica.merge(delta)
 
@@ -1059,7 +1055,7 @@ describe("PlainReplica.advance()", () => {
     // exportSince(v0) returns null — history is gone
     expect(
       replica.exportSince(
-        new PlainVersion(0, (replica.version() as PlainVersion).incarnation),
+        new PlainVersion(0, (replica.version() as PlainVersion).epoch),
       ),
     ).toBeNull()
 
@@ -1085,7 +1081,7 @@ describe("PlainReplica.advance()", () => {
 
     // Merge all ops into replica
     const delta = source.exportSince(
-      new PlainVersion(0, (source.version() as PlainVersion).incarnation),
+      new PlainVersion(0, (source.version() as PlainVersion).epoch),
     ) as any
     replica.merge(delta)
     expect(replica.version().value).toBe(v4.value)
@@ -1099,7 +1095,7 @@ describe("PlainReplica.advance()", () => {
     // exportSince(v0) = null (behind base)
     expect(
       replica.exportSince(
-        new PlainVersion(0, (replica.version() as PlainVersion).incarnation),
+        new PlainVersion(0, (replica.version() as PlainVersion).epoch),
       ),
     ).toBeNull()
     // exportSince(v2) = remaining ops
@@ -1123,7 +1119,7 @@ describe("PlainReplica.advance()", () => {
     const v2 = source.version()
 
     const delta1 = source.exportSince(
-      new PlainVersion(0, (source.version() as PlainVersion).incarnation),
+      new PlainVersion(0, (source.version() as PlainVersion).epoch),
     ) as any
     replica.merge(delta1)
     replica.advance(v2)
@@ -1149,7 +1145,7 @@ describe("PlainReplica.advance()", () => {
     const replica = plainReplicaFactory.createEmpty()
     expect(() =>
       replica.advance(
-        new PlainVersion(999, (replica.version() as PlainVersion).incarnation),
+        new PlainVersion(999, (replica.version() as PlainVersion).epoch),
       ),
     ).toThrow()
   })
@@ -1166,14 +1162,14 @@ describe("PlainReplica.advance()", () => {
 
     replica.merge(
       source.exportSince(
-        new PlainVersion(0, (source.version() as PlainVersion).incarnation),
+        new PlainVersion(0, (source.version() as PlainVersion).epoch),
       ) as any,
     )
 
     // Before advance, exportSince(v0) works
     expect(
       replica.exportSince(
-        new PlainVersion(0, (replica.version() as PlainVersion).incarnation),
+        new PlainVersion(0, (replica.version() as PlainVersion).epoch),
       ),
     ).not.toBeNull()
 
@@ -1183,12 +1179,12 @@ describe("PlainReplica.advance()", () => {
     // After advance, v0 is behind base → null
     expect(
       replica.exportSince(
-        new PlainVersion(0, (replica.version() as PlainVersion).incarnation),
+        new PlainVersion(0, (replica.version() as PlainVersion).epoch),
       ),
     ).toBeNull()
     expect(
       replica.exportSince(
-        new PlainVersion(1, (replica.version() as PlainVersion).incarnation),
+        new PlainVersion(1, (replica.version() as PlainVersion).epoch),
       ),
     ).toBeNull()
 
@@ -1212,7 +1208,7 @@ describe("PlainReplica.advance()", () => {
 
     replica.merge(
       source.exportSince(
-        new PlainVersion(0, (source.version() as PlainVersion).incarnation),
+        new PlainVersion(0, (source.version() as PlainVersion).epoch),
       ) as any,
     )
     replica.advance(replica.version())
@@ -1254,92 +1250,104 @@ describe("PlainSubstrate.advance()", () => {
 })
 
 // ---------------------------------------------------------------------------
-// incarnation-aware merge — cross-lineage adoption via self-sufficient payload
+// epoch-aware merge / resetFromEntirety — cross-lineage adoption
 // ---------------------------------------------------------------------------
 
 // Helper: build a substrate whose strategy is seeded with a specific,
-// already-REAL incarnation (bypassing the DEFAULT lazy-mint path) so tests
-// can construct a known cross-incarnation scenario deterministically.
-function createSubstrateWithIncarnation(incarnation: string) {
-  const { strategy, adoptIncarnation, getIncarnation } =
-    createPlainVersionStrategy(incarnation)
+// already-REAL epoch (bypassing the DEFAULT lazy-mint path) so tests
+// can construct a known cross-epoch scenario deterministically.
+function createSubstrateWithEpoch(epoch: string) {
+  const { strategy, adoptEpoch, getEpoch } = createPlainVersionStrategy(epoch)
   const doc = { ...(Zero.structural(TestSchema) as object) }
-  const substrate = createPlainSubstrate(
-    doc,
-    strategy,
-    adoptIncarnation,
-    getIncarnation,
-  )
+  const substrate = createPlainSubstrate(doc, strategy, adoptEpoch, getEpoch)
   return substrate
 }
 
-describe("incarnation-aware merge", () => {
-  it("exportEntirety()'s payload carries an 'i' field once the substrate has a REAL incarnation", () => {
-    const source = createSubstrateWithIncarnation("inc-source")
+describe("epoch-aware merge", () => {
+  it("exportEntirety()'s payload carries the epoch once the substrate has a REAL epoch", () => {
+    const source = createSubstrateWithEpoch("inc-source")
     const doc = interpretSubstrate(source)
     batch(doc, d => d.title.insert(0, "Hello"))
 
     const payload = source.exportEntirety()
+    expect(payload.epoch).toBe("inc-source")
     const parsed = JSON.parse(payload.data as string)
-    expect(parsed.i).toBe("inc-source")
-    expect(parsed.s.title).toBe("Hello")
+    expect(parsed.title).toBe("Hello")
   })
 
-  it("exportSince()'s payload carries an 'i' field once the substrate has a REAL incarnation", () => {
-    const source = createSubstrateWithIncarnation("inc-source")
+  it("exportSince()'s payload carries the epoch once the substrate has a REAL epoch", () => {
+    const source = createSubstrateWithEpoch("inc-source")
     const doc = interpretSubstrate(source)
     const v0 = source.version()
     batch(doc, d => d.title.insert(0, "Hello"))
 
     const payload = source.exportSince(v0) as SubstratePayload
+    expect(payload.epoch).toBe("inc-source")
     const parsed = JSON.parse(payload.data as string)
-    expect(parsed.i).toBe("inc-source")
-    expect(parsed.b).toBeDefined()
+    expect(Array.isArray(parsed)).toBe(true)
   })
 
-  it("merging an entirety from a different REAL incarnation into a DEFAULT target adopts the incoming incarnation", () => {
-    const source = createSubstrateWithIncarnation("inc-source")
+  it("merging an entirety from a different REAL epoch into a DEFAULT target adopts the incoming epoch", () => {
+    const source = createSubstrateWithEpoch("inc-source")
     const sourceDoc = interpretSubstrate(source)
     batch(sourceDoc, d => d.title.insert(0, "World"))
 
     const target = plainReplicaFactory.createEmpty()
-    expect((target.version() as PlainVersion).incarnation).toBe(
-      DEFAULT_INCARNATION,
-    )
+    expect((target.version() as PlainVersion).epoch).toBe(DEFAULT_EPOCH)
 
     target.merge(source.exportEntirety())
 
-    expect((target.version() as PlainVersion).incarnation).toBe("inc-source")
+    expect((target.version() as PlainVersion).epoch).toBe("inc-source")
     const snap = JSON.parse(target.exportEntirety().data as string)
-    expect(snap.s.title).toBe("World")
+    expect(snap.title).toBe("World")
   })
 
-  it("merging an entirety from a different REAL incarnation into a target with its own REAL incarnation also adopts (epoch boundary reset)", () => {
-    const source = createSubstrateWithIncarnation("inc-source")
+  it("merging an entirety from a different REAL epoch into a target with its own REAL epoch does NOT adopt (merge() is same-epoch-only)", () => {
+    const source = createSubstrateWithEpoch("inc-source")
     const sourceDoc = interpretSubstrate(source)
     batch(sourceDoc, d => d.title.insert(0, "Fresh"))
 
-    // Target already has its own REAL incarnation from a prior session.
+    // Target already has its own REAL epoch from a prior session.
     const targetHandle = createPlainVersionStrategy("inc-target-old")
     const target = createPlainReplica(
       targetHandle.strategy,
-      targetHandle.adoptIncarnation,
-      targetHandle.getIncarnation,
+      targetHandle.adoptEpoch,
+      targetHandle.getEpoch,
     )
-    expect((target.version() as PlainVersion).incarnation).toBe(
-      "inc-target-old",
-    )
+    expect((target.version() as PlainVersion).epoch).toBe("inc-target-old")
 
-    // An entirety payload (epoch boundary trigger) adopts the new incarnation
-    // even though the target already had a different REAL one.
+    // REAL -> different REAL is a genuine epoch boundary. `merge()` no
+    // longer adopts across epochs — that's `resetFromEntirety`'s job,
+    // invoked exclusively by the Synchronizer's explicit epoch gate.
     target.merge(source.exportEntirety())
 
-    expect((target.version() as PlainVersion).incarnation).toBe("inc-source")
+    expect((target.version() as PlainVersion).epoch).toBe("inc-target-old")
   })
 
-  it("merging a legacy (no-envelope) payload does not change the target's incarnation", () => {
+  it("merging an entirety from a different REAL epoch into a target with its own REAL epoch also adopts (epoch boundary reset)", () => {
+    const source = createSubstrateWithEpoch("inc-source")
+    const sourceDoc = interpretSubstrate(source)
+    batch(sourceDoc, d => d.title.insert(0, "Fresh"))
+
+    // Target already has its own REAL epoch from a prior session.
+    const targetHandle = createPlainVersionStrategy("inc-target-old")
+    const target = createPlainReplica(
+      targetHandle.strategy,
+      targetHandle.adoptEpoch,
+      targetHandle.getEpoch,
+    )
+    expect((target.version() as PlainVersion).epoch).toBe("inc-target-old")
+
+    // `resetFromEntirety` is the epoch-boundary path: it adopts the new
+    // epoch even though the target already had a different REAL one.
+    target.resetFromEntirety(source.exportEntirety(), source.version())
+
+    expect((target.version() as PlainVersion).epoch).toBe("inc-source")
+  })
+
+  it("merging a legacy (no-envelope) payload does not change the target's epoch", () => {
     const target = plainReplicaFactory.createEmpty()
-    const incBefore = (target.version() as PlainVersion).incarnation
+    const epochBefore = (target.version() as PlainVersion).epoch
 
     const legacyPayload: SubstratePayload = {
       kind: "entirety",
@@ -1348,20 +1356,16 @@ describe("incarnation-aware merge", () => {
     }
     target.merge(legacyPayload)
 
-    expect((target.version() as PlainVersion).incarnation).toBe(incBefore)
+    expect((target.version() as PlainVersion).epoch).toBe(epochBefore)
   })
 
-  it("exportSince falls back to entirety (not null) for a cross-REAL-incarnation since-version", () => {
-    const { strategy, adoptIncarnation, getIncarnation } =
+  it("exportSince falls back to entirety (not null) for a cross-REAL-epoch since-version", () => {
+    const { strategy, adoptEpoch, getEpoch } =
       createPlainVersionStrategy("inc-a")
-    const replica = createPlainReplica(
-      strategy,
-      adoptIncarnation,
-      getIncarnation,
-    )
+    const replica = createPlainReplica(strategy, adoptEpoch, getEpoch)
 
-    const crossIncarnationVersion = new PlainVersion(0, "inc-b")
-    const result = replica.exportSince(crossIncarnationVersion)
+    const crossEpochVersion = new PlainVersion(0, "inc-b")
+    const result = replica.exportSince(crossEpochVersion)
     expect(result).not.toBeNull()
     expect(result?.kind).toBe("entirety")
   })

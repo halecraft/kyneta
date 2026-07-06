@@ -353,7 +353,9 @@ For substrates whose `V` is a map of `PeerId → number` (Lamport-style vectors)
 
 Both are pure. Loro and Yjs substrates use these directly for their Lamport vectors; substrates with different version shapes (wall clock, Loro's opaque version) implement their own comparison.
 
-`PlainVersion` (the plain substrate's version, below) is **not** a version vector — it's a scalar (a monotonic integer) with an incarnation dimension bolted on for identity, not a per-peer map. `versionVectorMeet`/`versionVectorCompare` are for Loro/Yjs only; `PlainVersion` implements `compare`/`meet` directly.
+`PlainVersion` (the plain substrate's version, below) is **not** a version vector — it's a scalar (a monotonic integer) with an epoch dimension bolted on for identity, not a per-peer map. `versionVectorMeet`/`versionVectorCompare` are for Loro/Yjs only; `PlainVersion` implements `compare`/`meet` directly.
+
+`epoch` (see `Version.epoch`) is orthogonal to the version lattice — it partitions the version space into causal islands. Two versions are only comparable via `compare()`/`meet()` when they share the same epoch; comparing across epochs is meaningless, the same way comparing version vectors from unrelated documents would be. Every `Version` implementation carries an `epoch: string` (Loro/Yjs/TimestampVersion/StateVersion are always `DEFAULT_EPOCH`; `PlainVersion` mints a REAL epoch lazily on first write). The lattice operations themselves never branch on `epoch` — epoch-mismatch detection is a precondition check performed by the Synchronizer *before* `compare()` is invoked, not a case inside it.
 
 ---
 
@@ -1087,7 +1089,7 @@ These are the primitives `step`, `with-changefeed`, and `Position` build on.
 
 Source: `packages/schema/src/substrates/plain.ts`.
 
-The built-in substrate. Stores state as plain JS objects, tracks a monotonic integer version scoped to an incarnation (see `PlainVersion` below), and merges by total-order last-writer-wins within an incarnation. Used for:
+The built-in substrate. Stores state as plain JS objects, tracks a monotonic integer version scoped to an epoch (see `PlainVersion` below), and merges by total-order last-writer-wins within an epoch. Used for:
 
 - The default binding when no CRDT is needed (`Schema.string`, small configs, ephemeral UI state).
 - The LWW variant (`src/substrates/lww.ts` + `src/substrates/timestamp-version.ts`) for wall-clock-ordered ephemeral broadcasts.
@@ -1107,21 +1109,23 @@ Key functions:
 
 ```
 class PlainVersion {
-  constructor(value: number, incarnation: string)
+  constructor(value: number, epoch: string)
   readonly value: number
-  readonly incarnation: string
+  readonly epoch: string
 }
 ```
 
-A monotonic integer (`value`) carrying an `incarnation: string` — **not** a version vector (see [§Version vector algebra](#version-vector-algebra)). `serialize()` produces `"incarnation:value"`; `parseVersion` also accepts legacy bare-integer strings (e.g. `"5"`), which parse as belonging to `LEGACY_INCARNATION`.
+A monotonic integer (`value`) carrying an `epoch: string` — **not** a version vector (see [§Version vector algebra](#version-vector-algebra)). `serialize()` produces `"epoch:value"`; `parseVersion` also accepts legacy bare-integer strings (e.g. `"5"`), which parse as belonging to `LEGACY_EPOCH`.
+
+`epoch` is not a Plain-specific concept — it is a universal property of every `Version` implementation (see [§Version vector algebra](#version-vector-algebra)). Plain is simply the substrate where epochs change during normal operation (lazy-mint on writer restart); CRDT substrates (Loro, Yjs) and the `state` substrate hold a constant `DEFAULT_EPOCH` for their entire lifetime, changing only via an explicit developer-invoked migration primitive (not yet implemented).
 
 `compare()`:
-- Same incarnation → total order on `value` (`"behind" | "equal" | "ahead"`), same as a bare counter.
-- Different incarnations → `"concurrent"`, **unless** one side is `DEFAULT_INCARNATION` (see below), in which case DEFAULT is never reported ahead of REAL and REAL is never reported behind DEFAULT.
+- Same epoch → total order on `value` (`"behind" | "equal" | "ahead"`), same as a bare counter.
+- Different epochs → `"concurrent"` as a safety fallback. This case should not normally be reached: the Synchronizer gates on `Version.epoch` equality *before* calling `compare()`, so cross-epoch pairs are intercepted upstream. `DEFAULT_EPOCH` is handled specially (see below) so the fallback only fires for two different REAL epochs reaching `compare()` directly — e.g. a caller that bypasses the Synchronizer.
 
-`DEFAULT_INCARNATION` is the sentinel every newly created replica starts with — it has no identity yet because the replica contains only schema defaults (init ops). It acts as a *universal prefix*: a version carrying it compares against any REAL incarnation without ever producing a false `"concurrent"` on two independent peers' very first sync. The first real write (`flushCount > 1` in `createPlainVersionStrategy`) lazily mints a REAL incarnation via `randomHex(8)`; this is how a writer that restarts with no persisted store (fresh `DEFAULT_INCARNATION` → freshly-minted REAL incarnation) ends up `"concurrent"` against a peer's cached version from the writer's *previous* REAL incarnation — the receiver's existing `"concurrent"` → gap → entirety → `canReset` machinery (see `@kyneta/exchange`'s [Compaction and epoch boundaries](../exchange/TECHNICAL.md#compaction-and-epoch-boundaries)) handles the resync with zero sync-layer changes.
+`DEFAULT_EPOCH` is the sentinel every newly created replica starts with — it has no identity yet because the replica contains only schema defaults (init ops). It acts as a *universal prefix*: a version carrying it compares against any REAL epoch without ever producing a false `"concurrent"` on two independent peers' very first sync. `compare()` special-cases DEFAULT-vs-REAL directly (DEFAULT is never ahead of REAL, REAL is never behind DEFAULT) so this path never even reaches the cross-epoch fallback above. The first real write (`flushCount > 1` in `createPlainVersionStrategy`) lazily mints a REAL epoch via `randomHex(8)`.
 
-`merge()` adopts an incoming incarnation (via the `adoptIncarnation` closure returned by `createPlainVersionStrategy`) when the incoming payload's declared incarnation differs from the current one and either the current one is still `DEFAULT_INCARNATION`, or the payload is an entirety (epoch-boundary reset). This makes the substrate's payload self-sufficient for identity-aware merge — analogous to Loro's binary oplog carrying actor IDs — without any new `Substrate<V>` interface method or sync-layer coordination: `parsePlainPayload` extracts `{ i, s|b }` on the receiving side, and `merge`/`fromEntirety`/`buildUpgrade` call sites handle adoption natively.
+`merge()` adopts an incoming epoch (via the `adoptEpoch` closure returned by `createPlainVersionStrategy`) only while the current epoch is still `DEFAULT_EPOCH` — i.e. accepting the substrate's first real identity. Genuine epoch-boundary resets (REAL epoch transitioning to a *different* REAL epoch) are handled exclusively by `resetFromEntirety` (see `Substrate.resetFromEntirety` and `@kyneta/exchange`'s [Compaction and epoch boundaries](../exchange/TECHNICAL.md#compaction-and-epoch-boundaries)), which the Synchronizer invokes once it detects an explicit epoch mismatch — `merge()` itself never adopts across two REAL epochs. `SubstratePayload.epoch` is the preferred source for the incoming epoch; `parsePlainPayload`'s legacy `{ i, s|b }` envelope extraction is the fallback for peers that pre-date epoch support.
 
 ### `TimestampVersion`
 
@@ -1131,7 +1135,9 @@ For ephemeral substrates: a single wall-clock number plus the peer ID. `merge` a
 
 The plain substrate's `serializeOps` / `deserializeOps` embed `Op.change` by reference — the change is JSON-stringified as-is and passed through `WireOfferMsg.d` (an opaque `string | Uint8Array` payload). The exchange wire codec never inspects schema-level change types; it carries them as JSON inside the substrate payload. Adding a new `ChangeBase` variant (e.g. `SetChange { type: "set-op" }`) is purely additive — no exchange codec change required. The only caveat is for out-of-monorepo consumers parsing the plain JSON wire format with a strict change-type whitelist: those need to extend their whitelist when new change variants land.
 
-Since incarnation support landed, the plain substrate's JSON payload also wraps its state/ops with an incarnation envelope — `{ i: string, s: PlainState }` for entirety, `{ i: string, b: SerializedOp[][] }` for since — produced by `exportEntirety`/`exportSince` and unwrapped by `parsePlainPayload` on merge. This is still opaque to the exchange wire codec (it's carried as an undifferentiated JSON string inside `SubstratePayload.data`); the envelope only matters to the plain substrate itself, making its payload self-sufficient for identity-aware merge, analogous to Loro's binary oplog carrying actor IDs. Legacy payloads (bare state object / bare op-batch array, no `i` field) still parse correctly via the same helper.
+The epoch now travels as an explicit field, `SubstratePayload.epoch`, set by every substrate's `exportEntirety`/`exportSince` (Plain sets it to the current epoch; Loro/Yjs/`state` set it to `DEFAULT_EPOCH`). Plain's own `data` payload is simply `JSON.stringify(materialize())` for entirety and `JSON.stringify(serializedBatches)` for since — no inner envelope. This is a simplification from an earlier design where Plain's JSON payload wrapped state/ops in an inline envelope (`{ i: string, s: PlainState }` / `{ i: string, b: SerializedOp[][] }`); that inline epoch field duplicated information already available via the parsed `Version` (which encodes as `"${epoch}:${value}"`) and via the new `SubstratePayload.epoch` field, creating a desync hazard between the wire-level version and the body-embedded epoch.
+
+`parsePlainPayload` still parses the legacy `{ i, s|b }` envelope for backward compatibility with peers/payloads that pre-date `SubstratePayload.epoch` — `SubstratePayload.epoch` is the preferred source when present; `parsePlainPayload`'s extracted `i` field is the fallback. Bare state objects / bare op-batch arrays (no `i` field, no `SubstratePayload.epoch`) still parse correctly via the same helper, one level further back in the compatibility chain.
 
 ## The functional shadow
 

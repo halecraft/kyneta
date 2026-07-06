@@ -370,4 +370,61 @@ describe("encodeStoreRecord / decodeStoreRecord", () => {
   it("throws on empty bytes", () => {
     expect(() => decodeStoreRecord(new Uint8Array(0))).toThrow()
   })
+
+  it("round-trips an entry record with epoch set (json payload)", () => {
+    const record: StoreRecord = {
+      kind: "entry",
+      payload: {
+        kind: "entirety",
+        encoding: "json",
+        data: '{"hello":"world"}',
+        epoch: "abc123",
+      },
+      version: "abc123:1",
+    }
+    const decoded = decodeStoreRecord(encodeStoreRecord(record))
+    expect(decoded).toEqual(record)
+  })
+
+  it("round-trips an entry record with epoch set (binary payload)", () => {
+    const bytes = new Uint8Array([0xde, 0xad, 0xbe, 0xef])
+    const record: StoreRecord = {
+      kind: "entry",
+      payload: {
+        kind: "since",
+        encoding: "binary",
+        data: bytes,
+        epoch: "inc-a",
+      },
+      version: "inc-a:5",
+    }
+    const decoded = decodeStoreRecord(encodeStoreRecord(record))
+    expect(decoded).toEqual(record)
+  })
+
+  it("round-trips an entry record without epoch (legacy, bit 4 clear)", () => {
+    const record: StoreRecord = makeEntryRecord("entirety", "v1")
+    const encoded = encodeStoreRecord(record)
+    expect(encoded[0]! & 0x10).toBe(0x00) // bit 4 clear — no epoch segment
+    const decoded = decodeStoreRecord(encoded)
+    expect(decoded.kind).toBe("entry")
+    if (decoded.kind === "entry") {
+      expect(decoded.payload.epoch).toBeUndefined()
+    }
+  })
+
+  it("entry record with epoch has bit 4 set", () => {
+    const record: StoreRecord = {
+      kind: "entry",
+      payload: {
+        kind: "entirety",
+        encoding: "json",
+        data: "{}",
+        epoch: "e1",
+      },
+      version: "e1:1",
+    }
+    const encoded = encodeStoreRecord(record)
+    expect(encoded[0]! & 0x10).toBe(0x10) // bit 4 set — epoch segment present
+  })
 })

@@ -10,6 +10,7 @@
 // semantic for LWW.
 
 import type { Version } from "../substrate.js"
+import { DEFAULT_EPOCH } from "./plain.js"
 
 /**
  * A Version wrapping a wall-clock timestamp (milliseconds since epoch).
@@ -21,12 +22,21 @@ import type { Version } from "../substrate.js"
  *
  * `serialize()` encodes to a decimal string for text-safe embedding.
  * `parse()` is the inverse.
+ *
+ * LWW substrates never mint a new epoch automatically — `epoch` is always
+ * `DEFAULT_EPOCH` for the lifetime of the document. Epoch changes are a
+ * deliberate developer-invoked migration, not an automatic reboot tracker
+ * (unlike Plain's lazy-mint on writer restart).
  */
 export class TimestampVersion implements Version {
   readonly timestamp: number
 
   constructor(timestamp: number) {
     this.timestamp = timestamp
+  }
+
+  get epoch(): string {
+    return DEFAULT_EPOCH
   }
 
   /**

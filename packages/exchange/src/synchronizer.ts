@@ -37,7 +37,12 @@ import type {
   SyncMode,
   Version,
 } from "@kyneta/schema"
-import { DEVTOOLS_HISTORY, hasDevtoolsHistory } from "@kyneta/schema"
+import {
+  DEFAULT_EPOCH,
+  DEVTOOLS_HISTORY,
+  hasDevtoolsHistory,
+  LEGACY_EPOCH,
+} from "@kyneta/schema"
 import type {
   AddressedEnvelope,
   AnyTransport,
@@ -263,6 +268,28 @@ function resolveOutboundVersionGap(
     (parsed, current) => current.compare(parsed),
   )
   return result
+}
+
+/**
+ * Explicit epoch-boundary detection: `remoteEpoch !== localEpoch`, fired
+ * independent of payload shape (`kind: "since"` included) — this is what
+ * eliminates the old `isEntirety && hasEverSynced` heuristic for the
+ * identity-discontinuity case. `LEGACY_EPOCH` and `DEFAULT_EPOCH` on
+ * either side are excluded: `LEGACY_EPOCH` predates epoch support (the
+ * signal carries no lineage information), and `DEFAULT_EPOCH` is the
+ * normal lazy-mint/first-sync path already handled correctly by
+ * `compare()`/`merge()` — neither is a trustworthy mismatch signal.
+ */
+export function isEpochBoundaryOffer(
+  localEpoch: string,
+  remoteEpoch: string,
+): boolean {
+  const epochsComparable =
+    remoteEpoch !== LEGACY_EPOCH &&
+    localEpoch !== LEGACY_EPOCH &&
+    remoteEpoch !== DEFAULT_EPOCH &&
+    localEpoch !== DEFAULT_EPOCH
+  return epochsComparable && remoteEpoch !== localEpoch
 }
 
 // ---------------------------------------------------------------------------
@@ -1394,11 +1421,25 @@ export class Synchronizer {
         break
     }
 
-    // Epoch boundary detection: an entirety payload arriving for a doc
-    // that has *already* synced with some peer signals a compaction-
-    // induced reset (the sender trimmed history past our version). The
-    // first-ever entirety is initial sync — the normal merge path
-    // handles that; subsequent entireties go through the policy.
+    // Epoch boundary detection: the explicit signal is `Version.epoch`
+    // disagreement between the incoming payload's parsed version and our
+    // current replica version — the Synchronizer gates on this directly,
+    // and independently of payload shape (fires even for `kind: "since"`).
+    const localEpoch = runtime.replica.version().epoch
+    const remoteEpoch = gap.parsed.epoch
+    const isEpochBoundary = isEpochBoundaryOffer(localEpoch, remoteEpoch)
+
+    // Legacy heuristic: an entirety payload arriving for a doc that has
+    // *already* synced with some peer signals a compaction-induced reset
+    // (the sender trimmed history past our version). This remains
+    // unconditional (not gated on epoch comparability) because it is the
+    // *only* signal for same-epoch compaction-truncation resets — those
+    // carry no epoch mismatch at all, just a history gap. The explicit
+    // epoch check above only ever adds coverage (identity-discontinuity
+    // resets, detectable independent of payload shape); it never narrows
+    // this heuristic's original scope. The first-ever entirety is initial
+    // sync (hasEverSynced is false) — the normal merge path handles that;
+    // subsequent entireties go through the policy.
     const isEntirety = effect.payload.kind === "entirety"
     const sync = this.#syncHandle.getState()
     const hasEverSynced = (() => {
@@ -1408,8 +1449,9 @@ export class Synchronizer {
       }
       return false
     })()
+    const isLegacyReset = isEntirety && hasEverSynced
 
-    if (isEntirety && hasEverSynced) {
+    if (isEpochBoundary || isLegacyReset) {
       const peerState = sync.peers.get(effect.fromPeerId)
       const peerIdentity = peerState?.identity ?? {
         peerId: effect.fromPeerId,
@@ -1432,11 +1474,10 @@ export class Synchronizer {
         // Headless replicas must replace the whole replica via
         // fromEntirety. A plain `merge()` would preserve local ops
         // whose causal anchors were trimmed, leaving the replica in
-        // an inconsistent state. Interpreted substrates fall through
-        // to merge — entirety decomposes correctly there.
-        // State-based CRDTs (CvRDTs) also fall through to merge —
-        // `fromEntirety` would replace local state entirely, losing
-        // concurrent field writes that the peer doesn't yet have.
+        // an inconsistent state. State-based CRDTs (CvRDTs) fall
+        // through to merge instead — `fromEntirety` would replace
+        // local state entirely, losing concurrent field writes that
+        // the peer doesn't yet have.
         if (runtime.replicaFactory.replicaType[0] !== "state") {
           try {
             runtime.replica = runtime.replicaFactory.fromEntirety(
@@ -1459,6 +1500,34 @@ export class Synchronizer {
           })
           return
         }
+        // `state` (replicate mode): fall through to the routine merge
+        // path below — field-level LWW absorption is always safe.
+      } else {
+        // Interpret-mode substrates: `resetFromEntirety` discards local
+        // history and adopts the incoming state and lineage explicitly,
+        // decoupled from the routine `merge()` path (which now assumes
+        // shared causal ancestry and never adopts across epochs).
+        try {
+          const substrate = runtime.replica as Substrate<Version>
+          substrate.resetFromEntirety(effect.payload, gap.parsed, {
+            origin: "sync",
+          })
+        } catch (err) {
+          console.warn(
+            `[exchange] epoch boundary reset failed for doc '${effect.docId}'.`,
+            err,
+          )
+          return
+        }
+
+        const newVersion = runtime.replica.version().serialize()
+        this.#dispatchSync({
+          type: "sync/doc-imported",
+          docId: effect.docId,
+          version: newVersion,
+          fromPeerId: effect.fromPeerId,
+        })
+        return
       }
     }
 
@@ -1472,7 +1541,6 @@ export class Synchronizer {
       )
       return
     }
-
     const newVersion = runtime.replica.version().serialize()
     this.#dispatchSync({
       type: "sync/doc-imported",

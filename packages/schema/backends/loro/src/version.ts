@@ -10,6 +10,7 @@
 import type { Version } from "@kyneta/schema"
 import {
   base64ToUint8Array,
+  DEFAULT_EPOCH,
   uint8ArrayToBase64,
   versionVectorMeet,
 } from "@kyneta/schema"
@@ -36,6 +37,16 @@ export class LoroVersion implements Version {
 
   constructor(vv: VersionVector) {
     this.vv = vv
+  }
+
+  /**
+   * Loro is a collaborative (CRDT) substrate — epochs are never minted
+   * automatically. `epoch` is always `DEFAULT_EPOCH` for the document's
+   * lifetime; new epochs require an explicit developer-invoked migration
+   * primitive (T3 migrations, not implemented here).
+   */
+  get epoch(): string {
+    return DEFAULT_EPOCH
   }
 
   /**

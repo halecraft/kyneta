@@ -41,8 +41,8 @@ import type { Exchange } from "./exchange.js"
  * Build the invariant envelope schema for a Line document, parameterized
  * by the application's message schema.
  *
- * The envelope structure (`seq`, `ackSeq`, `ackIncarnation`) is an implementation
- * detail of the `Line` class. `ackIncarnation` uses `""` as a sentinel for "never acked".
+ * The envelope structure (`seq`, `ackSeq`, `ackEpoch`) is an implementation
+ * detail of the `Line` class. `ackEpoch` uses `""` as a sentinel for "never acked".
  * External consumers interact with `send(msg)` and the async iterator — they
  * never see the envelope fields.
  */
@@ -55,7 +55,7 @@ export function createLineDocSchema<S extends SchemaNode>(messageSchema: S) {
       }),
     ),
     ackSeq: Schema.number(),
-    ackIncarnation: Schema.string(),
+    ackEpoch: Schema.string(),
     nextSeq: Schema.number(),
   })
 }
@@ -289,7 +289,7 @@ export class Line<SendMsg, RecvMsg>
   readonly #unsubscribeInbox: () => void
   #nextSeq = 1
   #lastProcessedSeq = 0
-  #inboxIncarnation: string
+  #inboxEpoch: string
   #closed = false
   #refCount = 1
   #consumerAttached = false
@@ -315,7 +315,7 @@ export class Line<SendMsg, RecvMsg>
     this.#disposePolicy = disposePolicy
     this.#queue = new AsyncQueue<RecvMsg>()
 
-    this.#inboxIncarnation = (version(inbox) as any).incarnation
+    this.#inboxEpoch = version(inbox).epoch
 
     // Resume persisted protocol state from the outbox document.
     // Zero.structural defaults: Schema.number() → 0.
@@ -323,8 +323,8 @@ export class Line<SendMsg, RecvMsg>
     const persistedNextSeq = outbox.nextSeq() as number
     this.#nextSeq = persistedNextSeq || 1
 
-    const ackIncarnation = outbox.ackIncarnation() as string
-    if (ackIncarnation === this.#inboxIncarnation) {
+    const ackEpoch = outbox.ackEpoch() as string
+    if (ackEpoch === this.#inboxEpoch) {
       this.#lastProcessedSeq = outbox.ackSeq() as number
     } else {
       this.#lastProcessedSeq = 0
@@ -458,11 +458,11 @@ export class Line<SendMsg, RecvMsg>
   #processInbox(): void {
     if (this.#closed) return
 
-    const currentInboxIncarnation = (version(this.#inbox) as any).incarnation
+    const currentInboxEpoch = version(this.#inbox).epoch
 
-    if (currentInboxIncarnation !== this.#inboxIncarnation) {
+    if (currentInboxEpoch !== this.#inboxEpoch) {
       this.#lastProcessedSeq = 0
-      this.#inboxIncarnation = currentInboxIncarnation
+      this.#inboxEpoch = currentInboxEpoch
     }
 
     // Read all messages from inbox — inbox is any-typed, so messages are any[]
@@ -483,7 +483,7 @@ export class Line<SendMsg, RecvMsg>
         // Write ack to outbox
         batch(this.#outbox, (d: any) => {
           d.ackSeq.set(this.#lastProcessedSeq)
-          d.ackIncarnation.set(this.#inboxIncarnation)
+          d.ackEpoch.set(this.#inboxEpoch)
         })
       }
     }
@@ -496,10 +496,10 @@ export class Line<SendMsg, RecvMsg>
   }
 
   #pruneOutbox(): void {
-    const currentOutboxIncarnation = (version(this.#outbox) as any).incarnation
+    const currentOutboxEpoch = version(this.#outbox).epoch
 
-    const ackIncarnation = this.#inbox.ackIncarnation() as string
-    if (ackIncarnation !== currentOutboxIncarnation) return
+    const ackEpoch = this.#inbox.ackEpoch() as string
+    if (ackEpoch !== currentOutboxEpoch) return
 
     const remoteAck = this.#inbox.ackSeq() as number
     if (remoteAck <= 0) return

@@ -40,6 +40,7 @@ import type {
 } from "../substrate.js"
 import { BACKING_DOC, RECORD_INVERSE } from "../substrate.js"
 import { Zero } from "../zero.js"
+import { DEFAULT_EPOCH } from "./plain.js"
 import {
   extractPlainState,
   isStateTuple,
@@ -64,6 +65,10 @@ export class StateVersion implements Version {
 
   constructor(timestamp: number) {
     this.timestamp = timestamp
+  }
+
+  get epoch(): string {
+    return DEFAULT_EPOCH
   }
 
   static now(): StateVersion {
@@ -151,6 +156,7 @@ function createStateReplicaCore(
         kind: "entirety",
         encoding: "json",
         data: JSON.stringify(getTree()),
+        epoch: DEFAULT_EPOCH,
       }
     },
 
@@ -173,6 +179,20 @@ function createStateReplicaCore(
         // change (merges can cause changes that need to be re-broadcast).
         cachedVersion = StateVersion.now()
       }
+    },
+
+    resetFromEntirety(
+      payload: SubstratePayload,
+      _remoteVersion: Version,
+    ): void {
+      // `state` is a CvRDT with a single constant epoch (DEFAULT_EPOCH) for
+      // its entire lifetime — a true epoch boundary never arises here. If
+      // this is ever invoked (e.g. via the legacy entirety-after-sync
+      // fallback), field-level LWW merge is the correct and safe behavior:
+      // discarding local history would lose concurrent field writes that
+      // the peer doesn't yet have, exactly like the replicate-mode
+      // fallback for `state` in the Synchronizer.
+      this.merge(payload)
     },
   }
 }
@@ -332,6 +352,20 @@ export function createStateSubstrate(
       } else {
         throw new Error("StateSubstrate only accepts entirety payloads.")
       }
+    },
+
+    resetFromEntirety(
+      payload: SubstratePayload,
+      _remoteVersion: Version,
+      options?: BatchOptions,
+    ): void {
+      // `state` is a CvRDT with a single constant epoch for its entire
+      // lifetime — a true epoch boundary never arises here. Field-level
+      // LWW merge is the correct and safe fallback: discarding local
+      // history would lose concurrent field writes the peer doesn't yet
+      // have (the same reasoning the Synchronizer applies to fall through
+      // to `merge()` for `state` in replicate mode).
+      substrate.merge(payload, options)
     },
 
     /**
@@ -535,7 +569,7 @@ export function createStateReplica(): Replica<StateVersion> {
     },
   )
 
-  return {
+  const replica = {
     version: core.version,
     baseVersion: core.baseVersion,
     advance: core.advance,
@@ -545,7 +579,14 @@ export function createStateReplica(): Replica<StateVersion> {
       core.merge(payload)
       core.flush()
     },
+    resetFromEntirety(payload: SubstratePayload, _remoteVersion: Version) {
+      // See createStateSubstrate's resetFromEntirety — same rationale:
+      // `state` has no true epoch boundary, so field-level LWW merge is
+      // the correct fallback.
+      replica.merge(payload)
+    },
   }
+  return replica
 }
 
 // ---------------------------------------------------------------------------

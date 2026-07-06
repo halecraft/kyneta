@@ -82,6 +82,46 @@ describe("toRow / fromRow", () => {
       expect(fromRow(toRow(r))).toEqual(r)
     }
   })
+
+  it("round-trips a JSON-string entry record with epoch set", () => {
+    const record: StoreRecord = {
+      kind: "entry",
+      payload: {
+        kind: "entirety",
+        encoding: "json",
+        data: '{"hello":"world"}',
+        epoch: "abc123",
+      },
+      version: "abc123:1",
+    }
+    const decoded = fromRow(toRow(record))
+    expect(decoded).toEqual(record)
+  })
+
+  it("round-trips a binary entry record with epoch set", () => {
+    const bytes = new Uint8Array([0x00, 0x01, 0xff, 0xfe])
+    const record: StoreRecord = {
+      kind: "entry",
+      payload: {
+        kind: "since",
+        encoding: "binary",
+        data: bytes,
+        epoch: "inc-a",
+      },
+      version: "inc-a:2",
+    }
+    const decoded = fromRow(toRow(record))
+    expect(decoded).toEqual(record)
+  })
+
+  it("round-trips an entry record without epoch (legacy)", () => {
+    const record = jsonEntry("v1")
+    const decoded = fromRow(toRow(record))
+    expect(decoded.kind).toBe("entry")
+    if (decoded.kind === "entry") {
+      expect(decoded.payload.epoch).toBeUndefined()
+    }
+  })
 })
 
 // ---------------------------------------------------------------------------

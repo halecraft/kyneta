@@ -228,6 +228,8 @@ function validateOffer(
   if (!isString(obj.v)) return fail("v must be a string", ["v"])
   if (obj.r !== undefined && !isBoolean(obj.r))
     return fail("r must be a boolean", ["r"])
+  if (obj.ep !== undefined && !isString(obj.ep))
+    return fail("ep must be a string", ["ep"])
   return ok(obj as unknown as WireMessage)
 }
 

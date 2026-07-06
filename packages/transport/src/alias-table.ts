@@ -319,6 +319,7 @@ export function applyOutboundAliasing(
         wire.doc = msg.docId
       }
       if (msg.reciprocate !== undefined) wire.r = msg.reciprocate
+      if (msg.payload.epoch !== undefined) wire.ep = msg.payload.epoch
       return { state, result: ok(wire) }
     }
 
@@ -490,7 +491,10 @@ export function applyInboundAliasing(
       const msg: OfferMsg = {
         type: "offer",
         docId: docResult.docId,
-        payload: { kind, encoding, data: wire.d },
+        payload:
+          wire.ep !== undefined
+            ? { kind, encoding, data: wire.d, epoch: wire.ep }
+            : { kind, encoding, data: wire.d },
         version: wire.v,
       }
       if (wire.r !== undefined) msg.reciprocate = wire.r

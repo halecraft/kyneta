@@ -292,6 +292,31 @@ describe("Text codec — offer", () => {
     const decoded = roundTrip(wire) as WireOfferMsg
     expect(decoded.r).toBeUndefined()
   })
+
+  it("round-trips offer with epoch set", () => {
+    const wire = offerWire({
+      docId: "doc-epoch",
+      kind: "entirety",
+      encoding: "json",
+      data: JSON.stringify({ title: "Hello" }),
+      version: "abc123:5",
+      epoch: "abc123",
+    })
+    const decoded = roundTrip(wire) as WireOfferMsg
+    expect(decoded.ep).toBe("abc123")
+  })
+
+  it("round-trips offer without optional epoch (legacy payload)", () => {
+    const wire = offerWire({
+      docId: "doc-legacy",
+      kind: "entirety",
+      encoding: "json",
+      data: "{}",
+      version: "1",
+    })
+    const decoded = roundTrip(wire) as WireOfferMsg
+    expect(decoded.ep).toBeUndefined()
+  })
 })
 
 // ---------------------------------------------------------------------------

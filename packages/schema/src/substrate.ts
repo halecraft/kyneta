@@ -207,6 +207,14 @@ export { computeSchemaHash, HASH_ALGORITHM_VERSION } from "./hash.js"
  * (no concurrency), CRDT substrates may have concurrent versions.
  */
 export interface Version {
+  /**
+   * The causal island this version belongs to. Versions from different
+   * epochs are incommensurable — `compare()` is only meaningful within
+   * one epoch. The Synchronizer gates on epoch equality before invoking
+   * `compare()`.
+   */
+  readonly epoch: string
+
   /** Serialize for embedding in HTML (meta tags, script tags). */
   serialize(): string
 
@@ -263,6 +271,16 @@ export interface SubstratePayload {
   readonly kind: "entirety" | "since"
   readonly encoding: "json" | "binary"
   readonly data: string | Uint8Array
+
+  /**
+   * The causal island (see {@link Version.epoch}) this payload was
+   * produced under, if the producing substrate tracks epochs explicitly
+   * (Plain always sets this; Loro/Yjs set it to `DEFAULT_EPOCH`). Absent
+   * for legacy peers/payloads that pre-date epoch support — receivers
+   * fall back to substrate-specific legacy extraction (e.g. Plain's
+   * `{i, ...}` envelope inside `data`).
+   */
+  readonly epoch?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -365,6 +383,27 @@ export interface ReplicaLike {
    * elsewhere" to consumers like the exchange's echo filter.
    */
   merge(payload: SubstratePayload, options?: BatchOptions): void
+
+  /**
+   * Discard local history and adopt an entirely new state and lineage.
+   *
+   * Called exclusively on the epoch-boundary path, when an incoming
+   * payload's epoch differs from this replica's current epoch (see
+   * {@link Version.epoch}). Unlike `merge()` — which assumes the incoming
+   * payload shares causal ancestry with local state — `resetFromEntirety`
+   * assumes no shared ancestry: local history is discarded, not merged.
+   *
+   * @param payload A SubstratePayload where `kind === "entirety"`.
+   * @param remoteVersion The parsed `Version` of the remote peer that
+   *   authored the entirety — used to seed the local version/epoch so
+   *   subsequent comparisons agree with the sender without re-deriving
+   *   it from `payload`.
+   */
+  resetFromEntirety(
+    payload: SubstratePayload,
+    remoteVersion: Version,
+    options?: BatchOptions,
+  ): void
 }
 
 // ---------------------------------------------------------------------------
