@@ -1440,6 +1440,17 @@ export class Synchronizer {
     // this heuristic's original scope. The first-ever entirety is initial
     // sync (hasEverSynced is false) — the normal merge path handles that;
     // subsequent entireties go through the policy.
+    //
+    // Excluded for `durability: "transient"` (ephemeral/LWW) docs: the
+    // heuristic's own rationale presupposes a doc whose sender can "trim
+    // history past our version" — but ephemeral docs never retain history
+    // to trim (`timestampVersionStrategy.logOffset` always returns `null`;
+    // `exportSince` always falls back to `exportEntirety`). Combined with
+    // ephemeral's `delivery: "snapshot-only"` (every push is `kind:
+    // "entirety"`, never `"since"`), applying this heuristic to ephemeral
+    // docs would misclassify every steady-state push after the first sync
+    // as a compaction-induced reset — there is no compaction concept for a
+    // substrate that never accumulates a trimmable log in the first place.
     const isEntirety = effect.payload.kind === "entirety"
     const sync = this.#syncHandle.getState()
     const hasEverSynced = (() => {
@@ -1449,7 +1460,8 @@ export class Synchronizer {
       }
       return false
     })()
-    const isLegacyReset = isEntirety && hasEverSynced
+    const isLegacyReset =
+      isEntirety && hasEverSynced && runtime.syncMode.durability !== "transient"
 
     if (isEpochBoundary || isLegacyReset) {
       const peerState = sync.peers.get(effect.fromPeerId)

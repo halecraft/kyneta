@@ -16,7 +16,7 @@
 // is reached deterministically rather than racing.
 
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
-import { batch, json, Schema } from "@kyneta/schema"
+import { batch, ephemeral, json, Schema } from "@kyneta/schema"
 import { afterEach, describe, expect, it } from "vitest"
 import {
   Exchange,
@@ -377,5 +377,62 @@ describe("cohort governance predicate", () => {
     // Client still converges via entirety (epoch reset).
     expect(client.get("doc-1", TestDoc).title()).toBe("V2")
     expect(client.get("doc-1", TestDoc).count()).toBe(2)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Ephemeral sync-mode dispatch — regression coverage for the premature
+// "synced" marking fixed in this plan (jj:vuxnnnxz)
+// ---------------------------------------------------------------------------
+
+const EphemeralDoc = ephemeral.bind(
+  Schema.struct({
+    val: Schema.number(),
+  }),
+)
+
+describe("ephemeral sync-mode dispatch", () => {
+  it("never routes an inter-peer push through the compaction-reset path", async () => {
+    let resetCount = 0
+    const alice = createExchange({
+      id: "alice",
+      canReset: () => {
+        resetCount++
+        return true
+      },
+    })
+    const bob = createExchange({ id: "bob" })
+
+    const bridge = new Bridge()
+    alice.addTransport(createBridgeTransport({ transportId: "alice", bridge }))
+    bob.addTransport(createBridgeTransport({ transportId: "bob", bridge }))
+
+    const aDoc = alice.get("ephemeral", EphemeralDoc)
+    const bDoc = bob.get("ephemeral", EphemeralDoc)
+
+    // First mutual write exchange — even the very first entirety exchange
+    // must not trip isLegacyReset, since neither peer has actually
+    // received the other's data yet at the point their interest arrives.
+    batch(aDoc, (d: any) => {
+      d.val.set(1)
+    })
+    await drain()
+
+    batch(bDoc, (d: any) => {
+      d.val.set(2)
+    })
+    await drain()
+
+    expect(resetCount).toBe(0)
+
+    // Second-and-later pushes to an already-synced peer must also route
+    // through the ordinary merge() path.
+    batch(aDoc, (d: any) => {
+      d.val.set(3)
+    })
+    await drain()
+
+    expect(resetCount).toBe(0)
+    expect(bDoc.val()).toBe(3)
   })
 })

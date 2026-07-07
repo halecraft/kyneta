@@ -987,6 +987,49 @@ describe("sync-program", () => {
       expect(docSync).toBeDefined()
       expect(defined(docSync).status).toBe("pending")
     })
+
+    it("non-reciprocating interest for an authoritative doc marks the peer synced immediately", () => {
+      const update = makeUpdate()
+      let model = initSync(alice)
+      ;[model] = addPeer(update, model, "bob", bob)
+      ;[model] = ensureDoc(update, model, "doc-1", {
+        syncMode: SYNC_AUTHORITATIVE,
+      })
+
+      const [m2] = receiveMessage(update, model, "bob", {
+        type: "interest",
+        docId: "doc-1",
+        version: "v0",
+        reciprocate: false,
+      })
+
+      const docSync = defined(m2.peers.get("bob")).docSyncStates.get("doc-1")
+      expect(defined(docSync).status).toBe("synced")
+    })
+
+    it("non-reciprocating interest for an ephemeral doc also marks the peer synced immediately", () => {
+      // SYNC_EPHEMERAL sets reciprocate: false, same as SYNC_AUTHORITATIVE —
+      // this handler's behavior does not distinguish sync modes. Whether
+      // this premature "synced" marking is safe for a given sync mode is
+      // the concern of isLegacyReset's own durability check in the
+      // Synchronizer, not of this per-message-type transition.
+      const update = makeUpdate()
+      let model = initSync(alice)
+      ;[model] = addPeer(update, model, "bob", bob)
+      ;[model] = ensureDoc(update, model, "doc-1", {
+        syncMode: SYNC_EPHEMERAL,
+      })
+
+      const [m2] = receiveMessage(update, model, "bob", {
+        type: "interest",
+        docId: "doc-1",
+        version: "v0",
+        reciprocate: false,
+      })
+
+      const docSync = defined(m2.peers.get("bob")).docSyncStates.get("doc-1")
+      expect(defined(docSync).status).toBe("synced")
+    })
   })
 
   // -----------------------------------------------------------------------
