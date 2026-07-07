@@ -32,6 +32,9 @@
     "test": "verify logic",
     "verify": "verify"
   },
+  "dependencies": {
+    "@sindresorhus/fnv1a": "^3.1.0"
+  },
   "peerDependencies": {
     "@kyneta/changefeed": "workspace:^",
     "@kyneta/schema": "workspace:^",

@@ -18,7 +18,7 @@ Consumed by applications that bind schemas with `yjs.bind(schema)`. Not imported
 - Why one root `Y.Map` instead of multiple root shared types? → [The single-root-`Y.Map` design](#the-single-root-ymap-design)
 - How does this differ from `@kyneta/loro-schema` — same job, different substrate? → [Loro vs Yjs: what changes](#loro-vs-yjs-what-changes)
 - Why `instanceof` here but `.kind()` there? → [`instanceof` container discrimination](#instanceof-container-discrimination)
-- What does `YjsVersion` include that a bare state vector doesn't? → [`YjsVersion` — state vector + delete set](#yjsversion--state-vector--delete-set)
+- What does `YjsVersion` include that a bare state vector doesn't? → [`YjsVersion` — state vector + delete-set digest](#yjsversion--state-vector--delete-set-digest)
 - How do structural inserts (a whole struct into a map) commit atomically? → [The write path and populate-then-attach](#the-write-path-and-populate-then-attach)
 - Why is there a reserved `clientID = 0` for structural operations? → [`STRUCTURAL_YJS_CLIENT_ID`](#structural_yjs_client_id)
 - How does a remote `Y.applyUpdate` notify kyneta subscribers? → [The event bridge](#the-event-bridge)
@@ -30,7 +30,7 @@ Consumed by applications that bind schemas with `yjs.bind(schema)`. Not imported
 | `Y.Doc` | Yjs's top-level document (from `yjs`). Owns shared types, client ID, update stream. | A kyneta `DocRef` — the `Y.Doc` is the substrate-native backing |
 | `YjsLaws` | The composition-law set `"lww" \| "positional-ot" \| "lww-per-key" \| "lww-tag-replaced"`. Yjs supports text (`positional-ot`), structural (`lww-per-key`), scalars (`lww`), and rich text (`positional-ot` + `lww-tag-replaced`) — but not `"additive"` (counter), `"positional-ot-move"` (movable), `"tree-move"` (tree), or `"add-wins-per-key"` (set). | Yjs's full feature set — this is the subset kyneta exposes via composition-law tags |
 | `YjsNativeMap` | The `NativeMap` functor mapping schema kinds to Yjs shared types (`text → Y.Text`, `list → Y.Array`, `struct → Y.Map`, `map → Y.Map`). Slots for unsupported kinds are `undefined`. | A JS `Map` — this is a type-level functor |
-| `YjsVersion` | `@kyneta/schema`'s `Version` implementation wrapping a Yjs **snapshot** (state vector + delete set). | A bare state vector — SV-only versions cannot distinguish same-state from divergent-deletes |
+| `YjsVersion` | `@kyneta/schema`'s `Version` implementation wrapping a Yjs state vector plus a **fixed-size digest** of the delete set. | A bare state vector — SV-only versions cannot distinguish same-state from divergent-deletes. Also not a raw snapshot — the delete set is hashed, never stored verbatim, to keep serialized size bounded by peer count. |
 | `YjsPosition` | `Position` implementation wrapping `Y.RelativePosition`. Stateless `transform` — resolution queries the CRDT directly. | A numeric index |
 | `resolveYjsType` | Thin wrapper over the core `foldPath(stepIntoYjs, ...)` primitive (from `@kyneta/schema`). The two semantic invariants (identity-keying, sum-boundary short-circuit) live in `@kyneta/schema/src/fold-path.ts`, not here. | A cache lookup — resolution happens on every read |
 | `stepIntoYjs` | The Yjs `PathStepper`: per-step substrate dispatch. Given `(current, _nextSchema, segment, identity)` returns the child shared type or scalar (the `_nextSchema` slot is unused; Yjs's `instanceof` dispatch doesn't look ahead). | `stepIntoLoro` from the Loro backend — both are `PathStepper` instances, both driven by `foldPath`; the dispatch is what differs |
@@ -87,7 +87,7 @@ The two backends implement the same `Substrate<V>` contract and share the overal
 | Structural creation | Lazy — creation happens on first typed accessor call | Eager — `ensureContainers` walks the schema on upgrade |
 | Structural client ID | Not needed (Loro has no equivalent concern) | `STRUCTURAL_YJS_CLIENT_ID = 0` during `ensureContainers` |
 | Composition laws | `LoroLaws` = `"lww" \| "additive" \| "positional-ot" \| "positional-ot-move" \| "lww-per-key" \| "tree-move" \| "lww-tag-replaced"` | `YjsLaws` = `"lww" \| "positional-ot" \| "lww-per-key" \| "lww-tag-replaced"` |
-| Version | Wraps `VersionVector` | Wraps full snapshot (state vector + delete set) |
+| Version | Wraps `VersionVector` | Wraps state vector + fixed-size digest of the delete set |
 | Position | Wraps `Cursor` | Wraps `Y.RelativePosition` |
 
 When a concept is structurally identical to Loro's (navigation fold, event bridge's purpose, identity-keying rationale, write-path FC/IS intent), the Loro document is the canonical reference. This document focuses on the Yjs-specific mechanics.
@@ -153,7 +153,7 @@ Yjs does not expose a uniform `.kind()` method. Each type has its own shape (`Y.
 
 ---
 
-## `YjsVersion` — state vector + delete set
+## `YjsVersion` — state vector + delete-set digest
 
 Source: `packages/schema/backends/yjs/src/version.ts`.
 
@@ -164,18 +164,24 @@ Yjs's state vector tracks how many operations from each peer have been observed,
 
 This matters for sync: if the exchange compared SV-only versions, it would skip pushing deletes to peers with a matching SV.
 
-`YjsVersion` wraps the full **Yjs snapshot** (state vector + delete set) so `compare` distinguishes same-state from divergent-deletes:
+`YjsVersion` pairs the state vector with a **fixed-size digest** of the full Yjs snapshot (state vector + delete set) so `compare` distinguishes same-state from divergent-deletes, without embedding the raw delete set:
 
 | Method | Behaviour |
 |--------|-----------|
-| `serialize()` | `base64(stateVector)` + `"."` + `base64(snapshotBytes)`. The `.`-joined two-part format. |
-| `compare(other)` | Compare SVs first via `versionVectorCompare`; if SVs agree, compare snapshot bytes; differing snapshots with matching SVs → `"concurrent"`. |
+| `serialize()` | `base64(stateVector)` + `"."` + `deleteSetDigest` (32-char hex). Only the state vector is base64-wrapped; the digest is already compact. |
+| `compare(other)` | Compare SVs first via `versionVectorCompare`; if SVs agree, compare `deleteSetDigest` strings for equality; a mismatch with matching SVs → `"concurrent"`. |
 | `meet(other)` | Component-wise minimum on state vectors via `versionVectorMeet`; delete set ignored for the lattice meet. |
-| `YjsVersion.parse(s)` | Split on `"."`; decode SV and snapshot separately. Legacy format (no `"."`) decodes as SV-only for back-compat. |
+| `YjsVersion.parse(s)` | Split on `"."`; decode SV, read the digest as-is (no re-hashing). Legacy format (no `"."`) decodes as SV-only for back-compat. |
+
+### Why a digest, not raw snapshot bytes
+
+Yjs's delete set (`Map<clientID, DeleteItem[]>`) only merges *adjacent* same-client deleted ranges. A workload with non-contiguous deletes — concretely, insert-then-correct cycles such as STT partial corrections (permanently commit a word, then insert-and-delete a corrected guess, repeat) — accumulates new, never-merging `DeleteItem` entries forever. Because the raw encoded snapshot was embedded directly in `serialize()`'s output (which flows into every wire offer, ack, and persisted `Store` version record), this caused the serialized version to grow **unboundedly with edit history** rather than with peer count — confirmed in production and via a minimal reproduction (a 500-cycle insert-then-delete-correction loop grew the raw snapshot from 150 to 1501 bytes while the state vector itself stayed flat at 4 bytes).
+
+A version vector's serialized size must scale with the number of distinct peers alone, matching `PlainVersion` (O(1)) and `LoroVersion` (O(peers)). `YjsVersion` restores this invariant by reducing the delete-set component to a **128-bit FNV-1a digest** (`deleteSetDigest`, via `@sindresorhus/fnv1a`) — a fixed-size fingerprint used exclusively for equality comparison, never reconstructed from. This is the same fixed-size-fingerprint tradeoff already accepted elsewhere in `@kyneta/schema` (see `computeSchemaHash` in `packages/schema/src/hash.ts`): a digest collision would cause a genuine delete-only divergence to be misreported as `"equal"`, but at 128 bits this probability is negligible, and the alternative (unbounded growth) is a real, observed production defect.
 
 ### Backward compatibility with SV-only versions
 
-A `YjsVersion` parsed from the legacy SV-only format has no delete-set component. When compared against a new-format version with the same SV but different deletes, the comparison yields `"concurrent"` — which causes the exchange to push an update. The push is redundant in cases where the deletes actually match, but it is always *safe*: a legacy peer receiving a push it didn't strictly need is merely bandwidth, never corruption.
+A `YjsVersion` parsed from the legacy SV-only format has no delete-set component — its `deleteSetDigest` is computed from the state-vector bytes themselves, which is guaranteed to differ from any real snapshot's digest. When compared against a new-format version with the same SV but different deletes, the comparison yields `"concurrent"` — which causes the exchange to push an update. The push is redundant in cases where the deletes actually match, but it is always *safe*: a legacy peer receiving a push it didn't strictly need is merely bandwidth, never corruption.
 
 ### What `YjsVersion` is NOT
 
@@ -183,6 +189,7 @@ A `YjsVersion` parsed from the legacy SV-only format has no delete-set component
 - **Not a wall-clock timestamp.** Yjs versions are CRDT causal history, not physical time.
 - **Not totally ordered.** Two concurrent peers can be `"concurrent"`. `compare` returns the full partial order.
 - **Not interchangeable with `LoroVersion`.** They serialize differently and compare with different algorithms.
+- **Not a store of the raw delete set.** `deleteSetDigest` is a one-way fingerprint — there is no way to recover the delete set from a `YjsVersion`, by design; that would defeat the whole point of bounding its size.
 
 ---
 
@@ -441,7 +448,7 @@ This is the same mechanism as the Loro backend, exercised with a narrower law se
 | `yjs` | `src/bind-yjs.ts` | The binding target: `.bind(schema)`, `.replica()`. |
 | `YjsLaws` | `src/bind-yjs.ts` | `"lww" \| "positional-ot" \| "lww-per-key" \| "lww-tag-replaced"` — composition laws Yjs supports. |
 | `YjsNativeMap` | `src/native-map.ts` | The `NativeMap` functor for Yjs. Unsupported kinds map to `undefined`. |
-| `YjsVersion` | `src/version.ts` | `Version` over Yjs snapshot (SV + delete set). |
+| `YjsVersion` | `src/version.ts` | `Version` over Yjs SV + a fixed-size digest of the delete set. |
 | `YjsPosition` | `src/position.ts` | `Position` over `Y.RelativePosition`. |
 | `toYjsAssoc` | `src/position.ts` | `Side → Yjs assoc` enum. |
 | `yjsSubstrateFactory` / `yjsReplicaFactory` | `src/substrate.ts` | Factory instances. |
@@ -463,7 +470,7 @@ This is the same mechanism as the Loro backend, exercised with a narrower law se
 | `src/yjs-resolve.ts` | 88 | `stepIntoYjs`; `resolveYjsType` is a thin wrapper over the core `foldPath` primitive. |
 | `src/populate.ts` | 248 | `ensureContainers` (conditional structural creation) + `populate` (populate-then-attach). |
 | `src/reader.ts` | 131 | `yjsReader` — reads via `resolveYjsType` + per-type extraction. |
-| `src/version.ts` | 240 | `YjsVersion` (SV + delete set), two-part serialisation, legacy SV-only compat. |
+| `src/version.ts` | 240 | `YjsVersion` (SV + delete-set digest), two-part serialisation, legacy SV-only compat. |
 | `src/position.ts` | 45 | `YjsPosition` (wraps `Y.RelativePosition`), `toYjsAssoc`. |
 | `src/native-map.ts` | 37 | `YjsNativeMap` type-level functor. |
 | `src/__tests__/create.test.ts` | 665 | End-to-end: `createDoc(yjs.bind(schema))` → read/write round-trips. |

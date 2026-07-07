@@ -202,6 +202,47 @@ describe("YjsVersion", () => {
   // ===========================================================================
 
   describe("YjsVersion: snapshot-aware comparison (delete detection)", () => {
+    it("serialized size stays bounded across many non-contiguous insert-then-delete cycles", () => {
+      // Regression test for unbounded version growth: Yjs's delete set only
+      // merges ADJACENT same-client deleted ranges. A workload that commits
+      // permanent text interleaved with insert-then-delete "correction"
+      // cycles (e.g. STT partial corrections) produces non-contiguous
+      // deletes that never merge, so the raw encoded snapshot — and
+      // therefore the old raw-bytes YjsVersion representation — grew
+      // without bound. The digest-based representation must stay flat.
+      const doc = new Y.Doc()
+      const text = doc.getText("body")
+
+      function correctionCycle(i: number): void {
+        text.insert(text.length, `word${i} `) // permanently committed
+        text.insert(text.length, "partialguess")
+        text.delete(text.length - 12, 12) // non-contiguous delete
+      }
+
+      for (let i = 0; i < 10; i++) correctionCycle(i)
+      const lenAt10 = new YjsVersion(
+        Y.encodeStateVector(doc),
+        Y.encodeSnapshot(Y.snapshot(doc)),
+      ).serialize().length
+
+      for (let i = 10; i < 100; i++) correctionCycle(i)
+      const lenAt100 = new YjsVersion(
+        Y.encodeStateVector(doc),
+        Y.encodeSnapshot(Y.snapshot(doc)),
+      ).serialize().length
+
+      for (let i = 100; i < 1000; i++) correctionCycle(i)
+      const lenAt1000 = new YjsVersion(
+        Y.encodeStateVector(doc),
+        Y.encodeSnapshot(Y.snapshot(doc)),
+      ).serialize().length
+
+      // A single client ID (state vector) plus a fixed-size digest — the
+      // serialized length must not grow with cycle count.
+      expect(lenAt100).toBe(lenAt10)
+      expect(lenAt1000).toBe(lenAt10)
+    })
+
     it("compare returns 'concurrent' when SVs match but delete sets differ", () => {
       const doc = new Y.Doc()
       doc.getText("body").insert(0, "hello")
@@ -231,7 +272,7 @@ describe("YjsVersion", () => {
       expect(v1.compare(v2)).toBe("equal")
     })
 
-    it("serialize/parse round-trips snapshot bytes", () => {
+    it("serialize/parse round-trips the delete-set digest", () => {
       const doc = new Y.Doc()
       doc.getText("body").insert(0, "hello")
       doc.getText("body").delete(1, 1)
@@ -241,8 +282,10 @@ describe("YjsVersion", () => {
 
       const parsed = YjsVersion.parse(v.serialize())
       expect(parsed.compare(v)).toBe("equal")
-      // Snapshot bytes preserved through round-trip
-      expect(parsed.snapshotBytes.length).toBe(snap.length)
+      // Digest is a fixed-size (32-char hex) fingerprint, preserved
+      // byte-for-byte through the round-trip (not re-hashed from raw bytes).
+      expect(parsed.deleteSetDigest).toBe(v.deleteSetDigest)
+      expect(parsed.deleteSetDigest).toMatch(/^[0-9a-f]{32}$/)
     })
 
     it("SV-ahead still returns 'ahead' even with different snapshots", () => {
@@ -277,9 +320,9 @@ describe("YjsVersion", () => {
       // But parsing old-format strings without "." should work
       const oldFormat = uint8ArrayToBase64(sv) // no dot
       const parsed = YjsVersion.parse(oldFormat)
-      // snapshotBytes defaults to sv bytes
+      // deleteSetDigest defaults to a digest of the SV bytes themselves
       expect(parsed.sv.length).toBe(sv.length)
-      expect(parsed.snapshotBytes.length).toBe(sv.length)
+      expect(parsed.deleteSetDigest).toBe(legacy.deleteSetDigest)
     })
   })
 
