@@ -457,6 +457,18 @@ function buildPush(
 
   // Delta-capable: include sinceVersion so the substrate can compute a delta.
   // Snapshot-only: omit sinceVersion — the substrate always sends entirety.
+  //
+  // sinceVersion is the doc's own pre-change baseline (docEntry.version),
+  // deliberately shared across all target peers rather than resolved per
+  // peer from PeerDocSyncState.lastKnownVersion. For a push-based,
+  // reliably-ordered protocol, this is the correct invariant: only
+  // already-synced/pending peers receive pushes (getSyncedPeers), and
+  // each push's baseline is exactly the version established by the
+  // previous push — no per-peer freshness tracking is needed. (Per-peer
+  // lastKnownVersion was tried and reverted: it is frozen at the initial
+  // handshake for one-way writer→reader docs and goes stale immediately,
+  // causing exportSince to recompute deltas against the wrong baseline
+  // and corrupt op replay — see jj:5e9e318542ee2006ccb720fd4ec9f819.)
   return {
     type: "send-offers",
     to: peerIds,

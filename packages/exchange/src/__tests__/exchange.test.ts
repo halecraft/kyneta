@@ -1305,6 +1305,14 @@ describe("Exchange", () => {
       //
       // This test isolates the issue by using Line.protocol + a simple
       // echo handler, matching the voice-credentials RPC topology.
+      //
+      // Regression coverage (jj:5e9e318542ee2006ccb720fd4ec9f819): a stale
+      // steady-state push crossing the epoch boundary as a `kind: "since"`
+      // payload used to crash resetFromEntirety ("expects a JSON entirety
+      // payload") and silently drop the offer. Spy on console.warn/error to
+      // assert that failure mode no longer occurs.
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
       const { Line } = await import("../line.js")
 
       const bridge = new Bridge()
@@ -1387,8 +1395,99 @@ describe("Exchange", () => {
       expect(received).toContain(100)
       expect(received).toContain(200)
 
+      // The crash symptom never occurs: no "epoch boundary reset failed"
+      // warning, and no offer silently dropped via that path.
+      const allWarnings = [...warnSpy.mock.calls, ...errorSpy.mock.calls]
+        .map(args => String(args[0]))
+        .join("\n")
+      expect(allWarnings).not.toContain("epoch boundary reset failed")
+
+      warnSpy.mockRestore()
+      errorSpy.mockRestore()
+
       sender2.close()
       receiver2.close()
+    })
+
+    it("double-mount race (same peerId, two concurrent client Exchanges — StrictMode/HMR): epoch boundary crash is recovered, not thrown (production repro)", async () => {
+      // Production repro (jj:5e9e318542ee2006ccb720fd4ec9f819): the actual
+      // trigger observed in production is TWO client Exchange instances
+      // sharing the same peerId connecting concurrently (e.g. React
+      // StrictMode's double-invoke, or an HMR reload racing the previous
+      // module instance's teardown) — not a clean sequential restart.
+      // Each instance mints its own epoch; cross-traffic between them
+      // causes the server's cached epoch for this peerId to whiplash
+      // between the two, so a steady-state `since`-kind push from one
+      // instance can arrive while the server's local epoch reflects the
+      // other. Confirmed to reproduce the exact production stack trace
+      // (`PlainSubstrate.resetFromEntirety expects a JSON entirety
+      // payload`) when the synchronizer's guard is removed.
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+      const { Line } = await import("../line.js")
+
+      const RealProto = Line.protocol({
+        topic: "voice-credentials-v2",
+        schema: Schema.struct({
+          id: Schema.string(),
+          request: Schema.boolean(),
+        }),
+      })
+
+      const bridge = new Bridge()
+      const server = createExchange({
+        id: "loomi-server",
+        transports: [createBridgeTransport({ transportId: "server", bridge })],
+      })
+      const serverReceived: Array<{ id: string; request: boolean }> = []
+      const listener = RealProto.listen(server)
+      listener.onReceive((_sender, receiver) => {
+        void (async () => {
+          for await (const msg of receiver) serverReceived.push(msg)
+        })()
+      })
+
+      // Client "instance 1" mounts.
+      const client1 = createExchange({
+        id: "87f8ec6c3fb92285",
+        transports: [
+          createBridgeTransport({ transportId: "client-1", bridge }),
+        ],
+      })
+      const sender1 = RealProto.sender(client1, "loomi-server")
+      sender1.send({ id: "req-1", request: true })
+
+      // Client "instance 2" mounts with the SAME peerId almost immediately
+      // (StrictMode/HMR double-invoke) — no drain, no clean teardown of
+      // instance 1 in between.
+      const client2 = createExchange({
+        id: "87f8ec6c3fb92285",
+        transports: [
+          createBridgeTransport({ transportId: "client-2", bridge }),
+        ],
+      })
+      const sender2 = RealProto.sender(client2, "loomi-server")
+      sender2.send({ id: "req-2", request: true })
+
+      await drain(60)
+
+      // Both requests still arrive — the epoch-boundary guard recovers via
+      // a fresh interest/entirety round-trip rather than crashing and
+      // dropping the offer.
+      const ids = serverReceived.map(m => m.id)
+      expect(ids).toContain("req-1")
+      expect(ids).toContain("req-2")
+
+      const allWarnings = [...warnSpy.mock.calls, ...errorSpy.mock.calls]
+        .map(args => String(args[0]))
+        .join("\n")
+      expect(allWarnings).not.toContain("epoch boundary reset failed")
+
+      warnSpy.mockRestore()
+      errorSpy.mockRestore()
+
+      sender1.close()
+      sender2.close()
     })
   })
 })

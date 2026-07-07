@@ -1470,6 +1470,33 @@ export class Synchronizer {
         return
       }
 
+      // `resetFromEntirety`/`fromEntirety` are partial functions: they
+      // are only well-defined for a self-sufficient `kind: "entirety"`
+      // state image — a `kind: "since"` delta has no valid causal anchor
+      // once the epoch has changed, so there is no coherent way to
+      // "reset" with it. The epoch-boundary check above is intentionally
+      // independent of payload shape (see isEpochBoundaryOffer), so it
+      // can and does fire on `"since"` offers. Recover by re-requesting
+      // the sender's current state (a fresh `interest`) instead of
+      // feeding an inapplicable delta to a reset path that cannot
+      // service it — the sender's existing interest-response path
+      // (buildInterestResponse) already supplies a full entirety when
+      // asked, the same mechanism first-sync relies on.
+      // Context: jj:5e9e318542ee2006ccb720fd4ec9f819.
+      if (effect.payload.kind !== "entirety") {
+        console.warn(
+          `[exchange] epoch boundary detected for doc '${effect.docId}' ` +
+            `with a non-entirety payload — re-requesting the sender's full state.`,
+        )
+        this.#sendToPeer(effect.fromPeerId, {
+          type: "interest",
+          docId: effect.docId,
+          version: runtime.replica.version().serialize(),
+          reciprocate: false,
+        })
+        return
+      }
+
       if (runtime.mode === "replicate") {
         // Headless replicas must replace the whole replica via
         // fromEntirety. A plain `merge()` would preserve local ops
