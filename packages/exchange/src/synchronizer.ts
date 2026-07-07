@@ -41,7 +41,6 @@ import {
   DEFAULT_EPOCH,
   DEVTOOLS_HISTORY,
   hasDevtoolsHistory,
-  LEGACY_EPOCH,
 } from "@kyneta/schema"
 import type {
   AddressedEnvelope,
@@ -274,21 +273,16 @@ function resolveOutboundVersionGap(
  * Explicit epoch-boundary detection: `remoteEpoch !== localEpoch`, fired
  * independent of payload shape (`kind: "since"` included) — this is what
  * eliminates the old `isEntirety && hasEverSynced` heuristic for the
- * identity-discontinuity case. `LEGACY_EPOCH` and `DEFAULT_EPOCH` on
- * either side are excluded: `LEGACY_EPOCH` predates epoch support (the
- * signal carries no lineage information), and `DEFAULT_EPOCH` is the
- * normal lazy-mint/first-sync path already handled correctly by
- * `compare()`/`merge()` — neither is a trustworthy mismatch signal.
+ * identity-discontinuity case. `DEFAULT_EPOCH` on either side is excluded:
+ * `DEFAULT_EPOCH` is the normal lazy-mint/first-sync path already handled
+ * correctly by `compare()`/`merge()` — it is not a trustworthy mismatch signal.
  */
 export function isEpochBoundaryOffer(
   localEpoch: string,
   remoteEpoch: string,
 ): boolean {
   const epochsComparable =
-    remoteEpoch !== LEGACY_EPOCH &&
-    localEpoch !== LEGACY_EPOCH &&
-    remoteEpoch !== DEFAULT_EPOCH &&
-    localEpoch !== DEFAULT_EPOCH
+    remoteEpoch !== DEFAULT_EPOCH && localEpoch !== DEFAULT_EPOCH
   return epochsComparable && remoteEpoch !== localEpoch
 }
 
@@ -1429,17 +1423,17 @@ export class Synchronizer {
     const remoteEpoch = gap.parsed.epoch
     const isEpochBoundary = isEpochBoundaryOffer(localEpoch, remoteEpoch)
 
-    // Legacy heuristic: an entirety payload arriving for a doc that has
-    // *already* synced with some peer signals a compaction-induced reset
-    // (the sender trimmed history past our version). This remains
+    // Legacy heuristic: an entirety payload arriving from a peer we have
+    // *already* synced *with* signals a compaction-induced reset from
+    // *that peer* (the sender trimmed history past our version). This remains
     // unconditional (not gated on epoch comparability) because it is the
     // *only* signal for same-epoch compaction-truncation resets — those
     // carry no epoch mismatch at all, just a history gap. The explicit
     // epoch check above only ever adds coverage (identity-discontinuity
     // resets, detectable independent of payload shape); it never narrows
-    // this heuristic's original scope. The first-ever entirety is initial
-    // sync (hasEverSynced is false) — the normal merge path handles that;
-    // subsequent entireties go through the policy.
+    // this heuristic's original scope. The first-ever entirety from a peer
+    // is initial sync (senderAlreadySynced is false) — the normal merge path
+    // handles that; subsequent entireties go through the policy.
     //
     // Excluded for `durability: "transient"` (ephemeral/LWW) docs: the
     // heuristic's own rationale presupposes a doc whose sender can "trim
@@ -1453,15 +1447,13 @@ export class Synchronizer {
     // substrate that never accumulates a trimmable log in the first place.
     const isEntirety = effect.payload.kind === "entirety"
     const sync = this.#syncHandle.getState()
-    const hasEverSynced = (() => {
-      for (const [, peerState] of sync.peers) {
-        const docSync = peerState.docSyncStates.get(effect.docId)
-        if (docSync && docSync.status === "synced") return true
-      }
-      return false
-    })()
+    const senderAlreadySynced =
+      sync.peers.get(effect.fromPeerId)?.docSyncStates.get(effect.docId)
+        ?.status === "synced"
     const isLegacyReset =
-      isEntirety && hasEverSynced && runtime.syncMode.durability !== "transient"
+      isEntirety &&
+      senderAlreadySynced &&
+      runtime.syncMode.durability !== "transient"
 
     if (isEpochBoundary || isLegacyReset) {
       const peerState = sync.peers.get(effect.fromPeerId)

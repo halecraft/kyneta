@@ -125,11 +125,6 @@ export type VersionStrategy<V extends Version> = {
 // fresh Loro doc's empty version vector — see jj:kxswmuzx.
 export const DEFAULT_EPOCH = "kyneta.default"
 
-// Legacy sentinel used when parsing bare integer version strings that
-// pre-date epoch support. Treated as a REAL epoch for comparison
-// purposes — it won't match any active epoch.
-export const LEGACY_EPOCH = "kyneta.legacy"
-
 export class PlainVersion implements Version {
   readonly #value: number
   readonly #epoch: string
@@ -399,11 +394,8 @@ export function createPlainSubstrate<V extends Version>(
         )
       }
 
-      const { epoch: legacyEpoch, content } = parsePlainPayload(payload.data)
-      // `SubstratePayload.epoch` is the canonical source for the epoch;
-      // the legacy `{i, ...}` envelope extraction inside `data` is the
-      // fallback for peers that pre-date epoch support.
-      const epoch = payload.epoch ?? legacyEpoch
+      const { content } = parsePlainPayload(payload.data)
+      const epoch = payload.epoch
 
       // Adopt the incoming epoch if we are still DEFAULT (accept our first
       // real identity). True epoch-boundary resets (REAL -> different REAL)
@@ -463,8 +455,8 @@ export function createPlainSubstrate<V extends Version>(
         )
       }
 
-      const { epoch: legacyEpoch, content } = parsePlainPayload(payload.data)
-      const epoch = payload.epoch ?? legacyEpoch
+      const { content } = parsePlainPayload(payload.data)
+      const epoch = payload.epoch
       if (epoch !== undefined && getEpoch && epoch !== getEpoch()) {
         adoptEpoch?.(epoch)
       }
@@ -778,8 +770,8 @@ export function createPlainReplica<V extends Version>(
         )
       }
 
-      const { epoch: legacyEpoch, content } = parsePlainPayload(payload.data)
-      const epoch = payload.epoch ?? legacyEpoch
+      const { content } = parsePlainPayload(payload.data)
+      const epoch = payload.epoch
       // Adopt the incoming epoch only while still DEFAULT (accept our first
       // real identity). Genuine epoch-boundary resets (REAL -> different
       // REAL) go through `resetFromEntirety` instead — the Synchronizer
@@ -832,8 +824,8 @@ export function createPlainReplica<V extends Version>(
         )
       }
 
-      const { epoch: legacyEpoch, content } = parsePlainPayload(payload.data)
-      const epoch = payload.epoch ?? legacyEpoch
+      const { content } = parsePlainPayload(payload.data)
+      const epoch = payload.epoch
       if (epoch !== undefined && getEpoch && epoch !== getEpoch()) {
         adoptEpoch?.(epoch)
       }
@@ -902,23 +894,9 @@ export function objectToReplaceOps(state: Record<string, unknown>): Op[] {
 }
 
 export function parsePlainPayload(data: string): {
-  epoch: string | undefined
   content: unknown
 } {
-  const parsed = JSON.parse(data)
-  if (
-    parsed !== null &&
-    typeof parsed === "object" &&
-    "i" in parsed &&
-    ("s" in parsed || "b" in parsed)
-  ) {
-    const raw = parsed as Record<string, unknown>
-    return {
-      epoch: typeof raw.i === "string" ? raw.i : undefined,
-      content: "s" in raw ? raw.s : raw.b,
-    }
-  }
-  return { epoch: undefined, content: parsed }
+  return { content: JSON.parse(data) }
 }
 
 /**
@@ -962,7 +940,8 @@ export function buildPlainSubstrateFromEntirety<V extends Version>(
     )
   }
 
-  const { epoch, content } = parsePlainPayload(payload.data)
+  const { content } = parsePlainPayload(payload.data)
+  const epoch = payload.epoch
   if (epoch !== undefined && getEpoch && epoch !== getEpoch()) {
     adoptEpoch?.(epoch)
   }
@@ -1106,15 +1085,11 @@ export const plainReplicaFactory: ReplicaFactory<PlainVersion> = {
       throw new Error(`Invalid PlainVersion value: (empty string)`)
     }
     const parts = serialized.split(":")
-    let inc: string
-    let n: number
-    if (parts.length === 2) {
-      inc = parts[0]
-      n = Number(parts[1])
-    } else {
-      inc = LEGACY_EPOCH
-      n = Number(serialized)
+    if (parts.length !== 2) {
+      throw new Error(`Invalid PlainVersion value: ${serialized}`)
     }
+    const inc = parts[0]
+    const n = Number(parts[1])
     if (!Number.isFinite(n) || n < 0 || Math.floor(n) !== n) {
       throw new Error(`Invalid PlainVersion value: ${serialized}`)
     }

@@ -275,10 +275,7 @@ export interface SubstratePayload {
   /**
    * The causal island (see {@link Version.epoch}) this payload was
    * produced under, if the producing substrate tracks epochs explicitly
-   * (Plain always sets this; Loro/Yjs set it to `DEFAULT_EPOCH`). Absent
-   * for legacy peers/payloads that pre-date epoch support — receivers
-   * fall back to substrate-specific legacy extraction (e.g. Plain's
-   * `{i, ...}` envelope inside `data`).
+   * (Plain always sets this; Loro/Yjs set it to `DEFAULT_EPOCH`).
    */
   readonly epoch?: string
 }

@@ -25,7 +25,6 @@ import {
   createPlainSubstrate,
   createPlainVersionStrategy,
   DEFAULT_EPOCH,
-  LEGACY_EPOCH,
   parsePlainPayload,
 } from "../substrates/plain.js"
 
@@ -157,12 +156,6 @@ describe("PlainVersion", () => {
     expect(roundTripped.value).toBe(7)
   })
 
-  it("parseVersion handles the legacy bare-integer format", () => {
-    const v = plainSubstrateFactory.parseVersion("5")
-    expect(v.value).toBe(5)
-    expect(v.epoch).toBe(LEGACY_EPOCH)
-  })
-
   it("parseVersion handles the new 'epoch:value' format", () => {
     const v = plainSubstrateFactory.parseVersion("abc123:5")
     expect(v.value).toBe(5)
@@ -170,6 +163,7 @@ describe("PlainVersion", () => {
   })
 
   it("parseVersion rejects invalid input", () => {
+    expect(() => plainSubstrateFactory.parseVersion("5")).toThrow()
     expect(() => plainSubstrateFactory.parseVersion("abc")).toThrow()
     expect(() => plainSubstrateFactory.parseVersion("-1")).toThrow()
     expect(() => plainSubstrateFactory.parseVersion("1.5")).toThrow()
@@ -328,31 +322,15 @@ describe("createPlainVersionStrategy", () => {
 // ===========================================================================
 
 describe("parsePlainPayload", () => {
-  it("extracts { epoch, content } from the new entirety envelope", () => {
-    const data = JSON.stringify({ i: "inc-a", s: { title: "Hi" } })
-    const { epoch, content } = parsePlainPayload(data)
-    expect(epoch).toBe("inc-a")
-    expect(content).toEqual({ title: "Hi" })
-  })
-
-  it("extracts { epoch, content } from the new since (batched-ops) envelope", () => {
-    const data = JSON.stringify({ i: "inc-a", b: [[{ foo: "bar" }]] })
-    const { epoch, content } = parsePlainPayload(data)
-    expect(epoch).toBe("inc-a")
-    expect(content).toEqual([[{ foo: "bar" }]])
-  })
-
-  it("returns { epoch: undefined, content } for a legacy bare-object payload", () => {
+  it("returns { content } for a bare-object payload", () => {
     const data = JSON.stringify({ title: "Hi" })
-    const { epoch, content } = parsePlainPayload(data)
-    expect(epoch).toBeUndefined()
+    const { content } = parsePlainPayload(data)
     expect(content).toEqual({ title: "Hi" })
   })
 
-  it("returns { epoch: undefined, content } for a legacy bare-array payload", () => {
+  it("returns { content } for a bare-array payload", () => {
     const data = JSON.stringify([[{ foo: "bar" }]])
-    const { epoch, content } = parsePlainPayload(data)
-    expect(epoch).toBeUndefined()
+    const { content } = parsePlainPayload(data)
     expect(content).toEqual([[{ foo: "bar" }]])
   })
 })
