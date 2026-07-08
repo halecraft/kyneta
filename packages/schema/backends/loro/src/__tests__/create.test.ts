@@ -38,6 +38,20 @@ const bound = loro.bind(TestSchema)
 // ===========================================================================
 
 describe("createDoc (fresh doc)", () => {
+  it("two fresh peers share the empty genesis version vector (op-free structure)", () => {
+    // Loro's container creation is op-free — structure is reconstructed from
+    // the schema, never versioned — so two fresh peers with DIFFERENT peerIds
+    // hold the empty version vector and compare `equal`. This is the shared
+    // genesis bottom the plain substrate now mirrors. Context: jj:kxswmuzx.
+    const vA = bound.factory({ peerId: "alice", binding: bound.identityBinding })
+      .create(bound.schema)
+      .version()
+    const vB = bound.factory({ peerId: "bob", binding: bound.identityBinding })
+      .create(bound.schema)
+      .version()
+    expect(vA.compare(vB)).toBe("equal")
+  })
+
   it("creates a doc with default values", () => {
     const doc = createDoc(bound)
     expect(doc.title()).toBe("")

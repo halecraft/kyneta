@@ -62,6 +62,7 @@ import type {
   Version,
 } from "../substrate.js"
 import { BACKING_DOC, RECORD_INVERSE } from "../substrate.js"
+import { versionVectorCompare, versionVectorMeet } from "../version-vector.js"
 import { Zero } from "../zero.js"
 
 // ---------------------------------------------------------------------------
@@ -114,12 +115,14 @@ export type VersionStrategy<V extends Version> = {
 // PlainVersion — monotonic integer version marker
 // ---------------------------------------------------------------------------
 
-// The sentinel epoch assigned to all newly created plain replicas.
-// A DEFAULT epoch is pluripotent: it has no identity yet because the
-// replica contains only schema defaults (init ops). Any version carrying
-// DEFAULT compares as "behind" a REAL epoch and as "equal" to
-// another DEFAULT. The first real write (flushCount > 1) or the first
-// merge with a REAL epoch upgrades the replica to a specific identity.
+// The genesis / empty-vector marker: a version whose authored lineage is
+// not yet minted — the ⊥ (bottom) of the lineage lattice. A newly created
+// replica holds only schema-derived structure (reconstructible by every
+// peer from the schema alone), so its `toVector()` projection is the EMPTY
+// version vector: it compares "equal" to any other genesis and "behind"
+// (a subset of) any REAL lineage. The first authored write mints a REAL
+// lineage (see `createPlainVersionStrategy`). This is Plain's analog of a
+// fresh Loro doc's empty version vector — see jj:kxswmuzx.
 export const DEFAULT_EPOCH = "kyneta.default"
 
 // Legacy sentinel used when parsing bare integer version strings that
@@ -149,47 +152,25 @@ export class PlainVersion implements Version {
     return `${this.#epoch}:${this.#value}`
   }
 
+  /**
+   * Project this version to a single-entry version vector: genesis
+   * (`DEFAULT_EPOCH`) → the empty vector ⊥; a REAL lineage → `{epoch: value}`.
+   * `compare`/`meet` are then the shared `versionVector*` algebra — the same
+   * lattice Loro/Yjs use — with zero Plain-specific special cases. See
+   * jj:kxswmuzx for the derivation.
+   */
+  #toVector(): Map<string, number> {
+    if (this.#epoch === DEFAULT_EPOCH) return new Map()
+    return new Map([[this.#epoch, this.#value]])
+  }
+
   compare(other: Version): "behind" | "equal" | "ahead" | "concurrent" {
     if (!(other instanceof PlainVersion)) {
       throw new Error(
         "PlainVersion can only be compared with another PlainVersion",
       )
     }
-
-    const otherValue = other.#value
-    const thisDefault = this.#epoch === DEFAULT_EPOCH
-    const otherDefault = other.#epoch === DEFAULT_EPOCH
-
-    if (thisDefault && otherDefault) {
-      // Both are DEFAULT — no identity formed yet. Treat as totally ordered.
-      if (this.#value < otherValue) return "behind"
-      if (this.#value > otherValue) return "ahead"
-      return "equal"
-    }
-
-    if (thisDefault && !otherDefault) {
-      // We are DEFAULT, they are REAL. DEFAULT can never be ahead of REAL.
-      if (this.#value < otherValue) return "behind"
-      return "equal"
-    }
-
-    if (!thisDefault && otherDefault) {
-      // We are REAL, they are DEFAULT. REAL is never behind DEFAULT.
-      if (this.#value > otherValue) return "ahead"
-      return "equal"
-    }
-
-    // Both REAL, same epoch — pure total order on value. Cross-epoch REAL
-    // pairs are no longer compared here: the Synchronizer gates on
-    // `Version.epoch` equality upstream of `compare()`. If a caller
-    // bypasses that gate, this is a safety fallback only.
-    if (this.#epoch !== other.#epoch) {
-      return "concurrent"
-    }
-
-    if (this.#value < otherValue) return "behind"
-    if (this.#value > otherValue) return "ahead"
-    return "equal"
+    return versionVectorCompare(this.#toVector(), other.#toVector())
   }
 
   meet(other: Version): PlainVersion {
@@ -198,33 +179,15 @@ export class PlainVersion implements Version {
         "PlainVersion can only be meet'd with another PlainVersion",
       )
     }
-
-    const thisDefault = this.#epoch === DEFAULT_EPOCH
-    const otherDefault = other.#epoch === DEFAULT_EPOCH
-
-    if (thisDefault && otherDefault) {
-      return new PlainVersion(
-        Math.min(this.#value, other.#value),
-        DEFAULT_EPOCH,
-      )
-    }
-
-    if (thisDefault && !otherDefault) {
-      // DEFAULT vs REAL: REAL subsumes DEFAULT. Meet at REAL's root.
-      return new PlainVersion(0, other.#epoch)
-    }
-
-    if (!thisDefault && otherDefault) {
-      return new PlainVersion(0, this.#epoch)
-    }
-
-    // Both REAL. Different lineages have no shared history.
-    if (this.#epoch !== other.#epoch) {
-      const inc = this.#epoch < other.#epoch ? this.#epoch : other.#epoch
-      return new PlainVersion(0, inc)
-    }
-
-    return new PlainVersion(Math.min(this.#value, other.#value), this.#epoch)
+    // Greatest common ancestor of the two lineage vectors. For divergent
+    // lineages the meet is the empty vector → genesis; for a shared lineage
+    // it is the min counter. Inputs are ≤1 entry (single authored lineage,
+    // prune-on-reset), so the result is ≤1 entry.
+    const met = versionVectorMeet(this.#toVector(), other.#toVector())
+    const entry = met.entries().next()
+    if (entry.done) return new PlainVersion(0, DEFAULT_EPOCH)
+    const [epoch, value] = entry.value
+    return new PlainVersion(value, epoch)
   }
 }
 
@@ -244,17 +207,19 @@ export function createPlainVersionStrategy(initialEpoch: string): {
       return new PlainVersion(0, epoch)
     },
     current(flushCount: number) {
-      // Lazy mint: if we're still DEFAULT and this is the first real write
-      // (flushCount > 1 means more than just init ops), claim an identity.
-      if (epoch === DEFAULT_EPOCH && flushCount > 1) {
-        epoch = randomHex(8)
-      }
+      // Pure projection. A REAL lineage is minted by the substrate on the
+      // first LOCAL authored flush (see createPlainSubstrate.afterBatch), never
+      // here — so a headless replica, or a merge that only absorbs a peer's
+      // ops, never invents an identity for content it does not own. Genesis is
+      // the empty vector ⊥ (value 0) until that mint. Context: jj:kxswmuzx.
       return new PlainVersion(flushCount, epoch)
     },
     logOffset(since: PlainVersion) {
-      // DEFAULT is the universal prefix — any epoch can map it.
+      // Genesis (DEFAULT) is the empty vector ⊥ — it maps to the start of the
+      // authored log (offset 0), so a genesis peer receives the full authored
+      // delta regardless of any phantom counter it may carry.
       if (since.epoch === DEFAULT_EPOCH) {
-        return since.value
+        return 0
       }
       if (since.epoch !== epoch) {
         return null
@@ -346,7 +311,21 @@ export function createPlainSubstrate<V extends Version>(
       replicaCore.pendingOps.push({ path, change })
     },
 
-    afterBatch(_options?: BatchOptions): void {
+    afterBatch(options?: BatchOptions): void {
+      // Mint a REAL lineage on the first LOCAL authored write. A merge sets
+      // `replay: true` (absorbing a peer's ops must never claim identity), and
+      // a headless replica flushes without ever reaching afterBatch — so both
+      // stay genesis / adopt the sender's lineage instead. Must precede flush()
+      // so the flushed version already carries the new lineage. `getEpoch` is
+      // undefined for LWW/timestamp substrates, which never mint.
+      if (
+        !options?.replay &&
+        replicaCore.pendingOps.length > 0 &&
+        getEpoch &&
+        getEpoch() === DEFAULT_EPOCH
+      ) {
+        adoptEpoch?.(randomHex(8))
+      }
       replicaCore.flush()
     },
 
@@ -1077,20 +1056,14 @@ export function buildUpgrade<V extends Version>(
 
   const initOps = objectToReplaceOps(missing)
   if (initOps.length > 0) {
-    // Probe whether this strategy supports delta sync.
-    const supportsDeltaSync = strategy.logOffset(strategy.zero) !== null
-
-    if (supportsDeltaSync) {
-      // Authoritative: init ops enter the log via executeBatch,
-      // advancing the version so peers can sync via exportSince(v0).
-      executeBatch(substrate.context(), initOps)
-    } else {
-      // Ephemeral: apply directly to the doc without entering the log.
-      // This prevents independent peers from diverging on creation
-      // timestamp for ephemeral docs.
-      for (const op of initOps) {
-        applyChange(doc, op.path, op.change)
-      }
+    // Op-free genesis: structural defaults are a pure function of the schema,
+    // so every interpreter reconstructs them locally (this same `buildUpgrade`
+    // fills missing keys via `Zero.structural`) — they need not be versioned
+    // or synced. Apply them directly to the doc WITHOUT entering the log, so a
+    // fresh doc's version() is the empty vector (genesis ⊥). Ephemeral already
+    // did this; authoritative now matches. Context: jj:kxswmuzx.
+    for (const op of initOps) {
+      applyChange(doc, op.path, op.change)
     }
   }
 

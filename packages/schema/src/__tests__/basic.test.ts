@@ -115,10 +115,10 @@ describe("createDocFromEntirety", () => {
 // ===========================================================================
 
 describe("sync primitives", () => {
-  it("version returns 1 initially (init ops)", () => {
+  it("version returns 0 initially (genesis — op-free structural init)", () => {
     const doc = createDoc(TestSchema)
 
-    expect(version(doc)).toBe(1)
+    expect(version(doc)).toBe(0)
   })
 
   it("version increments after mutations", () => {
@@ -356,8 +356,8 @@ describe("WeakMap isolation", () => {
 
     const vA0 = version(docA)
     const vB0 = version(docB)
-    expect(vA0).toBe(1)
-    expect(vB0).toBe(1)
+    expect(vA0).toBe(0)
+    expect(vB0).toBe(0)
 
     batch(docA, d => {
       d.theme.set("light")
@@ -484,8 +484,9 @@ describe("isPopulated", () => {
     // Mutate docA
     batch(docA, d => d.theme.set("synced"))
 
-    // Sync A → B (delta from init version, not 0, to avoid init ops)
-    const ops = delta(docA, 1)
+    // Sync A → B. Op-free genesis: structural init is never versioned, so the
+    // authored write starts at version 1 — delta from genesis (0) carries it.
+    const ops = delta(docA, 0)
     applyChanges(docB, ops, { origin: "sync" })
 
     expect(isPopulated(docB.theme)).toBe(true)

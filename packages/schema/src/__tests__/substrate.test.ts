@@ -120,31 +120,29 @@ describe("PlainVersion", () => {
     expect(a1.compare(b5)).toBe("concurrent")
   })
 
-  it("compare() is a total order when both sides are DEFAULT_EPOCH", () => {
+  it("compare(): two genesis (DEFAULT) versions are equal — both project to ⊥", () => {
     const d0 = new PlainVersion(0, DEFAULT_EPOCH)
     const d1 = new PlainVersion(1, DEFAULT_EPOCH)
 
-    expect(d0.compare(d1)).toBe("behind")
-    expect(d1.compare(d0)).toBe("ahead")
+    // Genesis is the empty vector regardless of counter — it has no internal
+    // order (two peers holding only schema-derived structure are equivalent).
+    expect(d0.compare(d1)).toBe("equal")
+    expect(d1.compare(d0)).toBe("equal")
     expect(d0.compare(d0)).toBe("equal")
   })
 
-  it("compare(): DEFAULT is never ahead of REAL, REAL is never behind DEFAULT", () => {
+  it("compare(): genesis (DEFAULT) is behind any REAL lineage — a VV subset", () => {
     const def0 = new PlainVersion(0, DEFAULT_EPOCH)
     const def5 = new PlainVersion(5, DEFAULT_EPOCH)
     const real1 = new PlainVersion(1, "inc-real")
     const real5 = new PlainVersion(5, "inc-real")
 
-    // DEFAULT(0) behind REAL(1) by value — still resolves via the DEFAULT branch.
+    // The empty vector ⊥ is a subset of every REAL lineage → always "behind",
+    // regardless of the genesis counter (the projection ignores it).
     expect(def0.compare(real1)).toBe("behind")
     expect(real1.compare(def0)).toBe("ahead")
-
-    // DEFAULT can never be reported as "ahead" of REAL, even with a larger value —
-    // it degrades to "equal" rather than asserting a false ordering.
-    expect(def5.compare(real1)).toBe("equal")
-    // Symmetric: REAL can never be reported "behind" DEFAULT.
-    expect(real1.compare(def5)).toBe("equal")
-
+    expect(def5.compare(real1)).toBe("behind")
+    expect(real1.compare(def5)).toBe("ahead")
     expect(def0.compare(real5)).toBe("behind")
     expect(real5.compare(def0)).toBe("ahead")
   })
@@ -229,31 +227,32 @@ describe("PlainVersion.meet()", () => {
     }
   })
 
-  it("cross-epoch meet produces a deterministic zero at the lexicographically-min epoch", () => {
+  it("meet of two divergent REAL lineages is the genesis (empty) version", () => {
     const a = new PlainVersion(5, "inc-a")
     const b = new PlainVersion(3, "inc-b")
 
     const ab = a.meet(b) as PlainVersion
     const ba = b.meet(a) as PlainVersion
 
+    // Disjoint lineage keys share no common entry → the empty vector ⊥ → genesis.
     expect(ab.value).toBe(0)
     expect(ba.value).toBe(0)
-    // Commutative: both orders pick the same (lexicographically smaller) epoch.
-    expect(ab.epoch).toBe("inc-a")
-    expect(ba.epoch).toBe("inc-a")
+    expect(ab.epoch).toBe(DEFAULT_EPOCH)
+    expect(ba.epoch).toBe(DEFAULT_EPOCH)
   })
 
-  it("DEFAULT-vs-REAL meet subsumes at the REAL epoch's root", () => {
+  it("meet of genesis (DEFAULT) and REAL is the genesis version", () => {
     const def = new PlainVersion(3, DEFAULT_EPOCH)
     const real = new PlainVersion(7, "inc-real")
 
     const defReal = def.meet(real) as PlainVersion
     const realDef = real.meet(def) as PlainVersion
 
+    // ⊥ ∩ {real} = ⊥ → genesis.
     expect(defReal.value).toBe(0)
-    expect(defReal.epoch).toBe("inc-real")
+    expect(defReal.epoch).toBe(DEFAULT_EPOCH)
     expect(realDef.value).toBe(0)
-    expect(realDef.epoch).toBe("inc-real")
+    expect(realDef.epoch).toBe(DEFAULT_EPOCH)
   })
 })
 
@@ -288,10 +287,11 @@ describe("createPlainVersionStrategy", () => {
     expect(strategy.logOffset(since)).toBe(2)
   })
 
-  it("logOffset treats DEFAULT_EPOCH as a universal prefix regardless of current epoch", () => {
+  it("logOffset maps genesis (DEFAULT_EPOCH) to offset 0 regardless of counter", () => {
     const { strategy } = createPlainVersionStrategy("inc-a")
-    const since = new PlainVersion(3, DEFAULT_EPOCH)
-    expect(strategy.logOffset(since)).toBe(3)
+    // Genesis is the empty vector ⊥ → the start of the authored log.
+    expect(strategy.logOffset(new PlainVersion(3, DEFAULT_EPOCH))).toBe(0)
+    expect(strategy.logOffset(new PlainVersion(0, DEFAULT_EPOCH))).toBe(0)
   })
 
   it("adoptEpoch updates subsequent current()/zero output", () => {
@@ -304,22 +304,22 @@ describe("createPlainVersionStrategy", () => {
     expect(strategy.current(5).epoch).toBe("inc-b")
   })
 
-  it("getEpoch reflects the live epoch, including after lazy-mint", () => {
-    const { strategy, getEpoch } = createPlainVersionStrategy(DEFAULT_EPOCH)
+  it("current() is a pure projection (no mint); adoptEpoch is the sole epoch mutator", () => {
+    const { strategy, getEpoch, adoptEpoch } =
+      createPlainVersionStrategy(DEFAULT_EPOCH)
     expect(getEpoch()).toBe(DEFAULT_EPOCH)
 
-    // flushCount=1 is init-ops-only — stays DEFAULT.
+    // current() no longer mints — identity is claimed by the substrate on the
+    // first LOCAL authored flush (see the PlainSubstrate lifecycle tests).
     strategy.current(1)
+    strategy.current(2)
     expect(getEpoch()).toBe(DEFAULT_EPOCH)
 
-    // flushCount=2 is the first real write — lazily mints a REAL epoch.
-    strategy.current(2)
-    const minted = getEpoch()
-    expect(minted).not.toBe(DEFAULT_EPOCH)
-
-    // The minted epoch is stable across subsequent flushes.
-    strategy.current(3)
-    expect(getEpoch()).toBe(minted)
+    // adoptEpoch is the only epoch mutator (the substrate uses it to mint; a
+    // merge uses it to adopt a peer's lineage). It is stable afterwards.
+    adoptEpoch("inc-real")
+    expect(getEpoch()).toBe("inc-real")
+    expect(strategy.current(3).epoch).toBe("inc-real")
   })
 })
 
@@ -386,52 +386,55 @@ describe("PlainSubstrate lifecycle", () => {
     expect(snapshotOf(substrate)).toEqual(defaults)
   })
 
-  it("version() starts at 1 for a freshly created substrate (init ops)", () => {
+  it("version() starts at genesis (value 0, DEFAULT_EPOCH) for a freshly created substrate", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
-    const f = substrate.version()
-    expect(f.value).toBe(1)
-    expect(f.serialize()).toBe(
-      `${(substrate.version() as PlainVersion).epoch}:1`,
-    )
+    const f = substrate.version() as PlainVersion
+    // Op-free genesis: structural init does not flush, so a fresh doc is the
+    // empty vector ⊥ — value 0, no lineage yet.
+    expect(f.value).toBe(0)
+    expect(f.epoch).toBe(DEFAULT_EPOCH)
+    expect(f.serialize()).toBe(`${DEFAULT_EPOCH}:0`)
   })
 
   it("version() increments after mutations via the writable context", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(substrate)
 
-    expect(substrate.version().value).toBe(1)
+    expect(substrate.version().value).toBe(0)
+    expect((substrate.version() as PlainVersion).epoch).toBe(DEFAULT_EPOCH)
 
-    // Each batch() call triggers one flush cycle → one version bump
+    // The first local authored flush mints a REAL lineage and bumps to 1.
     batch(doc, d => d.title.insert(0, "Hi"))
-    expect(substrate.version().value).toBe(2)
+    expect(substrate.version().value).toBe(1)
+    expect((substrate.version() as PlainVersion).epoch).not.toBe(DEFAULT_EPOCH)
 
     batch(doc, d => d.count.increment(5))
-    expect(substrate.version().value).toBe(3)
+    expect(substrate.version().value).toBe(2)
 
     // A multi-op transaction is a single flush cycle → one version bump
     batch(doc, d => {
       d.title.insert(2, " there")
       d.count.increment(3)
     })
-    expect(substrate.version().value).toBe(4)
+    expect(substrate.version().value).toBe(3)
   })
 
   it("version() does not increment for empty transactions", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(substrate)
 
-    expect(substrate.version().value).toBe(1)
+    expect(substrate.version().value).toBe(0)
 
     // applyChanges with empty array should not bump version
     applyChanges(doc, [])
-    expect(substrate.version().value).toBe(1)
+    expect(substrate.version().value).toBe(0)
   })
 
   it("version() is up-to-date inside a subscribe callback (notify-after-commit)", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     const doc = interpretSubstrate(substrate)
 
-    expect(substrate.version().value).toBe(1)
+    expect(substrate.version().value).toBe(0)
 
     // Track the version value observed inside the subscriber
     const observedVersions: number[] = []
@@ -445,7 +448,7 @@ describe("PlainSubstrate lifecycle", () => {
 
     // Each subscriber call should see the version AFTER the flush,
     // not the stale version from before.
-    expect(observedVersions).toEqual([2, 3, 4])
+    expect(observedVersions).toEqual([1, 2, 3])
   })
 
   it("delta() returns the just-flushed ops inside a subscribe callback", () => {
@@ -559,10 +562,10 @@ describe("PlainSubstrate lifecycle", () => {
 
     batch(doc, d => d.title.insert(0, "A"))
     const f1 = substrate.version()
-    expect(f1.value).toBe(2)
+    expect(f1.value).toBe(1)
 
     batch(doc, d => d.count.increment(1))
-    expect(substrate.version().value).toBe(3)
+    expect(substrate.version().value).toBe(2)
 
     // exportSince(f1) should only contain the second mutation
     const payload = substrate.exportSince(f1) as any
@@ -680,15 +683,18 @@ describe("Round-trip replication", () => {
     batch(docA, d => d.count.increment(1))
     batch(docA, d => d.count.increment(2))
 
-    expect(substrateB.version().value).toBe(1)
+    expect(substrateB.version().value).toBe(0)
 
     const delta = substrateA.exportSince(f0) as any
     substrateB.merge(delta)
 
     // merge preserves batch boundaries — each batch is a separate
     // executeBatch call → 2 version bumps (one per change on A).
-    // B starts at 1 (init) + 2 merged batches = 3.
-    expect(substrateB.version().value).toBe(3)
+    // B starts at genesis (0) + 2 merged batches = 2, adopting A's lineage.
+    expect(substrateB.version().value).toBe(2)
+    expect((substrateB.version() as PlainVersion).epoch).toBe(
+      (substrateA.version() as PlainVersion).epoch,
+    )
   })
 
   it("merge with empty ops does not increment the version", () => {
@@ -702,7 +708,7 @@ describe("Round-trip replication", () => {
     }
     substrate.merge(emptyPayload)
 
-    expect(substrate.version().value).toBe(1)
+    expect(substrate.version().value).toBe(0)
   })
 })
 
@@ -793,7 +799,7 @@ describe("merge with entirety payload (PlainSubstrate)", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     interpretSubstrate(substrate)
 
-    expect(substrate.version().value).toBe(1)
+    expect(substrate.version().value).toBe(0)
 
     const entirety: SubstratePayload = {
       kind: "entirety",
@@ -816,7 +822,7 @@ describe("merge with entirety payload (PlainSubstrate)", () => {
     }
     substrate.merge(entirety)
 
-    expect(substrate.version().value).toBe(1)
+    expect(substrate.version().value).toBe(0)
   })
 })
 
@@ -900,7 +906,8 @@ describe("Epoch boundaries", () => {
     batch(docA, d => d.count.increment(100))
     batch(docA, d => d.items.push({ name: "Task", done: false }))
 
-    expect(substrateA.version().value).toBe(5)
+    // Op-free genesis: 4 authored batches → value 4 (no init flush).
+    expect(substrateA.version().value).toBe(4)
 
     // Export snapshot and create a new substrate
     const snapshot = substrateA.exportEntirety()
@@ -1143,11 +1150,18 @@ describe("PlainReplica.advance()", () => {
 
   it("advance precondition: target beyond current version throws", () => {
     const replica = plainReplicaFactory.createEmpty()
-    expect(() =>
-      replica.advance(
-        new PlainVersion(999, (replica.version() as PlainVersion).epoch),
-      ),
-    ).toThrow()
+    const source = plainSubstrateFactory.create(TestSchema)
+    const doc = interpretSubstrate(source)
+    batch(doc, d => d.title.insert(0, "A"))
+    // Replica adopts source's REAL lineage and its single authored batch.
+    replica.merge(
+      source.exportSince(
+        new PlainVersion(0, (source.version() as PlainVersion).epoch),
+      ) as any,
+    )
+    const epoch = (replica.version() as PlainVersion).epoch
+    // A same-lineage target beyond the current log length cannot be reached.
+    expect(() => replica.advance(new PlainVersion(999, epoch))).toThrow()
   })
 
   it("exportSince returns null for versions behind the base after advance", () => {
@@ -1176,15 +1190,10 @@ describe("PlainReplica.advance()", () => {
     // Advance past v0
     replica.advance(v2)
 
-    // After advance, v0 is behind base → null
+    // After advancing the base to v2 (value 1), genesis is behind the base → null.
     expect(
       replica.exportSince(
         new PlainVersion(0, (replica.version() as PlainVersion).epoch),
-      ),
-    ).toBeNull()
-    expect(
-      replica.exportSince(
-        new PlainVersion(1, (replica.version() as PlainVersion).epoch),
       ),
     ).toBeNull()
 
