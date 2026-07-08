@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/devtools",
-  "version": "2.1.0",
+  "version": "2.3.0",
   "description": "Reactive world model over the Kyneta observation (ObsEvent) stream, composed from @kyneta/index",
   "author": "Duane Johnson",
   "license": "MIT",

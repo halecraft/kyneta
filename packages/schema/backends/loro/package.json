@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/loro-schema",
-  "version": "2.1.0",
+  "version": "2.3.0",
   "description": "Loro CRDT substrate for @kyneta/schema — collaborative data types with typed refs (formerly @kyneta/schema-loro)",
   "author": "Duane Johnson",
   "license": "MIT",
