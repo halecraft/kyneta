@@ -107,7 +107,7 @@ describe("PlainVersion", () => {
     }
   })
 
-  it("compare() returns 'concurrent' across two REAL lineages, both directions (safety fallback)", () => {
+  it("compare() returns 'concurrent' across two REAL lineages, both directions (disjoint VV keys)", () => {
     const a1 = new PlainVersion(1, "inc-a")
     const a5 = new PlainVersion(5, "inc-a")
     const b1 = new PlainVersion(1, "inc-b")
@@ -721,6 +721,28 @@ describe("merge with entirety payload (PlainSubstrate)", () => {
     expect(snap.title).toBe("Replaced")
     expect(snap.count).toBe(99)
     expect(snap.theme).toBe("dark")
+  })
+
+  it("absorbing a peer's content via merge never mints a lineage (absorb ≠ author)", () => {
+    const substrate = plainSubstrateFactory.create(TestSchema)
+    expect((substrate.version() as PlainVersion).lineage).toBe(DEFAULT_LINEAGE)
+
+    // Only local authorship mints a lineage. Absorbing a peer's ops must never
+    // make the receiver claim a fresh identity for content it does not own — a
+    // writer that adopted a spurious lineage here would fork sync from its peers.
+    const entirety: SubstratePayload = {
+      kind: "entirety",
+      encoding: "json",
+      data: JSON.stringify({
+        title: "from-peer",
+        count: 1,
+        theme: "",
+        items: [],
+      }),
+    }
+    substrate.merge(entirety, { origin: "sync" })
+
+    expect((substrate.version() as PlainVersion).lineage).toBe(DEFAULT_LINEAGE)
   })
 
   it("preserves ref identity after entirety merge", () => {

@@ -1009,6 +1009,39 @@ importers:
         specifier: 'catalog:'
         version: 4.1.4(@opentelemetry/api@1.9.0)(@types/node@25.6.0)(jsdom@26.1.0)(vite@7.3.2(@types/node@25.6.0)(jiti@2.7.0)(tsx@4.21.0))
 
+  tests/conformance:
+    devDependencies:
+      '@kyneta/bridge-transport':
+        specifier: workspace:^
+        version: link:../../packages/exchange/transports/bridge
+      '@kyneta/exchange':
+        specifier: workspace:^
+        version: link:../../packages/exchange
+      '@kyneta/loro-schema':
+        specifier: workspace:^
+        version: link:../../packages/schema/backends/loro
+      '@kyneta/schema':
+        specifier: workspace:^
+        version: link:../../packages/schema
+      '@kyneta/yjs-schema':
+        specifier: workspace:^
+        version: link:../../packages/schema/backends/yjs
+      '@types/node':
+        specifier: ^22
+        version: 22.19.17
+      loro-crdt:
+        specifier: ^1.10.0
+        version: 1.10.8
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.4(@opentelemetry/api@1.9.0)(@types/node@22.19.17)(jsdom@26.1.0)(vite@7.3.2(@types/node@22.19.17)(jiti@2.7.0)(tsx@4.21.0))
+      yjs:
+        specifier: ^13.6.30
+        version: 13.6.30
+
   tests/integration:
     devDependencies:
       '@kyneta/exchange':

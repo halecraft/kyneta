@@ -1,0 +1,21 @@
+{
+  "name": "@kyneta/test-conformance",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "verify logic",
+    "verify": "verify"
+  },
+  "devDependencies": {
+    "@kyneta/bridge-transport": "workspace:^",
+    "@kyneta/exchange": "workspace:^",
+    "@kyneta/loro-schema": "workspace:^",
+    "@kyneta/schema": "workspace:^",
+    "@kyneta/yjs-schema": "workspace:^",
+    "@types/node": "^22",
+    "loro-crdt": "^1.10.0",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "yjs": "^13.6.30"
+  }
+}

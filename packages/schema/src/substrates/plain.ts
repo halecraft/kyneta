@@ -192,7 +192,7 @@ export class PlainVersion implements Version {
 
 export function createPlainVersionStrategy(initialLineage: string): {
   strategy: VersionStrategy<PlainVersion>
-  adoptLineage: (inc: string) => void
+  adoptLineage: (next: string) => void
   getLineage: () => string
 } {
   let lineage = initialLineage
@@ -225,8 +225,8 @@ export function createPlainVersionStrategy(initialLineage: string): {
 
   return {
     strategy,
-    adoptLineage: (inc: string) => {
-      lineage = inc
+    adoptLineage: (next: string) => {
+      lineage = next
     },
     getLineage: () => lineage,
   }
@@ -255,7 +255,7 @@ export function createPlainVersionStrategy(initialLineage: string): {
 export function createPlainSubstrate<V extends Version>(
   doc: PlainState,
   strategy: VersionStrategy<V>,
-  adoptLineage?: (inc: string) => void,
+  adoptLineage?: (next: string) => void,
   getLineage?: () => string,
 ): Substrate<V> {
   const reader = plainReader(doc)
@@ -511,7 +511,7 @@ export function createPlainSubstrate<V extends Version>(
 function createPlainReplicaCore<V extends Version>(
   materialize: () => PlainState,
   strategy: VersionStrategy<V>,
-  _adoptLineage?: (inc: string) => void,
+  _adoptLineage?: (next: string) => void,
   getLineage?: () => string,
 ) {
   // Version log: log[i] = batch of Ops from flush cycle (baseOffset + i).
@@ -677,7 +677,7 @@ function createPlainReplicaCore<V extends Version>(
  */
 export function createPlainReplica<V extends Version>(
   strategy: VersionStrategy<V>,
-  adoptLineage?: (inc: string) => void,
+  adoptLineage?: (next: string) => void,
   getLineage?: () => string,
 ): Replica<V> {
   // --- Mutable base state ---
@@ -931,7 +931,7 @@ export function buildPlainSubstrateFromEntirety<V extends Version>(
   payload: SubstratePayload,
   schema: SchemaNode,
   strategy: VersionStrategy<V>,
-  adoptLineage?: (inc: string) => void,
+  adoptLineage?: (next: string) => void,
   getLineage?: () => string,
 ): Substrate<V> {
   if (payload.encoding !== "json" || typeof payload.data !== "string") {
@@ -978,7 +978,7 @@ export function buildPlainSubstrateFromEntirety<V extends Version>(
 export function buildPlainReplicaFromEntirety<V extends Version>(
   payload: SubstratePayload,
   strategy: VersionStrategy<V>,
-  adoptLineage?: (inc: string) => void,
+  adoptLineage?: (next: string) => void,
   getLineage?: () => string,
 ): Replica<V> {
   if (payload.encoding !== "json" || typeof payload.data !== "string") {
@@ -1019,7 +1019,7 @@ export function buildUpgrade<V extends Version>(
   replica: Replica<V>,
   schema: SchemaNode,
   strategy: VersionStrategy<V>,
-  adoptLineage?: (inc: string) => void,
+  adoptLineage?: (next: string) => void,
   getLineage?: () => string,
 ): Substrate<V> {
   const materializedState = (replica as any)[BACKING_DOC] as PlainState
@@ -1098,12 +1098,12 @@ export const plainReplicaFactory: ReplicaFactory<PlainVersion> = {
     if (parts.length !== 2) {
       throw new Error(`Invalid PlainVersion value: ${serialized}`)
     }
-    const inc = parts[0]
+    const lineage = parts[0]
     const n = Number(parts[1])
     if (!Number.isFinite(n) || n < 0 || Math.floor(n) !== n) {
       throw new Error(`Invalid PlainVersion value: ${serialized}`)
     }
-    return new PlainVersion(n, inc)
+    return new PlainVersion(n, lineage)
   },
 }
 
@@ -1134,9 +1134,9 @@ export const plainSubstrateFactory: SubstrateFactory<PlainVersion> = {
     replica: Replica<PlainVersion>,
     schema: SchemaNode,
   ): Substrate<PlainVersion> {
-    const inc = replica.version().lineage
+    const lineage = replica.version().lineage
     const { strategy, adoptLineage, getLineage } =
-      createPlainVersionStrategy(inc)
+      createPlainVersionStrategy(lineage)
     return buildUpgrade(replica, schema, strategy, adoptLineage, getLineage)
   },
 
