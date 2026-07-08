@@ -56,6 +56,7 @@ export type {
 export {
   advanceAddresses,
   advanceIndex,
+  applyTextInstructions,
   foldInstructions,
   incrementChange,
   isIncrementChange,

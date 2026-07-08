@@ -680,3 +680,37 @@ export function textInstructionsToPatches(
 
   return result
 }
+
+// ---------------------------------------------------------------------------
+// applyTextInstructions — replay a text delta onto a live TextRef
+// ---------------------------------------------------------------------------
+
+import type { TextRef } from "./interpreters/writable.js"
+
+/**
+ * Replay a `TextInstruction[]` delta onto a live, mutable `TextRef`,
+ * character-cursor style (retain advances the cursor; insert applies at the
+ * cursor and advances it by the inserted length; delete applies at the cursor
+ * and does not advance it).
+ *
+ * This is the **imperative shell** over the pure `textInstructionsToPatches`:
+ * it converts the cursor-based instructions to absolute-offset patches and
+ * dispatches each to `TextRef.insert` / `TextRef.delete`. It is the `TextRef`
+ * counterpart to applying those same patches to a DOM `Text` node via
+ * `insertData`/`deleteData` — the use case `textInstructionsToPatches` was
+ * built for. The cursor math lives there, not here.
+ *
+ * Distinct from `foldInstructions`, which is a *dual-cursor* (source/target)
+ * fold for tracking position across a diff and whose `insert` case carries only
+ * a length, not content — the wrong sibling to build replay on. This is the
+ * single-cursor, content-carrying replay.
+ */
+export function applyTextInstructions(
+  target: TextRef,
+  instructions: readonly TextInstruction[],
+): void {
+  for (const patch of textInstructionsToPatches(instructions)) {
+    if (patch.kind === "insert") target.insert(patch.offset, patch.text)
+    else target.delete(patch.offset, patch.count)
+  }
+}
