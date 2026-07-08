@@ -256,7 +256,7 @@ describe("export/import snapshot", () => {
     expect(readerB.read(RawPath.empty.field("theme"))).toBe("dark")
   })
 
-  it("fromSnapshot creates a new epoch (version independent)", () => {
+  it("fromSnapshot creates a new lineage (version independent)", () => {
     const substrateA = loroSubstrateFactory.create(TestSchema)
     const docA = interpretSubstrate(TestSchema, substrateA)
     batch(docA, d => d.title.insert(0, "Hello"))

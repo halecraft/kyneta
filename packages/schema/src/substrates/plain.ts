@@ -85,8 +85,8 @@ import { Zero } from "../zero.js"
  * The type itself is pure — no member mutates anything through this
  * interface. But `createPlainVersionStrategy`'s concrete implementation for
  * `PlainVersion` is per-replica *stateful*: it closes over a mutable
- * `epoch` string (lazily minted, and updatable via the accompanying
- * `adoptEpoch` closure returned alongside the strategy — see below).
+ * `lineage` string (lazily minted, and updatable via the accompanying
+ * `adoptLineage` closure returned alongside the strategy — see below).
  * `timestampVersionStrategy` (LWW, in `lww.ts`) remains a genuinely stateless
  * `VersionStrategy<TimestampVersion>` singleton, unaffected by this.
  */
@@ -123,15 +123,15 @@ export type VersionStrategy<V extends Version> = {
 // (a subset of) any REAL lineage. The first authored write mints a REAL
 // lineage (see `createPlainVersionStrategy`). This is Plain's analog of a
 // fresh Loro doc's empty version vector — see jj:kxswmuzx.
-export const DEFAULT_EPOCH = "kyneta.default"
+export const DEFAULT_LINEAGE = "kyneta.genesis"
 
 export class PlainVersion implements Version {
   readonly #value: number
-  readonly #epoch: string
+  readonly #lineage: string
 
-  constructor(value: number, epoch: string) {
+  constructor(value: number, lineage: string) {
     this.#value = value
-    this.#epoch = epoch
+    this.#lineage = lineage
   }
 
   /** The raw version integer. */
@@ -139,24 +139,24 @@ export class PlainVersion implements Version {
     return this.#value
   }
 
-  get epoch(): string {
-    return this.#epoch
+  get lineage(): string {
+    return this.#lineage
   }
 
   serialize(): string {
-    return `${this.#epoch}:${this.#value}`
+    return `${this.#lineage}:${this.#value}`
   }
 
   /**
    * Project this version to a single-entry version vector: genesis
-   * (`DEFAULT_EPOCH`) → the empty vector ⊥; a REAL lineage → `{epoch: value}`.
+   * (`DEFAULT_LINEAGE`) → the empty vector ⊥; a REAL lineage → `{lineage: value}`.
    * `compare`/`meet` are then the shared `versionVector*` algebra — the same
    * lattice Loro/Yjs use — with zero Plain-specific special cases. See
    * jj:kxswmuzx for the derivation.
    */
   #toVector(): Map<string, number> {
-    if (this.#epoch === DEFAULT_EPOCH) return new Map()
-    return new Map([[this.#epoch, this.#value]])
+    if (this.#lineage === DEFAULT_LINEAGE) return new Map()
+    return new Map([[this.#lineage, this.#value]])
   }
 
   compare(other: Version): "behind" | "equal" | "ahead" | "concurrent" {
@@ -180,9 +180,9 @@ export class PlainVersion implements Version {
     // prune-on-reset), so the result is ≤1 entry.
     const met = versionVectorMeet(this.#toVector(), other.#toVector())
     const entry = met.entries().next()
-    if (entry.done) return new PlainVersion(0, DEFAULT_EPOCH)
-    const [epoch, value] = entry.value
-    return new PlainVersion(value, epoch)
+    if (entry.done) return new PlainVersion(0, DEFAULT_LINEAGE)
+    const [lineage, value] = entry.value
+    return new PlainVersion(value, lineage)
   }
 }
 
@@ -190,16 +190,16 @@ export class PlainVersion implements Version {
 // plainVersionStrategy — the PlainVersion algebra
 // ---------------------------------------------------------------------------
 
-export function createPlainVersionStrategy(initialEpoch: string): {
+export function createPlainVersionStrategy(initialLineage: string): {
   strategy: VersionStrategy<PlainVersion>
-  adoptEpoch: (inc: string) => void
-  getEpoch: () => string
+  adoptLineage: (inc: string) => void
+  getLineage: () => string
 } {
-  let epoch = initialEpoch
+  let lineage = initialLineage
 
   const strategy: VersionStrategy<PlainVersion> = {
     get zero() {
-      return new PlainVersion(0, epoch)
+      return new PlainVersion(0, lineage)
     },
     current(flushCount: number) {
       // Pure projection. A REAL lineage is minted by the substrate on the
@@ -207,16 +207,16 @@ export function createPlainVersionStrategy(initialEpoch: string): {
       // here — so a headless replica, or a merge that only absorbs a peer's
       // ops, never invents an identity for content it does not own. Genesis is
       // the empty vector ⊥ (value 0) until that mint. Context: jj:kxswmuzx.
-      return new PlainVersion(flushCount, epoch)
+      return new PlainVersion(flushCount, lineage)
     },
     logOffset(since: PlainVersion) {
       // Genesis (DEFAULT) is the empty vector ⊥ — it maps to the start of the
       // authored log (offset 0), so a genesis peer receives the full authored
       // delta regardless of any phantom counter it may carry.
-      if (since.epoch === DEFAULT_EPOCH) {
+      if (since.lineage === DEFAULT_LINEAGE) {
         return 0
       }
-      if (since.epoch !== epoch) {
+      if (since.lineage !== lineage) {
         return null
       }
       return since.value
@@ -225,10 +225,10 @@ export function createPlainVersionStrategy(initialEpoch: string): {
 
   return {
     strategy,
-    adoptEpoch: (inc: string) => {
-      epoch = inc
+    adoptLineage: (inc: string) => {
+      lineage = inc
     },
-    getEpoch: () => epoch,
+    getLineage: () => lineage,
   }
 }
 
@@ -255,8 +255,8 @@ export function createPlainVersionStrategy(initialEpoch: string): {
 export function createPlainSubstrate<V extends Version>(
   doc: PlainState,
   strategy: VersionStrategy<V>,
-  adoptEpoch?: (inc: string) => void,
-  getEpoch?: () => string,
+  adoptLineage?: (inc: string) => void,
+  getLineage?: () => string,
 ): Substrate<V> {
   const reader = plainReader(doc)
 
@@ -265,8 +265,8 @@ export function createPlainSubstrate<V extends Version>(
   const replicaCore = createPlainReplicaCore(
     () => doc,
     strategy,
-    adoptEpoch,
-    getEpoch,
+    adoptLineage,
+    getLineage,
   )
 
   // The WritableContext is built lazily and cached — the same context
@@ -311,15 +311,15 @@ export function createPlainSubstrate<V extends Version>(
       // `replay: true` (absorbing a peer's ops must never claim identity), and
       // a headless replica flushes without ever reaching afterBatch — so both
       // stay genesis / adopt the sender's lineage instead. Must precede flush()
-      // so the flushed version already carries the new lineage. `getEpoch` is
+      // so the flushed version already carries the new lineage. `getLineage` is
       // undefined for LWW/timestamp substrates, which never mint.
       if (
         !options?.replay &&
         replicaCore.pendingOps.length > 0 &&
-        getEpoch &&
-        getEpoch() === DEFAULT_EPOCH
+        getLineage &&
+        getLineage() === DEFAULT_LINEAGE
       ) {
-        adoptEpoch?.(randomHex(8))
+        adoptLineage?.(randomHex(8))
       }
       replicaCore.flush()
     },
@@ -395,19 +395,19 @@ export function createPlainSubstrate<V extends Version>(
       }
 
       const { content } = parsePlainPayload(payload.data)
-      const epoch = payload.epoch
+      const lineage = payload.lineage
 
-      // Adopt the incoming epoch if we are still DEFAULT (accept our first
-      // real identity). True epoch-boundary resets (REAL -> different REAL)
+      // Adopt the incoming lineage if we are still DEFAULT (accept our first
+      // real identity). True lineage-boundary resets (REAL -> different REAL)
       // are handled exclusively by `resetFromEntirety` — the Synchronizer
-      // calls that instead of `merge()` once it detects an epoch mismatch.
+      // calls that instead of `merge()` once it detects an lineage mismatch.
       if (
-        epoch !== undefined &&
-        getEpoch &&
-        epoch !== getEpoch() &&
-        getEpoch() === DEFAULT_EPOCH
+        lineage !== undefined &&
+        getLineage &&
+        lineage !== getLineage() &&
+        getLineage() === DEFAULT_LINEAGE
       ) {
-        adoptEpoch?.(epoch)
+        adoptLineage?.(lineage)
       }
 
       const ctx = substrate.context()
@@ -456,9 +456,9 @@ export function createPlainSubstrate<V extends Version>(
       }
 
       const { content } = parsePlainPayload(payload.data)
-      const epoch = payload.epoch
-      if (epoch !== undefined && getEpoch && epoch !== getEpoch()) {
-        adoptEpoch?.(epoch)
+      const lineage = payload.lineage
+      if (lineage !== undefined && getLineage && lineage !== getLineage()) {
+        adoptLineage?.(lineage)
       }
 
       const ctx = substrate.context()
@@ -471,7 +471,7 @@ export function createPlainSubstrate<V extends Version>(
       // pipeline so the changefeed fires and refs observe the transition.
       // Every schema-defined top-level field is present in the incoming
       // entirety (built from Zero.structural on the sender), so replacing
-      // each field fully supersedes the prior epoch's value — no explicit
+      // each field fully supersedes the prior lineage's value — no explicit
       // doc wipe is needed for the schema-aware substrate case.
       const ops = stateImageToOps(content as Record<string, unknown>)
       if (ops.length > 0) {
@@ -479,7 +479,7 @@ export function createPlainSubstrate<V extends Version>(
       }
 
       // Resynchronize the log/version with the remote's authoritative
-      // value — this prevents flush-count inflation across epochs.
+      // value — this prevents flush-count inflation across lineages.
       if (remoteVersion instanceof PlainVersion) {
         replicaCore.resetLog(remoteVersion.value)
       }
@@ -511,8 +511,8 @@ export function createPlainSubstrate<V extends Version>(
 function createPlainReplicaCore<V extends Version>(
   materialize: () => PlainState,
   strategy: VersionStrategy<V>,
-  _adoptEpoch?: (inc: string) => void,
-  getEpoch?: () => string,
+  _adoptLineage?: (inc: string) => void,
+  getLineage?: () => string,
 ) {
   // Version log: log[i] = batch of Ops from flush cycle (baseOffset + i).
   // The absolute flush count is baseOffset + log.length.
@@ -620,7 +620,7 @@ function createPlainReplicaCore<V extends Version>(
         kind: "entirety",
         encoding: "json",
         data: JSON.stringify(materialize()),
-        epoch: getEpoch ? getEpoch() : undefined,
+        lineage: getLineage ? getLineage() : undefined,
       }
     },
 
@@ -630,7 +630,7 @@ function createPlainReplicaCore<V extends Version>(
       // Strategy cannot map the version to a log index — fall back to
       // entirety. This is the TimestampVersion path: wall-clock timestamps
       // have no relationship to the op log array.
-      // Additionally, for PlainVersion, this is now triggered for cross-epoch versions.
+      // Additionally, for PlainVersion, this is now triggered for cross-lineage versions.
       if (offset === null) return this.exportEntirety()
 
       // Peer is behind the base — incremental export is not possible.
@@ -650,7 +650,7 @@ function createPlainReplicaCore<V extends Version>(
         kind: "since",
         encoding: "json",
         data: JSON.stringify(serializedBatches),
-        epoch: getEpoch ? getEpoch() : undefined,
+        lineage: getLineage ? getLineage() : undefined,
       }
     },
   }
@@ -677,8 +677,8 @@ function createPlainReplicaCore<V extends Version>(
  */
 export function createPlainReplica<V extends Version>(
   strategy: VersionStrategy<V>,
-  adoptEpoch?: (inc: string) => void,
-  getEpoch?: () => string,
+  adoptLineage?: (inc: string) => void,
+  getLineage?: () => string,
 ): Replica<V> {
   // --- Mutable base state ---
   // After advance(), the base incorporates projected ops. Starts empty.
@@ -711,8 +711,8 @@ export function createPlainReplica<V extends Version>(
   const core = createPlainReplicaCore(
     materialize,
     strategy,
-    adoptEpoch,
-    getEpoch,
+    adoptLineage,
+    getLineage,
   )
 
   // Wrap core.flush to invalidate the materialization cache.
@@ -771,18 +771,18 @@ export function createPlainReplica<V extends Version>(
       }
 
       const { content } = parsePlainPayload(payload.data)
-      const epoch = payload.epoch
-      // Adopt the incoming epoch only while still DEFAULT (accept our first
-      // real identity). Genuine epoch-boundary resets (REAL -> different
+      const lineage = payload.lineage
+      // Adopt the incoming lineage only while still DEFAULT (accept our first
+      // real identity). Genuine lineage-boundary resets (REAL -> different
       // REAL) go through `resetFromEntirety` instead — the Synchronizer
-      // calls that once it detects an epoch mismatch.
+      // calls that once it detects an lineage mismatch.
       if (
-        epoch !== undefined &&
-        getEpoch &&
-        epoch !== getEpoch() &&
-        getEpoch() === DEFAULT_EPOCH
+        lineage !== undefined &&
+        getLineage &&
+        lineage !== getLineage() &&
+        getLineage() === DEFAULT_LINEAGE
       ) {
-        adoptEpoch?.(epoch)
+        adoptLineage?.(lineage)
       }
 
       if (payload.kind === "entirety") {
@@ -825,15 +825,15 @@ export function createPlainReplica<V extends Version>(
       }
 
       const { content } = parsePlainPayload(payload.data)
-      const epoch = payload.epoch
-      if (epoch !== undefined && getEpoch && epoch !== getEpoch()) {
-        adoptEpoch?.(epoch)
+      const lineage = payload.lineage
+      if (lineage !== undefined && getLineage && lineage !== getLineage()) {
+        adoptLineage?.(lineage)
       }
 
       // Discard local history and adopt the incoming state and lineage:
       // clear the base, project the new state directly onto it, and
       // synchronize the log/version with the sender's authoritative value.
-      // This prevents flush-count inflation across epochs.
+      // This prevents flush-count inflation across lineages.
       const ops = stateImageToOps(content as Record<string, unknown>)
       for (const key of Object.keys(base)) {
         delete base[key]
@@ -931,8 +931,8 @@ export function buildPlainSubstrateFromEntirety<V extends Version>(
   payload: SubstratePayload,
   schema: SchemaNode,
   strategy: VersionStrategy<V>,
-  adoptEpoch?: (inc: string) => void,
-  getEpoch?: () => string,
+  adoptLineage?: (inc: string) => void,
+  getLineage?: () => string,
 ): Substrate<V> {
   if (payload.encoding !== "json" || typeof payload.data !== "string") {
     throw new Error(
@@ -941,9 +941,9 @@ export function buildPlainSubstrateFromEntirety<V extends Version>(
   }
 
   const { content } = parsePlainPayload(payload.data)
-  const epoch = payload.epoch
-  if (epoch !== undefined && getEpoch && epoch !== getEpoch()) {
-    adoptEpoch?.(epoch)
+  const lineage = payload.lineage
+  if (lineage !== undefined && getLineage && lineage !== getLineage()) {
+    adoptLineage?.(lineage)
   }
 
   // Plain substrates track version via log length — creating a fresh
@@ -952,7 +952,12 @@ export function buildPlainSubstrateFromEntirety<V extends Version>(
   // their version is inherent in the document state.)
   const defaults = Zero.structural(schema) as Record<string, unknown>
   const doc = { ...defaults } as PlainState
-  const substrate = createPlainSubstrate(doc, strategy, adoptEpoch, getEpoch)
+  const substrate = createPlainSubstrate(
+    doc,
+    strategy,
+    adoptLineage,
+    getLineage,
+  )
   const ops = stateImageToOps(content as Record<string, unknown>)
   if (ops.length > 0) {
     executeBatch(substrate.context(), ops)
@@ -973,15 +978,15 @@ export function buildPlainSubstrateFromEntirety<V extends Version>(
 export function buildPlainReplicaFromEntirety<V extends Version>(
   payload: SubstratePayload,
   strategy: VersionStrategy<V>,
-  adoptEpoch?: (inc: string) => void,
-  getEpoch?: () => string,
+  adoptLineage?: (inc: string) => void,
+  getLineage?: () => string,
 ): Replica<V> {
   if (payload.encoding !== "json" || typeof payload.data !== "string") {
     throw new Error(
       "PlainReplicaFactory.fromEntirety only supports JSON-encoded payloads",
     )
   }
-  const replica = createPlainReplica(strategy, adoptEpoch, getEpoch)
+  const replica = createPlainReplica(strategy, adoptLineage, getLineage)
   replica.merge(payload)
   return replica
 }
@@ -1014,15 +1019,20 @@ export function buildUpgrade<V extends Version>(
   replica: Replica<V>,
   schema: SchemaNode,
   strategy: VersionStrategy<V>,
-  adoptEpoch?: (inc: string) => void,
-  getEpoch?: () => string,
+  adoptLineage?: (inc: string) => void,
+  getLineage?: () => string,
 ): Substrate<V> {
   const materializedState = (replica as any)[BACKING_DOC] as PlainState
 
   // Create a fresh doc seeded from the replica's materialized state.
   // The substrate owns this doc — the replica's state is not shared.
   const doc = { ...materializedState } as PlainState
-  const substrate = createPlainSubstrate(doc, strategy, adoptEpoch, getEpoch)
+  const substrate = createPlainSubstrate(
+    doc,
+    strategy,
+    adoptLineage,
+    getLineage,
+  )
 
   // Compute defaults and filter to keys not already present.
   const defaults = Zero.structural(schema) as Record<string, unknown>
@@ -1064,19 +1074,19 @@ export const plainReplicaFactory: ReplicaFactory<PlainVersion> = {
   replicaType: ["plain", 1, 0] as const,
 
   createEmpty(): Replica<PlainVersion> {
-    const { strategy, adoptEpoch, getEpoch } =
-      createPlainVersionStrategy(DEFAULT_EPOCH)
-    return createPlainReplica(strategy, adoptEpoch, getEpoch)
+    const { strategy, adoptLineage, getLineage } =
+      createPlainVersionStrategy(DEFAULT_LINEAGE)
+    return createPlainReplica(strategy, adoptLineage, getLineage)
   },
 
   fromEntirety(payload: SubstratePayload): Replica<PlainVersion> {
-    const { strategy, adoptEpoch, getEpoch } =
-      createPlainVersionStrategy(DEFAULT_EPOCH)
+    const { strategy, adoptLineage, getLineage } =
+      createPlainVersionStrategy(DEFAULT_LINEAGE)
     return buildPlainReplicaFromEntirety(
       payload,
       strategy,
-      adoptEpoch,
-      getEpoch,
+      adoptLineage,
+      getLineage,
     )
   },
 
@@ -1115,18 +1125,19 @@ export const plainReplicaFactory: ReplicaFactory<PlainVersion> = {
  */
 export const plainSubstrateFactory: SubstrateFactory<PlainVersion> = {
   createReplica(): Replica<PlainVersion> {
-    const { strategy, adoptEpoch, getEpoch } =
-      createPlainVersionStrategy(DEFAULT_EPOCH)
-    return createPlainReplica(strategy, adoptEpoch, getEpoch)
+    const { strategy, adoptLineage, getLineage } =
+      createPlainVersionStrategy(DEFAULT_LINEAGE)
+    return createPlainReplica(strategy, adoptLineage, getLineage)
   },
 
   upgrade(
     replica: Replica<PlainVersion>,
     schema: SchemaNode,
   ): Substrate<PlainVersion> {
-    const inc = replica.version().epoch
-    const { strategy, adoptEpoch, getEpoch } = createPlainVersionStrategy(inc)
-    return buildUpgrade(replica, schema, strategy, adoptEpoch, getEpoch)
+    const inc = replica.version().lineage
+    const { strategy, adoptLineage, getLineage } =
+      createPlainVersionStrategy(inc)
+    return buildUpgrade(replica, schema, strategy, adoptLineage, getLineage)
   },
 
   create(schema: SchemaNode): Substrate<PlainVersion> {
@@ -1137,14 +1148,14 @@ export const plainSubstrateFactory: SubstrateFactory<PlainVersion> = {
     payload: SubstratePayload,
     schema: SchemaNode,
   ): Substrate<PlainVersion> {
-    const { strategy, adoptEpoch, getEpoch } =
-      createPlainVersionStrategy(DEFAULT_EPOCH)
+    const { strategy, adoptLineage, getLineage } =
+      createPlainVersionStrategy(DEFAULT_LINEAGE)
     return buildPlainSubstrateFromEntirety(
       payload,
       schema,
       strategy,
-      adoptEpoch,
-      getEpoch,
+      adoptLineage,
+      getLineage,
     )
   },
 

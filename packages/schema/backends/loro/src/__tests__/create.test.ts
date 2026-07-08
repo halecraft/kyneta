@@ -43,10 +43,12 @@ describe("createDoc (fresh doc)", () => {
     // the schema, never versioned — so two fresh peers with DIFFERENT peerIds
     // hold the empty version vector and compare `equal`. This is the shared
     // genesis bottom the plain substrate now mirrors. Context: jj:kxswmuzx.
-    const vA = bound.factory({ peerId: "alice", binding: bound.identityBinding })
+    const vA = bound
+      .factory({ peerId: "alice", binding: bound.identityBinding })
       .create(bound.schema)
       .version()
-    const vB = bound.factory({ peerId: "bob", binding: bound.identityBinding })
+    const vB = bound
+      .factory({ peerId: "bob", binding: bound.identityBinding })
       .create(bound.schema)
       .version()
     expect(vA.compare(vB)).toBe("equal")

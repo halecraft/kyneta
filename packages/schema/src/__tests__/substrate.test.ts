@@ -24,7 +24,7 @@ import {
   createPlainReplica,
   createPlainSubstrate,
   createPlainVersionStrategy,
-  DEFAULT_EPOCH,
+  DEFAULT_LINEAGE,
   parsePlainPayload,
 } from "../substrates/plain.js"
 
@@ -90,7 +90,7 @@ describe("PlainVersion", () => {
     expect(f5.compare(f1)).toBe("ahead")
   })
 
-  it("compare() never returns 'concurrent' for the same epoch", () => {
+  it("compare() never returns 'concurrent' for the same lineage", () => {
     // Plain substrates have a total order — exhaustively check
     // a range of values to verify "concurrent" never appears.
     const values = [0, 1, 2, 5, 10, 100]
@@ -107,7 +107,7 @@ describe("PlainVersion", () => {
     }
   })
 
-  it("compare() returns 'concurrent' across two REAL epochs, both directions (safety fallback)", () => {
+  it("compare() returns 'concurrent' across two REAL lineages, both directions (safety fallback)", () => {
     const a1 = new PlainVersion(1, "inc-a")
     const a5 = new PlainVersion(5, "inc-a")
     const b1 = new PlainVersion(1, "inc-b")
@@ -120,8 +120,8 @@ describe("PlainVersion", () => {
   })
 
   it("compare(): two genesis (DEFAULT) versions are equal — both project to ⊥", () => {
-    const d0 = new PlainVersion(0, DEFAULT_EPOCH)
-    const d1 = new PlainVersion(1, DEFAULT_EPOCH)
+    const d0 = new PlainVersion(0, DEFAULT_LINEAGE)
+    const d1 = new PlainVersion(1, DEFAULT_LINEAGE)
 
     // Genesis is the empty vector regardless of counter — it has no internal
     // order (two peers holding only schema-derived structure are equivalent).
@@ -131,8 +131,8 @@ describe("PlainVersion", () => {
   })
 
   it("compare(): genesis (DEFAULT) is behind any REAL lineage — a VV subset", () => {
-    const def0 = new PlainVersion(0, DEFAULT_EPOCH)
-    const def5 = new PlainVersion(5, DEFAULT_EPOCH)
+    const def0 = new PlainVersion(0, DEFAULT_LINEAGE)
+    const def5 = new PlainVersion(5, DEFAULT_LINEAGE)
     const real1 = new PlainVersion(1, "inc-real")
     const real5 = new PlainVersion(5, "inc-real")
 
@@ -156,10 +156,10 @@ describe("PlainVersion", () => {
     expect(roundTripped.value).toBe(7)
   })
 
-  it("parseVersion handles the new 'epoch:value' format", () => {
+  it("parseVersion handles the new 'lineage:value' format", () => {
     const v = plainSubstrateFactory.parseVersion("abc123:5")
     expect(v.value).toBe(5)
-    expect(v.epoch).toBe("abc123")
+    expect(v.lineage).toBe("abc123")
   })
 
   it("parseVersion rejects invalid input", () => {
@@ -231,12 +231,12 @@ describe("PlainVersion.meet()", () => {
     // Disjoint lineage keys share no common entry → the empty vector ⊥ → genesis.
     expect(ab.value).toBe(0)
     expect(ba.value).toBe(0)
-    expect(ab.epoch).toBe(DEFAULT_EPOCH)
-    expect(ba.epoch).toBe(DEFAULT_EPOCH)
+    expect(ab.lineage).toBe(DEFAULT_LINEAGE)
+    expect(ba.lineage).toBe(DEFAULT_LINEAGE)
   })
 
   it("meet of genesis (DEFAULT) and REAL is the genesis version", () => {
-    const def = new PlainVersion(3, DEFAULT_EPOCH)
+    const def = new PlainVersion(3, DEFAULT_LINEAGE)
     const real = new PlainVersion(7, "inc-real")
 
     const defReal = def.meet(real) as PlainVersion
@@ -244,9 +244,9 @@ describe("PlainVersion.meet()", () => {
 
     // ⊥ ∩ {real} = ⊥ → genesis.
     expect(defReal.value).toBe(0)
-    expect(defReal.epoch).toBe(DEFAULT_EPOCH)
+    expect(defReal.lineage).toBe(DEFAULT_LINEAGE)
     expect(realDef.value).toBe(0)
-    expect(realDef.epoch).toBe(DEFAULT_EPOCH)
+    expect(realDef.lineage).toBe(DEFAULT_LINEAGE)
   })
 })
 
@@ -255,65 +255,65 @@ describe("PlainVersion.meet()", () => {
 // ===========================================================================
 
 describe("createPlainVersionStrategy", () => {
-  it("current(flushCount) embeds the strategy's epoch", () => {
-    // A non-DEFAULT initial epoch never lazy-mints — current() just
+  it("current(flushCount) embeds the strategy's lineage", () => {
+    // A non-DEFAULT initial lineage never lazy-mints — current() just
     // stamps every produced version with it, regardless of flushCount.
     const { strategy } = createPlainVersionStrategy("inc-fixed")
     const v1 = strategy.current(1)
     const v5 = strategy.current(5)
-    expect(v1.epoch).toBe("inc-fixed")
+    expect(v1.lineage).toBe("inc-fixed")
     expect(v1.value).toBe(1)
-    expect(v5.epoch).toBe("inc-fixed")
+    expect(v5.lineage).toBe("inc-fixed")
     expect(v5.value).toBe(5)
   })
 
-  it("logOffset returns null for a since-version from a different REAL epoch", () => {
+  it("logOffset returns null for a since-version from a different REAL lineage", () => {
     const { strategy } = createPlainVersionStrategy("inc-a")
-    // Force past DEFAULT so the strategy's epoch is REAL for this test's
-    // purposes — "inc-a" is already REAL (not DEFAULT_EPOCH).
+    // Force past DEFAULT so the strategy's lineage is REAL for this test's
+    // purposes — "inc-a" is already REAL (not DEFAULT_LINEAGE).
     const since = new PlainVersion(2, "inc-b")
     expect(strategy.logOffset(since)).toBeNull()
   })
 
-  it("logOffset returns the value for a same-epoch since-version", () => {
+  it("logOffset returns the value for a same-lineage since-version", () => {
     const { strategy } = createPlainVersionStrategy("inc-a")
     const since = new PlainVersion(2, "inc-a")
     expect(strategy.logOffset(since)).toBe(2)
   })
 
-  it("logOffset maps genesis (DEFAULT_EPOCH) to offset 0 regardless of counter", () => {
+  it("logOffset maps genesis (DEFAULT_LINEAGE) to offset 0 regardless of counter", () => {
     const { strategy } = createPlainVersionStrategy("inc-a")
     // Genesis is the empty vector ⊥ → the start of the authored log.
-    expect(strategy.logOffset(new PlainVersion(3, DEFAULT_EPOCH))).toBe(0)
-    expect(strategy.logOffset(new PlainVersion(0, DEFAULT_EPOCH))).toBe(0)
+    expect(strategy.logOffset(new PlainVersion(3, DEFAULT_LINEAGE))).toBe(0)
+    expect(strategy.logOffset(new PlainVersion(0, DEFAULT_LINEAGE))).toBe(0)
   })
 
-  it("adoptEpoch updates subsequent current()/zero output", () => {
-    const { strategy, adoptEpoch } = createPlainVersionStrategy("inc-a")
-    expect(strategy.zero.epoch).toBe("inc-a")
+  it("adoptLineage updates subsequent current()/zero output", () => {
+    const { strategy, adoptLineage } = createPlainVersionStrategy("inc-a")
+    expect(strategy.zero.lineage).toBe("inc-a")
 
-    adoptEpoch("inc-b")
+    adoptLineage("inc-b")
 
-    expect(strategy.zero.epoch).toBe("inc-b")
-    expect(strategy.current(5).epoch).toBe("inc-b")
+    expect(strategy.zero.lineage).toBe("inc-b")
+    expect(strategy.current(5).lineage).toBe("inc-b")
   })
 
-  it("current() is a pure projection (no mint); adoptEpoch is the sole epoch mutator", () => {
-    const { strategy, getEpoch, adoptEpoch } =
-      createPlainVersionStrategy(DEFAULT_EPOCH)
-    expect(getEpoch()).toBe(DEFAULT_EPOCH)
+  it("current() is a pure projection (no mint); adoptLineage is the sole lineage mutator", () => {
+    const { strategy, getLineage, adoptLineage } =
+      createPlainVersionStrategy(DEFAULT_LINEAGE)
+    expect(getLineage()).toBe(DEFAULT_LINEAGE)
 
     // current() no longer mints — identity is claimed by the substrate on the
     // first LOCAL authored flush (see the PlainSubstrate lifecycle tests).
     strategy.current(1)
     strategy.current(2)
-    expect(getEpoch()).toBe(DEFAULT_EPOCH)
+    expect(getLineage()).toBe(DEFAULT_LINEAGE)
 
-    // adoptEpoch is the only epoch mutator (the substrate uses it to mint; a
+    // adoptLineage is the only lineage mutator (the substrate uses it to mint; a
     // merge uses it to adopt a peer's lineage). It is stable afterwards.
-    adoptEpoch("inc-real")
-    expect(getEpoch()).toBe("inc-real")
-    expect(strategy.current(3).epoch).toBe("inc-real")
+    adoptLineage("inc-real")
+    expect(getLineage()).toBe("inc-real")
+    expect(strategy.current(3).lineage).toBe("inc-real")
   })
 })
 
@@ -364,14 +364,14 @@ describe("PlainSubstrate lifecycle", () => {
     expect(snapshotOf(substrate)).toEqual(defaults)
   })
 
-  it("version() starts at genesis (value 0, DEFAULT_EPOCH) for a freshly created substrate", () => {
+  it("version() starts at genesis (value 0, DEFAULT_LINEAGE) for a freshly created substrate", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     const f = substrate.version() as PlainVersion
     // Op-free genesis: structural init does not flush, so a fresh doc is the
     // empty vector ⊥ — value 0, no lineage yet.
     expect(f.value).toBe(0)
-    expect(f.epoch).toBe(DEFAULT_EPOCH)
-    expect(f.serialize()).toBe(`${DEFAULT_EPOCH}:0`)
+    expect(f.lineage).toBe(DEFAULT_LINEAGE)
+    expect(f.serialize()).toBe(`${DEFAULT_LINEAGE}:0`)
   })
 
   it("version() increments after mutations via the writable context", () => {
@@ -379,12 +379,14 @@ describe("PlainSubstrate lifecycle", () => {
     const doc = interpretSubstrate(substrate)
 
     expect(substrate.version().value).toBe(0)
-    expect((substrate.version() as PlainVersion).epoch).toBe(DEFAULT_EPOCH)
+    expect((substrate.version() as PlainVersion).lineage).toBe(DEFAULT_LINEAGE)
 
     // The first local authored flush mints a REAL lineage and bumps to 1.
     batch(doc, d => d.title.insert(0, "Hi"))
     expect(substrate.version().value).toBe(1)
-    expect((substrate.version() as PlainVersion).epoch).not.toBe(DEFAULT_EPOCH)
+    expect((substrate.version() as PlainVersion).lineage).not.toBe(
+      DEFAULT_LINEAGE,
+    )
 
     batch(doc, d => d.count.increment(5))
     expect(substrate.version().value).toBe(2)
@@ -441,7 +443,7 @@ describe("PlainSubstrate lifecycle", () => {
       const payload = substrate.exportSince(
         new PlainVersion(
           prevVersion,
-          (substrate.version() as PlainVersion).epoch,
+          (substrate.version() as PlainVersion).lineage,
         ),
       )
       if (payload) {
@@ -496,7 +498,7 @@ describe("PlainSubstrate lifecycle", () => {
     const substrate = plainSubstrateFactory.create(TestSchema)
     const futureVersion = new PlainVersion(
       999,
-      (substrate.version() as PlainVersion).epoch,
+      (substrate.version() as PlainVersion).lineage,
     )
     expect(substrate.exportSince(futureVersion)).toBeNull()
   })
@@ -670,8 +672,8 @@ describe("Round-trip replication", () => {
     // executeBatch call → 2 version bumps (one per change on A).
     // B starts at genesis (0) + 2 merged batches = 2, adopting A's lineage.
     expect(substrateB.version().value).toBe(2)
-    expect((substrateB.version() as PlainVersion).epoch).toBe(
-      (substrateA.version() as PlainVersion).epoch,
+    expect((substrateB.version() as PlainVersion).lineage).toBe(
+      (substrateA.version() as PlainVersion).lineage,
     )
   })
 
@@ -857,7 +859,7 @@ describe("merge with entirety payload (PlainReplica)", () => {
     batch(doc, d => d.count.increment(5))
 
     const since = source.exportSince(
-      new PlainVersion(0, (source.version() as PlainVersion).epoch),
+      new PlainVersion(0, (source.version() as PlainVersion).lineage),
     ) as any
     expect(since.kind).toBe("since")
     replica.merge(since)
@@ -867,11 +869,11 @@ describe("merge with entirety payload (PlainReplica)", () => {
 })
 
 // ===========================================================================
-// Epoch boundaries
+// Lineage boundaries
 // ===========================================================================
 
-describe("Epoch boundaries", () => {
-  it("fromEntirety creates a fresh epoch: version > 0, store matches source", () => {
+describe("Lineage boundaries", () => {
+  it("fromEntirety creates a fresh lineage: version > 0, store matches source", () => {
     const substrateA = plainSubstrateFactory.create(TestSchema)
     const docA = interpretSubstrate(substrateA)
 
@@ -903,7 +905,7 @@ describe("Epoch boundaries", () => {
     expect(snapB.items as unknown[]).toHaveLength(1)
   })
 
-  it("new epoch substrate is fully functional: can mutate, version, export", () => {
+  it("new lineage substrate is fully functional: can mutate, version, export", () => {
     const substrateA = plainSubstrateFactory.create(TestSchema)
     const docA = interpretSubstrate(substrateA)
     batch(docA, d => {
@@ -929,11 +931,11 @@ describe("Epoch boundaries", () => {
     const snapshot2 = substrateB.exportEntirety()
     expect((JSON.parse(snapshot2.data as string) as any).title).toBe("Source!")
 
-    // Export delta since the snapshot epoch version
+    // Export delta since the snapshot lineage version
     const delta = substrateB.exportSince(
       new PlainVersion(
         vAfterSnapshot,
-        (substrateB.version() as PlainVersion).epoch,
+        (substrateB.version() as PlainVersion).lineage,
       ),
     ) as any
     const batches = JSON.parse(delta.data as string) as Op[][]
@@ -942,7 +944,7 @@ describe("Epoch boundaries", () => {
     expect(ops[0]?.change.type).toBe("text")
   })
 
-  it("old and new epoch substrates are independent", () => {
+  it("old and new lineage substrates are independent", () => {
     const substrateA = plainSubstrateFactory.create(TestSchema)
     const docA = interpretSubstrate(substrateA)
     batch(docA, d => {
@@ -1023,7 +1025,7 @@ describe("PlainReplica.advance()", () => {
 
     // Merge source ops into replica
     const delta = source.exportSince(
-      new PlainVersion(0, (source.version() as PlainVersion).epoch),
+      new PlainVersion(0, (source.version() as PlainVersion).lineage),
     ) as any
     replica.merge(delta)
 
@@ -1040,7 +1042,7 @@ describe("PlainReplica.advance()", () => {
     // exportSince(v0) returns null — history is gone
     expect(
       replica.exportSince(
-        new PlainVersion(0, (replica.version() as PlainVersion).epoch),
+        new PlainVersion(0, (replica.version() as PlainVersion).lineage),
       ),
     ).toBeNull()
 
@@ -1066,7 +1068,7 @@ describe("PlainReplica.advance()", () => {
 
     // Merge all ops into replica
     const delta = source.exportSince(
-      new PlainVersion(0, (source.version() as PlainVersion).epoch),
+      new PlainVersion(0, (source.version() as PlainVersion).lineage),
     ) as any
     replica.merge(delta)
     expect(replica.version().value).toBe(v4.value)
@@ -1080,7 +1082,7 @@ describe("PlainReplica.advance()", () => {
     // exportSince(v0) = null (behind base)
     expect(
       replica.exportSince(
-        new PlainVersion(0, (replica.version() as PlainVersion).epoch),
+        new PlainVersion(0, (replica.version() as PlainVersion).lineage),
       ),
     ).toBeNull()
     // exportSince(v2) = remaining ops
@@ -1104,7 +1106,7 @@ describe("PlainReplica.advance()", () => {
     const v2 = source.version()
 
     const delta1 = source.exportSince(
-      new PlainVersion(0, (source.version() as PlainVersion).epoch),
+      new PlainVersion(0, (source.version() as PlainVersion).lineage),
     ) as any
     replica.merge(delta1)
     replica.advance(v2)
@@ -1134,12 +1136,12 @@ describe("PlainReplica.advance()", () => {
     // Replica adopts source's REAL lineage and its single authored batch.
     replica.merge(
       source.exportSince(
-        new PlainVersion(0, (source.version() as PlainVersion).epoch),
+        new PlainVersion(0, (source.version() as PlainVersion).lineage),
       ) as any,
     )
-    const epoch = (replica.version() as PlainVersion).epoch
+    const lineage = (replica.version() as PlainVersion).lineage
     // A same-lineage target beyond the current log length cannot be reached.
-    expect(() => replica.advance(new PlainVersion(999, epoch))).toThrow()
+    expect(() => replica.advance(new PlainVersion(999, lineage))).toThrow()
   })
 
   it("exportSince returns null for versions behind the base after advance", () => {
@@ -1154,14 +1156,14 @@ describe("PlainReplica.advance()", () => {
 
     replica.merge(
       source.exportSince(
-        new PlainVersion(0, (source.version() as PlainVersion).epoch),
+        new PlainVersion(0, (source.version() as PlainVersion).lineage),
       ) as any,
     )
 
     // Before advance, exportSince(v0) works
     expect(
       replica.exportSince(
-        new PlainVersion(0, (replica.version() as PlainVersion).epoch),
+        new PlainVersion(0, (replica.version() as PlainVersion).lineage),
       ),
     ).not.toBeNull()
 
@@ -1171,7 +1173,7 @@ describe("PlainReplica.advance()", () => {
     // After advancing the base to v2 (value 1), genesis is behind the base → null.
     expect(
       replica.exportSince(
-        new PlainVersion(0, (replica.version() as PlainVersion).epoch),
+        new PlainVersion(0, (replica.version() as PlainVersion).lineage),
       ),
     ).toBeNull()
 
@@ -1195,7 +1197,7 @@ describe("PlainReplica.advance()", () => {
 
     replica.merge(
       source.exportSince(
-        new PlainVersion(0, (source.version() as PlainVersion).epoch),
+        new PlainVersion(0, (source.version() as PlainVersion).lineage),
       ) as any,
     )
     replica.advance(replica.version())
@@ -1237,104 +1239,110 @@ describe("PlainSubstrate.advance()", () => {
 })
 
 // ---------------------------------------------------------------------------
-// epoch-aware merge / resetFromEntirety — cross-lineage adoption
+// lineage-aware merge / resetFromEntirety — cross-lineage adoption
 // ---------------------------------------------------------------------------
 
 // Helper: build a substrate whose strategy is seeded with a specific,
-// already-REAL epoch (bypassing the DEFAULT lazy-mint path) so tests
-// can construct a known cross-epoch scenario deterministically.
-function createSubstrateWithEpoch(epoch: string) {
-  const { strategy, adoptEpoch, getEpoch } = createPlainVersionStrategy(epoch)
+// already-REAL lineage (bypassing the DEFAULT lazy-mint path) so tests
+// can construct a known cross-lineage scenario deterministically.
+function createSubstrateWithLineage(lineage: string) {
+  const { strategy, adoptLineage, getLineage } =
+    createPlainVersionStrategy(lineage)
   const doc = { ...(Zero.structural(TestSchema) as object) }
-  const substrate = createPlainSubstrate(doc, strategy, adoptEpoch, getEpoch)
+  const substrate = createPlainSubstrate(
+    doc,
+    strategy,
+    adoptLineage,
+    getLineage,
+  )
   return substrate
 }
 
-describe("epoch-aware merge", () => {
-  it("exportEntirety()'s payload carries the epoch once the substrate has a REAL epoch", () => {
-    const source = createSubstrateWithEpoch("inc-source")
+describe("lineage-aware merge", () => {
+  it("exportEntirety()'s payload carries the lineage once the substrate has a REAL lineage", () => {
+    const source = createSubstrateWithLineage("inc-source")
     const doc = interpretSubstrate(source)
     batch(doc, d => d.title.insert(0, "Hello"))
 
     const payload = source.exportEntirety()
-    expect(payload.epoch).toBe("inc-source")
+    expect(payload.lineage).toBe("inc-source")
     const parsed = JSON.parse(payload.data as string)
     expect(parsed.title).toBe("Hello")
   })
 
-  it("exportSince()'s payload carries the epoch once the substrate has a REAL epoch", () => {
-    const source = createSubstrateWithEpoch("inc-source")
+  it("exportSince()'s payload carries the lineage once the substrate has a REAL lineage", () => {
+    const source = createSubstrateWithLineage("inc-source")
     const doc = interpretSubstrate(source)
     const v0 = source.version()
     batch(doc, d => d.title.insert(0, "Hello"))
 
     const payload = source.exportSince(v0) as SubstratePayload
-    expect(payload.epoch).toBe("inc-source")
+    expect(payload.lineage).toBe("inc-source")
     const parsed = JSON.parse(payload.data as string)
     expect(Array.isArray(parsed)).toBe(true)
   })
 
-  it("merging an entirety from a different REAL epoch into a DEFAULT target adopts the incoming epoch", () => {
-    const source = createSubstrateWithEpoch("inc-source")
+  it("merging an entirety from a different REAL lineage into a DEFAULT target adopts the incoming lineage", () => {
+    const source = createSubstrateWithLineage("inc-source")
     const sourceDoc = interpretSubstrate(source)
     batch(sourceDoc, d => d.title.insert(0, "World"))
 
     const target = plainReplicaFactory.createEmpty()
-    expect((target.version() as PlainVersion).epoch).toBe(DEFAULT_EPOCH)
+    expect((target.version() as PlainVersion).lineage).toBe(DEFAULT_LINEAGE)
 
     target.merge(source.exportEntirety())
 
-    expect((target.version() as PlainVersion).epoch).toBe("inc-source")
+    expect((target.version() as PlainVersion).lineage).toBe("inc-source")
     const snap = JSON.parse(target.exportEntirety().data as string)
     expect(snap.title).toBe("World")
   })
 
-  it("merging an entirety from a different REAL epoch into a target with its own REAL epoch does NOT adopt (merge() is same-epoch-only)", () => {
-    const source = createSubstrateWithEpoch("inc-source")
+  it("merging an entirety from a different REAL lineage into a target with its own REAL lineage does NOT adopt (merge() is same-lineage-only)", () => {
+    const source = createSubstrateWithLineage("inc-source")
     const sourceDoc = interpretSubstrate(source)
     batch(sourceDoc, d => d.title.insert(0, "Fresh"))
 
-    // Target already has its own REAL epoch from a prior session.
+    // Target already has its own REAL lineage from a prior session.
     const targetHandle = createPlainVersionStrategy("inc-target-old")
     const target = createPlainReplica(
       targetHandle.strategy,
-      targetHandle.adoptEpoch,
-      targetHandle.getEpoch,
+      targetHandle.adoptLineage,
+      targetHandle.getLineage,
     )
-    expect((target.version() as PlainVersion).epoch).toBe("inc-target-old")
+    expect((target.version() as PlainVersion).lineage).toBe("inc-target-old")
 
-    // REAL -> different REAL is a genuine epoch boundary. `merge()` no
-    // longer adopts across epochs — that's `resetFromEntirety`'s job,
-    // invoked exclusively by the Synchronizer's explicit epoch gate.
+    // REAL -> different REAL is a genuine lineage boundary. `merge()` no
+    // longer adopts across lineages — that's `resetFromEntirety`'s job,
+    // invoked exclusively by the Synchronizer's explicit lineage gate.
     target.merge(source.exportEntirety())
 
-    expect((target.version() as PlainVersion).epoch).toBe("inc-target-old")
+    expect((target.version() as PlainVersion).lineage).toBe("inc-target-old")
   })
 
-  it("merging an entirety from a different REAL epoch into a target with its own REAL epoch also adopts (epoch boundary reset)", () => {
-    const source = createSubstrateWithEpoch("inc-source")
+  it("merging an entirety from a different REAL lineage into a target with its own REAL lineage also adopts (lineage boundary reset)", () => {
+    const source = createSubstrateWithLineage("inc-source")
     const sourceDoc = interpretSubstrate(source)
     batch(sourceDoc, d => d.title.insert(0, "Fresh"))
 
-    // Target already has its own REAL epoch from a prior session.
+    // Target already has its own REAL lineage from a prior session.
     const targetHandle = createPlainVersionStrategy("inc-target-old")
     const target = createPlainReplica(
       targetHandle.strategy,
-      targetHandle.adoptEpoch,
-      targetHandle.getEpoch,
+      targetHandle.adoptLineage,
+      targetHandle.getLineage,
     )
-    expect((target.version() as PlainVersion).epoch).toBe("inc-target-old")
+    expect((target.version() as PlainVersion).lineage).toBe("inc-target-old")
 
-    // `resetFromEntirety` is the epoch-boundary path: it adopts the new
-    // epoch even though the target already had a different REAL one.
+    // `resetFromEntirety` is the lineage-boundary path: it adopts the new
+    // lineage even though the target already had a different REAL one.
     target.resetFromEntirety(source.exportEntirety(), source.version())
 
-    expect((target.version() as PlainVersion).epoch).toBe("inc-source")
+    expect((target.version() as PlainVersion).lineage).toBe("inc-source")
   })
 
-  it("merging a legacy (no-envelope) payload does not change the target's epoch", () => {
+  it("merging a legacy (no-envelope) payload does not change the target's lineage", () => {
     const target = plainReplicaFactory.createEmpty()
-    const epochBefore = (target.version() as PlainVersion).epoch
+    const lineageBefore = (target.version() as PlainVersion).lineage
 
     const legacyPayload: SubstratePayload = {
       kind: "entirety",
@@ -1343,16 +1351,16 @@ describe("epoch-aware merge", () => {
     }
     target.merge(legacyPayload)
 
-    expect((target.version() as PlainVersion).epoch).toBe(epochBefore)
+    expect((target.version() as PlainVersion).lineage).toBe(lineageBefore)
   })
 
-  it("exportSince falls back to entirety (not null) for a cross-REAL-epoch since-version", () => {
-    const { strategy, adoptEpoch, getEpoch } =
+  it("exportSince falls back to entirety (not null) for a cross-REAL-lineage since-version", () => {
+    const { strategy, adoptLineage, getLineage } =
       createPlainVersionStrategy("inc-a")
-    const replica = createPlainReplica(strategy, adoptEpoch, getEpoch)
+    const replica = createPlainReplica(strategy, adoptLineage, getLineage)
 
-    const crossEpochVersion = new PlainVersion(0, "inc-b")
-    const result = replica.exportSince(crossEpochVersion)
+    const crossLineageVersion = new PlainVersion(0, "inc-b")
+    const result = replica.exportSince(crossLineageVersion)
     expect(result).not.toBeNull()
     expect(result?.kind).toBe("entirety")
   })

@@ -37,8 +37,8 @@ export interface EntryPayloadJson {
   readonly encoding: "json" | "binary"
   readonly version: string
   readonly data?: string
-  /** SubstratePayload.epoch, optional — absent for legacy payloads. */
-  readonly epoch?: string
+  /** SubstratePayload.lineage, optional — absent for legacy payloads. */
+  readonly lineage?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -61,7 +61,7 @@ export function toRow(record: StoreRecord): RowShape {
       kind: payload.kind,
       encoding: payload.encoding,
       version,
-      ...(payload.epoch !== undefined ? { epoch: payload.epoch } : {}),
+      ...(payload.lineage !== undefined ? { lineage: payload.lineage } : {}),
     }
     return {
       kind: "entry",
@@ -75,7 +75,7 @@ export function toRow(record: StoreRecord): RowShape {
     encoding: payload.encoding,
     version,
     data: payload.data as string,
-    ...(payload.epoch !== undefined ? { epoch: payload.epoch } : {}),
+    ...(payload.lineage !== undefined ? { lineage: payload.lineage } : {}),
   }
   return {
     kind: "entry",
@@ -114,7 +114,7 @@ export function fromRow(row: RowShape): StoreRecord {
     kind: json.kind,
     encoding: json.encoding,
     data,
-    ...(json.epoch !== undefined ? { epoch: json.epoch } : {}),
+    ...(json.lineage !== undefined ? { lineage: json.lineage } : {}),
   }
 
   return { kind: "entry", payload, version: json.version }

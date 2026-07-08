@@ -10,7 +10,7 @@
 import type { Version } from "@kyneta/schema"
 import {
   base64ToUint8Array,
-  DEFAULT_EPOCH,
+  DEFAULT_LINEAGE,
   uint8ArrayToBase64,
   versionVectorMeet,
 } from "@kyneta/schema"
@@ -40,13 +40,13 @@ export class LoroVersion implements Version {
   }
 
   /**
-   * Loro is a collaborative (CRDT) substrate — epochs are never minted
-   * automatically. `epoch` is always `DEFAULT_EPOCH` for the document's
-   * lifetime; new epochs require an explicit developer-invoked migration
+   * Loro is a collaborative (CRDT) substrate — lineages are never minted
+   * automatically. `lineage` is always `DEFAULT_LINEAGE` for the document's
+   * lifetime; new lineages require an explicit developer-invoked migration
    * primitive (T3 migrations, not implemented here).
    */
-  get epoch(): string {
-    return DEFAULT_EPOCH
+  get lineage(): string {
+    return DEFAULT_LINEAGE
   }
 
   /**

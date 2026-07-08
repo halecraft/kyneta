@@ -353,9 +353,9 @@ For substrates whose `V` is a map of `PeerId → number` (Lamport-style vectors)
 
 Both are pure. Loro and Yjs substrates use these directly for their Lamport vectors; substrates with different version shapes (wall clock, Loro's opaque version) implement their own comparison.
 
-`PlainVersion` (the plain substrate's version, below) **is** a version vector — a single authored *lineage* entry `{epoch: value}`, with genesis (`DEFAULT_EPOCH`) projecting to the **empty** vector ⊥. Its `compare`/`meet` delegate to `versionVectorCompare`/`versionVectorMeet` over that projection (`PlainVersion.#toVector`) — the same lattice Loro/Yjs use, with no Plain-specific case matrix. The `epoch` string is the version-vector *lineage key* (the identity coordinate), not a scalar bolted on beside the counter. A serialized writer holds at most one authored lineage at a time (prune-on-reset), so the vector is single-entry. Context: jj:kxswmuzx.
+`PlainVersion` (the plain substrate's version, below) **is** a version vector — a single authored *lineage* entry `{lineage: value}`, with genesis (`DEFAULT_LINEAGE`) projecting to the **empty** vector ⊥. Its `compare`/`meet` delegate to `versionVectorCompare`/`versionVectorMeet` over that projection (`PlainVersion.#toVector`) — the same lattice Loro/Yjs use, with no Plain-specific case matrix. `Version.lineage` is the version-vector *lineage key* (the writer/identity coordinate), not a scalar bolted on beside the counter. A serialized writer holds at most one authored lineage at a time (prune-on-reset), so the vector is single-entry. Context: jj:kxswmuzx.
 
-`epoch` (see `Version.epoch`) currently serves two roles the field name conflates: for `PlainVersion` it is the **lineage key** *inside* the version vector (genesis ⊥ until the first authored write mints a REAL lineage); for Loro/Yjs/TimestampVersion/StateVersion it is a constant `DEFAULT_EPOCH` marker on a future **migration-generation** axis (deliberate global discontinuity, not yet implemented). The lattice operations never branch on the raw string — `PlainVersion` projects it to a vector and `versionVectorCompare` does the rest; genuine cross-lineage divergence surfaces as `"concurrent"`. A future plan will split these two axes by name (lineage vs. epoch/generation).
+`Version.lineage` (renamed from `Version.epoch` — jj:pwymxzwq) is the identity coordinate on every `Version`: for `PlainVersion` a REAL lineage minted on the first authored write (genesis ⊥ before that); for Loro/Yjs/TimestampVersion/StateVersion a constant `DEFAULT_LINEAGE` (their identity lives in their own native vectors). The lattice operations never branch on the raw string — `PlainVersion` projects it to a vector and `versionVectorCompare` does the rest; genuine cross-lineage divergence surfaces as `"concurrent"`. **The word `epoch` is now reserved for the deliberate T3 _migration_ boundary** (`.epoch()` / `EpochStep` / `MigrationTier` T3 — see [Migration and identity](#migration-and-identity)): *lineage* (writer identity, per-VV-key, minted automatically) and *epoch* (migration generation, global, developer-declared) are now distinct axes with distinct names.
 
 ---
 
@@ -1089,7 +1089,7 @@ These are the primitives `step`, `with-changefeed`, and `Position` build on.
 
 Source: `packages/schema/src/substrates/plain.ts`.
 
-The built-in substrate. Stores state as plain JS objects, tracks a monotonic integer version scoped to an epoch (see `PlainVersion` below), and merges by total-order last-writer-wins within an epoch. Used for:
+The built-in substrate. Stores state as plain JS objects, tracks a monotonic integer version scoped to an lineage (see `PlainVersion` below), and merges by total-order last-writer-wins within an lineage. Used for:
 
 - The default binding when no CRDT is needed (`Schema.string`, small configs, ephemeral UI state).
 - The LWW variant (`src/substrates/lww.ts` + `src/substrates/timestamp-version.ts`) for wall-clock-ordered ephemeral broadcasts.
@@ -1109,24 +1109,24 @@ Key functions:
 
 ```
 class PlainVersion {
-  constructor(value: number, epoch: string)
+  constructor(value: number, lineage: string)
   readonly value: number
-  readonly epoch: string
+  readonly lineage: string
 }
 ```
 
-A **single-entry version vector**: at most one authored *lineage* `{epoch: value}`, with genesis (`DEFAULT_EPOCH`) as the empty vector ⊥ (see [§Version vector algebra](#version-vector-algebra)). `serialize()` produces `"epoch:value"` (genesis serializes as `"kyneta.default:0"`); `parseVersion` also accepts legacy bare-integer strings (e.g. `"5"`), which parse as belonging to `LEGACY_EPOCH`. Context: jj:kxswmuzx.
+A **single-entry version vector**: at most one authored *lineage* `{lineage: value}`, with genesis (`DEFAULT_LINEAGE`) as the empty vector ⊥ (see [§Version vector algebra](#version-vector-algebra)). `serialize()` produces `"lineage:value"` (genesis serializes as `"kyneta.genesis:0"`); `parseVersion` also accepts legacy bare-integer strings (e.g. `"5"`), which parse as belonging to `LEGACY_EPOCH`. Context: jj:kxswmuzx.
 
-`epoch` is the version-vector *lineage key* — the identity coordinate, universal to every `Version` (see [§Version vector algebra](#version-vector-algebra)). Plain is the substrate where the lineage changes during normal operation (a fresh REAL lineage is minted on the first authored write, or on a writer restart with no persisted store); CRDT substrates (Loro, Yjs) and `state` hold a constant `DEFAULT_EPOCH`, their identity living in their own native vectors.
+`lineage` is the version-vector *lineage key* — the identity coordinate, universal to every `Version` (see [§Version vector algebra](#version-vector-algebra)). Plain is the substrate where the lineage changes during normal operation (a fresh REAL lineage is minted on the first authored write, or on a writer restart with no persisted store); CRDT substrates (Loro, Yjs) and `state` hold a constant `DEFAULT_LINEAGE`, their identity living in their own native vectors.
 
-`compare()`/`meet()` delegate to `versionVectorCompare`/`versionVectorMeet` over `#toVector()` (`DEFAULT_EPOCH` → empty map; REAL → `{epoch: value}`) — **no** Plain-specific case matrix:
+`compare()`/`meet()` delegate to `versionVectorCompare`/`versionVectorMeet` over `#toVector()` (`DEFAULT_LINEAGE` → empty map; REAL → `{lineage: value}`) — **no** Plain-specific case matrix:
 - Two genesis versions → `equal` (both ⊥); genesis vs a REAL lineage → `behind`/`ahead` (⊥ is a subset).
 - Same REAL lineage → total order on `value`.
 - Two different REAL lineages → `concurrent` (disjoint keys); their `meet` is the empty vector → genesis (a valid compaction floor).
 
-**Op-free genesis.** A freshly created doc is the empty vector: `buildUpgrade` applies structural defaults directly to the doc *without* flushing them into the log (structure is schema-derived and reconstructed by every interpreter), so `version()` starts at `DEFAULT_EPOCH:0`. Identity is minted lazily by `createPlainSubstrate.afterBatch` on the first **local, non-`replay`** authored flush (via `adoptEpoch(randomHex(8))`) — never in `strategy.current()` (a pure projection now), and never on a merge/replica that merely *absorbs* a peer's ops, so absorbed content never causes a peer to invent an identity.
+**Op-free genesis.** A freshly created doc is the empty vector: `buildUpgrade` applies structural defaults directly to the doc *without* flushing them into the log (structure is schema-derived and reconstructed by every interpreter), so `version()` starts at `DEFAULT_LINEAGE:0`. Identity is minted lazily by `createPlainSubstrate.afterBatch` on the first **local, non-`replay`** authored flush (via `adoptEpoch(randomHex(8))`) — never in `strategy.current()` (a pure projection now), and never on a merge/replica that merely *absorbs* a peer's ops, so absorbed content never causes a peer to invent an identity.
 
-`merge()` adopts an incoming epoch (via the `adoptEpoch` closure) only while the current epoch is still `DEFAULT_EPOCH` — accepting the substrate's first real lineage. Genuine lineage-boundary resets (a REAL lineage transitioning to a *different* REAL lineage) are handled by `resetFromEntirety` (see `Substrate.resetFromEntirety` and `@kyneta/exchange`'s [Compaction and epoch boundaries](../exchange/TECHNICAL.md#compaction-and-epoch-boundaries)), which the Synchronizer invokes on an explicit mismatch — `merge()` never adopts across two REAL lineages. `SubstratePayload.epoch` is the preferred source for the incoming epoch; `parsePlainPayload`'s legacy `{ i, s|b }` envelope extraction is the fallback for peers that pre-date epoch support.
+`merge()` adopts an incoming lineage (via the `adoptEpoch` closure) only while the current lineage is still `DEFAULT_LINEAGE` — accepting the substrate's first real lineage. Genuine lineage-boundary resets (a REAL lineage transitioning to a *different* REAL lineage) are handled by `resetFromEntirety` (see `Substrate.resetFromEntirety` and `@kyneta/exchange`'s [Compaction and lineage boundaries](../exchange/TECHNICAL.md#compaction-and-lineage-boundaries)), which the Synchronizer invokes on an explicit mismatch — `merge()` never adopts across two REAL lineages. `SubstratePayload.lineage` is the preferred source for the incoming lineage; `parsePlainPayload`'s legacy `{ i, s|b }` envelope extraction is the fallback for peers that pre-date lineage support.
 
 ### `TimestampVersion`
 
@@ -1136,9 +1136,9 @@ For ephemeral substrates: a single wall-clock number plus the peer ID. `merge` a
 
 The plain substrate's `serializeOps` / `deserializeOps` embed `Op.change` by reference — the change is JSON-stringified as-is and passed through `WireOfferMsg.d` (an opaque `string | Uint8Array` payload). The exchange wire codec never inspects schema-level change types; it carries them as JSON inside the substrate payload. Adding a new `ChangeBase` variant (e.g. `SetChange { type: "set-op" }`) is purely additive — no exchange codec change required. The only caveat is for out-of-monorepo consumers parsing the plain JSON wire format with a strict change-type whitelist: those need to extend their whitelist when new change variants land.
 
-The epoch now travels as an explicit field, `SubstratePayload.epoch`, set by every substrate's `exportEntirety`/`exportSince` (Plain sets it to the current epoch; Loro/Yjs/`state` set it to `DEFAULT_EPOCH`). Plain's own `data` payload is simply `JSON.stringify(materialize())` for entirety and `JSON.stringify(serializedBatches)` for since — no inner envelope. This is a simplification from an earlier design where Plain's JSON payload wrapped state/ops in an inline envelope (`{ i: string, s: PlainState }` / `{ i: string, b: SerializedOp[][] }`); that inline epoch field duplicated information already available via the parsed `Version` (which encodes as `"${epoch}:${value}"`) and via the new `SubstratePayload.epoch` field, creating a desync hazard between the wire-level version and the body-embedded epoch.
+The lineage now travels as an explicit field, `SubstratePayload.lineage`, set by every substrate's `exportEntirety`/`exportSince` (Plain sets it to the current lineage; Loro/Yjs/`state` set it to `DEFAULT_LINEAGE`). Plain's own `data` payload is simply `JSON.stringify(materialize())` for entirety and `JSON.stringify(serializedBatches)` for since — no inner envelope. This is a simplification from an earlier design where Plain's JSON payload wrapped state/ops in an inline envelope (`{ i: string, s: PlainState }` / `{ i: string, b: SerializedOp[][] }`); that inline lineage field duplicated information already available via the parsed `Version` (which encodes as `"${lineage}:${value}"`) and via the new `SubstratePayload.lineage` field, creating a desync hazard between the wire-level version and the body-embedded lineage.
 
-`parsePlainPayload` still parses the legacy `{ i, s|b }` envelope for backward compatibility with peers/payloads that pre-date `SubstratePayload.epoch` — `SubstratePayload.epoch` is the preferred source when present; `parsePlainPayload`'s extracted `i` field is the fallback. Bare state objects / bare op-batch arrays (no `i` field, no `SubstratePayload.epoch`) still parse correctly via the same helper, one level further back in the compatibility chain.
+`parsePlainPayload` still parses the legacy `{ i, s|b }` envelope for backward compatibility with peers/payloads that pre-date `SubstratePayload.lineage` — `SubstratePayload.lineage` is the preferred source when present; `parsePlainPayload`'s extracted `i` field is the fallback. Bare state objects / bare op-batch arrays (no `i` field, no `SubstratePayload.lineage`) still parse correctly via the same helper, one level further back in the compatibility chain.
 
 ## The functional shadow
 

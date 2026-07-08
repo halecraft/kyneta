@@ -40,7 +40,7 @@ import type {
 } from "../substrate.js"
 import { BACKING_DOC, RECORD_INVERSE } from "../substrate.js"
 import { Zero } from "../zero.js"
-import { DEFAULT_EPOCH } from "./plain.js"
+import { DEFAULT_LINEAGE } from "./plain.js"
 import {
   extractPlainState,
   isStateTuple,
@@ -67,8 +67,8 @@ export class StateVersion implements Version {
     this.timestamp = timestamp
   }
 
-  get epoch(): string {
-    return DEFAULT_EPOCH
+  get lineage(): string {
+    return DEFAULT_LINEAGE
   }
 
   static now(): StateVersion {
@@ -156,7 +156,7 @@ function createStateReplicaCore(
         kind: "entirety",
         encoding: "json",
         data: JSON.stringify(getTree()),
-        epoch: DEFAULT_EPOCH,
+        lineage: DEFAULT_LINEAGE,
       }
     },
 
@@ -185,8 +185,8 @@ function createStateReplicaCore(
       payload: SubstratePayload,
       _remoteVersion: Version,
     ): void {
-      // `state` is a CvRDT with a single constant epoch (DEFAULT_EPOCH) for
-      // its entire lifetime — a true epoch boundary never arises here. If
+      // `state` is a CvRDT with a single constant lineage (DEFAULT_LINEAGE) for
+      // its entire lifetime — a true lineage boundary never arises here. If
       // this is ever invoked (e.g. via the legacy entirety-after-sync
       // fallback), field-level LWW merge is the correct and safe behavior:
       // discarding local history would lose concurrent field writes that
@@ -359,8 +359,8 @@ export function createStateSubstrate(
       _remoteVersion: Version,
       options?: BatchOptions,
     ): void {
-      // `state` is a CvRDT with a single constant epoch for its entire
-      // lifetime — a true epoch boundary never arises here. Field-level
+      // `state` is a CvRDT with a single constant lineage for its entire
+      // lifetime — a true lineage boundary never arises here. Field-level
       // LWW merge is the correct and safe fallback: discarding local
       // history would lose concurrent field writes the peer doesn't yet
       // have (the same reasoning the Synchronizer applies to fall through
@@ -581,7 +581,7 @@ export function createStateReplica(): Replica<StateVersion> {
     },
     resetFromEntirety(payload: SubstratePayload, _remoteVersion: Version) {
       // See createStateSubstrate's resetFromEntirety — same rationale:
-      // `state` has no true epoch boundary, so field-level LWW merge is
+      // `state` has no true lineage boundary, so field-level LWW merge is
       // the correct fallback.
       replica.merge(payload)
     },
@@ -679,7 +679,7 @@ function insertStructuralZeros(tree: StateTree, defaults: any): void {
         t[key] = {}
         insertStructuralZeros(t[key], defaultVal)
       } else {
-        // Scalar zero gets timestamp 0 (Unix epoch = -Infinity)
+        // Scalar zero gets timestamp 0 (Unix lineage = -Infinity)
         t[key] = [defaultVal, 0]
       }
     } else {

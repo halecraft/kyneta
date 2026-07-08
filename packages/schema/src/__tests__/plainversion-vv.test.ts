@@ -1,22 +1,22 @@
 // PlainVersion as a version vector — characterizes that compare/meet reduce
 // to the shared versionVectorCompare/versionVectorMeet over a single-entry
-// lineage projection, with genesis (DEFAULT_EPOCH) as the empty vector ⊥.
+// lineage projection, with genesis (DEFAULT_LINEAGE) as the empty vector ⊥.
 // Context: jj:kxswmuzx.
 
 import { describe, expect, it } from "vitest"
-import { DEFAULT_EPOCH, PlainVersion } from "../substrates/plain.js"
+import { DEFAULT_LINEAGE, PlainVersion } from "../substrates/plain.js"
 import { versionVectorCompare, versionVectorMeet } from "../version-vector.js"
 
 const A = "aaaa1111"
 const B = "bbbb2222"
-const genesis = () => new PlainVersion(0, DEFAULT_EPOCH)
+const genesis = () => new PlainVersion(0, DEFAULT_LINEAGE)
 const authored = (key: string, n: number) => new PlainVersion(n, key)
 
 // The reference projection compare/meet are expected to agree with.
 const toVec = (v: PlainVersion) =>
-  v.epoch === DEFAULT_EPOCH
+  v.lineage === DEFAULT_LINEAGE
     ? new Map<string, number>()
-    : new Map([[v.epoch, v.value]])
+    : new Map([[v.lineage, v.value]])
 
 describe("PlainVersion is a single-entry version vector", () => {
   it("compare agrees with versionVectorCompare across the matrix", () => {
@@ -44,11 +44,11 @@ describe("PlainVersion is a single-entry version vector", () => {
 
   it("meet of a shared lineage is the min; of divergent lineages is genesis", () => {
     const same = authored(A, 5).meet(authored(A, 3)) as PlainVersion
-    expect(same.epoch).toBe(A)
+    expect(same.lineage).toBe(A)
     expect(same.value).toBe(3)
 
     const divergent = authored(A, 5).meet(authored(B, 7)) as PlainVersion
-    expect(divergent.epoch).toBe(DEFAULT_EPOCH)
+    expect(divergent.lineage).toBe(DEFAULT_LINEAGE)
     expect(divergent.value).toBe(0)
 
     // Reconstruction agrees with the raw versionVectorMeet.

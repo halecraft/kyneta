@@ -63,7 +63,7 @@ import {
   applyChange,
   BACKING_DOC,
   buildWritableContext,
-  DEFAULT_EPOCH,
+  DEFAULT_LINEAGE,
   DEVTOOLS_HISTORY,
   type DevtoolsHistory,
   type DevtoolsHistorySummary,
@@ -412,7 +412,7 @@ export function createYjsSubstrate(
         kind: "entirety",
         encoding: "binary",
         data: Y.encodeStateAsUpdate(doc),
-        epoch: DEFAULT_EPOCH,
+        lineage: DEFAULT_LINEAGE,
       }
     },
 
@@ -452,12 +452,12 @@ export function createYjsSubstrate(
       _remoteVersion: Version,
       options?: BatchOptions,
     ): void {
-      // Yjs never mints a new epoch automatically (see YjsVersion.epoch),
-      // so an epoch boundary never arises for this substrate today — this
+      // Yjs never mints a new lineage automatically (see YjsVersion.lineage),
+      // so an lineage boundary never arises for this substrate today — this
       // exists to satisfy the Substrate contract. CRDT merge (Y.applyUpdate)
       // is an idempotent, commutative set union; there is no "discard local
       // history" step to perform — union is always the correct absorption
-      // for an oplog CRDT, epoch boundary or not.
+      // for an oplog CRDT, lineage boundary or not.
       substrate.merge(payload, options)
     },
   }
@@ -613,7 +613,7 @@ export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
         kind: "entirety",
         encoding: "binary",
         data: Y.encodeStateAsUpdate(currentDoc),
-        epoch: DEFAULT_EPOCH,
+        lineage: DEFAULT_LINEAGE,
       }
     },
 
@@ -651,7 +651,7 @@ export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
       options?: BatchOptions,
     ): void {
       // See createYjsSubstrate's resetFromEntirety — CRDT merge (set union
-      // via Y.applyUpdate) is always the correct absorption, epoch boundary
+      // via Y.applyUpdate) is always the correct absorption, lineage boundary
       // or not, so this delegates to the routine merge path.
       this.merge(payload, options)
     },

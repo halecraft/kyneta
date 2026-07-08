@@ -2,9 +2,9 @@
 //
 // Why authoritative (PlainSubstrate) documents, not CRDTs?
 // Compacted CRDT entireties lack the causal history needed for safe merge.
-// A peer receiving a compacted entirety cannot distinguish "new epoch" from
+// A peer receiving a compacted entirety cannot distinguish "new lineage" from
 // "late-arriving ops," so merge produces silent op loss or corruption.
-// Authoritative documents give clean, deterministic epoch-reset behavior:
+// Authoritative documents give clean, deterministic lineage-reset behavior:
 // the entirety replaces the local state unconditionally.
 //
 // Why sequential writes with drain between?
@@ -176,12 +176,12 @@ describe("cohort governance predicate", () => {
     })
     await drain(40)
 
-    // Relay (cohort member) receives the update via delta, not epoch reset.
+    // Relay (cohort member) receives the update via delta, not lineage reset.
     expect(docRelay.title()).toBe("V2")
     expect(docRelay.count()).toBe(2)
   })
 
-  it("non-cohort writer loses writes on epoch reset", async () => {
+  it("non-cohort writer loses writes on lineage reset", async () => {
     const bridge = new Bridge()
 
     const server = createExchange({
@@ -227,7 +227,7 @@ describe("cohort governance predicate", () => {
 
     // Compact ignores the client's version (not in cohort), so it
     // advances past the client's confirmed state. The next offer
-    // triggers exportEntirety (epoch reset), replacing the client's
+    // triggers exportEntirety (lineage reset), replacing the client's
     // local state unconditionally.
     await server.compact("doc-1")
 
@@ -374,7 +374,7 @@ describe("cohort governance predicate", () => {
     })
     await drain(40)
 
-    // Client still converges via entirety (epoch reset).
+    // Client still converges via entirety (lineage reset).
     expect(client.get("doc-1", TestDoc).title()).toBe("V2")
     expect(client.get("doc-1", TestDoc).count()).toBe(2)
   })

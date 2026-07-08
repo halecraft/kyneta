@@ -68,28 +68,28 @@ describe("createLineDocSchema", () => {
     expect(typeof bound.schemaHash).toBe("string")
   })
 
-  it("the envelope's ack field is named ackEpoch, not ackIncarnation", () => {
+  it("the envelope's ack field is named ackLineage, not ackIncarnation", () => {
     const exchange = new Exchange({ id: "test" })
     const bound = json.bind(createLineDocSchema(SimpleSchema))
     const doc = exchange.get("envelope-shape-check" as any, bound)
     // Structural presence of the renamed field, and absence of the old
     // one — confirms the field rename is present in the schema shape.
-    expect(typeof (doc as any).ackEpoch).toBe("function")
+    expect(typeof (doc as any).ackLineage).toBe("function")
     expect((doc as any).ackIncarnation).toBeUndefined()
-    expect((doc as any).ackEpoch()).toBe("")
+    expect((doc as any).ackLineage()).toBe("")
   })
 
-  it("Line's substrate-agnostic epoch access: version(doc).epoch is typed with no 'as any' cast", () => {
+  it("Line's substrate-agnostic lineage access: version(doc).lineage is typed with no 'as any' cast", () => {
     // This is a type-level assertion enforced by the compiler at build
-    // time (Line.ts contains zero `as any` casts for epoch access — see
+    // time (Line.ts contains zero `as any` casts for lineage access — see
     // `pnpm verify`'s type-check stage). At runtime, confirm the typed
-    // `Version.epoch` property Line relies on is reachable directly off
+    // `Version.lineage` property Line relies on is reachable directly off
     // `version(doc)` without any cast, for any substrate-backed doc.
     const exchange = new Exchange({ id: "test" })
     const bound = json.bind(createLineDocSchema(SimpleSchema))
-    const doc = exchange.get("epoch-access-check" as any, bound)
+    const doc = exchange.get("lineage-access-check" as any, bound)
     batch(doc, (d: any) => d.nextSeq.set(1))
-    const epoch: string = version(doc).epoch
-    expect(typeof epoch).toBe("string")
+    const lineage: string = version(doc).lineage
+    expect(typeof lineage).toBe("string")
   })
 })

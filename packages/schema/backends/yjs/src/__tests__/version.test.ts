@@ -186,7 +186,7 @@ describe("YjsVersion", () => {
     it("throws when comparing with a non-YjsVersion", () => {
       const v = emptyVersion()
       const fake = {
-        epoch: "kyneta.default",
+        lineage: "kyneta.genesis",
         serialize: () => "fake",
         compare: () => "equal" as const,
         meet: () => fake,

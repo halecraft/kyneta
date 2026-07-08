@@ -10,10 +10,10 @@
 // semantic for LWW.
 
 import type { Version } from "../substrate.js"
-import { DEFAULT_EPOCH } from "./plain.js"
+import { DEFAULT_LINEAGE } from "./plain.js"
 
 /**
- * A Version wrapping a wall-clock timestamp (milliseconds since epoch).
+ * A Version wrapping a wall-clock timestamp (milliseconds since lineage).
  *
  * Timestamps form a total order — `compare()` returns `"behind"`,
  * `"equal"`, or `"ahead"` but never `"concurrent"`. This is the
@@ -23,8 +23,8 @@ import { DEFAULT_EPOCH } from "./plain.js"
  * `serialize()` encodes to a decimal string for text-safe embedding.
  * `parse()` is the inverse.
  *
- * LWW substrates never mint a new epoch automatically — `epoch` is always
- * `DEFAULT_EPOCH` for the lifetime of the document. Epoch changes are a
+ * LWW substrates never mint a new lineage automatically — `lineage` is always
+ * `DEFAULT_LINEAGE` for the lifetime of the document. Lineage changes are a
  * deliberate developer-invoked migration, not an automatic reboot tracker
  * (unlike Plain's lazy-mint on writer restart).
  */
@@ -35,8 +35,8 @@ export class TimestampVersion implements Version {
     this.timestamp = timestamp
   }
 
-  get epoch(): string {
-    return DEFAULT_EPOCH
+  get lineage(): string {
+    return DEFAULT_LINEAGE
   }
 
   /**

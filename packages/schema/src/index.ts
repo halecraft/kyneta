@@ -503,7 +503,7 @@ export {
   buildUpgrade,
   createPlainReplica,
   createPlainSubstrate,
-  DEFAULT_EPOCH,
+  DEFAULT_LINEAGE,
   objectToReplaceOps,
   PlainVersion,
   plainContext,

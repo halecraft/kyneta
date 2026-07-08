@@ -41,8 +41,8 @@ import type { Exchange } from "./exchange.js"
  * Build the invariant envelope schema for a Line document, parameterized
  * by the application's message schema.
  *
- * The envelope structure (`seq`, `ackSeq`, `ackEpoch`) is an implementation
- * detail of the `Line` class. `ackEpoch` uses `""` as a sentinel for "never acked".
+ * The envelope structure (`seq`, `ackSeq`, `ackLineage`) is an implementation
+ * detail of the `Line` class. `ackLineage` uses `""` as a sentinel for "never acked".
  * External consumers interact with `send(msg)` and the async iterator — they
  * never see the envelope fields.
  */
@@ -55,7 +55,7 @@ export function createLineDocSchema<S extends SchemaNode>(messageSchema: S) {
       }),
     ),
     ackSeq: Schema.number(),
-    ackEpoch: Schema.string(),
+    ackLineage: Schema.string(),
     nextSeq: Schema.number(),
   })
 }
@@ -289,7 +289,7 @@ export class Line<SendMsg, RecvMsg>
   readonly #unsubscribeInbox: () => void
   #nextSeq = 1
   #lastProcessedSeq = 0
-  #inboxEpoch: string
+  #inboxLineage: string
   #closed = false
   #refCount = 1
   #consumerAttached = false
@@ -315,7 +315,7 @@ export class Line<SendMsg, RecvMsg>
     this.#disposePolicy = disposePolicy
     this.#queue = new AsyncQueue<RecvMsg>()
 
-    this.#inboxEpoch = version(inbox).epoch
+    this.#inboxLineage = version(inbox).lineage
 
     // Resume persisted protocol state from the outbox document.
     // Zero.structural defaults: Schema.number() → 0.
@@ -323,8 +323,8 @@ export class Line<SendMsg, RecvMsg>
     const persistedNextSeq = outbox.nextSeq() as number
     this.#nextSeq = persistedNextSeq || 1
 
-    const ackEpoch = outbox.ackEpoch() as string
-    if (ackEpoch === this.#inboxEpoch) {
+    const ackLineage = outbox.ackLineage() as string
+    if (ackLineage === this.#inboxLineage) {
       this.#lastProcessedSeq = outbox.ackSeq() as number
     } else {
       this.#lastProcessedSeq = 0
@@ -458,11 +458,11 @@ export class Line<SendMsg, RecvMsg>
   #processInbox(): void {
     if (this.#closed) return
 
-    const currentInboxEpoch = version(this.#inbox).epoch
+    const currentInboxLineage = version(this.#inbox).lineage
 
-    if (currentInboxEpoch !== this.#inboxEpoch) {
+    if (currentInboxLineage !== this.#inboxLineage) {
       this.#lastProcessedSeq = 0
-      this.#inboxEpoch = currentInboxEpoch
+      this.#inboxLineage = currentInboxLineage
     }
 
     // Read all messages from inbox — inbox is any-typed, so messages are any[]
@@ -483,7 +483,7 @@ export class Line<SendMsg, RecvMsg>
         // Write ack to outbox
         batch(this.#outbox, (d: any) => {
           d.ackSeq.set(this.#lastProcessedSeq)
-          d.ackEpoch.set(this.#inboxEpoch)
+          d.ackLineage.set(this.#inboxLineage)
         })
       }
     }
@@ -496,10 +496,10 @@ export class Line<SendMsg, RecvMsg>
   }
 
   #pruneOutbox(): void {
-    const currentOutboxEpoch = version(this.#outbox).epoch
+    const currentOutboxLineage = version(this.#outbox).lineage
 
-    const ackEpoch = this.#inbox.ackEpoch() as string
-    if (ackEpoch !== currentOutboxEpoch) return
+    const ackLineage = this.#inbox.ackLineage() as string
+    if (ackLineage !== currentOutboxLineage) return
 
     const remoteAck = this.#inbox.ackSeq() as number
     if (remoteAck <= 0) return
@@ -527,7 +527,7 @@ export class Line<SendMsg, RecvMsg>
       // Safety: compact() internally uses leastCommonVersion() as the trim
       // boundary. If no peers are synced, it does full projection — the
       // entirety fallback (§30) ensures reconnecting peers get the full
-      // state via exportEntirety(), accepted by the epoch boundary policy
+      // state via exportEntirety(), accepted by the lineage boundary policy
       // (§29, default: accept for authoritative strategy).
       // Fire-and-forget: compaction failure is non-fatal.
       if (this.#outbox.messages().length === 0) {

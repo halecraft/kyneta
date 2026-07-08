@@ -53,7 +53,7 @@ export type GatePredicate = (
  *
  * Used internally by `Policy.canReset`.
  */
-export type EpochBoundaryPredicate = (
+export type LineageBoundaryPredicate = (
   docId: DocId,
   peer: PeerIdentityDetails,
 ) => boolean | undefined
@@ -68,7 +68,7 @@ export interface Policy {
   name?: string
   canShare?: GatePredicate
   canAccept?: GatePredicate
-  canReset?: EpochBoundaryPredicate
+  canReset?: LineageBoundaryPredicate
   cohort?: GatePredicate
   canConnect?: (peer: PeerIdentityDetails) => boolean | undefined
   resolve?: (
@@ -192,7 +192,7 @@ export class Governance {
   }
 
   /**
-   * Composed epoch boundary (reset) gate.
+   * Composed lineage boundary (reset) gate.
    *
    * Uses three-valued composition: any policy returning `false` vetoes
    * the reset. If no policy has an opinion, defaults to `true` (all

@@ -175,8 +175,8 @@ export { Synchronizer } from "./synchronizer.js"
 // ---------------------------------------------------------------------------
 
 export type {
-  EpochBoundaryPredicate,
   GatePredicate,
+  LineageBoundaryPredicate,
   Policy,
 } from "./governance.js"
 export { composeGate, Governance } from "./governance.js"

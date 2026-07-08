@@ -397,7 +397,7 @@ describe("Governance", () => {
   })
 
   // -----------------------------------------------------------------------
-  // canReset: three-valued gate composition for epoch boundaries
+  // canReset: three-valued gate composition for lineage boundaries
   // -----------------------------------------------------------------------
 
   describe("canReset composition", () => {

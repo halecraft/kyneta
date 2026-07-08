@@ -319,7 +319,7 @@ export function applyOutboundAliasing(
         wire.doc = msg.docId
       }
       if (msg.reciprocate !== undefined) wire.r = msg.reciprocate
-      if (msg.payload.epoch !== undefined) wire.ep = msg.payload.epoch
+      if (msg.payload.lineage !== undefined) wire.ln = msg.payload.lineage
       return { state, result: ok(wire) }
     }
 
@@ -492,8 +492,8 @@ export function applyInboundAliasing(
         type: "offer",
         docId: docResult.docId,
         payload:
-          wire.ep !== undefined
-            ? { kind, encoding, data: wire.d, epoch: wire.ep }
+          wire.ln !== undefined
+            ? { kind, encoding, data: wire.d, lineage: wire.ln }
             : { kind, encoding, data: wire.d },
         version: wire.v,
       }

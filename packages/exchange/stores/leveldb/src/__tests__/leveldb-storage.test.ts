@@ -371,14 +371,14 @@ describe("encodeStoreRecord / decodeStoreRecord", () => {
     expect(() => decodeStoreRecord(new Uint8Array(0))).toThrow()
   })
 
-  it("round-trips an entry record with epoch set (json payload)", () => {
+  it("round-trips an entry record with lineage set (json payload)", () => {
     const record: StoreRecord = {
       kind: "entry",
       payload: {
         kind: "entirety",
         encoding: "json",
         data: '{"hello":"world"}',
-        epoch: "abc123",
+        lineage: "abc123",
       },
       version: "abc123:1",
     }
@@ -386,7 +386,7 @@ describe("encodeStoreRecord / decodeStoreRecord", () => {
     expect(decoded).toEqual(record)
   })
 
-  it("round-trips an entry record with epoch set (binary payload)", () => {
+  it("round-trips an entry record with lineage set (binary payload)", () => {
     const bytes = new Uint8Array([0xde, 0xad, 0xbe, 0xef])
     const record: StoreRecord = {
       kind: "entry",
@@ -394,7 +394,7 @@ describe("encodeStoreRecord / decodeStoreRecord", () => {
         kind: "since",
         encoding: "binary",
         data: bytes,
-        epoch: "inc-a",
+        lineage: "inc-a",
       },
       version: "inc-a:5",
     }
@@ -402,29 +402,29 @@ describe("encodeStoreRecord / decodeStoreRecord", () => {
     expect(decoded).toEqual(record)
   })
 
-  it("round-trips an entry record without epoch (legacy, bit 4 clear)", () => {
+  it("round-trips an entry record without lineage (legacy, bit 4 clear)", () => {
     const record: StoreRecord = makeEntryRecord("entirety", "v1")
     const encoded = encodeStoreRecord(record)
-    expect(encoded[0]! & 0x10).toBe(0x00) // bit 4 clear — no epoch segment
+    expect(encoded[0]! & 0x10).toBe(0x00) // bit 4 clear — no lineage segment
     const decoded = decodeStoreRecord(encoded)
     expect(decoded.kind).toBe("entry")
     if (decoded.kind === "entry") {
-      expect(decoded.payload.epoch).toBeUndefined()
+      expect(decoded.payload.lineage).toBeUndefined()
     }
   })
 
-  it("entry record with epoch has bit 4 set", () => {
+  it("entry record with lineage has bit 4 set", () => {
     const record: StoreRecord = {
       kind: "entry",
       payload: {
         kind: "entirety",
         encoding: "json",
         data: "{}",
-        epoch: "e1",
+        lineage: "e1",
       },
       version: "e1:1",
     }
     const encoded = encodeStoreRecord(record)
-    expect(encoded[0]! & 0x10).toBe(0x10) // bit 4 set — epoch segment present
+    expect(encoded[0]! & 0x10).toBe(0x10) // bit 4 set — lineage segment present
   })
 })

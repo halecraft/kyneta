@@ -232,20 +232,20 @@ describe("CBOR codec — offer", () => {
     expect(decoded.r).toBeUndefined()
   })
 
-  it("round-trips offer with epoch set", () => {
+  it("round-trips offer with lineage set", () => {
     const wire = offerWire({
-      docId: "doc-epoch",
+      docId: "doc-lineage",
       kind: "entirety",
       encoding: "json",
       data: JSON.stringify({ title: "Hello" }),
       version: "abc123:5",
-      epoch: "abc123",
+      lineage: "abc123",
     })
     const decoded = roundTrip(wire) as WireOfferMsg
-    expect(decoded.ep).toBe("abc123")
+    expect(decoded.ln).toBe("abc123")
   })
 
-  it("round-trips offer without optional epoch (legacy payload)", () => {
+  it("round-trips offer without optional lineage (legacy payload)", () => {
     const wire = offerWire({
       docId: "doc-legacy",
       kind: "entirety",
@@ -254,7 +254,7 @@ describe("CBOR codec — offer", () => {
       version: "1",
     })
     const decoded = roundTrip(wire) as WireOfferMsg
-    expect(decoded.ep).toBeUndefined()
+    expect(decoded.ln).toBeUndefined()
   })
 })
 

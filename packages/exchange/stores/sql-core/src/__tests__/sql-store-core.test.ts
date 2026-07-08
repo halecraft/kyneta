@@ -83,14 +83,14 @@ describe("toRow / fromRow", () => {
     }
   })
 
-  it("round-trips a JSON-string entry record with epoch set", () => {
+  it("round-trips a JSON-string entry record with lineage set", () => {
     const record: StoreRecord = {
       kind: "entry",
       payload: {
         kind: "entirety",
         encoding: "json",
         data: '{"hello":"world"}',
-        epoch: "abc123",
+        lineage: "abc123",
       },
       version: "abc123:1",
     }
@@ -98,7 +98,7 @@ describe("toRow / fromRow", () => {
     expect(decoded).toEqual(record)
   })
 
-  it("round-trips a binary entry record with epoch set", () => {
+  it("round-trips a binary entry record with lineage set", () => {
     const bytes = new Uint8Array([0x00, 0x01, 0xff, 0xfe])
     const record: StoreRecord = {
       kind: "entry",
@@ -106,7 +106,7 @@ describe("toRow / fromRow", () => {
         kind: "since",
         encoding: "binary",
         data: bytes,
-        epoch: "inc-a",
+        lineage: "inc-a",
       },
       version: "inc-a:2",
     }
@@ -114,12 +114,12 @@ describe("toRow / fromRow", () => {
     expect(decoded).toEqual(record)
   })
 
-  it("round-trips an entry record without epoch (legacy)", () => {
+  it("round-trips an entry record without lineage (legacy)", () => {
     const record = jsonEntry("v1")
     const decoded = fromRow(toRow(record))
     expect(decoded.kind).toBe("entry")
     if (decoded.kind === "entry") {
-      expect(decoded.payload.epoch).toBeUndefined()
+      expect(decoded.payload.lineage).toBeUndefined()
     }
   })
 })

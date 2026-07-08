@@ -38,7 +38,7 @@ import type {
   Version,
 } from "@kyneta/schema"
 import {
-  DEFAULT_EPOCH,
+  DEFAULT_LINEAGE,
   DEVTOOLS_HISTORY,
   hasDevtoolsHistory,
 } from "@kyneta/schema"
@@ -164,7 +164,7 @@ export type DocDismissedCallback = (
  * reset). Returns `true` to accept the reset, `false` to keep local state
  * and diverge from compacted peers.
  */
-export type EpochBoundaryPredicate = (
+export type LineageBoundaryPredicate = (
   docId: DocId,
   peer: PeerIdentityDetails,
   syncMode: SyncMode,
@@ -176,7 +176,7 @@ export type SynchronizerParams = {
   canShare: (docId: DocId, peer: PeerIdentityDetails) => boolean
   canAccept: (docId: DocId, peer: PeerIdentityDetails) => boolean
   canConnect?: (peer: PeerIdentityDetails) => boolean
-  canReset: EpochBoundaryPredicate
+  canReset: LineageBoundaryPredicate
   onEnsureDoc?: DocCreationCallback
   onEnsureDocDismissed?: DocDismissedCallback
   departureTimeout?: number
@@ -270,20 +270,20 @@ function resolveOutboundVersionGap(
 }
 
 /**
- * Explicit epoch-boundary detection: `remoteEpoch !== localEpoch`, fired
+ * Explicit lineage-boundary detection: `remoteLineage !== localLineage`, fired
  * independent of payload shape (`kind: "since"` included) — this is what
  * eliminates the old `isEntirety && hasEverSynced` heuristic for the
- * identity-discontinuity case. `DEFAULT_EPOCH` on either side is excluded:
- * `DEFAULT_EPOCH` is the normal lazy-mint/first-sync path already handled
+ * identity-discontinuity case. `DEFAULT_LINEAGE` on either side is excluded:
+ * `DEFAULT_LINEAGE` is the normal lazy-mint/first-sync path already handled
  * correctly by `compare()`/`merge()` — it is not a trustworthy mismatch signal.
  */
-export function isEpochBoundaryOffer(
-  localEpoch: string,
-  remoteEpoch: string,
+export function isLineageBoundaryOffer(
+  localLineage: string,
+  remoteLineage: string,
 ): boolean {
-  const epochsComparable =
-    remoteEpoch !== DEFAULT_EPOCH && localEpoch !== DEFAULT_EPOCH
-  return epochsComparable && remoteEpoch !== localEpoch
+  const lineagesComparable =
+    remoteLineage !== DEFAULT_LINEAGE && localLineage !== DEFAULT_LINEAGE
+  return lineagesComparable && remoteLineage !== localLineage
 }
 
 // ---------------------------------------------------------------------------
@@ -378,7 +378,7 @@ export class Synchronizer {
    */
   readonly #observationBus: ObservationBus
 
-  readonly #canReset: EpochBoundaryPredicate
+  readonly #canReset: LineageBoundaryPredicate
   readonly #canConnect?: (peer: PeerIdentityDetails) => boolean
   readonly #canShare: (docId: DocId, peer: PeerIdentityDetails) => boolean
   readonly #canAccept: (docId: DocId, peer: PeerIdentityDetails) => boolean
@@ -1415,21 +1415,24 @@ export class Synchronizer {
         break
     }
 
-    // Epoch boundary detection: the explicit signal is `Version.epoch`
+    // Lineage boundary detection: the explicit signal is `Version.lineage`
     // disagreement between the incoming payload's parsed version and our
     // current replica version — the Synchronizer gates on this directly,
     // and independently of payload shape (fires even for `kind: "since"`).
-    const localEpoch = runtime.replica.version().epoch
-    const remoteEpoch = gap.parsed.epoch
-    const isEpochBoundary = isEpochBoundaryOffer(localEpoch, remoteEpoch)
+    const localLineage = runtime.replica.version().lineage
+    const remoteLineage = gap.parsed.lineage
+    const isLineageBoundary = isLineageBoundaryOffer(
+      localLineage,
+      remoteLineage,
+    )
 
     // Legacy heuristic: an entirety payload arriving from a peer we have
     // *already* synced *with* signals a compaction-induced reset from
     // *that peer* (the sender trimmed history past our version). This remains
-    // unconditional (not gated on epoch comparability) because it is the
-    // *only* signal for same-epoch compaction-truncation resets — those
-    // carry no epoch mismatch at all, just a history gap. The explicit
-    // epoch check above only ever adds coverage (identity-discontinuity
+    // unconditional (not gated on lineage comparability) because it is the
+    // *only* signal for same-lineage compaction-truncation resets — those
+    // carry no lineage mismatch at all, just a history gap. The explicit
+    // lineage check above only ever adds coverage (identity-discontinuity
     // resets, detectable independent of payload shape); it never narrows
     // this heuristic's original scope. The first-ever entirety from a peer
     // is initial sync (senderAlreadySynced is false) — the normal merge path
@@ -1455,7 +1458,7 @@ export class Synchronizer {
       senderAlreadySynced &&
       runtime.syncMode.durability !== "transient"
 
-    if (isEpochBoundary || isLegacyReset) {
+    if (isLineageBoundary || isLegacyReset) {
       const peerState = sync.peers.get(effect.fromPeerId)
       const peerIdentity = peerState?.identity ?? {
         peerId: effect.fromPeerId,
@@ -1477,9 +1480,9 @@ export class Synchronizer {
       // `resetFromEntirety`/`fromEntirety` are partial functions: they
       // are only well-defined for a self-sufficient `kind: "entirety"`
       // state image — a `kind: "since"` delta has no valid causal anchor
-      // once the epoch has changed, so there is no coherent way to
-      // "reset" with it. The epoch-boundary check above is intentionally
-      // independent of payload shape (see isEpochBoundaryOffer), so it
+      // once the lineage has changed, so there is no coherent way to
+      // "reset" with it. The lineage-boundary check above is intentionally
+      // independent of payload shape (see isLineageBoundaryOffer), so it
       // can and does fire on `"since"` offers. Recover by re-requesting
       // the sender's current state (a fresh `interest`) instead of
       // feeding an inapplicable delta to a reset path that cannot
@@ -1489,7 +1492,7 @@ export class Synchronizer {
       // Context: jj:5e9e318542ee2006ccb720fd4ec9f819.
       if (effect.payload.kind !== "entirety") {
         console.warn(
-          `[exchange] epoch boundary detected for doc '${effect.docId}' ` +
+          `[exchange] lineage boundary detected for doc '${effect.docId}' ` +
             `with a non-entirety payload — re-requesting the sender's full state.`,
         )
         this.#sendToPeer(effect.fromPeerId, {
@@ -1516,7 +1519,7 @@ export class Synchronizer {
             )
           } catch (err) {
             console.warn(
-              `[exchange] epoch boundary reset failed for doc '${effect.docId}'.`,
+              `[exchange] lineage boundary reset failed for doc '${effect.docId}'.`,
               err,
             )
             return
@@ -1537,7 +1540,7 @@ export class Synchronizer {
         // Interpret-mode substrates: `resetFromEntirety` discards local
         // history and adopts the incoming state and lineage explicitly,
         // decoupled from the routine `merge()` path (which now assumes
-        // shared causal ancestry and never adopts across epochs).
+        // shared causal ancestry and never adopts across lineages).
         try {
           const substrate = runtime.replica as Substrate<Version>
           substrate.resetFromEntirety(effect.payload, gap.parsed, {
@@ -1545,7 +1548,7 @@ export class Synchronizer {
           })
         } catch (err) {
           console.warn(
-            `[exchange] epoch boundary reset failed for doc '${effect.docId}'.`,
+            `[exchange] lineage boundary reset failed for doc '${effect.docId}'.`,
             err,
           )
           return

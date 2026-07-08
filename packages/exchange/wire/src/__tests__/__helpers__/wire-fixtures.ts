@@ -114,7 +114,7 @@ export function offerWire(opts: {
   data: string | Uint8Array
   version: string
   reciprocate?: boolean
-  epoch?: string
+  lineage?: string
 }): WireOfferMsg {
   const pk = StringToPayloadKind[opts.kind]
   if (pk === undefined) throw new Error(`Unknown payload kind: ${opts.kind}`)
@@ -130,7 +130,7 @@ export function offerWire(opts: {
     v: opts.version,
   }
   if (opts.reciprocate !== undefined) wire.r = opts.reciprocate
-  if (opts.epoch !== undefined) wire.ep = opts.epoch
+  if (opts.lineage !== undefined) wire.ln = opts.lineage
   return wire
 }
 

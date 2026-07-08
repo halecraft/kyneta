@@ -61,7 +61,7 @@ describe("TimestampVersion", () => {
     it("throws when compared with a non-TimestampVersion", () => {
       const v = new TimestampVersion(1000)
       const fake = {
-        epoch: "kyneta.default",
+        lineage: "kyneta.genesis",
         serialize: () => "1000",
         compare: () => "equal" as const,
         meet: () => fake,

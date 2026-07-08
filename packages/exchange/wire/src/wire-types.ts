@@ -185,7 +185,7 @@ export function syncModeToWire(mode: SyncMode): SyncModeWireValue {
  *   sh  — schemaHash (string, 34-char hex, required in present doc entries)
  *   pk  — payload kind (PayloadKindValue)
  *   pe  — payload encoding (PayloadEncodingValue)
- *   ep  — payload epoch (SubstratePayload.epoch, string, optional; absent ⇒ legacy peer/payload)
+ *   ln  — payload lineage (SubstratePayload.lineage, string, optional; absent ⇒ legacy peer/payload)
  *   pv  — protocolVersion [major, minor] (establish, optional; absent ⇒ [1,0])
  */
 
@@ -283,8 +283,8 @@ export type WireOfferMsg = {
   d: string | Uint8Array
   v: string
   r?: boolean
-  /** SubstratePayload.epoch, optional — absent for legacy peers/payloads. */
-  ep?: string
+  /** SubstratePayload.lineage, optional — absent for legacy peers/payloads. */
+  ln?: string
 }
 
 /**

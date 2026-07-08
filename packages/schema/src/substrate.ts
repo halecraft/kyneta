@@ -209,11 +209,11 @@ export { computeSchemaHash, HASH_ALGORITHM_VERSION } from "./hash.js"
 export interface Version {
   /**
    * The causal island this version belongs to. Versions from different
-   * epochs are incommensurable — `compare()` is only meaningful within
-   * one epoch. The Synchronizer gates on epoch equality before invoking
+   * lineages are incommensurable — `compare()` is only meaningful within
+   * one lineage. The Synchronizer gates on lineage equality before invoking
    * `compare()`.
    */
-  readonly epoch: string
+  readonly lineage: string
 
   /** Serialize for embedding in HTML (meta tags, script tags). */
   serialize(): string
@@ -273,11 +273,11 @@ export interface SubstratePayload {
   readonly data: string | Uint8Array
 
   /**
-   * The causal island (see {@link Version.epoch}) this payload was
-   * produced under, if the producing substrate tracks epochs explicitly
-   * (Plain always sets this; Loro/Yjs set it to `DEFAULT_EPOCH`).
+   * The causal island (see {@link Version.lineage}) this payload was
+   * produced under, if the producing substrate tracks lineages explicitly
+   * (Plain always sets this; Loro/Yjs set it to `DEFAULT_LINEAGE`).
    */
-  readonly epoch?: string
+  readonly lineage?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -384,15 +384,15 @@ export interface ReplicaLike {
   /**
    * Discard local history and adopt an entirely new state and lineage.
    *
-   * Called exclusively on the epoch-boundary path, when an incoming
-   * payload's epoch differs from this replica's current epoch (see
-   * {@link Version.epoch}). Unlike `merge()` — which assumes the incoming
+   * Called exclusively on the lineage-boundary path, when an incoming
+   * payload's lineage differs from this replica's current lineage (see
+   * {@link Version.lineage}). Unlike `merge()` — which assumes the incoming
    * payload shares causal ancestry with local state — `resetFromEntirety`
    * assumes no shared ancestry: local history is discarded, not merged.
    *
    * @param payload A SubstratePayload where `kind === "entirety"`.
    * @param remoteVersion The parsed `Version` of the remote peer that
-   *   authored the entirety — used to seed the local version/epoch so
+   *   authored the entirety — used to seed the local version/lineage so
    *   subsequent comparisons agree with the sender without re-deriving
    *   it from `payload`.
    */

@@ -35,7 +35,7 @@ function getMaxTimestamp(tree: StateTree | undefined | null): number | null {
  * tuple, it returns `null`.
  *
  * @param ref - A reference from a `state` document.
- * @returns The timestamp (in milliseconds since epoch) or `null`.
+ * @returns The timestamp (in milliseconds since lineage) or `null`.
  */
 export function lastUpdated(ref: unknown): number | null {
   if (!hasTransact(ref)) return null

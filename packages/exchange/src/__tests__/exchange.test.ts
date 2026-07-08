@@ -1210,7 +1210,7 @@ describe("Exchange", () => {
       await drain()
 
       // Bob must receive it: "concurrent" version comparison (cross-incarnation)
-      // → gap → entirety fallback → canReset epoch-boundary accept → merge with
+      // → gap → entirety fallback → canReset lineage-boundary accept → merge with
       // incarnation adoption → subsequent comparisons match.
       await sync(docB).waitForSync()
       expect(docB.title()).toBe("from session 2")
@@ -1227,10 +1227,10 @@ describe("Exchange", () => {
     it("subsequent writes after restart are delivered even when the receiver's version was inflated by many pre-restart writes", async () => {
       // This test reproduces the production bug where a long-lived server's
       // cached version of a client's doc (from many exchanges in session 1)
-      // inflates beyond the client's fresh version after restart. The epoch
+      // inflates beyond the client's fresh version after restart. The lineage
       // boundary merge adds 1 to the server's version but carries over the
       // old flush count. If the old flush count was high (e.g. 10+), the
-      // server's post-epoch version (11+) is far above the client's fresh
+      // server's post-lineage version (11+) is far above the client's fresh
       // version (2), and all subsequent offers are classified as "behind".
       const bridge = new Bridge()
 
@@ -1266,7 +1266,7 @@ describe("Exchange", () => {
       const docA2 = alice2.get("inflated-doc", TestDoc)
       await drain()
 
-      // First write after restart — should arrive via epoch boundary
+      // First write after restart — should arrive via lineage boundary
       batch(docA2, d => {
         d.title.set("from session 2")
         d.count.set(100)
@@ -1300,14 +1300,14 @@ describe("Exchange", () => {
     it("Line RPC: second request after restart is delivered (production repro)", async () => {
       // Production scenario: a Line RPC where the client sends a request,
       // gets a response, then restarts. After restart, the FIRST request
-      // arrives via epoch boundary, but the SECOND request (the LLM host's
+      // arrives via lineage boundary, but the SECOND request (the LLM host's
       // credential call) times out because the server's version is inflated.
       //
       // This test isolates the issue by using Line.protocol + a simple
       // echo handler, matching the voice-credentials RPC topology.
       //
       // Regression coverage (jj:5e9e318542ee2006ccb720fd4ec9f819): a stale
-      // steady-state push crossing the epoch boundary as a `kind: "since"`
+      // steady-state push crossing the lineage boundary as a `kind: "since"`
       // payload used to crash resetFromEntirety ("expects a JSON entirety
       // payload") and silently drop the offer. Spy on console.warn/error to
       // assert that failure mode no longer occurs.
@@ -1395,12 +1395,12 @@ describe("Exchange", () => {
       expect(received).toContain(100)
       expect(received).toContain(200)
 
-      // The crash symptom never occurs: no "epoch boundary reset failed"
+      // The crash symptom never occurs: no "lineage boundary reset failed"
       // warning, and no offer silently dropped via that path.
       const allWarnings = [...warnSpy.mock.calls, ...errorSpy.mock.calls]
         .map(args => String(args[0]))
         .join("\n")
-      expect(allWarnings).not.toContain("epoch boundary reset failed")
+      expect(allWarnings).not.toContain("lineage boundary reset failed")
 
       warnSpy.mockRestore()
       errorSpy.mockRestore()
@@ -1409,16 +1409,16 @@ describe("Exchange", () => {
       receiver2.close()
     })
 
-    it("double-mount race (same peerId, two concurrent client Exchanges — StrictMode/HMR): epoch boundary crash is recovered, not thrown (production repro)", async () => {
+    it("double-mount race (same peerId, two concurrent client Exchanges — StrictMode/HMR): lineage boundary crash is recovered, not thrown (production repro)", async () => {
       // Production repro (jj:5e9e318542ee2006ccb720fd4ec9f819): the actual
       // trigger observed in production is TWO client Exchange instances
       // sharing the same peerId connecting concurrently (e.g. React
       // StrictMode's double-invoke, or an HMR reload racing the previous
       // module instance's teardown) — not a clean sequential restart.
-      // Each instance mints its own epoch; cross-traffic between them
-      // causes the server's cached epoch for this peerId to whiplash
+      // Each instance mints its own lineage; cross-traffic between them
+      // causes the server's cached lineage for this peerId to whiplash
       // between the two, so a steady-state `since`-kind push from one
-      // instance can arrive while the server's local epoch reflects the
+      // instance can arrive while the server's local lineage reflects the
       // other. Confirmed to reproduce the exact production stack trace
       // (`PlainSubstrate.resetFromEntirety expects a JSON entirety
       // payload`) when the synchronizer's guard is removed.
@@ -1471,7 +1471,7 @@ describe("Exchange", () => {
 
       await drain(60)
 
-      // Both requests still arrive — the epoch-boundary guard recovers via
+      // Both requests still arrive — the lineage-boundary guard recovers via
       // a fresh interest/entirety round-trip rather than crashing and
       // dropping the offer.
       const ids = serverReceived.map(m => m.id)
@@ -1481,7 +1481,7 @@ describe("Exchange", () => {
       const allWarnings = [...warnSpy.mock.calls, ...errorSpy.mock.calls]
         .map(args => String(args[0]))
         .join("\n")
-      expect(allWarnings).not.toContain("epoch boundary reset failed")
+      expect(allWarnings).not.toContain("lineage boundary reset failed")
 
       warnSpy.mockRestore()
       errorSpy.mockRestore()

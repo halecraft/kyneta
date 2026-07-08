@@ -145,8 +145,8 @@ export function delta(doc: object, fromVersion: number): Op[] {
   if (!substrate) {
     throw new Error("delta() requires a root ref created by createDoc().")
   }
-  const currentEpoch = (substrate.version() as PlainVersion).epoch
-  const since = new PlainVersion(fromVersion, currentEpoch)
+  const currentLineage = (substrate.version() as PlainVersion).lineage
+  const since = new PlainVersion(fromVersion, currentLineage)
   const payload = substrate.exportSince(since)
   if (!payload) return []
   // Wire format is batched: SerializedOp[][] — one inner array per flush cycle.

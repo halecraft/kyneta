@@ -197,7 +197,7 @@ describe("LoroVersion", () => {
     it("throws when comparing with a non-LoroVersion", () => {
       const v = emptyVersion()
       const fake = {
-        epoch: "kyneta.default",
+        lineage: "kyneta.genesis",
         serialize: () => "fake",
         compare: () => "equal" as const,
         meet: () => fake,
