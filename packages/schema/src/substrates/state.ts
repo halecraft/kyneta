@@ -256,8 +256,11 @@ export function createStateSubstrate(
         applyChangeToStateTree(currentTree, path, change, Date.now())
       }
 
-      // Record op for changefeed delivery
-      core.pendingOps.push({ path, change })
+      // Record op for changefeed delivery. Freeze to an immutable RawPath
+      // at authoring time so the log never aliases the live addressing
+      // registry (uniform with the plain substrate; defense-in-depth even
+      // though `state` exports entirety, not serialized ops). Context: jj:mlurlzqt.
+      core.pendingOps.push({ path: path.toRaw(), change })
     },
 
     afterBatch(options?: BatchOptions): Op[][] {

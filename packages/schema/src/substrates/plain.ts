@@ -303,7 +303,13 @@ export function createPlainSubstrate<V extends Version>(
         record(path, inverse)
       }
       applyChange(doc, path, change)
-      replicaCore.pendingOps.push({ path, change })
+      // Freeze to an immutable RawPath before the op enters the log. The live
+      // AddressedPath aliases memoized registry Address objects that a later
+      // delete tombstones and a later insert re-indexes, in place — logging it
+      // would let those mutations corrupt this historical op (export throws, or
+      // serializes a drifted index). The addressed `path` above is still needed
+      // for the σ read and inverse; only the logged copy is frozen. jj:mlurlzqt
+      replicaCore.pendingOps.push({ path: path.toRaw(), change })
     },
 
     afterBatch(options?: BatchOptions): void {
@@ -1185,6 +1191,11 @@ interface SerializedOp {
 /**
  * Convert Ops with Path objects into JSON-safe form for serialization.
  * Extracts segments and produces plain `{ type, field/entry/index }` objects.
+ *
+ * `seg.resolve()` here never throws: the log holds only `RawPath` ops —
+ * local writes are frozen via `path.toRaw()` in `prepare`, merged ops are
+ * already raw from `deserializeOps` — and `RawSegment.resolve()` is total.
+ * The dead-`Address` hazard was the *input*, fixed there, not here. jj:mlurlzqt
  */
 function serializeOps(ops: readonly Op[]): SerializedOp[] {
   return ops.map(op => ({

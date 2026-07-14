@@ -1126,7 +1126,7 @@ export function advanceSchema(schema: Schema, segment: Segment): Schema {
           `advanceSchema: product expects a field segment, got ${segment.role} segment`,
         )
       }
-      const key = segment.resolve() as string
+      const key = segment.coord() as string
       const fieldSchema = schema.fields[key]
       if (!fieldSchema) {
         throw new Error(`advanceSchema: product has no field "${key}"`)
@@ -1137,7 +1137,7 @@ export function advanceSchema(schema: Schema, segment: Segment): Schema {
     case "sequence": {
       if (segment.role !== "index") {
         throw new Error(
-          `advanceSchema: sequence expects an index segment, got ${segment.role} segment "${segment.resolve()}"`,
+          `advanceSchema: sequence expects an index segment, got ${segment.role} segment "${segment.coord()}"`,
         )
       }
       return schema.item
@@ -1196,7 +1196,7 @@ export function advanceSchema(schema: Schema, segment: Segment): Schema {
     case "movable": {
       if (segment.role !== "index") {
         throw new Error(
-          `advanceSchema: movable sequence expects an index segment, got ${segment.role} segment "${segment.resolve()}"`,
+          `advanceSchema: movable sequence expects an index segment, got ${segment.role} segment "${segment.coord()}"`,
         )
       }
       return schema.item

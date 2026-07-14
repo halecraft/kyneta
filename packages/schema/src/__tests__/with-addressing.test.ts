@@ -183,7 +183,7 @@ describe("withAddressing: sequences", () => {
 // ===========================================================================
 
 describe("withAddressing: maps", () => {
-  it("ref for deleted entry has dead address", () => {
+  it("ref for deleted entry has dead address; read is undefined", () => {
     const { doc } = createMapDoc({ version: "1.0", author: "alice" })
 
     const versionRef = doc.metadata.at("version")
@@ -194,8 +194,12 @@ describe("withAddressing: maps", () => {
       d.metadata.delete("version")
     })
 
+    // Deletion is observable via `deleted()`; reading a deleted entry is
+    // total and yields the absent value (undefined), not a throw. Writes
+    // still guard (see "writing through a deleted map entry ref throws").
+    // Context: jj:mlurlzqt.
     expect(isDeleted(versionRef)).toBe(true)
-    expect(() => versionRef()).toThrow("Ref access on deleted map entry")
+    expect(versionRef()).toBeUndefined()
   })
 
   it("deleted key address is resurrected on re-set", () => {
@@ -373,7 +377,7 @@ describe("withAddressing: ReplaceChange", () => {
 // ===========================================================================
 
 describe("withAddressing: dead ref detection", () => {
-  it("reading through a child ref of a deleted sequence item throws", () => {
+  it("reading through a child ref of a deleted sequence item returns undefined", () => {
     const { doc } = createTodoDoc([
       { text: "alpha", done: false },
       { text: "beta", done: false },
@@ -387,9 +391,10 @@ describe("withAddressing: dead ref detection", () => {
       d.todos.delete(1, 1)
     })
 
-    // Reading through the child ref should throw
-    expect(() => beta.done()).toThrow("Ref access on deleted list item")
-    expect(() => beta.text()).toThrow("Ref access on deleted list item")
+    // Reading through the child ref is total → undefined (deleted item is
+    // absent). Writes still throw (next test). Context: jj:mlurlzqt.
+    expect(beta.done()).toBeUndefined()
+    expect(beta.text()).toBeUndefined()
   })
 
   it("writing through a child ref of a deleted sequence item throws", () => {
@@ -413,7 +418,7 @@ describe("withAddressing: dead ref detection", () => {
     }).toThrow("Ref access on deleted list item")
   })
 
-  it("reading through a deleted map entry ref throws", () => {
+  it("reading through a deleted map entry ref returns undefined", () => {
     const { doc } = createMapDoc({ version: "1.0", author: "alice" })
 
     const versionRef = doc.metadata.at("version")
@@ -423,7 +428,9 @@ describe("withAddressing: dead ref detection", () => {
       d.metadata.delete("version")
     })
 
-    expect(() => versionRef()).toThrow("Ref access on deleted map entry")
+    // Total read: deleted entry is absent → undefined (not a throw).
+    // Context: jj:mlurlzqt.
+    expect(versionRef()).toBeUndefined()
   })
 
   it("writing through a deleted map entry ref throws", () => {
@@ -442,7 +449,7 @@ describe("withAddressing: dead ref detection", () => {
     }).toThrow("Ref access on deleted map entry")
   })
 
-  it("end-to-end sequence: delete item → read throws, write throws, deleted is true", () => {
+  it("end-to-end sequence: delete item → read undefined, write throws, deleted is true", () => {
     const { doc } = createTodoDoc([{ text: "only", done: false }])
 
     const item = doc.todos.at(0)
@@ -453,8 +460,10 @@ describe("withAddressing: dead ref detection", () => {
       d.todos.delete(0, 1)
     })
 
+    // Deleted: detectable via deleted(), reads total (undefined), writes guard.
+    // Context: jj:mlurlzqt.
     expect(isDeleted(item)).toBe(true)
-    expect(() => item.text()).toThrow("Ref access on deleted list item")
+    expect(item.text()).toBeUndefined()
     expect(() => {
       batch(doc, () => {
         item.done.set(true)
@@ -462,7 +471,7 @@ describe("withAddressing: dead ref detection", () => {
     }).toThrow("Ref access on deleted list item")
   })
 
-  it("end-to-end map: delete key → read throws, write throws, deleted is true", () => {
+  it("end-to-end map: delete key → read undefined, write throws, deleted is true", () => {
     const { doc } = createMapDoc({ version: "1.0" })
 
     const ref = doc.metadata.at("version")
@@ -473,8 +482,10 @@ describe("withAddressing: dead ref detection", () => {
       d.metadata.delete("version")
     })
 
+    // Deleted: detectable via deleted(), reads total (undefined), writes guard.
+    // Context: jj:mlurlzqt.
     expect(isDeleted(ref)).toBe(true)
-    expect(() => ref()).toThrow("Ref access on deleted map entry")
+    expect(ref()).toBeUndefined()
     expect(() => {
       batch(doc, () => {
         ref.set("2.0")

@@ -309,10 +309,10 @@ export function flattenDocPosition(
     const childSchema = advanceToChild(currentSchema, segment)
     const childPath =
       segment.role === "field"
-        ? currentPath.field(segment.resolve() as string)
+        ? currentPath.field(segment.coord() as string)
         : segment.role === "entry"
-          ? currentPath.entry(segment.resolve() as string)
-          : currentPath.item(segment.resolve() as number)
+          ? currentPath.entry(segment.coord() as string)
+          : currentPath.item(segment.coord() as number)
 
     if (depth < segments.length - 1) {
       if (!isLeaf(childSchema)) {
@@ -470,16 +470,16 @@ function getChildren(
 
 function matchesSegment(
   child: ChildInfo,
-  segment: { role: string; resolve(): string | number },
+  segment: { role: string; coord(): string | number },
 ): boolean {
   if (
     (segment.role === "field" || segment.role === "entry") &&
     child.key !== undefined
   ) {
-    return child.key === segment.resolve()
+    return child.key === segment.coord()
   }
   if (segment.role === "index" && child.index !== undefined) {
-    return child.index === segment.resolve()
+    return child.index === segment.coord()
   }
   return false
 }
@@ -488,11 +488,11 @@ function matchesSegment(
  *  tries all variants since the reader is not available here. */
 function advanceToChild(
   schema: SchemaNode,
-  segment: { role: string; resolve(): string | number },
+  segment: { role: string; coord(): string | number },
 ): SchemaNode {
   switch (schema[KIND]) {
     case "product": {
-      const key = segment.resolve() as string
+      const key = segment.coord() as string
       const fieldSchema = schema.fields[key]
       if (!fieldSchema) {
         throw new Error(`advanceToChild: product has no field "${key}"`)
@@ -524,7 +524,7 @@ function advanceToChild(
         }
       }
       throw new Error(
-        `advanceToChild: no sum variant can accept segment "${segment.resolve()}"`,
+        `advanceToChild: no sum variant can accept segment "${segment.coord()}"`,
       )
     }
 

@@ -61,12 +61,26 @@ export interface Segment {
   readonly role: "field" | "entry" | "index"
 
   /**
-   * Resolve this segment to a store-access key (string or number).
+   * Resolve this segment to a store-access key (string or number),
+   * asserting liveness. For dead addresses, throws a descriptive error.
    *
-   * For dead addresses, throws a descriptive error. This is the only
-   * method most consumers need — tombstone checking is built in.
+   * Use `resolve()` only where a dead segment is a genuine bug that must
+   * fail loudly — writing through a path (`writeByPath`) or live ref
+   * navigation. For coordinate-only reads (serialization, `format()`,
+   * identity `key`, schema/position walks, `read()`), use `coord()` — a
+   * since-deleted key is still a valid coordinate, and diagnostics must
+   * never throw. Context: jj:mlurlzqt.
    */
   resolve(): string | number
+
+  /**
+   * Project this segment to its coordinate (key or index) — total, pure,
+   * never throws, even for a dead address. The coordinate is an invariant
+   * of the segment (`readonly key` / `index`); liveness is orthogonal
+   * temporal state. This is the accessor for history, diagnostics, and
+   * identity. Context: jj:mlurlzqt.
+   */
+  coord(): string | number
 }
 
 // ---------------------------------------------------------------------------
@@ -87,33 +101,56 @@ export type RawSegment =
       readonly field: string
       readonly role: "field"
       resolve(): string
+      coord(): string
     }
   | {
       readonly type: "entry"
       readonly entry: string
       readonly role: "entry"
       resolve(): string
+      coord(): string
     }
   | {
       readonly type: "index"
       readonly index: number
       readonly role: "index"
       resolve(): number
+      coord(): number
     }
 
 /** Declared product field segment. Identity-keyed at binding boundaries. */
 export function rawField(key: string): RawSegment {
-  return { type: "field", field: key, role: "field", resolve: () => key }
+  // Raw segments are already liveness-agnostic, so `coord` and `resolve`
+  // coincide (neither throws). The split matters only for `Address`.
+  return {
+    type: "field",
+    field: key,
+    role: "field",
+    resolve: () => key,
+    coord: () => key,
+  }
 }
 
 /** Runtime string-key segment for map entries, set members, tree node ids. */
 export function rawEntry(key: string): RawSegment {
-  return { type: "entry", entry: key, role: "entry", resolve: () => key }
+  return {
+    type: "entry",
+    entry: key,
+    role: "entry",
+    resolve: () => key,
+    coord: () => key,
+  }
 }
 
 /** Numeric position segment for sequences and movable lists. */
 export function rawIndex(index: number): RawSegment {
-  return { type: "index", index, role: "index", resolve: () => index }
+  return {
+    type: "index",
+    index,
+    role: "index",
+    resolve: () => index,
+    coord: () => index,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +177,7 @@ export type Address =
       listeners?: Set<() => void>
       readonly role: "field"
       resolve(): string
+      coord(): string
     }
   | {
       readonly kind: "entry"
@@ -148,6 +186,7 @@ export type Address =
       listeners?: Set<() => void>
       readonly role: "entry"
       resolve(): string
+      coord(): string
     }
   | {
       readonly kind: "index"
@@ -157,6 +196,7 @@ export type Address =
       listeners?: Set<() => void>
       readonly role: "index"
       resolve(): number
+      coord(): number
     }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +256,9 @@ export function fieldAddress(key: string, dead = false): Address {
       }
       return this.key
     },
+    coord() {
+      return this.key
+    },
   }
 }
 
@@ -235,6 +278,9 @@ export function entryAddress(key: string, dead = false): Address {
           `Ref access on deleted map entry. The entry "${this.key}" this ref pointed to has been removed.`,
         )
       }
+      return this.key
+    },
+    coord() {
       return this.key
     },
   }
@@ -257,6 +303,9 @@ export function indexAddress(index: number, dead = false): Address {
           `Ref access on deleted list item. The item this ref pointed to has been removed.`,
         )
       }
+      return this.index
+    },
+    coord() {
       return this.index
     },
   }
@@ -309,6 +358,14 @@ export interface Path {
   format(): string
   /** Create an empty path of the same concrete type. */
   root(): Path
+  /**
+   * Project to an immutable, liveness-agnostic `RawPath` — the value form
+   * used by the op-log and the wire. Idempotent on `RawPath` (returns
+   * `this`); on `AddressedPath` it reads each segment's `coord()` so the
+   * result never aliases the live addressing registry. The named inverse
+   * of `resolveToAddressed`. Context: jj:mlurlzqt.
+   */
+  toRaw(): RawPath
 }
 
 // ---------------------------------------------------------------------------
@@ -328,6 +385,7 @@ export abstract class AbstractPath implements Path {
   abstract slice(start: number, end?: number): Path
   abstract concat(other: Path): Path
   abstract root(): Path
+  abstract toRaw(): RawPath
 
   /** Sugar for `entry(id)`. */
   node(id: string): Path {
@@ -356,7 +414,10 @@ export abstract class AbstractPath implements Path {
     let current = store
     for (const seg of this.segments) {
       if (current == null) return undefined
-      const key = seg.resolve()
+      // `coord()`, not `resolve()`: a since-deleted key reads as the absent
+      // value (undefined via the `current[key]` miss), not a throw — a deleted
+      // key is absent, not a bug. Writes still guard (see `writeByPath`). jj:mlurlzqt
+      const key = seg.coord()
       // Flat-forest navigation: when traversing an `entry` segment
       // over an array of `{id, parent, index, data}` nodes (the canonical
       // shadow shape produced by `stepTree`), look the node up by id and
@@ -382,11 +443,14 @@ export abstract class AbstractPath implements Path {
     if (this.segments.length === 0) return "root"
     let result = ""
     for (const seg of this.segments) {
+      // `coord()`, not `resolve()`: `format()` feeds error messages, so it
+      // must be total — a dead segment must not throw here and mask the real
+      // error being reported. jj:mlurlzqt
       if (seg.role === "field" || seg.role === "entry") {
         if (result.length > 0) result += "."
-        result += String(seg.resolve())
+        result += String(seg.coord())
       } else {
-        result += `[${seg.resolve()}]`
+        result += `[${seg.coord()}]`
       }
     }
     return result
@@ -428,7 +492,13 @@ export class RawPath extends AbstractPath {
   }
 
   protected computeKey(): string {
-    return this.segments.map(s => String(s.resolve())).join("\0")
+    // `coord()`: identity is a coordinate projection, not a live read.
+    return this.segments.map(s => String(s.coord())).join("\0")
+  }
+
+  /** Already raw — identity projection. */
+  toRaw(): RawPath {
+    return this
   }
 
   slice(start: number, end?: number): RawPath {
@@ -722,6 +792,24 @@ export class AddressedPath extends AbstractPath {
   }
 
   /**
+   * Freeze to an immutable `RawPath` by projecting each `Address` to its
+   * coordinate via `coord()` (never `resolve()` — this must succeed even
+   * for a `dead` address, e.g. an entry deleted after the op was authored).
+   * The named inverse of `resolveToAddressed`. The op-log and wire hold
+   * these values, so history never aliases the mutable registry.
+   * Context: jj:mlurlzqt.
+   */
+  toRaw(): RawPath {
+    let raw = RawPath.empty
+    for (const seg of this.segments) {
+      if (seg.role === "field") raw = raw.field(seg.coord() as string)
+      else if (seg.role === "entry") raw = raw.entry(seg.coord() as string)
+      else raw = raw.item(seg.coord() as number)
+    }
+    return raw
+  }
+
+  /**
    * Access the last segment as an Address (for ref registration).
    */
   lastAddress(): Address | undefined {
@@ -744,6 +832,7 @@ export class AddressedPath extends AbstractPath {
  * This is the single point where raw→addressed translation happens.
  * Called in the prepare pipeline so that `path.key` on incoming
  * external mutations matches the identity-stable keys used internally.
+ * The inverse — addressed→raw, for freezing history — is `AddressedPath.toRaw()`.
  */
 export function resolveToAddressed(
   path: Path,
@@ -755,12 +844,14 @@ export function resolveToAddressed(
   // the registry's getOrCreate* methods at each level.
   let current = new AddressedPath([], registry)
   for (const seg of path.segments) {
+    // `coord()` for consistency; input is always raw here (addressed returns
+    // early), so this is a pure coordinate read either way.
     if (seg.role === "field") {
-      current = current.field(seg.resolve() as string) as AddressedPath
+      current = current.field(seg.coord() as string) as AddressedPath
     } else if (seg.role === "entry") {
-      current = current.entry(seg.resolve() as string) as AddressedPath
+      current = current.entry(seg.coord() as string) as AddressedPath
     } else {
-      current = current.item(seg.resolve() as number) as AddressedPath
+      current = current.item(seg.coord() as number) as AddressedPath
     }
   }
   return current

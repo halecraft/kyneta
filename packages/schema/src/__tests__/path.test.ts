@@ -288,14 +288,15 @@ describe("AddressedPath", () => {
       expect(p.read(store)).toBe("bob")
     })
 
-    it("throws on read when address is dead", () => {
+    it("returns undefined (does not throw) when the address is dead", () => {
+      // read() is total: a deleted coordinate reads as absent (the store no
+      // longer has the key), not a throw. Writes still guard (see below).
+      // Context: jj:mlurlzqt.
       const root = new AddressedPath([], registry)
       const child = root.item(0)
       const addr = child.segments[0] as any as Address
       addr.dead = true
-      expect(() => child.read({ items: ["x"] })).toThrow(
-        "Ref access on deleted list item",
-      )
+      expect(child.read({})).toBeUndefined()
     })
   })
 
@@ -452,7 +453,7 @@ describe("dead address propagation", () => {
     )
   })
 
-  it("read() throws when path contains a dead field address", () => {
+  it("read() returns undefined (does not throw) when a path segment is dead", () => {
     const registry = new AddressTableRegistry()
     const root = new AddressedPath([], registry)
     const p = root.field("settings").field("theme")
@@ -461,9 +462,9 @@ describe("dead address propagation", () => {
     const addr = p.segments[1] as any as Address
     addr.dead = true
 
-    expect(() => p.read({ settings: { theme: "dark" } })).toThrow(
-      "Ref access on deleted product field",
-    )
+    // Total read: a deleted coordinate is absent, not an error. The store
+    // reflects the deletion (no `theme` key) → undefined. Context: jj:mlurlzqt.
+    expect(p.read({ settings: {} })).toBeUndefined()
   })
 })
 

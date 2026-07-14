@@ -125,7 +125,7 @@ export function foldPath(
 
     let identity: string | undefined
     if (binding && seg.role === "field") {
-      absPath = extendSchemaPathKey(absPath, seg.resolve() as string)
+      absPath = extendSchemaPathKey(absPath, seg.coord() as string)
       identity = binding.forward.get(absPath) as string | undefined
     }
 
@@ -138,7 +138,7 @@ export function foldPath(
       for (let j = i + 1; j < segments.length; j++) {
         const remaining = segments[j] as Segment
         current = (current as Record<string, unknown> | undefined)?.[
-          remaining.resolve() as string
+          remaining.coord() as string
         ]
       }
       return { resolved: current, schema }
@@ -153,7 +153,7 @@ export function foldPath(
       for (let j = i + 1; j < segments.length; j++) {
         const remaining = segments[j] as Segment
         current = (current as Record<string, unknown> | undefined)?.[
-          remaining.resolve() as string
+          remaining.coord() as string
         ]
       }
       return { resolved: current, schema }
@@ -232,7 +232,7 @@ export function findJsonBoundary(
       // Mirrors the absPath accumulation in `foldPath`. Kept here so
       // a future identity-aware variant of findJsonBoundary can reuse
       // the same lookup discipline; currently unused but harmless.
-      absPath = extendSchemaPathKey(absPath, seg.resolve() as string)
+      absPath = extendSchemaPathKey(absPath, seg.coord() as string)
       void absPath
     }
 
