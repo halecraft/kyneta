@@ -17,7 +17,13 @@
 // functions: ensureContainers, ensureRootField, ensureMapContainers.
 
 import type { SchemaBinding, Schema as SchemaNode } from "@kyneta/schema"
-import { isJsonBoundary, KIND, STRUCTURAL_YJS_CLIENT_ID } from "@kyneta/schema"
+import {
+  containerKey,
+  extendSchemaPathKey,
+  isJsonBoundary,
+  KIND,
+  STRUCTURAL_YJS_CLIENT_ID,
+} from "@kyneta/schema"
 import * as Y from "yjs"
 
 // ---------------------------------------------------------------------------
@@ -72,8 +78,7 @@ export function ensureContainers(
       for (const [key, fieldSchema] of Object.entries(schema.fields).sort(
         ([a], [b]) => a.localeCompare(b),
       )) {
-        const identity = binding?.forward.get(key) as string | undefined
-        const mapKey = identity ?? key
+        const mapKey = containerKey(binding, key, key)
         ensureRootField(
           rootMap,
           mapKey,
@@ -198,9 +203,8 @@ function ensureMapContainers(
   for (const [key, fieldSchema] of Object.entries(
     schema.fields as Record<string, SchemaNode>,
   ).sort(([a], [b]) => a.localeCompare(b))) {
-    const absPath = prefix ? `${prefix}.${key}` : key
-    const identity = binding?.forward.get(absPath) as string | undefined
-    const mapKey = identity ?? key
+    const absPath = extendSchemaPathKey(prefix ?? "", key)
+    const mapKey = containerKey(binding, absPath, key)
 
     // JSON-boundary nested field: leave the entry absent, the first
     // write will set the plain JSON value at this key.

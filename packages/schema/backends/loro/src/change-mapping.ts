@@ -33,9 +33,13 @@ import type {
   TreeInstruction,
 } from "@kyneta/schema"
 import {
+  containerKey,
   expandMapOpsToLeaves,
-  isJsonBoundary,
+  extendSchemaPathKey,
+  fieldAbsPath,
   KIND,
+  type MaterializedNode,
+  materializeValue,
   pathSchema,
   RawPath,
   richTextChange,
@@ -86,6 +90,134 @@ function syntheticCID(
 
 function jsonCID(cid: ContainerID): JsonContainerID {
   return `🦜:${cid}` as JsonContainerID
+}
+
+/** Loro needs declared containers to exist before nested writes land on them. */
+const LORO_EAGER = "all-containers" as const
+
+// ---------------------------------------------------------------------------
+// realizeLoro — MaterializedNode → Loro applyDiff tuples (pre-order)
+// ---------------------------------------------------------------------------
+
+/**
+ * The Loro container type for a materialized container node. `movable` on a
+ * list node selects `MovableList` over `List`.
+ */
+function containerTypeForNode(
+  node: MaterializedNode,
+): "Map" | "List" | "MovableList" | "Text" | "Counter" {
+  switch (node.kind) {
+    case "map":
+      return "Map"
+    case "list":
+      return node.movable ? "MovableList" : "List"
+    case "text":
+    case "richtext":
+      return "Text"
+    case "counter":
+      return "Counter"
+    default:
+      // Unreachable: `plain` nodes are inlined by `materializeChild`.
+      return "Map"
+  }
+}
+
+/**
+ * Resolve a materialized child into the value the parent stores for it — a
+ * plain `Value` for `plain` nodes, or a `🦜:` JsonContainerID reference for
+ * container/leaf-container nodes (whose own diffs are pushed into `result`).
+ * The single point where a synthetic ContainerID is minted — keeping
+ * `materializeValue` (the pure planner) free of CID allocation.
+ */
+function materializeChild(
+  node: MaterializedNode,
+  result: [ContainerID, Diff | JsonDiff][],
+): Value | JsonContainerID {
+  if (node.kind === "plain") return node.value as Value
+  const cid = syntheticCID(containerTypeForNode(node))
+  realizeLoro(node, cid, result)
+  return jsonCID(cid)
+}
+
+/**
+ * Emit the applyDiff tuples for a container `node` under `cid`, pre-order:
+ * the container's own diff is pushed BEFORE its descendants. Loro resolves a
+ * `🦜:` reference only once the referenced container has been created, so the
+ * parent (which holds the reference) must land before the child it points to.
+ */
+function realizeLoro(
+  node: MaterializedNode,
+  cid: ContainerID,
+  result: [ContainerID, Diff | JsonDiff][],
+): void {
+  switch (node.kind) {
+    case "map": {
+      const updated: Record<string, Value | JsonContainerID | undefined> = {}
+      const pending: Array<[ContainerID, MaterializedNode]> = []
+      for (const [key, child] of node.entries) {
+        if (child.kind === "plain") {
+          updated[key] = child.value as Value
+        } else {
+          const childCID = syntheticCID(containerTypeForNode(child))
+          updated[key] = jsonCID(childCID)
+          pending.push([childCID, child])
+        }
+      }
+      result.push([cid, { type: "map", updated } as MapJsonDiff])
+      for (const [childCID, child] of pending) {
+        realizeLoro(child, childCID, result)
+      }
+      return
+    }
+    case "list": {
+      const listDeltas: Delta<(Value | JsonContainerID)[]>[] = []
+      const pending: Array<[ContainerID, MaterializedNode]> = []
+      for (const item of node.items) {
+        if (item.kind === "plain") {
+          listDeltas.push({ insert: [item.value as Value] })
+        } else {
+          const childCID = syntheticCID(containerTypeForNode(item))
+          listDeltas.push({ insert: [jsonCID(childCID)] })
+          pending.push([childCID, item])
+        }
+      }
+      result.push([cid, { type: "list", diff: listDeltas } as ListJsonDiff])
+      for (const [childCID, child] of pending) {
+        realizeLoro(child, childCID, result)
+      }
+      return
+    }
+    case "text": {
+      if (node.content !== "") {
+        result.push([cid, { type: "text", diff: [{ insert: node.content }] }])
+      }
+      return
+    }
+    case "richtext": {
+      const value = node.value
+      if (typeof value === "string" && value.length > 0) {
+        result.push([cid, { type: "text", diff: [{ insert: value }] }])
+      } else if (Array.isArray(value)) {
+        const diff = (
+          value as Array<{ text: string; marks?: Record<string, unknown> }>
+        ).map(span => {
+          const d: any = { insert: span.text }
+          if (span.marks && Object.keys(span.marks).length > 0) {
+            d.attributes = span.marks
+          }
+          return d as Delta<string>
+        })
+        if (diff.length > 0) result.push([cid, { type: "text", diff }])
+      }
+      return
+    }
+    case "counter": {
+      if (node.amount !== 0) {
+        result.push([cid, { type: "counter", increment: node.amount }])
+      }
+      return
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -167,6 +299,9 @@ export function changeToDiff(
   // switch then receives a sum schema for a non-replace change — same
   // effective failure mode (malformed write), different surface.
   const targetSchema = pathSchema(schema, path)
+  // Field-only abs-path of the target container — the prefix under which a
+  // materialized value's product fields are identity-keyed.
+  const absPath = fieldAbsPath(path.segments)
 
   switch (change.type) {
     case "text":
@@ -180,10 +315,18 @@ export function changeToDiff(
         targetCID,
         change as SequenceChange,
         targetSchema,
+        binding,
+        absPath,
       )
 
     case "map":
-      return mapChangeToDiff(targetCID, change as MapChange, targetSchema)
+      return mapChangeToDiff(
+        targetCID,
+        change as MapChange,
+        targetSchema,
+        binding,
+        absPath,
+      )
 
     case "increment":
       return [[targetCID, counterChangeToDiff(change as IncrementChange)]]
@@ -347,11 +490,14 @@ function sequenceChangeToDiff(
   targetCID: ContainerID,
   change: SequenceChange,
   targetSchema: SchemaNode,
+  binding: SchemaBinding | undefined,
+  absPath: string,
 ): [ContainerID, Diff | JsonDiff][] {
   const result: [ContainerID, Diff | JsonDiff][] = []
   const listDeltas: Delta<(Value | JsonContainerID)[]>[] = []
 
-  // Determine the item schema — movable sequences also have .item
+  // Determine the item schema — movable sequences also have .item. List items
+  // share the list's abs-path prefix (an index is not a field boundary).
   const sk = structuralKind(targetSchema)
   const itemSchema =
     sk === "sequence" && "item" in targetSchema
@@ -368,29 +514,19 @@ function sequenceChangeToDiff(
         delete: inst.delete,
       } as Delta<(Value | JsonContainerID)[]>)
     } else if ("insert" in inst) {
-      const items: (Value | JsonContainerID)[] = []
-
       for (const item of inst.insert as readonly unknown[]) {
-        if (itemSchema && needsContainer(item, itemSchema)) {
-          // Structured insert: create synthetic container diffs
-          const cid = materializeCIDForSchema(itemSchema)
-          items.push(jsonCID(cid))
-          materializeValueDiffs(item, itemSchema, cid, result)
-        } else {
-          // Plain value insert
-          items.push(item as Value)
-        }
-      }
-
-      for (const item of items) {
-        listDeltas.push({
-          insert: [item],
-        } as Delta<(Value | JsonContainerID)[]>)
+        const child = itemSchema
+          ? materializeChild(
+              materializeValue(itemSchema, item, binding, absPath, LORO_EAGER),
+              result,
+            )
+          : (item as Value)
+        listDeltas.push({ insert: [child] })
       }
     }
   }
 
-  // The list diff itself goes first
+  // The list diff itself goes first (parent-before-descendant).
   result.unshift([
     targetCID,
     { type: "list", diff: listDeltas } as ListJsonDiff,
@@ -399,50 +535,57 @@ function sequenceChangeToDiff(
 }
 
 /**
- * MapChange → MapDiff (possibly with JsonContainerID references)
+ * MapChange → MapDiff (possibly with JsonContainerID references).
+ *
+ * Product fields are identity-keyed and advance the abs-path; map/record
+ * entries keep their runtime key and leave the abs-path unchanged.
  */
 function mapChangeToDiff(
   targetCID: ContainerID,
   change: MapChange,
   targetSchema: SchemaNode,
+  binding: SchemaBinding | undefined,
+  absPath: string,
 ): [ContainerID, Diff | JsonDiff][] {
   const result: [ContainerID, Diff | JsonDiff][] = []
   const updated: Record<string, Value | JsonContainerID | undefined> = {}
 
-  // Determine the item schema for dynamic maps (including set)
+  const isProduct = targetSchema[KIND] === "product"
   const sk = structuralKind(targetSchema)
   const valueSchema =
     sk === "map" && "item" in targetSchema
       ? ((targetSchema as any).item as SchemaNode)
       : undefined
 
+  const keyFor = (key: string): { mapKey: string; childAbs: string } => {
+    if (isProduct) {
+      const childAbs = extendSchemaPathKey(absPath, key)
+      return { mapKey: containerKey(binding, childAbs, key), childAbs }
+    }
+    return { mapKey: key, childAbs: absPath }
+  }
+
   // Set entries
   if (change.set) {
     for (const [key, value] of Object.entries(change.set)) {
-      // Try to find the field schema for product-typed maps (structs)
       let fieldSchema = valueSchema
-      if (
-        !fieldSchema &&
-        targetSchema[KIND] === "product" &&
-        targetSchema.fields[key]
-      ) {
+      if (!fieldSchema && isProduct && targetSchema.fields[key]) {
         fieldSchema = targetSchema.fields[key]
       }
-
-      if (fieldSchema && needsContainer(value, fieldSchema)) {
-        const cid = materializeCIDForSchema(fieldSchema)
-        updated[key] = jsonCID(cid)
-        materializeValueDiffs(value, fieldSchema, cid, result)
-      } else {
-        updated[key] = value as Value
-      }
+      const { mapKey, childAbs } = keyFor(key)
+      updated[mapKey] = fieldSchema
+        ? materializeChild(
+            materializeValue(fieldSchema, value, binding, childAbs, LORO_EAGER),
+            result,
+          )
+        : (value as Value)
     }
   }
 
   // Delete entries
   if (change.delete) {
     for (const key of change.delete) {
-      updated[key] = undefined
+      updated[keyFor(key).mapKey] = undefined
     }
   }
 
@@ -471,6 +614,37 @@ function replaceChangeToDiff(
 
   const lastSeg = path.segments[path.segments.length - 1]
   if (!lastSeg) throw new Error("replaceChangeToDiff: empty path")
+
+  // Materialize the replaced value. `absPath` is the target's own field-abs-path
+  // — only product-field segments contribute; entry/index segments are runtime.
+  const targetSchema = pathSchema(schema, path, binding)
+  const absPath = fieldAbsPath(path.segments)
+  const node = materializeValue(
+    targetSchema,
+    change.value,
+    binding,
+    absPath,
+    LORO_EAGER,
+  )
+
+  // Container-kind target (product/map/sequence/text/counter): set the field's
+  // OWN container contents in place. A root-level container is addressed
+  // directly (`doc.getMap(id)`) and cannot be swapped, and a nested one is
+  // reused rather than swapped — both are correct because `realizeLoro`
+  // identity-keys every leaf onto the resolved container.
+  if (node.kind !== "plain") {
+    const { resolved: target } = resolveContainer(doc, schema, path, binding)
+    if (isLoroContainer(target)) {
+      const result: [ContainerID, Diff | JsonDiff][] = []
+      realizeLoro(node, target.id as ContainerID, result)
+      return result
+    }
+    // No live container for a bound container field would be a resolution bug;
+    // fall through to the plain path defensively.
+  }
+
+  // Plain-value target (scalar/sum/json subtree): store as a plain value in the
+  // parent container (root scalars live in the shared _props map).
   const parentPath = path.slice(0, -1)
   const { resolved: parentResolved } = resolveContainer(
     doc,
@@ -478,27 +652,24 @@ function replaceChangeToDiff(
     parentPath,
     binding,
   )
+  const plainValue = (
+    node.kind === "plain" ? node.value : change.value
+  ) as Value
+  const mapKey =
+    lastSeg.role === "field"
+      ? containerKey(binding, absPath, lastSeg.resolve() as string)
+      : (lastSeg.resolve() as string)
 
-  // If the parent is the LoroDoc itself (root-level field), the target
-  // depends on the field type. For scalars/sums, they're stored in the
-  // shared _props LoroMap. For containers, use the container's own ID.
   if (!isLoroContainer(parentResolved)) {
-    // Parent is the LoroDoc — this is a root-level replace.
-    // Scalars at root are stored in _props.
     if (lastSeg.role === "field" || lastSeg.role === "entry") {
-      const fieldName = lastSeg.resolve() as string
-      // Identity-keying applies only at product-field boundaries.
-      const identity =
-        lastSeg.role === "field"
-          ? (binding?.forward.get(fieldName) as string | undefined)
-          : undefined
-      const key = identity ?? fieldName
       const propsMap = (parentResolved as any).getMap(PROPS_KEY)
       const propsCID = propsMap.id as ContainerID
-      const updated: Record<string, Value | undefined> = {
-        [key]: change.value as Value,
-      }
-      return [[propsCID, { type: "map", updated } as MapDiff]]
+      return [
+        [
+          propsCID,
+          { type: "map", updated: { [mapKey]: plainValue } } as MapDiff,
+        ],
+      ]
     }
     throw new Error(
       "replaceChangeToDiff: root-level replace requires a key-style segment",
@@ -506,37 +677,23 @@ function replaceChangeToDiff(
   }
 
   const parentCID = parentResolved.id
-  const resolved = lastSeg.resolve()
 
   if (lastSeg.role === "field" || lastSeg.role === "entry") {
-    // Compute the absolute schema path for nested identity lookup.
-    // Only product-field segments contribute to the absolute schema path;
-    // entry segments (map/set/tree keys) are runtime keys and don't.
-    const absPath = path.segments
-      .filter(s => s.role === "field")
-      .map(s => s.resolve() as string)
-      .join(".")
-    // Identity-keying applies only when the last segment is a product field.
-    const identity =
-      lastSeg.role === "field"
-        ? (binding?.forward.get(absPath) as string | undefined)
-        : undefined
-    const key = identity ?? (resolved as string)
-    const updated: Record<string, Value | undefined> = {
-      [key]: change.value as Value,
-    }
-    return [[parentCID, { type: "map", updated } as MapDiff]]
+    return [
+      [
+        parentCID,
+        { type: "map", updated: { [mapKey]: plainValue } } as MapDiff,
+      ],
+    ]
   }
 
-  // Index-based replace in a list — modeled as delete + insert at position
+  // Index-based replace of a plain list item — delete + insert at position.
   if (lastSeg.role === "index") {
-    const idx = resolved as number
+    const idx = lastSeg.resolve() as number
     const diff: Delta<Value[]>[] = []
-    if (idx > 0) {
-      diff.push({ retain: idx } as Delta<Value[]>)
-    }
+    if (idx > 0) diff.push({ retain: idx } as Delta<Value[]>)
     diff.push({ delete: 1 } as Delta<Value[]>)
-    diff.push({ insert: [change.value as Value] } as Delta<Value[]>)
+    diff.push({ insert: [plainValue] } as Delta<Value[]>)
     return [[parentCID, { type: "list", diff } as ListDiff]]
   }
 
@@ -549,269 +706,6 @@ function replaceChangeToDiff(
  */
 function counterChangeToDiff(change: IncrementChange): CounterDiff {
   return { type: "counter", increment: change.amount }
-}
-
-// ---------------------------------------------------------------------------
-// Structured value materialization (for container inserts)
-// ---------------------------------------------------------------------------
-
-/**
- * Map a schema's `[KIND]` to the Loro container type string used in
- * synthetic CID generation, or `undefined` if the kind does not
- * correspond to a Loro container.
- */
-function kindToContainerType(
-  schema: SchemaNode,
-): "Counter" | "Text" | "List" | "MovableList" | "Tree" | "Map" | undefined {
-  switch (schema[KIND]) {
-    case "counter":
-      return "Counter"
-    case "text":
-      return "Text"
-    case "movable":
-      return "MovableList"
-    case "tree":
-      return "Tree"
-    case "set":
-    case "product":
-    case "map":
-      return "Map"
-    case "sequence":
-      return "List"
-    default:
-      return undefined
-  }
-}
-
-/**
- * Determine whether a value needs to be materialized as a Loro container
- * (vs. inserted as a plain value).
- *
- * A value needs a container if the schema indicates it should be:
- * - A composite type (product/struct, sequence/list, map/record)
- * - A first-class CRDT type (text, counter, movable, tree, set)
- *
- * For first-class types the value itself may be a primitive (number
- * for counter, string for text) but Loro still needs a container.
- *
- * **JSON-boundary exception**: schemas carrying the `JSON_BOUNDARY`
- * marker (`struct.json`, `list.json`, `record.json`) are stored as a
- * single plain JSON value in the parent container — no nested CRDT
- * containers are created. The boundary itself takes the plain-value
- * branch.
- */
-function needsContainer(_value: unknown, schema: SchemaNode): boolean {
-  if (isJsonBoundary(schema)) return false
-  const kind = schema[KIND]
-  switch (kind) {
-    // First-class CRDT types — always need a Loro container
-    case "text":
-    case "counter":
-    case "movable":
-    case "tree":
-    case "set":
-    // Structural composites — need a Loro container
-    case "product":
-    case "map":
-    case "sequence":
-      return true
-    default:
-      return false
-  }
-}
-
-/**
- * Recursively produce [ContainerID, Diff] tuples for a plain JS value
- * that should be materialized as Loro containers.
- *
- * The `parentCID` is the synthetic CID that was referenced via 🦜: in
- * the parent's insert. This function emits a MapDiff for `parentCID`
- * with the value's fields, and recurses for any nested containers.
- *
- * For product (struct) schemas, also creates containers for first-class
- * fields (counter, text, etc.) that are declared in the schema but may
- * be missing from the value object. This ensures Loro containers exist
- * for later mutation (e.g. `.increment()` on a counter inside a struct
- * inside a record).
- */
-function materializeValueDiffs(
-  value: unknown,
-  schema: SchemaNode,
-  parentCID: ContainerID,
-  result: [ContainerID, Diff | JsonDiff][],
-): void {
-  const kind = schema[KIND]
-
-  // First-class leaf CRDT types — emit an init diff directly
-  switch (kind) {
-    case "counter": {
-      const amount = typeof value === "number" ? value : 0
-      if (amount !== 0) {
-        result.push([
-          parentCID,
-          { type: "counter", increment: amount } as CounterDiff,
-        ])
-      }
-      return
-    }
-    case "text": {
-      const content = typeof value === "string" ? value : ""
-      if (content !== "") {
-        result.push([
-          parentCID,
-          {
-            type: "text",
-            diff: [{ insert: content }],
-          } as TextDiff,
-        ])
-      }
-      return
-    }
-    case "movable":
-    case "tree":
-      // movableList, tree — future work; fall through to structural handling
-      break
-  }
-
-  if (kind === "product" && typeof value === "object" && value !== null) {
-    const obj = value as Record<string, unknown>
-    const updated: Record<string, Value | JsonContainerID | undefined> = {}
-
-    // Deferred init diffs for first-class containers (counter, text).
-    // These must come AFTER the parent MapDiff that creates them via
-    // 🦜: JsonContainerID references. Loro resolves 🦜: refs when it
-    // processes a MapDiff, so the container must be created (by the
-    // MapDiff) before the init diff (CounterDiff, TextDiff) can target it.
-    const deferred: [ContainerID, Diff | JsonDiff][] = []
-
-    // Process fields present in the value object
-    for (const [key, fieldValue] of Object.entries(obj)) {
-      const fieldSchema = schema.fields[key]
-      if (fieldSchema && needsContainer(fieldValue, fieldSchema)) {
-        const childCID = materializeCIDForSchema(fieldSchema)
-        updated[key] = jsonCID(childCID)
-        materializeValueDiffs(fieldValue, fieldSchema, childCID, deferred)
-      } else {
-        updated[key] = fieldValue as Value
-      }
-    }
-
-    // Create containers for first-class fields declared in the schema
-    // but missing from the value object. This ensures Loro containers
-    // exist for later mutation (e.g. counter.increment()).
-    for (const [key, fieldSchema] of Object.entries(schema.fields)) {
-      if (key in obj) continue // already processed above
-      if (fieldSchema && needsContainer(undefined, fieldSchema as SchemaNode)) {
-        const childCID = materializeCIDForSchema(fieldSchema as SchemaNode)
-        updated[key] = jsonCID(childCID)
-        materializeValueDiffs(
-          undefined,
-          fieldSchema as SchemaNode,
-          childCID,
-          deferred,
-        )
-      }
-    }
-
-    // Parent MapDiff first (creates containers via 🦜: refs), then
-    // deferred init diffs for the containers it created.
-    result.push([parentCID, { type: "map", updated } as MapJsonDiff])
-    result.push(...deferred)
-  } else if (kind === "product" && (value === undefined || value === null)) {
-    // Product with no value — still need to create containers for
-    // first-class fields in the schema
-    const updated: Record<string, Value | JsonContainerID | undefined> = {}
-    const deferred: [ContainerID, Diff | JsonDiff][] = []
-
-    for (const [key, fieldSchema] of Object.entries(schema.fields)) {
-      if (fieldSchema && needsContainer(undefined, fieldSchema as SchemaNode)) {
-        const childCID = materializeCIDForSchema(fieldSchema as SchemaNode)
-        updated[key] = jsonCID(childCID)
-        materializeValueDiffs(
-          undefined,
-          fieldSchema as SchemaNode,
-          childCID,
-          deferred,
-        )
-      }
-    }
-
-    if (Object.keys(updated).length > 0) {
-      result.push([parentCID, { type: "map", updated } as MapJsonDiff])
-      result.push(...deferred)
-    }
-  } else if (
-    (kind === "map" || kind === "set") &&
-    typeof value === "object" &&
-    value !== null
-  ) {
-    const obj = value as Record<string, unknown>
-    const updated: Record<string, Value | JsonContainerID | undefined> = {}
-    const deferred: [ContainerID, Diff | JsonDiff][] = []
-
-    for (const [key, entryValue] of Object.entries(obj)) {
-      if (needsContainer(entryValue, (schema as any).item)) {
-        const childCID = materializeCIDForSchema((schema as any).item)
-        updated[key] = jsonCID(childCID)
-        materializeValueDiffs(
-          entryValue,
-          (schema as any).item,
-          childCID,
-          deferred,
-        )
-      } else {
-        updated[key] = entryValue as Value
-      }
-    }
-
-    result.push([parentCID, { type: "map", updated } as MapJsonDiff])
-    result.push(...deferred)
-  } else if (kind === "sequence" && Array.isArray(value)) {
-    const items: (Value | JsonContainerID)[] = []
-    const deferred: [ContainerID, Diff | JsonDiff][] = []
-    const itemSchema = (schema as any).item
-
-    for (const item of value) {
-      if (itemSchema && needsContainer(item, itemSchema)) {
-        const childCID = materializeCIDForSchema(itemSchema)
-        items.push(jsonCID(childCID))
-        materializeValueDiffs(item, itemSchema, childCID, deferred)
-      } else {
-        items.push(item as Value)
-      }
-    }
-
-    if (items.length > 0) {
-      const listDeltas: Delta<(Value | JsonContainerID)[]>[] = []
-      for (const item of items) {
-        listDeltas.push({ insert: [item] } as Delta<
-          (Value | JsonContainerID)[]
-        >)
-      }
-      result.push([
-        parentCID,
-        { type: "list", diff: listDeltas } as ListJsonDiff,
-      ])
-    }
-    result.push(...deferred)
-  }
-}
-
-/**
- * Create a synthetic CID with the appropriate Loro container type
- * for a given schema node.
- *
- * For first-class CRDT types (counter, text, etc.), uses the schema's
- * [KIND] to determine the container type. For structural schemas
- * (product, map, sequence), uses "Map" or "List".
- */
-function materializeCIDForSchema(schema: SchemaNode): ContainerID {
-  const containerType = kindToContainerType(schema)
-  if (containerType !== undefined) {
-    return syntheticCID(containerType)
-  }
-  // Fallback — should not happen for well-formed schemas
-  return syntheticCID("Map")
 }
 
 // ---------------------------------------------------------------------------

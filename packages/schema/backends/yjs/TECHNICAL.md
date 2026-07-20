@@ -287,13 +287,15 @@ Inserting a whole struct into a list or map is the one case that needs care. The
 
 **The populate-then-attach pattern**:
 
-1. Create a fresh `new Y.Map()` (not yet attached to any parent).
-2. Populate it: iterate the struct's fields (alphabetical over identity hashes), set entries — nested shared types as newly-created-and-populated sub-types. Scalar and sum fields are **not** written here; their `case "scalar"` / `case "sum"` branches in `ensureRootField` and `ensureMapContainers` are explicit no-ops (retained for switch exhaustiveness). Only shared type containers are created.
-3. Attach the fully-populated map to the parent in one `set`/`insert` call.
+1. `materializeValue(schema, value, binding, absPath, "leaf-containers")` (from `@kyneta/schema`) builds a pure, backend-agnostic `MaterializedNode` tree with every product-field boundary **already identity-hashed**.
+2. `realizeYjs(node)` (in `src/change-mapping.ts`) walks that tree post-order: children are fully built, then their parent `Y.Map`/`Y.Array`/`Y.Text` is assembled — nothing is attached to the document mid-build. Scalar and sum leaves become plain `Y.Map` entries; only container kinds become shared types.
+3. The applier (`applyReplaceChange` / `applyMapChange` / `applySequenceChange`) attaches the fully-populated shared type to the parent in one `set`/`insert` call under its own identity key.
 
 One `observeDeep` event fires (the attach). `eventsToOps` expands it into the correct kyneta change at the structural boundary. Subscribers see one coherent `Op`, not two half-constructed states.
 
-Source: `src/populate.ts` → `populate` (recursive), called from `applyChangeToYjs` for every nested structural insert.
+Source: `materializeValue` (shared, `@kyneta/schema/src/materialize-value.ts` — the write-side counterpart to `foldPath`) + `realizeYjs` (`src/change-mapping.ts`). The former hand-rolled helpers `createStructuredMap` / `maybeCreateSharedType` are gone; `src/populate.ts` retains only the doc-init eager pass (`ensureContainers`), not a `populate` helper.
+
+> **Invariant (jj:vlnkqyvq).** Every write path routes product-field keys through the single `containerKey` producer and materializes structured values through the shared `materializeValue` unfold, so a whole-struct `.set({...})` lands under the same identity hashes the reader resolves — writer and reader keys agree by construction. The subtlety this guards: a nested product-field leaf written under its literal name would be invisible to the identity-keyed reader and never converge to a peer. `src/__tests__/struct-replace-convergence.test.ts` checks both the container-key level and cross-peer convergence.
 
 ### What the write path is NOT
 
@@ -466,9 +468,9 @@ This is the same mechanism as the Loro backend, exercised with a narrower law se
 | `src/index.ts` | 64 | Public barrel. Re-exports generic API from `@kyneta/schema`; exports Yjs-specific symbols. |
 | `src/bind-yjs.ts` | 171 | `yjs.bind` / `yjs.replica` binding target; `YjsLaws`. |
 | `src/substrate.ts` | 499 | `YjsSubstrate`, factories, prepare/flush, `Y.transact` wrapping, `observeDeep` event bridge, origin-based suppression. |
-| `src/change-mapping.ts` | 666 | `applyChangeToYjs` (per kyneta change type → Yjs mutations) + `eventsToOps` (Yjs events → kyneta `Op[]`). |
+| `src/change-mapping.ts` | 666 | `applyChangeToYjs` (per kyneta change type → Yjs mutations) + `realizeYjs` (`MaterializedNode` → Yjs shared type, populate-then-attach) + `eventsToOps` (Yjs events → kyneta `Op[]`). |
 | `src/yjs-resolve.ts` | 88 | `stepIntoYjs`; `resolveYjsType` is a thin wrapper over the core `foldPath` primitive. |
-| `src/populate.ts` | 248 | `ensureContainers` (conditional structural creation) + `populate` (populate-then-attach). |
+| `src/populate.ts` | 249 | `ensureContainers` (conditional doc-init structural creation, `clientID:0`, identity-keyed via shared `containerKey`). Value-driven population lives in `realizeYjs` (`src/change-mapping.ts`), not here. |
 | `src/reader.ts` | 131 | `yjsReader` — reads via `resolveYjsType` + per-type extraction. |
 | `src/version.ts` | 240 | `YjsVersion` (SV + delete-set digest), two-part serialisation, legacy SV-only compat. |
 | `src/position.ts` | 45 | `YjsPosition` (wraps `Y.RelativePosition`), `toYjsAssoc`. |

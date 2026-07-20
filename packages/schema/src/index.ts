@@ -298,6 +298,15 @@ export {
   tracking,
   writable,
 } from "./layers.js"
+// materializeValue — write-side counterpart to foldPath: unfolds a plain value
+// into a backend-agnostic, identity-keyed container-shape IR.
+export type { EagerPolicy, MaterializedNode } from "./materialize-value.js"
+export {
+  containerKey,
+  fieldAbsPath,
+  materializeValue,
+  needsContainer,
+} from "./materialize-value.js"
 // Migration — schema migration primitives and identity derivation
 export type {
   Droppable,

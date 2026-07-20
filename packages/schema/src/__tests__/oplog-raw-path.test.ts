@@ -229,10 +229,9 @@ describe("plain op-log: a late replica converges (state, not just no-throw)", ()
     // Had the label-write drifted to index 1, replay would apply "a-edited" to
     // "b". Convergence proves the op replayed at its frozen index 0.
     expect(snap(replica)).toEqual(snap(substrate))
-    expect((snap(substrate).items as Array<{ label: string }>).map(i => i.label)).toEqual([
-      "b",
-      "a-edited",
-    ])
+    expect(
+      (snap(substrate).items as Array<{ label: string }>).map(i => i.label),
+    ).toEqual(["b", "a-edited"])
   })
 })
 
@@ -271,8 +270,9 @@ describe("plain op-log: set and tree entry deletes survive export", () => {
 
     const delta = substrateA.exportSince(v0)
     // Non-null guards against a vacuous pass: if the delete erased the history
-    // and the delta were empty, both snapshots would trivially match.
-    expect(delta).not.toBeNull()
+    // and the delta were empty, both snapshots would trivially match. (Also
+    // narrows `SubstratePayload | null` for the merge below.)
+    if (delta === null) throw new Error("exportSince returned no delta")
     substrateB.merge(delta, { origin: "sync" })
     expect(snap(substrateB)).toEqual(snap(substrateA))
   })

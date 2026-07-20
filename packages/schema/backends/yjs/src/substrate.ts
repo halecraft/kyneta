@@ -63,6 +63,7 @@ import {
   applyChange,
   BACKING_DOC,
   buildWritableContext,
+  containerKey,
   DEFAULT_LINEAGE,
   DEVTOOLS_HISTORY,
   type DevtoolsHistory,
@@ -70,6 +71,7 @@ import {
   deepClonePreState,
   deriveSchemaBinding,
   executeBatch,
+  fieldAbsPath,
   findJsonBoundary,
   invert,
   KIND,
@@ -169,14 +171,9 @@ export function createYjsSubstrate(
    */
   function boundaryKey(path: Path, prefixLength: number): string | number {
     const seg = path.segments[prefixLength]!
-    if (seg.role === "field" && binding) {
-      const absPath = path.segments
-        .slice(0, prefixLength + 1)
-        .filter(s => s.role === "field")
-        .map(s => s.resolve() as string)
-        .join(".")
-      const identity = binding.forward.get(absPath) as string | undefined
-      if (identity) return identity
+    if (seg.role === "field") {
+      const absPath = fieldAbsPath(path.segments.slice(0, prefixLength + 1))
+      return containerKey(binding, absPath, seg.resolve() as string)
     }
     return seg.resolve() as string | number
   }

@@ -34,16 +34,22 @@ import type {
   TextInstruction,
 } from "@kyneta/schema"
 import {
+  containerKey,
   expandMapOpsToLeaves,
-  isJsonBoundary,
-  isPlainObject,
+  extendSchemaPathKey,
+  fieldAbsPath,
   KIND,
+  type MaterializedNode,
+  materializeValue,
   pathSchema,
   RawPath,
   richTextChange,
 } from "@kyneta/schema"
 import * as Y from "yjs"
 import { resolveYjsType } from "./yjs-resolve.js"
+
+/** Eager policy for Yjs: only first-class leaf containers (text/richtext). */
+const YJS_EAGER = "leaf-containers" as const
 
 // ---------------------------------------------------------------------------
 // Direction 1: kyneta → Yjs (`applyChangeToYjs`)
@@ -214,9 +220,11 @@ function applySequenceChange(
     )
   }
 
-  // Resolve the item schema for structured insert detection
+  // Resolve the item schema for structured insert detection. List items share
+  // the list's field-abs-path (an index is not a field boundary).
   const targetSchema = pathSchema(rootSchema, path)
   const itemSchema = getItemSchema(targetSchema)
+  const absPath = fieldAbsPath(path.segments)
 
   let cursor = 0
   for (const instruction of change.instructions) {
@@ -228,7 +236,11 @@ function applySequenceChange(
     } else if ("insert" in instruction) {
       const items = instruction.insert as readonly unknown[]
       const yjsItems = items.map(item =>
-        maybeCreateSharedType(item, itemSchema),
+        itemSchema
+          ? realizeYjs(
+              materializeValue(itemSchema, item, binding, absPath, YJS_EAGER),
+            )
+          : item,
       )
       resolved.insert(cursor, yjsItems)
       cursor += items.length
@@ -256,6 +268,8 @@ function applyMapChange(
 
   // Resolve the schema at this path for structured value detection
   const targetSchema = pathSchema(rootSchema, path)
+  const parentAbsPath = fieldAbsPath(path.segments)
+  const isProduct = targetSchema[KIND] === "product"
 
   // Apply deletes first
   if (change.delete) {
@@ -264,25 +278,26 @@ function applyMapChange(
     }
   }
 
-  // Apply sets
+  // Apply sets. Product fields are identity-keyed and advance the abs-path;
+  // map/record entries keep their runtime key and leave the abs-path unchanged.
   if (change.set) {
     for (const [key, value] of Object.entries(change.set)) {
       const fieldSchema = getFieldSchema(targetSchema, key)
-      const yjsValue = maybeCreateSharedType(value, fieldSchema)
-      // For product schemas (structs), use the identity hash as the map key.
-      // For map schemas (records), use the key as-is (no identity-keying).
-      let mapKey = key
-      if (binding && targetSchema[KIND] === "product") {
-        // Compute absolute schema path for this field — only product-field
-        // segments contribute (entry segments are runtime keys).
-        const parentAbsPath = path.segments
-          .filter(s => s.role === "field")
-          .map(s => s.resolve() as string)
-          .join(".")
-        const absPath = parentAbsPath ? `${parentAbsPath}.${key}` : key
-        const identity = binding.forward.get(absPath) as string | undefined
-        if (identity) mapKey = identity
-      }
+      const childAbsPath = isProduct
+        ? extendSchemaPathKey(parentAbsPath, key)
+        : parentAbsPath
+      const mapKey = isProduct ? containerKey(binding, childAbsPath, key) : key
+      const yjsValue = fieldSchema
+        ? realizeYjs(
+            materializeValue(
+              fieldSchema,
+              value,
+              binding,
+              childAbsPath,
+              YJS_EAGER,
+            ),
+          )
+        : value
       resolved.set(mapKey, yjsValue)
     }
   }
@@ -318,28 +333,24 @@ function applyReplaceChange(
   )
 
   const resolved = lastSeg.resolve()
+  // The target field's own field-abs-path (includes the last field segment).
+  const targetSchema = pathSchema(rootSchema, path)
+  const absPath = fieldAbsPath(path.segments)
+  const yjsValue = realizeYjs(
+    materializeValue(targetSchema, change.value, binding, absPath, YJS_EAGER),
+  )
   if (
     parent instanceof Y.Map &&
     (lastSeg.role === "field" || lastSeg.role === "entry")
   ) {
-    // Resolve schema for the target field for structured value detection
-    const targetSchema = pathSchema(rootSchema, path)
-    const yjsValue = maybeCreateSharedType(change.value, targetSchema)
     // Identity-keying applies only at product-field boundaries; entry
     // segments use the runtime key as-is.
-    let mapKey = resolved as string
-    if (binding && lastSeg.role === "field") {
-      const absPath = path.segments
-        .filter(s => s.role === "field")
-        .map(s => s.resolve() as string)
-        .join(".")
-      const identity = binding.forward.get(absPath) as string | undefined
-      if (identity) mapKey = identity
-    }
+    const mapKey =
+      lastSeg.role === "field"
+        ? containerKey(binding, absPath, resolved as string)
+        : (resolved as string)
     parent.set(mapKey, yjsValue)
   } else if (parent instanceof Y.Array && lastSeg.role === "index") {
-    const targetSchema = pathSchema(rootSchema, path)
-    const yjsValue = maybeCreateSharedType(change.value, targetSchema)
     parent.delete(resolved as number, 1)
     parent.insert(resolved as number, [yjsValue])
   } else {
@@ -351,42 +362,34 @@ function applyReplaceChange(
 }
 
 // ---------------------------------------------------------------------------
-// Structured value creation (populate-then-attach pattern)
+// realizeYjs — MaterializedNode → Yjs shared type (populate-then-attach)
 // ---------------------------------------------------------------------------
 
 /**
- * If the schema says the value should be a shared type (product → Y.Map,
- * sequence → Y.Array, text → Y.Text, richtext → Y.Text), create and
- * populate it. Otherwise return the plain value as-is.
+ * Turn a `MaterializedNode` (from `materializeValue`) into a Yjs shared type or
+ * plain value. Post-order: children are fully built before their parent is
+ * assembled, and the parent is attached to the tree by the caller — the
+ * populate-then-attach pattern that keeps a whole structural insert to a single
+ * `observeDeep` event.
  *
- * Uses populate-then-attach: the new shared type is fully populated
- * before being returned for insertion into its parent.
+ * All keys in the IR are already final (identity-hashed at product-field
+ * boundaries by `materializeValue`); this function never computes a key.
  */
-function maybeCreateSharedType(
-  value: unknown,
-  schema: SchemaNode | undefined,
-): unknown {
-  if (schema === undefined) return value
+function realizeYjs(node: MaterializedNode): unknown {
+  switch (node.kind) {
+    case "plain":
+      return node.value
 
-  // JSON-boundary schemas (struct.json/list.json/record.json) store
-  // their entire subtree as a plain JSON value in the parent Y.Map
-  // entry. Skip Y.Map/Y.Array materialisation and pass the value
-  // through unchanged — including nested objects/arrays underneath.
-  if (isJsonBoundary(schema)) return value
-
-  switch (schema[KIND]) {
-    // First-class text → Y.Text
     case "text": {
       const text = new Y.Text()
-      if (typeof value === "string" && value.length > 0) {
-        text.insert(0, value)
-      }
+      if (node.content.length > 0) text.insert(0, node.content)
       return text
     }
 
-    // Rich text → Y.Text (Yjs uses Y.Text for both plain and rich text)
     case "richtext": {
+      // Yjs uses Y.Text for both plain and rich text.
       const text = new Y.Text()
+      const value = node.value
       if (typeof value === "string" && value.length > 0) {
         text.insert(0, value)
       } else if (Array.isArray(value)) {
@@ -400,103 +403,30 @@ function maybeCreateSharedType(
           }
           return d
         })
-        if (delta.length > 0) {
-          text.applyDelta(delta)
-        }
+        if (delta.length > 0) text.applyDelta(delta)
       }
       return text
     }
 
-    case "product": {
-      if (!isPlainObject(value)) {
-        return value
-      }
-      return createStructuredMap(value as Record<string, unknown>, schema)
-    }
-
-    case "sequence": {
-      if (!Array.isArray(value)) return value
-      const arr = new Y.Array()
-      const itemSchema = schema.item
-      const items = (value as unknown[]).map(item =>
-        maybeCreateSharedType(item, itemSchema),
+    case "counter":
+      // Unreachable: counters are rejected at `yjs.bind` (no "additive" law).
+      throw new Error(
+        "Yjs substrate does not support counters. " +
+          "This should have been caught at bind() time.",
       )
-      arr.insert(0, items)
-      return arr
-    }
 
     case "map": {
-      if (!isPlainObject(value)) {
-        return value
-      }
       const map = new Y.Map()
-      const valueSchema = schema.item
-      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-        map.set(k, maybeCreateSharedType(v, valueSchema))
-      }
+      for (const [key, child] of node.entries) map.set(key, realizeYjs(child))
       return map
     }
 
-    // Unsupported first-class CRDT types — should not reach here
-    // (rejected at bind time by caps check)
-    case "counter":
-    case "set":
-    case "tree":
-    case "movable":
-      throw new Error(
-        `Yjs substrate does not support [KIND]="${schema[KIND]}". ` +
-          `This should have been caught at bind() time.`,
-      )
-
-    default:
-      // Scalar, sum — return as plain value
-      return value
-  }
-}
-
-/**
- * Create a Y.Map from a plain object, recursively creating nested
- * shared types as guided by the product schema.
- *
- * Follows populate-then-attach: fully populates the map before the
- * caller inserts it into a parent container.
- */
-function createStructuredMap(
-  obj: Record<string, unknown>,
-  productSchema: SchemaNode,
-): Y.Map<any> {
-  const map = new Y.Map()
-
-  if (productSchema[KIND] !== "product") {
-    // Fallback: set all values as plain
-    for (const [key, val] of Object.entries(obj)) {
-      map.set(key, val)
-    }
-    return map
-  }
-
-  // Process fields present in the value object
-  for (const [key, val] of Object.entries(obj)) {
-    if (val === undefined) continue
-    const fieldSchema = productSchema.fields[key]
-    const yjsVal = fieldSchema ? maybeCreateSharedType(val, fieldSchema) : val
-    map.set(key, yjsVal)
-  }
-
-  // Create shared types for first-class CRDT fields declared in the schema
-  // but missing from the value object. This ensures Yjs containers
-  // exist for later mutation (e.g. .insert() on a text field inside
-  // a struct inside a record/list).
-  for (const [key, fieldSchema] of Object.entries(
-    productSchema.fields as Record<string, SchemaNode>,
-  )) {
-    if (key in obj) continue // already processed above
-    if (fieldSchema[KIND] === "text" || fieldSchema[KIND] === "richtext") {
-      map.set(key, new Y.Text())
+    case "list": {
+      const arr = new Y.Array()
+      arr.insert(0, node.items.map(realizeYjs))
+      return arr
     }
   }
-
-  return map
 }
 
 // ---------------------------------------------------------------------------
