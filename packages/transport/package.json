@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/transport",
-  "version": "2.3.0",
+  "version": "2.3.2",
   "description": "Transport infrastructure — base class, channel types, message vocabulary, and client utilities for @kyneta/exchange",
   "author": "Duane Johnson",
   "license": "MIT",

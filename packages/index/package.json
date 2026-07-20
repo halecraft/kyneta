@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/index",
-  "version": "2.3.0",
+  "version": "2.3.2",
   "description": "Catalog, secondary indexes, and reactive joins over document collections",
   "author": "Duane Johnson",
   "license": "MIT",

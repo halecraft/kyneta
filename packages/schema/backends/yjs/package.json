@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/yjs-schema",
-  "version": "2.3.0",
+  "version": "2.3.2",
   "description": "Yjs CRDT substrate for @kyneta/schema — collaborative data types with typed refs",
   "author": "Duane Johnson",
   "license": "MIT",

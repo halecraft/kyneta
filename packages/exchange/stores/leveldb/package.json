@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/leveldb-store",
-  "version": "2.3.0",
+  "version": "2.3.2",
   "description": "LevelDB storage backend for @kyneta/exchange — server-side persistent storage",
   "author": "Duane Johnson",
   "license": "MIT",

@@ -1,6 +1,6 @@
 {
   "name": "@kyneta/reactive",
-  "version": "2.3.0",
+  "version": "2.3.2",
   "description": "Fine-grained reactive computations over the changefeed — auto-tracked tree/point reactivity",
   "author": "Duane Johnson",
   "license": "MIT",
