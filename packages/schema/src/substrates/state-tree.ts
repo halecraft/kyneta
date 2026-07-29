@@ -13,6 +13,8 @@
 // the requirement that headless replicas (relays, stores) can merge entirety
 // payloads without schema knowledge.
 
+import type { ChangeBase } from "../change.js"
+import type { Path } from "../interpret.js"
 import type { PlainState } from "../reader.js"
 import { KIND, type Schema as SchemaNode } from "../schema.js"
 import { Zero } from "../zero.js"
@@ -311,4 +313,178 @@ function deepClone(value: any): any {
     return clone
   }
   return value
+}
+
+// ---------------------------------------------------------------------------
+// Tree construction — plain value / change → StateTree
+// ---------------------------------------------------------------------------
+// These build (or mutate) a StateTree from a plain value or a Change. They
+// live here alongside the merge/extract algebra so the whole StateTree
+// transform layer is one functional core; the `state` substrate (the
+// imperative shell) just calls them.
+
+/**
+ * Applies a change directly to the StateTree, stamping mutated scalar leaves
+ * with the given timestamp.
+ */
+export function applyChangeToStateTree(
+  tree: StateTree,
+  path: Path,
+  change: ChangeBase,
+  timestamp: number,
+): void {
+  if (path.length === 0) {
+    if (change.type === "replace") {
+      const val = (change as any).value
+      if (typeof val === "object" && val !== null && !Array.isArray(val)) {
+        // Deep replace: we must recursively stamp all leaves
+        const newTree: Record<string, StateTree> = {}
+        syncStateTreeToShadow(newTree, val, timestamp)
+        // Clear the existing root and merge the new one
+        const target = tree as Record<string, StateTree>
+        for (const k of Object.keys(target)) delete target[k]
+        for (const k of Object.keys(newTree)) target[k] = newTree[k]
+      } else {
+        throw new Error("Cannot replace root with a scalar")
+      }
+    } else if (change.type === "map") {
+      const target = tree as Record<string, StateTree>
+      const mapChange = change as any
+      for (const [key, instruction] of Object.entries(mapChange.entries)) {
+        if ((instruction as any).type === "delete") {
+          delete target[key]
+        } else if ((instruction as any).type === "set") {
+          const val = (instruction as any).value
+          if (typeof val === "object" && val !== null && !Array.isArray(val)) {
+            const newTree: Record<string, StateTree> = {}
+            syncStateTreeToShadow(newTree, val, timestamp)
+            target[key] = newTree
+          } else {
+            target[key] = [val, timestamp]
+          }
+        }
+      }
+    }
+    return
+  }
+
+  // Traverse to the parent of the target node
+  let current: unknown = tree
+  for (let i = 0; i < path.length - 1; i++) {
+    const segment = path.segments[i]
+    const key = String(segment.resolve())
+    let next = (current as Record<string, unknown>)[key]
+    if (typeof next !== "object" || next === null || Array.isArray(next)) {
+      next = {}
+      ;(current as Record<string, unknown>)[key] = next
+    }
+    current = next
+  }
+
+  const lastSegment = path.segments[path.length - 1]
+  const key = String(lastSegment.resolve())
+  const target = current as Record<string, StateTree>
+
+  if (change.type === "replace") {
+    const val = (change as any).value
+    if (typeof val === "object" && val !== null && !Array.isArray(val)) {
+      const newTree: Record<string, StateTree> = {}
+      syncStateTreeToShadow(newTree, val, timestamp)
+      target[key] = newTree
+    } else {
+      target[key] = [val, timestamp]
+    }
+  } else if (change.type === "map") {
+    let child = target[key]
+    if (typeof child !== "object" || child === null || Array.isArray(child)) {
+      child = {}
+      target[key] = child
+    }
+    const mapChange = change as any
+    const cTarget = child as Record<string, StateTree>
+    for (const [k, instruction] of Object.entries(mapChange.entries)) {
+      if ((instruction as any).type === "delete") {
+        delete cTarget[k]
+      } else if ((instruction as any).type === "set") {
+        const val = (instruction as any).value
+        if (typeof val === "object" && val !== null && !Array.isArray(val)) {
+          const newTree: Record<string, StateTree> = {}
+          syncStateTreeToShadow(newTree, val, timestamp)
+          cTarget[k] = newTree
+        } else {
+          cTarget[k] = [val, timestamp]
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Propagate a PlainState (from user mutations) into a StateTree.
+ * Any scalar value in `plain` becomes `[value, timestamp]` in `tree`.
+ */
+export function syncStateTreeToShadow(
+  tree: StateTree,
+  plain: any,
+  timestamp: number,
+): void {
+  if (isStateTuple(tree)) {
+    throw new Error("Cannot sync into a root tuple.")
+  }
+
+  const target = tree as Record<string, StateTree>
+
+  // Recursively update or insert keys
+  for (const key of Object.keys(plain)) {
+    const val = plain[key]
+
+    // If it's an object, it's a container.
+    if (typeof val === "object" && val !== null && !Array.isArray(val)) {
+      if (!target[key] || isStateTuple(target[key])) {
+        target[key] = {}
+      }
+      syncStateTreeToShadow(target[key], val, timestamp)
+    } else {
+      // It's a scalar leaf.
+      target[key] = [val, timestamp]
+    }
+  }
+
+  // Remove keys deleted from plain
+  for (const key of Object.keys(target)) {
+    if (!(key in plain)) {
+      delete target[key]
+    }
+  }
+}
+
+export function insertStructuralZeros(tree: StateTree, defaults: any): void {
+  if (isStateTuple(tree)) return
+
+  const t = tree as Record<string, StateTree>
+
+  for (const key of Object.keys(defaults)) {
+    const defaultVal = defaults[key]
+    if (!(key in t)) {
+      if (
+        typeof defaultVal === "object" &&
+        defaultVal !== null &&
+        !Array.isArray(defaultVal)
+      ) {
+        t[key] = {}
+        insertStructuralZeros(t[key], defaultVal)
+      } else {
+        // Scalar zero gets timestamp 0 (Unix lineage = -Infinity)
+        t[key] = [defaultVal, 0]
+      }
+    } else {
+      if (
+        typeof defaultVal === "object" &&
+        defaultVal !== null &&
+        !Array.isArray(defaultVal)
+      ) {
+        insertStructuralZeros(t[key], defaultVal)
+      }
+    }
+  }
 }
