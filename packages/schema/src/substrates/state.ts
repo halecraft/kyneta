@@ -255,7 +255,7 @@ export function createStateSubstrate(
       // is a projection (tick/decay), in which case the math stays
       // untouched and only the local shadow moves.
       if (!options?.projection) {
-        applyChangeToStateTree(currentTree, path, change, Date.now())
+        applyChangeToStateTree(currentTree, path, change, Date.now(), schema)
       }
 
       // Record op for changefeed delivery. Freeze to an immutable RawPath
@@ -499,7 +499,7 @@ export const stateSubstrateFactory: SubstrateFactory<StateVersion> = {
     const defaults = Zero.structural(schema) as Record<string, unknown>
 
     // We will do a recursive walk to insert structural zeros tagged with T=0.
-    insertStructuralZeros(tree, defaults)
+    insertStructuralZeros(tree, defaults, schema)
 
     // 3. Create the substrate with the upgraded tree AND schema.
     // The schema is needed for `tick()` to know which fields have `decayMs`.
@@ -524,4 +524,3 @@ export const stateSubstrateFactory: SubstrateFactory<StateVersion> = {
     return StateVersion.parse(serialized)
   },
 }
-

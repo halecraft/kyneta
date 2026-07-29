@@ -15,8 +15,10 @@
 
 import type { ChangeBase } from "../change.js"
 import type { Path } from "../interpret.js"
+import { deepClonePlain } from "../inverse.js"
+import { needsContainer } from "../materialize-value.js"
 import type { PlainState } from "../reader.js"
-import { KIND, type Schema as SchemaNode } from "../schema.js"
+import { advanceSchema, KIND, type Schema as SchemaNode } from "../schema.js"
 import { Zero } from "../zero.js"
 
 // ---------------------------------------------------------------------------
@@ -58,6 +60,12 @@ export function isStateTuple(node: unknown): node is StateTuple {
  * This implements the $A \sqcup B$ join operation for the CvRDT.
  * For leaf tuples, it takes the maximum timestamp.
  * For containers, it takes the union of keys and recurses.
+ *
+ * A `sum`/`.json()` register is a single leaf tuple *by construction* (see
+ * "Tree construction" below), so this schema-blind join merges it atomically
+ * — highest-T wins on the whole variant, never blending fields across
+ * variants. That structural encoding is exactly why merge needs no schema:
+ * headless relays/stores converge on raw payloads without one.
  *
  * Modifies `local` in-place and returns it.
  */
@@ -209,7 +217,13 @@ function extractInto(
       target[key] = Zero.structural(childSchema)
       anyDecayed = true
     } else {
-      target[key] = child[0]
+      // A register (sum / .json()) is stored as one tuple whose value is a
+      // whole object; clone it so the shadow never aliases the StateTree.
+      const value = child[0]
+      target[key] =
+        typeof value === "object" && value !== null
+          ? deepClonePlain(value)
+          : value
     }
   }
 
@@ -322,25 +336,85 @@ function deepClone(value: any): any {
 // live here alongside the merge/extract algebra so the whole StateTree
 // transform layer is one functional core; the `state` substrate (the
 // imperative shell) just calls them.
+//
+// The one decision they share is leaf-vs-container. Products and maps
+// decompose into per-field tuples — that is what gives `state` its
+// field-level merge. Scalars and *registers* — a `sum` variant or a
+// `.json()` blob, for which `needsContainer` is false — are stored as ONE
+// `[value, timestamp]` tuple. Storing a register whole is what stops
+// `mergeStateTree` from blending fields across variants: a sum is opaque to
+// the CRDT, exactly like a scalar (variant fields are not independently
+// addressable — a variant switch is a single whole-value `.set()`).
 
 /**
- * Applies a change directly to the StateTree, stamping mutated scalar leaves
- * with the given timestamp.
+ * Should `value` be decomposed into per-field tuples (a container), or stored
+ * as one atomic tuple (a scalar or register)? Only a plain (non-array) object
+ * can be a decomposed container. A missing schema falls back to the
+ * historical "decompose any object" behavior.
+ */
+function isDecomposedContainer(
+  value: unknown,
+  nodeSchema: SchemaNode | undefined,
+): boolean {
+  const isPlainObject =
+    typeof value === "object" && value !== null && !Array.isArray(value)
+  if (!isPlainObject) return false
+  return nodeSchema === undefined || needsContainer(nodeSchema)
+}
+
+/**
+ * Wrap a leaf value in a `StateTuple`, deep-cloning objects/arrays (register
+ * values) so the tree never aliases the caller's live value.
+ */
+function leafTuple(value: unknown, timestamp: number): StateTuple {
+  const stored =
+    typeof value === "object" && value !== null ? deepClonePlain(value) : value
+  return [stored, timestamp]
+}
+
+/**
+ * The schema node at `path`, or `undefined` if it can't be resolved. Walks one
+ * segment at a time via `advanceSchema` (the same discipline as
+ * `findJsonBoundary`). Write paths never target *inside* a register, so this
+ * stops at the register boundary and never descends past a sum.
+ */
+function schemaAtPath(
+  root: SchemaNode | undefined,
+  path: Path,
+): SchemaNode | undefined {
+  if (!root) return undefined
+  let node: SchemaNode = root
+  for (const segment of path.segments) {
+    try {
+      node = advanceSchema(node, segment)
+    } catch {
+      return undefined
+    }
+  }
+  return node
+}
+
+/**
+ * Apply a change directly to the StateTree, stamping mutated leaves with the
+ * given timestamp. `schema` is the document root schema; it is threaded so a
+ * mutated register (sum / `.json()`) lands as a single atomic tuple instead of
+ * being decomposed into blendable per-field tuples.
  */
 export function applyChangeToStateTree(
   tree: StateTree,
   path: Path,
   change: ChangeBase,
   timestamp: number,
+  schema: SchemaNode | undefined,
 ): void {
   if (path.length === 0) {
     if (change.type === "replace") {
       const val = (change as any).value
       if (typeof val === "object" && val !== null && !Array.isArray(val)) {
-        // Deep replace: we must recursively stamp all leaves
+        // Deep replace of the whole root (always a product). Decompose so
+        // nested registers still land atomically (schema threaded through).
         const newTree: Record<string, StateTree> = {}
-        syncStateTreeToShadow(newTree, val, timestamp)
-        // Clear the existing root and merge the new one
+        syncStateTreeToShadow(newTree, val, schema, timestamp)
         const target = tree as Record<string, StateTree>
         for (const k of Object.keys(target)) delete target[k]
         for (const k of Object.keys(newTree)) target[k] = newTree[k]
@@ -355,12 +429,15 @@ export function applyChangeToStateTree(
           delete target[key]
         } else if ((instruction as any).type === "set") {
           const val = (instruction as any).value
-          if (typeof val === "object" && val !== null && !Array.isArray(val)) {
+          const childSchema = schema
+            ? childSchemaForKey(schema, key, {})
+            : undefined
+          if (isDecomposedContainer(val, childSchema)) {
             const newTree: Record<string, StateTree> = {}
-            syncStateTreeToShadow(newTree, val, timestamp)
+            syncStateTreeToShadow(newTree, val, childSchema, timestamp)
             target[key] = newTree
           } else {
-            target[key] = [val, timestamp]
+            target[key] = leafTuple(val, timestamp)
           }
         }
       }
@@ -368,7 +445,10 @@ export function applyChangeToStateTree(
     return
   }
 
-  // Traverse to the parent of the target node
+  // Resolve the schema at the target node so a register replace stays atomic.
+  const targetSchema = schemaAtPath(schema, path)
+
+  // Traverse to the parent of the target node.
   let current: unknown = tree
   for (let i = 0; i < path.length - 1; i++) {
     const segment = path.segments[i]
@@ -387,12 +467,12 @@ export function applyChangeToStateTree(
 
   if (change.type === "replace") {
     const val = (change as any).value
-    if (typeof val === "object" && val !== null && !Array.isArray(val)) {
+    if (isDecomposedContainer(val, targetSchema)) {
       const newTree: Record<string, StateTree> = {}
-      syncStateTreeToShadow(newTree, val, timestamp)
+      syncStateTreeToShadow(newTree, val, targetSchema, timestamp)
       target[key] = newTree
     } else {
-      target[key] = [val, timestamp]
+      target[key] = leafTuple(val, timestamp)
     }
   } else if (change.type === "map") {
     let child = target[key]
@@ -407,12 +487,16 @@ export function applyChangeToStateTree(
         delete cTarget[k]
       } else if ((instruction as any).type === "set") {
         const val = (instruction as any).value
-        if (typeof val === "object" && val !== null && !Array.isArray(val)) {
+        // The map's item schema decides whether an entry is a register.
+        const itemSchema = targetSchema
+          ? childSchemaForKey(targetSchema, k, {})
+          : undefined
+        if (isDecomposedContainer(val, itemSchema)) {
           const newTree: Record<string, StateTree> = {}
-          syncStateTreeToShadow(newTree, val, timestamp)
+          syncStateTreeToShadow(newTree, val, itemSchema, timestamp)
           cTarget[k] = newTree
         } else {
-          cTarget[k] = [val, timestamp]
+          cTarget[k] = leafTuple(val, timestamp)
         }
       }
     }
@@ -420,12 +504,13 @@ export function applyChangeToStateTree(
 }
 
 /**
- * Propagate a PlainState (from user mutations) into a StateTree.
- * Any scalar value in `plain` becomes `[value, timestamp]` in `tree`.
+ * Propagate a plain value (from user mutations) into a StateTree, guided by
+ * `schema`: containers decompose, scalars and registers become one tuple.
  */
 export function syncStateTreeToShadow(
   tree: StateTree,
   plain: any,
+  schema: SchemaNode | undefined,
   timestamp: number,
 ): void {
   if (isStateTuple(tree)) {
@@ -434,23 +519,26 @@ export function syncStateTreeToShadow(
 
   const target = tree as Record<string, StateTree>
 
-  // Recursively update or insert keys
   for (const key of Object.keys(plain)) {
     const val = plain[key]
+    const childSchema = schema
+      ? childSchemaForKey(schema, key, plain)
+      : undefined
 
-    // If it's an object, it's a container.
-    if (typeof val === "object" && val !== null && !Array.isArray(val)) {
+    if (isDecomposedContainer(val, childSchema)) {
+      // Container (product/map): reuse an existing subtree so a partial update
+      // merges into it; replace a tuple/absent slot with a fresh container.
       if (!target[key] || isStateTuple(target[key])) {
         target[key] = {}
       }
-      syncStateTreeToShadow(target[key], val, timestamp)
+      syncStateTreeToShadow(target[key], val, childSchema, timestamp)
     } else {
-      // It's a scalar leaf.
-      target[key] = [val, timestamp]
+      // Scalar or register (sum / .json()): one atomic tuple.
+      target[key] = leafTuple(val, timestamp)
     }
   }
 
-  // Remove keys deleted from plain
+  // Remove keys deleted from plain.
   for (const key of Object.keys(target)) {
     if (!(key in plain)) {
       delete target[key]
@@ -458,33 +546,36 @@ export function syncStateTreeToShadow(
   }
 }
 
-export function insertStructuralZeros(tree: StateTree, defaults: any): void {
+/**
+ * Seed structural-zero defaults (timestamp 0 = genesis, lineage ⊥) for keys
+ * missing from `tree`, guided by `schema` so a register default (e.g. a sum's
+ * first variant) is seeded as one atomic tuple.
+ */
+export function insertStructuralZeros(
+  tree: StateTree,
+  defaults: any,
+  schema: SchemaNode | undefined,
+): void {
   if (isStateTuple(tree)) return
 
   const t = tree as Record<string, StateTree>
 
   for (const key of Object.keys(defaults)) {
     const defaultVal = defaults[key]
+    const childSchema = schema
+      ? childSchemaForKey(schema, key, defaults)
+      : undefined
+
     if (!(key in t)) {
-      if (
-        typeof defaultVal === "object" &&
-        defaultVal !== null &&
-        !Array.isArray(defaultVal)
-      ) {
+      if (isDecomposedContainer(defaultVal, childSchema)) {
         t[key] = {}
-        insertStructuralZeros(t[key], defaultVal)
+        insertStructuralZeros(t[key], defaultVal, childSchema)
       } else {
-        // Scalar zero gets timestamp 0 (Unix lineage = -Infinity)
-        t[key] = [defaultVal, 0]
+        t[key] = leafTuple(defaultVal, 0)
       }
-    } else {
-      if (
-        typeof defaultVal === "object" &&
-        defaultVal !== null &&
-        !Array.isArray(defaultVal)
-      ) {
-        insertStructuralZeros(t[key], defaultVal)
-      }
+    } else if (isDecomposedContainer(defaultVal, childSchema)) {
+      // Present container: fill any nested gaps.
+      insertStructuralZeros(t[key], defaultVal, childSchema)
     }
   }
 }
