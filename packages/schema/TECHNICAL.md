@@ -191,14 +191,20 @@ Kyneta exports five pre-configured binding targets:
 |--------|--------|----------------|--------------|-----------|
 | `json` | `@kyneta/schema` | `SYNC_AUTHORITATIVE` | all (`string`) | Plain JS objects, Lamport version |
 | `ephemeral` | `@kyneta/schema` | `SYNC_EPHEMERAL` | `EphemeralLaws` (`"lww"`, `"lww-per-key"`, `"lww-tag-replaced"`) | LWW substrate, wall-clock version, full document overwrite |
-| `state` | `@kyneta/schema` | `SYNC_EPHEMERAL` | `EphemeralLaws` (`"lww"`, `"lww-per-key"`, `"lww-tag-replaced"`) | State CvRDT, wall-clock version, field-level overwrite |
+| `state` | `@kyneta/schema` | `SYNC_EPHEMERAL` | `EphemeralLaws` (`"lww"`, `"lww-per-key"`, `"lww-tag-replaced"`) | State CvRDT, wall-clock version, field-level merge (`sum`/`.json()` stored as atomic registers) |
 | `loro` | `@kyneta/loro-schema` | `SYNC_COLLABORATIVE` | `LoroLaws` (full CRDT set minus `"add-wins-per-key"`) | Loro CRDT doc |
 | `yjs` | `@kyneta/yjs-schema` | `SYNC_COLLABORATIVE` | `YjsLaws` (text + structural laws) | Yjs doc |
 
 #### `ephemeral` vs `state`
 Both targets implement snapshot-only transient delivery via `SYNC_EPHEMERAL`, but they have radically different semantics:
 - `ephemeral`: A **Global LWW Register**. A write to any field bumps the global document timestamp. When peers sync, the peer with the newest timestamp overwrites the *entire* document. Useful when you explicitly want total state replacement.
-- `state`: A **Field-level LWW Map (CvRDT)**. The substrate maintains a `[Value, Timestamp]` tuple for every scalar leaf. When peers sync, the payloads merge concurrently field-by-field (`Highest T wins`). Useful for decentralized presence where multiple peers write to their own keys in a shared document without clobbering each other, without generating any op-log history bloat.
+- `state`: A **Field-level LWW Map (CvRDT)**. The substrate maintains a `[Value, Timestamp]` tuple for every scalar leaf. When peers sync, the payloads merge concurrently field-by-field (`Highest T wins`). Useful for decentralized presence where multiple peers write to their own keys in a shared document without clobbering each other, without generating any op-log history bloat. A `sum`/discriminated-union variant and a `.json()` blob are stored as a **single atomic register** tuple (`[wholeValue, T]`), not decomposed — so a concurrent variant switch resolves whole (highest-T wins) and never blends fields across variants.
+
+##### Atomic registers in the StateTree
+
+The leaf-vs-container decision reuses `needsContainer` (`materialize-value.ts`), the same predicate the Loro/Yjs backends use for insert detection: `product`/`map` decompose into per-field tuples (that is what gives `state` its field-level merge), while `scalar`, `sum`, and `.json()` nodes are stored as one `[value, T]` leaf. Storing a register whole is deliberate — a sum variant is an opaque LWW value (variant fields are not independently addressable; a switch is one whole-value `.set()`, per the `WritableDiscriminantProductRef` contract), so decomposing it would let the schema-blind `mergeStateTree` interleave fields from different variants.
+
+Crucially, atomicity is encoded in the tree's *shape* (register = leaf tuple), **not** in the merge logic. That is why `mergeStateTree` stays schema-blind: a headless relay/store merges raw entirety payloads by timestamp without ever needing the schema. The schema is consulted only when translating between plain values and the tree (build via `applyChangeToStateTree`/`syncStateTreeToShadow`, extract via `extractPlainState`), which always runs on a schema-aware peer. Register values are deep-cloned (`deepClonePlain`) at the tree↔shadow boundary so the two never alias.
 
 Usage:
 

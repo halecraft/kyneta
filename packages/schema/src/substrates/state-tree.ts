@@ -9,7 +9,14 @@
 // clean separation: any JSON array (`[]`) encountered in a StateTree is
 // unambiguously a leaf tuple, not a sequence container.
 //
-// This enables `mergeStateTree` to be completely schema-blind, fulfilling
+// An *atomic register* — a `sum` variant or a `.json()` blob — is likewise
+// stored as ONE leaf tuple whose value (the tuple's `[0]`) is the whole
+// object, rather than being decomposed into per-field tuples. Atomicity is
+// therefore encoded in the tree's *shape*: because a register is a single
+// tuple, the schema-blind merge treats it atomically for free (see
+// "Tree construction" below).
+//
+// This is what lets `mergeStateTree` be completely schema-blind, fulfilling
 // the requirement that headless replicas (relays, stores) can merge entirety
 // payloads without schema knowledge.
 
