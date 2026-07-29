@@ -161,30 +161,11 @@ function extractInto(
   let anyDecayed = false
   let maxTimestamp = 0
 
-  let keys = Object.keys(source)
-
-  // For discriminated unions, we MUST extract the discriminant field first.
-  // Otherwise, if we extract sibling fields before the discriminant is updated in `target`,
-  // `childSchemaForKey` will resolve schemas using the old (or structural zero) discriminant value.
-  if (schema && schema[KIND] === "sum") {
-    const sumSchema = schema as any
-    if (sumSchema.discriminant !== undefined) {
-      const discKey = sumSchema.discriminant
-      keys = keys.sort((a, b) => {
-        if (a === discKey) return -1
-        if (b === discKey) return 1
-        return 0
-      })
-    }
-  }
-
-  for (const key of keys) {
+  for (const key of Object.keys(source)) {
     const child = source[key]
     if (!isStateTuple(child)) {
       // Nested container. Resolve the child schema if we can.
-      const childSchema = schema
-        ? childSchemaForKey(schema, key, target)
-        : undefined
+      const childSchema = schema ? childSchemaForKey(schema, key) : undefined
       if (typeof target[key] !== "object" || target[key] === null) {
         target[key] = {}
       }
@@ -202,9 +183,7 @@ function extractInto(
     }
 
     // Leaf tuple.
-    const childSchema = schema
-      ? childSchemaForKey(schema, key, target)
-      : undefined
+    const childSchema = schema ? childSchemaForKey(schema, key) : undefined
 
     maxTimestamp = Math.max(maxTimestamp, child[1])
 
@@ -257,43 +236,19 @@ function extractInto(
 }
 
 /**
- * Given a container schema, resolve the schema node for the named child.
- * `state` supports product (`fields`), map (`item`), and sum (`variantMap`).
- * Other kinds have no keyed children and return `undefined`.
+ * The schema node for a named child of a container schema. `state`'s only
+ * containers are product (`fields[key]`) and map (`item`) — a sum is stored as
+ * one atomic leaf tuple, so it is never descended into and needs no case here.
  */
 function childSchemaForKey(
   schema: SchemaNode,
   key: string,
-  target: PlainState,
 ): SchemaNode | undefined {
   switch (schema[KIND]) {
     case "product":
       return (schema as { fields: Record<string, SchemaNode> }).fields[key]
     case "map":
       return (schema as { item: SchemaNode }).item
-    case "sum": {
-      const sumSchema = schema as any
-      if (sumSchema.discriminant !== undefined) {
-        // Discriminated union. Read the discriminant value from the target state.
-        const discValue = target[sumSchema.discriminant]
-        // If the discriminant value isn't populated in target yet, it means we might be extracting
-        // it right now! If the key IS the discriminant, we can just return the schema of the discriminant
-        // from the first variant (it's identical across all variants).
-        if (key === sumSchema.discriminant) {
-          const firstVariant = sumSchema.variants[0]
-          return firstVariant.fields[key]
-        }
-        if (
-          typeof discValue === "string" &&
-          discValue in sumSchema.variantMap
-        ) {
-          const variantSchema = sumSchema.variantMap[discValue]
-          // The nested field's schema is found on the active variant's fields
-          return variantSchema.fields?.[key]
-        }
-      }
-      return undefined
-    }
     default:
       return undefined
   }
@@ -430,7 +385,7 @@ export function applyChangeToStateTree(
         } else if ((instruction as any).type === "set") {
           const val = (instruction as any).value
           const childSchema = schema
-            ? childSchemaForKey(schema, key, {})
+            ? childSchemaForKey(schema, key)
             : undefined
           if (isDecomposedContainer(val, childSchema)) {
             const newTree: Record<string, StateTree> = {}
@@ -489,7 +444,7 @@ export function applyChangeToStateTree(
         const val = (instruction as any).value
         // The map's item schema decides whether an entry is a register.
         const itemSchema = targetSchema
-          ? childSchemaForKey(targetSchema, k, {})
+          ? childSchemaForKey(targetSchema, k)
           : undefined
         if (isDecomposedContainer(val, itemSchema)) {
           const newTree: Record<string, StateTree> = {}
@@ -521,9 +476,7 @@ export function syncStateTreeToShadow(
 
   for (const key of Object.keys(plain)) {
     const val = plain[key]
-    const childSchema = schema
-      ? childSchemaForKey(schema, key, plain)
-      : undefined
+    const childSchema = schema ? childSchemaForKey(schema, key) : undefined
 
     if (isDecomposedContainer(val, childSchema)) {
       // Container (product/map): reuse an existing subtree so a partial update
@@ -562,9 +515,7 @@ export function insertStructuralZeros(
 
   for (const key of Object.keys(defaults)) {
     const defaultVal = defaults[key]
-    const childSchema = schema
-      ? childSchemaForKey(schema, key, defaults)
-      : undefined
+    const childSchema = schema ? childSchemaForKey(schema, key) : undefined
 
     if (!(key in t)) {
       if (isDecomposedContainer(defaultVal, childSchema)) {
