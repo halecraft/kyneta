@@ -18,7 +18,7 @@ import type { Op } from "../changefeed.js"
 import type { Path } from "../interpret.js"
 import type { WritableContext } from "../interpreters/writable.js"
 import { buildWritableContext } from "../interpreters/writable.js"
-import { deepClonePreState, invert } from "../inverse.js"
+import { deepClonePlain, invert } from "../inverse.js"
 import { RawPath } from "../path.js"
 import {
   decodePlainPosition,
@@ -238,7 +238,7 @@ export function createStateSubstrate(
           | undefined
       )?.[RECORD_INVERSE]
       if (record && !options?.compensating && !options?.replay) {
-        const pre = deepClonePreState(path.read(shadow))
+        const pre = deepClonePlain(path.read(shadow))
         const inverse = invert(pre, change)
         if (inverse) {
           record(path, inverse)

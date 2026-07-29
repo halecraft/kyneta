@@ -278,7 +278,7 @@ export {
 } from "./interpreters/writable.js"
 // Inverse — reverse arrows for the change groupoid (atomic abort)
 export {
-  deepClonePreState,
+  deepClonePlain,
   invert,
   invertIncrement,
   invertMap,

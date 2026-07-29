@@ -46,7 +46,7 @@ import {
   DEVTOOLS_HISTORY,
   type DevtoolsHistory,
   type DevtoolsHistorySummary,
-  deepClonePreState,
+  deepClonePlain,
   deriveSchemaBinding,
   executeBatch,
   fieldAbsPath,
@@ -366,7 +366,7 @@ export function createLoroSubstrate(
           | undefined
       )?.[RECORD_INVERSE]
       if (record && !options?.compensating) {
-        const pre = deepClonePreState(path.read(shadow))
+        const pre = deepClonePlain(path.read(shadow))
         const inverse = invert(pre, change)
         record(path, inverse)
       }

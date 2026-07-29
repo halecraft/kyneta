@@ -753,7 +753,7 @@ The change algebra `⟨State, Change, step⟩` is extended into a groupoid by `i
 | `richtext` | OT inverse with mark restoration |
 | `tree` | per-instruction inverse with pre-state topology lookup; reversed instruction order for LIFO undo |
 
-Substrates capture `pre = path.read(σ)` (deep-cloned via `deepClonePreState`) before applying the forward change, compute the inverse, push it onto the active runBatch frame's stack via the `RECORD_INVERSE` callback threaded through prepare options. On throw, the bracket's catch path replays inverses LIFO inside the same commit — observers see one batched event with net-zero delta.
+Substrates capture `pre = path.read(σ)` (deep-cloned via `deepClonePlain`) before applying the forward change, compute the inverse, push it onto the active runBatch frame's stack via the `RECORD_INVERSE` callback threaded through prepare options. On throw, the bracket's catch path replays inverses LIFO inside the same commit — observers see one batched event with net-zero delta.
 
 ### Depth-aware `dispatch`
 

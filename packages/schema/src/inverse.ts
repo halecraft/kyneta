@@ -45,23 +45,29 @@ import {
 } from "./change.js"
 
 // ---------------------------------------------------------------------------
-// deepClonePreState — defensive clone for inverse construction
+// deepClonePlain — deep clone of a plain-JSON value
 // ---------------------------------------------------------------------------
 
 /**
- * Deep-clone a pre-state value before storing it in an inverse.
+ * Deep-clone a plain-JSON value.
  *
- * The substrate captures σ at the change's target path *before* applying
- * the forward change. The same σ is then mutated by `applyChange`, so the
- * inverter must hold a snapshot — otherwise subsequent mutations would
- * corrupt the recorded inverse.
+ * The name describes the mechanism (a `structuredClone` of a plain value),
+ * not any one caller's intent, because two subsystems rely on it:
+ *
+ * - **Inverse construction** captures σ at the change's target path *before*
+ *   applying the forward change. The same σ is then mutated by `applyChange`,
+ *   so the inverter must hold a snapshot — otherwise subsequent mutations
+ *   would corrupt the recorded inverse.
+ * - **The `state` substrate** uses it as an aliasing barrier when a whole
+ *   register value (a sum variant or `.json()` blob) crosses the
+ *   StateTree↔shadow boundary, so the two never share a mutable object.
  *
  * Primitives are returned as-is (clone is a no-op for `undefined`, `null`,
  * `boolean`, `number`, `string`, `bigint`, `symbol`). Objects and arrays
- * go through `structuredClone`. Plain JSON values (the σ shape) round-trip
- * faithfully under `structuredClone`.
+ * go through `structuredClone`. Plain JSON values round-trip faithfully
+ * under `structuredClone`.
  */
-export function deepClonePreState<T>(value: T): T {
+export function deepClonePlain<T>(value: T): T {
   if (value === null || value === undefined) return value
   const t = typeof value
   if (t === "object") return structuredClone(value)
@@ -81,7 +87,7 @@ export function invertReplace<T>(
   pre: T,
   _change: ReplaceChange<T>,
 ): ReplaceChange<T> {
-  return replaceChange(deepClonePreState(pre))
+  return replaceChange(deepClonePlain(pre))
 }
 
 // ---------------------------------------------------------------------------
@@ -159,7 +165,7 @@ export function invertSequence<T>(
     } else if ("delete" in op) {
       const segment = source
         .slice(preCursor, preCursor + op.delete)
-        .map(item => deepClonePreState(item))
+        .map(item => deepClonePlain(item))
       inverse.push({ insert: segment })
       preCursor += op.delete
     }
@@ -193,7 +199,7 @@ export function invertMap(
   if (change.set) {
     for (const key of Object.keys(change.set)) {
       if (Object.hasOwn(source, key)) {
-        invertSet[key] = deepClonePreState(source[key])
+        invertSet[key] = deepClonePlain(source[key])
       } else {
         invertDelete.push(key)
       }
@@ -203,7 +209,7 @@ export function invertMap(
   if (change.delete) {
     for (const key of change.delete) {
       if (Object.hasOwn(source, key)) {
-        invertSet[key] = deepClonePreState(source[key])
+        invertSet[key] = deepClonePlain(source[key])
       }
       // If the key didn't exist, deleting it was a no-op; the inverse
       // is also a no-op (no entry to add to invertSet or invertDelete).
@@ -326,7 +332,7 @@ export function invertRichText(
         const text = span.text.slice(start, start + length)
         inverse.push(
           prevMarks && Object.keys(prevMarks).length > 0
-            ? { insert: text, marks: deepClonePreState(prevMarks) }
+            ? { insert: text, marks: deepClonePlain(prevMarks) }
             : { insert: text },
         )
       })
