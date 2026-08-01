@@ -1,3 +1,19 @@
+# Unreleased
+
+## Fixed
+
+- **Writes at or inside a `.nullable()` subtree now work on the CRDT backends.** A `sum` — which is what `.nullable()` expands to — has no CRDT container of its own; the whole variant is stored as one plain value. Writes aimed at or inside one were not being widened into a whole-value write, so three things went wrong on `yjs.bind` and `loro.bind`. Writing a leaf through a non-null nullable struct (`d.optional.to.set(2)`) threw `advanceSchema: cannot advance through a sum`. Mutating a nullable collection (`d.maybeList.push(x)`, `d.maybeRecord.set(k, v)`) either threw looking for a container that was never created, or — worse on Loro — updated the local shadow while the CRDT never received the write, so it read back correctly and was silently lost on replication. All read paths and `json.bind` handled these correctly throughout, which is what made the failure look substrate-specific.
+
+- **`state` no longer decomposes an atomic register when a write targets its interior.** A `sum` variant or a `.json()` blob is stored as one `[value, timestamp]` tuple so that a concurrent variant switch resolves whole. A write aimed inside one split that tuple into per-field tuples and discarded every sibling field the change did not mention, which also let the schema-blind `mergeStateTree` blend fields across two peers' variants. Local reads were unaffected — the substrate serves them from a separate shadow — so only replicated state was damaged.
+
+## Added
+
+- **`walkPath` / `PathWalk`** (`@kyneta/schema`) — the single schema-guided traversal of a path. `foldPath`, `pathSchema`, `findOpaqueBoundary` and the `state` substrate's schema lookup are now projections of it. It never throws: it reports where the walk stopped (`complete`, `boundary`, `mismatch`) and each caller applies its own policy. The bugs above were three separate hand-rolled walks disagreeing about one case; consolidating them fixed all three without a rule needing to be written down anywhere. See `packages/schema/TECHNICAL.md` §"Why one traversal, not many".
+
+## Deprecated
+
+- **`findJsonBoundary` → `findOpaqueBoundary`**, and **`JsonBoundaryHit` → `OpaqueBoundaryHit`** (`@kyneta/schema`). The old names described only `.json()` boundaries, from when those were the only kind reported; sums are reported too. Both old names remain as working aliases. No behaviour change for existing callers.
+
 # 2.1.0
 
 ## Added

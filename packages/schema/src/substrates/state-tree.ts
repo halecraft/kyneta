@@ -21,11 +21,12 @@
 // payloads without schema knowledge.
 
 import type { ChangeBase } from "../change.js"
+import { walkPath } from "../fold-path.js"
 import type { Path } from "../interpret.js"
 import { deepClonePlain } from "../inverse.js"
 import { needsContainer } from "../materialize-value.js"
 import type { PlainState } from "../reader.js"
-import { advanceSchema, KIND, type Schema as SchemaNode } from "../schema.js"
+import { KIND, type Schema as SchemaNode } from "../schema.js"
 import { Zero } from "../zero.js"
 
 // ---------------------------------------------------------------------------
@@ -335,25 +336,34 @@ function leafTuple(value: unknown, timestamp: number): StateTuple {
 }
 
 /**
- * The schema node at `path`, or `undefined` if it can't be resolved. Walks one
- * segment at a time via `advanceSchema` (the same discipline as
- * `findJsonBoundary`). Write paths never target *inside* a register, so this
- * stops at the register boundary and never descends past a sum.
+ * The schema node at `path`, or `undefined` when the path does not fit the
+ * schema.
+ *
+ * `undefined` means "no schema opinion here," and callers answer it by falling
+ * back to the original schema-blind behaviour, which decomposes any object it
+ * is handed. That makes failure quiet and permissive, so it matters a great
+ * deal which paths fail.
+ *
+ * This used to wrap `advanceSchema` in a `try/catch`, which caught two very
+ * different things with one net. A genuinely malformed path — an unknown field,
+ * say — is fine to answer with `undefined`. But `advanceSchema` also throws on
+ * a `sum`, and a path leading into a sum is perfectly legitimate; it just needs
+ * the *value* to resolve, not the schema. Swallowing that one meant a write
+ * aimed inside a register came back `undefined`, the caller decomposed the
+ * register, and every sibling field the change never mentioned was dropped.
+ *
+ * `walkPath` separates the two: a `mismatch` is a real malformed path and still
+ * yields `undefined`, while a `boundary` yields the register's own schema. It
+ * also drops the `try/catch`, which was broad enough to hide bugs inside
+ * `advanceSchema` itself.
  */
 function schemaAtPath(
   root: SchemaNode | undefined,
   path: Path,
 ): SchemaNode | undefined {
   if (!root) return undefined
-  let node: SchemaNode = root
-  for (const segment of path.segments) {
-    try {
-      node = advanceSchema(node, segment)
-    } catch {
-      return undefined
-    }
-  }
-  return node
+  const walk = walkPath(undefined, root, path)
+  return walk.stop === "mismatch" ? undefined : walk.schema
 }
 
 /**

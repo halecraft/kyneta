@@ -50,7 +50,7 @@ import {
   deriveSchemaBinding,
   executeBatch,
   fieldAbsPath,
-  findJsonBoundary,
+  findOpaqueBoundary,
   invert,
   isJsonBoundary,
   KIND,
@@ -382,7 +382,7 @@ export function createLoroSubstrate(
       // parents (coalesces with sibling writes) or a ListDiff
       // replace for list-shaped parents (cannot coalesce via spread
       // semantics; force-flushes any buffered MapDiffs first).
-      const boundary = findJsonBoundary(schema, path, binding)
+      const boundary = findOpaqueBoundary(schema, path, binding)
       if (boundary !== null) {
         applyJsonBoundaryWrite(path, boundary.prefixLength)
         return

@@ -109,18 +109,27 @@ export { applyChanges, batch, remove } from "./facade/batch.js"
 export { lastUpdated } from "./facade/last-updated.js"
 // Facade — library-level observation protocol
 export { subscribe, subscribeNode } from "./facade/observe.js"
-// foldPath — schema-guided sibling of Path.read; the navigation primitive
-// every CRDT backend's path resolver composes around.
+// walkPath — the one schema-guided traversal, and its projections. `foldPath`
+// is the value-resolving one that every CRDT backend's path resolver composes
+// around. The single-step primitive underneath (`stepSchema`) is deliberately
+// NOT exported: handing it out is what makes hand-rolling a divergent walker
+// easy, and that is what this module exists to prevent.
 export type {
+  /** @deprecated Use `OpaqueBoundaryHit`. */
   JsonBoundaryHit,
+  OpaqueBoundaryHit,
   PathFoldResult,
   PathStepper,
+  PathWalk,
 } from "./fold-path.js"
 export {
   extendSchemaPathKey,
+  /** @deprecated Use `findOpaqueBoundary`. */
   findJsonBoundary,
+  findOpaqueBoundary,
   foldPath,
   pathSchema,
+  walkPath,
 } from "./fold-path.js"
 // Forest helpers — pure flat↔recursive projection for `Schema.tree`
 export type {

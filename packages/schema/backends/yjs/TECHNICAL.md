@@ -32,7 +32,7 @@ Consumed by applications that bind schemas with `yjs.bind(schema)`. Not imported
 | `YjsNativeMap` | The `NativeMap` functor mapping schema kinds to Yjs shared types (`text → Y.Text`, `list → Y.Array`, `struct → Y.Map`, `map → Y.Map`). Slots for unsupported kinds are `undefined`. | A JS `Map` — this is a type-level functor |
 | `YjsVersion` | `@kyneta/schema`'s `Version` implementation wrapping a Yjs state vector plus a **fixed-size digest** of the delete set. | A bare state vector — SV-only versions cannot distinguish same-state from divergent-deletes. Also not a raw snapshot — the delete set is hashed, never stored verbatim, to keep serialized size bounded by peer count. |
 | `YjsPosition` | `Position` implementation wrapping `Y.RelativePosition`. Stateless `transform` — resolution queries the CRDT directly. | A numeric index |
-| `resolveYjsType` | Thin wrapper over the core `foldPath(stepIntoYjs, ...)` primitive (from `@kyneta/schema`). The two semantic invariants (identity-keying, sum-boundary short-circuit) live in `@kyneta/schema/src/fold-path.ts`, not here. | A cache lookup — resolution happens on every read |
+| `resolveYjsType` | Thin wrapper over the core `foldPath(stepIntoYjs, ...)` primitive (from `@kyneta/schema`). The two semantic invariants (identity-keying, opaque-boundary stop) live in `@kyneta/schema/src/fold-path.ts`, not here. | A cache lookup — resolution happens on every read |
 | `stepIntoYjs` | The Yjs `PathStepper`: per-step substrate dispatch. Given `(current, _nextSchema, segment, identity)` returns the child shared type or scalar (the `_nextSchema` slot is unused; Yjs's `instanceof` dispatch doesn't look ahead). | `stepIntoLoro` from the Loro backend — both are `PathStepper` instances, both driven by `foldPath`; the dispatch is what differs |
 | `root Y.Map` | The single `Y.Map` at `doc.getMap("root")` that holds every schema field (shared types or plain values). | A per-field root container (that's the Loro model) |
 | `ensureContainers` | Conditionally creates shared types for every schema field. Idempotent. Uses structural client ID during creation. | `populate` — creates containers; populate fills them |
@@ -252,7 +252,7 @@ batch(doc, d => { d.title.insert(0, "hi"); d.items.push(x) })
   │
   ├─ prepare phase (per mutation, applies to both σ and λ EAGERLY):
   │    1. applyChange(shadow, path, change)        ── σ advances
-  │    2. findJsonBoundary(path) ─► boundary?
+  │    2. findOpaqueBoundary(path) ─► boundary?
   │       ├─ yes: stage the full σ snapshot at the boundary key
   │       │       in the json-boundary coalescing buffer
   │       └─ no:  applyChangeToYjs(rootMap, ...)   ── λ advances

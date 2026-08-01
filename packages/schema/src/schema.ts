@@ -1119,64 +1119,138 @@ export function isNullableSum(schema: PositionalSumSchema): boolean {
  *   index segment on a product, or key segment on a scalar).
  */
 export function advanceSchema(schema: Schema, segment: Segment): Schema {
+  const step = stepSchema(schema, segment)
+  if (step.kind === "mismatch") throw new Error(step.reason)
+  // `boundary` returns rather than throws, which preserves two long-standing
+  // behaviours: descending TO a sum hands back the sum itself, and descending
+  // INTO a `.json()` subtree keeps working. Only `walkPath` treats a boundary
+  // as a reason to stop.
+  return step.schema
+}
+
+// ---------------------------------------------------------------------------
+// stepSchema — the total single step
+// ---------------------------------------------------------------------------
+
+/**
+ * The outcome of trying to move one path segment down the schema tree.
+ *
+ * - `descend` — ordinary progress. `schema` is the child you landed on.
+ * - `boundary` — you landed on a node the substrate stores as ONE opaque
+ *   value. Stop. Any remaining segments have to be resolved against the value,
+ *   because there is no further structure in the schema to navigate.
+ * - `mismatch` — the path does not fit the schema, or it ran off the end of a
+ *   leaf. `reason` is a ready-to-throw message.
+ *
+ * There is deliberately no tag distinguishing the two kinds of boundary (a sum
+ * versus a `.json()` node). Nothing downstream needs to tell them apart, and
+ * every past attempt to treat them differently turned out to be a bug.
+ */
+export type SchemaStep =
+  | { readonly kind: "descend"; readonly schema: Schema }
+  | { readonly kind: "boundary"; readonly schema: Schema }
+  | { readonly kind: "mismatch"; readonly reason: string }
+
+/**
+ * Move one path segment down the schema tree. Never throws.
+ *
+ * This is the whole of {@link advanceSchema}'s logic, with one difference that
+ * matters: the case where a path is *legitimate* but the schema cannot follow
+ * it is reported as data rather than raised as an error.
+ *
+ * That case is worth spelling out, because it does not look special. A sum
+ * chooses its variant by inspecting the value, so a path like `optional.to` is
+ * perfectly meaningful — it reads fine, and it works under `json.bind` — yet
+ * no amount of schema inspection can tell you which variant is present. The
+ * path is not wrong; the schema is simply the wrong oracle for it. Ten of the
+ * eleven failure modes here really are malformed paths, and filing this one
+ * beside them invites the reader to treat it as another error to guard
+ * against. Two callers did exactly that: one let it throw, one caught it and
+ * substituted `undefined`. Both shipped bugs.
+ *
+ * `.json()` nodes are boundaries for the same practical reason, arrived at
+ * differently: the schema *could* keep descending (a `struct.json` is an
+ * ordinary product carrying a marker), but the substrate has stored the whole
+ * subtree as one plain value, so there is nothing down there to address.
+ *
+ * Package-internal on purpose: `fold-path.ts` imports it, but `index.ts` does
+ * not re-export it. The public way to traverse is `walkPath`. Handing out a
+ * single step is what makes hand-rolling a fourth walker easy, and that habit
+ * is what produced the divergence this function exists to prevent.
+ */
+export function stepSchema(schema: Schema, segment: Segment): SchemaStep {
+  const child = childSchema(schema, segment)
+  if (typeof child === "string") return { kind: "mismatch", reason: child }
+  return isOpaque(child)
+    ? { kind: "boundary", schema: child }
+    : { kind: "descend", schema: child }
+}
+
+/**
+ * Whether a schema node is stored as one opaque plain value by the substrates.
+ *
+ * Mirrors the `needsContainer === false` branch of `materializeValue` for the
+ * two composite cases. Those two functions answer the same question from
+ * opposite directions — `materializeValue` when *writing* a value out,
+ * `stepSchema` when *walking* a path in — so they have to agree.
+ */
+function isOpaque(schema: Schema): boolean {
+  return isJsonBoundary(schema) || schema[KIND] === "sum"
+}
+
+/**
+ * Descend one segment, or return the failure message as a string.
+ *
+ * Returning `string` for failure keeps every message in one place, so
+ * `advanceSchema` (which throws) and `stepSchema` (which does not) cannot
+ * drift apart in their wording.
+ */
+function childSchema(schema: Schema, segment: Segment): Schema | string {
   switch (schema[KIND]) {
     case "product": {
       if (segment.role !== "field") {
-        throw new Error(
-          `advanceSchema: product expects a field segment, got ${segment.role} segment`,
-        )
+        return `advanceSchema: product expects a field segment, got ${segment.role} segment`
       }
       const key = segment.coord() as string
       const fieldSchema = schema.fields[key]
       if (!fieldSchema) {
-        throw new Error(`advanceSchema: product has no field "${key}"`)
+        return `advanceSchema: product has no field "${key}"`
       }
       return fieldSchema
     }
 
     case "sequence": {
       if (segment.role !== "index") {
-        throw new Error(
-          `advanceSchema: sequence expects an index segment, got ${segment.role} segment "${segment.coord()}"`,
-        )
+        return `advanceSchema: sequence expects an index segment, got ${segment.role} segment "${segment.coord()}"`
       }
       return schema.item
     }
 
     case "map": {
       if (segment.role !== "entry") {
-        throw new Error(
-          `advanceSchema: map expects an entry segment, got ${segment.role} segment`,
-        )
+        return `advanceSchema: map expects an entry segment, got ${segment.role} segment`
       }
       return schema.item
     }
 
     case "scalar":
-      throw new Error(
-        `advanceSchema: cannot advance into a scalar (kind: ${schema.scalarKind})`,
-      )
+      return `advanceSchema: cannot advance into a scalar (kind: ${schema.scalarKind})`
 
+    // Stepping *from* a sum, as opposed to landing on one. A walker that
+    // honours `boundary` stops before it can get here, so this is unreachable
+    // from `walkPath` — it exists for `advanceSchema`'s direct callers.
     case "sum":
-      throw new Error(
-        `advanceSchema: cannot advance through a sum (sums resolve by value, not by path segment)`,
-      )
+      return `advanceSchema: cannot advance through a sum (sums resolve by value, not by path segment)`
 
     case "text":
-      throw new Error(
-        `advanceSchema: cannot advance into text (leaf type, no inner schema)`,
-      )
+      return `advanceSchema: cannot advance into text (leaf type, no inner schema)`
 
     case "counter":
-      throw new Error(
-        `advanceSchema: cannot advance into counter (leaf type, no inner schema)`,
-      )
+      return `advanceSchema: cannot advance into counter (leaf type, no inner schema)`
 
     case "set": {
       if (segment.role !== "entry") {
-        throw new Error(
-          `advanceSchema: set expects an entry segment, got ${segment.role} segment`,
-        )
+        return `advanceSchema: set expects an entry segment, got ${segment.role} segment`
       }
       return schema.item
     }
@@ -1186,25 +1260,19 @@ export function advanceSchema(schema: Schema, segment: Segment): Schema {
       // advances into the per-node data schema. `field`/`index` are
       // rejected — tree paths use entry segments (runtime-keyed node ids).
       if (segment.role !== "entry") {
-        throw new Error(
-          `advanceSchema: tree expects an entry segment (node id), got ${segment.role} segment`,
-        )
+        return `advanceSchema: tree expects an entry segment (node id), got ${segment.role} segment`
       }
       return schema.item
     }
 
     case "movable": {
       if (segment.role !== "index") {
-        throw new Error(
-          `advanceSchema: movable sequence expects an index segment, got ${segment.role} segment "${segment.coord()}"`,
-        )
+        return `advanceSchema: movable sequence expects an index segment, got ${segment.role} segment "${segment.coord()}"`
       }
       return schema.item
     }
 
     case "richtext":
-      throw new Error(
-        `advanceSchema: cannot advance into richtext (leaf type, no inner schema)`,
-      )
+      return `advanceSchema: cannot advance into richtext (leaf type, no inner schema)`
   }
 }

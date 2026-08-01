@@ -15,6 +15,7 @@
 import type { ChangeBase } from "../change.js"
 import { replaceChange } from "../change.js"
 import type { Op } from "../changefeed.js"
+import { findOpaqueBoundary } from "../fold-path.js"
 import type { Path } from "../interpret.js"
 import type { WritableContext } from "../interpreters/writable.js"
 import { buildWritableContext } from "../interpreters/writable.js"
@@ -255,7 +256,46 @@ export function createStateSubstrate(
       // is a projection (tick/decay), in which case the math stays
       // untouched and only the local shadow moves.
       if (!options?.projection) {
-        applyChangeToStateTree(currentTree, path, change, Date.now(), schema)
+        // A register — a sum variant or a `.json()` blob — lives in the tree as
+        // ONE `[value, timestamp]` tuple, so that concurrent edits to it settle
+        // as a single unit. A change aimed at or inside one has nowhere to go:
+        // applying it literally would split that tuple into per-field tuples,
+        // throwing away every sibling field the change never mentioned and
+        // handing the schema-blind `mergeStateTree` something it can blend
+        // across two peers' variants. So re-aim the change at the register
+        // itself and store the whole post-change value, which the shadow is
+        // already holding — the `applyChange` call above just put it there.
+        //
+        // Yjs and Loro do the same thing at the same point, asking the same
+        // function where the boundary is. For them it decides what lands in a
+        // CRDT container; here it decides what lands in a tuple. Sharing the
+        // oracle is the point: "which subtrees are indivisible" is a property
+        // of the schema and should have one answer, not one per substrate.
+        //
+        // Re-aiming also normalizes the change into a `replace`, which is the
+        // only kind `applyChangeToStateTree` handles well. That incidentally
+        // makes register-shaped `map` and `sequence` changes work. Bare
+        // containers get no such help and remain broken independently of this.
+        //
+        // Watch out when testing this: `prepare` also updates the shadow above,
+        // and local reads come from the shadow. Get this branch wrong and reads
+        // on this peer still look perfect — only what replicates is damaged.
+        //
+        // With no schema there are no registers to find, so a schemaless
+        // substrate keeps the old decompose-everything behaviour.
+        const boundary = schema ? findOpaqueBoundary(schema, path) : null
+        if (boundary !== null) {
+          const registerPath = path.slice(0, boundary.prefixLength + 1)
+          applyChangeToStateTree(
+            currentTree,
+            registerPath,
+            replaceChange(deepClonePlain(registerPath.read(shadow))),
+            Date.now(),
+            schema,
+          )
+        } else {
+          applyChangeToStateTree(currentTree, path, change, Date.now(), schema)
+        }
       }
 
       // Record op for changefeed delivery. Freeze to an immutable RawPath

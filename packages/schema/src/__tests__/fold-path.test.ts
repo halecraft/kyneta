@@ -1,10 +1,15 @@
-// fold-path — invariant tests for the schema-guided path fold.
+// fold-path — tests for the one schema-guided traversal and its projections.
 //
-// Coverage is invariant-focused (the two semantic rules `foldPath` enforces:
-// identity-keying at `seg.role === "field"` only, and sum-boundary
-// short-circuit) and key-construction (`extendSchemaPathKey`) with a
-// round-trip pin against `deriveSchemaBinding` so the writer/reader
-// contract for binding keys is verified end-to-end.
+// Three things are covered. `walkPath` itself, one case per outcome. The two
+// semantic invariants its projections inherit: identity-keying at
+// `seg.role === "field"` only, and the opaque-boundary stop. And key
+// construction (`extendSchemaPathKey`), round-tripped against
+// `deriveSchemaBinding` so the writer/reader contract is verified end-to-end.
+//
+// The stepper-ordering tests deserve a note: nothing else in the repository
+// pins WHEN `foldPath` stops calling the stepper, and both CRDT backends
+// resolve every read through it. They exist so a plausible-looking
+// simplification of the traversal fails here rather than in a backend.
 
 import { describe, expect, it } from "vitest"
 import {
@@ -16,6 +21,7 @@ import {
   pathSchema,
   RawPath,
   Schema,
+  walkPath,
 } from "../index.js"
 
 // ---------------------------------------------------------------------------
@@ -167,6 +173,74 @@ describe("foldPath", () => {
     expect(result.schema[KIND]).toBe("sum")
   })
 
+  // ── stepper call sequence at a boundary ───────────────────────────────
+  //
+  // These pin the exact sequence of stepper calls, not just how many. Both CRDT
+  // backends supply the stepper (`stepIntoLoro` / `stepIntoYjs`) and every
+  // substrate read routes through it, so a change to when `foldPath` stops
+  // calling it silently changes what those backends resolve.
+  //
+  // The subtle part is that the stepper IS called for the segment that lands on
+  // the boundary, and only then does the fold stop. Deciding to stop one step
+  // earlier — say, by noticing the boundary before stepping rather than after —
+  // would look equivalent while making `resolveYjsType` hand back the parent
+  // container instead of the boundary value.
+
+  it("steps INTO the sum, then stops", () => {
+    const schema = Schema.struct({
+      payload: Schema.union(
+        Schema.struct({ x: Schema.string() }),
+        Schema.string(),
+      ),
+    })
+    const path = RawPath.empty.field("payload").field("x")
+
+    const calls: Array<{ segment: unknown; schemaKind: unknown }> = []
+    const stepper: PathStepper = (_current, nextSchema, seg) => {
+      calls.push({ segment: seg.resolve(), schemaKind: nextSchema[KIND] })
+      return { x: "hello" }
+    }
+    foldPath(undefined, schema, path, stepper)
+
+    // One call, for the boundary segment itself, and it is handed the sum
+    // schema — evidence the stop happens after the step, not before it.
+    expect(calls).toEqual([{ segment: "payload", schemaKind: "sum" }])
+  })
+
+  it("steps INTO the json boundary, then stops", () => {
+    const schema = Schema.struct({
+      blob: Schema.struct.json({ a: Schema.string() }),
+    })
+    const path = RawPath.empty.field("blob").field("a")
+
+    const calls: Array<{ segment: unknown; schemaKind: unknown }> = []
+    const stepper: PathStepper = (_current, nextSchema, seg) => {
+      calls.push({ segment: seg.resolve(), schemaKind: nextSchema[KIND] })
+      return { a: "hello" }
+    }
+    const result = foldPath(undefined, schema, path, stepper)
+
+    // A json boundary is a product carrying a marker, so the kind is "product"
+    // — the boundary-ness comes from the marker, not the kind.
+    expect(calls).toEqual([{ segment: "blob", schemaKind: "product" }])
+    expect(result.resolved).toBe("hello")
+  })
+
+  it("walks every segment when no boundary is crossed", () => {
+    const schema = Schema.struct({
+      a: Schema.struct({ b: Schema.struct({ c: Schema.string() }) }),
+    })
+    const path = RawPath.empty.field("a").field("b").field("c")
+
+    const calls: unknown[] = []
+    const stepper: PathStepper = (_current, _next, seg) => {
+      calls.push(seg.resolve())
+      return {}
+    }
+    foldPath(undefined, schema, path, stepper)
+    expect(calls).toEqual(["a", "b", "c"])
+  })
+
   // ── value walk: stepper threading ──────────────────────────────────────
   it("threads `current` through the stepper", () => {
     const schema = Schema.struct({
@@ -265,5 +339,140 @@ describe("writer/reader contract on binding keys", () => {
       expect(terminal).toBe(binding.forward.get(key))
       expect(terminal).toBeDefined()
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// walkPath — the traversal every other walker projects from
+// ---------------------------------------------------------------------------
+//
+// One case per outcome. `boundary` gets the most attention because it is the
+// case that used to be handled three different ways in three different walkers,
+// and `consumed` is the number every projection does arithmetic on.
+
+describe("walkPath", () => {
+  const Inner = Schema.struct({
+    from: Schema.number(),
+    to: Schema.number().nullable(),
+  })
+
+  it("consumes every segment on an ordinary path", () => {
+    const schema = Schema.struct({ a: Schema.struct({ b: Schema.string() }) })
+    const walk = walkPath(
+      undefined,
+      schema,
+      RawPath.empty.field("a").field("b"),
+    )
+    expect(walk.stop).toBe("complete")
+    expect(walk.consumed).toBe(2)
+  })
+
+  it("empty path completes with zero steps", () => {
+    const schema = Schema.struct({ a: Schema.string() })
+    const walk = walkPath(undefined, schema, RawPath.empty)
+    expect(walk.stop).toBe("complete")
+    expect(walk.consumed).toBe(0)
+    // Narrowing is required to reach `.schema` — `mismatch` does not carry one.
+    // That is the union doing its job: you cannot read the result of a walk
+    // without first acknowledging it might not have found anything.
+    if (walk.stop !== "mismatch") expect(walk.schema).toBe(schema)
+  })
+
+  it("stops at a sum, counting the boundary segment as consumed", () => {
+    const schema = Schema.struct({ v: Inner.nullable() })
+    const walk = walkPath(
+      undefined,
+      schema,
+      RawPath.empty.field("v").field("to"),
+    )
+    expect(walk.stop).toBe("boundary")
+    // The boundary segment is consumed, so it sits at `consumed - 1` and the
+    // segments still needing value-level resolution begin at `consumed`.
+    expect(walk.consumed).toBe(1)
+    if (walk.stop === "boundary") expect(walk.schema[KIND]).toBe("sum")
+  })
+
+  it("stops at a sum the path terminates on", () => {
+    // Reported the same as an interior path. A `.json()` or nullable
+    // collection has no container to mutate, so a `push` arrives here as a
+    // change AT the boundary and still needs widening.
+    const schema = Schema.struct({ v: Inner.nullable() })
+    const walk = walkPath(undefined, schema, RawPath.empty.field("v"))
+    expect(walk.stop).toBe("boundary")
+    expect(walk.consumed).toBe(1)
+  })
+
+  it("stops at a .json() node", () => {
+    const schema = Schema.struct({
+      blob: Schema.struct.json({ a: Schema.string() }),
+    })
+    const walk = walkPath(
+      undefined,
+      schema,
+      RawPath.empty.field("blob").field("a"),
+    )
+    expect(walk.stop).toBe("boundary")
+    expect(walk.consumed).toBe(1)
+  })
+
+  it("stops at whichever boundary comes first", () => {
+    // A `.json()` node inside a sum's variant. The sum is nearer the root and
+    // is the node actually stored in the container, so the json node inside it
+    // has no independent existence to stop at.
+    const schema = Schema.struct({
+      v: Schema.struct({
+        blob: Schema.struct.json({ a: Schema.string() }),
+      }).nullable(),
+    })
+    const walk = walkPath(
+      undefined,
+      schema,
+      RawPath.empty.field("v").field("blob").field("a"),
+    )
+    expect(walk.stop).toBe("boundary")
+    expect(walk.consumed).toBe(1)
+    if (walk.stop === "boundary") expect(walk.schema[KIND]).toBe("sum")
+  })
+
+  it("reports a boundary reached through a container", () => {
+    // `consumed - 1` is what callers slice the parent path on. Every case above
+    // lands at index 0, which is also what an off-by-one would produce.
+    const schema = Schema.struct({ items: Schema.list(Inner.nullable()) })
+    const walk = walkPath(
+      undefined,
+      schema,
+      RawPath.empty.field("items").item(0).field("to"),
+    )
+    expect(walk.stop).toBe("boundary")
+    expect(walk.consumed).toBe(2)
+  })
+
+  it("reports a mismatch instead of throwing", () => {
+    const schema = Schema.struct({ a: Schema.string() })
+    const walk = walkPath(undefined, schema, RawPath.empty.field("nope"))
+    expect(walk.stop).toBe("mismatch")
+    expect(walk.consumed).toBe(0)
+    if (walk.stop === "mismatch") {
+      expect(walk.reason).toContain('has no field "nope"')
+    }
+  })
+
+  it("reports a mismatch for a path running past a leaf", () => {
+    const schema = Schema.struct({ a: Schema.string() })
+    const walk = walkPath(
+      undefined,
+      schema,
+      RawPath.empty.field("a").field("b"),
+    )
+    expect(walk.stop).toBe("mismatch")
+    expect(walk.consumed).toBe(1)
+  })
+
+  it("never throws, however deep a path runs past a sum", () => {
+    // The regression pin. Walking past a sum used to reach `advanceSchema` and
+    // throw, which is how the reported crash happened.
+    const schema = Schema.struct({ v: Inner.nullable() })
+    const deep = RawPath.empty.field("v").field("to").field("a").field("b")
+    expect(() => walkPath(undefined, schema, deep)).not.toThrow()
   })
 })

@@ -334,3 +334,34 @@ describe("advanceSchema", () => {
     })
   })
 })
+
+// ---------------------------------------------------------------------------
+// advanceSchema is a wrapper now — these pin that nothing moved
+// ---------------------------------------------------------------------------
+//
+// `advanceSchema` is implemented as a thin shell over `stepSchema`, the total
+// single-step descent that `walkPath` drives. It has no production callers left
+// and stays exported for downstream users, so its behaviour must not drift.
+// Everything above this comment is the original suite and passes unchanged —
+// these add the one case the refactor could plausibly have broken.
+
+describe("advanceSchema as a wrapper over stepSchema", () => {
+  it("still descends INTO a .json() subtree rather than stopping", () => {
+    // `walkPath` treats a `.json()` node as a boundary and stops there. This
+    // function must not: a json node is an ordinary product carrying a marker,
+    // and descending into it is what direct callers have always gotten. Only
+    // the traversal cares that the substrate stores the subtree whole.
+    const schema = Schema.struct.json({
+      inner: Schema.string(),
+    })
+    const result = advanceSchema(schema, field("inner"))
+    expect(result[KIND]).toBe("scalar")
+  })
+
+  it("still returns a sum as-is when descending TO one", () => {
+    // Landing on a sum is fine; only stepping THROUGH one throws (above).
+    const schema = Schema.struct({ v: Schema.string().nullable() })
+    const result = advanceSchema(schema, field("v"))
+    expect(result[KIND]).toBe("sum")
+  })
+})

@@ -33,7 +33,7 @@ Consumed by applications that bind schemas with `loro.bind(schema)`. Not importe
 | `LoroNativeMap` | The `NativeMap` functor mapping schema kinds to Loro container types (`text → LoroText`, `list → LoroList`, `struct → LoroMap`, etc.). | A JS `Map` — this is a type-level functor, not a runtime object |
 | `LoroVersion` | `@kyneta/schema`'s `Version` implementation wrapping Loro's `VersionVector`. | Loro's `Frontiers` (DAG leaf ops for checkpoints) — `VersionVector` is the full peer-state vector used for sync diffing |
 | `LoroPosition` | `Position` implementation wrapping Loro's `Cursor`. Stateless `transform` — resolution queries the CRDT directly. | A numeric index |
-| `resolveContainer` | Thin wrapper over the core `foldPath(stepIntoLoro, ...)` primitive (from `@kyneta/schema`). The two semantic invariants (identity-keying, sum-boundary short-circuit) live in `@kyneta/schema/src/fold-path.ts`, not here. | A cache lookup — resolution happens on every read |
+| `resolveContainer` | Thin wrapper over the core `foldPath(stepIntoLoro, ...)` primitive (from `@kyneta/schema`). The two semantic invariants (identity-keying, opaque-boundary stop) live in `@kyneta/schema/src/fold-path.ts`, not here. | A cache lookup — resolution happens on every read |
 | `stepIntoLoro` | The Loro `PathStepper`: per-step substrate dispatch. Given `(current, nextSchema, segment, identity)` returns the child container or scalar. Driven by `foldPath`. | `stepFromDoc`, which is the root-level variant |
 | `stepFromDoc` | Root-level dispatch: given a `LoroDoc` and a field schema, return the typed root container (`doc.getMap(key)`, `doc.getText(key)`, etc.). | `stepIntoLoro` |
 | `PROPS_KEY` | The string `"_props"` — the reserved LoroMap key under which every root-level scalar and sum field is stored. | An application field name — reserved |
@@ -83,9 +83,9 @@ resolveContainer(doc, schema, path, binding) =
 
 Source: `packages/schema/backends/loro/src/loro-resolve.ts`.
 
-`foldPath` is the schema-guided path-fold primitive in `@kyneta/schema` (see [§foldPath](../../TECHNICAL.md#foldpath--schema-guided-path-resolution)). It owns the fold skeleton, the identity-keying rule (only at `seg.role === "field"`), and the sum-boundary short-circuit. `stepIntoLoro` is the only Loro-specific piece: given `(current, nextSchema, segment, identity)` it dispatches on `isLoroDoc(current)` (root → `stepFromDoc`) or container `.kind()` (non-root), returning the child container or scalar.
+`foldPath` is the schema-guided path-fold primitive in `@kyneta/schema` (see [§foldPath](../../TECHNICAL.md#foldpath--schema-guided-path-resolution)). It owns the fold skeleton, the identity-keying rule (only at `seg.role === "field"`), and the opaque-boundary stop. `stepIntoLoro` is the only Loro-specific piece: given `(current, nextSchema, segment, identity)` it dispatches on `isLoroDoc(current)` (root → `stepFromDoc`) or container `.kind()` (non-root), returning the child container or scalar.
 
-**Sum boundary.** When the fold lands on a sum schema, `foldPath` short-circuits: the sum's JSON value (stored as a plain value via `_props` or a parent map) is descended via plain JS property access for any remaining segments. This is sound because sum variants are always `PlainSchema` — no Loro containers exist inside sums.
+**Opaque boundary.** When the fold lands on a sum or a `.json()` node, `foldPath` short-circuits: the boundary's plain value (stored via `_props` or a parent map) is descended via plain JS property access for any remaining segments. This is sound because neither can contain a Loro container — sum variants are always `PlainSchema`, and a `.json()` subtree is one inert blob.
 
 ### `stepFromDoc` — root dispatch
 
@@ -232,7 +232,7 @@ batch(doc, d => { d.title.insert(0, "hi"); d.items.push(x) })
   │
   ├─ prepare phase (per mutation, applies to both σ and λ EAGERLY):
   │    1. applyChange(shadow, path, change)        ── σ advances
-  │    2. findJsonBoundary(path) ─► boundary?
+  │    2. findOpaqueBoundary(path) ─► boundary?
   │       ├─ yes: stage the full σ-snapshot at the boundary key
   │       │       (MapDiff for map parents, ListDiff replace for list
   │       │       parents) in the per-CID coalescing buffer
@@ -271,7 +271,9 @@ The write path advances **both** σ (the shadow) and λ (the LoroDoc tree) at ev
 | `"replace"` | Container-level replacement (varies by kind) |
 | `"increment"` | `CounterDiff` with delta |
 
-Non-replace change types (`text`, `sequence`, `map`, `increment`) cannot originate from sum-interior paths because sum variants are constrained to `PlainSchema`. The `advanceSchema` throw on sums is unreachable for these change types.
+Non-replace change types can and do originate at sum paths, and the claim previously made here — that they cannot, because sum variants are constrained to `PlainSchema` — was wrong. `Schema.list(...).nullable()` is a plain sequence inside a sum, so `d.maybeList.push(x)` produces a `SequenceChange` targeting the sum itself; `Schema.record(...).nullable()` does the same with a `MapChange`. Both used to reach the direct write path and look for a Loro container that was never created, because a sum is stored as one plain value.
+
+These are now routed through `findOpaqueBoundary` like any other boundary write, and widened into a whole-value write of the variant. The `advanceSchema` throw on sums is unreachable from any traversal, but that is because `walkPath` stops at the boundary — not because such paths do not arise.
 
 **Whole-value materialization is shared.** When a change carries a structured value (a struct written into a record entry, a struct pushed onto a list, or a whole-struct `.set({...})`), the value is turned into an identity-keyed container tree by the shared `materializeValue` unfold (`@kyneta/schema/src/materialize-value.ts` — the write-side counterpart to `foldPath`), then realized into `applyDiff` tuples by `realizeLoro` (`src/change-mapping.ts`, pre-order: parent map/list diff before descendants; synthetic `cid:` ContainerIDs minted only here, keeping `materializeValue` pure). The former `materializeValueDiffs` / `materializeCIDForSchema` / `needsContainer` / `kindToContainerType` helpers are gone. `replaceChangeToDiff` sets a **container** field's contents on the field's own container (a root-level container cannot be swapped; nested ones are reused in place) and only stores a **plain** scalar/sum value in the parent `_props`/map.
 

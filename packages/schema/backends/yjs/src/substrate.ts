@@ -72,7 +72,7 @@ import {
   deriveSchemaBinding,
   executeBatch,
   fieldAbsPath,
-  findJsonBoundary,
+  findOpaqueBoundary,
   invert,
   KIND,
   plainReader,
@@ -285,7 +285,7 @@ export function createYjsSubstrate(
       // boundary segment of the parent container. Coalesces with
       // repeated writes inside the same subtree (last σ snapshot
       // wins) and lands in λ on `afterBatch` flush.
-      const boundary = findJsonBoundary(schema, path, binding)
+      const boundary = findOpaqueBoundary(schema, path, binding)
       if (boundary !== null) {
         stageJsonBoundaryWrite(path, boundary.prefixLength)
         return
