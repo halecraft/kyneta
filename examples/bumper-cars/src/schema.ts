@@ -9,7 +9,7 @@
 //   Exchange handles them transparently.
 //
 //   • GameStateDoc  — json.bind (authoritative merge, server-authoritative)
-//   • PlayerInputDoc — ephemeral.bind (LWW broadcast, one per player)
+//   • PlayerInputDoc — ephemeral.bind (field-level LWW, one per player)
 //
 //   The server is the single writer for game state (cars, scores, tick).
 //   Clients only read it. No CRDT is needed — plain JS with authoritative
@@ -58,8 +58,10 @@ export const GameStateDoc = json.bind(GameStateSchema)
 // ─────────────────────────────────────────────────────────────────────────
 // Player input — ephemeral, one doc per player.
 //
-// Each client writes joystick/keyboard state at ~20fps. The server
-// reads all input docs every tick. Only the latest value matters.
+// Each client writes joystick/keyboard state at ~20fps. The server reads
+// all input docs every tick. Nothing is persisted, and each field carries
+// its own timestamp, so a peer's `force` and `angle` written concurrently
+// both survive rather than one clobbering the other.
 // ─────────────────────────────────────────────────────────────────────────
 
 export const PlayerInputSchema = Schema.struct({

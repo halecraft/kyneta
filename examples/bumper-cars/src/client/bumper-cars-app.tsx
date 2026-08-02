@@ -6,7 +6,7 @@
 //
 //   Two documents, two binding targets:
 //     • game-state (json.bind, authoritative) — server-authoritative cars + scores
-//     • input:${peerId} (ephemeral.bind, LWW) — this player's joystick input
+//     • input:${peerId} (ephemeral.bind, field-level LWW) — this player's joystick input
 //
 //   The client reads game state reactively via useValue() and writes
 //   input via batch() through the useInputSender hook.
@@ -90,7 +90,7 @@ export default function BumperCarsApp({
     [joystickInput, keyboardInput],
   )
 
-  // Throttled input sender — writes to the LWW input doc
+  // Throttled input sender — writes to the ephemeral input doc
   useInputSender({
     inputDocRef,
     hasJoined,
