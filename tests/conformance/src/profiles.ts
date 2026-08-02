@@ -44,11 +44,22 @@ export const Optional = Schema.struct({
 // does not erase the inner laws. `Schema.list.json(...)` binds fine on all five,
 // because `.json()` collapses the subtree to an inert blob and leaves only `lww`.
 // Struct- and record-shaped sums like the two above are unaffected.
+// `peers` is the one dynamic-key field; every other field here is fixed-key.
+// That is what it exists to test — membership itself can be concurrent, so a
+// key added by one peer can be removed by another, and "removed" then has to
+// survive a merge with someone who never saw the removal.
+//
+// It binds on all five: `map` carries `lww-per-key`, which is in
+// `EphemeralLaws`. Rich text is the same arithmetic as the list case above and
+// lands on the other side of it, so a `richText` field cannot join this schema
+// at all. It is covered per-backend instead, in each backend's
+// `eager-write-coherence.test.ts`.
 export const ConformanceSchema = Schema.struct({
   a: Schema.string(),
   b: Schema.string(),
   shape: Shape,
   optional: Optional,
+  peers: Schema.record(Schema.number()),
 })
 
 /** Whether concurrent writes to two DIFFERENT fields both survive a merge. */

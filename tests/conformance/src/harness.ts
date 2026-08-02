@@ -142,6 +142,55 @@ export function runSubstrateConformance(profile: SubstrateProfile): void {
       return [docA, docB]
     }
 
+    /**
+     * Two peers that agree on a starting state, then split, write, and rejoin.
+     *
+     * `partitionedWrites` starts both peers from genesis, which is enough for
+     * concurrent *writes* but not for a concurrent *removal*: a peer can only
+     * remove a key it already has, and the removal is only interesting if the
+     * other peer also had it and never saw it go. So this one seeds a shared
+     * base first, then partitions.
+     *
+     * The partition is real: `removeTransport` detaches the peers, rather than
+     * closing a bridge that may still deliver. If the split silently fails to
+     * take, the "concurrent" writes are merely sequential — and then every
+     * substrate passes, for the wrong reason and with nothing to show for it.
+     */
+    const seededPartition = async (
+      bound: Bound,
+      seed: (d: Doc) => void,
+      writeA: (d: Doc) => void,
+      writeB: (d: Doc) => void,
+    ): Promise<[Doc, Doc]> => {
+      const bridge = new Bridge()
+      const a = spawn("A", bridge, bound)
+      const b = spawn("B", bridge, bound)
+      const docA: Doc = a.get("doc", bound)
+      const docB: Doc = b.get("doc", bound)
+
+      batch(docA, seed)
+      await drain()
+
+      await a.removeTransport("A")
+      await b.removeTransport("B")
+
+      batch(docA, writeA)
+      await drain(5) // same-millisecond guard as in `partitionedWrites`
+      batch(docB, writeB)
+      await drain(5)
+
+      const healed = new Bridge()
+      await a.addTransport(
+        createBridgeTransport({ transportId: "A2", bridge: healed }),
+      )
+      await b.addTransport(
+        createBridgeTransport({ transportId: "B2", bridge: healed }),
+      )
+      await drain()
+
+      return [docA, docB]
+    }
+
     it("converges to equal state; keeps independent-field writes iff it merges below whole-document granularity", async () => {
       const bound = profile.bind()
 
@@ -257,6 +306,105 @@ export function runSubstrateConformance(profile: SubstrateProfile): void {
       // local reads from a shadow that `prepare` updates directly, so the writer
       // looks correct no matter what actually reached the network.
       expect(docB.optional()).toEqual({ from: 1, to: 2 })
+    })
+
+    it("record keys written by different peers both survive", async () => {
+      // The dynamic-key counterpart to the independent-field scenario above.
+      // A record is where membership itself is concurrent: two peers adding
+      // different keys is the presence-roster shape, and it is the reason the
+      // `state` substrate exists.
+      const bound = profile.bind()
+
+      if (profile.writerModel === "serialized") {
+        const [docA, docB] = connectedPair(bound)
+        batch(docA, (d: Doc) => d.peers.set("alice", 1))
+        await drain()
+        batch(docB, (d: Doc) => d.peers.set("bob", 2))
+        await drain()
+        expect(docA.peers()).toEqual({ alice: 1, bob: 2 })
+        expect(docA.peers()).toEqual(docB.peers())
+        return
+      }
+
+      const [docA, docB] = await partitionedWrites(
+        bound,
+        (d: Doc) => d.peers.set("alice", 1),
+        (d: Doc) => d.peers.set("bob", 2),
+      )
+
+      expect(docA.peers()).toEqual(docB.peers())
+      if (profile.fieldConcurrency === "both-survive") {
+        expect(docA.peers()).toEqual({ alice: 1, bob: 2 })
+      } else {
+        // Whole-document LWW: the newer snapshot replaces everything, so only
+        // one peer's key is left. Which one is not the point; agreeing is.
+        expect(Object.keys(docA.peers() as object)).toHaveLength(1)
+      }
+    })
+
+    it("a removed record key stays removed after merging a peer that still has it", async () => {
+      // Absence carries no information in a key-union merge: a key one peer
+      // lacks looks exactly like a key it has never seen. Every substrate has
+      // to represent removal somehow — a CRDT delete, a tombstone, or a newer
+      // whole-document snapshot — and which one it picks decides whether a
+      // removal can survive a concurrent write by someone who never saw it.
+      //
+      // The `fieldConcurrency` branch below measures that, the same way the
+      // first scenario measures it for field values. Only `ephemeral` sits on
+      // the `one-wins` side of it — every other profile merges below
+      // whole-document granularity and keeps the removal.
+      const bound = profile.bind()
+
+      if (profile.writerModel === "serialized") {
+        // Racing one document is misuse for a serialized substrate. Delete
+        // sequentially instead — the removal is still asserted, only the
+        // concurrency is dropped.
+        const [docA, docB] = connectedPair(bound)
+        batch(docA, (d: Doc) => {
+          d.peers.set("alice", 1)
+          d.peers.set("bob", 2)
+        })
+        await drain()
+        batch(docB, (d: Doc) => d.peers.delete("alice"))
+        await drain()
+        expect(docA.peers()).toEqual({ bob: 2 })
+        expect(docA.peers()).toEqual(docB.peers())
+        return
+      }
+
+      const [docA, docB] = await seededPartition(
+        bound,
+        (d: Doc) => {
+          d.peers.set("alice", 1)
+          d.peers.set("bob", 2)
+        },
+        // A removes alice while partitioned.
+        (d: Doc) => d.peers.delete("alice"),
+        // B never sees the removal and writes an unrelated key, so it has
+        // something of its own to contribute at heal time.
+        (d: Doc) => d.peers.set("carol", 3),
+      )
+
+      // Universal: the peers agree.
+      expect(docA.peers()).toEqual(docB.peers())
+
+      if (profile.fieldConcurrency === "both-survive") {
+        // The removal and the unrelated add are independent facts, and both
+        // hold. `state` reaches this only because map deletes stopped being a
+        // bare removal — before tombstones, merging the peer that still held
+        // the key resurrected it, and nothing here would have noticed, because
+        // the conformance schema had no dynamic-key collection at all.
+        expect(docA.peers()).toEqual({ bob: 2, carol: 3 })
+      } else {
+        // Whole-document LWW: the newer snapshot replaces everything, so the
+        // result is one peer's entire document rather than a merge of the two.
+        // A removal therefore survives only if the remover wrote last — and
+        // here B did, so alice comes back. Not a defect; it is what choosing
+        // whole-document granularity costs, and the reason `state` exists.
+        expect([{ bob: 2 }, { alice: 1, bob: 2, carol: 3 }]).toContainEqual(
+          docA.peers(),
+        )
+      }
     })
 
     it("a fresh peer adopts an incumbent's state on join", async () => {
