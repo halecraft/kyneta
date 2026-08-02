@@ -1146,21 +1146,66 @@ export type SchemaStep =
 export function stepSchema(schema: Schema, segment: Segment): SchemaStep {
   const child = childSchema(schema, segment)
   if (typeof child === "string") return { kind: "mismatch", reason: child }
-  return isOpaque(child)
+  return isOpaqueBoundary(child)
     ? { kind: "boundary", schema: child }
     : { kind: "descend", schema: child }
 }
 
 /**
+ * How a substrate stores a schema node.
+ *
+ * - `container` — it gets its own CRDT container in the parent.
+ * - `opaque-composite` — it *could* be descended into, but the substrate keeps
+ *   the whole subtree as one plain value, so there is nothing addressable
+ *   inside it. Only two shapes qualify: a `sum` (which is what `.nullable()`
+ *   expands to) and a `.json()` node.
+ * - `leaf` — a scalar. Nothing to descend into in the first place.
+ *
+ * This is the single definition of that decision. Two predicates derive from
+ * it and hold no logic of their own: `isOpaqueBoundary` below, which
+ * `stepSchema` consults while *walking a path in*, and `needsContainer`
+ * (`materialize-value.ts`), which `materializeValue` consults while *writing a
+ * value out*. Those two ask opposite questions about the same fact, and used to
+ * be separate switches that had to be compared by hand to check they agreed.
+ * They no longer have to agree — they cannot disagree.
+ *
+ * The `EagerPolicy` in `materialize-value.ts` rests on that. `"leaf-containers"`
+ * selects a subset of what `"all-containers"` selects, as their names promise,
+ * and the relation holds because both are expressed against this one
+ * classification rather than two switches that happened to line up. When they
+ * were separate, `richtext` fell through one switch's `default` and broke it.
+ */
+export type StorageClass = "container" | "opaque-composite" | "leaf"
+
+export function storageClass(schema: Schema): StorageClass {
+  // The `.json()` marker wins over the node's kind: a `struct.json` is an
+  // ordinary product carrying a flag, and the flag is what decides storage.
+  if (isJsonBoundary(schema)) return "opaque-composite"
+  switch (schema[KIND]) {
+    case "sum":
+      return "opaque-composite"
+    case "scalar":
+      return "leaf"
+    default:
+      // Everything else is a container, including `text` and `richtext`. Those
+      // two read as leaves elsewhere — TECHNICAL.md §"Interpreter duplication
+      // families" describes them as indexed for writing but leaf for reading
+      // and navigation — but that split governs the interpreters. For storage
+      // each is its own CRDT type, so each gets its own container.
+      return "container"
+  }
+}
+
+/**
  * Whether a schema node is stored as one opaque plain value by the substrates.
  *
- * Mirrors the `needsContainer === false` branch of `materializeValue` for the
- * two composite cases. Those two functions answer the same question from
- * opposite directions — `materializeValue` when *writing* a value out,
- * `stepSchema` when *walking* a path in — so they have to agree.
+ * Named to match the vocabulary around it — `findOpaqueBoundary`,
+ * `OpaqueBoundaryHit`, and `walkPath`'s `boundary` stop all mean this. Exported
+ * so anything in the package that needs the notion can share this one, rather
+ * than rewriting the disjunction; deliberately not re-exported from `index.ts`.
  */
-function isOpaque(schema: Schema): boolean {
-  return isJsonBoundary(schema) || schema[KIND] === "sum"
+export function isOpaqueBoundary(schema: Schema): boolean {
+  return storageClass(schema) === "opaque-composite"
 }
 
 /**

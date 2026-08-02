@@ -30,6 +30,7 @@ import {
   type ProductSchema,
   type Schema as SchemaNode,
   type SequenceSchema,
+  storageClass,
   structuralKind,
 } from "./schema.js"
 
@@ -83,33 +84,14 @@ export type EagerPolicy = "leaf-containers" | "all-containers"
  * value in the parent). The one predicate shared by both backends' insert
  * detection and the `"all-containers"` eager policy.
  *
- * JSON-boundary schemas take the plain branch — the whole subtree is one
- * opaque value in the parent container. A `sum` does too, for the same reason:
- * a variant is stored whole, so there is no container to create.
- *
- * `richtext` answers `true`, which is worth stating because it reads like a
- * leaf. Elsewhere it half-behaves as one: TECHNICAL.md §"Interpreter
- * duplication families" describes `text` and `richtext` as straddling two
- * families, indexed for writing but leaf for reading and navigation. That
- * split is about the interpreters. For storage both are plainly containers —
- * a Loro or Yjs text type carrying formatting marks.
+ * This is the write-side view of `storageClass` (`schema.ts`), which is where
+ * the decision itself lives and where the per-kind reasoning is written down —
+ * including why `richtext` counts as a container despite reading like a leaf.
+ * The walk-side view is `isOpaqueBoundary`, asking the same classification a
+ * different question.
  */
 export function needsContainer(schema: SchemaNode): boolean {
-  if (isJsonBoundary(schema)) return false
-  switch (schema[KIND]) {
-    case "text":
-    case "richtext":
-    case "counter":
-    case "movable":
-    case "tree":
-    case "set":
-    case "product":
-    case "map":
-    case "sequence":
-      return true
-    default:
-      return false
-  }
+  return storageClass(schema) === "container"
 }
 
 // ---------------------------------------------------------------------------
@@ -168,7 +150,16 @@ export function materializeValue(
   prefix: string,
   policy: EagerPolicy,
 ): MaterializedNode {
-  // JSON-boundary, sum, tree, and scalars are opaque plain values.
+  // This switch dispatches on kind rather than delegating to `storageClass`,
+  // because it does more than classify — it builds a differently shaped node
+  // for each kind, so routing through the classification would add a lookup
+  // without removing a decision.
+  //
+  // It does have to stay consistent with it. The branches that produce a
+  // `{kind: "plain"}` node — the JSON boundary here, and `sum` below — are the
+  // same two shapes `storageClass` calls `opaque-composite`. If the two ever
+  // look like they disagree, `storageClass` is the definition and this is the
+  // copy that has drifted.
   if (isJsonBoundary(schema)) return { kind: "plain", value }
 
   switch (schema[KIND]) {
