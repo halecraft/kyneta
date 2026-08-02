@@ -1,23 +1,15 @@
 // state-records — `Schema.record` works on the `state` substrate.
 //
-// `state` exists for decentralised presence, and the shape that use case wants
-// is a roster: a record keyed by peer, each peer writing only its own key.
-// That was the one container the substrate could not do.
-// `applyChangeToStateTree` read a `MapChange` shape the change vocabulary has
-// never defined — per-key `{type: "set" | "delete"}` instructions under an
-// `.entries` property, where the real change carries `set` (a key→value
-// object) and `delete` (an array of keys) — so every map write threw
-// `TypeError: Cannot convert undefined or null to object`.
+// `state` exists for decentralised presence, and that use case wants a roster:
+// a record keyed by peer, each peer writing only its own key. It was the one
+// container the substrate could not do — `applyChangeToStateTree` read a
+// `MapChange` shape the change vocabulary has never defined, so every map
+// write threw. No test covered a record key write, which is how it survived.
 //
-// It survived because no test covered a record key write on `state`. The
-// substrate's own header says containers are "limited to structs and maps",
-// which made maps look covered.
-//
-// Several assertions here reach past the document to the tree. The substrate
-// serves local reads from a separate plain-object shadow, so a document-level
-// assertion can pass while the replicated tree is wrong — a trap documented in
-// TECHNICAL.md §"Atomic registers in the StateTree" that has caught this
-// substrate before.
+// Several assertions reach past the document to the tree. Local reads come
+// from a separate shadow, so a document-level assertion can pass while the
+// replicated tree is wrong — a trap documented in TECHNICAL.md §"Atomic
+// registers in the StateTree" that has caught this substrate before.
 
 import { describe, expect, it } from "vitest"
 import { batch, createDoc, mapChange, Schema, state } from "../index.js"

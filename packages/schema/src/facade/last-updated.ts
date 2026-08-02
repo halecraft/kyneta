@@ -1,6 +1,6 @@
 // facade/last-updated.ts — read the LWW timestamp from a state ref.
 //
-// Extracts the underlying `[Value, Timestamp]` tuple's timestamp from
+// Extracts the timestamp slot of the underlying `StateTuple` from
 // a `state` substrate ref.
 
 import { hasTransact, PATH, TRANSACT } from "../interpreters/writable.js"

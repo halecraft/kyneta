@@ -1,20 +1,19 @@
 // state-deletion — a deleted key stays deleted after a merge.
 //
-// `mergeStateTree` unions keys, so absence carries no information: a key
-// missing from one peer looks exactly like a key that peer has never seen.
-// Removing a key therefore used to survive only until the next merge with
-// anyone who still held it, which made `Schema.record` unusable as a roster —
-// players, cursors and sessions could join but never leave.
+// `mergeStateTree` unions keys, so absence carries no information: a key one
+// peer lacks looks exactly like a key it has never seen. A removal therefore
+// survived only until the next merge with anyone still holding it, which made
+// `Schema.record` unusable as a roster — players, cursors and sessions could
+// join but never leave.
 //
-// A delete now writes a tombstone: `[null, timestamp, true]`. It is an
-// ordinary register value, so it wins or loses by the same rule as any other
-// write, and `mergeStateTree` needs no knowledge of it.
+// A delete now writes a tombstone, `[null, timestamp, true]`. It is an
+// ordinary value that wins or loses by the normal rule, so the merge needs no
+// knowledge of it.
 //
 // Semantics are LWW-Element-Set, not OR-Set: concurrent add and remove resolve
-// by timestamp, so a later add beats an earlier delete. Anyone reading
-// "tombstone" is likely to assume OR-Set (where a concurrent add always wins),
-// so the distinguishing case is pinned below as a decision rather than left to
-// be inferred.
+// by timestamp. Since "tombstone" usually implies OR-Set, where a concurrent
+// add always wins, the distinguishing case is pinned below as a decision
+// rather than left to be inferred.
 
 import { describe, expect, it } from "vitest"
 import {

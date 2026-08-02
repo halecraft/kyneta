@@ -198,7 +198,7 @@ Kyneta exports five pre-configured binding targets:
 #### `ephemeral` vs `state`
 Both targets implement snapshot-only transient delivery via `SYNC_EPHEMERAL`, but they have radically different semantics:
 - `ephemeral`: A **Global LWW Register**. A write to any field bumps the global document timestamp. When peers sync, the peer with the newest timestamp overwrites the *entire* document. Useful when you explicitly want total state replacement.
-- `state`: A **Field-level LWW Map (CvRDT)**. The substrate maintains a `[Value, Timestamp]` tuple for every scalar leaf. When peers sync, the payloads merge concurrently field-by-field. Useful for decentralized presence where multiple peers write to their own keys in a shared document without clobbering each other, without generating any op-log history bloat. A `sum`/discriminated-union variant and a `.json()` blob are stored as a **single atomic register** tuple (`[wholeValue, T]`), not decomposed — so a concurrent variant switch resolves whole and never blends fields across variants.
+- `state`: A **Field-level LWW Map (CvRDT)**. The substrate maintains a `StateTuple` for every scalar leaf. When peers sync, the payloads merge concurrently field-by-field. Useful for decentralized presence where multiple peers write to their own keys in a shared document without clobbering each other, without generating any op-log history bloat. A `sum`/discriminated-union variant and a `.json()` blob are stored as a **single atomic register** tuple holding the whole value, not decomposed — so a concurrent variant switch resolves whole and never blends fields across variants.
 
 ###### The merge rule, in full
 

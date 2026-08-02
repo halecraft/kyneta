@@ -1,19 +1,17 @@
 // state-lattice — the `state` substrate's merge is a join-semilattice.
 //
 // A CvRDT converges only if its merge is commutative, associative and
-// idempotent. Those three laws are the whole reason two peers can exchange
-// state in any order, any number of times, and still agree.
+// idempotent. Those laws are the whole reason two peers can exchange state in
+// any order, any number of times, and still agree.
 //
 // Commutativity used to fail. On a timestamp tie the merge took the remote
-// value, described in a comment as "arbitrarily pick remote to be
-// deterministic" — but deterministic as a function is not the same as
-// commutative, and it is commutativity the peers depend on. Two peers writing
-// different values in the same millisecond each kept their own, forever, with
-// no error and no convergence.
+// value — deterministic, but deterministic is not commutative, and it is
+// commutativity peers depend on. Two peers writing different values in the
+// same millisecond each kept their own, permanently, with no error raised.
 //
-// The laws are checked exhaustively over a small curated set rather than with
-// random generation, because the case that broke is the tie, and a generator
-// over timestamps would almost never produce two equal ones.
+// Checked exhaustively over a curated set rather than by random generation:
+// the case that broke is the tie, and a generator over timestamps would
+// almost never produce two equal ones.
 
 import { describe, expect, it } from "vitest"
 import {

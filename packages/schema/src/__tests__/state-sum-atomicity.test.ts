@@ -2,7 +2,7 @@
 //
 // A sum variant or a `.json()` blob must merge as ONE value: a variant switch
 // moves the tag and its fields together. The state substrate stores each such
-// register as a single `[value, timestamp]` tuple so the schema-blind
+// register as a single leaf tuple so the schema-blind
 // `mergeStateTree` can never blend fields across variants. These tests pin the
 // property at the builder level (applyChangeToStateTree / mergeStateTree) and
 // end-to-end through the substrate.

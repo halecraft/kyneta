@@ -1,8 +1,9 @@
 // state-tree — CvRDT field-level LWW state space.
 //
 // Defines the core data structure and merge algebra for the `state` substrate.
-// A StateTree is isomorphic to the document schema, but every scalar leaf
-// is replaced with a `StateTuple = [value: unknown, timestamp: number]`.
+// A StateTree is isomorphic to the document schema, but every scalar leaf is
+// replaced with a `StateTuple` — `[value, timestamp]`, plus a third slot on a
+// deleted key (see `StateTuple` and TECHNICAL.md §"Deletion").
 //
 // Because the `state` substrate supports only LWW laws (`"lww" | "lww-per-key"`),
 // containers are limited to structs and maps. This creates a mathematically
@@ -37,14 +38,13 @@ import { Zero } from "../zero.js"
  * The fundamental LWW field-level state element.
  *
  * `[0]` is the scalar value (or structural zero), `[1]` is the wall-clock
- * timestamp, and `[2]` — when present and `true` — marks the tuple as a
- * **tombstone**: the key was deleted at `[1]`, and reads project it as absent.
+ * timestamp, and `[2]` — when present and `true` — marks a **tombstone**: the
+ * key was deleted at `[1]`, and reads project it as absent.
  *
- * The marker sits in its own slot rather than in the value because it must be
- * out-of-band from the value domain. `null` is a legitimate value under a
- * nullable schema, and any in-band sentinel (a magic string, a marker object)
- * is something a `.json()` blob could legitimately contain. A third slot
- * cannot be mistaken for a value a user wrote.
+ * The marker needs its own slot rather than a sentinel value, because it has
+ * to be out-of-band from the value domain: `null` is legitimate under a
+ * nullable schema, and any in-band marker is something a `.json()` blob could
+ * itself contain.
  */
 export type StateTuple = [value: unknown, timestamp: number, deleted?: boolean]
 
@@ -62,14 +62,13 @@ export type StateTree = StateTuple | Record<string, any>
 /**
  * Check if a StateTree node is a leaf tuple.
  *
- * Because sequences are not supported by `state.bind`, any Array in a
- * StateTree is a leaf — that is the real invariant, and this guard states it.
- * There is deliberately no check on the tuple's length: the timestamp test
- * already rules out an array too short to be a tuple, so an arity check would
- * add only an upper bound, and an upper bound has to be revised every time the
- * tuple grows a slot. Getting that wrong is expensive and quiet — a tuple the
- * guard rejects is treated as a container, and its slots are then merged and
- * projected as if they were keys.
+ * Sequences are not a supported container here, so **any** array in a
+ * StateTree is a leaf. That is the real invariant, and checking the tuple's
+ * length is not it: the timestamp test already excludes an array too short to
+ * be a tuple, so an arity check adds only an upper bound — on the one part of
+ * the shape that changes as the tuple gains slots. Get that wrong and the
+ * failure is quiet: a rejected tuple is treated as a container, and its slots
+ * are merged and projected as if they were keys.
  */
 export function isStateTuple(node: unknown): node is StateTuple {
   return Array.isArray(node) && typeof node[1] === "number"
@@ -98,22 +97,17 @@ function tombstone(timestamp: number): StateTuple {
 /**
  * Mark an entire subtree deleted, tombstoning every leaf inside it.
  *
- * Deleting a record entry whose value is a struct could instead replace the
- * whole subtree with one tombstone tuple, which is shorter. It does not,
- * because that would make two peers disagree about the *shape* of a node — one
- * holding a leaf exactly where the other still holds a container — and any
- * merge rule that resolves a shape disagreement has to throw away one side's
- * contents.
+ * Replacing the whole subtree with one tombstone tuple would be shorter, and
+ * it breaks associativity. It leaves two peers disagreeing about a node's
+ * *shape* — one holding a leaf where the other still holds a container — and
+ * resolving that means discarding one side's contents, which a later merge
+ * then cannot recover. Concretely: a leaf at t=300 beats a container whose
+ * newest leaf is t=150, destroying it, so merging a third peer afterwards
+ * gives a different answer than merging it first.
  *
- * Throwing contents away is what breaks associativity. With a leaf `L` at
- * t=300 and containers `B` (newest leaf t=150) and `C` (newest leaf t=400):
- * `(L ⊔ B) ⊔ C` lets L win the first join, discarding B's leaves, so C alone
- * survives — while `L ⊔ (B ⊔ C)` merges B into C first and keeps them. Two
- * peers given the same three updates in different orders would end up with
- * different state, which is precisely what a CvRDT must never do.
- *
- * Tombstoning leaf-by-leaf keeps every node's shape stable, so the merge only
- * ever joins leaf against leaf — where it is provably a lattice.
+ * Going leaf-by-leaf keeps every shape stable, so the merge only ever joins
+ * leaf against leaf — where it is provably a lattice. See TECHNICAL.md
+ * §"Deletion" for the worked example.
  */
 function tombstoneSubtree(node: StateTree, timestamp: number): StateTree {
   if (isStateTuple(node)) return tombstone(timestamp)
@@ -134,11 +128,10 @@ function tombstoneSubtree(node: StateTree, timestamp: number): StateTree {
 /**
  * Rank a tuple's value for tie-breaking, as its JSON serialisation.
  *
- * `JSON.stringify(undefined)` evaluates to `undefined` rather than a string,
- * which would make the comparison in `joinTuples` non-total and break the
- * lattice. Any fixed stand-in restores the total order, and it cannot be
- * confused with a real value: the string `"undefined"` serialises *with*
- * quotes, so it ranks differently from this bare marker.
+ * The fallback matters: `JSON.stringify(undefined)` returns `undefined`, not a
+ * string, which would make the comparison non-total and break the lattice. The
+ * bare stand-in cannot collide with a real value, since the *string*
+ * `"undefined"` serialises with quotes.
  */
 function valueRank(value: unknown): string {
   return JSON.stringify(value) ?? "undefined"
@@ -147,34 +140,21 @@ function valueRank(value: unknown): string {
 /**
  * The join of two leaf tuples — which one wins.
  *
- * Highest timestamp wins. On a tie, the greater value rank wins.
+ * Highest timestamp wins; on a tie, the greater value rank.
  *
- * The tie rule is a semantic choice worth stating plainly: on a tie the
- * greater *value* wins, not the later writer. A tie IS simultaneity — two
- * peers wrote in the same millisecond — so there is no later writer to prefer.
- * An arbitrary-but-agreed winner is the most that can be asked for, and that
- * is exactly what a CvRDT join needs.
+ * The tie rule is a decision rather than a detail. On a tie the greater
+ * *value* wins, not the later writer: a tie IS simultaneity, so there is no
+ * later writer to prefer, and an arbitrary-but-agreed winner is all a join
+ * needs. Comparing serialisations reads like a hack and is not — both peers
+ * compare the same pair of strings, so they cannot reach different verdicts,
+ * and string comparison is a *total order*, which is what makes the join
+ * associative across three or more tied peers. The rule this replaced ("take
+ * remote") was deterministic but not commutative, so two peers merging in
+ * opposite directions diverged permanently. TECHNICAL.md §"The merge rule, in
+ * full" has the longer argument.
  *
- * Comparing serialisations looks fragile and is not, for three reasons worth
- * spelling out because the failure it prevents is invisible:
- *
- *  - Two peers might serialise an equal object with different key order, but
- *    each side compares *the same pair of strings* and so reaches the same
- *    verdict. Disagreement would need the two peers to disagree about a single
- *    comparison, which cannot happen when both hold both values.
- *  - String comparison is a total order, which is what makes the join
- *    associative across three or more tied peers. A merely-deterministic rule
- *    (the old "pick remote") is not: it gives a different answer depending on
- *    which side you are, which is precisely how two peers diverged forever.
- *  - Values are JSON-safe by construction — the wire format for a whole tree
- *    is `JSON.stringify(tree)`, so anything unserialisable could never have
- *    reached a peer to be compared in the first place.
- *
- * Only the equal-timestamp path pays for `stringify`; the common case compares
- * two numbers and stops.
- *
- * Returns one of its two arguments rather than a copy, so the ordinary path
- * allocates nothing. Callers decide whether the winner needs cloning.
+ * Only the tie path pays for `stringify`. Returns one of its arguments rather
+ * than a copy; the caller decides whether the winner needs cloning.
  */
 export function joinTuples(local: StateTuple, remote: StateTuple): StateTuple {
   if (remote[1] > local[1]) return remote
@@ -215,34 +195,29 @@ function subtreeTimestamp(node: StateTree): number {
  */
 export function mergeStateTree(local: StateTree, remote: StateTree): StateTree {
   if (isStateTuple(local) && isStateTuple(remote)) {
-    // Adopt the winning tuple WHOLE rather than copying slot by slot. Copying
-    // a fixed set of slots would silently preserve any slot this function does
-    // not know about, so a tuple that lost the join could still impose its
-    // extra slots on the value that beat it. Taking the winner entire keeps
-    // the merge indifferent to how many slots a tuple carries.
+    // Adopt the winner WHOLE rather than copying slot by slot: copying fixed
+    // slots preserves any slot this function does not know about, so a losing
+    // tombstone would leave its marker sitting on the value that beat it.
     const winner = joinTuples(local, remote)
-    // Clone on the remote-wins path so the merged tree never aliases the
-    // incoming payload, which the caller may still own.
+    // Clone when remote wins, so the merged tree never aliases a payload the
+    // caller may still own.
     return winner === local ? local : cloneTuple(winner)
   }
 
-  // One side is a leaf where the other is a container — the two peers disagree
-  // about the SHAPE of this node. Well-formed peers cannot reach here: shape
-  // comes from the schema, and even a delete preserves it (see
-  // `tombstoneSubtree`). This is the degraded path for malformed or
-  // mismatched-schema payloads.
+  // One side is a leaf where the other is a container: the peers disagree
+  // about this node's SHAPE. Well-formed peers cannot get here — shape comes
+  // from the schema, and even a delete preserves it (see `tombstoneSubtree`) —
+  // so this is the degraded path for malformed or mismatched-schema payloads.
   //
-  // A container carries no timestamp of its own, so compare on the newest
-  // timestamp anywhere inside it. That is commutative, which the previous
-  // "remote always wins" was not — it gave two peers merging in opposite
-  // directions different answers, the same defect the tuple join had.
+  // Containers carry no timestamp of their own, hence the comparison on the
+  // newest timestamp within. Simply taking `remote` would be shorter and is
+  // wrong: deterministic is not commutative, so two peers merging in opposite
+  // directions would disagree permanently.
   //
-  // It is deliberately NOT claimed to be associative, and it is not: whichever
-  // side loses has its contents discarded, so a later merge cannot recover
-  // them and the grouping of three merges can change the result. Associativity
-  // cannot be recovered here without inventing a union of two disagreeing
-  // shapes. The real guarantee is upstream — normal operation keeps shapes
-  // stable, so the lattice laws hold on every tree a peer can actually produce.
+  // Deliberately NOT associative, and not claimed to be: the loser's contents
+  // are discarded, so no later merge can recover them. That cannot be fixed
+  // here without inventing a union of two disagreeing shapes; the guarantee
+  // lives upstream, in keeping shapes stable.
   if (isStateTuple(local) || isStateTuple(remote)) {
     const localTimestamp = subtreeTimestamp(local)
     const remoteTimestamp = subtreeTimestamp(remote)
@@ -462,14 +437,12 @@ function isExpired(
 // ---------------------------------------------------------------------------
 
 /**
- * Copy a leaf tuple.
+ * Copy a leaf tuple, whatever slots it has.
  *
- * Deliberately arity-agnostic: it copies whatever slots the tuple has rather
- * than naming them. Naming slots here would quietly truncate any tuple that
- * carries more than the two this function happened to know about.
- *
- * Shallow, like the clone it replaced — a tuple's value is deep-cloned once on
- * the way in by `leafTuple`, so the tree never aliases a caller's live value.
+ * Arity-agnostic on purpose: naming slots here would quietly truncate any
+ * tuple carrying more than the two a past version knew about. Shallow, like
+ * the clone it replaced — `leafTuple` deep-clones a value once on the way in,
+ * so the tree never aliases a caller's live value.
  */
 function cloneTuple(tuple: StateTuple): StateTuple {
   return tuple.slice() as StateTuple
@@ -501,7 +474,7 @@ function deepClone(value: any): any {
 // decompose into per-field tuples — that is what gives `state` its
 // field-level merge. Scalars and *registers* — a `sum` variant or a
 // `.json()` blob, for which `needsContainer` is false — are stored as ONE
-// `[value, timestamp]` tuple. Storing a register whole is what stops
+// leaf tuple. Storing a register whole is what stops
 // `mergeStateTree` from blending fields across variants: a sum is opaque to
 // the CRDT, exactly like a scalar (variant fields are not independently
 // addressable — a variant switch is a single whole-value `.set()`).
@@ -633,22 +606,20 @@ export function applyChangeToStateTree(
   } else if (change.type === "map") {
     let child = target[key]
 
-    // A map change is only meaningful at a container. If this node is an
-    // atomic register — a sum variant or a `.json()` blob, stored as ONE tuple
-    // so a concurrent variant switch resolves whole — then `state.ts:prepare`
-    // should already have widened the write into a whole-value replace.
-    // Reaching here means that widening was bypassed.
+    // A map change is only meaningful at a container. An atomic register — a
+    // sum or `.json()` node, stored as ONE tuple so a variant switch resolves
+    // whole — never legitimately receives one, because `state.ts:prepare`
+    // widens such writes into a whole-value replace first. Getting here means
+    // that widening was bypassed.
     //
-    // This used to overwrite the register with `{}` and write entries into it,
-    // decomposing it into blendable per-field tuples: the exact damage the
-    // widening exists to prevent, and invisible locally because reads are
-    // served from a separate shadow. Saying so beats corrupting the tree
-    // quietly.
+    // Throwing is the point. Quietly building a container instead would
+    // decompose the register into blendable per-field tuples and drop every
+    // sibling field the change did not mention — and since local reads are
+    // served from a separate shadow, the damage would only ever appear on
+    // some other peer.
     //
-    // The schema is authoritative and covers the case where the register has
-    // not been written yet. The tuple check is a second line of defence for
-    // when there is no schema opinion, where the tree's own shape is the only
-    // evidence available.
+    // The schema is authoritative and catches a register not yet written; the
+    // tuple check covers the case where there is no schema opinion.
     const schemaSaysRegister =
       targetSchema !== undefined && !needsContainer(targetSchema)
     if (schemaSaysRegister || isStateTuple(child)) {
@@ -675,15 +646,14 @@ export function applyChangeToStateTree(
 /**
  * Apply a `MapChange` to one StateTree container.
  *
- * Shared by the root and nested call sites above. They were duplicated, and
- * both read a shape the change vocabulary has never defined — per-key
- * `{type: "set" | "delete"}` instructions under an `.entries` property — so
- * every map write on this substrate threw `TypeError: Cannot convert undefined
- * or null to object`. `Schema.record` was unusable. One implementation means
- * the two sites cannot drift apart again.
+ * Shared by the root and nested call sites above. Both were duplicates, and
+ * both read a shape the change vocabulary has never defined (per-key
+ * `{type: "set" | "delete"}` instructions under `.entries`), so every map
+ * write threw and `Schema.record` was unusable. Duplication is how they came
+ * to agree on a shape neither had.
  *
- * `delete` is an array of keys, not instruction objects. Deletes are applied
- * before sets, matching `stepMap`, so a key appearing in both ends up set.
+ * `delete` is an array of keys, not instruction objects. Deletes apply before
+ * sets, matching `stepMap`, so a key in both ends up set.
  */
 function applyMapChange(
   target: Record<string, StateTree>,
@@ -692,19 +662,14 @@ function applyMapChange(
   timestamp: number,
 ): void {
   for (const key of change.delete ?? []) {
-    // A tombstone rather than a removal. `mergeStateTree` unions keys, so a
-    // key simply taken out of the tree is indistinguishable from one this peer
-    // has never seen, and the next merge with anyone still holding it brings
-    // it back.
+    // A tombstone, not a removal: `mergeStateTree` unions keys, so a key taken
+    // out of the tree is indistinguishable from one never seen, and the next
+    // merge with anyone still holding it brings it back.
     //
-    // Concurrent add and remove resolve BY TIMESTAMP: a later add beats an
-    // earlier delete, and a later delete beats an earlier add. That is
-    // LWW-Element-Set behaviour, which is what a target advertising
-    // `lww-per-key` should do — and deliberately NOT an observed-remove
-    // (OR-Set), where a concurrent add always wins regardless of clock.
-    // Anyone reading the word "tombstone" is likely to assume OR-Set, so it is
-    // worth being explicit. For presence, LWW is also the behaviour you want:
-    // a peer that is removed and rejoins should be present again.
+    // Concurrent add and remove resolve BY TIMESTAMP — LWW-Element-Set, and
+    // deliberately not an observed-remove set where a concurrent add always
+    // wins regardless of clock. Worth naming, because "tombstone" usually
+    // implies OR-Set. TECHNICAL.md §"Deletion" covers why LWW is right here.
     const existing = target[key]
     target[key] =
       existing === undefined
@@ -761,14 +726,13 @@ export function syncStateTreeToShadow(
     }
   }
 
-  // A key present in the tree but absent from the plain value has been
-  // deleted, so it tombstones exactly as an explicit delete does. The two
-  // paths have to agree: otherwise a whole-value `.set()` that omits a key
-  // would converge differently from `delete(key)` on the same key.
+  // A key in the tree but absent from the plain value has been deleted, so it
+  // tombstones exactly as an explicit `delete` does — otherwise which call a
+  // writer happened to use would decide whether the removal survives a merge.
   //
-  // A key that is already tombstoned is left alone rather than re-stamped.
-  // Refreshing its timestamp on every unrelated whole-value write would let an
-  // old delete keep beating a newer remote re-add.
+  // An existing tombstone is left alone rather than re-stamped: refreshing it
+  // on every unrelated whole-value write would let an old delete keep beating
+  // a newer remote re-add.
   for (const key of Object.keys(target)) {
     if (key in plain) continue
     if (isTombstone(target[key])) continue

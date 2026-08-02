@@ -137,7 +137,7 @@ describe("ephemeral substrate", () => {
 })
 
 // ===========================================================================
-// state — bug class C. A register must stay ONE `[value, timestamp]` tuple.
+// state — bug class C. A register must stay ONE leaf tuple.
 // ===========================================================================
 //
 // Splitting a register into per-field tuples does two kinds of damage. It drops

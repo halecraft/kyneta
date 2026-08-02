@@ -3,7 +3,7 @@
 // The state substrate is a history-free, snapshot-only CRDT that merges
 // concurrently at the field level. Unlike the plain/LWW substrate which
 // tracks a single timestamp for the entire document, this tracks a
-// `[Value, Timestamp]` tuple for every scalar leaf.
+// `StateTuple` for every scalar leaf.
 //
 // This enables true decentralized presence: multiple peers can write
 // to their own keys in a shared document without clobbering each other,
@@ -257,7 +257,7 @@ export function createStateSubstrate(
       // untouched and only the local shadow moves.
       if (!options?.projection) {
         // A register — a sum variant or a `.json()` blob — lives in the tree as
-        // ONE `[value, timestamp]` tuple, so that concurrent edits to it settle
+        // ONE leaf tuple, so that concurrent edits to it settle
         // as a single unit. A change aimed at or inside one has nowhere to go:
         // applying it literally would split that tuple into per-field tuples,
         // throwing away every sibling field the change never mentioned and
