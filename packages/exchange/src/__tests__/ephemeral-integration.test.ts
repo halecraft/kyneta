@@ -1,8 +1,13 @@
-// state-integration — end-to-end behaviour of the `ephemeral` CvRDT substrate
-// through a real Exchange.
+// ephemeral-integration — the `ephemeral` target's field-level merge, driven
+// end-to-end through a real Exchange rather than against the substrate alone.
 //
-// These tests mimic the current "Ephemeral clobbering bug" to prove that
-// the `ephemeral` substrate correctly implements a field-level LWW Map.
+// The property under test is the one the target exists for: two peers writing
+// *different* keys of a shared roster both survive. Under whole-document
+// last-writer-wins — which is what this target was through 2.x — whichever
+// peer wrote most recently would clobber the other, making a presence roster
+// unusable. The substrate's own suites in `@kyneta/schema` cover the merge
+// algebra; this one covers the path a real peer takes to reach it, including
+// the synchronizer's decision to import an offer at all.
 
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { batch, ephemeral, lastUpdated, Schema } from "@kyneta/schema"
@@ -23,7 +28,7 @@ async function drain(rounds = 20): Promise<void> {
   }
 }
 
-describe("State Substrate (CvRDT Field-Level LWW)", () => {
+describe("ephemeral substrate — field-level LWW through a live Exchange", () => {
   it("merges concurrently at the field level without clobbering", async () => {
     const bridge = new Bridge()
 

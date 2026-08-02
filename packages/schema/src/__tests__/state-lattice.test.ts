@@ -285,7 +285,7 @@ describe("StateVersion carries no lineage", () => {
     // document out of the reset path altogether.
     //
     // The other half of that invariant — durability excluding the compaction
-    // trigger — lives in @kyneta/exchange's `epoch-boundary.test.ts`, which
+    // trigger — lives in @kyneta/exchange's `reset-trigger.test.ts`, which
     // points back here. Changing this line means revisiting the replicate arm
     // of `Synchronizer.#executeImportDocData`.
     expect(StateVersion.now().lineage).toBe(DEFAULT_LINEAGE)

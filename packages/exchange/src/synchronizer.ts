@@ -316,7 +316,7 @@ export type ResetTrigger = "none" | "lineage" | "compaction"
  * Durability excludes it from compaction here, and `StateVersion` reporting
  * `DEFAULT_LINEAGE` excludes it from lineage. That is what lets the reset path
  * rebuild a replica rather than merge into it — see `#executeImportDocData`.
- * `epoch-boundary.test.ts` pins both halves.
+ * `reset-trigger.test.ts` pins both halves.
  */
 export function classifyResetTrigger(
   localLineage: string,

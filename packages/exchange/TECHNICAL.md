@@ -757,7 +757,7 @@ The lineage trigger requires a REAL lineage on *both* sides; `LEGACY_EPOCH` and 
 
 The compaction trigger is the *only* signal for a same-lineage history gap, since there is no lineage mismatch to find. It requires a whole-state image from a peer already marked synced: a first entirety is just initial sync. **Transient documents are excluded from it entirely** — the heuristic presumes a sender that can trim history, but a snapshot-only substrate accumulates no trimmable log, and every steady-state push is already an entirety. Applying it to presence traffic would classify ordinary sync as a reset on every message after the first.
 
-Those two facts compose into an invariant worth stating plainly, because it is what makes item 1 below safe: **a transient CvRDT document reaches neither trigger.** Durability excludes it from compaction, and `StateVersion` reporting `DEFAULT_LINEAGE` excludes it from lineage. The two halves are pinned in `epoch-boundary.test.ts` and `@kyneta/schema`'s `state-lattice.test.ts` respectively.
+Those two facts compose into an invariant worth stating plainly, because it is what makes item 1 below safe: **a transient CvRDT document reaches neither trigger.** Durability excludes it from compaction, and `StateVersion` reporting `DEFAULT_LINEAGE` excludes it from lineage. The two halves are pinned in `reset-trigger.test.ts` and `@kyneta/schema`'s `state-lattice.test.ts` respectively.
 
 Both triggers converge on the same `offer { payload: { kind: "entirety" | "since" } }` handling, gated by the same `canReset` policy: when the receiver encounters a boundary for a doc that already has local state, two things can happen:
 

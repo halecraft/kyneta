@@ -1,12 +1,10 @@
-// epoch-boundary — unit tests for the pure `classifyResetTrigger` classifier.
+// reset-trigger — unit tests for the pure `classifyResetTrigger` classifier.
 //
-// The name is historical: this suite once covered only the lineage (epoch)
-// boundary, and now covers the whole "is this offer a reset, and if so which
-// kind?" decision that the Synchronizer gates on in `#executeImportDocData`.
-//
-// The branch it feeds sits in a private method that needs a full sync scenario
-// to reach, so the decision is tested here as a pure function of plain values
-// instead — which is why it was extracted in the first place.
+// This is the whole "is this offer a reset, and if so which kind?" decision
+// that the Synchronizer gates on in `#executeImportDocData`. The branch it
+// feeds sits in a private method that needs a full sync scenario to reach, so
+// the decision is tested here as a pure function of plain values instead —
+// which is why it was extracted from that method in the first place.
 //
 // Two properties matter beyond the individual rows:
 //
