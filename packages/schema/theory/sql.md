@@ -766,7 +766,7 @@ Write `schemaToSql(schema)` that produces `CREATE TABLE` statements.
 A standalone fold over the schema functor. Forces the embed-vs-normalize
 decisions. Shared by both the projection (8b) and the substrate (8c).
 
-Existing utilities: `advanceSchema()` for schema descent,
+Existing utilities: `walkPath()` for schema-guided path descent,
 `unwrapAnnotation()` for stripping annotations, `structuralKind()` for
 node discrimination. `Zero.structural(schema)` for default values
 (needed for initial table population).

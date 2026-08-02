@@ -384,7 +384,7 @@ This is how `batch(doc, d => { d.title.insert(0, "hi"); d.items.push(x); })` bec
 
 `resolveContainer` in substrate backends (e.g. `loro-resolve.ts`) handles opaque boundaries by switching to plain JS property navigation for the remaining path segments. This is sound because neither boundary kind can contain a CRDT container: sum variants are always `PlainSchema`, and a `.json()` subtree is one inert blob. The Yjs backend's `resolveYjsType` follows the same pattern.
 
-Both get this for free from `walkPath`, which reports a `boundary` stop rather than letting the descent run into `advanceSchema`'s "cannot advance through a sum" throw. That throw still exists, and is still correct — a sum resolves by inspecting the value, never by reading the next path segment — but it is now unreachable from any traversal in the package.
+Both get this for free from `walkPath`, which reports a `boundary` stop rather than letting the descent run on into the sum. `stepSchema` still has an answer for a path that steps *through* a sum — it reports a `mismatch` reading "cannot advance through a sum" — and that answer is still correct, because a sum resolves by inspecting the value rather than by reading the next path segment. It is simply unreachable from any traversal, since every traversal honours the boundary first.
 
 ### Version vector algebra
 
@@ -1297,7 +1297,9 @@ By 2.3.x there were three production callers. `findJsonBoundary` arrived with th
 
 The claim was true when written. What made it decay is that nothing enforced it — the rule lived in a doc comment, and `advanceSchema` was exported, so hand-rolling a fourth walk was the path of least resistance. **A stated invariant is not an enforced one.**
 
-The current arrangement is structural instead. `walkPath` is the only traversal; `foldPath`, `pathSchema`, `findOpaqueBoundary`, and the `state` substrate's schema lookup are projections of it that differ only in policy. The single-step primitive underneath (`stepSchema`) is package-internal and deliberately *not* exported, because handing it out is what made a divergent walker easy to write. `advanceSchema` survives as a public wrapper with no production callers.
+The current arrangement is structural instead. `walkPath` is the only traversal; `foldPath`, `pathSchema`, `findOpaqueBoundary`, and the `state` substrate's schema lookup are projections of it that differ only in policy. The single-step primitive underneath (`stepSchema`) is package-internal and deliberately *not* exported, because handing it out is what made a divergent walker easy to write.
+
+`advanceSchema` — the public throwing wrapper over that primitive — has been removed. It was retained through 2.x on the reasoning that it had lost its callers but was still public, and it was pinned with tests so its behaviour could not drift. That retention was the last piece of the decayed arrangement still standing: an exported single-step descent is precisely what the paragraph above identifies as the hazard, and keeping it meant the package's most thorough descent tests pointed at a function nothing called. Those tests now target `stepSchema` directly (`src/__tests__/step-schema.test.ts`), including the `descend`-versus-`boundary` distinction the wrapper could not express. `walkPath` is the supported replacement for outside callers.
 
 Notably, the boundary rule needed no separate implementation once the walkers were consolidated. Reporting a `boundary` from one place meant every projection inherited it — the rule was never a policy anyone had to write down, only a question that had been asked in three places instead of one.
 
@@ -1379,7 +1381,7 @@ Selection of the most-used types. Full list in [Canonical symbols](#canonical-sy
 | `CALL`, `NATIVE`, `SUBSTRATE`, `BACKING_DOC`, `KIND`, `LAWS`, `POSITION`, `MIGRATION_CHAIN`, `INVALIDATE`, `REMOVE`, `TRANSACT`, `ADDRESS_TABLE` | various | Symbol-keyed runtime protocol tags. |
 | `Reader`, `PlainState` | `src/reader.ts` | Plain-state reader primitive. |
 | `Path`, `Segment`, `Address`, `AddressTableRegistry` | `src/path.ts` | Path and address types. |
-| `walkPath`, `PathWalk`, `foldPath`, `pathSchema`, `findOpaqueBoundary`, `OpaqueBoundaryHit`, `PathStepper`, `PathFoldResult`, `extendSchemaPathKey` | `src/fold-path.ts` | The one schema-guided traversal and its projections (the substrate-blind sibling of `Path.read(state)`), plus the shared binding-key accumulator. `findJsonBoundary` / `JsonBoundaryHit` remain as deprecated aliases. The single-step primitive `stepSchema` is package-internal by design — see [Why one traversal, not many](#why-one-traversal-not-many). |
+| `walkPath`, `PathWalk`, `foldPath`, `pathSchema`, `findOpaqueBoundary`, `OpaqueBoundaryHit`, `PathStepper`, `PathFoldResult`, `extendSchemaPathKey` | `src/fold-path.ts` | The one schema-guided traversal and its projections (the substrate-blind sibling of `Path.read(state)`), plus the shared binding-key accumulator. The single-step primitive `stepSchema` is package-internal by design — see [Why one traversal, not many](#why-one-traversal-not-many). |
 
 ## Build & Exports
 
@@ -1420,7 +1422,7 @@ dist/
 | File | Lines | Role |
 |------|-------|------|
 | `src/index.ts` | ~400 | Public barrel — exports every public symbol. |
-| `src/schema.ts` | ~800 | The grammar: types + `Schema.*` constructors + `stepSchema` (the total single-step descent) + `advanceSchema` (its public throwing wrapper) + `buildVariantMap` + `isNullableSum`. |
+| `src/schema.ts` | ~800 | The grammar: types + `Schema.*` constructors + `stepSchema` (the total single-step descent, package-internal) + `buildVariantMap` + `isNullableSum`. |
 | `src/bind.ts` | ~500 | `bind`, `BoundSchema`, `BoundReplica`, `BindingTarget`, `createBindingTarget`, `json`, `ephemeral`, resolve outcomes, `FactoryBuilder`. |
 | `src/substrate.ts` | ~300 | `Substrate<V>`, `Replica<V>`, factories, `BACKING_DOC`. Re-exports `computeSchemaHash` and `HASH_ALGORITHM_VERSION` from `src/hash.ts`. |
 | `src/migration.ts` | ~1000 | 14 primitives, 4 tiers, identity derivation, chain validation, `MIGRATION_CHAIN`. |
