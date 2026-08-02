@@ -162,6 +162,101 @@ describe("mergeStateTree over whole trees", () => {
     expect(merged.nested.z).toEqual([3, 700]) // only in remote
   })
 
+  // -------------------------------------------------------------------------
+  // The laws again, at tree level, over shapes that disagree with each other
+  // -------------------------------------------------------------------------
+
+  // Shape-stable trees: every peer agrees on which nodes are leaves and which
+  // are containers. This is what normal operation produces — shape comes from
+  // the schema, and even a delete preserves it, because deleting a record entry
+  // tombstones the leaves inside it rather than replacing the subtree with one
+  // tuple. The laws are guaranteed here, and this is the set that matters.
+  const TREES: StateTree[] = [
+    { k: { x: ["live", 100], y: [1, 100] } },
+    { k: { x: ["other", 100], y: [1, 100] } }, // ties with the above on x
+    { k: { x: ["live", 300], y: [1, 100] } },
+    { k: { x: [null, 200, true], y: [null, 200, true] } }, // deleted entry
+    { k: { x: [null, 100, true], y: [1, 100] } }, // partially tombstoned
+    { k: { x: ["live", 400], y: [9, 50] } },
+    { k: {} }, // empty container — distinct from a deleted one
+    {}, // key absent entirely
+  ]
+
+  const fresh = (tree: StateTree): StateTree =>
+    JSON.parse(JSON.stringify(tree)) as StateTree
+
+  const law = (
+    name: string,
+    check: (a: StateTree, b: StateTree, c: StateTree) => boolean,
+  ) => {
+    const divergent: string[] = []
+    for (const a of TREES) {
+      for (const b of TREES) {
+        for (const c of TREES) {
+          if (!check(a, b, c)) {
+            divergent.push(
+              `${name}: ${JSON.stringify(a)}, ${JSON.stringify(b)}, ${JSON.stringify(c)}`,
+            )
+          }
+        }
+      }
+    }
+    return divergent
+  }
+
+  it("is commutative over shape-stable trees", () => {
+    const divergent: string[] = []
+    for (const a of TREES) {
+      for (const b of TREES) {
+        const ab = mergeStateTree(fresh(a), fresh(b))
+        const ba = mergeStateTree(fresh(b), fresh(a))
+        if (JSON.stringify(ab) !== JSON.stringify(ba)) {
+          divergent.push(
+            `${JSON.stringify(a)} vs ${JSON.stringify(b)} → ${JSON.stringify(ab)} / ${JSON.stringify(ba)}`,
+          )
+        }
+      }
+    }
+    expect(divergent).toEqual([])
+  })
+
+  it("is associative over shape-stable trees", () => {
+    expect(
+      law("assoc", (a, b, c) => {
+        const left = mergeStateTree(
+          mergeStateTree(fresh(a), fresh(b)),
+          fresh(c),
+        )
+        const right = mergeStateTree(
+          fresh(a),
+          mergeStateTree(fresh(b), fresh(c)),
+        )
+        return JSON.stringify(left) === JSON.stringify(right)
+      }),
+    ).toEqual([])
+  })
+
+  it("is idempotent over shape-stable trees", () => {
+    for (const a of TREES) {
+      expect(JSON.stringify(mergeStateTree(fresh(a), fresh(a)))).toBe(
+        JSON.stringify(a),
+      )
+    }
+  })
+
+  it("resolves a leaf-versus-container shape conflict commutatively", () => {
+    // Well-formed peers cannot produce this — shape comes from the schema — so
+    // it is the degraded path for malformed or mismatched-schema payloads.
+    // Commutativity still holds, which the old "remote always wins" did not.
+    // Associativity deliberately does NOT hold and is not claimed: the losing
+    // side's contents are discarded, so no later merge can recover them.
+    const leaf: StateTree = { k: ["leaf", 300] }
+    const container: StateTree = { k: { x: [1, 100] } }
+    expect(mergeStateTree(fresh(leaf), fresh(container))).toEqual(
+      mergeStateTree(fresh(container), fresh(leaf)),
+    )
+  })
+
   it("does not alias the remote payload it merged from", () => {
     // The merged tree adopts remote's winning tuples. If it adopted them by
     // reference, a later local write would reach back and mutate a payload the

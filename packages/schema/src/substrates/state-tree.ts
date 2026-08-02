@@ -35,9 +35,18 @@ import { Zero } from "../zero.js"
 
 /**
  * The fundamental LWW field-level state element.
- * `[0]` is the scalar value (or structural zero), `[1]` is the wall-clock timestamp.
+ *
+ * `[0]` is the scalar value (or structural zero), `[1]` is the wall-clock
+ * timestamp, and `[2]` — when present and `true` — marks the tuple as a
+ * **tombstone**: the key was deleted at `[1]`, and reads project it as absent.
+ *
+ * The marker sits in its own slot rather than in the value because it must be
+ * out-of-band from the value domain. `null` is a legitimate value under a
+ * nullable schema, and any in-band sentinel (a magic string, a marker object)
+ * is something a `.json()` blob could legitimately contain. A third slot
+ * cannot be mistaken for a value a user wrote.
  */
-export type StateTuple = [value: unknown, timestamp: number]
+export type StateTuple = [value: unknown, timestamp: number, deleted?: boolean]
 
 /**
  * A recursive tree of tuples.
@@ -52,10 +61,70 @@ export type StateTree = StateTuple | Record<string, any>
 
 /**
  * Check if a StateTree node is a leaf tuple.
- * Because sequences are not supported by `state.bind`, any Array is a StateTuple.
+ *
+ * Because sequences are not supported by `state.bind`, any Array in a
+ * StateTree is a leaf — that is the real invariant, and this guard states it.
+ * There is deliberately no check on the tuple's length: the timestamp test
+ * already rules out an array too short to be a tuple, so an arity check would
+ * add only an upper bound, and an upper bound has to be revised every time the
+ * tuple grows a slot. Getting that wrong is expensive and quiet — a tuple the
+ * guard rejects is treated as a container, and its slots are then merged and
+ * projected as if they were keys.
  */
 export function isStateTuple(node: unknown): node is StateTuple {
-  return Array.isArray(node) && node.length === 2 && typeof node[1] === "number"
+  return Array.isArray(node) && typeof node[1] === "number"
+}
+
+/**
+ * A tombstone: a tuple recording that the key was deleted at its timestamp.
+ *
+ * Deletion has to be *represented* rather than expressed as absence, because
+ * `mergeStateTree` unions keys — a key missing from one peer is indistinguishable
+ * from one that peer has never seen, so a bare removal is resurrected by the
+ * next merge with anyone who still holds it.
+ */
+export function isTombstone(node: unknown): node is StateTuple {
+  return isStateTuple(node) && node[2] === true
+}
+
+/**
+ * Build a tombstone. The value slot is `null` and is never read: a tombstoned
+ * key projects as absent, so nothing consults what it used to hold.
+ */
+function tombstone(timestamp: number): StateTuple {
+  return [null, timestamp, true]
+}
+
+/**
+ * Mark an entire subtree deleted, tombstoning every leaf inside it.
+ *
+ * Deleting a record entry whose value is a struct could instead replace the
+ * whole subtree with one tombstone tuple, which is shorter. It does not,
+ * because that would make two peers disagree about the *shape* of a node — one
+ * holding a leaf exactly where the other still holds a container — and any
+ * merge rule that resolves a shape disagreement has to throw away one side's
+ * contents.
+ *
+ * Throwing contents away is what breaks associativity. With a leaf `L` at
+ * t=300 and containers `B` (newest leaf t=150) and `C` (newest leaf t=400):
+ * `(L ⊔ B) ⊔ C` lets L win the first join, discarding B's leaves, so C alone
+ * survives — while `L ⊔ (B ⊔ C)` merges B into C first and keeps them. Two
+ * peers given the same three updates in different orders would end up with
+ * different state, which is precisely what a CvRDT must never do.
+ *
+ * Tombstoning leaf-by-leaf keeps every node's shape stable, so the merge only
+ * ever joins leaf against leaf — where it is provably a lattice.
+ */
+function tombstoneSubtree(node: StateTree, timestamp: number): StateTree {
+  if (isStateTuple(node)) return tombstone(timestamp)
+  const marked: Record<string, StateTree> = {}
+  for (const key of Object.keys(node)) {
+    marked[key] = tombstoneSubtree(
+      (node as Record<string, StateTree>)[key],
+      timestamp,
+    )
+  }
+  return marked
 }
 
 // ---------------------------------------------------------------------------
@@ -114,6 +183,22 @@ export function joinTuples(local: StateTuple, remote: StateTuple): StateTuple {
 }
 
 /**
+ * The newest timestamp anywhere in a subtree.
+ *
+ * Containers have no timestamp of their own — only leaves are stamped — so
+ * this is what lets a leaf and a container be compared when one peer holds one
+ * and another peer holds the other at the same key.
+ */
+function subtreeTimestamp(node: StateTree): number {
+  if (isStateTuple(node)) return node[1]
+  let newest = 0
+  for (const key of Object.keys(node)) {
+    newest = Math.max(newest, subtreeTimestamp(node[key]))
+  }
+  return newest
+}
+
+/**
  * Schema-blind recursive merge of two StateTrees.
  *
  * This implements the $A \sqcup B$ join operation for the CvRDT.
@@ -141,15 +226,31 @@ export function mergeStateTree(local: StateTree, remote: StateTree): StateTree {
     return winner === local ? local : cloneTuple(winner)
   }
 
-  // Type mismatch fallback (should not happen with valid peer data,
-  // but if it does, LWW replacement is the safest degraded behavior).
+  // One side is a leaf where the other is a container — the two peers disagree
+  // about the SHAPE of this node. Well-formed peers cannot reach here: shape
+  // comes from the schema, and even a delete preserves it (see
+  // `tombstoneSubtree`). This is the degraded path for malformed or
+  // mismatched-schema payloads.
+  //
+  // A container carries no timestamp of its own, so compare on the newest
+  // timestamp anywhere inside it. That is commutative, which the previous
+  // "remote always wins" was not — it gave two peers merging in opposite
+  // directions different answers, the same defect the tuple join had.
+  //
+  // It is deliberately NOT claimed to be associative, and it is not: whichever
+  // side loses has its contents discarded, so a later merge cannot recover
+  // them and the grouping of three merges can change the result. Associativity
+  // cannot be recovered here without inventing a union of two disagreeing
+  // shapes. The real guarantee is upstream — normal operation keeps shapes
+  // stable, so the lattice laws hold on every tree a peer can actually produce.
   if (isStateTuple(local) || isStateTuple(remote)) {
-    // We cannot merge a tuple with an object. Remote wins (overwrite).
-    // Note: since we mutate local in place, if remote is an object,
-    // we just replace local entirely. However, we can't cleanly mutate a tuple
-    // into an object in-place in TS without returning it.
-    // The safest is to return the remote clone.
-    return deepClone(remote)
+    const localTimestamp = subtreeTimestamp(local)
+    const remoteTimestamp = subtreeTimestamp(remote)
+    if (remoteTimestamp > localTimestamp) return deepClone(remote)
+    if (localTimestamp > remoteTimestamp) return local
+    // Same rule as the tuple tie-break: greater serialisation wins, giving a
+    // total order both peers compute identically.
+    return valueRank(remote) > valueRank(local) ? deepClone(remote) : local
   }
 
   // Both are objects (containers). Union the keys.
@@ -218,9 +319,20 @@ function extractInto(
   target: PlainState,
   schema: SchemaNode | undefined,
   now: number | undefined,
-): { anyDecayed: boolean; maxTimestamp: number } {
+): {
+  anyDecayed: boolean
+  maxTimestamp: number
+  /** Whether this subtree should appear in the projection at all. */
+  kept: boolean
+} {
   let anyDecayed = false
   let maxTimestamp = 0
+  // A subtree drops out of the projection only when it is entirely tombstoned.
+  // Tracking "has a tombstone" separately from "has a live leaf" is what
+  // distinguishes a deleted entry from a legitimately EMPTY container: an
+  // empty record still projects as `{}`, while a deleted one is absent.
+  let anyLive = false
+  let anyTombstone = false
 
   for (const key of Object.keys(source)) {
     const child = source[key]
@@ -239,6 +351,13 @@ function extractInto(
       if (result.anyDecayed) {
         anyDecayed = true
       }
+      if (result.kept) {
+        anyLive = true
+      } else {
+        // Every leaf beneath it is tombstoned: the whole entry was deleted.
+        delete target[key]
+        anyTombstone = true
+      }
       maxTimestamp = Math.max(maxTimestamp, result.maxTimestamp)
       continue
     }
@@ -247,6 +366,15 @@ function extractInto(
     const childSchema = schema ? childSchemaForKey(schema, key) : undefined
 
     maxTimestamp = Math.max(maxTimestamp, child[1])
+
+    if (isTombstone(child)) {
+      // Deleted: present in the tree so the delete can replicate, absent from
+      // every read. The tuple stays; the projection drops it.
+      delete target[key]
+      anyTombstone = true
+      continue
+    }
+    anyLive = true
 
     const decayed =
       childSchema !== undefined &&
@@ -293,7 +421,7 @@ function extractInto(
     }
   }
 
-  return { anyDecayed, maxTimestamp }
+  return { anyDecayed, maxTimestamp, kept: anyLive || !anyTombstone }
 }
 
 /**
@@ -564,11 +692,24 @@ function applyMapChange(
   timestamp: number,
 ): void {
   for (const key of change.delete ?? []) {
-    // A plain local removal, which does NOT converge: `mergeStateTree` unions
-    // keys, so merging any peer that still holds this key resurrects it. The
-    // delete is visible locally and lost on the next sync. Converging deletion
-    // needs a tombstone, which is separate work.
-    delete target[key]
+    // A tombstone rather than a removal. `mergeStateTree` unions keys, so a
+    // key simply taken out of the tree is indistinguishable from one this peer
+    // has never seen, and the next merge with anyone still holding it brings
+    // it back.
+    //
+    // Concurrent add and remove resolve BY TIMESTAMP: a later add beats an
+    // earlier delete, and a later delete beats an earlier add. That is
+    // LWW-Element-Set behaviour, which is what a target advertising
+    // `lww-per-key` should do — and deliberately NOT an observed-remove
+    // (OR-Set), where a concurrent add always wins regardless of clock.
+    // Anyone reading the word "tombstone" is likely to assume OR-Set, so it is
+    // worth being explicit. For presence, LWW is also the behaviour you want:
+    // a peer that is removed and rejoins should be present again.
+    const existing = target[key]
+    target[key] =
+      existing === undefined
+        ? tombstone(timestamp)
+        : tombstoneSubtree(existing, timestamp)
   }
 
   for (const [key, value] of Object.entries(change.set ?? {})) {
@@ -620,11 +761,18 @@ export function syncStateTreeToShadow(
     }
   }
 
-  // Remove keys deleted from plain.
+  // A key present in the tree but absent from the plain value has been
+  // deleted, so it tombstones exactly as an explicit delete does. The two
+  // paths have to agree: otherwise a whole-value `.set()` that omits a key
+  // would converge differently from `delete(key)` on the same key.
+  //
+  // A key that is already tombstoned is left alone rather than re-stamped.
+  // Refreshing its timestamp on every unrelated whole-value write would let an
+  // old delete keep beating a newer remote re-add.
   for (const key of Object.keys(target)) {
-    if (!(key in plain)) {
-      delete target[key]
-    }
+    if (key in plain) continue
+    if (isTombstone(target[key])) continue
+    target[key] = tombstoneSubtree(target[key], timestamp)
   }
 }
 

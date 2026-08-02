@@ -26,6 +26,7 @@ import { stateSubstrateFactory } from "../substrates/state.js"
 import {
   applyChangeToStateTree,
   isStateTuple,
+  isTombstone,
   type StateTree,
 } from "../substrates/state-tree.js"
 
@@ -131,7 +132,9 @@ describe("a record decomposes into one tuple per key", () => {
 
     // `alice` appears in both `set` and `delete`, so the set wins.
     expect(asRecord(tree).peers.alice).toEqual([9, 200])
-    expect(asRecord(tree).peers.bob).toBeUndefined()
+    // `bob` was only deleted, so he is tombstoned rather than removed — the
+    // tuple has to stay in the tree for the delete to replicate.
+    expect(isTombstone(asRecord(tree).peers.bob)).toBe(true)
   })
 
   it("refuses a map change aimed at an atomic register", () => {
@@ -182,18 +185,16 @@ describe("two peers merge a roster without clobbering", () => {
     expect(peerA.reader.read(peersPath)).toEqual({ alice: 1, bob: 2 })
   })
 
-  it("a key deleted on one peer is resurrected by the other (not yet converging)", () => {
-    // Pinned as the current, known-wrong behaviour so the tombstone work has
-    // something concrete to flip. `mergeStateTree` unions keys, and an absent
-    // key is indistinguishable from one that never existed, so the delete is
-    // simply lost.
+  it("a key merely missing from an incoming payload is not a delete", () => {
+    // `mergeStateTree` unions keys, so absence carries no information: a key
+    // one peer lacks is indistinguishable from one it has never seen. This is
+    // exactly why deletion has to be represented rather than expressed by
+    // omission — see state-deletion.test.ts for the tombstone that does it.
     const peerA = stateSubstrateFactory.fromEntirety(
       payload({ peers: { alice: [1, 100] } }),
       Roster,
     )
-    // A deletes alice; B never saw the delete and still holds her.
     peerA.merge(payload({ peers: {} }))
-    peerA.merge(payload({ peers: { alice: [1, 100] } }))
 
     expect(peerA.reader.read(peersPath)).toEqual({ alice: 1 })
   })

@@ -1,5 +1,13 @@
 # Unreleased
 
+## Breaking
+
+- **`state` StateTuple gains a third slot** (`@kyneta/schema`) — `[value, timestamp]` becomes `[value, timestamp, deleted?]`, where the third element marks a tombstone. A 3-element array serialises and parses with no wire-format change, so nothing on the transport is affected, but a 2.x peer cannot read it: the old `isStateTuple` rejected a tuple on arity, so it would be treated as a container and projected as `{0: value, 1: timestamp, 2: true}`. Mixed-version `state` sync is out of contract in 3.0.0. `state` is `SYNC_EPHEMERAL`, so nothing persisted needs migrating.
+
+## Added
+
+- **Map deletes converge on the `state` substrate.** `mergeStateTree` unions keys, so absence carries no information — a key one peer lacks is indistinguishable from one it has never seen, and a removal survived only until the next merge with anyone who still held it. A `Schema.record` used as a roster could gain members but never lose them. A delete now writes a tombstone, which is an ordinary value that wins or loses by the normal rule, so the merge stays schema-blind for headless relays. Semantics are **LWW-Element-Set, not OR-Set**: concurrent add and remove resolve by timestamp, so a later add beats an earlier delete — for presence, a peer removed and rejoining should be present again. Deleting an entry whose value is a container tombstones the leaves inside it rather than replacing the subtree, which keeps every node's shape stable and so keeps the merge associative. Tombstones accumulate per *key*, not per operation — deleting replaces a tuple rather than adding one — so no collection mechanism is needed or provided. See `packages/schema/TECHNICAL.md` §"Deletion".
+
 ## Fixed
 
 - **`Schema.record` is usable on the `state` substrate.** Every map write threw `TypeError: Cannot convert undefined or null to object`. `applyChangeToStateTree` read a `MapChange` shape the change vocabulary has never defined — per-key `{type: "set" | "delete"}` instructions under an `.entries` property — where the real change carries `set` (a key→value object) and `delete` (an array of keys). Both call sites, root and nested, carried the same mistake, and no test covered a record key write on `state`, so it survived. The two sites are now one shared helper. This unblocks the presence-roster shape the substrate exists for: a record keyed by peer, each peer writing only its own key. Note that a `delete` is still a local removal only — it does not survive a merge with a peer that has not seen it. See below.
