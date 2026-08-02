@@ -1200,9 +1200,23 @@ export function storageClass(schema: Schema): StorageClass {
  * Whether a schema node is stored as one opaque plain value by the substrates.
  *
  * Named to match the vocabulary around it — `findOpaqueBoundary`,
- * `OpaqueBoundaryHit`, and `walkPath`'s `boundary` stop all mean this. Exported
- * so anything in the package that needs the notion can share this one, rather
- * than rewriting the disjunction; deliberately not re-exported from `index.ts`.
+ * `OpaqueBoundaryHit`, and `walkPath`'s `boundary` stop all mean this. Its
+ * callers are `stepSchema` just above, and `validateDecayConstraints`
+ * (`bind.ts`), which needs to know where a register begins.
+ *
+ * Exported package-internally, while `stepSchema` right beside it deliberately
+ * is not — worth explaining, because the two look like the same kind of thing.
+ * `stepSchema` returns a tagged result, and every tag demands a *policy* from
+ * whoever receives it: stop or keep going at a boundary, throw or answer
+ * `undefined` on a mismatch, what to accumulate across a loop. Handing that out
+ * is what makes a divergent walker easy to write, which is how the traversal
+ * consolidation came apart once already.
+ *
+ * A predicate carries no policy. There is one correct answer and nothing to
+ * accumulate, so no two consumers can drift. Withholding it would not prevent a
+ * second copy either — `isJsonBoundary` and `KIND` are both public, so the
+ * disjunction is one line away — it would only guarantee the copy is
+ * hand-written, and that it silently stops matching `storageClass`.
  */
 export function isOpaqueBoundary(schema: Schema): boolean {
   return storageClass(schema) === "opaque-composite"

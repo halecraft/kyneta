@@ -121,7 +121,7 @@ describe("durable substrate rejects .decay()", () => {
     })
 
     // Constructing a binding with SYNC_COLLABORATIVE directly should throw
-    // because bind() runs validateSyncModeConstraints.
+    // because bind() runs validateDecayConstraints.
     expect(() =>
       bind({
         schema,
@@ -453,5 +453,74 @@ describe("extractPlainState schema-aware projection", () => {
     const user = target.user as Record<string, unknown>
     expect(user.presence).toBe("")
     expect(user.name).toBe("alice")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Where `.decay()` may sit
+// ---------------------------------------------------------------------------
+//
+// Decay works per leaf tuple: it compares one stored timestamp against `now`.
+// A sum variant or a `.json()` blob is stored as ONE tuple holding the whole
+// value, so a field inside it has no timestamp of its own and can never age out
+// on its own. Setting `decayMs` there used to bind cleanly and then silently
+// never fire — the failure profile this codebase keeps getting caught by.
+
+describe("decay placement relative to an opaque boundary", () => {
+  it("is legal ON a sum — the whole variant decays together", () => {
+    const schema = Schema.struct({
+      opt: Schema.struct({ a: Schema.number() }).nullable().decay(1000),
+    })
+    expect(() => state.bind(schema)).not.toThrow()
+  })
+
+  it("is legal ON a .json() node", () => {
+    const schema = Schema.struct({
+      blob: Schema.struct.json({ a: Schema.number() }).decay(1000),
+    })
+    expect(() => state.bind(schema)).not.toThrow()
+  })
+
+  it("is rejected INSIDE a sum variant", () => {
+    const schema = Schema.struct({
+      opt: Schema.struct({ a: Schema.number().decay(1000) }).nullable(),
+    })
+    expect(() => state.bind(schema)).toThrow(/one register with a single/)
+  })
+
+  it("is rejected INSIDE a .json() blob", () => {
+    const schema = Schema.struct({
+      blob: Schema.struct.json({ a: Schema.number().decay(1000) }),
+    })
+    expect(() => state.bind(schema)).toThrow(/one register with a single/)
+  })
+
+  it("is rejected on a record item nested inside a .json() blob", () => {
+    // The flag propagates through every level below the boundary, so this needs
+    // no special branch. Asserted rather than assumed, because "it falls out of
+    // the recursion" is exactly the kind of claim that turns out to be wrong.
+    const schema = Schema.struct({
+      blob: Schema.struct.json({
+        m: Schema.record(Schema.number().decay(1000)),
+      }),
+    })
+    expect(() => state.bind(schema)).toThrow(/one register with a single/)
+  })
+
+  it("names the fix rather than only the prohibition", () => {
+    const schema = Schema.struct({
+      opt: Schema.struct({ a: Schema.number().decay(1000) }).nullable(),
+    })
+    expect(() => state.bind(schema)).toThrow(/Move \.decay\(\) onto the sum/)
+  })
+
+  it("reports the durable rule first when a schema breaks both", () => {
+    // Independent problems: fixing either leaves the other. Leading with the
+    // boundary message would tell someone to move an annotation when their real
+    // problem is that `json` supports no decay anywhere.
+    const schema = Schema.struct({
+      opt: Schema.struct({ a: Schema.number().decay(1000) }).nullable(),
+    })
+    expect(() => json.bind(schema)).toThrow(/do not support \.decay\(\)/)
   })
 })

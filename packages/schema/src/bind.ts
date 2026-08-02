@@ -40,7 +40,7 @@ import type {
   ProductSchema,
   Schema as SchemaNode,
 } from "./schema.js"
-import { KIND } from "./schema.js"
+import { isOpaqueBoundary, KIND } from "./schema.js"
 import type {
   ReplicaFactory,
   SubstrateFactory,
@@ -311,10 +311,12 @@ export function bind<S extends SchemaNode>(config: {
 }): BoundSchema<S> {
   const schemaHash = computeSchemaHash(config.schema)
 
-  // Validate sync-mode constraints: `.decay()` is structurally illegal on
-  // durable substrates (history cannot be retroactively forgotten).
-  // Runs before any other work so the error fires loudly at module load.
-  validateSyncModeConstraints(config.schema, config.syncMode)
+  // Validate where `.decay()` may sit: never on a durable substrate (history
+  // cannot be retroactively forgotten), and never below an opaque boundary
+  // (everything inside a register shares one timestamp, so a field within it
+  // has nothing of its own to age out). Runs before any other work so the
+  // error fires loudly at module load.
+  validateDecayConstraints(config.schema, config.syncMode)
 
   // Derive identity binding from the migration chain (if present).
   const chain = getMigrationChain(config.schema)
@@ -527,7 +529,7 @@ export const state: BindingTarget<EphemeralLaws, PlainNativeMap> =
   })
 
 // ---------------------------------------------------------------------------
-// validateSyncModeConstraints — reject `.decay()` on durable substrates
+// validateDecayConstraints — where `.decay()` may legally sit
 // ---------------------------------------------------------------------------
 
 /**
@@ -538,49 +540,86 @@ export const state: BindingTarget<EphemeralLaws, PlainNativeMap> =
 const MAX_VALIDATE_DEPTH = 1000
 
 /**
- * Recursively walk a schema graph, rejecting `.decay()` on non-ephemeral
- * sync modes.
+ * Recursively walk a schema graph, rejecting `.decay()` where it cannot work.
  *
- * `.decay()` is a projection-only property of the local shadow — it cannot
- * retroactively forget durable history. Allowing it on a persistent
- * substrate would be a math-vs-projection contradiction: the history log
- * would still carry the timed-out value, but the shadow would pretend it
- * was gone. We surface the contradiction loudly, at `bind()` time, rather
- * than letting it manifest as a silent divergence later.
+ * Two rules, both about `.decay()`, checked in this order because they are not
+ * peers — the second is a refinement of the first.
+ *
+ * **1. Not on a durable or collaborative substrate.** `.decay()` is a
+ * projection-only property of the local shadow — it cannot retroactively
+ * forget durable history. Allowing it on a persistent substrate would be a
+ * math-vs-projection contradiction: the history log would still carry the
+ * timed-out value, but the shadow would pretend it was gone. We surface the
+ * contradiction loudly, at `bind()` time, rather than letting it manifest as a
+ * silent divergence later.
+ *
+ * **2. Not below an opaque boundary.** Decay works per leaf tuple, by testing
+ * one stored timestamp against `now`. A `sum` variant or a `.json()` blob is
+ * stored as ONE tuple holding the whole value, so a field inside it has no
+ * timestamp of its own and can never age out independently. Setting `decayMs`
+ * there used to bind cleanly and then silently never fire.
+ *
+ * The order matters for the message a caller gets. A schema can break both
+ * rules at once, and the two are independent — fixing either leaves the other
+ * — so leading with the boundary rule would tell someone to move an annotation
+ * when their real problem is that the substrate supports no decay at all.
+ * Asking "where may decay sit" only makes sense once decay is permitted
+ * somewhere, which is why rule 2 is nested inside rule 1's negation.
  *
  * Visited-set is intentionally omitted: legitimate shared-node DAGs (a
  * `Schema.string()` reused across many fields) would false-positive.
  * A depth cap converts cycles into a clear error instead.
  */
-export function validateSyncModeConstraints(
+export function validateDecayConstraints(
   schema: SchemaNode,
   syncMode: SyncMode,
 ): void {
   const isEphemeral = syncMode.durability === "transient"
-  walk(schema, 0)
+  walk(schema, 0, false)
 
-  function walk(node: SchemaNode, depth: number): void {
+  /**
+   * `belowBoundary` is true once the walk has descended *through* a sum or
+   * `.json()` node. It is raised for a node's children rather than for the node
+   * itself, which is what keeps `.decay()` legal ON a boundary — the register
+   * is one tuple with one timestamp, so the whole variant decaying together is
+   * coherent — while rejecting it anywhere underneath.
+   */
+  function walk(node: SchemaNode, depth: number, belowBoundary: boolean): void {
     if (depth > MAX_VALIDATE_DEPTH) {
       throw new Error(
-        `validateSyncModeConstraints: schema nesting exceeds limit (${MAX_VALIDATE_DEPTH}) — cycle or pathological depth`,
+        `validateDecayConstraints: schema nesting exceeds limit (${MAX_VALIDATE_DEPTH}) — cycle or pathological depth`,
       )
     }
 
-    if (!isEphemeral && (node as { decayMs?: number }).decayMs !== undefined) {
-      throw new Error(
-        "Durable and collaborative substrates do not support .decay(). " +
-          "Time-decay is ephemeral-only: the local shadow reverts to its " +
-          "structural zero after `decayMs`, but durable history cannot be " +
-          "retroactively forgotten. Bind this schema via `state` or " +
-          "`ephemeral` instead.",
-      )
+    if ((node as { decayMs?: number }).decayMs !== undefined) {
+      if (!isEphemeral) {
+        throw new Error(
+          "Durable and collaborative substrates do not support .decay(). " +
+            "Time-decay is ephemeral-only: the local shadow reverts to its " +
+            "structural zero after `decayMs`, but durable history cannot be " +
+            "retroactively forgotten. Bind this schema via `state` or " +
+            "`ephemeral` instead.",
+        )
+      }
+      if (belowBoundary) {
+        throw new Error(
+          ".decay() cannot be set inside a sum variant or a .json() blob. " +
+            "The whole value is stored as one register with a single " +
+            "timestamp, so a field inside it has nothing of its own to age " +
+            "out. Move .decay() onto the sum or .json() node itself if the " +
+            "whole value should decay together.",
+        )
+      }
     }
+
+    // Raised for the children, not for this node — see `belowBoundary` above.
+    const childrenAreBelowBoundary = belowBoundary || isOpaqueBoundary(node)
 
     switch (node[KIND]) {
       case "product": {
         const fields = (node as { fields: Record<string, SchemaNode> }).fields
         for (const key of Object.keys(fields)) {
-          walk(fields[key] as SchemaNode, depth + 1)
+          walk(fields[key] as SchemaNode, depth + 1, childrenAreBelowBoundary)
         }
         return
       }
@@ -589,12 +628,16 @@ export function validateSyncModeConstraints(
       case "set":
       case "tree":
       case "movable":
-        walk((node as { item: SchemaNode }).item, depth + 1)
+        walk(
+          (node as { item: SchemaNode }).item,
+          depth + 1,
+          childrenAreBelowBoundary,
+        )
         return
       case "sum": {
         const variants = (node as { variants: readonly SchemaNode[] }).variants
         for (const variant of variants) {
-          walk(variant, depth + 1)
+          walk(variant, depth + 1, childrenAreBelowBoundary)
         }
         return
       }
