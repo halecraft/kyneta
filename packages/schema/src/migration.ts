@@ -31,7 +31,7 @@ import {
  *
  * Structurally identical to `ProductSchema` — all existing code that
  * accepts `ProductSchema` continues to work. The migration chain is
- * invisible to `canonicalizeSchema`, `advanceSchema`, `Object.keys`,
+ * invisible to `canonicalizeSchema`, `walkPath`, `Object.keys`,
  * and `JSON.stringify`.
  *
  * The type parameter `S` anchors the structural shape so that

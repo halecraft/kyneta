@@ -335,22 +335,3 @@ export function findOpaqueBoundary(
     boundarySegment: path.segments[prefixLength] as Segment,
   }
 }
-
-// ---------------------------------------------------------------------------
-// Deprecated aliases
-// ---------------------------------------------------------------------------
-
-/**
- * @deprecated Renamed to {@link OpaqueBoundaryHit}. The old name described only
- * `.json()` boundaries, from when those were the only kind. Sums are reported
- * too, and always were meant to be.
- */
-export type JsonBoundaryHit = OpaqueBoundaryHit
-
-/**
- * @deprecated Renamed to {@link findOpaqueBoundary}, which is what it actually
- * finds: `.json()` nodes *and* sums. Kept because it is exported from the
- * package root, and renaming should not break downstream callers over what is
- * otherwise an internal correctness fix.
- */
-export const findJsonBoundary = findOpaqueBoundary

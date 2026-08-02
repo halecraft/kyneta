@@ -13,7 +13,7 @@
 //
 // `findOpaqueBoundary` reports both kinds of boundary alike. It used to report
 // only `.json()` nodes, and sums failed two ways as a result: a write *inside*
-// one threw out of `advanceSchema`, and a collection mutation *at* one threw
+// one threw out of the schema descent, and a collection mutation *at* one threw
 // out of the direct write path looking for a container that was never created.
 //
 // The `.json()` cases here are regression guards, not aspirations. `list.json`

@@ -72,7 +72,7 @@ export interface Op<C extends ChangeBase = ChangeBase> {
  *   The map changefeed needs the structural event for dynamic subscription
  *   management (`handleStructuralChange`).
  *
- * The schema determines which case applies. `advanceSchema` walks the
+ * The schema determines which case applies. `pathSchema` walks the
  * schema tree to the op's path; the structural kind there decides.
  *
  * Root path (length 0) is always expanded — this covers `_props` scalar
@@ -161,8 +161,8 @@ function resolveSchemaKindAtPath(
     // foldPath's short-circuit) — the kind classifier maps "sum" to
     // "other" since the variant cannot be determined without a value.
     // The try/catch still covers structural mismatches (unknown field,
-    // index-on-non-sequence) that `advanceSchema` throws on from inside
-    // `foldPath`.
+    // index-on-non-sequence): `walkPath` reports those as a `mismatch`, and
+    // `foldPath` turns a mismatch into a throw.
     const current = pathSchema(schema, path)
     if (current[KIND] === "product") return "product"
     if (current[KIND] === "map") return "map"

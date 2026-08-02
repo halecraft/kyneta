@@ -514,18 +514,18 @@ function leafTuple(value: unknown, timestamp: number): StateTuple {
  * is handed. That makes failure quiet and permissive, so it matters a great
  * deal which paths fail.
  *
- * This used to wrap `advanceSchema` in a `try/catch`, which caught two very
- * different things with one net. A genuinely malformed path — an unknown field,
- * say — is fine to answer with `undefined`. But `advanceSchema` also throws on
- * a `sum`, and a path leading into a sum is perfectly legitimate; it just needs
- * the *value* to resolve, not the schema. Swallowing that one meant a write
- * aimed inside a register came back `undefined`, the caller decomposed the
- * register, and every sibling field the change never mentioned was dropped.
+ * This used to wrap a *throwing* single-step descent in a `try/catch`, which
+ * caught two very different things with one net. A genuinely malformed path —
+ * an unknown field, say — is fine to answer with `undefined`. But that descent
+ * also threw on a `sum`, and a path leading into a sum is perfectly legitimate;
+ * it just needs the *value* to resolve, not the schema. Swallowing that one
+ * meant a write aimed inside a register came back `undefined`, the caller
+ * decomposed the register, and every sibling field the change never mentioned
+ * was dropped.
  *
  * `walkPath` separates the two: a `mismatch` is a real malformed path and still
- * yields `undefined`, while a `boundary` yields the register's own schema. It
- * also drops the `try/catch`, which was broad enough to hide bugs inside
- * `advanceSchema` itself.
+ * yields `undefined`, while a `boundary` yields the register's own schema. The
+ * `try/catch` went with it — it was broad enough to hide unrelated bugs.
  */
 function schemaAtPath(
   root: SchemaNode | undefined,

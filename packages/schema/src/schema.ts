@@ -1094,41 +1094,6 @@ export function isNullableSum(schema: PositionalSumSchema): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// advanceSchema — pure schema descent for a single path segment
-// ---------------------------------------------------------------------------
-
-/**
- * Given a schema node and a path segment, returns the child schema at
- * that position.
- *
- * This is the pure schema descent extracted from the logic implicit in
- * `interpretImpl`'s field/item path construction. It walks one step
- * down the schema tree — no store access, no Loro dependency.
- *
- * First-class types are dispatched directly:
- * - `text` / `counter` — leaf types, cannot advance (throws)
- * - `set` — advance to `.item` on any key (like map)
- * - `tree` — advance to `.item` then descend (like product)
- * - `movable` — advance to `.item` on index (like sequence)
- *
- * Sum types are never advanced through — sums resolve by value (store
- * inspection), not by path segment. If a field's schema is a sum,
- * `advanceSchema` on the parent product returns the sum as-is.
- *
- * @throws If the segment type doesn't match the schema kind (e.g.,
- *   index segment on a product, or key segment on a scalar).
- */
-export function advanceSchema(schema: Schema, segment: Segment): Schema {
-  const step = stepSchema(schema, segment)
-  if (step.kind === "mismatch") throw new Error(step.reason)
-  // `boundary` returns rather than throws, which preserves two long-standing
-  // behaviours: descending TO a sum hands back the sum itself, and descending
-  // INTO a `.json()` subtree keeps working. Only `walkPath` treats a boundary
-  // as a reason to stop.
-  return step.schema
-}
-
-// ---------------------------------------------------------------------------
 // stepSchema — the total single step
 // ---------------------------------------------------------------------------
 
@@ -1154,9 +1119,9 @@ export type SchemaStep =
 /**
  * Move one path segment down the schema tree. Never throws.
  *
- * This is the whole of {@link advanceSchema}'s logic, with one difference that
- * matters: the case where a path is *legitimate* but the schema cannot follow
- * it is reported as data rather than raised as an error.
+ * The case where a path is *legitimate* but the schema cannot follow it is
+ * reported as data rather than raised as an error, and that difference is the
+ * point of the function.
  *
  * That case is worth spelling out, because it does not look special. A sum
  * chooses its variant by inspecting the value, so a path like `optional.to` is
@@ -1205,11 +1170,11 @@ function isOpaque(schema: Schema): boolean {
  * one place, so the callers that throw and the callers that do not cannot
  * drift apart in their wording.
  *
- * The messages are prefixed `stepSchema:` because that is the function a
- * reader can actually find in the call path: these strings reach users as
- * `walkPath`'s `mismatch` reason, which `foldPath` then throws. They used to
- * name `advanceSchema`, a wrapper no traversal calls, which sent anyone
- * grepping the error text to a dead end.
+ * The messages are prefixed `stepSchema:` because that is the function that
+ * produces them: these strings reach users as `walkPath`'s `mismatch` reason,
+ * which `foldPath` then throws. They previously named a public wrapper that no
+ * traversal called and which has since been removed, so anyone who grepped the
+ * error text landed nowhere.
  */
 function childSchema(schema: Schema, segment: Segment): Schema | string {
   switch (schema[KIND]) {
@@ -1244,7 +1209,9 @@ function childSchema(schema: Schema, segment: Segment): Schema | string {
 
     // Stepping *from* a sum, as opposed to landing on one. A walker that
     // honours `boundary` stops before it can get here, so this is unreachable
-    // from `walkPath` — it exists for `advanceSchema`'s direct callers.
+    // from `walkPath`. It is kept because `stepSchema` is total: every schema
+    // kind needs an answer, and "you cannot ask the schema this" is the honest
+    // one for a sum, which resolves by inspecting a value instead.
     case "sum":
       return `stepSchema: cannot advance through a sum (sums resolve by value, not by path segment)`
 

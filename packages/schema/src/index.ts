@@ -116,7 +116,6 @@ export { subscribe, subscribeNode } from "./facade/observe.js"
 // easy, and that is what this module exists to prevent.
 export type {
   /** @deprecated Use `OpaqueBoundaryHit`. */
-  JsonBoundaryHit,
   OpaqueBoundaryHit,
   PathFoldResult,
   PathStepper,
@@ -125,7 +124,6 @@ export type {
 export {
   extendSchemaPathKey,
   /** @deprecated Use `findOpaqueBoundary`. */
-  findJsonBoundary,
   findOpaqueBoundary,
   foldPath,
   pathSchema,
@@ -453,7 +451,6 @@ export type {
 } from "./schema.js"
 // Schema — unified recursive grammar (backend-agnostic)
 export {
-  advanceSchema,
   buildVariantMap,
   isJsonBoundary,
   isNullableSum,

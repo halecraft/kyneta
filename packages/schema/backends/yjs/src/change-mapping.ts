@@ -478,7 +478,7 @@ export function eventsToOps(
  * without crossing a runtime-keyed container. A declared struct field
  * nested under a `record(...)` value type is reachable via Yjs but
  * absent from `binding.inverse` — without the schema walk it would be
- * misclassified as an entry and then rejected by `advanceSchema`.
+ * misclassified as an entry and then reported as a path mismatch.
  */
 function yjsPathToKynetaPath(
   yjsPath: (string | number)[],
