@@ -91,12 +91,12 @@ Port `@kyneta/sse-transport` and build the chat example. Introduces text CRDTs, 
 
 ### Phase 4: Bumper-cars ✅
 
-Build the bumper-cars example. Demonstrates heterogeneous merge strategies in one Exchange: sequential (`json.bind` for server-authoritative game state including scoreboard) and ephemeral (`json.bind(schema, "ephemeral")` for ephemeral player input). Zero CRDT dependencies — plain substrate only, because the server is the single writer for game state and scores.
+Build the bumper-cars example. Demonstrates heterogeneous merge strategies in one Exchange: sequential (`json.bind` for server-authoritative game state including scoreboard) and ephemeral (`ephemeral.bind` for player input). Zero CRDT dependencies — plain substrate only, because the server is the single writer for game state and scores.
 
 - Domain: two schemas, two `BoundSchema` declarations, physics engine, pure `tick()` functional core
 - Server: Bun, `Bun.build()` for client, game loop at 60fps with Gather → Plan → Execute pattern, `route`/`authorize`/`onDocDiscovered`/`onDocDismissed`
 - Client: React (JSX via Bun, no Vite), joystick input writing to LWW doc via throttled `useInputSender`, rendering from sequential game-state doc (cars + scores + tick)
-- Key point: no special "presence" or "ephemeral" API — ephemeral state is `json.bind(schema, "ephemeral")` + `exchange.get()`, same as everything else. No CRDT needed when the server is the single writer.
+- Key point: no special "presence" or "ephemeral" API — ephemeral state is `ephemeral.bind(schema)` + `exchange.get()`, same as everything else. No CRDT needed when the server is the single writer.
 
 ### Phase 5: WebRTC transport + video-conference
 
