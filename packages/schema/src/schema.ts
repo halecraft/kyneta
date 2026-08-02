@@ -1170,11 +1170,11 @@ function isOpaque(schema: Schema): boolean {
  * one place, so the callers that throw and the callers that do not cannot
  * drift apart in their wording.
  *
- * The messages are prefixed `stepSchema:` because that is the function that
- * produces them: these strings reach users as `walkPath`'s `mismatch` reason,
- * which `foldPath` then throws. They previously named a public wrapper that no
- * traversal called and which has since been removed, so anyone who grepped the
- * error text landed nowhere.
+ * The messages name `stepSchema` because that is where they come from. They
+ * reach a user as `walkPath`'s `mismatch` reason, which `foldPath` turns into a
+ * throw — so the prefix has to name a function that appears in that path.
+ * Naming anything else, however sensible it looks from a particular call site,
+ * sends whoever greps the error text somewhere that cannot explain it.
  */
 function childSchema(schema: Schema, segment: Segment): Schema | string {
   switch (schema[KIND]) {

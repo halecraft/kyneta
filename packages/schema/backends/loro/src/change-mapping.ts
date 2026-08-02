@@ -294,8 +294,8 @@ export function changeToDiff(
   // Invariant: no sum schema mid-walk. Non-replace change types cannot
   // originate from sum-interior paths (PlainSchema excludes all CRDT
   // types); replace changes are dispatched early above. If the invariant
-  // were violated, `pathSchema` would return the sum schema (rather than
-  // throwing, as the older single-step descent did); the downstream
+  // were violated, `pathSchema` would return the sum schema rather than
+  // signalling anything; the downstream
   // switch then receives a sum schema for a non-replace change — same
   // effective failure mode (malformed write), different surface.
   const targetSchema = pathSchema(schema, path)

@@ -11,12 +11,10 @@
 //             against the value instead
 //   mismatch  the path does not fit the schema, with a ready-to-use reason
 //
-// This suite previously tested a public wrapper that threw on a mismatch and
-// had no production callers, so the package's most thorough descent coverage
-// pointed at the one entry point nothing used. That wrapper is now gone.
-// Asserting on the returned tag rather than on a thrown message is also the
-// better test: it is data, and it distinguishes `descend` from `boundary`,
-// which the wrapper collapsed into "returned a schema".
+// Assertions here read the returned tag rather than catching a thrown message.
+// That is deliberate: the tag is data, and it separates `descend` from
+// `boundary` — a distinction any throw-or-return API has to flatten into a
+// single "it worked", because both cases hand back a schema.
 //
 // The boundary rule is covered at the traversal level too, in fold-path.test.ts
 // — including the subtler question of *when* a fold stops. What is pinned here

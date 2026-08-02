@@ -469,8 +469,9 @@ describe("walkPath", () => {
   })
 
   it("never throws, however deep a path runs past a sum", () => {
-    // The regression pin. Walking past a sum used to reach a throwing descent
-    // and raise, which is how the reported crash happened.
+    // The regression pin, and the reported crash: a path running past a sum
+    // must not raise. Descending into the sum instead of reporting a boundary
+    // is what made it raise.
     const schema = Schema.struct({ v: Inner.nullable() })
     const deep = RawPath.empty.field("v").field("to").field("a").field("b")
     expect(() => walkPath(undefined, schema, deep)).not.toThrow()
