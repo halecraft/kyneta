@@ -489,4 +489,4 @@ Every test file is pure — no I/O, no timers. The cross-validation suites (`tes
 
 The Unified CCS Engine Specification in `theory/unified-engine.md` is the reference document. Every invariant in this TECHNICAL.md traces to a `§` reference there; the specification overrules this document wherever they differ.
 
-**Tests**: 1,374 passed, 0 skipped across 35 files. Run with `cd experimental/perspective && pnpm exec vitest run`.
+**Run tests**: `cd experimental/perspective && pnpm exec vitest run`

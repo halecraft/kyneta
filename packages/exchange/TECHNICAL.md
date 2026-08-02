@@ -873,7 +873,7 @@ Tests use real `BridgeTransport` pairs from `@kyneta/bridge-transport` for multi
 
 The `line.test.ts` file alone runs ~50 scenarios including relay topology, hub-and-spoke, and one-way flow — validating that `Line`'s durability surface works end-to-end through real transports.
 
-**Tests**: 420 passed, 0 skipped across 17 files (notable files: `line.test.ts` at 50 tests, full doc lifecycle and governance suites). Run with `cd packages/exchange && pnpm exec vitest run`.
+**Run tests**: `cd packages/exchange && pnpm exec vitest run`
 
 Cross-package integration tests live in `tests/integration/` (workspace
 package `@kyneta/test-integration`, private). Files in that suite use

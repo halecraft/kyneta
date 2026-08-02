@@ -293,4 +293,4 @@ const exchange = new Exchange({
 
 `createWsClientProgram` is a pure `Program`, so `client-program.test.ts` dispatches messages and asserts on the returned `[state, ...effects]` tuple. No real sockets, no real timers (`vi.useFakeTimers` where time is relevant). `client-transport.test.ts` uses a minimal `WebSocketLike` stub to verify the imperative shell schedules the right effects. The drain core is tested purely (`drain.test.ts`); `drainConnections` and the stop-accepting guard are tested in `server-transport.test.ts` with `vi.useFakeTimers()`, a pinned `randomFn`, and the `mock-socket.ts` helper (whose `close()` fires `onClose`, the signal the drain awaits).
 
-**Tests**: 68 passed, 0 skipped across 4 files (`client-program.test.ts`: 51, `client-transport.test.ts`: 5, `drain.test.ts`: 7, `server-transport.test.ts`: 5). Run with `cd packages/exchange/transports/websocket && pnpm exec vitest run`.
+**Run tests**: `cd packages/exchange/transports/websocket && pnpm exec vitest run`

@@ -469,15 +469,15 @@ isDOMProducing({ kind: "statement" })  // false
 | `src/walk.ts` | 565 | Generator-based walker + `WalkEvent` types. |
 | `src/transforms.ts` | 226 | `dissolveConditionals`, `filterTargetBlocks`, `mergeSiblings`. |
 | `src/html-constants.ts` | ~ | `escapeHtml`, `VOID_ELEMENTS`. |
-| `src/__tests__/analyze.test.ts` | — | AST → IR: 68 tests covering every node kind + classification path. |
-| `src/__tests__/expression-build.test.ts` | — | 80 tests over `ExpressionIR` construction. |
-| `src/__tests__/expression-ir.test.ts` | — | 157 tests over expression-level types. |
+| `src/__tests__/analyze.test.ts` | — | AST → IR: covers every node kind + classification path. |
+| `src/__tests__/expression-build.test.ts` | — | covers `ExpressionIR` construction. |
+| `src/__tests__/expression-ir.test.ts` | — | covers expression-level types. |
 | `src/__tests__/ir.test.ts` | 954 | Core IR predicates + type guards. |
-| `src/__tests__/template.test.ts` | 817 | 49 tests: template extraction, hole assignment, `planWalk`. |
-| `src/__tests__/walk.test.ts` | 561 | 27 tests: walker event order for every IR shape. |
-| `src/__tests__/transforms.test.ts` | 1050 | 30 tests: `dissolveConditionals`, `filterTargetBlocks`, `mergeSiblings`. |
+| `src/__tests__/template.test.ts` | 817 | template extraction, hole assignment, `planWalk`. |
+| `src/__tests__/walk.test.ts` | 561 | walker event order for every IR shape. |
+| `src/__tests__/transforms.test.ts` | 1050 | `dissolveConditionals`, `filterTargetBlocks`, `mergeSiblings`. |
 | `src/__tests__/tree-merge.test.ts` | 560 | Sibling-merge edge cases. |
-| `src/__tests__/binding-scope.test.ts` | — | 17 binding-resolution tests (under `binding-analysis.test.ts`). |
+| `src/__tests__/binding-scope.test.ts` | — | Binding-resolution tests (under `binding-analysis.test.ts`). |
 | `src/__tests__/binding-analysis.test.ts` | — | Transitive-binding dependency extraction. |
 | `src/__tests__/classify.test.ts` | — | Classification: structural / item / external. |
 | `src/__tests__/patterns.test.ts` | 575 | 19 filter-pattern detection tests. |
@@ -487,6 +487,6 @@ isDOMProducing({ kind: "statement" })  // false
 
 Tests exercise each pass in isolation (AST → IR → classification → templates → walk → transforms) plus end-to-end compilation of realistic builder patterns from `examples/`. No rendering target is invoked; the tests assert on IR structure and walker event streams.
 
-The largest suites are `expression-build.test.ts` (80 tests, ~5s) and `analyze.test.ts` (68 tests, ~4s) — they run real TypeScript parsing through ts-morph, so they dominate wall time. All other suites run in milliseconds.
+The slowest suites are `expression-build.test.ts` and `analyze.test.ts` — they run real TypeScript parsing through ts-morph, so they dominate wall time. All other suites run in milliseconds.
 
-**Tests**: 547 passed, 0 skipped across 13 files (`analyze`: 68, `expression-build`: 80, `expression-ir`: 157, `ir`: core IR type guards, `template`: 49, `walk`: 27, `transforms`: 30, `tree-merge`: ~, `patterns`: 19, `binding-scope`: ~, `binding-analysis`: 17, `filter-integration`: 4, plus classify). Run with `cd experimental/compiler && pnpm exec vitest run`.
+**Run tests**: `cd experimental/compiler && pnpm exec vitest run`

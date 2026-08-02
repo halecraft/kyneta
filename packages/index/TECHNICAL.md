@@ -258,7 +258,7 @@ Given a `Source<A>` and a per-outer-entry projection to `Source<B>`, produce a `
 
 Default flat-key composition: `outerKey + "\0" + innerKey`. Override via `options.key`.
 
-This is the standard flat-map shape, applied at the ℤ-set layer. It's bilinear in the DBSP sense — incremental updates to either the outer source or any of the inner sources propagate in O(|Δ|). The 481 tests in `source-of.test.ts` + `flatmap.test.ts` cover every permutation of outer/inner mutations.
+This is the standard flat-map shape, applied at the ℤ-set layer. It's bilinear in the DBSP sense — incremental updates to either the outer source or any of the inner sources propagate in O(|Δ|). `source-of.test.ts` + `flatmap.test.ts` cover every permutation of outer/inner mutations.
 
 ### What `flatMap` is NOT
 
@@ -390,7 +390,7 @@ A `KeySpec<V>` tells `Index.by` how to derive group keys from a value. Three com
 | `field("tags.0")` | One group key per value (first tag) | Group by first tag |
 | `keys(field("author"), field("assignee"))` | Multiple group keys (both author and assignee) | Index appears once under each derived key |
 
-`KeySpec` composition is pure — applying it to a value produces a `string | string[]` key set. The runtime machinery is in `key-spec.ts`; 11 tests in `key-spec.test.ts` cover the cases.
+`KeySpec` composition is pure — applying it to a value produces a `string | string[]` key set. The runtime machinery is in `key-spec.ts`; `key-spec.test.ts` cover the cases.
 
 ### What `KeySpec` is NOT
 
@@ -458,4 +458,4 @@ Similarly, `replay`, `origin`, and `aborted` do not propagate through derived fe
 
 Every test is pure JS — no `Schema.bind` requirement beyond what `Source.of` / `Source.fromList` exercise, no real substrates needed for the core ℤ-set algebra. Adapter tests use in-memory exchanges (`Bridge` + `BridgeTransport` from `@kyneta/bridge-transport`) and the plain substrate from `@kyneta/schema`. Algebraic-law tests assert the abelian-group properties directly on constructed `ZSet` values.
 
-**Tests**: 169 passed, 0 skipped across 9 files (`zset.test.ts`: ~30; `source.test.ts`: 38 — includes filter-watch + non-injective map weight-trajectory; `index.test.ts`: 27; `join.test.ts`: 13; `key-spec.test.ts`: 11; `collection.test.ts`: 22 — includes union/map equivariance + `integrate` functional-core tests; `from-reactive-map.test.ts`: 11 — `fromReactiveMap` + `diffValueMaps`; plus `flatmap.test.ts`, `source-of.test.ts`). Run with `cd packages/index && pnpm exec vitest run`.
+**Run tests**: `cd packages/index && pnpm exec vitest run`

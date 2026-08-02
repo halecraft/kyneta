@@ -389,7 +389,7 @@ Re-rendering on mount would:
 - Break focus, selection, and scroll state of the already-rendered DOM.
 - Flash the user's view as the DOM is destroyed and rebuilt.
 
-`hydrate` claims instead of rebuilds. 461 tests in `hydrate.test.ts` exercise every IR shape's hydration path.
+`hydrate` claims instead of rebuilds. `hydrate.test.ts` exercise every IR shape's hydration path.
 
 ### `HydrationMismatchError`
 
@@ -468,7 +468,7 @@ expect(dom.opCount("createElement")).toBe(1)
 expect(dom.opCount("removeChild")).toBe(0)
 ```
 
-Ensures that a single item append is an O(1) DOM operation, not O(N). 197 tests use this.
+Ensures that a single item append is an O(1) DOM operation, not O(N). use this.
 
 ---
 
@@ -542,14 +542,14 @@ All inherit from `Error` with a `code` field (typed as `KynetaErrorCode`) and an
 | `src/compiler/transform.ts` | 591 | Compilation orchestrator. |
 | `src/compiler/codegen/dom.ts` | — | Client-side (DOM) codegen. |
 | `src/compiler/codegen/html.ts` | — | Server-side (HTML / SSR) codegen. |
-| `src/compiler/transform.test.ts` | — | 69 tests — end-to-end compilation. |
+| `src/compiler/transform.test.ts` | — | end-to-end compilation. |
 | `src/compiler/integration/reactive.test.ts` | — | Reactive-content compilation tests. |
-| `src/compiler/integration/statements.test.ts` | — | Statement-node integration tests (20 tests). |
+| `src/compiler/integration/statements.test.ts` | — | Statement-node integration tests. |
 | `src/unplugin/index.ts` | 164 | Universal plugin factory. |
 | `src/unplugin/transform.ts` | 73 | Thin wrapper over `transformKynetaSource`. |
 | `src/unplugin/filter.ts` | 56 | `shouldTransform` predicate. |
 | `src/vite/plugin.ts` | 21 | Vite adapter (`kyneta(...).vite`). |
-| `src/vite/plugin.test.ts` | 337 | 14 tests — Vite-specific transform behaviour. |
+| `src/vite/plugin.test.ts` | 337 | Vite-specific transform behaviour. |
 | `src/testing/counting-dom.ts` | 245 | Minimal DOM mock with op counters. |
 | `src/testing/counting-dom.test.ts` | 197 | Tests for `counting-dom` itself. |
 | `src/testing/runtime.ts` | 39 | Test-runtime utilities. |
@@ -570,4 +570,4 @@ Tests run both with `jsdom` (for DOM-dependent region and mount tests) and with 
 
 The `regions.test.ts` file alone is 2,226 lines, exercising every combination of delta kind × region type × edge case (empty input, single-item lists, filter flips, hydration boundaries).
 
-**Tests**: 634 passed, 0 skipped across 27 files. Run with `cd experimental/cast && pnpm exec vitest run`.
+**Run tests**: `cd experimental/cast && pnpm exec vitest run`

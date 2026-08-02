@@ -565,7 +565,7 @@ Application code rarely touches `[NATIVE]`. Backends use it to dispatch to subst
 
 Source: `src/interpreters/with-tracking.ts` (the layer) + `src/tracking.ts` (the pure context). Consumed by `@kyneta/reactive` (jj:kpywvkpr) for fine-grained auto-tracked reactivity (`useSelector`/`useValue` ultimately rest on it).
 
-`withTracking` is the **outermost** layer in the canonical `createRef` stack (`.with(readable).with(writable).with(observation).with(tracking)`). When a *tracking scope* is active, every user-facing read reports a `Dependency` (a stable handle + an `Aspect`); when no scope is active, every wrapped accessor is a one-guard passthrough (the full suite is byte-identical — confirmed by 2171 passing tests). Subscription *policy* (aspect → changefeed primitive) lives in the runtime, not here.
+`withTracking` is the **outermost** layer in the canonical `createRef` stack (`.with(readable).with(writable).with(observation).with(tracking)`). When a *tracking scope* is active, every user-facing read reports a `Dependency` (a stable handle + an `Aspect`); when no scope is active, every wrapped accessor is a one-guard passthrough (the full suite passes unchanged either way). Subscription *policy* (aspect → changefeed primitive) lives in the runtime, not here.
 
 **The pure context (`tracking.ts`)** is the functional core: a save/restore scope discipline (`withReadScope(fn) → { value, deps }`), a single mutation point (`reportRead`, a no-op when no scope is active), and `withoutTracking` (suppresses reports while a composite `()` folds its snapshot). FC/IS exemplars: `@kyneta/index`'s `integrate` and `@kyneta/machine`'s `Program`/runtime.
 
@@ -1438,12 +1438,4 @@ Every test in this package is pure. Substrates-under-test are the plain substrat
 
 The full suite serves as the specification of the `Substrate<V>` contract: `@kyneta/loro-schema` and `@kyneta/yjs-schema` run this same suite (adapted) against their substrates. Position conformance tests import `positionConformance` and `PositionTestEnv` from `@kyneta/schema/testing`; general substrate conformance helpers live in `@kyneta/schema/basic`.
 
-**Tests**:
-
-| Package | Passed | Skipped |
-|---------|--------|---------|
-| `@kyneta/schema` | 1,949 | 8 |
-| `@kyneta/loro-schema` | 208 | 4 |
-| `@kyneta/yjs-schema` | 218 | 4 |
-
-Run with `cd packages/schema && pnpm exec vitest run`.
+**Run tests**: `cd packages/schema && pnpm exec vitest run`

@@ -271,4 +271,4 @@ if (result.type === "messages") {
 
 `createSseClientProgram` is a pure `Program`, so `client-program.test.ts` dispatches messages and asserts on the returned `[state, ...effects]` tuple. No real `EventSource`, no real network, no real timers (`vi.useFakeTimers` where time is relevant). `connection.test.ts` verifies encoding, fragmentation, and reassembly through a recorded `sendFn`. `sse-handler.test.ts` exercises every branch of `parseTextPostBody`.
 
-**Tests**: 44 passed, 0 skipped across 3 files (`client-program.test.ts`: 30, `connection.test.ts`: 9, `sse-handler.test.ts`: 5). Run with `cd packages/exchange/transports/sse && pnpm exec vitest run`.
+**Run tests**: `cd packages/exchange/transports/sse && pnpm exec vitest run`
