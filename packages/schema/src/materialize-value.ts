@@ -84,14 +84,21 @@ export type EagerPolicy = "leaf-containers" | "all-containers"
  * detection and the `"all-containers"` eager policy.
  *
  * JSON-boundary schemas take the plain branch — the whole subtree is one
- * opaque value in the parent container. `richtext` is excluded here (it is not
- * gated through this predicate): `materializeValue` dispatches it straight to a
- * text-container node, so it never needs insert-detection.
+ * opaque value in the parent container. A `sum` does too, for the same reason:
+ * a variant is stored whole, so there is no container to create.
+ *
+ * `richtext` answers `true`, which is worth stating because it reads like a
+ * leaf. Elsewhere it half-behaves as one: TECHNICAL.md §"Interpreter
+ * duplication families" describes `text` and `richtext` as straddling two
+ * families, indexed for writing but leaf for reading and navigation. That
+ * split is about the interpreters. For storage both are plainly containers —
+ * a Loro or Yjs text type carrying formatting marks.
  */
 export function needsContainer(schema: SchemaNode): boolean {
   if (isJsonBoundary(schema)) return false
   switch (schema[KIND]) {
     case "text":
+    case "richtext":
     case "counter":
     case "movable":
     case "tree":
@@ -168,7 +175,13 @@ export function materializeValue(
     case "text":
       return { kind: "text", content: typeof value === "string" ? value : "" }
     case "richtext":
-      return { kind: "richtext", value }
+      // The default is what makes the eager path work. When a whole-value
+      // write omits this field, the node built here is all the backend gets to
+      // create an empty container from — and it cannot build one out of
+      // `undefined`, so the container never appears and the next write into it
+      // fails. `[]` is `Zero.structural` for a rich-text node, matching how
+      // `text` and `counter` fill an absent value on either side of this case.
+      return { kind: "richtext", value: value ?? [] }
     case "counter":
       return { kind: "counter", amount: typeof value === "number" ? value : 0 }
     case "tree":

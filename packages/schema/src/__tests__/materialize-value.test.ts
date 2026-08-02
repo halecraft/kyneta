@@ -191,6 +191,64 @@ describe("needsContainer / fieldAbsPath", () => {
     expect(needsContainer(Schema.struct.json({ a: Schema.string() }))).toBe(
       false,
     )
+
+    // Rich text is a container like `text`, despite reading as a leaf. The
+    // predicate's own doc comment explains why that is easy to get backwards.
+    expect(needsContainer(Schema.richText({ bold: { expand: "after" } }))).toBe(
+      true,
+    )
+
+    // A sum is stored whole, so there is no container to create. Worth pinning
+    // because the consequence reaches well past this predicate: a sum
+    // answering `false` is what makes a register land as ONE tuple in the
+    // `state` substrate, and that in turn is what lets `mergeStateTree` merge
+    // raw payloads without ever consulting the schema.
+    expect(needsContainer(Schema.string().nullable())).toBe(false)
+  })
+
+  it("eager policies nest: leaf-containers ⊆ all-containers", () => {
+    // `materializeValue` pre-creates containers for schema-declared fields the
+    // written value omits, so a later write has something to land on. Two
+    // policies choose how far to go: `"leaf-containers"` (Yjs) creates only the
+    // leaf containers, `"all-containers"` (Loro) creates those *and* the
+    // structural ones.
+    //
+    // The names promise a subset relation, and the promise is checkable, so it
+    // is checked here rather than left to the naming. Asserting the relation
+    // itself — instead of a list of per-kind expectations — means it keeps
+    // holding as kinds are added, which is how it came to be violated by a
+    // single kind that fell through a switch's `default`.
+    const ALL_KINDS = {
+      product: Schema.struct({ x: Schema.number() }),
+      sum: Schema.struct({ x: Schema.number() }).nullable(),
+      sequence: Schema.list(Schema.number()),
+      map: Schema.record(Schema.number()),
+      scalar: Schema.number(),
+      text: Schema.text(),
+      counter: Schema.counter(),
+      set: Schema.set(Schema.string()),
+      tree: Schema.tree(Schema.string()),
+      movable: Schema.movableList(Schema.string()),
+      richtext: Schema.richText({ bold: { expand: "after" } }),
+      jsonBoundary: Schema.struct.json({ x: Schema.number() }),
+    }
+    // An empty value means every declared field is absent — the eager path.
+    const eagerlyCreated = (policy: "leaf-containers" | "all-containers") => {
+      const node = materializeValue(
+        Schema.struct(ALL_KINDS) as never,
+        {},
+        undefined,
+        "",
+        policy,
+      ) as { entries?: ReadonlyArray<readonly [string, unknown]> }
+      return new Set((node.entries ?? []).map(([key]) => key))
+    }
+
+    const all = eagerlyCreated("all-containers")
+    const leaf = eagerlyCreated("leaf-containers")
+    expect([...leaf].filter(kind => !all.has(kind))).toEqual([])
+    // And the relation is non-trivial: `all` genuinely creates more.
+    expect(all.size).toBeGreaterThan(leaf.size)
   })
 
   it("fieldAbsPath accumulates only field segments", () => {

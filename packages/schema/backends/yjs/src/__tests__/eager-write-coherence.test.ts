@@ -319,3 +319,56 @@ describe("Yjs three-primitive substrate (jj:ryquprut)", () => {
     expect((doc.a as any)()).toBe("")
   })
 })
+
+// ---------------------------------------------------------------------------
+// Eager creation of a declared-but-absent rich-text field
+// ---------------------------------------------------------------------------
+//
+// Yjs binds the `"leaf-containers"` eager policy, the narrower of the two: it
+// creates leaf containers like text and rich text, but not structural ones.
+// Loro binds `"all-containers"`, which should be a strict superset.
+//
+// This file is the control for that claim. The same two cases live in the Loro
+// suite, and asserting them on both is what shows the policies agree on rich
+// text rather than merely both being green. Nothing else in the repository
+// writes a `richText` field on a document, so without these the path is
+// unexercised on either backend.
+
+describe("Yjs eager creation of an absent richtext field", () => {
+  const Marks = { bold: { expand: "after" } } as const
+  // Nested, because a whole-value `.set()` is the operation that leaves a
+  // declared field absent — and the root struct cannot be `.set()` on a CRDT
+  // backend, where the root identity is fixed.
+  const Nested = Schema.struct({
+    inner: Schema.struct({
+      title: Schema.string(),
+      body: Schema.richText(Marks),
+    }),
+  })
+
+  it("a whole-value set omitting the richtext field leaves it writable", () => {
+    const { doc } = build(Nested)
+    batch(doc, (d: any) => d.inner.set({ title: "x" } as any))
+    batch(doc, (d: any) => d.inner.body.insert(0, "zz"))
+    expect(doc.inner.body()).toEqual([{ text: "zz" }])
+    expect(doc.inner.title()).toBe("x")
+  })
+
+  it("converges across peers", () => {
+    // Both peers share a base in which the rich-text container exists but was
+    // never written to. Whether it was created eagerly or lazily, they must
+    // agree afterwards — that is what makes either timing safe.
+    const a = build(Nested)
+    batch(a.doc, (d: any) => d.inner.set({ title: "x" } as any))
+    const b = build(Nested)
+    b.substrate.merge(a.substrate.exportEntirety(), { origin: "sync" })
+
+    batch(a.doc, (d: any) => d.inner.body.insert(0, "AAA"))
+    batch(b.doc, (d: any) => d.inner.body.insert(0, "BBB"))
+
+    a.substrate.merge(b.substrate.exportEntirety(), { origin: "sync" })
+    b.substrate.merge(a.substrate.exportEntirety(), { origin: "sync" })
+
+    expect(a.doc.inner.body()).toEqual(b.doc.inner.body())
+  })
+})

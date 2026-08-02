@@ -465,3 +465,60 @@ describe("Loro three-primitive substrate (jj:ryquprut)", () => {
     expect((doc.a as any)()).toBe("")
   })
 })
+
+// ---------------------------------------------------------------------------
+// Eager creation of a declared-but-absent rich-text field
+// ---------------------------------------------------------------------------
+//
+// Loro binds the `"all-containers"` eager policy: a field the written value
+// omits still gets its container up front, so a later write has somewhere to
+// land. These tests cover that for a `richText` field, which reaches the
+// backend as a node carrying no value at all.
+//
+// They are the ONLY thing exercising that path. Nothing else in the repository
+// writes a `richText` field on a document, so a green suite would be equally
+// consistent with the path never running — which makes these load-bearing
+// evidence rather than coverage, and a poor candidate for deletion as
+// redundant.
+
+describe("Loro eager creation of an absent richtext field", () => {
+  const Marks = { bold: { expand: "after" } } as const
+  const Nested = Schema.struct({
+    // A nested struct, because a whole-value `.set()` is the operation that
+    // leaves a declared field absent — and the root struct cannot be `.set()`
+    // on a CRDT backend, where the root identity is fixed.
+    inner: Schema.struct({
+      title: Schema.string(),
+      body: Schema.richText(Marks),
+    }),
+  })
+
+  it("a whole-value set omitting the richtext field leaves it writable", () => {
+    const { doc } = build(Nested)
+    batch(doc, (d: any) => d.inner.set({ title: "x" } as any))
+    batch(doc, (d: any) => d.inner.body.insert(0, "zz"))
+    expect(doc.inner.body()).toEqual([{ text: "zz" }])
+    expect(doc.inner.title()).toBe("x")
+  })
+
+  it("converges across peers", () => {
+    // Two peers from a shared base each write the field. Whether the container
+    // was created eagerly or lazily, they must agree afterwards — that is what
+    // makes either timing safe.
+    const a = build(Nested)
+    // A writes the parent struct while omitting `body` — the eager case — and
+    // B starts from that state, so both peers share a base in which the
+    // rich-text container was created without ever being written to.
+    batch(a.doc, (d: any) => d.inner.set({ title: "x" } as any))
+    const b = build(Nested)
+    b.substrate.merge(a.substrate.exportEntirety(), { origin: "sync" })
+
+    batch(a.doc, (d: any) => d.inner.body.insert(0, "AAA"))
+    batch(b.doc, (d: any) => d.inner.body.insert(0, "BBB"))
+
+    a.substrate.merge(b.substrate.exportEntirety(), { origin: "sync" })
+    b.substrate.merge(a.substrate.exportEntirety(), { origin: "sync" })
+
+    expect(a.doc.inner.body()).toEqual(b.doc.inner.body())
+  })
+})
