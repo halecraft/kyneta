@@ -94,8 +94,10 @@ const CF_SYM = Symbol.for("kyneta:changefeed")
 
 function getChangefeed(obj: unknown): {
   current: unknown
-  subscribe: (cb: (changeset: Changeset) => void) => () => void
-  subscribeDescendants?: (cb: (changeset: Changeset<Op>) => void) => () => void
+  subscribe: (callback: (changeset: Changeset) => void) => () => void
+  subscribeDescendants?: (
+    callback: (changeset: Changeset<Op>) => void,
+  ) => () => void
 } {
   return (obj as any)[CF_SYM]
 }
@@ -198,8 +200,8 @@ describe("changefeed: subscription lifecycle", () => {
 
     const a: Changeset[] = []
     const b: Changeset[] = []
-    cf.subscribe(cs => a.push(cs))
-    cf.subscribe(cs => b.push(cs))
+    cf.subscribe(changeset => a.push(changeset))
+    cf.subscribe(changeset => b.push(changeset))
 
     doc.title.insert(0, "X")
     expect(a).toHaveLength(1)
@@ -217,8 +219,8 @@ describe("changefeed: exact-path subscription", () => {
 
     // Scalar (replace)
     const scalarChangesets: Changeset[] = []
-    getChangefeed(doc.settings.darkMode).subscribe(cs =>
-      scalarChangesets.push(cs),
+    getChangefeed(doc.settings.darkMode).subscribe(changeset =>
+      scalarChangesets.push(changeset),
     )
     doc.settings.darkMode.set(true)
     expect(scalarChangesets).toHaveLength(1)
@@ -226,28 +228,36 @@ describe("changefeed: exact-path subscription", () => {
 
     // Text
     const textChangesets: Changeset[] = []
-    getChangefeed(doc.title).subscribe(cs => textChangesets.push(cs))
+    getChangefeed(doc.title).subscribe(changeset =>
+      textChangesets.push(changeset),
+    )
     doc.title.insert(0, "X")
     expect(textChangesets).toHaveLength(1)
     expect(textChangesets[0]?.changes[0]?.type).toBe("text")
 
     // Counter
     const counterChangesets: Changeset[] = []
-    getChangefeed(doc.count).subscribe(cs => counterChangesets.push(cs))
+    getChangefeed(doc.count).subscribe(changeset =>
+      counterChangesets.push(changeset),
+    )
     doc.count.increment(5)
     expect(counterChangesets).toHaveLength(1)
     expect(counterChangesets[0]?.changes[0]?.type).toBe("increment")
 
     // Sequence
     const seqChangesets: Changeset[] = []
-    getChangefeed(doc.messages).subscribe(cs => seqChangesets.push(cs))
+    getChangefeed(doc.messages).subscribe(changeset =>
+      seqChangesets.push(changeset),
+    )
     doc.messages.push({ author: "Bob", body: "Hey" })
     expect(seqChangesets).toHaveLength(1)
     expect(seqChangesets[0]?.changes[0]?.type).toBe("sequence")
 
     // Product (whole-struct replace)
     const prodChangesets: Changeset[] = []
-    getChangefeed(doc.settings).subscribe(cs => prodChangesets.push(cs))
+    getChangefeed(doc.settings).subscribe(changeset =>
+      prodChangesets.push(changeset),
+    )
     doc.settings.set({ darkMode: false, fontSize: 20 })
     expect(prodChangesets).toHaveLength(1)
     expect(prodChangesets[0]?.changes[0]?.type).toBe("replace")
@@ -300,7 +310,7 @@ describe("changefeed: product subscribe is node-level", () => {
     const { doc } = createChatDoc()
     const cf = getChangefeed(doc.settings)
     const received: Changeset[] = []
-    cf.subscribe(cs => received.push(cs))
+    cf.subscribe(changeset => received.push(changeset))
 
     // Mutate a child — should NOT fire on the product's subscribe
     doc.settings.darkMode.set(true)
@@ -379,7 +389,7 @@ describe("changefeed: sequence subscribe is structural only", () => {
     const { doc } = createChatDoc()
     const cf = getChangefeed(doc.messages)
     const received: Changeset[] = []
-    cf.subscribe(cs => received.push(cs))
+    cf.subscribe(changeset => received.push(changeset))
 
     // Push — structural, should fire
     doc.messages.push({ author: "Bob", body: "Hey" })
@@ -585,7 +595,7 @@ describe("changefeed: coexistence of subscribe and subscribeDescendants", () => 
     const shallowChangesets: Changeset[] = []
     const treeEvents: Op[] = []
 
-    cf.subscribe(cs => shallowChangesets.push(cs))
+    cf.subscribe(changeset => shallowChangesets.push(changeset))
     cf.subscribeDescendants?.(changeset => {
       for (const event of changeset.changes) treeEvents.push(event)
     })
@@ -632,7 +642,7 @@ describe("changefeed: batch() block integration", () => {
       .done()
 
     const xChangesets: Changeset[] = []
-    getChangefeed(doc.x).subscribe(cs => xChangesets.push(cs))
+    getChangefeed(doc.x).subscribe(changeset => xChangesets.push(changeset))
 
     batch(doc, d => {
       d.x.set(10)
@@ -663,7 +673,7 @@ describe("changefeed: batch() block integration", () => {
     // composition from child → parent. darkMode and fontSize are at
     // different paths, so 2 tree changesets.
     expect(treeChangesets).toHaveLength(2)
-    const allEvents = treeChangesets.flatMap(cs => cs.changes)
+    const allEvents = treeChangesets.flatMap(changeset => changeset.changes)
     expect(allEvents).toHaveLength(2)
 
     const darkModeEvents = allEvents.filter(
@@ -722,7 +732,7 @@ describe("changefeed: batch() block integration", () => {
       .done()
 
     const xChangesets: Changeset[] = []
-    getChangefeed(doc.x).subscribe(cs => xChangesets.push(cs))
+    getChangefeed(doc.x).subscribe(changeset => xChangesets.push(changeset))
 
     batch(doc, d => {
       d.x.set(10)
@@ -780,7 +790,7 @@ describe("changefeed: batched notification", () => {
   it("auto-commit (single mutation) delivers Changeset with exactly 1 change", () => {
     const { doc } = createChatDoc()
     const changesets: Changeset[] = []
-    getChangefeed(doc.title).subscribe(cs => changesets.push(cs))
+    getChangefeed(doc.title).subscribe(changeset => changesets.push(changeset))
 
     doc.title.insert(0, "X")
     expect(changesets).toHaveLength(1)
@@ -802,7 +812,7 @@ describe("changefeed: batched notification", () => {
       .done()
 
     const xChangesets: Changeset[] = []
-    getChangefeed(doc.x).subscribe(cs => xChangesets.push(cs))
+    getChangefeed(doc.x).subscribe(changeset => xChangesets.push(changeset))
 
     batch(doc, d => d.x.set(42), { origin: "sync" })
 
@@ -814,7 +824,7 @@ describe("changefeed: batched notification", () => {
   it("origin tagging: auto-commit has no origin", () => {
     const { doc } = createChatDoc()
     const changesets: Changeset[] = []
-    getChangefeed(doc.count).subscribe(cs => changesets.push(cs))
+    getChangefeed(doc.count).subscribe(changeset => changesets.push(changeset))
 
     doc.count.increment(5)
     expect(changesets).toHaveLength(1)
@@ -824,8 +834,8 @@ describe("changefeed: batched notification", () => {
   it("origin tagging: tree subscribers receive origin from batch()", () => {
     const { doc } = createChatDoc()
     const treeChangesets: Changeset<Op>[] = []
-    getChangefeed(doc.settings).subscribeDescendants?.(cs =>
-      treeChangesets.push(cs),
+    getChangefeed(doc.settings).subscribeDescendants?.(changeset =>
+      treeChangesets.push(changeset),
     )
 
     batch(doc, d => d.settings.darkMode.set(true), { origin: "undo" })
@@ -854,8 +864,8 @@ describe("changefeed: batched notification", () => {
 
     const xChangesets: Changeset[] = []
     const yChangesets: Changeset[] = []
-    getChangefeed(doc.x).subscribe(cs => xChangesets.push(cs))
-    getChangefeed(doc.y).subscribe(cs => yChangesets.push(cs))
+    getChangefeed(doc.x).subscribe(changeset => xChangesets.push(changeset))
+    getChangefeed(doc.y).subscribe(changeset => yChangesets.push(changeset))
 
     batch(doc, d => {
       d.x.set(10)
@@ -887,7 +897,7 @@ describe("changefeed: batched notification", () => {
 
     // Only subscribe to x, not y
     const xChangesets: Changeset[] = []
-    getChangefeed(doc.x).subscribe(cs => xChangesets.push(cs))
+    getChangefeed(doc.x).subscribe(changeset => xChangesets.push(changeset))
 
     batch(doc, d => {
       d.x.set(10)
@@ -965,7 +975,9 @@ describe("changefeed: edge cases", () => {
       .done()
 
     const changesets: Changeset[] = []
-    getChangefeed(doc.n).subscribe((cs: Changeset) => changesets.push(cs))
+    getChangefeed(doc.n).subscribe((changeset: Changeset) =>
+      changesets.push(changeset),
+    )
 
     doc.n.set(99)
     expect(changesets).toHaveLength(1)
@@ -1005,7 +1017,7 @@ describe("changefeed: edge cases", () => {
   it("changeset wraps a single change (degenerate changeset)", () => {
     const { doc } = createChatDoc()
     const changesets: Changeset[] = []
-    getChangefeed(doc.title).subscribe(cs => changesets.push(cs))
+    getChangefeed(doc.title).subscribe(changeset => changesets.push(changeset))
 
     doc.title.insert(0, "X")
     expect(changesets).toHaveLength(1)
@@ -1017,8 +1029,8 @@ describe("changefeed: edge cases", () => {
   it("tree changeset wraps a single tree event (degenerate)", () => {
     const { doc } = createChatDoc()
     const changesets: Changeset<Op>[] = []
-    getChangefeed(doc.settings).subscribeDescendants?.(cs =>
-      changesets.push(cs),
+    getChangefeed(doc.settings).subscribeDescendants?.(changeset =>
+      changesets.push(changeset),
     )
 
     doc.settings.darkMode.set(true)

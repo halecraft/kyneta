@@ -145,16 +145,19 @@ describe("planNotifications: grouping", () => {
 
 describe("liftToOps: wraps each change with the given path", () => {
   it("empty changeset → empty result, origin preserved", () => {
-    const cs: Changeset<ChangeBase> = { changes: [], origin: "populated" }
-    const lifted = liftToOps(cs, RawPath.empty)
+    const changeset: Changeset<ChangeBase> = {
+      changes: [],
+      origin: "populated",
+    }
+    const lifted = liftToOps(changeset, RawPath.empty)
     expect(lifted.changes).toHaveLength(0)
     expect(lifted.origin).toBe("populated")
   })
 
   it("single-change changeset → one Op with the supplied path", () => {
     const path = RawPath.empty.field("title")
-    const cs: Changeset<ChangeBase> = { changes: [{ type: "text" }] }
-    const lifted = liftToOps(cs, path)
+    const changeset: Changeset<ChangeBase> = { changes: [{ type: "text" }] }
+    const lifted = liftToOps(changeset, path)
     expect(lifted.changes).toHaveLength(1)
     expect(lifted.changes[0]?.path).toBe(path)
     expect(lifted.changes[0]?.change.type).toBe("text")
@@ -162,14 +165,14 @@ describe("liftToOps: wraps each change with the given path", () => {
 
   it("multi-change changeset → N Ops, all sharing the path", () => {
     const path = RawPath.empty.field("counter")
-    const cs: Changeset<ChangeBase> = {
+    const changeset: Changeset<ChangeBase> = {
       changes: [
         { type: "increment" },
         { type: "increment" },
         { type: "replace" },
       ],
     }
-    const lifted = liftToOps(cs, path)
+    const lifted = liftToOps(changeset, path)
     expect(lifted.changes).toHaveLength(3)
     for (const op of lifted.changes) {
       expect(op.path).toBe(path)
@@ -182,23 +185,23 @@ describe("liftToOps: wraps each change with the given path", () => {
   })
 
   it("origin is preserved across the lift", () => {
-    const cs: Changeset<ChangeBase> = {
+    const changeset: Changeset<ChangeBase> = {
       changes: [{ type: "replace" }],
       origin: "test-origin",
     }
-    const lifted = liftToOps(cs, RawPath.empty.field("x"))
+    const lifted = liftToOps(changeset, RawPath.empty.field("x"))
     expect(lifted.origin).toBe("test-origin")
   })
 
   // The exchange's auto-subscribe filter reads `replay` off the tree-
   // subscriber changeset; if this strips it, foreign-origin merges echo.
   it("replay is preserved across the lift", () => {
-    const cs: Changeset<ChangeBase> = {
+    const changeset: Changeset<ChangeBase> = {
       changes: [{ type: "replace" }],
       origin: "external",
       replay: true,
     }
-    const lifted = liftToOps(cs, RawPath.empty.field("x"))
+    const lifted = liftToOps(changeset, RawPath.empty.field("x"))
     expect(lifted.replay).toBe(true)
   })
 
@@ -207,11 +210,11 @@ describe("liftToOps: wraps each change with the given path", () => {
   // their own writes.
   it("source identity is preserved across the lift", () => {
     const tok = Symbol("test-source")
-    const cs: Changeset<ChangeBase> = {
+    const changeset: Changeset<ChangeBase> = {
       changes: [{ type: "replace" }],
       source: tok,
     }
-    const lifted = liftToOps(cs, RawPath.empty.field("x"))
+    const lifted = liftToOps(changeset, RawPath.empty.field("x"))
     expect(lifted.source).toBe(tok)
   })
 })

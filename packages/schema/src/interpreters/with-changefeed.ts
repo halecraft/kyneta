@@ -111,10 +111,10 @@ export function populated(
  */
 export function attachChangefeed(
   target: object,
-  cf: RecursiveChangefeedProtocol<unknown, ChangeBase>,
+  changefeed: RecursiveChangefeedProtocol<unknown, ChangeBase>,
 ): asserts target is HasChangefeed {
   Object.defineProperty(target, CHANGEFEED, {
-    value: cf,
+    value: changefeed,
     enumerable: false,
     configurable: true,
     writable: false,
@@ -168,13 +168,13 @@ export function planNotifications(pending: readonly Op[]): NotificationPlan {
   const paths = new Map<string, Path>()
   for (const { path, change } of pending) {
     const key = path.key
-    let arr = grouped.get(key)
-    if (!arr) {
-      arr = []
-      grouped.set(key, arr)
+    let changesAtPath = grouped.get(key)
+    if (!changesAtPath) {
+      changesAtPath = []
+      grouped.set(key, changesAtPath)
       paths.set(key, path)
     }
-    arr.push(change)
+    changesAtPath.push(change)
   }
   return { grouped, paths }
 }
@@ -244,7 +244,7 @@ export function deliverNotifications(
         aborted: options?.aborted,
         source: options?.source,
       }
-      for (const cb of set) cb(changeset)
+      for (const callback of set) callback(changeset)
     }
 
     // Descendant channel — every subscriber at this path or above it. The set
@@ -304,15 +304,15 @@ export function deliverNotifications(
  * Pure, table-testable. Exported for tests; not re-exported from index.
  */
 export function liftToOps<C extends ChangeBase>(
-  cs: Changeset<C>,
+  changeset: Changeset<C>,
   path: Path,
 ): Changeset<Op<C>> {
   return {
-    changes: cs.changes.map(change => ({ path, change })),
-    origin: cs.origin,
-    replay: cs.replay,
-    aborted: cs.aborted,
-    source: cs.source,
+    changes: changeset.changes.map(change => ({ path, change })),
+    origin: changeset.origin,
+    replay: changeset.replay,
+    aborted: changeset.aborted,
+    source: changeset.source,
   }
 }
 
@@ -324,7 +324,7 @@ export function liftToOps<C extends ChangeBase>(
  * `Changeset<Op>` form indistinguishable from a real own-path delivery.
  *
  * Pure, table-testable; subscribers pattern-match on
- * `cs.changes[0].type === "tree" && instructions[0].action === "delete"`.
+ * `changeset.changes[0].type === "tree" && instructions[0].action === "delete"`.
  */
 export function synthesizeTreeDeleteTerminal(
   id: string,
@@ -665,7 +665,7 @@ function firePopulatedListeners(
   const set = populatedListeners.get(key)
   if (set) {
     // Fire all listeners, then remove — this fires at most once per path
-    for (const cb of set) cb()
+    for (const callback of set) callback()
     populatedListeners.delete(key)
   }
 }
@@ -721,8 +721,8 @@ function createPopulatedChangefeed(
       return populated.has(key)
     },
     subscribe,
-    subscribeDescendants(cb) {
-      return subscribe(cs => cb(liftToOps(cs, path.root())))
+    subscribeDescendants(callback) {
+      return subscribe(changeset => callback(liftToOps(changeset, path.root())))
     },
   }
 }
@@ -741,20 +741,24 @@ function attachIsPopulated(
   populated: Set<string>,
   populatedListeners: Map<string, Set<() => void>>,
 ): void {
-  const cf = createPopulatedChangefeed(path, populated, populatedListeners)
+  const changefeed = createPopulatedChangefeed(
+    path,
+    populated,
+    populatedListeners,
+  )
   const populatedRef = Object.create(null) as Record<symbol, unknown>
   Object.defineProperty(populatedRef, CHANGEFEED, {
-    value: cf,
+    value: changefeed,
     enumerable: false,
     configurable: false,
     writable: false,
   })
   // Also make it callable: populatedRef() returns the boolean
   const callable = function (this: unknown) {
-    return cf.current
+    return changefeed.current
   } as any
   Object.defineProperty(callable, CHANGEFEED, {
-    value: cf,
+    value: changefeed,
     enumerable: false,
     configurable: false,
     writable: false,
@@ -803,7 +807,7 @@ function getPopulatedState(ctx: RefContext): {
 /**
  * Builds the `RecursiveChangefeedProtocol` for a structurally-leaf node.
  *
- * Parallel structure with composite factories: shared `shallowSubs` /
+ * Parallel structure with composite factories: shared `ownPathSubscribers` /
  * `treeSubs` sets, one own-path listener registered via `listenAtPath`
  * that delegates fan-out to `fanOutOwnPath`. The leaf's `subscribeDescendants`
  * is the trivial own-path → Op lift with `path.root()` as the relative
@@ -817,26 +821,28 @@ function createLeafChangefeed(
   path: Path,
   readCurrent: () => unknown,
 ): RecursiveChangefeedProtocol<unknown, ChangeBase> {
-  const shallowSubs = new Set<(cs: Changeset<ChangeBase>) => void>()
+  const ownPathSubscribers = new Set<
+    (changeset: Changeset<ChangeBase>) => void
+  >()
 
-  listenAtPath(channels.listeners, path, cs => {
-    for (const cb of shallowSubs) cb(cs)
+  listenAtPath(channels.listeners, path, changeset => {
+    for (const callback of ownPathSubscribers) callback(changeset)
   })
 
   return {
     get current() {
       return readCurrent()
     },
-    subscribe(cb) {
-      shallowSubs.add(cb)
+    subscribe(callback) {
+      ownPathSubscribers.add(callback)
       return () => {
-        shallowSubs.delete(cb)
+        ownPathSubscribers.delete(callback)
       }
     },
     // A leaf is a tree of size one, so its deep channel carries exactly its own
     // change — delivered by the ancestor walk at relative path `[]`.
-    subscribeDescendants(cb) {
-      return listenDescendants(channels.descendants, path, cb)
+    subscribeDescendants(callback) {
+      return listenDescendants(channels.descendants, path, callback)
     },
   }
 }
@@ -861,10 +867,12 @@ function createProductChangefeed(
   path: Path,
   readCurrent: () => unknown,
 ): RecursiveChangefeedProtocol<unknown, ChangeBase> {
-  const shallowSubs = new Set<(changeset: Changeset<ChangeBase>) => void>()
+  const ownPathSubscribers = new Set<
+    (changeset: Changeset<ChangeBase>) => void
+  >()
 
-  listenAtPath(channels.listeners, path, cs => {
-    for (const cb of shallowSubs) cb(cs)
+  listenAtPath(channels.listeners, path, changeset => {
+    for (const callback of ownPathSubscribers) callback(changeset)
   })
 
   return {
@@ -874,9 +882,9 @@ function createProductChangefeed(
     subscribe(
       callback: (changeset: Changeset<ChangeBase>) => void,
     ): () => void {
-      shallowSubs.add(callback)
+      ownPathSubscribers.add(callback)
       return () => {
-        shallowSubs.delete(callback)
+        ownPathSubscribers.delete(callback)
       }
     },
     subscribeDescendants(
@@ -892,10 +900,12 @@ function createSequenceChangefeed(
   path: Path,
   readCurrent: () => unknown,
 ): RecursiveChangefeedProtocol<unknown, ChangeBase> {
-  const shallowSubs = new Set<(changeset: Changeset<ChangeBase>) => void>()
+  const ownPathSubscribers = new Set<
+    (changeset: Changeset<ChangeBase>) => void
+  >()
 
-  listenAtPath(channels.listeners, path, cs => {
-    for (const cb of shallowSubs) cb(cs)
+  listenAtPath(channels.listeners, path, changeset => {
+    for (const callback of ownPathSubscribers) callback(changeset)
   })
 
   return {
@@ -903,9 +913,9 @@ function createSequenceChangefeed(
       return readCurrent()
     },
     subscribe(callback) {
-      shallowSubs.add(callback)
+      ownPathSubscribers.add(callback)
       return () => {
-        shallowSubs.delete(callback)
+        ownPathSubscribers.delete(callback)
       }
     },
     // No child wiring, and nothing to rebuild when this collection changes
@@ -929,10 +939,12 @@ function createMapChangefeed(
   path: Path,
   readCurrent: () => unknown,
 ): RecursiveChangefeedProtocol<unknown, ChangeBase> {
-  const shallowSubs = new Set<(changeset: Changeset<ChangeBase>) => void>()
+  const ownPathSubscribers = new Set<
+    (changeset: Changeset<ChangeBase>) => void
+  >()
 
-  listenAtPath(channels.listeners, path, cs => {
-    for (const cb of shallowSubs) cb(cs)
+  listenAtPath(channels.listeners, path, changeset => {
+    for (const callback of ownPathSubscribers) callback(changeset)
   })
 
   return {
@@ -940,9 +952,9 @@ function createMapChangefeed(
       return readCurrent()
     },
     subscribe(callback) {
-      shallowSubs.add(callback)
+      ownPathSubscribers.add(callback)
       return () => {
-        shallowSubs.delete(callback)
+        ownPathSubscribers.delete(callback)
       }
     },
     // No child wiring, and nothing to rebuild when this collection changes
@@ -976,7 +988,9 @@ function createTreeChangefeed(
   path: Path,
   readCurrent: () => unknown,
 ): RecursiveChangefeedProtocol<unknown, ChangeBase> {
-  const shallowSubs = new Set<(changeset: Changeset<ChangeBase>) => void>()
+  const ownPathSubscribers = new Set<
+    (changeset: Changeset<ChangeBase>) => void
+  >()
 
   function deliverDeleteTerminal(id: string): void {
     // Delivered straight to the deleted node's own key rather than through the
@@ -988,7 +1002,7 @@ function createTreeChangefeed(
     // that is synthesized rather than derived from an op, so it is the one
     // place the ancestor walk cannot do the routing. The facade `subscribe` is
     // `subscribeDescendants`, so a per-node subscriber sits in the descendant
-    // map, while `.subscribe(cb)` on the node sits in the own-path map.
+    // map, while `.subscribe(callback)` on the node sits in the own-path map.
     const nodePath = path.node(id)
     const nodeKey = nodePath.key
     const synthetic = synthesizeTreeDeleteTerminal(id)
@@ -1006,10 +1020,10 @@ function createTreeChangefeed(
     }
   }
 
-  listenAtPath(channels.listeners, path, cs => {
-    for (const cb of shallowSubs) cb(cs)
+  listenAtPath(channels.listeners, path, changeset => {
+    for (const callback of ownPathSubscribers) callback(changeset)
 
-    for (const change of cs.changes) {
+    for (const change of changeset.changes) {
       if (!isTreeChange(change)) continue
       for (const inst of change.instructions) {
         if (inst.action === "delete") deliverDeleteTerminal(inst.target)
@@ -1024,9 +1038,9 @@ function createTreeChangefeed(
     subscribe(
       callback: (changeset: Changeset<ChangeBase>) => void,
     ): () => void {
-      shallowSubs.add(callback)
+      ownPathSubscribers.add(callback)
       return () => {
-        shallowSubs.delete(callback)
+        ownPathSubscribers.delete(callback)
       }
     },
     subscribeDescendants(
@@ -1076,13 +1090,13 @@ function createTreeChangefeed(
  * const interp = withChangefeed(withWritable(withCaching(withReadable(withNavigation(bottom)))))
  * const ctx = createPlainSubstrate(store).context()
  * const doc = interpret(schema, interp, ctx)
- * doc[CHANGEFEED].subscribe(cb)       // fires on mutation
+ * doc[CHANGEFEED].subscribe(callback)       // fires on mutation
  *
  * // Read-only stack (observe without mutation):
  * const roInterp = withChangefeed(withCaching(withReadable(withNavigation(bottom))))
  * const roDoc = interpret(schema, roInterp, { store })
  * roDoc[CHANGEFEED].current           // works — reads via [CALL]
- * roDoc[CHANGEFEED].subscribe(cb)     // valid — never fires
+ * roDoc[CHANGEFEED].subscribe(callback)     // valid — never fires
  * ```
  */
 
@@ -1110,14 +1124,14 @@ function wireChangefeed(
 ): void {
   if (isPropertyHost(result)) {
     const channels = ensurePrepareWiring(ctx)
-    const cf = createCf(channels, path)
-    attachChangefeed(result as object, cf)
-    const ps = getPopulatedState(ctx)
+    const changefeed = createCf(channels, path)
+    attachChangefeed(result as object, changefeed)
+    const populatedState = getPopulatedState(ctx)
     attachIsPopulated(
       result as object,
       path,
-      ps.populated,
-      ps.populatedListeners,
+      populatedState.populated,
+      populatedState.populatedListeners,
     )
   }
 }

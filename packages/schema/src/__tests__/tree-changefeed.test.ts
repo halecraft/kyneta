@@ -16,7 +16,7 @@ const Outline = Schema.struct({
 })
 
 function collectOps(changesets: readonly Changeset<Op>[]): readonly Op[] {
-  return changesets.flatMap(cs => cs.changes)
+  return changesets.flatMap(changeset => changeset.changes)
 }
 
 function isTreeOp(op: Op): op is Op & {
@@ -43,7 +43,7 @@ describe("subscribe(doc) on a doc with Schema.tree", () => {
   it("receives the TreeChange.create AND the initial-data MapChange in one flush", () => {
     const doc = createDoc(Outline)
     const changesets: Changeset<Op>[] = []
-    subscribe(doc as any, cs => changesets.push(cs))
+    subscribe(doc as any, changeset => changesets.push(changeset))
 
     let id = ""
     batch(doc as any, (d: any) => {
@@ -76,7 +76,7 @@ describe("subscribe(doc) on a doc with Schema.tree", () => {
     })
 
     const changesets: Changeset<Op>[] = []
-    subscribe(doc as any, cs => changesets.push(cs))
+    subscribe(doc as any, changeset => changesets.push(changeset))
 
     batch(doc as any, (d: any) => {
       d.tree.node(id).label.set("updated")
@@ -103,7 +103,9 @@ describe("subscribe(d.tree.node(id))", () => {
     })
 
     const changesets: Changeset<Op>[] = []
-    subscribe((doc as any).tree.node(id), cs => changesets.push(cs))
+    subscribe((doc as any).tree.node(id), changeset =>
+      changesets.push(changeset),
+    )
 
     batch(doc as any, (d: any) => {
       d.tree.node(id).label.set("renamed")
@@ -126,7 +128,9 @@ describe("subscribe(d.tree.node(id))", () => {
     })
 
     const aChangesets: Changeset<Op>[] = []
-    subscribe((doc as any).tree.node(a), cs => aChangesets.push(cs))
+    subscribe((doc as any).tree.node(a), changeset =>
+      aChangesets.push(changeset),
+    )
 
     batch(doc as any, (d: any) => {
       d.tree.node(b).label.set("B-updated")
@@ -145,7 +149,7 @@ describe("same-batch create + data write", () => {
   it("doc-level subscriber sees BOTH the topology op and the data op", () => {
     const doc = createDoc(Outline)
     const changesets: Changeset<Op>[] = []
-    subscribe(doc as any, cs => changesets.push(cs))
+    subscribe(doc as any, changeset => changesets.push(changeset))
 
     batch(doc as any, (d: any) => {
       d.tree.create({ data: { label: "z" } })
@@ -176,7 +180,9 @@ describe("terminal event on delete", () => {
     })
 
     const changesets: Changeset<Op>[] = []
-    subscribe((doc as any).tree.node(id), cs => changesets.push(cs))
+    subscribe((doc as any).tree.node(id), changeset =>
+      changesets.push(changeset),
+    )
 
     batch(doc as any, (d: any) => {
       d.tree.delete(id)
@@ -202,7 +208,9 @@ describe("terminal event on delete", () => {
     })
 
     const changesets: Changeset<Op>[] = []
-    subscribe((doc as any).tree.node(id), cs => changesets.push(cs))
+    subscribe((doc as any).tree.node(id), changeset =>
+      changesets.push(changeset),
+    )
 
     batch(doc as any, (d: any) => {
       d.tree.delete(id)
@@ -227,7 +235,7 @@ describe("terminal event on delete", () => {
     })
 
     const docChangesets: Changeset<Op>[] = []
-    subscribe(doc as any, cs => docChangesets.push(cs))
+    subscribe(doc as any, changeset => docChangesets.push(changeset))
 
     batch(doc as any, (d: any) => {
       d.tree.delete(id)
@@ -262,9 +270,11 @@ describe("terminal event on delete", () => {
 
     const childChangesets: Changeset<Op>[] = []
     const grandchildChangesets: Changeset<Op>[] = []
-    subscribe((doc as any).tree.node(child), cs => childChangesets.push(cs))
-    subscribe((doc as any).tree.node(grandchild), cs =>
-      grandchildChangesets.push(cs),
+    subscribe((doc as any).tree.node(child), changeset =>
+      childChangesets.push(changeset),
+    )
+    subscribe((doc as any).tree.node(grandchild), changeset =>
+      grandchildChangesets.push(changeset),
     )
 
     batch(doc as any, (d: any) => {
@@ -305,7 +315,9 @@ describe("move preserves identity", () => {
     })
 
     const changesets: Changeset<Op>[] = []
-    subscribe((doc as any).tree.node(c), cs => changesets.push(cs))
+    subscribe((doc as any).tree.node(c), changeset =>
+      changesets.push(changeset),
+    )
 
     batch(doc as any, (d: any) => {
       d.tree.move(c, { parent: b, index: 0 })
@@ -340,7 +352,7 @@ describe("unsubscribe and resubscribe", () => {
   it("unsubscribed callback receives nothing after unsubscribe", () => {
     const doc = createDoc(Outline)
     const changesets: Changeset<Op>[] = []
-    const unsub = subscribe(doc as any, cs => changesets.push(cs))
+    const unsub = subscribe(doc as any, changeset => changesets.push(changeset))
     unsub()
 
     batch(doc as any, (d: any) => {
@@ -359,8 +371,8 @@ describe("unsubscribe and resubscribe", () => {
 
     // First subscriber + unsubscribe (last-subscriber teardown path).
     const firstChangesets: Changeset<Op>[] = []
-    const firstUnsub = subscribe((doc as any).tree.node(id), cs =>
-      firstChangesets.push(cs),
+    const firstUnsub = subscribe((doc as any).tree.node(id), changeset =>
+      firstChangesets.push(changeset),
     )
     firstUnsub()
 
@@ -375,7 +387,9 @@ describe("unsubscribe and resubscribe", () => {
 
     // Second subscriber on the same still-live node also sees no phantom.
     const secondChangesets: Changeset<Op>[] = []
-    subscribe((doc as any).tree.node(id), cs => secondChangesets.push(cs))
+    subscribe((doc as any).tree.node(id), changeset =>
+      secondChangesets.push(changeset),
+    )
 
     // Write something to confirm liveness.
     batch(doc as any, (d: any) => {
