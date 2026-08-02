@@ -198,7 +198,15 @@ Kyneta exports five pre-configured binding targets:
 #### `ephemeral` vs `state`
 Both targets implement snapshot-only transient delivery via `SYNC_EPHEMERAL`, but they have radically different semantics:
 - `ephemeral`: A **Global LWW Register**. A write to any field bumps the global document timestamp. When peers sync, the peer with the newest timestamp overwrites the *entire* document. Useful when you explicitly want total state replacement.
-- `state`: A **Field-level LWW Map (CvRDT)**. The substrate maintains a `[Value, Timestamp]` tuple for every scalar leaf. When peers sync, the payloads merge concurrently field-by-field (`Highest T wins`). Useful for decentralized presence where multiple peers write to their own keys in a shared document without clobbering each other, without generating any op-log history bloat. A `sum`/discriminated-union variant and a `.json()` blob are stored as a **single atomic register** tuple (`[wholeValue, T]`), not decomposed — so a concurrent variant switch resolves whole (highest-T wins) and never blends fields across variants.
+- `state`: A **Field-level LWW Map (CvRDT)**. The substrate maintains a `[Value, Timestamp]` tuple for every scalar leaf. When peers sync, the payloads merge concurrently field-by-field. Useful for decentralized presence where multiple peers write to their own keys in a shared document without clobbering each other, without generating any op-log history bloat. A `sum`/discriminated-union variant and a `.json()` blob are stored as a **single atomic register** tuple (`[wholeValue, T]`), not decomposed — so a concurrent variant switch resolves whole and never blends fields across variants.
+
+###### The merge rule, in full
+
+Highest timestamp wins; **on a tie, the greater `JSON.stringify(value)` wins**. State both halves — the tie is the half a reader will meet in production and not in testing, and getting it wrong is invisible.
+
+The tie rule is not a detail. Timestamps come from `Date.now()`, so a tie means two peers wrote in the same millisecond — routine for presence traffic, which arrives in bursts from many peers at once. A merge that resolved ties by preferring "the remote value" would be deterministic but *not commutative*: each peer would keep its own value and the two would diverge permanently, with no error raised and no convergence to follow. Commutativity, associativity and idempotence are pinned as laws in `state-lattice.test.ts`.
+
+On a tie the greater **value** wins, not the later writer — a tie *is* simultaneity, so there is no later writer to prefer. Comparing serialisations is sound because both peers compare the same pair of strings and so reach the same verdict, and because string comparison is a total order, which is what makes the join associative across three or more tied peers. Only the tie path pays for `stringify`.
 
 ##### Atomic registers in the StateTree
 

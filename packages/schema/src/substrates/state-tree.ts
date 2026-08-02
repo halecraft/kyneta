@@ -63,15 +63,66 @@ export function isStateTuple(node: unknown): node is StateTuple {
 // ---------------------------------------------------------------------------
 
 /**
+ * Rank a tuple's value for tie-breaking, as its JSON serialisation.
+ *
+ * `JSON.stringify(undefined)` evaluates to `undefined` rather than a string,
+ * which would make the comparison in `joinTuples` non-total and break the
+ * lattice. Any fixed stand-in restores the total order, and it cannot be
+ * confused with a real value: the string `"undefined"` serialises *with*
+ * quotes, so it ranks differently from this bare marker.
+ */
+function valueRank(value: unknown): string {
+  return JSON.stringify(value) ?? "undefined"
+}
+
+/**
+ * The join of two leaf tuples — which one wins.
+ *
+ * Highest timestamp wins. On a tie, the greater value rank wins.
+ *
+ * The tie rule is a semantic choice worth stating plainly: on a tie the
+ * greater *value* wins, not the later writer. A tie IS simultaneity — two
+ * peers wrote in the same millisecond — so there is no later writer to prefer.
+ * An arbitrary-but-agreed winner is the most that can be asked for, and that
+ * is exactly what a CvRDT join needs.
+ *
+ * Comparing serialisations looks fragile and is not, for three reasons worth
+ * spelling out because the failure it prevents is invisible:
+ *
+ *  - Two peers might serialise an equal object with different key order, but
+ *    each side compares *the same pair of strings* and so reaches the same
+ *    verdict. Disagreement would need the two peers to disagree about a single
+ *    comparison, which cannot happen when both hold both values.
+ *  - String comparison is a total order, which is what makes the join
+ *    associative across three or more tied peers. A merely-deterministic rule
+ *    (the old "pick remote") is not: it gives a different answer depending on
+ *    which side you are, which is precisely how two peers diverged forever.
+ *  - Values are JSON-safe by construction — the wire format for a whole tree
+ *    is `JSON.stringify(tree)`, so anything unserialisable could never have
+ *    reached a peer to be compared in the first place.
+ *
+ * Only the equal-timestamp path pays for `stringify`; the common case compares
+ * two numbers and stops.
+ *
+ * Returns one of its two arguments rather than a copy, so the ordinary path
+ * allocates nothing. Callers decide whether the winner needs cloning.
+ */
+export function joinTuples(local: StateTuple, remote: StateTuple): StateTuple {
+  if (remote[1] > local[1]) return remote
+  if (local[1] > remote[1]) return local
+  return valueRank(remote[0]) > valueRank(local[0]) ? remote : local
+}
+
+/**
  * Schema-blind recursive merge of two StateTrees.
  *
  * This implements the $A \sqcup B$ join operation for the CvRDT.
- * For leaf tuples, it takes the maximum timestamp.
+ * For leaf tuples, it defers to `joinTuples`.
  * For containers, it takes the union of keys and recurses.
  *
  * A `sum`/`.json()` register is a single leaf tuple *by construction* (see
  * "Tree construction" below), so this schema-blind join merges it atomically
- * — highest-T wins on the whole variant, never blending fields across
+ * — the whole variant wins or loses together, never blending fields across
  * variants. That structural encoding is exactly why merge needs no schema:
  * headless relays/stores converge on raw payloads without one.
  *
@@ -79,13 +130,15 @@ export function isStateTuple(node: unknown): node is StateTuple {
  */
 export function mergeStateTree(local: StateTree, remote: StateTree): StateTree {
   if (isStateTuple(local) && isStateTuple(remote)) {
-    // Highest T wins. In a tie, arbitrarily pick remote to be deterministic
-    // (though values should ideally be identical if T is identical).
-    if (remote[1] >= local[1]) {
-      local[0] = remote[0]
-      local[1] = remote[1]
-    }
-    return local
+    // Adopt the winning tuple WHOLE rather than copying slot by slot. Copying
+    // a fixed set of slots would silently preserve any slot this function does
+    // not know about, so a tuple that lost the join could still impose its
+    // extra slots on the value that beat it. Taking the winner entire keeps
+    // the merge indifferent to how many slots a tuple carries.
+    const winner = joinTuples(local, remote)
+    // Clone on the remote-wins path so the merged tree never aliases the
+    // incoming payload, which the caller may still own.
+    return winner === local ? local : cloneTuple(winner)
   }
 
   // Type mismatch fallback (should not happen with valid peer data,
@@ -280,8 +333,24 @@ function isExpired(
 // Clone Helper
 // ---------------------------------------------------------------------------
 
+/**
+ * Copy a leaf tuple.
+ *
+ * Deliberately arity-agnostic: it copies whatever slots the tuple has rather
+ * than naming them. Naming slots here would quietly truncate any tuple that
+ * carries more than the two this function happened to know about.
+ *
+ * Shallow, like the clone it replaced — a tuple's value is deep-cloned once on
+ * the way in by `leafTuple`, so the tree never aliases a caller's live value.
+ */
+function cloneTuple(tuple: StateTuple): StateTuple {
+  return tuple.slice() as StateTuple
+}
+
 function deepClone(value: any): any {
-  if (Array.isArray(value)) return [value[0], value[1]] // StateTuple
+  // An array inside a StateTree is always a leaf tuple: sequences are not a
+  // supported container on this substrate, so nothing else can be an array.
+  if (Array.isArray(value)) return cloneTuple(value as StateTuple)
   if (typeof value === "object" && value !== null) {
     const clone: Record<string, any> = {}
     for (const key of Object.keys(value)) {
