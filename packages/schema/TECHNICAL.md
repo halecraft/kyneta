@@ -221,7 +221,7 @@ Two properties follow from being snapshot-only and transient:
 
 Highest timestamp wins; **on a tie, the greater `JSON.stringify(value)` wins**. State both halves — the tie is the half a reader will meet in production and not in testing, and getting it wrong is invisible.
 
-The tie rule is not a detail. Timestamps come from `Date.now()`, so a tie means two peers wrote in the same millisecond — routine for presence traffic, which arrives in bursts from many peers at once. A merge that resolved ties by preferring "the remote value" would be deterministic but *not commutative*: each peer would keep its own value and the two would diverge permanently, with no error raised and no convergence to follow. Commutativity, associativity and idempotence are pinned as laws in `state-lattice.test.ts`.
+The tie rule is not a detail. Timestamps come from `Date.now()`, so a tie means two peers wrote in the same millisecond — routine for presence traffic, which arrives in bursts from many peers at once. A merge that resolved ties by preferring "the remote value" would be deterministic but *not commutative*: each peer would keep its own value and the two would diverge permanently, with no error raised and no convergence to follow. Commutativity, associativity and idempotence are pinned as laws in `ephemeral-lattice.test.ts`.
 
 On a tie the greater **value** wins, not the later writer — a tie *is* simultaneity, so there is no later writer to prefer. Comparing serialisations is sound because both peers compare the same pair of strings and so reach the same verdict, and because string comparison is a total order, which is what makes the join associative across three or more tied peers. Only the tie path pays for `stringify`.
 

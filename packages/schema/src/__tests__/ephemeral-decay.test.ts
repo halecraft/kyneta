@@ -1,4 +1,4 @@
-// state-decay — tests for `.decay(ms)` on the state substrate.
+// ephemeral-decay — tests for `.decay(ms)` on the `ephemeral` substrate.
 //
 // Verifies:
 // - Schema: `.decay(N)` sets `decayMs` and does not pollute base schemas.

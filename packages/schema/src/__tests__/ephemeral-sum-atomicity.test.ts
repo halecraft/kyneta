@@ -1,4 +1,4 @@
-// state-sum-atomicity — sum & .json() nodes are atomic LWW registers.
+// ephemeral-sum-atomicity — sum & .json() nodes are atomic LWW registers.
 //
 // A sum variant or a `.json()` blob must merge as ONE value: a variant switch
 // moves the tag and its fields together. The state substrate stores each such

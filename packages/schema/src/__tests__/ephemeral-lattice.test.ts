@@ -1,4 +1,4 @@
-// state-lattice — the `ephemeral` substrate's merge is a join-semilattice.
+// ephemeral-lattice — the `ephemeral` substrate's merge is a join-semilattice.
 //
 // A CvRDT converges only if its merge is commutative, associative and
 // idempotent. Those laws are the whole reason two peers can exchange state in

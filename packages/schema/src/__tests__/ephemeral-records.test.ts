@@ -1,4 +1,4 @@
-// state-records — `Schema.record` works on the `ephemeral` substrate.
+// ephemeral-records — `Schema.record` works on the `ephemeral` substrate.
 //
 // The `ephemeral` target exists for decentralised presence, and that use case wants a roster:
 // a record keyed by peer, each peer writing only its own key. It was the one
@@ -181,7 +181,7 @@ describe("two peers merge a roster without clobbering", () => {
     // `mergeStateTree` unions keys, so absence carries no information: a key
     // one peer lacks is indistinguishable from one it has never seen. This is
     // exactly why deletion has to be represented rather than expressed by
-    // omission — see state-deletion.test.ts for the tombstone that does it.
+    // omission — see ephemeral-deletion.test.ts for the tombstone that does it.
     const peerA = ephemeralSubstrateFactory.fromEntirety(
       payload({ peers: { alice: [1, 100] } }),
       Roster,

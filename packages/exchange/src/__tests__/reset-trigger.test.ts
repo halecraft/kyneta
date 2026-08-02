@@ -113,7 +113,7 @@ describe("classifyResetTrigger — transient documents reach no trigger", () => 
   //
   //   - durability excludes the compaction trigger — pinned below;
   //   - StateVersion reports DEFAULT_LINEAGE, which excludes the lineage
-  //     trigger — pinned in @kyneta/schema's state-lattice suite.
+  //     trigger — pinned in @kyneta/schema's ephemeral-lattice suite.
   //
   // If either fact changes, the reset path would begin rebuilding a CvRDT
   // replica from a peer snapshot, silently dropping concurrent field writes

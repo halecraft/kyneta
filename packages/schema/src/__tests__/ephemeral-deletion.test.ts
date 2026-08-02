@@ -1,4 +1,4 @@
-// state-deletion — a deleted key stays deleted after a merge.
+// ephemeral-deletion — a deleted key stays deleted after a merge.
 //
 // `mergeStateTree` unions keys, so absence carries no information: a key one
 // peer lacks looks exactly like a key it has never seen. A removal therefore
