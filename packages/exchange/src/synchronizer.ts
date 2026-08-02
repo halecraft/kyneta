@@ -29,6 +29,7 @@ import {
 import type {
   DevtoolsHistory,
   DocMetadata,
+  Durability,
   ReplicaFactoryLike,
   ReplicaLike,
   ReplicaType,
@@ -270,20 +271,69 @@ function resolveOutboundVersionGap(
 }
 
 /**
- * Explicit lineage-boundary detection: `remoteLineage !== localLineage`, fired
- * independent of payload shape (`kind: "since"` included) — this is what
- * eliminates the old `isEntirety && hasEverSynced` heuristic for the
- * identity-discontinuity case. `DEFAULT_LINEAGE` on either side is excluded:
- * `DEFAULT_LINEAGE` is the normal lazy-mint/first-sync path already handled
- * correctly by `compare()`/`merge()` — it is not a trustworthy mismatch signal.
+ * Which kind of reset — if any — an inbound offer represents.
+ *
+ * A "reset" means: stop trying to reconcile with local state, and take the
+ * sender's word for the document instead. Two quite different situations lead
+ * there, and they are worth telling apart because only one of them is about
+ * identity.
+ *
+ * - `"lineage"` — an *identity* discontinuity. The sender is authoring a
+ *   different lineage than we are (see {@link Version.lineage}), typically a
+ *   serialized writer that restarted with no persisted store and minted a
+ *   fresh one. Its history is not a continuation of ours.
+ * - `"compaction"` — a *history* gap within the same lineage. The sender
+ *   trimmed history past our version, so its `exportSince()` could not compute
+ *   a delta and fell back to a whole-state image. Identity is unchanged; only
+ *   the connecting history is missing.
+ * - `"none"` — an ordinary offer. Merge it.
  */
-export function isLineageBoundaryOffer(
+export type ResetTrigger = "none" | "lineage" | "compaction"
+
+/**
+ * Classify an inbound offer into a {@link ResetTrigger}. Pure, so that every
+ * outcome can be tested without standing up a Synchronizer.
+ *
+ * **Lineage** requires a REAL lineage on *both* sides. `DEFAULT_LINEAGE` is
+ * excluded because it is the ordinary lazy-mint / first-sync value, which
+ * `merge()` already handles — a mismatch against it means nothing. Only
+ * `PlainVersion` ever mints a real one, so in practice this fires for `json`
+ * documents alone.
+ *
+ * **Compaction** requires a whole-state image from a peer already marked
+ * synced; a first entirety is just initial sync. It is the only signal
+ * available for a same-lineage history gap, since there is no lineage
+ * mismatch to find.
+ *
+ * Transient documents are excluded from compaction outright. The heuristic
+ * presumes a sender that can trim history, but a snapshot-only substrate keeps
+ * no trimmable log, and *every* steady-state push is already an entirety —
+ * applying it to presence traffic would classify ordinary sync as a reset on
+ * every message after the first.
+ *
+ * One consequence is worth stating, because it depends on two facts that live
+ * in different files: **a transient CvRDT document reaches neither trigger.**
+ * Durability excludes it from compaction here, and `StateVersion` reporting
+ * `DEFAULT_LINEAGE` excludes it from lineage. That is what lets the reset path
+ * rebuild a replica rather than merge into it — see `#executeImportDocData`.
+ * `epoch-boundary.test.ts` pins both halves.
+ */
+export function classifyResetTrigger(
   localLineage: string,
   remoteLineage: string,
-): boolean {
+  isEntirety: boolean,
+  senderAlreadySynced: boolean,
+  durability: Durability,
+): ResetTrigger {
   const lineagesComparable =
     remoteLineage !== DEFAULT_LINEAGE && localLineage !== DEFAULT_LINEAGE
-  return lineagesComparable && remoteLineage !== localLineage
+  if (lineagesComparable && remoteLineage !== localLineage) return "lineage"
+
+  if (isEntirety && senderAlreadySynced && durability !== "transient") {
+    return "compaction"
+  }
+
+  return "none"
 }
 
 // ---------------------------------------------------------------------------
@@ -1415,50 +1465,22 @@ export class Synchronizer {
         break
     }
 
-    // Lineage boundary detection: the explicit signal is `Version.lineage`
-    // disagreement between the incoming payload's parsed version and our
-    // current replica version — the Synchronizer gates on this directly,
-    // and independently of payload shape (fires even for `kind: "since"`).
-    const localLineage = runtime.replica.version().lineage
-    const remoteLineage = gap.parsed.lineage
-    const isLineageBoundary = isLineageBoundaryOffer(
-      localLineage,
-      remoteLineage,
-    )
-
-    // Legacy heuristic: an entirety payload arriving from a peer we have
-    // *already* synced *with* signals a compaction-induced reset from
-    // *that peer* (the sender trimmed history past our version). This remains
-    // unconditional (not gated on lineage comparability) because it is the
-    // *only* signal for same-lineage compaction-truncation resets — those
-    // carry no lineage mismatch at all, just a history gap. The explicit
-    // lineage check above only ever adds coverage (identity-discontinuity
-    // resets, detectable independent of payload shape); it never narrows
-    // this heuristic's original scope. The first-ever entirety from a peer
-    // is initial sync (senderAlreadySynced is false) — the normal merge path
-    // handles that; subsequent entireties go through the policy.
-    //
-    // Excluded for `durability: "transient"` (ephemeral/LWW) docs: the
-    // heuristic's own rationale presupposes a doc whose sender can "trim
-    // history past our version" — but ephemeral docs never retain history
-    // to trim (`timestampVersionStrategy.logOffset` always returns `null`;
-    // `exportSince` always falls back to `exportEntirety`). Combined with
-    // ephemeral's `delivery: "snapshot-only"` (every push is `kind:
-    // "entirety"`, never `"since"`), applying this heuristic to ephemeral
-    // docs would misclassify every steady-state push after the first sync
-    // as a compaction-induced reset — there is no compaction concept for a
-    // substrate that never accumulates a trimmable log in the first place.
-    const isEntirety = effect.payload.kind === "entirety"
+    // Does this offer mean "reconcile with me" or "take my word for it"?
+    // `classifyResetTrigger` holds that entire decision — see its doc comment
+    // for what each trigger means and which substrates can produce it.
     const sync = this.#syncHandle.getState()
     const senderAlreadySynced =
       sync.peers.get(effect.fromPeerId)?.docSyncStates.get(effect.docId)
         ?.status === "synced"
-    const isLegacyReset =
-      isEntirety &&
-      senderAlreadySynced &&
-      runtime.syncMode.durability !== "transient"
+    const resetTrigger = classifyResetTrigger(
+      runtime.replica.version().lineage,
+      gap.parsed.lineage,
+      effect.payload.kind === "entirety",
+      senderAlreadySynced,
+      runtime.syncMode.durability,
+    )
 
-    if (isLineageBoundary || isLegacyReset) {
+    if (resetTrigger !== "none") {
       const peerState = sync.peers.get(effect.fromPeerId)
       const peerIdentity = peerState?.identity ?? {
         peerId: effect.fromPeerId,
@@ -1481,9 +1503,9 @@ export class Synchronizer {
       // are only well-defined for a self-sufficient `kind: "entirety"`
       // state image — a `kind: "since"` delta has no valid causal anchor
       // once the lineage has changed, so there is no coherent way to
-      // "reset" with it. The lineage-boundary check above is intentionally
-      // independent of payload shape (see isLineageBoundaryOffer), so it
-      // can and does fire on `"since"` offers. Recover by re-requesting
+      // "reset" with it. The lineage trigger is intentionally independent of
+      // payload shape (see classifyResetTrigger), so it can and does fire on
+      // `"since"` offers. Recover by re-requesting
       // the sender's current state (a fresh `interest`) instead of
       // feeding an inapplicable delta to a reset path that cannot
       // service it — the sender's existing interest-response path
@@ -1505,37 +1527,40 @@ export class Synchronizer {
       }
 
       if (runtime.mode === "replicate") {
-        // Headless replicas must replace the whole replica via
-        // fromEntirety. A plain `merge()` would preserve local ops
-        // whose causal anchors were trimmed, leaving the replica in
-        // an inconsistent state. State-based CRDTs (CvRDTs) fall
-        // through to merge instead — `fromEntirety` would replace
-        // local state entirely, losing concurrent field writes that
-        // the peer doesn't yet have.
-        if (runtime.replicaFactory.replicaType[0] !== "state") {
-          try {
-            runtime.replica = runtime.replicaFactory.fromEntirety(
-              effect.payload,
-            )
-          } catch (err) {
-            console.warn(
-              `[exchange] lineage boundary reset failed for doc '${effect.docId}'.`,
-              err,
-            )
-            return
-          }
-
-          const newVersion = runtime.replica.version().serialize()
-          this.#dispatchSync({
-            type: "sync/doc-imported",
-            docId: effect.docId,
-            version: newVersion,
-            fromPeerId: effect.fromPeerId,
-          })
+        // Headless replicas rebuild from the payload rather than merging it.
+        //
+        // Merging would be wrong for both triggers, for the same underlying
+        // reason: the incoming image is not a continuation of what we hold.
+        // Under `"compaction"` the sender genuinely rewrote its history —
+        // `LoroReplica.advance()` exports a shallow snapshot and rebuilds the
+        // doc from it, and `YjsReplica.advance()` re-projects into a fresh
+        // `Y.Doc`, because Yjs has no trim primitive at all. Merging such an
+        // image keeps local ops whose causal anchors it no longer carries.
+        // Under `"lineage"` the sender's history is a different identity
+        // altogether, so there is nothing to reconcile against.
+        //
+        // Rebuilding would be wrong for a field-level LWW substrate — it drops
+        // concurrent field writes the sender has not seen. That is safe here
+        // only because such a document never reaches this branch; see
+        // `classifyResetTrigger` for why.
+        try {
+          runtime.replica = runtime.replicaFactory.fromEntirety(effect.payload)
+        } catch (err) {
+          console.warn(
+            `[exchange] ${resetTrigger} reset failed for doc '${effect.docId}'.`,
+            err,
+          )
           return
         }
-        // `state` (replicate mode): fall through to the routine merge
-        // path below — field-level LWW absorption is always safe.
+
+        const newVersion = runtime.replica.version().serialize()
+        this.#dispatchSync({
+          type: "sync/doc-imported",
+          docId: effect.docId,
+          version: newVersion,
+          fromPeerId: effect.fromPeerId,
+        })
+        return
       } else {
         // Interpret-mode substrates: `resetFromEntirety` discards local
         // history and adopts the incoming state and lineage explicitly,

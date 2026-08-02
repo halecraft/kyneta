@@ -9,15 +9,15 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { describe, expect, it } from "vitest"
-import { tick, type TickInput } from "./tick.js"
 import {
-  ARENA_WIDTH,
   ARENA_HEIGHT,
+  ARENA_WIDTH,
   CAR_RADIUS,
   COLLISION_COOLDOWN,
   HIT_EFFECT_DURATION,
 } from "../constants.js"
 import { makeCar, makeTickInput } from "./test-helpers.js"
+import { type TickInput, tick } from "./tick.js"
 
 // ─────────────────────────────────────────────────────────────────────────
 // Basic tick behavior
@@ -139,9 +139,7 @@ describe("tick", () => {
     const key = ["alice", "bob"].sort().join("-")
     const recentCollisions = new Map([[key, now - 100]]) // 100ms ago, well within cooldown
 
-    const result = tick(
-      makeTickInput({ cars, recentCollisions, now }),
-    )
+    const result = tick(makeTickInput({ cars, recentCollisions, now }))
 
     // The collision should be suppressed by cooldown
     expect(result.scoredCollisions).toHaveLength(0)
@@ -165,9 +163,7 @@ describe("tick", () => {
     const key = ["alice", "bob"].sort().join("-")
     const recentCollisions = new Map([[key, now - COLLISION_COOLDOWN - 100]])
 
-    const result = tick(
-      makeTickInput({ cars, recentCollisions, now }),
-    )
+    const result = tick(makeTickInput({ cars, recentCollisions, now }))
 
     // Cooldown expired — collision should score
     expect(result.scoredCollisions.length).toBeGreaterThanOrEqual(1)
@@ -218,9 +214,7 @@ describe("tick", () => {
     ])
 
     // No cars, no collisions — just testing cleanup
-    const result = tick(
-      makeTickInput({ recentCollisions, now }),
-    )
+    const result = tick(makeTickInput({ recentCollisions, now }))
 
     expect(result.recentCollisions.has("alice-bob")).toBe(false)
     expect(result.recentCollisions.has("alice-charlie")).toBe(true)
@@ -258,7 +252,9 @@ describe("tick", () => {
     const result = tick(makeTickInput({ cars }))
 
     // After tick, car should be within bounds and velocity reversed
-    expect(result.cars.get("alice")!.x).toBeLessThanOrEqual(ARENA_WIDTH - CAR_RADIUS)
+    expect(result.cars.get("alice")!.x).toBeLessThanOrEqual(
+      ARENA_WIDTH - CAR_RADIUS,
+    )
     expect(result.cars.get("alice")!.vx).toBeLessThan(0) // bounced
   })
 })

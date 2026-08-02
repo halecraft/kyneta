@@ -21,13 +21,13 @@
 import http from "node:http"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { PrismaClient } from "@prisma/client"
 import { Exchange } from "@kyneta/exchange"
 import { createPrismaStore } from "@kyneta/prisma-store"
 import {
   WebsocketServerTransport,
   wrapNodeWebsocket,
 } from "@kyneta/websocket-transport/server"
+import { PrismaClient } from "@prisma/client"
 import { createServer as createViteServer } from "vite"
 import { WebSocketServer } from "ws"
 import { CounterDoc } from "./schema.js"

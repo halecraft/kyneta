@@ -10,9 +10,15 @@ import { Exchange } from "@kyneta/exchange"
 import { randomPeerId } from "@kyneta/random"
 import { subscribe } from "@kyneta/schema"
 import { createUnixSocketPeer } from "@kyneta/unix-socket-transport"
+import {
+  type Direction,
+  fields,
+  stepBoolean,
+  stepNumber,
+  stepString,
+} from "./fields.js"
 import { ConfigDoc } from "./schema.js"
-import { fields, stepBoolean, stepString, stepNumber, type Direction } from "./fields.js"
-import { render, startInput, type PeerInfo } from "./tui.js"
+import { type PeerInfo, render, startInput } from "./tui.js"
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -80,7 +86,7 @@ function rerender() {
 subscribe(doc, () => rerender())
 
 // Subscribe to exchange.peers for cleanup
-exchange.peers.subscribe((changeset) => {
+exchange.peers.subscribe(changeset => {
   for (const peerChange of changeset.changes) {
     if (peerChange.type === "peer-departed") {
       // Remove departed peer from the document's peers record (single write).
@@ -98,7 +104,7 @@ rerender()
 // Input
 // ---------------------------------------------------------------------------
 
-const stopInput = startInput((action) => {
+const stopInput = startInput(action => {
   switch (action) {
     case "quit":
       cleanup()
@@ -132,7 +138,13 @@ function applyChange(direction: Direction) {
       newValue = stepString(currentValue as string, field.options, direction)
       break
     case "number":
-      newValue = stepNumber(currentValue as number, field.step, field.min, field.max, direction)
+      newValue = stepNumber(
+        currentValue as number,
+        field.step,
+        field.min,
+        field.max,
+        direction,
+      )
       break
   }
 

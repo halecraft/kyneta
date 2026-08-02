@@ -6,13 +6,13 @@ import { describe, expect, it } from "vitest"
 import {
   batch,
   createRef,
+  ephemeralSubstrateFactory,
   interpret,
   observation,
   plainReplicaFactory,
   plainSubstrateFactory,
   readable,
   Schema,
-  stateSubstrateFactory,
   writable,
 } from "../index.js"
 import { type Address, AddressedPath, AddressTableRegistry } from "../path.js"
@@ -29,7 +29,7 @@ const SetDoc = Schema.struct({ tags: Schema.set(Schema.string()) })
 const TreeDoc = Schema.struct({
   outline: Schema.tree(Schema.struct({ label: Schema.string() })),
 })
-// The `state` substrate rejects ordered sequences and errors on record
+// The `ephemeral` substrate rejects ordered sequences and errors on record
 // whole-entry sets, so its freeze is exercised via a plain nested field.
 const StateDoc = Schema.struct({
   settings: Schema.struct({ theme: Schema.string() }),
@@ -296,7 +296,7 @@ describe("plain op-log: set and tree entry deletes survive export", () => {
 })
 
 // ===========================================================================
-// The `state` substrate got the same authoring-time freeze. It exports
+// The `ephemeral` substrate got the same authoring-time freeze. It exports
 // entirety (never serialized ops) and drains its op-log every batch, so the
 // freeze has no observable corruption path — its changefeed even re-derives
 // addressed paths. The one place the frozen value surfaces is the ops
@@ -306,7 +306,7 @@ describe("plain op-log: set and tree entry deletes survive export", () => {
 
 describe("state substrate: flushed op-log paths are frozen too", () => {
   it("records flushed ops as immutable RawPath, not live AddressedPath", () => {
-    const substrate = stateSubstrateFactory.create(StateDoc) as any
+    const substrate = ephemeralSubstrateFactory.create(StateDoc) as any
     const flushed: Array<{ path: { isAddressed: boolean } }> = []
     // Intercept afterBatch's return — the only surface exposing the frozen
     // ops before they're drained (the changefeed re-derives addressed paths).

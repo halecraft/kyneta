@@ -201,7 +201,7 @@ describe("needsContainer / fieldAbsPath", () => {
     // A sum is stored whole, so there is no container to create. Worth pinning
     // because the consequence reaches well past this predicate: a sum
     // answering `false` is what makes a register land as ONE tuple in the
-    // `state` substrate, and that in turn is what lets `mergeStateTree` merge
+    // `ephemeral` substrate, and that in turn is what lets `mergeStateTree` merge
     // raw payloads without ever consulting the schema.
     expect(needsContainer(Schema.string().nullable())).toBe(false)
   })

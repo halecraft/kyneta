@@ -1,6 +1,6 @@
-// state-records — `Schema.record` works on the `state` substrate.
+// state-records — `Schema.record` works on the `ephemeral` substrate.
 //
-// `state` exists for decentralised presence, and that use case wants a roster:
+// The `ephemeral` target exists for decentralised presence, and that use case wants a roster:
 // a record keyed by peer, each peer writing only its own key. It was the one
 // container the substrate could not do — `applyChangeToStateTree` read a
 // `MapChange` shape the change vocabulary has never defined, so every map
@@ -12,9 +12,9 @@
 // registers in the StateTree" that has caught this substrate before.
 
 import { describe, expect, it } from "vitest"
-import { batch, createDoc, mapChange, Schema, state } from "../index.js"
+import { batch, createDoc, ephemeral, mapChange, Schema } from "../index.js"
 import { RawPath } from "../path.js"
-import { stateSubstrateFactory } from "../substrates/state.js"
+import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
 import {
   applyChangeToStateTree,
   isStateTuple,
@@ -23,7 +23,7 @@ import {
 } from "../substrates/state-tree.js"
 
 const Roster = Schema.struct({ peers: Schema.record(Schema.number()) })
-const Bound = state.bind(Roster)
+const Bound = ephemeral.bind(Roster)
 const peersPath = RawPath.empty.field("peers")
 
 const asRecord = (tree: StateTree) => tree as Record<string, any>
@@ -168,7 +168,7 @@ describe("two peers merge a roster without clobbering", () => {
   })
 
   it("each peer's own key survives the merge", () => {
-    const peerA = stateSubstrateFactory.fromEntirety(
+    const peerA = ephemeralSubstrateFactory.fromEntirety(
       payload({ peers: { alice: [1, 100] } }),
       Roster,
     )
@@ -182,7 +182,7 @@ describe("two peers merge a roster without clobbering", () => {
     // one peer lacks is indistinguishable from one it has never seen. This is
     // exactly why deletion has to be represented rather than expressed by
     // omission — see state-deletion.test.ts for the tombstone that does it.
-    const peerA = stateSubstrateFactory.fromEntirety(
+    const peerA = ephemeralSubstrateFactory.fromEntirety(
       payload({ peers: { alice: [1, 100] } }),
       Roster,
     )

@@ -4,16 +4,16 @@
 // When peers reconnect after a failure, the Exchange handshake merges
 // their Loro documents — all writes converge, no data lost.
 
-import { Schema, loro } from "@kyneta/loro-schema"
+import { loro, Schema } from "@kyneta/loro-schema"
 
 export const ConfigSchema = Schema.struct({
-  darkMode:    Schema.boolean(),
-  logLevel:    Schema.string(),
-  region:      Schema.string(),
+  darkMode: Schema.boolean(),
+  logLevel: Schema.string(),
+  region: Schema.string(),
   maintenance: Schema.boolean(),
   maxRequests: Schema.number(),
-  rateLimit:   Schema.number(),
-  peers:       Schema.record(Schema.boolean()),
+  rateLimit: Schema.number(),
+  peers: Schema.record(Schema.boolean()),
 })
 
 export const ConfigDoc = loro.bind(ConfigSchema)

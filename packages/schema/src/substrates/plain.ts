@@ -88,7 +88,7 @@ import { Zero } from "../zero.js"
  * `lineage` string (lazily minted, and updatable via the accompanying
  * `adoptLineage` closure returned alongside the strategy — see below).
  * `timestampVersionStrategy` (LWW, in `lww.ts`) remains a genuinely stateless
- * `VersionStrategy<TimestampVersion>` singleton, unaffected by this.
+ * `VersionStrategy` singleton, unaffected by this.
  */
 export type VersionStrategy<V extends Version> = {
   /** Version for a replica with no state transitions. */
@@ -97,13 +97,13 @@ export type VersionStrategy<V extends Version> = {
   /**
    * Produce the current version after `flushCount` flush cycles.
    * For PlainVersion: `new PlainVersion(flushCount)`.
-   * For TimestampVersion: `TimestampVersion.now()`.
+   * For a wall-clock version: the current time.
    */
   current(flushCount: number): V
 
   /**
    * Map a since-version to a log offset, or null if the version
-   * cannot be mapped (e.g. TimestampVersion has no log index).
+   * cannot be mapped (e.g. a wall-clock version has no log index).
    *
    * The core uses this to slice the op log for delta export.
    * When null, the core falls back to `exportEntirety()`.
@@ -512,7 +512,7 @@ export function createPlainSubstrate<V extends Version>(
  *
  * Version construction and log-to-delta mapping are delegated to the
  * `VersionStrategy<V>` — the core never mentions `PlainVersion` or
- * `TimestampVersion` directly.
+ * a concrete version type directly.
  */
 function createPlainReplicaCore<V extends Version>(
   materialize: () => PlainState,
@@ -532,7 +532,7 @@ function createPlainReplicaCore<V extends Version>(
   // Cached version — computed once per flush cycle via strategy.current().
   // For PlainVersion (monotonic counter), this is deterministic: same
   // flushCount always produces the same version.
-  // For TimestampVersion (wall clock), caching is critical: version()
+  // For a wall-clock version, caching is critical: version()
   // must return the timestamp from the last flush, not a fresh Date.now()
   // on every call. Without caching, a receiver's version() advances in
   // real-time, causing inbound offers from the near-past to be rejected
@@ -634,7 +634,7 @@ function createPlainReplicaCore<V extends Version>(
       const offset = strategy.logOffset(since)
 
       // Strategy cannot map the version to a log index — fall back to
-      // entirety. This is the TimestampVersion path: wall-clock timestamps
+      // entirety. This is the wall-clock path: timestamps
       // have no relationship to the op log array.
       // Additionally, for PlainVersion, this is now triggered for cross-lineage versions.
       if (offset === null) return this.exportEntirety()
@@ -930,7 +930,7 @@ function stateImageToOps(state: Record<string, unknown>): Op[] {
  * comparison works correctly for authoritative sync.
  *
  * Used by both `plainSubstrateFactory.fromEntirety` and
- * `lwwSubstrateFactory.fromEntirety` — the only difference is the
+ * a wall-clock-versioned factory's `fromEntirety` — the only difference is the
  * strategy parameter.
  */
 export function buildPlainSubstrateFromEntirety<V extends Version>(
@@ -978,7 +978,7 @@ export function buildPlainSubstrateFromEntirety<V extends Version>(
  * that merges the entirety into its log.
  *
  * Used by both `plainReplicaFactory.fromEntirety` and
- * `lwwReplicaFactory.fromEntirety` — the only difference is the
+ * a wall-clock-versioned replica factory's `fromEntirety` — the difference is the
  * strategy parameter.
  */
 export function buildPlainReplicaFromEntirety<V extends Version>(
@@ -1003,7 +1003,7 @@ export function buildPlainReplicaFromEntirety<V extends Version>(
 
 /**
  * Shared `upgrade` implementation for both `plainSubstrateFactory` and
- * `lwwSubstrateFactory`.
+ * a wall-clock-versioned substrate factory.
  *
  * 1. Read the materialized state from the replica via `[BACKING_DOC]`
  * 2. Create the substrate (so `context()` is available for `executeBatch`)

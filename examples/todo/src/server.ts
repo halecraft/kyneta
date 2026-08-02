@@ -15,15 +15,15 @@
 
 /// <reference types="bun-types" />
 
-import { Exchange } from "@kyneta/exchange"
-import { WebsocketServerTransport } from "@kyneta/websocket-transport/server"
-import {
-  createBunWebsocketHandlers,
-  type BunWebsocketData,
-} from "@kyneta/websocket-transport/bun"
-import { TodoDoc } from "./schema.js"
 import { serveDist } from "@kyneta/bun-server"
+import { Exchange } from "@kyneta/exchange"
+import {
+  type BunWebsocketData,
+  createBunWebsocketHandlers,
+} from "@kyneta/websocket-transport/bun"
+import { WebsocketServerTransport } from "@kyneta/websocket-transport/server"
 import { build } from "./build.js"
+import { TodoDoc } from "./schema.js"
 
 // ─────────────────────────────────────────────────────────────────────────
 // 1. Exchange — server-side sync hub

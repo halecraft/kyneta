@@ -507,7 +507,7 @@ describe("Loro eager creation of an absent richtext field", () => {
     // makes either timing safe.
     const a = build(Nested)
     // A writes the parent struct while omitting `body` — the eager case — and
-    // B starts from that state, so both peers share a base in which the
+    // B starts from that ephemeral, so both peers share a base in which the
     // rich-text container was created without ever being written to.
     batch(a.doc, (d: any) => d.inner.set({ title: "x" } as any))
     const b = build(Nested)

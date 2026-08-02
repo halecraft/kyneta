@@ -1,7 +1,7 @@
 // facade/last-updated.ts — read the LWW timestamp from a state ref.
 //
 // Extracts the timestamp slot of the underlying `StateTuple` from
-// a `state` substrate ref.
+// an `ephemeral` substrate ref.
 
 import { hasTransact, PATH, TRANSACT } from "../interpreters/writable.js"
 import { BACKING_DOC } from "../substrate.js"
@@ -30,11 +30,11 @@ function getMaxTimestamp(tree: StateTree | undefined | null): number | null {
 /**
  * Reads the LWW timestamp for the given reference.
  *
- * This only works for references backed by the `state` substrate.
+ * This only works for references backed by the `ephemeral` substrate.
  * For any other substrate, or if the path does not resolve to a
  * tuple, it returns `null`.
  *
- * @param ref - A reference from a `state` document.
+ * @param ref - A reference from an `ephemeral` document.
  * @returns The timestamp (in milliseconds since lineage) or `null`.
  */
 export function lastUpdated(ref: unknown): number | null {
@@ -47,7 +47,7 @@ export function lastUpdated(ref: unknown): number | null {
 
   const backingDoc = (ctx as any)[BACKING_DOC]
 
-  // The backing doc for a `state` substrate is a StateTree.
+  // The backing doc for a `ephemeral` substrate is a StateTree.
   // We need to traverse the path to find the tuple.
   let current: unknown = backingDoc
   for (const segment of path.segments) {

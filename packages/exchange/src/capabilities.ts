@@ -18,7 +18,7 @@ import type {
   SubstrateFactory,
   SyncMode,
 } from "@kyneta/schema"
-import { BoundReplica, ephemeral, json, state } from "@kyneta/schema"
+import { BoundReplica, ephemeral, json } from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
 // ReplicaKey — composite lookup key
@@ -73,19 +73,23 @@ function replicaKey(replicaType: ReplicaType, syncMode: SyncMode): ReplicaKey {
 /**
  * Default replica bindings shipped with the exchange.
  *
+ * A "replica" here is the headless half of a substrate — enough to receive,
+ * store and re-emit payloads, with no ability to read the document. Relays and
+ * stores run on these.
+ *
  * - **json / authoritative**: monotonic-version plain JS objects with
  *   request/response sync (the default mode).
- * - **ephemeral**: timestamp-versioned plain JS objects with
- *   last-writer-wins broadcast (ephemeral/presence state).
+ * - **ephemeral**: field-level last-writer-wins registers, broadcast as whole
+ *   snapshots and never persisted. Presence, cursors, live input.
  *
- * Both are provided by the `json` and `ephemeral` substrate namespaces.
- * Consumers can extend this set by passing additional replicas (e.g.
- * `loro.replica()`) to `createCapabilities`.
+ * Both come from `@kyneta/schema`, which is why they can be defaults — the
+ * exchange already depends on it. The CRDT backends live in separate packages,
+ * so consumers add them explicitly by passing `loro.replica()` / `yjs.replica()`
+ * to `createCapabilities`.
  */
 export const DEFAULT_REPLICAS: readonly BoundReplica[] = [
   json.replica(),
   ephemeral.replica(),
-  state.replica(),
 ]
 
 // ---------------------------------------------------------------------------

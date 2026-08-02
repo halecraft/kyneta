@@ -15,9 +15,9 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { useEffect, useRef } from "react"
 import { batch } from "@kyneta/react"
 import type { Ref } from "@kyneta/schema"
+import { useEffect, useRef } from "react"
 import type { PlayerInputSchema } from "../../schema.js"
 import type { InputState } from "../../types.js"
 import { shouldSendInputUpdate, ZERO_INPUT } from "../logic.js"

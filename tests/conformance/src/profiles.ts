@@ -1,5 +1,5 @@
 import { loro } from "@kyneta/loro-schema"
-import { ephemeral, json, Schema, state } from "@kyneta/schema"
+import { ephemeral, json, Schema } from "@kyneta/schema"
 import { yjs } from "@kyneta/yjs-schema"
 
 /**
@@ -39,17 +39,17 @@ export const Optional = Schema.struct({
 //
 // A note for anyone extending this further: what a substrate accepts is decided
 // by composition laws, and wrapping changes them. `Schema.list(...)` is rejected
-// on `state` and `ephemeral` because a sequence carries `positional-ot`, which is
-// not in `EphemeralLaws` — and `.nullable()` does NOT change that, because it
-// does not erase the inner laws. `Schema.list.json(...)` binds fine on all five,
-// because `.json()` collapses the subtree to an inert blob and leaves only `lww`.
+// on `ephemeral` because a sequence carries `positional-ot`, which is not in
+// `EphemeralLaws` — and `.nullable()` does NOT change that, because it does not
+// erase the inner laws. `Schema.list.json(...)` binds fine on all four, because
+// `.json()` collapses the subtree to an inert blob and leaves only `lww`.
 // Struct- and record-shaped sums like the two above are unaffected.
 // `peers` is the one dynamic-key field; every other field here is fixed-key.
 // That is what it exists to test — membership itself can be concurrent, so a
 // key added by one peer can be removed by another, and "removed" then has to
 // survive a merge with someone who never saw the removal.
 //
-// It binds on all five: `map` carries `lww-per-key`, which is in
+// It binds on all four: `map` carries `lww-per-key`, which is in
 // `EphemeralLaws`. Rich text is the same arithmetic as the list case above and
 // lands on the other side of it, so a `richText` field cannot join this schema
 // at all. It is covered per-backend instead, in each backend's
@@ -109,23 +109,14 @@ export const PROFILES: readonly SubstrateProfile[] = [
     fieldConcurrency: "both-survive",
   },
   {
-    name: "ephemeral (whole-doc LWW)",
+    name: "state (field-level LWW)",
     bind: () => anyBind(ephemeral.bind(ConformanceSchema)),
     writerModel: "concurrent",
     durable: false,
     liveCompactable: false,
-    // A single document-wide timestamp: the newer write replaces the whole doc.
-    fieldConcurrency: "one-wins",
-  },
-  {
-    name: "state (field-level LWW)",
-    bind: () => anyBind(state.bind(ConformanceSchema)),
-    writerModel: "concurrent",
-    durable: false,
-    liveCompactable: false,
     // A `[value, timestamp]` per leaf — concurrent writes to distinct fields
-    // never clobber each other. This is the property that distinguishes `state`
-    // from `ephemeral`.
+    // never clobber each other. That is the whole reason this substrate
+    // exists: a presence roster where each peer writes only its own key.
     fieldConcurrency: "both-survive",
   },
   {

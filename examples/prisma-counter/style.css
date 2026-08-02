@@ -50,7 +50,9 @@ h1 {
   background: #fafafa;
   font-size: 28px;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
   display: flex;
   align-items: center;
   justify-content: center;

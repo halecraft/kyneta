@@ -6,10 +6,7 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-import {
-  ARENA_HEIGHT,
-  ARENA_WIDTH,
-} from "../constants.js"
+import { ARENA_HEIGHT, ARENA_WIDTH } from "../constants.js"
 import type { CarState, InputState } from "../types.js"
 
 export function makeCar(overrides: Partial<CarState> = {}): CarState {
@@ -26,12 +23,14 @@ export function makeCar(overrides: Partial<CarState> = {}): CarState {
   }
 }
 
-export function makeTickInput(overrides: {
-  cars?: Map<string, CarState>
-  inputs?: Map<string, InputState>
-  recentCollisions?: Map<string, number>
-  now?: number
-} = {}): {
+export function makeTickInput(
+  overrides: {
+    cars?: Map<string, CarState>
+    inputs?: Map<string, InputState>
+    recentCollisions?: Map<string, number>
+    now?: number
+  } = {},
+): {
   cars: Map<string, CarState>
   inputs: Map<string, InputState>
   recentCollisions: Map<string, number>

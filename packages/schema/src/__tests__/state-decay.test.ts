@@ -19,12 +19,11 @@ import {
   readable,
   Schema,
   SYNC_COLLABORATIVE,
-  state,
   subscribe,
   writable,
 } from "../index.js"
 import { RawPath } from "../path.js"
-import { stateSubstrateFactory } from "../substrates/state.js"
+import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
 import type { StateTree } from "../substrates/state-tree.js"
 import { extractPlainState } from "../substrates/state-tree.js"
 
@@ -134,14 +133,6 @@ describe("durable substrate rejects .decay()", () => {
     ).toThrow(/decay/i)
   })
 
-  it("state.bind allows .decay() (ephemeral)", () => {
-    const schema = Schema.struct({
-      presence: Schema.string().decay(2000),
-    })
-
-    expect(() => state.bind(schema)).not.toThrow()
-  })
-
   it("ephemeral.bind allows .decay()", () => {
     const schema = Schema.struct({
       presence: Schema.string().decay(2000),
@@ -168,7 +159,7 @@ describe("state substrate tick() decay sweep", () => {
    * the changefeed).
    */
   function makeDecayedSubstrate(_now: number) {
-    const substrate = stateSubstrateFactory.fromEntirety(
+    const substrate = ephemeralSubstrateFactory.fromEntirety(
       {
         kind: "entirety",
         encoding: "json",
@@ -238,7 +229,7 @@ describe("state substrate tick() decay sweep", () => {
       name: Schema.string(),
     })
 
-    const substrate = stateSubstrateFactory.fromEntirety(
+    const substrate = ephemeralSubstrateFactory.fromEntirety(
       {
         kind: "entirety",
         encoding: "json",
@@ -277,7 +268,7 @@ describe("state substrate tick() decay sweep", () => {
     })
 
     const initialNow = Date.now()
-    const substrate = stateSubstrateFactory.fromEntirety(
+    const substrate = ephemeralSubstrateFactory.fromEntirety(
       {
         kind: "entirety",
         encoding: "json",
@@ -472,28 +463,28 @@ describe("decay placement relative to an opaque boundary", () => {
     const schema = Schema.struct({
       opt: Schema.struct({ a: Schema.number() }).nullable().decay(1000),
     })
-    expect(() => state.bind(schema)).not.toThrow()
+    expect(() => ephemeral.bind(schema)).not.toThrow()
   })
 
   it("is legal ON a .json() node", () => {
     const schema = Schema.struct({
       blob: Schema.struct.json({ a: Schema.number() }).decay(1000),
     })
-    expect(() => state.bind(schema)).not.toThrow()
+    expect(() => ephemeral.bind(schema)).not.toThrow()
   })
 
   it("is rejected INSIDE a sum variant", () => {
     const schema = Schema.struct({
       opt: Schema.struct({ a: Schema.number().decay(1000) }).nullable(),
     })
-    expect(() => state.bind(schema)).toThrow(/one register with a single/)
+    expect(() => ephemeral.bind(schema)).toThrow(/one register with a single/)
   })
 
   it("is rejected INSIDE a .json() blob", () => {
     const schema = Schema.struct({
       blob: Schema.struct.json({ a: Schema.number().decay(1000) }),
     })
-    expect(() => state.bind(schema)).toThrow(/one register with a single/)
+    expect(() => ephemeral.bind(schema)).toThrow(/one register with a single/)
   })
 
   it("is rejected on a record item nested inside a .json() blob", () => {
@@ -505,14 +496,16 @@ describe("decay placement relative to an opaque boundary", () => {
         m: Schema.record(Schema.number().decay(1000)),
       }),
     })
-    expect(() => state.bind(schema)).toThrow(/one register with a single/)
+    expect(() => ephemeral.bind(schema)).toThrow(/one register with a single/)
   })
 
   it("names the fix rather than only the prohibition", () => {
     const schema = Schema.struct({
       opt: Schema.struct({ a: Schema.number().decay(1000) }).nullable(),
     })
-    expect(() => state.bind(schema)).toThrow(/Move \.decay\(\) onto the sum/)
+    expect(() => ephemeral.bind(schema)).toThrow(
+      /Move \.decay\(\) onto the sum/,
+    )
   })
 
   it("reports the durable rule first when a schema breaks both", () => {

@@ -12,7 +12,7 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { Schema, type Ref } from "@kyneta/schema"
+import { type Ref, Schema } from "@kyneta/schema"
 
 export const TodoSchema = Schema.struct({
   todos: Schema.list(

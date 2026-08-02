@@ -14,7 +14,7 @@
 //     ├─ pathSchema    returns just the schema
 //     └─ findOpaqueBoundary  reports where an opaque subtree begins
 //
-// The `state` substrate's own schema lookup (`state-tree.ts`) is a fourth.
+// The `ephemeral` substrate's own schema lookup (`state-tree.ts`) is a fourth.
 //
 // Two semantic invariants live here, in exactly one place:
 //
@@ -147,7 +147,7 @@ export type PathWalk =
  * Walk a path alongside its schema. Never throws.
  *
  * This is the only traversal in the package. `foldPath`, `pathSchema`,
- * `findOpaqueBoundary`, and the `state` substrate's schema lookup are all thin
+ * `findOpaqueBoundary`, and the `ephemeral` substrate's schema lookup are all thin
  * projections of it, differing only in what they do with the result.
  *
  * That consolidation is the point. These used to be separate hand-rolled loops
@@ -158,7 +158,7 @@ export type PathWalk =
  * caller inherits it.
  *
  * Returning `mismatch` rather than throwing lets each caller pick its own
- * policy — `foldPath` throws, the `state` lookup tolerates. That split is the
+ * policy — `foldPath` throws, the `ephemeral` substrate's lookup tolerates. That split is the
  * functional-core / imperative-shell shape: this function reports what
  * happened, its callers decide what to do about it.
  *

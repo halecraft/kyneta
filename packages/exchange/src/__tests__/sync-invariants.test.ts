@@ -3,7 +3,7 @@
 // These tests protect against bugs discovered during development:
 // 1. Initial content via batch() syncs to peers (post-seed-removal)
 // 2. Snapshot import preserves ref object identity
-// 3. Ephemeral stale rejection discards out-of-order arrivals
+// 3. Ephemeral traffic converges under out-of-order arrival
 // 4. Collaborative sync uses deltas after initial sync
 // 5. Universal version comparison — all strategies reject stale offers
 // 6. Plain replica snapshot import falls back to replicaFactory.fromSnapshot()
@@ -18,7 +18,6 @@ import {
   PlainVersion,
   Replicate,
   Schema,
-  TimestampVersion,
 } from "@kyneta/schema"
 import { afterEach, describe, expect, it } from "vitest"
 import {
@@ -195,14 +194,20 @@ describe("snapshot import preserves ref identity", () => {
 })
 
 // ---------------------------------------------------------------------------
-// 3. Ephemeral stale rejection
+// 3. Ephemeral convergence under out-of-order arrival
 //
-// When a peer receives an ephemeral offer with a timestamp older than or
-// equal to its current state, it must discard the offer. This prevents
-// out-of-order network delivery from overwriting newer state.
+// Presence traffic arrives out of order routinely — many peers broadcasting at
+// once, over links with different latencies. The ephemeral substrate handles
+// that by merging every payload field-by-field on its own timestamp, so a late
+// offer can only win the fields it is actually newer for.
+//
+// Note this is convergence by merge, not by rejection. `StateVersion.compare`
+// always reports "concurrent", so the synchronizer never discards an offer as
+// stale — it cannot, because a payload that is older *overall* may still carry
+// the newest value for some individual field.
 // ---------------------------------------------------------------------------
 
-describe("ephemeral stale rejection", () => {
+describe("ephemeral convergence", () => {
   it("out-of-order arrival: newer local state is not overwritten by stale offer", async () => {
     const bridge = new Bridge()
 
@@ -240,30 +245,11 @@ describe("ephemeral stale rejection", () => {
     })
     await drain()
 
-    // The key invariant: after all messages settle, both sides should
-    // have consistent state. The ephemeral comparison runs, and state
-    // converges to something consistent.
-    const bobName = presB.name()
-    const bobX = presB.x()
-    expect(typeof bobName).toBe("string")
-    expect(typeof bobX).toBe("number")
-  })
-
-  it("equal-timestamp offers are discarded (idempotent)", async () => {
-    // Unit-level test: verify the TimestampVersion comparison logic
-    const v1 = new TimestampVersion(1000)
-    const v2 = new TimestampVersion(1000)
-
-    // "equal" should result in discard (not import)
-    expect(v1.compare(v2)).toBe("equal")
-
-    // "behind" should also result in discard
-    const stale = new TimestampVersion(500)
-    expect(stale.compare(v1)).toBe("behind")
-
-    // Only "ahead" should be accepted
-    const newer = new TimestampVersion(2000)
-    expect(newer.compare(v1)).toBe("ahead")
+    // The invariant: once every message has settled, the two peers agree on
+    // every field. Which peer's write wins a given field is decided by
+    // timestamp; that they do not disagree is what convergence means.
+    expect(presB.name()).toBe(presA.name())
+    expect(presB.x()).toBe(presA.x())
   })
 })
 

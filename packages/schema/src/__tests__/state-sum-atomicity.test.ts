@@ -10,7 +10,7 @@
 import { describe, expect, it } from "vitest"
 import { replaceChange, Schema } from "../index.js"
 import { RawPath } from "../path.js"
-import { stateSubstrateFactory } from "../substrates/state.js"
+import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
 import {
   applyChangeToStateTree,
   isStateTuple,
@@ -176,7 +176,7 @@ describe("state substrate converges concurrent variant switches", () => {
   })
 
   it("merged peers read a coherent single variant", () => {
-    const subA = stateSubstrateFactory.fromEntirety(
+    const subA = ephemeralSubstrateFactory.fromEntirety(
       payload({
         shape: [{ kind: "circle", radius: 5 }, 100],
         label: ["a", 100],

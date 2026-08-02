@@ -11,8 +11,6 @@
 // This ensures each exchange gets a fresh factory instance with the
 // correct peer identity and schema binding. Factories that don't need
 // these simply ignore the context: () => plainSubstrateFactory.
-// For LWW/ephemeral, the builder returns lwwSubstrateFactory (which wraps
-// plain with TimestampVersion for cross-peer stale rejection).
 //
 // SyncMode is a structured record decomposing sync semantics into
 // three orthogonal axes (writerModel, delivery, durability). Each
@@ -52,15 +50,14 @@ import {
   SYNC_AUTHORITATIVE,
   SYNC_EPHEMERAL,
 } from "./substrate.js"
-import { lwwReplicaFactory, lwwSubstrateFactory } from "./substrates/lww.js"
+import {
+  ephemeralReplicaFactory,
+  ephemeralSubstrateFactory,
+} from "./substrates/ephemeral.js"
 import {
   plainReplicaFactory,
   plainSubstrateFactory,
 } from "./substrates/plain.js"
-import {
-  stateReplicaFactory,
-  stateSubstrateFactory,
-} from "./substrates/state.js"
 
 // ---------------------------------------------------------------------------
 // FactoryBuilder — deferred factory construction with peer identity
@@ -491,44 +488,31 @@ export const json: BindingTarget<string, PlainNativeMap> = createBindingTarget<
 })
 
 // ---------------------------------------------------------------------------
-// ephemeral — the LWW broadcast binding target
+// ephemeral — the transient, field-level LWW binding target
 // ---------------------------------------------------------------------------
 
 /** The LWW-family composition laws — supported by the ephemeral target. */
 export type EphemeralLaws = "lww" | "lww-per-key" | "lww-tag-replaced"
 
 /**
- * The ephemeral broadcast binding target.
+ * The transient broadcast binding target — presence, cursors, live input.
  *
- * `ephemeral.bind(schema)` — LWW broadcast, snapshot-only delivery, transient.
- * `ephemeral.replica()` — ephemeral replication.
+ * `ephemeral.bind(schema)` — field-level LWW, snapshot-only delivery, transient.
+ * `ephemeral.replica()` — headless replication for relays.
  *
- * Only supports LWW-family composition laws. Schemas requiring additive,
- * positional-OT, or other non-LWW laws are rejected at compile time.
+ * Only LWW-family composition laws bind here; anything carrying `additive`,
+ * `positional-ot` or a tree law is rejected at compile time.
+ *
+ * "Ephemeral" names the property that distinguishes this target from every
+ * other one: its data is never persisted, and `.decay()` can retire values on
+ * a timer. Concurrent writes merge per field, so peers each writing their own
+ * key in a shared roster never clobber one another — which is what makes it
+ * usable for presence at all.
  */
 export const ephemeral: BindingTarget<EphemeralLaws, PlainNativeMap> =
   createBindingTarget<EphemeralLaws, PlainNativeMap>({
-    factory: () => lwwSubstrateFactory,
-    replicaFactory: lwwReplicaFactory,
-    syncMode: SYNC_EPHEMERAL,
-  })
-
-// ---------------------------------------------------------------------------
-// state — the field-level LWW CvRDT binding target
-// ---------------------------------------------------------------------------
-
-/**
- * The field-level LWW broadcast binding target.
- *
- * `state.bind(schema)` — Field-level LWW Map broadcast, snapshot-only delivery, transient.
- * `state.replica()` — headless state replication.
- *
- * Only supports LWW-family composition laws. Concurrent field writes merge flawlessly.
- */
-export const state: BindingTarget<EphemeralLaws, PlainNativeMap> =
-  createBindingTarget<EphemeralLaws, PlainNativeMap>({
-    factory: () => stateSubstrateFactory,
-    replicaFactory: stateReplicaFactory,
+    factory: () => ephemeralSubstrateFactory,
+    replicaFactory: ephemeralReplicaFactory,
     syncMode: SYNC_EPHEMERAL,
   })
 
@@ -599,8 +583,8 @@ export function validateDecayConstraints(
           "Durable and collaborative substrates do not support .decay(). " +
             "Time-decay is ephemeral-only: the local shadow reverts to its " +
             "structural zero after `decayMs`, but durable history cannot be " +
-            "retroactively forgotten. Bind this schema via `state` or " +
-            "`ephemeral` instead.",
+            "retroactively forgotten. Bind this schema via `ephemeral` " +
+            "instead.",
         )
       }
       if (belowBoundary) {

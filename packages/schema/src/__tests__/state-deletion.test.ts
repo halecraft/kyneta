@@ -19,13 +19,13 @@ import { describe, expect, it } from "vitest"
 import {
   batch,
   createDoc,
+  ephemeral,
   lastUpdated,
   mapChange,
   Schema,
-  state,
 } from "../index.js"
 import { RawPath } from "../path.js"
-import { stateSubstrateFactory } from "../substrates/state.js"
+import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
 import {
   applyChangeToStateTree,
   isTombstone,
@@ -79,7 +79,7 @@ describe("a delete writes a tombstone", () => {
   })
 
   it("reads as absent through the document", () => {
-    const Bound = state.bind(Roster)
+    const Bound = ephemeral.bind(Roster)
     const doc: any = createDoc(Bound)
     batch(doc, (writable: any) => {
       writable.peers.set("alice", 1)
@@ -143,7 +143,7 @@ describe("a delete converges", () => {
     // Asserted through the substrate, not just the tree builder: local reads
     // come from a separate shadow, so a tree-level pass can coexist with a
     // document that still shows the key.
-    const peerA = stateSubstrateFactory.fromEntirety(
+    const peerA = ephemeralSubstrateFactory.fromEntirety(
       payload({ peers: { alice: [1, 100], bob: [2, 100] } }),
       Roster,
     )
@@ -208,7 +208,7 @@ describe("lastUpdated sees tombstones", () => {
   // is the maximum timestamp of the leaves beneath it.
 
   it("reports a container's delete as its last update", () => {
-    const Bound = state.bind(Roster)
+    const Bound = ephemeral.bind(Roster)
     const doc: any = createDoc(Bound)
     batch(doc, (writable: any) => {
       writable.peers.set("alice", 1)
@@ -226,7 +226,7 @@ describe("lastUpdated sees tombstones", () => {
   })
 
   it("still reads a live key through the widened tuple", () => {
-    const Bound = state.bind(Roster)
+    const Bound = ephemeral.bind(Roster)
     const doc: any = createDoc(Bound)
     batch(doc, (writable: any) => writable.peers.set("alice", 1))
     expect(typeof lastUpdated(doc.peers.at("alice"))).toBe("number")
@@ -320,7 +320,7 @@ describe("deleting an entry whose value is a container", () => {
 
     // Every leaf beneath `alice` is tombstoned, so the whole entry drops out
     // of the projection — not an empty `{}` where she used to be.
-    const peerA = stateSubstrateFactory.fromEntirety(
+    const peerA = ephemeralSubstrateFactory.fromEntirety(
       payload({ peers: { alice: { x: [1, 100] }, bob: { x: [5, 100] } } }),
       Cursors,
     )
@@ -328,7 +328,7 @@ describe("deleting an entry whose value is a container", () => {
     expect(peerA.reader.read(peersPath)).toEqual({ bob: { x: 5 } })
 
     // An empty record is NOT a deleted one: it still projects as `{}`.
-    const empty = stateSubstrateFactory.fromEntirety(
+    const empty = ephemeralSubstrateFactory.fromEntirety(
       payload({ peers: {} }),
       Cursors,
     )

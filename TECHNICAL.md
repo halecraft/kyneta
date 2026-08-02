@@ -117,7 +117,7 @@ See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the 30,000-foot design — thesis
 
 **`examples/todo-react`** — Same collaborative todo list rendered with React + `@kyneta/react` instead of Cast. Proves substrate-and-rendering-target agnosticism. Uses Vite in middleware mode against a Node HTTP server.
 
-**`examples/bumper-cars`** — Multi-peer ephemeral + collaborative hybrid. Per-peer input docs (ephemeral, LWW) drive shared game state (collaborative CRDT). Demonstrates `canShare` / `canAccept` policies restricting input-doc visibility to the owning peer, and server-only writes to game state.
+**`examples/bumper-cars`** — Multi-peer ephemeral + collaborative hybrid. Per-peer input docs (ephemeral, field-level LWW) drive shared game state (collaborative CRDT). Demonstrates `canShare` / `canAccept` policies restricting input-doc visibility to the owning peer, and server-only writes to game state.
 
 **`examples/unix-socket-sync`** — Minimal demonstration of `createUnixSocketPeer` — two processes sharing a socket path, leaderless role negotiation, bidirectional sync.
 

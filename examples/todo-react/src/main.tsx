@@ -11,10 +11,10 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { createRoot } from "react-dom/client"
-import { ExchangeProvider } from "@kyneta/react"
 import { Exchange, persistentPeerId } from "@kyneta/exchange"
+import { ExchangeProvider } from "@kyneta/react"
 import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
+import { createRoot } from "react-dom/client"
 import { App } from "./app.js"
 import "../style.css"
 

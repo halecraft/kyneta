@@ -18,20 +18,20 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
+import { createWriteStream } from "node:fs"
 import http from "node:http"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import { streamObservations } from "@kyneta/devtools"
 import { Exchange } from "@kyneta/exchange"
+import { createLevelDBStore } from "@kyneta/leveldb-store"
 import {
   WebsocketServerTransport,
   wrapNodeWebsocket,
 } from "@kyneta/websocket-transport/server"
-import { createLevelDBStore } from "@kyneta/leveldb-store"
-import { streamObservations } from "@kyneta/devtools"
 import { createServer as createViteServer } from "vite"
 import { WebSocketServer } from "ws"
 import { TodoDoc } from "./schema.js"
-import { createWriteStream } from "node:fs"
 
 const out = createWriteStream("observations.ndjson", { flags: "a" })
 

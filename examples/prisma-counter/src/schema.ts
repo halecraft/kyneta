@@ -14,8 +14,8 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { Schema } from "@kyneta/schema"
 import { loro } from "@kyneta/loro-schema"
+import { Schema } from "@kyneta/schema"
 
 export const CounterSchema = Schema.struct({
   count: Schema.counter(),

@@ -232,10 +232,10 @@ export function runSubstrateConformance(profile: SubstrateProfile): void {
 
     it("a concurrent variant switch resolves to ONE coherent variant", async () => {
       // Universal, and gated on nothing — but every substrate arrives at it by a
-      // different route. `json` and `ephemeral` get it from whole-document LWW,
-      // `state` from storing a sum as one atomic `[value, timestamp]` register,
-      // `loro` and `yjs` from keeping a sum's interior opaque. Four mechanisms,
-      // one guarantee, and no shared assertion until now — which is exactly the
+      // different route. `json` gets it from serialized writes, `ephemeral` from
+      // storing a sum as one atomic `[value, timestamp]` register, `loro` and
+      // `yjs` from keeping a sum's interior opaque. Three mechanisms, one
+      // guarantee, and no shared assertion until now — which is exactly the
       // shape of thing a conformance suite is for. Three separate sum bugs, one
       // per substrate, were live simultaneously before this landed.
       const bound = profile.bind()
@@ -261,7 +261,7 @@ export function runSubstrateConformance(profile: SubstrateProfile): void {
       )
 
       // Agreement alone is not enough: two peers can agree on a blended value,
-      // and that is precisely the bug `state` shipped before its sum values
+      // and that is precisely the bug `ephemeral` shipped before its sum values
       // became atomic registers. Both peers converged — on a shape carrying a
       // tag from one variant and fields from both.
       expect(docA.shape()).toEqual(docB.shape())
@@ -312,7 +312,7 @@ export function runSubstrateConformance(profile: SubstrateProfile): void {
       // The dynamic-key counterpart to the independent-field scenario above.
       // A record is where membership itself is concurrent: two peers adding
       // different keys is the presence-roster shape, and it is the reason the
-      // `state` substrate exists.
+      // `ephemeral` substrate exists.
       const bound = profile.bind()
 
       if (profile.writerModel === "serialized") {
@@ -350,9 +350,9 @@ export function runSubstrateConformance(profile: SubstrateProfile): void {
       // removal can survive a concurrent write by someone who never saw it.
       //
       // The `fieldConcurrency` branch below measures that, the same way the
-      // first scenario measures it for field values. Only `ephemeral` sits on
-      // the `one-wins` side of it — every other profile merges below
-      // whole-document granularity and keeps the removal.
+      // first scenario measures it for field values. Every profile shipping
+      // today merges below whole-document granularity and keeps the removal;
+      // the `one-wins` branch remains for any substrate that does not.
       const bound = profile.bind()
 
       if (profile.writerModel === "serialized") {
@@ -390,7 +390,7 @@ export function runSubstrateConformance(profile: SubstrateProfile): void {
 
       if (profile.fieldConcurrency === "both-survive") {
         // The removal and the unrelated add are independent facts, and both
-        // hold. `state` reaches this only because map deletes stopped being a
+        // hold. `ephemeral` reaches this only because map deletes stopped being a
         // bare removal — before tombstones, merging the peer that still held
         // the key resurrected it, and nothing here would have noticed, because
         // the conformance schema had no dynamic-key collection at all.
@@ -400,7 +400,7 @@ export function runSubstrateConformance(profile: SubstrateProfile): void {
         // result is one peer's entire document rather than a merge of the two.
         // A removal therefore survives only if the remover wrote last — and
         // here B did, so alice comes back. Not a defect; it is what choosing
-        // whole-document granularity costs, and the reason `state` exists.
+        // whole-document granularity costs, and the reason `ephemeral` exists.
         expect([{ bob: 2 }, { alice: 1, bob: 2, carol: 3 }]).toContainEqual(
           docA.peers(),
         )

@@ -152,7 +152,7 @@ bumper-cars/
 
 Previously, in `@loro-extended` (see `@loro-extended/examples/bumper-cars`) we used a dedicated "ephemeral/presence" system baked into the sync engine — `sync(doc).presence.setSelf(...)`, `useEphemeral(...)`, a discriminated union schema for presence types.
 
-Kyneta has none of that. Player input is a regular document bound with `ephemeral.bind(schema)`. It goes through the same Exchange, the same WebSocket adapter, the same `batch()` / `useValue()` API as everything else. The ephemeral sync mode handles the semantics (broadcast snapshot on every change, timestamp-based stale rejection at the receiver).
+Kyneta has none of that. Player input is a regular document bound with `ephemeral.bind(schema)`. It goes through the same Exchange, the same WebSocket adapter, the same `batch()` / `useValue()` API as everything else. The ephemeral sync mode handles the semantics: every change broadcasts a whole snapshot, and the receiver merges it field by field on each leaf's own timestamp. Nothing is persisted, and no offer is discarded as stale — a snapshot that is older overall may still carry the newest value for some individual field.
 
 ### The server is the right tool for game state
 

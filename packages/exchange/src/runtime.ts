@@ -1021,9 +1021,9 @@ export class Runtime {
       for (const [, entry] of this.#docCache) {
         if (entry.mode !== "interpret") continue
         const substrate = (entry.ref as any)?.[SUBSTRATE]
-        // Defensive: substrates may not implement tick (it's optional).
-        // The `.decay()` feature (jj:nxxwqosl) will implement it on the
-        // state substrate.
+        // `tick` is optional on the Substrate interface, and most substrates
+        // have no use for it — only `ephemeral` does, to re-project decayed
+        // leaves as their structural zeros. Everything durable skips this.
         if (substrate && typeof substrate.tick === "function") {
           substrate.tick(now)
         }

@@ -1,10 +1,11 @@
-// state-integration.test.ts — verifies the behavior of the `state` CvRDT substrate.
+// state-integration — end-to-end behaviour of the `ephemeral` CvRDT substrate
+// through a real Exchange.
 //
 // These tests mimic the current "Ephemeral clobbering bug" to prove that
-// the `state` substrate correctly implements a field-level LWW Map.
+// the `ephemeral` substrate correctly implements a field-level LWW Map.
 
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
-import { batch, lastUpdated, Schema, state } from "@kyneta/schema"
+import { batch, ephemeral, lastUpdated, Schema } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import { Exchange } from "../exchange.js"
 
@@ -13,7 +14,7 @@ const StateSchema = Schema.struct({
   bob: Schema.string().nullable(),
 })
 
-const StateDoc = state.bind(StateSchema)
+const StateDoc = ephemeral.bind(StateSchema)
 
 async function drain(rounds = 20): Promise<void> {
   for (let i = 0; i < rounds; i++) {

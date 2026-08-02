@@ -10,14 +10,6 @@
 
 import { describe, expect, it } from "vitest"
 import {
-  applyFriction,
-  applyInput,
-  checkCarCollision,
-  getSpawnPosition,
-  handleWallCollisions,
-  updatePosition,
-} from "./physics.js"
-import {
   ARENA_HEIGHT,
   ARENA_WIDTH,
   CAR_RADIUS,
@@ -26,6 +18,14 @@ import {
   WALL_BOUNCE,
 } from "../constants.js"
 import type { CarState } from "../types.js"
+import {
+  applyFriction,
+  applyInput,
+  checkCarCollision,
+  getSpawnPosition,
+  handleWallCollisions,
+  updatePosition,
+} from "./physics.js"
 import { makeCar } from "./test-helpers.js"
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -54,7 +54,10 @@ describe("applyInput", () => {
   })
 
   it("updates rotation to face the input angle", () => {
-    const next = applyInput(makeCar({ rotation: 0 }), { force: 0.5, angle: 2.0 })
+    const next = applyInput(makeCar({ rotation: 0 }), {
+      force: 0.5,
+      angle: 2.0,
+    })
     expect(next.rotation).toBe(2.0)
   })
 })

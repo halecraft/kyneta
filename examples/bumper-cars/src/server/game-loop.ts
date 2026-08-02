@@ -15,14 +15,18 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { Exchange } from "@kyneta/exchange"
-import { batch } from "@kyneta/schema"
+import type { Exchange } from "@kyneta/exchange"
 import type { Plain, Ref } from "@kyneta/schema"
+import { batch } from "@kyneta/schema"
 import { TICK_INTERVAL } from "../constants.js"
-import { GameStateSchema, PlayerInputDoc, type PlayerInputSchema } from "../schema.js"
+import {
+  type GameStateSchema,
+  PlayerInputDoc,
+  type PlayerInputSchema,
+} from "../schema.js"
 import type { CarState, InputState } from "../types.js"
 import { getSpawnPosition } from "./physics.js"
-import { tick, type TickOutput } from "./tick.js"
+import { type TickOutput, tick } from "./tick.js"
 
 // ─────────────────────────────────────────────────────────────────────────
 // Types
@@ -154,7 +158,9 @@ export class GameLoop {
     this.#players.set(peerId, { inputDoc, car })
     this.#scores.set(peerId, 0)
 
-    console.log(`  🚗 Player joined at (${spawn.x.toFixed(0)}, ${spawn.y.toFixed(0)})`)
+    console.log(
+      `  🚗 Player joined at (${spawn.x.toFixed(0)}, ${spawn.y.toFixed(0)})`,
+    )
   }
 
   removePlayer(peerId: string): void {
@@ -199,7 +205,8 @@ export class GameLoop {
       // object and spreads it into new CarState objects — the mutation
       // is harmless and simpler than rebuilding the car before tick().
       if (raw.name && raw.name !== entry.car.name) entry.car.name = raw.name
-      if (raw.color && raw.color !== entry.car.color) entry.car.color = raw.color
+      if (raw.color && raw.color !== entry.car.color)
+        entry.car.color = raw.color
 
       cars.set(peerId, entry.car)
       inputs.set(peerId, { force: raw.force, angle: raw.angle })

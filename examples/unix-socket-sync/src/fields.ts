@@ -38,11 +38,35 @@ export type Field = BooleanField | StringField | NumberField
 
 export const fields: Field[] = [
   { key: "darkMode", label: "Dark Mode", type: "boolean" },
-  { key: "logLevel", label: "Log Level", type: "string", options: ["debug", "info", "warn", "error"] },
-  { key: "region", label: "Region", type: "string", options: ["us-east", "eu-west", "ap-south"] },
+  {
+    key: "logLevel",
+    label: "Log Level",
+    type: "string",
+    options: ["debug", "info", "warn", "error"],
+  },
+  {
+    key: "region",
+    label: "Region",
+    type: "string",
+    options: ["us-east", "eu-west", "ap-south"],
+  },
   { key: "maintenance", label: "Maintenance", type: "boolean" },
-  { key: "maxRequests", label: "Max Requests", type: "number", step: 100, min: 0, max: 10000 },
-  { key: "rateLimit", label: "Rate Limit", type: "number", step: 10, min: 0, max: 1000 },
+  {
+    key: "maxRequests",
+    label: "Max Requests",
+    type: "number",
+    step: 100,
+    min: 0,
+    max: 10000,
+  },
+  {
+    key: "rateLimit",
+    label: "Rate Limit",
+    type: "number",
+    step: 10,
+    min: 0,
+    max: 1000,
+  },
 ]
 
 // ---------------------------------------------------------------------------
@@ -55,7 +79,11 @@ export function stepBoolean(_current: boolean, _direction: Direction): boolean {
   return !_current
 }
 
-export function stepString(current: string, options: string[], direction: Direction): string {
+export function stepString(
+  current: string,
+  options: string[],
+  direction: Direction,
+): string {
   const idx = options.indexOf(current)
   if (idx === -1) return options[0]
   if (direction === "right") {
@@ -64,7 +92,13 @@ export function stepString(current: string, options: string[], direction: Direct
   return options[(idx - 1 + options.length) % options.length]
 }
 
-export function stepNumber(current: number, step: number, min: number, max: number, direction: Direction): number {
+export function stepNumber(
+  current: number,
+  step: number,
+  min: number,
+  max: number,
+  direction: Direction,
+): number {
   if (direction === "right") {
     return Math.min(current + step, max)
   }

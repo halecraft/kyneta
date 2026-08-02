@@ -1,9 +1,13 @@
-// state — field-level LWW State-based CRDT (CvRDT).
+// ephemeral — field-level LWW state-based CRDT (CvRDT).
 //
-// The state substrate is a history-free, snapshot-only CRDT that merges
-// concurrently at the field level. Unlike the plain/LWW substrate which
-// tracks a single timestamp for the entire document, this tracks a
-// `StateTuple` for every scalar leaf.
+// The substrate behind the `ephemeral` binding target: history-free,
+// snapshot-only, and merging concurrently at the field level. Rather than one
+// timestamp for the whole document, it tracks a `StateTuple` for every scalar
+// leaf.
+//
+// The `State*` vocabulary throughout this file refers to *state-based CRDT* —
+// the family that exchanges whole states and joins them — not to any binding
+// target. See the header of `state-tree.ts`.
 //
 // This enables true decentralized presence: multiple peers can write
 // to their own keys in a shared document without clobbering each other,
@@ -56,12 +60,12 @@ import {
 // ---------------------------------------------------------------------------
 
 /**
- * A Version wrapping a wall-clock timestamp for the `state` substrate.
+ * A Version wrapping a wall-clock timestamp for the `ephemeral` substrate.
  *
- * Unlike `StateVersion` which forms a total order, a CvRDT's global
- * version must always return `"concurrent"` if timestamps differ, so the
- * Exchange synchronizer doesn't aggressively discard payloads that might
- * contain newer data for specific fields.
+ * A CvRDT has no total order to offer. Where `PlainVersion` can say "you are
+ * behind me", this can only ever say "we are concurrent" — any payload may
+ * carry the newest value for some individual field, so none can be discarded
+ * as stale. See `compare` for why that extends even to identical timestamps.
  */
 export class StateVersion implements Version {
   readonly timestamp: number
@@ -93,8 +97,24 @@ export class StateVersion implements Version {
     if (!(other instanceof StateVersion)) {
       throw new Error("StateVersion mismatch")
     }
-    if (this.timestamp === other.timestamp) return "equal"
-    return "concurrent" // ALWAYS concurrent if not perfectly equal!
+
+    // Always "concurrent" — never "equal", even for identical timestamps.
+    //
+    // The synchronizer skips importing any offer it classifies as "equal", on
+    // the assumption that equal versions mean equal state. True of a
+    // total-order version; false here. This timestamp records the document's
+    // newest *write*, so two peers that wrote to *different fields* in the
+    // same millisecond carry the same timestamp over divergent trees. Saying
+    // "equal" makes each of them discard the payload that would have
+    // reconciled them, and the field-level merge never runs.
+    //
+    // A wall clock cannot answer "do we hold the same state?", so this does
+    // not guess. The cost is that no offer is ever skipped as redundant, which
+    // is why this substrate re-merges and re-broadcasts more than it needs to.
+    // Answering properly needs a digest of the tree instead of a timestamp;
+    // until then merging needlessly is the safe direction, because a merge is
+    // idempotent and a skipped merge is not recoverable.
+    return "concurrent"
   }
 
   static parse(serialized: string): StateVersion {
@@ -114,7 +134,7 @@ export class StateVersion implements Version {
 // ---------------------------------------------------------------------------
 
 /**
- * Creates the core replication surface for a state substrate.
+ * Creates the core replication surface for the ephemeral substrate.
  *
  * This is a pure CvRDT implementation. It maintains a `StateTree` and
  * a cached version, with no op-log.
@@ -188,13 +208,12 @@ function createStateReplicaCore(
       payload: SubstratePayload,
       _remoteVersion: Version,
     ): void {
-      // `state` is a CvRDT with a single constant lineage (DEFAULT_LINEAGE) for
-      // its entire lifetime — a true lineage boundary never arises here. If
-      // this is ever invoked (e.g. via the legacy entirety-after-sync
-      // fallback), field-level LWW merge is the correct and safe behavior:
-      // discarding local history would lose concurrent field writes that
-      // the peer doesn't yet have, exactly like the replicate-mode
-      // fallback for `state` in the Synchronizer.
+      // This substrate carries a single constant lineage (DEFAULT_LINEAGE) for
+      // its entire lifetime, so a true lineage boundary never arises here —
+      // `classifyResetTrigger` in the Synchronizer excludes it on both counts.
+      // Kept to satisfy the `ReplicaLike` contract. If it were ever invoked,
+      // field-level merge is the safe behaviour: discarding local state would
+      // lose concurrent field writes the peer has not seen.
       this.merge(payload)
     },
   }
@@ -301,7 +320,7 @@ export function createStateSubstrate(
       // Record op for changefeed delivery. Freeze to an immutable RawPath
       // at authoring time so the log never aliases the live addressing
       // registry (uniform with the plain substrate; defense-in-depth even
-      // though `state` exports entirety, not serialized ops). Context: jj:mlurlzqt.
+      // though this substrate exports entirety, not serialized ops). Context: jj:mlurlzqt.
       core.pendingOps.push({ path: path.toRaw(), change })
     },
 
@@ -404,12 +423,12 @@ export function createStateSubstrate(
       _remoteVersion: Version,
       options?: BatchOptions,
     ): void {
-      // `state` is a CvRDT with a single constant lineage for its entire
+      // This substrate is a CvRDT with a single constant lineage for its entire
       // lifetime — a true lineage boundary never arises here. Field-level
       // LWW merge is the correct and safe fallback: discarding local
       // history would lose concurrent field writes the peer doesn't yet
       // have (the same reasoning the Synchronizer applies to fall through
-      // to `merge()` for `state` in replicate mode).
+      // to `merge()` in replicate mode).
       substrate.merge(payload, options)
     },
 
@@ -483,7 +502,7 @@ export function createStateReplica(): Replica<StateVersion> {
     },
     resetFromEntirety(payload: SubstratePayload, _remoteVersion: Version) {
       // See createStateSubstrate's resetFromEntirety — same rationale:
-      // `state` has no true lineage boundary, so field-level LWW merge is
+      // this substrate has no true lineage boundary, so field-level merge is
       // the correct fallback.
       replica.merge(payload)
     },
@@ -492,11 +511,11 @@ export function createStateReplica(): Replica<StateVersion> {
 }
 
 // ---------------------------------------------------------------------------
-// stateSubstrateFactory
+// ephemeralSubstrateFactory
 // ---------------------------------------------------------------------------
 
-export const stateReplicaFactory: ReplicaFactory<StateVersion> = {
-  replicaType: ["state", 1, 0] as const,
+export const ephemeralReplicaFactory: ReplicaFactory<StateVersion> = {
+  replicaType: ["ephemeral", 1, 0] as const,
 
   createEmpty(): Replica<StateVersion> {
     return createStateReplica()
@@ -518,8 +537,8 @@ export const stateReplicaFactory: ReplicaFactory<StateVersion> = {
   },
 }
 
-export const stateSubstrateFactory: SubstrateFactory<StateVersion> = {
-  replica: stateReplicaFactory,
+export const ephemeralSubstrateFactory: SubstrateFactory<StateVersion> = {
+  replica: ephemeralReplicaFactory,
 
   createReplica(): Replica<StateVersion> {
     return createStateReplica()

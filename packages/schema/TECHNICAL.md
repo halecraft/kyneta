@@ -92,7 +92,7 @@ Plus three cross-cutting facilities:
 - **Not a database.** It is an interface. Plain JS objects, Loro CRDTs, and Yjs docs all satisfy it.
 - **Not a backend in the framework sense.** No framework choices leak through the substrate boundary — there is no "Loro mode" that propagates upward. The interpreter stack treats every substrate identically.
 - **Not responsible for sync.** The substrate produces and consumes `SubstratePayload`. The exchange owns *when* and *to whom* to send it.
-- **Not symmetric across sync modes.** A collaborative substrate (Loro, Yjs) has concurrent versions (`SYNC_COLLABORATIVE`); an authoritative substrate (json) has a total order (`SYNC_AUTHORITATIVE`); an ephemeral substrate has wall-clock-timestamped overwrite (`SYNC_EPHEMERAL`). The `SyncMode` — decomposed into `WriterModel`, `Delivery`, and `Durability` axes — tells the exchange which mode shape to run. `requiresBidirectionalSync(mode)` is the predicate the exchange uses to decide whether to establish a bidirectional causal exchange or a unidirectional push.
+- **Not symmetric across sync modes.** A collaborative substrate (Loro, Yjs) has concurrent versions (`SYNC_COLLABORATIVE`); an authoritative substrate (json) has a total order (`SYNC_AUTHORITATIVE`); an ephemeral substrate has wall-clock-timestamped per-field registers and no total order at all (`SYNC_EPHEMERAL`). The `SyncMode` — decomposed into `WriterModel`, `Delivery`, and `Durability` axes — tells the exchange which mode shape to run. `requiresBidirectionalSync(mode)` is the predicate the exchange uses to decide whether to establish a bidirectional causal exchange or a unidirectional push.
 - **Not a monolithic capability provider.** Producer-side capability attachment uses a typed bag (`SubstrateCapabilities`); consumer-side capability discovery uses optional fields on `RefContext` plus the `HasTreeNodeAllocation` marker interface. The asymmetry is deliberate — substrates declare what they have; consumers ask only when they need it.
 
 ---
@@ -162,8 +162,7 @@ Each binding target declares its closed law set:
 | Target | Laws | Algebraic meaning |
 |--------|------|-------------------|
 | `json` | `AllowedLaws = string` (all) | Authoritative — any law is fine because writes are serialized. |
-| `ephemeral` | `EphemeralLaws = "lww" \| "lww-per-key" \| "lww-tag-replaced"` | LWW-family only — no concurrent merge needed. |
-| `state` | `EphemeralLaws = "lww" \| "lww-per-key" \| "lww-tag-replaced"` | Field-level LWW Map (CvRDT) — concurrent merges for presence state. |
+| `ephemeral` | `EphemeralLaws = "lww" \| "lww-per-key" \| "lww-tag-replaced"` | Field-level LWW map (CvRDT) — concurrent merge for presence state. |
 | `loro` | `LoroLaws = "lww" \| "additive" \| "positional-ot" \| "positional-ot-move" \| "lww-per-key" \| "tree-move" \| "lww-tag-replaced"` | Full CRDT law set minus `"add-wins-per-key"`. |
 | `yjs` | `YjsLaws = "lww" \| "positional-ot" \| "lww-per-key" \| "lww-tag-replaced"` | Text and structural laws — no `"additive"`, `"positional-ot-move"`, `"tree-move"`, `"add-wins-per-key"`. |
 
@@ -171,7 +170,7 @@ Each binding target declares its closed law set:
 
 No runtime dispatch, no substrate-specific error messages. The type system is the enforcement mechanism.
 
-Each row of that table has an executable form. `packages/schema/backends/loro` and `.../yjs` carry a `bind-constraints` suite for their own law sets, and `src/__tests__/bind-constraints-state.test.ts` covers `state` — accepted shapes as ordinary assertions, rejected ones under `@ts-expect-error`, where **`tsc` is the assertion rather than the test runner**: a directive that stops suppressing an error becomes unused and fails the build. Without those suites the contract holds only by review, which is how a `state` defect once came to be filed against behaviour the compiler had already ruled out.
+Each row of that table has an executable form. `packages/schema/backends/loro` and `.../yjs` carry a `bind-constraints` suite for their own law sets, and `src/__tests__/bind-constraints-ephemeral.test.ts` covers `ephemeral` — accepted shapes as ordinary assertions, rejected ones under `@ts-expect-error`, where **`tsc` is the assertion rather than the test runner**: a directive that stops suppressing an error becomes unused and fails the build. Without those suites the contract holds only by review, which is how a defect against this target once came to be filed against behaviour the compiler had already ruled out.
 
 ### What the grammar is NOT
 
@@ -185,22 +184,38 @@ Each row of that table has an executable form. `packages/schema/backends/loro` a
 
 Source: `packages/schema/src/bind.ts`.
 
-### The five binding targets
+### The four binding targets
 
-Kyneta exports five pre-configured binding targets:
+Kyneta exports four pre-configured binding targets:
 
 | Target | Package | `syncMode` | Allowed Laws | Mechanism |
 |--------|--------|----------------|--------------|-----------|
 | `json` | `@kyneta/schema` | `SYNC_AUTHORITATIVE` | all (`string`) | Plain JS objects, Lamport version |
-| `ephemeral` | `@kyneta/schema` | `SYNC_EPHEMERAL` | `EphemeralLaws` (`"lww"`, `"lww-per-key"`, `"lww-tag-replaced"`) | LWW substrate, wall-clock version, full document overwrite |
-| `state` | `@kyneta/schema` | `SYNC_EPHEMERAL` | `EphemeralLaws` (`"lww"`, `"lww-per-key"`, `"lww-tag-replaced"`) | State CvRDT, wall-clock version, field-level merge (`sum`/`.json()` stored as atomic registers) |
+| `ephemeral` | `@kyneta/schema` | `SYNC_EPHEMERAL` | `EphemeralLaws` (`"lww"`, `"lww-per-key"`, `"lww-tag-replaced"`) | State-based CRDT, wall-clock version, field-level merge (`sum`/`.json()` stored as atomic registers) |
 | `loro` | `@kyneta/loro-schema` | `SYNC_COLLABORATIVE` | `LoroLaws` (full CRDT set minus `"add-wins-per-key"`) | Loro CRDT doc |
 | `yjs` | `@kyneta/yjs-schema` | `SYNC_COLLABORATIVE` | `YjsLaws` (text + structural laws) | Yjs doc |
 
-#### `ephemeral` vs `state`
-Both targets implement snapshot-only transient delivery via `SYNC_EPHEMERAL`, but they have radically different semantics:
-- `ephemeral`: A **Global LWW Register**. A write to any field bumps the global document timestamp. When peers sync, the peer with the newest timestamp overwrites the *entire* document. Useful when you explicitly want total state replacement.
-- `state`: A **Field-level LWW Map (CvRDT)**. The substrate maintains a `StateTuple` for every scalar leaf. When peers sync, the payloads merge concurrently field-by-field. Useful for decentralized presence where multiple peers write to their own keys in a shared document without clobbering each other, without generating any op-log history bloat. A `sum`/discriminated-union variant and a `.json()` blob are stored as a **single atomic register** tuple holding the whole value, not decomposed — so a concurrent variant switch resolves whole and never blends fields across variants.
+#### What `ephemeral` is
+
+A **field-level LWW map**, and a state-based CRDT (CvRDT) — peers exchange whole
+states and reconcile them with a join, rather than shipping an op log. The
+substrate keeps a `StateTuple` — `[value, timestamp]` — for every scalar leaf,
+so concurrent writes merge field by field.
+
+That granularity is the whole point. A presence roster where each peer writes
+only its own key is the motivating case, and it is unusable under
+whole-document last-writer-wins, where whichever peer wrote most recently
+clobbers everyone else. Kyneta shipped exactly that substrate through 2.x under
+this same name; 3.0 replaced its implementation. See the CHANGELOG.
+
+Two properties follow from being snapshot-only and transient:
+
+- A `sum`/discriminated-union variant and a `.json()` blob are stored as a
+  **single atomic register** tuple holding the whole value, not decomposed — so
+  a concurrent variant switch resolves to one coherent variant and never blends
+  fields across two.
+- There is no op log, so nothing accumulates and nothing is persisted.
+  `.decay()` can retire a leaf on a timer, which is meaningful only here.
 
 ###### The merge rule, in full
 
@@ -246,24 +261,24 @@ Before this check existed, `decayMs` below a boundary bound cleanly and then sil
 
 A `StateTuple` is `[value, timestamp, deleted?]`. The third slot is present only on a tombstone (see "Deletion" above); the marker lives in its own slot rather than in the value because it has to be **out-of-band from the value domain** — `null` is a legitimate value under a nullable schema, and any in-band sentinel is something a `.json()` blob could legitimately contain. Note that `isStateTuple` deliberately does **not** check the tuple's length: an array in a StateTree is always a leaf, since sequences are not a supported container here, and an arity check would have to be revised every time the tuple gains a slot. Getting that wrong is quiet and expensive — a tuple the guard rejects is treated as a container, and its slots are then merged and projected as if they were keys.
 
-The leaf-vs-container decision reuses `needsContainer` (`materialize-value.ts`), the same predicate the Loro/Yjs backends use for insert detection: `product`/`map` decompose into per-field tuples (that is what gives `state` its field-level merge), while `scalar`, `sum`, and `.json()` nodes are stored as one leaf tuple. Storing a register whole is deliberate — a sum variant is an opaque LWW value (variant fields are not independently addressable; a switch is one whole-value `.set()`, per the `WritableDiscriminantProductRef` contract), so decomposing it would let the schema-blind `mergeStateTree` interleave fields from different variants.
+The leaf-vs-container decision reuses `needsContainer` (`materialize-value.ts`), the same predicate the Loro/Yjs backends use for insert detection: `product`/`map` decompose into per-field tuples (that is what gives `ephemeral` its field-level merge), while `scalar`, `sum`, and `.json()` nodes are stored as one leaf tuple. Storing a register whole is deliberate — a sum variant is an opaque LWW value (variant fields are not independently addressable; a switch is one whole-value `.set()`, per the `WritableDiscriminantProductRef` contract), so decomposing it would let the schema-blind `mergeStateTree` interleave fields from different variants.
 
 A write aimed *at or inside* a register is re-aimed at the register itself before it reaches the tree (`state.ts:prepare`, via the same `findOpaqueBoundary` the CRDT backends use). Applying such a write literally would split the tuple into per-field tuples and drop every sibling field the change never mentioned. This is easy to miss in testing: `prepare` updates the plain-object shadow that local reads are served from, so the document reads back correctly on the peer that made the write, and only replicated state is damaged. Assert on the exported tree, not on the document.
 
-The property this buys — a concurrent variant switch resolving to one coherent variant, never a blend of two — is asserted across every substrate in `tests/conformance`, not just for `state`. If you change how registers are stored, that is where the cross-substrate guard lives.
+The property this buys — a concurrent variant switch resolving to one coherent variant, never a blend of two — is asserted across every substrate in `tests/conformance`, not just for `ephemeral`. If you change how registers are stored, that is where the cross-substrate guard lives.
 
 Crucially, atomicity is encoded in the tree's *shape* (register = leaf tuple), **not** in the merge logic. That is why `mergeStateTree` stays schema-blind: a headless relay/store merges raw entirety payloads by timestamp without ever needing the schema. The schema is consulted only when translating between plain values and the tree (build via `applyChangeToStateTree`/`syncStateTreeToShadow`, extract via `extractPlainState`), which always runs on a schema-aware peer. Register values are deep-cloned (`deepClonePlain`) at the tree↔shadow boundary so the two never alias.
 
 Usage:
 
 ```
-import { json, ephemeral, state, Schema } from "@kyneta/schema"
+import { json, ephemeral, Schema } from "@kyneta/schema"
 import { loro } from "@kyneta/loro-schema"
 import { yjs } from "@kyneta/yjs-schema"
 
 const Config = json.bind(Schema.struct({ theme: Schema.string() }))
 const Cursor = ephemeral.bind(Schema.struct({ x: Schema.number(), y: Schema.number() }))
-const MeshPresence = state.bind(Schema.struct({ alice: Schema.string(), bob: Schema.string() }))
+const MeshPresence = ephemeral.bind(Schema.struct({ alice: Schema.string(), bob: Schema.string() }))
 const Todo = loro.bind(Schema.struct({ title: Schema.text(), done: Schema.boolean() }))
 const Note = yjs.bind(Schema.struct({ body: Schema.text() }))
 ```
@@ -411,7 +426,7 @@ Both are pure. Loro and Yjs substrates use these directly for their Lamport vect
 
 `PlainVersion` (the plain substrate's version, below) **is** a version vector — a single authored *lineage* entry `{lineage: value}`, with genesis (`DEFAULT_LINEAGE`) projecting to the **empty** vector ⊥. Its `compare`/`meet` delegate to `versionVectorCompare`/`versionVectorMeet` over that projection (`PlainVersion.#toVector`) — the same lattice Loro/Yjs use, with no Plain-specific case matrix. `Version.lineage` is the version-vector *lineage key* (the writer/identity coordinate), not a scalar bolted on beside the counter. A serialized writer holds at most one authored lineage at a time (prune-on-reset), so the vector is single-entry. Context: jj:kxswmuzx.
 
-`Version.lineage` (renamed from `Version.epoch` — jj:pwymxzwq) is the identity coordinate on every `Version`: for `PlainVersion` a REAL lineage minted on the first authored write (genesis ⊥ before that); for Loro/Yjs/TimestampVersion/StateVersion a constant `DEFAULT_LINEAGE` (their identity lives in their own native vectors). The lattice operations never branch on the raw string — `PlainVersion` projects it to a vector and `versionVectorCompare` does the rest; genuine cross-lineage divergence surfaces as `"concurrent"`. **The word `epoch` is now reserved for the deliberate T3 _migration_ boundary** (`.epoch()` / `EpochStep` / `MigrationTier` T3 — see [Migration and identity](#migration-and-identity)): *lineage* (writer identity, per-VV-key, minted automatically) and *epoch* (migration generation, global, developer-declared) are now distinct axes with distinct names.
+`Version.lineage` (renamed from `Version.epoch` — jj:pwymxzwq) is the identity coordinate on every `Version`: for `PlainVersion` a REAL lineage minted on the first authored write (genesis ⊥ before that); for Loro/Yjs/StateVersion a constant `DEFAULT_LINEAGE` (their identity lives in their own native vectors). The lattice operations never branch on the raw string — `PlainVersion` projects it to a vector and `versionVectorCompare` does the rest; genuine cross-lineage divergence surfaces as `"concurrent"`. **The word `epoch` is now reserved for the deliberate T3 _migration_ boundary** (`.epoch()` / `EpochStep` / `MigrationTier` T3 — see [Migration and identity](#migration-and-identity)): *lineage* (writer identity, per-VV-key, minted automatically) and *epoch* (migration generation, global, developer-declared) are now distinct axes with distinct names.
 
 ---
 
@@ -1164,7 +1179,6 @@ Source: `packages/schema/src/substrates/plain.ts`.
 The built-in substrate. Stores state as plain JS objects, tracks a monotonic integer version scoped to an lineage (see `PlainVersion` below), and merges by total-order last-writer-wins within an lineage. Used for:
 
 - The default binding when no CRDT is needed (`Schema.string`, small configs, ephemeral UI state).
-- The LWW variant (`src/substrates/lww.ts` + `src/substrates/timestamp-version.ts`) for wall-clock-ordered ephemeral broadcasts.
 - Reference implementation for testing the `Substrate<V>` contract.
 
 All substrates now share the same read semantics: reads go through `plainReader` backed by a `PlainState` object. For the plain substrate this is trivially the substrate's own state. For CRDT substrates (Loro, Yjs), the `PlainState` is a shadow that is kept in sync — eagerly on local writes, re-materialized from the CRDT doc on replay. See [§The functional shadow](#the-functional-shadow).
@@ -1189,7 +1203,7 @@ class PlainVersion {
 
 A **single-entry version vector**: at most one authored *lineage* `{lineage: value}`, with genesis (`DEFAULT_LINEAGE`) as the empty vector ⊥ (see [§Version vector algebra](#version-vector-algebra)). `serialize()` produces `"lineage:value"` (genesis serializes as `"kyneta.genesis:0"`); `parseVersion` also accepts legacy bare-integer strings (e.g. `"5"`), which parse as belonging to `LEGACY_EPOCH`. Context: jj:kxswmuzx.
 
-`lineage` is the version-vector *lineage key* — the identity coordinate, universal to every `Version` (see [§Version vector algebra](#version-vector-algebra)). Plain is the substrate where the lineage changes during normal operation (a fresh REAL lineage is minted on the first authored write, or on a writer restart with no persisted store); CRDT substrates (Loro, Yjs) and `state` hold a constant `DEFAULT_LINEAGE`, their identity living in their own native vectors.
+`lineage` is the version-vector *lineage key* — the identity coordinate, universal to every `Version` (see [§Version vector algebra](#version-vector-algebra)). Plain is the substrate where the lineage changes during normal operation (a fresh REAL lineage is minted on the first authored write, or on a writer restart with no persisted store); CRDT substrates (Loro, Yjs) and `ephemeral` hold a constant `DEFAULT_LINEAGE`, their identity living in their own native vectors.
 
 `compare()`/`meet()` delegate to `versionVectorCompare`/`versionVectorMeet` over `#toVector()` (`DEFAULT_LINEAGE` → empty map; REAL → `{lineage: value}`) — **no** Plain-specific case matrix:
 - Two genesis versions → `equal` (both ⊥); genesis vs a REAL lineage → `behind`/`ahead` (⊥ is a subset).
@@ -1200,15 +1214,11 @@ A **single-entry version vector**: at most one authored *lineage* `{lineage: val
 
 `merge()` adopts an incoming lineage (via the `adoptEpoch` closure) only while the current lineage is still `DEFAULT_LINEAGE` — accepting the substrate's first real lineage. Genuine lineage-boundary resets (a REAL lineage transitioning to a *different* REAL lineage) are handled by `resetFromEntirety` (see `Substrate.resetFromEntirety` and `@kyneta/exchange`'s [Compaction and lineage boundaries](../exchange/TECHNICAL.md#compaction-and-lineage-boundaries)), which the Synchronizer invokes on an explicit mismatch — `merge()` never adopts across two REAL lineages. `SubstratePayload.lineage` is the preferred source for the incoming lineage; `parsePlainPayload`'s legacy `{ i, s|b }` envelope extraction is the fallback for peers that pre-date lineage support.
 
-### `TimestampVersion`
-
-For ephemeral substrates: a single wall-clock number plus the peer ID. `merge` accepts the incoming value iff `timestamp > local.timestamp || (equal && peerId > local.peerId)`. Stale writes are rejected silently.
-
 ### Wire-codec opacity
 
 The plain substrate's `serializeOps` / `deserializeOps` embed `Op.change` by reference — the change is JSON-stringified as-is and passed through `WireOfferMsg.d` (an opaque `string | Uint8Array` payload). The exchange wire codec never inspects schema-level change types; it carries them as JSON inside the substrate payload. Adding a new `ChangeBase` variant (e.g. `SetChange { type: "set-op" }`) is purely additive — no exchange codec change required. The only caveat is for out-of-monorepo consumers parsing the plain JSON wire format with a strict change-type whitelist: those need to extend their whitelist when new change variants land.
 
-The lineage now travels as an explicit field, `SubstratePayload.lineage`, set by every substrate's `exportEntirety`/`exportSince` (Plain sets it to the current lineage; Loro/Yjs/`state` set it to `DEFAULT_LINEAGE`). Plain's own `data` payload is simply `JSON.stringify(materialize())` for entirety and `JSON.stringify(serializedBatches)` for since — no inner envelope. This is a simplification from an earlier design where Plain's JSON payload wrapped state/ops in an inline envelope (`{ i: string, s: PlainState }` / `{ i: string, b: SerializedOp[][] }`); that inline lineage field duplicated information already available via the parsed `Version` (which encodes as `"${lineage}:${value}"`) and via the new `SubstratePayload.lineage` field, creating a desync hazard between the wire-level version and the body-embedded lineage.
+The lineage now travels as an explicit field, `SubstratePayload.lineage`, set by every substrate's `exportEntirety`/`exportSince` (Plain sets it to the current lineage; Loro/Yjs/`ephemeral` set it to `DEFAULT_LINEAGE`). Plain's own `data` payload is simply `JSON.stringify(materialize())` for entirety and `JSON.stringify(serializedBatches)` for since — no inner envelope. This is a simplification from an earlier design where Plain's JSON payload wrapped state/ops in an inline envelope (`{ i: string, s: PlainState }` / `{ i: string, b: SerializedOp[][] }`); that inline lineage field duplicated information already available via the parsed `Version` (which encodes as `"${lineage}:${value}"`) and via the new `SubstratePayload.lineage` field, creating a desync hazard between the wire-level version and the body-embedded lineage.
 
 `parsePlainPayload` still parses the legacy `{ i, s|b }` envelope for backward compatibility with peers/payloads that pre-date `SubstratePayload.lineage` — `SubstratePayload.lineage` is the preferred source when present; `parsePlainPayload`'s extracted `i` field is the fallback. Bare state objects / bare op-batch arrays (no `i` field, no `SubstratePayload.lineage`) still parse correctly via the same helper, one level further back in the compatibility chain.
 
@@ -1216,7 +1226,7 @@ The lineage now travels as an explicit field, `SubstratePayload.lineage`, set by
 
 **Invariant: the op-log is history — immutable values, never references into the live addressing registry.** A logged `Op` is a fact about the past; a since-deleted key is still the correct thing that op did. `AddressedPath` segments are memoized, *mutable* `Address` objects (an entry delete sets `dead = true`; a sequence edit advances `index` — both in place, see [§The interpreter stack](#the-interpreter-stack) addressing and `change.ts` `advanceAddresses`). If the log stored the live path, a later mutation would corrupt a historical op: `exportSince` → `serializeOps` would throw `"Ref access on deleted map entry"` on a tombstoned entry segment, or silently serialize a *drifted* index. Context: jj:mlurlzqt.
 
-The fix is a one-token change at the authoring seam: `PlainSubstrate.prepare` (and the `state` substrate's) pushes `{ path: path.toRaw(), change }`, not `{ path, change }`. `Path.toRaw()` (`path.ts`) is a pure projection — `RawPath.toRaw()` returns `this`; `AddressedPath.toRaw()` reads each segment's **`coord()`** (never `resolve()`, so it succeeds even for a dead address). It is the named inverse of `resolveToAddressed`. Two consequences worth internalizing:
+The fix is a one-token change at the authoring seam: `PlainSubstrate.prepare` (and the `ephemeral` substrate's) pushes `{ path: path.toRaw(), change }`, not `{ path, change }`. `Path.toRaw()` (`path.ts`) is a pure projection — `RawPath.toRaw()` returns `this`; `AddressedPath.toRaw()` reads each segment's **`coord()`** (never `resolve()`, so it succeeds even for a dead address). It is the named inverse of `resolveToAddressed`. Two consequences worth internalizing:
 
 - **Freeze at *push*, not flush.** Index addresses advance in place *within* a batch, before `log.push([...pendingOps])` runs, so freezing later would capture the post-advance index. Push-time captures the coordinate as-authored. (The addressing prepare-handler fires *before* `substrate.prepare` for the same change, but an op's own path coordinate is stable under its own change — structural effects live in the change *payload* at the container path, not in the op's path segments; `index`/`entry` segments appear only on *nested* writes, which don't advance the address they sit on.)
 - **The log is now byte-shape-homogeneous.** Local-write ops and merge ops (which were already `RawPath` via `deserializeOps`) are the same value type, replayed by the same `applyChange`. `serializeOps` needs no special case: its `seg.resolve()` runs only on total `RawSegment`s and never throws — the defect was the *input*, not the code.
@@ -1269,7 +1279,7 @@ walkPath              reports where the walk stopped; never throws
   └─ findOpaqueBoundary   reports where an opaque subtree begins
 ```
 
-The `state` substrate's schema lookup (`state-tree.ts:schemaAtPath`) is a fourth projection. `walkPath` returns a `PathWalk`: `complete`, `boundary` (with `consumed` marking where value-level resolution takes over), or `mismatch` (carrying a ready-to-throw reason rather than raising). Each projection picks its own policy — `foldPath` throws on `mismatch`, the `state` lookup answers `undefined` — which is the functional-core / imperative-shell split: the traversal reports what happened, its callers decide what to do about it.
+The `ephemeral` substrate's schema lookup (`state-tree.ts:schemaAtPath`) is a fourth projection. `walkPath` returns a `PathWalk`: `complete`, `boundary` (with `consumed` marking where value-level resolution takes over), or `mismatch` (carrying a ready-to-throw reason rather than raising). Each projection picks its own policy — `foldPath` throws on `mismatch`, the `ephemeral` lookup answers `undefined` — which is the functional-core / imperative-shell split: the traversal reports what happened, its callers decide what to do about it.
 
 ```ts
 type PathStepper = (
@@ -1319,7 +1329,7 @@ By 2.3.x there were three production callers. `findJsonBoundary` arrived with th
 
 The claim was true when written. What made it decay is that nothing enforced it — the rule lived in a doc comment, and `advanceSchema` was exported, so hand-rolling a fourth walk was the path of least resistance. **A stated invariant is not an enforced one.**
 
-The current arrangement is structural instead. `walkPath` is the only traversal; `foldPath`, `pathSchema`, `findOpaqueBoundary`, and the `state` substrate's schema lookup are projections of it that differ only in policy. The single-step primitive underneath (`stepSchema`) is package-internal and deliberately *not* exported, because handing it out is what made a divergent walker easy to write.
+The current arrangement is structural instead. `walkPath` is the only traversal; `foldPath`, `pathSchema`, `findOpaqueBoundary`, and the `ephemeral` substrate's schema lookup are projections of it that differ only in policy. The single-step primitive underneath (`stepSchema`) is package-internal and deliberately *not* exported, because handing it out is what made a divergent walker easy to write.
 
 `advanceSchema` — the public throwing wrapper over that primitive — has been removed. It was retained through 2.x on the reasoning that it had lost its callers but was still public, and it was pinned with tests so its behaviour could not drift. That retention was the last piece of the decayed arrangement still standing: an exported single-step descent is precisely what the paragraph above identifies as the hazard, and keeping it meant the package's most thorough descent tests pointed at a function nothing called. Those tests now target `stepSchema` directly (`src/__tests__/step-schema.test.ts`), including the `descend`-versus-`boundary` distinction the wrapper could not express. `walkPath` is the supported replacement for outside callers.
 
@@ -1483,7 +1493,7 @@ dist/
 | `src/guards.ts` | ~30 | `isNonNullObject`, `isPropertyHost`. |
 | `src/base64.ts` | ~30 | Platform-agnostic base64. |
 | `src/substrates/plain.ts` | ~400 | Plain substrate + factories. |
-| `src/substrates/lww.ts`, `substrates/timestamp-version.ts` | ~200 + ~100 | LWW / ephemeral substrate. |
+| `src/substrates/ephemeral.ts`, `substrates/state-tree.ts` | ~570 + ~770 | Ephemeral substrate: CvRDT field-level LWW and its state space. |
 | `src/basic/index.ts` | — | Test-only helpers (re-exports). |
 | `src/sync.ts` | ~100 | `version`, `exportEntirety`, `exportSince`, `merge` — generic over `ref[SUBSTRATE]`. |
 | `src/__tests__/` | ~56 files | Every test file is pure; no I/O, no timers. |

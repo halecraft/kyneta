@@ -10,7 +10,7 @@
 // to get wrong and is correct in every case below. Every other substrate is
 // measured against it.
 //
-// The `state` cases assert on the EXPORTED TREE rather than on the document,
+// The `ephemeral` cases assert on the EXPORTED TREE rather than on the document,
 // and that detail is why the bugs here survived. The substrate keeps two
 // copies: a plain-object shadow that local reads come from, and the StateTree
 // that actually replicates. `prepare` updates the shadow straight from the
@@ -26,7 +26,6 @@ import {
   json,
   Schema,
   SUBSTRATE,
-  state,
   subscribe,
 } from "../index.js"
 import { isStateTuple } from "../substrates/state-tree.js"
@@ -116,27 +115,6 @@ describe("json substrate (reference behaviour)", () => {
 })
 
 // ===========================================================================
-// ephemeral — a whole-document LWW register, so it has no per-field tree to
-// corrupt. Included to confirm it tracks the reference.
-// ===========================================================================
-
-describe("ephemeral substrate", () => {
-  it("interior leaf write through a nullable struct", () => {
-    const doc = createDoc(ephemeral.bind(StructNullable))
-    doc.v.set({ from: 1, to: null })
-    inner(doc.v).to.set(2)
-    expect(doc.v()).toEqual({ from: 1, to: 2 })
-  })
-
-  it("key write on a nullable record", () => {
-    const doc = createDoc(ephemeral.bind(RecordNullable))
-    doc.v.set({ a: 1 })
-    inner(doc.v).set("b", 2)
-    expect(doc.v()).toEqual({ a: 1, b: 2 })
-  })
-})
-
-// ===========================================================================
 // state — bug class C. A register must stay ONE leaf tuple.
 // ===========================================================================
 //
@@ -147,8 +125,8 @@ describe("ephemeral substrate", () => {
 // relay has that a register is a single value.
 
 // No nullable-list case here, and the reason is worth recording. A `sequence`
-// carries the `positional-ot` composition law, which `state` and `ephemeral` do
-// not allow, so `state.bind(...)` rejects a nullable list at compile time.
+// carries the `positional-ot` composition law, which `ephemeral` does not allow,
+// so `ephemeral.bind(...)` rejects a nullable list at compile time.
 // `.json()` does not have this problem: collapsing the subtree to an inert blob
 // erases the inner laws, leaving only `lww`. So `list.json` binds and a nullable
 // list does not — an asymmetry between two shapes that are otherwise stored
@@ -156,7 +134,7 @@ describe("ephemeral substrate", () => {
 // working as designed.
 describe("state substrate — registers stay atomic", () => {
   it("interior leaf write keeps the sum register whole", () => {
-    const doc = createDoc(state.bind(StructNullable))
+    const doc = createDoc(ephemeral.bind(StructNullable))
     doc.v.set({ from: 1, to: null })
     inner(doc.v).to.set(2)
 
@@ -166,7 +144,7 @@ describe("state substrate — registers stay atomic", () => {
   })
 
   it("interior leaf write keeps the .json() register whole", () => {
-    const doc = createDoc(state.bind(StructJson))
+    const doc = createDoc(ephemeral.bind(StructJson))
     doc.v.set({ from: 1, to: 5 })
     inner(doc.v).to.set(2)
 
@@ -176,7 +154,7 @@ describe("state substrate — registers stay atomic", () => {
   })
 
   it("push onto a .json() list reaches the tree", () => {
-    const doc = createDoc(state.bind(ListJson))
+    const doc = createDoc(ephemeral.bind(ListJson))
     inner(doc.v).push(1)
     inner(doc.v).push(2)
 
@@ -185,7 +163,7 @@ describe("state substrate — registers stay atomic", () => {
   })
 
   it("key write on a nullable record reaches the tree", () => {
-    const doc = createDoc(state.bind(RecordNullable))
+    const doc = createDoc(ephemeral.bind(RecordNullable))
     doc.v.set({ a: 1 })
     inner(doc.v).set("b", 2)
 
@@ -195,7 +173,7 @@ describe("state substrate — registers stay atomic", () => {
   })
 
   it("key write on a .json() record reaches the tree", () => {
-    const doc = createDoc(state.bind(RecordJson))
+    const doc = createDoc(ephemeral.bind(RecordJson))
     inner(doc.v).set("a", 1)
     inner(doc.v).set("b", 2)
 
@@ -218,7 +196,7 @@ describe("state substrate — registers stay atomic", () => {
 
 describe("widening does not leak past the substrate", () => {
   it("a subscriber is still notified at the leaf path, not the register", () => {
-    const doc = createDoc(state.bind(StructNullable))
+    const doc = createDoc(ephemeral.bind(StructNullable))
     doc.v.set({ from: 1, to: null })
 
     const paths: string[] = []
@@ -233,7 +211,7 @@ describe("widening does not leak past the substrate", () => {
   })
 
   it("aborting a batch restores the whole register", () => {
-    const doc = createDoc(state.bind(StructNullable))
+    const doc = createDoc(ephemeral.bind(StructNullable))
     doc.v.set({ from: 1, to: 3 })
 
     expect(() => {

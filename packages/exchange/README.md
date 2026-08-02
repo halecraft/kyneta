@@ -252,7 +252,7 @@ const NoteDoc = yjs.bind(Schema.struct({
 // Config data — plain substrate with sequential sync
 const ConfigDoc = json.bind(Schema.struct({ theme: Schema.string() }))
 
-// Ephemeral presence — ephemeral broadcast, only the latest value matters
+// Ephemeral presence — snapshot broadcast, merged per field on each leaf's timestamp
 const PresenceDoc = ephemeral.bind(Schema.struct({
   cursor: Schema.struct({ x: Schema.number(), y: Schema.number() }),
   name: Schema.string(),
@@ -611,7 +611,7 @@ You only engage the next level when you need it. Each level is additive — it d
 |----------|---------|-------------|
 | `bind({ schema, factory, syncMode })` | `@kyneta/schema` | General primitive — explicit schema, factory builder, sync mode. |
 | `json.bind(schema)` | `@kyneta/schema` | Plain substrate + authoritative protocol (`SYNC_AUTHORITATIVE`). |
-| `ephemeral.bind(schema)` | `@kyneta/schema` | Plain substrate + ephemeral broadcast protocol (`SYNC_EPHEMERAL`). Ideal for presence. |
+| `ephemeral.bind(schema)` | `@kyneta/schema` | Field-level LWW CvRDT, snapshot broadcast, never persisted (`SYNC_EPHEMERAL`). Presence, cursors, live input. |
 | `loro.bind(schema)` | `@kyneta/loro-schema` | Loro substrate + collaborative protocol (`SYNC_COLLABORATIVE`). |
 | `yjs.bind(schema)` | `@kyneta/yjs-schema` | Yjs substrate + collaborative protocol (`SYNC_COLLABORATIVE`). |
 
@@ -623,8 +623,8 @@ Each binding target is a fixed `(substrate, sync-mode, supported-laws)` bundle. 
 |--------|---------|----------------|-------------|
 | `json.bind(schema)` | `@kyneta/schema` | `SYNC_AUTHORITATIVE` | Plain substrate, sequential sync. |
 | `json.replica()` | `@kyneta/schema` | `SYNC_AUTHORITATIVE` | Plain replica for headless replication. |
-| `ephemeral.bind(schema)` | `@kyneta/schema` | `SYNC_EPHEMERAL` | Plain substrate, ephemeral broadcast. |
-| `ephemeral.replica()` | `@kyneta/schema` | `SYNC_EPHEMERAL` | LWW replica for headless replication. |
+| `ephemeral.bind(schema)` | `@kyneta/schema` | `SYNC_EPHEMERAL` | Field-level LWW CvRDT, snapshot broadcast. |
+| `ephemeral.replica()` | `@kyneta/schema` | `SYNC_EPHEMERAL` | Headless replica for relays; merges snapshots without a schema. |
 | `loro.bind(schema)` | `@kyneta/loro-schema` | `SYNC_COLLABORATIVE` | Loro substrate, collaborative CRDT sync. |
 | `loro.replica()` | `@kyneta/loro-schema` | `SYNC_COLLABORATIVE` | Loro replica for headless replication. |
 | `yjs.bind(schema)` | `@kyneta/yjs-schema` | `SYNC_COLLABORATIVE` | Yjs substrate, collaborative CRDT sync. |
@@ -655,15 +655,6 @@ Each binding target is a fixed `(substrate, sync-mode, supported-laws)` bundle. 
 | `Store` | Interface for persistent storage backends. |
 | `StoreEntry` | `{ payload: SubstratePayload, version: string }` |
 | `createInMemoryStore(opts?)` | Map-backed store for testing. Pass `{ sharedData }` for cross-instance persistence. |
-
-### TimestampVersion
-
-| Method | Description |
-|--------|-------------|
-| `TimestampVersion.now()` | Create from the current wall clock. |
-| `TimestampVersion.parse(s)` | Deserialize from string. |
-| `serialize()` | Serialize to decimal string. |
-| `compare(other)` | `"behind"`, `"equal"`, or `"ahead"` (never `"concurrent"`). |
 
 ### Utility
 

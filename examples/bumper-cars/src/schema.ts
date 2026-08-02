@@ -21,7 +21,7 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { Schema, json, ephemeral } from "@kyneta/schema"
+import { ephemeral, json, Schema } from "@kyneta/schema"
 
 // ─────────────────────────────────────────────────────────────────────────
 // Game state — plain JS, authoritative merge, server-authoritative.

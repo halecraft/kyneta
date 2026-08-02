@@ -107,7 +107,7 @@ export function render(
   selectedIndex: number,
   peerInfo: PeerInfo,
 ): string {
-  const labelWidth = Math.max(...fields.map((f) => f.label.length))
+  const labelWidth = Math.max(...fields.map(f => f.label.length))
 
   // Pre-format all field rows to measure their widths.
   const fieldRows = fields.map((field, i) =>
@@ -123,22 +123,24 @@ export function render(
   )
 
   // Role tag (displayed outside the box, after the top border).
-  const roleTag = peerInfo.role === "listener" ? `${DIM}(listening)${RESET}`
-    : peerInfo.role === "connector" ? `${DIM}(connected)${RESET}`
-    : `${DIM}(negotiating...)${RESET}`
+  const roleTag =
+    peerInfo.role === "listener"
+      ? `${DIM}(listening)${RESET}`
+      : peerInfo.role === "connector"
+        ? `${DIM}(connected)${RESET}`
+        : `${DIM}(negotiating...)${RESET}`
 
   // Peer info (displayed below the box).
   const peerCount = peerInfo.peerIds.length
   const peerLabel = peerCount === 1 ? "1 peer" : `${peerCount} peers`
-  const peerNames = peerInfo.peerIds.length > 0
-    ? peerInfo.peerIds.join(", ")
-    : "none"
+  const peerNames =
+    peerInfo.peerIds.length > 0 ? peerInfo.peerIds.join(", ") : "none"
 
   // Compose.
   const lines = [
     `${BOLD}${boxTop(TITLE, innerWidth)}  ${roleTag}`,
     boxEmpty(innerWidth),
-    ...fieldRows.map((row) =>
+    ...fieldRows.map(row =>
       boxLine(padVisible(` ${row} `, innerWidth), innerWidth),
     ),
     boxEmpty(innerWidth),
@@ -164,18 +166,42 @@ export function startInput(onAction: (action: Action) => void): () => void {
 
   const handler = (key: string) => {
     // Ctrl-C
-    if (key === "\x03") { onAction("quit"); return }
+    if (key === "\x03") {
+      onAction("quit")
+      return
+    }
     // Escape
-    if (key === "\x1b") { onAction("quit"); return }
+    if (key === "\x1b") {
+      onAction("quit")
+      return
+    }
     // q
-    if (key === "q") { onAction("quit"); return }
+    if (key === "q") {
+      onAction("quit")
+      return
+    }
     // Arrow keys (escape sequences)
-    if (key === "\x1b[A" || key === "k") { onAction("up"); return }
-    if (key === "\x1b[B" || key === "j") { onAction("down"); return }
-    if (key === "\x1b[D" || key === "h") { onAction("left"); return }
-    if (key === "\x1b[C" || key === "l") { onAction("right"); return }
+    if (key === "\x1b[A" || key === "k") {
+      onAction("up")
+      return
+    }
+    if (key === "\x1b[B" || key === "j") {
+      onAction("down")
+      return
+    }
+    if (key === "\x1b[D" || key === "h") {
+      onAction("left")
+      return
+    }
+    if (key === "\x1b[C" || key === "l") {
+      onAction("right")
+      return
+    }
     // Enter / Space
-    if (key === "\r" || key === " ") { onAction("right"); return }
+    if (key === "\r" || key === " ") {
+      onAction("right")
+      return
+    }
   }
 
   process.stdin.on("data", handler)

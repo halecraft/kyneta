@@ -681,7 +681,8 @@ External queries read from SQLite. All writes go through the CRDT.
 
 Different documents use different substrates based on their needs.
 Blog data in SQLite (queryable, sequential). Collaborative documents
-in Loro (CRDT merge). Presence in plain LWW (ephemeral). The exchange
+in Loro (CRDT merge). Presence in the ephemeral substrate (field-level LWW,
+transient). The exchange
 protocol is substrate-agnostic — discover/interest/offer works
 regardless of what's behind each substrate.
 

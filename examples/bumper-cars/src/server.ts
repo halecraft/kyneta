@@ -20,13 +20,13 @@
 
 /// <reference types="bun-types" />
 
-import { Exchange } from "@kyneta/exchange"
-import { WebsocketServerTransport } from "@kyneta/websocket-transport/server"
-import {
-  createBunWebsocketHandlers,
-  type BunWebsocketData,
-} from "@kyneta/websocket-transport/bun"
 import { buildClient, serveDist } from "@kyneta/bun-server"
+import { Exchange } from "@kyneta/exchange"
+import {
+  type BunWebsocketData,
+  createBunWebsocketHandlers,
+} from "@kyneta/websocket-transport/bun"
+import { WebsocketServerTransport } from "@kyneta/websocket-transport/server"
 import { GameStateDoc, PlayerInputDoc } from "./schema.js"
 import { GameLoop } from "./server/game-loop.js"
 

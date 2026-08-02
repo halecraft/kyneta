@@ -197,21 +197,13 @@ export function ArenaCanvas({ cars, myPeerId }: ArenaCanvasProps) {
         ctx.font = "bold 12px sans-serif"
         ctx.textAlign = "center"
         ctx.textBaseline = "bottom"
-        ctx.fillText(
-          car.name,
-          car.x + shakeX,
-          car.y - CAR_RADIUS - 5 + shakeY,
-        )
+        ctx.fillText(car.name, car.x + shakeX, car.y - CAR_RADIUS - 5 + shakeY)
 
         // Draw "YOU" indicator for self
         if (isMe) {
           ctx.fillStyle = "#4ECDC4"
           ctx.font = "bold 10px sans-serif"
-          ctx.fillText(
-            "YOU",
-            car.x + shakeX,
-            car.y - CAR_RADIUS - 18 + shakeY,
-          )
+          ctx.fillText("YOU", car.x + shakeX, car.y - CAR_RADIUS - 18 + shakeY)
         }
 
         // Draw "HIT!" indicator when hit

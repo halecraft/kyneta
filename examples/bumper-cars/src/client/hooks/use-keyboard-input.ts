@@ -39,7 +39,8 @@ export function useKeyboardInput(): InputState {
     const isTyping = (e: KeyboardEvent): boolean => {
       const t = e.target
       if (!(t instanceof HTMLElement)) return false
-      if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement) return true
+      if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement)
+        return true
       return t.isContentEditable
     }
 

@@ -154,7 +154,7 @@ export interface ScalarSchema<
   readonly constraint?: readonly V[]
   readonly [LAWS]?: Laws
   /**
-   * Optional time-decay for ephemeral presence fields (state substrate).
+   * Optional time-decay for ephemeral presence fields (the `ephemeral` substrate).
    * `decayMs` of N means: if no new write is observed within N ms, the
    * local projection reverts to its structural zero. Only valid with
    * `SYNC_EPHEMERAL`; binding `.decay()` to a durable substrate throws.
@@ -198,7 +198,7 @@ export interface ProductSchema<
   readonly discriminantKey?: string
   readonly [LAWS]?: Laws
   /**
-   * Optional time-decay for ephemeral presence fields (state substrate).
+   * Optional time-decay for ephemeral presence fields (the `ephemeral` substrate).
    * See {@link ScalarSchema.decayMs}.
    */
   readonly decayMs?: number
@@ -227,7 +227,7 @@ export interface SequenceSchema<
   readonly item: I
   readonly [LAWS]?: Laws
   /**
-   * Optional time-decay for ephemeral presence fields (state substrate).
+   * Optional time-decay for ephemeral presence fields (the `ephemeral` substrate).
    * See {@link ScalarSchema.decayMs}.
    */
   readonly decayMs?: number
@@ -246,7 +246,7 @@ export interface MapSchema<
   readonly item: I
   readonly [LAWS]?: Laws
   /**
-   * Optional time-decay for ephemeral presence fields (state substrate).
+   * Optional time-decay for ephemeral presence fields (the `ephemeral` substrate).
    * See {@link ScalarSchema.decayMs}.
    */
   readonly decayMs?: number
@@ -283,7 +283,7 @@ export interface PositionalSumSchema<
   readonly discriminant?: undefined
   readonly [LAWS]?: Laws
   /**
-   * Optional time-decay for ephemeral presence fields (state substrate).
+   * Optional time-decay for ephemeral presence fields (the `ephemeral` substrate).
    * See {@link ScalarSchema.decayMs}.
    */
   readonly decayMs?: number
@@ -309,7 +309,7 @@ export interface DiscriminatedSumSchema<
   readonly variantMap: Readonly<Record<string, PlainProductSchema>>
   readonly [LAWS]?: Laws
   /**
-   * Optional time-decay for ephemeral presence fields (state substrate).
+   * Optional time-decay for ephemeral presence fields (the `ephemeral` substrate).
    * See {@link ScalarSchema.decayMs}.
    */
   readonly decayMs?: number
@@ -563,7 +563,7 @@ export interface NullableSumOf<S, Laws extends string = string> {
   readonly discriminant?: undefined
   readonly [LAWS]?: "lww-tag-replaced" | "lww" | Laws
   /**
-   * Optional time-decay for ephemeral presence fields (state substrate).
+   * Optional time-decay for ephemeral presence fields (the `ephemeral` substrate).
    * See {@link ScalarSchema.decayMs}.
    */
   readonly decayMs?: number

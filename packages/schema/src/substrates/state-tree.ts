@@ -1,11 +1,19 @@
 // state-tree — CvRDT field-level LWW state space.
 //
-// Defines the core data structure and merge algebra for the `state` substrate.
-// A StateTree is isomorphic to the document schema, but every scalar leaf is
-// replaced with a `StateTuple` — `[value, timestamp]`, plus a third slot on a
-// deleted key (see `StateTuple` and TECHNICAL.md §"Deletion").
+// The name is deliberate, though it reads like a leftover: the binding target
+// this serves is `ephemeral`, and its substrate lives in `ephemeral.ts`.
+// "State" here means *state-based CRDT* — the family whose peers exchange
+// whole states and reconcile them with a join, rather than shipping an op log
+// — which is precisely what this file implements. So `StateTree`,
+// `StateTuple` and `mergeStateTree` keep the term rather than following the
+// target's name.
 //
-// Because the `state` substrate supports only LWW laws (`"lww" | "lww-per-key"`),
+// Defines the core data structure and merge algebra for the `ephemeral`
+// substrate. A StateTree is isomorphic to the document schema, but every
+// scalar leaf is replaced with a `StateTuple` — `[value, timestamp]`, plus a
+// third slot on a deleted key (see `StateTuple` and TECHNICAL.md §"Deletion").
+//
+// Because the target supports only LWW laws (`"lww" | "lww-per-key"`),
 // containers are limited to structs and maps. This creates a mathematically
 // clean separation: any JSON array (`[]`) encountered in a StateTree is
 // unambiguously a leaf tuple, not a sequence container.
@@ -400,7 +408,7 @@ function extractInto(
 }
 
 /**
- * The schema node for a named child of a container schema. `state`'s only
+ * The schema node for a named child of a container schema. This substrate's only
  * containers are product (`fields[key]`) and map (`item`) — a sum is stored as
  * one atomic leaf tuple, so it is never descended into and needs no case here.
  */
@@ -467,11 +475,11 @@ function deepClone(value: any): any {
 // ---------------------------------------------------------------------------
 // These build (or mutate) a StateTree from a plain value or a Change. They
 // live here alongside the merge/extract algebra so the whole StateTree
-// transform layer is one functional core; the `state` substrate (the
+// transform layer is one functional core; the `ephemeral` substrate (the
 // imperative shell) just calls them.
 //
 // The one decision they share is leaf-vs-container. Products and maps
-// decompose into per-field tuples — that is what gives `state` its
+// decompose into per-field tuples — that is what gives `ephemeral` its
 // field-level merge. Scalars and *registers* — a `sum` variant or a
 // `.json()` blob, for which `needsContainer` is false — are stored as ONE
 // leaf tuple. Storing a register whole is what stops

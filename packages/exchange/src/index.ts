@@ -76,12 +76,6 @@ export type { HasNativeAny } from "@kyneta/schema"
 export { unwrap } from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
-// TimestampVersion — LWW version implementation (re-exported from @kyneta/schema)
-// ---------------------------------------------------------------------------
-
-export { TimestampVersion } from "@kyneta/schema"
-
-// ---------------------------------------------------------------------------
 // Messages — re-exported from @kyneta/transport
 // ---------------------------------------------------------------------------
 

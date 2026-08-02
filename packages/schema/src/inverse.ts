@@ -58,7 +58,7 @@ import {
  *   applying the forward change. The same σ is then mutated by `applyChange`,
  *   so the inverter must hold a snapshot — otherwise subsequent mutations
  *   would corrupt the recorded inverse.
- * - **The `state` substrate** uses it as an aliasing barrier when a whole
+ * - **The `ephemeral` substrate** uses it as an aliasing barrier when a whole
  *   register value (a sum variant or `.json()` blob) crosses the
  *   StateTree↔shadow boundary, so the two never share a mutable object.
  *

@@ -100,7 +100,8 @@ describe("Capabilities", () => {
       resolveFactory,
     })
 
-    // ["plain", 1, 0] is registered with authoritative and ephemeral, but not collaborative
+    // ["plain", 1, 0] is registered with authoritative only; the ephemeral
+    // tier is ["ephemeral", 1, 0]. Neither covers collaborative.
     const resolved = caps.resolveReplica(["plain", 1, 0], SYNC_COLLABORATIVE)
     expect(resolved).toBeUndefined()
   })
@@ -232,22 +233,24 @@ describe("Capabilities", () => {
   // DEFAULT_REPLICAS coverage
   // -------------------------------------------------------------------------
 
-  it("DEFAULT_REPLICAS covers both plain-wire sync protocols", () => {
+  it("DEFAULT_REPLICAS covers the durable and the transient tier", () => {
     const caps = createCapabilities({
       schemas: [],
       replicas: [...DEFAULT_REPLICAS],
       resolveFactory,
     })
 
-    const sequential = caps.resolveReplica(["plain", 1, 0], SYNC_AUTHORITATIVE)
-    const eph = caps.resolveReplica(["plain", 1, 0], SYNC_EPHEMERAL)
+    const durable = caps.resolveReplica(["plain", 1, 0], SYNC_AUTHORITATIVE)
+    const transient = caps.resolveReplica(["ephemeral", 1, 0], SYNC_EPHEMERAL)
 
-    expect(sequential).toBeDefined()
-    expect(eph).toBeDefined()
+    expect(durable?.factory).toBe(plainReplicaFactory)
+    expect(transient?.factory).toBe(ephemeral.replica().factory)
+    expect(durable?.factory).not.toBe(transient?.factory)
 
-    // They should be different BoundReplica instances with different factories
-    expect(sequential?.factory).toBe(plainReplicaFactory)
-    expect(eph?.factory).toBe(ephemeral.replica().factory)
-    expect(sequential?.factory).not.toBe(eph?.factory)
+    // The two tiers are distinct on the wire, not merely by sync mode. A
+    // headless relay picks its replica from `replicaType` first, so a
+    // transient document announced as ["plain", 1, 0] resolves to nothing —
+    // there is no plain-backed ephemeral replica any more.
+    expect(caps.resolveReplica(["plain", 1, 0], SYNC_EPHEMERAL)).toBeUndefined()
   })
 })

@@ -10,7 +10,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { useText, useValue } from "@kyneta/react"
-import { remove, type Ref, type Removable } from "@kyneta/schema"
+import { type Ref, type Removable, remove } from "@kyneta/schema"
 import type { TodoItemSchema } from "./schema.js"
 
 export function TodoItem({

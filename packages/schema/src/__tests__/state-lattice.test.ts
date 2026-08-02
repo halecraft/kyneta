@@ -1,4 +1,4 @@
-// state-lattice — the `state` substrate's merge is a join-semilattice.
+// state-lattice — the `ephemeral` substrate's merge is a join-semilattice.
 //
 // A CvRDT converges only if its merge is commutative, associative and
 // idempotent. Those laws are the whole reason two peers can exchange state in
@@ -14,6 +14,8 @@
 // almost never produce two equal ones.
 
 import { describe, expect, it } from "vitest"
+import { StateVersion } from "../substrates/ephemeral.js"
+import { DEFAULT_LINEAGE } from "../substrates/plain.js"
 import {
   joinTuples,
   mergeStateTree,
@@ -266,5 +268,27 @@ describe("mergeStateTree over whole trees", () => {
     >
     merged.scalar[0] = "mutated"
     expect((remote as any).scalar[0]).toBe("B")
+  })
+})
+
+describe("StateVersion carries no lineage", () => {
+  it("always reports DEFAULT_LINEAGE", () => {
+    // `Version.lineage` is the writer-identity coordinate. A substrate that
+    // mints a REAL one is telling the exchange "my history is a distinct
+    // identity from yours", which triggers a lineage-boundary reset: local
+    // state is discarded and the peer's snapshot adopted wholesale.
+    //
+    // That is exactly wrong for this substrate. A field-level LWW merge has no
+    // history and no identity to diverge — every payload is absorbable, and
+    // replacing local state would drop concurrent field writes the sender has
+    // not seen yet. Reporting DEFAULT_LINEAGE is what keeps a transient
+    // document out of the reset path altogether.
+    //
+    // The other half of that invariant — durability excluding the compaction
+    // trigger — lives in @kyneta/exchange's `epoch-boundary.test.ts`, which
+    // points back here. Changing this line means revisiting the replicate arm
+    // of `Synchronizer.#executeImportDocData`.
+    expect(StateVersion.now().lineage).toBe(DEFAULT_LINEAGE)
+    expect(new StateVersion(0).lineage).toBe(DEFAULT_LINEAGE)
   })
 })

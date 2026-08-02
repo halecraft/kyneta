@@ -26,7 +26,6 @@ export {
   json,
   Reject,
   Replicate,
-  state,
 } from "./bind.js"
 // Change types — the universal currency of change
 export type {
@@ -514,9 +513,12 @@ export {
   SYNC_EPHEMERAL,
   TREE_NODE_ALLOCATE,
 } from "./substrate.js"
+export {
+  ephemeralReplicaFactory,
+  ephemeralSubstrateFactory,
+} from "./substrates/ephemeral.js"
 // Plain substrate — plain JS object store with version tracking
 export {
-  buildUpgrade,
   createPlainReplica,
   createPlainSubstrate,
   DEFAULT_LINEAGE,
@@ -526,12 +528,6 @@ export {
   plainReplicaFactory,
   plainSubstrateFactory,
 } from "./substrates/plain.js"
-export {
-  stateReplicaFactory,
-  stateSubstrateFactory,
-} from "./substrates/state.js"
-// Timestamp version — wall-clock version for LWW/ephemeral substrates
-export { TimestampVersion } from "./substrates/timestamp-version.js"
 // Sync — generic sync functions for any substrate (via ref[SUBSTRATE])
 export {
   exportEntirety,

@@ -159,7 +159,7 @@ describe("Storage persist + hydrate", () => {
     expect(doc2.title()).toBe("hello loro")
   })
 
-  it("ephemeral doc: write → shutdown → restart → hydrate", async () => {
+  it("ephemeral doc: writes do NOT survive a restart", async () => {
     const sharedData: InMemoryStoreData = {
       records: new Map(),
       metadata: new Map(),
@@ -188,9 +188,19 @@ describe("Storage persist + hydrate", () => {
     const doc2 = exchange2.get("presence-1", PresenceDoc)
     await exchange2.flush()
 
-    expect(doc2.name()).toBe("Alice")
-    expect(doc2.cursor.x()).toBe(100)
-    expect(doc2.cursor.y()).toBe(200)
+    // `SYNC_EPHEMERAL` is `durability: "transient"`. Presence says who is here
+    // *now*, so a restarted server resurrecting yesterday's cursor positions
+    // would be worse than having none — the document comes back at its
+    // structural zeros.
+    //
+    // Asserted against that contract rather than against the mechanism,
+    // because the mechanism is currently an accident: nothing tells the store
+    // the document is transient, it simply cannot persist updates, since
+    // `Runtime.#persistIfAdvanced` gives up when `exportSince` returns `null`.
+    // Making the skip explicit is queued work; this assertion should survive it.
+    expect(doc2.name()).toBe("")
+    expect(doc2.cursor.x()).toBe(0)
+    expect(doc2.cursor.y()).toBe(0)
   })
 })
 

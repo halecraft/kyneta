@@ -49,7 +49,7 @@ Imported by applications to construct the top-level sync graph; by `@kyneta/reac
 | `composeGate` | Pure function. Takes an iterable of `boolean \| undefined` results and a default. Returns `false` if any is `false`; `true` if any is `true`; otherwise the default. | A synchronous reducer |
 | `Capabilities` | Registry of supported `ReplicaType × SyncMode` pairs and their bound schemas, keyed by `ReplicaKey`. Conduit participants register only replicas; interpreters register schemas too. | A schema registry |
 | `ReplicaKey` | `${replicaName}:${major}:${syncMode}` — composite string key into `Capabilities`. | A doc ID |
-| `DEFAULT_REPLICAS` | The default replica-factory bundle: plain (authoritative), plain+LWW (ephemeral). Applications extend with Loro / Yjs replica factories as needed. | A per-doc factory |
+| `DEFAULT_REPLICAS` | The default replica-factory bundle: plain (authoritative) and ephemeral (transient CvRDT). Applications extend with Loro / Yjs replica factories as needed. | A per-doc factory |
 | `Disposition` | `Interpret \| Replicate \| Defer \| Reject` — the four outcomes of classifying an unknown doc on `present`. | An HTTP status |
 | `resolve` callback | Application-supplied function on `ExchangeParams`. Receives a peer + doc metadata; returns a `Disposition`. Runs only when auto-resolution (via `Capabilities`) fails. | A React ref, an async resolver |
 | `Interpret(bound)` | Decision: run the full interpreter stack for this doc against `bound`. | `Replicate(replicaBound)` — no schema, no interpreter |
@@ -242,7 +242,7 @@ Each `BoundSchema` carries a `SyncMode` — a structured record with three ortho
 
 **Routing fix**: All three protocols now use interest-based routing. Previously, ephemeral docs broadcast to *all* available peers regardless of interest. Now, ephemeral pushes go only to peers who have expressed interest (via the interest-based routing path in `buildPush`), filtered by `canShare`. The `delivery` axis determines *what* is sent (delta vs entirety), but interest registration determines *who* receives it.
 
-The sync mode is a property of the document, not the substrate — a Loro substrate can host ephemeral docs via `ephemeral.bind(schema)`.
+The sync mode is a property of the document, not of the exchange: one exchange hosts documents of all three modes at once, dispatching per document on the axes above.
 
 ### Document classification on `present`
 
@@ -746,13 +746,26 @@ Properties:
 
 Source: `src/synchronizer.ts` → `#executeImportDocData`, `governance.ts` → `canReset`.
 
-Lineage-boundary detection is now driven by an explicit lineage comparison, not solely by payload shape: `#executeImportDocData` compares the incoming version's `Version.lineage` against the local replica's `version().lineage` (via the pure, unit-tested `isLineageBoundaryOffer(localEpoch, remoteEpoch)` classifier). `LEGACY_EPOCH` and `DEFAULT_LINEAGE` on either side are excluded — neither is a trustworthy mismatch signal (LEGACY predates lineage support; DEFAULT is the normal lazy-mint/first-sync path, already handled correctly by `merge()`). This check fires independent of `payload.kind`, which is what lets it detect an identity-discontinuity reset even when the offending offer happens to carry a `"since"` payload rather than an `"entirety"`.
+**Two triggers, one path.** `#executeImportDocData` asks a single question of every inbound offer — *is this a reset, and if so which kind?* — via the pure, unit-tested `classifyResetTrigger(...)`, which returns `"none" | "lineage" | "compaction"`. Keeping the whole decision in one classifier is what lets the outcomes be tested directly; the branch it feeds sits in a private method that otherwise needs a full sync scenario to reach.
 
-A second, independent trigger remains and is preserved as the `isEntirety && hasEverSynced` heuristic: CRDT state grows monotonically, and eventually peers compact — discarding history ops and snapshotting current state. A post-compaction `exportSince(oldVersion)` may return an entirety payload rather than a delta, because the substrate no longer retains the history needed to compute the delta. This is a same-lineage history gap, not an identity discontinuity — the explicit lineage check above cannot detect it (there is no lineage mismatch to find), so the heuristic remains the *only* signal for this case and is evaluated unconditionally alongside the lineage check (`isLineageBoundary || isLegacyReset`), not superseded by it.
+| Trigger | Fires for | Meaning |
+|---|---|---|
+| `"lineage"` | `json` only | **Identity** discontinuity — the sender authors a different `Version.lineage` than we do. Typically a serialized writer that restarted with no persisted store and minted a fresh one. |
+| `"compaction"` | `json`, `loro`, `yjs` | **History** gap within one lineage — the sender trimmed past our version, so its `exportSince()` fell back to a whole-state image. |
+
+The lineage trigger requires a REAL lineage on *both* sides; `LEGACY_EPOCH` and `DEFAULT_LINEAGE` are excluded as untrustworthy mismatch signals (LEGACY predates lineage support; DEFAULT is the normal lazy-mint/first-sync path, already handled by `merge()`). It fires independent of `payload.kind`, which is what lets it catch an identity discontinuity even when the offending offer carries a `"since"` payload. Only `PlainVersion` ever mints a real lineage — `LoroVersion`, `YjsVersion` and `StateVersion` all report `DEFAULT_LINEAGE` — so in practice this trigger belongs to `json`.
+
+The compaction trigger is the *only* signal for a same-lineage history gap, since there is no lineage mismatch to find. It requires a whole-state image from a peer already marked synced: a first entirety is just initial sync. **Transient documents are excluded from it entirely** — the heuristic presumes a sender that can trim history, but a snapshot-only substrate accumulates no trimmable log, and every steady-state push is already an entirety. Applying it to presence traffic would classify ordinary sync as a reset on every message after the first.
+
+Those two facts compose into an invariant worth stating plainly, because it is what makes item 1 below safe: **a transient CvRDT document reaches neither trigger.** Durability excludes it from compaction, and `StateVersion` reporting `DEFAULT_LINEAGE` excludes it from lineage. The two halves are pinned in `epoch-boundary.test.ts` and `@kyneta/schema`'s `state-lattice.test.ts` respectively.
 
 Both triggers converge on the same `offer { payload: { kind: "entirety" | "since" } }` handling, gated by the same `canReset` policy: when the receiver encounters a boundary for a doc that already has local state, two things can happen:
 
-1. **Accept the reset.** Discard local state, adopt the incoming entirety/lineage. For interpret-mode substrates, this calls `Substrate.resetFromEntirety(payload, remoteVersion, options)` — a dedicated method, decoupled from the routine `merge()` path (which now assumes shared causal ancestry and never adopts across lineages on its own). For replicate-mode substrates (headless replicas), `ReplicaFactory.fromEntirety()` replaces the whole replica, except for `state` (CvRDT), which falls through to `merge()` since field-level LWW absorption is always safe regardless of lineage boundary.
+1. **Accept the reset.** Discard local state, adopt the incoming entirety/lineage. For interpret-mode substrates, this calls `Substrate.resetFromEntirety(payload, remoteVersion, options)` — a dedicated method, decoupled from the routine `merge()` path (which now assumes shared causal ancestry and never adopts across lineages on its own). For replicate-mode substrates (headless replicas), `ReplicaFactory.fromEntirety()` rebuilds the whole replica.
+
+   Rebuilding rather than merging is correct for **both** triggers, for the same underlying reason: the incoming image is not a continuation of what we hold. Under `"compaction"` the sender genuinely rewrote its history — `LoroReplica.advance()` exports a `mode: "shallow-snapshot"` and rebuilds via `LoroDoc.fromSnapshot`, and `YjsReplica.advance()` re-projects into a fresh `Y.Doc` because Yjs has no trim primitive at all — so merging keeps local ops whose causal anchors the image no longer carries. Under `"lineage"` there is no shared ancestry to reconcile against in the first place.
+
+   This is only safe because the branch is unreachable for a transient CvRDT, per the invariant above. For a field-level LWW merge, rebuilding *would* be wrong: it drops concurrent field writes the sender has not seen. Note also that `ReplicaLike.resetFromEntirety` exists and three of its four implementations delegate to `merge()` — but those are scoped to the lineage trigger, which never fires for Loro or Yjs. Pointing the replicate arm at them would route the compaction trigger into a merge and reintroduce the dangling-anchor hazard.
 2. **Reject the reset.** Keep local state. Sync will diverge from peers that compacted.
 
 `Policy.canReset(docId, peer)` is the gate. It defaults to `true` (accept) for all sync modes. Applications that need to reject resets for specific docs or peers register a `canReset` policy.

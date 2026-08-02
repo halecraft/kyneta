@@ -18,7 +18,7 @@
 > 4. **The grammar is closed; composition is open.** `Schema` has ten `[KIND]` values; users compose schemas freely, but do not add kinds (`packages/schema/src/schema.ts`).
 > 5. **Composition-law compatibility is checked at compile time.** `bind()` applies `RestrictLaws<S, AllowedLaws>`; binding a `Schema.counter()` to a substrate without `"additive"` in its `[LAWS]` set fails in the type system (`packages/schema/src/bind.ts`).
 >
-> **Primary substrates**: plain JS (authoritative, ephemeral), Loro (collaborative CRDT), Yjs (collaborative CRDT).
+> **Primary substrates**: plain JS (authoritative), ephemeral (transient field-level CvRDT), Loro (collaborative CRDT), Yjs (collaborative CRDT).
 > **Primary transports**: WebSocket, SSE, WebRTC, Unix socket, in-process bridge.
 > **Primary consumer**: React (+ any framework via `[CHANGEFEED]`).
 

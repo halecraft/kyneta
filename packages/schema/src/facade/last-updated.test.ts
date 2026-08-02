@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest"
-import { state } from "../bind.js"
+import { ephemeral } from "../bind.js"
 import { createDoc } from "../create-doc.js"
 import { Schema } from "../schema.js"
 import { lastUpdated } from "./last-updated.js"
@@ -13,7 +13,7 @@ describe("lastUpdated", () => {
       }),
     })
 
-    const doc = createDoc(state.bind(s))
+    const doc = createDoc(ephemeral.bind(s))
 
     // initially they might be 0 due to structural zero initialization in state tree
     const initialTs = lastUpdated(doc.server)

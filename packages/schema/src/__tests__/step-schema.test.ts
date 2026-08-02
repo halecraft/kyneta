@@ -2,7 +2,7 @@
 //
 // `stepSchema` is the primitive every traversal in the package rests on:
 // `walkPath` drives it, and `foldPath`, `pathSchema`, `findOpaqueBoundary` and
-// the `state` substrate's schema lookup are all projections of `walkPath`. It
+// the `ephemeral` substrate's schema lookup are all projections of `walkPath`. It
 // is total — it never throws — and reports one of three outcomes:
 //
 //   descend   an ordinary child; keep walking

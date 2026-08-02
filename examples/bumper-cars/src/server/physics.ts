@@ -253,9 +253,10 @@ export function checkCarCollision(
 // ─────────────────────────────────────────────────────────────────────────
 
 /** Find a spawn position that doesn't overlap with existing cars. */
-export function getSpawnPosition(
-  existingCars: CarState[],
-): { x: number; y: number } {
+export function getSpawnPosition(existingCars: CarState[]): {
+  x: number
+  y: number
+} {
   const margin = CAR_RADIUS * 3
   const maxAttempts = 50
 
