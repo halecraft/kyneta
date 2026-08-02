@@ -39,8 +39,14 @@ const ReproSchema = Schema.struct({
 })
 
 const Media = Schema.discriminatedUnion("type", [
-  Schema.struct({ type: Schema.string("text" as const), body: Schema.string() }),
-  Schema.struct({ type: Schema.string("image" as const), url: Schema.string() }),
+  Schema.struct({
+    type: Schema.string("text" as const),
+    body: Schema.string(),
+  }),
+  Schema.struct({
+    type: Schema.string("image" as const),
+    url: Schema.string(),
+  }),
 ])
 const UnionSchema = Schema.struct({ content: Media })
 
