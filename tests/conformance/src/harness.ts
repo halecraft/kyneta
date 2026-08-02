@@ -8,6 +8,10 @@ import type { SubstrateProfile } from "./profiles.js"
 // is deliberately substrate-agnostic, exercising the runtime, not the type surface.
 type Doc = any
 
+// The substrate-agnostic bound schema, taken from the profile table rather than
+// re-derived, so the helpers below accept exactly what `profile.bind()` returns.
+type Bound = ReturnType<SubstrateProfile["bind"]>
+
 // Advance micro- and macro-task queues enough times for a full present/interest/
 // offer handshake plus any reset re-request round trips.
 async function drain(rounds = 60): Promise<void> {
@@ -20,11 +24,41 @@ async function drain(rounds = 60): Promise<void> {
 const read = (doc: Doc) => ({ a: doc.a() as string, b: doc.b() as string })
 
 /**
+ * Assert a `Shape` value is one whole variant, not a mixture of two.
+ *
+ * Hand-written rather than delegated to `tryValidate`, because validation only
+ * covers half of it: it does reject a tag that disagrees with its payload
+ * (`{kind:"circle", side:3}`), but it ACCEPTS `{kind:"circle", radius:5, side:3}`,
+ * since it does not reject excess properties. The excess field is the whole
+ * signature of a blend, so that half has to be checked here.
+ */
+function expectCoherentVariant(v: any): void {
+  expect(v == null ? null : v.kind).toBeDefined()
+  if (v.kind === "circle") {
+    expect(typeof v.radius).toBe("number")
+    expect(v.side).toBeUndefined() // a field from the losing variant
+  } else {
+    expect(v.kind).toBe("square")
+    expect(typeof v.side).toBe("number")
+    expect(v.radius).toBeUndefined()
+  }
+}
+
+/**
  * Runs the substrate-unification conformance battery against one profile through
- * the real Exchange/Bridge sync machinery. Universal invariants (convergence,
- * fresh-peer adoption) must hold for every substrate; capability-gated ones
- * (compaction) run only where the profile declares support. See `profiles.ts`
- * for the matrix these assertions enforce.
+ * the real Exchange/Bridge sync machinery.
+ *
+ * Universal invariants — convergence, fresh-peer adoption, and sum-variant
+ * coherence — must hold for every substrate. Capability-gated ones (compaction)
+ * run only where the profile declares support. See `profiles.ts` for the matrix
+ * these assertions enforce.
+ *
+ * One scenario currently FAILS on every profile, on purpose. It asserts that a
+ * write inside a sum reaches the other peer, which is a guarantee the Exchange
+ * does not presently keep. It is left red rather than skipped or pinned to the
+ * broken value, because a suite that reports green while it knows a guarantee is
+ * broken is how the last three sum bugs survived — every test passed the whole
+ * time they were live. See `sum-interior-write-sync-issue.md`.
  */
 export function runSubstrateConformance(profile: SubstrateProfile): void {
   describe(`substrate conformance — ${profile.name}`, () => {
@@ -32,7 +66,7 @@ export function runSubstrateConformance(profile: SubstrateProfile): void {
     const spawn = (
       id: string,
       bridge: Bridge | null,
-      bound: unknown,
+      bound: Bound,
     ): Exchange => {
       const ex = new Exchange({
         id,
@@ -55,6 +89,59 @@ export function runSubstrateConformance(profile: SubstrateProfile): void {
       active.length = 0
     })
 
+    // --- Peer setups -------------------------------------------------------
+    //
+    // Two ways to get a pair of peers, factored out so each scenario below is
+    // just "put two peers in a state, then assert a property of the result".
+    // Assembling an Exchange pair is effectful and fiddly; the invariants are
+    // plain questions about two values. Keeping them apart is what lets a
+    // scenario read as a specification rather than as a setup script.
+
+    /** Two peers already joined by a bridge. Writes propagate as they happen. */
+    const connectedPair = (bound: Bound): [Doc, Doc] => {
+      const bridge = new Bridge()
+      // Each doc is annotated rather than inferred: returning `.get()` results
+      // straight into a tuple makes TypeScript build the full typed `DocRef` for
+      // this schema, which exceeds its instantiation-depth limit. The harness
+      // works untyped on purpose, so pinning them to `Doc` costs nothing.
+      const docA: Doc = spawn("A", bridge, bound).get("doc", bound)
+      const docB: Doc = spawn("B", bridge, bound).get("doc", bound)
+      return [docA, docB]
+    }
+
+    /**
+     * Two peers that each write while disconnected, then reconnect.
+     *
+     * A partition is the only way to get genuinely concurrent writes: with a
+     * live bridge, whichever peer writes second has already seen the first.
+     *
+     * The `drain(5)` between the two writes is load-bearing, not cosmetic.
+     * Timestamps taken in the same millisecond compare "equal", and the
+     * synchronizer skips a sync it believes is a no-op — so without the gap the
+     * partition heals into silence and the scenario asserts nothing.
+     */
+    const partitionedWrites = async (
+      bound: Bound,
+      writeA: (d: Doc) => void,
+      writeB: (d: Doc) => void,
+    ): Promise<[Doc, Doc]> => {
+      const a = spawn("A", null, bound)
+      const b = spawn("B", null, bound)
+      const docA: Doc = a.get("doc", bound)
+      const docB: Doc = b.get("doc", bound)
+
+      batch(docA, writeA)
+      await drain(5)
+      batch(docB, writeB)
+
+      const bridge = new Bridge()
+      await a.addTransport(createBridgeTransport({ transportId: "A", bridge }))
+      await b.addTransport(createBridgeTransport({ transportId: "B", bridge }))
+      await drain()
+
+      return [docA, docB]
+    }
+
     it("converges to equal state; keeps independent-field writes iff it merges below whole-document granularity", async () => {
       const bound = profile.bind()
 
@@ -62,9 +149,7 @@ export function runSubstrateConformance(profile: SubstrateProfile): void {
         // One authoritative writer at a time is the supported pattern for a
         // serialized substrate (two peers racing the same doc is misuse). Each
         // write syncs before the next, so both survive.
-        const bridge = new Bridge()
-        const docA: Doc = spawn("A", bridge, bound).get("doc", bound)
-        const docB: Doc = spawn("B", bridge, bound).get("doc", bound)
+        const [docA, docB] = connectedPair(bound)
         batch(docA, (d: Doc) => d.a.set("A"))
         await drain()
         batch(docB, (d: Doc) => d.b.set("B"))
@@ -75,23 +160,11 @@ export function runSubstrateConformance(profile: SubstrateProfile): void {
         return
       }
 
-      // Concurrent substrates: genuinely concurrent writes require a partition —
-      // each peer writes while disconnected, so neither observes the other. The
-      // brief gap between the writes gives them distinct timestamps (same-ms
-      // timestamps compare "equal", and the synchronizer would skip the sync).
-      const a = spawn("A", null, bound)
-      const b = spawn("B", null, bound)
-      const docA: Doc = a.get("doc", bound)
-      const docB: Doc = b.get("doc", bound)
-      batch(docA, (d: Doc) => d.a.set("A"))
-      await drain(5)
-      batch(docB, (d: Doc) => d.b.set("B"))
-
-      // Heal the partition and let it reconcile.
-      const bridge = new Bridge()
-      await a.addTransport(createBridgeTransport({ transportId: "A", bridge }))
-      await b.addTransport(createBridgeTransport({ transportId: "B", bridge }))
-      await drain()
+      const [docA, docB] = await partitionedWrites(
+        bound,
+        (d: Doc) => d.a.set("A"),
+        (d: Doc) => d.b.set("B"),
+      )
 
       // Universal: both peers reach the same materialized state.
       expect(read(docA)).toEqual(read(docB))
@@ -108,11 +181,87 @@ export function runSubstrateConformance(profile: SubstrateProfile): void {
       }
     })
 
+    it("a concurrent variant switch resolves to ONE coherent variant", async () => {
+      // Universal, and gated on nothing — but every substrate arrives at it by a
+      // different route. `json` and `ephemeral` get it from whole-document LWW,
+      // `state` from storing a sum as one atomic `[value, timestamp]` register,
+      // `loro` and `yjs` from keeping a sum's interior opaque. Four mechanisms,
+      // one guarantee, and no shared assertion until now — which is exactly the
+      // shape of thing a conformance suite is for. Three separate sum bugs, one
+      // per substrate, were live simultaneously before this landed.
+      const bound = profile.bind()
+
+      if (profile.writerModel === "serialized") {
+        // Racing one document is misuse for a serialized substrate, so switch
+        // sequentially. The coherence property is still asserted; only the
+        // concurrency is dropped.
+        const [docA, docB] = connectedPair(bound)
+        batch(docA, (d: Doc) => d.shape.set({ kind: "circle", radius: 5 }))
+        await drain()
+        batch(docB, (d: Doc) => d.shape.set({ kind: "square", side: 3 }))
+        await drain()
+        expectCoherentVariant(docA.shape())
+        expect(docA.shape()).toEqual(docB.shape())
+        return
+      }
+
+      const [docA, docB] = await partitionedWrites(
+        bound,
+        (d: Doc) => d.shape.set({ kind: "circle", radius: 5 }),
+        (d: Doc) => d.shape.set({ kind: "square", side: 3 }),
+      )
+
+      // Agreement alone is not enough: two peers can agree on a blended value,
+      // and that is precisely the bug `state` shipped before its sum values
+      // became atomic registers. Both peers converged — on a shape carrying a
+      // tag from one variant and fields from both.
+      expect(docA.shape()).toEqual(docB.shape())
+      expectCoherentVariant(docA.shape())
+      expectCoherentVariant(docB.shape())
+    })
+
+    it("a write inside a sum reaches the other peer", async () => {
+      // FAILING ON PURPOSE — this is a live bug, and the suite is supposed to
+      // say so. See `sum-interior-write-sync-issue.md`.
+      //
+      // A write inside a sum applies locally, bumps the substrate version, and
+      // fires the changefeed — but the Exchange never offers it. Peer A reads
+      // its own write back correctly; the other peer stays on the previous value
+      // however long the harness drains. Any later unrelated write carries it
+      // across, so the data is intact and it is the sync trigger that is missing.
+      //
+      // It reproduces identically on all five substrates including `json`, which
+      // rules out the substrates and places the fault above them. Diagnosis and
+      // fix are separate work at the Exchange layer.
+      //
+      // Deliberately NOT `it.fails`, and deliberately not pinned to the wrong
+      // value. Both of those report green, and a green suite is exactly how the
+      // three sum bugs before this one survived — every test passed the entire
+      // time they were live. A conformance suite that knows a guarantee is broken
+      // should fail; that is what makes the gap impossible to forget rather than
+      // merely recorded somewhere.
+      const bound = profile.bind()
+      const [docA, docB] = connectedPair(bound)
+
+      batch(docA, (d: Doc) => d.optional.set({ from: 1, to: 7 }))
+      await drain()
+      // The whole-value write syncs correctly — so the pair is genuinely
+      // connected, and it is specifically the interior write that is lost.
+      expect(docB.optional()).toEqual({ from: 1, to: 7 })
+
+      batch(docA, (d: Doc) => (d.optional as Doc).to.set(2))
+      await drain()
+
+      expect(docA.optional()).toEqual({ from: 1, to: 2 })
+      // Asserted on the receiving peer, not the writer: every substrate serves
+      // local reads from a shadow that `prepare` updates directly, so the writer
+      // looks correct no matter what actually reached the network.
+      expect(docB.optional()).toEqual({ from: 1, to: 2 })
+    })
+
     it("a fresh peer adopts an incumbent's state on join", async () => {
       const bound = profile.bind()
-      const bridge = new Bridge()
-      const docA: Doc = spawn("A", bridge, bound).get("doc", bound)
-      const docB: Doc = spawn("B", bridge, bound).get("doc", bound)
+      const [docA, docB] = connectedPair(bound)
 
       // Incumbent A writes; B is a fresh (genesis) peer that never writes.
       batch(docA, (d: Doc) => {
@@ -128,6 +277,8 @@ export function runSubstrateConformance(profile: SubstrateProfile): void {
     if (profile.liveCompactable) {
       it("compaction preserves convergence with a synced peer", async () => {
         const bound = profile.bind()
+        // Spawned directly rather than via `connectedPair`: this scenario needs
+        // the Exchange itself to call `compact()`, not just the document.
         const bridge = new Bridge()
         const a = spawn("A", bridge, bound)
         const b = spawn("B", bridge, bound)

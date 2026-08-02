@@ -2,14 +2,53 @@ import { loro } from "@kyneta/loro-schema"
 import { ephemeral, json, Schema, state } from "@kyneta/schema"
 import { yjs } from "@kyneta/yjs-schema"
 
-// A minimal two-scalar schema that every substrate accepts. The two INDEPENDENT
-// fields are the crux of the concurrent-write invariant: a substrate that merges
-// below whole-document granularity (field-level LWW, or op-level CRDT) keeps both
-// a peer-A write to `a` and a concurrent peer-B write to `b`; a whole-document
-// last-writer-wins substrate keeps only one.
+/**
+ * A sum whose two variants share NO field names.
+ *
+ * The disjointness is the whole point. "A concurrent variant switch never blends
+ * fields across peers" is only checkable if a blend is visible, and a blend looks
+ * like a value carrying `radius` AND `side`, or a `kind` that disagrees with its
+ * payload. Two variants sharing a field name would let a blended result pass for
+ * a coherent one.
+ */
+export const Shape = Schema.discriminatedUnion("kind", [
+  Schema.struct({ kind: Schema.string("circle"), radius: Schema.number() }),
+  Schema.struct({ kind: Schema.string("square"), side: Schema.number() }),
+])
+
+/**
+ * A nullable struct, for the scenario that writes a leaf INSIDE a sum.
+ *
+ * `Shape` cannot serve that purpose. Per the `WritableDiscriminantProductRef`
+ * contract, a discriminated union's variant fields are read-only — the only
+ * mutation it offers is a whole-value `.set()` on the union itself. A
+ * `.nullable()` struct is the shape whose interior is writable at runtime.
+ */
+export const Optional = Schema.struct({
+  from: Schema.number(),
+  to: Schema.number(),
+}).nullable()
+
+// The schema every substrate is measured against.
+//
+// `a` and `b` are the crux of the concurrent-write invariant: two INDEPENDENT
+// fields, so a substrate that merges below whole-document granularity
+// (field-level LWW, or op-level CRDT) keeps both a peer-A write to `a` and a
+// concurrent peer-B write to `b`, while a whole-document last-writer-wins
+// substrate keeps only one.
+//
+// A note for anyone extending this further: what a substrate accepts is decided
+// by composition laws, and wrapping changes them. `Schema.list(...)` is rejected
+// on `state` and `ephemeral` because a sequence carries `positional-ot`, which is
+// not in `EphemeralLaws` — and `.nullable()` does NOT change that, because it
+// does not erase the inner laws. `Schema.list.json(...)` binds fine on all five,
+// because `.json()` collapses the subtree to an inert blob and leaves only `lww`.
+// Struct- and record-shaped sums like the two above are unaffected.
 export const ConformanceSchema = Schema.struct({
   a: Schema.string(),
   b: Schema.string(),
+  shape: Shape,
+  optional: Optional,
 })
 
 /** Whether concurrent writes to two DIFFERENT fields both survive a merge. */

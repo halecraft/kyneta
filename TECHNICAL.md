@@ -53,7 +53,16 @@ Every test count in every per-package `TECHNICAL.md` agrees with this table. Run
 | `@kyneta/cast` (exp.) | 634 | 0 | 27 |
 | `@kyneta/perspective` (exp., private) | 1,374 | 0 | 35 |
 
-Two additional test suites live outside the main package graph:
+Three additional test suites live outside the main package graph:
+- `tests/conformance` — the substrate-unification battery, and the executable
+  specification of the substrate abstraction. `profiles.ts` declares each
+  substrate's axes as data (writer model, durability, merge granularity,
+  compaction); `harness.ts` runs the same scenarios against every one of them
+  through a real `Exchange` and `Bridge`. Universal invariants (convergence,
+  fresh-peer adoption, sum-variant coherence) must hold everywhere; anything
+  capability-gated runs only where a profile declares support. A substrate whose
+  behaviour drifts from its declared row fails here — so this is the first place
+  to add coverage when substrates could plausibly disagree.
 - `tests/integration` — cross-package integration suite. Files use
   `.node.test.ts` (vitest) or `.bun.test.ts` (bun test) suffixes to
   declare their runtime contract; `verify.config.ts` runs both runners
@@ -257,6 +266,7 @@ kyneta/
 │   └── bun-server/           # shared Bun build + static serving for examples
 │
 ├── tests/                    # cross-package test harnesses
+│   ├── conformance/          # substrate-unification battery (all 5 substrates)
 │   └── integration/          # Node (vitest) + Bun (bun test) suites
 │
 ├── scripts/                  # build/release/maintenance scripts
