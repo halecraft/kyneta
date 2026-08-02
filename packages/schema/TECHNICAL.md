@@ -171,6 +171,8 @@ Each binding target declares its closed law set:
 
 No runtime dispatch, no substrate-specific error messages. The type system is the enforcement mechanism.
 
+Each row of that table has an executable form. `packages/schema/backends/loro` and `.../yjs` carry a `bind-constraints` suite for their own law sets, and `src/__tests__/bind-constraints-state.test.ts` covers `state` — accepted shapes as ordinary assertions, rejected ones under `@ts-expect-error`, where **`tsc` is the assertion rather than the test runner**: a directive that stops suppressing an error becomes unused and fails the build. Without those suites the contract holds only by review, which is how a `state` defect once came to be filed against behaviour the compiler had already ruled out.
+
 ### What the grammar is NOT
 
 - **Not closed.** `sum` variants are open (you can add more) and `product` fields are open (you can nest arbitrary schemas). The eleven *kinds* are closed; user composition is not.
@@ -229,6 +231,16 @@ A **read-time projection**, not a deletion mechanism. `tick(now)` re-projects th
 Decay removes nothing. It is the rule *"when reading, treat a leaf older than `decayMs` as its zero value"*, and it converges across peers with **no communication at all**, because every peer applies the same age test to the same stored timestamp and therefore reaches the same answer.
 
 It does not interact with tombstones, and cannot be used to collect them — dropping a tombstone would be a tree mutation, which is exactly what decay does not do.
+
+###### Where `.decay()` may be attached
+
+Decay works **per leaf tuple**: it compares one stored timestamp against `now`. That fixes where it can legally sit.
+
+An atomic register — a `sum` variant or a `.json()` blob — is stored as ONE tuple holding the whole value, so a field inside it has no timestamp of its own and can never age out independently. `decayMs` is therefore **legal at or above an opaque boundary and illegal strictly below one**, and `bind()` rejects the illegal case (`validateDecayConstraints`, `bind.ts`). Attaching it to the sum or `.json()` node itself is supported and means what it says: the whole variant decays to its structural zero together.
+
+Two rules now live in that validator, checked in order — never on a durable substrate, then never below a boundary. The order is deliberate. A schema can break both at once, and the two are independent, so leading with the boundary message would tell a caller to move an annotation when their real problem is that the substrate supports no decay at all. Asking *where* decay may sit only has meaning once decay is permitted somewhere.
+
+Before this check existed, `decayMs` below a boundary bound cleanly and then silently never fired — no throw, no log, just a field that never decayed.
 
 ##### Atomic registers in the StateTree
 
@@ -1286,6 +1298,8 @@ function foldPath(
    These were documented as *two* invariants until 2.3.x, and the split was itself the bug: a walker could learn the json half and miss the sum half, which is exactly what happened. They are one rule because they describe one storage decision.
 
    **That constraint is now retired rather than restated.** This document used to say the walk-side predicate and `needsContainer` (`materialize-value.ts`) "must agree", which is the same kind of prose invariant the section below diagnoses — a rule living in a doc comment, enforced by review. Both are now one-line derivations of `storageClass` (`schema.ts`), the single place the decision is made: `isOpaqueBoundary` asks it the walk-side question, `needsContainer` the write-side one. They cannot disagree, so nothing has to remember that they must.
+
+   There is now a third consumer outside the traversal entirely: `validateDecayConstraints` (`bind.ts`) uses `isOpaqueBoundary` to find where a register begins, because `.decay()` is illegal below one (see §"Where `.decay()` may be attached"). Under the old arrangement that would have meant a third hand-written copy of the rule, since `isJsonBoundary` and `KIND` are both public and the disjunction is one line away. Sharing the predicate is what makes the validator agree with the traversal by construction rather than by review — and note that `!needsContainer` is *not* a substitute for it, because that is also false for scalars, which are leaves rather than boundaries.
 
    The cost of the old arrangement was paid: `richtext` was classified as a container by one and a leaf by the other, which broke the `EagerPolicy` subset relation described in §"Value materialization — the write-side unfold".
 

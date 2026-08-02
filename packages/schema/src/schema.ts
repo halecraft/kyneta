@@ -1199,24 +1199,17 @@ export function storageClass(schema: Schema): StorageClass {
 /**
  * Whether a schema node is stored as one opaque plain value by the substrates.
  *
- * Named to match the vocabulary around it — `findOpaqueBoundary`,
- * `OpaqueBoundaryHit`, and `walkPath`'s `boundary` stop all mean this. Its
- * callers are `stepSchema` just above, and `validateDecayConstraints`
- * (`bind.ts`), which needs to know where a register begins.
+ * Named for the vocabulary around it — `findOpaqueBoundary`,
+ * `OpaqueBoundaryHit`, and `walkPath`'s `boundary` stop all mean this.
  *
- * Exported package-internally, while `stepSchema` right beside it deliberately
- * is not — worth explaining, because the two look like the same kind of thing.
- * `stepSchema` returns a tagged result, and every tag demands a *policy* from
- * whoever receives it: stop or keep going at a boundary, throw or answer
- * `undefined` on a mismatch, what to accumulate across a loop. Handing that out
- * is what makes a divergent walker easy to write, which is how the traversal
- * consolidation came apart once already.
- *
- * A predicate carries no policy. There is one correct answer and nothing to
- * accumulate, so no two consumers can drift. Withholding it would not prevent a
- * second copy either — `isJsonBoundary` and `KIND` are both public, so the
- * disjunction is one line away — it would only guarantee the copy is
- * hand-written, and that it silently stops matching `storageClass`.
+ * Exported package-internally, while `stepSchema` beside it is not. The two
+ * look alike and are not: `stepSchema` returns a tagged result whose every tag
+ * demands a policy from the caller — stop or continue at a boundary, throw or
+ * answer `undefined` on a mismatch — and handing that out is what makes a
+ * divergent walker easy to write. A predicate has one right answer and no
+ * policy to diverge on. Keeping it private would not prevent a second copy
+ * anyway, since `isJsonBoundary` and `KIND` are public; it would only ensure
+ * the copy is hand-written, and silently free to stop matching `storageClass`.
  */
 export function isOpaqueBoundary(schema: Schema): boolean {
   return storageClass(schema) === "opaque-composite"

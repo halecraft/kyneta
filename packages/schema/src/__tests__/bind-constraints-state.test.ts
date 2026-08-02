@@ -14,10 +14,12 @@
 //
 // This suite exists because the contract held by accident. It matches
 // `state-tree.ts`'s header — structs, maps, and opaque registers — and nothing
-// asserted that, which is how a project note came to claim `state.bind` accepts
-// a bare `Schema.list`. It does not, and a fix direction was written for work
-// that could never be needed. The Loro and Yjs backends have carried an
-// equivalent suite for their own law sets; this is the core-substrate one.
+// asserted it, so the only way to find out what `state` accepts was to attempt
+// a bind and read the compiler error. A contract nobody can look up is one
+// people guess at, and a guess written down reads exactly like a fact.
+//
+// The Loro and Yjs backends have carried an equivalent suite for their own law
+// sets; this is the core-substrate one.
 
 import { describe, expect, expectTypeOf, it } from "vitest"
 import { type BoundSchema, Schema, state } from "../index.js"

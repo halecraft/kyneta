@@ -76,8 +76,12 @@ import {
  *
  * For Loro substrates, the builder hashes the peerId to a deterministic
  * numeric Loro PeerID and returns a factory that calls `doc.setPeerId()`
- * on every new LoroDoc. The binding will be used in a later phase to
- * key CRDT containers by identity instead of field name.
+ * on every new LoroDoc.
+ *
+ * The `binding` keys CRDT containers by identity rather than by field name.
+ * Both sides go through it — `materializeValue` when writing (`containerKey`)
+ * and `foldPath` when reading (`binding.forward.get`) — so a whole-struct write
+ * cannot land under a key the reader will not look up.
  */
 export type FactoryBuilder<V extends Version = Version> = (context: {
   peerId: string
@@ -556,15 +560,13 @@ const MAX_VALIDATE_DEPTH = 1000
  * **2. Not below an opaque boundary.** Decay works per leaf tuple, by testing
  * one stored timestamp against `now`. A `sum` variant or a `.json()` blob is
  * stored as ONE tuple holding the whole value, so a field inside it has no
- * timestamp of its own and can never age out independently. Setting `decayMs`
- * there used to bind cleanly and then silently never fire.
+ * timestamp of its own and cannot age out independently. Left unchecked, such a
+ * binding succeeds and the decay simply never fires.
  *
- * The order matters for the message a caller gets. A schema can break both
- * rules at once, and the two are independent — fixing either leaves the other
- * — so leading with the boundary rule would tell someone to move an annotation
- * when their real problem is that the substrate supports no decay at all.
- * Asking "where may decay sit" only makes sense once decay is permitted
- * somewhere, which is why rule 2 is nested inside rule 1's negation.
+ * The order is what a caller sees. A schema can break both rules at once, and
+ * they are independent — fixing either leaves the other — so leading with the
+ * boundary rule would tell someone to move an annotation when their real
+ * problem is that the substrate supports no decay at all.
  *
  * Visited-set is intentionally omitted: legitimate shared-node DAGs (a
  * `Schema.string()` reused across many fields) would false-positive.

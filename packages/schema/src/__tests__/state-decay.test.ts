@@ -462,9 +462,10 @@ describe("extractPlainState schema-aware projection", () => {
 //
 // Decay works per leaf tuple: it compares one stored timestamp against `now`.
 // A sum variant or a `.json()` blob is stored as ONE tuple holding the whole
-// value, so a field inside it has no timestamp of its own and can never age out
-// on its own. Setting `decayMs` there used to bind cleanly and then silently
-// never fire — the failure profile this codebase keeps getting caught by.
+// value, so a field inside it has no timestamp of its own and cannot age out on
+// its own. Before this rule such a binding succeeded and the decay never fired
+// — no throw, no log, just a field that stayed put. These cases are what keep
+// that from being reachable again.
 
 describe("decay placement relative to an opaque boundary", () => {
   it("is legal ON a sum — the whole variant decays together", () => {
