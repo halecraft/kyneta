@@ -1201,56 +1201,62 @@ function isOpaque(schema: Schema): boolean {
 /**
  * Descend one segment, or return the failure message as a string.
  *
- * Returning `string` for failure keeps every message in one place, so
- * `advanceSchema` (which throws) and `stepSchema` (which does not) cannot
+ * Returning `string` for failure rather than throwing keeps every message in
+ * one place, so the callers that throw and the callers that do not cannot
  * drift apart in their wording.
+ *
+ * The messages are prefixed `stepSchema:` because that is the function a
+ * reader can actually find in the call path: these strings reach users as
+ * `walkPath`'s `mismatch` reason, which `foldPath` then throws. They used to
+ * name `advanceSchema`, a wrapper no traversal calls, which sent anyone
+ * grepping the error text to a dead end.
  */
 function childSchema(schema: Schema, segment: Segment): Schema | string {
   switch (schema[KIND]) {
     case "product": {
       if (segment.role !== "field") {
-        return `advanceSchema: product expects a field segment, got ${segment.role} segment`
+        return `stepSchema: product expects a field segment, got ${segment.role} segment`
       }
       const key = segment.coord() as string
       const fieldSchema = schema.fields[key]
       if (!fieldSchema) {
-        return `advanceSchema: product has no field "${key}"`
+        return `stepSchema: product has no field "${key}"`
       }
       return fieldSchema
     }
 
     case "sequence": {
       if (segment.role !== "index") {
-        return `advanceSchema: sequence expects an index segment, got ${segment.role} segment "${segment.coord()}"`
+        return `stepSchema: sequence expects an index segment, got ${segment.role} segment "${segment.coord()}"`
       }
       return schema.item
     }
 
     case "map": {
       if (segment.role !== "entry") {
-        return `advanceSchema: map expects an entry segment, got ${segment.role} segment`
+        return `stepSchema: map expects an entry segment, got ${segment.role} segment`
       }
       return schema.item
     }
 
     case "scalar":
-      return `advanceSchema: cannot advance into a scalar (kind: ${schema.scalarKind})`
+      return `stepSchema: cannot advance into a scalar (kind: ${schema.scalarKind})`
 
     // Stepping *from* a sum, as opposed to landing on one. A walker that
     // honours `boundary` stops before it can get here, so this is unreachable
     // from `walkPath` — it exists for `advanceSchema`'s direct callers.
     case "sum":
-      return `advanceSchema: cannot advance through a sum (sums resolve by value, not by path segment)`
+      return `stepSchema: cannot advance through a sum (sums resolve by value, not by path segment)`
 
     case "text":
-      return `advanceSchema: cannot advance into text (leaf type, no inner schema)`
+      return `stepSchema: cannot advance into text (leaf type, no inner schema)`
 
     case "counter":
-      return `advanceSchema: cannot advance into counter (leaf type, no inner schema)`
+      return `stepSchema: cannot advance into counter (leaf type, no inner schema)`
 
     case "set": {
       if (segment.role !== "entry") {
-        return `advanceSchema: set expects an entry segment, got ${segment.role} segment`
+        return `stepSchema: set expects an entry segment, got ${segment.role} segment`
       }
       return schema.item
     }
@@ -1260,19 +1266,19 @@ function childSchema(schema: Schema, segment: Segment): Schema | string {
       // advances into the per-node data schema. `field`/`index` are
       // rejected — tree paths use entry segments (runtime-keyed node ids).
       if (segment.role !== "entry") {
-        return `advanceSchema: tree expects an entry segment (node id), got ${segment.role} segment`
+        return `stepSchema: tree expects an entry segment (node id), got ${segment.role} segment`
       }
       return schema.item
     }
 
     case "movable": {
       if (segment.role !== "index") {
-        return `advanceSchema: movable sequence expects an index segment, got ${segment.role} segment "${segment.coord()}"`
+        return `stepSchema: movable sequence expects an index segment, got ${segment.role} segment "${segment.coord()}"`
       }
       return schema.item
     }
 
     case "richtext":
-      return `advanceSchema: cannot advance into richtext (leaf type, no inner schema)`
+      return `stepSchema: cannot advance into richtext (leaf type, no inner schema)`
   }
 }
