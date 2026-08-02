@@ -20,7 +20,7 @@
 // the requirement that headless replicas (relays, stores) can merge entirety
 // payloads without schema knowledge.
 
-import type { ChangeBase } from "../change.js"
+import type { ChangeBase, MapChange } from "../change.js"
 import { walkPath } from "../fold-path.js"
 import type { Path } from "../interpret.js"
 import { deepClonePlain } from "../inverse.js"
@@ -463,25 +463,12 @@ export function applyChangeToStateTree(
         throw new Error("Cannot replace root with a scalar")
       }
     } else if (change.type === "map") {
-      const target = tree as Record<string, StateTree>
-      const mapChange = change as any
-      for (const [key, instruction] of Object.entries(mapChange.entries)) {
-        if ((instruction as any).type === "delete") {
-          delete target[key]
-        } else if ((instruction as any).type === "set") {
-          const val = (instruction as any).value
-          const childSchema = schema
-            ? childSchemaForKey(schema, key)
-            : undefined
-          if (isDecomposedContainer(val, childSchema)) {
-            const newTree: Record<string, StateTree> = {}
-            syncStateTreeToShadow(newTree, val, childSchema, timestamp)
-            target[key] = newTree
-          } else {
-            target[key] = leafTuple(val, timestamp)
-          }
-        }
-      }
+      applyMapChange(
+        tree as Record<string, StateTree>,
+        change as MapChange,
+        schema,
+        timestamp,
+      )
     }
     return
   }
@@ -517,29 +504,85 @@ export function applyChangeToStateTree(
     }
   } else if (change.type === "map") {
     let child = target[key]
-    if (typeof child !== "object" || child === null || Array.isArray(child)) {
+
+    // A map change is only meaningful at a container. If this node is an
+    // atomic register — a sum variant or a `.json()` blob, stored as ONE tuple
+    // so a concurrent variant switch resolves whole — then `state.ts:prepare`
+    // should already have widened the write into a whole-value replace.
+    // Reaching here means that widening was bypassed.
+    //
+    // This used to overwrite the register with `{}` and write entries into it,
+    // decomposing it into blendable per-field tuples: the exact damage the
+    // widening exists to prevent, and invisible locally because reads are
+    // served from a separate shadow. Saying so beats corrupting the tree
+    // quietly.
+    //
+    // The schema is authoritative and covers the case where the register has
+    // not been written yet. The tuple check is a second line of defence for
+    // when there is no schema opinion, where the tree's own shape is the only
+    // evidence available.
+    const schemaSaysRegister =
+      targetSchema !== undefined && !needsContainer(targetSchema)
+    if (schemaSaysRegister || isStateTuple(child)) {
+      throw new Error(
+        `Cannot apply a map change at "${key}": it is an atomic register ` +
+          `(a sum or .json() node). Such writes must be widened to a ` +
+          `whole-value replace before reaching the state tree.`,
+      )
+    }
+
+    if (typeof child !== "object" || child === null) {
       child = {}
       target[key] = child
     }
-    const mapChange = change as any
-    const cTarget = child as Record<string, StateTree>
-    for (const [k, instruction] of Object.entries(mapChange.entries)) {
-      if ((instruction as any).type === "delete") {
-        delete cTarget[k]
-      } else if ((instruction as any).type === "set") {
-        const val = (instruction as any).value
-        // The map's item schema decides whether an entry is a register.
-        const itemSchema = targetSchema
-          ? childSchemaForKey(targetSchema, k)
-          : undefined
-        if (isDecomposedContainer(val, itemSchema)) {
-          const newTree: Record<string, StateTree> = {}
-          syncStateTreeToShadow(newTree, val, itemSchema, timestamp)
-          cTarget[k] = newTree
-        } else {
-          cTarget[k] = leafTuple(val, timestamp)
-        }
-      }
+    applyMapChange(
+      child as Record<string, StateTree>,
+      change as MapChange,
+      targetSchema,
+      timestamp,
+    )
+  }
+}
+
+/**
+ * Apply a `MapChange` to one StateTree container.
+ *
+ * Shared by the root and nested call sites above. They were duplicated, and
+ * both read a shape the change vocabulary has never defined — per-key
+ * `{type: "set" | "delete"}` instructions under an `.entries` property — so
+ * every map write on this substrate threw `TypeError: Cannot convert undefined
+ * or null to object`. `Schema.record` was unusable. One implementation means
+ * the two sites cannot drift apart again.
+ *
+ * `delete` is an array of keys, not instruction objects. Deletes are applied
+ * before sets, matching `stepMap`, so a key appearing in both ends up set.
+ */
+function applyMapChange(
+  target: Record<string, StateTree>,
+  change: MapChange,
+  containerSchema: SchemaNode | undefined,
+  timestamp: number,
+): void {
+  for (const key of change.delete ?? []) {
+    // A plain local removal, which does NOT converge: `mergeStateTree` unions
+    // keys, so merging any peer that still holds this key resurrects it. The
+    // delete is visible locally and lost on the next sync. Converging deletion
+    // needs a tombstone, which is separate work.
+    delete target[key]
+  }
+
+  for (const [key, value] of Object.entries(change.set ?? {})) {
+    // The container's item schema decides whether an entry decomposes into a
+    // subtree or lands as one leaf tuple (a register, or an ordinary scalar).
+    const itemSchema = containerSchema
+      ? childSchemaForKey(containerSchema, key)
+      : undefined
+    if (isDecomposedContainer(value, itemSchema)) {
+      const subtree: Record<string, StateTree> = {}
+      syncStateTreeToShadow(subtree, value, itemSchema, timestamp)
+      target[key] = subtree
+    } else {
+      target[key] = leafTuple(value, timestamp)
     }
   }
 }
