@@ -792,7 +792,7 @@ interface RecursiveChangefeedProtocol<S, C> extends ChangefeedProtocol<S, C> {
 }
 ```
 
-For a composite ref, `subscribeDescendants` aggregates own-path changes with children's tree-streams (paths prefixed appropriately). For a leaf ref, `subscribeDescendants` is the trivial own-path lift: every change is delivered as a single `Op` whose `path` is the leaf's registry-aware root (empty relative path). A leaf is a tree of size 1.
+Every node — leaf or composite — registers its deep subscribers at **its own path**, and delivery finds them by walking each changed path's ancestors (see [`planNotifications` → `deliverNotifications`](#plannotifications--delivernotifications)). A composite does not subscribe to its children; there is no aggregation step and no subscription graph. For a leaf, the deep channel carries exactly its own change at the empty relative path — a leaf is a tree of size 1.
 
 `subscribe` (own-path only, `Changeset<C>` shape with no paths) is the lighter sibling. The two channels carry the same information for a leaf and different information for a composite (where own-path ⊊ tree).
 
@@ -800,16 +800,22 @@ Facade vs. protocol vocabulary inversion: facade `subscribe` is deep delivery (`
 
 > **Principle.** Facade-level entry points should hide protocol-method-set distinctions when the user's semantic is well-defined regardless of carrier kind. "Subscribe to changes under this ref" is well-defined for any reactive value; whether the value happens to have children is a structural concern, not an observation concern. Pre-1.6.0 the facade threw on `subscribe(leaf)` because leaves lacked `subscribeDescendants`; 1.6.0 retires that leak by lifting `subscribeDescendants` to every schema-issued changefeed.
 
-**The pure helpers.** `liftToOps(cs, path): Changeset<Op<C>>` raises shape from `Changeset<C>` to `Changeset<Op<C>>` at a constant path; `prefixOps(cs, prefix): Changeset<Op<C>>` keeps shape and prepends a prefix to each event's existing path. Together they form the entire shape-grammar of the changefeed delivery pipeline: leaves' `subscribeDescendants`, composites' own-path → tree fan-out, and composites' child-tree propagation all decompose into one of these two transforms.
+**The pure helper.** `liftToOps(cs, path): Changeset<Op<C>>` raises shape from `Changeset<C>` to `Changeset<Op<C>>` at a constant path. It is used for the tree's synthesized delete terminal, which is the one event not derived from an op. Ordinary delivery needs no shape transform beyond the one `deliverNotifications` performs when it rebases a change to a subscriber's relative path — computed once, at the point of delivery. (`prefixOps`, which prepended a prefix at each level as a change propagated up the subscription graph, is gone with the graph.)
 
 `subscribe(ref, callback)` is the facade primitive that calls `subscribeDescendants` under the hood. `subscribeNode(ref, callback)` is the explicit shallow opt-in — fires only when the *specific node's* state changes, not its descendants.
 
 ### `planNotifications` → `deliverNotifications`
 
-Two pure functions form the notification engine:
+Two functions form the notification engine:
 
-1. `planNotifications(changes, addressTable)` → `NotificationPlan` — which refs need which changesets, deduplicated and ordered.
-2. `deliverNotifications(plan, subscribers)` → fires each subscriber exactly once per transaction with the appropriate changeset.
+1. `planNotifications(ops: readonly Op[])` → `NotificationPlan` — the Functional Core. Groups the flush's ops by path key, and records one representative `Path` per group.
+2. `deliverNotifications(plan, listeners, descendants, options?)` → the Imperative Shell. Fires the own-path channel by exact key lookup, then walks each changed path's ancestors to fire the deep channel.
+
+**The ancestor walk.** A change at `a.b.c` concerns a subscriber at `a.b.c`, at `a.b`, at `a`, and at the root. That set is just the path's ancestor chain, so it is computed at delivery from the path itself rather than maintained between flushes. The change is rebased to each subscriber's relative path, and rebasing is done only where a subscriber actually exists — a deep document with few subscribers pays for map lookups, not allocation.
+
+The walk goes **deepest-first**. That order is chosen, not inherited: before this, cross-level delivery order was an artifact of the sequence in which subscribers happened to register, and reversing registration reversed delivery.
+
+`NotificationPlan.paths` exists because the walk must be **structural** — take the first N segments, then compute that path's key. A path key is its segments joined by a separator, so ancestor keys look like prefixes of the key string and cutting the string would be cheaper. It is also wrong: joining is lossy, so a segment whose own text contains the separator makes the split invent a level that never existed, and a subscriber at that phantom path would receive changes from an unrelated subtree. `markPopulated` walks structurally for the same reason.
 
 This is how a transaction that modifies `doc.items[0].title` and `doc.items[0].count` delivers one changeset to `subscribe(doc)` (two ops), one to `subscribe(doc.items)` (two ops), one to `subscribe(doc.items[0])` (two ops), and one each to `subscribe(doc.items[0].title)` / `subscribe(doc.items[0].count)` (one op each) — all synchronously, all deduplicated.
 
@@ -819,31 +825,27 @@ The per-context dispatcher (`createDispatcher<ChangefeedMsg>` inside `ensurePrep
 
 A single `MapChange` (e.g. `replaceEntry("alice", {...})`) represents a structural operation on a `map` node. For subscribers on descendants of that map, the change has to be *expanded* into per-leaf `ReplaceChange` ops. `expandMapOpsToLeaves` does this pure expansion, used by `planNotifications`.
 
-### Dynamic-collection changefeed factories
+### Why there are no dynamic-collection changefeed factories
 
-`createSequenceChangefeed`, `createMapChangefeed`, and `createTreeChangefeed` are three instances of one pattern: an **own-path listener** registered via `listenAtPath` + a **per-key forwarder map** holding `child[CHANGEFEED].subscribeDescendants(propagateUp)` unsubs + **structural-change-driven wire/unwire** triggered from the own-path callback.
+Sequence, map, and tree used to share a pattern: an own-path listener plus a **per-key forwarder map** holding `child[CHANGEFEED].subscribeDescendants(...)` unsubscribes, plus **structural-change-driven wire/unwire** triggered from the own-path callback. Each kept its forwarders keyed by something stable — the sequence by address ID from `withAddressing`, the map by entry key, the tree by TreeID — and each rebuilt them as items came and went.
 
-The three differ only in:
+All of it is gone. Those three mechanisms existed to keep a *derived* structure aligned with a document whose shape changes at runtime, and the relation they encoded — "which subscribers care about this change" — is recomputable in O(depth) at delivery from the changed path alone. The factories are now the same three lines each: register own-path subscribers via `listenAtPath`, register deep subscribers via `listenDescendants`, done. None of them touches a child ref.
 
-| Factory | Key type | Key-stability source | Structural-change-instruction source |
-|---------|----------|----------------------|--------------------------------------|
-| `createSequenceChangefeed` | numeric index | `ADDRESS_TABLE` from `withAddressing` (stable address IDs) | `SequenceChange` instructions + `ReplaceChange` |
-| `createMapChangefeed` | string key | the key itself (LWW per key) | `MapChange.set` / `MapChange.delete` |
-| `createTreeChangefeed` | `TreeID` | the TreeID itself (CRDT-stable identifier) | `TreeChange.instructions` (`create` / `delete`; `move` preserves identity) |
+The bug that forced the question was in `product`, which had **no** repair machinery because a struct's fields are fixed. That is true of the fields, and not of what sits behind them: `withChangefeed.sum()` is a pass-through, so a `.nullable()` field's `[CHANGEFEED]` resolves to *the live variant's* feed. A product that subscribed to its fields once captured the null variant's feed, and a later variant shift left it listening to nothing. Subscribing to a document before an optional field was populated meant never hearing about writes inside it, permanently — and because the Exchange wires its document subscription at creation time, that was every synced document.
 
-The dynamic-lookup property of `deliverNotifications` is what makes same-batch wiring correct in all three: when a parent's own-path callback fires `subscribeToChild(newKey)`, the new child's `listenAtPath` registration lands in the listener map mid-iteration; the next path the loop reaches finds the freshly-registered listener and fires it. This is the same invariant for sequence (`subscribeToItem`), map (`subscribeToEntry`), and tree (`subscribeToNode`).
-
-Tree is the cleanest instance of the pattern: TreeIDs are identity-bearing from the start (no address-table dance), and `TreeChange.instructions` is an explicit create/delete stream (no diff inference from `MapChange.delete` keys). Tree's structural-change handler is a two-line compose of the pure `planTreeMembershipUpdate` (the diff calc) + the impure wire/unwire loop — see `with-changefeed.ts:createTreeChangefeed`.
+The stability the sequence used to get from the address table it now gets for free: `AddressedPath.computeKey` emits `@${seg.id}` for index segments, so a path key already survives inserts and reorders. The changefeed layer no longer reads `ADDRESS_TABLE` at all.
 
 ### Terminal-on-delete
 
-`createTreeChangefeed` is the one dynamic-collection factory that synthesizes a **terminal event** before tearing down a per-node forwarder on deletion. When a `TreeChange.delete` removes a node, the per-node `treeSubs` receive one final `Changeset<Op>` containing the delete instruction at the node-relative path. After that delivery, the forwarder is torn down and the subscriber receives nothing further.
+`createTreeChangefeed` synthesizes a **terminal event** when a node is deleted: subscribers at that node receive one final `Changeset<Op>` containing the delete instruction, and nothing after it.
 
-The terminal payload is built by the pure `synthesizeTreeDeleteTerminal(prefix, id)` helper — pinned as a first-class artifact rather than inline-synthesized. Subscribers pattern-match on `cs.changes[0].change.type === "tree" && instructions[0].action === "delete"` to detect end-of-stream.
+This is the tree's one responsibility that is not routing, and the only event in the changefeed that is *synthesized* rather than derived from an op. That is precisely why it cannot ride on the ancestor walk: once a node is deleted, no op ever targets its path again, so there is nothing for the walk to find. The tree scans `TreeChange` delete instructions from its own-path listener and delivers directly.
+
+Delivering directly means feeding **both** channels by hand — the facade `subscribe` is `subscribeDescendants`, so a per-node subscriber sits in the descendant map, while `.subscribe(cb)` on the node sits in the own-path map. It also means deliberately bypassing the notification plan: the terminal must reach the deleted node only, never its ancestors, because the tree already reported the deletion via its own-path change and an ancestor receiving both would see the same delete twice.
+
+The payload is built by the pure `synthesizeTreeDeleteTerminal(id)` helper. Subscribers pattern-match on `cs.changes[0].change.type === "tree" && instructions[0].action === "delete"` to detect end-of-stream.
 
 The asymmetry with sequence and map is justified by **identity semantics**: TreeIDs are CRDT-stable identifiers (minted at create-time, never reused, never re-anchored on shifts), and a subscriber at `d.tree.node(id)` holds a meaningful identity reference. Map keys are user-chosen strings that can come and go without identity meaning (re-adding the same key creates "the same" entry); sequence items are positional and shift under structural change. Only tree carries the identity invariant that warrants a lifecycle-end signal.
-
-**Last-subscriber teardown is distinct from terminal-on-delete.** When `subscribeDescendants`'s unsub fires `treeSubs.size === 0`, the factory uses a private `tearDownForwarder` helper that bypasses `synthesizeTreeDeleteTerminal`. Conflating teardown-because-empty with terminal-because-deleted would emit phantom delete events to a (just-cleared) subscriber set on resubscribe scenarios — a correctness leak avoided by routing the two paths through different helpers.
 
 ### Per-ref-instance listener multiplication
 

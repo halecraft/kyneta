@@ -2,9 +2,17 @@
 
 ## Fixed
 
+- **Subscribing to a document before a `.nullable()` field is populated no longer loses writes inside it.** Deep subscription (`subscribe(ref, cb)` / `subscribeDescendants`) used to be a graph of subscriptions between ref objects, wired once per composite. A sum has no changefeed of its own — its `[CHANGEFEED]` resolves to the live variant's — so a subscriber registered while an optional field was `null` captured the null variant's feed and never heard about writes inside the populated one, permanently, even across re-setting the whole field. Because the Exchange wires its document subscription at creation time, before anything is written, this affected every synced document: no changeset meant no sync offer, so the write reached the substrate locally and only replicated when some later unrelated write triggered an offer. It also silently affected `@kyneta/reactive` and React's `useValue` / `useTracked`, whose deep aspect uses the same channel.
+
+  Deep delivery is now derived from paths at flush time: a subscriber records the path it sits at, and delivery walks each changed path's ancestors to find it. Nothing is bound to a ref object, so a variant shift, insert, delete, reorder, or tree move cannot orphan a subscription. Observable behaviour is otherwise unchanged — one changeset per changed path, paths relative to the subscription point, and the tree's terminal-on-delete all preserved.
+
 - **Writes at or inside a `.nullable()` subtree now work on the CRDT backends.** A `sum` — which is what `.nullable()` expands to — has no CRDT container of its own; the whole variant is stored as one plain value. Writes aimed at or inside one were not being widened into a whole-value write, so three things went wrong on `yjs.bind` and `loro.bind`. Writing a leaf through a non-null nullable struct (`d.optional.to.set(2)`) threw `advanceSchema: cannot advance through a sum`. Mutating a nullable collection (`d.maybeList.push(x)`, `d.maybeRecord.set(k, v)`) either threw looking for a container that was never created, or — worse on Loro — updated the local shadow while the CRDT never received the write, so it read back correctly and was silently lost on replication. All read paths and `json.bind` handled these correctly throughout, which is what made the failure look substrate-specific.
 
 - **`state` no longer decomposes an atomic register when a write targets its interior.** A `sum` variant or a `.json()` blob is stored as one `[value, timestamp]` tuple so that a concurrent variant switch resolves whole. A write aimed inside one split that tuple into per-field tuples and discarded every sibling field the change did not mention, which also let the schema-blind `mergeStateTree` blend fields across two peers' variants. Local reads were unaffected — the substrate serves them from a separate shadow — so only replicated state was damaged.
+
+## Changed
+
+- **`NotificationPlan` gains a `paths` field** (`@kyneta/schema`) — one representative `Path` per group key, which deep delivery needs in order to walk ancestors structurally. Additive; existing consumers of `planNotifications` are unaffected.
 
 ## Added
 

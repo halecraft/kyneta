@@ -2,7 +2,7 @@ import type { ChangeBase, Changeset } from "@kyneta/changefeed"
 import { describe, expect, it } from "vitest"
 import type { Op } from "../index.js"
 import { planNotifications } from "../index.js"
-import { liftToOps, prefixOps } from "../interpreters/with-changefeed.js"
+import { liftToOps } from "../interpreters/with-changefeed.js"
 import type { Path } from "../path.js"
 import { RawPath } from "../path.js"
 
@@ -213,100 +213,6 @@ describe("liftToOps: wraps each change with the given path", () => {
     }
     const lifted = liftToOps(cs, RawPath.empty.field("x"))
     expect(lifted.source).toBe(tok)
-  })
-})
-
-// ---------------------------------------------------------------------------
-// prefixOps: re-prefix Changeset<Op<C>> by prepending to each event's path
-// ---------------------------------------------------------------------------
-
-describe("prefixOps: re-prefixes each event's path", () => {
-  it("empty changeset → empty result, origin preserved", () => {
-    const cs: Changeset<Op> = { changes: [], origin: "sync" }
-    const prefixed = prefixOps(cs, RawPath.empty.field("settings"))
-    expect(prefixed.changes).toHaveLength(0)
-    expect(prefixed.origin).toBe("sync")
-  })
-
-  // Locks in the leaf-child invariant for composite tree propagation:
-  // a leaf descendant fires with `path.root()`, so the parent's prefix
-  // concatenation must yield the prefix unchanged.
-  it("identity when each event's path is empty (leaf-child case)", () => {
-    const prefix = RawPath.empty.field("settings")
-    const cs: Changeset<Op> = {
-      changes: [
-        { path: RawPath.empty, change: { type: "replace" } },
-        { path: RawPath.empty, change: { type: "replace" } },
-      ],
-    }
-    const prefixed = prefixOps(cs, prefix)
-    expect(prefixed.changes).toHaveLength(2)
-    for (const op of prefixed.changes) {
-      expect(op.path.key).toBe(prefix.key)
-    }
-  })
-
-  it("nested descendant path is prepended (composite-child case)", () => {
-    const prefix = RawPath.empty.field("settings")
-    const innerPath = RawPath.empty.field("darkMode")
-    const expectedKey = prefix.field("darkMode").key
-    const cs: Changeset<Op> = {
-      changes: [{ path: innerPath, change: { type: "replace" } }],
-    }
-    const prefixed = prefixOps(cs, prefix)
-    expect(prefixed.changes).toHaveLength(1)
-    expect(prefixed.changes[0]?.path.key).toBe(expectedKey)
-  })
-
-  it("multi-event changeset: each event independently prefixed", () => {
-    const prefix = RawPath.empty.field("items").item(0)
-    const cs: Changeset<Op> = {
-      changes: [
-        { path: RawPath.empty.field("title"), change: { type: "text" } },
-        { path: RawPath.empty.field("body"), change: { type: "text" } },
-        { path: RawPath.empty, change: { type: "replace" } },
-      ],
-    }
-    const prefixed = prefixOps(cs, prefix)
-    expect(prefixed.changes.map(op => op.path.key)).toEqual([
-      prefix.field("title").key,
-      prefix.field("body").key,
-      prefix.key,
-    ])
-  })
-
-  it("origin is preserved across the re-prefix", () => {
-    const cs: Changeset<Op> = {
-      changes: [{ path: RawPath.empty, change: { type: "replace" } }],
-      origin: "undo",
-    }
-    const prefixed = prefixOps(cs, RawPath.empty.field("x"))
-    expect(prefixed.origin).toBe("undo")
-  })
-
-  // The exchange's auto-subscribe filter reads `replay` off the tree-
-  // subscriber changeset; descendant propagation must not strip it.
-  it("replay is preserved across the re-prefix", () => {
-    const cs: Changeset<Op> = {
-      changes: [{ path: RawPath.empty, change: { type: "replace" } }],
-      origin: "external",
-      replay: true,
-    }
-    const prefixed = prefixOps(cs, RawPath.empty.field("x"))
-    expect(prefixed.replay).toBe(true)
-  })
-
-  // Echo-token discriminator (jj:wpvtoxmw): composite propagation
-  // through `prefixOps` must preserve `source` identity so subscribers
-  // higher up the tree can recognize their own writes.
-  it("source identity is preserved across the re-prefix", () => {
-    const tok = Symbol("test-source")
-    const cs: Changeset<Op> = {
-      changes: [{ path: RawPath.empty, change: { type: "replace" } }],
-      source: tok,
-    }
-    const prefixed = prefixOps(cs, RawPath.empty.field("x"))
-    expect(prefixed.source).toBe(tok)
   })
 })
 

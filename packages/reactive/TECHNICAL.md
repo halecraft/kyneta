@@ -50,7 +50,7 @@ Direct schema-ref dependencies mark their node dirty *synchronously* when the ch
 
 ## Known limits (v1)
 
-- **Subscription multiplicity (Fork A).** A reactive holds O(|deps|) subscriptions. For a huge dependency set this is real memory/churn; mitigate with the `deep` aspect (read a whole subtree → one `subscribeDescendants`, not one-per-field). Central op-stabilization (one shared index, resolve positional Op paths once at delivery) is the deferred scaling lever for the many-subscriber regime.
+- **Subscription multiplicity (Fork A).** A reactive holds O(|deps|) subscriptions. For a huge dependency set this is real memory/churn; mitigate with the `deep` aspect (read a whole subtree → one `subscribeDescendants`, not one-per-field). Central op-stabilization (one shared index, resolve positional Op paths once at delivery) is the deferred scaling lever for the many-subscriber regime — and the delivery-side half of it has since landed in `@kyneta/schema`. Deep subscribers now register at their own path in one shared map, and `deliverNotifications` walks each changed path's ancestors to find them, rebasing once at delivery instead of re-prefixing at every level of a subscription graph. What remains deferred is the *reactive-side* half: one shared index over dependencies, rather than O(|deps|) subscriptions per reactive.
 - **Collection composition needs a reported read.** Reading a plain `Collection`/`ReactiveMap` inside a thunk only becomes a dependency if it is *reported* — `Reactive` self-reports via its `()`, but `@kyneta/index` operators do not yet. Until they do (or a `track(changefeed)` helper ships), depend on a `Collection` by wrapping it in a `reactive`.
 
 ## File Map
