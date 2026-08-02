@@ -560,6 +560,8 @@ Source: `packages/schema/src/materialize-value.ts` → `materializeValue`, `Mate
 
 `materializeValue` is **pure** — no substrate handles, no synthetic ContainerIDs, no global counters — so the identity-keying is unit-testable without any backend (`src/__tests__/materialize-value.test.ts`). Each backend supplies a thin realizer that turns the IR into native form: `realizeYjs` (post-order populate-then-attach) and `realizeLoro` (pre-order, minting Loro synthetic CIDs). Backends never compute a container key or read `binding`, so writer keys and reader keys agree **by construction** (jj:vlnkqyvq) — a whole-struct write cannot land under a key the reader won't look up. The `EagerPolicy` argument (`"leaf-containers"` for Yjs, `"all-containers"` for Loro) selects how aggressively declared-but-absent container fields are pre-created; the two backends genuinely differ (Loro needs the container to exist before a nested write can land on it).
 
+`"leaf-containers"` is a strict **subset** of `"all-containers"`, as the names promise: the first creates only the leaf containers (`text`, `richtext`), the second creates those *and* the structural ones. That relation now holds structurally, because both branches are expressed against the single `storageClass` classification (`schema.ts`) rather than against two switches that happened to line up. It did not always hold — `richtext` was missing from `needsContainer`'s switch and fell through its `default`, so `"all-containers"` skipped a container the narrower policy created. `materialize-value.test.ts` asserts the subset relation directly rather than per-kind expectations, so it keeps holding as kinds are added.
+
 ### What an `Interpreter` is NOT
 
 - **Not a visitor pattern.** Interpreters return values; visitors mutate state. `interpret` is a catamorphism, not a traversal.
@@ -578,6 +580,8 @@ The 11 interpreter cases fall into four structural categories. The first three a
 | **Structural** (unique) | `product`, `sum`, `tree` | None — each has unique per-case logic | Product: schema-driven fields + discriminant. Sum: store-based variant dispatch. Tree: thin pass-through. |
 
 **`text` and `richtext` straddle two families.** They are indexed for writable (share `at()` and the retain/insert/delete instruction stream with sequence/movable) but leaf for readable, navigation, and changefeed (return `string` / delta directly, not a fold over children). Characters are not independently addressable refs.
+
+The straddle is about these interpreter families and nothing else. For **storage** both are plainly containers — each is its own CRDT type — and `storageClass` (`schema.ts`) classifies them that way without qualification. Worth stating because the leaf half is the memorable one: `richtext` was once classified as a leaf for storage on the strength of it, which is the defect §"Value materialization — the write-side unfold" describes.
 
 **`set` is leaf-shaped at the ref layer.** Although the catamorphism dispatches set children by string key (mirroring `map`), there are no per-member child refs at the user-facing API. The surface is `.has(value)`, `.add(value)`, `.delete(value)`, `.clear()`, `.size`, `[Symbol.iterator]`, callable returning `Plain<I>[]` — narrower than `map`'s, and value-addressed (no `.at(value)`). Invalidation is whole-carrier on any `SetChange` (same pattern as text/counter). See [§Set: value-addressed leaf](#set-value-addressed-leaf).
 
@@ -1279,7 +1283,11 @@ function foldPath(
    - A `sum` (which is what `.nullable()` expands to). Sum variants are `PlainSchema` by construction, so no CRDT container can exist inside one.
    - A `.json()` node. The whole subtree is one plain JSON blob by definition of the modifier.
 
-   These were documented as *two* invariants until 2.3.x, and the split was itself the bug: a walker could learn the json half and miss the sum half, which is exactly what happened. They are one rule because they describe one storage decision — `needsContainer` (`materialize-value.ts`) makes the same call from the writing side, and the two must agree.
+   These were documented as *two* invariants until 2.3.x, and the split was itself the bug: a walker could learn the json half and miss the sum half, which is exactly what happened. They are one rule because they describe one storage decision.
+
+   **That constraint is now retired rather than restated.** This document used to say the walk-side predicate and `needsContainer` (`materialize-value.ts`) "must agree", which is the same kind of prose invariant the section below diagnoses — a rule living in a doc comment, enforced by review. Both are now one-line derivations of `storageClass` (`schema.ts`), the single place the decision is made: `isOpaqueBoundary` asks it the walk-side question, `needsContainer` the write-side one. They cannot disagree, so nothing has to remember that they must.
+
+   The cost of the old arrangement was paid: `richtext` was classified as a container by one and a leaf by the other, which broke the `EagerPolicy` subset relation described in §"Value materialization — the write-side unfold".
 
 ### `pathSchema` — the schema-only specialization
 
