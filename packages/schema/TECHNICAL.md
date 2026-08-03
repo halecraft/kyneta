@@ -1241,7 +1241,7 @@ A path segment (`RawSegment` | `Address`, `path.ts`) exposes two coordinate acce
 Two totality rules follow (both fixed as part of jj:mlurlzqt):
 
 - **Diagnostics never throw.** `format()`/`key` route through `coord()`. Previously they used `resolve()`, so formatting a path with a dead segment threw *while building an error message* (e.g. `withAddressing`'s `onRefCreated` throw), masking the original error.
-- **Reads are total; a deleted key is absent.** `path.read(store)` of a deleted key returns `undefined` (via the natural `store[key]` miss), **not** a throw. Deletion remains observable via `deleted(ref)`; **writes** still throw (that guard belongs on the write path, not the read). This is the intended contract — see the `with-addressing` "delete → read undefined, write throws, deleted is true" tests.
+- **Reads are total; a deleted key is absent.** `path.read(store)` of a deleted key returns `undefined` (via the natural `store[key]` miss), **not** a throw. Deletion remains observable via `deletedFeed(ref)` (or `isDeleted(ref)` for a plain boolean); **writes** still throw (that guard belongs on the write path, not the read). This is the intended contract — see the `with-addressing` "delete → read undefined, write throws, deleted is true" tests.
 
 ## The functional shadow
 

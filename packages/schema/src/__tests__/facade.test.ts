@@ -8,7 +8,7 @@ import {
   interpret,
   observation,
   plainContext,
-  populated,
+  populatedFeed,
   RawPath,
   readable,
   replaceChange,
@@ -1073,14 +1073,14 @@ describe("subscribe: basic behavior", () => {
     }
   })
 
-  it("subscribe(populated(ref), cb) fires when the path becomes populated", async () => {
+  it("subscribe(populatedFeed(ref), cb) fires when the path becomes populated", async () => {
     const { doc } = createChatDoc({
       // Override the seed so settings.fontSize starts unpopulated.
       settings: { darkMode: false } as Record<string, unknown>,
     })
     const changesets: Changeset<Op>[] = []
 
-    subscribe(populated(doc.settings.fontSize), cs => changesets.push(cs))
+    subscribe(populatedFeed(doc.settings.fontSize), cs => changesets.push(cs))
 
     // Mutate to trigger populated transition.
     doc.settings.fontSize.set(16)

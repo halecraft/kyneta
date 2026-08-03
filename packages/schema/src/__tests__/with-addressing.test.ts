@@ -194,7 +194,7 @@ describe("withAddressing: maps", () => {
       d.metadata.delete("version")
     })
 
-    // Deletion is observable via `deleted()`; reading a deleted entry is
+    // Deletion is observable via `deletedFeed()`; reading a deleted entry is
     // total and yields the absent value (undefined), not a throw. Writes
     // still guard (see "writing through a deleted map entry ref throws").
     // Context: jj:mlurlzqt.
@@ -460,7 +460,7 @@ describe("withAddressing: dead ref detection", () => {
       d.todos.delete(0, 1)
     })
 
-    // Deleted: detectable via deleted(), reads total (undefined), writes guard.
+    // Deleted: detectable via deletedFeed(), reads total (undefined), writes guard.
     // Context: jj:mlurlzqt.
     expect(isDeleted(item)).toBe(true)
     expect(item.text()).toBeUndefined()
@@ -482,7 +482,7 @@ describe("withAddressing: dead ref detection", () => {
       d.metadata.delete("version")
     })
 
-    // Deleted: detectable via deleted(), reads total (undefined), writes guard.
+    // Deleted: detectable via deletedFeed(), reads total (undefined), writes guard.
     // Context: jj:mlurlzqt.
     expect(isDeleted(ref)).toBe(true)
     expect(ref()).toBeUndefined()

@@ -1,4 +1,4 @@
-import { deleted, remove, Schema } from "@kyneta/schema"
+import { deletedFeed, remove, Schema } from "@kyneta/schema"
 import { batch, createDoc } from "@kyneta/schema/basic"
 import { act, render, screen } from "@testing-library/react"
 import { useMemo } from "react"
@@ -44,7 +44,7 @@ function App() {
   }, [])
 
   const todoRef = doc.todos.at(0)
-  const todoDeleted = useValue(deleted(todoRef))
+  const todoDeleted = useValue(deletedFeed(todoRef))
 
   return (
     <ul data-testid="list">

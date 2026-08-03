@@ -1,4 +1,4 @@
-import { deleted, isDeleted, remove, Schema } from "@kyneta/schema"
+import { deletedFeed, isDeleted, remove, Schema } from "@kyneta/schema"
 import { batch, createDoc } from "@kyneta/schema/basic"
 import { describe, expect, it } from "vitest"
 import { reactive, track } from "../reactive.js"
@@ -44,7 +44,7 @@ describe("deleted ref tracking", () => {
     expect(recomputed).toBe(1)
   })
 
-  it("reactive(thunk) with deleted(ref)() re-runs on remove", async () => {
+  it("reactive(thunk) with deletedFeed(ref)() re-runs on remove", async () => {
     const doc = createDoc(TodoDoc)
     batch(doc, (d: typeof doc) => {
       d.todos.push({ id: "t1", text: "", done: false })
@@ -53,7 +53,7 @@ describe("deleted ref tracking", () => {
     if (!ref) throw new Error("ref not found")
 
     const r = reactive(() => {
-      return deleted(ref)!()
+      return deletedFeed(ref)!()
     })
 
     let recomputed = 0
@@ -72,7 +72,7 @@ describe("deleted ref tracking", () => {
     expect(recomputed).toBe(1)
   })
 
-  it("reactive(thunk) with track(deleted(ref)) re-runs on remove", async () => {
+  it("reactive(thunk) with track(deletedFeed(ref)) re-runs on remove", async () => {
     const doc = createDoc(TodoDoc)
     batch(doc, (d: typeof doc) => {
       d.todos.push({ id: "t1", text: "", done: false })
@@ -81,7 +81,7 @@ describe("deleted ref tracking", () => {
     if (!ref) throw new Error("ref not found")
 
     const r = reactive(() => {
-      return track(deleted(ref)!)
+      return track(deletedFeed(ref)!)
     })
 
     let recomputed = 0

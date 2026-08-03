@@ -7,8 +7,8 @@
 //
 // The framework stores this metadata under unique symbols instead
 // (`[POPULATED]` in with-changefeed.ts, `[DELETED]` in with-addressing.ts),
-// read through the free-function facades `isPopulated(ref)` / `populated(ref)`
-// and `isDeleted(ref)` / `deleted(ref)`.
+// read through the free-function facades `isPopulated(ref)` / `populatedFeed(ref)`
+// and `isDeleted(ref)` / `deletedFeed(ref)`.
 //
 // These tests pin that isolation in both directions: the user's colliding
 // fields behave as ordinary data, and the framework's metadata stays correct
@@ -16,7 +16,13 @@
 
 import { describe, expect, it } from "vitest"
 import { batch, createDoc, Schema } from "../basic/index.js"
-import { deleted, isDeleted, isPopulated, populated, remove } from "../index.js"
+import {
+  deletedFeed,
+  isDeleted,
+  isPopulated,
+  populatedFeed,
+  remove,
+} from "../index.js"
 
 // ---------------------------------------------------------------------------
 // A schema whose field names collide with framework metadata
@@ -119,14 +125,14 @@ describe("namespace isolation — framework metadata", () => {
   it("exposes reactive carriers without colliding with user fields", () => {
     const doc = createDoc(CollidingSchema)
 
-    // `populated(ref)` returns a callable; the user's same-named field
+    // `populatedFeed(ref)` returns a callable; the user's same-named field
     // remains reachable as an ordinary ref.
-    expect(populated(doc.isPopulated)()).toBe(false)
+    expect(populatedFeed(doc.isPopulated)()).toBe(false)
     expect(typeof doc.deleted()).toBe("string")
 
     batch(doc, d => d.isPopulated.set(true))
 
-    expect(populated(doc.isPopulated)()).toBe(true)
+    expect(populatedFeed(doc.isPopulated)()).toBe(true)
   })
 
   it("never attaches framework metadata under a string key", () => {
@@ -145,6 +151,6 @@ describe("namespace isolation — framework metadata", () => {
 
     // And the item ref carries deletion metadata only under the symbol.
     expect(isDeleted(row)).toBe(false)
-    expect(typeof deleted(row)).toBe("function")
+    expect(typeof deletedFeed(row)).toBe("function")
   })
 })

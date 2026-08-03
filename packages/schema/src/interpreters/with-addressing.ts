@@ -118,20 +118,38 @@ export function isDeleted(ref: unknown): boolean {
 /**
  * Returns a callable that implements the `[CHANGEFEED]` protocol for the
  * ref's deletion state. The callable returns a boolean (true if deleted).
- * You can subscribe to it via `subscribeNode(deleted(ref), ...)`.
+ * You can subscribe to it via `subscribeNode(deletedFeed(ref), ...)`.
  * Throws if the ref does not track deletion.
+ *
+ * The `Feed` suffix marks this as the *observable carrier* rather than the
+ * plain boolean — for a boolean, call `isDeleted(ref)`. Reading is the routine
+ * case, so it gets the shorter name; subscribing is the specialist one, so it
+ * pays the suffix. Mirrors `populatedFeed` in `with-changefeed.ts`.
+ *
+ * A carrier is a callable, which means it is **always truthy** when present.
+ * Never write `if (deletedFeed(ref))` — call it, or use `isDeleted(ref)`.
  */
-export function deleted(
+export function deletedFeed(
   ref: unknown,
 ): ((() => boolean) & HasChangefeed<boolean>) | undefined {
   if (ref === null || ref === undefined) return undefined
   if (!(DELETED in (ref as object))) {
     throw new Error(
-      "deleted() requires a ref that tracks deletion (e.g. a sequence item or map entry)",
+      "deletedFeed() requires a ref that tracks deletion (e.g. a sequence item or map entry)",
     )
   }
   return (ref as any)[DELETED]
 }
+
+/**
+ * @deprecated Use {@link deletedFeed} instead — same function, clearer name.
+ *
+ * Retained through the 2.x line only. In 3.0 the short name `deleted` is
+ * reused for the plain boolean that `isDeleted` returns today, so code written
+ * against this alias would silently change meaning if it survived the rename.
+ * See `next.md` §10; the same reasoning applies to `populated`.
+ */
+export const deleted = deletedFeed
 
 // ---------------------------------------------------------------------------
 // Per-context state — prepare wrapping for address advancement

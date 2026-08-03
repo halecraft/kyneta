@@ -229,6 +229,7 @@ export {
   ADDRESS_TABLE,
   DELETED,
   deleted,
+  deletedFeed,
   isDeleted,
   withAddressing,
 } from "./interpreters/with-addressing.js"
@@ -248,6 +249,7 @@ export {
   POPULATED,
   planNotifications,
   populated,
+  populatedFeed,
   withChangefeed,
 } from "./interpreters/with-changefeed.js"
 // withNavigation — structural navigation (coalgebraic addressing, no reading)

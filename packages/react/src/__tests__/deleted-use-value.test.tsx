@@ -1,4 +1,4 @@
-import { deleted, remove, Schema } from "@kyneta/schema"
+import { deletedFeed, remove, Schema } from "@kyneta/schema"
 import { batch, createDoc } from "@kyneta/schema/basic"
 import { act, renderHook } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
@@ -16,7 +16,7 @@ const TodoDoc = Schema.product({
 
 const tick = () => new Promise<void>(resolve => queueMicrotask(resolve))
 
-describe("useValue(deleted(ref))", () => {
+describe("useValue(deletedFeed(ref))", () => {
   it("re-renders when ref is removed", async () => {
     const doc = createDoc(TodoDoc)
     batch(doc, (d: typeof doc) => {
@@ -28,7 +28,7 @@ describe("useValue(deleted(ref))", () => {
     let renderCount = 0
     const { result } = renderHook(() => {
       renderCount++
-      return useValue(deleted(ref))
+      return useValue(deletedFeed(ref))
     })
 
     expect(result.current).toBe(false)

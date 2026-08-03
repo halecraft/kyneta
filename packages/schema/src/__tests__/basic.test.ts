@@ -14,7 +14,7 @@ import {
   version,
 } from "../basic/index.js"
 import type { Op, SubstratePayload } from "../index.js"
-import { hasTransact, isPopulated, populated, TRANSACT } from "../index.js"
+import { hasTransact, isPopulated, populatedFeed, TRANSACT } from "../index.js"
 
 // ===========================================================================
 // Shared fixtures
@@ -453,15 +453,15 @@ describe("isPopulated", () => {
 
   it("has [CHANGEFEED] for reactive detection", () => {
     const doc = createDoc(TestSchema)
-    expect(hasChangefeed(populated(doc))).toBe(true)
-    expect(hasChangefeed(populated(doc.title))).toBe(true)
+    expect(hasChangefeed(populatedFeed(doc))).toBe(true)
+    expect(hasChangefeed(populatedFeed(doc.title))).toBe(true)
   })
 
   it("changefeed fires on false → true transition", () => {
     const doc = createDoc(TestSchema)
     const events: boolean[] = []
 
-    populated(doc.theme)[CHANGEFEED].subscribe(() => {
+    populatedFeed(doc.theme)[CHANGEFEED].subscribe(() => {
       events.push(isPopulated(doc.theme))
     })
 

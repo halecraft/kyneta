@@ -87,19 +87,40 @@ export function isPopulated(ref: unknown): boolean {
 /**
  * Returns a callable that implements the `[CHANGEFEED]` protocol for the
  * ref's population state. The callable returns a boolean (true if populated).
- * You can subscribe to it via `subscribeNode(populated(ref), ...)`.
+ * You can subscribe to it via `subscribeNode(populatedFeed(ref), ...)`.
  * Throws if the ref does not track population.
+ *
+ * The `Feed` suffix marks this as the *observable carrier* rather than the
+ * plain boolean — for a boolean, call `isPopulated(ref)`. Reading "has data
+ * arrived?" is the routine case, so it gets the shorter name; subscribing to
+ * the transition is the specialist one, so it pays the suffix.
+ *
+ * A carrier is a callable, which means it is **always truthy**. Never write
+ * `if (populatedFeed(ref))` — that reports the opposite of the truth for an
+ * empty document. Call it (`populatedFeed(ref)()`) or use `isPopulated(ref)`.
  */
-export function populated(
+export function populatedFeed(
   ref: unknown,
 ): (() => boolean) & HasChangefeed<boolean> {
   if (!ref || !(POPULATED in (ref as object))) {
     throw new Error(
-      "populated() requires a ref that tracks population (e.g. a ref produced by withChangefeed)",
+      "populatedFeed() requires a ref that tracks population (e.g. a ref produced by withChangefeed)",
     )
   }
   return (ref as any)[POPULATED]
 }
+
+/**
+ * @deprecated Use {@link populatedFeed} instead — same function, clearer name.
+ *
+ * This spelling is retained through the 2.x line only. In 3.0 the short name
+ * `populated` is reused for the plain boolean that `isPopulated` returns
+ * today, so code written against this alias would silently change meaning if
+ * it survived the rename. Migrating now costs one search-and-replace; not
+ * migrating costs a type error at the 3.0 upgrade (the two halves swap types,
+ * so the compiler finds every call site).
+ */
+export const populated = populatedFeed
 
 // ---------------------------------------------------------------------------
 // Attach [CHANGEFEED] non-enumerably to any object
@@ -672,7 +693,7 @@ function firePopulatedListeners(
 
 /**
  * Create a `RecursiveChangefeedProtocol<boolean>` for the population state
- * at a path — the protocol behind `populated(ref)` / `isPopulated(ref)`.
+ * at a path — the protocol behind `populatedFeed(ref)` / `isPopulated(ref)`.
  *
  * - `.current` reads from the populated set (true if this path key is in the set)
  * - `.subscribe` fires exactly once when the path transitions from
@@ -682,7 +703,7 @@ function firePopulatedListeners(
  *   has no payload (changes is empty by construction), so the delivered
  *   `Changeset<Op>` has an empty changes array; only `origin` is
  *   load-bearing. Provided so the facade `subscribe` works universally
- *   on `populated(ref)` carriers without a method-set check.
+ *   on `populatedFeed(ref)` carriers without a method-set check.
  */
 function createPopulatedChangefeed(
   path: Path,
@@ -734,7 +755,7 @@ function createPopulatedChangefeed(
  * Keyed by `Symbol`, never by the string `"isPopulated"`: refs expose the
  * user's schema fields as properties, so a string key would let framework
  * metadata collide with (and shadow) a field of the same name. Read it via
- * the `isPopulated(ref)` / `populated(ref)` facades.
+ * the `isPopulated(ref)` / `populatedFeed(ref)` facades.
  */
 function attachIsPopulated(
   target: object,

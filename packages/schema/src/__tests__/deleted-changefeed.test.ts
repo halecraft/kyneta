@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { batch, createDoc } from "../basic/index.js"
 import { hasRecursiveChangefeed } from "../changefeed.js"
-import { deleted } from "../interpreters/with-addressing.js"
+import { deletedFeed } from "../interpreters/with-addressing.js"
 import { Schema } from "../schema.js"
 
 const TodoDoc = Schema.product({
@@ -14,7 +14,7 @@ const TodoDoc = Schema.product({
   ),
 })
 
-describe("deleted() changefeed", () => {
+describe("deletedFeed() changefeed", () => {
   it("should NOT have a recursive changefeed", () => {
     const doc = createDoc(TodoDoc)
     batch(doc, (d: typeof doc) => {
@@ -23,7 +23,7 @@ describe("deleted() changefeed", () => {
     const ref = doc.todos.at(0)
     if (!ref) throw new Error("Expected todo at index 0")
 
-    const d = deleted(ref)
+    const d = deletedFeed(ref)
 
     expect(hasRecursiveChangefeed(d)).toBe(false)
   })
