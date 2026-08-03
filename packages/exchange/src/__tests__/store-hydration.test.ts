@@ -7,6 +7,7 @@
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import {
   batch,
+  isPopulated,
   json,
   plainReplicaFactory,
   Replicate,
@@ -456,5 +457,99 @@ describe("Yjs storage round-trip", () => {
     expect(doc2.count()).toBe(123)
 
     await exchange2.shutdown()
+  })
+})
+
+// ===========================================================================
+// isPopulated through hydration
+//
+// `isPopulated` is the *content* half of document readiness ("does this doc
+// hold data?"). For it to serve as an initialization gate ("is this doc
+// empty, so I may write defaults?"), hydration replays must mark paths
+// populated — otherwise a restarted authoritative peer would read `false`
+// against a full store and overwrite it with defaults.
+//
+// The three tests below pin the three distinguishable states, and in
+// particular the middle one: while hydration is still in flight,
+// `isPopulated` reads `false` even though the store holds data. It is
+// therefore only meaningful *behind a settle gate*, never on its own.
+// ===========================================================================
+
+/** Append a meta record + a JSON entirety entry for `doc-1`. */
+async function seedStoredDoc(data: string): Promise<InMemoryStoreData> {
+  const sharedData: InMemoryStoreData = {
+    records: new Map(),
+    metadata: new Map(),
+  }
+  const backend = new InMemoryStore(sharedData)
+  await backend.append("doc-1", makeMetaRecord())
+  await backend.append("doc-1", {
+    kind: "entry",
+    payload: {
+      kind: "entirety" as const,
+      encoding: "json" as const,
+      data,
+    },
+    version: "1",
+  })
+  return sharedData
+}
+
+describe("isPopulated through storage hydration", () => {
+  it("marks the doc populated from a hydration replay alone", async () => {
+    const sharedData = await seedStoredDoc('{"title":"stored","count":42}')
+    const exchange = createExchange({
+      id: "peer-1",
+      stores: [createInMemoryStore({ sharedData })],
+    })
+
+    const doc = exchange.get("doc-1", TestDoc)
+    await exchange.flush() // hydration
+
+    // No local write has occurred — population comes purely from replay.
+    expect(isPopulated(doc)).toBe(true)
+    expect(isPopulated(doc.title)).toBe(true)
+    expect(isPopulated(doc.count)).toBe(true)
+
+    await exchange.shutdown()
+  })
+
+  it("reads false while hydration is pending, though the store has data", async () => {
+    const sharedData = await seedStoredDoc('{"title":"stored","count":42}')
+    const exchange = createExchange({
+      id: "peer-1",
+      stores: [createInMemoryStore({ sharedData })],
+    })
+
+    const doc = exchange.get("doc-1", TestDoc)
+
+    // Hydration is async. The store holds data, but nothing has replayed yet,
+    // so `isPopulated` is indistinguishable from a genuinely empty document.
+    // Seeding defaults *here* would clobber the stored state — which is why
+    // an empty verdict is only trustworthy behind a settle gate.
+    expect(isPopulated(doc)).toBe(false)
+    expect(doc.title()).toBe("")
+
+    await exchange.flush()
+
+    expect(isPopulated(doc)).toBe(true)
+    expect(doc.title()).toBe("stored")
+
+    await exchange.shutdown()
+  })
+
+  it("stays false after hydration settles with nothing stored", async () => {
+    const exchange = createExchange({
+      id: "peer-1",
+      stores: [createInMemoryStore()],
+    })
+
+    const doc = exchange.get("doc-1", TestDoc)
+    await exchange.flush() // hydration settles with nothing to replay
+
+    // The genuine "empty" verdict — the only state an initializer may act on.
+    expect(isPopulated(doc)).toBe(false)
+
+    await exchange.shutdown()
   })
 })

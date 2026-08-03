@@ -671,8 +671,8 @@ function firePopulatedListeners(
 }
 
 /**
- * Create a `RecursiveChangefeedProtocol<boolean>` for the `isPopulated`
- * property at a path.
+ * Create a `RecursiveChangefeedProtocol<boolean>` for the population state
+ * at a path — the protocol behind `populated(ref)` / `isPopulated(ref)`.
  *
  * - `.current` reads from the populated set (true if this path key is in the set)
  * - `.subscribe` fires exactly once when the path transitions from
@@ -682,7 +682,7 @@ function firePopulatedListeners(
  *   has no payload (changes is empty by construction), so the delivered
  *   `Changeset<Op>` has an empty changes array; only `origin` is
  *   load-bearing. Provided so the facade `subscribe` works universally
- *   on `ref.isPopulated` carriers without a method-set check.
+ *   on `populated(ref)` carriers without a method-set check.
  */
 function createPopulatedChangefeed(
   path: Path,
@@ -728,12 +728,13 @@ function createPopulatedChangefeed(
 }
 
 /**
- * Attach the `isPopulated` property to a ref as a non-enumerable object
- * carrying its own `[CHANGEFEED]`.
+ * Attach the population state to a ref under the `[POPULATED]` symbol, as a
+ * non-enumerable callable carrying its own `[CHANGEFEED]`.
  *
- * The property is an object with `[CHANGEFEED]: ChangefeedProtocol<boolean>`.
- * The compiler detects `[CHANGEFEED]` on the type and emits reactive
- * regions (e.g. `conditionalRegion` for `if (ref.isPopulated)`).
+ * Keyed by `Symbol`, never by the string `"isPopulated"`: refs expose the
+ * user's schema fields as properties, so a string key would let framework
+ * metadata collide with (and shadow) a field of the same name. Read it via
+ * the `isPopulated(ref)` / `populated(ref)` facades.
  */
 function attachIsPopulated(
   target: object,

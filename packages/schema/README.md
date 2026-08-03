@@ -169,17 +169,26 @@ Subscribers receive batched `Changeset` objects — never partially-applied stat
 ## Data readiness
 
 ```ts
+import { isPopulated, populated } from "@kyneta/schema"
+
 // Every ref starts unpopulated — no data has arrived yet
-doc.title.isPopulated()     // false
+isPopulated(doc.title)      // false
 
 doc.title.insert(0, "Hello")
 
-doc.title.isPopulated()     // true (monotonic — never reverts)
-doc.isPopulated()           // true (parent flips when any child does)
-doc.count.isPopulated()     // false (untouched siblings stay false)
+isPopulated(doc.title)      // true (monotonic — never reverts)
+isPopulated(doc)            // true (parent flips when any child does)
+isPopulated(doc.count)      // false (untouched siblings stay false)
+
+// The reactive form — a callable carrying its own [CHANGEFEED]
+subscribeNode(populated(doc.title), () => { /* data arrived */ })
 ```
 
-`isPopulated` is a reactive boolean on every ref. It starts `false` and flips to `true` when any mutation — local or remote — touches that ref or a descendant. Once `true`, it never reverts. Each `isPopulated` carries its own `[CHANGEFEED]`, so the compiler can emit conditional rendering regions that activate when data arrives.
+`isPopulated(ref)` reports whether any mutation — local, remote, or replayed from storage — has touched that ref or a descendant. It starts `false` and, once `true`, never reverts. `populated(ref)` returns the same state as a callable carrying its own `[CHANGEFEED]`, so it can be subscribed to or composed into a reactive computation.
+
+These are free functions, not properties on the ref. Refs expose your schema's fields as properties, so framework metadata is stored under a `Symbol` (`[POPULATED]`) instead — otherwise a schema with an `isPopulated` field would collide with it. The same applies to `isDeleted(ref)` / `deleted(ref)`.
+
+> **Readiness is not emptiness.** `isPopulated` answers "has data arrived?", not "has everything that could deliver data reported in?". A document whose store is still hydrating, or whose peers have not yet replied, reads `false` — indistinguishable from a genuinely empty document. Before treating `false` as "empty, safe to write defaults", gate on the relevant settle signal (storage hydration, and `sync(doc)` readiness when the document belongs to an Exchange).
 
 ## Validation
 

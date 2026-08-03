@@ -1073,7 +1073,7 @@ describe("subscribe: basic behavior", () => {
     }
   })
 
-  it("subscribe(ref.isPopulated, cb) fires when the path becomes populated", async () => {
+  it("subscribe(populated(ref), cb) fires when the path becomes populated", async () => {
     const { doc } = createChatDoc({
       // Override the seed so settings.fontSize starts unpopulated.
       settings: { darkMode: false } as Record<string, unknown>,
