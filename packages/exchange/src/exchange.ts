@@ -51,6 +51,7 @@ import type {
 } from "@kyneta/transport"
 import type { Capabilities } from "./capabilities.js"
 import { createCapabilities, DEFAULT_REPLICAS } from "./capabilities.js"
+import { registerDocAuthority } from "./doc-meta.js"
 import type { Authority, Policy } from "./governance.js"
 import { Governance } from "./governance.js"
 import type { ObsSink } from "./observe.js"
@@ -611,6 +612,7 @@ export class Exchange {
     // Registered here rather than once sync completes, because the term has to
     // be observable *while still false*. That is what stops a caller reading a
     // not-yet-synced document as empty.
+    registerDocAuthority(ref, () => this.#governance.authority() ?? "any")
     registerPeerResolver(ref, authority => this.#peerSettled(docId, authority))
     registerSettleTerm(
       ref,

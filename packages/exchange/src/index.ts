@@ -224,6 +224,8 @@ export {
   docStatus,
   docStatusFeed,
 } from "./doc-status.js"
+export type { InitAction } from "./initialize.js"
+export { initialize, planInitialization } from "./initialize.js"
 export type { SettleTerm } from "./settle.js"
 export {
   hydrated,

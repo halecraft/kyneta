@@ -37,6 +37,7 @@ import type {
 } from "@kyneta/schema"
 import { createRef, SUBSTRATE, subscribe } from "@kyneta/schema"
 import type { DocId } from "@kyneta/transport"
+import { registerDocSyncMode } from "./doc-meta.js"
 import { makeSettleTerm, registerHydrationTerm } from "./settle.js"
 import type { Store, StoreMeta } from "./store/store.js"
 import {
@@ -803,6 +804,7 @@ export class Runtime {
     // of the term is to be observable *while* still pending — that is what
     // stops a caller concluding "empty" from a document that simply has not
     // finished loading.
+    registerDocSyncMode(ref, bound.syncMode)
     registerHydrationTerm(
       ref,
       makeSettleTerm(
