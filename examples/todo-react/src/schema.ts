@@ -27,6 +27,12 @@ export const TodoItemSchema = Schema.struct({
 })
 
 export const TodoSchema = Schema.struct({
+  // A last-writer-wins scalar, and therefore safe to seed: if two peers both
+  // initialize this document at once they write the same value, and LWW
+  // converges on it. Seeding a list (`todos.push(...)`) would NOT be safe the
+  // same way — positional inserts from two peers duplicate rather than merge.
+  // See "Writing a concurrency-safe seed" in @kyneta/exchange's README.
+  title: Schema.string(),
   todos: Schema.list(TodoItemSchema),
 })
 

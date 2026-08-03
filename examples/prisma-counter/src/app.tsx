@@ -8,14 +8,15 @@
 //   Imports from @kyneta/react:
 //     useDocument   — get (or create) a document from the Exchange
 //     useValue      — subscribe to a ref's plain snapshot (re-renders)
-//     useSyncState  — observe per-peer sync state
+//     useDocStatus  — "pending" until every source has reported, then
+//                     "empty" or "populated"
 //
 //   Counter refs auto-commit: doc.count.increment(n) writes directly.
 //   No batch() wrapper needed for single-counter mutations.
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { useDocument, useSyncState, useValue } from "@kyneta/react"
+import { useDocStatus, useDocument, useValue } from "@kyneta/react"
 import { CounterDoc } from "./schema.js"
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -23,15 +24,16 @@ import { CounterDoc } from "./schema.js"
 // ─────────────────────────────────────────────────────────────────────────
 
 function SyncIndicator({ doc }: { doc: object }) {
-  const peerStates = useSyncState(doc)
-  const synced = peerStates.some(s => s.state === "synced")
+  // `useDocStatus` answers what we actually want to show: has everything that
+  // could tell us about this document reported in yet? `useSyncState` — the
+  // raw per-peer array — is the escape hatch for multi-peer dashboards, not
+  // for a one-glyph indicator.
+  const status = useDocStatus(doc)
+  const ready = status !== "pending"
 
   return (
-    <span
-      className="sync-indicator"
-      title={synced ? "Connected" : "Connecting..."}
-    >
-      {synced ? "✅" : "⏳"}
+    <span className="sync-indicator" title={ready ? "Ready" : "Loading..."}>
+      {ready ? "✅" : "⏳"}
     </span>
   )
 }
