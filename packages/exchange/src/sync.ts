@@ -136,10 +136,20 @@ class SyncRefImpl implements SyncRef {
   }
 
   get ready(): boolean {
+    // With no transports configured there is no peer that could ever answer,
+    // so waiting would be waiting forever. Reporting ready is the honest
+    // answer, not a shortcut — and it matches the carve-out `settled()` has
+    // had all along (see `connectivity() === "offline"` below).
+    if (this.#synchronizer.connectivity() === "offline") return true
     return this.#synchronizer.hasReconciled(this.docId)
   }
 
   readyFor(pred: (peer: PeerIdentityDetails) => boolean): boolean {
+    // Deliberately NOT given the offline carve-out that `ready` has. `ready`
+    // means "safe to proceed"; `readyFor` asserts that one *particular* peer
+    // was consulted. With no transports, no peer was — so answering `true`
+    // would be a lie, and callers use this precisely when they need the
+    // authority's word rather than a plausible default.
     return this.#synchronizer.reconciledMatching(this.docId, pred)
   }
 

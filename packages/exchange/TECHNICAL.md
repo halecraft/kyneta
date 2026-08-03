@@ -527,6 +527,10 @@ A peer's per-doc sync transition is a single event with **two folds**, both adva
 
 Three distinct "has-synced" predicates, deliberately **not** unified: `hasEverSynced` (`=== "synced"` only — gates compaction-reset detection), `#isReady` (connection-aware reconciled — gates `waitForSync`), and `hasReconciled` (monotonic, connection-independent — gates `ready`).
 
+That count is a consequence of `waitForSync` existing. `#isReady` has exactly one caller, `waitUntilReady`, which has exactly one caller, `waitForSync` — a strictly linear chain. When `waitForSync` is removed in 3.0 the whole chain goes with it and the distinction collapses to two: `hasEverSynced` (compaction-reset detection) and `hasReconciled` (readiness).
+
+Note also that `sync(doc).ready` now reports `true` when no transports are configured, matching the carve-out `settled()` already had — with nothing that could ever answer, waiting is waiting forever. `readyFor(pred)` deliberately does *not* get that carve-out: it asserts a specific peer was consulted, and with no transports none was.
+
 ### Connectivity & settling
 
 - `deriveConnectivity({ establishedPeers, transportCount })` — pure classifier: `online` (≥1 established peer), `offline` (no transports), else `connecting`. `synchronizer.connectivity()` / `sync(doc).connectivity` gather the counts (`TransportManager.size`, session peers with a live channel) and delegate.
