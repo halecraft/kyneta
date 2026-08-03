@@ -214,6 +214,13 @@ export type { SyncRef, WaitForSyncOptions } from "./sync.js"
 export { hasSync, sync } from "./sync.js"
 
 // ---------------------------------------------------------------------------
+// Settle terms — "have all of this document's truth sources reported?"
+// ---------------------------------------------------------------------------
+
+export type { SettleTerm } from "./settle.js"
+export { hydrated, hydratedFeed, settled, settledFeed } from "./settle.js"
+
+// ---------------------------------------------------------------------------
 // Storage — persistent storage adapters
 // ---------------------------------------------------------------------------
 

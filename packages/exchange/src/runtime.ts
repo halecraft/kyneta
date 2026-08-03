@@ -37,6 +37,7 @@ import type {
 } from "@kyneta/schema"
 import { createRef, SUBSTRATE, subscribe } from "@kyneta/schema"
 import type { DocId } from "@kyneta/transport"
+import { makeSettleTerm, registerHydrationTerm } from "./settle.js"
 import type { Store, StoreMeta } from "./store/store.js"
 import {
   allDocsIdle,
@@ -92,6 +93,45 @@ export type DocReadyInfo = {
 // ---------------------------------------------------------------------------
 
 /**
+ * Where a document's load-from-storage has got to.
+ *
+ * Three states, not two, because "still loading" and "tried and failed" must
+ * not look alike to anything downstream. A document whose store read threw is
+ * *not* an empty document — treating it as one would mean writing defaults
+ * over data we merely failed to read, which is the failure this whole
+ * readiness layer exists to prevent. So a failed load keeps the document
+ * un-settled and hangs on to the error for whoever asks.
+ *
+ * A document with no stores configured starts `loaded`: there is nothing to
+ * wait for.
+ */
+export type HydrationLatch = {
+  state: "pending" | "loaded" | "failed"
+  error?: unknown
+  /** Fired once when the state leaves `pending`. */
+  readonly listeners: Set<() => void>
+}
+
+/** @internal Move a latch out of `pending` and wake anyone waiting on it. */
+export function resolveHydration(
+  latch: HydrationLatch,
+  outcome: { ok: true } | { ok: false; error: unknown },
+): void {
+  if (latch.state !== "pending") return
+  latch.state = outcome.ok ? "loaded" : "failed"
+  if (!outcome.ok) latch.error = outcome.error
+  for (const listener of latch.listeners) listener()
+  latch.listeners.clear()
+}
+
+/** @internal A latch for a document with nothing to load. */
+export function createHydrationLatch(
+  initial: "pending" | "loaded",
+): HydrationLatch {
+  return { state: initial, listeners: new Set() }
+}
+
+/**
  * `readyInfo` + `announced` let {@link Runtime.setHooks} safely backfill
  * `onDocReady` for documents that already existed before hooks were
  * attached (e.g. a standalone `Runtime` later wrapped in an `Exchange`).
@@ -99,6 +139,9 @@ export type DocReadyInfo = {
  * (post-hydration, or immediately if no stores are configured); `announced`
  * tracks whether `onDocReady` has actually fired for it yet, so repeated or
  * out-of-order `setHooks` calls never double-announce. Context: jj:mrlnmlus.
+ *
+ * `hydration` is the storage half of the document's readiness — see
+ * {@link HydrationLatch} and `settle.ts`.
  */
 export type DocCacheEntry =
   | {
@@ -108,12 +151,14 @@ export type DocCacheEntry =
       readyInfo: DocReadyInfo
       announced: boolean
       suspended?: boolean
+      hydration: HydrationLatch
     }
   | {
       mode: "replicate"
       readyInfo: DocReadyInfo
       announced: boolean
       suspended?: boolean
+      hydration: HydrationLatch
     }
   | { mode: "deferred" }
 
@@ -739,14 +784,36 @@ export class Runtime {
       supportedHashes: [...bound.supportedHashes],
     }
 
+    const hydration = createHydrationLatch(
+      this.#stores.length > 0 ? "pending" : "loaded",
+    )
+
     const entry: DocCacheEntry = {
       mode: "interpret",
       ref,
       bound,
       readyInfo,
       announced: false,
+      hydration,
     }
     this.#docCache.set(docId, entry)
+
+    // The storage term joins this document's settle conjunction. It is
+    // registered here rather than after hydration finishes, because the point
+    // of the term is to be observable *while* still pending — that is what
+    // stops a caller concluding "empty" from a document that simply has not
+    // finished loading.
+    registerHydrationTerm(
+      ref,
+      makeSettleTerm(
+        () => hydration.state === "loaded",
+        onChange => {
+          if (hydration.state !== "pending") return () => {}
+          hydration.listeners.add(onChange)
+          return () => hydration.listeners.delete(onChange)
+        },
+      ),
+    )
 
     // ── Divergent tail: store vs no-store ──
     if (this.#stores.length > 0) {
@@ -756,10 +823,21 @@ export class Runtime {
         factory.replica,
         bound.syncMode,
         bound.schemaHash,
-      ).then(() => {
-        this.#register(entry)
-        this.#wireDocSubscription(docId, ref)
-      })
+      ).then(
+        () => {
+          resolveHydration(hydration, { ok: true })
+          this.#register(entry)
+          this.#wireDocSubscription(docId, ref)
+        },
+        (error: unknown) => {
+          // A failed load must stay visible. Marking the latch `failed` keeps
+          // the document un-settled (so nothing concludes it is empty) and
+          // holds the error for `whenSettled` to surface, rather than leaving
+          // an unexplained hang. The document deliberately does NOT get
+          // registered or announced: we have no idea what its state is.
+          resolveHydration(hydration, { ok: false, error })
+        },
+      )
       this.#trackHydration(hydrationOp)
     } else {
       // No stores — doc is immediately ready.
@@ -794,10 +872,19 @@ export class Runtime {
       schemaHash,
     }
 
+    // A replicate document has no ref, so no settle term can be keyed to it
+    // and it has no `docStatus` surface. The latch is still tracked so the
+    // entry's hydration state is uniform across modes and available for
+    // diagnostics.
+    const hydration = createHydrationLatch(
+      this.#stores.length > 0 ? "pending" : "loaded",
+    )
+
     const entry: DocCacheEntry = {
       mode: "replicate",
       readyInfo,
       announced: false,
+      hydration,
     }
     this.#docCache.set(docId, entry)
 
@@ -808,9 +895,15 @@ export class Runtime {
         replicaFactory,
         syncMode,
         schemaHash,
-      ).then(() => {
-        this.#register(entry)
-      })
+      ).then(
+        () => {
+          resolveHydration(hydration, { ok: true })
+          this.#register(entry)
+        },
+        (error: unknown) => {
+          resolveHydration(hydration, { ok: false, error })
+        },
+      )
       this.#trackHydration(hydrationOp)
     } else {
       // No stores — doc is immediately ready.
@@ -955,9 +1048,18 @@ export class Runtime {
 
     // First-hit semantics: use the first store that has data
     let hadStoredEntries = false
+    // A store that throws has told us nothing — not "the document is empty",
+    // merely "I could not answer". Track those separately from stores that
+    // answered (with data or with a definitive null), because the difference
+    // decides whether an empty replica means "nothing stored" or "we failed to
+    // look". Reporting the second as the first is how defaults get written
+    // over data that exists on disk.
+    const readFailures: unknown[] = []
+    let anyStoreAnswered = false
     for (const backend of this.#stores) {
       try {
         const existing = await backend.currentMeta(docId)
+        anyStoreAnswered = true
         if (existing) {
           for await (const record of backend.loadAll(docId)) {
             if (record.kind === "entry") {
@@ -975,11 +1077,20 @@ export class Runtime {
           break // First-hit: use first store that has the doc
         }
       } catch (error) {
+        readFailures.push(error)
         console.warn(
           `[runtime] store hydration failed for doc '${docId}':`,
           error,
         )
       }
+    }
+
+    // Only a *total* read failure is fatal. With several stores configured, one
+    // failing and another answering is a legitimate fallback — that is what
+    // first-hit ordering is for. But if nothing could be read at all, the
+    // caller must not be handed a document that merely looks empty.
+    if (!anyStoreAnswered && readFailures.length > 0) {
+      throw readFailures[0]
     }
 
     const handle = this.#storeHandle
