@@ -1,27 +1,19 @@
-// use-doc-ready — reactive monotonic readiness latch for a document.
+// use-doc-ready — "is it safe to read this document yet?"
 //
-// useDocReady(doc) returns a boolean that flips to `true` the first time
-// the doc reconciles with a peer (receives data, or a terminal `vacant`
-// reply) and never regresses — across the reconnect re-handshake flip or a
-// reconciled peer departing. This is the common "safe to read?" gate.
-//
-// For the raw per-peer array (multi-peer / debugging), use useSyncState.
+// Sugar over useDocStatus: ready means "not still waiting to find out". Kept
+// as its own hook because the boolean reads better at a call site that only
+// wants a gate, and because it is the older, established name.
 
-import { type PeerIdentityDetails, sync } from "@kyneta/exchange"
-import { useMemo, useSyncExternalStore } from "react"
-import { createDerivedSyncStore } from "./store.js"
-
-// ---------------------------------------------------------------------------
-// useDocReady
-// ---------------------------------------------------------------------------
+import type { PeerIdentityDetails } from "@kyneta/exchange"
+import { useDocStatus } from "./use-doc-status.js"
 
 /**
- * Subscribe to a document's monotonic readiness latch.
+ * Subscribe to a document's readiness gate.
  *
- * Returns `false` while connecting and flips to `true` on first
- * reconciliation (data **or** `vacant`), then stays `true`. Pass
- * `opts.peer` to require reconciliation with a peer matching a predicate
- * (the authority / quorum case). The boolean snapshot is flicker-free.
+ * Returns `false` while some truth source has yet to report, and `true` once
+ * everything has — whether the document turned out to have data or not.
+ * Monotonic in practice, and flicker-free: the snapshot is a boolean, so
+ * `useSyncExternalStore` bails out when it has not moved.
  *
  * ```tsx
  * function Menu({ userDoc }: { userDoc: Ref<typeof UserSchema> }) {
@@ -31,22 +23,18 @@ import { createDerivedSyncStore } from "./store.js"
  * }
  * ```
  *
- * @param doc - A document ref from `exchange.get()` (or `useDocument()`).
- * @param opts.peer - Optional predicate; require a matching reconciled peer.
- * @returns `true` once reconciled (subject to `opts.peer`), else `false`.
- * @throws If `doc` was not created via `exchange.get()` (no sync capabilities).
+ * If you need to distinguish "ready and empty" from "ready with data" — which
+ * is the distinction that decides whether writing defaults is safe — use
+ * {@link useDocStatus} directly, or {@link useInitialize} to act on it.
+ *
+ * @param doc - A document ref (or any ref within one).
+ * @param opts.peer - Require this specific peer to have answered, rather than
+ *   accepting whichever source reports first.
  */
 export function useDocReady(
   doc: object,
   opts?: { peer?: (peer: PeerIdentityDetails) => boolean },
 ): boolean {
   const pred = opts?.peer
-  const store = useMemo(
-    () =>
-      createDerivedSyncStore(sync(doc), ref =>
-        pred ? ref.readyFor(pred) : ref.ready,
-      ),
-    [doc, pred],
-  )
-  return useSyncExternalStore(store.subscribe, store.getSnapshot)
+  return useDocStatus(doc, pred ? { authority: pred } : undefined) !== "pending"
 }
