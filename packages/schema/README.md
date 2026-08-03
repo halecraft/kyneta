@@ -190,6 +190,11 @@ These are free functions, not properties on the ref. Refs expose your schema's f
 
 > **`*Feed` is the carrier; the short name is the value.** `populatedFeed(ref)` returns a *callable*, so it is always truthy — `if (populatedFeed(ref))` reports the opposite of the truth for an empty document. Use `isPopulated(ref)` when you want a boolean. The older spellings `populated(ref)` / `deleted(ref)` are deprecated aliases of the `*Feed` functions; in 3.0 those short names become the booleans.
 
+> **For documents in a Runtime or Exchange**, `docStatus(doc)` from
+> `@kyneta/exchange` answers this properly — it waits for stored data and
+> peers before saying a document is empty — and `initialize(doc, seed)`
+> writes defaults exactly once, safely.
+
 > **Readiness is not emptiness.** `isPopulated` answers "has data arrived?", not "has everything that could deliver data reported in?". A document whose store is still hydrating, or whose peers have not yet replied, reads `false` — indistinguishable from a genuinely empty document. Before treating `false` as "empty, safe to write defaults", gate on the relevant settle signal (storage hydration, and `sync(doc)` readiness when the document belongs to an Exchange).
 
 ## Validation

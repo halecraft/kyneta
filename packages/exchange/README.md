@@ -538,6 +538,129 @@ loroDoc.toJSON()
 
 ---
 
+## Document Initialization
+
+A document that has just been created is empty. So is a document whose stored
+data is still loading, and one whose server has not answered yet. Telling those
+apart is the entire problem: writing defaults into the first is correct, and
+writing them into the other two destroys data.
+
+`initialize` waits for every source that could have something to say, and only
+then decides:
+
+```ts
+import { initialize } from "@kyneta/exchange"
+
+await initialize(doc, d => d.set({ title: "Untitled", posts: [] }))
+// → "created" if it wrote the defaults, "loaded" if data was already there
+```
+
+The rule it encodes, in one line: **whoever is authoritative seeds when the
+document is empty; everyone else waits and reads.**
+
+### The four topologies, one verb
+
+```ts
+// Standalone — nothing to wait for
+const doc = createDoc(BlogSchema)
+await initialize(doc, seedDefaults)
+
+// Local-only, with storage — waits for the load, never for a network
+const exchange = new Exchange({ id: "app", stores: [store] })
+await initialize(exchange.get("blog", BlogDoc), seedDefaults)
+
+// Server — authoritative. Declared once, at construction.
+const server = new Exchange({ id: "server", stores: [store], authority: "self" })
+await initialize(server.get("blog", BlogDoc), seedDefaults)
+
+// Client — waits for the server's answer, and gives up after 3s if it never
+// comes (offline-first).
+const client = new Exchange({
+  id: "client",
+  transports: [ws],
+  authority: p => p.peerId === "server",
+})
+await initialize(client.get("blog", BlogDoc), seedDefaults, { offlineAfter: 3000 })
+```
+
+### Identify the authority by peer ID, not by role
+
+`PeerIdentityDetails.type` is one of `"user" | "bot" | "service"`, so the
+tempting client-side check is `p => p.type === "service"`. That is too loose
+for anything that gates a write: your server is a service, but so is any other
+service peer on the network — including the devtools inspector, which is itself
+an Exchange peer. A client using the role check could accept the inspector's
+reply as the server's verdict.
+
+```ts
+authority: p => p.peerId === "my-server"   // recommended
+```
+
+### Reading the status directly
+
+```ts
+import { docStatus } from "@kyneta/exchange"
+
+docStatus(doc)  // "pending" | "empty" | "populated"
+```
+
+`"pending"` means some source has yet to report. `"empty"` means everything has
+reported and there is nothing there — the only state from which writing
+defaults is safe. The three states exist so that "we do not know yet" cannot be
+mistaken for "there is nothing here".
+
+This works at every layer and never throws, including on a plain `createDoc`
+document with no Exchange behind it.
+
+### Writing a concurrency-safe seed
+
+Whether two peers seeding at once causes a problem depends only on which merge
+law the seed's writes touch — and every schema constructor already declares its
+law:
+
+| Constructor | Law | Two peers seeding the same thing |
+| --- | --- | --- |
+| `product` / field `.set()` | `lww-per-key` | converge — safe |
+| `map` (deterministic key) | `lww-per-key` | converge — safe |
+| `set` | `add-wins-per-key` | converge (value-addressed) — safe |
+| `sum` | `lww-tag-replaced` | converge — safe |
+| `sequence` / `movableList` | `positional-ot` | **duplicate** |
+| `counter` | `additive` | **double-count** |
+| `text` | `positional-ot` | **duplicate** |
+
+A seed made of scalars, struct fields, deterministically-keyed map entries, or
+set members is safe on any number of peers with no configuration at all:
+
+```ts
+await initialize(doc, d => {
+  d.title.set("Untitled")                 // lww-per-key
+  d.settings.theme.set("dark")            // lww-per-key
+  d.tags.add("inbox")                     // add-wins, value-addressed
+  d.sections.set("intro", { order: 0 })   // lww-per-key, deterministic key
+})
+```
+
+The unsafe shape is the reflex one — `d.items.push({ id: crypto.randomUUID() })`
+— and the fix is usually a one-line reshape to a map keyed by a stable id,
+which is often the better model anyway.
+
+If a seed genuinely must be positional, declare an authority so only one peer
+writes it. `TECHNICAL.md` covers the remaining options.
+
+### What `initialize` does not do
+
+The seed is an ordinary local write. It broadcasts, it persists, and it passes
+the same governance gates as any other mutation — so a restrictive `canShare`
+or `canAccept` policy applies to it too. A large default payload therefore
+produces a full changeset broadcast.
+
+It also refuses one thing outright: seeding a `writerModel: "serialized"`
+document (anything bound with `json.bind`) from a peer that is not the
+authority. Concurrent seeds cannot merge on that document type, so rather than
+lose the race at runtime, it throws with the fix in the message.
+
+---
+
 ## Complexity Gradient
 
 | Level | What you write | What you get |

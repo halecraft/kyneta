@@ -379,25 +379,68 @@ function Counter({ count }: { count: Ref<CounterSchema> }) {
 
 ---
 
-## `useDocReady` and `useSyncState`
+## Document status hooks
 
-Source: `packages/react/src/use-doc-ready.ts`, `packages/react/src/use-sync-state.ts`.
+Source: `packages/react/src/use-doc-status.ts`, `use-initialize.ts`, `use-doc-ready.ts`, `use-sync-state.ts`.
 
 ```ts
-useDocReady(doc: Ref<S>, opts?: { peer?: (p: PeerIdentityDetails) => boolean }): boolean
-useSyncState(doc: Ref<S>): PeerSyncState[]
+useDocStatus(doc, opts?): "pending" | "empty" | "populated"
+useInitialize(doc, seedFn, opts?): DocStatus
+useDocReady(doc, opts?): boolean
+useSyncState(doc): PeerSyncState[]
 ```
 
-`useDocReady` is the common gate: a **monotonic** boolean latch that flips to `true` on first reconciliation (`synced` or `vacant`) and never regresses across the reconnect re-handshake flip or a reconciled peer departing. Because the snapshot is a scalar, `useSyncExternalStore` bails out of re-render via `Object.is` when it's unchanged — flicker-free even as the underlying per-peer array churns. `opts.peer` requires a matching reconciled peer (authority / quorum).
+`useDocStatus` is the primary one. `"pending"` means some truth source — the
+document's store, or its authoritative peer — has yet to report; `"empty"`
+means everything has and there is no data; `"populated"` means there is. The
+three states exist so that "we do not know yet" cannot be mistaken for "there
+is nothing here", which is the distinction that decides whether writing
+defaults destroys data. See `@kyneta/exchange`'s TECHNICAL.md §"Document
+readiness" for the conjunction behind it.
 
-`useSyncState` (renamed from `useSyncStatus` in 2.0) is the raw escape hatch: a live `PeerSyncState[]` (`{ docId, peer, state }`), re-rendering on any per-peer change. Volatile — an entry can regress `synced → pending` on reconnect. Both hooks share one subscription primitive, `createDerivedSyncStore(syncRef, select)`.
+`useInitialize` writes a document's defaults exactly once, waiting for every
+source first. Idempotency lives in `initialize` itself (a per-document promise
+cache), so StrictMode's deliberate double-invocation, a remount, or two
+components both wanting defaults all collapse to one write. The `seed` and
+`onError` callbacks are held in refs rather than dependencies — both are
+usually inline arrows, so depending on them would re-run the effect every
+render; the document is the identity that matters. Same technique as
+`useTracked`'s `thunkRef`.
 
-Applications use `useDocReady` for "safe to read?" gates and `useSyncState` for "syncing with 3 peers" / per-peer indicators.
+`useDocReady` is now sugar over `useDocStatus` (`status !== "pending"`). It
+also gained a behaviour fix: `sync(doc).ready` is `true` on a transportless
+exchange, so a local-only app no longer shows a spinner that never resolves.
+
+`useSyncState` remains the raw escape hatch: a live `PeerSyncState[]`,
+volatile, for multi-peer indicators and debugging.
+
+### No store core needed
+
+These hooks need no `createDerivedSyncStore`-style factory, unlike
+`useSyncState`. `docStatusFeed` carries `[CHANGEFEED]`, and that protocol is
+already the `useSyncExternalStore` contract — `.current` for the snapshot,
+`.subscribe()` returning an unsubscribe — so `useChangefeed` bridges them
+directly.
+
+That matters more than it looks. The status moves for two unrelated reasons:
+data arriving, and the last truth source reporting in. A hand-rolled hook would
+have to subscribe to both and merge them; the composed feed has already done
+that in `@kyneta/exchange`, so there is nothing left to wire in React. This is
+why §"The FC/IS split" applies differently here — the functional core is
+upstream, not in `store.ts`.
+
+`createDerivedSyncStore` consequently has no production consumer left
+(`use-doc-ready.ts` was its only one). It is a public export, so it is removed
+in 3.0 rather than dropped silently.
 
 ### What these are NOT
 
-- **Not a connectivity indicator.** They reflect sync reconciliation per doc, not transport connectivity — see `sync(doc).connectivity` (`"online" | "connecting" | "offline"`) and the presentational `describeSyncStatus(peerStates, connectivity, ready)`.
-- **`useSyncState` is not reactive to peers joining / leaving the connection graph.** That's `exchange.peers`. It tracks per-peer sync-state transitions on docs that already have peer entries.
+- **Not a connectivity indicator.** They reflect what is known about the
+  document's *data*, not transport connectivity — that is
+  `sync(doc).connectivity` (`"online" | "connecting" | "offline"`).
+- **`useSyncState` is not reactive to peers joining / leaving the connection
+  graph.** That is `exchange.peers`. It tracks per-peer sync-state transitions
+  on docs that already have peer entries.
 
 ---
 
@@ -547,7 +590,7 @@ The barrel (`src/index.ts`) re-exports a curated subset of `@kyneta/schema`, `@k
 |------|-------------|
 | `@kyneta/changefeed` | `CHANGEFEED`, `Changeset` (type) |
 | `@kyneta/schema` | `Schema`, `change`, `applyChanges`, `subscribe`, `subscribeNode`, `BoundSchema`, `Op`, `Plain`, `Ref`, `RRef`, `CommitOptions` (types) |
-| `@kyneta/exchange` | `AsyncQueue`, `createLineDocSchema`, `describeSyncStatus`, `Connectivity`, `DocChange`, `DocId`, `DocInfo`, `ExchangeParams`, `GatePredicate`, `LineListener`, `LineProtocol`, `PeerIdentityDetails`, `Policy`, `PeerSyncState`, `SyncRef`, `SyncStatusSummary`, `TransportFactory` (types and values as applicable) |
+| `@kyneta/exchange` | `AsyncQueue`, `createLineDocSchema`, `describeSyncStatus` (deprecated, 3.0), `Connectivity`, `DocChange`, `DocId`, `DocInfo`, `ExchangeParams`, `GatePredicate`, `LineListener`, `LineProtocol`, `PeerIdentityDetails`, `Policy`, `PeerSyncState`, `SyncRef`, `SyncStatusSummary`, `TransportFactory` (types and values as applicable) |
 
 This is a convenience, not a hard coupling — direct imports from the upstream packages work identically.
 

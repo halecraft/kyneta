@@ -30,6 +30,8 @@ Imported by applications to construct the top-level sync graph; by `@kyneta/reac
 - How does compaction interact with sync? → [Compaction and lineage boundaries](#compaction-and-lineage-boundaries)
 - What does `peerId` continuity buy me? → [Peer-ID continuity](#peer-id-continuity)
 - How do reactive `peers` / `documents` collections behave? → [Reactive collections](#reactive-collections)
+- How do I tell an empty document from one that has not loaded? → [Document readiness](#document-readiness--a-conjunction-over-layers)
+- How do I write a document's defaults exactly once? → [Document readiness](#document-readiness--a-conjunction-over-layers)
 
 ## Vocabulary
 
@@ -541,6 +543,150 @@ This is the reactive surface for `@kyneta/react`'s `useDocReady` / `useSyncState
 
 ---
 
+## Document readiness — a conjunction over layers
+
+Source: `src/settle.ts`, `src/doc-status.ts`, `src/initialize.ts`, `src/doc-meta.ts`.
+
+A document sits at one of four layers, and each adds exactly one thing worth
+waiting for:
+
+| Layer | Construction | Adds |
+| --- | --- | --- |
+| Ref | `doc.field` | — (inherits the document's) |
+| Document | `createDoc(bound)` | — nothing to await |
+| + Runtime | stores configured | the stored data finishing its load |
+| + Exchange | transports configured | the authoritative peer answering |
+
+Each registers one **settle term** — a boolean that starts `false` and flips
+when its source reports. `settled(ref)` is the conjunction. Zero terms is the
+empty conjunction, which is `true`, so a standalone document and a
+transportless, storeless daemon are settled by construction. The transportless
+case therefore needs no carve-out anywhere: it falls out of the algebra.
+
+A term is a `[CHANGEFEED]` carrier, not a bespoke interface — the universality
+rule in `packages/changefeed/TECHNICAL.md` ("every reactive surface in Kyneta
+goes through this one symbol"), and the same insight `jj:mltppspx` recorded as
+"The Universality of CHANGEFEED". A term is therefore the same shape as
+`populatedFeed(ref)`, and composes with `useChangefeed`, `@kyneta/reactive`,
+and `@kyneta/index` with no new plumbing. That is why the React binding is a
+one-line adapter rather than a store core.
+
+### The gate guards only the negative verdict
+
+`docStatus` returns `"pending" | "empty" | "populated"`, computed by the pure
+`deriveDocStatus`:
+
+- `populated` wins regardless of settledness. Content is monotonic and arrives
+  from any source, so data that has already arrived is not made less real by
+  another source still being in flight. Disjunctive.
+- `empty` requires every source to have reported. It is a claim about absence,
+  and absence of evidence is not evidence of absence until everything has been
+  consulted. Conjunctive.
+
+The three states exist so that "we do not know yet" cannot be mistaken for
+"there is nothing here" — the distinction that decides whether writing defaults
+destroys data.
+
+### The `x` / `xFeed` naming rule
+
+The short name is the plain value; the `*Feed` suffix is the observable
+carrier. Reading is routine and gets the short name; subscribing is the
+specialist move and pays the suffix.
+
+The shipped `isPopulated` / `populated` and `isDeleted` / `deleted` pairs are
+named the other way round. That is a known error, corrected in 3.0
+(`next.md` §10); `populatedFeed` / `deletedFeed` ship now as aliases so the
+carrier side is already uniform. The hazard the old order creates is concrete:
+a carrier is a callable, so `if (populated(ref))` is **always truthy** —
+silently the opposite of the truth for an empty document.
+
+### The limits of the claim
+
+"Every truth source has reported" is decidable only for sources on this
+machine. The storage load is a promise we hold; the transport count is a local
+number; `authority: "self"` waits for nobody. Whether a *remote* authority will
+ever reply is not decidable — a slow peer and an absent peer are
+indistinguishable, which is a standing result in distributed systems rather
+than something an API can fix.
+
+The design stays sound because it only ever concludes `"empty"` from local
+evidence. Giving up on a remote peer produces `waitOutcome: "offline"`, which
+`planInitialization` takes as a separate input and never becomes a status:
+`docStatus` still reads `"pending"`, truthfully, and the decision to act anyway
+is visible at the point it is made.
+
+This is also why `offlineAfter` applies to the peer wait and never to
+hydration. `whenSettled` is two sequential steps — storage without a timeout,
+then peers with one — so there is nowhere for a deadline on a disk read to be
+introduced. A missing peer may genuinely never arrive, so abandoning that wait
+is the only option; a slow disk is a local fault we can observe, and abandoning
+it would mean writing defaults over data we merely failed to load. A failed
+store read makes `whenSettled` reject rather than resolve.
+
+### Why the cross-peer version of the race does not occur
+
+A reader will ask: what stops a server that has a document on disk, but has not
+opened it, from replying "I do not have this" and inviting the client to seed
+over it? Two independent mechanisms.
+
+First, a document with stores does not enter the sync graph until it has
+hydrated — `#register` runs inside `#hydrate(...).then(...)`, so a server never
+announces a half-loaded document.
+
+Second, the default disposition for an unrecognised document is `defer`, not
+`vacant` (`exchange.ts`, the discovery handler): "NOT terminal, so no `vacant`
+— the peer's interest stays live." A terminal `vacant` is sent only when the
+replica type is genuinely unsupported.
+
+The residual hazard is an application returning `Reject()` from its own
+`resolve` callback for a document it does hold on disk. That peer will be told
+the document is empty. Worth knowing, because `initialize` makes the
+consequence larger than it used to be.
+
+### Identify the authority by peer ID, not role
+
+`PeerIdentityDetails.type` has three values, so `p => p.type === "service"` is
+the tempting check. It is too loose for anything gating a write: the multi-peer
+devtools inspector described in `PRODUCT.md` is itself an Exchange peer and
+would very likely identify as a service. Prefer
+`p => p.peerId === "my-server"`.
+
+### When a seed must be positional
+
+`README.md` covers the law table that makes most seeds concurrency-safe without
+configuration. When a seed genuinely must touch a positional or additive law in
+a mesh topology, four options, cheapest first:
+
+1. Declare an authority, even an intermittent one, with `offlineAfter` as the
+   fallback.
+2. Elect one at the call site from `exchange.peers` and pass it as
+   `initialize`'s `authority` option — the reason a call-site override exists
+   at all, since a policy fixed at construction could not express it.
+3. Bind the document as serialized (`json.bind`), so the guard in
+   `planInitialization` refuses client seeds outright.
+4. Claim with an LWW register and let the winner do the positional part. This
+   is timing-sensitive (the register has to converge before the winner is
+   read), which is why it belongs here rather than in the README.
+
+A future affordance worth recording rather than losing: `ExtractLaws<S>` is a
+type-level law accumulator, so "is this seed concurrency-safe?" is in principle
+a compile-time question. It is currently single-level and non-recursive, so a
+real check would need work.
+
+### `hydrated` vs `flush`
+
+`hydrated(doc)` / `whenHydrated(doc)` is the storage gate. `exchange.flush()`
+drains pending *writes* and only happens to await hydration as an
+implementation detail — using it as a load gate tests a coincidence rather than
+a contract.
+
+The per-document latch is a different mechanism from the `Store.initialize?()`
+lifecycle hook rejected in "Async-factory pattern" below. That hook was about
+store *construction*; this is about one document's load completing, and it does
+not gate the executor.
+
+---
+
 ## Storage
 
 Source: `src/store/*.ts`, `src/store/store-program.ts`, `src/exchange.ts` → store-program executor.
@@ -810,7 +956,7 @@ For durability guarantees, use the `cohort` predicate to prevent compaction past
 | `validateAppend` | `src/store/store.ts` | Shared meta-first invariant guard for `append` implementations. |
 | `SeqNoTracker` | `src/store/seq-tracker.ts` | Per-doc monotonic seqNo tracker with lazy backend discovery. |
 | `PeerChange` / `DocChange` / `DocInfo` / `PeerState` / `PeerSyncState` / `PeerDocSyncState` / `Connectivity` | `src/types.ts` | Reactive-collection change types and snapshot shapes. |
-| `describeSyncStatus` / `SyncStatusSummary` | `src/describe-sync-status.ts` | Pure presentational projection over `peerStates` / `connectivity` / `ready`. Re-exported from `@kyneta/react`. |
+| `describeSyncStatus` / `SyncStatusSummary` **(deprecated, removed in 3.0 — no consumers; compose from `connectivity`, `peerStates`, `docStatus`)** | `src/describe-sync-status.ts` | Pure presentational projection over `peerStates` / `connectivity` / `ready`. Re-exported from `@kyneta/react`. |
 | `sync(doc)` | `src/sync.ts` | Helper: returns `SyncRef` (`peerStates`, `ready`, `readyFor`, `connectivity`, `settled`, `waitForSync`, `onPeerSyncChange`). |
 | `AsyncQueue` | `src/async-queue.ts` | Bounded async producer/consumer queue used inside `Line`. |
 
@@ -831,7 +977,7 @@ For durability guarantees, use the `cohort` predicate to prevent compaction past
 | `src/persistent-peer-id.ts` | 216 | Browser-tab peer-ID lease; FC/IS split. Imports `randomPeerId` and `randomHex` from `@kyneta/random`. |
 | `src/sync.ts` | 195 | `sync(doc)` helper + `registerSync`. |
 | `src/types.ts` | 135 | `DocChange`, `DocInfo`, `PeerChange`, `PeerDocSyncState`, `PeerState`, `PeerSyncState`, `Connectivity`. |
-| `src/describe-sync-status.ts` | 48 | `describeSyncStatus`, `SyncStatusSummary` — pure presentational projection. |
+| `src/describe-sync-status.ts` | 48 | **Deprecated (3.0).**  `describeSyncStatus`, `SyncStatusSummary` — pure presentational projection. |
 | `src/observe.ts` | — | DevTools observation protocol (`ObsEvent`), bus (`createObservationBus`), and pure effect/msg/changeset/frame mappers. Experimental. |
 | `src/utils.ts` | 50 | `validatePeerId`. (Random ID generation extracted to `@kyneta/random`.) |
 | `src/store/` | — | `Store` interface, in-memory implementation, shared utilities (`seq-tracker.ts`, `validateAppend` in `store.ts`). |

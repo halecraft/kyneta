@@ -207,7 +207,24 @@ batch(doc, (d) => {
 
 From `@kyneta/schema`: `batch`, `applyChanges`, `subscribe`, `subscribeNode`, `Schema`, `CHANGEFEED`, and types `Ref`, `RRef`, `Plain`, `Changeset`, `Op`, `BoundSchema`.
 
-From `@kyneta/exchange`: `Exchange`, `sync`, `hasSync`, `describeSyncStatus`, and types `ExchangeParams`, `SyncRef`, `PeerSyncState`, `Connectivity`, `SyncStatusSummary`, `PeerIdentityDetails`, `DocId`.
+### Document status
+
+```tsx
+import { useDocStatus, useInitialize } from "@kyneta/react"
+
+// "pending" until every source has reported; then "empty" or "populated".
+const status = useDocStatus(doc)
+if (status === "pending") return <Spinner />
+
+// Or: ensure defaults exist, exactly once, without overwriting stored data.
+const status = useInitialize(doc, d => d.set({ title: "Untitled" }))
+```
+
+`useDocReady(doc)` is sugar for `useDocStatus(doc) !== "pending"` — use it when
+you only need a gate, and `useDocStatus` when you need to tell an empty
+document from one that already has data.
+
+From `@kyneta/exchange`: `Exchange`, `sync`, `whenSettled`, `docStatus`, `initialize`, and types `ExchangeParams`, `SyncRef`, `PeerSyncState`, `Connectivity`, `SyncStatusSummary`, `PeerIdentityDetails`, `DocId`.
 
 ## Architecture
 
