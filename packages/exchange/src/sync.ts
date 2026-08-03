@@ -14,6 +14,7 @@
 //   await s.waitForSync()
 
 import type { DocId, PeerId, PeerIdentityDetails } from "@kyneta/transport"
+import { whenHydrated } from "./settle.js"
 import type { Synchronizer } from "./synchronizer.js"
 import type { Connectivity, PeerSyncState } from "./types.js"
 
@@ -111,6 +112,12 @@ export interface SyncRef {
 // ---------------------------------------------------------------------------
 
 const syncRefMap = new WeakMap<object, SyncRef>()
+
+/** The raw wiring behind each `SyncRef`, for waits that need the synchronizer. */
+const syncSourceMap = new WeakMap<
+  object,
+  { docId: DocId; synchronizer: Synchronizer }
+>()
 
 // ---------------------------------------------------------------------------
 // SyncRef implementation
@@ -213,6 +220,10 @@ export function registerSync(
 ): void {
   const syncRef = new SyncRefImpl(params)
   syncRefMap.set(ref, syncRef)
+  // `whenSettled` needs the synchronizer itself, not just the public SyncRef
+  // surface, because it waits on an authority predicate that `SyncRef` does
+  // not expose.
+  syncSourceMap.set(ref, params)
 }
 
 // ---------------------------------------------------------------------------
@@ -265,4 +276,69 @@ export function sync(ref: object): SyncRef {
  */
 export function hasSync(ref: object): boolean {
   return syncRefMap.has(ref)
+}
+
+// ---------------------------------------------------------------------------
+// whenSettled — wait for every truth source, not just the network
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve once every truth source attached to this document has reported.
+ *
+ * This is the promise form of `settled(ref)`, and the one to reach for before
+ * deciding whether a document is empty. It awaits **both** halves: the stored
+ * data finishing its load, and the authority answering.
+ *
+ * Waiting on the network alone is the tempting shortcut and it is wrong. A
+ * document with both a store and transports would proceed the moment the
+ * server replied — while its own disk read was still in flight — and read as
+ * empty. That is exactly the failure this layer exists to prevent.
+ *
+ * The two waits run in sequence, and that order is load-bearing rather than
+ * incidental: the storage wait carries no timeout, so there is nowhere for a
+ * deadline on a disk read to be introduced later. A missing peer may genuinely
+ * never arrive, so abandoning that wait is the only option available; a slow
+ * disk is a local fault we can observe, and abandoning it would mean writing
+ * defaults over data we merely failed to load.
+ *
+ * Never rejects for network reasons — an unreachable peer resolves
+ * `{ via: "offline" }` after `offlineAfter`. It *does* reject if the store
+ * read failed, because that is a fault worth surfacing rather than a state
+ * worth proceeding from.
+ *
+ * @param ref - A document ref.
+ * @param opts.peer - Require a peer matching this predicate to have answered.
+ * @param opts.offlineAfter - Give up waiting for peers after this many ms.
+ *   `0` (the default) waits indefinitely. Never applies to the storage wait.
+ */
+export async function whenSettled(
+  ref: object,
+  opts?: {
+    peer?: (peer: PeerIdentityDetails) => boolean
+    offlineAfter?: number
+  },
+): Promise<{ via: "peer" | "local" | "offline" }> {
+  // ── Step 1: storage. No timeout, by construction. ──
+  await whenHydrated(ref)
+
+  // ── Step 2: peers, with the timeout. ──
+  const source = syncSourceMap.get(ref)
+  // No exchange behind this document, so there is no upstream to wait for.
+  if (!source) return { via: "local" }
+
+  const { docId, synchronizer } = source
+  if (synchronizer.connectivity() === "offline") return { via: "local" }
+
+  const isReady = opts?.peer
+    ? () => synchronizer.reconciledMatching(docId, opts.peer as never)
+    : () => synchronizer.hasReconciled(docId)
+
+  if (isReady()) return { via: "peer" }
+
+  const result = await synchronizer.awaitReconciliation(
+    docId,
+    isReady,
+    opts?.offlineAfter ?? 0,
+  )
+  return result === "ready" ? { via: "peer" } : { via: "offline" }
 }

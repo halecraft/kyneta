@@ -21,7 +21,7 @@ import {
 import type { InMemoryStoreData } from "../store/in-memory-store.js"
 import { createInMemoryStore, InMemoryStore } from "../store/in-memory-store.js"
 import type { Store } from "../store/store.js"
-import { sync } from "../sync.js"
+import { sync, whenSettled } from "../sync.js"
 import { makeMetaRecord } from "../testing/store-conformance.js"
 
 const TestDoc = json.bind(
@@ -255,6 +255,104 @@ describe("ready — transportless", () => {
     expect(describeSyncStatus(s.peerStates, s.connectivity, s.ready)).toBe(
       "offline",
     )
+
+    exchange.reset()
+  })
+})
+
+// ===========================================================================
+// whenSettled — the layered wait
+// ===========================================================================
+
+describe("whenSettled", () => {
+  it("resolves via 'local' when there is nothing upstream", async () => {
+    const exchange = createExchange()
+    const doc = exchange.get("doc-1", TestDoc)
+
+    await expect(whenSettled(doc)).resolves.toEqual({ via: "local" })
+
+    exchange.reset()
+  })
+
+  it("waits for hydration before reporting settled", async () => {
+    const sharedData = await seedStoredDoc('{"title":"stored","count":7}')
+    const exchange = createExchange({
+      stores: [createInMemoryStore({ sharedData })],
+    })
+
+    const doc = exchange.get("doc-1", TestDoc)
+
+    let done = false
+    const wait = whenSettled(doc).then(r => {
+      done = true
+      return r
+    })
+
+    // Still loading, so the wait must not have resolved yet.
+    expect(done).toBe(false)
+
+    await expect(wait).resolves.toEqual({ via: "local" })
+    expect(doc.title()).toBe("stored")
+
+    await exchange.shutdown()
+  })
+
+  it("rejects with the store error when the load fails", async () => {
+    // A failed read is a fault to surface, not a state to proceed from. The
+    // alternative — resolving as though the document were empty — is how
+    // defaults get written over data we could not read.
+    const failing: Store = {
+      async append() {},
+      // biome-ignore lint/correctness/useYield: the point is that it throws
+      async *loadAll() {
+        throw new Error("disk on fire")
+      },
+      async replace() {},
+      async delete() {},
+      async currentMeta(): Promise<never> {
+        throw new Error("disk on fire")
+      },
+      // biome-ignore lint/correctness/useYield: an empty store lists nothing
+      async *listDocIds() {},
+      async close() {},
+    }
+    const exchange = createExchange({ stores: [failing] })
+    const doc = exchange.get("doc-1", TestDoc)
+
+    await expect(whenSettled(doc)).rejects.toThrow("disk on fire")
+
+    exchange.reset()
+  })
+
+  it("does not let offlineAfter rescue a stuck hydration", async () => {
+    // The timeout is for peers, never for storage. A missing peer may truly
+    // never arrive, so giving up is the only option; a slow disk is a local
+    // fault, and giving up on it would mean proceeding as though the document
+    // were empty. This test is what stops the two waits being "simplified"
+    // into one timeout later.
+    const stuck: Store = {
+      async append() {},
+      // biome-ignore lint/correctness/useYield: never reached
+      async *loadAll() {},
+      async replace() {},
+      async delete() {},
+      currentMeta() {
+        return new Promise(() => {}) // never settles
+      },
+      // biome-ignore lint/correctness/useYield: an empty store lists nothing
+      async *listDocIds() {},
+      async close() {},
+    }
+    const exchange = createExchange({ stores: [stuck] })
+    const doc = exchange.get("doc-1", TestDoc)
+
+    const raced = await Promise.race([
+      whenSettled(doc, { offlineAfter: 20 }).then(() => "settled"),
+      new Promise(resolve => setTimeout(() => resolve("still waiting"), 60)),
+    ])
+
+    expect(raced).toBe("still waiting")
+    expect(settled(doc)).toBe(false)
 
     exchange.reset()
   })

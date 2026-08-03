@@ -813,6 +813,7 @@ export class Runtime {
           return () => hydration.listeners.delete(onChange)
         },
       ),
+      () => (hydration.state === "failed" ? hydration.error : undefined),
     )
 
     // ── Divergent tail: store vs no-store ──

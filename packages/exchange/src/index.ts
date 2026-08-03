@@ -212,14 +212,21 @@ export { createCapabilities, DEFAULT_REPLICAS } from "./capabilities.js"
 // ---------------------------------------------------------------------------
 
 export type { SyncRef, WaitForSyncOptions } from "./sync.js"
-export { hasSync, sync } from "./sync.js"
+export { hasSync, sync, whenSettled } from "./sync.js"
 
 // ---------------------------------------------------------------------------
 // Settle terms — "have all of this document's truth sources reported?"
 // ---------------------------------------------------------------------------
 
 export type { SettleTerm } from "./settle.js"
-export { hydrated, hydratedFeed, settled, settledFeed } from "./settle.js"
+export {
+  hydrated,
+  hydratedFeed,
+  hydrationError,
+  settled,
+  settledFeed,
+  whenHydrated,
+} from "./settle.js"
 
 // ---------------------------------------------------------------------------
 // Storage — persistent storage adapters

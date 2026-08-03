@@ -156,15 +156,64 @@ export function settled(ref: object): boolean {
  */
 const hydrationTerms = new WeakMap<object, SettleTerm>()
 
+/** Reads the load error for a document, if its load failed. */
+const hydrationErrors = new WeakMap<object, () => unknown | undefined>()
+
 /**
  * Register the storage term for a document: it joins the conjunction *and*
  * becomes individually addressable via {@link hydrated}.
  *
+ * `readError` lets a failed load be *reported* rather than merely waited on
+ * forever. Without it a store error would present as a document that is
+ * permanently un-settled with nothing said about why — safe, but impossible
+ * to debug.
+ *
  * @internal Called by `Runtime` as a document is created.
  */
-export function registerHydrationTerm(ref: object, term: SettleTerm): void {
+export function registerHydrationTerm(
+  ref: object,
+  term: SettleTerm,
+  readError: () => unknown | undefined,
+): void {
   hydrationTerms.set(ref, term)
+  hydrationErrors.set(ref, readError)
   registerSettleTerm(ref, term)
+}
+
+/**
+ * The error from this document's failed load, or `undefined` if the load
+ * succeeded, is still running, or there was nothing to load.
+ */
+export function hydrationError(ref: object): unknown | undefined {
+  return hydrationErrors.get(ref)?.()
+}
+
+/**
+ * Resolve once this document's stored data has finished loading; reject if the
+ * load failed.
+ *
+ * Deliberately takes no timeout. A missing peer may genuinely never arrive, so
+ * giving up on one is the only option available — but a slow disk is a local
+ * fault we can observe, and abandoning the wait would mean proceeding as
+ * though the document were empty. That is how defaults end up written over
+ * data we merely failed to read.
+ */
+export function whenHydrated(ref: object): Promise<void> {
+  const term = hydrationTerms.get(ref)
+  if (!term) return Promise.resolve() // nothing to load
+  if (term()) return Promise.resolve()
+
+  const failure = hydrationError(ref)
+  if (failure !== undefined) return Promise.reject(failure)
+
+  return new Promise<void>((resolve, reject) => {
+    const dispose = term[CHANGEFEED].subscribe(() => {
+      const error = hydrationError(ref)
+      dispose()
+      if (error !== undefined) reject(error)
+      else resolve()
+    })
+  })
 }
 
 /**
