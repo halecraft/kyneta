@@ -218,6 +218,12 @@ export { hasSync, sync, whenSettled } from "./sync.js"
 // Settle terms — "have all of this document's truth sources reported?"
 // ---------------------------------------------------------------------------
 
+export type { DocStatus } from "./doc-status.js"
+export {
+  deriveDocStatus,
+  docStatus,
+  docStatusFeed,
+} from "./doc-status.js"
 export type { SettleTerm } from "./settle.js"
 export {
   hydrated,
@@ -225,6 +231,7 @@ export {
   hydrationError,
   settled,
   settledFeed,
+  settledWith,
   whenHydrated,
 } from "./settle.js"
 

@@ -35,6 +35,7 @@ import type {
   HasChangefeed,
 } from "@kyneta/changefeed"
 import { CHANGEFEED } from "@kyneta/changefeed"
+import type { Authority } from "./governance.js"
 
 // ---------------------------------------------------------------------------
 // The term protocol
@@ -59,12 +60,12 @@ export type SettleTerm = (() => boolean) & HasChangefeed<boolean>
  *
  * @internal
  */
-export function makeSettleTerm(
-  read: () => boolean,
+export function makeFeed<T>(
+  read: () => T,
   subscribe: (onChange: () => void) => () => void,
-): SettleTerm {
-  const protocol: ChangefeedProtocol<boolean, never> = {
-    get current(): boolean {
+): (() => T) & HasChangefeed<T> {
+  const protocol: ChangefeedProtocol<T, never> = {
+    get current(): T {
       return read()
     },
     subscribe(callback: (changeset: Changeset<never>) => void): () => void {
@@ -73,15 +74,21 @@ export function makeSettleTerm(
       return subscribe(() => callback({ changes: [] }))
     },
   }
-  const term = (() => read()) as SettleTerm
-  Object.defineProperty(term, CHANGEFEED, {
+  const feed = (() => read()) as (() => T) & HasChangefeed<T>
+  Object.defineProperty(feed, CHANGEFEED, {
     value: protocol,
     enumerable: false,
     configurable: false,
     writable: false,
   })
-  return term
+  return feed
 }
+
+/** A boolean feed — the shape every settle term takes. @internal */
+export const makeSettleTerm: (
+  read: () => boolean,
+  subscribe: (onChange: () => void) => () => void,
+) => SettleTerm = makeFeed
 
 // ---------------------------------------------------------------------------
 // The registry
@@ -267,4 +274,45 @@ export function settledFeed(ref: object): SettleTerm {
       }
     },
   )
+}
+
+// ---------------------------------------------------------------------------
+// Authority override
+// ---------------------------------------------------------------------------
+
+/** Re-evaluates the peer term against a caller-supplied authority. */
+const peerResolvers = new WeakMap<object, (authority: Authority) => boolean>()
+
+/**
+ * Register the peer term's resolver, so a caller can ask "would this be
+ * settled if I treated *this* peer as the authority?" without the answer being
+ * fixed at document-creation time.
+ *
+ * @internal Called by `Exchange` alongside the peer term itself.
+ */
+export function registerPeerResolver(
+  ref: object,
+  resolve: (authority: Authority) => boolean,
+): void {
+  peerResolvers.set(ref, resolve)
+}
+
+/**
+ * {@link settled}, but with the authority decided by the caller rather than by
+ * the Exchange's policy.
+ *
+ * The resolution order this completes is: call-site → `Policy.authority` →
+ * `"any"`. The call-site override is what makes runtime leader election
+ * expressible — a peer can compute who the leader is from the current peer set
+ * and pass it in, which a policy fixed at construction could never express.
+ *
+ * Enumerates the two term kinds rather than iterating the generic term list,
+ * because only the peer term is authority-dependent and it has to be evaluated
+ * differently from the rest.
+ */
+export function settledWith(ref: object, authority?: Authority): boolean {
+  if (authority === undefined) return settled(ref)
+  if (!hydrated(ref)) return false
+  const resolve = peerResolvers.get(ref)
+  return resolve ? resolve(authority) : true
 }

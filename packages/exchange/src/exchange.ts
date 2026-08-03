@@ -55,7 +55,11 @@ import type { Authority, Policy } from "./governance.js"
 import { Governance } from "./governance.js"
 import type { ObsSink } from "./observe.js"
 import { Runtime } from "./runtime.js"
-import { makeSettleTerm, registerSettleTerm } from "./settle.js"
+import {
+  makeSettleTerm,
+  registerPeerResolver,
+  registerSettleTerm,
+} from "./settle.js"
 import type { Store } from "./store/store.js"
 import { registerSync } from "./sync.js"
 import {
@@ -607,6 +611,7 @@ export class Exchange {
     // Registered here rather than once sync completes, because the term has to
     // be observable *while still false*. That is what stops a caller reading a
     // not-yet-synced document as empty.
+    registerPeerResolver(ref, authority => this.#peerSettled(docId, authority))
     registerSettleTerm(
       ref,
       makeSettleTerm(
