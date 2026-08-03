@@ -9,6 +9,8 @@
 
 import type { Connectivity, PeerSyncState } from "./types.js"
 
+let warnedDescribe = false
+
 export type SyncStatusSummary =
   | "connecting"
   | "pending"
@@ -18,6 +20,15 @@ export type SyncStatusSummary =
 
 /**
  * Summarize a doc's sync state for display.
+ *
+ * @deprecated Removed in 3.0. This helper has never had a consumer — not an
+ * example, not a hook, nothing in the repository calls it — and it now sits
+ * beside `docStatus`, which answers a similar-sounding but different question
+ * (data readiness rather than connection presentation).
+ *
+ * If you want a label, compose one from the primitives it was wrapping:
+ * `connectivity` for the connection, `peerStates` for per-peer detail, and
+ * `docStatus(doc)` for whether the document actually has data.
  *
  * Precedence:
  * - `offline` — no transports configured (nothing to sync with).
@@ -33,6 +44,13 @@ export function describeSyncStatus(
   connectivity: Connectivity,
   ready: boolean,
 ): SyncStatusSummary {
+  if (!warnedDescribe) {
+    warnedDescribe = true
+    console.warn(
+      "[exchange] describeSyncStatus is deprecated and will be removed in 3.0. " +
+        "Compose a label from `connectivity`, `peerStates`, and `docStatus(doc)`.",
+    )
+  }
   if (connectivity === "offline") return "offline"
 
   if (!ready) {

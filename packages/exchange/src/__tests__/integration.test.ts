@@ -26,7 +26,7 @@ import {
   type ExchangeParams,
   type PeerIdentityInput,
 } from "../exchange.js"
-import { sync } from "../sync.js"
+import { sync, whenSettled } from "../sync.js"
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -715,7 +715,7 @@ describe("Vacant — terminal will-not-serve", () => {
       states.some(s => s.peer.peerId === "bob" && s.state === "vacant"),
     ).toBe(true)
     expect(sync(docA).ready).toBe(true)
-    await expect(sync(docA).settled()).resolves.toEqual({ via: "peer" })
+    await expect(whenSettled(docA)).resolves.toEqual({ via: "peer" })
   })
 
   it("departure-survival: ready stays true after the reconciled peer departs", async () => {
@@ -790,7 +790,7 @@ describe("Vacant — terminal will-not-serve", () => {
     const docA = exchangeA.get("doc-1", SequentialDoc)
     batch(docA, (d: any) => d.title.set("hello"))
     const docB = exchangeB.get("doc-1", SequentialDoc)
-    await sync(docB).waitForSync({ timeout: 5000 })
+    await whenSettled(docB)
     await drain(20)
     expect(sync(docB).ready).toBe(true)
 
@@ -803,7 +803,7 @@ describe("Vacant — terminal will-not-serve", () => {
     expect(sync(docB).ready).toBe(true)
   })
 
-  it("waitForSync resolves (does not time out) when the only reply is vacant", async () => {
+  it("whenSettled resolves (does not time out) when the only reply is vacant", async () => {
     const bridge = new Bridge()
     const exchangeA = createExchange({
       id: "alice",
@@ -820,15 +820,15 @@ describe("Vacant — terminal will-not-serve", () => {
     // Start waiting before the handshake settles — the vacant reply must
     // resolve the wait through the connection-aware readiness path, not
     // hang until the timeout.
-    const waited = sync(docA).waitForSync({ timeout: 5000 })
+    const waited = whenSettled(docA)
     await drain(40)
-    await expect(waited).resolves.toBeUndefined()
+    await expect(waited).resolves.toEqual({ via: "peer" })
   })
 
   it("settled() resolves { via: 'local' } when no transports are configured", async () => {
     const exchange = createExchange({ id: "solo" }) // no transports
     const doc = exchange.get("doc-1", SequentialDoc)
-    await expect(sync(doc).settled()).resolves.toEqual({ via: "local" })
+    await expect(whenSettled(doc)).resolves.toEqual({ via: "local" })
   })
 })
 
@@ -1414,7 +1414,7 @@ describe("waitForSync", () => {
     const docB = exchangeB.get("doc-1", SequentialDoc)
 
     // waitForSync should resolve — not hang or time out
-    await sync(docB).waitForSync({ timeout: 5000 })
+    await whenSettled(docB)
 
     expect(docB.title()).toBe("hello")
     expect(docB.count()).toBe(1)
@@ -1770,7 +1770,7 @@ describe("waitForSync semantics", () => {
     const docB = exchangeB.get("config", SequentialDoc)
 
     // Receiver-side waitForSync resolves — Bob received Alice's data
-    await sync(docB).waitForSync({ timeout: 5000 })
+    await whenSettled(docB)
     expect(docB.title()).toBe("dark")
     expect(docB.count()).toBe(42)
   })
@@ -1794,7 +1794,7 @@ describe("waitForSync semantics", () => {
     batch(docA, (d: any) => d.title.insert(0, "hello"))
 
     const docB = exchangeB.get("collab", LoroDoc)
-    await sync(docB).waitForSync({ timeout: 5000 })
+    await whenSettled(docB)
 
     // Wait for any reciprocal messages to settle
     await drain(50)
@@ -1833,7 +1833,7 @@ describe("waitForSync semantics", () => {
     batch(docA, (d: any) => d.title.set("dark"))
 
     const docB = exchangeB.get("config", SequentialDoc)
-    await sync(docB).waitForSync({ timeout: 5000 })
+    await whenSettled(docB)
 
     // Wait for any reciprocal messages to settle
     await drain(50)
@@ -1882,7 +1882,7 @@ describe("waitForSync semantics", () => {
     const docB = exchangeB.get("collab", LoroDoc)
 
     // Receiver-side waitForSync resolves even through a relay hop
-    await sync(docB).waitForSync({ timeout: 5000 })
+    await whenSettled(docB)
     expect(docB.title()).toBe("hello from alice")
   })
 })

@@ -21,6 +21,7 @@ import {
   type ExchangeParams,
   type PeerIdentityInput,
 } from "../exchange.js"
+import { whenHydrated } from "../settle.js"
 import {
   createInMemoryStore,
   InMemoryStore,
@@ -504,7 +505,10 @@ describe("isPopulated through storage hydration", () => {
     })
 
     const doc = exchange.get("doc-1", TestDoc)
-    await exchange.flush() // hydration
+    // `whenHydrated` is the storage gate. `flush()` also happens to await
+    // hydration, but it is named for draining pending *writes* — using it here
+    // would test the coincidence rather than the contract.
+    await whenHydrated(doc)
 
     // No local write has occurred — population comes purely from replay.
     expect(isPopulated(doc)).toBe(true)
@@ -530,7 +534,7 @@ describe("isPopulated through storage hydration", () => {
     expect(isPopulated(doc)).toBe(false)
     expect(doc.title()).toBe("")
 
-    await exchange.flush()
+    await whenHydrated(doc)
 
     expect(isPopulated(doc)).toBe(true)
     expect(doc.title()).toBe("stored")
@@ -545,7 +549,7 @@ describe("isPopulated through storage hydration", () => {
     })
 
     const doc = exchange.get("doc-1", TestDoc)
-    await exchange.flush() // hydration settles with nothing to replay
+    await whenHydrated(doc) // settles with nothing to replay
 
     // The genuine "empty" verdict — the only state an initializer may act on.
     expect(isPopulated(doc)).toBe(false)
