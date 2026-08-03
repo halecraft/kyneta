@@ -169,6 +169,7 @@ export { Synchronizer } from "./synchronizer.js"
 // ---------------------------------------------------------------------------
 
 export type {
+  Authority,
   GatePredicate,
   LineageBoundaryPredicate,
   Policy,

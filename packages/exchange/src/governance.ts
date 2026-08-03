@@ -63,6 +63,27 @@ export type LineageBoundaryPredicate = (
  * region of the document and connection space. All fields are optional
  * — a policy only provides the gates it cares about.
  */
+/**
+ * Who is authoritative for a document — i.e. whose answer settles the question
+ * "does this document already have data?".
+ *
+ * This is a property of the deployment topology, not of any one document, so
+ * it is normally declared once per process on a {@link Policy} rather than
+ * passed at every call site.
+ *
+ * - `"self"` — this peer is the authority. Its own storage is the last word,
+ *   so it never waits for anyone else. This is what a server declares.
+ * - `"any"` — the first peer to answer is good enough. Correct in hub-and-spoke,
+ *   the dominant topology, because a client links only to the server.
+ * - a predicate — that specific peer is the authority. Prefer identifying it by
+ *   `peerId` rather than by `type`: a server is a `"service"`, but so is any
+ *   other service peer on the network, including a devtools inspector.
+ */
+export type Authority =
+  | "self"
+  | "any"
+  | ((peer: PeerIdentityDetails) => boolean)
+
 export interface Policy {
   /** Optional name for debuggability, introspection, and replacement. */
   name?: string
@@ -71,6 +92,13 @@ export interface Policy {
   canReset?: LineageBoundaryPredicate
   cohort?: GatePredicate
   canConnect?: (peer: PeerIdentityDetails) => boolean | undefined
+  /**
+   * Who this peer treats as authoritative. See {@link Authority}.
+   *
+   * Resolved first-non-`undefined` in registration order, like `resolve` —
+   * this is a value to look up, not a boolean gate to compose.
+   */
+  authority?: Authority
   resolve?: (
     docId: DocId,
     peer: PeerIdentityDetails,
@@ -229,6 +257,20 @@ export class Governance {
       this.#policies.map(p => p.canConnect?.(peer)),
       true,
     )
+  }
+
+  /**
+   * The declared authority, or `undefined` if no policy declares one.
+   *
+   * First non-`undefined` in registration order wins — the same rule as
+   * `resolve`, because this looks up a value rather than composing a gate.
+   * Callers apply their own default when nothing is declared.
+   */
+  authority(): Authority | undefined {
+    for (const policy of this.#policies) {
+      if (policy.authority !== undefined) return policy.authority
+    }
+    return undefined
   }
 
   /**

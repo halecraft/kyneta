@@ -51,13 +51,18 @@ import type {
 } from "@kyneta/transport"
 import type { Capabilities } from "./capabilities.js"
 import { createCapabilities, DEFAULT_REPLICAS } from "./capabilities.js"
-import type { Policy } from "./governance.js"
+import type { Authority, Policy } from "./governance.js"
 import { Governance } from "./governance.js"
 import type { ObsSink } from "./observe.js"
 import { Runtime } from "./runtime.js"
+import { makeSettleTerm, registerSettleTerm } from "./settle.js"
 import type { Store } from "./store/store.js"
 import { registerSync } from "./sync.js"
-import { type DocRuntime, Synchronizer } from "./synchronizer.js"
+import {
+  type DocRuntime,
+  derivePeerSettled,
+  Synchronizer,
+} from "./synchronizer.js"
 import type { DocChange, DocInfo, PeerChange } from "./types.js"
 import { validatePeerId } from "./utils.js"
 
@@ -595,7 +600,51 @@ export class Exchange {
       synchronizer: this.#synchronizer,
     })
 
+    // The peer term — the network half of this document's settle conjunction.
+    // The Runtime already attached the storage half; together they answer
+    // "has everything that could tell me about this document reported yet?".
+    //
+    // Registered here rather than once sync completes, because the term has to
+    // be observable *while still false*. That is what stops a caller reading a
+    // not-yet-synced document as empty.
+    registerSettleTerm(
+      ref,
+      makeSettleTerm(
+        () => this.#peerSettled(docId),
+        onChange =>
+          this.#synchronizer.onPeerSyncChange(changed => {
+            if (changed === docId) onChange()
+          }),
+      ),
+    )
+
     return ref
+  }
+
+  /**
+   * Resolve the effective authority for a document and ask whether it has
+   * reported.
+   *
+   * Resolution order is call-site → `Policy.authority` → `"any"`. There is no
+   * call-site override at this layer — that arrives with `docStatus` — so this
+   * consults the policy and falls back.
+   *
+   * Defaulting to `"any"` is safe because the case where a wrong guess would
+   * corrupt data is blocked elsewhere by the schema binding: a
+   * `writerModel: "serialized"` document can only be initialised by the peer
+   * that declares `authority: "self"`.
+   */
+  #peerSettled(docId: DocId, override?: Authority): boolean {
+    const authority = override ?? this.#governance.authority() ?? "any"
+    return derivePeerSettled({
+      authority,
+      hasReconciled: this.#synchronizer.hasReconciled(docId),
+      matchesAuthority:
+        typeof authority === "function"
+          ? this.#synchronizer.reconciledMatching(docId, authority)
+          : false,
+      isOffline: this.#synchronizer.connectivity() === "offline",
+    })
   }
 
   /**

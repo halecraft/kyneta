@@ -58,6 +58,7 @@ import type {
   WireFeatures,
 } from "@kyneta/transport"
 import { isLifecycleMsg } from "@kyneta/transport"
+import type { Authority } from "./governance.js"
 import {
   createObservationBus,
   frameTraceToBody,
@@ -361,6 +362,43 @@ export function deriveConnectivity(input: {
   if (input.establishedPeers > 0) return "online"
   if (input.transportCount === 0) return "offline"
   return "connecting"
+}
+
+/**
+ * Has the authority reported on this document yet — the network half of
+ * document readiness?
+ *
+ * Pure, so the authority rules are a truth table rather than something only a
+ * live two-peer scenario can exercise. That matters more here than usual: a
+ * wrong branch means an application concludes a document is empty when it is
+ * not, and writes defaults over live data.
+ *
+ * The rules, in order:
+ * - `"self"` — we are the authority, so there is nobody to wait for.
+ * - a predicate — a peer satisfying it must have reconciled.
+ * - `"any"` — any peer reconciling is enough.
+ *
+ * And in every case, having no transports at all also counts as reported: with
+ * nothing configured to reach a peer, there is nothing that could ever answer,
+ * so waiting would be waiting forever. That is the same empty-conjunction idea
+ * the settle layer is built on, applied to one term.
+ *
+ * "Reconciled" means the peer either sent data or replied `vacant` ("I do not
+ * have this document"). Both are answers; only silence is not.
+ */
+export function derivePeerSettled(input: {
+  authority: Authority
+  /** Any peer reached `synced` or `vacant` for this document. */
+  hasReconciled: boolean
+  /** A peer satisfying the authority predicate did. */
+  matchesAuthority: boolean
+  /** No transports are configured. */
+  isOffline: boolean
+}): boolean {
+  if (input.authority === "self") return true
+  if (input.isOffline) return true
+  if (input.authority === "any") return input.hasReconciled
+  return input.matchesAuthority
 }
 
 // ---------------------------------------------------------------------------
