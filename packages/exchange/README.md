@@ -32,7 +32,7 @@ batch(doc, d => {
 
 doc.title()  // "My Todos"
 
-await sync(doc).waitForSync()  // ✓ synced with all connected peers
+await whenSettled(doc)  // ✓ every truth source has reported
 ```
 
 That's a collaborative CRDT document, syncing over WebSocket, with full TypeScript types. Every connected peer running this code converges automatically — concurrent edits merge, no data-level conflicts, no manual resolution.
@@ -140,7 +140,7 @@ const exchangeB = new Exchange({
   transports: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
 })
 const docB = exchangeB.get("config", ConfigDoc)
-await sync(docB).waitForSync()
+await whenSettled(docB)
 docB.theme()  // "dark"
 ```
 
@@ -477,11 +477,10 @@ sync(doc).peerStates    // raw per-peer sync state (volatile)
 sync(doc).ready         // monotonic readiness latch (the 90% gate)
 sync(doc).connectivity  // "online" | "connecting" | "offline"
 
-await sync(doc).waitForSync()
-await sync(doc).waitForSync({ timeout: 5000 })
+await whenSettled(doc)
 
 // Settle without throwing: resolves { via: "peer" | "local" | "offline" }
-await sync(doc).settled({ offlineAfter: 3000 })
+await whenSettled(doc, { offlineAfter: 3000 })
 
 sync(doc).onPeerSyncChange(states => {
   console.log("Per-peer sync state:", states)
@@ -724,7 +723,7 @@ You only engage the next level when you need it. Each level is additive — it d
 | `ready` | `boolean` — monotonic readiness latch: `true` once the doc reconciles with ≥1 peer (data or `vacant`); never regresses. The 90% gate. |
 | `readyFor(pred)` | `boolean` — latch restricted to reconciled peers matching `pred` (authority / quorum). |
 | `connectivity` | `"online" \| "connecting" \| "offline"`. |
-| `waitForSync(opts?)` | Wait for sync to complete. Options: `{ timeout?: number }` (default 30000ms). Throws on timeout. |
+| `whenSettled(doc, opts?)` | Resolve once **every** truth source has reported — stored data loaded and the authority answered. Options: `{ peer?, offlineAfter? }`. Rejects only if the store read failed. |
 | `settled(opts?)` | Resolve (never reject) to `{ via: "peer" \| "local" \| "offline" }`. Options: `{ offlineAfter?: number }`. |
 | `onPeerSyncChange(cb)` | Subscribe to per-peer sync state changes. Returns unsubscribe function. |
 

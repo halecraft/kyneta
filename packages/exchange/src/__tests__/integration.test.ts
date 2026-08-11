@@ -1388,10 +1388,10 @@ describe("relay via exchange.replicate()", () => {
 })
 
 // ---------------------------------------------------------------------------
-// waitForSync — targeted ready-state emission via notification co-product
+// whenSettled — targeted ready-state emission via notification co-product
 // ---------------------------------------------------------------------------
 
-describe("waitForSync", () => {
+describe("whenSettled", () => {
   it("resolves after peer completes sync", async () => {
     const bridge = new Bridge()
 
@@ -1413,7 +1413,7 @@ describe("waitForSync", () => {
 
     const docB = exchangeB.get("doc-1", SequentialDoc)
 
-    // waitForSync should resolve — not hang or time out
+    // whenSettled should resolve — not hang or time out
     await whenSettled(docB)
 
     expect(docB.title()).toBe("hello")
@@ -1744,11 +1744,11 @@ describe("exchange.get() validation", () => {
 })
 
 // ---------------------------------------------------------------------------
-// waitForSync — semantics: receiver-side primitive
+// whenSettled — semantics: receiver-side primitive
 // ---------------------------------------------------------------------------
 
-describe("waitForSync semantics", () => {
-  it("receiver-side waitForSync resolves after originator's data arrives", async () => {
+describe("whenSettled semantics", () => {
+  it("receiver-side whenSettled resolves after originator's data arrives", async () => {
     const bridge = new Bridge()
 
     const exchangeA = createExchange({
@@ -1769,7 +1769,7 @@ describe("waitForSync semantics", () => {
 
     const docB = exchangeB.get("config", SequentialDoc)
 
-    // Receiver-side waitForSync resolves — Bob received Alice's data
+    // Receiver-side whenSettled resolves — Bob received Alice's data
     await whenSettled(docB)
     expect(docB.title()).toBe("dark")
     expect(docB.count()).toBe(42)
@@ -1812,8 +1812,8 @@ describe("waitForSync semantics", () => {
     expect(alicePeerStates[0].state).toBe("synced")
   })
 
-  it("originator sees peer as 'synced' — waitForSync is receiver-side", async () => {
-    // waitForSync answers "has someone sent me state?" not "has my state
+  it("originator sees peer as 'synced' — whenSettled is receiver-side", async () => {
+    // whenSettled answers "has someone sent me state?" not "has my state
     // reached all peers?" — the originator never receives an offer back
     // from the receiver, but because it's an authoritative doc, it knows
     // the receiver is synced.
@@ -1846,7 +1846,7 @@ describe("waitForSync semantics", () => {
     expect(peerStates[0].state).toBe("synced")
   })
 
-  it("three-peer hub: receiver-side waitForSync resolves through relay", async () => {
+  it("three-peer hub: receiver-side whenSettled resolves through relay", async () => {
     const bridgeAH = new Bridge()
     const bridgeHB = new Bridge()
 
@@ -1881,7 +1881,7 @@ describe("waitForSync semantics", () => {
     exchangeHub.get("collab", LoroDoc)
     const docB = exchangeB.get("collab", LoroDoc)
 
-    // Receiver-side waitForSync resolves even through a relay hop
+    // Receiver-side whenSettled resolves even through a relay hop
     await whenSettled(docB)
     expect(docB.title()).toBe("hello from alice")
   })

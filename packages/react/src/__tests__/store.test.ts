@@ -1,17 +1,13 @@
 // store.test.ts — Tier 1 pure store tests (no React, no jsdom).
 //
-// Tests createNullishStore / createSyncStore / createDerivedSyncStore
+// Tests createNullishStore / createSyncStore
 // independently of React. (createChangefeedStore was removed in jj:smkurmok;
 // its CHANGEFEED→ExternalStore logic — a degenerate single-dependency reactive —
 // is now generalized inside @kyneta/reactive; see that package's reactive.test.ts.)
 
 import type { PeerIdentityDetails, SyncRef } from "@kyneta/exchange"
 import { describe, expect, it, vi } from "vitest"
-import {
-  createDerivedSyncStore,
-  createNullishStore,
-  createSyncStore,
-} from "../store.js"
+import { createNullishStore, createSyncStore } from "../store.js"
 
 // ---------------------------------------------------------------------------
 // createNullishStore
@@ -64,8 +60,6 @@ function createMockSyncRef(): MockSyncRef {
       return reconciled.some(pred)
     },
     connectivity: "connecting",
-    waitForSync: () => Promise.resolve(),
-    settled: () => Promise.resolve({ via: "peer" as const }),
     onPeerSyncChange(cb: (peerStates: any[]) => void) {
       listeners.add(cb)
       return () => {
@@ -121,57 +115,5 @@ describe("createSyncStore", () => {
 
     expect(onStoreChange).not.toHaveBeenCalled()
     expect(store.getSnapshot()).toEqual([]) // still initial
-  })
-})
-
-describe("createDerivedSyncStore", () => {
-  it("array select returns peerStates", () => {
-    const syncRef = createMockSyncRef()
-    const store = createDerivedSyncStore(syncRef, ref => ref.peerStates)
-    store.subscribe(() => {})
-    const states = [
-      { docId: "test-doc", peer: { peerId: "peer-1" }, state: "synced" },
-    ]
-    syncRef._emit({ peerStates: states })
-    expect(store.getSnapshot()).toBe(states)
-  })
-
-  it("boolean (ready) select latches true and does NOT regress on a flip back to pending", () => {
-    const syncRef = createMockSyncRef()
-    const store = createDerivedSyncStore(syncRef, ref => ref.ready)
-    store.subscribe(() => {})
-    expect(store.getSnapshot()).toBe(false)
-
-    // First reconciliation: ready latches true.
-    syncRef._emit({
-      ready: true,
-      peerStates: [
-        { docId: "test-doc", peer: { peerId: "peer-1" }, state: "synced" },
-      ],
-    })
-    expect(store.getSnapshot()).toBe(true)
-
-    // Reconnect re-handshake: the live per-peer state flips back to pending,
-    // but `ready` stays latched (the mock keeps ready=true).
-    syncRef._emit({
-      peerStates: [
-        { docId: "test-doc", peer: { peerId: "peer-1" }, state: "pending" },
-      ],
-    })
-    expect(store.getSnapshot()).toBe(true)
-  })
-
-  it("predicate select matches latched identities", () => {
-    const syncRef = createMockSyncRef()
-    const store = createDerivedSyncStore(syncRef, ref =>
-      ref.readyFor(p => p.type === "service"),
-    )
-    store.subscribe(() => {})
-    expect(store.getSnapshot()).toBe(false)
-
-    syncRef._emit({
-      reconciled: [{ peerId: "server-1", type: "service" }],
-    })
-    expect(store.getSnapshot()).toBe(true)
   })
 })

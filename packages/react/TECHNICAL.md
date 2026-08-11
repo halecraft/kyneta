@@ -4,7 +4,7 @@
 > **Role**: Thin React bindings over `@kyneta/schema` + `@kyneta/exchange`. Bridges the `[CHANGEFEED]` reactive protocol to React's rendering cycle via `useSyncExternalStore`, and provides a framework-agnostic text-adapter for binding native `<input>` / `<textarea>` elements to collaborative `TextRef`s.
 > **Depends on**: `@kyneta/schema` (peer), `@kyneta/changefeed` (peer), `@kyneta/exchange` (peer), `@kyneta/reactive` (peer), `react` (>=18, peer)
 > **Depended on by**: Application code that renders Kyneta documents in React.
-> **Canonical symbols**: `ExchangeProvider`, `useExchange`, `useDocument`, `useTracked`, `useSelector`, `useValue`, `useSyncState`, `useDocReady`, `useText`, `ExchangeProviderProps`, `UseTextOptions`, `CallableRef`, `ExternalStore`, `createSyncStore`, `createDerivedSyncStore`, `createNullishStore`, `attach`, `diffText`, `transformSelection`, `TextRefLike`, `AttachOptions`
+> **Canonical symbols**: `ExchangeProvider`, `useExchange`, `useDocument`, `useTracked`, `useSelector`, `useValue`, `useSyncState`, `useDocReady`, `useDocStatus`, `useInitialize`, `useText`, `ExchangeProviderProps`, `UseTextOptions`, `CallableRef`, `ExternalStore`, `createSyncStore`, `createNullishStore`, `attach`, `diffText`, `transformSelection`, `TextRefLike`, `AttachOptions`
 > **Key invariant(s)**:
 > 1. The package is an **adapter**, not a renderer. Every hook is a ≤10-line `useSyncExternalStore` wrapper over a pure, React-agnostic store factory. Zero React imports in `store.ts` or `text-adapter.ts`.
 > 2. `useValue` returns the same object reference between renders when the underlying value has not changed — downstream `React.memo` and `useMemo` remain stable.
@@ -33,8 +33,7 @@ Consumed by application code. Not imported by any other Kyneta package.
 | `ExternalStore<T>` | `{ subscribe(onStoreChange): unsubscribe, getSnapshot(): T }` — the contract `useSyncExternalStore` consumes. | A state container, a Zustand store — this is the React built-in contract |
 | `CallableRef` | Structural type: a callable `(...args) => any` that also carries `[CHANGEFEED]`. Every `Ref<S>` from the standard interpreter stack satisfies it. | A React `ref`, a DOM ref |
 | `createChangefeedStore(ref)` | Pure factory: `ref → ExternalStore<Plain<S>>`. Subscribes to `[CHANGEFEED]`, caches snapshots, dispatches deep or shallow based on ref kind. | `createSyncStore` |
-| `createDerivedSyncStore(syncRef, select)` | Pure factory: one `onPeerSyncChange` subscription, snapshot `select(syncRef)`. Backs both `useSyncState` (array select) and `useDocReady` (scalar select). | `createSyncStore` |
-| `createSyncStore(syncRef)` | `createDerivedSyncStore(syncRef, r => r.peerStates)` — `SyncRef → ExternalStore<PeerSyncState[]>`. | `createChangefeedStore` |
+| `createSyncStore(syncRef)` | `SyncRef → ExternalStore<PeerSyncState[]>`. One `onPeerSyncChange` subscription; the snapshot is cached because `peerStates` allocates a fresh array per read. | `createChangefeedStore` |
 | `createNullishStore(value)` | Pure factory returning a store whose snapshot is `null` / `undefined` and whose `subscribe` is a no-op. Used for conditional hook calls. | A placeholder — this is a real `ExternalStore` with stable identity |
 | `ExchangeProvider` | React context provider that publishes an `Exchange` to descendants. | A DI container |
 | `useExchange()` | Reads the `Exchange` from context. Throws if no provider is in the tree. | `useContext` on some generic `ExchangeContext` — this is the curated hook |
@@ -71,7 +70,8 @@ Application code
      ├─ useSelector(ref, select)       ─── useTracked(() => select(ref))
      ├─ useValue(ref)                  ─── useTracked(() => track(ref))
      ├─ useSyncState(doc)              ─── useSyncExternalStore ──► createSyncStore(syncRef)
-     ├─ useDocReady(doc)               ─── useSyncExternalStore ──► createDerivedSyncStore(syncRef, r => r.ready)
+     ├─ useDocStatus(doc)              ─── useChangefeed ────────► docStatusFeed(doc)  [@kyneta/exchange]
+     ├─ useDocReady(doc)               ─── useDocStatus(doc) !== "pending"
      └─ useText(textRef)               ─── ref callback         ──► attach(el, textRef)
                                                                      │
                                                                      └─ diffText, transformSelection (pure)
@@ -416,7 +416,7 @@ volatile, for multi-peer indicators and debugging.
 
 ### No store core needed
 
-These hooks need no `createDerivedSyncStore`-style factory, unlike
+These hooks need no store factory at all, unlike
 `useSyncState`. `docStatusFeed` carries `[CHANGEFEED]`, and that protocol is
 already the `useSyncExternalStore` contract — `.current` for the snapshot,
 `.subscribe()` returning an unsubscribe — so `useChangefeed` bridges them
@@ -429,9 +429,13 @@ that in `@kyneta/exchange`, so there is nothing left to wire in React. This is
 why §"The FC/IS split" applies differently here — the functional core is
 upstream, not in `store.ts`.
 
-`createDerivedSyncStore` consequently has no production consumer left
-(`use-doc-ready.ts` was its only one). It is a public export, so it is removed
-in 3.0 rather than dropped silently.
+`createDerivedSyncStore` is consequently gone. It had become a generic
+combinator with exactly one caller and one fixed selector, so its `select`
+parameter was dead generality kept alive only by its own tests. The caching it
+provided is load-bearing and now lives directly in `createSyncStore`; the two
+tests that exercised `ready` / `readyFor` selectors were mock-based restatements
+of `@kyneta/exchange`'s departure-survival, re-arm, and suspend-survival
+integration tests, which assert the same latching against real exchanges.
 
 ### What these are NOT
 
@@ -626,7 +630,7 @@ This is a convenience, not a hard coupling — direct imports from the upstream 
 | File | Lines | Role |
 |------|-------|------|
 | `src/index.ts` | 90 | Public barrel + curated re-exports from upstream packages. |
-| `src/store.ts` | ~110 | Pure store factories: `createDerivedSyncStore`, `createSyncStore`, `createNullishStore`, `CallableRef`, `ExternalStore`. (`createChangefeedStore` removed in jj:smkurmok — subsumed by `@kyneta/reactive`.) Zero React imports. |
+| `src/store.ts` | ~95 | Pure store factories: `createSyncStore`, `createNullishStore`, `CallableRef`, `ExternalStore`. (`createChangefeedStore` removed in jj:smkurmok — subsumed by `@kyneta/reactive`.) Zero React imports. |
 | `src/use-tracked.ts` | ~55 | `useTracked` — `useSyncExternalStore` over a `@kyneta/reactive` computation. |
 | `src/use-selector.ts` | ~30 | `useSelector` — `useTracked(() => select(ref))`. |
 | `src/text-adapter.ts` | 355 | Pure text-adapter: `attach`, `diffText`, `transformSelection`, `TextRefLike`, `AttachOptions`. Zero React imports. |
@@ -634,9 +638,9 @@ This is a convenience, not a hard coupling — direct imports from the upstream 
 | `src/use-value.ts` | ~45 | `useValue` — now `useTracked(() => track(ref))` (derivation; nullish passthrough). |
 | `src/use-document.ts` | 67 | `useDocument` — memoized `exchange.get(docId, bound)`. |
 | `src/use-sync-state.ts` | 44 | `useSyncState` — `useSyncExternalStore` wrapper over `createSyncStore`. |
-| `src/use-doc-ready.ts` | 54 | `useDocReady` — `useSyncExternalStore` wrapper over `createDerivedSyncStore`. |
+| `src/use-doc-ready.ts` | ~40 | `useDocReady` — sugar over `useDocStatus` (`status !== "pending"`). |
 | `src/use-text.ts` | 82 | `useText` — ref callback wrapping `attach`. |
-| `src/__tests__/store.test.ts` | ~195 | `createNullishStore` + `createSyncStore` + `createDerivedSyncStore`. (The `createChangefeedStore` cases moved to `@kyneta/reactive`'s `reactive.test.ts`.) No React. |
+| `src/__tests__/store.test.ts` | ~125 | `createNullishStore` + `createSyncStore`. (The `createChangefeedStore` cases moved to `@kyneta/reactive`'s `reactive.test.ts`.) No React. |
 | `src/__tests__/use-selector.test.tsx` | ~90 | `useSelector` — the todos parsimony scenario (text edit → no re-render; done flip → re-render) + no-deps + dispose. |
 | `src/__tests__/text-adapter.test.ts` | 543 | `diffText`, `transformSelection`, `attach` — edit detection, selection rebasing, IME composition, undo interception. |
 | `src/__tests__/collaborative-text.test.ts` | 354 | End-to-end: two textareas bound to concurrently-syncing text refs, verifying cursor stability during remote edits. |

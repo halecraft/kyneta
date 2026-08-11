@@ -19,7 +19,7 @@
 //
 //   const TodoDoc = loro.bind(Schema.struct({ title: Schema.text() }))  // loro from @kyneta/loro-schema
 //   const doc = exchange.get("my-doc", TodoDoc)
-//   sync(doc).waitForSync()
+//   await whenSettled(doc)
 
 import type { ReactiveMap } from "@kyneta/changefeed"
 import type { Lease } from "@kyneta/machine"
@@ -293,7 +293,7 @@ export type { DocCacheEntry } from "./runtime.js"
  * const config = exchange.get("config", ConfigDoc)
  * doc.title()  // read
  * batch(doc, d => d.title.insert(0, "Hello"))  // write
- * await sync(doc).waitForSync()  // sync
+ * await whenSettled(doc)          // sync
  * ```
  */
 function rethrowErrors(errors: unknown[]): void {

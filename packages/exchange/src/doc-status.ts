@@ -74,9 +74,9 @@ export function deriveDocStatus(input: {
  * never `"pending"`. A document from an `Exchange` with a store and transports
  * waits for both.
  *
- * Named `docStatus` rather than `status` to stay clear of `describeSyncStatus`
- * in this same package, which also has a `"pending"` member meaning something
- * else. That one summarises the *connection*; this one describes the *data*.
+ * Named `docStatus` rather than `status` because "status" alone invites
+ * confusion with connection state — `connectivity` and `peerStates` describe
+ * the *connection*; this describes the *data*.
  *
  * @param node - A document ref (or any ref within one).
  * @param opts.authority - Whose answer settles the question. Defaults to the

@@ -27,12 +27,13 @@ import type {
   LoroMap as LoroMapNative,
 } from "loro-crdt"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { docStatus } from "../doc-status.js"
 import {
   Exchange,
   type ExchangeParams,
   type PeerIdentityInput,
 } from "../exchange.js"
-import { hasSync, sync } from "../sync.js"
+import { sync, whenSettled } from "../sync.js"
 import type { PeerChange } from "../types.js"
 
 // ---------------------------------------------------------------------------
@@ -252,14 +253,15 @@ describe("Exchange", () => {
       expect(s.docId).toBe("doc-1")
     })
 
-    it("hasSync returns true for exchange docs", () => {
-      const exchange = new Exchange({ id: "test" })
+    it("docStatus works for exchange docs and plain objects alike", () => {
+      const exchange = createExchange()
       const doc = exchange.get("doc-1", TestDoc)
-      expect(hasSync(doc)).toBe(true)
-    })
 
-    it("hasSync returns false for non-exchange objects", () => {
-      expect(hasSync({})).toBe(false)
+      // `hasSync` existed to guard `sync()`'s throw. `docStatus` is total —
+      // it answers for any ref, at any layer — so the guard is unnecessary.
+      expect(docStatus(doc)).toBe("empty")
+      expect(docStatus({})).toBe("empty")
+      exchange.reset()
     })
 
     it("sync() throws for non-exchange objects", () => {
@@ -714,7 +716,7 @@ describe("Exchange", () => {
 
       // Bob should have the doc
       const doc2 = exchange2.get("doc-1", TestDoc)
-      await sync(doc2).waitForSync()
+      await whenSettled(doc2)
       expect(doc2.title()).toBe("hello")
 
       // Involuntary disconnect
@@ -732,7 +734,7 @@ describe("Exchange", () => {
       await drain()
 
       // Bob should receive the mutation made during disconnect
-      await sync(doc2).waitForSync()
+      await whenSettled(doc2)
       expect(doc2.count()).toBe(42)
     })
 
@@ -1182,7 +1184,7 @@ describe("Exchange", () => {
       await drain()
 
       const docB = bob.get("shared-doc", TestDoc)
-      await sync(docB).waitForSync()
+      await whenSettled(docB)
       expect(docB.title()).toBe("from session 1")
 
       // ── Involuntary disconnect ── no depart, so bob's cached sync state for
@@ -1212,7 +1214,7 @@ describe("Exchange", () => {
       // Bob must receive it: "concurrent" version comparison (cross-incarnation)
       // → gap → entirety fallback → canReset lineage-boundary accept → merge with
       // incarnation adoption → subsequent comparisons match.
-      await sync(docB).waitForSync()
+      await whenSettled(docB)
       expect(docB.title()).toBe("from session 2")
       expect(docB.count()).toBe(2)
 
@@ -1220,7 +1222,7 @@ describe("Exchange", () => {
       // adopted incarnation is stable, not a one-shot fluke.
       batch(docA2, d => d.count.set(3))
       await drain()
-      await sync(docB).waitForSync()
+      await whenSettled(docB)
       expect(docB.count()).toBe(3)
     })
 
@@ -1252,7 +1254,7 @@ describe("Exchange", () => {
         batch(docA1, d => d.count.set(i))
       }
       await drain()
-      await sync(docB).waitForSync()
+      await whenSettled(docB)
       expect(docB.count()).toBe(9)
 
       // ── Restart alice ──
@@ -1272,7 +1274,7 @@ describe("Exchange", () => {
         d.count.set(100)
       })
       await drain()
-      await sync(docB).waitForSync()
+      await whenSettled(docB)
       expect(docB.title()).toBe("from session 2")
 
       // Second write after restart — this is where the bug manifests
@@ -1286,7 +1288,7 @@ describe("Exchange", () => {
         .serialize()
       console.log("DIAG inflated:", { bobVBefore, aliceVAfter })
       await drain()
-      await sync(docB).waitForSync()
+      await whenSettled(docB)
       const bobVAfter = (docB as any)[Symbol.for("kyneta:substrate")]
         .version()
         .serialize()

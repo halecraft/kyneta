@@ -50,9 +50,9 @@ export type CallableRef = ((...args: any[]) => any) & {
 // adapter, a degenerate single-dependency reactive) was removed in jj:smkurmok.
 // Its deep/shallow `hasRecursiveChangefeed` dispatch is now generalized inside
 // `@kyneta/reactive`'s aspect → primitive resolution (jj:kpywvkpr); `useValue`
-// is now `useTracked(() => ref())`. `createSyncStore` / `createDerivedSyncStore`
-// remain — they wrap `SyncRef.onPeerSyncChange` (not a changefeed) and are not
-// subsumable by the reactive runtime.
+// is now `useTracked(() => ref())`. `createSyncStore` remains — it wraps
+// `SyncRef.onPeerSyncChange` (not a changefeed) and is not subsumable by the
+// reactive runtime.
 
 // ---------------------------------------------------------------------------
 // Nullish no-op store — stable singleton for null/undefined refs
@@ -82,39 +82,15 @@ export function createNullishStore<T extends null | undefined>(
 // ---------------------------------------------------------------------------
 
 /**
- * Create an external store backed by a projection over a SyncRef.
+ * Create an external store backed by a SyncRef's per-peer sync state.
  *
- * One subscription (`onPeerSyncChange`) drives any number of derived views:
- * the snapshot is `select(syncRef)`, recomputed on each peer-sync change and
- * cached for referential stability. A scalar select (e.g. `ref.ready`, a
- * boolean) is flicker-free — `useSyncExternalStore` bails out of re-render
- * via `Object.is` when the value is unchanged, even though the underlying
- * per-peer array churned.
- *
- * @param syncRef - A SyncRef from `sync(doc)`.
- * @param select - Pure projection from the SyncRef to the snapshot value.
- */
-export function createDerivedSyncStore<T>(
-  syncRef: SyncRef,
-  select: (ref: SyncRef) => T,
-): ExternalStore<T> {
-  let snapshot: T = select(syncRef)
-
-  const subscribe = (onStoreChange: () => void): (() => void) => {
-    return syncRef.onPeerSyncChange(() => {
-      snapshot = select(syncRef)
-      onStoreChange()
-    })
-  }
-
-  const getSnapshot = (): T => snapshot
-
-  return { subscribe, getSnapshot }
-}
-
-/**
- * Create an external store backed by a SyncRef's per-peer sync state — the
- * `peerStates` array projection over {@link createDerivedSyncStore}.
+ * The cached snapshot is the load-bearing part, not an optimization.
+ * `syncRef.peerStates` builds a **fresh array on every read** (see
+ * `Synchronizer.getPeerStates`), so returning it straight from `getSnapshot`
+ * would hand `useSyncExternalStore` a new identity on every render. React
+ * would read that as "the store changed" and re-render forever. Caching the
+ * array and refreshing it only when the sync state actually moves is what
+ * keeps that loop from forming.
  *
  * @param syncRef - A SyncRef from `sync(doc)`.
  * @returns An ExternalStore<PeerSyncState[]>.
@@ -122,5 +98,14 @@ export function createDerivedSyncStore<T>(
 export function createSyncStore(
   syncRef: SyncRef,
 ): ExternalStore<PeerSyncState[]> {
-  return createDerivedSyncStore(syncRef, ref => ref.peerStates)
+  let snapshot: PeerSyncState[] = syncRef.peerStates
+
+  return {
+    subscribe: (onStoreChange: () => void) =>
+      syncRef.onPeerSyncChange(() => {
+        snapshot = syncRef.peerStates
+        onStoreChange()
+      }),
+    getSnapshot: () => snapshot,
+  }
 }

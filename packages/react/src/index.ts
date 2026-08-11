@@ -22,7 +22,6 @@ export type { CallableRef, ExternalStore } from "./store.js"
 // derivation of `useTracked` over `@kyneta/reactive`. The Sync stores remain
 // (they wrap SyncRef.onPeerSyncChange, not a changefeed).
 export {
-  createDerivedSyncStore,
   createNullishStore,
   createSyncStore,
 } from "./store.js"
@@ -87,15 +86,12 @@ export type {
   PeerSyncState,
   Policy,
   SyncRef,
-  SyncStatusSummary,
 } from "@kyneta/exchange"
 export {
   AsyncQueue,
   createLineDocSchema,
-  describeSyncStatus,
   Exchange,
   Governance,
-  hasSync,
   isLineDocId,
   Line,
   lineDocId,

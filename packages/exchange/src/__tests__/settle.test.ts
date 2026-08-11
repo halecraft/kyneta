@@ -8,7 +8,6 @@
 import { CHANGEFEED } from "@kyneta/changefeed"
 import { json, Schema } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
-import { describeSyncStatus } from "../describe-sync-status.js"
 import { Exchange, type ExchangeParams } from "../exchange.js"
 import {
   hydrated,
@@ -236,25 +235,6 @@ describe("ready — transportless", () => {
 
     expect(sync(doc).ready).toBe(true)
     expect(sync(doc).readyFor(() => true)).toBe(false)
-
-    exchange.reset()
-  })
-
-  it("leaves describeSyncStatus unchanged", () => {
-    // The one reader of `ready` whose behaviour must not shift. It
-    // short-circuits on connectivity before consulting `ready`, so a
-    // transportless exchange still summarises as "offline" — non-obvious
-    // enough to pin rather than assume.
-    //
-    // (`describeSyncStatus` is deprecated for removal in 3.0; this assertion
-    // guards the deprecation window and goes with the module.)
-    const exchange = createExchange()
-    const doc = exchange.get("doc-1", TestDoc)
-    const s = sync(doc)
-
-    expect(describeSyncStatus(s.peerStates, s.connectivity, s.ready)).toBe(
-      "offline",
-    )
 
     exchange.reset()
   })

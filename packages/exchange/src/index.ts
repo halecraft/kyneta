@@ -9,10 +9,6 @@
 // Core types — sync-specific (defined here)
 // ---------------------------------------------------------------------------
 
-export {
-  describeSyncStatus,
-  type SyncStatusSummary,
-} from "./describe-sync-status.js"
 // DevTools observation protocol (experimental — `ObsEvent` v:1 may change).
 export {
   createObservationBus,
@@ -211,8 +207,8 @@ export { createCapabilities, DEFAULT_REPLICAS } from "./capabilities.js"
 // Sync — sync capabilities access
 // ---------------------------------------------------------------------------
 
-export type { SyncRef, WaitForSyncOptions } from "./sync.js"
-export { hasSync, sync, whenSettled } from "./sync.js"
+export type { SyncRef } from "./sync.js"
+export { sync, whenSettled } from "./sync.js"
 
 // ---------------------------------------------------------------------------
 // Settle terms — "have all of this document's truth sources reported?"

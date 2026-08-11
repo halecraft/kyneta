@@ -11,7 +11,7 @@
 //   s.peerId        // local peer ID
 //   s.docId         // document ID
 //   s.peerStates    // current per-peer sync state
-//   await s.waitForSync()
+//   await whenSettled(doc)
 
 import type { DocId, PeerId, PeerIdentityDetails } from "@kyneta/transport"
 import { whenHydrated } from "./settle.js"
@@ -23,24 +23,13 @@ import type { Connectivity, PeerSyncState } from "./types.js"
 // ---------------------------------------------------------------------------
 
 /**
- * Options for waitForSync().
- */
-export type WaitForSyncOptions = {
-  /**
-   * Timeout in milliseconds. Set to 0 to disable timeout.
-   * @default 30000
-   */
-  timeout?: number
-}
-
-/**
  * SyncRef provides access to sync/network capabilities for a document.
  *
  * This interface is returned by `sync(ref)` and provides:
  * - `peerId` — the local peer ID
  * - `docId` — the document ID
  * - `peerStates` — current per-peer sync state
- * - `waitForSync()` — wait for sync to complete
+ * - `ready` / `readyFor(pred)` — monotonic readiness latches
  * - `onPeerSyncChange()` — subscribe to per-peer sync state changes
  */
 export interface SyncRef {
@@ -77,42 +66,6 @@ export interface SyncRef {
   readonly connectivity: Connectivity
 
   /**
-   * Resolve when sync has settled — never rejects.
-   *
-   * @deprecated Use the free function `whenSettled(doc, opts)` instead.
-   *
-   * This method awaits the *peer* term only. On a document that also has a
-   * store, it can therefore resolve while the stored data is still loading —
-   * the server answers, this returns, and the document still reads empty.
-   * `whenSettled` awaits every truth source, which is what callers deciding
-   * "is this document empty?" actually need. Removed in 3.0.
-   */
-  settled(opts?: {
-    offlineAfter?: number
-  }): Promise<{ via: "peer" | "local" | "offline" }>
-
-  /**
-   * Wait for sync to complete with a currently-connected peer.
-   *
-   * @deprecated Use the free function `whenSettled(doc)` instead.
-   *
-   * What this uniquely offered was connection *liveness* — it waits for a
-   * reconciled peer that still has a live channel. That is not worth keeping:
-   * the guarantee expires the instant the promise resolves, so nothing can be
-   * built on it; it does not confirm that local writes landed, which is what
-   * callers usually want (that needs an ack — see `Line`); and it hangs
-   * forever on a transportless exchange or after the reconciled peer departs.
-   *
-   * For a point-in-time liveness check, read
-   * `peerStates.some(s => s.state === "synced")` together with
-   * `connectivity === "online"` — honest about being a snapshot rather than
-   * dressed up as a wait. Removed in 3.0.
-   *
-   * @throws If the timeout is reached before sync completes
-   */
-  waitForSync(options?: WaitForSyncOptions): Promise<void>
-
-  /**
    * Subscribe to per-peer sync state changes.
    * @param cb Callback that receives the new peer states
    * @returns Unsubscribe function
@@ -131,21 +84,6 @@ const syncSourceMap = new WeakMap<
   object,
   { docId: DocId; synchronizer: Synchronizer }
 >()
-
-// ---------------------------------------------------------------------------
-// Deprecation warnings — one per call site kind, not one per call
-// ---------------------------------------------------------------------------
-
-const warned = new Set<string>()
-
-/** Warn once per process, so a hot path does not flood the console. */
-function warnDeprecated(what: string, instead: string): void {
-  if (warned.has(what)) return
-  warned.add(what)
-  console.warn(
-    `[exchange] ${what} is deprecated and will be removed in 3.0. Use ${instead}.`,
-  )
-}
 
 // ---------------------------------------------------------------------------
 // SyncRef implementation
@@ -190,32 +128,6 @@ class SyncRefImpl implements SyncRef {
 
   get connectivity(): Connectivity {
     return this.#synchronizer.connectivity()
-  }
-
-  async settled(opts?: {
-    offlineAfter?: number
-  }): Promise<{ via: "peer" | "local" | "offline" }> {
-    warnDeprecated("sync(doc).settled()", "whenSettled(doc, opts)")
-    // No transports configured — there is no upstream to wait for.
-    if (this.#synchronizer.connectivity() === "offline") return { via: "local" }
-    // Already reconciled with a peer.
-    if (this.#synchronizer.hasReconciled(this.docId)) return { via: "peer" }
-
-    // Otherwise wait for the monotonic latch. `offlineAfter` (if given) is
-    // the deadline after which we proceed offline; 0 ⇒ wait indefinitely.
-    const result = await this.#synchronizer.awaitReconciliation(
-      this.docId,
-      () => this.#synchronizer.hasReconciled(this.docId),
-      opts?.offlineAfter ?? 0,
-    )
-    return result === "ready" ? { via: "peer" } : { via: "offline" }
-  }
-
-  async waitForSync(options?: WaitForSyncOptions): Promise<void> {
-    warnDeprecated("sync(doc).waitForSync()", "whenSettled(doc)")
-    const timeout = options?.timeout ?? 30000
-
-    return this.#synchronizer.waitUntilReady(this.docId, timeout)
   }
 
   onPeerSyncChange(cb: (peerStates: PeerSyncState[]) => void): () => void {
@@ -267,7 +179,7 @@ export function registerSync(
  * - `peerId` — the local peer ID
  * - `docId` — the document ID
  * - `peerStates` — current per-peer sync state
- * - `waitForSync()` — wait for sync to complete
+ * - `ready` / `readyFor(pred)` — monotonic readiness latches
  * - `onPeerSyncChange()` — subscribe to per-peer sync state changes
  *
  * @param ref - A document obtained from `exchange.get()`
@@ -281,7 +193,7 @@ export function registerSync(
  * const doc = exchange.get("my-doc", schema)
  * sync(doc).peerId
  * sync(doc).peerStates
- * await sync(doc).waitForSync()
+ * await whenSettled(doc)
  * ```
  */
 export function sync(ref: object): SyncRef {
@@ -296,21 +208,6 @@ export function sync(ref: object): SyncRef {
   }
 
   return syncRef
-}
-
-/**
- * Check if a document has sync capabilities (was created via exchange.get()).
- *
- * @deprecated Exists only to guard `sync()`'s throw. `docStatus(doc)` works at
- * every layer and never throws, so the guard is no longer needed. Removed in
- * 3.0.
- *
- * @param ref - A document ref to check
- * @returns true if the document has sync capabilities
- */
-export function hasSync(ref: object): boolean {
-  warnDeprecated("hasSync(ref)", "docStatus(doc), which works at every layer")
-  return syncRefMap.has(ref)
 }
 
 // ---------------------------------------------------------------------------

@@ -584,7 +584,7 @@ const adminExchange = new Exchange({
 })
 
 const blog = adminExchange.get("blog", BlogDoc)
-await sync(blog).waitForSync()
+await whenSettled(blog)
 
 batch(blog, b => {
   for (const post of b.posts) {
@@ -720,7 +720,7 @@ blog.db.exec("UPDATE posts SET published = 1 WHERE title LIKE '%release%'")
 // Client: plain substrate, same schema, different binding
 const BlogDoc = bindPlain(BlogSchema)
 const blog = client.get("blog", BlogDoc)
-await sync(blog).waitForSync()
+await whenSettled(blog)
 
 // Client doesn't know it's talking to SQLite
 blog.title()  // reads from in-memory plain store, synced from server

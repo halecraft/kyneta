@@ -1018,9 +1018,9 @@ export class Synchronizer {
    * Shared wait core: resolve `"ready"` once `isReady()` becomes true (on a
    * peer-sync change for `docId`), or `"timeout"` after `timeoutMs` (0 ⇒ no
    * timeout). Never rejects — callers decide what a timeout means. The
-   * resolve predicate is a parameter so the two callers can wait on
-   * different conditions: `waitForSync` passes the connection-aware
-   * `#isReady`; `settled` passes the monotonic `hasReconciled`.
+   * The resolve predicate is a parameter so callers can wait on different
+   * conditions — `whenSettled` passes either the monotonic `hasReconciled` or
+   * an authority-restricted `reconciledMatching`.
    */
   awaitReconciliation(
     docId: DocId,
@@ -1055,19 +1055,6 @@ export class Synchronizer {
     })
   }
 
-  async waitUntilReady(docId: DocId, timeoutMs = 30000): Promise<void> {
-    const result = await this.awaitReconciliation(
-      docId,
-      () => this.#isReady(docId),
-      timeoutMs,
-    )
-    if (result === "timeout") {
-      throw new Error(
-        `waitForSync timed out after ${timeoutMs}ms for doc '${docId}'`,
-      )
-    }
-  }
-
   /**
    * Fires once per docId at quiescence when the document's state has
    * advanced — from a local mutation (changefeed → notifyLocalChange)
@@ -1088,22 +1075,6 @@ export class Synchronizer {
   ): () => void {
     this.#peerSyncListeners.add(cb)
     return () => this.#peerSyncListeners.delete(cb)
-  }
-
-  #isReady(docId: DocId): boolean {
-    const session = this.#sessionHandle.getState()
-    for (const [peerId, peerState] of this.#syncHandle.getState().peers) {
-      const docSync = peerState.docSyncStates.get(docId)
-      if (!docSync) continue
-
-      if (docSync.status === "synced" || docSync.status === "vacant") {
-        const sessionPeer = session.peers.get(peerId)
-        if (sessionPeer && sessionPeer.channels.size > 0) {
-          return true
-        }
-      }
-    }
-    return false
   }
 
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=

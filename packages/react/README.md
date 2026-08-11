@@ -186,9 +186,9 @@ const peerStates = useSyncState(doc)
 const synced = peerStates.some((s) => s.state === "synced")
 ```
 
-### `sync(doc).settled(opts?)`
+### `whenSettled(doc, opts?)`
 
-Promise that resolves (never rejects): `{ via: "local" }` immediately when no transports are configured, `{ via: "peer" }` on first reconciliation, or `{ via: "offline" }` after `opts.offlineAfter` ms with no upstream. `describeSyncStatus(peerStates, connectivity, ready)` projects the primitives into a single display label (`"connecting" | "pending" | "synced" | "vacant" | "offline"`).
+Resolves once every truth source has reported — the stored data finished loading *and* the authority answered. `{ via: "local" }` when no transports are configured, `{ via: "peer" }` on reconciliation, `{ via: "offline" }` after `opts.offlineAfter` ms. Rejects only if the store read failed. For a display label, compose `connectivity`, `peerStates`, and `docStatus(doc)`.
 
 ### Mutations
 
@@ -224,13 +224,13 @@ const status = useInitialize(doc, d => d.set({ title: "Untitled" }))
 you only need a gate, and `useDocStatus` when you need to tell an empty
 document from one that already has data.
 
-From `@kyneta/exchange`: `Exchange`, `sync`, `whenSettled`, `docStatus`, `initialize`, and types `ExchangeParams`, `SyncRef`, `PeerSyncState`, `Connectivity`, `SyncStatusSummary`, `PeerIdentityDetails`, `DocId`.
+From `@kyneta/exchange`: `Exchange`, `sync`, `whenSettled`, `docStatus`, `initialize`, and types `ExchangeParams`, `SyncRef`, `PeerSyncState`, `Connectivity`, `DocStatus`, `PeerIdentityDetails`, `DocId`.
 
 ## Architecture
 
 The package follows a **Functional Core / Imperative Shell** pattern:
 
-- **Functional Core**: reactive change detection lives in [`@kyneta/reactive`](../reactive) (auto-tracked computations over the changefeed) and the React-free `src/store.ts` (the `SyncRef`-backed `createSyncStore` / `createDerivedSyncStore`). Zero React imports. Independently testable.
+- **Functional Core**: reactive change detection lives in [`@kyneta/reactive`](../reactive) (auto-tracked computations over the changefeed) and the React-free `src/store.ts` (the `SyncRef`-backed `createSyncStore`). Zero React imports. Independently testable.
 - **Imperative Shell** (hooks): `useTracked`/`useSelector`/`useValue`, `useSyncState`, `useDocReady`, etc. are thin wrappers that feed reactives / pure stores into React's `useSyncExternalStore`.
 
 See [TECHNICAL.md](./TECHNICAL.md) for details on snapshot memoization, type recovery, and subscription strategy.
