@@ -438,9 +438,9 @@ export function frameTraceToBody(ev: FrameTrace): WireBody {
 }
 
 /**
- * Summarize a document `Changeset` into a `doc` event. Uses `Path.format()`
- * (the canonical stringifier) — never the deprecated `formatPath` free
- * function. The descendant op shape is `{ path: Path, change: ChangeBase }`.
+ * Summarize a document `Changeset` into a `doc` event. Uses `Path.format()`,
+ * the canonical stringifier. The descendant op shape is
+ * `{ path: Path, change: ChangeBase }`.
  */
 export function summarizeChangeset(
   docId: string,

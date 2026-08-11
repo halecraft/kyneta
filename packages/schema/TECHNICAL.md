@@ -1343,7 +1343,7 @@ Source: `packages/schema/src/interpreters/validate.ts`.
 
 A separate interpreter — not required by the stack, not automatic. `validate(schema, value)` returns `ValidationResult` collecting every error in the tree; `tryValidate` throws on the first. `SchemaValidationError` carries a structured `path` and a human-readable `message`.
 
-Validation is an *interpretation* of the schema. The same `Schema` value that builds a ref also validates untrusted input. Errors format via `formatPath(path)` for human-readable output.
+Validation is an *interpretation* of the schema. The same `Schema` value that builds a ref also validates untrusted input. Errors format via `path.format()` for human-readable output.
 
 Not used by the exchange. Not automatic on `bind`. Opt-in at boundaries where untrusted data enters the system.
 

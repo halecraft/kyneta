@@ -18,7 +18,6 @@ import {
   applyChanges,
   batch,
   describe,
-  formatPath,
   hasRecursiveChangefeed,
   hasTransact,
   incrementChange,
@@ -343,7 +342,7 @@ log(`
 
   const events: string[] = []
   subscribe(replicaDoc, cs => {
-    for (const e of cs.changes) events.push(formatPath(e.path))
+    for (const e of cs.changes) events.push(e.path.format())
   })
 
   applyChanges(

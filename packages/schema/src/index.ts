@@ -114,7 +114,6 @@ export { subscribe, subscribeNode } from "./facade/observe.js"
 // NOT exported: handing it out is what makes hand-rolling a divergent walker
 // easy, and that is what this module exists to prevent.
 export type {
-  /** @deprecated Use `OpaqueBoundaryHit`. */
   OpaqueBoundaryHit,
   PathFoldResult,
   PathStepper,
@@ -122,7 +121,6 @@ export type {
 } from "./fold-path.js"
 export {
   extendSchemaPathKey,
-  /** @deprecated Use `findOpaqueBoundary`. */
   findOpaqueBoundary,
   foldPath,
   pathSchema,
@@ -218,7 +216,6 @@ export { at } from "./interpreters/sequence-helpers.js"
 export type { ValidateContext } from "./interpreters/validate.js"
 // Validate interpreter — schema-driven validation with collecting errors
 export {
-  formatPath,
   SchemaValidationError,
   tryValidate,
   validate,

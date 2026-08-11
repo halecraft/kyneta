@@ -38,16 +38,6 @@ import {
 } from "../schema.js"
 import { serializeConstraintValue } from "../serialize-value.js"
 
-/**
- * Converts a typed Path to a human-readable string for error reporting.
- *
- * @deprecated Use `path.format()` instead. This free function is retained
- * temporarily for downstream consumers that haven't migrated yet.
- */
-export function formatPath(path: Path): string {
-  return path.format()
-}
-
 // ---------------------------------------------------------------------------
 // SchemaValidationError
 // ---------------------------------------------------------------------------
