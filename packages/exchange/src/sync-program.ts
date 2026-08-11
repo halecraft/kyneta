@@ -112,7 +112,7 @@ export type SyncModel = {
    * `synced→pending` reconnect flip. Stores the **identity** (not just the
    * `PeerId`) so the `readyFor` predicate works and the fact survives the
    * peer leaving `model.peers`. Mirrors `@kyneta/schema`'s
-   * `populated`/`isPopulated` set, lifted to the sync layer.
+   * `populated`/`populated` set, lifted to the sync layer.
    *
    * Cleared only on *our* doc removal (`handleDocDelete`, true-removal
    * `handleDocDismiss`) and `initSync` — never by an inbound `dismiss`.

@@ -4,7 +4,7 @@
 // This completes the design commit jj:rpuqvkyy set out when it removed the
 // `seed` parameter from `SubstrateFactory.create` and `Exchange.get`. That
 // commit split seeding into two halves: a predicate for "has data arrived?"
-// (`isPopulated`, which shipped) and authoritative initial content applied as
+// (`populated`, which shipped) and authoritative initial content applied as
 // real operations after construction (which shipped as unwritten convention).
 // This is the missing half, written down.
 //

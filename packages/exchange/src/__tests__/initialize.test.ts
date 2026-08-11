@@ -146,8 +146,8 @@ describe("initialize", () => {
 
   it("does NOT overwrite a store that still has data loading", async () => {
     // The regression that motivates the entire design. Before this layer
-    // existed, `isPopulated` read false while hydration was in flight, so a
-    // naive `if (!isPopulated) seed()` destroyed the stored document.
+    // existed, `populated` read false while hydration was in flight, so a
+    // naive `if (!populated) seed()` destroyed the stored document.
     const sharedData = await seedStoredDoc('{"title":"stored","count":42}')
     const exchange = createExchange({
       stores: [createInMemoryStore({ sharedData })],

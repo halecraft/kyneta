@@ -1,4 +1,4 @@
-import { deletedFeed, isDeleted, remove, Schema } from "@kyneta/schema"
+import { deleted, deletedFeed, remove, Schema } from "@kyneta/schema"
 import { batch, createDoc } from "@kyneta/schema/basic"
 import { describe, expect, it } from "vitest"
 import { reactive, track } from "../reactive.js"
@@ -16,7 +16,7 @@ const TodoDoc = Schema.product({
 const tick = () => new Promise<void>(resolve => queueMicrotask(resolve))
 
 describe("deleted ref tracking", () => {
-  it("reactive(thunk) with isDeleted(ref) re-runs on remove", async () => {
+  it("reactive(thunk) with deleted(ref) re-runs on remove", async () => {
     const doc = createDoc(TodoDoc)
     batch(doc, (d: typeof doc) => {
       d.todos.push({ id: "t1", text: "", done: false })
@@ -25,7 +25,7 @@ describe("deleted ref tracking", () => {
     if (!ref) throw new Error("ref not found")
 
     const r = reactive(() => {
-      return isDeleted(ref)
+      return deleted(ref)
     })
 
     let recomputed = 0

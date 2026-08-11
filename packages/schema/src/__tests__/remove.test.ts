@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest"
 import {
   applyChanges,
   batch,
+  deleted,
   hasRemove,
   interpret,
-  isDeleted,
   observation,
   plainContext,
   REMOVE,
@@ -132,7 +132,7 @@ describe("[REMOVE]: sequences", () => {
     expect(doc.todos.length).toBe(2)
     expect(doc.todos.at(0).text()).toBe("a")
     expect(doc.todos.at(1).text()).toBe("c")
-    expect(isDeleted(b)).toBe(true)
+    expect(deleted(b)).toBe(true)
   })
 
   it("removes via the remove() facade — delegates to [REMOVE]", () => {
@@ -152,7 +152,7 @@ describe("[REMOVE]: sequences", () => {
     expect(doc.todos.length).toBe(2)
     expect(doc.todos.at(0).text()).toBe("a")
     expect(doc.todos.at(1).text()).toBe("c")
-    expect(isDeleted(b)).toBe(true)
+    expect(deleted(b)).toBe(true)
   })
 
   it("removes first item (index 0, no retain)", () => {
@@ -174,7 +174,7 @@ describe("[REMOVE]: sequences", () => {
     only[REMOVE]()
 
     expect(doc.todos.length).toBe(0)
-    expect(isDeleted(only)).toBe(true)
+    expect(deleted(only)).toBe(true)
   })
 
   it("works with advanced addresses after prior deletion", () => {
@@ -193,16 +193,16 @@ describe("[REMOVE]: sequences", () => {
       d.todos.delete(0, 1)
     })
 
-    expect(isDeleted(a)).toBe(true)
-    expect(isDeleted(b)).toBe(false)
-    expect(isDeleted(c)).toBe(false)
+    expect(deleted(a)).toBe(true)
+    expect(deleted(b)).toBe(false)
+    expect(deleted(c)).toBe(false)
 
     // c's address is now index 1 — [REMOVE] should use the advanced index
     c[REMOVE]()
 
     expect(doc.todos.length).toBe(1)
     expect(doc.todos.at(0).text()).toBe("b")
-    expect(isDeleted(c)).toBe(true)
+    expect(deleted(c)).toBe(true)
   })
 })
 
@@ -222,7 +222,7 @@ describe("[REMOVE]: maps", () => {
 
     expect(doc.metadata.has("version")).toBe(false)
     expect(doc.metadata.has("author")).toBe(true)
-    expect(isDeleted(versionRef)).toBe(true)
+    expect(deleted(versionRef)).toBe(true)
   })
 })
 
@@ -271,7 +271,7 @@ describe("[REMOVE]: dead ref", () => {
       d.todos.delete(0, 1)
     })
 
-    expect(isDeleted(item)).toBe(true)
+    expect(deleted(item)).toBe(true)
     expect(() => item[REMOVE]()).toThrow("Cannot remove a dead ref")
   })
 
@@ -283,7 +283,7 @@ describe("[REMOVE]: dead ref", () => {
       d.metadata.delete("key")
     })
 
-    expect(isDeleted(ref)).toBe(true)
+    expect(deleted(ref)).toBe(true)
     expect(() => ref[REMOVE]()).toThrow("Cannot remove a dead ref")
   })
 })
@@ -430,7 +430,7 @@ describe("[REMOVE]: movable sequences", () => {
     expect(doc.items.length).toBe(2)
     expect(doc.items.at(0).name()).toBe("x")
     expect(doc.items.at(1).name()).toBe("z")
-    expect(isDeleted(y)).toBe(true)
+    expect(deleted(y)).toBe(true)
   })
 })
 
@@ -497,7 +497,7 @@ describe("remove() facade", () => {
 
     expect(doc.todos.length).toBe(1)
     expect(doc.todos.at(0).text()).toBe("b")
-    expect(isDeleted(a)).toBe(true)
+    expect(deleted(a)).toBe(true)
   })
 
   it("removes a map entry via remove(ref)", () => {

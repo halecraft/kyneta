@@ -108,7 +108,7 @@ export const DELETED: unique symbol = Symbol.for("kyneta:deleted") as any
  * to remove it). Returns false if the ref is alive, or if it is not a ref
  * that tracks deletion (like a top-level document or product field).
  */
-export function isDeleted(ref: unknown): boolean {
+export function deleted(ref: unknown): boolean {
   if (ref === null || ref === undefined) return false
   const deletedCf = (ref as any)[DELETED]
   if (!deletedCf) return false
@@ -122,12 +122,12 @@ export function isDeleted(ref: unknown): boolean {
  * Throws if the ref does not track deletion.
  *
  * The `Feed` suffix marks this as the *observable carrier* rather than the
- * plain boolean — for a boolean, call `isDeleted(ref)`. Reading is the routine
+ * plain boolean — for a boolean, call `deleted(ref)`. Reading is the routine
  * case, so it gets the shorter name; subscribing is the specialist one, so it
  * pays the suffix. Mirrors `populatedFeed` in `with-changefeed.ts`.
  *
  * A carrier is a callable, which means it is **always truthy** when present.
- * Never write `if (deletedFeed(ref))` — call it, or use `isDeleted(ref)`.
+ * Never write `if (deletedFeed(ref))` — call it, or use `deleted(ref)`.
  */
 export function deletedFeed(
   ref: unknown,
@@ -140,16 +140,6 @@ export function deletedFeed(
   }
   return (ref as any)[DELETED]
 }
-
-/**
- * @deprecated Use {@link deletedFeed} instead — same function, clearer name.
- *
- * Retained through the 2.x line only. In 3.0 the short name `deleted` is
- * reused for the plain boolean that `isDeleted` returns today, so code written
- * against this alias would silently change meaning if it survived the rename.
- * See `next.md` §10; the same reasoning applies to `populated`.
- */
-export const deleted = deletedFeed
 
 // ---------------------------------------------------------------------------
 // Per-context state — prepare wrapping for address advancement

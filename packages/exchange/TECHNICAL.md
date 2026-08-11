@@ -523,7 +523,7 @@ Both drain at quiescence with batched changesets (one `Changeset` per dispatch c
 A peer's per-doc sync transition is a single event with **two folds**, both advanced at the single fold point `setPeerDocState` (`src/sync-program.ts`):
 
 1. **Volatile state** — `SyncModel.peers[*].docSyncStates: Map<DocId, PeerDocSyncState>` (`status ∈ {pending, synced, vacant}`). Drives routing (`getSyncedPeers`) and the raw per-peer view `sync(doc).peerStates: PeerSyncState[]`. **Can regress** — a reconnecting peer's reciprocal `interest` flips `synced → pending` before re-settling.
-2. **Monotonic latch** — `SyncModel.reconciledIdentities: Map<DocId, Map<PeerId, PeerIdentityDetails>>`, a grow-only accumulator of reconciled peer **identities**. `setPeerDocState` folds the peer's identity in whenever `next.status ∈ {synced, vacant}`; `pending` never touches it. This is the monotonic complement that volatile state lacks — the same shape as `@kyneta/schema`'s `populated`/`isPopulated` set, lifted to the sync layer. Storing identities (not just `PeerId`) is what lets `readyFor(pred)` work and lets the latch **survive the reconciled peer leaving `model.peers`**.
+2. **Monotonic latch** — `SyncModel.reconciledIdentities: Map<DocId, Map<PeerId, PeerIdentityDetails>>`, a grow-only accumulator of reconciled peer **identities**. `setPeerDocState` folds the peer's identity in whenever `next.status ∈ {synced, vacant}`; `pending` never touches it. This is the monotonic complement that volatile state lacks — the same shape as `@kyneta/schema`'s `populated`/`populated` set, lifted to the sync layer. Storing identities (not just `PeerId`) is what lets `readyFor(pred)` work and lets the latch **survive the reconciled peer leaving `model.peers`**.
 
 `sync(doc).ready` is `hasReconciled(model, docId)` (accumulator non-empty) — monotonic, connection-independent. `sync(doc).readyFor(pred)` is `reconciledMatching(model, docId, pred)`. The latch is cleared only on *our* doc removal (`handleDocDelete`, and `handleDocDismiss` **only when `msg.event?.type !== "doc-suspended"`** — suspend keeps the runtime/data alive, so its latch survives `resume`) and on `initSync` (so `reset()`/`shutdown()` clear it). An inbound `dismiss` clears the peer's *volatile* entry but **not** the accumulator.
 
@@ -593,7 +593,7 @@ The short name is the plain value; the `*Feed` suffix is the observable
 carrier. Reading is routine and gets the short name; subscribing is the
 specialist move and pays the suffix.
 
-The shipped `isPopulated` / `populated` and `isDeleted` / `deleted` pairs are
+The shipped `populated` / `populated` and `deleted` / `deleted` pairs are
 named the other way round. That is a known error, corrected in 3.0
 (`next.md` §10); `populatedFeed` / `deletedFeed` ship now as aliases so the
 carrier side is already uniform. The hazard the old order creates is concrete:

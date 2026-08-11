@@ -230,7 +230,6 @@ export {
   DELETED,
   deleted,
   deletedFeed,
-  isDeleted,
   withAddressing,
 } from "./interpreters/with-addressing.js"
 // withCaching — interposition transformer (identity-preserving caching + INVALIDATE)
@@ -245,7 +244,6 @@ export type { NotificationPlan } from "./interpreters/with-changefeed.js"
 export {
   attachChangefeed,
   deliverNotifications,
-  isPopulated,
   POPULATED,
   planNotifications,
   populated,

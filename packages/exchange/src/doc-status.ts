@@ -2,12 +2,12 @@
 //
 // Two questions get conflated constantly, with expensive results:
 //
-//   isPopulated(doc) === false
+//   populated(doc) === false
 //
 // means either "settled, and genuinely empty" (safe to write defaults) or
 // "not settled yet, so of course it looks empty" (writing defaults destroys
 // data). Nothing at the call site distinguishes them, so the safe-looking
-// `if (!isPopulated(doc)) seed()` is a data-loss bug waiting for a slow disk.
+// `if (!populated(doc)) seed()` is a data-loss bug waiting for a slow disk.
 //
 // The three-state fixes that by making the dangerous state unrepresentable:
 // you cannot observe "empty" before settling, because the type does not offer
@@ -21,7 +21,7 @@
 
 import type { HasChangefeed } from "@kyneta/changefeed"
 import { CHANGEFEED } from "@kyneta/changefeed"
-import { isPopulated, populatedFeed } from "@kyneta/schema"
+import { populated, populatedFeed } from "@kyneta/schema"
 import type { Authority } from "./governance.js"
 import { makeFeed, settledFeed, settledWith } from "./settle.js"
 
@@ -88,7 +88,7 @@ export function docStatus(
   opts?: { authority?: Authority },
 ): DocStatus {
   return deriveDocStatus({
-    populated: isPopulated(node),
+    populated: populated(node),
     settled: settledWith(node, opts?.authority),
   })
 }

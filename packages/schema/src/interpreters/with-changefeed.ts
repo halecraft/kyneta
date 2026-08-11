@@ -73,11 +73,14 @@ import { CALL } from "./bottom.js"
 export const POPULATED: unique symbol = Symbol.for("kyneta:populated") as any
 
 /**
- * Returns true if the ref has been populated (received at least one mutation).
- * Returns false if it has not been populated, or if it is not a ref that tracks
- * population.
+ * Returns true if the ref has been populated (received at least one mutation —
+ * local, remote, or replayed from storage). Returns false if it has not, or if
+ * it is not a ref that tracks population.
+ *
+ * This is the plain boolean and is safe to put in an `if`. For the observable
+ * form, use {@link populatedFeed}.
  */
-export function isPopulated(ref: unknown): boolean {
+export function populated(ref: unknown): boolean {
   if (ref === null || ref === undefined) return false
   const populatedCf = (ref as any)[POPULATED]
   if (!populatedCf) return false
@@ -91,13 +94,13 @@ export function isPopulated(ref: unknown): boolean {
  * Throws if the ref does not track population.
  *
  * The `Feed` suffix marks this as the *observable carrier* rather than the
- * plain boolean — for a boolean, call `isPopulated(ref)`. Reading "has data
+ * plain boolean — for a boolean, call `populated(ref)`. Reading "has data
  * arrived?" is the routine case, so it gets the shorter name; subscribing to
  * the transition is the specialist one, so it pays the suffix.
  *
  * A carrier is a callable, which means it is **always truthy**. Never write
  * `if (populatedFeed(ref))` — that reports the opposite of the truth for an
- * empty document. Call it (`populatedFeed(ref)()`) or use `isPopulated(ref)`.
+ * empty document. Call it (`populatedFeed(ref)()`) or use `populated(ref)`.
  */
 export function populatedFeed(
   ref: unknown,
@@ -109,18 +112,6 @@ export function populatedFeed(
   }
   return (ref as any)[POPULATED]
 }
-
-/**
- * @deprecated Use {@link populatedFeed} instead — same function, clearer name.
- *
- * This spelling is retained through the 2.x line only. In 3.0 the short name
- * `populated` is reused for the plain boolean that `isPopulated` returns
- * today, so code written against this alias would silently change meaning if
- * it survived the rename. Migrating now costs one search-and-replace; not
- * migrating costs a type error at the 3.0 upgrade (the two halves swap types,
- * so the compiler finds every call site).
- */
-export const populated = populatedFeed
 
 // ---------------------------------------------------------------------------
 // Attach [CHANGEFEED] non-enumerably to any object
@@ -368,7 +359,7 @@ export function synthesizeTreeDeleteTerminal(
  *   before/after the changefeed layer's logic.
  * - `populated`: monotonic set of path keys that have received at least
  *   one mutation. Once a key enters this set it never leaves (except
- *   on substrate reset). Used by `isPopulated` changefeeds.
+ *   on substrate reset). Used by `populated` changefeeds.
  * - `populatedListeners`: callbacks waiting for a specific path key to
  *   become populated. Fired at most once per path key, then removed.
  *
@@ -693,7 +684,7 @@ function firePopulatedListeners(
 
 /**
  * Create a `RecursiveChangefeedProtocol<boolean>` for the population state
- * at a path — the protocol behind `populatedFeed(ref)` / `isPopulated(ref)`.
+ * at a path — the protocol behind `populatedFeed(ref)` / `populated(ref)`.
  *
  * - `.current` reads from the populated set (true if this path key is in the set)
  * - `.subscribe` fires exactly once when the path transitions from
@@ -752,10 +743,10 @@ function createPopulatedChangefeed(
  * Attach the population state to a ref under the `[POPULATED]` symbol, as a
  * non-enumerable callable carrying its own `[CHANGEFEED]`.
  *
- * Keyed by `Symbol`, never by the string `"isPopulated"`: refs expose the
+ * Keyed by `Symbol`, never by the string `"populated"`: refs expose the
  * user's schema fields as properties, so a string key would let framework
  * metadata collide with (and shadow) a field of the same name. Read it via
- * the `isPopulated(ref)` / `populatedFeed(ref)` facades.
+ * the `populated(ref)` / `populatedFeed(ref)` facades.
  */
 function attachIsPopulated(
   target: object,
@@ -796,7 +787,7 @@ function attachIsPopulated(
 /**
  * Get the populated state for a context. Returns the populated set and
  * listeners map. For read-only stacks (no prepare pipeline), returns a
- * static empty set — `isPopulated` will always be false.
+ * static empty set — `populated` will always be false.
  */
 function getPopulatedState(ctx: RefContext): {
   populated: Set<string>
@@ -1128,7 +1119,7 @@ function createTreeChangefeed(
 
 /**
  * Wire a changefeed onto a ref. Handles isPropertyHost guard, prepare wiring,
- * changefeed attachment, and isPopulated attachment. The `createCf` closure
+ * changefeed attachment, and populated attachment. The `createCf` closure
  * receives prepare listeners AND path (avoiding double-capture) and returns
  * the kind-specific changefeed protocol.
  *
@@ -1239,7 +1230,7 @@ export function withChangefeed<A extends HasRead>(
     },
 
     // --- Text -----------------------------------------------------------------
-    // Leaf type — attach a leaf changefeed + isPopulated.
+    // Leaf type — attach a leaf changefeed + populated.
     text(ctx: RefContext, path: Path, schema: TextSchema): A & HasChangefeed {
       const result = base.text(ctx, path, schema)
       wireChangefeed(result, ctx, path, (channels, nodePath) =>
@@ -1249,7 +1240,7 @@ export function withChangefeed<A extends HasRead>(
     },
 
     // --- Counter --------------------------------------------------------------
-    // Leaf type — attach a leaf changefeed + isPopulated.
+    // Leaf type — attach a leaf changefeed + populated.
     counter(
       ctx: RefContext,
       path: Path,
@@ -1314,7 +1305,7 @@ export function withChangefeed<A extends HasRead>(
     },
 
     // --- RichText -------------------------------------------------------------
-    // Leaf type — attach a leaf changefeed + isPopulated.
+    // Leaf type — attach a leaf changefeed + populated.
     richtext(
       ctx: RefContext,
       path: Path,

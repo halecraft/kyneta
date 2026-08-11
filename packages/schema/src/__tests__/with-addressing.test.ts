@@ -4,8 +4,8 @@ import {
   ADDRESS_TABLE,
   applyChanges,
   batch,
+  deleted,
   interpret,
-  isDeleted,
   observation,
   plainContext,
   RawPath,
@@ -163,10 +163,10 @@ describe("withAddressing: sequences", () => {
 
     // After delete: "a" is dead, "b" and "c" read correct values
     // via their advanced addresses
-    expect(isDeleted(a)).toBe(true)
-    expect(isDeleted(b)).toBe(false)
+    expect(deleted(a)).toBe(true)
+    expect(deleted(b)).toBe(false)
     expect(b.text()).toBe("b")
-    expect(isDeleted(c)).toBe(false)
+    expect(deleted(c)).toBe(false)
     expect(c.text()).toBe("c")
 
     // Fresh lookups at the new indices also read correctly
@@ -198,7 +198,7 @@ describe("withAddressing: maps", () => {
     // total and yields the absent value (undefined), not a throw. Writes
     // still guard (see "writing through a deleted map entry ref throws").
     // Context: jj:mlurlzqt.
-    expect(isDeleted(versionRef)).toBe(true)
+    expect(deleted(versionRef)).toBe(true)
     expect(versionRef()).toBeUndefined()
   })
 
@@ -212,7 +212,7 @@ describe("withAddressing: maps", () => {
     batch(doc, (d: any) => {
       d.metadata.delete("version")
     })
-    expect(isDeleted(versionRef)).toBe(true)
+    expect(deleted(versionRef)).toBe(true)
 
     // Re-set the same key
     batch(doc, (d: any) => {
@@ -220,7 +220,7 @@ describe("withAddressing: maps", () => {
     })
 
     // Address should be resurrected
-    expect(isDeleted(versionRef)).toBe(false)
+    expect(deleted(versionRef)).toBe(false)
     expect(versionRef()).toBe("2.0")
   })
 })
@@ -271,11 +271,11 @@ describe("withAddressing: composition", () => {
 
     // Access a deeply nested ref and verify it has `deleted` property
     const item = doc.todos.at(0)
-    expect(isDeleted(item)).toBe(false)
+    expect(deleted(item)).toBe(false)
 
     // The text leaf under the item should also have `deleted`
     const textRef = item.text
-    expect(isDeleted(textRef)).toBe(false)
+    expect(deleted(textRef)).toBe(false)
   })
 })
 
@@ -288,16 +288,16 @@ describe("withAddressing: onRefCreated", () => {
     const { doc } = createTodoDoc([{ text: "test", done: false }])
 
     // Product field ref — never dead
-    expect(isDeleted(doc.todos)).toBe(false)
+    expect(deleted(doc.todos)).toBe(false)
 
     // Sequence item ref — starts alive, becomes dead on delete
     const item = doc.todos.at(0)
-    expect(isDeleted(item)).toBe(false)
+    expect(deleted(item)).toBe(false)
 
     batch(doc, (d: any) => {
       d.todos.delete(0, 1)
     })
-    expect(isDeleted(item)).toBe(true)
+    expect(deleted(item)).toBe(true)
   })
 })
 
@@ -356,8 +356,8 @@ describe("withAddressing: ReplaceChange", () => {
     const alpha = doc.todos.at(0)
     const beta = doc.todos.at(1)
 
-    expect(isDeleted(alpha)).toBe(false)
-    expect(isDeleted(beta)).toBe(false)
+    expect(deleted(alpha)).toBe(false)
+    expect(deleted(beta)).toBe(false)
 
     // Replace the entire list via applyChanges with a replaceChange op
     applyChanges(doc, [
@@ -367,8 +367,8 @@ describe("withAddressing: ReplaceChange", () => {
       },
     ])
 
-    expect(isDeleted(alpha)).toBe(true)
-    expect(isDeleted(beta)).toBe(true)
+    expect(deleted(alpha)).toBe(true)
+    expect(deleted(beta)).toBe(true)
   })
 })
 
@@ -453,7 +453,7 @@ describe("withAddressing: dead ref detection", () => {
     const { doc } = createTodoDoc([{ text: "only", done: false }])
 
     const item = doc.todos.at(0)
-    expect(isDeleted(item)).toBe(false)
+    expect(deleted(item)).toBe(false)
     expect(item.text()).toBe("only")
 
     batch(doc, (d: any) => {
@@ -462,7 +462,7 @@ describe("withAddressing: dead ref detection", () => {
 
     // Deleted: detectable via deletedFeed(), reads total (undefined), writes guard.
     // Context: jj:mlurlzqt.
-    expect(isDeleted(item)).toBe(true)
+    expect(deleted(item)).toBe(true)
     expect(item.text()).toBeUndefined()
     expect(() => {
       batch(doc, () => {
@@ -475,7 +475,7 @@ describe("withAddressing: dead ref detection", () => {
     const { doc } = createMapDoc({ version: "1.0" })
 
     const ref = doc.metadata.at("version")
-    expect(isDeleted(ref)).toBe(false)
+    expect(deleted(ref)).toBe(false)
     expect(ref()).toBe("1.0")
 
     batch(doc, (d: any) => {
@@ -484,7 +484,7 @@ describe("withAddressing: dead ref detection", () => {
 
     // Deleted: detectable via deletedFeed(), reads total (undefined), writes guard.
     // Context: jj:mlurlzqt.
-    expect(isDeleted(ref)).toBe(true)
+    expect(deleted(ref)).toBe(true)
     expect(ref()).toBeUndefined()
     expect(() => {
       batch(doc, () => {
@@ -504,7 +504,7 @@ describe("withAddressing: dead ref detection", () => {
     // Simulate an event handler pattern
     // Simulate an event handler that closes over the ref
     const handler = () => {
-      if (isDeleted(beta)) return "guarded"
+      if (deleted(beta)) return "guarded"
       return beta.text()
     }
 
@@ -584,7 +584,7 @@ describe("withAddressing: subscription survival after structural change", () => 
     })
 
     // gamma is still alive and reads correctly
-    expect(isDeleted(gamma)).toBe(false)
+    expect(deleted(gamma)).toBe(false)
     expect(gamma.text()).toBe("gamma")
 
     // Mutate gamma at its new position — subscription should fire
@@ -613,7 +613,7 @@ describe("withAddressing: subscription survival after structural change", () => 
     })
 
     // Author subscription should still work
-    expect(isDeleted(authorRef)).toBe(false)
+    expect(deleted(authorRef)).toBe(false)
 
     batch(doc, () => {
       authorRef.set("bob")

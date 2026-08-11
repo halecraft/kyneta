@@ -20,7 +20,7 @@
 // Why a conjunction and not a disjunction: `settled` exists to make the
 // *negative* verdict trustworthy ("this document is genuinely empty"). Absence
 // of evidence is not evidence of absence until every source has been consulted.
-// Positive evidence needs no such gate — see `isPopulated` in @kyneta/schema,
+// Positive evidence needs no such gate — see `populated` in @kyneta/schema,
 // which flips as soon as any source delivers data.
 //
 // A term is a `[CHANGEFEED]` carrier rather than a bespoke interface. That is
