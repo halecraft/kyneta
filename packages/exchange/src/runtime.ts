@@ -433,12 +433,28 @@ export class Runtime {
    * Multiple calls with the same `docId` return the same instance.
    * Calling with a different BoundSchema for the same `docId` throws.
    *
+   * That last check lives here and not in {@link createInterpretDoc}, because
+   * `createInterpretDoc` is shared. The Exchange calls it both for a caller's
+   * own `get()` and for documents a peer announces — and in the second case
+   * the `BoundSchema` is whichever object the capability registry returned,
+   * not one the caller ever held. Comparing object identity catches a caller
+   * that rebuilds its schema on every call, which is worth catching; applied
+   * to the network path it would reject documents that are perfectly fine.
+   *
    * @param docId - The document ID
    * @param bound - A BoundSchema created by `bind()`
    * @returns A full-stack ref with the local substrate
    */
-  get: RuntimeGet = (docId, bound) =>
-    this.createInterpretDoc(docId, bound) as never
+  get: RuntimeGet = (docId, bound) => {
+    const cached = this.#docCache.get(docId)
+    if (cached && cached.mode === "interpret" && cached.bound !== bound) {
+      throw new Error(
+        `Document '${docId}' already exists with a different BoundSchema. ` +
+          `Use the same BoundSchema object when calling get() for the same document.`,
+      )
+    }
+    return this.createInterpretDoc(docId, bound) as never
+  }
 
   /**
    * Register a document for headless replication — no schema, no ref.

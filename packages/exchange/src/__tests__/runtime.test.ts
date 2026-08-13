@@ -368,4 +368,22 @@ describe("Runtime.get and replicate-mode documents", () => {
 
     runtime.shutdown()
   })
+
+  it("throws when the same docId is requested with a different BoundSchema", () => {
+    const runtime = new Runtime({ peerId: "alice" })
+    const OtherDoc = json.bind(TodoSchema)
+
+    runtime.get("todo-1", TodoDoc)
+    expect(() => runtime.get("todo-1", OtherDoc)).toThrow(/different BoundSchema/)
+
+    runtime.shutdown()
+  })
+
+  it("still returns the identical ref for the same BoundSchema", () => {
+    // Guards the check above against over-reaching: it must reject a
+    // *different* bound object, not repeat calls with the same one.
+    const runtime = new Runtime({ peerId: "alice" })
+    expect(runtime.get("todo-1", TodoDoc)).toBe(runtime.get("todo-1", TodoDoc))
+    runtime.shutdown()
+  })
 })
