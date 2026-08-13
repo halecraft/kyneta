@@ -246,6 +246,13 @@ Each `BoundSchema` carries a `SyncMode` — a structured record with three ortho
 
 The sync mode is a property of the document, not of the exchange: one exchange hosts documents of all three modes at once, dispatching per document on the axes above.
 
+**Only these three modes are network-expressible.** `SyncMode` has three orthogonal axes locally, but the wire carries a single 3-valued enum: `syncModeToWire` (`wire/src/wire-types.ts`) collapses any `writerModel: "serialized"` to `Authoritative`, any remaining `delivery: "delta-capable"` to `Collaborative`, and everything else to `Ephemeral`; the decode side maps that enum straight back to one of the three constants above. A custom mode built with `createBindingTarget` — say `{serialized, delta-capable, transient}` — therefore **cannot survive a round trip**: it is announced as `Authoritative` and arrives at the peer as `SYNC_AUTHORITATIVE`.
+
+Two consequences worth knowing:
+
+- `replicaKey`'s 3-way collapse in `Capabilities` is not a lossy shortcut. It is exactly as granular as the wire, and `resolveSchema` — whose only caller is `onEnsureDoc`, i.e. always a wire-decoded mode — can never be handed a fourth possibility. (It verifies the full triple anyway, so the guarantee lives in the function rather than three layers away in the codec.)
+- Custom `SyncMode`s are usable **locally** — a standalone `Runtime`, a single-process test — but two peers cannot agree on one. Anyone extending the mode space has to extend the wire enum with it.
+
 ### Document classification on `present`
 
 Source: `src/sync-program.ts` → `handlePresent`, `src/exchange.ts` → `classifyDoc`.

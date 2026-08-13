@@ -18,7 +18,13 @@ import type {
   SubstrateFactory,
   SyncMode,
 } from "@kyneta/schema"
-import { BoundReplica, ephemeral, json } from "@kyneta/schema"
+import {
+  BoundReplica,
+  ephemeral,
+  json,
+  metadataOf,
+  mismatchForInterpretation,
+} from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
 // ReplicaKey — composite lookup key
@@ -270,12 +276,31 @@ export function createCapabilities(params: {
       if (!entry) return undefined
       // Try exact match first
       const exact = entry.schemas.get(schemaHash)
-      if (exact) return exact
-      // Try any schema whose supportedHashes includes the requested hash
-      for (const bound of entry.schemas.values()) {
-        if (bound.supportedHashes.has(schemaHash)) return bound
-      }
-      return undefined
+      // Otherwise, any schema whose migration chain reaches the requested hash
+      const candidate =
+        exact ??
+        [...entry.schemas.values()].find(bound =>
+          bound.supportedHashes.has(schemaHash),
+        )
+      if (!candidate) return undefined
+
+      // The bucket above is an *index*, not a decision. `replicaKey` collapses
+      // a SyncMode into one of three names — anything with a serialized writer
+      // becomes "authoritative" whatever its delivery or durability — so two
+      // genuinely different modes can share a key. Landing in the same bucket
+      // therefore says "worth comparing", not "compatible".
+      //
+      // So: coarse key for the O(1) lookup, exact law for the answer. Without
+      // this second step a caller could be handed a BoundSchema whose sync
+      // mode differs from the one it asked about, and nothing downstream would
+      // notice until the two peers failed to converge.
+      return mismatchForInterpretation(metadataOf(candidate), {
+        replicaType,
+        syncMode,
+        schemaHash,
+      })
+        ? undefined
+        : candidate
     },
 
     resolveReplica(

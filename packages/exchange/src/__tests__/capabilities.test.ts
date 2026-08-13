@@ -139,6 +139,34 @@ describe("Capabilities", () => {
     expect(resolved).toBe(bound)
   })
 
+  it("resolveSchema declines a bucket collision the key cannot see", () => {
+    // `replicaKey` collapses a SyncMode into one of three names: anything with
+    // a serialized writer becomes "authoritative", whatever its delivery or
+    // durability. So this mode and SYNC_AUTHORITATIVE share a bucket while
+    // differing on `durability` — the lookup finds the schema, and only the
+    // exact law can tell that it is the wrong one.
+    //
+    // Unreachable with the three stock modes, which each map to a distinct
+    // name; reachable via `createBindingTarget`, the documented extension
+    // point for custom substrates.
+    const collidingMode = {
+      ...SYNC_AUTHORITATIVE,
+      durability: "transient",
+    } as const
+    const schema = Schema.struct({ title: Schema.string() })
+    const bound = json.bind(schema)
+
+    const caps = createCapabilities({
+      schemas: [bound],
+      replicas: [...DEFAULT_REPLICAS],
+      resolveFactory,
+    })
+
+    expect(
+      caps.resolveSchema(bound.schemaHash, ["plain", 1, 0], collidingMode),
+    ).toBeUndefined()
+  })
+
   it("resolveSchema returns undefined for wrong syncMode", () => {
     const schema = Schema.struct({ title: Schema.string() })
     const bound = json.bind(schema)
