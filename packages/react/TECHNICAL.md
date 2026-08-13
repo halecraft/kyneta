@@ -594,7 +594,7 @@ The barrel (`src/index.ts`) re-exports a curated subset of `@kyneta/schema`, `@k
 |------|-------------|
 | `@kyneta/changefeed` | `CHANGEFEED`, `Changeset` (type) |
 | `@kyneta/schema` | `Schema`, `change`, `applyChanges`, `subscribe`, `subscribeNode`, `BoundSchema`, `Op`, `Plain`, `Ref`, `RRef`, `CommitOptions` (types) |
-| `@kyneta/exchange` | `AsyncQueue`, `createLineDocSchema`, `describeSyncStatus` (deprecated, 3.0), `Connectivity`, `DocChange`, `DocId`, `DocInfo`, `ExchangeParams`, `GatePredicate`, `LineListener`, `LineProtocol`, `PeerIdentityDetails`, `Policy`, `PeerSyncState`, `SyncRef`, `SyncStatusSummary`, `TransportFactory` (types and values as applicable) |
+| `@kyneta/exchange` | `AsyncQueue`, `createLineDocSchema`, `Connectivity`, `DocChange`, `DocId`, `DocInfo`, `ExchangeParams`, `GatePredicate`, `LineListener`, `LineProtocol`, `PeerIdentityDetails`, `Policy`, `PeerSyncState`, `SyncRef`, `TransportFactory` (types and values as applicable) |
 
 This is a convenience, not a hard coupling — direct imports from the upstream packages work identically.
 
