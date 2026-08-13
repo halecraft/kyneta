@@ -24,6 +24,7 @@ export {
   Interpret,
   isBoundSchema,
   json,
+  metadataOf,
   Reject,
   Replicate,
 } from "./bind.js"
@@ -480,6 +481,9 @@ export type {
   Durability,
   HasDevtoolsHistory,
   HasTreeNodeAllocation,
+  MetadataAxis,
+  MetadataMismatch,
+  ReadCapability,
   RecordInverseFn,
   Replica,
   ReplicaFactory,
@@ -501,6 +505,8 @@ export {
   HASH_ALGORITHM_VERSION,
   hasDevtoolsHistory,
   hasTreeNodeAllocation,
+  mismatchForInterpretation,
+  mismatchForSync,
   RECORD_INVERSE,
   replicaTypesCompatible,
   requiresBidirectionalSync,
@@ -508,6 +514,7 @@ export {
   SYNC_AUTHORITATIVE,
   SYNC_COLLABORATIVE,
   SYNC_EPHEMERAL,
+  supportsHash,
   TREE_NODE_ALLOCATE,
 } from "./substrate.js"
 export {

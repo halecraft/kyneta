@@ -750,17 +750,217 @@ export function requiresBidirectionalSync(mode: SyncMode): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * Per-document metadata — the replicaType + syncMode pair.
+ * What a document *is* — the three facts two peers must agree on before any
+ * bytes can pass between them: how it is encoded (`replicaType`), how it
+ * syncs (`syncMode`), and what shape it holds (`schemaHash`).
  *
- * Used in StorageBackend, PresentMsg, DocEntry, cmd/ensure-doc,
- * and onDocDiscovered. Named as a first-class type because it appears
- * across storage, wire protocol, synchronizer model, and public API.
+ * A document has exactly one of each. Notably it does *not* have a set of
+ * schema hashes: the set of shapes a *reader* can cope with belongs to the
+ * reader, not to the thing being read — see {@link ReadCapability}.
+ *
+ * Appears across storage, the wire protocol, the synchronizer model, and the
+ * public API, which is why it is a named type rather than an inline shape.
  */
 export type DocMetadata = {
   readonly replicaType: ReplicaType
   readonly syncMode: SyncMode
   readonly schemaHash: string
-  readonly supportedHashes?: readonly string[]
+}
+
+/**
+ * What a peer *can read* — a document's own facts, plus every ancestor shape
+ * this peer's schema can still reach by walking its migration chains
+ * backwards (see `computeSupportedHashes` in `migration.ts`).
+ *
+ * `supportedHashes` is **required** here, and that is load-bearing rather
+ * than fussy. A read capability is always derived locally from a
+ * `BoundSchema`, whose own `supportedHashes` is a required set — it never
+ * arrives over the wire, so it is never absent. Requiring it is what lets the
+ * compiler tell a reader apart from a document: a bare {@link DocMetadata}
+ * cannot be passed where a `ReadCapability` is expected, so the argument
+ * order of the *directional* law below cannot be silently reversed.
+ */
+export type ReadCapability = DocMetadata & {
+  readonly supportedHashes: readonly string[]
+}
+
+// ---------------------------------------------------------------------------
+// The two compatibility laws
+// ---------------------------------------------------------------------------
+//
+// `supportedHashes` gets asked two different questions, and they have
+// different answers. Keeping them apart is the whole point of this section.
+//
+//   interpretation — "can MY schema read a document written at this shape?"
+//                    Look for that one shape in my own set. One-directional:
+//                    swapping the two sides asks something else entirely.
+//
+//   sync           — "is there a shape we BOTH speak?"
+//                    Look for any overlap between the two sets. Symmetric:
+//                    either side may ask, and the answer is the same.
+//
+// The first implies the second, but not the reverse — and the gap is real, not
+// a technicality. Picture two peers that both migrated away from a shared
+// ancestor, in different directions: each still recognises the ancestor, so
+// they overlap and can sync there. Neither has ever seen the shape the other
+// currently writes, so neither can read the other's documents. Both answers
+// are correct for their own question, and using one law to answer the other's
+// question is a bug whichever way round you do it.
+
+/**
+ * Can a peer with this read capability take on data written at `hash`?
+ *
+ * Directional. `supportedHashes` is built by walking migration chains
+ * *backwards*, so a newer schema reaches its own ancestors' shapes and never
+ * the other way round — a V2 schema reads V1 documents, a V1 schema does not
+ * read V2 documents. This is the question `exchange.get()` asks.
+ *
+ * One caveat, because the set is narrower than this function's name suggests.
+ * `computeSupportedHashes` stops walking backwards at any migration step that
+ * destroys field identities, so what it returns is "shapes I can exchange
+ * *operations* at" — a stricter bar than "shapes I can read", since a shape
+ * past that boundary could still be recovered by shipping the document whole.
+ * The effect is that this predicate sometimes says no where reading would
+ * have worked. That is the safe direction to be wrong in, and it is what
+ * `resolveSchema` in `@kyneta/exchange` has always done.
+ *
+ * Those two notions are meant to become separate sets (§`supportedHashes` in
+ * this package's TECHNICAL.md calls them `readSupports` and `nativeSupports`).
+ * When they do, *this* law follows the looser one and {@link mismatchForSync}
+ * keeps the stricter — so the two laws will then read different sets, not the
+ * same set two ways. Worth knowing before anyone tries to merge them.
+ */
+export function supportsHash(reader: ReadCapability, hash: string): boolean {
+  return reader.supportedHashes.includes(hash)
+}
+
+/**
+ * Is there a shape both peers can take on?
+ *
+ * Symmetric, and *derived* rather than independent: syncing is interpreting,
+ * at some shape the two of them happen to share. Every `reachable.has(h)`
+ * below is one {@link supportsHash} question, asked once per shape the other
+ * peer knows — the loop is the only thing this adds.
+ */
+function hashesIntersect(a: ReadCapability, b: ReadCapability): boolean {
+  // The membership test is inlined against a Set rather than calling
+  // `supportsHash` in the loop, purely to keep the O(1) lookup the sync
+  // program used before this law was extracted. The sets are small either way
+  // — `computeSupportedHashes` is a cartesian product over migration chains,
+  // "dozens" for a realistic schema — but the original made that choice on
+  // purpose, and a refactor should not quietly hand it back.
+  const reachable = new Set(a.supportedHashes)
+  return b.supportedHashes.some(h => reachable.has(h))
+}
+
+// ---------------------------------------------------------------------------
+// Comparing two descriptions of the same document
+// ---------------------------------------------------------------------------
+
+/** Which axis of a document's metadata failed to line up. */
+export type MetadataAxis = "replicaType" | "schemaHash" | "syncMode"
+
+/**
+ * The first axis on which two descriptions of a document disagreed, with both
+ * offending values rendered for a human.
+ *
+ * `local` and `remote` are strings rather than the original values because
+ * every consumer either logs them or puts them in an error; `@kyneta/exchange`
+ * lifts them straight into its structured `Diagnostic` type.
+ */
+export type MetadataMismatch = {
+  readonly axis: MetadataAxis
+  readonly local: string
+  readonly remote: string
+}
+
+/**
+ * The two axes that mean the same thing to both laws. Factored out so the
+ * pair cannot drift apart on the parts where they agree.
+ *
+ * `replicaType` is checked first, matching the order the sync program has
+ * always used: if the bytes cannot be decoded at all, telling the reader
+ * their *schema* disagrees points them at the wrong problem.
+ */
+function mismatchOnSharedAxes(
+  local: DocMetadata,
+  remote: DocMetadata,
+): MetadataMismatch | undefined {
+  if (!replicaTypesCompatible(local.replicaType, remote.replicaType)) {
+    return {
+      axis: "replicaType",
+      local: JSON.stringify(local.replicaType),
+      remote: JSON.stringify(remote.replicaType),
+    }
+  }
+  if (
+    local.syncMode.writerModel !== remote.syncMode.writerModel ||
+    local.syncMode.delivery !== remote.syncMode.delivery ||
+    local.syncMode.durability !== remote.syncMode.durability
+  ) {
+    return {
+      axis: "syncMode",
+      local: JSON.stringify(local.syncMode),
+      remote: JSON.stringify(remote.syncMode),
+    }
+  }
+  return undefined
+}
+
+/**
+ * Can `reader` take on `doc`? Returns the first axis that says no.
+ *
+ * All three axes are checked, and the `syncMode` one is not a stray: "to
+ * interpret" here means *admission to the interpret tier* — the tier named
+ * alongside replicate and deferred — not the narrow act of decoding bytes.
+ * What a document must supply to enter that tier is not a matter of taste;
+ * it is `DocReadyInfo` in `@kyneta/exchange`, whose three
+ * compatibility-bearing fields are exactly these. One axis per precondition:
+ * construct a substrate (`replicaType`), register for sync (`syncMode`),
+ * bind a schema (`schemaHash`).
+ *
+ * The two parameters are deliberately different types. Passing them the wrong
+ * way round would invert a directional law silently — newer-reads-older
+ * becoming older-reads-newer — so `doc` being a bare {@link DocMetadata}
+ * makes that a compile error instead. It also means `doc` has no
+ * `supportedHashes` field to misuse: a document is read at the one shape it
+ * was written at, and no set enters into it.
+ */
+export function mismatchForInterpretation(
+  reader: ReadCapability,
+  doc: DocMetadata,
+): MetadataMismatch | undefined {
+  const shared = mismatchOnSharedAxes(reader, doc)
+  if (shared) return shared
+  if (!supportsHash(reader, doc.schemaHash)) {
+    return {
+      axis: "schemaHash",
+      local: reader.schemaHash,
+      remote: doc.schemaHash,
+    }
+  }
+  return undefined
+}
+
+/**
+ * Can these two peers sync? Returns the first axis that says no.
+ *
+ * Same three axes as {@link mismatchForInterpretation}, for a different
+ * reason: here they are the triple two peers must share to exchange ops at
+ * all, rather than the preconditions for entering a tier. Both parameters are
+ * read capabilities because sync compares two peers, each with its own range
+ * of shapes.
+ */
+export function mismatchForSync(
+  a: ReadCapability,
+  b: ReadCapability,
+): MetadataMismatch | undefined {
+  const shared = mismatchOnSharedAxes(a, b)
+  if (shared) return shared
+  if (!hashesIntersect(a, b)) {
+    return { axis: "schemaHash", local: a.schemaHash, remote: b.schemaHash }
+  }
+  return undefined
 }
 
 // ---------------------------------------------------------------------------

@@ -13,6 +13,7 @@ import {
   batch,
   bind,
   Migration,
+  plainReplicaFactory,
   plainSubstrateFactory,
   Schema,
   SYNC_AUTHORITATIVE,
@@ -66,6 +67,7 @@ describe("supportedHashes — cross-migrated-version sync", () => {
         count: Schema.number(),
       }).migrated(Migration.rename("name", "title")),
       factory: () => plainSubstrateFactory,
+      replicaType: plainReplicaFactory.replicaType,
       syncMode: SYNC_AUTHORITATIVE,
     })
 
@@ -77,6 +79,7 @@ describe("supportedHashes — cross-migrated-version sync", () => {
         count: Schema.number(),
       }),
       factory: () => plainSubstrateFactory,
+      replicaType: plainReplicaFactory.replicaType,
       syncMode: SYNC_AUTHORITATIVE,
     })
 
@@ -135,12 +138,14 @@ describe("supportedHashes — cross-migrated-version sync", () => {
     const schemaA = bind({
       schema: Schema.struct({ a: Schema.string() }),
       factory: () => plainSubstrateFactory,
+      replicaType: plainReplicaFactory.replicaType,
       syncMode: SYNC_AUTHORITATIVE,
     })
 
     const schemaB = bind({
       schema: Schema.struct({ b: Schema.number() }),
       factory: () => plainSubstrateFactory,
+      replicaType: plainReplicaFactory.replicaType,
       syncMode: SYNC_AUTHORITATIVE,
     })
 

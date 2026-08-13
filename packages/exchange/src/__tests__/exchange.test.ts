@@ -157,6 +157,7 @@ describe("Exchange", () => {
       const Doc = bind({
         schema: testSchema,
         factory: builder,
+        replicaType: plainReplicaFactory.replicaType,
         syncMode: SYNC_AUTHORITATIVE,
       })
 
@@ -173,6 +174,7 @@ describe("Exchange", () => {
       const DocA = bind({
         schema: testSchema,
         factory: builder,
+        replicaType: plainReplicaFactory.replicaType,
         syncMode: SYNC_AUTHORITATIVE,
       })
 
@@ -197,6 +199,7 @@ describe("Exchange", () => {
       const Doc = bind({
         schema: testSchema,
         factory: builder,
+        replicaType: plainReplicaFactory.replicaType,
         syncMode: SYNC_AUTHORITATIVE,
       })
 

@@ -374,7 +374,9 @@ describe("Runtime.get and replicate-mode documents", () => {
     const OtherDoc = json.bind(TodoSchema)
 
     runtime.get("todo-1", TodoDoc)
-    expect(() => runtime.get("todo-1", OtherDoc)).toThrow(/different BoundSchema/)
+    expect(() => runtime.get("todo-1", OtherDoc)).toThrow(
+      /different BoundSchema/,
+    )
 
     runtime.shutdown()
   })

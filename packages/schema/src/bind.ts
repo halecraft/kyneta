@@ -40,7 +40,9 @@ import type {
 } from "./schema.js"
 import { isOpaqueBoundary, KIND } from "./schema.js"
 import type {
+  ReadCapability,
   ReplicaFactory,
+  ReplicaType,
   SubstrateFactory,
   SyncMode,
   Version,
@@ -113,6 +115,19 @@ export interface BoundSchema<
   readonly _nativeMap?: N
   readonly schema: S
   readonly factory: FactoryBuilder<any>
+
+  /**
+   * The binary format this binding's substrate produces and consumes.
+   *
+   * A property of the *binding* — this schema, on this substrate family,
+   * under this sync mode — not of any substrate instance built from it, which
+   * is why it does not vary with `peerId`. Its absence used to force callers
+   * to build a whole substrate factory just to read it, and left
+   * `BoundSchema` unable to answer a question its sibling `BoundReplica`
+   * could answer from a field.
+   */
+  readonly replicaType: ReplicaType
+
   readonly syncMode: SyncMode
   readonly schemaHash: string
 
@@ -309,6 +324,16 @@ export function bind<S extends SchemaNode>(config: {
   schema: S
   factory: FactoryBuilder<any>
   syncMode: SyncMode
+  /**
+   * The binary format this schema's substrate produces and consumes.
+   *
+   * Supplied rather than derived because a `FactoryBuilder` needs a `peerId`
+   * to run, and the format identifier does not depend on one — building a
+   * whole substrate factory to read a static tuple off it would be the tail
+   * wagging the dog. Every caller has it to hand: `createBindingTarget` reads
+   * it off the `ReplicaFactory` it already holds.
+   */
+  replicaType: ReplicaType
 }): BoundSchema<S> {
   const schemaHash = computeSchemaHash(config.schema)
 
@@ -371,6 +396,7 @@ export function bind<S extends SchemaNode>(config: {
     _brand: "BoundSchema",
     schema: config.schema,
     factory: config.factory,
+    replicaType: config.replicaType,
     syncMode: config.syncMode,
     schemaHash,
     identityBinding,
@@ -394,6 +420,33 @@ export function isBoundSchema(value: unknown): value is BoundSchema {
     "_brand" in value &&
     (value as any)._brand === "BoundSchema"
   )
+}
+
+// ---------------------------------------------------------------------------
+// metadataOf — a BoundSchema, viewed as a read capability
+// ---------------------------------------------------------------------------
+
+/**
+ * What a peer holding this schema can read.
+ *
+ * A `BoundSchema` *is* a reader: it knows its own format, protocol and shape,
+ * and it knows every ancestor shape its migration chains can still reach. So
+ * this is a projection, not a computation — every field is already present.
+ *
+ * It returns a `ReadCapability` rather than a `DocMetadata`, and that is what
+ * lets the comparison laws in `substrate.ts` distinguish a reader from a
+ * document at the type level. The projection is total because
+ * `BoundSchema.supportedHashes` is a required set, never an optional one:
+ * unlike a peer's declaration arriving over the wire, a local schema's range
+ * is always known.
+ */
+export function metadataOf(bound: BoundSchema): ReadCapability {
+  return {
+    replicaType: bound.replicaType,
+    syncMode: bound.syncMode,
+    schemaHash: bound.schemaHash,
+    supportedHashes: [...bound.supportedHashes],
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -455,6 +508,7 @@ export function createBindingTarget<
       return bind({
         schema,
         factory: config.factory,
+        replicaType: config.replicaFactory.replicaType,
         syncMode: config.syncMode,
       }) as BoundSchema<P, N>
     },

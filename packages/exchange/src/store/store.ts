@@ -27,16 +27,19 @@ import type { DocId } from "@kyneta/transport"
 /**
  * Per-document metadata persisted in the store.
  *
- * Structurally `Omit<DocMetadata, 'supportedHashes'>`. The `Omit`
- * relationship keeps `StoreMeta` in sync with `DocMetadata` if fields
- * are added — the compiler catches drift.
+ * Exactly a `DocMetadata` — the storage layer keeps its own name for the
+ * concept because that is the vocabulary its interface speaks in, and
+ * because `@kyneta/postgres-store` and friends import it.
  *
- * `supportedHashes` is excluded because it is derived from the runtime
- * `BoundSchema.supportedHashes` set, not from the document's persisted
- * data. A cold-start inventory reconstructs supported hashes from
- * registered schemas, not from storage.
+ * This used to be `Omit<DocMetadata, 'supportedHashes'>`, working around a
+ * field that had no business on `DocMetadata` in the first place: the set of
+ * shapes a *reader* can cope with is derived from a runtime `BoundSchema`,
+ * not from a document's persisted bytes. A cold-start inventory rebuilds
+ * supported hashes from registered schemas, never from storage. That field
+ * now lives on `ReadCapability` where it belongs, so there is nothing left
+ * to omit.
  */
-export type StoreMeta = Omit<DocMetadata, "supportedHashes">
+export type StoreMeta = DocMetadata
 
 // ---------------------------------------------------------------------------
 // StoreRecord — the unit of persistence

@@ -88,10 +88,22 @@ export type DepartMsg = {
  *
  * Each entry carries per-document metadata (replicaType, syncMode)
  * so the receiver can validate compatibility before any binary exchange.
+ *
+ * It also carries `supportedHashes` — but that is the *sender's* declaration
+ * of which shapes it can read, not a property of the document, which has
+ * exactly one shape. `DocMetadata` deliberately does not model it (see
+ * `ReadCapability` in `@kyneta/schema`), so this message declares it here,
+ * where the sparseness belongs: the field is omitted on the wire whenever it
+ * would say nothing beyond `schemaHash`, so it is optional in a way a local
+ * read capability never is.
  */
 export type PresentMsg = {
   type: "present"
-  docs: Array<{ docId: DocId } & DocMetadata>
+  docs: Array<
+    { docId: DocId } & DocMetadata & {
+        readonly supportedHashes?: readonly string[]
+      }
+  >
 }
 
 /**

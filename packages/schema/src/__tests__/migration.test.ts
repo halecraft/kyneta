@@ -23,6 +23,7 @@ import {
   type MigrationPrimitive,
   type MigrationTier,
   type ProductSchema,
+  plainReplicaFactory,
   plainSubstrateFactory,
   Schema,
   SYNC_AUTHORITATIVE,
@@ -478,6 +479,7 @@ describe("supportedHashes — JSON boundary propagation", () => {
     bind({
       schema,
       factory: () => plainSubstrateFactory,
+      replicaType: plainReplicaFactory.replicaType,
       syncMode: SYNC_AUTHORITATIVE,
     })
 
@@ -525,6 +527,7 @@ describe("bind() with migrations", () => {
     const bound = bind({
       schema: s,
       factory: () => plainSubstrateFactory,
+      replicaType: plainReplicaFactory.replicaType,
       syncMode: SYNC_AUTHORITATIVE,
     })
 
@@ -543,6 +546,7 @@ describe("bind() with migrations", () => {
     const bound = bind({
       schema: s,
       factory: () => plainSubstrateFactory,
+      replicaType: plainReplicaFactory.replicaType,
       syncMode: SYNC_AUTHORITATIVE,
     })
 
@@ -560,6 +564,7 @@ describe("bind() with migrations", () => {
     const bound = bind({
       schema: s,
       factory: () => plainSubstrateFactory,
+      replicaType: plainReplicaFactory.replicaType,
       syncMode: SYNC_AUTHORITATIVE,
     })
 
@@ -584,6 +589,7 @@ describe("bind() with migrations", () => {
         bind({
           schema: invalid,
           factory: () => plainSubstrateFactory,
+          replicaType: plainReplicaFactory.replicaType,
           syncMode: SYNC_AUTHORITATIVE,
         }),
       ).toThrow(/Migration chain validation failed/)
@@ -605,6 +611,7 @@ describe("computeSupportedHashes (via bind.supportedHashes)", () => {
     const bound = bind({
       schema: s,
       factory: () => plainSubstrateFactory,
+      replicaType: plainReplicaFactory.replicaType,
       syncMode: SYNC_AUTHORITATIVE,
     })
     return bound.schemaHash
@@ -626,6 +633,7 @@ describe("computeSupportedHashes (via bind.supportedHashes)", () => {
     const bound = bind({
       schema: migrated,
       factory: () => plainSubstrateFactory,
+      replicaType: plainReplicaFactory.replicaType,
       syncMode: SYNC_AUTHORITATIVE,
     })
 
@@ -649,6 +657,7 @@ describe("computeSupportedHashes (via bind.supportedHashes)", () => {
     const bound = bind({
       schema: migrated,
       factory: () => plainSubstrateFactory,
+      replicaType: plainReplicaFactory.replicaType,
       syncMode: SYNC_AUTHORITATIVE,
     })
 
@@ -673,6 +682,7 @@ describe("computeSupportedHashes (via bind.supportedHashes)", () => {
     const bound = bind({
       schema: migrated,
       factory: () => plainSubstrateFactory,
+      replicaType: plainReplicaFactory.replicaType,
       syncMode: SYNC_AUTHORITATIVE,
     })
 
@@ -695,6 +705,7 @@ describe("computeSupportedHashes (via bind.supportedHashes)", () => {
     const bound = bind({
       schema: migrated,
       factory: () => plainSubstrateFactory,
+      replicaType: plainReplicaFactory.replicaType,
       syncMode: SYNC_AUTHORITATIVE,
     })
 
@@ -718,6 +729,7 @@ describe("computeSupportedHashes (via bind.supportedHashes)", () => {
     const bound = bind({
       schema: rootCurrent,
       factory: () => plainSubstrateFactory,
+      replicaType: plainReplicaFactory.replicaType,
       syncMode: SYNC_AUTHORITATIVE,
     })
 
@@ -746,6 +758,7 @@ describe("computeSupportedHashes (via bind.supportedHashes)", () => {
     const bound = bind({
       schema: s,
       factory: () => plainSubstrateFactory,
+      replicaType: plainReplicaFactory.replicaType,
       syncMode: SYNC_AUTHORITATIVE,
     })
     expect(bound.supportedHashes.size).toBe(1)

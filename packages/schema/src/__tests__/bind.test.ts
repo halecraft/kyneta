@@ -38,6 +38,7 @@ describe("bind()", () => {
     const bound = bind({
       schema: testSchema,
       factory,
+      replicaType: plainReplicaFactory.replicaType,
       syncMode: SYNC_COLLABORATIVE,
     })
 
@@ -52,6 +53,7 @@ describe("bind()", () => {
     const bound = bind({
       schema: testSchema,
       factory,
+      replicaType: plainReplicaFactory.replicaType,
       syncMode: SYNC_AUTHORITATIVE,
     })
 

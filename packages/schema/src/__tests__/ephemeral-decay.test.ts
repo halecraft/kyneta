@@ -16,6 +16,7 @@ import {
   interpret,
   json,
   observation,
+  plainReplicaFactory,
   readable,
   Schema,
   SYNC_COLLABORATIVE,
@@ -128,6 +129,7 @@ describe("durable substrate rejects .decay()", () => {
           // This factory is never reached — the validator throws first.
           throw new Error("should not reach factory")
         },
+        replicaType: plainReplicaFactory.replicaType,
         syncMode: SYNC_COLLABORATIVE,
       }),
     ).toThrow(/decay/i)

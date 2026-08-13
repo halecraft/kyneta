@@ -4,7 +4,7 @@
 > **Role**: The schema interpreter algebra — one recursive grammar for document structure, a reactive observation surface (`[CHANGEFEED]` on every ref, with tree-level composed changefeeds for composites), a substrate boundary that separates state management from replication, a migration system that derives stable identity from structure, and a position algebra for cursor-stable text and sequences.
 > **Depends on**: `@kyneta/changefeed`
 > **Depended on by**: `@kyneta/exchange`, `@kyneta/loro-schema`, `@kyneta/yjs-schema`, `@kyneta/index`, `@kyneta/react`, `@kyneta/compiler`, `@kyneta/cast`, `@kyneta/transport`
-> **Canonical symbols**: `Schema`, `Schema.*` constructors, `KIND`, `LAWS`, `bind`, `BoundSchema`, `BoundReplica`, `BindingTarget`, `createBindingTarget`, `json`, `ephemeral`, `Interpret`, `Replicate`, `Defer`, `Reject`, `interpret`, `Interpreter`, `InterpreterLayer`, `createDoc`, `createRef`, `change`, `applyChanges`, `subscribe`, `subscribeNode`, `Substrate`, `SubstrateFactory`, `SubstrateCapabilities`, `Replica`, `ReplicaFactory`, `SubstratePayload`, `Version`, `SyncMode`, `SYNC_AUTHORITATIVE`, `SYNC_COLLABORATIVE`, `SYNC_EPHEMERAL`, `requiresBidirectionalSync`, `computeSchemaHash`, `BACKING_DOC`, `Op`, `RecursiveChangefeedProtocol`, `Change`, `ChangeBase`, `TextChange`, `SequenceChange`, `MapChange`, `TreeChange`, `ReplaceChange`, `IncrementChange`, `RichTextChange`, `transformIndex`, `textInstructionsToPatches`, `Migration`, `MIGRATION_CHAIN`, `deriveIdentity`, `deriveManifest`, `deriveSchemaBinding`, `deriveTier`, `validateChain`, `Position`, `POSITION`, `PlainPosition`, `hasPosition`, `decodePlainPosition`, `Side`, `NATIVE`, `SUBSTRATE`, `NativeMap`, `unwrap`, `versionVectorMeet`, `versionVectorCompare`, `Zero`, `validate`, `tryValidate`, `SchemaValidationError`, `walkPath`, `PathWalk`, `foldPath`, `pathSchema`, `findOpaqueBoundary`, `OpaqueBoundaryHit`, `PathStepper`, `PathFoldResult`, `extendSchemaPathKey`, `materializeValue`, `MaterializedNode`, `EagerPolicy`, `containerKey`, `fieldAbsPath`, `needsContainer`, `withTracking`, `tracking`, `withReadScope`, `reportRead`, `withoutTracking`, `currentScope`, `dependencyKey`, `Dependency`, `Aspect`
+> **Canonical symbols**: `Schema`, `Schema.*` constructors, `KIND`, `LAWS`, `bind`, `BoundSchema`, `BoundReplica`, `BindingTarget`, `createBindingTarget`, `metadataOf`, `json`, `ephemeral`, `Interpret`, `Replicate`, `Defer`, `Reject`, `interpret`, `Interpreter`, `InterpreterLayer`, `createDoc`, `createRef`, `change`, `applyChanges`, `subscribe`, `subscribeNode`, `Substrate`, `SubstrateFactory`, `SubstrateCapabilities`, `DocMetadata`, `ReadCapability`, `supportsHash`, `mismatchForInterpretation`, `mismatchForSync`, `MetadataAxis`, `MetadataMismatch`, `Replica`, `ReplicaFactory`, `SubstratePayload`, `Version`, `SyncMode`, `SYNC_AUTHORITATIVE`, `SYNC_COLLABORATIVE`, `SYNC_EPHEMERAL`, `requiresBidirectionalSync`, `computeSchemaHash`, `BACKING_DOC`, `Op`, `RecursiveChangefeedProtocol`, `Change`, `ChangeBase`, `TextChange`, `SequenceChange`, `MapChange`, `TreeChange`, `ReplaceChange`, `IncrementChange`, `RichTextChange`, `transformIndex`, `textInstructionsToPatches`, `Migration`, `MIGRATION_CHAIN`, `deriveIdentity`, `deriveManifest`, `deriveSchemaBinding`, `deriveTier`, `validateChain`, `Position`, `POSITION`, `PlainPosition`, `hasPosition`, `decodePlainPosition`, `Side`, `NATIVE`, `SUBSTRATE`, `NativeMap`, `unwrap`, `versionVectorMeet`, `versionVectorCompare`, `Zero`, `validate`, `tryValidate`, `SchemaValidationError`, `walkPath`, `PathWalk`, `foldPath`, `pathSchema`, `findOpaqueBoundary`, `OpaqueBoundaryHit`, `PathStepper`, `PathFoldResult`, `extendSchemaPathKey`, `materializeValue`, `MaterializedNode`, `EagerPolicy`, `containerKey`, `fieldAbsPath`, `needsContainer`, `withTracking`, `tracking`, `withReadScope`, `reportRead`, `withoutTracking`, `currentScope`, `dependencyKey`, `Dependency`, `Aspect`
 > **Key invariant(s)**: The schema grammar is one recursive type with eleven node kinds; substrates declare *closed* composition-law sets via phantom `[LAWS]` brands; `bind()` enforces law compatibility at compile time. Four named binding targets (`json`, `ephemeral`, `loro`, `yjs`) each bundle a substrate factory, a `SyncMode`, and a set of allowed laws. No runtime law dispatch; no open-world subtyping; no hidden backend coupling.
 
 The algebraic core of every document in Kyneta. You write a schema once — a tree of structural composites and CRDT leaves — and hand it to a substrate (plain JS, Loro, Yjs). The substrate stores state; the interpreter stack gives you a typed, navigable, writable reference (`Ref<S>`) over that state, with reactive observation baked in — every ref carries a `[CHANGEFEED]` that emits one `Changeset<Op>` per transaction covering own-path + descendants via `subscribeDescendants`. Migration primitives derive a content-addressed identity from the schema tree so that documents can evolve across schema versions without losing peer-to-peer identity.
@@ -1122,6 +1122,41 @@ A `BoundSchema` declares `supportedHashes`: all schema hashes at which the curre
 The richer `readSupports` / `nativeSupports` split (allowing degraded entirety-only sync across T2/T3 boundaries — see `.jj-plan/migrations.md` §8.1) is deferred until degraded-sync infrastructure exists.
 
 The exchange includes `supportedHashes` in every `present` message when it carries more info than the primary hash alone. Receivers with older schemas check whether one of their hashes is in the sender's `supportedHashes` to decide if sync can proceed.
+
+### The two laws over `supportedHashes`
+
+Source: `packages/schema/src/substrate.ts` → `supportsHash`, `mismatchForInterpretation`, `mismatchForSync`.
+
+The set above gets asked two different questions, and they have different answers. Both are needed; neither substitutes for the other.
+
+| Question | Law | Symmetry | Asked by |
+|---|---|---|---|
+| **Interpretation** — "can *my* schema read a document written at `h`?" | `h ∈ S_local` | directional | `exchange.get()` and everything that decides whether to interpret a document |
+| **Sync** — "is there a shape we *both* speak?" | `S_local ∩ S_remote ≠ ∅` | symmetric | the sync program, when a `present` arrives for a document it already holds |
+
+Membership implies intersection; the converse does not. Two peers on divergent migration branches from a common ancestor — `{H2a, H1}` and `{H2b, H1}` — share `H1`, so ops can flow between them; but neither can interpret a document written at the other's *current* shape, because neither has ever seen it. Answering one question with the other's law is a bug in whichever direction you make the mistake.
+
+`hashesIntersect` is written in terms of `supportsHash` rather than as an independent set operation, so the relationship between the two laws lives in the code instead of only here.
+
+**Which set is this, today?** `nativeSupports` — the T2 halt above exists precisely to keep it so. That makes `supportsHash` *conservative* when used for a read question: it can refuse a shape that entirety-only reading would in fact recover. Refusing is the safe direction, and it is what `resolveSchema` in `@kyneta/exchange` has always done. When the deferred `readSupports` / `nativeSupports` split arrives, **`supportsHash` moves to `readSupports` and `mismatchForSync` stays on `nativeSupports`** — at which point the two laws read different sets, not merely the same set two ways. That is the strongest reason not to collapse them into one function with a mode flag: the flag would eventually have to switch the data source, not just the operator.
+
+### `DocMetadata` vs `ReadCapability`
+
+`supportedHashes` describes a **reader**, never a document. A document has exactly one shape — the one its bytes were written at. A peer has a *set* — the shapes its schema can still reach. The type system now says so:
+
+| Type | Is | Carries `supportedHashes` |
+|---|---|---|
+| `DocMetadata` | what a document *is*: `replicaType`, `syncMode`, `schemaHash` | no |
+| `ReadCapability` | what a peer *can read*: a `DocMetadata` plus its reachable shapes | **yes, required** |
+
+The required-ness is deliberate. A read capability is always derived locally from a `BoundSchema` (via `metadataOf`), whose own `supportedHashes` is a required set — it never arrives over the wire, so it is never absent. Because it is required, a bare `DocMetadata` cannot be passed where a `ReadCapability` is expected, which makes reversing `mismatchForInterpretation`'s arguments a compile error rather than a silent inversion of a directional law.
+
+**Why both laws check all three axes**, despite the hash axis being the only one that differs:
+
+- For **interpretation**, the three axes are the admission preconditions of a tier. "Interpret" here is the tier named alongside replicate and deferred, not the narrow act of decoding bytes. What a document must supply to enter it is `DocReadyInfo` in `@kyneta/exchange`, whose three compatibility-bearing fields are exactly these — one axis per precondition: construct a substrate (`replicaType`), register for sync (`syncMode`), bind a schema (`schemaHash`).
+- For **sync**, the same three are simply the triple two peers must share to exchange ops at all.
+
+`MetadataAxis` is deliberately *not* `@kyneta/exchange`'s `DiagnosticCode`. Schema names the axes; the exchange names the diagnostics it reports to users; the mapping between them is the layer boundary, and `@kyneta/devtools` depends on the diagnostic names independently.
 
 ### What migrations are NOT
 
