@@ -9,11 +9,15 @@
 // The shell resolves PeerId → ChannelId when interpreting effects.
 
 import type { Program } from "@kyneta/machine"
-import type { ReplicaType, SubstratePayload, SyncMode } from "@kyneta/schema"
-import {
-  replicaTypesCompatible,
-  requiresBidirectionalSync,
+import type {
+  MetadataAxis,
+  MetadataMismatch,
+  ReadCapability,
+  ReplicaType,
+  SubstratePayload,
+  SyncMode,
 } from "@kyneta/schema"
+import { mismatchForSync, requiresBidirectionalSync } from "@kyneta/schema"
 import type {
   DismissMsg,
   DocId,
@@ -200,6 +204,36 @@ type SyncDiagnostic = Extract<
       | "sync-mode-mismatch"
   }
 >
+
+/**
+ * Translate a compatibility axis into the diagnostic code we report it under.
+ *
+ * The layer boundary made explicit: `@kyneta/schema` names the three axes a
+ * document can disagree on, and knows nothing about diagnostics; the exchange
+ * names what it reports to users, and `@kyneta/devtools` depends on those code
+ * strings independently of either. `satisfies` turns "added an axis, forgot
+ * the code" into a compile error rather than a runtime `undefined`.
+ */
+const MISMATCH_CODE = {
+  replicaType: "replica-type-mismatch",
+  schemaHash: "schema-hash-mismatch",
+  syncMode: "sync-mode-mismatch",
+} as const satisfies Record<MetadataAxis, SyncDiagnostic["code"]>
+
+/** The human-readable half of a mismatch diagnostic. */
+function describeMismatch(docId: DocId, m: MetadataMismatch): string {
+  const subject =
+    m.axis === "replicaType"
+      ? "replica type"
+      : m.axis === "schemaHash"
+        ? "schema hash"
+        : "syncMode"
+  const quote = m.axis === "schemaHash" ? "'" : ""
+  return (
+    `[exchange] ${subject} mismatch for doc '${docId}': ` +
+    `local ${quote}${m.local}${quote} vs remote ${quote}${m.remote}${quote} — skipping sync`
+  )
+}
 
 export type SyncEffect =
   | { type: "send-to-peer"; to: PeerId; message: SyncMsg }
@@ -1155,68 +1189,38 @@ function handlePresent(
   } of message.docs) {
     const docEntry = model.documents.get(docId)
     if (docEntry) {
-      // Known doc — validate replicaType compatibility
-      if (!replicaTypesCompatible(docEntry.replicaType, replicaType)) {
+      // Known doc — can the two of us sync it at all?
+      //
+      // Both operands are read capabilities: sync compares two *peers*, each
+      // with its own range of shapes, rather than a peer against a document.
+      // The remote one has to be assembled because `present` is sparse — a
+      // sender omits `supportedHashes` whenever it would say nothing beyond
+      // the primary hash. Resolving that here, where the wire meets the
+      // domain, is what keeps the law itself free of optional fields; it is
+      // the same treatment `establish`'s protocolVersion already gets.
+      const local: ReadCapability = {
+        replicaType: docEntry.replicaType,
+        syncMode: docEntry.syncMode,
+        schemaHash: docEntry.schemaHash,
+        supportedHashes: docEntry.supportedHashes ?? [docEntry.schemaHash],
+      }
+      const remote: ReadCapability = {
+        replicaType,
+        syncMode,
+        schemaHash,
+        supportedHashes: remoteSupportedHashes ?? [schemaHash],
+      }
+      const mismatch = mismatchForSync(local, remote)
+      if (mismatch) {
         effects.push({
           type: "diagnostic",
-          code: "replica-type-mismatch",
+          code: MISMATCH_CODE[mismatch.axis],
           severity: "error",
           peer: from,
           docId,
-          local: JSON.stringify(docEntry.replicaType),
-          remote: JSON.stringify(replicaType),
-          message:
-            `[exchange] replica type mismatch for doc '${docId}': ` +
-            `local [${docEntry.replicaType}] vs remote [${replicaType}] — skipping sync`,
-        })
-        continue
-      }
-      // Check schema hash compatibility via set-intersection.
-      // Legacy peers that don't send supportedHashes are assumed to
-      // support only their primary hash.
-      const localHashes = new Set(
-        docEntry.supportedHashes ?? [docEntry.schemaHash],
-      )
-      const remoteHashes = new Set(remoteSupportedHashes ?? [schemaHash])
-      let compatible = false
-      for (const h of localHashes) {
-        if (remoteHashes.has(h)) {
-          compatible = true
-          break
-        }
-      }
-      if (!compatible) {
-        effects.push({
-          type: "diagnostic",
-          code: "schema-hash-mismatch",
-          severity: "error",
-          peer: from,
-          docId,
-          local: docEntry.schemaHash,
-          remote: schemaHash,
-          message:
-            `[exchange] schema hash mismatch for doc '${docId}': ` +
-            `local '${docEntry.schemaHash}' vs remote '${schemaHash}' — skipping sync`,
-        })
-        continue
-      }
-      // Check syncMode compatibility
-      if (
-        docEntry.syncMode.writerModel !== syncMode.writerModel ||
-        docEntry.syncMode.delivery !== syncMode.delivery ||
-        docEntry.syncMode.durability !== syncMode.durability
-      ) {
-        effects.push({
-          type: "diagnostic",
-          code: "sync-mode-mismatch",
-          severity: "error",
-          peer: from,
-          docId,
-          local: JSON.stringify(docEntry.syncMode),
-          remote: JSON.stringify(syncMode),
-          message:
-            `[exchange] syncMode mismatch for doc '${docId}': ` +
-            `local ${JSON.stringify(docEntry.syncMode)} vs remote ${JSON.stringify(syncMode)} — skipping sync`,
+          local: mismatch.local,
+          remote: mismatch.remote,
+          message: describeMismatch(docId, mismatch),
         })
         continue
       }
