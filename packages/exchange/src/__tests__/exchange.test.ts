@@ -1550,3 +1550,66 @@ describe("deferred promotion is independent of schema-registration order", () =>
     expect(await deferredAfter("after")).toEqual([])
   })
 })
+
+describe("get() on a deferred document checks all three axes", () => {
+  const S = Schema.struct({ title: Schema.string() })
+
+  it("refuses when the replica format disagrees", async () => {
+    // Alice announces a Loro document; Bob asks for it with a plain schema.
+    // Before this check Bob promoted it anyway and built a substrate that
+    // could not decode a single byte Alice would send.
+    const bridge = new Bridge()
+    const alice = createExchange({
+      id: "alice",
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
+      replicas: [loro.replica()],
+    })
+    const bob = createExchange({
+      id: "bob",
+      transports: [createBridgeTransport({ transportId: "bob", bridge })],
+      replicas: [loro.replica()],
+    })
+
+    alice.get("doc-1", loro.bind(Schema.struct({ title: Schema.text() })))
+    await drain()
+    expect(bob.deferred.has("doc-1")).toBe(true)
+
+    expect(() => bob.get("doc-1", json.bind(S))).toThrow(
+      /replicaType disagrees/,
+    )
+
+    await alice.shutdown()
+    await bob.shutdown()
+  })
+
+  it("promotes and warns when only the schema hash disagrees", async () => {
+    // The local schema stays authoritative on the interpretation axis — a
+    // remote peer must not be able to break a local get() by announcing a
+    // colliding docId. This is the one policy the classifier does not hold,
+    // so this is the only place it can be tested.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const bridge = new Bridge()
+    const alice = createExchange({
+      id: "alice",
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
+    })
+    const bob = createExchange({
+      id: "bob",
+      transports: [createBridgeTransport({ transportId: "bob", bridge })],
+    })
+
+    alice.get("doc-1", json.bind(Schema.struct({ other: Schema.string() })))
+    await drain()
+    expect(bob.deferred.has("doc-1")).toBe(true)
+
+    expect(() => bob.get("doc-1", json.bind(S))).not.toThrow()
+    expect(bob.deferred.has("doc-1")).toBe(false)
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Local schema is authoritative"),
+    )
+
+    warnSpy.mockRestore()
+    await alice.shutdown()
+    await bob.shutdown()
+  })
+})

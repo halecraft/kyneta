@@ -780,37 +780,66 @@ export class Exchange {
         )
       }
 
-      if (cached.mode === "replicate") {
+      // The BoundSchema identity check is this door's own, and stays here
+      // rather than moving into the classifier: it guards against a *caller*
+      // rebuilding its schema on every call, which is a fact about the caller.
+      // The network path must not apply it — there the BoundSchema is
+      // whichever object the capability registry returned.
+      if (cached.mode === "interpret" && cached.bound !== bound) {
         throw new Error(
-          `Document '${docId}' is registered in replicate mode. ` +
-            `Cannot call exchange.get() on a replicated document — it has no schema or ref.`,
+          `Document '${docId}' already exists with a different BoundSchema. ` +
+            `Use the same BoundSchema object when calling exchange.get() for the same document.`,
+        )
+      }
+
+      const action = planInterpretation({
+        phase: cached.mode,
+        reader: metadataOf(bound),
+        doc: this.#synchronizer.getDocMetadata(docId),
+      })
+
+      if (action.action === "return-cached") {
+        return (cached as { ref: unknown }).ref as Ref<S>
+      }
+
+      if (action.action === "refuse") {
+        if (action.kind === "unsupported") {
+          throw new Error(
+            `Document '${docId}' is registered in replicate mode. ` +
+              `Cannot call exchange.get() on a replicated document — it has no schema or ref.`,
+          )
+        }
+
+        // The one policy this door holds, and the only place it is true.
+        //
+        // A deferred document got here because a *peer* announced it. If we
+        // refused on a schema disagreement, any peer could break a local
+        // `get()` simply by announcing a document under a colliding docId with
+        // a different schema. So on the interpretation axis the local schema
+        // stays authoritative: promote anyway, and say so.
+        //
+        // Only that axis. A replicaType or syncMode disagreement is about
+        // whether bytes can be exchanged at all, and no amount of local intent
+        // makes an undecodable format decodable — those refusals stand.
+        if (action.mismatch.axis !== "schemaHash") {
+          throw new Error(
+            `Document '${docId}' cannot be interpreted with this schema: ` +
+              `${action.mismatch.axis} disagrees (local ${action.mismatch.local} ` +
+              `vs discovered ${action.mismatch.remote}).`,
+          )
+        }
+        console.warn(
+          `[exchange] Promoting deferred doc "${docId}": local schemaHash "${bound.schemaHash}" ` +
+            `differs from discovery schemaHash "${action.mismatch.remote}". ` +
+            `Local schema is authoritative, but this indicates protocol disagreement.`,
         )
       }
 
       if (cached.mode === "deferred") {
-        // Promote deferred → interpret: retrieve metadata for diagnostics
-        const metadata = this.#synchronizer.getDocMetadata(docId)
-        if (metadata && bound.schemaHash !== metadata.schemaHash) {
-          console.warn(
-            `[exchange] Promoting deferred doc "${docId}": local schemaHash "${bound.schemaHash}" ` +
-              `differs from discovery schemaHash "${metadata.schemaHash}". ` +
-              `Local schema is authoritative, but this indicates protocol disagreement.`,
-          )
-        }
         // Delete deferred entry and fall through to normal get() creation.
         // registerDoc() → doc-ensure handles the deferred→promoted transition
         // in the synchronizer model.
         this.#runtime.deleteDeferred(docId)
-      } else {
-        // mode === "interpret" — validate BoundSchema match
-        if (cached.bound !== bound) {
-          throw new Error(
-            `Document '${docId}' already exists with a different BoundSchema. ` +
-              `Use the same BoundSchema object when calling exchange.get() for the same document.`,
-          )
-        }
-
-        return cached.ref as Ref<S>
       }
     }
 
