@@ -13,8 +13,8 @@ import {
   Defer,
   json,
   Migration,
-  plainReplicaFactory,
   type PlainState,
+  plainReplicaFactory,
   plainSubstrateFactory,
   Schema,
   SUBSTRATE,
@@ -1550,4 +1550,3 @@ describe("deferred promotion is independent of schema-registration order", () =>
     expect(await deferredAfter("after")).toEqual([])
   })
 })
-

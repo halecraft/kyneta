@@ -42,7 +42,7 @@ import type {
   SyncMode,
   Version,
 } from "@kyneta/schema"
-import { metadataOf, mismatchForInterpretation } from "@kyneta/schema"
+import { metadataOf } from "@kyneta/schema"
 import type {
   AnyTransport,
   DocId,
@@ -55,6 +55,8 @@ import { createCapabilities, DEFAULT_REPLICAS } from "./capabilities.js"
 import { registerDocAuthority } from "./doc-meta.js"
 import type { Authority, Policy } from "./governance.js"
 import { Governance } from "./governance.js"
+import type { DocPhase } from "./interpret.js"
+import { planInterpretation } from "./interpret.js"
 import type { ObsSink } from "./observe.js"
 import { Runtime } from "./runtime.js"
 import {
@@ -80,6 +82,17 @@ import { validatePeerId } from "./utils.js"
  * The four possible dispositions when classifying a discovered document.
  */
 export type Disposition = Interpret | Replicate | Defer | Reject
+
+/**
+ * A cache entry's phase, or `"absent"` when there is no entry.
+ *
+ * `DocCacheEntry` and `DocPhase` say the same thing with different words —
+ * this bridges them so the classifier can stay in terms of phases without the
+ * Runtime's entry shape leaking into it.
+ */
+function phaseOf(entry: { mode: DocPhase } | undefined): DocPhase {
+  return entry ? entry.mode : "absent"
+}
 
 /**
  * Call signature for {@link Exchange.get}.
@@ -444,7 +457,24 @@ export class Exchange {
           syncMode,
         )
         if (resolvedBound) {
-          this.#interpretDoc(docId, resolvedBound)
+          // Unlike `#getImpl`, this door applies no policy of its own — no
+          // BoundSchema identity check, no local-schema-authoritative
+          // override. It takes the classifier's answer as given.
+          //
+          // `resolveSchema` has already matched the triple, so a compatible
+          // document reaches `create` or `return-cached` exactly as before.
+          // What this closes is the replicate case: this path used to call
+          // `#interpretDoc` directly, which would have overwritten a replicate
+          // entry's accumulated state.
+          const action = planInterpretation({
+            phase: phaseOf(this.#runtime.getEntry(docId)),
+            reader: metadataOf(resolvedBound),
+            doc: this.#synchronizer.getDocMetadata(docId),
+          })
+          if (action.action === "promote") this.#runtime.deleteDeferred(docId)
+          if (action.action !== "refuse") {
+            this.#interpretDoc(docId, resolvedBound)
+          }
           return
         }
 
@@ -1065,7 +1095,12 @@ export class Exchange {
       // is a different situation from "matched and disagreed" — a blanket
       // sweep should not act on a document it knows nothing about.
       if (!metadata) continue
-      if (mismatchForInterpretation(reader, metadata)) continue
+      const action = planInterpretation({
+        phase: "deferred",
+        reader,
+        doc: metadata,
+      })
+      if (action.action === "refuse") continue
       // Safe: Runtime.deleteDeferred removes from cache, then #interpretDoc
       // inserts the new entry.
       this.#runtime.deleteDeferred(docId)

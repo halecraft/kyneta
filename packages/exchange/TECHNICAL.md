@@ -45,6 +45,8 @@ Imported by applications to construct the top-level sync graph; by `@kyneta/reac
 | Dispatch cycle | One inbound input → update → effects executed → (possibly) more inputs queued from `sync-event` effects → update again → … → quiescence. Notifications accumulate throughout, deliver once on drain. | An event-loop tick |
 | Quiescence | The state after one dispatch cycle completes: session queue empty, sync queue empty, no pending `sync-event`s. Notifications drain here. | Async settlement |
 | `DocRuntime` | Per-doc bundle: `Ref<S>`, the `ReplicaLike` / `ReplicaFactoryLike` pair, the schema binding, the mode (`interpret \| replicate \| deferred`), the changefeed subscription, and echo-prevention state. Uses the variance-safe `-Like` interfaces from `@kyneta/schema` to avoid `Replica<any>`. Held by the Synchronizer, not by the programs. | A document — a `DocRuntime` *manages* a document |
+| Phase | Which tier a document sits in: `deferred` (announced by a peer, nothing held), `replicate` (a bare `Replica`, no schema), or `interpret` (substrate + `Ref<S>`). `planInterpretation` (`src/interpret.ts`) classifies on it. | **Suspension** — an orthogonal flag about sync-graph membership, not a fourth phase. A suspended document is still in interpret phase. |
+| `Disposition` vs `InterpretAction` | `Disposition` (`Interpret \| Replicate \| Defer \| Reject`) decides which tier a *newly discovered* document should enter. `InterpretAction` decides how an *existing* document is raised to interpret. | Each other — adjacent, and neither supersedes the other. |
 | `ReactiveMap<K, V, C>` | From `@kyneta/changefeed` — a callable changefeed over a `ReadonlyMap<K, V>` with lifted accessors. | A plain `Map` — this fires the changefeed |
 | `Policy` | Interface with gate predicates (`canShare`, `canAccept`, `canConnect`, `canReset`) and document handlers (`resolve`). Multiple policies register into one `Governance`. | An HTTP middleware, an authorization system |
 | `Governance` | The composer. Exposes `composeGate` (pure) + the registry (imperative). Every gate evaluates three-valued logic: `false` vetoes, `true` permits, all-`undefined` falls back to default. | `Policy` — `Governance` *composes* policies |
@@ -986,6 +988,7 @@ For durability guarantees, use the `cohort` predicate to prevent compaction past
 | `src/line.ts` | 745 | `Line`, `LineProtocol`, envelope schema, ack-based pruning. |
 | `src/async-queue.ts` | 69 | Bounded async queue used by `Line`. |
 | `src/persistent-peer-id.ts` | 216 | Browser-tab peer-ID lease; FC/IS split. Imports `randomPeerId` and `randomHex` from `@kyneta/random`. |
+| `src/interpret.ts` | 101 | Pure phase classifier: `DocPhase`, `InterpretAction`, `planInterpretation`. The one rule all three interpretation doors consult. |
 | `src/sync.ts` | 195 | `sync(doc)` helper + `registerSync`. |
 | `src/types.ts` | 135 | `DocChange`, `DocInfo`, `PeerChange`, `PeerDocSyncState`, `PeerState`, `PeerSyncState`, `Connectivity`. |
 | `src/describe-sync-status.ts` | 48 | **Deprecated (3.0).**  `describeSyncStatus`, `SyncStatusSummary` — pure presentational projection. |
