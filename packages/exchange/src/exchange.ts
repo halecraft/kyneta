@@ -774,11 +774,18 @@ export class Exchange {
     const cached = this.#runtime.getEntry(docId)
 
     if (cached) {
-      if (cached.mode !== "deferred" && cached.suspended) {
-        throw new Error(
-          `Document '${docId}' is suspended. Call exchange.resume('${docId}') to re-enter the sync graph.`,
-        )
-      }
+      // Note what is *not* checked here: suspension.
+      //
+      // `get()` on a suspended document returns the ref and leaves it
+      // suspended — not "re-hydrates", not "resumes". `suspend()` only sets a
+      // flag and tells peers to drop the document; the ref and substrate are
+      // untouched, so reading locally was always well-defined.
+      //
+      // Resuming here would mean an unrelated read silently re-entering the
+      // sync graph and restarting traffic peers can observe. Returning without
+      // resuming keeps a property worth relying on — **`get()` never changes
+      // sync-graph membership**; only `resume()` does — and matches what a
+      // standalone `Runtime` has always done.
 
       // The BoundSchema identity check is this door's own, and stays here
       // rather than moving into the classifier: it guards against a *caller*

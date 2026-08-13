@@ -1033,13 +1033,21 @@ describe("Exchange", () => {
       expect(exchange.documents.has("doc-1")).toBe(false)
     })
 
-    it("get() on suspended doc throws with guidance to call resume()", () => {
+    it("get() on a suspended doc returns the ref and leaves it suspended", () => {
       const exchange = createExchange()
-      exchange.get("doc-1", TestDoc)
+      const before = exchange.get("doc-1", TestDoc)
       exchange.suspend("doc-1")
 
-      expect(() => exchange.get("doc-1", TestDoc)).toThrow(/suspended/)
-      expect(() => exchange.get("doc-1", TestDoc)).toThrow(/resume/)
+      // `suspend()` sets a flag and sends `dismiss`; it never touched the ref
+      // or the substrate. So reading the document locally is still perfectly
+      // well-defined, and this used to throw.
+      expect(exchange.get("doc-1", TestDoc)).toBe(before)
+
+      // The assertion that matters. It is what distinguishes "get() is total"
+      // from "get() resumes on read" — if reading re-entered the sync graph,
+      // an unrelated read would restart traffic that peers can observe. Only
+      // `resume()` may do that.
+      expect(exchange.documents.get("doc-1")?.suspended).toBe(true)
     })
 
     it("suspend() is idempotent", () => {

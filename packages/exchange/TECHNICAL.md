@@ -4,7 +4,7 @@
 > **Role**: Substrate-agnostic document sync runtime. Orchestrates channel topology, document convergence, and persistence above any transport and any `@kyneta/schema` substrate — via two pure TEA programs (session + sync), a Synchronizer shell that owns the serialized dispatch queue, a **Runtime** (the local imperative shell: documents + stores + lease + clock), and an **Exchange** façade (the network shell: transports + peers + governance) that composes a Runtime.
 > **Depends on**: `@kyneta/schema` (peer), `@kyneta/changefeed` (peer), `@kyneta/transport` (direct)
 > **Depended on by**: `@kyneta/react` (peer), `@kyneta/leveldb-store`, `@kyneta/indexeddb-store`, `@kyneta/sqlite-store`, `@kyneta/postgres-store`, `@kyneta/prisma-store`, `@kyneta/sql-store-core`, application code, every transport package (dev)
-> **Canonical symbols**: `Exchange`, `ExchangeParams`, `Runtime`, `RuntimeParams`, `RuntimeHooks`, `DocReadyInfo`, `Synchronizer`, `DocRuntime`, `SessionModel`, `SessionInput`, `SessionEffect`, `SyncModel`, `SyncInput`, `SyncEffect`, `updateSession`, `updateSync`, `Governance`, `Policy`, `composeGate`, `GatePredicate`, `EpochBoundaryPredicate`, `Line`, `LineProtocol`, `Capabilities`, `ReplicaLike`, `ReplicaFactoryLike`, `ReplicaKey`, `DEFAULT_REPLICAS`, `Interpret`, `Replicate`, `Defer`, `Reject`, `Disposition`, `PeerIdentityInput`, `PeerChange`, `DocChange`, `DocInfo`, `PeerState`, `PeerSyncState`, `PeerDocSyncState`, `Connectivity`, `describeSyncStatus`, `SyncStatusSummary`, `deriveConnectivity`, `Store`, `StoreRecord`, `StoreMeta`, `DocMetadata`, `persistentPeerId`, `releasePeerId`, `resolveLease`, `LeaseState`, `sync` (helper), `SyncMode`, `SYNC_COLLABORATIVE`, `SYNC_AUTHORITATIVE`, `SYNC_EPHEMERAL`, `requiresBidirectionalSync`, `BindingTarget`, `createBindingTarget`
+> **Canonical symbols**: `Exchange`, `ExchangeParams`, `Runtime`, `RuntimeParams`, `RuntimeHooks`, `DocReadyInfo`, `Synchronizer`, `DocRuntime`, `SessionModel`, `SessionInput`, `SessionEffect`, `SyncModel`, `SyncInput`, `SyncEffect`, `updateSession`, `updateSync`, `Governance`, `Policy`, `composeGate`, `GatePredicate`, `EpochBoundaryPredicate`, `Line`, `LineProtocol`, `Capabilities`, `ReplicaLike`, `ReplicaFactoryLike`, `ReplicaKey`, `DEFAULT_REPLICAS`, `Interpret`, `Replicate`, `Defer`, `Reject`, `Disposition`, `PeerIdentityInput`, `PeerChange`, `DocChange`, `DocInfo`, `PeerState`, `PeerSyncState`, `PeerDocSyncState`, `Connectivity`, `deriveConnectivity`, `Store`, `StoreRecord`, `StoreMeta`, `DocMetadata`, `persistentPeerId`, `releasePeerId`, `resolveLease`, `LeaseState`, `sync` (helper), `SyncMode`, `SYNC_COLLABORATIVE`, `SYNC_AUTHORITATIVE`, `SYNC_EPHEMERAL`, `requiresBidirectionalSync`, `BindingTarget`, `createBindingTarget`
 > **Key invariant(s)**:
 > 1. The exchange never inspects `SubstratePayload` contents. Payloads are opaque blobs carried by `offer` messages; only the substrate produces and consumes them.
 > 2. The session program never sees documents. The sync program never sees channels, transports, or connection state. They share a single dispatch queue and communicate exclusively through `sync-event` effects the shell forwards.
@@ -22,7 +22,7 @@ Imported by applications to construct the top-level sync graph; by `@kyneta/reac
 
 - What is the difference between session and sync, and why are they split? → [Two programs, one shell](#two-programs-one-shell)
 - How does a local mutation become a wire `offer`? → [The local-write path](#the-local-write-path)
-- What does `exchange.get(docId, bound)` actually do? → [`exchange.get` — the four-case classifier](#exchangeget--the-four-case-classifier)
+- What does `exchange.get(docId, bound)` actually do? → [`exchange.get` — phase in, action out](#exchangeget--phase-in-action-out)
 - What does the `resolve` callback decide? → [Document classification on `present`](#document-classification-on-present)
 - How do departure and reconnection interact? → [Departure, grace, reconnection](#departure-grace-reconnection)
 - How does the exchange hand merge decisions back to the application? → [`Policy` and `Governance`](#policy-and-governance)
@@ -257,7 +257,7 @@ Two consequences worth knowing:
 
 ### Document classification on `present`
 
-Source: `src/sync-program.ts` → `handlePresent`, `src/exchange.ts` → `classifyDoc`.
+Source: `src/sync-program.ts` → `handlePresent`, `src/exchange.ts` → the `onEnsureDoc` hook.
 
 When a peer announces an unknown doc, four checks run in order:
 
@@ -306,30 +306,63 @@ Each capability handle's `close()` decrements the reference count. The underlyin
 
 ---
 
-## `exchange.get` — the four-case classifier
+## `exchange.get` — phase in, action out
 
-Source: `src/exchange.ts` → `Exchange.get`.
+Source: `src/interpret.ts` → `planInterpretation`; `src/exchange.ts` → `Exchange.get`.
 
 ```
 exchange.get<S>(docId: DocId, bound: BoundSchema<S>): Ref<S>
 ```
 
-Four cases, in order:
+Two questions decide the outcome, and keeping them apart is what makes the
+behaviour predictable. **Phase** determines *what* `get()` does. **Reconcilability**
+determines *whether* it does anything at all. Suspension participates in neither.
 
-| Case | Condition | Effect |
-|------|-----------|--------|
-| 1. Already interpreted with compatible schema | `DocRuntime.mode === "interpret"` and schema hash compatible | Return existing `Ref<S>`. No substrate reconstruction. |
-| 2. Currently replicated (headless) | `DocRuntime.mode === "replicate"` | Upgrade to interpret: construct substrate via `bound.factoryBuilder`, replay stored entries, attach `Ref<S>`. `ready` transitions. |
-| 3. Deferred from `present` | `DocRuntime.mode === "deferred"` | Upgrade to interpret; send `interest` to the peer that presented; run sync. |
-| 4. New doc | No entry | Create `DocRuntime`, register with `Store[]`, broadcast `present`, return fresh `Ref<S>`. |
+| Phase | Effect |
+|-------|--------|
+| absent | Create the `DocRuntime`, register with `Store[]`, broadcast `present`, return a fresh `Ref<S>`. |
+| interpret | Return the existing `Ref<S>`. No substrate reconstruction. |
+| deferred | Promote to interpret; send `interest` to the peer that presented; run sync. |
+| replicate | **Refused** — see below. |
 
-The return is always a `Ref<S>` — a typed, callable, navigable, observable, writable reference from the interpreter stack. Application code reads `doc.title()`, writes `batch(doc, d => d.title("new"))`, subscribes `subscribe(doc, changeset => …)`. Everything downstream of `get` is identical regardless of which case fired.
+Reconcilability is `mismatchForInterpretation` (`@kyneta/schema`) over the three
+axes a document is identified by: `replicaType`, `syncMode`, `schemaHash`. A
+disagreement on the first two is refused outright — they decide whether bytes
+can be exchanged at all, and no local intent makes an undecodable format
+decodable. A `schemaHash` disagreement on a *deferred* document is the one
+exception: `get()` promotes anyway and warns. That is defensive, not permissive
+— a deferred document arrived from a peer, so refusing would let any peer break
+a local `get()` by announcing a colliding `docId`. It is written at `#getImpl`
+rather than in the classifier, because it is the only door that holds it.
+
+**Totality is over *phase*.** `get()` never refuses a document for being
+deferred, interpreted, or suspended. It still throws for an incoherent
+*request* — a `BoundSchema` object that differs from the one the document was
+created with, or a `replicaType`/`syncMode` that cannot work — and those are
+about the arguments, not the document's state.
+
+`replicate` is the one phase still refused, and deliberately: it is reported as
+`kind: "unsupported"` rather than as a mismatch, so a caller can tell "not built
+yet" from "can never work". Promotion is mechanically close (`SubstrateFactory.upgrade`),
+but it is one-way — there is no `demote()` — so a relay that promoted a document
+would silently acquire a full substrate for something it only meant to forward.
+
+Otherwise the return is always a `Ref<S>` — a typed, callable, navigable,
+observable, writable reference from the interpreter stack. Application code
+reads `doc.title()`, writes `batch(doc, d => d.title("new"))`, subscribes
+`subscribe(doc, changeset => …)`. Everything downstream of `get` is identical
+regardless of which case fired.
+
+**This table describes `Exchange.get()`.** `Runtime.get()` differs in two ways,
+and a standalone-`Runtime` reader should know both: it has no `deferred` phase
+at all (deferral is a sync-graph concept), and it enforces the `BoundSchema`
+identity check itself rather than inheriting it.
 
 ### Suspend vs destroy
 
 | Intention | API | Behaviour |
 |-----------|-----|-----------|
-| Leave sync graph, keep local state | `exchange.suspend(docId)` | Sends `dismiss`. Removes from `exchange.documents`. State remains in `Store`. `exchange.get(docId)` re-hydrates. |
+| Leave sync graph, keep local state | `exchange.suspend(docId)` | Sends `dismiss`. Removes from `exchange.documents`. State remains in `Store`. `exchange.get(docId)` still returns the ref — **without** resuming. |
 | Permanent removal | `exchange.destroy(docId)` | Sends `dismiss`. Removes from `exchange.documents`, from `Store`, from all peers' views. Fresh `get` constructs a new doc. |
 | Temporary local removal | `exchange.remove(docId)` | Removes from `exchange.documents` and local `DocRuntime`. Does not send `dismiss`. State remains in `Store`. |
 
@@ -338,7 +371,7 @@ The three exist because "I'm done with this doc" has three distinct flavours —
 ### What `suspend` is NOT
 
 - **Not a disconnect.** Other docs in the same exchange continue syncing.
-- **Not destructive.** Local state is preserved. `resume` or `get` restores it.
+- **Not destructive.** Local state is preserved — `suspend` sets a flag and sends `dismiss`; the ref and substrate are untouched. `get(docId)` therefore keeps working and returns the same ref, but it does **not** un-suspend: only `resume` re-enters the sync graph. That separation is deliberate, so an unrelated read can never restart traffic peers observe — **`get()` never changes sync-graph membership.**
 - **Not idempotent with `destroy`.** Suspending a destroyed doc is a no-op; destroying a suspended doc completes the destruction.
 
 ---
@@ -540,17 +573,16 @@ A peer's per-doc sync transition is a single event with **two folds**, both adva
 
 `sync(doc).ready` is `hasReconciled(model, docId)` (accumulator non-empty) — monotonic, connection-independent. `sync(doc).readyFor(pred)` is `reconciledMatching(model, docId, pred)`. The latch is cleared only on *our* doc removal (`handleDocDelete`, and `handleDocDismiss` **only when `msg.event?.type !== "doc-suspended"`** — suspend keeps the runtime/data alive, so its latch survives `resume`) and on `initSync` (so `reset()`/`shutdown()` clear it). An inbound `dismiss` clears the peer's *volatile* entry but **not** the accumulator.
 
-Three distinct "has-synced" predicates, deliberately **not** unified: `hasEverSynced` (`=== "synced"` only — gates compaction-reset detection), `#isReady` (connection-aware reconciled — gates `waitForSync`), and `hasReconciled` (monotonic, connection-independent — gates `ready`).
+Two distinct "has-synced" predicates, deliberately **not** unified: `hasEverSynced` (`=== "synced"` only — gates compaction-reset detection) and `hasReconciled` (monotonic, connection-independent — gates `ready`).
 
-That count is a consequence of `waitForSync` existing. `#isReady` has exactly one caller, `waitUntilReady`, which has exactly one caller, `waitForSync` — a strictly linear chain. When `waitForSync` is removed in 3.0 the whole chain goes with it and the distinction collapses to two: `hasEverSynced` (compaction-reset detection) and `hasReconciled` (readiness).
+There used to be a third, `#isReady` — connection-aware, reachable only through `waitUntilReady` and then `waitForSync`, a strictly linear chain. Removing `waitForSync` in 3.0 took the whole chain with it.
 
 Note also that `sync(doc).ready` now reports `true` when no transports are configured, matching the carve-out `settled()` already had — with nothing that could ever answer, waiting is waiting forever. `readyFor(pred)` deliberately does *not* get that carve-out: it asserts a specific peer was consulted, and with no transports none was.
 
 ### Connectivity & settling
 
 - `deriveConnectivity({ establishedPeers, transportCount })` — pure classifier: `online` (≥1 established peer), `offline` (no transports), else `connecting`. `synchronizer.connectivity()` / `sync(doc).connectivity` gather the counts (`TransportManager.size`, session peers with a live channel) and delegate.
-- `awaitReconciliation(docId, isReady, timeoutMs)` (`synchronizer.ts`) — shared listener+timeout+cleanup core whose **resolve predicate is a parameter**: `waitForSync` (via `waitUntilReady`) passes the connection-aware `#isReady`; `sync(doc).settled()` passes the monotonic `hasReconciled`. `settled()` never rejects — resolves `{ via: "local" }` (no transports), `{ via: "peer" }` (first reconciliation), or `{ via: "offline" }` (after `offlineAfter` ms).
-- `describeSyncStatus(peerStates, connectivity, ready)` (`src/describe-sync-status.ts`, re-exported from `@kyneta/react`) — pure presentational projection into `"connecting" | "pending" | "synced" | "vacant" | "offline"`. A derived helper over the public primitives, not a stored type.
+- `awaitReconciliation(docId, isReady, timeoutMs)` (`synchronizer.ts`) — shared listener+timeout+cleanup core whose **resolve predicate is a parameter**. `whenSettled` passes the monotonic `hasReconciled`; it never rejects, resolving `{ via: "local" }` (no transports), `{ via: "peer" }` (first reconciliation), or `{ via: "offline" }` (after `offlineAfter` ms). The parameterisation dates from when a second, connection-aware predicate also used it.
 
 This is the reactive surface for `@kyneta/react`'s `useDocReady` / `useSyncState` and similar hooks.
 
@@ -969,8 +1001,7 @@ For durability guarantees, use the `cohort` predicate to prevent compaction past
 | `validateAppend` | `src/store/store.ts` | Shared meta-first invariant guard for `append` implementations. |
 | `SeqNoTracker` | `src/store/seq-tracker.ts` | Per-doc monotonic seqNo tracker with lazy backend discovery. |
 | `PeerChange` / `DocChange` / `DocInfo` / `PeerState` / `PeerSyncState` / `PeerDocSyncState` / `Connectivity` | `src/types.ts` | Reactive-collection change types and snapshot shapes. |
-| `describeSyncStatus` / `SyncStatusSummary` **(deprecated, removed in 3.0 — no consumers; compose from `connectivity`, `peerStates`, `docStatus`)** | `src/describe-sync-status.ts` | Pure presentational projection over `peerStates` / `connectivity` / `ready`. Re-exported from `@kyneta/react`. |
-| `sync(doc)` | `src/sync.ts` | Helper: returns `SyncRef` (`peerStates`, `ready`, `readyFor`, `connectivity`, `settled`, `waitForSync`, `onPeerSyncChange`). |
+| `sync(doc)` | `src/sync.ts` | Helper: returns `SyncRef` (`peerStates`, `ready`, `readyFor`, `connectivity`, `onPeerSyncChange`). |
 | `AsyncQueue` | `src/async-queue.ts` | Bounded async producer/consumer queue used inside `Line`. |
 
 ## File Map
@@ -978,10 +1009,10 @@ For durability guarantees, use the `cohort` predicate to prevent compaction past
 | File | Lines | Role |
 |------|-------|------|
 | `src/index.ts` | 228 | Public barrel. Re-exports `bind` / `json` / `ephemeral` / `SyncMode` / `SYNC_COLLABORATIVE` / `SYNC_AUTHORITATIVE` / `SYNC_EPHEMERAL` / `requiresBidirectionalSync` from `@kyneta/schema`; exports exchange-specific types. |
-| `src/exchange.ts` | 1250 | `Exchange` class, `ExchangeParams`, disposition types, `classifyDoc`, `peerId` validation, `registerReplica`, `registerPolicy`, reactive-collection wiring. |
+| `src/exchange.ts` | 1290 | `Exchange` class, `ExchangeParams`, disposition types, `phaseOf`, `peerId` validation, `registerReplica`, `registerPolicy`, reactive-collection wiring. |
 | `src/synchronizer.ts` | 1517 | Shell. Dispatch queue, `DocRuntime` map, effect interpreter, emit methods (`#emitPeerSyncChanges`, `#emitStateAdvanced`, `#emitDocEvents`, `#emitPeerEvents`), `declareVacant` / `hasReconciled` / `reconciledMatching` / `connectivity` / `awaitReconciliation`, local-change subscription, transport + storage integration. |
 | `src/session-program.ts` | 543 | Pure session program: `SessionModel`, inputs, effects, `updateSession`, transition collapse. |
-| `src/sync-program.ts` | 1127 | Pure sync program: `SyncModel`, `DocEntry`, inputs, effects, `updateSync`, per-message handlers. |
+| `src/sync-program.ts` | 1455 | Pure sync program: `SyncModel`, `DocEntry`, inputs, effects, `updateSync`, per-message handlers. |
 | `src/program-types.ts` | 48 | Shared `Transition` and `collapse` helper for both programs. |
 | `src/governance.ts` | 282 | `Policy`, `GatePredicate`, `EpochBoundaryPredicate`, `Governance`, `composeGate`. |
 | `src/capabilities.ts` | 284 | `Capabilities`, `ReplicaKey`, `ReplicaEntry`, `DEFAULT_REPLICAS`, `createCapabilities`. |
@@ -989,9 +1020,8 @@ For durability guarantees, use the `cohort` predicate to prevent compaction past
 | `src/async-queue.ts` | 69 | Bounded async queue used by `Line`. |
 | `src/persistent-peer-id.ts` | 216 | Browser-tab peer-ID lease; FC/IS split. Imports `randomPeerId` and `randomHex` from `@kyneta/random`. |
 | `src/interpret.ts` | 101 | Pure phase classifier: `DocPhase`, `InterpretAction`, `planInterpretation`. The one rule all three interpretation doors consult. |
-| `src/sync.ts` | 195 | `sync(doc)` helper + `registerSync`. |
+| `src/sync.ts` | 276 | `sync(doc)` helper + `registerSync`. |
 | `src/types.ts` | 135 | `DocChange`, `DocInfo`, `PeerChange`, `PeerDocSyncState`, `PeerState`, `PeerSyncState`, `Connectivity`. |
-| `src/describe-sync-status.ts` | 48 | **Deprecated (3.0).**  `describeSyncStatus`, `SyncStatusSummary` — pure presentational projection. |
 | `src/observe.ts` | — | DevTools observation protocol (`ObsEvent`), bus (`createObservationBus`), and pure effect/msg/changeset/frame mappers. Experimental. |
 | `src/utils.ts` | 50 | `validatePeerId`. (Random ID generation extracted to `@kyneta/random`.) |
 | `src/store/` | — | `Store` interface, in-memory implementation, shared utilities (`seq-tracker.ts`, `validateAppend` in `store.ts`). |
