@@ -42,6 +42,7 @@ import type {
   SyncMode,
   Version,
 } from "@kyneta/schema"
+import { metadataOf, mismatchForInterpretation } from "@kyneta/schema"
 import type {
   AnyTransport,
   DocId,
@@ -1040,29 +1041,35 @@ export class Exchange {
       builder({ peerId: this.peerId, binding: b.identityBinding }),
     )
 
-    // Auto-promote deferred docs that match the newly registered schema
-    const factory = bound.factory({
-      peerId: this.peerId,
-      binding: bound.identityBinding,
-    })
-    const replicaType = factory.replica.replicaType
+    // Auto-promote deferred docs this schema can now interpret.
+    //
+    // This asks the same question `resolveSchema` asks when a `present` first
+    // arrives — "can this local schema read that document?" — so it has to
+    // answer it the same way. It used to compare hashes for equality while
+    // `resolveSchema` matched through `supportedHashes`, and the gap showed up
+    // as promotion depending on *when* a schema was registered: before the
+    // peer's `present` and the document was interpreted, after and it stayed
+    // deferred forever, because this sweep is the only thing that ever
+    // re-examines a deferred document and by then it has already run.
+    //
+    // Keep the iteration to deferred documents only. It is tempting, once a
+    // shared law is in play, to widen this to replicate entries as well —
+    // don't. This sweep is blanket: registering one schema would promote every
+    // matching replicate document at once, and a relay that registered a
+    // schema to interpret *one* document would silently acquire full
+    // substrates for all of them.
+    const reader = metadataOf(bound)
     for (const docId of this.#runtime.deferred) {
       const metadata = this.#synchronizer.getDocMetadata(docId)
+      // No metadata means the synchronizer has nothing to match against, which
+      // is a different situation from "matched and disagreed" — a blanket
+      // sweep should not act on a document it knows nothing about.
       if (!metadata) continue
-      // Check if the new schema matches the deferred doc's triple
-      if (
-        bound.schemaHash === metadata.schemaHash &&
-        replicaType[0] === metadata.replicaType[0] &&
-        replicaType[1] === metadata.replicaType[1] &&
-        bound.syncMode.writerModel === metadata.syncMode.writerModel &&
-        bound.syncMode.delivery === metadata.syncMode.delivery &&
-        bound.syncMode.durability === metadata.syncMode.durability
-      ) {
-        // Safe: Runtime.deleteDeferred removes from cache, then #interpretDoc
-        // inserts the new entry.
-        this.#runtime.deleteDeferred(docId)
-        this.#interpretDoc(docId, bound)
-      }
+      if (mismatchForInterpretation(reader, metadata)) continue
+      // Safe: Runtime.deleteDeferred removes from cache, then #interpretDoc
+      // inserts the new entry.
+      this.#runtime.deleteDeferred(docId)
+      this.#interpretDoc(docId, bound)
     }
   }
 

@@ -12,8 +12,9 @@ import {
   bind,
   Defer,
   json,
-  type PlainState,
+  Migration,
   plainReplicaFactory,
+  type PlainState,
   plainSubstrateFactory,
   Schema,
   SUBSTRATE,
@@ -1496,3 +1497,57 @@ describe("Exchange", () => {
     })
   })
 })
+
+describe("deferred promotion is independent of schema-registration order", () => {
+  // Alice holds V1. Bob holds the migrated successor V2, whose supportedHashes
+  // reaches back through the rename to V1's hash while its own primary hash
+  // differs. Bob should end up interpreting Alice's document either way.
+  const V1 = json.bind(Schema.struct({ zip: Schema.string() }))
+  const V2 = json.bind(
+    Schema.struct({ postalCode: Schema.string() }).migrated(
+      Migration.rename("zip", "postalCode"),
+    ),
+  )
+
+  it("a migrated schema recognises its predecessor's shape", () => {
+    expect(V1.schemaHash).not.toBe(V2.schemaHash)
+    expect([...V2.supportedHashes]).toContain(V1.schemaHash)
+  })
+
+  // Deliberately one test over both orderings rather than two tests. The
+  // property is *order invariance*; split in two, someone could "fix" a
+  // failing half by making the passing half match it.
+  it("promotes whether the schema is registered before or after the present", async () => {
+    async function deferredAfter(
+      order: "before" | "after",
+    ): Promise<readonly string[]> {
+      const bridge = new Bridge()
+      const alice = createExchange({
+        id: "alice",
+        transports: [createBridgeTransport({ transportId: "alice", bridge })],
+      })
+      const bob = createExchange({
+        id: "bob",
+        transports: [createBridgeTransport({ transportId: "bob", bridge })],
+      })
+
+      if (order === "before") bob.registerSchema(V2)
+      alice.get("doc-1", V1)
+      await drain()
+      if (order === "after") bob.registerSchema(V2)
+      await drain()
+
+      const deferred = [...bob.deferred]
+      await alice.shutdown()
+      await bob.shutdown()
+      return deferred
+    }
+
+    expect(await deferredAfter("before")).toEqual([])
+    // Before this fix, the sweep compared hashes for equality and this was
+    // ["doc-1"] — permanently, since nothing re-examines a deferred document
+    // after registerSchema has run.
+    expect(await deferredAfter("after")).toEqual([])
+  })
+})
+
