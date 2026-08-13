@@ -763,6 +763,24 @@ export class Runtime {
       return cached.ref
     }
 
+    // A replicate entry holds an accumulated `Replica` and no ref. Falling
+    // through to the construction below would replace it with a fresh, empty
+    // substrate — losing that state with no error and no event. `replicate`
+    // is the tier relays and audit logs use, so the loss would land exactly
+    // where nobody is reading a document's contents to notice it.
+    //
+    // Refusing is not a ruling on *promotion*: whether `get()` should one day
+    // upgrade a replicate document to interpret is still open. Refusing is
+    // right under either answer; overwriting is right under neither. Keep the
+    // wording in step with the Exchange's own replicate guard, so both layers
+    // describe the same situation the same way.
+    if (cached && cached.mode === "replicate") {
+      throw new Error(
+        `Document '${docId}' is registered in replicate mode. ` +
+          `Cannot call get() on a replicated document — it has no schema or ref.`,
+      )
+    }
+
     const factory = bound.factory({
       peerId: this.peerId,
       binding: bound.identityBinding,
@@ -797,6 +815,10 @@ export class Runtime {
       announced: false,
       hydration,
     }
+    // The early returns at the top of this method are the only thing between
+    // an existing entry and this overwrite. Any new document mode has to be
+    // handled up there — returned early, or refused — or it reaches this line
+    // and whatever it was holding is replaced without a word.
     this.#docCache.set(docId, entry)
 
     // The storage term joins this document's settle conjunction. It is

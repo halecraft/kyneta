@@ -345,3 +345,27 @@ describe("Exchange with pre-constructed Runtime (rare overload)", () => {
     await exchange.shutdown()
   })
 })
+
+describe("Runtime.get and replicate-mode documents", () => {
+  it("refuses rather than clobbering a replicate entry", () => {
+    const runtime = new Runtime({ peerId: "alice" })
+    const boundReplica = json.replica()
+    runtime.replicate(
+      "todo-1",
+      boundReplica.factory,
+      boundReplica.syncMode,
+      TodoDoc.schemaHash,
+    )
+
+    expect(() => runtime.get("todo-1", TodoDoc)).toThrow(/replicate mode/)
+
+    // The throw alone is not the point — a version that clobbered first and
+    // threw afterwards would pass that assertion. What matters is that the
+    // replicate entry, and the accumulated Replica it holds, survived.
+    const entry = runtime.getEntry("todo-1")
+    expect(entry?.mode).toBe("replicate")
+    expect(entry?.mode === "replicate" && entry.readyInfo.replica).toBeDefined()
+
+    runtime.shutdown()
+  })
+})
