@@ -86,8 +86,72 @@ export function createRef(
 }
 
 // ---------------------------------------------------------------------------
-// createDoc — public API: BoundSchema → DocRef
+// createDoc / createDocAs — public API: BoundSchema → DocRef
 // ---------------------------------------------------------------------------
+
+/**
+ * The shared implementation behind both public surfaces. Not exported, and
+ * named to be unattractive: it throws away the schema's types, handing back
+ * `any`. Reach for `createDoc` or `createDocAs` instead.
+ *
+ * The types are dropped deliberately rather than accidentally. Resolving
+ * `DocRef<S, N>` against an abstract `S` makes TypeScript walk the whole
+ * recursive ref tree and trip its instantiation-depth limit (TS2589). So the
+ * work happens once, untyped, and each public surface re-attaches the precise
+ * type through a declared call signature — the same split `Exchange.get` keeps
+ * between its signature and its body.
+ */
+function createDocUnderPeerIdUntyped(
+  peerId: string,
+  bound: BoundSchema<any, any>,
+  payload?: SubstratePayload,
+): any {
+  const factory = bound.factory({
+    peerId,
+    binding: bound.identityBinding,
+  })
+  const substrate = payload
+    ? factory.fromEntirety(payload, bound.schema)
+    : factory.create(bound.schema)
+  return createRef(bound.schema, substrate)
+}
+
+/**
+ * Create a live document under a specific peer identity.
+ *
+ * A CRDT attributes every operation to whoever made it, so a document's
+ * identity is part of what its operations *mean*. Most standalone documents
+ * never need to care — nobody else will read their operations — which is what
+ * {@link createDoc} is for. Reach for this one when the identity is load-
+ * bearing:
+ *
+ * - the document's operations will be exported and attributed to a named peer;
+ * - two documents must be distinguishable *reproducibly*, so that a difference
+ *   between runs means something rather than being the identity churn.
+ *
+ * `peerId` is required and leads, rather than trailing as an optional. A
+ * caller either does not care about identity — and uses {@link createDoc},
+ * which never mentions it — or does care, and has to say so. There is no
+ * middle state where a caller ends up with an identity it never chose.
+ *
+ * ```ts
+ * const a = createDocAs("peer-a", yjs.bind(schema))
+ * const b = createDocAs("peer-b", yjs.bind(schema))
+ * ```
+ *
+ * @param peerId - The peer identity to attribute this document's operations to
+ * @param bound - A BoundSchema from json.bind(), loro.bind(), or yjs.bind()
+ * @param payload - Optional SubstratePayload for hydration (from exportEntirety)
+ * @returns A full-stack DocRef<S, N> with typed [NATIVE] at every node
+ */
+type CreateDocAs = <S extends SchemaType, N extends NativeMap>(
+  peerId: string,
+  bound: BoundSchema<S, N>,
+  payload?: SubstratePayload,
+) => DocRef<S, N>
+
+export const createDocAs: CreateDocAs =
+  createDocUnderPeerIdUntyped as CreateDocAs
 
 /**
  * Create a live document from a BoundSchema.
@@ -95,8 +159,11 @@ export function createRef(
  * The single public entry point for document construction. The substrate
  * is determined by the BoundSchema (which carries the factory builder).
  *
- * For standalone use — generates a random peerId. The exchange provides
- * its own stable peerId and calls `createRef` directly.
+ * For standalone use. **The peer identity is arbitrary** — a fresh random one
+ * each time — which is the right default when nothing will read this
+ * document's operations but this process. When the identity matters, use
+ * {@link createDocAs} and name it. (The exchange takes neither path: it holds
+ * its own stable peerId and calls `createRef` directly.)
  *
  * Supports an optional `payload` for hydrating from an exported entirety.
  *
@@ -112,30 +179,13 @@ export function createRef(
  * @param payload - Optional SubstratePayload for hydration (from exportEntirety)
  * @returns A full-stack DocRef<S, N> with typed [NATIVE] at every node
  */
-type CreateDoc = {
-  <S extends SchemaType, N extends NativeMap>(
-    bound: BoundSchema<S, N>,
-    payload?: SubstratePayload,
-    peerId?: string,
-  ): DocRef<S, N>
-  <S extends SchemaType, N extends NativeMap>(
-    bound: BoundSchema<S, N>,
-    payload: SubstratePayload,
-    peerId?: string,
-  ): DocRef<S, N>
-}
+type CreateDoc = <S extends SchemaType, N extends NativeMap>(
+  bound: BoundSchema<S, N>,
+  payload?: SubstratePayload,
+) => DocRef<S, N>
 
 export const createDoc: CreateDoc = ((
   bound: BoundSchema<any, any>,
   payload?: SubstratePayload,
-  peerId?: string,
-): any => {
-  const factory = bound.factory({
-    peerId: peerId ?? randomPeerId(),
-    binding: bound.identityBinding,
-  })
-  const substrate = payload
-    ? factory.fromEntirety(payload, bound.schema)
-    : factory.create(bound.schema)
-  return createRef(bound.schema, substrate)
-}) as CreateDoc
+): any =>
+  createDocUnderPeerIdUntyped(randomPeerId(), bound, payload)) as CreateDoc

@@ -21,7 +21,7 @@
 // stops on it — there is no container to push into, so widening is the entire
 // mechanism. Any rule that skipped terminating boundaries would break them.
 
-import { createDoc, Schema, unwrap } from "@kyneta/schema"
+import { createDoc, createDocAs, Schema, unwrap } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
 import { yjs } from "../bind-yjs.js"
@@ -148,8 +148,8 @@ describe("writes inside a sum", () => {
 
   it("an interior leaf write replicates", () => {
     const bound = yjs.bind(StructNullable)
-    const a = createDoc(bound, undefined, "peer-a")
-    const b = createDoc(bound, undefined, "peer-b")
+    const a = createDocAs("peer-a", bound)
+    const b = createDocAs("peer-b", bound)
     a.v.set({ from: 1, to: null })
     inner(a.v).to.set(2)
     sync(a, b)
@@ -213,8 +213,8 @@ describe("whole-value writes at a sum (regression guards)", () => {
 
   it("materializing from null replicates", () => {
     const bound = yjs.bind(StructNullable)
-    const a = createDoc(bound, undefined, "peer-a")
-    const b = createDoc(bound, undefined, "peer-b")
+    const a = createDocAs("peer-a", bound)
+    const b = createDocAs("peer-b", bound)
     expect(a.v()).toBe(null)
     sync(a, b)
     expect(b.v()).toBe(null)

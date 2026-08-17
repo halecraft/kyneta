@@ -91,7 +91,7 @@ export {
   hasRecursiveChangefeed,
 } from "./changefeed.js"
 // Create-doc — generic document construction for any substrate
-export { createDoc, createRef } from "./create-doc.js"
+export { createDoc, createDocAs, createRef } from "./create-doc.js"
 export { describe } from "./describe.js"
 // Doc-position algebra — flat↔document-tree position mapping for editor bindings
 export type { ResolvedDocPosition } from "./doc-position.js"
