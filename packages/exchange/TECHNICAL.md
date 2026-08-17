@@ -847,9 +847,34 @@ Two asymmetries in the same area, both deliberate:
 - **`compact` needs no guard.** The store-program returns unchanged for a document it does not know, and a transient document is never registered, so it is never known. The safety is the store-program's rather than the runtime's.
 - **The store-program's `destroy` case still emits `persist-delete` unconditionally**, where its `compact` case guards on `!existing`. Making them symmetric would break deleting a document that is on disk but was not opened this session — the contract `Exchange.destroy` advertises. `Runtime.destroy` filters on the *cache entry* instead, and treats "no entry" and "deferred" as "we do not know enough to skip".
 
-**Per-doc phase tracking.** Each document tracked by the store-program is in one of two phases: `idle` (version confirmed, ready for next write) or `writing` (I/O in flight, with an optional queued input). When a `state-advanced` arrives during `writing`, the delta is queued (latest-wins) and replayed on `write-succeeded`. This ensures at most one in-flight write per document.
+**Per-doc phase tracking.** Each document tracked by the store-program is in one of three phases:
 
-**Self-healing version tracking.** The store-program's confirmed version only advances on `write-succeeded`. If a write fails, the old version is preserved so the next `exportSince` recomputes the full delta from the last known-good point. This means transient store failures (disk full, `QuotaExceededError` on IndexedDB, network blip on a remote store) self-heal on the next successful write without data loss.
+| Phase | Means |
+|-------|-------|
+| `unwritten` | The store has never acknowledged anything for this document. Reached when its first write failed. |
+| `idle` | A version is confirmed, and named. Ready for the next write. |
+| `writing` | I/O in flight, with an optional queued input and a `revertTo`. |
+
+`unwritten` and `idle` are the two *settled* phases — nothing in flight — and `writing` carries one of them as `revertTo`: where to fall back if this write fails. Storing the fallback rather than deriving it is what keeps `writing` a single phase. The alternative, a separate status for "writing with nothing behind it", would fall silently out of every `status === "writing"` check, including the one that acknowledges a *successful* write — leaving the document mid-write forever and hanging every `flush()`.
+
+Note that `allDocsIdle`, which `flush()` and `shutdown()` block on, means "no I/O in flight" rather than "status is `idle`". An `unwritten` document satisfies it.
+
+When a `state-advanced` arrives during `writing`, the delta is queued (latest-wins) and replayed on `write-succeeded`. This ensures at most one in-flight write per document. On an `unwritten` document it is dropped instead: a delta has no base version to apply against. `compact` on the same document does write, because it carries the whole document and its own `meta` rather than a difference.
+
+**Self-healing version tracking.** The store-program's confirmed version only advances on `write-succeeded`. A failed write falls back to whatever the phase it started from was — carried on the `writing` phase as `revertTo`, decided when the write began by the code that knew which case it was in. Temporary store failures (disk full, `QuotaExceededError` on IndexedDB, a network blip on a remote store) therefore recover on the next write, without data loss.
+
+*Temporary* here means the failure, not the document. `durability: "transient"` is an unrelated property described above — a transient document never reaches a store at all, so none of this applies to it.
+
+Recovery takes one of two shapes, and which one depends on whether anything was ever written:
+
+| Failed write | Falls back to | Next write |
+|---|---|---|
+| incremental (`state-advanced`, `compact`) | `idle` at the last confirmed version | `exportSince` recomputes the full delta from that point |
+| the document's first (`register`) | `unwritten` | a fresh `register` carrying the whole document |
+
+The second exists because a delta is defined relative to a version the store acknowledged, and a first write has none. Without the distinction there is nothing to recompute from, and the document would stay unpersisted until the process restarted — which is what `version: ""` used to cause, by making "no confirmed version" indistinguishable from "a confirmed version" at the type level.
+
+The retry is driven by the *runtime*, from the next mutation (`Runtime.#persistIfAdvanced`), rather than by the program re-emitting its own failed effect. That keeps it bounded — one attempt per mutation against a persistently failing store, rather than a loop — and keeps the program a pure function of its inputs. Applications that want a different policy have `onStoreError`.
 
 ### `onStoreError` callback
 
