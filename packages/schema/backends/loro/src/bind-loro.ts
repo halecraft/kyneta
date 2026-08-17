@@ -2,9 +2,13 @@
 //
 // The `loro` binding target provides `loro.bind()` and `loro.replica()` for
 // binding schemas to the Loro substrate with collaborative sync protocol.
-// The factory builder accepts { peerId } and returns a SubstrateFactory
-// that calls doc.setPeerId() on every new LoroDoc, ensuring deterministic
-// peer identity across all documents in an exchange.
+// The factory builder accepts { peerId } and returns a SubstrateFactory that
+// derives one deterministic PeerID from it via hashPeerId, so an exchange's
+// documents all speak as the same peer and stay recognisable across restarts.
+//
+// Every construction path claims that PeerID; they differ only in *when*.
+// A document that will first import its own stored history has to wait —
+// see `createForHydration` below for what goes wrong otherwise.
 //
 // Usage:
 //   import { loro, Schema } from "@kyneta/loro-schema"
@@ -75,15 +79,37 @@ function hashPeerId(peerId: string): PeerID {
 // ---------------------------------------------------------------------------
 
 /**
- * Create a SubstrateFactory<LoroVersion> that calls doc.setPeerId()
- * on every new LoroDoc with a deterministic numeric PeerID derived
- * from the exchange's string peerId.
+ * Create a SubstrateFactory<LoroVersion> whose documents share one
+ * deterministic numeric PeerID, derived from the exchange's string peerId.
  */
 function createLoroFactory(
   peerId: string,
   binding: SchemaBinding,
 ): SubstrateFactory<LoroVersion> {
   const numericPeerId = hashPeerId(peerId)
+
+  // Every construction below is this, differing only in where the LoroDoc
+  // comes from and whether identity is claimed now or later. Sharing the body
+  // keeps that one difference visible as an argument rather than something a
+  // reader has to find by diffing three near-identical functions.
+  //
+  // Loro's root containers are addressed by name, so `ensureLoroContainers`
+  // only looks them up — it writes no operations, and the commit that follows
+  // has nothing to record. That is why this has no counterpart to the Yjs
+  // binding's STRUCTURAL_YJS_CLIENT_ID dance: Yjs has to neutralise the
+  // identity on its structural operations, and here there are none to
+  // neutralise. Either choice of `claimIdentity` therefore starts from an
+  // empty operation log.
+  const buildSubstrate = (
+    doc: LoroDocType,
+    schema: SchemaNode,
+    claimIdentity: boolean,
+  ): Substrate<LoroVersion> => {
+    if (claimIdentity) doc.setPeerId(numericPeerId)
+    ensureLoroContainers(doc, schema, binding)
+    doc.commit()
+    return createLoroSubstrate(doc, schema, binding)
+  }
 
   return {
     replica: loroReplicaFactory,
@@ -98,21 +124,39 @@ function createLoroFactory(
       replica: Replica<LoroVersion>,
       schema: SchemaNode,
     ): Substrate<LoroVersion> {
-      const doc = (replica as any)[BACKING_DOC] as LoroDocType
-      // Set stable identity AFTER hydration — avoids any PeerID
-      // conflict with operations in hydrated state.
-      doc.setPeerId(numericPeerId)
-      ensureLoroContainers(doc, schema, binding)
-      doc.commit()
-      return createLoroSubstrate(doc, schema, binding)
+      // Claim identity now: this is the two-phase path, so any import has
+      // already happened and the op counter for our PeerID resumes past it
+      // rather than colliding with it.
+      return buildSubstrate(
+        (replica as any)[BACKING_DOC] as LoroDocType,
+        schema,
+        true,
+      )
     },
 
     create(schema: SchemaNode): Substrate<LoroVersion> {
+      // Fresh doc, nothing to import — claiming immediately is safe.
+      return buildSubstrate(new LoroDoc(), schema, true)
+    },
+
+    createForHydration(schema: SchemaNode) {
+      // Identity is deferred to `adopt` below. See the contract note on
+      // SubstrateFactory.createForHydration for why claiming a PeerID before
+      // importing that PeerID's own history silently drops an operation.
+      //
+      // Worth knowing about Loro specifically: it has no counterpart to Yjs's
+      // collision detection. It does not notice the clash and simply loses the
+      // operation, which makes a stable PeerID misleading here — identity
+      // survives a restart looking healthy precisely because nothing defended
+      // it.
       const doc = new LoroDoc()
-      doc.setPeerId(numericPeerId)
-      ensureLoroContainers(doc, schema, binding)
-      doc.commit()
-      return createLoroSubstrate(doc, schema, binding)
+      const substrate = buildSubstrate(doc, schema, false)
+      return {
+        substrate,
+        adopt: () => {
+          doc.setPeerId(numericPeerId)
+        },
+      }
     },
 
     fromEntirety(

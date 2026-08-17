@@ -21,6 +21,7 @@ Consumed by applications that bind schemas with `yjs.bind(schema)`. Not imported
 - What does `YjsVersion` include that a bare state vector doesn't? → [`YjsVersion` — state vector + delete-set digest](#yjsversion--state-vector--delete-set-digest)
 - How do structural inserts (a whole struct into a map) commit atomically? → [The write path and populate-then-attach](#the-write-path-and-populate-then-attach)
 - Why is there a reserved `clientID = 0` for structural operations? → [`STRUCTURAL_YJS_CLIENT_ID`](#structural_yjs_client_id)
+- Why is the peer's own `clientID` claimed *after* hydration, not at construction? → [`clientID` and the order it is claimed in](#clientid-and-the-order-it-is-claimed-in)
 - How does a remote `Y.applyUpdate` notify kyneta subscribers? → [The event bridge](#the-event-bridge)
 
 ## Vocabulary
@@ -226,6 +227,26 @@ This happens inside `yjsSubstrateFactory.upgrade(replica, schema)` after hydrati
 - **Not a security boundary.** It is a coordination mechanism, not a capability.
 
 ---
+
+## `clientID` and the order it is claimed in
+
+Source: `src/bind-yjs.ts` → `createForHydration`, `upgrade`, `create`.
+
+Yjs addresses every operation by `(clientID, clock)`, and `clock` restarts at zero on a fresh `Y.Doc`. A peer that sets its stable `clientID` on an empty document and then writes therefore produces operations at addresses its *own* stored history already occupies — and `applyUpdate` deduplicates by address, because that is what makes applying the same update twice a no-op.
+
+Measured, with a prior session that wrote three items under `clientID` 42:
+
+| Sequence | Resulting `clientID` | Contents |
+|---|---|---|
+| claim → import | reassigned to random | `["p1","p2","p3"]` — intact |
+| claim → **write** → import | reassigned to random | `["mine","p2","p3"]` — **`p1` lost** |
+| import → claim → write | `42` | `["p1","p2","p3","mine"]` — complete |
+
+Rows one and two show Yjs's own defence: when an update arrives carrying operations from the local `clientID` that this document did not author, Yjs concludes two live clients share an id and silently reassigns itself a random one. That is a correctness feature and it is what saves the data in row one — but it costs the peer its stable identity, and by row two it is too late, because the collision already happened at write time.
+
+Row three is the order this binding uses. `createForHydration` builds the document without claiming, so the import lands cleanly against the throwaway id; `adopt()` then sets the stable `clientID`, and the clock resumes past the imported history rather than colliding with it. `create()` still claims immediately, which is correct for a document that imports nothing.
+
+Note that this is **not** a Yjs quirk. Loro has the same collision for the same reason and also implements `createForHydration`; the difference is only in the symptom, since Loro does not defend and so keeps a stable `PeerID` while dropping the operation. See §"Peer identity and when a substrate may claim it" in `packages/schema/TECHNICAL.md` for the rule stated in terms of addressing.
 
 ## Identity-keyed containers
 

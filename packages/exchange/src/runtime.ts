@@ -35,7 +35,7 @@ import type {
   Schema as SchemaNode,
   SyncMode,
 } from "@kyneta/schema"
-import { createRef, SUBSTRATE, subscribe } from "@kyneta/schema"
+import { beginHydration, createRef, SUBSTRATE, subscribe } from "@kyneta/schema"
 import type { DocId } from "@kyneta/transport"
 import { registerDocSyncMode } from "./doc-meta.js"
 import { makeSettleTerm, registerHydrationTerm } from "./settle.js"
@@ -48,6 +48,9 @@ import {
   type StoreModel,
   storeProgram,
 } from "./store/store-program.js"
+
+/** The obligation a no-store document has: none. */
+const NO_ADOPT = (): void => {}
 
 // ---------------------------------------------------------------------------
 // RuntimeGet — the call signature for Runtime.get (mirrors Exchange's Get type)
@@ -803,7 +806,20 @@ export class Runtime {
     })
 
     // ── Shared prefix: create substrate, build ref ──
-    const substrate = factory.create(bound.schema)
+    //
+    // With stores configured this document is about to import operations this
+    // peer wrote in an earlier session, so it takes the deferred-identity
+    // path: `adopt` is called once that import lands, below. Without stores
+    // there is nothing to import, so `create()`'s immediate claim is correct
+    // and `adopt` is a no-op.
+    //
+    // Whether deferring changes anything is a per-backend fact, and not one
+    // this file should hold: `beginHydration` puts the question to the factory
+    // and falls back to the safe answer for backends that do not care.
+    const willHydrate = this.#stores.length > 0
+    const { substrate, adopt } = willHydrate
+      ? beginHydration(factory, bound.schema)
+      : { substrate: factory.create(bound.schema), adopt: NO_ADOPT }
 
     const ref: any = createRef(bound.schema, substrate, {
       lease: this.lease,
@@ -867,6 +883,17 @@ export class Runtime {
       ).then(
         () => {
           resolveHydration(hydration, { ok: true })
+          // Claim identity before announcing or subscribing. Registration
+          // publishes this document's version to the sync graph and the
+          // subscription starts forwarding local changes; both should carry
+          // the peer's final identity rather than the throwaway one it wore
+          // while loading.
+          //
+          // Deliberately not on the failure branch below: a document whose
+          // load failed stays unregistered and un-settled because its state is
+          // unknown, and claiming a stable identity on something we may yet
+          // reload would defeat that.
+          adopt()
           this.#register(entry)
           this.#wireDocSubscription(docId, ref)
         },

@@ -389,6 +389,16 @@ The `peerId` in `ExchangeParams.id` is **required** (enforced by the type: `stri
 
 The stability requirement is why `new Exchange({ id })` takes a value rather than generating one. The library does not know what counts as "the same participant" across boots — it could be a device, a user, a browser tab, a service replica. The caller decides.
 
+### The substrate's own copy of the invariant
+
+A stable `peerId` string is necessary but not sufficient. Each substrate translates it into whatever its CRDT uses to attribute operations — Yjs a numeric `clientID`, Loro a `PeerID` — and *when* that translation is claimed matters as much as its value.
+
+Because a CRDT addresses operations by `(peer, counter)` and the counter restarts at zero on a fresh document, a peer that claims its identity before loading its own stored history writes to addresses that history already occupies. The merge deduplicates by address and one of the two operations is silently dropped.
+
+So a **store-backed document claims its substrate identity after hydration, not at construction**. `Runtime.createInterpretDoc` takes `beginHydration` from `@kyneta/schema` when stores are configured and calls the returned `adopt()` once the load resolves — before `registerDoc`, so peers never see the transient identity in an announcement. Without stores there is nothing to import and identity is claimed immediately.
+
+One consequence worth knowing: a document written to *before* it has hydrated contributes its early operations under a transient identity, which shows up as one extra version-vector entry that never grows. Waiting for the document to settle avoids it, which the readiness layer already asks for on independent grounds. See §"Peer identity and when a substrate may claim it" in `packages/schema/TECHNICAL.md` for the rule and which backends need it.
+
 ### Browser tabs: `persistentPeerId`
 
 The multi-tab browser case is subtle enough to deserve its own helper. A tab wants a peer ID that:

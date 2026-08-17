@@ -1052,6 +1052,44 @@ export interface ReplicaFactory<V extends Version = Version>
  * enables conduit participants to receive just the `ReplicaFactory`
  * without depending on the schema infrastructure.
  */
+/**
+ * A substrate, plus the obligation that comes with it.
+ *
+ * Returned by {@link beginHydration} rather than attached to the substrate as
+ * an optional capability, so that a caller cannot obtain the substrate without
+ * also being handed the thing it owes. A capability a caller must know to go
+ * looking for can only be discharged by a caller who already knew.
+ */
+export type HydrationHandle<V extends Version = Version> = {
+  readonly substrate: Substrate<V>
+  /** Claim this peer's stable identity. Idempotent — safe to call twice. */
+  readonly adopt: () => void
+}
+
+/**
+ * Build a substrate for a caller that is about to import this peer's own
+ * history, and receive the obligation to claim identity afterwards.
+ *
+ * Falls back to `create()` plus a no-op `adopt` for backends that declare no
+ * {@link SubstrateFactory.createForHydration}. That default lives here rather
+ * than at the call site because it is a statement about the substrate
+ * contract — *claiming immediately is safe when nothing will be imported* —
+ * not a convenience for one consumer.
+ */
+export function beginHydration<V extends Version>(
+  factory: SubstrateFactory<V>,
+  schema: SchemaNode,
+): HydrationHandle<V> {
+  return (
+    factory.createForHydration?.(schema) ?? {
+      substrate: factory.create(schema),
+      adopt: NOOP_ADOPT,
+    }
+  )
+}
+
+const NOOP_ADOPT = (): void => {}
+
 export interface SubstrateFactory<V extends Version = Version> {
   /**
    * Create a bare replica with no schema, no identity, no structural
@@ -1093,13 +1131,47 @@ export interface SubstrateFactory<V extends Version = Version> {
   upgrade(replica: Replica<V>, schema: SchemaNode): Substrate<V>
 
   /**
-   * Create a fresh substrate from a schema.
+   * Create a fresh substrate from a schema, ready to use.
    *
    * Convenience that composes `upgrade(createReplica(), schema)`.
    * Useful for tests and standalone scripts that don't need the
    * two-phase lifecycle. Store starts with Zero.structural defaults.
+   *
+   * **Claims this peer's identity immediately**, which is correct as long as
+   * the caller is not about to import operations this same peer authored
+   * earlier. A caller that *is* — a document being hydrated from storage —
+   * must use {@link SubstrateFactory.createForHydration} instead; see the
+   * note there for why the order matters.
    */
   create(schema: SchemaNode): Substrate<V>
+
+  /**
+   * Create a substrate for a caller that is about to import this peer's own
+   * history — hydration from a store, principally.
+   *
+   * **Optional.** Implement it when claiming identity on an empty document
+   * would be unsafe once that document imports operations the same peer
+   * authored earlier. {@link beginHydration} supplies `create()` plus a no-op
+   * for backends that leave it out.
+   *
+   * Whether it is unsafe follows from how the backend addresses operations.
+   * Where an address is `(peer, counter)` and the counter restarts at zero on
+   * a fresh document, a peer that claims its identity and then writes produces
+   * operations at addresses its own stored history already occupies. Merge
+   * deduplicates by address, so one of the two is discarded — silently, and
+   * with no way to tell which was the real one.
+   *
+   * Both operation-log backends are in this position, and both implement this.
+   * Neither defends itself adequately: Yjs notices the collision and reassigns
+   * its id, which saves the data but costs the peer its identity, and Loro
+   * does not notice at all. The plain and ephemeral substrates need nothing
+   * here: they carry no peer identity whatsoever, storing values in
+   * last-write-wins registers rather than an addressed operation log.
+   *
+   * The returned `adopt` is the obligation that comes with the substrate: call
+   * it once the imports are finished and no further ones are outstanding.
+   */
+  createForHydration?(schema: SchemaNode): HydrationHandle<V>
 
   /**
    * Construct a new substrate from a self-sufficient payload.

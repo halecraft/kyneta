@@ -2,9 +2,13 @@
 //
 // The `yjs` binding target provides `yjs.bind()` and `yjs.replica()` for
 // binding schemas to the Yjs substrate with collaborative sync protocol.
-// The factory builder accepts { peerId } and returns a SubstrateFactory
-// that calls doc.clientID = hashPeerId(peerId) on every new Y.Doc,
-// ensuring deterministic peer identity across all documents in an exchange.
+// The factory builder accepts { peerId } and returns a SubstrateFactory that
+// derives one deterministic clientID from it via hashPeerId, so an exchange's
+// documents all speak as the same peer and stay recognisable across restarts.
+//
+// Every construction path claims that clientID; they differ only in *when*.
+// A document that will first import its own stored history has to wait —
+// see `createForHydration` below for what goes wrong otherwise.
 //
 // Yjs clientID is a uint32 number. We use FNV-1a hash truncated to
 // 32 bits, mirroring the Loro binding's hashPeerId pattern but
@@ -78,15 +82,34 @@ function hashPeerId(peerId: string): number {
 // ---------------------------------------------------------------------------
 
 /**
- * Create a SubstrateFactory<YjsVersion> that sets doc.clientID
- * on every new Y.Doc with a deterministic uint32 clientID derived
- * from the exchange's string peerId.
+ * Create a SubstrateFactory<YjsVersion> whose documents share one deterministic
+ * uint32 clientID, derived from the exchange's string peerId.
  */
 function createYjsFactory(
   peerId: string,
   binding: SchemaBinding,
 ): SubstrateFactory<YjsVersion> {
   const numericClientId = hashPeerId(peerId)
+
+  // Every construction below is this, differing only in where the Y.Doc comes
+  // from and whether identity is claimed now or later. Sharing the body keeps
+  // that one difference visible as an argument instead of something a reader
+  // has to find by diffing three near-identical functions.
+  //
+  // Note that `ensureContainers` briefly swaps in STRUCTURAL_YJS_CLIENT_ID and
+  // restores whatever id is current, so structural ops are byte-identical
+  // across peers and dedupe on merge. That is why a freshly built document has
+  // no operations under the peer's *own* id — and it composes with either
+  // choice below without caring which was made.
+  const buildSubstrate = (
+    doc: Y.Doc,
+    schema: SchemaNode,
+    claimIdentity: boolean,
+  ): Substrate<YjsVersion> => {
+    if (claimIdentity) doc.clientID = numericClientId
+    ensureContainers(doc, schema, binding)
+    return createYjsSubstrate(doc, schema, binding)
+  }
 
   return {
     replica: yjsReplicaFactory,
@@ -101,20 +124,43 @@ function createYjsFactory(
       replica: Replica<YjsVersion>,
       schema: SchemaNode,
     ): Substrate<YjsVersion> {
-      const doc = (replica as any)[BACKING_DOC] as Y.Doc
-      // Set stable identity AFTER hydration — avoids Yjs clientID
-      // conflict detection that would reassign to a random value.
-      doc.clientID = numericClientId
-      ensureContainers(doc, schema, binding)
-      return createYjsSubstrate(doc, schema, binding)
+      // Claim identity now: this is the two-phase path, so any import has
+      // already happened and the clock for our id is wherever that history
+      // left it. Writes continue from there rather than colliding with it.
+      return buildSubstrate(
+        (replica as any)[BACKING_DOC] as Y.Doc,
+        schema,
+        true,
+      )
     },
 
     create(schema: SchemaNode): Substrate<YjsVersion> {
-      // Fresh doc — set identity immediately.
+      // Fresh doc, nothing to import — claiming immediately is safe.
+      return buildSubstrate(new Y.Doc(), schema, true)
+    },
+
+    createForHydration(schema: SchemaNode) {
+      // Identity is deferred to `adopt` below. See the contract note on
+      // SubstrateFactory.createForHydration for why claiming a clientID before
+      // importing that clientID's own history silently drops an operation.
+      //
+      // Worth knowing about Yjs specifically: it would catch this itself, by
+      // reassigning clientID when an arriving update carries operations from
+      // an id it claims but did not author. That saves the data, but only when
+      // the import beats every local write, and it costs the peer its identity
+      // on every restart either way. Deferring keeps both.
+      //
+      // The cost of deferring: anything written during the import stays
+      // attributed to the throwaway id — one extra version-vector entry that
+      // never grows again, which is far cheaper than a lost operation.
       const doc = new Y.Doc()
-      doc.clientID = numericClientId
-      ensureContainers(doc, schema, binding)
-      return createYjsSubstrate(doc, schema, binding)
+      const substrate = buildSubstrate(doc, schema, false)
+      return {
+        substrate,
+        adopt: () => {
+          doc.clientID = numericClientId
+        },
+      }
     },
 
     fromEntirety(

@@ -481,6 +481,7 @@ export type {
   Durability,
   HasDevtoolsHistory,
   HasTreeNodeAllocation,
+  HydrationHandle,
   MetadataAxis,
   MetadataMismatch,
   ReadCapability,
@@ -500,6 +501,7 @@ export type {
 } from "./substrate.js"
 export {
   BACKING_DOC,
+  beginHydration,
   computeSchemaHash,
   DEVTOOLS_HISTORY,
   HASH_ALGORITHM_VERSION,
