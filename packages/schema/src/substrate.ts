@@ -1138,6 +1138,22 @@ export interface SubstrateFactory<V extends Version = Version> {
    * 3. Returns a Substrate wrapping the same backing document with the
    *    full interpreter surface.
    *
+   * **Also the mechanism behind a public transition.** `@kyneta/exchange` uses
+   * this to promote a document it has been relaying headlessly — a bare
+   * `Replica` with no schema — into a fully interpreted one, when a caller
+   * supplies the schema it was missing. Because the returned substrate wraps
+   * the same backing document, everything the replica accumulated carries
+   * across.
+   *
+   * Step 1 above is why that transition has a precondition. Identity is
+   * claimed here immediately, assuming any import has already finished —
+   * which holds for two-phase construction, where `createReplica` hydrates
+   * first. Promoting a document whose load is still in flight breaks that
+   * assumption and loses operations to the collision
+   * {@link SubstrateFactory.createForHydration} describes, so the exchange
+   * refuses until loading completes. That refusal is required by this
+   * ordering, not caution about it.
+   *
    * @param replica - A replica previously created by `createReplica()`
    *   on this factory (or a compatible one).
    * @param schema - The root schema for the document.

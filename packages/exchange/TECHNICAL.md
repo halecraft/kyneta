@@ -45,7 +45,7 @@ Imported by applications to construct the top-level sync graph; by `@kyneta/reac
 | Dispatch cycle | One inbound input → update → effects executed → (possibly) more inputs queued from `sync-event` effects → update again → … → quiescence. Notifications accumulate throughout, deliver once on drain. | An event-loop tick |
 | Quiescence | The state after one dispatch cycle completes: session queue empty, sync queue empty, no pending `sync-event`s. Notifications drain here. | Async settlement |
 | `DocRuntime` | Per-doc bundle: `Ref<S>`, the `ReplicaLike` / `ReplicaFactoryLike` pair, the schema binding, the mode (`interpret \| replicate \| deferred`), the changefeed subscription, and echo-prevention state. Uses the variance-safe `-Like` interfaces from `@kyneta/schema` to avoid `Replica<any>`. Held by the Synchronizer, not by the programs. | A document — a `DocRuntime` *manages* a document |
-| Phase | Which tier a document sits in: `deferred` (announced by a peer, nothing held), `replicate` (a bare `Replica`, no schema), or `interpret` (substrate + `Ref<S>`). `planInterpretation` (`src/interpret.ts`) classifies on it. | **Suspension** — an orthogonal flag about sync-graph membership, not a fourth phase. A suspended document is still in interpret phase. |
+| Phase | Which tier a document sits in: `deferred` (announced by a peer, nothing held), `replicate` (a bare `Replica`, no schema), or `interpret` (substrate + `Ref<S>`). `planInterpretation` (`src/interpret.ts`) classifies on it. Not a fixed classification: `interpret` is reachable from both other phases via `get()`, and the reverse is not reachable at all. | **Suspension** — an orthogonal flag about sync-graph membership, not a fourth phase. A suspended document is still in interpret phase. |
 | `Disposition` vs `InterpretAction` | `Disposition` (`Interpret \| Replicate \| Defer \| Reject`) decides which tier a *newly discovered* document should enter. `InterpretAction` decides how an *existing* document is raised to interpret. | Each other — adjacent, and neither supersedes the other. |
 | `ReactiveMap<K, V, C>` | From `@kyneta/changefeed` — a callable changefeed over a `ReadonlyMap<K, V>` with lifted accessors. | A plain `Map` — this fires the changefeed |
 | `Policy` | Interface with gate predicates (`canShare`, `canAccept`, `canConnect`, `canReset`) and document handlers (`resolve`). Multiple policies register into one `Governance`. | An HTTP middleware, an authorization system |
@@ -323,7 +323,7 @@ determines *whether* it does anything at all. Suspension participates in neither
 | absent | Create the `DocRuntime`, register with `Store[]`, broadcast `present`, return a fresh `Ref<S>`. |
 | interpret | Return the existing `Ref<S>`. No substrate reconstruction. |
 | deferred | Promote to interpret; send `interest` to the peer that presented; run sync. |
-| replicate | **Refused** — see below. |
+| replicate | Promote to interpret over the *same* accumulated state — see below. |
 
 Reconcilability is `mismatchForInterpretation` (`@kyneta/schema`) over the three
 axes a document is identified by: `replicaType`, `syncMode`, `schemaHash`. A
@@ -341,11 +341,46 @@ deferred, interpreted, or suspended. It still throws for an incoherent
 created with, or a `replicaType`/`syncMode` that cannot work — and those are
 about the arguments, not the document's state.
 
-`replicate` is the one phase still refused, and deliberately: it is reported as
-`kind: "unsupported"` rather than as a mismatch, so a caller can tell "not built
-yet" from "can never work". Promotion is mechanically close (`SubstrateFactory.upgrade`),
-but it is one-way — there is no `demote()` — so a relay that promoted a document
-would silently acquire a full substrate for something it only meant to forward.
+### Promoting a replicate document
+
+A `replicate` document is a bare `Replica` — it accumulates state, computes
+per-peer deltas and relays bytes, but has no schema, no substrate and no ref.
+The one thing it lacks is exactly what `get(docId, bound)` supplies, so the
+call is not a request for something the peer cannot do; it is the peer being
+handed the missing piece.
+
+`SubstrateFactory.upgrade(replica, schema)` performs it, wrapping the *same*
+backing document. Accumulated state carries across rather than being rebuilt —
+a promotion that produced a fresh empty substrate would be indistinguishable
+from success by any structural check, which is why the tests assert on content.
+
+Three preconditions, and together they are the whole contract:
+
+1. **The caller supplies a schema.** Promotion never happens without one.
+2. **The schema is compatible on all three axes** — `replicaType`, `syncMode`,
+   `schemaHash`, via `mismatchForInterpretation`. Note the deferred-document
+   exception below does *not* apply here.
+3. **The document has finished loading.** `upgrade()` claims this peer's stable
+   identity on the backing document, and a CRDT addressing operations by
+   `(peer, counter)` silently drops one of a colliding pair. Claiming while the
+   document's own history is still arriving is that collision. A caller that
+   gets `Document '…' is still loading` should `await exchange.whenHydrated(docId)`
+   — the docId-keyed accessor exists because a replicate document has no ref
+   for the ref-keyed `whenHydrated` to take.
+
+**The cost is that promotion is one-way.** There is no `demote()`, so a peer
+that promotes a document it was only relaying keeps the full substrate for the
+rest of the process. That is why it happens only where a caller named both a
+`docId` and a `BoundSchema`.
+
+**No blanket path promotes, and that asymmetry is the safety property.**
+`registerSchema`'s deferred sweep and the `onEnsureDoc` network route both
+raise documents to interpret without any caller naming one. Neither may promote
+a replicate document: registering a single schema would otherwise convert every
+matching replicate document at once, and a relay that registered a schema to
+read *one* document would acquire full substrates for all of them, irreversibly.
+The sweep's own comment refuses to widen for this reason. A named `docId` plus a
+`BoundSchema` is a deliberate act; a sweep is not.
 
 Otherwise the return is always a `Ref<S>` — a typed, callable, navigable,
 observable, writable reference from the interpreter stack. Application code
