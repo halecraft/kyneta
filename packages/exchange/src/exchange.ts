@@ -585,14 +585,10 @@ export class Exchange {
     // ── Wire Synchronizer → Runtime (store delta saves) ──
     // When the sync graph advances a doc's version (from network import
     // or local change), the Runtime needs to persist the delta.
+    // Just the docId. The Runtime resolves the document from its own cache —
+    // do not look it up here and pass it in, which is what this used to do.
     this.#synchronizer.onStateAdvanced((docId: DocId) => {
-      const docRuntime = this.#synchronizer.getDocRuntime(docId)
-      if (!docRuntime) return
-      this.#runtime.onStateAdvanced(
-        docId,
-        docRuntime.replica,
-        docRuntime.replicaFactory,
-      )
+      this.#runtime.onStateAdvanced(docId)
     })
   }
 

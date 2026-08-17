@@ -388,4 +388,30 @@ describe("Runtime.get and replicate-mode documents", () => {
     expect(runtime.get("todo-1", TodoDoc)).toBe(runtime.get("todo-1", TodoDoc))
     runtime.shutdown()
   })
+
+  it("ignores a state advance for a document it does not hold", async () => {
+    // `onStateAdvanced` reports only which document changed, so one the
+    // Runtime does not track has nothing to resolve and the call must be a
+    // no-op rather than a throw.
+    //
+    // It should not arise: the Runtime's cache and the Synchronizer's document
+    // set are populated together via `onDocReady` and torn down together via
+    // `onDocDestroyed`. Pinned anyway, because "should not arise" stops being
+    // true quietly, and because the alternative — persisting a document
+    // nothing local owns — is worse than skipping it.
+    const runtime = new Runtime({
+      peerId: "alice",
+      stores: [createInMemoryStore()],
+    })
+
+    expect(() => runtime.onStateAdvanced("never-seen")).not.toThrow()
+
+    // A destroyed document is the same case reached a different way.
+    runtime.get("todo-1", TodoDoc)
+    await runtime.flush()
+    runtime.destroy("todo-1")
+    expect(() => runtime.onStateAdvanced("todo-1")).not.toThrow()
+
+    await runtime.shutdown()
+  })
 })

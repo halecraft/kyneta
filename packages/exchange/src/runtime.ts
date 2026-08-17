@@ -633,13 +633,15 @@ export class Runtime {
    * Safe to call redundantly for the same mutation from both paths: the
    * store-program's confirmed-version dedup means whichever call reaches
    * it first performs the real write, the other is a no-op. Context: jj:mrlnmlus.
+   *
+   * Carries a `docId` and nothing else. Every hook in {@link RuntimeHooks}
+   * reports outward, from the Runtime to whoever wired it up; this is the one
+   * call that comes back in, and it should not need the network shell to hold
+   * local bookkeeping in order to make it. The Runtime resolves the document
+   * from its own cache, which is where the document lives.
    */
-  onStateAdvanced(
-    docId: DocId,
-    replica: ReplicaLike,
-    replicaFactory: ReplicaFactoryLike,
-  ): void {
-    this.#persistIfAdvanced(docId, replica, replicaFactory)
+  onStateAdvanced(docId: DocId): void {
+    this.#persistIfAdvanced(docId)
   }
 
   /**
@@ -679,12 +681,17 @@ export class Runtime {
    * without touching the store-program's own Mealy-machine transitions.
    * Context: jj:mrlnmlus.
    */
-  #persistIfAdvanced(
-    docId: DocId,
-    replica: ReplicaLike,
-    replicaFactory: ReplicaFactoryLike,
-  ): void {
+  #persistIfAdvanced(docId: DocId): void {
     if (!this.#storeHandle) return
+
+    // Skip a document this Runtime does not hold. A deferred entry has no
+    // replica to export from, and one absent from the cache is no longer
+    // tracked here at all — persisting its state would write something whose
+    // lifecycle nothing local owns.
+    const entry = this.#docCache.get(docId)
+    if (!entry || entry.mode === "deferred") return
+    const { replica, replicaFactory } = entry.readyInfo
+
     const phase = this.#storeHandle.getState().docs.get(docId)
     if (!phase) return // Not yet registered — still hydrating
 
@@ -711,8 +718,6 @@ export class Runtime {
     // persistently failing store gets one attempt per mutation instead of a
     // loop, and the program stays a function of its inputs.
     if (phase.status === "unwritten") {
-      const entry = this.#docCache.get(docId)
-      if (!entry || entry.mode === "deferred") return
       this.#storeHandle.dispatch({
         type: "register",
         docId,
@@ -1115,16 +1120,7 @@ export class Runtime {
   #drainLocalChanges(): void {
     const docIds = [...this.#dirtyLocalChanges]
     this.#dirtyLocalChanges.clear()
-    for (const docId of docIds) {
-      const entry = this.#docCache.get(docId)
-      if (entry && entry.mode !== "deferred") {
-        this.#persistIfAdvanced(
-          docId,
-          entry.readyInfo.replica,
-          entry.readyInfo.replicaFactory,
-        )
-      }
-    }
+    for (const docId of docIds) this.#persistIfAdvanced(docId)
   }
 
   /**
