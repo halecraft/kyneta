@@ -389,6 +389,41 @@ describe("Runtime.get and replicate-mode documents", () => {
     runtime.shutdown()
   })
 
+  it("reports an unknown document as hydrated", async () => {
+    // Nothing to load, so the load is trivially finished. Answering `false`
+    // would be defensible and useless: every caller would have to pair the
+    // question with an existence check before it meant anything.
+    const runtime = new Runtime({ peerId: "alice" })
+
+    expect(runtime.hydrated("never-seen")).toBe(true)
+    await expect(runtime.whenHydrated("never-seen")).resolves.toBeUndefined()
+
+    await runtime.shutdown()
+  })
+
+  it("tracks a replicate document's load, which has no ref to ask about", async () => {
+    // The case the docId-keyed form exists for. A replicate document is a bare
+    // replica — no schema, no interpreter stack, no ref — so `hydrated(ref)`
+    // from `settle.ts` has nothing to key on.
+    const runtime = new Runtime({
+      peerId: "alice",
+      stores: [createInMemoryStore()],
+    })
+    const boundReplica = json.replica()
+    runtime.replicate(
+      "todo-1",
+      boundReplica.factory,
+      boundReplica.syncMode,
+      TodoDoc.schemaHash,
+    )
+
+    expect(runtime.hydrated("todo-1")).toBe(false)
+    await runtime.whenHydrated("todo-1")
+    expect(runtime.hydrated("todo-1")).toBe(true)
+
+    await runtime.shutdown()
+  })
+
   it("ignores a state advance for a document it does not hold", async () => {
     // `onStateAdvanced` reports only which document changed, so one the
     // Runtime does not track has nothing to resolve and the call must be a

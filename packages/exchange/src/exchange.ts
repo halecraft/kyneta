@@ -959,6 +959,34 @@ export class Exchange {
   }
 
   /**
+   * Has this document finished loading from storage?
+   *
+   * Use this rather than the ref-keyed `hydrated(ref)` when there is no ref to
+   * ask about — a document held in `replicate` mode is a bare replica with no
+   * schema and no interpreter stack. An unknown document reports `true`: there
+   * is nothing to load.
+   *
+   * @param docId - The document ID
+   */
+  hydrated(docId: DocId): boolean {
+    return this.#runtime.hydrated(docId)
+  }
+
+  /**
+   * Resolve once this document's stored data has finished loading; reject if
+   * the load failed.
+   *
+   * The precise alternative to `flush()`, which drains every pending write
+   * across the whole exchange and is named for that. This waits for one
+   * document, and for loading rather than writing.
+   *
+   * @param docId - The document ID
+   */
+  whenHydrated(docId: DocId): Promise<void> {
+    return this.#runtime.whenHydrated(docId)
+  }
+
+  /**
    * Compute the least common version (LCV) for a document across all
    * synced cohort members. The LCV is the greatest version that is ≤
    * every synced cohort peer's last known version — the safe trim

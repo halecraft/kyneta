@@ -482,6 +482,50 @@ export class Runtime {
   }
 
   /**
+   * Has this document finished loading from storage?
+   *
+   * The docId-keyed twin of `hydrated(ref)` in `settle.ts`. Both exist because
+   * not every document has a ref to ask about: one held in `replicate` mode is
+   * a bare replica with no schema and no interpreter stack, so the ref-keyed
+   * form has nothing to key on. The parameter type says which surface you are
+   * using.
+   *
+   * An unknown document reports `true`. There is nothing to load, so the load
+   * is trivially finished — the same answer `hydrated(ref)` gives a document
+   * with no store behind it, and it saves every caller an existence check.
+   */
+  hydrated(docId: DocId): boolean {
+    const entry = this.#docCache.get(docId)
+    if (!entry || entry.mode === "deferred") return true
+    return entry.hydration.state !== "pending"
+  }
+
+  /**
+   * Resolve once this document's stored data has finished loading; reject if
+   * the load failed.
+   *
+   * No timeout, for the reason `whenHydrated(ref)` gives: a slow disk is a
+   * local fault we can observe, and abandoning the wait would mean proceeding
+   * as though the document were empty. That is how defaults get written over
+   * data we merely failed to read.
+   */
+  whenHydrated(docId: DocId): Promise<void> {
+    const entry = this.#docCache.get(docId)
+    if (!entry || entry.mode === "deferred") return Promise.resolve()
+
+    const latch = entry.hydration
+    if (latch.state === "loaded") return Promise.resolve()
+    if (latch.state === "failed") return Promise.reject(latch.error)
+
+    return new Promise<void>((resolve, reject) => {
+      latch.listeners.add(() => {
+        if (latch.state === "failed") reject(latch.error)
+        else resolve()
+      })
+    })
+  }
+
+  /**
    * Get a cached document entry, or undefined.
    */
   getEntry(docId: DocId): DocCacheEntry | undefined {
