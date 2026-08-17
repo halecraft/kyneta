@@ -922,7 +922,12 @@ describe("Exchange", () => {
       ).toThrow(/already registered/)
     })
 
-    it("get() throws if docId is registered in replicate mode", () => {
+    it("get() refuses a replicate document whose schema disagrees", () => {
+      // Registered under a hash this schema does not claim to read. A
+      // replicate document holds accumulated bytes, so reinterpreting them
+      // under a shape that was not theirs would be silently wrong — the
+      // local-schema-authoritative override applies to deferred documents,
+      // which hold nothing, and not to this.
       const exchange = createExchange()
       exchange.replicate(
         "doc-1",
@@ -930,7 +935,26 @@ describe("Exchange", () => {
         SYNC_AUTHORITATIVE,
         "00test",
       )
-      expect(() => exchange.get("doc-1", TestDoc)).toThrow(/replicate mode/)
+      expect(() => exchange.get("doc-1", TestDoc)).toThrow(/schemaHash/)
+    })
+
+    it("get() promotes a compatible replicate document", () => {
+      const exchange = createExchange()
+      exchange.replicate(
+        "doc-1",
+        plainReplicaFactory,
+        SYNC_AUTHORITATIVE,
+        TestDoc.schemaHash,
+      )
+
+      const doc = exchange.get("doc-1", TestDoc)
+
+      // A usable ref over the promoted document. Whether `exchange.documents`
+      // reflects the new mode is a separate concern — the sync layers have to
+      // learn the transition before the map is rebuilt — and is asserted with
+      // the event that drives it.
+      expect(doc).toBeDefined()
+      expect(exchange.has("doc-1")).toBe(true)
     })
 
     it("destroy() works for replicated docs", () => {

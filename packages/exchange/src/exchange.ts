@@ -807,16 +807,6 @@ export class Exchange {
         return (cached as { ref: unknown }).ref as Ref<S>
       }
 
-      // The classifier now says a hydrated, compatible replicate document may
-      // be promoted. This door does not yet carry that out, so it refuses as
-      // before rather than half-performing a transition.
-      if (action.action === "promote" && action.from === "replicate") {
-        throw new Error(
-          `Document '${docId}' is registered in replicate mode. ` +
-            `Cannot call exchange.get() on a replicated document — it has no schema or ref.`,
-        )
-      }
-
       if (action.action === "refuse") {
         if (action.kind === "not-hydrated") {
           throw new Error(
@@ -837,7 +827,18 @@ export class Exchange {
         // Only that axis. A replicaType or syncMode disagreement is about
         // whether bytes can be exchanged at all, and no amount of local intent
         // makes an undecodable format decodable — those refusals stand.
-        if (action.mismatch.axis !== "schemaHash") {
+        //
+        // And only for a deferred document. Both phases can arrive from a
+        // peer's announcement, so provenance is not the distinction — what is
+        // at stake is. A deferred document holds *nothing*, so overriding
+        // materialises an empty one under the local schema. A replicate
+        // document holds accumulated bytes, and overriding there reinterprets
+        // them under a shape their writer did not use. That answer would be
+        // wrong and silent, so refuse it like any other axis.
+        if (
+          cached.mode !== "deferred" ||
+          action.mismatch.axis !== "schemaHash"
+        ) {
           throw new Error(
             `Document '${docId}' cannot be interpreted with this schema: ` +
               `${action.mismatch.axis} disagrees (local ${action.mismatch.local} ` +

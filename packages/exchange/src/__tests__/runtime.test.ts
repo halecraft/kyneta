@@ -1,7 +1,7 @@
 // runtime.test.ts — verifies the Runtime can manage documents standalone
 // (no Exchange, no network transports) with stores and the tick clock.
 
-import { type DocRef, json, Schema } from "@kyneta/schema"
+import { batch, type DocRef, json, Schema } from "@kyneta/schema"
 import { describe, expect, it, vi } from "vitest"
 import { Runtime } from "../runtime.js"
 import { createInMemoryStore } from "../store/in-memory-store.js"
@@ -347,7 +347,11 @@ describe("Exchange with pre-constructed Runtime (rare overload)", () => {
 })
 
 describe("Runtime.get and replicate-mode documents", () => {
-  it("refuses rather than clobbering a replicate entry", () => {
+  it("promotes a replicate entry over its accumulated state", () => {
+    // **The load-bearing test.** A promotion that built a fresh empty
+    // substrate would still report `mode: "interpret"` and pass any structural
+    // check, so the assertion is on the *content*: state written into the
+    // replica before promotion must be readable through the ref after it.
     const runtime = new Runtime({ peerId: "alice" })
     const boundReplica = json.replica()
     runtime.replicate(
@@ -357,16 +361,74 @@ describe("Runtime.get and replicate-mode documents", () => {
       TodoDoc.schemaHash,
     )
 
-    expect(() => runtime.get("todo-1", TodoDoc)).toThrow(/replicate mode/)
+    // Accumulate through the replica, as a relay would from the wire.
+    const before = runtime.getEntry("todo-1")
+    if (before?.mode !== "replicate") throw new Error("expected replicate")
+    const source = runtime.get("source-doc", TodoDoc) as DocRef<
+      typeof TodoSchema
+    >
+    batch(source, d => {
+      d.title.set("relayed")
+    })
+    const payload = (
+      runtime.getEntry("source-doc") as { readyInfo: { replica: any } }
+    ).readyInfo.replica.exportEntirety()
+    before.readyInfo.replica.merge(payload)
 
-    // The throw alone is not the point — a version that clobbered first and
-    // threw afterwards would pass that assertion. What matters is that the
-    // replicate entry, and the accumulated Replica it holds, survived.
-    const entry = runtime.getEntry("todo-1")
-    expect(entry?.mode).toBe("replicate")
-    expect(entry?.mode === "replicate" && entry.readyInfo.replica).toBeDefined()
+    const doc = runtime.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
+
+    expect(runtime.getEntry("todo-1")?.mode).toBe("interpret")
+    expect(doc.title()).toBe("relayed")
 
     runtime.shutdown()
+  })
+
+  it("promotes a suspended replicate document and leaves it suspended", () => {
+    // Promotion says which tier holds the document; suspension says whether it
+    // is in the sync graph. Losing the flag here would let a `get()` silently
+    // re-announce a document the application had withdrawn.
+    const runtime = new Runtime({ peerId: "alice" })
+    const boundReplica = json.replica()
+    runtime.replicate(
+      "todo-1",
+      boundReplica.factory,
+      boundReplica.syncMode,
+      TodoDoc.schemaHash,
+    )
+    runtime.suspend("todo-1")
+
+    runtime.get("todo-1", TodoDoc)
+
+    const entry = runtime.getEntry("todo-1")
+    expect(entry?.mode).toBe("interpret")
+    expect(entry?.mode === "interpret" && entry.suspended).toBe(true)
+
+    runtime.shutdown()
+  })
+
+  it("refuses to promote while the document is still loading", async () => {
+    // `upgrade()` claims this peer's stable identity on the backing document.
+    // Doing that while the document's own history is still arriving writes to
+    // addresses that history occupies, and the merge drops one of the pair.
+    const runtime = new Runtime({
+      peerId: "alice",
+      stores: [createInMemoryStore()],
+    })
+    const boundReplica = json.replica()
+    runtime.replicate(
+      "todo-1",
+      boundReplica.factory,
+      boundReplica.syncMode,
+      TodoDoc.schemaHash,
+    )
+
+    expect(() => runtime.get("todo-1", TodoDoc)).toThrow(/whenHydrated/)
+
+    // And once it has loaded, the same call succeeds.
+    await runtime.whenHydrated("todo-1")
+    expect(() => runtime.get("todo-1", TodoDoc)).not.toThrow()
+
+    await runtime.shutdown()
   })
 
   it("throws when the same docId is requested with a different BoundSchema", () => {

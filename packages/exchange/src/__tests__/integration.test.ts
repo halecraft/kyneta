@@ -1302,8 +1302,16 @@ describe("relay via exchange.replicate()", () => {
     expect(bobAppDoc.title()).toBe("App Data")
     expect(bobAppDoc.count()).toBe(7)
 
-    // The replicated doc should exist but not be gettable as interpreted
-    expect(() => exchangeB.get("relay-doc", LoroDoc)).toThrow(/replicate mode/)
+    // The replicated doc holds accumulated state and no schema. Supplying one
+    // promotes it in place: the same bytes, now readable.
+    //
+    // This is the deployment the transition exists for. Bob has been relaying
+    // `relay-doc` headlessly, and the content he can now read arrived over the
+    // wire rather than being written locally — so a promotion that rebuilt an
+    // empty substrate instead of wrapping the accumulated one would show up
+    // here as an empty string.
+    const bobRelayDoc = exchangeB.get("relay-doc", LoroDoc)
+    expect(bobRelayDoc.title()).toBe("Loro Data")
   })
 
   it("nested authoritative doc relays through schema-free node", async () => {

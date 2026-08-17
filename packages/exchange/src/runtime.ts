@@ -35,9 +35,16 @@ import type {
   Schema as SchemaNode,
   SyncMode,
 } from "@kyneta/schema"
-import { beginHydration, createRef, SUBSTRATE, subscribe } from "@kyneta/schema"
+import {
+  beginHydration,
+  createRef,
+  metadataOf,
+  SUBSTRATE,
+  subscribe,
+} from "@kyneta/schema"
 import type { DocId } from "@kyneta/transport"
 import { registerDocSyncMode } from "./doc-meta.js"
+import { planInterpretation } from "./interpret.js"
 import { makeSettleTerm, registerHydrationTerm } from "./settle.js"
 import type { Store, StoreMeta } from "./store/store.js"
 import {
@@ -456,6 +463,41 @@ export class Runtime {
           `Use the same BoundSchema object when calling get() for the same document.`,
       )
     }
+
+    // A standalone Runtime is a complete door, not a shortcut through the
+    // Exchange's. Both consult the same classifier, so a local-first
+    // application gets the same compatibility check and the same hydration
+    // precondition — without this, `createInterpretDoc` below would upgrade a
+    // replicate document having verified nothing.
+    //
+    // Only `deferred` needs metadata the Runtime does not hold, and it never
+    // holds a deferred document, so that arm is unreachable from here.
+    if (cached?.mode === "replicate") {
+      const action = planInterpretation({
+        phase: "replicate",
+        reader: metadataOf(bound),
+        doc: {
+          replicaType: cached.readyInfo.replicaFactory.replicaType,
+          syncMode: cached.readyInfo.syncMode,
+          schemaHash: cached.readyInfo.schemaHash,
+        },
+        hydrated: this.hydrated(docId),
+      })
+      if (action.action === "refuse") {
+        throw action.kind === "not-hydrated"
+          ? new Error(
+              `Document '${docId}' is still loading from storage. ` +
+                `Await whenHydrated('${docId}') before calling get() ` +
+                `— promoting a document mid-load would lose part of it.`,
+            )
+          : new Error(
+              `Document '${docId}' cannot be interpreted with this schema: ` +
+                `${action.mismatch.axis} disagrees (local ${action.mismatch.local} ` +
+                `vs document ${action.mismatch.remote}).`,
+            )
+      }
+    }
+
     return this.createInterpretDoc(docId, bound) as never
   }
 
@@ -912,23 +954,14 @@ export class Runtime {
       return cached.ref
     }
 
-    // A replicate entry holds an accumulated `Replica` and no ref. Falling
-    // through to the construction below would replace it with a fresh, empty
-    // substrate — losing that state with no error and no event. `replicate`
-    // is the tier relays and audit logs use, so the loss would land exactly
-    // where nobody is reading a document's contents to notice it.
-    //
-    // Refusing is not a ruling on *promotion*: whether `get()` should one day
-    // upgrade a replicate document to interpret is still open. Refusing is
-    // right under either answer; overwriting is right under neither. Keep the
-    // wording in step with the Exchange's own replicate guard, so both layers
-    // describe the same situation the same way.
-    if (cached && cached.mode === "replicate") {
-      throw new Error(
-        `Document '${docId}' is registered in replicate mode. ` +
-          `Cannot call get() on a replicated document — it has no schema or ref.`,
-      )
-    }
+    // A replicate entry holds an accumulated `Replica` and no ref. Promoting
+    // it means giving that same replica a schema, not building a new document
+    // beside it — `factory.upgrade` wraps the existing backing state, so the
+    // accumulated bytes carry across. Falling through to ordinary construction
+    // instead would replace them with a fresh, empty substrate, losing the
+    // state with no error and no event, in the tier relays and audit logs use
+    // — exactly where nobody is reading contents closely enough to notice.
+    const promoting = cached?.mode === "replicate" ? cached : undefined
 
     const factory = bound.factory({
       peerId: this.peerId,
@@ -948,11 +981,26 @@ export class Runtime {
     // and falls back to the safe answer for backends that do not care.
     //
     // Bound once and used at all three decision points below — see
-    // `#usesStores` for why they have to agree.
-    const willHydrate = this.#usesStores(bound.syncMode)
-    const { substrate, adopt } = willHydrate
-      ? beginHydration(factory, bound.schema)
-      : { substrate: factory.create(bound.schema), adopt: NO_ADOPT }
+    // `#usesStores` for why they have to agree. A promotion never hydrates:
+    // the replica it upgrades has already loaded, which is the precondition
+    // the caller had to satisfy to get here.
+    const willHydrate = !promoting && this.#usesStores(bound.syncMode)
+
+    // All three arms end with this peer's identity claimed; they differ in
+    // *when*, and each is right for what it can guarantee. `beginHydration`
+    // defers, because an import is still coming. `create` claims at once,
+    // because none is. `upgrade` claims at once too, because the import has
+    // already finished — that is the two-phase construction contract every
+    // backend defines `create` in terms of. Making it defer to match the first
+    // arm would leave the identity unclaimed with nothing left to claim it.
+    const { substrate, adopt } = promoting
+      ? {
+          substrate: factory.upgrade(promoting.readyInfo.replica, bound.schema),
+          adopt: NO_ADOPT,
+        }
+      : willHydrate
+        ? beginHydration(factory, bound.schema)
+        : { substrate: factory.create(bound.schema), adopt: NO_ADOPT }
 
     const ref: any = createRef(bound.schema, substrate, {
       lease: this.lease,
@@ -980,6 +1028,12 @@ export class Runtime {
       readyInfo,
       announced: false,
       hydration,
+      // Suspension survives promotion. The two say different things: which
+      // tier holds the document, versus whether it is in the sync graph.
+      // Dropping the flag here would let a `get()` silently re-announce a
+      // document the application had deliberately withdrawn — the property
+      // `get()` is specifically built not to have.
+      ...(promoting?.suspended ? { suspended: true } : {}),
     }
     // The early returns at the top of this method are the only thing between
     // an existing entry and this overwrite. Any new document mode has to be
