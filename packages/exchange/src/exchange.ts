@@ -470,6 +470,7 @@ export class Exchange {
             phase: phaseOf(this.#runtime.getEntry(docId)),
             reader: metadataOf(resolvedBound),
             doc: this.#synchronizer.getDocMetadata(docId),
+            hydrated: this.#runtime.hydrated(docId),
           })
           if (action.action === "promote") this.#runtime.deleteDeferred(docId)
           if (action.action !== "refuse") {
@@ -799,17 +800,29 @@ export class Exchange {
         phase: cached.mode,
         reader: metadataOf(bound),
         doc: this.#synchronizer.getDocMetadata(docId),
+        hydrated: this.#runtime.hydrated(docId),
       })
 
       if (action.action === "return-cached") {
         return (cached as { ref: unknown }).ref as Ref<S>
       }
 
+      // The classifier now says a hydrated, compatible replicate document may
+      // be promoted. This door does not yet carry that out, so it refuses as
+      // before rather than half-performing a transition.
+      if (action.action === "promote" && action.from === "replicate") {
+        throw new Error(
+          `Document '${docId}' is registered in replicate mode. ` +
+            `Cannot call exchange.get() on a replicated document — it has no schema or ref.`,
+        )
+      }
+
       if (action.action === "refuse") {
-        if (action.kind === "unsupported") {
+        if (action.kind === "not-hydrated") {
           throw new Error(
-            `Document '${docId}' is registered in replicate mode. ` +
-              `Cannot call exchange.get() on a replicated document — it has no schema or ref.`,
+            `Document '${docId}' is still loading from storage. ` +
+              `Await exchange.whenHydrated('${docId}') before calling get() ` +
+              `— promoting a document mid-load would lose part of it.`,
           )
         }
 
@@ -1159,6 +1172,9 @@ export class Exchange {
         phase: "deferred",
         reader,
         doc: metadata,
+        // Ignored for a deferred document, which holds nothing a load could
+        // preserve. Passed because the classifier takes it for every phase.
+        hydrated: true,
       })
       if (action.action === "refuse") continue
       // Safe: Runtime.deleteDeferred removes from cache, then #interpretDoc

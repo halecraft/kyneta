@@ -6,7 +6,7 @@
 // a real Exchange because that is the only place it is true.
 
 import type { DocMetadata, ReadCapability } from "@kyneta/schema"
-import { SYNC_AUTHORITATIVE } from "@kyneta/schema"
+import { SYNC_AUTHORITATIVE, SYNC_COLLABORATIVE } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import { planInterpretation } from "../interpret.js"
 
@@ -25,31 +25,77 @@ const doc: DocMetadata = { ...base, schemaHash: "h1" }
 describe("planInterpretation", () => {
   it("creates when nothing is cached", () => {
     expect(
-      planInterpretation({ phase: "absent", reader, doc: undefined }),
+      planInterpretation({
+        phase: "absent",
+        reader,
+        doc: undefined,
+        hydrated: true,
+      }),
     ).toEqual({
       action: "create",
     })
   })
 
   it("returns the cached ref for an already-interpreted document", () => {
-    expect(planInterpretation({ phase: "interpret", reader, doc })).toEqual({
+    expect(
+      planInterpretation({
+        phase: "interpret",
+        reader,
+        doc,
+        hydrated: true,
+      }),
+    ).toEqual({
       action: "return-cached",
     })
   })
 
-  it("refuses a replicate document as unsupported, not as a mismatch", () => {
-    // The distinction is the point: "not built yet" and "can never work" are
-    // different answers, and a caller should be able to tell them apart
-    // without parsing an error message.
-    expect(planInterpretation({ phase: "replicate", reader, doc })).toEqual({
-      action: "refuse",
-      kind: "unsupported",
-      from: "replicate",
-    })
+  it("promotes a hydrated replicate document the reader can interpret", () => {
+    // The caller supplies the one thing a replicate document lacks — a
+    // schema — so the transition is one this peer has the information to make.
+    expect(
+      planInterpretation({ phase: "replicate", reader, doc, hydrated: true }),
+    ).toEqual({ action: "promote", from: "replicate" })
+  })
+
+  it("refuses a still-loading replicate document before checking the schema", () => {
+    // Ordering, not just outcome. A caller whose document is mid-load should
+    // be told to wait rather than told their schema is wrong — so this asserts
+    // `not-hydrated` for a reader that would otherwise be a clean match.
+    expect(
+      planInterpretation({ phase: "replicate", reader, doc, hydrated: false }),
+    ).toEqual({ action: "refuse", kind: "not-hydrated" })
+  })
+
+  it("refuses a replicate document on each mismatched axis", () => {
+    for (const [axis, docMeta] of [
+      ["replicaType", { ...doc, replicaType: ["loro", 1, 0] as const }],
+      ["syncMode", { ...doc, syncMode: SYNC_COLLABORATIVE }],
+      ["schemaHash", { ...doc, schemaHash: "h2" }],
+    ] as const) {
+      const action = planInterpretation({
+        phase: "replicate",
+        reader,
+        doc: docMeta,
+        hydrated: true,
+      })
+      expect(action).toMatchObject({ action: "refuse", kind: "mismatch" })
+      expect(
+        action.action === "refuse" &&
+          action.kind === "mismatch" &&
+          action.mismatch.axis,
+      ).toBe(axis)
+    }
   })
 
   it("promotes a deferred document the reader can interpret", () => {
-    expect(planInterpretation({ phase: "deferred", reader, doc })).toEqual({
+    expect(
+      planInterpretation({
+        phase: "deferred",
+        reader,
+        doc,
+        hydrated: true,
+      }),
+    ).toEqual({
       action: "promote",
       from: "deferred",
     })
@@ -59,7 +105,12 @@ describe("planInterpretation", () => {
     // Nothing contradicts the request. A blanket sweep that has no metadata
     // keeps its own guard rather than relying on this.
     expect(
-      planInterpretation({ phase: "deferred", reader, doc: undefined }),
+      planInterpretation({
+        phase: "deferred",
+        reader,
+        doc: undefined,
+        hydrated: true,
+      }),
     ).toEqual({ action: "promote", from: "deferred" })
   })
 
@@ -80,6 +131,7 @@ describe("planInterpretation", () => {
         phase: "deferred",
         reader,
         doc: { ...doc, ...override },
+        hydrated: true,
       })
       expect(action).toMatchObject({
         action: "refuse",
