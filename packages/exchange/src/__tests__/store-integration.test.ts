@@ -47,6 +47,30 @@ async function drain(ms = 100): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, ms))
 }
 
+/**
+ * Wrap a store, replacing some of its methods.
+ *
+ * Forwarding every method by hand is the point of the helper, not an
+ * oversight. `createInMemoryStore` returns a class instance, so the obvious
+ * spelling — `{ ...store, append }` — copies the own properties and none of
+ * the prototype methods. The result typechecks as a complete `Store` and then
+ * fails at the first `currentMeta` or `loadAll`, a long way from the line that
+ * caused it. Adding a method to `Store` now breaks this in one visible place
+ * rather than silently in several.
+ */
+function wrapStore(inner: Store, overrides: Partial<Store>): Store {
+  return {
+    append: (docId, record) => inner.append(docId, record),
+    loadAll: docId => inner.loadAll(docId),
+    replace: (docId, records) => inner.replace(docId, records),
+    delete: docId => inner.delete(docId),
+    currentMeta: docId => inner.currentMeta(docId),
+    listDocIds: prefix => inner.listDocIds(prefix),
+    close: () => inner.close(),
+    ...overrides,
+  }
+}
+
 /** Active exchanges that need cleanup */
 const activeExchanges: Exchange[] = []
 
@@ -215,18 +239,12 @@ describe("Storage persist + hydrate", () => {
 
 /** Wrap a store so appends resolve on a later turn, holding a write open. */
 function slowAppend(inner: Store): Store {
-  return {
+  return wrapStore(inner, {
     append: async (docId, record) => {
       await new Promise(resolve => setTimeout(resolve, 5))
       return inner.append(docId, record)
     },
-    loadAll: docId => inner.loadAll(docId),
-    replace: (docId, records) => inner.replace(docId, records),
-    delete: docId => inner.delete(docId),
-    currentMeta: docId => inner.currentMeta(docId),
-    listDocIds: prefix => inner.listDocIds(prefix),
-    close: () => inner.close(),
-  }
+  })
 }
 
 describe("a mutation during an in-flight write", () => {
@@ -278,18 +296,10 @@ describe("a mutation during an in-flight write", () => {
 // Recovering from a failed first write
 // ---------------------------------------------------------------------------
 
-/**
- * Wrap a store so that its first `append` rejects and later ones succeed.
- *
- * Every method is forwarded by hand rather than spread from `inner`.
- * `createInMemoryStore` returns a class instance, so `{ ...inner, append }`
- * copies the own properties and none of the prototype methods — the wrapper
- * then looks complete and fails at the first call to `currentMeta` or
- * `loadAll`, some way from the line that caused it.
- */
+/** Wrap a store so that its first `append` rejects and later ones succeed. */
 function failingFirstAppend(inner: Store): Store {
   let failuresLeft = 1
-  return {
+  return wrapStore(inner, {
     append: async (docId, record) => {
       if (failuresLeft > 0) {
         failuresLeft--
@@ -297,13 +307,7 @@ function failingFirstAppend(inner: Store): Store {
       }
       return inner.append(docId, record)
     },
-    loadAll: docId => inner.loadAll(docId),
-    replace: (docId, records) => inner.replace(docId, records),
-    delete: docId => inner.delete(docId),
-    currentMeta: docId => inner.currentMeta(docId),
-    listDocIds: prefix => inner.listDocIds(prefix),
-    close: () => inner.close(),
-  }
+  })
 }
 
 describe("a store whose first write fails", () => {
@@ -406,13 +410,12 @@ describe("transient documents never reach a store", () => {
     }
     const store = createInMemoryStore({ sharedData })
     let deletes = 0
-    const counting: Store = {
-      ...store,
+    const counting = wrapStore(store, {
       delete: async (docId: string) => {
         deletes++
         return store.delete(docId)
       },
-    }
+    })
 
     const exchange = createExchange({ id: "server", stores: [counting] })
     exchange.get("presence-1", PresenceDoc)
