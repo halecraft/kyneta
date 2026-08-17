@@ -210,6 +210,70 @@ describe("Storage persist + hydrate", () => {
 })
 
 // ---------------------------------------------------------------------------
+// Writes that arrive while another write is in flight
+// ---------------------------------------------------------------------------
+
+/** Wrap a store so appends resolve on a later turn, holding a write open. */
+function slowAppend(inner: Store): Store {
+  return {
+    append: async (docId, record) => {
+      await new Promise(resolve => setTimeout(resolve, 5))
+      return inner.append(docId, record)
+    },
+    loadAll: docId => inner.loadAll(docId),
+    replace: (docId, records) => inner.replace(docId, records),
+    delete: docId => inner.delete(docId),
+    currentMeta: docId => inner.currentMeta(docId),
+    listDocIds: prefix => inner.listDocIds(prefix),
+    close: () => inner.close(),
+  }
+}
+
+describe("a mutation during an in-flight write", () => {
+  it("is queued and persisted, not dropped", async () => {
+    // At most one write per document is in flight at a time; anything that
+    // arrives meanwhile is queued by the store-program and replayed when the
+    // first completes. That only works if the runtime still *offers* it —
+    // computing the delta from the last confirmed version, which during a
+    // write is the version that write started from, not its pending one.
+    //
+    // Returning early for an in-flight write instead looks harmless and is
+    // not: nothing else would ever offer that mutation to the store, so it
+    // would sit unpersisted until some later mutation happened to sweep it up.
+    const sharedData: InMemoryStoreData = {
+      records: new Map(),
+      metadata: new Map(),
+    }
+    const exchange1 = createExchange({
+      id: "server",
+      stores: [slowAppend(createInMemoryStore({ sharedData }))],
+    })
+
+    const doc = exchange1.get("doc-1", SequentialDoc)
+    await exchange1.flush()
+
+    batch(doc, d => {
+      d.title.set("first")
+    })
+    // Lands while the write above is still open.
+    batch(doc, d => {
+      d.count.set(99)
+    })
+    await exchange1.shutdown()
+
+    const exchange2 = createExchange({
+      id: "server",
+      stores: [createInMemoryStore({ sharedData })],
+    })
+    const restored = exchange2.get("doc-1", SequentialDoc)
+    await exchange2.flush()
+
+    expect(restored.title()).toBe("first")
+    expect(restored.count()).toBe(99)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Transient documents and durable storage
 // ---------------------------------------------------------------------------
 

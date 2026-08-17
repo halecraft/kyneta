@@ -84,7 +84,7 @@ describe("storeProgram", () => {
     const phase = getPhase(model, "doc-1")
     expect(phase).toEqual({
       status: "writing",
-      version: "",
+      revertTo: { status: "unwritten" },
       pendingVersion: "v1",
     })
 
@@ -143,7 +143,7 @@ describe("storeProgram", () => {
     const phase = getPhase(model, "doc-1")
     expect(phase).toEqual({
       status: "writing",
-      version: "v1",
+      revertTo: { status: "idle", version: "v1" },
       pendingVersion: "v2",
     })
 
@@ -190,7 +190,7 @@ describe("storeProgram", () => {
     expect(phase.status).toBe("writing")
     expect(phase).toEqual({
       status: "writing",
-      version: "v1",
+      revertTo: { status: "idle", version: "v1" },
       pendingVersion: "v2",
       queued: [
         {
@@ -265,7 +265,7 @@ describe("storeProgram", () => {
     const phase = getPhase(model, "doc-1")
     expect(phase).toEqual({
       status: "writing",
-      version: "v2", // advanced to pendingVersion from previous write
+      revertTo: { status: "idle", version: "v2" }, // advanced to pendingVersion from previous write
       pendingVersion: "v3",
     })
 
@@ -313,7 +313,7 @@ describe("storeProgram", () => {
     const phase = getPhase(model, "doc-1")
     expect(phase).toEqual({
       status: "writing",
-      version: "v2",
+      revertTo: { status: "idle", version: "v2" },
       pendingVersion: "v3",
     })
 
@@ -411,7 +411,7 @@ describe("storeProgram", () => {
     expect(phase.status).toBe("writing")
     expect(phase).toEqual({
       status: "writing",
-      version: "v1", // old version — write-failed does NOT advance
+      revertTo: { status: "idle", version: "v1" }, // old version — write-failed does NOT advance
       pendingVersion: "v3",
     })
 
@@ -447,7 +447,7 @@ describe("storeProgram", () => {
     const phase = getPhase(model, "doc-1")
     expect(phase).toEqual({
       status: "writing",
-      version: "v5",
+      revertTo: { status: "idle", version: "v5" },
       pendingVersion: "v6",
     })
 
@@ -492,7 +492,7 @@ describe("storeProgram", () => {
     const phase = getPhase(model, "doc-1")
     expect(phase).toEqual({
       status: "writing",
-      version: "v1",
+      revertTo: { status: "idle", version: "v1" },
       pendingVersion: "v2",
       queued: [
         {
@@ -801,7 +801,7 @@ describe("storeProgram", () => {
     const phase = getPhase(model, "doc-1")
     expect(phase).toEqual({
       status: "writing",
-      version: "v1",
+      revertTo: { status: "idle", version: "v1" },
       pendingVersion: "v3",
     })
 
@@ -815,5 +815,108 @@ describe("storeProgram", () => {
       { kind: "meta", meta: plainMeta },
       { kind: "entry", payload: fakePayload("compacted"), version: "v3" },
     ])
+  })
+
+  // -----------------------------------------------------------------------
+  // The first write, and what happens when it does not land
+  // -----------------------------------------------------------------------
+  //
+  // A document's first write is the one with nothing behind it. Every other
+  // write can fall back to the last version the store confirmed; this one has
+  // no such version, and the phase says so with `unwritten` rather than with
+  // an empty string.
+
+  /** Register `doc-1` and return the model with its first write in flight. */
+  function registered(): StoreModel {
+    const [model] = step(storeProgram.init[0], {
+      type: "register",
+      docId: "doc-1",
+      meta: plainMeta,
+      entirety: fakePayload("initial"),
+      version: "v1",
+    })
+    return model
+  }
+
+  it("register → write-failed — falls back to unwritten, still reports the error", () => {
+    const [model, ...effects] = step(registered(), {
+      type: "write-failed",
+      docId: "doc-1",
+      error: new Error("disk full"),
+    })
+
+    // Not `{ status: "idle", version: "" }`. There is no confirmed version to
+    // be idle at, and saying so is what lets the runtime tell "never written"
+    // apart from "written, and here is where from".
+    expect(getPhase(model, "doc-1")).toEqual({ status: "unwritten" })
+    expect(effects).toHaveLength(1)
+    expect(effects[0].type).toBe("store-error")
+  })
+
+  it("register → write-succeeded — reaches idle at the confirmed version", () => {
+    const [model, ...effects] = step(registered(), {
+      type: "write-succeeded",
+      docId: "doc-1",
+      version: "v1",
+    })
+
+    // The happy path through the first write. Cheap, but it guards the case
+    // that would hang every `flush()`: if a successful write ever stopped
+    // being acknowledged, the document would sit in `writing` forever and
+    // `allDocsIdle` would never come true.
+    expect(getPhase(model, "doc-1")).toEqual({ status: "idle", version: "v1" })
+    expect(effects).toHaveLength(0)
+  })
+
+  it("allDocsIdle — true for unwritten, false while writing", () => {
+    // `flush()` and `shutdown()` block on this predicate, so it has to mean
+    // "no I/O outstanding" rather than "status is literally idle". An
+    // unwritten document has nothing in flight; treating it as busy would
+    // hang every teardown.
+    expect(allDocsIdle(registered())).toBe(false)
+
+    const [failed] = step(registered(), {
+      type: "write-failed",
+      docId: "doc-1",
+      error: new Error("disk full"),
+    })
+    expect(allDocsIdle(failed)).toBe(true)
+  })
+
+  it("on an unwritten doc, compact writes but state-advanced does not", () => {
+    // The asymmetry is the point, and it follows from what each input
+    // carries. A compaction is a whole document plus its own meta, so it can
+    // be written with nothing behind it. A state advance is a *delta* — it is
+    // defined relative to a version the store confirmed, and there is none, so
+    // there is nothing coherent to append it to.
+    const [unwritten] = step(registered(), {
+      type: "write-failed",
+      docId: "doc-1",
+      error: new Error("disk full"),
+    })
+
+    const [advancedModel, ...advancedEffects] = step(unwritten, {
+      type: "state-advanced",
+      docId: "doc-1",
+      delta: fakeDelta("d1"),
+      newVersion: "v2",
+    })
+    expect(advancedEffects).toHaveLength(0)
+    expect(getPhase(advancedModel, "doc-1")).toEqual({ status: "unwritten" })
+
+    const [compactedModel, ...compactEffects] = step(unwritten, {
+      type: "compact",
+      docId: "doc-1",
+      meta: plainMeta,
+      entirety: fakePayload("whole"),
+      newVersion: "v2",
+    })
+    expect(compactEffects).toHaveLength(1)
+    expect(compactEffects[0].type).toBe("persist-replace")
+    expect(getPhase(compactedModel, "doc-1")).toEqual({
+      status: "writing",
+      revertTo: { status: "unwritten" },
+      pendingVersion: "v2",
+    })
   })
 })

@@ -688,8 +688,24 @@ export class Runtime {
     const phase = this.#storeHandle.getState().docs.get(docId)
     if (!phase) return // Not yet registered — still hydrating
 
-    const confirmedVersion = phase.version
-    if (!confirmedVersion) return // Empty string = initial register, skip
+    // The version the store has actually confirmed. While a write is in
+    // flight that is still whatever it was *before* that write started —
+    // `pendingVersion` is not confirmed until `write-succeeded` — which is
+    // exactly what the `writing` phase carries as `revertTo`.
+    //
+    // Deliberately not an early return for `writing`. A mutation arriving
+    // mid-write still has to compute its delta from the confirmed point and
+    // dispatch, so the store-program can queue it and replay it once the
+    // in-flight write lands. Returning here instead would drop that mutation:
+    // nothing else would ever offer it to the store.
+    const settled = phase.status === "writing" ? phase.revertTo : phase
+
+    // Nothing has ever been written, so there is no base to diff against. Two
+    // ways to arrive: the document's first write failed (`unwritten`), or it
+    // is still in flight (`writing` from `unwritten`).
+    if (settled.status === "unwritten") return
+
+    const confirmedVersion = settled.version
 
     const newVersion = replica.version().serialize()
     if (this.#versionAlreadyTargeted(phase, newVersion)) return

@@ -28,11 +28,35 @@ type Program<Msg, Model, Fx> = {
 // DocPhase — per-document lifecycle state
 // ---------------------------------------------------------------------------
 
-export type DocPhase =
+/**
+ * A phase with no write in flight — what a `writing` phase falls back to.
+ *
+ * The two cases are genuinely different, and keeping them apart is the whole
+ * point of this type. `unwritten` means the store has never acknowledged
+ * anything for this document, so there is no version to compute a delta
+ * against; `idle` means it has, and names the version.
+ */
+export type SettledPhase =
+  | { status: "unwritten" }
   | { status: "idle"; version: string }
+
+/**
+ * Where a document's persistence has got to.
+ *
+ * A write in flight carries `revertTo` — the settled phase to return to if it
+ * fails. That is what keeps this to three variants rather than four. The
+ * alternative, a separate status for "writing with nothing to fall back to",
+ * would silently fall out of every `status === "writing"` check in this file,
+ * including the two that decide whether a completed write is acknowledged at
+ * all. Carrying the fallback inside the phase means the decision is made once,
+ * where the write starts and the caller knows which case it is in, rather than
+ * being re-derived at each place a write can end.
+ */
+export type DocPhase =
+  | SettledPhase
   | {
       status: "writing"
-      version: string
+      revertTo: SettledPhase
       pendingVersion: string
       queued?: QueuedInput[]
     }
@@ -123,10 +147,20 @@ function withDoc(
 
 /**
  * The caller is responsible for splicing the returned phase into the model.
+ *
+ * `settled` is where the replayed write reverts to if it also fails — carried
+ * through rather than rebuilt, so a queued write inherits the same fallback the
+ * write it was queued behind had.
+ *
+ * A queued `state-advanced` cannot arrive here with `settled.status ===
+ * "unwritten"`. Queueing only happens while a write is in flight, and
+ * `state-advanced` is dropped rather than queued for a document with nothing
+ * written (see the `state-advanced` case). So the pairing is unreachable, and
+ * there is no branch for it below.
  */
 function processQueued(
   docId: DocId,
-  idleVersion: string,
+  settled: SettledPhase,
   queuedList: QueuedInput[],
 ): [DocPhase, ...StoreEffect[]] {
   // We process all queued inputs into a single batch of effects
@@ -141,7 +175,7 @@ function processQueued(
     case "state-advanced": {
       const phase: DocPhase = {
         status: "writing",
-        version: idleVersion,
+        revertTo: settled,
         pendingVersion: queued.newVersion,
         queued: remaining.length > 0 ? remaining : undefined,
       }
@@ -157,7 +191,7 @@ function processQueued(
     case "compact": {
       const phase: DocPhase = {
         status: "writing",
-        version: idleVersion,
+        revertTo: settled,
         pendingVersion: queued.newVersion,
         queued: remaining.length > 0 ? remaining : undefined,
       }
@@ -191,9 +225,11 @@ export const storeProgram: Program<StoreInput, StoreModel, StoreEffect> = {
       // register — new doc, first boot
       // -------------------------------------------------------------------
       case "register": {
+        // Nothing to fall back to: this is the document's first write, so if
+        // it fails there is no earlier version to recompute a delta from.
         const phase: DocPhase = {
           status: "writing",
-          version: "",
+          revertTo: { status: "unwritten" },
           pendingVersion: msg.version,
         }
         const effect: StoreEffect = {
@@ -226,10 +262,17 @@ export const storeProgram: Program<StoreInput, StoreModel, StoreEffect> = {
         const existing = model.docs.get(msg.docId)
         if (!existing) return [model]
 
+        // A delta is defined relative to a version the store acknowledged. An
+        // `unwritten` document has none, so there is nothing to append this to
+        // and nothing worth queueing — dropping it is the only coherent
+        // answer. Note `compact` below deliberately does the opposite, because
+        // it carries a whole document rather than a difference.
+        if (existing.status === "unwritten") return [model]
+
         if (existing.status === "idle") {
           const phase: DocPhase = {
             status: "writing",
-            version: existing.version,
+            revertTo: existing,
             pendingVersion: msg.newVersion,
           }
           const effect: StoreEffect = {
@@ -246,10 +289,11 @@ export const storeProgram: Program<StoreInput, StoreModel, StoreEffect> = {
           return [withDoc(model, msg.docId, phase), effect]
         }
 
-        // writing — queue
+        // writing — queue. The fallback is inherited, not recomputed: a write
+        // queued behind another reverts to wherever that one would have.
         const phase: DocPhase = {
           status: "writing",
-          version: existing.version,
+          revertTo: existing.revertTo,
           pendingVersion: existing.pendingVersion,
           queued: [
             ...(existing.queued || []),
@@ -272,10 +316,15 @@ export const storeProgram: Program<StoreInput, StoreModel, StoreEffect> = {
           return [model]
         }
 
-        if (existing.status === "idle") {
+        // Unlike `state-advanced`, this writes from an `unwritten` document as
+        // readily as from an `idle` one. A compaction carries the whole
+        // document and its own `meta`, so it needs no base version — it is a
+        // complete write in its own right. `revertTo: existing` says the same
+        // thing for both cases: fall back to wherever we already were.
+        if (existing.status !== "writing") {
           const phase: DocPhase = {
             status: "writing",
-            version: existing.version,
+            revertTo: existing,
             pendingVersion: msg.newVersion,
           }
           const effect: StoreEffect = {
@@ -296,7 +345,7 @@ export const storeProgram: Program<StoreInput, StoreModel, StoreEffect> = {
         // writing — queue
         const phase: DocPhase = {
           status: "writing",
-          version: existing.version,
+          revertTo: existing.revertTo,
           pendingVersion: existing.pendingVersion,
           queued: [
             ...(existing.queued || []),
@@ -329,19 +378,20 @@ export const storeProgram: Program<StoreInput, StoreModel, StoreEffect> = {
         const existing = model.docs.get(msg.docId)
         if (!existing || existing.status !== "writing") return [model]
 
-        const idleVersion = msg.version
+        // The store acknowledged this version, so it is now the confirmed
+        // one — whatever the document fell back to before is irrelevant.
+        const settled: SettledPhase = { status: "idle", version: msg.version }
 
         if (existing.queued) {
           const [phase, ...effects] = processQueued(
             msg.docId,
-            idleVersion,
+            settled,
             existing.queued,
           )
           return [withDoc(model, msg.docId, phase), ...effects]
         }
 
-        const phase: DocPhase = { status: "idle", version: idleVersion }
-        return [withDoc(model, msg.docId, phase)]
+        return [withDoc(model, msg.docId, settled)]
       }
 
       // -------------------------------------------------------------------
@@ -358,14 +408,19 @@ export const storeProgram: Program<StoreInput, StoreModel, StoreEffect> = {
           error: msg.error,
         }
 
-        // Revert to idle at the old version — next exportSince will
-        // recompute from the old version, so nothing is lost.
-        const idleVersion = existing.version
+        // Fall back to whatever this write was started from. No branch on
+        // which kind of write failed: that decision was made when the phase
+        // was constructed, by the code that knew whether a confirmed version
+        // existed. For a document that had one, this preserves it so the next
+        // `exportSince` recomputes from the last known-good point. For one
+        // that did not, it returns to `unwritten` — still nothing on disk,
+        // and now say-so rather than an empty string.
+        const settled = existing.revertTo
 
         if (existing.queued) {
           const [phase, ...queuedEffects] = processQueued(
             msg.docId,
-            idleVersion,
+            settled,
             existing.queued,
           )
           return [
@@ -375,8 +430,7 @@ export const storeProgram: Program<StoreInput, StoreModel, StoreEffect> = {
           ]
         }
 
-        const phase: DocPhase = { status: "idle", version: idleVersion }
-        return [withDoc(model, msg.docId, phase), errorEffect]
+        return [withDoc(model, msg.docId, settled), errorEffect]
       }
     }
   },
@@ -386,9 +440,22 @@ export const storeProgram: Program<StoreInput, StoreModel, StoreEffect> = {
 // Query helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Is every tracked document quiescent — no store I/O in flight?
+ *
+ * `flush()` and `shutdown()` both block until this is true, so it has to mean
+ * "nothing is still being written", not "every document has status `idle`".
+ * Those came to the same thing when `idle` was the only settled status. They
+ * do not now: an `unwritten` document has no write outstanding and must
+ * satisfy this, or every teardown hangs waiting for a write that will never
+ * complete. Only `writing` is busy.
+ *
+ * The name predates the distinction. It is kept because it is what the callers
+ * read, but test the status against `writing` rather than against `idle`.
+ */
 export function allDocsIdle(model: StoreModel): boolean {
   for (const phase of model.docs.values()) {
-    if (phase.status !== "idle") return false
+    if (phase.status === "writing") return false
   }
   return true
 }
