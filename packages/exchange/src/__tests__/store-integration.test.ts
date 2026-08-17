@@ -263,6 +263,69 @@ describe("transient documents never reach a store", () => {
     expect(sharedData.records.has("relayed-presence")).toBe(false)
   })
 
+  it("destroying a transient document issues no store delete", async () => {
+    // Presence documents churn on every tab open and close, so a delete per
+    // teardown for something never written is a steady trickle of pointless
+    // store I/O.
+    const sharedData: InMemoryStoreData = {
+      records: new Map(),
+      metadata: new Map(),
+    }
+    const store = createInMemoryStore({ sharedData })
+    let deletes = 0
+    const counting: Store = {
+      ...store,
+      delete: async (docId: string) => {
+        deletes++
+        return store.delete(docId)
+      },
+    }
+
+    const exchange = createExchange({ id: "server", stores: [counting] })
+    exchange.get("presence-1", PresenceDoc)
+    await exchange.flush()
+
+    exchange.destroy("presence-1")
+    await exchange.flush()
+
+    expect(deletes).toBe(0)
+  })
+
+  it("destroying a durable document never opened this session still deletes", async () => {
+    // The guard on this phase's own risk. Skipping the delete is only safe
+    // when we know the document was never stored, and a document absent from
+    // the cache is precisely the case where we know nothing — it may well be
+    // sitting on disk from a previous session. `Exchange.destroy` is
+    // documented as the single public API for removal, so it has to work here.
+    const sharedData: InMemoryStoreData = {
+      records: new Map(),
+      metadata: new Map(),
+    }
+
+    const exchange1 = createExchange({
+      id: "server",
+      stores: [createInMemoryStore({ sharedData })],
+    })
+    const doc = exchange1.get("doc-1", SequentialDoc)
+    await exchange1.flush()
+    batch(doc, d => {
+      d.title.set("on disk")
+    })
+    await exchange1.shutdown()
+    expect(sharedData.records.has("doc-1")).toBe(true)
+
+    // Second exchange never calls get() for this document, so it has no cache
+    // entry to consult.
+    const exchange2 = createExchange({
+      id: "server",
+      stores: [createInMemoryStore({ sharedData })],
+    })
+    exchange2.destroy("doc-1")
+    await exchange2.flush()
+
+    expect(sharedData.records.get("doc-1") ?? []).toHaveLength(0)
+  })
+
   it("a transient document settles rather than waiting on a load", async () => {
     // The readiness half of the rule, and the failure no other test can see.
     //

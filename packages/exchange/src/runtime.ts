@@ -529,10 +529,31 @@ export class Runtime {
    *
    * Fires {@link RuntimeHooks.onDocDestroyed} so the Exchange can broadcast
    * `dismiss` to peers and remove the doc from the sync graph.
+   *
+   * The store delete is skipped for a document that was never stored, which is
+   * only knowable from the cache entry. Gathering the facts, deciding, then
+   * executing makes "read the entry before deleting it" a property of the
+   * code's shape rather than of a comment asking nobody to reorder two lines.
    */
   destroy(docId: DocId): void {
+    const entry = this.#docCache.get(docId)
+
+    // Both "we don't know" cases default to deleting, because skipping is only
+    // safe when we know the document was never stored. An absent cache entry is
+    // exactly the case where we know nothing: `Exchange.destroy` is the single
+    // public API for removal and has to work on a document left on disk by an
+    // earlier session. A deferred entry holds no replica, so there is no sync
+    // mode to consult either.
+    //
+    // Discriminating on `mode` is forced rather than stylistic — the deferred
+    // variant is `{ mode: "deferred" }`, with no `readyInfo` to reach through.
+    const touchesStore =
+      entry === undefined ||
+      entry.mode === "deferred" ||
+      this.#usesStores(entry.readyInfo.syncMode)
+
     this.#docCache.delete(docId)
-    this.#storeHandle?.dispatch({ type: "destroy", docId })
+    if (touchesStore) this.#storeHandle?.dispatch({ type: "destroy", docId })
     this.#hooks.onDocDestroyed?.(docId)
   }
 
