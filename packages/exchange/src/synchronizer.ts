@@ -741,8 +741,16 @@ export class Synchronizer {
     // The promoted-vs-created distinction depends on the *pre-dispatch*
     // model state; capture it before #docRuntimes mutates and the
     // dispatch updates sync.documents.
+    // Any change of mode is a promotion, not just `deferred → X`: a document
+    // relayed headlessly and now interpreted has moved tier exactly as a
+    // deferred one does.
+    //
+    // Emitting matters more than it looks. `#emitDocEvents` rebuilds every
+    // `DocInfo` from `#docRuntimes` but returns early on an empty event list,
+    // so a transition with no event is not a missing notification — it is
+    // `exchange.documents` reporting the old mode indefinitely.
     let event: DocChange | undefined
-    if (existing?.mode === "deferred") {
+    if (existing && existing.mode !== runtime.mode) {
       event = { type: "doc-promoted", docId: runtime.docId }
     } else if (!this.#docRuntimes.has(runtime.docId)) {
       event = { type: "doc-created", docId: runtime.docId }

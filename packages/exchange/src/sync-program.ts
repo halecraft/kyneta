@@ -863,12 +863,18 @@ function handleDocEnsure(
   canShare: SyncPredicate,
 ): [SyncModel, ...SyncEffect[]] {
   const existing = model.documents.get(msg.docId)
-  if (existing) {
-    if (existing.mode !== "deferred") return [model]
-    // Promote deferred → the new mode
-    // Fall through to the normal doc-ensure logic below,
-    // which will overwrite the entry with the new mode/version
-  }
+  // Idempotent for an unchanged document: ensuring the same one twice at the
+  // same mode must not re-announce it. Any genuine mode change — `deferred →
+  // X`, or `replicate → interpret` — falls through to the path below, which
+  // rewrites the entry and sends `present` + `interest`.
+  //
+  // Re-announcing after a promotion is correct rather than noise. The
+  // document's triple does not change, since compatibility was the
+  // precondition, but an interpreted document advertises `supportedHashes`
+  // and a replicate one has none. Peers that could not previously match this
+  // document against a migrated schema of their own can once they hear the
+  // fuller range.
+  if (existing && existing.mode === msg.mode) return [model]
 
   const entry: DocEntry = {
     docId: msg.docId,

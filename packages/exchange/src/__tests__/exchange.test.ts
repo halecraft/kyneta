@@ -35,7 +35,7 @@ import {
   type PeerIdentityInput,
 } from "../exchange.js"
 import { sync, whenSettled } from "../sync.js"
-import type { PeerChange } from "../types.js"
+import type { DocChange, PeerChange } from "../types.js"
 
 // ---------------------------------------------------------------------------
 // Test schemas (bound at module scope)
@@ -949,12 +949,47 @@ describe("Exchange", () => {
 
       const doc = exchange.get("doc-1", TestDoc)
 
-      // A usable ref over the promoted document. Whether `exchange.documents`
-      // reflects the new mode is a separate concern — the sync layers have to
-      // learn the transition before the map is rebuilt — and is asserted with
-      // the event that drives it.
+      // A usable ref over the promoted document.
       expect(doc).toBeDefined()
       expect(exchange.has("doc-1")).toBe(true)
+    })
+
+    it("a promotion refreshes exchange.documents and emits doc-promoted", () => {
+      // Both halves of one fact. `exchange.documents` is rebuilt from the
+      // synchronizer's runtimes only when an event fires, so a missing event
+      // and a stale map are the same defect seen from two sides — asserting
+      // only the map would pass on a cached rebuild, and asserting only the
+      // event would not prove the map followed.
+      const exchange = createExchange()
+      exchange.replicate(
+        "doc-1",
+        plainReplicaFactory,
+        SYNC_AUTHORITATIVE,
+        TestDoc.schemaHash,
+      )
+      expect(exchange.documents.get("doc-1")?.mode).toBe("replicate")
+
+      const changes: DocChange[] = []
+      exchange.documents.subscribe(cs => changes.push(...cs.changes))
+
+      exchange.get("doc-1", TestDoc)
+
+      expect(exchange.documents.get("doc-1")?.mode).toBe("interpret")
+      expect(changes).toContainEqual({ type: "doc-promoted", docId: "doc-1" })
+    })
+
+    it("re-ensuring an unchanged document does not re-announce", () => {
+      // The idempotence the widened mode check has to preserve: only a genuine
+      // mode change falls through to the announce path.
+      const exchange = createExchange()
+      exchange.get("doc-1", TestDoc)
+
+      const changes: DocChange[] = []
+      exchange.documents.subscribe(cs => changes.push(...cs.changes))
+
+      exchange.get("doc-1", TestDoc)
+
+      expect(changes).toEqual([])
     })
 
     it("destroy() works for replicated docs", () => {
