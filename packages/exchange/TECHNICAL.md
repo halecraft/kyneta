@@ -836,6 +836,17 @@ Persistence is driven by a pure Mealy machine: `Program<StoreInput, StoreModel, 
 4. The Exchange's listener computes `exportSince(confirmedVersion)` to get the delta, then dispatches `{ type: 'state-advanced', docId, delta, newVersion }` into the store-program.
 5. The store-program emits `persist-append` effects; the Exchange's effect interpreter calls `store.append(docId, record)` on each registered store and feeds back `write-succeeded` or `write-failed`.
 
+**Transient documents are never offered to a store.** A document whose `SyncMode` carries `durability: "transient"` — today that is anything bound through `ephemeral` — is never registered, never hydrated, and never deleted. `Runtime` decides this once, in `#usesStores(syncMode)`, and every storage decision consults it: which substrate to build, how to initialise the readiness latch, whether to hydrate on creation, and whether to dispatch a delete on `destroy`.
+
+Those decisions have to agree. The readiness latch is registered as a settle term before hydration starts, so a document that is set up to hydrate and then never does stays `pending` forever — `whenSettled` never returns and `docStatus` never leaves `pending`. That is why the rule is one predicate rather than a condition repeated at each site.
+
+The rule is *declared*, read off the type, rather than emergent. Previously nothing told the store a document was transient: it simply could not persist updates, because a snapshot-only substrate always returns `null` from `exportSince`. That kept later writes off disk by accident, did nothing about the creation-time write, and would have reversed silently the day a transient substrate learned delta export.
+
+Two asymmetries in the same area, both deliberate:
+
+- **`compact` needs no guard.** The store-program returns unchanged for a document it does not know, and a transient document is never registered, so it is never known. The safety is the store-program's rather than the runtime's.
+- **The store-program's `destroy` case still emits `persist-delete` unconditionally**, where its `compact` case guards on `!existing`. Making them symmetric would break deleting a document that is on disk but was not opened this session — the contract `Exchange.destroy` advertises. `Runtime.destroy` filters on the *cache entry* instead, and treats "no entry" and "deferred" as "we do not know enough to skip".
+
 **Per-doc phase tracking.** Each document tracked by the store-program is in one of two phases: `idle` (version confirmed, ready for next write) or `writing` (I/O in flight, with an optional queued input). When a `state-advanced` arrives during `writing`, the delta is queued (latest-wins) and replayed on `write-succeeded`. This ensures at most one in-flight write per document.
 
 **Self-healing version tracking.** The store-program's confirmed version only advances on `write-succeeded`. If a write fails, the old version is preserved so the next `exportSince` recomputes the full delta from the last known-good point. This means transient store failures (disk full, `QuotaExceededError` on IndexedDB, network blip on a remote store) self-heal on the next successful write without data loss.

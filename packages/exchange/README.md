@@ -167,7 +167,8 @@ const exchange = new Exchange({
   transports: [serverTransport],
   stores: [await createLevelDBStore("./data/exchange-db")],  // ← new
 })
-// Documents auto-hydrate on restart, auto-persist on mutation
+// Durable documents auto-hydrate on restart, auto-persist on mutation.
+// Ephemeral ones deliberately do neither — see Storage, below.
 ```
 
 ### Add presence alongside your documents — same exchange
@@ -426,7 +427,7 @@ Use `resolve` to decide **what to do**. Use `onDocCreated` to observe **what hap
 
 ### Storage
 
-Stores are a first-class constructor parameter, separate from transports. Documents auto-persist on mutation and auto-hydrate on restart:
+Stores are a first-class constructor parameter, separate from transports. Durable documents auto-persist on mutation and auto-hydrate on restart:
 
 ```ts
 import { createLevelDBStore } from "@kyneta/leveldb-store/server"
@@ -440,6 +441,8 @@ const exchange = new Exchange({
 const doc = exchange.get("my-doc", TodoDoc)
 // Mutations are automatically persisted. On restart, documents hydrate from storage.
 ```
+
+**Ephemeral documents are never stored.** Anything bound through `ephemeral` declares `durability: "transient"`, and the exchange keeps it out of stores in both directions — no hydrate on open, no write on mutation, no delete on destroy. That is the point of the tier: presence, cursors and live input describe who is here *now*, and a restarted server resurrecting yesterday's cursor positions would be worse than having none. Configuring stores does not change this, and there is no way to opt a transient document into persistence — use a durable binding target instead.
 
 **Store format gate.** On open, every persistent backend stamps a `{ major, minor }` on-disk format version into a dedicated store-metadata namespace (a `kyneta_store_meta` table, an IndexedDB `store_meta` object store, or a `store-meta\x00` key prefix — separate from the per-document `doc_meta` namespace). On a later open it refuses — throwing `StoreFormatVersionError` — a store whose stamped major is incompatible with the running build, or an unversioned store that already holds documents. The gate is a compatibility check only; it performs no automatic migration.
 
