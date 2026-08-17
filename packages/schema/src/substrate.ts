@@ -699,7 +699,23 @@ export type WriterModel = "serialized" | "concurrent"
 /** What's sent over the wire? */
 export type Delivery = "delta-capable" | "snapshot-only"
 
-/** Is this document persisted? */
+/**
+ * Is this document persisted?
+ *
+ * `transient` is a commitment, not a hint. An exchange keeps such a document
+ * out of durable storage in **both** directions: it is never read from a store
+ * on open, never written on mutation, and never deleted on teardown.
+ * Configuring stores does not change that, and there is no way to opt a
+ * transient document into persistence.
+ *
+ * The tier exists because some state is a statement about *now*. Presence,
+ * cursors and live input describe who is here at this moment, and such a
+ * document may expire on a timer via `.decay()`. A restarted server
+ * resurrecting yesterday's cursor positions would be worse than having none.
+ *
+ * Today only `SYNC_EPHEMERAL` — and so only the `ephemeral` binding target —
+ * is transient.
+ */
 export type Durability = "persistent" | "transient"
 
 /**

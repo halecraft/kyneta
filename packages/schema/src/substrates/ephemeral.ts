@@ -66,6 +66,23 @@ import {
  * behind me", this can only ever say "we are concurrent" — any payload may
  * carry the newest value for some individual field, so none can be discarded
  * as stale. See `compare` for why that extends even to identical timestamps.
+ *
+ * **This substrate has no peer identity, deliberately.** A scalar timestamp,
+ * not a per-peer version vector — and the binding target hands back the shared
+ * `ephemeralSubstrateFactory` rather than building one per peer, so the
+ * exchange's `peerId` never arrives here. It can afford that because it merges
+ * field by field and lets timestamps decide, so it never has to order two
+ * writes by their author. Peer identity is the tie-breaker it chose not to
+ * need.
+ *
+ * **If that ever changes, derive the identity from the exchange's stable
+ * `peerId` rather than minting one per session.** Transient documents are
+ * never persisted, so a fresh identity per restart leaves no residue on disk —
+ * but a long-lived peer, a relay or a tab left open for a day, holds these
+ * documents in memory across everyone else's reconnects, and a per-session
+ * identity would add an entry there on every one. Same unbounded-growth shape
+ * the Yjs binding avoids by claiming its `clientID` only after hydration,
+ * reached by a different road.
  */
 export class StateVersion implements Version {
   readonly timestamp: number
