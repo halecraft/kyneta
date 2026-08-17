@@ -622,11 +622,27 @@ export class Runtime {
   }
 
   /**
+   * Will this document's state ever reach a store, in either direction?
+   */
+  #usesStores(syncMode: SyncMode): boolean {
+    return this.#stores.length > 0 && syncMode.durability === "persistent"
+  }
+
+  /**
    * Shared core of {@link Runtime.onStateAdvanced} — exports the delta
    * since the store program's last confirmed version and dispatches a
    * `state-advanced` write if the version actually moved. No-op if no
    * stores are configured, if the doc hasn't finished its initial
    * registration yet, or if there's nothing new to persist.
+   *
+   * **Transient documents never get past the `!phase` guard**, because they
+   * are never registered with the store-program at all — see `#usesStores`.
+   * That guard is a second line of defence rather than the mechanism: if such
+   * a document ever does acquire a phase, the rule upstream has already failed
+   * and this will not save it. It is not idle work, though — before that rule
+   * existed, every presence mutation ran this method almost to the end and
+   * computed an `exportSince` delta that a snapshot-only substrate always
+   * returns `null` for.
    *
    * Deduplicates on the *target* version, not just on an empty delta.
    * Pre-existing gap, exposed (not caused) by this plan's new local-change
@@ -807,16 +823,19 @@ export class Runtime {
 
     // ── Shared prefix: create substrate, build ref ──
     //
-    // With stores configured this document is about to import operations this
-    // peer wrote in an earlier session, so it takes the deferred-identity
-    // path: `adopt` is called once that import lands, below. Without stores
-    // there is nothing to import, so `create()`'s immediate claim is correct
-    // and `adopt` is a no-op.
+    // A document that will hydrate is about to import operations this peer
+    // wrote in an earlier session, so it takes the deferred-identity path:
+    // `adopt` is called once that import lands, below. One that will not
+    // hydrate has nothing to import, so `create()`'s immediate claim is
+    // correct and `adopt` is a no-op.
     //
     // Whether deferring changes anything is a per-backend fact, and not one
     // this file should hold: `beginHydration` puts the question to the factory
     // and falls back to the safe answer for backends that do not care.
-    const willHydrate = this.#stores.length > 0
+    //
+    // Bound once and used at all three decision points below — see
+    // `#usesStores` for why they have to agree.
+    const willHydrate = this.#usesStores(bound.syncMode)
     const { substrate, adopt } = willHydrate
       ? beginHydration(factory, bound.schema)
       : { substrate: factory.create(bound.schema), adopt: NO_ADOPT }
@@ -835,9 +854,10 @@ export class Runtime {
       supportedHashes: [...bound.supportedHashes],
     }
 
-    const hydration = createHydrationLatch(
-      this.#stores.length > 0 ? "pending" : "loaded",
-    )
+    // `loaded` means "there is nothing further to wait for", not "a load
+    // happened". A document that will not hydrate is in that state from the
+    // start, because nothing downstream will ever resolve this latch for it.
+    const hydration = createHydrationLatch(willHydrate ? "pending" : "loaded")
 
     const entry: DocCacheEntry = {
       mode: "interpret",
@@ -872,8 +892,8 @@ export class Runtime {
       () => (hydration.state === "failed" ? hydration.error : undefined),
     )
 
-    // ── Divergent tail: store vs no-store ──
-    if (this.#stores.length > 0) {
+    // ── Divergent tail: hydrate, or be ready now ──
+    if (willHydrate) {
       const hydrationOp = this.#hydrate(
         docId,
         substrate,
@@ -940,13 +960,14 @@ export class Runtime {
       schemaHash,
     }
 
+    // Same rule as the interpret path — a relay holds transient documents too.
+    const willHydrate = this.#usesStores(syncMode)
+
     // A replicate document has no ref, so no settle term can be keyed to it
     // and it has no `docStatus` surface. The latch is still tracked so the
     // entry's hydration state is uniform across modes and available for
     // diagnostics.
-    const hydration = createHydrationLatch(
-      this.#stores.length > 0 ? "pending" : "loaded",
-    )
+    const hydration = createHydrationLatch(willHydrate ? "pending" : "loaded")
 
     const entry: DocCacheEntry = {
       mode: "replicate",
@@ -956,7 +977,7 @@ export class Runtime {
     }
     this.#docCache.set(docId, entry)
 
-    if (this.#stores.length > 0) {
+    if (willHydrate) {
       const hydrationOp = this.#hydrate(
         docId,
         replica,

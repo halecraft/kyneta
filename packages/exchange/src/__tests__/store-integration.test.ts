@@ -12,12 +12,15 @@ import { loro } from "@kyneta/loro-schema"
 import {
   batch,
   ephemeral,
+  ephemeralReplicaFactory,
   Interpret,
   json,
   Replicate,
   Schema,
+  SYNC_EPHEMERAL,
 } from "@kyneta/schema"
 import { afterEach, describe, expect, it } from "vitest"
+import { docStatus } from "../doc-status.js"
 import {
   Exchange,
   type ExchangeParams,
@@ -29,6 +32,7 @@ import {
   type InMemoryStoreData,
 } from "../store/in-memory-store.js"
 import type { Store, StoreRecord } from "../store/store.js"
+import { whenSettled } from "../sync.js"
 import { collectAll, makeMetaRecord } from "../testing/store-conformance.js"
 
 // ---------------------------------------------------------------------------
@@ -193,14 +197,95 @@ describe("Storage persist + hydrate", () => {
     // would be worse than having none — the document comes back at its
     // structural zeros.
     //
-    // Asserted against that contract rather than against the mechanism,
-    // because the mechanism is currently an accident: nothing tells the store
-    // the document is transient, it simply cannot persist updates, since
-    // `Runtime.#persistIfAdvanced` gives up when `exportSince` returns `null`.
-    // Making the skip explicit is queued work; this assertion should survive it.
+    // Asserted against that contract rather than against the mechanism, which
+    // is why this test did not have to change when the mechanism did. It used
+    // to hold by accident — nothing told the store the document was transient,
+    // it simply could not persist updates, because a snapshot-only substrate
+    // always returns `null` from `exportSince`. The rule is now declared, and
+    // the assertion is untouched.
     expect(doc2.name()).toBe("")
     expect(doc2.cursor.x()).toBe(0)
     expect(doc2.cursor.y()).toBe(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Transient documents and durable storage
+// ---------------------------------------------------------------------------
+
+describe("transient documents never reach a store", () => {
+  // The test above pins the *observable* contract: writes do not survive a
+  // restart. These pin the rule underneath it — that a transient document is
+  // never offered to a store in either direction. Before this rule existed the
+  // document was registered at creation, so an empty creation-time snapshot sat
+  // on disk, was faithfully hydrated on restart, and never updated again.
+
+  it("an interpreted transient document leaves no records", async () => {
+    const sharedData: InMemoryStoreData = {
+      records: new Map(),
+      metadata: new Map(),
+    }
+    const exchange = createExchange({
+      id: "server",
+      stores: [createInMemoryStore({ sharedData })],
+    })
+
+    const doc = exchange.get("presence-1", PresenceDoc)
+    batch(doc, d => {
+      d.name.set("Alice")
+    })
+    await exchange.flush()
+
+    expect(sharedData.records.has("presence-1")).toBe(false)
+  })
+
+  it("a replicated transient document leaves no records", async () => {
+    // A relay holds transient documents too, headlessly. This is the only
+    // coverage of the replicate creation path — it has no `docStatus` surface,
+    // so the store is the one place its behaviour is observable.
+    const sharedData: InMemoryStoreData = {
+      records: new Map(),
+      metadata: new Map(),
+    }
+    const exchange = createExchange({
+      id: "relay",
+      stores: [createInMemoryStore({ sharedData })],
+    })
+
+    exchange.replicate(
+      "relayed-presence",
+      ephemeralReplicaFactory,
+      SYNC_EPHEMERAL,
+      PresenceDoc.schemaHash,
+    )
+    await exchange.flush()
+
+    expect(sharedData.records.has("relayed-presence")).toBe(false)
+  })
+
+  it("a transient document settles rather than waiting on a load", async () => {
+    // The readiness half of the rule, and the failure no other test can see.
+    //
+    // Three places in document creation ask "will this hydrate?" and they have
+    // to agree. Change only the branch that dispatches the load, and the latch
+    // is still initialised `pending` while the only code that resolves it sits
+    // in the branch now skipped — so the document never settles.
+    //
+    // `flush()` and `shutdown()` cannot catch that: an unregistered document is
+    // not tracked by the store-program, so both complete while it hangs.
+    const exchange = createExchange({
+      id: "server",
+      stores: [
+        createInMemoryStore({
+          sharedData: { records: new Map(), metadata: new Map() },
+        }),
+      ],
+    })
+
+    const doc = exchange.get("presence-1", PresenceDoc)
+
+    await whenSettled(doc)
+    expect(docStatus(doc)).not.toBe("pending")
   })
 })
 
