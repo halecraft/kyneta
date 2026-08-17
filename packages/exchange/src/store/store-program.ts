@@ -225,8 +225,18 @@ export const storeProgram: Program<StoreInput, StoreModel, StoreEffect> = {
       // register — new doc, first boot
       // -------------------------------------------------------------------
       case "register": {
-        // Nothing to fall back to: this is the document's first write, so if
-        // it fails there is no earlier version to recompute a delta from.
+        // Arrives twice for one document, on two different occasions. First
+        // from hydration, when the document is opened and found in no store.
+        // Again from the runtime's persist path if that first write failed —
+        // there is no confirmed version to send a delta against, so a retry
+        // has to be another whole write.
+        //
+        // So this must be correct when a phase already exists, not only when
+        // the document is unknown. Overwriting is right: whatever the previous
+        // phase was, the document is now writing its whole self again.
+        //
+        // Nothing to fall back to either way. If this write fails there is
+        // still no earlier version to recompute a delta from.
         const phase: DocPhase = {
           status: "writing",
           revertTo: { status: "unwritten" },

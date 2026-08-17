@@ -274,6 +274,75 @@ describe("a mutation during an in-flight write", () => {
 })
 
 // ---------------------------------------------------------------------------
+
+// Recovering from a failed first write
+// ---------------------------------------------------------------------------
+
+/**
+ * Wrap a store so that its first `append` rejects and later ones succeed.
+ *
+ * Every method is forwarded by hand rather than spread from `inner`.
+ * `createInMemoryStore` returns a class instance, so `{ ...inner, append }`
+ * copies the own properties and none of the prototype methods — the wrapper
+ * then looks complete and fails at the first call to `currentMeta` or
+ * `loadAll`, some way from the line that caused it.
+ */
+function failingFirstAppend(inner: Store): Store {
+  let failuresLeft = 1
+  return {
+    append: async (docId, record) => {
+      if (failuresLeft > 0) {
+        failuresLeft--
+        throw new Error("disk full")
+      }
+      return inner.append(docId, record)
+    },
+    loadAll: docId => inner.loadAll(docId),
+    replace: (docId, records) => inner.replace(docId, records),
+    delete: docId => inner.delete(docId),
+    currentMeta: docId => inner.currentMeta(docId),
+    listDocIds: prefix => inner.listDocIds(prefix),
+    close: () => inner.close(),
+  }
+}
+
+describe("a store whose first write fails", () => {
+  it("still persists the document on the next mutation", async () => {
+    // The first write is the one with nothing behind it. Every later write is
+    // a delta against the version the store last confirmed; the first has no
+    // such version, so if it fails there is nothing to recompute from.
+    //
+    // The document used to be abandoned at that point — silently excluded
+    // from persistence for the rest of the process, recovering only on
+    // restart, while `onStoreError` reported the failure but nothing reported
+    // the durable consequence.
+    const sharedData: InMemoryStoreData = {
+      records: new Map(),
+      metadata: new Map(),
+    }
+    const flaky = failingFirstAppend(createInMemoryStore({ sharedData }))
+
+    const exchange = createExchange({
+      id: "server",
+      stores: [flaky],
+      onStoreError: () => {}, // expected here; keep it out of the test output
+    })
+
+    const doc = exchange.get("doc-1", SequentialDoc)
+    await exchange.flush()
+    expect(sharedData.records.has("doc-1")).toBe(false)
+
+    // The next mutation re-attempts the whole document rather than a delta.
+    batch(doc, d => {
+      d.title.set("written on the retry")
+    })
+    await exchange.flush()
+
+    expect(sharedData.records.has("doc-1")).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Transient documents and durable storage
 // ---------------------------------------------------------------------------
 

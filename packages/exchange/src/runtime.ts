@@ -700,9 +700,37 @@ export class Runtime {
     // nothing else would ever offer it to the store.
     const settled = phase.status === "writing" ? phase.revertTo : phase
 
-    // Nothing has ever been written, so there is no base to diff against. Two
-    // ways to arrive: the document's first write failed (`unwritten`), or it
-    // is still in flight (`writing` from `unwritten`).
+    // Nothing has ever been written for this document — its very first write
+    // failed. There is no confirmed version to compute a delta against, so the
+    // only correct attempt is another *whole* write, and `register` is the
+    // input that carries one. (`compact` is the other, but it means "replace
+    // what is there", and here there is nothing there.)
+    //
+    // Driving the retry from the next mutation, rather than having the
+    // store-program re-emit its own failed effect, is what keeps it bounded: a
+    // persistently failing store gets one attempt per mutation instead of a
+    // loop, and the program stays a function of its inputs.
+    if (phase.status === "unwritten") {
+      const entry = this.#docCache.get(docId)
+      if (!entry || entry.mode === "deferred") return
+      this.#storeHandle.dispatch({
+        type: "register",
+        docId,
+        meta: {
+          replicaType: replicaFactory.replicaType,
+          syncMode: entry.readyInfo.syncMode,
+          schemaHash: entry.readyInfo.schemaHash,
+        },
+        entirety: replica.exportEntirety(),
+        version: replica.version().serialize(),
+      })
+      return
+    }
+
+    // The first write is still in flight — `writing`, reverting to
+    // `unwritten`. There is no confirmed version to diff against yet, and
+    // dispatching a second `register` behind the outstanding one would just
+    // duplicate it. Wait for it to land.
     if (settled.status === "unwritten") return
 
     const confirmedVersion = settled.version

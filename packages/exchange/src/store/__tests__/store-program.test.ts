@@ -883,6 +883,38 @@ describe("storeProgram", () => {
     expect(allDocsIdle(failed)).toBe(true)
   })
 
+  it("unwritten → register → write-succeeded — recovers to idle", () => {
+    // The recovery path, and that `unwritten` is not a dead end. The runtime
+    // answers a mutation on an unwritten document by dispatching a fresh
+    // `register` carrying the whole document; this is the program's half.
+    const [unwritten] = step(registered(), {
+      type: "write-failed",
+      docId: "doc-1",
+      error: new Error("disk full"),
+    })
+    expect(getPhase(unwritten, "doc-1")).toEqual({ status: "unwritten" })
+
+    const [retrying, ...retryEffects] = step(unwritten, {
+      type: "register",
+      docId: "doc-1",
+      meta: plainMeta,
+      entirety: fakePayload("whole"),
+      version: "v2",
+    })
+    expect(retryEffects).toHaveLength(1)
+    expect(retryEffects[0].type).toBe("persist-append")
+
+    const [recovered] = step(retrying, {
+      type: "write-succeeded",
+      docId: "doc-1",
+      version: "v2",
+    })
+    expect(getPhase(recovered, "doc-1")).toEqual({
+      status: "idle",
+      version: "v2",
+    })
+  })
+
   it("on an unwritten doc, compact writes but state-advanced does not", () => {
     // The asymmetry is the point, and it follows from what each input
     // carries. A compaction is a whole document plus its own meta, so it can
