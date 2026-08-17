@@ -362,7 +362,7 @@ identity check itself rather than inheriting it.
 
 | Intention | API | Behaviour |
 |-----------|-----|-----------|
-| Leave sync graph, keep local state | `exchange.suspend(docId)` | Sends `dismiss`. Removes from `exchange.documents`. State remains in `Store`. `exchange.get(docId)` still returns the ref — **without** resuming. |
+| Leave sync graph, keep local state | `exchange.suspend(docId)` | Sends `dismiss`. **Stays in `exchange.documents`**, as `{ mode: "interpret", suspended: true }`. State remains in `Store`. `exchange.get(docId)` still returns the ref — **without** resuming. |
 | Permanent removal | `exchange.destroy(docId)` | Sends `dismiss`. Removes from `exchange.documents`, from `Store`, from all peers' views. Fresh `get` constructs a new doc. |
 | Temporary local removal | `exchange.remove(docId)` | Removes from `exchange.documents` and local `DocRuntime`. Does not send `dismiss`. State remains in `Store`. |
 
@@ -372,6 +372,7 @@ The three exist because "I'm done with this doc" has three distinct flavours —
 
 - **Not a disconnect.** Other docs in the same exchange continue syncing.
 - **Not destructive.** Local state is preserved — `suspend` sets a flag and sends `dismiss`; the ref and substrate are untouched. `get(docId)` therefore keeps working and returns the same ref, but it does **not** un-suspend: only `resume` re-enters the sync graph. That separation is deliberate, so an unrelated read can never restart traffic peers observe — **`get()` never changes sync-graph membership.**
+- **Not a removal.** The document stays in `exchange.documents` with `suspended: true` — which is what that field is for, and what makes `doc-suspended` / `doc-resumed` meaningful events. `destroy` and `remove` are the two that take a document out of the map. Reading the suspend row as "it left the exchange" is the mistake to avoid: `@kyneta/index` once filtered suspended documents out of exchange-backed sources on that belief, which made pausing sync delete rows from every derived view.
 - **Not idempotent with `destroy`.** Suspending a destroyed doc is a no-op; destroying a suspended doc completes the destruction.
 
 ---

@@ -1,3 +1,15 @@
+// source-of — the adapter's own logic, driven by a mock exchange.
+//
+// The mock is deliberate, not a shortcut. These tests are about ℤ-set delta
+// shape, key mapping, entity extraction and namespacing, and a mock makes those
+// deterministic without a document lifecycle getting in the way.
+//
+// What a mock cannot do is notice the contract it stands in for changing: it
+// agrees with its own semantics forever. `source-exchange.test.ts` covers that
+// half against a real `Exchange`. Put a new test there if it is about the
+// exchange contract — phases, suspension, promotion, event timing — and here if
+// it is about the algebra.
+
 import { batch, createDoc, json, Schema } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import type { SourceEvent } from "../source.js"

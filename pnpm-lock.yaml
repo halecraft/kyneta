@@ -804,6 +804,9 @@ importers:
         specifier: workspace:^
         version: link:../changefeed
     devDependencies:
+      '@kyneta/bridge-transport':
+        specifier: workspace:^
+        version: link:../exchange/transports/bridge
       '@kyneta/exchange':
         specifier: workspace:^
         version: link:../exchange

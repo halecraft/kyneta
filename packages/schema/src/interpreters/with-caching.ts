@@ -198,11 +198,19 @@ function registerCacheHandler(
 }
 
 /**
- * @internal Test-only: number of distinct cache-handler registrants at
- * `atPathKey` for the given context. Lets regression tests assert the
- * registry stays bounded across many re-interpretations (the historical
- * bug accreted handlers in a composed closure chain instead of keying
- * by registrant). Not part of the public API.
+ * Number of distinct cache-handler registrants at `atPathKey` for the given
+ * context.
+ *
+ * @internal Not exported from the package barrel.
+ *
+ * Test-only. Lets regression tests assert the registry stays bounded across
+ * many re-interpretations (the historical bug accreted handlers in a composed
+ * closure chain instead of keying by registrant).
+ *
+ * The backdoor is deliberate. Accretion's only symptom is memory and per-write
+ * work, with no public-surface proxy, so a behavioural test would pass whether
+ * or not handlers accreted. Reading the structure is the test that actually
+ * holds.
  */
 export function __getCacheHandlerCountAtPath(
   ctx: object,

@@ -10,8 +10,8 @@
 // is `Collection.from(source)`.
 
 import type { ChangeBase, ReactiveMap } from "@kyneta/changefeed"
-import type { BoundSchema } from "@kyneta/schema"
-import { subscribeNode } from "@kyneta/schema"
+import type { BoundSchema, ReadCapability } from "@kyneta/schema"
+import { metadataOf, subscribeNode, supportsHash } from "@kyneta/schema"
 import { createWatcherTable } from "./watcher-table.js"
 import type { ZSet } from "./zset.js"
 import { add, isEmpty, single, zero } from "./zset.js"
@@ -364,6 +364,74 @@ const defaultMapping: SourceMapping = {
   toDocId: (key: string) => key,
 }
 
+/**
+ * One entry of `exchange.documents()`.
+ *
+ * Declared structurally instead of imported from `@kyneta/exchange`, which is
+ * an optional peer dependency: a type import would put that package into this
+ * one's emitted `.d.ts`, breaking consumers who never installed it. The same
+ * reason `fromExchange` takes `exchange: any`.
+ *
+ * `suspended` is listed to record that we see it and deliberately do not read
+ * it — see `isTrackable`.
+ */
+type DocInfo = {
+  readonly mode: "interpret" | "replicate" | "deferred"
+  readonly suspended: boolean
+}
+
+/**
+ * Which documents this source tracks. Pure — the caller does the lookups.
+ *
+ * This states what a source *tracks*, which is a different question from what
+ * `exchange.get()` will *tolerate*, and the two are meant to stay independent.
+ * `get()` is the more permissive of the pair — its job is to raise documents
+ * to a usable state, so it may well learn to upgrade a replicate document on
+ * request. This predicate must go on refusing to index one either way. Phrased
+ * as policy, it stays correct without tracking changes to `get()`; phrased as
+ * a precondition check, every change there would become a change here.
+ *
+ * Taking already-gathered values rather than the exchange keeps this a truth
+ * table — testable with no Exchange at all, the same shape as
+ * `deriveConnectivity` in `@kyneta/exchange`.
+ */
+function isTrackable(
+  info: DocInfo | undefined,
+  docHash: string | undefined,
+  reader: ReadCapability,
+): boolean {
+  // Gone from `exchange.documents()` — destroyed, or removed. `reconcile`
+  // relies on this to drop the entry.
+  if (info === undefined) return false
+
+  // The tier line, and the whole of it. A source may change a document's
+  // *readability* — attaching one registers its schema, which promotes the
+  // deferred documents that schema can now read, and that is the feature. It
+  // must never change a document's *tier*: turning a relay's headless replica
+  // into a full substrate is an operator's decision, not a side effect of
+  // someone indexing.
+  //
+  // This clause does not stop deferred documents being promoted —
+  // `registerSchema` below has already done that by the time we run. It
+  // stops a *replicate* document being upgraded.
+  if (info.mode !== "interpret") return false
+
+  // There is deliberately no `info.suspended` check here. Suspension is
+  // sync-graph state rather than a phase: a suspended document is still
+  // interpreted, still in `documents()`, still holding a live readable ref. If
+  // it decided membership, `exchange.suspend(docId)` would delete a row from
+  // every view built on this source and `resume` would put it back — churn
+  // because the network went quiet. `remove()` and `destroy()` are the exits.
+
+  // `supportsHash` rather than string equality, because a schema is defined to
+  // read its own ancestor shapes; comparing for equality would drop the very
+  // documents a migrated schema exists to keep reading. A hash the exchange
+  // cannot name is not evidence of a mismatch, so an absent one passes.
+  if (docHash !== undefined && !supportsHash(reader, docHash)) return false
+
+  return true
+}
+
 function fromExchange<V>(
   exchange: any,
   bound: BoundSchema<any>,
@@ -372,16 +440,45 @@ function fromExchange<V>(
   const m = mapping ?? defaultMapping
   const { emit, subscribe, clear } = createSourceEmitter<V>()
   const entries = new Map<string, V>()
-  const schemaHash = bound.schemaHash
+  // Built once, outside the predicate: the set of schema hashes this source
+  // can read, which is its own hash plus every ancestor shape it migrates from.
+  const reader = metadataOf(bound)
 
-  function tryAdd(docId: string): void {
+  /**
+   * Re-decide one document's membership, and emit if it changed.
+   *
+   * The single rule behind all three paths into this source — the scan asks it
+   * of every document, the subscription of one, the handle of the document it
+   * just created or destroyed. Two invariants follow, and both are worth
+   * holding onto when changing anything here:
+   *
+   * 1. The source's contents always equal what a fresh scan would produce.
+   * 2. The integrated deltas always equal the contents.
+   *
+   * The second is the one that is easy to break and hard to see. `entries` is
+   * a `Map`, so it dedupes silently and `snapshot()` will look right while the
+   * emitted stream — which is what downstream consumers integrate — is wrong.
+   * That is why nothing outside this function writes to `entries` or emits.
+   *
+   * Idempotent in both directions, so calling it twice for the same event is
+   * always safe.
+   */
+  function reconcile(docId: string): void {
     const key = m.toKey(docId)
     if (key === null) return
 
-    // Check schema hash — only track docs matching our bound
-    const docHash = exchange.getDocSchemaHash(docId)
-    if (docHash !== undefined && docHash !== schemaHash) return
+    const info = exchange.documents().get(docId) as DocInfo | undefined
+    const docHash = exchange.getDocSchemaHash(docId) as string | undefined
 
+    if (!isTrackable(info, docHash, reader)) {
+      if (!entries.delete(key)) return
+      emit(createSourceEvent(single(key, -1), new Map()))
+      return
+    }
+
+    // Already tracked — nothing changed. This guard sits after the
+    // trackability check and before `get()` on purpose: it must not suppress a
+    // removal, and it must spare us a redundant `get()` on a repeat event.
     if (entries.has(key)) return
 
     const ref = exchange.get(docId, bound) as V
@@ -392,43 +489,37 @@ function fromExchange<V>(
     emit(createSourceEvent(single(key, 1), values))
   }
 
-  function tryRemove(docId: string): void {
-    const key = m.toKey(docId)
-    if (key === null) return
-    if (!entries.delete(key)) return
-    emit(createSourceEvent(single(key, -1), new Map()))
-  }
-
-  // Register the BoundSchema so matching remote docs are auto-resolved
+  // Register the BoundSchema so matching remote docs are auto-resolved.
+  //
+  // This also sweeps documents already sitting deferred and promotes the ones
+  // this schema can now read — so attaching a source is not a read-only act,
+  // and cannot be: without registering, this peer would never be offered the
+  // remote documents the source exists to index. It is also why `isTrackable`
+  // has nothing to say about deferred promotion; it has already happened by
+  // the time the scan below runs.
   exchange.registerSchema(bound)
 
   // Subscribe to the documents changefeed — BEFORE scanning existing docs
   // so we don't miss docs created between scan and subscribe.
+  //
+  // No dispatch on `change.type`. Every `DocChange` means the same thing here
+  // — "this document may have changed" — and `reconcile` answers it from the
+  // exchange's current state rather than from what the event claims. A seventh
+  // member added to `DocChange` later is handled the day it ships.
   const unsubscribeDocs: () => void = exchange.documents.subscribe(
     (cs: any) => {
-      for (const change of cs.changes) {
-        if (change.type === "doc-created") {
-          tryAdd(change.docId)
-        } else if (change.type === "doc-removed") {
-          tryRemove(change.docId)
-        }
-      }
+      for (const change of cs.changes) reconcile(change.docId)
     },
   )
 
   // Scan existing documents to catch docs created before the subscription.
-  // Filter on mode === "interpret" (Source.of only tracks interpreted docs).
-  for (const [docId, info] of exchange.documents()) {
-    if (info.mode !== "interpret") continue
-    if (info.suspended) continue
-    const key = m.toKey(docId)
-    if (key === null) continue
-    const docHash = exchange.getDocSchemaHash(docId)
-    if (docHash !== undefined && docHash !== schemaHash) continue
-    if (entries.has(key)) continue
-    const ref = exchange.get(docId, bound) as V
-    entries.set(key, ref)
-  }
+  // Literally the same call the subscription makes, rather than a loop that
+  // resembles it — two implementations of one rule can drift apart, and a
+  // single call cannot.
+  //
+  // Emitting here is a no-op — `createSourceEmitter` does not buffer, and
+  // `fromExchange` has not returned, so there is nothing subscribed yet.
+  for (const docId of exchange.documents().keys()) reconcile(docId)
 
   const source: Source<V> = {
     subscribe,
@@ -444,8 +535,21 @@ function fromExchange<V>(
     },
   }
 
+  // Both methods act on the exchange, then let `reconcile` decide what that
+  // means for membership. Keeping their own bookkeeping is what made
+  // `createDoc` emit twice: `doc-created` fires synchronously inside
+  // `exchange.get()`, so the subscriber had already added and emitted before
+  // `createDoc` reached its own `entries.set`. The key integrated to weight 2,
+  // and a later `delete` left a phantom behind in every derived view.
+  //
+  // Routing through `reconcile` holds whichever way that ordering goes. If the
+  // event is synchronous, as today, the subscriber has done the work and the
+  // `entries.has` guard makes this call a no-op; were it ever deferred,
+  // `reconcile` does the work here and the later subscriber no-ops. Neither
+  // can double-emit, because one rule owns `entries`.
   const handle: ExchangeSourceHandle<V> = {
     createDoc(key: string): V {
+      // A caller-error check, not membership bookkeeping — hence still here.
       if (entries.has(key)) {
         throw new Error(
           `[source] Key "${key}" already exists. Use delete() first to replace.`,
@@ -453,20 +557,15 @@ function fromExchange<V>(
       }
       const docId = m.toDocId(key)
       const ref = exchange.get(docId, bound) as V
-      entries.set(key, ref)
-
-      const values = new Map<string, V>()
-      values.set(key, ref)
-      emit(createSourceEvent(single(key, 1), values))
+      reconcile(docId)
       return ref
     },
     delete(key: string): boolean {
       if (!entries.has(key)) return false
-      entries.delete(key)
       // Symmetric with createDoc: destroy from the exchange
       const docId = m.toDocId(key)
       exchange.destroy(docId)
-      emit(createSourceEvent(single(key, -1), new Map()))
+      reconcile(docId)
       return true
     },
   }

@@ -210,14 +210,28 @@ Adapters enforce this by tracking which keys they've already emitted. Consumers 
 
 ### `Source.fromList` and `Source.fromExchange` — subscription discipline
 
-Both adapters subscribe to schema-level reactive feeds (`subscribeNode` for list refs; `exchange.documents` + per-doc subscriptions for exchange-backed sources). The adapter:
+Both adapters subscribe to schema-level reactive feeds — `subscribeNode` for list refs, `exchange.documents` for exchange-backed sources. The adapter:
 
 1. Takes an initial snapshot on construction.
 2. Emits a ℤ-set delta on each observed change, with values for newly-positive keys.
-3. Manages per-entry sub-subscriptions (when the schema requires — e.g., a list of structs whose field mutations must propagate).
+3. Manages per-entry sub-subscriptions (when the schema requires — e.g., a list of structs whose field mutations must propagate). This is `fromList`'s concern; `fromExchange` holds exactly one subscription, to `exchange.documents`.
 4. Cleans up sub-subscriptions on `dispose()`.
 
 The subscription discipline is transparent to the consumer: once you hold a `Source<V>`, you see exactly the three methods.
+
+#### Which documents an exchange-backed source tracks
+
+One rule, applied identically on all three paths into the source — the construction scan, the `exchange.documents` subscription, and the handle's `createDoc` / `delete`:
+
+> **In `exchange.documents()`, in `interpret` mode, and readable by the bound schema.**
+
+"Readable" is `supportsHash`, not string equality on the schema hash: a schema is defined to read its own ancestor shapes, so comparing for equality would drop the very documents a migrated schema exists to keep reading. A document the exchange cannot name a hash for is allowed through — an absent hash is not evidence of a mismatch.
+
+**A source never promotes or materialises a document it did not already find live.** It may change a document's *readability* — attaching one calls `exchange.registerSchema`, which promotes deferred documents this schema can now read, and that is the point of attaching it. It must never change a document's *tier*: upgrading a relay's headless replica into a full substrate is an operator's decision, not a side effect of indexing. The `interpret`-mode clause is the whole of that guarantee.
+
+**Suspension is not a membership condition.** A suspended document stays indexed. Suspension is sync-graph state, not a phase — the document is still interpreted, still in `exchange.documents()`, and still holds a live readable ref. If it decided membership, `exchange.suspend(docId)` would delete a row from every `Collection` and `Index.by` view built on the source and `resume` would put it back, which downstream subscribers see as `removed` + `added` for a document whose contents never changed. Churn in the UI because the network went quiet. `remove()` and `destroy()` are the exits — both drop the document from `exchange.documents()`.
+
+There is no event table here on purpose. The subscriber does not dispatch on `DocChange.type`; every event means "this document may have changed," and membership is re-decided from the exchange's current state. A seventh `DocChange` member is handled the day it ships.
 
 ### `Source.fromReactiveMap` — bridging a changefeed `ReactiveMap`
 
@@ -456,6 +470,17 @@ Similarly, `replay`, `origin`, and `aborted` do not propagate through derived fe
 
 ## Testing
 
-Every test is pure JS — no `Schema.bind` requirement beyond what `Source.of` / `Source.fromList` exercise, no real substrates needed for the core ℤ-set algebra. Adapter tests use in-memory exchanges (`Bridge` + `BridgeTransport` from `@kyneta/bridge-transport`) and the plain substrate from `@kyneta/schema`. Algebraic-law tests assert the abelian-group properties directly on constructed `ZSet` values.
+Most tests are pure JS — no real substrates needed for the core ℤ-set algebra. Algebraic-law tests assert the abelian-group properties directly on constructed `ZSet` values.
+
+Exchange-backed source tests are deliberately split across two files, and knowing which is which is how you put a new test in the right place.
+
+| File | Instrument | What it is for |
+|------|-----------|----------------|
+| `source-of.test.ts` | A hand-built mock exchange | The adapter's own logic — delta shape, key mapping, entity extraction, namespacing. A mock makes these deterministic without a document lifecycle in the way. |
+| `source-exchange.test.ts` | A real `Exchange` | The exchange contract — phases, suspension, promotion, event timing. |
+
+Both exist because a mock cannot notice the contract it stands in for changing: it agrees with its own semantics forever. The real-`Exchange` file is what catches cross-package drift.
+
+Two notes on instrument choice there. Assertions about what downstream consumers see must fold the **emitted deltas**, not read `snapshot()` — `snapshot()` is backed by a `Map`, so it dedupes silently and will report the right answer while the emitted stream is wrong. And a deferred document needs two peers over a `Bridge` (`@kyneta/bridge-transport`), since a document is only deferred when another peer announces one this peer cannot read.
 
 **Run tests**: `cd packages/index && pnpm exec vitest run`

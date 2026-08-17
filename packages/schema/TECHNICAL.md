@@ -1514,6 +1514,20 @@ dist/
     *.js             # shared chunks, stable names, no hashes
 ```
 
+### Module-internal exports
+
+A symbol may be `export`ed from its own module and deliberately left out of the package barrel (`src/index.ts`). It is then reachable by tests inside the package and by nothing outside it — the module boundary carries it, the package boundary does not.
+
+Mark such a symbol with:
+
+```
+@internal Not exported from the package barrel.
+```
+
+The marker asserts two things at once: this is package-internal despite the `export` keyword, and its absence from the barrel is a decision rather than an oversight. Without it a future reader has no way to tell which, and is as likely to promote the symbol as to delete it.
+
+The worked example is `__getCacheHandlerCountAtPath` (`src/interpreters/with-caching.ts`), a backdoor for asserting that cache-invalidation handlers do not accrete across re-interpretations. It earns its place because that invariant's only symptom is memory and per-write work — there is no public-surface proxy, so a behavioural test would pass whether or not handlers accreted. Where the sole symptom is resource growth, inspecting the structure is the honest instrument; what was missing was the label.
+
 ## File Map
 
 | File | Lines | Role |
