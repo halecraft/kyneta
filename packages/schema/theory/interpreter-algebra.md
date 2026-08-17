@@ -936,7 +936,6 @@ to there is incremental:
 - Implement `Interpreter<Ctx, A>`, `interpret()` catamorphism
 - Implement `enrich`, `product`, `overlay` combinators
 - Test round-trips: `step(Zero.structural(schema), action) → expected`
-- See `.plans/schema-algebra-spike.md` for the full plan
 
 ### Phase 1: Unify the feed protocol
 - Collapse `[SNAPSHOT]` + `[REACTIVE]` into a single `[FEED]` that

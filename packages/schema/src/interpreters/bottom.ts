@@ -22,8 +22,6 @@
 //
 // Each level is branded with a phantom symbol so TypeScript's structural
 // subtyping enforces valid transformer ordering.
-//
-// See .plans/interpreter-decomposition.md §Phase 1.
 
 import type { ChangeBase } from "../change.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"

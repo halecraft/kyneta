@@ -13,8 +13,6 @@
 // Reading (filling the [CALL] slot) is NOT provided here — that's
 // withReadable's job. This means ref() still throws after withNavigation
 // alone; you need withReadable to make carriers callable.
-//
-// See .plans/navigation-layer.md §Phase 2, Task 2.1.
 
 import type {
   FlatTreeNode,

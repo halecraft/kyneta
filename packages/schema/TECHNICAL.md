@@ -1146,12 +1146,12 @@ A `BoundSchema` declares `supportedHashes`: all schema hashes at which the curre
 
 **Per-chain halt** at the first of:
 
-- **T2 step** — destroys identities; advertising T2 ancestors would overstate compatibility (the current path-keyed substrate has no identity-tombstone safety net). This aligns the single-set `supportedHashes` with the theory's `nativeSupports` semantics (`.jj-plan/migrations.md` §8).
+- **T2 step** — destroys identities; advertising T2 ancestors would overstate compatibility (the current path-keyed substrate has no identity-tombstone safety net). This aligns the single-set `supportedHashes` with the theory's `nativeSupports` semantics.
 - **T3 epoch** — hard identity break; pre-epoch hashes are deliberately unreachable.
 - **Un-invertible primitive** — anything not currently in `{add, rename, move}` at root level. The schema surgery for `addNullable` / `widenConstraint` / sub-product variant operations is bounded but not yet implemented; the walk halts conservatively rather than over-advertise.
 - **`chain.entries` exhaustion** — the `chain.base` prune horizon; pre-base shapes are not recoverable from the chain alone.
 
-The richer `readSupports` / `nativeSupports` split (allowing degraded entirety-only sync across T2/T3 boundaries — see `.jj-plan/migrations.md` §8.1) is deferred until degraded-sync infrastructure exists.
+The richer `readSupports` / `nativeSupports` split — allowing degraded entirety-only sync across T2/T3 boundaries — is deferred until degraded-sync infrastructure exists.
 
 The exchange includes `supportedHashes` in every `present` message when it carries more info than the primary hash alone. Receivers with older schemas check whether one of their hashes is in the sender's `supportedHashes` to decide if sync can proceed.
 

@@ -38,8 +38,6 @@
 //   - Sets use `ReadableSetRef<Plain<I>> & WritableSetRef<Plain<I>>` — leaf-shaped
 //     (no per-member child refs, no `.at(value)`)
 //   - `Wrap<T, M, Native>` intersects cross-cutting concerns per mode + HasNative<Native>
-//
-// See .plans/navigation-layer.md §Phase 3, Task 3.3.
 
 import type { HasChangefeed } from "@kyneta/changefeed"
 import type { RichTextDelta } from "./change.js"

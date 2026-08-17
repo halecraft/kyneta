@@ -29,8 +29,6 @@
 //
 // Compose: withChangefeed(withWritable(withCaching(withReadable(withNavigation(bottom)))))
 // Or read-only: withChangefeed(withCaching(withReadable(withNavigation(bottom))))
-//
-// See .plans/navigation-layer.md §Phase 2, Task 2.2b.
 
 import type { HasChangefeed } from "@kyneta/changefeed"
 import { CHANGEFEED } from "@kyneta/changefeed"

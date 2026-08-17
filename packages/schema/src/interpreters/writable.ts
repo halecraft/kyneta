@@ -15,9 +15,6 @@
 // Cache invalidation is handled by the prepare pipeline — withCaching
 // hooks ctx.prepare to invalidate caches at the target path before store
 // mutation. Mutation methods simply construct the change and dispatch.
-//
-// See .plans/interpreter-decomposition.md §Phase 4.
-// See .plans/apply-changes.md §Phase 4.
 
 import type { Lease } from "@kyneta/machine"
 

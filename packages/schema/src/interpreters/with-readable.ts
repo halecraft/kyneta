@@ -19,8 +19,6 @@
 //
 // Caching is NOT provided here — that's withCaching's job.
 // This means `ref.title !== ref.title` (each access forces the thunk).
-//
-// See .plans/navigation-layer.md §Phase 2, Task 2.2.
 
 import type {
   FlatTreeNode,

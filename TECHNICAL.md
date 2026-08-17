@@ -238,9 +238,13 @@ kyneta/
 │   └── integration/          # Node (vitest) + Bun (bun test) suites
 │
 ├── scripts/                  # build/release/maintenance scripts
-├── papers/                   # drafts, notes, theory docs
-└── .jj-plan/                 # plan documents for jj stack
+└── papers/                   # drafts, notes, theory docs
 ```
+
+Plan documents are deliberately absent from that tree. They live in a git ref
+namespace of their own, `refs/plans/store`, and are never checked out — see
+[docs/plans.md](docs/plans.md). A commit that implements a plan carries a
+`PLAN-YYYY-MM-DD-slug` reference to it, which `plans show` resolves.
 
 ---
 

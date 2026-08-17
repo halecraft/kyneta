@@ -14,8 +14,6 @@
 //
 // SequenceRef (mutation-only) is intentionally NOT in this hierarchy —
 // it provides .push(), .insert(), .delete() with no overlap.
-//
-// See .plans/navigation-layer.md §Phase 3, Task 3.1.
 
 /**
  * Navigation-only interface for sequence refs.
