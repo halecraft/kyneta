@@ -10,7 +10,15 @@
 // is `Collection.from(source)`.
 
 import type { ChangeBase, ReactiveMap } from "@kyneta/changefeed"
-import type { BoundSchema, ReadCapability } from "@kyneta/schema"
+import type {
+  BoundSchema,
+  DocRef,
+  NativeMap,
+  NavigableMapRef,
+  NavigableSequenceRef,
+  ReadCapability,
+  SchemaNode,
+} from "@kyneta/schema"
 import { metadataOf, subscribeNode, supportsHash } from "@kyneta/schema"
 import { createWatcherTable } from "./watcher-table.js"
 import type { ZSet } from "./zset.js"
@@ -1044,6 +1052,21 @@ function of<V>(
 // Source namespace — typed facade
 // ---------------------------------------------------------------------------
 
+/**
+ * The slice of an Exchange these sources use.
+ *
+ * Declared structurally rather than imported, because `@kyneta/exchange` is an
+ * *optional* peer dependency here: a consumer indexing plain records or lists
+ * should not be made to install it. Structural typing keeps that true while
+ * still rejecting an argument that is obviously not an exchange, which a bare
+ * `any` did not.
+ */
+export interface ExchangeLike {
+  readonly documents: ReactiveMap<string, unknown, ChangeBase>
+  get(docId: string, bound: BoundSchema<never, never>): unknown
+  destroy(docId: string): void
+}
+
 export interface SourceStatic {
   create<V>(): [Source<V>, SourceHandle<V>]
   fromRecord<V>(recordRef: any): Source<V>
@@ -1069,21 +1092,37 @@ export interface SourceStatic {
     fn: (key: string, value: Outer) => Source<Inner>,
     options?: FlatMapOptions,
   ): Source<Inner>
-  of<V>(exchange: any, bound: BoundSchema<any>): Source<V>
-  of<V>(
-    exchange: any,
-    bound: BoundSchema<any>,
-    accessor: (docRef: any) => any,
+  // `S` and `N` are threaded from `bound` so the accessor receives the real
+  // document, and `V` is inferred from what the accessor *returns* rather than
+  // from a callback parameter. A type parameter that appears only in a callback
+  // parameter position has nothing to infer from and silently resolves to its
+  // constraint — which is how every caller of this used to end up with
+  // `docRef: any` and `itemRef: unknown`.
+  of<S extends SchemaNode, N extends NativeMap>(
+    exchange: ExchangeLike,
+    bound: BoundSchema<S, N>,
+  ): Source<DocRef<S, N>>
+  of<S extends SchemaNode, N extends NativeMap, V>(
+    exchange: ExchangeLike,
+    bound: BoundSchema<S, N>,
+    accessor: (docRef: DocRef<S, N>) => NavigableMapRef<V>,
   ): Source<V>
-  of<V>(
-    exchange: any,
-    bound: BoundSchema<any>,
-    accessor: (docRef: any) => any,
-    keyFn: (itemRef: V) => any,
+  of<S extends SchemaNode, N extends NativeMap, V>(
+    exchange: ExchangeLike,
+    bound: BoundSchema<S, N>,
+    accessor: (docRef: DocRef<S, N>) => NavigableSequenceRef<V>,
+    keyFn: (itemRef: V) => string,
   ): Source<V>
 }
 
-export const Source: SourceStatic = {
+// Annotated via the cast rather than `const Source: SourceStatic`, and routed
+// through `unknown` deliberately. An annotation makes TypeScript check these
+// deliberately-loose implementations against the precise interface above, and
+// comparing them against `DocRef<S, N>` exceeds its recursion budget (TS2589).
+// The interface is the contract callers see; the implementations are internal
+// and typed loosely on purpose. Same trade `useDocument` makes in
+// `@kyneta/react`, and for the same reason.
+export const Source = {
   create,
   fromRecord,
   fromList,
@@ -1094,4 +1133,4 @@ export const Source: SourceStatic = {
   map,
   flatMap,
   of,
-} as SourceStatic
+} as unknown as SourceStatic

@@ -307,3 +307,39 @@ describe("every path agrees", () => {
     }
   })
 })
+
+// ---------------------------------------------------------------------------
+// Inference
+// ---------------------------------------------------------------------------
+
+describe("Source.of infers its document and item types", () => {
+  it("types the accessor's document and the key function's item", () => {
+    // A type-level regression test: nothing here asserts at runtime beyond the
+    // source existing. Its purpose is that `doc.tasks` and `item.id()` only
+    // compile if both callbacks are typed.
+    //
+    // The shape being guarded against is a type parameter that appears ONLY in
+    // a callback parameter position. TypeScript has nothing to infer such a
+    // parameter from, so it silently resolves to its constraint and every
+    // caller receives `unknown` — with no error anywhere in this package. The
+    // damage lands entirely on consumers, which is why the guard lives here.
+    const ProjectDoc = json.bind(
+      Schema.struct({
+        tasks: Schema.list(
+          Schema.struct({ id: Schema.string(), ownerId: Schema.string() }),
+        ),
+      }),
+    )
+    const exchange = new Exchange({ id: "typing" })
+
+    const source = SourceNS.of(
+      exchange,
+      ProjectDoc,
+      doc => doc.tasks,
+      item => item.id(),
+    )
+
+    expect(typeof source.subscribe).toBe("function")
+    return exchange.shutdown()
+  })
+})
