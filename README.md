@@ -7,8 +7,8 @@ Define your data once — sync, reactivity, validation, and persistence are deri
 ## Quick Start
 
 ```ts
-import { Schema, change } from "@kyneta/schema"
-import { Exchange, sync } from "@kyneta/exchange"
+import { Schema, batch } from "@kyneta/schema"
+import { Exchange, whenSettled } from "@kyneta/exchange"
 import { loro } from "@kyneta/loro-schema"
 import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
 
@@ -40,7 +40,10 @@ batch(doc, d => {
 })
 
 doc.title()  // "My Todos"
-await sync(doc).waitForSync()
+
+// Resolves once storage has loaded and peers have answered — so you know
+// you're looking at the whole document, not just the part that arrived first.
+await whenSettled(doc)
 ```
 
 React bindings are available today. It's easy to add other bindings.
@@ -73,10 +76,10 @@ Every step below is additive — earlier code doesn't change.
 | **Local document** | `createDoc(schema)` — no network, no exchange; type-safe, reactive doc, with validation | — |
 | **Two peers, plain sync** | Add `Exchange` + transport | Schema, reads, writes |
 | **Switch to CRDTs** | `json.bind(schema)` → `loro.bind(schema)` | Exchange, transport, reads, writes |
-| **Add persistence** | Add `stores: [leveldb()]` to exchange config | Everything above |
+| **Add persistence** | Add `stores: [await createLevelDBStore("./data")]` to exchange config | Everything above |
 | **Add presence** | `ephemeral.bind(schema)` alongside your collaborative docs | Everything above |
-| **Add access control** | Add `route` and `authorize` predicates | Client code unchanged |
-| **Add a relay** | One more Exchange with `type: "relay"` | Client code unchanged |
+| **Add access control** | Add a `Policy` with `canShare` / `canAccept` gates | Client code unchanged |
+| **Add a relay** | One more Exchange with `resolve: () => Replicate()` | Client code unchanged |
 
 See the [`@kyneta/exchange` README](./packages/exchange/README.md) for the full walkthrough with code.
 

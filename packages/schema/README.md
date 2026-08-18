@@ -5,7 +5,7 @@ Define a schema. Get a live, reactive, syncable document with full TypeScript ty
 `@kyneta/schema` is a mathematically rigorous but beautiful and ergonomic building block for representing structured data as it changes over time. You can use plain JS, or bring your own CRDT library (e.g. Loro, Yjs).
 
 ```ts
-import { Schema, createDoc, change, subscribe } from "@kyneta/schema/basic"
+import { Schema, createDoc, batch, subscribe } from "@kyneta/schema/basic"
 
 const TaskDoc = Schema.struct({
   title: Schema.text(),
@@ -57,7 +57,7 @@ Zero runtime dependencies.
 | **Sync** | `applyChanges(docB, ops)` — apply ops from another doc, network, or undo stack |
 | **Observation** | `subscribe(doc, cb)` for tree-level, `subscribeNode(ref, cb)` for leaf-level |
 | **Self-removal** | `remove(ref)` — a child ref removes itself from its parent container |
-| **Version tracking** | `version(doc)`, `delta(doc, fromVersion)`, `exportSnapshot(doc)` |
+| **Version tracking** | `version(doc)`, `delta(doc, fromVersion)`, `exportEntirety(doc)` |
 | **Validation** | `validate(schema, data)` — same schema, no separate Zod/Yup definition |
 | **Template coercion** | `` `Count: ${doc.count}` `` works via `toPrimitive` — no `.()` needed |
 

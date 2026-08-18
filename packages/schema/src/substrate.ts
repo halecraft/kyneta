@@ -1025,7 +1025,7 @@ export interface ReplicaFactoryLike {
  * For Loro: `createEmpty()` creates a bare `LoroDoc()` — no schema
  * walking, no container initialization. `fromSnapshot()` creates a
  * `LoroDoc()` and imports the payload. Both return replicas that
- * support `version()`, `exportSnapshot()`, `exportSince()`, and
+ * support `version()`, `exportEntirety()`, `exportSince()`, and
  * `merge()` but NOT `store`, `prepare`, `afterBatch`, `runBatch?`, or `context()`.
  *
  * For Plain: `createEmpty()` creates a fresh store with an empty op log.

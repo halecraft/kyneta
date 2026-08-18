@@ -8,7 +8,7 @@ Schemas are defined once with `Schema.*`, then bound to Loro via `loro.bind()`. 
 
 ```ts
 import { Schema } from "@kyneta/schema"
-import { createDoc, change, subscribe, loro } from "@kyneta/loro-schema"
+import { createDoc, batch, subscribe, loro } from "@kyneta/loro-schema"
 
 // Define a schema and bind to Loro
 const TodoDoc = loro.bind(Schema.struct({
@@ -94,12 +94,12 @@ loroDoc.commit()
 
 ## Sync
 
-Two peers exchange state via `exportSince` / `importDelta`:
+Two peers exchange state via `exportSince` / `merge`:
 
 ```ts
 import {
-  createDoc, change, subscribe,
-  version, exportSince, importDelta,
+  createDoc, batch, subscribe,
+  version, exportSince, merge,
 } from "@kyneta/loro-schema"
 
 // Peer A
@@ -113,7 +113,7 @@ subscribe(docB, () => console.log("B updated"))
 // Sync A → B
 const sinceVersion = version(docB)
 const delta = exportSince(docA, sinceVersion)
-importDelta(docB, delta!, "sync")
+merge(docB, delta!, { origin: "sync" })
 // → "B updated"
 // docB.title() === "Hello from A"
 ```
@@ -121,9 +121,9 @@ importDelta(docB, delta!, "sync")
 For full state transfer (SSR, reconnection), use snapshots via the exchange:
 
 ```ts
-import { exportSnapshot, createDoc } from "@kyneta/loro-schema"
+import { exportEntirety, createDoc } from "@kyneta/loro-schema"
 
-const snapshot = exportSnapshot(docA)
+const snapshot = exportEntirety(docA)
 const docB = createDoc(myBoundSchema)
 // restore from snapshot via the exchange or substrate
 ```
@@ -144,9 +144,9 @@ const docB = createDoc(myBoundSchema)
 | `createDoc(boundSchema, seed?)` | Create a live Loro-backed document. Pass a bound schema (result of `loro.bind()`) and an optional seed object. *(re-exported from `@kyneta/schema`)* |
 
 | `version(doc)` | Current version as a `LoroVersion`. |
-| `exportSnapshot(doc)` | Full state as a binary `SubstratePayload`. |
+| `exportEntirety(doc)` | Full state as a binary `SubstratePayload`. |
 | `exportSince(doc, since)` | Delta payload since a version. |
-| `importDelta(doc, payload, origin?)` | Apply a delta from another peer. |
+| `merge(doc, payload, options?)` | Apply a delta from another peer. |
 | `batch(doc, fn)` | Run mutations in a transaction. *(re-exported from `@kyneta/schema`)* |
 | `subscribe(doc, cb)` | Observe all mutations. *(re-exported from `@kyneta/schema`)* |
 | `applyChanges(doc, ops, opts?)` | Apply a list of ops declaratively. *(re-exported from `@kyneta/schema`)* |
@@ -190,7 +190,7 @@ Schemas are defined with `Schema.*` from `@kyneta/schema`. All constructors are 
 Wrapping a `LoroDoc` in a kyneta substrate means `subscribe()` observes **all** mutations to the underlying doc, regardless of source:
 
 - Mutations via `batch()` — the normal path
-- Mutations via `importDelta()` — remote sync
+- Mutations via `merge()` — remote sync
 - External `doc.import()` — e.g. from a state bus
 - External raw Loro API calls + `doc.commit()` — e.g. from another library
 

@@ -22,7 +22,7 @@ bun run example/basic/main.ts
 | **Transactions** | `batch(doc, fn)` → `Op[]` — batch mutations atomically |
 | **Round-Trip** | `batch(docA, fn)` → ops → `applyChanges(docB, ops)` — the sync story |
 | **Observation** | `subscribe` (tree-level) and `subscribeNode` (node-level) |
-| **Sync** | `version()`, `delta()`, `exportSnapshot()` — version tracking and replication |
+| **Sync** | `version()`, `delta()`, `exportEntirety()` — version tracking and replication |
 | **Validation** | `validate()` and `tryValidate()` — same schema, no separate definition |
 | **Portable Refs** | Pass refs to generic functions, template literal coercion |
 | **Batched Notification** | One `Changeset` per path, not per change |
@@ -33,13 +33,13 @@ bun run example/basic/main.ts
 import {
   Schema,
   createDoc,
-  change,
+  batch,
   applyChanges,
   subscribe,
   subscribeNode,
   version,
   delta,
-  exportSnapshot,
+  exportEntirety,
   validate,
   tryValidate,
 } from "@kyneta/schema/basic"

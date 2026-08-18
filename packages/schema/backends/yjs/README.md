@@ -9,15 +9,14 @@ Wraps a `Y.Doc` with schema-aware typed reads, writes, versioning, and export/im
 ```ts
 import {
   createDoc,
-  change,
+  batch,
   subscribe,
   Schema,
-  text,
   yjs,
   version,
-  exportSnapshot,
+  exportEntirety,
   exportSince,
-  importDelta,
+  merge,
 } from "@kyneta/yjs-schema"
 
 // Define a schema and bind to Yjs substrate
@@ -78,10 +77,10 @@ import {
   createDoc,
   yjs,
   version,
-  exportSnapshot,
+  exportEntirety,
   exportSince,
-  importDelta,
-  change,
+  merge,
+  batch,
 } from "@kyneta/yjs-schema"
 
 const MyDoc = yjs.bind(MySchema)
@@ -90,7 +89,7 @@ const MyDoc = yjs.bind(MySchema)
 const docA = createDoc(MyDoc, { title: "Draft" })
 
 // Peer B bootstraps from a full snapshot
-const snapshot = exportSnapshot(docA)
+const snapshot = exportEntirety(docA)
 const docB = createDoc(MyDoc, snapshot)
 
 // After mutations on A, sync incrementally
@@ -98,18 +97,17 @@ const vBefore = version(docB)
 batch(docA, (d) => d.title.insert(5, " v2"))
 
 const delta = exportSince(docA, vBefore)
-importDelta(docB, delta!)
+merge(docB, delta!)
 // docB.title() === "Draft v2"
 ```
 
 ## Exchange Integration
 
 ```ts
-import { yjs } from "@kyneta/yjs-schema"
-import { Schema, text } from "@kyneta/yjs-schema"
+import { Schema, yjs } from "@kyneta/yjs-schema"
 
 const TodoDoc = yjs.bind(Schema.struct({
-  title: text(),
+  title: Schema.text(),
   items: Schema.list(Schema.struct({
     name: Schema.string(),
     done: Schema.boolean(),

@@ -3,24 +3,28 @@
 Define your data's shape. Get sync, persistence, and presence — across any number of peers, over any transport, with any CRDT or none.
 
 ```ts
-import { Exchange, sync } from "@kyneta/exchange"
-import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
+import { Exchange, whenSettled } from "@kyneta/exchange"
 import { loro } from "@kyneta/loro-schema"
-import { Schema, change } from "@kyneta/schema"
+import { batch, Schema } from "@kyneta/schema"
+import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
 
-const TodoDoc = loro.bind(Schema.struct({
-  title: Schema.text(),
-  items: Schema.list(
-    Schema.struct.json({
-      text: Schema.string(),
-      done: Schema.boolean(),
-    }),
-  ),
-}))
+const TodoDoc = loro.bind(
+  Schema.struct({
+    title: Schema.text(),
+    items: Schema.list(
+      Schema.struct.json({
+        text: Schema.string(),
+        done: Schema.boolean(),
+      }),
+    ),
+  }),
+)
 
 const exchange = new Exchange({
   id: "alice",
-  transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
+  transports: [
+    createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket }),
+  ],
 })
 
 const doc = exchange.get("my-todos", TodoDoc)
@@ -30,9 +34,9 @@ batch(doc, d => {
   d.items.push({ text: "Learn Exchange", done: false })
 })
 
-doc.title()  // "My Todos"
+doc.title() // "My Todos"
 
-await whenSettled(doc)  // ✓ every truth source has reported
+await whenSettled(doc) // ✓ every truth source has reported
 ```
 
 That's a collaborative CRDT document, syncing over WebSocket, with full TypeScript types. Every connected peer running this code converges automatically — concurrent edits merge, no data-level conflicts, no manual resolution.
@@ -54,7 +58,7 @@ One protocol handles all three. The difference is a single line of configuration
 ```ts
 const exchange = new Exchange({
   id: "alice",
-  transports: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
+  transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
 })
 
 const doc = exchange.get("shared-doc", TodoDoc)
@@ -71,8 +75,8 @@ import { loro } from "@kyneta/loro-schema"
 const relay = new Exchange({
   id: { peerId: "relay", type: "service" },
   transports: [
-    createWebsocketClient({ url: "ws://upstream:3000/ws" }),
-    createWebsocketClient({ url: "ws://downstream:3001/ws" }),
+    createWebsocketClient({ url: "ws://upstream:3000/ws", WebSocket }),
+    createWebsocketClient({ url: "ws://downstream:3001/ws", WebSocket }),
   ],
   replicas: [loro.replica()],
   resolve: () => Replicate(),
@@ -114,10 +118,17 @@ The exchange is designed so that each capability is additive. You engage the nex
 ### Without an exchange — `@kyneta/schema` on its own
 
 ```ts
+import { createDoc, Schema } from "@kyneta/schema/basic"
+
 const doc = createDoc(Schema.struct({ theme: Schema.string() }))
 doc.theme.set("dark")
 doc.theme()  // "dark"
 ```
+
+The `/basic` entry is the batteries-included one: its `createDoc(schema)` binds
+the schema to the plain substrate for you. Everywhere else in this README the
+binding is explicit — `json.bind(schema)`, `loro.bind(schema)` — because once an
+exchange is involved, which substrate you picked is the whole point.
 
 When you need that document to sync across peers, the exchange wraps the same schema. Your reads and writes don't change.
 
@@ -129,7 +140,7 @@ const ConfigDoc = json.bind(Schema.struct({ theme: Schema.string() }))
 // Peer A — creates the document and writes
 const exchangeA = new Exchange({
   id: "alice",
-  transports: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
+  transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
 })
 const docA = exchangeA.get("config", ConfigDoc)
 docA.theme.set("dark")
@@ -137,7 +148,7 @@ docA.theme.set("dark")
 // Peer B — opens the same document and waits for data to arrive
 const exchangeB = new Exchange({
   id: "bob",
-  transports: [createWebsocketClient({ url: "ws://localhost:3000/ws" })],
+  transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
 })
 const docB = exchangeB.get("config", ConfigDoc)
 await whenSettled(docB)
@@ -212,8 +223,8 @@ const exchange = new Exchange({
 const relay = new Exchange({
   id: { peerId: "relay", type: "service" },
   transports: [
-    createWebsocketClient({ url: "ws://upstream:3000/ws" }),
-    createWebsocketClient({ url: "ws://downstream:3001/ws" }),
+    createWebsocketClient({ url: "ws://upstream:3000/ws", WebSocket }),
+    createWebsocketClient({ url: "ws://downstream:3001/ws", WebSocket }),
   ],
   replicas: [loro.replica()],
   resolve: () => Replicate(),
@@ -430,7 +441,7 @@ Use `resolve` to decide **what to do**. Use `onDocCreated` to observe **what hap
 Stores are a first-class constructor parameter, separate from transports. Durable documents auto-persist on mutation and auto-hydrate on restart:
 
 ```ts
-import { createLevelDBStore } from "@kyneta/leveldb-store/server"
+import { createLevelDBStore } from "@kyneta/leveldb-store"
 
 const exchange = new Exchange({
   id: "server",

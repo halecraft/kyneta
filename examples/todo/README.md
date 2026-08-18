@@ -188,7 +188,7 @@ The todo currently runs on **Loro**. To switch to **Yjs**, change one import and
 + import { yjs } from "@kyneta/yjs-schema"
 ```
 
-The @kyneta/exchange, the @kyneta/wire protocol, the @kyneta/cast view, the server — none of them know or care. The `Substrate` interface abstracts the CRDT behind `exportSnapshot()`, `importDelta()`, and `version()`. Two completely different CRDT engines, same sync protocol, same compiled UI.
+The @kyneta/exchange, the @kyneta/wire protocol, the @kyneta/cast view, the server — none of them know or care. The `Substrate` interface abstracts the CRDT behind `exportEntirety()`, `merge()`, and `version()`. Two completely different CRDT engines, same sync protocol, same compiled UI.
 
 ### The sync layer is pluggable end-to-end
 

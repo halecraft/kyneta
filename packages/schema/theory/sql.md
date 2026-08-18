@@ -217,7 +217,7 @@ On each flush: extract changeset from session → append to `_changelog`
 → bump version counter → start new session.
 
 `exportSince(v)` returns concatenated changesets from `_changelog WHERE
-version > ?`. `exportSnapshot()` returns JSON-serialized full state (or
+version > ?`. `exportEntirety()` returns JSON-serialized full state (or
 the raw `.db` file). `importDelta()` applies a binary changeset via
 `db.applyChangeset()`.
 
@@ -330,7 +330,7 @@ carries the origin tag for subscriber filtering.
 
 The schema → SQL mapping is a total, injective catamorphism. Every
 schema node has a lossless SQL representation. The `Substrate` interface
-(`prepare`, `onFlush`, `version`, `exportSnapshot`, `exportSince`,
+(`prepare`, `onFlush`, `version`, `exportEntirety`, `exportSince`,
 `importDelta`) maps cleanly to SQLite primitives. Cross-substrate
 interop works via the synchronizer's Strategy 2 fallback (reconstruct →
 replay as `ReplaceChange` ops).
@@ -384,8 +384,8 @@ restart, the exchange syncs from the storage adapter like any other peer.
 
 The kyneta exchange already has the `"storage"` channel kind
 infrastructure (ported from loro-extended). The `StorageAdapter` base
-class, `waitForSync({ kind: "storage" })`, and storage-channel routing
-in the synchronizer program all exist today.
+class, the storage settle term reported by `whenSettled(doc)`, and
+storage-channel routing in the synchronizer program all exist today.
 
 ```/dev/null/storage-adapter.txt#L1-8
 LoroSubstrate (CRDT, in-memory)
@@ -446,7 +446,7 @@ not supported.
 
 **Implementation note:** this requires the same schema → DDL
 catamorphism and change → SQL translation as the full substrate, but
-skips `StoreReader`, versioning, `exportSnapshot`, `exportSince`,
+skips `StoreReader`, versioning, `exportEntirety`, `exportSince`,
 `importDelta`. Roughly half the implementation work.
 
 ### 8c. SQL-Native Substrate (Full Substrate + Out-of-Band Writes)
@@ -759,7 +759,7 @@ Implement a `StorageAdapter` for the kyneta exchange. Persist
 `SubstratePayload` blobs to a backing store. This gives durable
 persistence to Loro/Yjs substrates immediately, independent of the
 SQL substrate work. The exchange infrastructure (`"storage"` channel
-kind, `waitForSync({ kind: "storage" })`) already exists.
+kind, and the storage term of `whenSettled(doc)`) already exists.
 
 ### Phase 1: Schema → DDL Catamorphism
 

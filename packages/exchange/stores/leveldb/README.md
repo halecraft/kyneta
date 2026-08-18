@@ -14,7 +14,7 @@ pnpm add @kyneta/leveldb-store
 
 ```ts
 import { Exchange } from "@kyneta/exchange"
-import { createLevelDBStore } from "@kyneta/leveldb-store/server"
+import { createLevelDBStore } from "@kyneta/leveldb-store"
 
 const exchange = new Exchange({
   identity: { peerId: "my-server", name: "server" },
@@ -35,7 +35,7 @@ That's it. The Exchange handles hydration (loading from storage on `get()` / `re
 Async factory that opens the database, runs the store-format gate (see below), and resolves to a `Store`. The `dbPath` is the directory where LevelDB stores its files. `await` it before passing to the `Exchange`.
 
 ```ts
-import { createLevelDBStore } from "@kyneta/leveldb-store/server"
+import { createLevelDBStore } from "@kyneta/leveldb-store"
 
 const store = await createLevelDBStore("./data/exchange-db")
 ```
@@ -45,7 +45,7 @@ const store = await createLevelDBStore("./data/exchange-db")
 The class implementing the `Store` interface. Use `createLevelDBStore` (or `LevelDBStore.open(dbPath)`) for most cases — both are async and run the store-format gate. The bare `new LevelDBStore(dbPath)` constructor opens the database **without** the gate and is for advanced use only.
 
 ```ts
-import { LevelDBStore } from "@kyneta/leveldb-store/server"
+import { LevelDBStore } from "@kyneta/leveldb-store"
 
 const store = await LevelDBStore.open("./data/exchange-db")
 
@@ -60,13 +60,13 @@ On open, the store stamps a `{ major, minor }` format version into a `store-meta
 
 ### Binary Codec
 
-The module also exports `encodeStoreEntry` and `decodeStoreEntry` for the compact binary envelope format. These are pure functions — useful for debugging, migration scripts, or building custom tooling over the LevelDB data files.
+The module also exports `encodeStoreRecord` and `decodeStoreRecord` for the compact binary envelope format. These are pure functions — useful for debugging, migration scripts, or building custom tooling over the LevelDB data files.
 
 ```ts
-import { encodeStoreEntry, decodeStoreEntry } from "@kyneta/leveldb-store/server"
+import { encodeStoreRecord, decodeStoreRecord } from "@kyneta/leveldb-store"
 
-const bytes = encodeStoreEntry(entry)  // StoreEntry → Uint8Array
-const entry = decodeStoreEntry(bytes)  // Uint8Array → StoreEntry
+const bytes = encodeStoreRecord(record)   // StoreRecord → Uint8Array
+const record = decodeStoreRecord(bytes)   // Uint8Array → StoreRecord
 ```
 
 ## Design
@@ -78,7 +78,7 @@ Keys follow the [FoundationDB convention](https://apple.github.io/foundationdb/d
 | Key pattern | Value |
 |---|---|
 | `meta\x00{docId}` | JSON-encoded `DocMetadata` |
-| `entry\x00{docId}\x00{seqNo}` | Binary-encoded `StoreEntry` |
+| `entry\x00{docId}\x00{seqNo}` | Binary-encoded `StoreRecord` |
 
 The `\x00` separator cannot appear in valid UTF-8 strings, so no docId validation is needed — the key-space imposes zero constraints on callers. Documents with overlapping name prefixes (e.g. `doc` vs `doc-extra`) are fully isolated.
 
