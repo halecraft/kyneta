@@ -1,5 +1,8 @@
 # Unreleased
 
+Upgrading from 2.x? See [docs/upgrading-3.0.md](docs/upgrading-3.0.md) — it
+opens with the three changes that alter behaviour without a compile error.
+
 ## Breaking
 
 - **The readiness API is removed** (`@kyneta/exchange`, `@kyneta/react`). Gone: `waitForSync`, `sync(doc).settled()`, `hasSync`, `describeSyncStatus`, `SyncStatusSummary`, `createDerivedSyncStore`. Use `whenSettled(doc)` to wait and `docStatus(doc)` to ask; compose a status label from connectivity + `peerStates` + `docStatus`.

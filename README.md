@@ -72,6 +72,12 @@ function TodoApp() {
 }
 ```
 
+## Upgrading from 2.x
+
+3.0 is a breaking release. [docs/upgrading-3.0.md](docs/upgrading-3.0.md) covers
+every change with a before/after, starting with the three your compiler will not
+catch.
+
 ## Grow Without Rewriting
 
 Every step below is additive — earlier code doesn't change.
