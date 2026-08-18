@@ -169,30 +169,41 @@ its default `unknown` on every call that does not name it explicitly.
 
 # ✅ Phase 3 — Guard against documentation drift
 
-Snippets live as ordinary source under a package the `types` task already
-covers, so they are typechecked by the run that exists. What remains is a
-comparison between the prose and that source, which is pure string work:
+Documented code should be correct *by construction*, not by agreement between
+two copies. Keeping a snippet in a source file and asserting the README matches
+it is the weakest form: two artifacts that can disagree, with a check to notice
+when they do. Compiling the markdown itself is stronger, because there is only
+one copy.
+
+Two layers, because no single one reaches everything:
+
+- **Compile the prose directly.** `typescript-docs-verifier` extracts each
+  fenced block and compiles it against a real tsconfig. Nothing is duplicated,
+  so nothing can drift. It only works for blocks that compile *standalone*.
+- **Check imports everywhere else.** Most of the ~110 fences are fragments that
+  reference an `exchange` or `doc` built earlier in the prose, and no tool can
+  compile those — a fragment genuinely lacks the information. A pure
+  `checkImports` over every fence still catches names and module paths that do
+  not exist, which is the defect class the 3.0 audit actually found.
 
 ```ts
-extractFences(markdown: string): Fence[]                     // pure
-matchFences(fences: Fence[], sources: Source[]): Mismatch[]  // pure
+extractFences(markdown: string, file: string): Fence[]   // pure
+checkImports(fences: Fence[], resolve: Resolver): Mismatch[]   // pure
 ```
 
-A thin imperative shell reads the files, calls the core, and reports.
-
-- ✅ **Task 3.1** — Create a snippets directory under an existing typechecked
-  package. `tests/integration/tsconfig.json` has `"include": ["src/**/*"]`, so
-  snippets must live under a `src/` to be compiled at all.
-- ✅ **Task 3.2** — Write the pure core. `extractFences` parses fenced `ts` and
-  `tsx` blocks with their source positions; `matchFences` compares each fence
-  against its named snippet file and returns the mismatches. Both are ordinary
-  functions over strings, testable without touching a filesystem.
-- ✅ **Task 3.3** — Write the shell as a vitest test that reads the READMEs and
-  snippet files, calls the core, and fails with the mismatching fence and its
-  line number.
-- ✅ **Task 3.4** — Bind each fence to its snippet with an HTML comment
-  immediately preceding it, so the association is visible in the document source
-  rather than inferred from ordering.
+- ✅ **Task 3.1** — Add `typescript-docs-verifier` and run it over the root
+  README. It must run from a host package that both declares `main`/`exports`
+  and has every demonstrated package installed; `tests/integration` is the only
+  one that qualifies, since a package's own README routinely demonstrates
+  packages it does not itself depend on.
+- ✅ **Task 3.2** — Mark the blocks that cannot compile standalone with
+  `<!-- ts-docs-verifier:ignore -->`. This is honest rather than unfortunate: the
+  comment marks precisely which examples are unverified.
+- ✅ **Task 3.3** — Keep the pure `extractFences` / `checkImports` core and its
+  shell as the wide net over every shipped README, and delete the snippet files,
+  region machinery and equality check that the verifier replaces.
+- ✅ **Task 3.4** — Wire the verifier into `tests/integration`'s
+  `verify.config.ts` so it runs with everything else.
 
 # 🔴 Phase 4 — Restore the missing released history
 
