@@ -40,9 +40,13 @@ import { useDocStatus } from "./use-doc-status.js"
  *   many milliseconds. Applies to the network wait only, never to storage.
  * @param opts.onError - Called if initialization fails.
  */
-export function useInitialize<T = unknown>(
-  doc: object,
-  seed: (d: T) => void,
+// `D` is bound to the *document* so the draft infers from it — see the same
+// note on `initialize` in @kyneta/exchange, which this delegates to. Typing
+// `doc` as `object` here would leave `D` with nothing to infer from, and every
+// caller would get an `unknown` draft with no error raised in this package.
+export function useInitialize<D extends object>(
+  doc: D,
+  seed: (d: D) => void,
   opts?: {
     authority?: Authority
     offlineAfter?: number
@@ -61,7 +65,7 @@ export function useInitialize<T = unknown>(
   onErrorRef.current = onError
 
   useEffect(() => {
-    initialize(doc, (d: T) => seedRef.current(d), {
+    initialize(doc, d => seedRef.current(d), {
       ...(authority ? { authority } : {}),
       ...(offlineAfter !== undefined ? { offlineAfter } : {}),
     }).catch(error => onErrorRef.current?.(error))

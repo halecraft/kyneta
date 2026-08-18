@@ -63,9 +63,9 @@ describe("useInitialize", () => {
 
     let writes = 0
     function Probe() {
-      const status = useInitialize(doc, (d: never) => {
+      const status = useInitialize(doc, d => {
         writes++
-        ;(d as { title: { set(v: string): void } }).title.set("Untitled")
+        d.title.set("Untitled")
       })
       return <span data-testid="s">{status}</span>
     }

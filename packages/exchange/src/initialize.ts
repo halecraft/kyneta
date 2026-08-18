@@ -120,9 +120,17 @@ const inFlight = new WeakMap<object, Promise<"created" | "loaded">>()
  * @throws If the document's store could not be read (via `whenSettled`), or if
  *   a non-authoritative peer tries to seed a serialized-writer document.
  */
-export function initialize<T = unknown>(
-  doc: object,
-  seed: (d: T) => void,
+// `D` is bound to the *document* rather than declared on the callback alone,
+// and that is load-bearing. TypeScript infers a type parameter from the
+// arguments it appears in; if `doc` were typed `object` and `D` appeared only in
+// `seed`, there would be nothing to infer from and every caller would silently
+// receive an `unknown` draft. Widening `doc` back to `object` therefore breaks
+// inference without producing a single error in this package — the damage shows
+// up only at call sites. This mirrors `batch` in @kyneta/schema, which is why
+// `seed` can be handed straight to it below with no cast.
+export function initialize<D extends object>(
+  doc: D,
+  seed: (d: D) => void,
   opts?: { authority?: Authority; offlineAfter?: number },
 ): Promise<"created" | "loaded"> {
   const existing = inFlight.get(doc)
@@ -153,7 +161,7 @@ export function initialize<T = unknown>(
     if (decision.action === "reject") throw new Error(decision.reason)
     if (decision.action === "skip") return "loaded"
 
-    batch(doc as never, seed as never, { origin: "init" })
+    batch(doc, seed, { origin: "init" })
     return "created"
   })()
 

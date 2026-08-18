@@ -134,9 +134,7 @@ describe("initialize", () => {
     const exchange = createExchange({ authority: "self" })
     const doc = exchange.get("doc-1", TestDoc)
 
-    const outcome = await initialize(doc, (d: never) =>
-      (d as { title: { set(v: string): void } }).title.set("Untitled"),
-    )
+    const outcome = await initialize(doc, d => d.title.set("Untitled"))
 
     expect(outcome).toBe("created")
     expect(doc.title()).toBe("Untitled")
@@ -157,9 +155,7 @@ describe("initialize", () => {
     const doc = exchange.get("doc-1", TestDoc)
     expect(docStatus(doc)).toBe("pending")
 
-    const outcome = await initialize(doc, (d: never) =>
-      (d as { title: { set(v: string): void } }).title.set("CLOBBERED"),
-    )
+    const outcome = await initialize(doc, d => d.title.set("CLOBBERED"))
 
     expect(outcome).toBe("loaded")
     expect(doc.title()).toBe("stored")
@@ -172,9 +168,12 @@ describe("initialize", () => {
     const doc = exchange.get("doc-1", TestDoc)
 
     let writes = 0
-    const seed = (d: never) => {
+    // Named rather than inline so all three calls share one identity, which is
+    // what the collapse is keyed on. `typeof doc` is needed because a standalone
+    // callback has no call site to infer the draft from.
+    const seed = (d: typeof doc) => {
       writes++
-      ;(d as { count: { set(v: number): void } }).count.set(1)
+      d.count.set(1)
     }
 
     const [a, b, c] = await Promise.all([
@@ -185,6 +184,28 @@ describe("initialize", () => {
 
     expect(writes).toBe(1)
     expect([a, b, c]).toEqual(["created", "created", "created"])
+
+    await exchange.shutdown()
+  })
+
+  it("infers the draft type from the document", async () => {
+    // A type-level regression test, not a behavioural one. `initialize` binds
+    // its type parameter to `doc` so the draft infers; if someone widens `doc`
+    // back to `object`, the draft silently becomes `unknown` and NOTHING in
+    // this package fails — the damage lands on callers. This assertion is the
+    // only thing standing between that regression and a release.
+    const exchange = createExchange({ authority: "self" })
+    const doc = exchange.get("doc-1", TestDoc)
+
+    await initialize(doc, d => {
+      // Reached only if `d` is the document type. Were it `unknown`, these
+      // property accesses would not compile.
+      d.title.set("typed")
+      d.count.set(7)
+    })
+
+    expect(doc.title()).toBe("typed")
+    expect(doc.count()).toBe(7)
 
     await exchange.shutdown()
   })
