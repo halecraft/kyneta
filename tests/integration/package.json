@@ -2,31 +2,47 @@
   "name": "@kyneta/test-integration",
   "private": true,
   "type": "module",
+  "//exports": "Required by typescript-docs-verifier, which refuses to run in a package with no main/exports because it rewrites a package's self-imports to that entry. Nothing imports this package — it is private and never published — so the entry only needs to be real, and the doc-check core is the one module here worth naming.",
   "scripts": {
     "test": "verify logic",
     "verify": "verify"
   },
   "devDependencies": {
+    "@kyneta/bridge-transport": "workspace:^",
+    "@kyneta/changefeed": "workspace:^",
+    "@kyneta/devtools": "workspace:^",
     "@kyneta/exchange": "workspace:^",
+    "@kyneta/index": "workspace:^",
+    "@kyneta/indexeddb-store": "workspace:^",
+    "@kyneta/leveldb-store": "workspace:^",
     "@kyneta/loro-schema": "workspace:^",
     "@kyneta/postgres-store": "workspace:^",
+    "@kyneta/prisma-store": "workspace:^",
+    "@kyneta/react": "workspace:^",
     "@kyneta/schema": "workspace:^",
     "@kyneta/sql-store-core": "workspace:^",
     "@kyneta/sqlite-store": "workspace:^",
+    "@kyneta/transport": "workspace:^",
     "@kyneta/websocket-transport": "workspace:^",
     "@kyneta/wire": "workspace:^",
     "@kyneta/yjs-schema": "workspace:^",
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22",
-    "@types/ws": "^8.18.1",
     "@types/pg": "^8.11.0",
+    "@types/react": "^19.2.14",
+    "@types/ws": "^8.18.1",
     "better-sqlite3": "^11.9.1",
     "bun-types": "^1.3.11",
     "loro-crdt": "^1.10.0",
     "pg": "^8.13.0",
+    "react": "^19.2.5",
     "typescript": "catalog:",
+    "typescript-docs-verifier": "^3.0.2",
     "vitest": "catalog:",
     "ws": "^8.20.0",
     "yjs": "^13.6.30"
+  },
+  "exports": {
+    ".": "./src/doc-check/fences.ts"
   }
 }

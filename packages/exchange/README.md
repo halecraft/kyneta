@@ -45,6 +45,44 @@ The same schema works with Loro CRDTs, Yjs CRDTs, plain JS objects, or ephemeral
 
 > 314 tests · 4 transport protocols · WebSocket, SSE, WebRTC, Unix socket
 
+<!--
+Setup the examples below share, so the prose need not repeat imports a reader
+has already met. Renderers drop HTML comments, so none of this is visible on npm
+or GitHub — but it is compiled, which is what keeps the examples honest.
+
+It holds only what NO block defines for itself. `exchange`, `doc`, `ConfigDoc`
+and friends are declared per-block with `ts-docs-setup`, because whether a block
+builds one or expects one to exist alternates section by section, and declaring
+it in both places is an error.
+-->
+<!-- ts-docs-prelude
+import { Exchange, createInMemoryStore, initialize, whenSettled } from "@kyneta/exchange"
+import type { AnyTransport, InMemoryStoreData, Store } from "@kyneta/exchange"
+import { Interpret, Reject, Replicate, Schema, batch, createDoc, ephemeral, json, subscribe } from "@kyneta/schema"
+import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
+import type { WebSocketConstructor } from "@kyneta/websocket-transport/browser"
+import { createLevelDBStore } from "@kyneta/leveldb-store"
+
+const TodoSchema = Schema.struct({
+  title: Schema.text(),
+  items: Schema.list(
+    Schema.struct.json({ text: Schema.string(), done: Schema.boolean() }),
+  ),
+})
+const MyDoc = json.bind(TodoSchema)
+const BlogSchema = Schema.struct({ title: Schema.text() })
+const BlogDoc = json.bind(BlogSchema)
+const PlayerInputDoc = ephemeral.bind(Schema.struct({ thrust: Schema.number() }))
+
+declare const serverTransport: AnyTransport
+declare const networkTransport: AnyTransport
+declare const store: Store
+declare const ws: { send(data: string): void }
+declare const registerPlayer: (peerId: string) => void
+declare const seedDefaults: (d: unknown) => void
+declare const WebSocket: WebSocketConstructor
+-->
+
 ---
 
 ## The Same App, Three Perspectives
@@ -55,6 +93,9 @@ One protocol handles all three. The difference is a single line of configuration
 
 **The Client** — full interpretation. Typed reads, writes, changefeed, the works.
 
+<!-- ts-docs-setup
+declare const TodoDoc: typeof MyDoc
+-->
 ```ts
 const exchange = new Exchange({
   id: "alice",
@@ -117,6 +158,7 @@ The exchange is designed so that each capability is additive. You engage the nex
 
 ### Without an exchange — `@kyneta/schema` on its own
 
+<!-- ts-docs-standalone -->
 ```ts
 import { createDoc, Schema } from "@kyneta/schema/basic"
 
@@ -157,6 +199,7 @@ docB.theme()  // "dark"
 
 ### Switch to multi-writer — change the bind, not the reads/writes
 
+<!-- ts-docs-verifier:ignore -->
 ```ts
 // Before: plain JS with sequential sync
 const ConfigDoc = json.bind(Schema.struct({ theme: Schema.string() }))
@@ -184,6 +227,10 @@ const exchange = new Exchange({
 
 ### Add presence alongside your documents — same exchange
 
+<!-- ts-docs-setup
+declare const exchange: Exchange
+declare const TodoDoc: typeof MyDoc
+-->
 ```ts
 const PresenceDoc = ephemeral.bind(Schema.struct({
   cursor: Schema.struct({
@@ -217,6 +264,9 @@ const exchange = new Exchange({
 
 ### Add a relay — no client changes
 
+<!-- ts-docs-setup
+import { loro } from '@kyneta/loro-schema'
+-->
 ```ts
 // The relay has zero knowledge of your schemas.
 // Plain and ephemeral replicas are built-in; add CRDT replicas if relaying Loro/Yjs docs.
@@ -245,6 +295,7 @@ A `BoundSchema` captures the three choices that define a document type:
 2. **Factory** — how is the data stored and versioned?
 3. **SyncMode** — how does the exchange sync it?
 
+<!-- ts-docs-standalone -->
 ```ts
 import { Schema, json, ephemeral } from "@kyneta/schema"
 import { loro } from "@kyneta/loro-schema"
@@ -275,6 +326,7 @@ BoundSchemas are static declarations, defined at module scope. They can be share
 
 For custom substrates, use `bind()` directly as the general primitive, and `createBindingTarget` to build custom binding target objects:
 
+<!-- ts-docs-verifier:ignore -->
 ```ts
 import { bind, createBindingTarget, SYNC_COLLABORATIVE } from "@kyneta/schema"
 
@@ -370,6 +422,11 @@ const exchange = new Exchange({
 
 A single exchange hosts documents backed by different substrate types simultaneously:
 
+<!-- ts-docs-setup
+declare const exchange: Exchange
+-->
+<!-- Not compiled: assumes a document shape the shared prelude does not declare. -->
+<!-- ts-docs-verifier:ignore -->
 ```ts
 const doc = exchange.get("collab-doc", TodoDoc)       // Loro CRDT, concurrent merge
 const config = exchange.get("settings", ConfigDoc)     // Plain JSON, sequential sync
@@ -394,6 +451,9 @@ Four predicates control information flow. All use three-valued logic (`true` / `
 
 **`resolve`** fires when a peer announces a document your exchange doesn't know about. Return a disposition:
 
+<!-- ts-docs-standalone -->
+<!-- Not compiled: assumes a document shape the shared prelude does not declare. -->
+<!-- ts-docs-verifier:ignore -->
 ```ts
 import { Interpret, Replicate, Defer, Reject } from "@kyneta/schema"
 
@@ -412,6 +472,11 @@ The callback receives the full metadata from the peer's `present` message — so
 
 **`schemas`** enables auto-resolve without a callback. Register schemas upfront and the exchange auto-interprets matching documents:
 
+<!-- ts-docs-setup
+declare const TodoDoc: typeof MyDoc
+-->
+<!-- Not compiled: assumes a document shape the shared prelude does not declare. -->
+<!-- ts-docs-verifier:ignore -->
 ```ts
 const exchange = new Exchange({
   id: "alice",
@@ -425,12 +490,17 @@ const exchange = new Exchange({
 const exchange = new Exchange({
   id: "server",
   schemas: [PlayerInputDoc],
-  onDocCreated(docId, peer, mode, origin) {
-    if (origin === "remote" && docId.startsWith("input:")) {
-      const inputDoc = exchange.get(docId, PlayerInputDoc)
-      registerPlayer(peer.peerId, inputDoc)
-    }
-  },
+})
+
+// `documents` is a reactive collection, so registration is a subscription
+// rather than a constructor callback — the same channel reports suspension,
+// promotion and removal.
+exchange.documents.subscribe(changeset => {
+  for (const change of changeset.changes) {
+    if (change.type !== "doc-created") continue
+    if (!change.docId.startsWith("input:")) continue
+    registerPlayer(change.docId.slice("input:".length))
+  }
 })
 ```
 
@@ -440,6 +510,9 @@ Use `resolve` to decide **what to do**. Use `onDocCreated` to observe **what hap
 
 Stores are a first-class constructor parameter, separate from transports. Durable documents auto-persist on mutation and auto-hydrate on restart:
 
+<!-- ts-docs-standalone -->
+<!-- Not compiled: assumes a document shape the shared prelude does not declare. -->
+<!-- ts-docs-verifier:ignore -->
 ```ts
 import { createLevelDBStore } from "@kyneta/leveldb-store"
 
@@ -459,6 +532,15 @@ const doc = exchange.get("my-doc", TodoDoc)
 
 For testing, use `createInMemoryStore()` with shared state to simulate persist → restart → hydrate flows:
 
+<!-- ts-docs-setup
+declare const TodoDoc: typeof MyDoc
+-->
+<!-- ts-docs-setup
+declare const TodoDoc: typeof MyDoc
+declare const exchange: Exchange
+-->
+<!-- Not compiled: assumes a document shape the shared prelude does not declare. -->
+<!-- ts-docs-verifier:ignore -->
 ```ts
 const sharedData: InMemoryStoreData = { entries: new Map(), metadata: new Map() }
 
@@ -480,6 +562,9 @@ const exchange2 = new Exchange({
 
 ### Sync Status
 
+<!-- ts-docs-setup
+declare const exchange: Exchange
+-->
 ```ts
 import { sync } from "@kyneta/exchange"
 
@@ -505,6 +590,9 @@ sync(doc).onPeerSyncChange(states => {
 
 `exchange.peers` is a reactive feed of the peers this exchange is connected to — callable as a function, subscribable for changes:
 
+<!-- ts-docs-setup
+declare const exchange: Exchange
+-->
 ```ts
 const peers = exchange.peers()  // ReadonlyMap<PeerId, PeerIdentityDetails>
 
@@ -536,6 +624,11 @@ Multi-transport deduplication: when a peer is connected through multiple transpo
 
 Access the underlying substrate when you need to:
 
+<!-- ts-docs-setup
+const doc = createDoc(MyDoc)
+-->
+<!-- Not compiled: assumes a document shape the shared prelude does not declare. -->
+<!-- ts-docs-verifier:ignore -->
 ```ts
 // General — returns the Substrate<any> backing a ref
 import { unwrap } from "@kyneta/schema"
@@ -561,6 +654,9 @@ writing them into the other two destroys data.
 `initialize` waits for every source that could have something to say, and only
 then decides:
 
+<!-- ts-docs-standalone -->
+<!-- Not compiled: assumes a document shape the shared prelude does not declare. -->
+<!-- ts-docs-verifier:ignore -->
 ```ts
 import { initialize } from "@kyneta/exchange"
 
@@ -573,6 +669,8 @@ document is empty; everyone else waits and reads.**
 
 ### The four topologies, one verb
 
+<!-- Not compiled: assumes a document shape the shared prelude does not declare. -->
+<!-- ts-docs-verifier:ignore -->
 ```ts
 // Standalone — nothing to wait for
 const doc = createDoc(BlogSchema)
@@ -605,12 +703,17 @@ service peer on the network — including the devtools inspector, which is itsel
 an Exchange peer. A client using the role check could accept the inspector's
 reply as the server's verdict.
 
+<!-- Not compiled: assumes a document shape the shared prelude does not declare. -->
+<!-- ts-docs-verifier:ignore -->
 ```ts
 authority: p => p.peerId === "my-server"   // recommended
 ```
 
 ### Reading the status directly
 
+<!-- ts-docs-setup
+const doc = createDoc(MyDoc)
+-->
 ```ts
 import { docStatus } from "@kyneta/exchange"
 
@@ -644,6 +747,11 @@ law:
 A seed made of scalars, struct fields, deterministically-keyed map entries, or
 set members is safe on any number of peers with no configuration at all:
 
+<!-- ts-docs-setup
+const doc = createDoc(MyDoc)
+-->
+<!-- Not compiled: assumes a document shape the shared prelude does not declare. -->
+<!-- ts-docs-verifier:ignore -->
 ```ts
 await initialize(doc, d => {
   d.title.set("Untitled")                 // lww-per-key
@@ -829,6 +937,8 @@ The websocket and SSE packages export `/client` and `/server` entry points. The 
 
 Extend the `Transport<G>` base class. `G` is the type of argument needed to generate a channel:
 
+<!-- Not compiled: assumes a document shape the shared prelude does not declare. -->
+<!-- ts-docs-verifier:ignore -->
 ```ts
 import { Transport } from "@kyneta/transport"
 

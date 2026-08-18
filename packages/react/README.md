@@ -74,12 +74,56 @@ function App() {
 }
 ```
 
+<!--
+Setup shared by the API examples below. Renderers drop HTML comments, so this is
+invisible on npm and GitHub — but it is compiled, which is what keeps the
+examples honest. It holds only what no block defines for itself.
+-->
+<!-- ts-docs-prelude
+import { Exchange } from "@kyneta/exchange"
+import { createDoc } from "@kyneta/schema"
+import { loro } from "@kyneta/loro-schema"
+import {
+  ExchangeProvider,
+  Schema,
+  batch,
+  useDocReady,
+  useDocument,
+  useExchangeSingleton,
+  useSelector,
+  useSyncState,
+  useText,
+  useTracked,
+  useValue,
+} from "@kyneta/react"
+import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
+
+const TodoSchema = Schema.struct({
+  title: Schema.text(),
+  items: Schema.list(
+    Schema.struct({ text: Schema.string(), done: Schema.boolean() }),
+  ),
+})
+const TodoDoc = loro.bind(TodoSchema)
+
+const exampleDoc = createDoc(TodoDoc)
+declare const App: () => React.ReactNode
+declare const Badge: (props: { count: number }) => React.ReactNode
+declare const Spinner: () => React.ReactNode
+declare const user: { id: string; name: string }
+declare const filter: string
+const optionalRef: (typeof exampleDoc)["title"] | null = null
+-->
+
 ## API
 
 ### `<ExchangeProvider exchange={...}>`
 
 Provides an `Exchange` instance to the React subtree. The Exchange must be created **outside** the React component tree (e.g. at module scope) so it survives lifecycle events like StrictMode remounts — the provider neither constructs nor tears it down. Recreating an Exchange for the same `peerId` mid-session can corrupt distributed state and leak connections, so the provider guards against it; for the async-dependency case (e.g. waiting on an auth token before you know your identity), reach for `useExchangeSingleton`.
 
+<!-- ts-docs-standalone -->
+<!-- Not compiled: a fragment from inside a component, or one assuming a document shape the shared prelude does not declare. -->
+<!-- ts-docs-verifier:ignore -->
 ```tsx
 import { Exchange } from "@kyneta/exchange"
 import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
@@ -103,6 +147,9 @@ function Root() {
 
 The async-dependency path. Instantiates an Exchange inside the React tree while still guaranteeing one instance per `peerId` — immune to React 18 StrictMode double-invocation. Pass `peerId` (or `null`/`undefined` while the identity is still loading) and a `factory` invoked at most once per peer; returns the `Exchange`, or `null` until `peerId` is available. Prefer module-scope construction above when you can.
 
+<!-- ts-docs-standalone -->
+<!-- Not compiled: a fragment from inside a component, or one assuming a document shape the shared prelude does not declare. -->
+<!-- ts-docs-verifier:ignore -->
 ```tsx
 const exchange = useExchangeSingleton(user?.id, () => {
   const id = user?.id
@@ -133,6 +180,9 @@ const doc = useDocument("my-doc", TodoDoc)
 
 Subscribes to a ref's current plain value. Returns `Plain<S>` — a plain JS snapshot — and re-renders when the changefeed fires. The snapshot is memoized for referential equality.
 
+<!-- ts-docs-setup
+const doc = createDoc(TodoDoc)
+-->
 ```tsx
 // Full document — re-renders on any descendant change
 const value = useValue(doc)
@@ -150,6 +200,11 @@ const maybeValue = useValue(optionalRef) // null/undefined pass through
 
 Projects a ref to a derived value and re-renders **only when the nodes `select` actually read change** — auto-tracked, no deps array, no `isEqual`. A `text` edit never re-renders a `done`-only selector, and nothing is materialized unless `select` asks for it.
 
+<!-- ts-docs-setup
+const doc = createDoc(TodoDoc)
+-->
+<!-- Not compiled: a fragment from inside a component, or one assuming a document shape the shared prelude does not declare. -->
+<!-- ts-docs-verifier:ignore -->
 ```tsx
 // Re-renders only when the visible set of todo refs changes (add/remove, or a
 // `done` flip crossing the filter) — NOT when a todo's text is edited.
@@ -170,6 +225,8 @@ Built on [`@kyneta/reactive`](../reactive); change detection is version-driven (
 
 The 90% gate. Returns a **monotonic** `boolean` that flips to `true` the first time the doc reconciles with a peer (receives data, **or** a terminal `vacant` reply) and never regresses — across the reconnect re-handshake flip or a reconciled peer departing. Flicker-free (a stable scalar). Pass `opts.peer` to require reconciliation with a peer matching a predicate (authority / quorum).
 
+<!-- Not compiled: a fragment from inside a component, so it returns at top level. -->
+<!-- ts-docs-verifier:ignore -->
 ```tsx
 const ready = useDocReady(doc)
 if (!ready) return <Spinner />
@@ -181,6 +238,9 @@ const authReady = useDocReady(doc, { peer: (p) => p.type === "service" })
 
 The raw escape hatch (renamed from `useSyncStatus` in 2.0 — **breaking**). Returns `PeerSyncState[]` (`{ docId, peer, state: "pending" | "synced" | "vacant" }`) and re-renders on any per-peer change. Volatile — an entry can regress `synced → pending` on reconnect; for a stable gate use `useDocReady`.
 
+<!-- ts-docs-setup
+const doc = createDoc(TodoDoc)
+-->
 ```tsx
 const peerStates = useSyncState(doc)
 const synced = peerStates.some((s) => s.state === "synced")
@@ -194,6 +254,11 @@ Resolves once every truth source has reported — the stored data finished loadi
 
 A single mutation can be written directly — `doc.title.set("New title")` auto-commits. Use `batch()` (re-exported from `@kyneta/schema`) to group **multiple** mutations into one atomic commit and one notification:
 
+<!-- ts-docs-setup
+const doc = createDoc(TodoDoc)
+-->
+<!-- Not compiled: a fragment from inside a component, or one assuming a document shape the shared prelude does not declare. -->
+<!-- ts-docs-verifier:ignore -->
 ```tsx
 batch(doc, (d) => {
   d.title.set("New title")
@@ -209,6 +274,8 @@ From `@kyneta/schema`: `batch`, `applyChanges`, `subscribe`, `subscribeNode`, `S
 
 ### Document status
 
+<!-- Not compiled: a fragment from inside a component, so it returns at top level. -->
+<!-- ts-docs-verifier:ignore -->
 ```tsx
 import { useDocStatus, useInitialize } from "@kyneta/react"
 
@@ -247,6 +314,8 @@ Kyneta refs are **live**: you can traverse the schema and read individual nodes 
 
 **Avoid this — serializes the entire document on every change:**
 
+<!-- Not compiled: a fragment from inside a component, or one assuming a document shape the shared prelude does not declare. -->
+<!-- ts-docs-verifier:ignore -->
 ```tsx
 // ❌ Re-renders on ANY change anywhere in the document, materializing
 // every turn's full text content into a JS snapshot each time.
@@ -258,6 +327,8 @@ function Conversation({ docRef }) {
 
 **Do this instead — reads only what it needs, re-renders only when those nodes change:**
 
+<!-- Not compiled: a fragment from inside a component, or one assuming a document shape the shared prelude does not declare. -->
+<!-- ts-docs-verifier:ignore -->
 ```tsx
 // ✅ Re-renders only when the active student turn's content changes.
 function StudentText({ docRef }) {
@@ -291,6 +362,8 @@ function StatusBar({ docRef }) {
 
 `useSelector` can accept any ref, not just the root. Subscribing to `doc.todos` tracks the list structure (add/remove) but not descendant text edits — perfect for a filter that only cares about `done` flags.
 
+<!-- Not compiled: a fragment from inside a component, or one assuming a document shape the shared prelude does not declare. -->
+<!-- ts-docs-verifier:ignore -->
 ```tsx
 const visible = useSelector(doc.todos, todos =>
   [...todos].filter(t => t.done()),
@@ -299,6 +372,8 @@ const visible = useSelector(doc.todos, todos =>
 
 For a specific text field's insertions, subscribe directly to that ref:
 
+<!-- Not compiled: a fragment from inside a component, or one assuming a document shape the shared prelude does not declare. -->
+<!-- ts-docs-verifier:ignore -->
 ```tsx
 const chunk = useSelector(inferenceRef.response, response =>
   response.toString().slice(lastLength),

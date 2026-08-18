@@ -6,6 +6,9 @@
     "strict": true,
     "skipLibCheck": true,
     "lib": ["ESNext", "DOM"],
+    // For the `tsx` examples in @kyneta/react's README, which the doc check
+    // compiles out of the markdown. Nothing in src/ is JSX.
+    "jsx": "react-jsx",
     "sourceMap": true,
     "outDir": "./dist",
     "rootDir": "./src"

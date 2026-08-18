@@ -7,9 +7,9 @@ Define your data once — sync, reactivity, validation, and persistence are deri
 ## Quick Start
 
 ```ts
-import { Schema, batch } from "@kyneta/schema"
 import { Exchange, whenSettled } from "@kyneta/exchange"
 import { loro } from "@kyneta/loro-schema"
+import { batch, Schema } from "@kyneta/schema"
 import { createWebsocketClient } from "@kyneta/websocket-transport/browser"
 
 // 1. Define your data
@@ -22,13 +22,15 @@ const TodoDoc = loro.bind(
         done: Schema.boolean(),
       }),
     ),
-  })
+  }),
 )
 
 // 2. Create an exchange, one per peer (or server/client)
 const exchange = new Exchange({
   id: { peerId: "alice" },
-  transports: [createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket })],
+  transports: [
+    createWebsocketClient({ url: "ws://localhost:3000/ws", WebSocket }),
+  ],
 })
 
 // 3. Get a document — syncs automatically
@@ -39,7 +41,7 @@ batch(doc, d => {
   d.items.push({ text: "Learn Kyneta", done: false })
 })
 
-doc.title()  // "My Todos"
+doc.title() // "My Todos"
 
 // Resolves once storage has loaded and peers have answered — so you know
 // you're looking at the whole document, not just the part that arrived first.
@@ -47,6 +49,9 @@ await whenSettled(doc)
 ```
 
 React bindings are available today. It's easy to add other bindings.
+
+<!-- Not compiled: imports your own schema module, which is illustrative. -->
+<!-- ts-docs-verifier:ignore -->
 
 ```tsx
 import { useDocument, useValue } from "@kyneta/react"
@@ -88,6 +93,9 @@ See the [`@kyneta/exchange` README](./packages/exchange/README.md) for the full 
 Subscribe to a correlated event stream across every layer — engine (sync
 state), protocol (the message vocabulary), doc (changesets), directory
 (peers/documents), diagnostics (silent failures), and wire (frames):
+
+<!-- Not compiled: a fragment; `exchange` is the one built in the Quick Start. -->
+<!-- ts-docs-verifier:ignore -->
 
 ```ts
 const stop = exchange.observe(ev => console.log(ev.peerId, ev.layer, ev))
