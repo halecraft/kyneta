@@ -205,7 +205,7 @@ checkImports(fences: Fence[], resolve: Resolver): Mismatch[]   // pure
 - ✅ **Task 3.4** — Wire the verifier into `tests/integration`'s
   `verify.config.ts` so it runs with everything else.
 
-# 🔴 Phase 4 — Restore the missing released history
+# ✅ Phase 4 — Restore the missing released history
 
 The changelog must be continuous before 3.0.0 is added on top. Otherwise the new
 entry sits directly on 2.1.0 and implies the 2.2–2.3 work belongs to this
@@ -228,16 +228,16 @@ A reader scans a changelog to find out whether this release affects them. Prose
 that answers a question they have not yet asked makes that slower, not more
 thorough.
 
-- 🔴 **Task 4.1** — Reconstruct `# 2.2.0` from the 8 commits in
+- ✅ **Task 4.1** — Reconstruct `# 2.2.0` from the 8 commits in
   `v2.1.0..v2.2.0`. Group under `## Breaking` / `## Added` / `## Fixed` /
   `## Changed`. Most of the 22 commits across these three releases will produce
   no entry at all; that is the expected outcome, not an incomplete job.
-- 🔴 **Task 4.2** — Reconstruct `# 2.3.0` from the 9 commits in
+- ✅ **Task 4.2** — Reconstruct `# 2.3.0` from the 9 commits in
   `v2.2.0..v2.3.0`.
-- 🔴 **Task 4.3** — Reconstruct `# 2.3.2` from the 5 commits in
+- ✅ **Task 4.3** — Reconstruct `# 2.3.2` from the 5 commits in
   `v2.3.0..v2.3.2`.
 
-# 🔴 Phase 5 — Complete the 3.0.0 changelog entry
+# ✅ Phase 5 — Complete the 3.0.0 changelog entry
 
 The existing `# Unreleased` section documents 4 breaking changes. Six are
 missing, as is every feature added this cycle.
@@ -252,13 +252,13 @@ The task descriptions below are **source material, not target length**. Each
 gives the implementer what the change was and why it matters; the entry itself
 is one bullet.
 
-- 🔴 **Task 5.1** — Merge the two `## Added` blocks. The section currently has
+- ✅ **Task 5.1** — Merge the two `## Added` blocks. The section currently has
   `## Added` at two separate points with `## Fixed` and `## Changed` between
   them, so a reader who finds one will not look for the other.
-- 🔴 **Task 5.2** — Compress the four existing `## Breaking` entries and the
+- ✅ **Task 5.2** — Compress the four existing `## Breaking` entries and the
   `## Fixed` / `## Changed` / `## Added` prose to one bullet each, moving the
   reasoning to `docs/upgrading-3.0.md` where it is still wanted.
-- 🔴 **Task 5.3** — Remove the entries that declare their own irrelevance.
+- ✅ **Task 5.3** — Remove the entries that declare their own irrelevance.
   Several say plainly that nothing downstream changes: the `richtext`
   container-classification fix states "No user-visible behaviour changes", the
   atomic-register map-change fix states it is "unreachable in normal operation"
@@ -267,33 +267,33 @@ is one bullet.
   unaffected". These are commit-message material. The `stepSchema` error-message
   rename is borderline — keep it only as a single clause, since its whole
   audience is someone grepping an error string.
-- 🔴 **Task 5.4** — Add the breaking entry for **the readiness API removal**.
+- ✅ **Task 5.4** — Add the breaking entry for **the readiness API removal**.
   Removed: `waitForSync`, `sync(doc).settled()`, `hasSync`, `describeSyncStatus`,
   `SyncStatusSummary`, `createDerivedSyncStore`. Migration: `whenSettled(doc)`
   for waits, `docStatus(doc)` for readiness, and compose a status label from
   connectivity + `peerStates` + `docStatus`. This is the highest-impact entry:
   it is what breaks the README, and the API it removes was the documented way to
   await sync in 2.x.
-- 🔴 **Task 5.5** — Add the breaking entry for **`populated` / `deleted` now
+- ✅ **Task 5.5** — Add the breaking entry for **`populated` / `deleted` now
   returning booleans**. The carriers keep the `Feed` suffix (`populatedFeed`,
   `deletedFeed`); `isPopulated` and `isDeleted` are removed. Call out the one
   silent change: `if (populated(ref))` was *always* truthy before, because a
   carrier is a callable object. It now returns the correct boolean, so this
   migration repairs latent bugs rather than introducing them.
-- 🔴 **Task 5.6** — Add the breaking entry for **`get()` promoting a replicate
+- ✅ **Task 5.6** — Add the breaking entry for **`get()` promoting a replicate
   document**. When a caller supplies a schema for a document held as a bare
   replica, `get()` now upgrades it in place over the same backing document
   rather than throwing. State accumulated while it was headless carries across.
-- 🔴 **Task 5.7** — Add the breaking entry for **`get()` returning suspended
+- ✅ **Task 5.7** — Add the breaking entry for **`get()` returning suspended
   documents without resuming**. It previously threw. Suspension is about
   sync-graph membership, not local readability, so a read no longer risks
   silently restarting traffic that peers can observe.
-- 🔴 **Task 5.8** — Add the breaking entry for **`createDocAs` / `createDoc`**.
+- ✅ **Task 5.8** — Add the breaking entry for **`createDocAs` / `createDoc`**.
   `createDoc(bound, payload?)` no longer accepts a peer identity; it always uses
   a random one. `createDocAs(peerId, bound, payload?)` leads with the identity
   and requires it. Migration: `createDoc(bound, undefined, "peer-a")` becomes
   `createDocAs("peer-a", bound)`.
-- 🔴 **Task 5.9** — Add the breaking entry for **the two schema-compatibility
+- ✅ **Task 5.9** — Add the breaking entry for **the two schema-compatibility
   laws**. `supportsHash` is the primitive; `hashesIntersect` applies it pairwise.
   `mismatchForInterpretation` answers "can my schema read this document?" and
   `mismatchForSync` answers "is there a shape we both speak?". `supportedHashes`
@@ -301,18 +301,18 @@ is one bullet.
   document has one shape, a peer has a set it can cope with. `PresentMsg` now
   declares the field itself, optional, since a `present` is where a document's
   identity and the sender's declared range travel together.
-- 🔴 **Task 5.10** — Add the breaking entry for **`formatPath` removal**. Use
+- ✅ **Task 5.10** — Add the breaking entry for **`formatPath` removal**. Use
   `path.format()`. The free function was only ever a wrapper around the method.
-- 🔴 **Task 5.11** — Add `## Added` entries for this cycle's features:
+- ✅ **Task 5.11** — Add `## Added` entries for this cycle's features:
   `whenSettled`, `docStatus`, `initialize` and the settle-term registry
   (`@kyneta/exchange`); `useDocStatus` and `useInitialize` (`@kyneta/react`);
   `Source.fromExchange` and the exchange-backed source (`@kyneta/index`);
   `Policy.authority`; and `exchange.replicate` with schema-driven promotion.
-- 🔴 **Task 5.12** — Verify nothing remains undocumented by listing every commit
+- ✅ **Task 5.12** — Verify nothing remains undocumented by listing every commit
   in the release range whose subject carries a `!` marker or whose body carries
   a `BREAKING CHANGE:` trailer, and checking each against the changelog.
 
-# 🔴 Phase 6 — Write the upgrade guide
+# ✅ Phase 6 — Write the upgrade guide
 
 Ten breaking changes with no single document describing the upgrade.
 `docs/migrations.md` is about *schema* migration chains — a different mechanism
@@ -325,25 +325,25 @@ they are affected and wants the detail. Nothing is lost by compressing the
 changelog; it is relocated to where it answers a question the reader is actually
 asking.
 
-- 🔴 **Task 6.1** — Create `docs/upgrading-3.0.md`. One section per breaking
+- ✅ **Task 6.1** — Create `docs/upgrading-3.0.md`. One section per breaking
   change, each with a before/after pair. Order by likelihood of being hit rather
   than by package: the readiness API first, then the `populated`/`deleted`
   booleans, then the rest.
-- 🔴 **Task 6.2** — Open with the two changes that alter behaviour *without* a
+- ✅ **Task 6.2** — Open with the two changes that alter behaviour *without* a
   compile error, since those are what a type-driven upgrade will miss:
   `if (populated(ref))` silently flipping from always-true to correct, and
   `get()` on a suspended or replicate document no longer throwing.
-- 🔴 **Task 6.3** — Note the wire-compatibility boundary. The ephemeral tag
+- ✅ **Task 6.3** — Note the wire-compatibility boundary. The ephemeral tag
   changed from `["plain", 1, 0]` to `["ephemeral", 1, 0]`, and the ephemeral
   `StateTuple` gained a third slot, so 2.x and 3.0 peers cannot sync ephemeral
   documents. Nothing ephemeral is persisted, so there is nothing to migrate, but
   a mixed deployment will not exchange presence until both sides upgrade.
-- 🔴 **Task 6.4** — Link the guide from `README.md` and from the top of the
+- ✅ **Task 6.4** — Link the guide from `README.md` and from the top of the
   `# 3.0.0` changelog section.
 
-# 🔴 Phase 7 — Declare packaging metadata
+# ✅ Phase 7 — Declare packaging metadata
 
-- 🔴 **Task 7.1** — Add `"sideEffects": false` to all 24 public packages.
+- ✅ **Task 7.1** — Add `"sideEffects": false` to all 24 public packages.
   Without it a bundler must assume every module mutates something on import, so
   it cannot drop unused code — tree-shaking is off for every consumer. Before
   adding it, scan all 24 public source trees for module-level global assignment,
@@ -352,19 +352,19 @@ asking.
   one-time setting, so a future reviewer needs to know what backs it. The CSS
   side-effect imports in the examples do not bear on this; examples are private
   and unpublished.
-- 🔴 **Task 7.2** — Add `"engines": { "node": ">=18.0.0" }` to all 24 public
+- ✅ **Task 7.2** — Add `"engines": { "node": ">=18.0.0" }` to all 24 public
   packages, matching the floor already declared by `@halecraft/verify`.
 
-# 🔴 Phase 8 — Declare the index's optional exchange peer
+# ✅ Phase 8 — Declare the index's optional exchange peer
 
-- 🔴 **Task 8.1** — Fix `packages/index/package.json`. It declares
+- ✅ **Task 8.1** — Fix `packages/index/package.json`. It declares
   `peerDependenciesMeta` marking `@kyneta/exchange` optional, but
   `@kyneta/exchange` is absent from `peerDependencies`, which makes the meta
   entry inert. The package has no runtime import of the exchange —
   `Source.fromExchange` types it structurally — so add `@kyneta/exchange` to
   `peerDependencies` as `workspace:^` and keep the optional marker. That pair is
   what the code actually means: usable with it, not requiring it.
-- 🔴 **Task 8.2** — Confirm the resulting `pnpm-lock.yaml` diff is confined to
+- ✅ **Task 8.2** — Confirm the resulting `pnpm-lock.yaml` diff is confined to
   `@kyneta/index`. This is a separate revision from Phase 7 because it changes
   what pnpm resolves, and that must be reviewable on its own rather than buried
   in a 24-manifest diff.
@@ -381,17 +381,17 @@ asking.
   none. The rule explains why pnpm is mandatory but not why a bun lockfile sat
   next to it, which makes the file read as deliberate.
 
-# 🔴 Phase 10 — Version bump and release
+# ✅ Phase 10 — Version bump and release
 
 Last, so that everything published describes the release accurately.
 
-- 🔴 **Task 10.1** — Rename the changelog's `# Unreleased` heading to `# 3.0.0`.
-- 🔴 **Task 10.2** — Run `bun scripts/release.ts bump 3.0.0 --group all`. Groups
+- ✅ **Task 10.1** — Rename the changelog's `# Unreleased` heading to `# 3.0.0`.
+- ✅ **Task 10.2** — Run `bun scripts/release.ts bump 3.0.0 --group all`. Groups
   derive from directory convention, so no group list needs updating. Internal
   dependents use `workspace:^` and resolve automatically; `pnpm publish`
   rewrites those to `^3.0.0` in the published tarball.
-- 🔴 **Task 10.3** — Run `pnpm build && pnpm verify` and confirm 56/56.
-- 🔴 **Task 10.4** — Run `bun scripts/release.ts status` and confirm every
+- ✅ **Task 10.3** — Run `pnpm build && pnpm verify` and confirm 56/56.
+- ✅ **Task 10.4** — Run `bun scripts/release.ts status` and confirm every
   package reports 3.0.0 locally against its registry version.
 
 # Tests
