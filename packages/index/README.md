@@ -2,17 +2,64 @@
 
 Live, queryable views over document collections. Group by field, join across collections, subscribe to changes — views update automatically as data moves.
 
+<!--
+Setup shared by the examples below. Renderers drop HTML comments, so this is
+invisible on npm and GitHub — but it is compiled, which keeps the examples
+honest. It holds only what no block defines for itself.
+-->
+<!-- ts-docs-prelude
+import { Exchange } from "@kyneta/exchange"
+import { Collection, Index, Source, field } from "@kyneta/index"
+import { Schema, json } from "@kyneta/schema"
+
+const TaskSchema = Schema.struct({
+  id: Schema.string(),
+  ownerId: Schema.string(),
+  title: Schema.string(),
+})
+const ProjectDoc = json.bind(
+  Schema.struct({ name: Schema.string(), tasks: Schema.list(TaskSchema) }),
+)
+const SprintDoc = json.bind(
+  Schema.struct({ items: Schema.list(TaskSchema) }),
+)
+const TaskDoc = json.bind(TaskSchema)
+const TeamDoc = json.bind(
+  Schema.struct({ members: Schema.record(Schema.string()) }),
+)
+const ConvDoc = json.bind(Schema.struct({ id: Schema.string() }))
+const ThreadDoc = json.bind(
+  Schema.struct({ id: Schema.string(), conversationId: Schema.string() }),
+)
+
+declare const exchange: Exchange
+-->
+
 ## Index nested documents
 
 Your project documents each contain a task list. You need every task — across every project — indexed by owner.
 
+<!-- ts-docs-standalone -->
+<!-- ts-docs-setup
+import { Exchange } from "@kyneta/exchange"
+import { Schema, json } from "@kyneta/schema"
+const TaskSchema = Schema.struct({
+  id: Schema.string(),
+  ownerId: Schema.string(),
+  title: Schema.string(),
+})
+const ProjectDoc = json.bind(
+  Schema.struct({ name: Schema.string(), tasks: Schema.list(TaskSchema) }),
+)
+declare const exchange: Exchange
+-->
 ```ts
 import { Source, Collection, Index, field } from "@kyneta/index"
 
 // Pull tasks out of every ProjectDoc in the exchange.
 // Documents arrive from all peers; tasks appear and disappear automatically.
 const tasks = Collection.from(
-  Source.of(exchange, ProjectDoc, doc => doc.tasks, item => item.id),
+  Source.of(exchange, ProjectDoc, doc => doc.tasks, item => item.id()),
 )
 
 // Group by owner — one line
@@ -21,6 +68,8 @@ const byOwner = Index.by(tasks, field(ref => ref.ownerId))
 
 Now access any group as a live, reactive map:
 
+<!-- Not compiled: a menu of adapter forms that all bind the same name, or a fragment continuing one. -->
+<!-- ts-docs-verifier:ignore -->
 ```ts
 const aliceTasks = byOwner.get("alice")  // all tasks where ownerId is "alice"
 
@@ -40,6 +89,14 @@ for (const [key, ref] of aliceTasks) {
 
 When a task's owner changes, the index reorganizes — no manual invalidation, no re-query:
 
+<!-- ts-docs-setup
+const tasks = Collection.from(
+  Source.of(exchange, ProjectDoc, doc => doc.tasks, item => item.id()),
+)
+const byOwner = Index.by(tasks, field(ref => ref.ownerId))
+const aliceTasks = byOwner.get("alice")
+const taskRef = aliceTasks.get("task-1")!
+-->
 ```ts
 // Alice reassigns task-1 to Bob
 taskRef.ownerId.set("bob")
@@ -58,7 +115,7 @@ There's nothing special about one project versus ten. `Source.of` tracks *every*
 // Three ProjectDocs from three different peers — doesn't matter.
 // All their tasks are unified into one collection, one index.
 const tasks = Collection.from(
-  Source.of(exchange, ProjectDoc, doc => doc.tasks, item => item.id),
+  Source.of(exchange, ProjectDoc, doc => doc.tasks, item => item.id()),
 )
 
 const byOwner = Index.by(tasks, field(ref => ref.ownerId))
@@ -76,8 +133,8 @@ Tasks live in `ProjectDoc`. More tasks live in `SprintDoc`. You want one unified
 ```ts
 const allTasks = Collection.from(
   Source.union(
-    Source.of(exchange, ProjectDoc,  doc => doc.tasks, item => item.id),
-    Source.of(exchange, SprintDoc,   doc => doc.items, item => item.id),
+    Source.of(exchange, ProjectDoc,  doc => doc.tasks, item => item.id()),
+    Source.of(exchange, SprintDoc,   doc => doc.items, item => item.id()),
   ),
 )
 
@@ -93,6 +150,14 @@ byOwner.get("alice")
 
 The reactive map returned by `get` tells you *when* things move:
 
+<!-- ts-docs-setup
+const tasks = Collection.from(
+  Source.of(exchange, ProjectDoc, doc => doc.tasks, item => item.id()),
+)
+const byOwner = Index.by(tasks, field(ref => ref.ownerId))
+const aliceTasks = byOwner.get("alice")
+const taskRef = aliceTasks.get("task-1")!
+-->
 ```ts
 aliceTasks.subscribe(changeset => {
   for (const change of changeset.changes) {
@@ -104,6 +169,14 @@ aliceTasks.subscribe(changeset => {
 
 Or subscribe to the entire index for all group changes at once:
 
+<!-- ts-docs-setup
+const tasks = Collection.from(
+  Source.of(exchange, ProjectDoc, doc => doc.tasks, item => item.id()),
+)
+const byOwner = Index.by(tasks, field(ref => ref.ownerId))
+const aliceTasks = byOwner.get("alice")
+const taskRef = aliceTasks.get("task-1")!
+-->
 ```ts
 byOwner.subscribe(changeset => {
   // every add, remove, and regroup across all owners
@@ -123,12 +196,12 @@ const threadIndex  = Index.by(threads, field(ref => ref.conversationId))
 const convThreads  = Index.join(convIndex, threadIndex)
 
 // All threads in a conversation — reactive
-const threads = convThreads.get("conv:abc")
-threads.size  // 5
+const convThreadsForAbc = convThreads.get("conv:abc")
+convThreadsForAbc.size  // 5
 
 // Which conversation does this thread belong to?
-const convs = convThreads.reverse("thread-1")
-convs.has("conv:abc")  // true
+const owningConvs = convThreads.reverse("thread-1")
+owningConvs.has("conv:abc")  // true
 ```
 
 Joins are live — add a thread, and it appears. Move a thread, and both sides update.
@@ -142,7 +215,7 @@ Joins are live — add a thread, and it appears. Move a thread, and both sides u
 Source.of(exchange, TaskDoc)
 
 // List-level — reach into each doc's list, extract entities by key
-Source.of(exchange, ProjectDoc, doc => doc.tasks, item => item.id)
+Source.of(exchange, ProjectDoc, doc => doc.tasks, item => item.id())
 
 // Record-level — reach into each doc's record, entries keyed by record keys
 Source.of(exchange, TeamDoc, doc => doc.members)
@@ -150,12 +223,14 @@ Source.of(exchange, TeamDoc, doc => doc.members)
 
 For power users, raw adapters give you full control:
 
+<!-- Not compiled: a menu of alternatives that all bind the same name. -->
+<!-- ts-docs-verifier:ignore -->
 ```ts
 // From a schema record ref directly
 const source = Source.fromRecord(doc.members)
 
 // From a schema list ref with a key extractor
-const source = Source.fromList(doc.items, item => item.id)
+const source = Source.fromList(doc.items, item => item.id())
 
 // From an exchange with handle access for dismiss control
 const [source, handle] = Source.fromExchange(exchange, TaskDoc)
@@ -171,6 +246,8 @@ Every source feeds into `Collection.from(source)` the same way.
 
 Sources are composable. Filter, merge, or remap *before* creating a collection:
 
+<!-- Not compiled: a menu of adapter forms that all bind the same name, or a fragment continuing one. -->
+<!-- ts-docs-verifier:ignore -->
 ```ts
 // Only active tasks. Pass a `watch` argument when the predicate reads
 // a mutable field — the filter re-evaluates when that field changes.
@@ -193,6 +270,8 @@ const prefixed = Source.map(source, key => `org:${key}`)
 
 `field` and `keys` tell the index how to group entries:
 
+<!-- Not compiled: a menu of adapter forms that all bind the same name, or a fragment continuing one. -->
+<!-- ts-docs-verifier:ignore -->
 ```ts
 // Group by a single field
 Index.by(tasks, field(ref => ref.ownerId))

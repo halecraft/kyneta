@@ -37,6 +37,7 @@ const DOCUMENTS = [
   "README.md",
   "packages/exchange/README.md",
   "packages/react/README.md",
+  "packages/index/README.md",
 ]
 
 function main(): void {
