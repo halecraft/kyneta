@@ -4,6 +4,10 @@
   "description": "In-process transport for @kyneta/exchange — codec-faithful + alias-aware delivery for testing multi-peer scenarios in a single process",
   "author": "Duane Johnson",
   "license": "MIT",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/halecraft/kyneta",

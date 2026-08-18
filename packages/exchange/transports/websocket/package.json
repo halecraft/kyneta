@@ -4,6 +4,10 @@
   "description": "Websocket network adapter for @kyneta/exchange — browser, server, and Bun integration",
   "author": "Duane Johnson",
   "license": "MIT",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/halecraft/kyneta",

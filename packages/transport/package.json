@@ -4,6 +4,10 @@
   "description": "Transport infrastructure — base class, channel types, message vocabulary, and client utilities for @kyneta/exchange",
   "author": "Duane Johnson",
   "license": "MIT",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/halecraft/kyneta",

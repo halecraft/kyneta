@@ -4,6 +4,10 @@
   "description": "Reactive world model over the Kyneta observation (ObsEvent) stream, composed from @kyneta/index",
   "author": "Duane Johnson",
   "license": "MIT",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/halecraft/kyneta",

@@ -4,6 +4,10 @@
   "description": "Pure helpers shared by SQL-family Store backends for @kyneta/exchange",
   "author": "Duane Johnson",
   "license": "MIT",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/halecraft/kyneta",

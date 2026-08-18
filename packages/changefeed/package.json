@@ -4,6 +4,10 @@
   "description": "Universal reactive contract — a Moore machine identified by [CHANGEFEED]",
   "author": "Duane Johnson",
   "license": "MIT",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/halecraft/kyneta",

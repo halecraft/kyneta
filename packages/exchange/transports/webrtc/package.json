@@ -4,6 +4,10 @@
   "description": "WebRTC data channel transport for @kyneta/exchange — BYODC (Bring Your Own Data Channel) with DataChannelLike interface",
   "author": "Duane Johnson",
   "license": "MIT",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/halecraft/kyneta",
