@@ -169,6 +169,8 @@ cd packages/schema && pnpm exec vitest run
 
 **pnpm is required.** Workspace references (`workspace:^`), peer-dep hoisting, and the `pnpm-workspace.yaml` glob configuration all assume pnpm. Bun and npm do not work for the monorepo build — use Bun to *run* published packages, but use pnpm for development here.
 
+`pnpm-lock.yaml` is therefore the only lockfile, and that is deliberate. Bun does appear in development — it runs `scripts/release.ts` and the `logic-bun` half of the integration suite — but in both cases against a `node_modules` that pnpm installed, so it never reads a lockfile of its own. A `bun.lock` was tracked here until it was removed: nothing referenced it, `bun install` could not regenerate it for the reason above, and a stale second lockfile invites someone to trust it.
+
 Shared devDependency versions (vitest, tsdown, typescript) are centralized in the `catalog:` section of `pnpm-workspace.yaml`. Individual `package.json` files reference these as `"catalog:"` instead of literal version ranges, so a single edit in the workspace file updates the tooling version across all ~30 packages.
 
 ### Runtime
