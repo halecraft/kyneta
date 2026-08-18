@@ -136,9 +136,9 @@ its default `unknown` on every call that does not name it explicitly.
   to `object` silently removes inference without producing any error in these
   packages — the damage appears only at call sites.
 
-# 🔴 Phase 2 — Fix the README and stale documentation references
+# ✅ Phase 2 — Fix the README and stale documentation references
 
-- 🔴 **Task 2.1** — Fix the Quick Start's two independent breakages
+- ✅ **Task 2.1** — Fix the Quick Start's two independent breakages
   (`README.md:9–44`):
   - `import { Schema, change }` — `change` is not exported from
     `@kyneta/schema`, as a value or a type. The block calls `batch(doc, …)`,
@@ -146,28 +146,28 @@ its default `unknown` on every call that does not name it explicitly.
   - `await sync(doc).waitForSync()` — removed. Replace with
     `await whenSettled(doc)`, imported from `@kyneta/exchange`
     (`packages/exchange/src/sync.ts:246`).
-- 🔴 **Task 2.2** — Fix the "Grow Without Rewriting" table (`README.md:78–79`).
+- ✅ **Task 2.2** — Fix the "Grow Without Rewriting" table (`README.md:78–79`).
   It names a `route` and `authorize` predicate pair, and a `type: "relay"`
   exchange option. None exist. The real `Policy` surface is at
   `packages/exchange/src/governance.ts:87` — `canShare`, `canAccept`,
   `canReset`, `cohort`, `canConnect`, `authority`, `resolve`. Relay is a
   topology built from those gates, not a config flag; describe it as such.
-- 🔴 **Task 2.3** — Correct every remaining fence and API claim in the root
+- ✅ **Task 2.3** — Correct every remaining fence and API claim in the root
   `README.md`, and in each package-level `README.md`. Package READMEs ship in
   the published tarballs and are what a consumer reads on npm. Use the Phase 3
   guard as the working tool here: build it against the current documents, let it
   list the mismatches, fix them, and land the fixes in this revision.
-- 🔴 **Task 2.4** — Correct `packages/schema/theory/sql.md:387,762`. Both cite
+- ✅ **Task 2.4** — Correct `packages/schema/theory/sql.md:387,762`. Both cite
   `waitForSync({ kind: "storage" })` as something that "already exists". Reword
   against `whenSettled`, whose options object is the nearest equivalent.
-- 🔴 **Task 2.5** — Leave the three historical references to removed symbols
+- ✅ **Task 2.5** — Leave the three historical references to removed symbols
   **unchanged**: `packages/exchange/TECHNICAL.md:624`,
   `packages/react/TECHNICAL.md:432`, and the explanatory comment at
   `packages/exchange/src/__tests__/exchange.test.ts:264`. Each narrates a
   removal in the past tense and is correct as written. They are listed here so a
   search-and-replace does not sweep them up.
 
-# 🔴 Phase 3 — Guard against documentation drift
+# ✅ Phase 3 — Guard against documentation drift
 
 Snippets live as ordinary source under a package the `types` task already
 covers, so they are typechecked by the run that exists. What remains is a
@@ -180,17 +180,17 @@ matchFences(fences: Fence[], sources: Source[]): Mismatch[]  // pure
 
 A thin imperative shell reads the files, calls the core, and reports.
 
-- 🔴 **Task 3.1** — Create a snippets directory under an existing typechecked
+- ✅ **Task 3.1** — Create a snippets directory under an existing typechecked
   package. `tests/integration/tsconfig.json` has `"include": ["src/**/*"]`, so
   snippets must live under a `src/` to be compiled at all.
-- 🔴 **Task 3.2** — Write the pure core. `extractFences` parses fenced `ts` and
+- ✅ **Task 3.2** — Write the pure core. `extractFences` parses fenced `ts` and
   `tsx` blocks with their source positions; `matchFences` compares each fence
   against its named snippet file and returns the mismatches. Both are ordinary
   functions over strings, testable without touching a filesystem.
-- 🔴 **Task 3.3** — Write the shell as a vitest test that reads the READMEs and
+- ✅ **Task 3.3** — Write the shell as a vitest test that reads the READMEs and
   snippet files, calls the core, and fails with the mismatching fence and its
   line number.
-- 🔴 **Task 3.4** — Bind each fence to its snippet with an HTML comment
+- ✅ **Task 3.4** — Bind each fence to its snippet with an HTML comment
   immediately preceding it, so the association is visible in the document source
   rather than inferred from ordering.
 
