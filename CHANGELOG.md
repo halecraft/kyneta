@@ -1,4 +1,4 @@
-# Unreleased
+# 3.0.0
 
 Upgrading from 2.x? See [docs/upgrading-3.0.md](docs/upgrading-3.0.md) — it
 opens with the three changes that alter behaviour without a compile error.
