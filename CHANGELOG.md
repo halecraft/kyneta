@@ -56,6 +56,47 @@
 
 - **`walkPath` / `PathWalk`** (`@kyneta/schema`) — the single schema-guided traversal of a path. `foldPath`, `pathSchema`, `findOpaqueBoundary` and the `ephemeral` substrate's schema lookup are now projections of it. It never throws: it reports where the walk stopped (`complete`, `boundary`, `mismatch`) and each caller applies its own policy. The bugs above were three separate hand-rolled walks disagreeing about one case; consolidating them fixed all three without a rule needing to be written down anywhere. See `packages/schema/TECHNICAL.md` §"Why one traversal, not many".
 
+# 2.3.2
+
+## Fixed
+
+- **Op-log paths are frozen when authored** (`@kyneta/schema`). They aliased live addressing state, so an op could describe a location that had since moved.
+- **Identity-keyed whole-value writes materialize correctly** (`@kyneta/schema`).
+
+# 2.3.1
+
+Released to npm but never tagged; its content is folded into 2.3.2 above.
+
+# 2.3.0
+
+## Breaking
+
+- **`Version.epoch` is renamed `Version.lineage`** (`@kyneta/schema`, `@kyneta/exchange`, `@kyneta/wire`, `@kyneta/transport`). "Epoch" now means only the T3-migration axis. `SubstratePayload` carries `lineage` too.
+- **`LEGACY_EPOCH` and its compatibility paths are removed** (`@kyneta/schema`, `@kyneta/exchange`).
+- **`YjsVersion` encodes its delete-set as a fixed-size digest** rather than raw bytes (`@kyneta/yjs-schema`), bounding version size. Versions are not comparable across this change.
+
+## Added
+
+- **`applyTextInstructions(ref, instructions)`** (`@kyneta/schema`) — replay a `TextInstruction[]` onto a live `TextRef`.
+- **A sender declares discontinuity explicitly.** `SubstratePayload.lineage` replaces the receiver-side heuristic that inferred a reset from payload shape.
+
+## Fixed
+
+- **Ephemeral documents no longer trigger a compaction reset** (`@kyneta/exchange`). They always send entireties, which the heuristic read as a lineage break.
+- **Non-entirety payloads are no longer passed to `resetFromEntirety`** at a lineage boundary (`@kyneta/exchange`).
+
+# 2.2.0
+
+## Breaking
+
+- **Replica identity is a first-class `epoch` on `Version`** (`@kyneta/schema`, `@kyneta/exchange`), replacing `PlainVersion.incarnation`. Renamed again to `lineage` in 2.3.0 — upgrading past this release, go straight to that name.
+
+## Fixed
+
+- **A standalone `Runtime` persists its local mutations** (`@kyneta/exchange`). Persistence ran only through the network shell, so a `Runtime` used without an `Exchange` — a documented, supported configuration — silently dropped writes on shutdown. Anything written after hydration completed, or to a document that already had stored data, was lost with no error.
+- **Wrapping a populated `Runtime` in an `Exchange` registers the documents it already holds** (`@kyneta/exchange`). They were previously invisible to the sync graph for the life of the process.
+- **Plain-substrate log resets are exact when adopting an entirety with an explicit version** (`@kyneta/schema`).
+
 # 2.1.0
 
 ## Added
