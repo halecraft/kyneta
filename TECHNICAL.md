@@ -103,7 +103,9 @@ See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the 30,000-foot design — thesis
 
 **`@kyneta/cast`** — Web rendering target for `@kyneta/compiler`. Compiled delta-driven UI framework. Runtime is five region primitives (`listRegion`, `filteredListRegion`, `conditionalRegion`, `textRegion`, `valueRegion`) + `mount` / `hydrate` / `scope` / `subscribe` — O(k) DOM updates per delta, no VDOM. Universal build plugin (`unplugin`) for Vite, Rollup, Rolldown, esbuild, Bun, Farm, webpack. Local reactive primitive (`state()` → `LocalRef<T>`). `inputTextRegion` for selection-stable text-input binding. Deps: `@kyneta/compiler`, `@kyneta/schema`, `@kyneta/changefeed`, `ts-morph`, `unplugin`. → `experimental/cast/TECHNICAL.md`.
 
-**`@kyneta/perspective`** — Standalone experimental package: Convergent Constraint Systems (CCS). Agents assert constraints; merge is set union; a stratified Datalog evaluator derives the shared reality. LWW and Fugue are Datalog rules that travel in the store — not hardcoded algorithms. Two-layer engine (Layer 0 kernel + Layer 1 Datalog evaluator), §B.7 native-solver fast paths, incremental pipeline with ℤ-set algebra for O(|Δ|) updates. Zero runtime dependencies, zero Kyneta dependencies. Private — not published to npm. → `experimental/perspective/TECHNICAL.md`.
+### Standalone (independent versioning)
+
+**`@kyneta/perspective`** — Convergent Constraint Systems (CCS). Agents assert constraints; merge is set union; a stratified Datalog evaluator derives the shared reality. LWW and Fugue are Datalog rules that travel in the store — not hardcoded algorithms. Two-layer engine (Layer 0 kernel + Layer 1 Datalog evaluator), §B.7 native-solver fast paths, incremental pipeline with ℤ-set algebra for O(|Δ|) updates. Zero runtime dependencies, zero Kyneta dependencies. Published at 0.1.0 under independent versioning — it does not ride the 3.x core version train. → `packages/perspective/TECHNICAL.md`.
 
 ### Internal
 
@@ -169,7 +171,7 @@ cd packages/schema && pnpm exec vitest run
 
 **pnpm is required.** Workspace references (`workspace:^`), peer-dep hoisting, and the `pnpm-workspace.yaml` glob configuration all assume pnpm. Bun and npm do not work for the monorepo build — use Bun to *run* published packages, but use pnpm for development here.
 
-`pnpm-lock.yaml` is therefore the only lockfile, and that is deliberate. Bun does appear in development — it runs `scripts/release.ts` and the `logic-bun` half of the integration suite — but in both cases against a `node_modules` that pnpm installed, so it never reads a lockfile of its own. A `bun.lock` was tracked here until it was removed: nothing referenced it, `bun install` could not regenerate it for the reason above, and a stale second lockfile invites someone to trust it.
+`pnpm-lock.yaml` is therefore the only lockfile, and that is deliberate. Bun does appear in development — it runs the `logic-bun` half of the integration suite, and the `release` script is `@halecraft/release` (Node) — in both cases against a `node_modules` that pnpm installed, so bun never reads a lockfile of its own. A `bun.lock` was tracked here until it was removed: nothing referenced it, `bun install` could not regenerate it for the reason above, and a stale second lockfile invites someone to trust it.
 
 Shared devDependency versions (vitest, tsdown, typescript) are centralized in the `catalog:` section of `pnpm-workspace.yaml`. Individual `package.json` files reference these as `"catalog:"` instead of literal version ranges, so a single edit in the workspace file updates the tooling version across all ~30 packages.
 
@@ -217,13 +219,13 @@ kyneta/
 │   │       ├── postgres/     # @kyneta/postgres-store
 │   │       └── prisma/       # @kyneta/prisma-store
 │   ├── index/                # @kyneta/index
+│   ├── perspective/          # @kyneta/perspective (independent 0.x versioning)
 │   ├── react/                # @kyneta/react
 │   └── devtools/             # @kyneta/devtools
 │
-├── experimental/             # experimental packages (public surface may shift)
+├── experimental/             # experimental packages (not published)
 │   ├── compiler/             # @kyneta/compiler
-│   ├── cast/                 # @kyneta/cast
-│   └── perspective/          # @kyneta/perspective (private)
+│   └── cast/                 # @kyneta/cast
 │
 ├── examples/                 # runnable examples
 │   ├── todo/                 # Loro + WebSocket + Cast
@@ -239,7 +241,6 @@ kyneta/
 │   ├── conformance/          # substrate-unification battery (all 5 substrates)
 │   └── integration/          # Node (vitest) + Bun (bun test) suites
 │
-├── scripts/                  # build/release/maintenance scripts
 └── papers/                   # drafts, notes, theory docs
 ```
 
@@ -247,6 +248,30 @@ Plan documents are deliberately absent from that tree. They live in a git ref
 namespace of their own, `refs/plans/store`, and are never checked out — see
 [docs/plans.md](docs/plans.md). A commit that implements a plan carries a
 `PLAN-YYYY-MM-DD-slug` reference to it, which `plans show` resolves.
+
+---
+
+## Releases
+
+Releases run through `@halecraft/release` (the `release` script). Versioning
+is a two-policy model:
+
+- **Uniform (default)** — packages ride their group's version train. A core
+  release bumps every core package to one version and tags it `v<version>`.
+- **Independent** — a package declares `"versioning": "independent"` in its
+  own `package.json` (`@kyneta/perspective` at 0.x) and is skipped by group
+  and default bumps. Bump it alone with `--packages` and a release that ships
+  it tags `@scope/name@version`.
+
+Groups are declared in `release.config.ts`, mirroring the directory layout:
+`core` (`packages/*` plus `packages/exchange/wire`, minus `packages/react`),
+`backends`, `transport`, `stores`, `bindings` (`packages/react`), and
+`experimental`. `--packages` resolves group names before package names, so
+`@kyneta/transport` must be named in full.
+
+Publishing is idempotent: versions already on the npm registry are skipped,
+so re-running a completed release publishes nothing. `release status` shows
+local vs. registry versions, with independent packages marked.
 
 ---
 

@@ -100,7 +100,7 @@ The solver is a pure function parameterized by a version vector. `solve(S, V)` c
 | **Plan 006.1: Unified Evaluator** | ✅ | Weighted Relation/Substitution, dirty-map distinct + delta extraction, single evaluator replacing four loops |
 | **Plan 006.2: Differential Negation** | ✅ | Dual-weight Relation, asymmetric join, differential negation, unified semi-naive loop for all strata |
 
-**1304 tests across 34 files, all passing.**
+**1426 tests across 34 files, all passing.**
 
 See [.plans/002-unified-ccs-engine.md](./.plans/002-unified-ccs-engine.md) for the batch engine plan, [.plans/005-incremental-kernel-pipeline.md](./.plans/005-incremental-kernel-pipeline.md) for the incremental kernel plan, [.plans/006-incremental-datalog-evaluator.md](./.plans/006-incremental-datalog-evaluator.md) for the incremental Datalog plan, and [.plans/006.2-differential-negation.md](./.plans/006.2-differential-negation.md) for the differential negation plan.
 
@@ -180,7 +180,7 @@ Traditional CRDTs define a state space S, a merge function ⊔ forming a join-se
 ## Installation
 
 ```bash
-bun install
+npm install @kyneta/perspective
 ```
 
 ## Development
@@ -188,7 +188,7 @@ bun install
 ```bash
 bun install          # Install dependencies
 bun run test         # Run tests in watch mode
-bun run test:run     # Run tests once (1304 tests)
+bun run test:run     # Run tests once (1426 tests)
 bun run typecheck    # TypeScript type checking
 ```
 

@@ -214,7 +214,7 @@ A plain JS substrate is built into `@kyneta/schema` — no external package need
                     └──► @kyneta/devtools (+ index, changefeed) ── experimental
 
 @kyneta/machine                         (standalone — used by exchange, transports)
-@kyneta/perspective                     (standalone — private, not published)
+@kyneta/perspective                     (standalone — independent versioning, zero kyneta deps)
 ```
 
 `@kyneta/changefeed` defines the universal reactive contract — the `[CHANGEFEED]` symbol protocol. `@kyneta/schema` builds the interpreter algebra on top of it. Everything else — substrates, exchange, transports, bindings — builds on schema's `Substrate` interface and changefeed's reactive protocol.
@@ -262,7 +262,7 @@ CRDTs already know what changed. When you insert a character, the CRDT emits a d
 
 | Package | Description | Tests |
 |---------|-------------|-------|
-| [`@kyneta/perspective`](./packages/perspective) | Constraint-based CRDTs (codename Prism). Agents assert constraints, merge is set union, and a stratified Datalog evaluator derives shared reality. Includes an incremental pipeline based on DBSP. Private — not published to npm. | 1,374 |
+| [`@kyneta/perspective`](./packages/perspective) | Constraint-based CRDTs (codename Prism). Agents assert constraints, merge is set union, and a stratified Datalog evaluator derives shared reality. Includes an incremental pipeline based on DBSP. First released at 0.1.0, versioned independently of the 3.x core packages. | 1,426 |
 
 Traditional CRDTs couple state representation with merge logic. Perspective separates them: the semilattice moves to constraint sets, and a Datalog solver derives state. Conflict resolution strategies become rules that travel inside the data. See the [Perspective README](./packages/perspective/README.md) for the full treatment.
 

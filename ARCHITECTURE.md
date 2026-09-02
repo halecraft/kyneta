@@ -78,7 +78,7 @@ Kyneta is a framework for collaborative, substrate-agnostic documents. You defin
 | `@kyneta/devtools` (exp.) | Observability aggregation — a world model folded from `exchange.observe()` (`ObsEvent`), composed from `@kyneta/index` + `@kyneta/changefeed`. One pure classifier; the rest is reused machinery. | `createWorldModel`, `attach`, `classify`, `docView` |
 | `@kyneta/compiler` (exp.) | Target-agnostic IR producer. Parses builder patterns → classified IR for rendering targets. | IR + `analyze`, `walk`, `transforms` |
 | `@kyneta/cast` (exp.) | Web rendering target — consumes compiler IR, emits code calling delta regions. | `mount`, `hydrate`, five region primitives, `state()` |
-| `@kyneta/perspective` (exp., private) | Convergent Constraint Systems — standalone constraint-based approach to CRDTs. | `createReality`, `solve`, Datalog evaluator |
+| `@kyneta/perspective` (0.x, independent) | Convergent Constraint Systems — standalone constraint-based approach to CRDTs. | `createReality`, `solve`, Datalog evaluator |
 
 ## Dependency flow
 
@@ -105,7 +105,7 @@ Kyneta is a framework for collaborative, substrate-agnostic documents. You defin
    │
 @kyneta/machine (zero deps) ─► @kyneta/transport + the four transport clients
 
-@kyneta/perspective (standalone — private, zero kyneta deps)
+@kyneta/perspective (standalone — zero kyneta deps, versioned independently)
 ```
 
 Two tier-0 packages carry no Kyneta dependencies: `@kyneta/changefeed` (the reactive contract) and `@kyneta/machine` (the state-machine algebra). Everything else composes above them. The exchange sits at the confluence of schema (for substrates), transport (for wires), and changefeed (for reactive collections); the four concrete transports depend on wire and transport but not on exchange — they serve the exchange through the abstract `Transport<G>` contract.

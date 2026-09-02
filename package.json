@@ -6,9 +6,9 @@
   "main": "index.js",
   "scripts": {
     "build": "SKIP_BROTLI=1 turbo build",
-    "test": "turbo test --filter='!@kyneta/perspective'",
-    "verify": "SKIP_BROTLI=1 turbo verify --filter='!@kyneta/perspective'",
-    "release": "bun scripts/release.ts"
+    "test": "turbo test",
+    "verify": "SKIP_BROTLI=1 turbo verify",
+    "release": "release"
   },
   "keywords": [],
   "author": "",
@@ -17,6 +17,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.4.8",
     "@halecraft/plans": "0.1.0",
+    "@halecraft/release": "file:../release",
     "@halecraft/verify": "1.3.0",
     "@typescript/native-preview": "7.0.0-dev.20260322.1",
     "bun-types": "^1.3.11",

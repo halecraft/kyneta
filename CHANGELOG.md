@@ -1,3 +1,29 @@
+# 0.1.0
+
+`@kyneta/perspective` graduates from `experimental/` to `packages/` and
+publishes at 0.1.0, versioned independently of the core 3.x train.
+
+## Added
+
+- **`@kyneta/perspective@0.1.0` on npm** — Convergent Constraint Systems:
+  agents assert constraints, merge is set union, and a stratified Datalog
+evaluator derives the shared reality. Zero runtime dependencies. The full
+Unified CCS Engine: Layer 0 kernel, incremental DBSP-grounded pipeline,
+native LWW/Fugue fast paths, bootstrap with default solver rules.
+- **Independent versioning** — perspective declares
+  `"versioning": "independent"`; it is skipped by group and default bumps and
+tags its releases `@kyneta/perspective@0.x` rather than `v<core-version>`.
+
+## Changed
+
+- **Release tooling is now `@halecraft/release`** (`release.config.ts`, the
+  `release` script); `scripts/release.ts` is deleted. Publishing is idempotent
+— versions already on the registry are skipped — and core releases still tag
+`v<version>`.
+- **Root `verify`/`test` now include perspective** (the
+  `--filter='!@kyneta/perspective'` exclusions are removed); the publish gate
+covers the package it ships.
+
 # 3.0.0
 
 Upgrading from 2.x? See [docs/upgrading-3.0.md](docs/upgrading-3.0.md) — it

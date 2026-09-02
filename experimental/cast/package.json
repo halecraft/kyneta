@@ -7,7 +7,7 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/halecraft/kyneta",
-    "directory": "packages/cast"
+    "directory": "experimental/cast"
   },
   "private": true,
   "type": "module",

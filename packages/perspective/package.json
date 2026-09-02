@@ -1,15 +1,22 @@
 {
-  "name": "@kyneta/compiler",
-  "version": "1.8.0",
-  "description": "Incremental view maintenance compiler for structured deltas",
+  "name": "@kyneta/perspective",
+  "version": "0.1.0",
+  "description": "Convergent Constraint Systems - A constraint-based approach to CRDTs",
+  "versioning": "independent",
   "author": "Duane Johnson",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/halecraft/kyneta",
-    "directory": "experimental/compiler"
+    "directory": "packages/perspective"
   },
-  "private": true,
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -20,12 +27,9 @@
   ],
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
-    },
-    "./transforms": {
-      "import": "./dist/transforms.js",
-      "types": "./dist/transforms.d.ts"
+      "default": "./dist/index.js"
     }
   },
   "scripts": {
@@ -33,12 +37,15 @@
     "test": "verify logic",
     "verify": "verify"
   },
-  "dependencies": {
-    "@kyneta/changefeed": "workspace:^",
-    "@kyneta/schema": "workspace:^",
-    "ts-morph": "^25.0.0"
-  },
+  "keywords": [
+    "crdt",
+    "ccs",
+    "convergent-constraint-systems",
+    "collaborative",
+    "distributed"
+  ],
   "devDependencies": {
+    "@types/node": "^20.10.0",
     "tsdown": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

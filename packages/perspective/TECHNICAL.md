@@ -3,16 +3,16 @@
 > **Package**: `@kyneta/perspective`
 > **Role**: Convergent Constraint Systems (CCS) — a constraint-based approach to CRDTs. Agents assert constraints; merge is pure set union; a stratified Datalog evaluator derives the shared reality. Ships with an incremental DBSP-grounded pipeline for O(|Δ|) updates.
 > **Depends on**: zero runtime dependencies
-> **Depended on by**: Standalone experimental package — not imported by any other Kyneta package. Not published to npm.
+> **Depended on by**: Standalone published package — not imported by any other Kyneta package. Published at 0.1.0 under independent versioning.
 > **Canonical symbols**: `createReality`, `solve`, `insert`, `produceRoot`, `produceMapChild`, `produceSeqChild`, `produceValue`, `retract`, `ConstraintStore`, `createStore`, `Constraint`, `Rule`, `Agent`, `createAgent`, `CnId`, `createCnId`, `PeerID`, `VersionVector`, `AuthorityConstraint`, `PipelineConfig`, `RetractionConfig`, `evaluate`, `stratify`, `unify`, `aggregate`, `Fugue`, `LWW`, `incrementalFugue`, `incrementalLWW`, `ZSet` + operators, `STUB_SIGNATURE`
 > **Key invariant(s)**:
 > 1. **Rules are data, not code.** LWW value resolution and Fugue sequence ordering are ordinary `rule` constraints asserted at reality bootstrap. They travel in the store. Any agent with `CreateRule + Retract` capabilities can replace them — the reality changes, the engine doesn't.
 > 2. **Given the same store, any two correct implementations produce identical results.** Layer 0 (kernel) algorithms are mechanical; Layer 1 (Datalog evaluator) is deterministic. Implementation languages and optimization strategies are free to vary; the resolved reality is not.
 > 3. **Merge is set union.** Two constraint stores combine via pointwise set union — no ordering, no conflict resolution at merge time. All resolution happens at solve time.
 
-A self-contained experimental implementation of the Unified CCS Engine Specification (see `theory/unified-engine.md`). Every structural or content change is modeled as a *constraint* — a signed, CnId-addressed assertion. Stores merge via set union. To compute the current state, the solver runs a Datalog program over the constraints; the default LWW + Fugue rules are themselves constraints in the store.
+A self-contained implementation of the Unified CCS Engine Specification (see `theory/unified-engine.md`). Every structural or content change is modeled as a *constraint* — a signed, CnId-addressed assertion. Stores merge via set union. To compute the current state, the solver runs a Datalog program over the constraints; the default LWW + Fugue rules are themselves constraints in the store.
 
-Standalone — does not integrate with `@kyneta/schema`, `@kyneta/exchange`, or the rest of the framework. Lives in the monorepo for shared tooling and review; ships as a private package.
+Standalone — does not integrate with `@kyneta/schema`, `@kyneta/exchange`, or the rest of the framework. Lives in the monorepo for shared tooling and review; its `versioning: "independent"` keeps its 0.x releases off the core version train.
 
 ---
 
