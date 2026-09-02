@@ -30,7 +30,6 @@ import {
   evaluateDifferentialNegation,
   evaluatePositiveAtom,
   evaluateRuleDelta,
-  evaluateRuleSemiNaive,
   getNegationAtomIndices,
 } from "../../src/datalog/evaluate.js"
 import {
@@ -484,7 +483,7 @@ describe("evaluatePositiveAtom allEntries parameter (Plan 006.2 Phase 1)", () =>
 })
 
 describe("evaluateRuleDelta (Plan 006.2 Phase 1)", () => {
-  it("positive atom delta source: identical to old evaluateRuleSemiNaive", () => {
+  it("positive atom delta source: derives only from the delta", () => {
     // derived(X) :- base(X).
     const r = rule(atom("derived", [varTerm("X")]), [
       positiveAtom(atom("base", [varTerm("X")])),
@@ -575,23 +574,6 @@ describe("evaluateRuleDelta (Plan 006.2 Phase 1)", () => {
     expect(results).toHaveLength(1)
     expect(results[0]?.fact.predicate).toBe("winner")
     expect(results[0]?.weight).toBe(1) // unblocked → new derivation
-  })
-
-  it("evaluateRuleSemiNaive alias produces same results as evaluateRuleDelta", () => {
-    const r = rule(atom("derived", [varTerm("X")]), [
-      positiveAtom(atom("base", [varTerm("X")])),
-    ])
-
-    const fullDb = new Database()
-    fullDb.addFact(fact("base", ["a"]))
-
-    const delta = new Database()
-    delta.addFact(fact("base", ["b"]))
-
-    const resultNew = evaluateRuleDelta(r, fullDb, fullDb, delta, 0)
-    const resultOld = evaluateRuleSemiNaive(r, fullDb, delta, 0)
-
-    expect(resultNew).toEqual(resultOld)
   })
 
   it("positive atom delta with negative-weight entry produces retraction", () => {

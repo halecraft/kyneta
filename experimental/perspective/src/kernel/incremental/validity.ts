@@ -29,13 +29,8 @@
 // See .plans/005-incremental-kernel-pipeline.md § Phase 6.
 // See theory/incremental.md §5.2.
 
-import type { ZSet } from "../../base/zset.js"
-import {
-  zsetAdd,
-  zsetEmpty,
-  zsetForEach,
-  zsetSingleton,
-} from "../../base/zset.js"
+import type { ZSet, ZSetEntry } from "../../base/zset.js"
+import { zsetEmpty, zsetForEach, zsetFromEntries } from "../../base/zset.js"
 import {
   type AuthorityState,
   computeAuthority,
@@ -262,7 +257,7 @@ export function createIncrementalValidity(
    * Returns a Z-set delta of validity changes.
    */
   function recheckPeers(affectedPeers: Set<PeerID>): ZSet<Constraint> {
-    let delta = zsetEmpty<Constraint>()
+    const changes: [string, ZSetEntry<Constraint>][] = []
 
     for (const peer of affectedPeers) {
       const keys = peerIndex.get(peer)
@@ -280,18 +275,18 @@ export function createIncrementalValidity(
           // Was valid, now invalid → emit −1
           validKeys.delete(key)
           invalidKeys.add(key)
-          delta = zsetAdd(delta, zsetSingleton(key, c, -1))
+          changes.push([key, { element: c, weight: -1 }])
         } else if (!wasValid && isNowValid) {
           // Was invalid, now valid → emit +1
           invalidKeys.delete(key)
           validKeys.add(key)
-          delta = zsetAdd(delta, zsetSingleton(key, c, 1))
+          changes.push([key, { element: c, weight: 1 }])
         }
         // If status unchanged, no delta
       }
     }
 
-    return delta
+    return zsetFromEntries(changes)
   }
 
   // --- Public interface ---
@@ -318,7 +313,11 @@ export function createIncrementalValidity(
       }
     })
 
-    let result = zsetEmpty<Constraint>()
+    // Every validity change — from direct checks and from authority-driven
+    // rechecks alike — lands in one array and becomes a Z-set once. `zsetAdd`
+    // copies its larger operand, so folding would be quadratic; collecting
+    // also keeps the +1/−1 cancellation in a single pass.
+    const changes: [string, ZSetEntry<Constraint>][] = []
 
     // --- Pass 1: Process non-authority additions ---
     // Validate each against the current (pre-authority-update) state.
@@ -334,7 +333,7 @@ export function createIncrementalValidity(
       const error = validateConstraint(c)
       if (error === null) {
         validKeys.add(key)
-        result = zsetAdd(result, zsetSingleton(key, c, 1))
+        changes.push([key, { element: c, weight: 1 }])
       } else {
         invalidKeys.add(key)
         // Invalid — no delta emitted (constraint is held in invalid set)
@@ -369,7 +368,7 @@ export function createIncrementalValidity(
         const error = validateConstraint(ac)
         if (error === null) {
           validKeys.add(key)
-          result = zsetAdd(result, zsetSingleton(key, ac, 1))
+          changes.push([key, { element: ac, weight: 1 }])
         } else {
           invalidKeys.add(key)
         }
@@ -383,7 +382,7 @@ export function createIncrementalValidity(
       // that might now have different validity due to the authority change.
       if (affectedPeers.size > 0) {
         const recheckDelta = recheckPeers(affectedPeers)
-        result = zsetAdd(result, recheckDelta)
+        for (const [k, e] of recheckDelta) changes.push([k, e])
       }
     }
 
@@ -414,17 +413,17 @@ export function createIncrementalValidity(
         const affectedPeers = diffAuthorityStates(oldState, authorityState)
         if (affectedPeers.size > 0) {
           const recheckDelta = recheckPeers(affectedPeers)
-          result = zsetAdd(result, recheckDelta)
+          for (const [k, e] of recheckDelta) changes.push([k, e])
         }
       }
 
       // If it was valid, emit −1
       if (wasValid) {
-        result = zsetAdd(result, zsetSingleton(key, c, -1))
+        changes.push([key, { element: c, weight: -1 }])
       }
     }
 
-    return result
+    return zsetFromEntries(changes)
   }
 
   function current(): Constraint[] {

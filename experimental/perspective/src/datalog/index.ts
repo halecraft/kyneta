@@ -17,7 +17,6 @@ export {
   evaluatePositiveAtom,
   evaluateRule,
   evaluateRuleDelta,
-  evaluateRuleSemiNaive,
   getNegationAtomIndices,
   getPositiveAtomIndices,
   groundHead,
@@ -72,6 +71,7 @@ export type {
 // --- Type constructors & utilities ---
 export {
   _,
+  ALL_POSITIONS,
   aggregation,
   atom,
   compareValues,
@@ -89,12 +89,15 @@ export {
   negation,
   neq,
   ok,
+  type Probe,
   positiveAtom,
   Relation,
   rule,
+  serializeTuple,
   serializeValue,
   valuesEqual,
   varTerm,
+  type WeightedTuple,
   wildcard,
 } from "./types.js"
 // --- Unification ---
@@ -103,7 +106,6 @@ export {
   evaluateGuard,
   extendSubstitution,
   groundAtom,
-  matchAtomAgainstRelation,
   matchAtomWithTuple,
   resolveTerm,
   unifyTermWithValue,

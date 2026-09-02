@@ -310,10 +310,93 @@ interface RelationEntry {
   clampedWeight: number
 }
 
+/** A tuple paired with a Z-set weight — the shape relation reads return. */
+export interface WeightedTuple {
+  readonly tuple: FactTuple
+  readonly weight: number
+}
+
+// ---------------------------------------------------------------------------
+// Join index
+//
+// `_map` is keyed by the *whole* serialized tuple, so a partially-bound atom
+// like `adj(X1, Y1, _, _)` — where X1 and Y1 are already known — has no way to
+// find its matches except by walking every tuple. That scan is what made a
+// recursive spatial rule cost |frontier| x |adj| per iteration.
+//
+// A join index answers the partially-bound question directly: for a set of
+// known positions, it maps the values at those positions to the entries
+// carrying them.
+//
+// The positions are named by a **bitmask over the tuple arity**, and that
+// works because *which* positions are known at a given body position is
+// structural — it depends on the rule, not on the data. So a relation
+// accumulates only as many indexes as the rule set has distinct binding
+// patterns for it, which in practice is one or two.
+//
+// Indexes are built on first use and maintained on insert/delete thereafter,
+// so a relation nothing joins on never builds one. Weight *changes* need no
+// maintenance: buckets hold entry references and the reader applies the
+// weight filter.
+//
+// The nested-Map shape (key → tuple key → entry) is what makes removal O(1);
+// `kernel/structure-index.ts` uses the same shape for `childrenOf` for the
+// same reason.
+// ---------------------------------------------------------------------------
+
+/** boundValuesKey → (tupleKey → entry). */
+type JoinIndex = Map<string, Map<string, RelationEntry>>
+
+/**
+ * Relation size below which a scan beats the index that would replace it.
+ * Most kernel relations (LWW slots, Fugue siblings) never reach it.
+ */
+const MIN_INDEXED_SIZE = 16
+
+/**
+ * A partially-bound lookup: which tuple positions are known (`mask`), and the
+ * serialized values at them (`key`).
+ *
+ * The two travel together deliberately. A `key` computed for one mask used
+ * with a different mask would silently return a *subset* of the matches
+ * rather than a superset, which is the one way an index could change an
+ * answer instead of just narrowing the search. Bundling them makes that
+ * mistake unrepresentable.
+ */
+export interface Probe {
+  readonly mask: number
+  readonly key: string
+}
+
+const NO_CANDIDATES: readonly WeightedTuple[] = []
+
+/** Get or create the bucket for `key` in `index`. */
+function bucketOf(index: JoinIndex, key: string): Map<string, RelationEntry> {
+  let bucket = index.get(key)
+  if (bucket === undefined) {
+    bucket = new Map()
+    index.set(key, bucket)
+  }
+  return bucket
+}
+
 export class Relation {
   private readonly _map: Map<string, RelationEntry> = new Map()
 
-  /** Count of tuples with clampedWeight > 0 (i.e., "present" tuples). */
+  /**
+   * Join indexes by bound-position bitmask. `null` until the first
+   * `candidates()` call that wants one, so an unjoined relation pays nothing.
+   */
+  private _indexes: Map<number, JoinIndex> | null = null
+
+  /**
+   * Count of tuples with clampedWeight > 0 (i.e., "present" tuples).
+   *
+   * Note this is O(n) — it counts by iterating, because presence is derived
+   * from each entry's clamp rather than stored. It reads like `Map.size` but
+   * is not; use `allEntryCount` when you want the O(1) count and do not care
+   * about presence (query planning does exactly that).
+   */
   get size(): number {
     let count = 0
     for (const entry of this._map.values()) {
@@ -351,11 +434,8 @@ export class Relation {
    * entries). This prevents weight explosion in recursive rules — joins
    * see weight 1, not the true multiplicity.
    */
-  weightedTuples(): readonly {
-    readonly tuple: FactTuple
-    readonly weight: number
-  }[] {
-    const result: { tuple: FactTuple; weight: number }[] = []
+  weightedTuples(): readonly WeightedTuple[] {
+    const result: WeightedTuple[] = []
     for (const entry of this._map.values()) {
       if (entry.clampedWeight > 0) {
         result.push({ tuple: entry.tuple, weight: entry.clampedWeight })
@@ -373,15 +453,115 @@ export class Relation {
    * represent retractions and true multiplicities matter for the
    * provenance product.
    */
-  allWeightedTuples(): readonly {
-    readonly tuple: FactTuple
-    readonly weight: number
-  }[] {
-    const result: { tuple: FactTuple; weight: number }[] = []
+  allWeightedTuples(): readonly WeightedTuple[] {
+    const result: WeightedTuple[] = []
     for (const entry of this._map.values()) {
       result.push({ tuple: entry.tuple, weight: entry.weight })
     }
     return result
+  }
+
+  // -------------------------------------------------------------------------
+  // Storage — the ONLY two methods that touch `_map`'s membership.
+  //
+  // Everything that adds or removes an entry goes through this pair, so index
+  // maintenance has exactly one insert point and one delete point. Before this
+  // funnel there were thirteen raw `_map.set` / `_map.delete` sites, six of
+  // which would have needed maintenance and seven of which (inside `union`,
+  // `difference`, `subtract`, `clone`) were safe only because those build a
+  // fresh relation — an invariant nobody adding a new factory would know.
+  //
+  // Note that changing an existing entry's *weight* is not a membership
+  // change and deliberately does not go through here: buckets hold entry
+  // references, so a weight update is visible through the index for free.
+  // -------------------------------------------------------------------------
+
+  /** Store a new entry, adding it to every live index. */
+  private putEntry(key: string, entry: RelationEntry): void {
+    this._map.set(key, entry)
+    if (this._indexes === null) return
+    for (const [mask, index] of this._indexes) {
+      bucketOf(index, serializeTuple(entry.tuple, mask)).set(key, entry)
+    }
+  }
+
+  /** Remove an entry, dropping it from every live index. */
+  private dropEntry(key: string, entry: RelationEntry): void {
+    this._map.delete(key)
+    if (this._indexes === null) return
+    for (const [mask, index] of this._indexes) {
+      const bucketKey = serializeTuple(entry.tuple, mask)
+      const bucket = index.get(bucketKey)
+      if (bucket === undefined) continue
+      bucket.delete(key)
+      if (bucket.size === 0) index.delete(bucketKey)
+    }
+  }
+
+  /**
+   * Candidate tuples for an atom whose values at the probe's positions are
+   * already known — a **superset** of the true matches, in the same shape
+   * `weightedTuples()` (or `allWeightedTuples()`, when `allEntries`) would
+   * have returned.
+   *
+   * This is the join lookup. A rule body that has already bound `X1` and `Y1`
+   * in `adj(X1, Y1, X2, Y2)` asks for the ~4 tuples sharing those values
+   * instead of scanning all ~12k.
+   *
+   * **Why a superset is enough.** The caller unifies every candidate exactly
+   * as it did before, so the index can only narrow the search — it can never
+   * change an answer. A zero mask, or a relation too small to index, simply
+   * falls back to the full scan, which is why correctness never depends on an
+   * index existing.
+   *
+   * **Order is preserved.** A bucket is built by scanning `_map` in order and
+   * appended to at the same moment `_map` is appended to, so bucket order is
+   * always `_map` order restricted to that bucket's members. Candidates
+   * therefore arrive in exactly the relative order a full scan would produce
+   * them — which is why introducing the index does not perturb the order facts
+   * are derived in, nor any array downstream of `tuples()`.
+   */
+  candidates(probe: Probe, allEntries: boolean): readonly WeightedTuple[] {
+    const index = probe.mask === 0 ? null : this.indexFor(probe.mask)
+    if (index === null) {
+      return allEntries ? this.allWeightedTuples() : this.weightedTuples()
+    }
+
+    const bucket = index.get(probe.key)
+    if (bucket === undefined) return NO_CANDIDATES
+
+    const result: WeightedTuple[] = []
+    for (const entry of bucket.values()) {
+      if (allEntries) {
+        result.push({ tuple: entry.tuple, weight: entry.weight })
+      } else if (entry.clampedWeight > 0) {
+        result.push({ tuple: entry.tuple, weight: entry.clampedWeight })
+      }
+    }
+    return result
+  }
+
+  /**
+   * The index for `mask`, building it on first request.
+   *
+   * Returns `null` when the relation is too small for an index to pay for
+   * itself and none has been built yet — the caller then scans. Once an index
+   * exists it stays, even if the relation later shrinks below the threshold:
+   * it is already built and already maintained, so using it is free.
+   */
+  private indexFor(mask: number): JoinIndex | null {
+    const existing = this._indexes?.get(mask)
+    if (existing !== undefined) return existing
+    if (this._map.size < MIN_INDEXED_SIZE) return null
+
+    const index: JoinIndex = new Map()
+    for (const [tupleKey, entry] of this._map) {
+      bucketOf(index, serializeTuple(entry.tuple, mask)).set(tupleKey, entry)
+    }
+
+    if (this._indexes === null) this._indexes = new Map()
+    this._indexes.set(mask, index)
+    return index
   }
 
   /**
@@ -398,14 +578,14 @@ export class Relation {
       const oldClamped = existing.clampedWeight
       const newWeight = existing.weight + 1
       if (newWeight === 0) {
-        this._map.delete(key)
+        this.dropEntry(key, existing)
         return false
       }
       existing.weight = newWeight
       existing.clampedWeight = newWeight > 0 ? 1 : 0
       return oldClamped === 0 && existing.clampedWeight === 1
     }
-    this._map.set(key, { tuple, weight: 1, clampedWeight: 1 })
+    this.putEntry(key, { tuple, weight: 1, clampedWeight: 1 })
     return true
   }
 
@@ -431,14 +611,14 @@ export class Relation {
     if (existing !== undefined) {
       const newWeight = existing.weight + weight
       if (newWeight === 0) {
-        this._map.delete(key)
+        this.dropEntry(key, existing)
         return 0
       }
       existing.weight = newWeight
       existing.clampedWeight = newWeight > 0 ? 1 : 0
       return newWeight
     }
-    this._map.set(key, { tuple, weight, clampedWeight: weight > 0 ? 1 : 0 })
+    this.putEntry(key, { tuple, weight, clampedWeight: weight > 0 ? 1 : 0 })
     return weight
   }
 
@@ -464,11 +644,11 @@ export class Relation {
     if (existing === undefined) return false
     if (existing.clampedWeight <= 0) {
       // Already absent — prune and report no change.
-      this._map.delete(key)
+      this.dropEntry(key, existing)
       return false
     }
     // Was present — remove by deleting the entry entirely.
-    this._map.delete(key)
+    this.dropEntry(key, existing)
     return true
   }
 
@@ -481,7 +661,7 @@ export class Relation {
     const result = new Relation()
     for (const entry of this._map.values()) {
       if (entry.clampedWeight > 0) {
-        result._map.set(serializeTuple(entry.tuple), {
+        result.putEntry(serializeTuple(entry.tuple), {
           tuple: entry.tuple,
           weight: entry.weight,
           clampedWeight: entry.clampedWeight,
@@ -493,7 +673,7 @@ export class Relation {
         const key = serializeTuple(entry.tuple)
         const existing = result._map.get(key)
         if (existing === undefined) {
-          result._map.set(key, {
+          result.putEntry(key, {
             tuple: entry.tuple,
             weight: entry.weight,
             clampedWeight: entry.clampedWeight,
@@ -513,7 +693,7 @@ export class Relation {
     const result = new Relation()
     for (const entry of this._map.values()) {
       if (entry.clampedWeight > 0 && !other.has(entry.tuple)) {
-        result._map.set(serializeTuple(entry.tuple), {
+        result.putEntry(serializeTuple(entry.tuple), {
           tuple: entry.tuple,
           weight: entry.weight,
           clampedWeight: entry.clampedWeight,
@@ -552,7 +732,7 @@ export class Relation {
       const otherEntry = other._map.get(key)
       if (otherEntry === undefined) {
         // No corresponding entry in other — copy as-is.
-        result._map.set(key, {
+        result.putEntry(key, {
           tuple: entry.tuple,
           weight: entry.weight,
           clampedWeight: entry.clampedWeight,
@@ -560,7 +740,7 @@ export class Relation {
       } else {
         const newWeight = entry.weight - otherEntry.weight
         if (newWeight !== 0) {
-          result._map.set(key, {
+          result.putEntry(key, {
             tuple: entry.tuple,
             weight: newWeight,
             clampedWeight: newWeight > 0 ? 1 : 0,
@@ -575,7 +755,7 @@ export class Relation {
       if (!this._map.has(key)) {
         const negWeight = -entry.weight
         if (negWeight !== 0) {
-          result._map.set(key, {
+          result.putEntry(key, {
             tuple: entry.tuple,
             weight: negWeight,
             clampedWeight: negWeight > 0 ? 1 : 0,
@@ -591,7 +771,7 @@ export class Relation {
   clone(): Relation {
     const result = new Relation()
     for (const [key, entry] of this._map) {
-      result._map.set(key, {
+      result.putEntry(key, {
         tuple: entry.tuple,
         weight: entry.weight,
         clampedWeight: entry.clampedWeight,
@@ -771,12 +951,56 @@ export function serializeValue(v: Value): string {
   return `r:${v.ref.peer}:${v.ref.counter}`
 }
 
-function serializeTuple(tuple: FactTuple): string {
-  // Use a separator that cannot appear inside our serialized values
-  // (we prefix each value with its type tag, so '|' is safe)
+/**
+ * Selects every position. See `serializeTuple` for why this works at any
+ * arity, not just arities below 32.
+ */
+export const ALL_POSITIONS = -1
+
+/**
+ * **The one key discipline in this package.** Serialize the values at the
+ * tuple positions selected by `mask` and join them with `|`.
+ *
+ * Everything that needs a collision-free string identity for a sequence of
+ * values goes through here: `Relation`'s tuple keys, the join index's bucket
+ * keys, `factKey`, and aggregation's group keys. Keeping one implementation
+ * keeps one proof of the property they all depend on —
+ *
+ * **Injectivity.** Distinct value sequences always produce distinct keys.
+ * Every serialized value starts with a type tag (`N`, `T`/`F`, `f:`, `i:`,
+ * `s:`, `b:`, `r:`) and strings carry an explicit length, so the concatenation
+ * is uniquely decodable: you can always tell where one value ends and the next
+ * begins, even when a string value itself contains a `|`. Without that,
+ * `_map` could conflate two different tuples and the join index could return
+ * the wrong bucket.
+ *
+ * **Why `mask` and not two functions.** A partially-bound atom such as
+ * `adj(X1, Y1, _, _)` needs a key over just the bound positions, and it must
+ * be the *same* discipline as the full-tuple key or the index would be
+ * answering a different question than the relation asks. One function, one
+ * answer.
+ *
+ * **Arity subtlety — this looks accidental but is not.** `ALL_POSITIONS`
+ * (`-1`) selects every position at *any* arity, including 32 and above.
+ * JavaScript shifts the count modulo 32, so `1 << i` is always some nonzero
+ * power of two, and `-1 & nonzero` is always nonzero. A *masked* call is
+ * limited to arity ≤ 31 and callers must guard it — `planRuleEvaluation` in
+ * `evaluate.ts` does, by planning `mask = 0` (full scan) for wider atoms.
+ *
+ * Naming note: `resolve.ts` documents a `*Key` convention (`cnIdKey`,
+ * `factKey`, `fuguePairKey`) for functions that produce an *identity*. This is
+ * deliberately not a member of that family — it is the primitive those are
+ * built from, and a masked key is a partial key, not an identity.
+ */
+export function serializeTuple(
+  tuple: FactTuple,
+  mask: number = ALL_POSITIONS,
+): string {
   const parts: string[] = []
   for (let i = 0; i < tuple.length; i++) {
-    parts.push(serializeValue(tuple[i]!))
+    if ((mask & (1 << i)) !== 0) {
+      parts.push(serializeValue(tuple[i]!))
+    }
   }
   return parts.join("|")
 }
@@ -792,11 +1016,7 @@ function serializeTuple(tuple: FactTuple): string {
  * incremental projection's Z-set keying (Plan 005, Phase 5).
  */
 export function factKey(f: Fact): string {
-  const parts: string[] = [f.predicate]
-  for (const v of f.values) {
-    parts.push(serializeValue(v))
-  }
-  return parts.join("|")
+  return `${f.predicate}|${serializeTuple(f.values)}`
 }
 
 // ---------------------------------------------------------------------------

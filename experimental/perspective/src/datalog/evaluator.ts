@@ -18,13 +18,12 @@
 // See DBSP (Budiu & McSherry, 2023) §3.2 (Z-set joins), §4–5.
 // See theory/incremental.md §9.
 
-import type { ZSet } from "../base/zset.js"
+import type { ZSet, ZSetEntry } from "../base/zset.js"
 import {
-  zsetAdd,
   zsetEmpty,
   zsetForEach,
+  zsetFromEntries,
   zsetIsEmpty,
-  zsetSingleton,
 } from "../base/zset.js"
 import type { FugueBeforePair, ResolvedWinner } from "../kernel/resolve.js"
 import { fuguePairKey } from "../kernel/resolve.js"
@@ -42,6 +41,7 @@ import {
   stratify,
 } from "./stratify.js"
 import type {
+  AtomElement,
   BodyElement,
   Fact,
   ReadonlyDatabase,
@@ -309,7 +309,21 @@ export function evaluateStratumFromDelta(
       }
     } else if (inputDelta.hasAnyEntries()) {
       // Positive atom delta sources.
+      //
+      // Only atoms whose predicate actually changed are worth driving. If the
+      // delta holds nothing for this atom's predicate, `evaluatePositiveAtom`
+      // matches against an empty relation, yields zero substitutions, and
+      // `evaluateRuleDelta` provably returns []. Skipping is not a heuristic —
+      // it removes a call whose result is already known.
+      //
+      // Worth knowing: the negation loop below has always had this guard. The
+      // positive loop did not, and the cost was invisible because it produced
+      // no wrong answers, only a full |body[0]| x |body[1]| scan per iteration
+      // per predicate that happened not to have changed.
       for (const deltaIdx of positiveAtomIndices) {
+        const atomPred = (rule.body[deltaIdx]! as AtomElement).atom.predicate
+        if (inputDelta.getRelation(atomPred).allEntryCount === 0) continue
+
         const derived = evaluateRuleDelta(rule, dbOld, db, inputDelta, deltaIdx)
         for (const wf of derived) {
           seedDerived.push(wf)
@@ -365,8 +379,12 @@ export function evaluateStratumFromDelta(
 
     for (const rule of rules) {
       // Positive atom delta sources (asymmetric semi-naive).
+      // Same skip as the seed phase — see the comment there.
       const positiveAtomIndices = getPositiveAtomIndices(rule.body)
       for (const deltaIdx of positiveAtomIndices) {
+        const atomPred = (rule.body[deltaIdx]! as AtomElement).atom.predicate
+        if (currentDelta.getRelation(atomPred).allEntryCount === 0) continue
+
         const derived = evaluateRuleDelta(
           rule,
           dbOldIter,
@@ -692,22 +710,20 @@ function winnerFactsToResolution(deltaDb: Database): ZSet<ResolvedWinner> {
   }
 
   // Produce resolution delta with replacement semantics.
-  let result = zsetEmpty<ResolvedWinner>()
+  const resolved: [string, ZSetEntry<ResolvedWinner>][] = []
 
   for (const [slotId, slot] of bySlot) {
-    if (slot.plus !== null && slot.minus !== null) {
-      // Replacement: emit only +1 for the new winner.
-      result = zsetAdd(result, zsetSingleton(slotId, slot.plus, 1))
-    } else if (slot.plus !== null) {
-      // New winner: emit +1.
-      result = zsetAdd(result, zsetSingleton(slotId, slot.plus, 1))
+    if (slot.plus !== null) {
+      // New winner, or a replacement (both +1 and −1 present for the slot):
+      // either way only the +1 is emitted.
+      resolved.push([slotId, { element: slot.plus, weight: 1 }])
     } else if (slot.minus !== null) {
       // Winner removed: emit −1.
-      result = zsetAdd(result, zsetSingleton(slotId, slot.minus, -1))
+      resolved.push([slotId, { element: slot.minus, weight: -1 }])
     }
   }
 
-  return result
+  return zsetFromEntries(resolved)
 }
 
 /**
@@ -724,7 +740,7 @@ function fuguePairFactsToResolution(deltaDb: Database): ZSet<FugueBeforePair> {
     return zsetEmpty<FugueBeforePair>()
   }
 
-  let result = zsetEmpty<FugueBeforePair>()
+  const pairs: [string, ZSetEntry<FugueBeforePair>][] = []
 
   for (const { tuple, weight } of entries) {
     const pair: FugueBeforePair = {
@@ -732,11 +748,39 @@ function fuguePairFactsToResolution(deltaDb: Database): ZSet<FugueBeforePair> {
       a: tuple[1] as string,
       b: tuple[2] as string,
     }
-    const key = fuguePairKey(pair)
-    result = zsetAdd(result, zsetSingleton(key, pair, weight > 0 ? 1 : -1))
+    pairs.push([
+      fuguePairKey(pair),
+      { element: pair, weight: weight > 0 ? 1 : -1 },
+    ])
   }
 
-  return result
+  return zsetFromEntries(pairs)
+}
+
+/**
+ * Convert a delta `Database` into a `ZSet<Fact>` of everything it changed.
+ *
+ * Weights are normalised to ±1: the delta already records presence changes,
+ * so multiplicity carries no extra information downstream.
+ */
+function derivedFactsToZSet(deltaDb: Database): ZSet<Fact> {
+  const entries: [string, ZSetEntry<Fact>][] = []
+  for (const pred of deltaDb.predicates()) {
+    for (const { tuple, weight } of deltaDb
+      .getRelation(pred)
+      .allWeightedTuples()) {
+      const f: Fact = { predicate: pred, values: tuple }
+      entries.push([factKey(f), { element: f, weight: weight > 0 ? 1 : -1 }])
+    }
+  }
+  return zsetFromEntries(entries)
+}
+
+/** Convert ground facts into an insertion Z-set (every weight +1). */
+function groundFactsToZSet(facts: readonly Fact[]): ZSet<Fact> {
+  return zsetFromEntries(
+    facts.map(f => [factKey(f), { element: f, weight: 1 }]),
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -876,14 +920,14 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
     after: Database,
     derivedPreds: ReadonlySet<string>,
   ): ZSet<Fact> {
-    let delta = zsetEmpty<Fact>()
+    const entries: [string, ZSetEntry<Fact>][] = []
 
     // Facts added (in after but not before).
     for (const pred of derivedPreds) {
       for (const tuple of after.getRelation(pred).tuples()) {
         const f: Fact = { predicate: pred, values: tuple }
         if (!before.hasFact(f)) {
-          delta = zsetAdd(delta, zsetSingleton(factKey(f), f, 1))
+          entries.push([factKey(f), { element: f, weight: 1 }])
         }
       }
     }
@@ -893,12 +937,12 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
       for (const tuple of before.getRelation(pred).tuples()) {
         const f: Fact = { predicate: pred, values: tuple }
         if (!after.hasFact(f)) {
-          delta = zsetAdd(delta, zsetSingleton(factKey(f), f, -1))
+          entries.push([factKey(f), { element: f, weight: -1 }])
         }
       }
     }
 
-    return delta
+    return zsetFromEntries(entries)
   }
 
   // --- Public interface ---
@@ -1069,19 +1113,11 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
 
       const deltaResolved = winnerFactsToResolution(outputDelta)
       const deltaFuguePairs = fuguePairFactsToResolution(outputDelta)
-      let deltaDerived = zsetEmpty<Fact>()
-      for (const pred of outputDelta.predicates()) {
-        for (const { tuple, weight } of outputDelta
-          .getRelation(pred)
-          .allWeightedTuples()) {
-          const f: Fact = { predicate: pred, values: tuple }
-          deltaDerived = zsetAdd(
-            deltaDerived,
-            zsetSingleton(factKey(f), f, weight > 0 ? 1 : -1),
-          )
-        }
+      return {
+        deltaResolved,
+        deltaFuguePairs,
+        deltaDerived: derivedFactsToZSet(outputDelta),
       }
-      return { deltaResolved, deltaFuguePairs, deltaDerived }
     }
 
     hasBeenStepped = true
@@ -1180,20 +1216,11 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
 
     // 7. Build deltaDerived ZSet from the output delta Database.
     // Use allWeightedTuples() to include negative-weight (retracted) entries.
-    let deltaDerived = zsetEmpty<Fact>()
-    for (const pred of outputDelta.predicates()) {
-      for (const { tuple, weight } of outputDelta
-        .getRelation(pred)
-        .allWeightedTuples()) {
-        const f: Fact = { predicate: pred, values: tuple }
-        deltaDerived = zsetAdd(
-          deltaDerived,
-          zsetSingleton(factKey(f), f, weight > 0 ? 1 : -1),
-        )
-      }
+    return {
+      deltaResolved,
+      deltaFuguePairs,
+      deltaDerived: derivedFactsToZSet(outputDelta),
     }
-
-    return { deltaResolved, deltaFuguePairs, deltaDerived }
   }
 
   function currentDatabase(): Database {
@@ -1286,11 +1313,7 @@ export function evaluateUnified(
 
   // Create evaluator and step with all facts.
   const evaluator = createEvaluator(rules)
-  let factsZSet = zsetEmpty<Fact>()
-  for (const f of facts) {
-    factsZSet = zsetAdd(factsZSet, zsetSingleton(factKey(f), f, 1))
-  }
-  evaluator.step(factsZSet, zsetEmpty())
+  evaluator.step(groundFactsToZSet(facts), zsetEmpty())
 
   return ok(evaluator.currentDatabase())
 }
@@ -1317,11 +1340,7 @@ export function evaluatePositiveUnified(
   }
 
   const evaluator = createEvaluator(rules)
-  let factsZSet = zsetEmpty<Fact>()
-  for (const f of facts) {
-    factsZSet = zsetAdd(factsZSet, zsetSingleton(factKey(f), f, 1))
-  }
-  evaluator.step(factsZSet, zsetEmpty())
+  evaluator.step(groundFactsToZSet(facts), zsetEmpty())
 
   return evaluator.currentDatabase()
 }

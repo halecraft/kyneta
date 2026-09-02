@@ -16,7 +16,6 @@ import {
   EMPTY_SUBSTITUTION,
   extendSubstitution,
   groundAtom,
-  matchAtomAgainstRelation,
   matchAtomWithTuple,
   resolveTerm,
   unifyTermWithValue,
@@ -409,51 +408,5 @@ describe("groundAtom", () => {
     const sub = extendSubstitution(EMPTY_SUBSTITUTION, "X", null)
     const result = groundAtom(a, sub)
     expect(result).toEqual([null])
-  })
-})
-
-// ---------------------------------------------------------------------------
-// matchAtomAgainstRelation
-// ---------------------------------------------------------------------------
-
-describe("matchAtomAgainstRelation", () => {
-  it("matches against multiple tuples", () => {
-    const a = atom("edge", [constTerm("a"), varTerm("Y")])
-    const tuples: Value[][] = [
-      ["a", "b"],
-      ["a", "c"],
-      ["b", "c"],
-    ]
-    const results = matchAtomAgainstRelation(a, tuples, EMPTY_SUBSTITUTION)
-    expect(results).toHaveLength(2) // only the 'a' rows
-    expect(results[0]?.bindings.get("Y")).toBe("b")
-    expect(results[1]?.bindings.get("Y")).toBe("c")
-  })
-
-  it("returns empty for no matches", () => {
-    const a = atom("edge", [constTerm("z"), varTerm("Y")])
-    const tuples: Value[][] = [
-      ["a", "b"],
-      ["c", "d"],
-    ]
-    const results = matchAtomAgainstRelation(a, tuples, EMPTY_SUBSTITUTION)
-    expect(results).toHaveLength(0)
-  })
-
-  it("returns empty for empty relation", () => {
-    const a = atom("edge", [varTerm("X"), varTerm("Y")])
-    const results = matchAtomAgainstRelation(a, [], EMPTY_SUBSTITUTION)
-    expect(results).toHaveLength(0)
-  })
-
-  it("properly constrains across multiple matches", () => {
-    const a = atom("edge", [varTerm("X"), varTerm("X")]) // self-loop
-    const tuples: Value[][] = [
-      ["a", "a"],
-      ["a", "b"],
-      ["b", "b"],
-    ]
-    const results = matchAtomAgainstRelation(a, tuples, EMPTY_SUBSTITUTION)
-    expect(results).toHaveLength(2) // 'a','a' and 'b','b'
   })
 })

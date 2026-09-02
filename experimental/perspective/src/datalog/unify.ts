@@ -15,11 +15,12 @@ import type {
   Atom,
   FactTuple,
   GuardElement,
+  Probe,
   Substitution,
   Term,
   Value,
 } from "./types.js"
-import { evaluateGuardOp, valuesEqual } from "./types.js"
+import { evaluateGuardOp, serializeTuple, valuesEqual } from "./types.js"
 
 // ---------------------------------------------------------------------------
 // Substitution helpers
@@ -120,6 +121,95 @@ export function unifyTermWithValue(
 }
 
 // ---------------------------------------------------------------------------
+// The known positions of an atom
+//
+// A join lookup needs two things: *which* of an atom's positions have known
+// values, and *what* those values are. Both questions are asked from four
+// places — positive atoms, negation, differential negation and aggregation —
+// so both live here, once.
+// ---------------------------------------------------------------------------
+
+/** Atoms wider than this cannot be described by a 32-bit position mask. */
+const MAX_MASKABLE_ARITY = 31
+
+/**
+ * Anything that can answer "is this variable bound?".
+ *
+ * Deliberately structural: the planner tracks bound variables in a `Set` while
+ * body-element evaluators read them off a `Substitution`'s bindings `Map`.
+ * Both satisfy this, so one function serves both.
+ */
+export interface BoundNames {
+  has(name: string): boolean
+}
+
+/**
+ * Bitmask of the atom positions whose values are already known — constants,
+ * plus variables in `bound`.
+ *
+ * Returns `0` for atoms too wide to mask, which the caller reads as "nothing
+ * known" and answers with a full scan. Degrading rather than masking a wrong
+ * position is the point.
+ */
+export function knownPositions(a: Atom, bound: BoundNames): number {
+  if (a.terms.length > MAX_MASKABLE_ARITY) return 0
+
+  let mask = 0
+  for (let i = 0; i < a.terms.length; i++) {
+    const term = a.terms[i]!
+    if (
+      term.kind === "const" ||
+      (term.kind === "var" && bound.has(term.name))
+    ) {
+      mask |= 1 << i
+    }
+  }
+  return mask
+}
+
+/**
+ * Collect the values at the atom positions marked in `mask`.
+ *
+ * Pure *resolution* — reading values that are already known. It deliberately
+ * does not decide which positions those are: for a positive atom
+ * `planRuleEvaluation` decided that once, statically, so this does not
+ * re-derive it per substitution.
+ *
+ * Assumes `mask` came from the same atom, so every marked position resolves.
+ * Private on purpose: `probeFor` is the only way to build a probe, so a key
+ * can never be built for one mask and used with another.
+ */
+function boundValues(a: Atom, mask: number, sub: Substitution): Value[] {
+  const values: Value[] = []
+  for (let i = 0; i < a.terms.length; i++) {
+    if ((mask & (1 << i)) === 0) continue
+    const term = a.terms[i]!
+    if (term.kind === "const") {
+      values.push(term.value)
+    } else if (term.kind === "var") {
+      const bound = sub.bindings.get(term.name)
+      // A Value may be null but never undefined, so `undefined` here would
+      // mean the planner marked an unbound position — impossible by
+      // construction, but null is the safe reading either way.
+      values.push(bound === undefined ? null : bound)
+    }
+  }
+  return values
+}
+
+/**
+ * The join-index probe for `a` under `sub`, over the positions in `mask`.
+ *
+ * Mask and key are built together and travel together, so a key computed for
+ * one mask can never reach `Relation.candidates` alongside another — that
+ * mistake would return a subset rather than a superset, which is the one way
+ * an index could change an answer instead of narrowing the search.
+ */
+export function probeFor(a: Atom, mask: number, sub: Substitution): Probe {
+  return { mask, key: serializeTuple(boundValues(a, mask, sub)) }
+}
+
+// ---------------------------------------------------------------------------
 // Matching an atom against a ground fact tuple
 // ---------------------------------------------------------------------------
 
@@ -189,34 +279,6 @@ export function groundAtom(a: Atom, sub: Substitution): FactTuple | null {
     }
   }
   return values
-}
-
-// ---------------------------------------------------------------------------
-// Matching a full atom against a relation (set of tuples)
-// ---------------------------------------------------------------------------
-
-/**
- * Find all substitutions that result from matching an atom against every
- * tuple in a relation, extending the given base substitution.
- *
- * This is the core "join" operation: for each tuple that matches, we get
- * an extended substitution. Weight is preserved through matching — weight
- * multiplication (for Z-set join semantics) is handled by the caller
- * (evaluatePositiveAtom).
- */
-export function matchAtomAgainstRelation(
-  a: Atom,
-  tuples: readonly FactTuple[],
-  baseSub: Substitution,
-): Substitution[] {
-  const results: Substitution[] = []
-  for (const tuple of tuples) {
-    const extended = matchAtomWithTuple(a, tuple, baseSub)
-    if (extended !== null) {
-      results.push(extended)
-    }
-  }
-  return results
 }
 
 // ---------------------------------------------------------------------------

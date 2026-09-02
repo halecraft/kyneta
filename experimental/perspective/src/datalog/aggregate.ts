@@ -25,41 +25,36 @@ import type {
   Substitution,
   Value,
 } from "./types.js"
-import { compareValues, serializeValue } from "./types.js"
-import { matchAtomWithTuple } from "./unify.js"
+import { compareValues, serializeTuple } from "./types.js"
+import { knownPositions, matchAtomWithTuple, probeFor } from "./unify.js"
 
 // ---------------------------------------------------------------------------
 // Group key computation
 // ---------------------------------------------------------------------------
 
 /**
- * Compute a string key for the grouping variables in a substitution.
- * The key is deterministic: same bindings produce the same key.
+ * Resolve the grouping variables to their bound values.
+ *
+ * Returns `null` if any grouping variable is unbound — such a substitution
+ * cannot form a group and is skipped. A variable *bound to null* is a
+ * different thing and produces a `null` entry in the result, which is fine.
+ *
+ * This replaces a former `groupKey` + `groupValues` pair that walked the same
+ * `groupBy` list twice and disagreed about the unbound case: `groupKey`
+ * returned `null` (skip) while `groupValues` silently substituted `null`
+ * (a group keyed on nothing). That was harmless only because the key was
+ * always computed first; resolving once removes the trap.
  */
-function groupKey(
+function resolveGroupValues(
   groupBy: readonly string[],
   sub: Substitution,
-): string | null {
-  const parts: string[] = []
-  for (const varName of groupBy) {
-    const val = sub.bindings.get(varName)
-    if (val === undefined && !sub.bindings.has(varName)) {
-      // Unbound grouping variable — can't form a group
-      return null
-    }
-    // val may be null (bound to null) which is fine
-    parts.push(serializeValue(val === undefined ? null : val))
-  }
-  return parts.join("|")
-}
-
-/**
- * Extract the bound values for grouping variables from a substitution.
- */
-function groupValues(groupBy: readonly string[], sub: Substitution): Value[] {
+): Value[] | null {
   const values: Value[] = []
   for (const varName of groupBy) {
     const val = sub.bindings.get(varName)
+    if (val === undefined && !sub.bindings.has(varName)) {
+      return null
+    }
     values.push(val === undefined ? null : val)
   }
   return values
@@ -106,18 +101,28 @@ export function evaluateAggregation(
   baseSub: Substitution,
 ): Substitution[] {
   const relation = db.getRelation(agg.source.predicate)
-  const tuples = relation.tuples()
+
+  // Narrow to the tuples that agree with what `baseSub` already binds, the
+  // same join lookup positive atoms use. Aggregation has no plan step of its
+  // own, so it works the mask out from the incoming substitution. Candidates
+  // are a superset, so `matchAtomWithTuple` below still decides every match.
+  const mask = knownPositions(agg.source, baseSub.bindings)
+  const candidates =
+    mask === 0
+      ? relation.weightedTuples()
+      : relation.candidates(probeFor(agg.source, mask, baseSub), false)
 
   // Step 1: Match source atom against all tuples, collecting groups.
   const groups = new Map<string, AggregationGroup>()
 
-  for (const tuple of tuples) {
+  for (const { tuple } of candidates) {
     const matched = matchAtomWithTuple(agg.source, tuple, baseSub)
     if (matched === null) continue
 
-    // Extract grouping key
-    const key = groupKey(agg.groupBy, matched)
-    if (key === null) continue
+    // Resolve the grouping variables once; the key is derived from them.
+    const groupVals = resolveGroupValues(agg.groupBy, matched)
+    if (groupVals === null) continue
+    const key = serializeTuple(groupVals)
 
     // Extract the `over` variable value
     const overVal = matched.bindings.get(agg.over)
@@ -129,10 +134,7 @@ export function evaluateAggregation(
 
     let group = groups.get(key)
     if (group === undefined) {
-      group = {
-        groupVals: groupValues(agg.groupBy, matched),
-        overValues: [],
-      }
+      group = { groupVals, overValues: [] }
       groups.set(key, group)
     }
     // Mutable push — we own the array

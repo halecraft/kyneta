@@ -22,11 +22,12 @@
 // See Plan 006.1 Phase 3: Wire Unified Evaluator into Pipeline.
 // See theory/incremental.md §9.7 (native solver fast path).
 
-import type { ZSet } from "../../base/zset.js"
+import type { ZSet, ZSetEntry } from "../../base/zset.js"
 import {
   zsetAdd,
   zsetEmpty,
   zsetForEach,
+  zsetFromEntries,
   zsetIsEmpty,
   zsetSingleton,
 } from "../../base/zset.js"
@@ -72,24 +73,29 @@ export function routeFactsByPredicate(deltaFacts: ZSet<Fact>): {
   fugueFacts: ZSet<Fact>
   otherFacts: ZSet<Fact>
 } {
-  let lwwFacts = zsetEmpty<Fact>()
-  let fugueFacts = zsetEmpty<Fact>()
-  let otherFacts = zsetEmpty<Fact>()
+  // One bucket per destination, filled in a single pass. Folding singletons
+  // with `zsetAdd` would copy each growing bucket per fact — quadratic.
+  const lww: [string, ZSetEntry<Fact>][] = []
+  const fugue: [string, ZSetEntry<Fact>][] = []
+  const other: [string, ZSetEntry<Fact>][] = []
 
   zsetForEach(deltaFacts, (entry, key) => {
     const pred = entry.element.predicate
-    const singleton = zsetSingleton(key, entry.element, entry.weight)
 
     if (pred === "active_value") {
-      lwwFacts = zsetAdd(lwwFacts, singleton)
+      lww.push([key, entry])
     } else if (pred === "active_structure_seq" || pred === "constraint_peer") {
-      fugueFacts = zsetAdd(fugueFacts, singleton)
+      fugue.push([key, entry])
     } else {
-      otherFacts = zsetAdd(otherFacts, singleton)
+      other.push([key, entry])
     }
   })
 
-  return { lwwFacts, fugueFacts, otherFacts }
+  return {
+    lwwFacts: zsetFromEntries(lww),
+    fugueFacts: zsetFromEntries(fugue),
+    otherFacts: zsetFromEntries(other),
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -245,21 +251,23 @@ function diffResolution(
     }
   }
 
-  let deltaFuguePairs = zsetEmpty<FugueBeforePair>()
+  // Collect then build once: `zsetAdd` copies its larger operand, so folding
+  // singletons over a diff would be quadratic in the number of changed pairs.
+  const pairChanges: [string, ZSetEntry<FugueBeforePair>][] = []
 
   for (const [key, p] of newFlat) {
     if (!oldFlat.has(key)) {
-      deltaFuguePairs = zsetAdd(deltaFuguePairs, zsetSingleton(key, p, 1))
+      pairChanges.push([key, { element: p, weight: 1 }])
     }
   }
 
   for (const [key, p] of oldFlat) {
     if (!newFlat.has(key)) {
-      deltaFuguePairs = zsetAdd(deltaFuguePairs, zsetSingleton(key, p, -1))
+      pairChanges.push([key, { element: p, weight: -1 }])
     }
   }
 
-  return { deltaResolved, deltaFuguePairs }
+  return { deltaResolved, deltaFuguePairs: zsetFromEntries(pairChanges) }
 }
 
 // ---------------------------------------------------------------------------
@@ -285,11 +293,11 @@ function datalogCurrentResolution(datalog: Evaluator): ResolutionResult {
  * Used for bootstrapping a strategy from accumulated facts.
  */
 function factsToZSet(facts: readonly Fact[]): ZSet<Fact> {
-  let zs = zsetEmpty<Fact>()
-  for (const f of facts) {
-    zs = zsetAdd(zs, zsetSingleton(factKey(f), f, 1))
-  }
-  return zs
+  // Built in one pass. This runs over the *whole* accumulated fact set, not a
+  // small delta, so folding singletons here was genuinely quadratic.
+  return zsetFromEntries(
+    facts.map(f => [factKey(f), { element: f, weight: 1 }]),
+  )
 }
 
 // ---------------------------------------------------------------------------

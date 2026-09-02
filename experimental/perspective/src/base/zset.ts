@@ -118,6 +118,18 @@ export function zsetFromEntries<T>(
  * For each key present in either input:
  *   result(key) = a(key) + b(key)
  *
+ * **Cost — read this before reaching for it.** This copies the larger operand,
+ * so it is O(|larger|). It is for combining two Z-sets you have already
+ * assembled. It is *not* for accumulating one element at a time: folding
+ * `acc = zsetAdd(acc, zsetSingleton(...))` over n elements copies a growing
+ * map n times, which is O(n²). Collect `[key, entry]` pairs and call
+ * `zsetFromEntries` once instead — it sums duplicate keys and prunes zeros
+ * just the same, in one pass.
+ *
+ * That fold used to appear at ten sites in the Datalog evaluator and was
+ * invisible until the joins around it got fast, at which point it was 90% of
+ * the remaining runtime.
+ *
  * Zero-weight entries are pruned. When weights are summed, the element
  * value from the entry with the non-zero contribution is preserved. If
  * both contribute non-zero weight, the element from `b` is used (the

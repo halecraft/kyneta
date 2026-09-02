@@ -77,7 +77,7 @@ Plus a top-level bootstrap (`src/bootstrap.ts`) that creates a new reality with 
 - **Not integrated with the rest of Kyneta.** Separate dependency graph, separate experimental status. Designed to be evaluated in isolation.
 - **Not a database.** No query language beyond the solver. No indexes for arbitrary lookup.
 - **Not production-ready.** Marked experimental in `package.json`; private (no npm publish). The Unified CCS Engine Specification is the authoritative document — this is its reference implementation.
-- **Not performant at scale without the §B.7 fast paths.** Pure Datalog evaluation of LWW over 10⁴ values is O(n²) without the native solver shortcut.
+- **Not performant at scale without the §B.7 fast paths *for the default rules*.** Pure Datalog evaluation of LWW over 10⁴ values is O(n²) without the native solver shortcut — but note that quadratic is in the *rule*, not the evaluator: `superseded` pairs every value against every other, so the join genuinely has n² answers. That is what §B.7 exists for. General Datalog joins are indexed (see [Evaluator performance](#evaluator-performance)); a rule whose output is linear now evaluates in linear time.
 
 ---
 
@@ -408,11 +408,82 @@ Constructors: `rule`, `atom`, `positiveAtom`, `negation`, `eq`, `neq`, `lt`, `gt
 
 `count`, `min`, `max`, `sum`, `collect(x)`. Used sparingly in the default rule set — primarily for compaction policy and Fugue-position tie-breaking.
 
+### The rule evaluation plan — the evaluator's functional core
+
+Source: `src/datalog/evaluate.ts` → `planRuleEvaluation`.
+
+Evaluating a rule body involves four decisions, and none of them needs to look at a tuple:
+
+| Decision | Answer lives in |
+|----------|-----------------|
+| Which database does this element read? | `step.source` — `"delta"`, `"new"` (P_new) or `"old"` (P_old) |
+| Which element does the delta drive? | `step.isDeltaSource` |
+| Which of an atom's positions are already known? | `step.mask` — a bitmask over the tuple arity |
+| In what order should elements be visited? | the plan's order |
+
+All four follow from the rule's shape plus relation *sizes*, so they are lifted into a pure function: **GATHER** (sizes) → **PLAN** (`EvalStep[]`) → **EXECUTE** (a fold over the steps). `evaluateRuleDelta` and `evaluateRule` are both folds and contain no decisions; they differ only in which plan they ask for (`evaluateRule` passes `deltaIdx = -1`).
+
+Two things this buys beyond tidiness. The mask is computed once per rule instead of rediscovered per substitution. And join order — the one decision that is a genuine judgement call, and the only one that changes the order facts are derived in — becomes directly testable without constructing a `Database` (`tests/datalog/plan.test.ts`).
+
+**Precondition, now explicit.** A static mask is correct only if every substitution arriving at a step has the same set of bound variables. That holds because binding is structural: a positive atom binds all its variables or the substitution is discarded, negation and guards bind nothing, aggregation binds `groupBy` plus `result`. This was always true and never written down.
+
+**Ordering is smallest-first, greedily.** An atom with no known position enumerates its whole relation; one with a known position is an indexed lookup. So the planner repeatedly takes whichever element is cheapest right now, since each choice binds variables that make the rest cheaper. Neither fixed order works: leading with the delta is right for a one-fact tick but wrong during a batch seed, where the "delta" is every ground fact. A body containing an `aggregation` keeps source order — aggregation is a group-by boundary that resets provenance weight and does not commute with joins.
+
+### Evaluator performance
+
+The Datalog evaluator had **four independent super-linear costs**, found while the Grame team was evaluating this package as a game runtime. A 100×30 grid with materialized 4-neighbour adjacency (14,741 facts) took **32 s** to flood; it now takes **~70 ms**. Per-tick incremental cost — one ground fact in, one derived fact out, over an 18k-fact database — went from 0.83 ms to **0.016 ms**.
+
+Unification counts for the full three-rule program on a 50×30 grid, after each fix cumulatively:
+
+| Fix | Unifications | Wall clock |
+|---|---|---|
+| baseline | 379,327,971 | 5,550 ms |
+| Prune empty delta sources | 20,006,843 | 1,515 ms |
+| Join index | 19,335 | 1,275 ms |
+| Linear Z-set construction | 19,335 | **44 ms** |
+| Selectivity ordering | — | tick: 0.99 → 0.03 ms |
+
+1. **Unpruned delta sources.** `evaluateStratumFromDelta` drove *every* positive body atom as a semi-naive delta source, including atoms whose predicate had no facts in the delta — a full cross-product scan per iteration that derived nothing. The negation path had always guarded this; the positive path had not.
+2. **Unindexed joins.** See below.
+3. **Quadratic Z-set construction.** Z-sets were built by folding `zsetAdd(acc, zsetSingleton(...))`. `zsetAdd` copies its larger operand, so building an n-element Z-set cost O(n²). This was 90% of the remaining runtime once the joins were fast — and completely invisible before that.
+4. **Fixed left-to-right body order.** See the rule evaluation plan above.
+
+**The sequencing is the lesson.** Fixes 1 and 2 account for 99.995% of the *work*, but until fix 3 also landed the *clock* barely moved. Any one of them alone looks like a disappointment. A profiler run after each change was worth more than the static reading that found the first one.
+
+### The join index
+
+Source: `src/datalog/types.ts` → `Relation.candidates`.
+
+`Relation` is a `Map` keyed by the *whole* serialized tuple, so a partially-bound atom like `adj(X1, Y1, _, _)` had no way to find its matches except by walking every tuple. The index answers that question directly: for a set of known positions (a bitmask), it maps the values at those positions to the entries carrying them.
+
+- **Lazy and self-maintaining.** Built on first use for a given mask, maintained on insert/delete after that. A relation nothing joins on never builds one. Below `MIN_INDEXED_SIZE` (16 entries) a scan is cheaper, so `candidates()` falls back to one — most kernel relations (LWW slots, Fugue siblings) never cross it.
+- **Bounded in count.** Masks are structural, not data-dependent, so a relation accumulates only as many indexes as the rule set has distinct binding patterns for it. One or two, in practice.
+- **Superset contract.** `candidates()` returns a superset of the true matches and the caller unifies each one exactly as before, so the index can only narrow the search — never change an answer. That is why correctness never depends on an index existing.
+- **Order-preserving.** A bucket is built by scanning the map in order and appended to at the same moment the map is, so bucket order is always map order restricted to the bucket's members. Candidates arrive in exactly the relative order a full scan would produce, which is why indexing perturbs no array downstream of `tuples()`.
+- **One equality notion.** Index keys come from `serializeTuple(tuple, mask)` — the same function that builds the relation's own tuple keys, `factKey`, and aggregation's group keys. The index introduces no new notion of equality, only a coarser one.
+
+Every mutation of a relation's membership funnels through two private methods (`putEntry` / `dropEntry`), so index maintenance has exactly one insert point and one delete point. Adding a new `Relation` factory that writes the backing map directly would silently break the index; do not.
+
+### Gotchas
+
+- **`Relation.size` is O(n), not `Map.size`.** It counts present tuples by iterating, because presence is derived from each entry's clamp rather than stored. Use `allEntryCount` when you want the O(1) count and do not care about presence — query planning does exactly that.
+- **A `Value` placed in a relation is owned by the relation.** Mutating it afterwards corrupts tuple identity: `has` / `getWeight` / `remove` recompute the key from the mutated bytes and miss. Only `Uint8Array` values are mutable, so this is the only way to hit it. Pre-existing, but the join index makes the failure quieter — a stale bucket entry yields a wrong candidate set rather than a missed lookup.
+- **`extractWinners` assumes one winner per slot.** It does `winners.set(slotId, ...)` while iterating the `winner` relation, so a second winner for the same slot would silently overwrite the first. The LWW rules guarantee exactly one; selectivity-ordered evaluation makes relation iteration order less predictable, so the invariant is worth stating rather than assuming.
+- **Per-iteration `applyDistinct` was measured and does not help.** `applyDistinct` walks the *whole accumulated* dirty map on every semi-naive iteration — O(|dirty| × iterations), 384k `getWeight` calls on a 100×30 flood — and looks like an obvious win in a profile. Restricting it to the facts touched in the current iteration is provably equivalent (after iteration *k* every dirty weight is ≥ 0, so only facts touched in *k+1* can go negative). Prototyped, measured, effect on this workload: **none** (1,275 ms → 1,268 ms). It may still matter where iterations are many and Z-set construction is not dominating.
+
+### Known follow-ups
+
+Both are visible in the post-change profile and are deliberately not done:
+
+- `weightedTuples()` allocates a fresh array per call, and after indexing the unbound path (delta scans) is its only heavy user — still the second-largest self-time entry. An iterator variant removes it but changes a public array-returning method that tests index into.
+- `extendSubstitution` does `new Map(sub.bindings)` per bound variable, so a 4-arity atom copies the map four times per candidate. The fix is slot arrays instead of `Map`s, and the rule evaluation plan is its prerequisite — which is the argument for having built the plan.
+
 ### What the evaluator is NOT
 
 - **Not Prolog.** No SLD resolution; no cuts; no unification in the first-order-logic sense. Datalog is a strict subset.
 - **Not Turing-complete.** Finite Herbrand universe → always terminating.
-- **Not indexed.** Linear scan of facts per atom. Optimisation is future work.
+- **Not a query planner.** Join order is one greedy pass over relation sizes, not a cost model with statistics. It is enough to turn every scan the rule set actually performs into a lookup; it does not attempt anything a real optimiser would.
+- **Not worst-case-optimal.** Cyclic queries (triangle-finding and friends) would want Leapfrog Triejoin and ordered indexes. The workloads here are acyclic star-shaped joins, where a hash index is already the right answer.
 
 ---
 

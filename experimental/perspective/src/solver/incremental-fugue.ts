@@ -21,8 +21,13 @@
 // See Plan 006, Phase 3.
 // See theory/incremental.md §9.7.
 
-import type { ZSet } from "../base/zset.js"
-import { zsetAdd, zsetEmpty, zsetForEach, zsetSingleton } from "../base/zset.js"
+import type { ZSet, ZSetEntry } from "../base/zset.js"
+import {
+  zsetAdd,
+  zsetEmpty,
+  zsetForEach,
+  zsetFromEntries,
+} from "../base/zset.js"
 import type { Fact } from "../datalog/types.js"
 import { cnIdFromString } from "../kernel/cnid.js"
 import { ACTIVE_STRUCTURE_SEQ, CONSTRAINT_PEER } from "../kernel/projection.js"
@@ -172,20 +177,21 @@ export function createIncrementalFugue(): IncrementalFugue {
       newPairs.set(fuguePairKey(p), p)
     }
 
-    // Diff against old pairs
-    let delta = zsetEmpty<FugueBeforePair>()
+    // Diff against old pairs. Collect first, build the Z-set once: `zsetAdd`
+    // copies its larger operand, so folding singletons would be quadratic.
+    const changes: [string, ZSetEntry<FugueBeforePair>][] = []
 
     // New pairs (in new but not old)
     for (const [key, p] of newPairs) {
       if (!state.pairs.has(key)) {
-        delta = zsetAdd(delta, zsetSingleton(key, p, 1))
+        changes.push([key, { element: p, weight: 1 }])
       }
     }
 
     // Removed pairs (in old but not new)
     for (const [key, p] of state.pairs) {
       if (!newPairs.has(key)) {
-        delta = zsetAdd(delta, zsetSingleton(key, p, -1))
+        changes.push([key, { element: p, weight: -1 }])
       }
     }
 
@@ -196,7 +202,7 @@ export function createIncrementalFugue(): IncrementalFugue {
       state.pairs.set(key, p)
     }
 
-    return delta
+    return zsetFromEntries(changes)
   }
 
   function step(deltaFacts: ZSet<Fact>): ZSet<FugueBeforePair> {

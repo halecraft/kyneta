@@ -25,13 +25,12 @@
 // See .plans/005-incremental-kernel-pipeline.md § Phase 3.
 // See theory/incremental.md §5.4.
 
-import type { ZSet } from "../../base/zset.js"
+import type { ZSet, ZSetEntry } from "../../base/zset.js"
 import {
   zsetAdd,
   zsetEmpty,
   zsetForEach,
-  zsetIsEmpty,
-  zsetSingleton,
+  zsetFromEntries,
 } from "../../base/zset.js"
 import { cnIdKey } from "../cnid.js"
 import type {
@@ -343,7 +342,7 @@ export function createIncrementalRetraction(
     }
 
     // Compute new status for all affected constraints
-    let delta = zsetEmpty<Constraint>()
+    const statusChanges: [string, ZSetEntry<Constraint>][] = []
 
     for (const key of toRecompute) {
       const c = allByKey.get(key)
@@ -359,21 +358,21 @@ export function createIncrementalRetraction(
       if (oldStatus === undefined) {
         // New constraint — emit +1 if active
         if (newStatus === "active") {
-          delta = zsetAdd(delta, zsetSingleton(key, c, 1))
+          statusChanges.push([key, { element: c, weight: 1 }])
         }
       } else if (oldStatus !== newStatus) {
         if (newStatus === "active") {
           // Was dominated, now active → +1
-          delta = zsetAdd(delta, zsetSingleton(key, c, 1))
+          statusChanges.push([key, { element: c, weight: 1 }])
         } else {
           // Was active, now dominated → −1
-          delta = zsetAdd(delta, zsetSingleton(key, c, -1))
+          statusChanges.push([key, { element: c, weight: -1 }])
         }
       }
       // If oldStatus === newStatus, no delta
     }
 
-    return delta
+    return zsetFromEntries(statusChanges)
   }
 
   /**
@@ -533,7 +532,9 @@ export function createIncrementalRetraction(
     // affected keys once at the end. Previous code had a bug where
     // the first active removal triggered an early return, silently
     // dropping subsequent removals in the same delta.
-    let removalDelta = zsetEmpty<Constraint>()
+    // Collected rather than folded: `zsetAdd` copies its larger operand, so
+    // accumulating one singleton at a time is quadratic in the delta size.
+    const removalChanges: [string, ZSetEntry<Constraint>][] = []
 
     for (const c of removals) {
       const key = cnIdKey(c.id)
@@ -557,19 +558,21 @@ export function createIncrementalRetraction(
         // can't handle it. Emit the −1 delta directly and remove
         // from the recompute set.
         affectedKeys.delete(key)
-        removalDelta = zsetAdd(removalDelta, zsetSingleton(key, c, -1))
+        removalChanges.push([key, { element: c, weight: -1 }])
       }
     }
 
     // Recompute dominance for all affected constraints
-    if (affectedKeys.size === 0 && zsetIsEmpty(removalDelta)) return zsetEmpty()
+    if (affectedKeys.size === 0 && removalChanges.length === 0) {
+      return zsetEmpty()
+    }
 
     const recomputeDelta =
       affectedKeys.size > 0
         ? recomputeAffected(affectedKeys)
         : zsetEmpty<Constraint>()
 
-    return zsetAdd(removalDelta, recomputeDelta)
+    return zsetAdd(zsetFromEntries(removalChanges), recomputeDelta)
   }
 
   function current(): Constraint[] {

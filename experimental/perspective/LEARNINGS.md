@@ -801,11 +801,42 @@ The working design inverts the approach: `step()` applies ground facts to `db` (
 
 **Lesson**: Theoretical designs that work for the single-operator case often break when composed in a pipeline. Test the multi-stratum case early — it's where the abstractions meet reality.
 
+## Datalog Evaluator Performance
+
+### Four Super-Linear Costs Hid Behind Each Other
+
+The Grame team evaluated this package as a runtime for a generative roguelike and reported one blocking problem: a 100×30 spatial grid took 20 s to flood, with 32× the facts costing ~1,200× the time. They diagnosed it precisely — an unindexed nested-loop join in `evaluatePositiveAtom`.
+
+That diagnosis was correct and incomplete. There were four independent super-linear costs, and fixing only the reported one would have left the benchmark at ~1.3 s rather than 70 ms:
+
+1. **Unpruned delta sources** — the semi-naive loop drove *every* positive body atom as a delta source, including atoms with no facts in the delta. 95% of all unification work, removed by three lines.
+2. **Unindexed joins** — the reported cause.
+3. **Quadratic Z-set construction** — `zsetAdd(acc, zsetSingleton(...))` folded in a loop. `zsetAdd` copies its larger operand, so building an n-element Z-set was O(n²). Ten call sites.
+4. **Fixed left-to-right body order** — a rule whose first atom is unbound scans that whole relation before the delta can narrow it.
+
+**The lesson is about sequencing, not about joins.** Costs 1 and 2 account for 99.995% of the *work*, but until cost 3 was also removed the *clock* barely moved (5,550 ms → 1,275 ms). Any one fix in isolation looks like a disappointment, and it would have been easy to conclude the whole direction was wrong. Static reading found cost 2. Counting unifications found cost 1. Only a profiler run *after each individual fix* found costs 3 and 4 — each of which was invisible while the others dominated.
+
+The practical rule: when a system has multiple super-linear costs, they mask each other. Re-profile after every fix, and do not judge a fix by the clock until the others are gone.
+
+### "The Evaluator Did O(|db|) Work Per Iteration" Has Been the Answer Three Times
+
+Plan 007 replaced an eager `constructDbOld` — a full `db.clone()` per semi-naive iteration — with the lazy `DatabaseView`. Plan 006.1 replaced snapshot-and-diff delta extraction with the dirty map, for the same reason. The join-index work found two more instances: scanning a whole relation per substitution, and `applyDistinct` walking the entire accumulated dirty map per iteration.
+
+Four occurrences of one shape. In a semi-naive loop, *anything* proportional to the database rather than the delta is a bug waiting to be measured, because the loop runs once per iteration and iterations scale with the data. It is worth grepping for the shape directly — a full-collection scan inside the fixpoint — rather than waiting for it to show up in a profile.
+
+(One instance of the shape turned out not to matter: restricting `applyDistinct` to the facts touched in the current iteration is provably equivalent and measured 1,275 ms → 1,268 ms, i.e. nothing, because Z-set construction dominated it. Recorded so the next reader does not re-derive it.)
+
+### Separating Plan from Execution Made the Risky Change Testable
+
+Rule evaluation used to interleave four decisions with the work: source database, delta source, known positions, and order. Lifting them into a pure `planRuleEvaluation` was motivated by wanting the *last* one — join order — to be reviewable, because reordering is the only change in this whole effort that alters the order facts are derived in.
+
+The payoff was concrete rather than aesthetic. Join order became a golden test over relation sizes with no `Database` in sight, which is how the batch-versus-tick conflict got caught: a fixed "delta source first" rule fixes the per-tick case (0.99 ms → 0.030 ms) and *regresses* batch (61 ms → 73 ms), because during a batch seed the "delta" is the entire ground fact set. Neither fixed order wins; a greedy smallest-first rule gets both. That is not something the benchmark would have shown, since it only exercised one of the two shapes.
+
 ## Open Questions
 
 1. **Can constraint compaction be made safe in a decentralized system?** Compacting requires knowing what all peers have seen. Without a central coordinator, this requires something like a "compaction frontier" protocol. For Lists, tombstone compaction is especially tricky due to origin references.
 
-2. ~~**What is the performance ceiling?**~~ **Resolved in Plan 006; refined in Plans 006.1 and 006.2.** The incremental pipeline is O(|Δ|) end-to-end for the common case (default rules via native solvers) and for the custom-rules case (via the unified Datalog evaluator). Plan 006.1 replaced DRed's snapshot-and-diff with dirty-map delta extraction (O(|touched facts|) instead of O(|all derived facts|)). Plan 006.2 eliminated wipe-and-recompute for negation strata via differential negation and the asymmetric join — all non-aggregation strata now use the unified O(|Δ|×|DB|) semi-naive loop. The remaining scoped limitation is aggregation strata (wipe-and-recompute, bounded by group count), which is acceptable since no default rules use aggregation.
+2. ~~**What is the performance ceiling?**~~ **Resolved in Plan 006; refined in Plans 006.1 and 006.2.** The incremental pipeline is O(|Δ|) end-to-end for the common case (default rules via native solvers) and for the custom-rules case (via the unified Datalog evaluator). Plan 006.1 replaced DRed's snapshot-and-diff with dirty-map delta extraction (O(|touched facts|) instead of O(|all derived facts|)). Plan 006.2 eliminated wipe-and-recompute for negation strata via differential negation and the asymmetric join — all non-aggregation strata now use the unified semi-naive loop. **Refined again by the join-index work:** that loop was O(|Δ|×|DB|) because every atom scanned its whole relation; with a bound-position join index it is O(|Δ|×|candidates|), where candidates is typically a handful. A 100×30 spatial flood went from 32 s to ~70 ms, and a one-fact tick over an 18k-fact database from 0.83 ms to 0.016 ms. The remaining scoped limitation is aggregation strata (wipe-and-recompute, bounded by group count), which is acceptable since no default rules use aggregation.
 
 3. **Can cross-container constraints be made to work?** E.g., "if key X exists in Map A, then key Y must exist in Map B." This requires a solver that reasons across containers, which the current per-container solver architecture doesn't support.
 

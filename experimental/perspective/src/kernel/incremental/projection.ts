@@ -25,13 +25,8 @@
 // See .plans/005-incremental-kernel-pipeline.md § Phase 5.
 // See theory/incremental.md §5.5.
 
-import type { ZSet } from "../../base/zset.js"
-import {
-  zsetAdd,
-  zsetEmpty,
-  zsetForEach,
-  zsetSingleton,
-} from "../../base/zset.js"
+import type { ZSet, ZSetEntry } from "../../base/zset.js"
+import { zsetForEach, zsetFromEntries } from "../../base/zset.js"
 import type { Fact } from "../../datalog/types.js"
 import { fact, factKey } from "../../datalog/types.js"
 import { cnIdKey } from "../cnid.js"
@@ -268,7 +263,7 @@ export function createIncrementalProjection(
    * Returns Z-set delta of newly projected facts.
    */
   function resolveOrphansForGroup(group: SlotGroup): ZSet<Fact> {
-    let delta = zsetEmpty<Fact>()
+    const resolvedFacts: [string, ZSetEntry<Fact>][] = []
 
     // Check each structure key in the group for orphans targeting it
     for (const structureKey of group.structureKeys) {
@@ -284,13 +279,13 @@ export function createIncrementalProjection(
           // Orphan resolved — add to accumulated facts and emit +1
           accFacts.set(result.key, result.fact)
           trackFact(result.constraintKey, result.key)
-          delta = zsetAdd(delta, zsetSingleton(result.key, result.fact, 1))
+          resolvedFacts.push([result.key, { element: result.fact, weight: 1 }])
           removeOrphan(vc)
         }
       }
     }
 
-    return delta
+    return zsetFromEntries(resolvedFacts)
   }
 
   // --- Public interface ---
@@ -299,7 +294,10 @@ export function createIncrementalProjection(
     deltaActive: ZSet<Constraint>,
     deltaIndex: StructureIndexDelta,
   ): ZSet<Fact> {
-    let delta = zsetEmpty<Fact>()
+    // Collect every fact change, build the Z-set once at the end. `zsetAdd`
+    // copies its larger operand, so folding singletons here would be
+    // quadratic in the number of facts a single step projects.
+    const factChanges: [string, ZSetEntry<Fact>][] = []
 
     // --- Phase 1: Process active constraint delta ---
 
@@ -317,7 +315,7 @@ export function createIncrementalProjection(
             // Target found — emit fact with weight +1
             accFacts.set(result.key, result.fact)
             trackFact(result.constraintKey, result.key)
-            delta = zsetAdd(delta, zsetSingleton(result.key, result.fact, 1))
+            factChanges.push([result.key, { element: result.fact, weight: 1 }])
           } else {
             // Target not found — orphan
             addOrphan(vc)
@@ -329,7 +327,7 @@ export function createIncrementalProjection(
           for (let i = 0; i < facts.length; i++) {
             accFacts.set(keys[i]!, facts[i]!)
             trackFact(constraintKey, keys[i]!)
-            delta = zsetAdd(delta, zsetSingleton(keys[i]!, facts[i]!, 1))
+            factChanges.push([keys[i]!, { element: facts[i]!, weight: 1 }])
           }
         }
         // Other constraint types (retract, rule, authority, bookmark)
@@ -350,7 +348,7 @@ export function createIncrementalProjection(
           if (result !== null) {
             accFacts.delete(result.key)
             untrackFact(result.constraintKey, result.key)
-            delta = zsetAdd(delta, zsetSingleton(result.key, result.fact, -1))
+            factChanges.push([result.key, { element: result.fact, weight: -1 }])
           }
         } else if (c.type === "structure") {
           const sc = c as StructureConstraint
@@ -359,7 +357,7 @@ export function createIncrementalProjection(
           for (let i = 0; i < facts.length; i++) {
             accFacts.delete(keys[i]!)
             untrackFact(constraintKey, keys[i]!)
-            delta = zsetAdd(delta, zsetSingleton(keys[i]!, facts[i]!, -1))
+            factChanges.push([keys[i]!, { element: facts[i]!, weight: -1 }])
           }
         }
       }
@@ -370,12 +368,15 @@ export function createIncrementalProjection(
 
     if (!deltaIndex.isEmpty) {
       for (const group of deltaIndex.updates.values()) {
-        const orphanDelta = resolveOrphansForGroup(group)
-        delta = zsetAdd(delta, orphanDelta)
+        // Merge the sub-delta's entries into the same accumulator, so the
+        // whole step still sums and cancels in one pass.
+        for (const [key, entry] of resolveOrphansForGroup(group)) {
+          factChanges.push([key, entry])
+        }
       }
     }
 
-    return delta
+    return zsetFromEntries(factChanges)
   }
 
   function current(): Fact[] {

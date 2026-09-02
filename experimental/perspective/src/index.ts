@@ -60,6 +60,8 @@ export {
   type AggregationClause,
   type AggregationElement,
   type AggregationFn,
+  // Value utilities
+  ALL_POSITIONS,
   type Atom,
   type AtomElement,
   aggregation,
@@ -103,11 +105,11 @@ export {
   headPredicates,
   lt,
   lte,
-  matchAtomAgainstRelation,
   matchAtomWithTuple,
   type NegationElement,
   negation,
   neq,
+  type Probe,
   positiveAtom,
   // Data structures
   Relation,
@@ -117,7 +119,7 @@ export {
   type StratificationError,
   type Stratum,
   type Substitution,
-  // Value utilities
+  serializeTuple,
   serializeValue,
   stratify,
   // Types (Datalog-specific; kernel re-exports are above)
@@ -126,6 +128,7 @@ export {
   type VarTerm,
   valuesEqual,
   varTerm,
+  type WeightedTuple,
   type WildcardTerm,
   wildcard,
 } from "./datalog/index.js"

@@ -17,8 +17,8 @@
 // See Plan 005 Learnings: Resolution Diffing Must Not Emit Opposing Weights
 // on the Same Key.
 
-import type { ZSet } from "../base/zset.js"
-import { zsetAdd, zsetEmpty, zsetForEach, zsetSingleton } from "../base/zset.js"
+import type { ZSet, ZSetEntry } from "../base/zset.js"
+import { zsetForEach, zsetFromEntries } from "../base/zset.js"
 import type { Fact } from "../datalog/types.js"
 import { cnIdKey } from "../kernel/cnid.js"
 import { ACTIVE_VALUE } from "../kernel/projection.js"
@@ -118,7 +118,9 @@ export function createIncrementalLWW(): IncrementalLWW {
   }
 
   function step(deltaFacts: ZSet<Fact>): ZSet<ResolvedWinner> {
-    let delta = zsetEmpty<ResolvedWinner>()
+    // Collect first, build the Z-set once: `zsetAdd` copies its larger
+    // operand, so folding singletons would be quadratic in the delta size.
+    const changes: [string, ZSetEntry<ResolvedWinner>][] = []
 
     zsetForEach(deltaFacts, (entry, _key) => {
       const f = entry.element
@@ -160,15 +162,15 @@ export function createIncrementalLWW(): IncrementalLWW {
       if (!winnersEqual(oldWinner, newWinner)) {
         if (newWinner !== null) {
           // New or changed winner: emit +1 only (skeleton handles replacement)
-          delta = zsetAdd(delta, zsetSingleton(slotId, newWinner, 1))
+          changes.push([slotId, { element: newWinner, weight: 1 }])
         } else {
           // Winner removed entirely: emit −1 with the old winner
-          delta = zsetAdd(delta, zsetSingleton(slotId, oldWinner!, -1))
+          changes.push([slotId, { element: oldWinner!, weight: -1 }])
         }
       }
     })
 
-    return delta
+    return zsetFromEntries(changes)
   }
 
   function current(): ReadonlyMap<string, ResolvedWinner> {
