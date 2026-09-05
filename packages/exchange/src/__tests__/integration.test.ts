@@ -27,6 +27,7 @@ import {
   type ExchangeParams,
   type PeerIdentityInput,
 } from "../exchange.js"
+import { Line } from "../line.js"
 import { sync, whenSettled } from "../sync.js"
 
 // ---------------------------------------------------------------------------
@@ -44,6 +45,19 @@ async function drain(rounds = 20): Promise<void> {
     // Also yield to promise queue
     await new Promise<void>(r => setTimeout(r, 0))
   }
+}
+
+/**
+ * Resolves `"pending"` if `p` has not settled within `ms`.
+ *
+ * For asserting that something resolves *at all*: a regression that makes a
+ * promise hang then fails the test instead of hanging the suite.
+ */
+async function within<T>(p: Promise<T>, ms = 100): Promise<T | "pending"> {
+  return Promise.race([
+    p,
+    new Promise<"pending">(r => setTimeout(() => r("pending"), ms)),
+  ])
 }
 
 /** Active exchanges that need cleanup */
@@ -908,6 +922,176 @@ describe("canShare predicate", () => {
     // Bob (denied) should not have the doc
     expect(exchangeB.has("private-doc")).toBe(false)
   })
+
+  it("denies a request by id, not just the announcement", async () => {
+    // The reported bug. The two tests above assert bob was never *told* about
+    // the document. Neither has him *ask* — and asking was, until this fix,
+    // enough to get the whole thing.
+    const bridge = new Bridge()
+
+    const exchangeA = createExchange({
+      id: "alice",
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
+      canShare: docId => docId !== "secret",
+    })
+    const exchangeB = createExchange({
+      id: "bob",
+      transports: [createBridgeTransport({ transportId: "bob", bridge })],
+    })
+
+    const docA = exchangeA.get("secret", SequentialDoc)
+    batch(docA, (d: any) => {
+      d.title.set("sentence one")
+      d.count.set(2)
+    })
+    await drain(40)
+    expect(exchangeB.has("secret")).toBe(false)
+
+    // Bob knows the name and asks for it directly.
+    const docB = exchangeB.get("secret", SequentialDoc)
+
+    // He is answered — `within` rather than a bare await, so a regression to
+    // silence fails the test instead of hanging the suite.
+    expect(await within(whenSettled(docB))).not.toBe("pending")
+    await drain(40)
+
+    expect(docB.title()).toBe("")
+    expect(docB.count()).toBe(0)
+
+    // Bob sees alice as `vacant` — indistinguishable from her not having it.
+    expect(
+      sync(docB).peerStates.some(
+        s => s.peer.peerId === "alice" && s.state === "vacant",
+      ),
+    ).toBe(true)
+
+    // And alice records no sync relationship with bob for this document.
+    expect(sync(docA).peerStates.some(s => s.peer.peerId === "bob")).toBe(false)
+
+    // A later write does not leak either.
+    batch(docA, (d: any) => d.title.set("sentence two"))
+    await drain(40)
+    expect(docB.title()).toBe("")
+  })
+
+  it("answers a denied request the same way whether or not the doc exists", async () => {
+    // Paired with the test above: alice never creates "ghost", and bob's
+    // experience is identical. If the two differed, the difference would let
+    // a peer discover which document ids exist without reading any of them.
+    const bridge = new Bridge()
+
+    createExchange({
+      id: "alice",
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
+      canShare: docId => docId !== "ghost",
+    })
+    const exchangeB = createExchange({
+      id: "bob",
+      transports: [createBridgeTransport({ transportId: "bob", bridge })],
+    })
+
+    await drain(40)
+
+    const docB = exchangeB.get("ghost", SequentialDoc)
+
+    expect(await within(whenSettled(docB))).not.toBe("pending")
+    await drain(40)
+
+    expect(docB.title()).toBe("")
+    expect(
+      sync(docB).peerStates.some(
+        s => s.peer.peerId === "alice" && s.state === "vacant",
+      ),
+    ).toBe(true)
+  })
+
+  it("restricts each input doc to its owner, per the bumper-cars policy", async () => {
+    // The root TECHNICAL.md cites `examples/bumper-cars` as demonstrating
+    // exactly this, and the README's "Add access control" example is the same
+    // shape. Both were bypassable by a direct request until now, so the
+    // documented guarantee is worth asserting rather than assuming.
+    const bridge = new Bridge()
+    const ownerOnly = (docId: string, peer: { peerId: string }) =>
+      docId.startsWith("input:") ? peer.peerId === docId.slice(6) : undefined
+
+    const server = createExchange({
+      id: "server",
+      transports: [createBridgeTransport({ transportId: "server", bridge })],
+      canShare: ownerOnly,
+    })
+    const mallory = createExchange({
+      id: "mallory",
+      transports: [createBridgeTransport({ transportId: "mallory", bridge })],
+    })
+
+    // The server holds alice's input document.
+    const aliceInput = server.get("input:alice", SequentialDoc)
+    batch(aliceInput, (d: any) => d.title.set("alice's keystrokes"))
+    await drain(40)
+
+    // Mallory asks for it by name.
+    const stolen = mallory.get("input:alice", SequentialDoc)
+    expect(await within(whenSettled(stolen))).not.toBe("pending")
+    await drain(40)
+
+    expect(stolen.title()).toBe("")
+
+    // Her own input document still works, so the policy is not just a mute.
+    const mine = mallory.get("input:mallory", SequentialDoc)
+    const served = server.get("input:mallory", SequentialDoc)
+    batch(served, (d: any) => d.title.set("mallory's keystrokes"))
+    await drain(40)
+    expect(mine.title()).toBe("mallory's keystrokes")
+  })
+
+  it("does not disturb Line, whose policy abstains for line docs", async () => {
+    // `Line` fetches the remote peer's outbox *by id* — the very path this
+    // change gates. It works because a well-formed policy returns `undefined`
+    // for documents it does not govern, rather than a blanket `false`. This
+    // pins that contract by example.
+    const bridge = new Bridge()
+
+    // A policy that governs one document and abstains on everything else —
+    // the shape both README examples use. A blanket `false` here would now
+    // block the line's own documents, which is the migration note in the
+    // changelog.
+    const govern = (docId: string) =>
+      docId === "unrelated-private" ? false : undefined
+
+    const exchangeA = createExchange({
+      id: "alice",
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
+      canShare: govern,
+    })
+    const exchangeB = createExchange({
+      id: "bob",
+      transports: [createBridgeTransport({ transportId: "bob", bridge })],
+      canShare: govern,
+    })
+    await drain(40)
+
+    const Chat = Line.protocol({
+      topic: "chat",
+      schema: Schema.struct({ text: Schema.string() }),
+    })
+    const aliceSender = Chat.sender(exchangeA, "bob")
+
+    const bobMessages: { text: string }[] = []
+    const listener = Chat.listen(exchangeB)
+    listener.onReceive((_sender, receiver) => {
+      ;(async () => {
+        for await (const msg of receiver) bobMessages.push(msg)
+      })()
+    })
+
+    aliceSender.send({ text: "hello over the line" })
+    await drain(60)
+
+    expect(bobMessages).toEqual([{ text: "hello over the line" }])
+
+    aliceSender.close()
+    listener.dispose()
+  })
 })
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -1478,14 +1662,6 @@ describe("whenSettled", () => {
 
 describe("whenSettled — authority", () => {
   const isServer = (p: { peerId: string }) => p.peerId === "server"
-
-  /** Resolves `"pending"` if `p` has not settled within `ms`. */
-  async function within<T>(p: Promise<T>, ms = 100): Promise<T | "pending"> {
-    return Promise.race([
-      p,
-      new Promise<"pending">(r => setTimeout(() => r("pending"), ms)),
-    ])
-  }
 
   it("'self' with a transport resolves { via: 'local' } with no peer present", async () => {
     // The reported bug. A server declares itself the authority precisely

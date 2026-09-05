@@ -415,6 +415,33 @@ export function reconciledMatching(
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
 /**
+ * "I will not serve you this document." The reply to a peer's `interest`
+ * that we are not going to answer with data.
+ *
+ * There are two reasons we might not, and **both send exactly this** — which
+ * is the whole reason this is one function rather than two literals:
+ *
+ * - We do not have the document (the `resolve` callback declined it, via
+ *   `declareVacant`).
+ * - We have it, but `canShare` says this peer may not.
+ *
+ * Keeping the two replies identical is deliberate. If a denied peer got a
+ * `vacant` for documents we hold and silence for ones we do not, the
+ * difference would tell it which document ids exist — an "existence oracle",
+ * i.e. a way to ask yes/no questions about our data without being allowed to
+ * read any of it. Same reply, no question answered.
+ *
+ * And it is a reply rather than silence because silence is not free either:
+ * the requester's `whenSettled` would stay pending until its `offlineAfter`
+ * elapsed (forever, by default), and *how long* a peer waits before giving up
+ * is itself a signal. `vacant` is terminal — the requester settles
+ * immediately, reads the document as empty, and keeps its own replica.
+ */
+function vacantReply(to: PeerId, docId: DocId): SyncEffect {
+  return { type: "send-to-peer", to, message: { type: "vacant", docId } }
+}
+
+/**
  * Filter peer IDs by the share predicate. Peers whose identity cannot
  * be resolved are dropped.
  */
@@ -750,7 +777,7 @@ function handleMessageReceived(
     case "present":
       return handlePresent(from, message, model, canShare)
     case "interest":
-      return handleInterest(from, message, model)
+      return handleInterest(from, message, model, canShare)
     case "offer":
       return handleOffer(from, message, model, canAccept)
     case "dismiss":
@@ -1195,7 +1222,13 @@ function handlePresent(
   } of message.docs) {
     const docEntry = model.documents.get(docId)
     if (docEntry) {
-      // Known doc — can the two of us sync it at all?
+      // Known doc — but first, may this peer have it from us at all? Replying
+      // `interest` would tell a peer we refuse to share with both that we hold
+      // the document and what version we are at. The unknown-doc branch below
+      // already makes this check before `ensure-doc`; the two now agree.
+      if (!canShare(docId, peerState.identity)) continue
+
+      // Can the two of us sync it at all?
       //
       // Both operands are read capabilities: sync compares two *peers*, each
       // with its own range of shapes, rather than a peer against a document.
@@ -1272,9 +1305,31 @@ function handleInterest(
   from: PeerId,
   message: InterestMsg,
   model: SyncModel,
+  canShare: SyncPredicate,
 ): [SyncModel, ...SyncEffect[]] {
   const peerState = model.peers.get(from)
   if (!peerState) return [model]
+
+  // A document can leave this peer by four paths, and all four consult
+  // `canShare`: announcing it (`handlePeerAvailable`, `announceDoc`), pushing
+  // a local change (`handleLocalDocChange`), relaying an imported one
+  // (`handleDocImported`) — and this one, answering a peer that asked for it
+  // by name. If you add a fifth, gate it here too; the invariant test in
+  // `sync-program.test.ts` ("no outbound effect reaches a vetoed peer") is
+  // what will fail if you forget.
+  //
+  // This path shipped ungated through 3.0.0, which meant `canShare` decided
+  // only whether a peer was *told* about a document, not whether it could
+  // *have* one: any peer that knew or guessed a document id could pull its
+  // full state simply by asking.
+  //
+  // The check sits above the document lookup on purpose — "who is asking?"
+  // before "what are they asking for?" — so that a denied peer gets the same
+  // reply whether or not we hold the document. See `vacantReply` for why that
+  // matters.
+  if (!canShare(message.docId, peerState.identity)) {
+    return [model, vacantReply(from, message.docId)]
+  }
 
   const docEntry = model.documents.get(message.docId)
   if (!docEntry) return [model]
@@ -1450,12 +1505,5 @@ function handleDeclareVacant(
   model: SyncModel,
 ): [SyncModel, ...SyncEffect[]] {
   if (!model.peers.has(msg.to)) return [model]
-  return [
-    model,
-    {
-      type: "send-to-peer",
-      to: msg.to,
-      message: { type: "vacant", docId: msg.docId },
-    },
-  ]
+  return [model, vacantReply(msg.to, msg.docId)]
 }

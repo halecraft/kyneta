@@ -90,7 +90,7 @@ Exactly six messages (source: `packages/transport/src/messages.ts`). Two groups:
 | `interest` | Sync | Either peer | `{ docId, version?, reciprocate? }` | "I want this document; here is my version" |
 | `offer` | Sync | Either peer | `{ docId, payload: SubstratePayload, version, reciprocate? }` | "Here is state for this document" |
 | `dismiss` | Sync | Leaving peer | `{ docId }` | "I am leaving the sync graph for this document" — dual of `present` |
-| `vacant` | Sync | Serving peer | `{ docId }` | "You expressed interest, but I don't have this document and won't serve it" — terminal negative ack; receiver records the sender `vacant` without tearing down its own replica |
+| `vacant` | Sync | Serving peer | `{ docId }` | "You expressed interest, but I will not serve you this document" — either because I don't have it or because policy says you may not have it, deliberately indistinguishable. Terminal negative ack; receiver records the sender `vacant` without tearing down its own replica |
 
 `isLifecycleMsg` and `isSyncMsg` type-narrow a `ChannelMsg`. A `ConnectedChannel` may only send `LifecycleMsg`; an `EstablishedChannel` may only send `SyncMsg`. The type system enforces the ordering constraint — no sync message can be sent before `establish` completes.
 

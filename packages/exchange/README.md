@@ -439,13 +439,15 @@ Each document's substrate and sync mode are determined by its BoundSchema. No co
 
 Four predicates control information flow. All use three-valued logic (`true` / `false` / `undefined`) for composable policy stacking — `false` short-circuits, `undefined` defers to other policies, and the default when all policies abstain is `true`.
 
-- **`canShare(docId, peer) → boolean | undefined`** — Outbound. Gates every outbound message: present, push, relay. Also gates `resolve` — if `canShare` returns `false` for the announcing peer, the callback never fires.
+- **`canShare(docId, peer) → boolean | undefined`** — Outbound. Gates all four ways a document can reach a peer: the `present` that announces it, the push on a local change, the relay of an imported change, and the `offer` answering a peer that asks for it by id. A denied request is answered `vacant` — "I will not serve you this" — which is deliberately the same reply the peer would get for a document that does not exist, so a denial reveals nothing about which ids are real. Also gates `resolve`: if `canShare` returns `false` for the announcing peer, the callback never fires.
 
 - **`canAccept(docId, peer) → boolean | undefined`** — Inbound. Gates offer imports. When rejected, the offer is silently dropped.
 
 - **`canReset(docId, peer) → boolean | undefined`** — Epoch boundary. Fires when a peer sends an entirety payload for a document that already has local state — meaning the remote peer has compacted history past our known version. Accepting discards local state and adopts the entirety; rejecting keeps local state and diverges from compacted peers.
 
 - **`canConnect(peer) → boolean | undefined`** — Connection. Gates the `establish` handshake. When rejected, the peer's channel is ignored entirely — no documents are exchanged. Unlike the other predicates, this takes only a peer (no docId).
+
+> **Return `undefined` for documents your policy does not govern.** This is what the three-valued logic is for, and with `canShare` it now matters in practice: a `false` blocks *every* path for that document, including a direct request. Features that own documents of their own — `Line`, most visibly, which fetches the remote peer's outbox by id — depend on unrelated policies abstaining rather than vetoing. Both examples above follow this pattern: each governs one id prefix and returns `undefined` for the rest.
 
 ### Dynamic Document Creation
 

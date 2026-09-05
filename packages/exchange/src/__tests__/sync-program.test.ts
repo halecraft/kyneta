@@ -593,6 +593,32 @@ describe("sync-program", () => {
       expect(ensureEffects.length).toBe(0)
     })
 
+    it("known doc from a peer denied by canShare: no interest reply", () => {
+      // The sibling of the case above, for a doc we already hold. Replying
+      // `interest` would confirm to a peer we refuse to share with both that
+      // we have the document and what version we are at.
+      const update = makeUpdate({
+        canShare: docId => docId !== "blocked-doc",
+      })
+      let model = initSync(alice)
+      ;[model] = addPeer(update, model, "bob", bob)
+      ;[model] = ensureDoc(update, model, "blocked-doc")
+
+      const [, effects] = receiveMessage(update, model, "bob", {
+        type: "present",
+        docs: [
+          {
+            docId: "blocked-doc",
+            replicaType: ["test", 0, 0],
+            syncMode: SYNC_COLLABORATIVE,
+            schemaHash: "abc123",
+          },
+        ],
+      })
+
+      expect(effectsOfType(effects, "send-to-peer")).toHaveLength(0)
+    })
+
     it("deferred doc: no interest sent", () => {
       const update = makeUpdate()
       let model = initSync(alice)
@@ -1029,6 +1055,91 @@ describe("sync-program", () => {
 
       const docSync = defined(m2.peers.get("bob")).docSyncStates.get("doc-1")
       expect(defined(docSync).status).toBe("synced")
+    })
+
+    // The by-id request path. Announcing a doc has always been gated by
+    // `canShare`; answering a peer that asks for one by name was not, so a
+    // peer that knew the id could pull the whole document anyway.
+    const deniesDoc1ForBob = {
+      canShare: (docId: string, peer: any) =>
+        !(docId === "doc-1" && peer.peerId === "bob"),
+    }
+
+    it("denied by canShare: replies vacant, sends no offer, records no peer state", () => {
+      const update = makeUpdate(deniesDoc1ForBob)
+      let model = initSync(alice)
+      ;[model] = addPeer(update, model, "bob", bob)
+      ;[model] = ensureDoc(update, model, "doc-1")
+
+      const [m2, effects] = receiveMessage(update, model, "bob", {
+        type: "interest",
+        docId: "doc-1",
+        version: "v0",
+      })
+
+      expect(effectsOfType(effects, "send-offer")).toHaveLength(0)
+      const replies = effectsOfType(effects, "send-to-peer")
+      expect(replies).toHaveLength(1)
+      expect(defined(replies[0]).to).toBe("bob")
+      expect(defined(replies[0]).message).toEqual({
+        type: "vacant",
+        docId: "doc-1",
+      })
+
+      // No sync relationship is recorded. A `synced` entry here would put bob
+      // into `getSyncedPeers` for a doc he is never going to receive.
+      expect(defined(m2.peers.get("bob")).docSyncStates.has("doc-1")).toBe(
+        false,
+      )
+    })
+
+    it("denied by canShare: a collaborative interest with reciprocate gets vacant, not a reciprocal interest", () => {
+      // Denial has to short-circuit the *whole* response. A CRDT interest
+      // normally draws an offer plus a reciprocal interest; neither may leak.
+      const update = makeUpdate(deniesDoc1ForBob)
+      let model = initSync(alice)
+      ;[model] = addPeer(update, model, "bob", bob)
+      ;[model] = ensureDoc(update, model, "doc-1", {
+        syncMode: SYNC_COLLABORATIVE,
+      })
+
+      const [, effects] = receiveMessage(update, model, "bob", {
+        type: "interest",
+        docId: "doc-1",
+        version: "v0",
+        reciprocate: true,
+      })
+
+      expect(effectsOfType(effects, "send-offer")).toHaveLength(0)
+      const replies = effectsOfType(effects, "send-to-peer")
+      expect(replies).toHaveLength(1)
+      expect((defined(replies[0]).message as any).type).toBe("vacant")
+    })
+
+    it("denied by canShare: an interest for a document we do not hold also gets vacant", () => {
+      // This is what makes the gate's *position* load-bearing rather than
+      // incidental. It sits above the document lookup, so the reply is the
+      // same whether or not we hold the doc. Move it below and a denied peer
+      // would get a prompt `vacant` for docs we have and silence for ones we
+      // do not — which is a way to test whether a doc id exists without ever
+      // being allowed to read it.
+      const update = makeUpdate(deniesDoc1ForBob)
+      let model = initSync(alice)
+      ;[model] = addPeer(update, model, "bob", bob)
+      // Deliberately no ensureDoc: alice does not have "doc-1" at all.
+
+      const [, effects] = receiveMessage(update, model, "bob", {
+        type: "interest",
+        docId: "doc-1",
+        version: "v0",
+      })
+
+      expect(effects).toHaveLength(1)
+      expect(defined(effects[0]).type).toBe("send-to-peer")
+      expect((defined(effects[0]) as any).message).toEqual({
+        type: "vacant",
+        docId: "doc-1",
+      })
     })
   })
 
@@ -1544,6 +1655,137 @@ describe("sync-program", () => {
       const docIds = ensureEffects.map(e => e.docId)
       expect(docIds).not.toContain("private-doc")
       expect(docIds).toContain("public-doc")
+    })
+  })
+
+  // -----------------------------------------------------------------------
+  // canShare — the invariant, over every path at once
+  // -----------------------------------------------------------------------
+  //
+  // The tests above sample one path each, which is how the by-id request path
+  // stayed ungated through a whole release: the suite covered announcing a
+  // document and nothing ever asked for one by name. An announce-path test
+  // proves a peer was not *told*, not that it could not *ask*.
+  //
+  // Because the sync program is pure, the guarantee can be asserted as an
+  // invariant instead of sampled: drive every input that can produce an
+  // outbound effect and check that none of them names the vetoed peer for the
+  // vetoed document. This is the test that fails when a fifth outbound path
+  // is added without a `canShare` check.
+  describe("canShare — no outbound effect reaches a vetoed peer", () => {
+    it("holds across every input that can emit one", () => {
+      const VETOED_DOC = "doc-1"
+      const update = makeUpdate({
+        canShare: (docId, peer) =>
+          !(docId === VETOED_DOC && peer.peerId === "carol"),
+      })
+
+      let model = initSync(alice)
+      const collected: SyncEffect[] = []
+      const drive = (input: Parameters<SyncUpdate>[0]) => {
+        const [m, fx] = applyUpdate(update, input, model)
+        model = m
+        collected.push(...fx)
+      }
+
+      // Bob is the control: unvetoed, and must show up in the effects, or
+      // this test could pass simply by producing nothing at all.
+      ;[model] = addPeer(update, model, "bob", bob)
+
+      // One per outbound-capable member of the `SyncInput` union in
+      // sync-program.ts. When that union grows a case that sends anything,
+      // add it here — the two lists are meant to be read side by side.
+      drive({ type: "sync/peer-available", peerId: "carol", identity: carol })
+      drive({
+        type: "sync/doc-ensure",
+        docId: VETOED_DOC,
+        mode: "interpret",
+        version: "v1",
+        replicaType: ["test", 0, 0],
+        syncMode: SYNC_COLLABORATIVE,
+        schemaHash: "abc123",
+      })
+      drive({
+        type: "sync/doc-defer",
+        docId: VETOED_DOC,
+        replicaType: ["test", 0, 0],
+        syncMode: SYNC_COLLABORATIVE,
+        schemaHash: "abc123",
+      })
+      drive({ type: "sync/local-doc-change", docId: VETOED_DOC, version: "v2" })
+      drive({
+        type: "sync/doc-imported",
+        docId: VETOED_DOC,
+        version: "v3",
+        fromPeerId: "bob",
+      })
+      drive({ type: "sync/doc-dismiss", docId: VETOED_DOC })
+      drive({
+        type: "sync/message-received",
+        from: "carol",
+        message: {
+          type: "present",
+          docs: [
+            {
+              docId: VETOED_DOC,
+              replicaType: ["test", 0, 0],
+              syncMode: SYNC_COLLABORATIVE,
+              schemaHash: "abc123",
+            },
+          ],
+        },
+      })
+      drive({
+        type: "sync/message-received",
+        from: "carol",
+        message: { type: "interest", docId: VETOED_DOC, version: "v0" },
+      })
+
+      /** Does this effect mention the vetoed doc, however it carries ids? */
+      const namesVetoedDoc = (effect: SyncEffect): boolean => {
+        const e = effect as any
+        if (e.docId === VETOED_DOC) return true
+        const msg = e.message
+        if (!msg) return false
+        if (msg.docId === VETOED_DOC) return true
+        // `present` carries a list rather than a single id.
+        return (
+          Array.isArray(msg.docs) &&
+          msg.docs.some((d: any) => d.docId === VETOED_DOC)
+        )
+      }
+
+      const recipients = (effect: SyncEffect): string[] => {
+        const to = (effect as any).to
+        if (to === undefined) return []
+        return Array.isArray(to) ? to : [to]
+      }
+
+      let carolSawSomething = false
+      let bobSawSomething = false
+
+      for (const effect of collected) {
+        if (!recipients(effect).includes("carol")) {
+          if (recipients(effect).includes("bob") && namesVetoedDoc(effect)) {
+            bobSawSomething = true
+          }
+          continue
+        }
+        if (!namesVetoedDoc(effect)) continue
+
+        carolSawSomething = true
+        // `vacant` — "I will not serve you this" — is the one thing carol may
+        // receive about this document. It carries no data and, by design, is
+        // the same reply she would get for a document that does not exist.
+        expect(effect.type).toBe("send-to-peer")
+        expect((effect as any).message.type).toBe("vacant")
+      }
+
+      // Carol asked, so she must have been answered — a silent denial would
+      // leave her `whenSettled` hanging, and would itself be a signal.
+      expect(carolSawSomething).toBe(true)
+      // And the veto is specific to carol, not a global mute.
+      expect(bobSawSomething).toBe(true)
     })
   })
 

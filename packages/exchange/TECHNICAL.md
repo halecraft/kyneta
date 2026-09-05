@@ -197,10 +197,10 @@ Source: `src/sync-program.ts` message handlers. The seven messages from `@kyneta
 | `establish` | Lifecycle | Symmetric | `{ identity, features?, protocolVersion? }` | Peer identity exchange on connection. Both peers send. `protocolVersion` drives establish-time compatibility detection (see below). |
 | `depart` | Lifecycle | One-way | `{}` | Explicit departure — the receiver skips the grace timer. |
 | `present` | Sync | One-way | `{ docs: Array<{ docId, replicaType, syncMode, schemaHash, supportedHashes? }> }` | "I have these documents." Filtered by `canShare`. |
-| `interest` | Sync | One-way | `{ docId, version?, reciprocate? }` | "I want this doc. Here's my version." `reciprocate` asks for the symmetric interest. |
+| `interest` | Sync | One-way | `{ docId, version?, reciprocate? }` | "I want this doc. Here's my version." `reciprocate` asks for the symmetric interest. Answered with `offer`, or with `vacant` if `canShare` denies the requester. |
 | `offer` | Sync | One-way | `{ docId, payload: SubstratePayload, version, reciprocate? }` | State transfer. `payload.kind` (`"entirety" | "since"`) is substrate-internal. |
 | `dismiss` | Sync | One-way | `{ docId }` | "I am leaving the sync graph for this doc." Dual of `present`. Receiver deletes its per-peer entry + fires `ensure-doc-dismissed`. |
-| `vacant` | Sync | Point-to-point | `{ docId }` | "You asked, but I don't have this doc and won't serve it." Produced by `declareVacant` from `onEnsureDoc`'s terminal non-serve branches; consumed by `handleVacant` (sets the peer `vacant`, emits **no** `ensure-doc-dismissed` — our replica survives). |
+| `vacant` | Sync | Point-to-point | `{ docId }` | "You asked, and I will not serve you this doc." Two producers, both via the shared `vacantReply` builder: `declareVacant` from `onEnsureDoc`'s terminal non-serve branches (we don't have it), and `handleInterest` on a `canShare` denial (we won't share it). Identical on the wire, deliberately — see §"Every path a document can leave by". Consumed by `handleVacant` (sets the peer `vacant`, emits **no** `ensure-doc-dismissed` — our replica survives). |
 
 The seven are defined once in `@kyneta/transport`; the wire encoding is defined once in `@kyneta/wire`. This package implements the *semantics*.
 
@@ -261,7 +261,7 @@ Source: `src/sync-program.ts` → `handlePresent`, `src/exchange.ts` → the `on
 
 When a peer announces an unknown doc, four checks run in order:
 
-1. **`canShare` / `canAccept` governance check.** `canAccept(peer, docMeta)` → `false` silently drops the `present`. `resolve` never fires.
+1. **`canShare` governance check.** `canShare(docId, peer)` → `false` silently drops the `present` for that document. `resolve` never fires, so no replica is created. (`canAccept` is not consulted here; it gates the inbound *offer*, one step later. Gating replica creation on the outbound predicate is the existing convention — a document we would not share with this peer is one we have no reason to create on its word.)
 2. **Schema-hash auto-resolve via `Capabilities`.** If `(schemaHash, replicaType, syncMode)` matches a registered `BoundSchema`, the triple auto-classifies as `Interpret(bound)`. `resolve` never fires.
 3. **`resolve` callback.** The application's `resolve(peer, docMeta)` runs. It returns one of the four dispositions.
 4. **Two-tiered default (no `resolve` callback).** If `replicaType` is supported (present in `Capabilities` as a replica-only entry), default is `Defer()`. Otherwise `Reject()`.
@@ -546,7 +546,9 @@ A `Policy` is an interface with **optional** gate predicates and handlers. Any f
 
 ```ts
 interface Policy {
-  canShare?: GatePredicate       // Should we include this doc in our `present`?
+  canShare?: GatePredicate       // May this peer receive this doc at all? Gates
+                                  // present, push, relay, and the answer to a
+                                  // direct request.
   canAccept?: GatePredicate       // Should we accept a peer's `present` for this doc?
   canReset?: EpochBoundaryPredicate     // Accept compaction-induced state discard?
   cohort?: GatePredicate         // Does this peer's version constrain compaction?
@@ -573,6 +575,25 @@ The default differs per gate:
 
 Three-valued logic is the composition mechanism. One `false` vetoes; one `true` permits (with no vetoes); all-undefined falls through to default. This lets a feature (a `Line`, a room, a game loop, a user-supplied policy) register its own gates without coordinating with the rest of the system — policies are independent concerns that unify cleanly.
 
+### Every path a document can leave by
+
+A document can reach a peer four ways, and **all four consult `canShare`**:
+
+| Path | Handler | Effect |
+|------|---------|--------|
+| Announce | `handlePeerAvailable`, `handleDocEnsure` / `handleDocDefer` → `announceDoc` | `present` |
+| Push | `handleLocalDocChange` → `buildPush` | `send-offers` |
+| Relay | `handleDocImported` → `buildPush` | `send-offers` |
+| Answer a request | `handleInterest` → `handleInterestForKnownDoc` | `send-offer` |
+
+The first three filter recipients through `filterPeersByShare`. The fourth is a single-peer check inside `handleInterest`.
+
+**The fourth shipped ungated through 3.0.0.** `canShare` therefore decided only whether a peer was *told about* a document, not whether it could *have* one: any peer that knew or guessed a document id could pull its full state by calling `get(docId, schema)`, which sends `interest` to everyone. The leak was the initial state rather than a live subscription — subsequent pushes were filtered by `buildPush` — which is part of why it went unnoticed. `handlePresent`'s known-document branch was ungated for the same reason and is now checked too; without it, a denied peer's own `present` would still draw an `interest` naming our version.
+
+**The denial reply does not depend on whether we hold the document.** The `canShare` check in `handleInterest` sits *above* the document lookup, so a denied peer gets `vacant` either way. If it were below, a denied peer would get a prompt `vacant` for documents we hold and silence for ones we do not — an existence oracle, a way to ask yes/no questions about our data without being permitted to read any of it. The reply is also a reply rather than silence for a related reason: silence leaves the requester's `whenSettled` pending until `offlineAfter`, and how long a peer waits before giving up is itself observable. Both producers of `vacant` go through one `vacantReply` builder, which is where the reasoning is recorded in the source.
+
+**The test lesson.** Both pre-existing `canShare` tests asserted `exchange.has(docId) === false` after an announce. That proves a peer was not *told*; it does not prove it could not *ask*, and nothing in the suite ever asked. A gate needs every door tried — and because the sync program is pure, they can all be tried in one test: `sync-program.test.ts` §"canShare — no outbound effect reaches a vetoed peer" drives every outbound-capable `SyncInput` and asserts nothing naming the vetoed document reaches the vetoed peer except `vacant`. That test, not this paragraph, is what fails when a fifth path is added.
+
 ### `cohort` — compaction scope governance
 
 The `cohort` gate determines which peers' confirmed versions participate in the LCV (least common version) computation. `Exchange.compact(docId)` uses the LCV as the safe trim point — `replica.advance()` never exceeds the LCV, so cohort members are guaranteed incremental delta sync (never stranded by compaction).
@@ -591,7 +612,7 @@ new Exchange({
 ### What `Policy` / `Governance` is NOT
 
 - **Not authorization middleware.** These gates run at protocol points (pre-send, pre-accept), not at application API points.
-- **Not synchronous with remote peers.** A policy denying `canShare` silently omits the doc from `present`; no error is sent.
+- **Not synchronous with remote peers.** A policy denying `canShare` silently omits the doc from `present`; no error is sent. A peer that asks for the doc *directly* does get a reply — `vacant` — but that is a protocol answer, not an error, and it is exactly the reply it would get for a doc we do not have.
 - **Not hierarchical.** Every registered policy is peer to every other. There is no "super-policy" that overrides the rest.
 - **Not persistent.** Policies live in memory. Add / remove at runtime.
 
