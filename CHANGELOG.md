@@ -1,3 +1,14 @@
+# Unreleased
+
+## Fixed
+
+- **`whenSettled` and `initialize` honour `Policy.authority`** (`@kyneta/exchange`). `whenSettled` waited for a peer to reconcile whenever *any* transport was configured, ignoring the declared authority — so a server with `authority: "self"` and a transport (the normal shape of a server) hung forever, even though `settled(doc)` and `docStatus(doc)` already reported it settled. In the other direction, a client naming a specific authority resolved on any peer's reply, including another empty client, and `initialize` then returned `"loaded"` for a document the authority had never described. Both came from `whenSettled` keeping its own copy of the rule instead of reading the document's settle term; it now waits on `settledWith(doc, authority)`. `initialize` resolves the authority before the wait rather than after, so an explicit `{ authority }` reaches it. `useInitialize` (`@kyneta/react`) inherits both fixes.
+- **The `sync()` API table no longer lists a `settled(opts?)` method** (docs). It was removed in 3.0.0; worse than a stale name, `settled` *is* exported — as a synchronous boolean over a ref, not a promise. The readiness functions now have their own table, and `docs/upgrading-3.0.md` warns about the collision.
+
+## Deprecated
+
+- **`whenSettled`'s `peer` option** (`@kyneta/exchange`) — use `authority`, which takes the same predicate plus `"self"` and `"any"`. `peer` still works.
+
 # 0.1.0
 
 `@kyneta/perspective` graduates from `experimental/` to `packages/` and

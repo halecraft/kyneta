@@ -137,21 +137,32 @@ export function initialize<D extends object>(
   if (existing) return existing
 
   const run = (async (): Promise<"created" | "loaded"> => {
+    // Resolution order: call-site → Policy.authority → "any".
+    //
+    // Resolved *before* the wait, not after, because it decides what we are
+    // waiting for: a peer declaring itself the authority has nobody to wait
+    // on, while one that names a specific peer must not settle for anyone
+    // else's reply. Reading it afterwards — as this did until the wait learned
+    // about authority — meant an explicit `{ authority: "self" }` could not
+    // stop a wait that had already begun, so an authoritative server with a
+    // transport hung until some client happened to connect.
+    const authority = opts?.authority ?? authorityFor(doc)
+
     // GATHER — wait for every source, then look. Reading the status *after*
     // the wait is what makes the answer meaningful; reading it before would
     // just observe "pending".
     const { via } = await whenSettled(doc, {
+      authority,
       ...(opts?.offlineAfter !== undefined
         ? { offlineAfter: opts.offlineAfter }
         : {}),
     })
 
-    // Resolution order: call-site → Policy.authority → "any".
-    const authority = opts?.authority ?? authorityFor(doc)
-
     // PLAN — all the rules, none of the effects.
     const decision = planInitialization({
-      status: docStatus(doc, opts?.authority ? { authority } : undefined),
+      // The same authority drives the wait and the status read, so the two
+      // cannot disagree about whose answer was being waited for.
+      status: docStatus(doc, { authority }),
       waitOutcome: via,
       authority,
       writerModel: writerModelOf(doc),

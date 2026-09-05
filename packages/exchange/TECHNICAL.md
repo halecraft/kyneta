@@ -623,12 +623,14 @@ Two distinct "has-synced" predicates, deliberately **not** unified: `hasEverSync
 
 There used to be a third, `#isReady` — connection-aware, reachable only through `waitUntilReady` and then `waitForSync`, a strictly linear chain. Removing `waitForSync` in 3.0 took the whole chain with it.
 
-Note also that `sync(doc).ready` now reports `true` when no transports are configured, matching the carve-out `settled()` already had — with nothing that could ever answer, waiting is waiting forever. `readyFor(pred)` deliberately does *not* get that carve-out: it asserts a specific peer was consulted, and with no transports none was.
+Note also that `sync(doc).ready` now reports `true` when no transports are configured, matching the carve-out the settle conjunction already had — with nothing that could ever answer, waiting is waiting forever. `readyFor(pred)` deliberately does *not* get that carve-out: it asserts a specific peer was consulted, and with no transports none was.
+
+`ready` is the *network* latch and stays authority-agnostic: it answers "did anyone reconcile?", not "did the right peer reconcile?". Authority is a settle-layer concept, so code that needs it reads `docStatus` or `whenSettled` rather than `ready`. This is why `authority: "self"` does **not** make `ready` true on a server with a transport and no clients — and why `useDocReady` is defined over `docStatus` rather than over `ready`.
 
 ### Connectivity & settling
 
 - `deriveConnectivity({ establishedPeers, transportCount })` — pure classifier: `online` (≥1 established peer), `offline` (no transports), else `connecting`. `synchronizer.connectivity()` / `sync(doc).connectivity` gather the counts (`TransportManager.size`, session peers with a live channel) and delegate.
-- `awaitReconciliation(docId, isReady, timeoutMs)` (`synchronizer.ts`) — shared listener+timeout+cleanup core whose **resolve predicate is a parameter**. `whenSettled` passes the monotonic `hasReconciled`; it never rejects, resolving `{ via: "local" }` (no transports), `{ via: "peer" }` (first reconciliation), or `{ via: "offline" }` (after `offlineAfter` ms). The parameterisation dates from when a second, connection-aware predicate also used it.
+- `awaitReconciliation(docId, isReady, timeoutMs)` (`synchronizer.ts`) — shared listener+timeout+cleanup core whose **resolve predicate is a parameter**, so it stays a pure wait mechanism with no opinion about readiness. `whenSettled` — its only caller — passes the document's settle conjunction, `settledWith(ref, authority)`. It never rejects, resolving `{ via: "local" }` (nothing upstream had to answer: no transports, or `authority: "self"`), `{ via: "peer" }` (the authority answered), or `{ via: "offline" }` (after `offlineAfter` ms).
 
 This is the reactive surface for `@kyneta/react`'s `useDocReady` / `useSyncState` and similar hooks.
 
@@ -661,6 +663,19 @@ goes through this one symbol"), and the same insight `jj:mltppspx` recorded as
 `populatedFeed(ref)`, and composes with `useChangefeed`, `@kyneta/reactive`,
 and `@kyneta/index` with no new plumbing. That is why the React binding is a
 one-line adapter rather than a store core.
+
+### One predicate, one wait
+
+Every readiness surface — `settled`, `settledWith`, `docStatus`, `docStatusFeed`, `whenSettled`, `initialize`, and the React hooks over them — derives its peer half from **one** function: `derivePeerSettled` (`synchronizer.ts`), reached through the peer settle term. None of them re-implements it. The boolean forms read the term directly; `whenSettled` waits on `settledWith(ref, authority)`, which is the same term with the authority supplied by the caller.
+
+That is an invariant rather than a stylistic preference, and it is written down because 3.0.0 shipped without it. `whenSettled` had a second, private copy of "has the authority answered?" that checked only `hasReconciled` (or `reconciledMatching`, when the caller passed the now-deprecated `peer` option). It never consulted `Policy.authority`. The two copies disagreed in both directions:
+
+- **Over-waiting.** A server declaring `authority: "self"` with a transport configured — the normal shape of a server, since it has to listen for clients — hung forever inside `initialize`. `settled(doc)` was already `true` and `docStatus(doc)` already read `"empty"`; only the promise disagreed. The `"self"` rule exists precisely to say "my own storage is the last word, there is nobody to wait for", and the wait ignored it.
+- **Under-waiting.** A client declaring `authority: p => p.peerId === "server"` resolved as soon as *any* peer reconciled, including another equally-empty client. `initialize` then returned `"loaded"` — "the document already had data" — on the word of a peer that had never seen it.
+
+The test gap that hid this is worth naming, because it is the reusable lesson: **every** `authority` scenario in the suite was transportless, and with no transports configured every rule in `derivePeerSettled` short-circuits to `true` via the `isOffline` branch. The truth table was exhaustive and the integration tests were green, yet nothing exercised the authority rules against a live transport. Tests for a rule with a short-circuit have to defeat the short-circuit, or they test only the short-circuit. The cases in `__tests__/authority.test.ts` and `__tests__/integration.test.ts` §"whenSettled — authority" now configure a bridge transport for exactly this reason.
+
+A corollary for `initialize`: the authority is resolved **before** the wait, not after. It decides what is being waited for, so reading it afterwards meant an explicit `initialize(doc, seed, { authority: "self" })` could not stop a wait that had already started.
 
 ### The gate guards only the negative verdict
 

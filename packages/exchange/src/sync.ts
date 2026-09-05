@@ -14,7 +14,9 @@
 //   await whenSettled(doc)
 
 import type { DocId, PeerId, PeerIdentityDetails } from "@kyneta/transport"
-import { whenHydrated } from "./settle.js"
+import { authorityFor } from "./doc-meta.js"
+import type { Authority } from "./governance.js"
+import { settledWith, whenHydrated } from "./settle.js"
 import type { Synchronizer } from "./synchronizer.js"
 import type { Connectivity, PeerSyncState } from "./types.js"
 
@@ -217,9 +219,9 @@ export function sync(ref: object): SyncRef {
 /**
  * Resolve once every truth source attached to this document has reported.
  *
- * This is the promise form of `settled(ref)`, and the one to reach for before
- * deciding whether a document is empty. It awaits **both** halves: the stored
- * data finishing its load, and the authority answering.
+ * This is the promise form of `settledWith(ref, authority)`, and the one to
+ * reach for before deciding whether a document is empty. It awaits **both**
+ * halves: the stored data finishing its load, and the authority answering.
  *
  * Waiting on the network alone is the tempting shortcut and it is wrong. A
  * document with both a store and transports would proceed the moment the
@@ -238,14 +240,40 @@ export function sync(ref: object): SyncRef {
  * read failed, because that is a fault worth surfacing rather than a state
  * worth proceeding from.
  *
+ * **The peer half is read from the document's settle term, never
+ * re-implemented here.** That rule is the whole point of this function's
+ * shape, and it was learned the hard way: 3.0.0 shipped with a second, private
+ * copy of the "has the authority answered?" logic living right here, which
+ * ignored `Policy.authority` entirely. The two copies then disagreed in both
+ * directions. A server declaring `authority: "self"` — meaning "my own storage
+ * is the last word" — hung forever waiting for a client that had nothing to
+ * tell it, while `docStatus` on the same document already said `"empty"`. And
+ * a client that named a specific peer as its authority would proceed the
+ * moment *any* peer replied, including another equally-empty client. One
+ * predicate, evaluated in one place (`derivePeerSettled`), is what prevents
+ * both.
+ *
  * @param ref - A document ref.
- * @param opts.peer - Require a peer matching this predicate to have answered.
+ * @param opts.authority - Whose answer settles the wait. Resolution order is
+ *   call-site → the Exchange's `Policy.authority` → `"any"`.
+ * @param opts.peer - Deprecated spelling of `opts.authority`, kept for 3.0.0
+ *   callers. Require a peer matching this predicate to have answered.
  * @param opts.offlineAfter - Give up waiting for peers after this many ms.
  *   `0` (the default) waits indefinitely. Never applies to the storage wait.
  */
 export async function whenSettled(
   ref: object,
   opts?: {
+    /**
+     * Whose answer settles the wait. Defaults to the Exchange's declared
+     * `Policy.authority`, and to `"any"` if none was declared.
+     */
+    authority?: Authority
+    /**
+     * @deprecated Use `authority`. A predicate passed here means exactly the
+     * same thing — `Authority` accepts one — so this is a spelling, kept so
+     * that 3.0.0 callers keep working.
+     */
     peer?: (peer: PeerIdentityDetails) => boolean
     offlineAfter?: number
   },
@@ -258,18 +286,33 @@ export async function whenSettled(
   // No exchange behind this document, so there is no upstream to wait for.
   if (!source) return { via: "local" }
 
+  // Resolution order: call-site → Policy.authority → "any", the same order
+  // `docStatus` and `initialize` use. Sharing it is what stops the promise and
+  // the boolean forms from answering differently about the same document.
+  const authority = opts?.authority ?? opts?.peer ?? authorityFor(ref)
+
   const { docId, synchronizer } = source
-  if (synchronizer.connectivity() === "offline") return { via: "local" }
 
-  const isReady = opts?.peer
-    ? () => synchronizer.reconciledMatching(docId, opts.peer as never)
-    : () => synchronizer.hasReconciled(docId)
+  // Hydration is already done above, so what remains of the conjunction is the
+  // peer term — and that term is where `derivePeerSettled` applies the
+  // authority rules, including the two carve-outs that mean "nobody could ever
+  // answer, so waiting is waiting forever": no transports configured, and
+  // `authority: "self"`.
+  const isSettled = () => settledWith(ref, authority)
 
-  if (isReady()) return { via: "peer" }
+  if (isSettled()) {
+    // Distinguish "somebody answered" from "nobody had to". A `"self"`
+    // authority and a transportless document both settle without any peer
+    // having spoken, and callers such as `initialize` read this label to know
+    // whether the verdict rests on local evidence alone.
+    const answered =
+      authority !== "self" && synchronizer.connectivity() !== "offline"
+    return { via: answered ? "peer" : "local" }
+  }
 
   const result = await synchronizer.awaitReconciliation(
     docId,
-    isReady,
+    isSettled,
     opts?.offlineAfter ?? 0,
   )
   return result === "ready" ? { via: "peer" } : { via: "offline" }

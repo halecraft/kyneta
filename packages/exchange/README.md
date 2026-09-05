@@ -578,7 +578,8 @@ sync(doc).connectivity  // "online" | "connecting" | "offline"
 
 await whenSettled(doc)
 
-// Settle without throwing: resolves { via: "peer" | "local" | "offline" }
+// Stop waiting for the authority after 3s and carry on with local evidence.
+// Resolves { via: "peer" | "local" | "offline" } — "offline" means we gave up.
 await whenSettled(doc, { offlineAfter: 3000 })
 
 sync(doc).onPeerSyncChange(states => {
@@ -680,8 +681,16 @@ await initialize(doc, seedDefaults)
 const exchange = new Exchange({ id: "app", stores: [store] })
 await initialize(exchange.get("blog", BlogDoc), seedDefaults)
 
-// Server — authoritative. Declared once, at construction.
-const server = new Exchange({ id: "server", stores: [store], authority: "self" })
+// Server — authoritative. Declared once, at construction. It has a transport
+// (it serves clients), but `authority: "self"` means its own storage is the
+// last word, so it seeds as soon as the disk read is done rather than waiting
+// for a client that has nothing to tell it.
+const server = new Exchange({
+  id: "server",
+  stores: [store],
+  transports: [wsServer],
+  authority: "self",
+})
 await initialize(server.get("blog", BlogDoc), seedDefaults)
 
 // Client — waits for the server's answer, and gives up after 3s if it never
@@ -845,9 +854,23 @@ You only engage the next level when you need it. Each level is additive — it d
 | `ready` | `boolean` — monotonic readiness latch: `true` once the doc reconciles with ≥1 peer (data or `vacant`); never regresses. The 90% gate. |
 | `readyFor(pred)` | `boolean` — latch restricted to reconciled peers matching `pred` (authority / quorum). |
 | `connectivity` | `"online" \| "connecting" \| "offline"`. |
-| `whenSettled(doc, opts?)` | Resolve once **every** truth source has reported — stored data loaded and the authority answered. Options: `{ peer?, offlineAfter? }`. Rejects only if the store read failed. |
-| `settled(opts?)` | Resolve (never reject) to `{ via: "peer" \| "local" \| "offline" }`. Options: `{ offlineAfter?: number }`. |
 | `onPeerSyncChange(cb)` | Subscribe to per-peer sync state changes. Returns unsubscribe function. |
+
+### Readiness
+
+Standalone functions, not members of `sync(doc)`. They divide by two questions: *has everything reported?* (`settled`, `whenSettled`) and *what does the document hold?* (`docStatus`).
+
+| Function | Description |
+|----------|-------------|
+| `whenSettled(doc, opts?)` | Resolve once **every** truth source has reported — stored data loaded and the authority answered. Options: `{ authority?, offlineAfter? }` (`peer?` is a deprecated spelling of `authority`). Resolves `{ via: "peer" \| "local" \| "offline" }`: `"local"` when nothing upstream had to answer (no transports, or `authority: "self"`), `"peer"` when the authority answered, `"offline"` when `offlineAfter` elapsed first. Rejects only if the store read failed. |
+| `docStatus(doc, opts?)` | `"pending" \| "empty" \| "populated"` — total, never throws. Options: `{ authority? }`. |
+| `docStatusFeed(doc, opts?)` | Observable form of `docStatus`, carrying `[CHANGEFEED]`. |
+| `initialize(doc, seed, opts?)` | Write defaults exactly once, only if the document is genuinely empty. Options: `{ authority?, offlineAfter? }`. Returns `"created"` or `"loaded"`. |
+| `settled(doc)` | `boolean` — has every truth source reported? The synchronous form of `whenSettled`; **not** a promise. |
+| `settledFeed(doc)` | Observable form of `settled`. A callable, so never put it in an `if`. |
+| `hydrated(doc)` / `whenHydrated(doc)` | The storage half alone: has this document's stored data finished loading? `whenHydrated` rejects if the load failed. This — not `flush()` — is the storage gate. |
+
+`whenSettled` and `docStatus` resolve the authority the same way, so they cannot disagree: call-site `opts.authority` → the Exchange's `Policy.authority` → `"any"`.
 
 ### Bind Functions
 

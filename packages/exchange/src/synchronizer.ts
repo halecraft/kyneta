@@ -1025,10 +1025,13 @@ export class Synchronizer {
   /**
    * Shared wait core: resolve `"ready"` once `isReady()` becomes true (on a
    * peer-sync change for `docId`), or `"timeout"` after `timeoutMs` (0 ⇒ no
-   * timeout). Never rejects — callers decide what a timeout means. The
-   * The resolve predicate is a parameter so callers can wait on different
-   * conditions — `whenSettled` passes either the monotonic `hasReconciled` or
-   * an authority-restricted `reconciledMatching`.
+   * timeout). Never rejects — callers decide what a timeout means.
+   *
+   * The resolve predicate is a parameter so this stays a pure
+   * listener-plus-timeout mechanism with no opinion about readiness.
+   * `whenSettled` — its only caller — passes the document's settle
+   * conjunction, `settledWith(ref, authority)`, so the authority rules are
+   * applied in one place (`derivePeerSettled`) rather than duplicated here.
    */
   awaitReconciliation(
     docId: DocId,

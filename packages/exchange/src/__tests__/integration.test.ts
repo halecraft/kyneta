@@ -21,6 +21,7 @@ import {
 } from "@kyneta/schema"
 import { yjs } from "@kyneta/yjs-schema"
 import { afterEach, describe, expect, it } from "vitest"
+import { docStatus } from "../doc-status.js"
 import {
   Exchange,
   type ExchangeParams,
@@ -825,7 +826,7 @@ describe("Vacant — terminal will-not-serve", () => {
     await expect(waited).resolves.toEqual({ via: "peer" })
   })
 
-  it("settled() resolves { via: 'local' } when no transports are configured", async () => {
+  it("whenSettled resolves { via: 'local' } when no transports are configured", async () => {
     const exchange = createExchange({ id: "solo" }) // no transports
     const doc = exchange.get("doc-1", SequentialDoc)
     await expect(whenSettled(doc)).resolves.toEqual({ via: "local" })
@@ -1462,6 +1463,162 @@ describe("whenSettled", () => {
     // Both docs should have been notified (they both synced)
     expect(notifiedDocIds.has("doc-1")).toBe(true)
     expect(notifiedDocIds.has("doc-2")).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// whenSettled — the authority decides who is worth waiting for
+// ---------------------------------------------------------------------------
+//
+// Every one of these configures a transport, which is the point. The bug these
+// guard against hid for a whole release because every `authority` scenario in
+// the suite was transportless, and with no transports configured *every*
+// authority rule short-circuits to "settled" — so none of them ever exercised
+// the rule itself.
+
+describe("whenSettled — authority", () => {
+  const isServer = (p: { peerId: string }) => p.peerId === "server"
+
+  /** Resolves `"pending"` if `p` has not settled within `ms`. */
+  async function within<T>(p: Promise<T>, ms = 100): Promise<T | "pending"> {
+    return Promise.race([
+      p,
+      new Promise<"pending">(r => setTimeout(() => r("pending"), ms)),
+    ])
+  }
+
+  it("'self' with a transport resolves { via: 'local' } with no peer present", async () => {
+    // The reported bug. A server declares itself the authority precisely
+    // because its own storage is the last word, so a client connecting later
+    // has nothing to tell it — waiting for one is waiting forever.
+    const bridge = new Bridge()
+    const server = createExchange({
+      id: "server",
+      transports: [createBridgeTransport({ transportId: "server", bridge })],
+      authority: "self",
+    })
+
+    const doc = server.get("doc-1", SequentialDoc)
+
+    expect(await within(whenSettled(doc))).toEqual({ via: "local" })
+    // And the promise agrees with the synchronous view, which was already
+    // right before this fix. The two disagreeing is what the bug *was*.
+    expect(docStatus(doc)).toBe("empty")
+  })
+
+  it("a predicate authority ignores a non-matching peer", async () => {
+    // Two empty clients that both name the server as their authority. The
+    // hazard: each sees the other reconcile and mistakes it for the server
+    // having spoken, so both conclude the document is empty.
+    const bridge = new Bridge()
+    const clientA = createExchange({
+      id: "client-a",
+      transports: [createBridgeTransport({ transportId: "client-a", bridge })],
+      authority: isServer,
+    })
+    const clientB = createExchange({
+      id: "client-b",
+      transports: [createBridgeTransport({ transportId: "client-b", bridge })],
+      authority: isServer,
+    })
+
+    const docA = clientA.get("doc-1", SequentialDoc)
+    clientB.get("doc-1", SequentialDoc)
+    await drain(40)
+
+    // client-b has reconciled, but it is not the authority.
+    expect(sync(docA).ready).toBe(true) // the network latch says yes …
+    expect(docStatus(docA)).toBe("pending") // … the authority has not spoken
+    expect(await within(whenSettled(docA))).toBe("pending")
+
+    // Now the authority shows up and serves the document.
+    const server = createExchange({
+      id: "server",
+      transports: [createBridgeTransport({ transportId: "server", bridge })],
+    })
+    const docS = server.get("doc-1", SequentialDoc)
+    batch(docS, (d: any) => d.title.set("from-the-server"))
+    await drain(40)
+
+    expect(await within(whenSettled(docA))).toEqual({ via: "peer" })
+    expect(docA.title()).toBe("from-the-server")
+  })
+
+  it("a call-site authority overrides the policy, in both directions", async () => {
+    const bridge = new Bridge()
+    // Policy is the permissive "any"; the call site is stricter.
+    const clientA = createExchange({
+      id: "client-a",
+      transports: [createBridgeTransport({ transportId: "client-a", bridge })],
+    })
+    const clientB = createExchange({
+      id: "client-b",
+      transports: [createBridgeTransport({ transportId: "client-b", bridge })],
+    })
+
+    const docA = clientA.get("doc-1", SequentialDoc)
+    clientB.get("doc-1", SequentialDoc)
+    await drain(40)
+
+    // Policy "any" is satisfied by client-b …
+    expect(await within(whenSettled(docA))).toEqual({ via: "peer" })
+    // … but a call-site predicate naming an absent server is not.
+    expect(await within(whenSettled(docA, { authority: isServer }))).toBe(
+      "pending",
+    )
+
+    // The inverse: a strict policy, relaxed at the call site by claiming
+    // authority for ourselves.
+    const solo = createExchange({
+      id: "solo",
+      transports: [createBridgeTransport({ transportId: "solo", bridge })],
+      authority: isServer,
+    })
+    const docSolo = solo.get("doc-2", SequentialDoc)
+
+    expect(await within(whenSettled(docSolo))).toBe("pending")
+    expect(await within(whenSettled(docSolo, { authority: "self" }))).toEqual({
+      via: "local",
+    })
+  })
+
+  it("the deprecated peer option still selects the authority", async () => {
+    // `peer` was 3.0.0's spelling. It means the same thing as an `authority`
+    // predicate, so it keeps working rather than breaking those callers.
+    const bridge = new Bridge()
+    const clientA = createExchange({
+      id: "client-a",
+      transports: [createBridgeTransport({ transportId: "client-a", bridge })],
+    })
+    const clientB = createExchange({
+      id: "client-b",
+      transports: [createBridgeTransport({ transportId: "client-b", bridge })],
+    })
+
+    const docA = clientA.get("doc-1", SequentialDoc)
+    clientB.get("doc-1", SequentialDoc)
+    await drain(40)
+
+    expect(await within(whenSettled(docA, { peer: isServer }))).toBe("pending")
+  })
+
+  it("gives up with { via: 'offline' } when the authority never arrives", async () => {
+    // The escape hatch for an offline-first client: act on local evidence
+    // rather than block forever. `docStatus` stays "pending" throughout —
+    // giving up is a decision, not a discovery that the document is empty.
+    const bridge = new Bridge()
+    const client = createExchange({
+      id: "client-a",
+      transports: [createBridgeTransport({ transportId: "client-a", bridge })],
+      authority: isServer,
+    })
+
+    const doc = client.get("doc-1", SequentialDoc)
+
+    expect(await within(whenSettled(doc, { offlineAfter: 20 }), 300)).toEqual({
+      via: "offline",
+    })
+    expect(docStatus(doc)).toBe("pending")
   })
 })
 

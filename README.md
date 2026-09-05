@@ -43,8 +43,9 @@ batch(doc, d => {
 
 doc.title() // "My Todos"
 
-// Resolves once storage has loaded and peers have answered — so you know
-// you're looking at the whole document, not just the part that arrived first.
+// Resolves once storage has loaded and the authority has answered — so you
+// know you're looking at the whole document, not just the part that arrived
+// first. (Nobody to wait for if this peer is itself the authority.)
 await whenSettled(doc)
 ```
 

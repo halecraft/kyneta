@@ -108,11 +108,15 @@ await whenSettled(doc); // wait for every truth source
 const status = docStatus(doc); // "pending" | "empty" | "populated"
 ```
 
-`whenSettled` resolves once storage has loaded _and_ peers have answered, so what you read afterwards is the whole document rather than the part that arrived first. `docStatus` is total — it always has an answer, which is why the old `hasSync` guard around `sync()` is no longer needed.
+`whenSettled` resolves once storage has loaded _and_ the authority has answered — nobody, if this peer is itself the authority — so what you read afterwards is the whole document rather than the part that arrived first. `docStatus` is total — it always has an answer, which is why the old `hasSync` guard around `sync()` is no longer needed.
+
+One behavioural difference worth knowing before you swap the calls: `sync(doc).settled()` never rejected, and `whenSettled` does — if the store read failed. A failed read is not an empty document, and surfacing it beats resolving as though there were nothing there. Network problems still never reject; an unreachable authority resolves `{ via: "offline" }` once `offlineAfter` elapses.
 
 For a status label, compose one from connectivity, `peerStates`, and `docStatus`. `describeSyncStatus` and `SyncStatusSummary` bundled those three into a string that could not be right for every UI; building the label where you render it costs a few lines and stops being wrong.
 
 `sync(doc).settled()` and `createDerivedSyncStore` are removed on the same grounds. In React, use `useDocStatus` and `useInitialize`.
+
+> **Watch the name.** 3.0 also exports a `settled(doc)`, and it is _not_ the old method under a new home: it is a **synchronous boolean** — "has every truth source reported?" — where the 2.x method returned a promise. So `await settled(doc)` compiles, waits for nothing, and gives you back a boolean wrapped in a resolved promise. The promise form is `whenSettled(doc)`, and only that.
 
 ---
 
@@ -176,7 +180,7 @@ Two questions were being answered with whichever comparison was to hand:
 
 | Removed | Use instead |
 | --- | --- |
-| `waitForSync`, `sync(doc).settled()` | `whenSettled(doc)` |
+| `waitForSync`, `sync(doc).settled()` | `whenSettled(doc)` — **not** `settled(doc)`, which is a synchronous boolean |
 | `hasSync` | `docStatus(doc)` — total, so no guard needed |
 | `describeSyncStatus`, `SyncStatusSummary` | compose from connectivity + `peerStates` + `docStatus` |
 | `createDerivedSyncStore` | `useDocStatus` / `useInitialize` |

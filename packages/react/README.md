@@ -248,7 +248,7 @@ const synced = peerStates.some((s) => s.state === "synced")
 
 ### `whenSettled(doc, opts?)`
 
-Resolves once every truth source has reported — the stored data finished loading *and* the authority answered. `{ via: "local" }` when no transports are configured, `{ via: "peer" }` on reconciliation, `{ via: "offline" }` after `opts.offlineAfter` ms. Rejects only if the store read failed. For a display label, compose `connectivity`, `peerStates`, and `docStatus(doc)`.
+Resolves once every truth source has reported — the stored data finished loading *and* the authority answered. `{ via: "local" }` when nothing upstream had to answer: no transports are configured, or this peer *is* the authority (`authority: "self"`). `{ via: "peer" }` once the authority reconciles, `{ via: "offline" }` after `opts.offlineAfter` ms. Rejects only if the store read failed. For a display label, compose `connectivity`, `peerStates`, and `docStatus(doc)`.
 
 ### Mutations
 

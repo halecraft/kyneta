@@ -6,12 +6,14 @@
 // live data. That is worth covering exhaustively rather than sampling through
 // a live two-peer scenario.
 
+import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
 import { json, Schema } from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import { Exchange, type ExchangeParams } from "../exchange.js"
 import type { Authority } from "../governance.js"
 import { Governance } from "../governance.js"
 import { settled } from "../settle.js"
+import { whenSettled } from "../sync.js"
 import { derivePeerSettled } from "../synchronizer.js"
 
 const TestDoc = json.bind(Schema.struct({ title: Schema.string() }))
@@ -105,6 +107,33 @@ describe("Policy.authority", () => {
     const doc = exchange.get("doc-1", TestDoc)
 
     expect(settled(doc)).toBe(true)
+
+    exchange.reset()
+  })
+
+  it("'self' does not wait, even with a transport configured", async () => {
+    // The case above passes for the wrong reason: with no transports every
+    // authority rule short-circuits to settled, so it never tests `"self"` at
+    // all. Configure a transport and the rule has to do real work — which is
+    // how a `whenSettled` that ignored the authority went unnoticed through a
+    // release, hanging exactly the server this option exists for.
+    const bridge = new Bridge()
+    const exchange = createExchange({
+      id: "server",
+      authority: "self",
+      transports: [createBridgeTransport({ transportId: "server", bridge })],
+    })
+    const doc = exchange.get("doc-1", TestDoc)
+
+    expect(settled(doc)).toBe(true)
+    // The promise form must agree with the boolean form. They are two views of
+    // one predicate, and any gap between them is a bug in one of the two.
+    await expect(
+      Promise.race([
+        whenSettled(doc),
+        new Promise(r => setTimeout(() => r("hung"), 150)),
+      ]),
+    ).resolves.toEqual({ via: "local" })
 
     exchange.reset()
   })
