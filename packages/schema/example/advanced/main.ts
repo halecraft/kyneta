@@ -155,8 +155,11 @@ log(`
     The 'readable' layer itself composes three sub-transformers:
       withCaching(withReadable(withNavigation(base)))
 
-    Full manual expansion:
-      withChangefeed(withWritable(withCaching(withReadable(withNavigation(bottomInterpreter)))))
+    Partial manual expansion:
+      observation(withWritable(withCaching(withReadable(withNavigation(bottomInterpreter)))))
+
+    'observation' is as far down as this goes. The transformer it wraps is an
+    internal of the changefeed layer and is not exported.
 `)
 
 // ═══════════════════════════════════════════════════════════════════════════

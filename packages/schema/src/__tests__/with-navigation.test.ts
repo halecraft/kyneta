@@ -6,13 +6,13 @@ import {
   plainContext,
   Schema,
   withCaching,
-  withChangefeed,
   withReadable,
   withWritable,
 } from "../index.js"
 import type { Interpreter } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
 import type { HasCall, HasNavigation, HasRead } from "../interpreters/bottom.js"
+import { withChangefeed } from "../interpreters/with-changefeed.js"
 import { withNavigation } from "../interpreters/with-navigation.js"
 import { plainReader } from "../reader.js"
 

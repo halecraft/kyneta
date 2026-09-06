@@ -65,12 +65,12 @@ import {
   type WritableContext,
   type WritableMapRef,
   withCaching,
-  withChangefeed,
   withNavigation,
   withReadable,
   withWritable,
   writable,
 } from "../index.js"
+import { withChangefeed } from "../interpreters/with-changefeed.js"
 
 // ---------------------------------------------------------------------------
 // Strict narrowing tests — toEqualTypeOf finds the REAL boundaries where

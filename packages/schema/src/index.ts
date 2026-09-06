@@ -238,15 +238,18 @@ export {
 // Path types — re-exported from path.ts via interpret.ts
 // (Path, RawPath, RawSegment, Segment, etc. are exported above)
 export type { NotificationPlan } from "./interpreters/with-changefeed.js"
-// Changefeed interpreter transformer — compositional observation layer
+// Changefeed observation layer.
+//
+// `attachChangefeed` and `withChangefeed` used to be exported here. Neither had
+// an importer outside this package, and `withChangefeed` is reached through the
+// public `observation` layer that wraps it (see `layers.ts`) — which is what the
+// interpreter-stack docs tell callers to compose with. Removed in 4.0.
 export {
-  attachChangefeed,
   deliverNotifications,
   POPULATED,
   planNotifications,
   populated,
   populatedFeed,
-  withChangefeed,
 } from "./interpreters/with-changefeed.js"
 // withNavigation — structural navigation (coalgebraic addressing, no reading)
 export { withNavigation } from "./interpreters/with-navigation.js"

@@ -31,8 +31,9 @@ const doc = interpret(schema, ctx)
   .with(observation)
   .done()   // → Ref<typeof schema>
 
-// Manual composition (equivalent):
-const interp = withChangefeed(withWritable(withCaching(withReadable(withNavigation(bottomInterpreter)))))
+// Manual composition (equivalent). `observation` is as far down as this goes —
+// the transformer it wraps is internal to the changefeed layer and not exported.
+const interp = observation(withWritable(withCaching(withReadable(withNavigation(bottomInterpreter)))))
 const doc = interpret(schema, interp, ctx)
 ```
 

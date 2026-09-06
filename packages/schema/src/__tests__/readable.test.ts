@@ -13,11 +13,11 @@ import {
   sequenceChange,
   withAddressing,
   withCaching,
-  withChangefeed,
   withNavigation,
   withReadable,
   withWritable,
 } from "../index.js"
+import { withChangefeed } from "../interpreters/with-changefeed.js"
 
 // Composed interpreter stack — includes withAddressing for
 // identity-preserving sequence/map caching via the address table.
