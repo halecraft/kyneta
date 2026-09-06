@@ -527,7 +527,9 @@ Plus the orthogonal observation layer:
 
 | Layer | Transformer | Adds |
 |-------|-------------|------|
-| Observation | `withChangefeed` | `subscribe`, `subscribeNode`, `RecursiveChangefeedProtocol<S>` |
+| Observation | `observation` | `subscribe`, `subscribeNode`, `RecursiveChangefeedProtocol<S>` |
+
+(`observation` wraps an internal transformer, `withChangefeed`, which this document names where it discusses the layer's internals. Only `observation` is exported.)
 
 The canonical "everything" stack:
 
@@ -672,7 +674,7 @@ End-to-end flow:
 2. `ctx.runBatch(work, opts)` opens a frame (push on `frameStarts`/`inverseStack`). At depth-0 entry it invokes the substrate's `runBatch` bracket (Loro `doc.commit()`, Yjs `Y.transact`) wrapping the whole body.
 3. `fn(doc)` runs. Inside `fn`, each helper (`.set`, `.push`, `.insert`, …) routes through `ctx.dispatch(path, change)` — the depth-aware combinator. Inside a frame, dispatch is just `ctx.prepare`; outside any frame it opens an implicit single-op runBatch (auto-commit).
 4. `ctx.prepare` writes to the writer log (for `batch()`'s return value), calls `substrate.prepare`. The substrate captures σ at the change's target path, computes the inverse via `invert(pre, change)` and records it on the active frame, then advances σ and λ in lockstep.
-5. After `fn` returns, the bracket's depth-0 release calls `ctx.flush(opts)` exactly once → `wrappedFlush` → `planNotifications` → `deliverNotifications`. One `Changeset` per affected subscriber path.
+5. After `fn` returns, the bracket's depth-0 release calls `ctx.flush(opts)` exactly once → `wrappedFlush` → `planDelivery` → `deliverNotifications`. One `Changeset` per affected subscriber.
 6. If `fn` throws, the catch path replays this frame's recorded inverses LIFO through `ctx.prepare(path, inverse, { compensating: true })`, then flushes with `aborted: true`, then rethrows. External observers see one batched native event whose ops net to zero.
 
 The substrate's `runBatch` bracket invocation is gated on `frameStarts.length === 0`: substrate.runBatch is invoked at most once per outermost block, regardless of how deeply `dispatch` nests. The exchange sees the transaction as a single `merge` source: after commit the substrate's `exportSince()` captures the entire delta.
@@ -857,7 +859,7 @@ interface RecursiveChangefeedProtocol<S, C> extends ChangefeedProtocol<S, C> {
 }
 ```
 
-Every node — leaf or composite — registers its deep subscribers at **its own path**, and delivery finds them by walking each changed path's ancestors (see [`planNotifications` → `deliverNotifications`](#plannotifications--delivernotifications)). A composite does not subscribe to its children; there is no aggregation step and no subscription graph. For a leaf, the deep channel carries exactly its own change at the empty relative path — a leaf is a tree of size 1.
+Every node — leaf or composite — registers its deep subscribers at **its own path**, and delivery finds them by walking each changed path's ancestors (see [`planDelivery` → `deliverNotifications`](#plandelivery--delivernotifications)). A composite does not subscribe to its children; there is no aggregation step and no subscription graph. For a leaf, the deep channel carries exactly its own change at the empty relative path — a leaf is a tree of size 1.
 
 `subscribe` (own-path only, `Changeset<C>` shape with no paths) is the lighter sibling. The two channels carry the same information for a leaf and different information for a composite (where own-path ⊊ tree).
 
@@ -869,26 +871,50 @@ Facade vs. protocol vocabulary inversion: facade `subscribe` is deep delivery (`
 
 `subscribe(ref, callback)` is the facade primitive that calls `subscribeDescendants` under the hood. `subscribeNode(ref, callback)` is the explicit shallow opt-in — fires only when the *specific node's* state changes, not its descendants.
 
-### `planNotifications` → `deliverNotifications`
+### `planDelivery` → `deliverNotifications`
 
 Two functions form the notification engine:
 
-1. `planNotifications(ops: readonly Op[])` → `NotificationPlan` — the Functional Core. Groups the flush's ops by path key, and records one representative `Path` per group.
-2. `deliverNotifications(plan, listeners, descendants, options?)` → the Imperative Shell. Fires the own-path channel by exact key lookup, then walks each changed path's ancestors to fire the deep channel.
+1. `planDelivery(ops, ownPathKeys, deepKeys)` → `DeliveryPlan` — the Functional Core. Walks the flush's ops **once**, in dispatch order, and answers both channels.
+2. `deliverNotifications(plan, listeners, descendants, options?)` → the Imperative Shell. Builds changesets and calls functions. All the deciding already happened.
 
-**The ancestor walk.** A change at `a.b.c` concerns a subscriber at `a.b.c`, at `a.b`, at `a`, and at the root. That set is just the path's ancestor chain, so it is computed at delivery from the path itself rather than maintained between flushes. The change is rebased to each subscriber's relative path, and rebasing is done only where a subscriber actually exists — a deep document with few subscribers pays for map lookups, not allocation.
+**The two channels group differently, and the reason is structural.** A node's own path is a single key, so own-path changes can only come from one place. A node's *subtree* spans many paths, so a deep subscriber's changeset gathers ops from all of them. That gathering is the whole point: **one `batch()` reaches each subscriber as one `Changeset`.**
 
-The walk goes **deepest-first**. That order is chosen, not inherited: before this, cross-level delivery order was an artifact of the sequence in which subscribers happened to register, and reversing registration reversed delivery.
+**The ancestor walk.** A change at `a.b.c` concerns a subscriber at `a.b.c`, at `a.b`, at `a`, and at the root. That set is just the path's ancestor chain, so it is computed from the path itself rather than maintained between flushes. The change is rebased to each subscriber's relative path, and rebasing is done only where a subscriber actually exists — a deep document with few subscribers pays for map lookups, not allocation.
 
-`NotificationPlan.paths` exists because the walk must be **structural** — take the first N segments, then compute that path's key. A path key is its segments joined by a separator, so ancestor keys look like prefixes of the key string and cutting the string would be cheaper. It is also wrong: joining is lossy, so a segment whose own text contains the separator makes the split invent a level that never existed, and a subscriber at that phantom path would receive changes from an unrelated subtree. `markPopulated` walks structurally for the same reason.
+The walk is **structural**: take the first N segments, then compute that path's key. A path key is its segments joined by a separator, so ancestor keys look like prefixes of the key string and cutting the string would be cheaper. It is also wrong. Joining is lossy, so a segment whose own text contains the separator makes the split invent a level that never existed, and a subscriber at that phantom path would receive changes from an unrelated subtree. `markPopulated` walks structurally for the same reason.
 
 This is how a transaction that modifies `doc.items[0].title` and `doc.items[0].count` delivers one changeset to `subscribe(doc)` (two ops), one to `subscribe(doc.items)` (two ops), one to `subscribe(doc.items[0])` (two ops), and one each to `subscribe(doc.items[0].title)` / `subscribe(doc.items[0].count)` (one op each) — all synchronously, all deduplicated.
 
+> That example described the intended contract for two major versions while the implementation delivered one changeset per *changed path*, so `subscribe(doc)` really received two. 4.0 makes the code match. `src/__tests__/delivery-conformance.test.ts` now runs the example, so the claim is anchored to something executable rather than to prose that can drift again.
+
+Delivery is a single pass because grouping destroys ordering. If an ancestor write lands between two writes to the same descendant, grouping by path floats the ancestor past both of them, and replaying the result reaches a different state than the writes produced. Walking the ops in order and appending as we go preserves dispatch order for free. The two channels also share work: at `i === path.length` the ancestor key *is* the op's own path key, so computing them separately would repeat a lookup.
+
+The old `NotificationPlan.paths` is gone with the restructure. It existed only so the shell could recover a `Path` to walk from, holding nothing but key strings; a planner iterating the ops already has one in hand.
+
+#### Ordering
+
+Three guarantees, all pinned:
+
+- **Dispatch order within a changeset.** A subscriber's `changes` are the ops it would have received individually, in the order they were dispatched. For a root subscriber that is exactly `batch()`'s return value, filtered to its subtree — which is what makes relaying through `applyChanges` sound.
+- **Deepest-first across deep subscribers.** Chosen, not inherited: before the ancestor walk, cross-level delivery order was an artifact of the sequence in which subscribers happened to register, and reversing registration reversed delivery.
+- **Every own-path callback before every deep callback.** This one *changed* in 4.0. The channels used to interleave per changed path — own(P1), deep(P1→root), own(P2), deep(P2→root) — because delivery happened inside the walk. Planning before firing is what collapses a subscriber's several changesets into one, and this ordering is the price. It is a trade, not an oversight.
+
+Ordering *across changed paths* used to be first-touch order and was never contractual. It is now subsumed: a subscriber above several paths receives one changeset, so there is no cross-path order left to observe.
+
+#### Replay is where the fan-out is largest
+
+The local-`batch()` framing hides the high-traffic case. A replay batch bypasses `ctx.runBatch` but calls `ctx.flush` **once** for its whole payload (`executeBatch`, `src/interpreters/writable.ts`), so one incoming sync merge is one flush over every op in it. Before 4.0 an `offer` touching fifty paths delivered **fifty** changesets to every doc-root subscriber; now it delivers one. The factor is the number of distinct paths in a merge payload, which is unbounded in practice, and `@kyneta/exchange`, `@kyneta/react` and `@kyneta/devtools` all sit on that path.
+
+Ordering has two halves here, and only one is universal. The engine preserves the relative order of the ops it is handed — that holds on every substrate and both entry points. That those ops arrive in *write* order is true only of a local batch: a merge carries a CRDT diff, so the event bridge reconstructs ops by enumerating what changed rather than replaying a write log. `deliveryConformance` pins the universal half for both drivers and the dispatch-order half for local writes.
+
 The per-context dispatcher (`createDispatcher<ChangefeedMsg>` inside `ensurePrepareWiring`) is what makes re-entrant `batch()` calls from inside a subscriber safe: each call dispatches an `accumulate` Msg that drains in a fresh sub-tick. See [Re-entrant `batch()` inside subscriber callbacks](#re-entrant-batch-inside-subscriber-callbacks-drain-to-quiescence).
+
+Because the planner runs before any callback, a subscriber that writes during delivery cannot mutate a buffer mid-iteration. The flush also commits to the substrate *before* delivering, so `version()` and `delta()` read from inside a callback reflect the finished batch.
 
 ### `expandMapOpsToLeaves`
 
-A single `MapChange` (e.g. `replaceEntry("alice", {...})`) represents a structural operation on a `map` node. For subscribers on descendants of that map, the change has to be *expanded* into per-leaf `ReplaceChange` ops. `expandMapOpsToLeaves` does this pure expansion, used by `planNotifications`.
+A single `MapChange` (e.g. `replaceEntry("alice", {...})`) represents a structural operation on a `map` node. For subscribers on descendants of that map, the change has to be *expanded* into per-leaf `ReplaceChange` ops. `expandMapOpsToLeaves` does this pure expansion. It is **not** part of the notification engine: its only callers are the CRDT event bridges (`backends/loro/src/change-mapping.ts`, `backends/yjs/src/change-mapping.ts`), which run it before handing `executeBatch` a finished op list. This is why the same logical write can reach subscribers as one map op on the plain substrate and as several per-key ops on Loro or Yjs — and why `deliveryConformance` asserts invariants rather than literal op lists.
 
 ### Why there are no dynamic-collection changefeed factories
 
@@ -919,6 +945,12 @@ Each call to the catamorphism's per-id child closure (sequence's `itemFn`, map's
 So multiple ref instances at the same path → multiple callbacks → multiple fan-outs per flush. The listener-Map keyed by `path.key` is *shared* (via `listenAtPath`), but each ref instance is independent. Correct by construction — `Changeset` delivery to N callbacks at the same path key is exactly N invocations — but not free.
 
 Profiling memory or callback counts on tree-heavy docs (where re-accessing `d.tree.node(id)` in subscriber callbacks is common) may surface this as a future optimization target: catamorphism-side memoization keyed by `(parentPath, id)` would collapse the ref-instance count to one per id. Documented here to surface the property; not currently fixed.
+
+**The shared registration is never released.** `fanOutOwnPath` discards the unsubscribe that `listenAtPath` returns, so the set does not merely grow large — it grows *monotonically*, one dead entry per discarded carrier, for the lifetime of the document. Each costs an iteration over an empty local set per flush plus a retained closure. Combined with the absence of memoization above, that means the workload this section calls out as common is also the one that accumulates.
+
+The deep channel has no equivalent problem: `subscribeDescendants` hands `listenDescendants`'s unsubscribe straight back to the caller, so a deep subscriber really does go away. The asymmetry is not principled, and fixing it would make the factory-local `ownPathSubscribers` set redundant — both channels would collapse to the same registration shape. Left alone deliberately for now, because it changes subscription lifecycle semantics and wants its own "carrier discarded, listener removed" test rather than riding along with a delivery change.
+
+One thing this multiplication does *not* cost is changeset allocation. `deliverNotifications` builds one `Changeset` per key and shares it across every callback registered there.
 
 ---
 
@@ -1549,7 +1581,7 @@ The worked example is `__getCacheHandlerCountAtPath` (`src/interpreters/with-cac
 | `src/interpreters/with-addressing.ts` | ~500 | Address-table layer. Sequence/movable and map/set cases delegate to shared helpers. |
 | `src/interpreters/with-caching.ts` | ~380 | Identity-preserving memoization + `INVALIDATE`. Sequence/movable and map/set cases delegate to shared helpers. |
 | `src/interpreters/writable.ts` | ~700 | Mutation primitives + `REMOVE` + `TRANSACT` + `executeBatch`. Text/sequence/movable/map/set cases delegate to shared helpers. |
-| `src/interpreters/with-changefeed.ts` | ~1300 | Observation layer + `planNotifications` + `deliverNotifications` + `wireChangefeed`. All cases use `wireChangefeed` to unify changefeed boilerplate. |
+| `src/interpreters/with-changefeed.ts` | ~1300 | Observation layer + `planDelivery` + `deliverNotifications` + `fanOutOwnPath` + `wireChangefeed`. All cases use `wireChangefeed` to unify changefeed boilerplate. The notification engine itself is internal — not exported since 4.0. |
 | `src/interpreters/validate.ts` | ~200 | Validation interpreter. |
 | `src/interpreters/plain.ts` | ~100 | Plain-state interpreter (reader + canonical shape). |
 | `src/interpreters/navigable.ts`, `readable.ts` | ~100 each | Type-interface modules. |

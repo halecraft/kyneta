@@ -142,7 +142,7 @@ describe("subscribe(d.tree.node(id))", () => {
 })
 
 // ---------------------------------------------------------------------------
-// Same-batch create + data invariant (planNotifications iteration order)
+// Same-batch create + data invariant (one changeset, both ops)
 // ---------------------------------------------------------------------------
 
 describe("same-batch create + data write", () => {

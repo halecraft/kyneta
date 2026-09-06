@@ -164,7 +164,11 @@ subscribeNode(doc.count, (changeset) => {
 })
 ```
 
-Subscribers receive batched `Changeset` objects — never partially-applied state. Origin provenance (`{ origin: "sync" }`) flows through from `batch()` and `applyChanges()`.
+One `batch()` reaches each subscriber as **one `Changeset`**, covering everything the block wrote inside that subscriber's subtree. A subscriber at the document root sees all of it together, however many fields or records the block touched; a subscriber further down sees only its own part. The whole batch is applied before any callback runs, so no subscriber ever observes partially-applied state.
+
+Within a changeset, `changes` are in the order they were written. That makes the list a faithful log: a root subscriber's `changes` are exactly the `Op[]` that `batch()` returned, and handing them to `applyChanges()` on another document reproduces the same writes. Deeper subscribers are called before shallower ones.
+
+Origin provenance (`{ origin: "sync" }`) flows through from `batch()` and `applyChanges()`.
 
 ## Data readiness
 
