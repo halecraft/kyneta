@@ -1,0 +1,101 @@
+// delivery-conformance.test — runs the shared delivery suite against the plain
+// substrate.
+//
+// The Loro and Yjs backends run the same suite from their own packages. Between
+// the three, the notification engine's contract is pinned on every substrate
+// that ships, through both entry points: a local `batch()` and an incoming
+// merge.
+
+import { describe, expect, it } from "vitest"
+import { createRef } from "../create-doc.js"
+import { batch } from "../facade/batch.js"
+import { subscribe } from "../facade/observe.js"
+import { plainSubstrateFactory } from "../substrates/plain.js"
+import {
+  DeliveryFixture,
+  type DeliveryTestEnv,
+  deliveryConformance,
+} from "../testing/index.js"
+
+/**
+ * Two plain-substrate peers over the same schema.
+ *
+ * B is seeded from A's genesis rather than created empty, because a
+ * from-empty replica has no schema defaults to replay a delta onto. The
+ * merge then carries only what the remote write produced.
+ */
+function createPlainEnv(): DeliveryTestEnv {
+  const substrateA = plainSubstrateFactory.create(DeliveryFixture)
+  const doc = createRef(DeliveryFixture, substrateA)
+
+  return {
+    doc,
+    remoteMerge(fn) {
+      const substrateB = plainSubstrateFactory.fromEntirety(
+        substrateA.exportEntirety(),
+        DeliveryFixture,
+      )
+      const docB = createRef(DeliveryFixture, substrateB) as any
+      const before = substrateB.version()
+      batch(docB, fn)
+      const delta = substrateB.exportSince(before)
+      // Guards against a vacuous pass: with no delta the merge would be a
+      // no-op and every "one changeset" assertion would trivially hold.
+      if (delta === null) throw new Error("exportSince produced no delta")
+      substrateA.merge(delta, { origin: "sync" })
+    },
+  }
+}
+
+deliveryConformance(createPlainEnv, { label: "plain" })
+
+// ===========================================================================
+// The example TECHNICAL.md has always used
+// ===========================================================================
+
+describe("the documented delivery example", () => {
+  // `packages/schema/TECHNICAL.md` has described this exact shape since the
+  // descendant-delivery rewrite. Promoted to a test so the claim is anchored
+  // to something that runs, rather than to prose that drifted from the code
+  // for two major versions.
+  it("one changeset to every level, each covering its own subtree", () => {
+    const env = createPlainEnv()
+    const doc = env.doc
+    batch(doc, (d: any) => d.items.push({ title: "a" }))
+
+    const counts: Record<string, number> = {}
+    const ops: Record<string, number> = {}
+    // Deliberately the facade `subscribe` — the deep channel.
+    const watch = (name: string, ref: unknown) => {
+      counts[name] = 0
+      ops[name] = 0
+      subscribe(ref, cs => {
+        counts[name] = (counts[name] ?? 0) + 1
+        ops[name] = (ops[name] ?? 0) + cs.changes.length
+      })
+    }
+    watch("doc", doc)
+    watch("items", doc.items)
+    // `.at()` is `T | undefined` — the item was pushed above, so a miss here
+    // means the push failed rather than that the assertion below is wrong.
+    const item = doc.items.at(0)
+    if (!item) throw new Error("expected items[0] to exist")
+    watch("item", item)
+    watch("title", item.title)
+
+    batch(doc, d => {
+      const draftItem = d.items.at(0)
+      if (!draftItem) throw new Error("expected items[0] to exist")
+      draftItem.title.set("b")
+      d.top.set(1)
+    })
+
+    // The root's two ops are the title write and the top write; everything
+    // below `items` sees only the title write.
+    expect(counts).toEqual({ doc: 1, items: 1, item: 1, title: 1 })
+    expect(ops.doc).toBe(2)
+    expect(ops.items).toBe(1)
+    expect(ops.item).toBe(1)
+    expect(ops.title).toBe(1)
+  })
+})
