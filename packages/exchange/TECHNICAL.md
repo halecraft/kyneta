@@ -467,6 +467,8 @@ Source: `src/synchronizer.ts` → `#wireLocalChanges`, `src/exchange.ts` → cha
 
 Every local mutation — `batch(doc, fn)`, direct writes on a ref, `applyChanges` — flows through the substrate's changefeed. The Synchronizer subscribes once per `DocRuntime` and filters by the structural `replay` flag:
 
+Since `@kyneta/schema` 4.0 that subscription receives **one changeset per transaction**, not one per changed path, and the same holds for a replayed merge — an incoming `offer` touching fifty paths now arrives as one changeset rather than fifty. Two mechanisms in `Runtime` were built when it was one per path, and both are retained: `#dirtyLocalChanges` still coalesces several *batches* and several *documents* within one microtask, and `#persistIfAdvanced`'s target-version dedup still guards any two calls landing before the confirmed version advances. What changed is which of them carries the common case, not whether either is needed.
+
 ```
 batch(doc, d => d.title.insert(0, "hi"))
   │

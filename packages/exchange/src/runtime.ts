@@ -301,9 +301,17 @@ export class Runtime {
    * tick — mirrors the Synchronizer's own dirty-set-drained-at-quiescence
    * pattern (`onStateAdvanced`'s doc comment: "Coalescing is intentional:
    * multiple advances within one dispatch cycle produce a single
-   * notification"). Without this, a multi-field `batch()` — which fires
-   * one changeset per touched field — would persist the same starting
-   * delta once per field instead of once per batch. Context: jj:mrlnmlus.
+   * notification").
+   *
+   * This originally existed because a multi-field `batch()` fired one
+   * changeset per touched field, so persisting inline wrote the same
+   * starting delta once per field. Since `@kyneta/schema` 4.0 a batch
+   * delivers one changeset per subscriber, so that particular trigger is
+   * gone — but the coalescing is not redundant. It still collapses
+   * *several separate batches* landing in one microtask, and it collapses
+   * across *several documents* at once, neither of which the schema-layer
+   * change addresses. A tick that issues three batches would otherwise
+   * export and dispatch three times. Context: jj:mrlnmlus.
    */
   readonly #dirtyLocalChanges = new Set<DocId>()
   #localChangeDrain: Promise<void> | null = null
@@ -754,18 +762,24 @@ export class Runtime {
    * returns `null` for.
    *
    * Deduplicates on the *target* version, not just on an empty delta.
-   * Pre-existing gap, exposed (not caused) by this plan's new local-change
-   * call site: `deliverNotifications` fires one `Changeset` per touched
-   * top-level field in a `batch()`, so a multi-field batch synchronously
-   * triggers this method multiple times before the first dispatch's async
-   * write ever resolves — every one of those calls computes the same
-   * `exportSince(confirmedVersion)` delta, because the store-program's
-   * confirmed version hasn't advanced yet. An empty-delta check alone
-   * doesn't catch this (the delta is real, just redundant). Tracking the
-   * already-targeted version — both the in-flight `pendingVersion` and
-   * any versions already sitting in the `writing`-phase queue — closes it
-   * without touching the store-program's own Mealy-machine transitions.
-   * Context: jj:mrlnmlus.
+   *
+   * The case that exposed this was a multi-field `batch()` back when
+   * `deliverNotifications` fired one `Changeset` per touched top-level
+   * field: the method was called several times synchronously, before the
+   * first dispatch's async write resolved, and every call computed the
+   * same `exportSince(confirmedVersion)` delta because the store-program's
+   * confirmed version had not advanced yet. An empty-delta check alone
+   * does not catch that — the delta is real, just redundant.
+   *
+   * Since `@kyneta/schema` 4.0 a batch delivers one changeset per
+   * subscriber, so that path no longer produces the repeat. The dedup
+   * stays because the hazard is structural rather than tied to that one
+   * trigger: any two calls landing before the confirmed version advances
+   * recompute the same delta, and re-entrant writes during a drain can
+   * still arrange it. Tracking the already-targeted version — both the
+   * in-flight `pendingVersion` and any versions already sitting in the
+   * `writing`-phase queue — closes it without touching the store-program's
+   * own Mealy-machine transitions. Context: jj:mrlnmlus.
    */
   #persistIfAdvanced(docId: DocId): void {
     if (!this.#storeHandle) return
@@ -1179,10 +1193,13 @@ export class Runtime {
    * program first performs the real write and the other is a no-op.
    *
    * Marks the doc dirty and schedules a microtask-deferred, coalesced
-   * drain rather than persisting inline — a single `batch()` fires one
-   * changeset per touched field, so persisting on every changeset would
-   * export and dispatch the same starting delta once per field instead
-   * of once per batch. Context: jj:mrlnmlus.
+   * drain rather than persisting inline. A single `batch()` used to fire
+   * one changeset per touched field, so persisting on every changeset
+   * exported the same starting delta once per field; since
+   * `@kyneta/schema` 4.0 a batch delivers one changeset, but the drain
+   * still earns its place by coalescing several batches — and several
+   * documents — within one microtask. See {@link Runtime.#dirtyLocalChanges}.
+   * Context: jj:mrlnmlus.
    *
    * Called after hydration completes (or immediately if no stores).
    */

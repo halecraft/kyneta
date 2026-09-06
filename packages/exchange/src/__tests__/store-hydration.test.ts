@@ -185,11 +185,17 @@ describe("Exchange storage persistence", () => {
       (r): r is StoreRecord & { kind: "entry" } => r.kind === "entry",
     )
     // Exactly one entirety (first boot) + one delta (the mutation) — NOT
-    // one delta per touched field. `deliverNotifications` fires one
-    // Changeset per touched top-level field, so a naive persistence path
-    // would double-write here; jj:mrlnmlus's `#persistIfAdvanced` dedupes
-    // on the target version to prevent this, closing a pre-existing gap
-    // this test's looser `toBeGreaterThanOrEqual` assertion had missed.
+    // one delta per touched field.
+    //
+    // Two mechanisms hold this, and the load has shifted between them.
+    // The multi-field batch here used to produce one changeset per field,
+    // and `#persistIfAdvanced`'s target-version dedup (jj:mrlnmlus) is
+    // what stopped that becoming several identical writes. Since
+    // `@kyneta/schema` 4.0 the batch delivers a single changeset, so the
+    // dedup is no longer what this particular case exercises — the
+    // microtask coalescing in `#dirtyLocalChanges` carries it instead.
+    // Both are still needed for the cases this test does not cover:
+    // several batches, or several documents, inside one tick.
     expect(entries).toHaveLength(2)
 
     // First entry: base entirety from first boot
