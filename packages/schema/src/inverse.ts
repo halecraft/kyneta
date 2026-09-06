@@ -43,36 +43,7 @@ import {
   textChange,
   treeChange,
 } from "./change.js"
-
-// ---------------------------------------------------------------------------
-// deepClonePlain — deep clone of a plain-JSON value
-// ---------------------------------------------------------------------------
-
-/**
- * Deep-clone a plain-JSON value.
- *
- * The name describes the mechanism (a `structuredClone` of a plain value),
- * not any one caller's intent, because two subsystems rely on it:
- *
- * - **Inverse construction** captures σ at the change's target path *before*
- *   applying the forward change. The same σ is then mutated by `applyChange`,
- *   so the inverter must hold a snapshot — otherwise subsequent mutations
- *   would corrupt the recorded inverse.
- * - **The `ephemeral` substrate** uses it as an aliasing barrier when a whole
- *   register value (a sum variant or `.json()` blob) crosses the
- *   StateTree↔shadow boundary, so the two never share a mutable object.
- *
- * Primitives are returned as-is (clone is a no-op for `undefined`, `null`,
- * `boolean`, `number`, `string`, `bigint`, `symbol`). Objects and arrays
- * go through `structuredClone`. Plain JSON values round-trip faithfully
- * under `structuredClone`.
- */
-export function deepClonePlain<T>(value: T): T {
-  if (value === null || value === undefined) return value
-  const t = typeof value
-  if (t === "object") return structuredClone(value)
-  return value
-}
+import { deepClonePlain } from "./clone.js"
 
 // ---------------------------------------------------------------------------
 // invertReplace — value swap

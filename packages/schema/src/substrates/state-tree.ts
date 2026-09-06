@@ -30,9 +30,9 @@
 // payloads without schema knowledge.
 
 import type { ChangeBase, MapChange } from "../change.js"
+import { deepClonePlain } from "../clone.js"
 import { walkPath } from "../fold-path.js"
 import type { Path } from "../interpret.js"
-import { deepClonePlain } from "../inverse.js"
 import { needsContainer } from "../materialize-value.js"
 import type { PlainState } from "../reader.js"
 import { KIND, type Schema as SchemaNode } from "../schema.js"

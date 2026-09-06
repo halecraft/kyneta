@@ -19,11 +19,12 @@
 import type { ChangeBase } from "../change.js"
 import { replaceChange } from "../change.js"
 import type { Op } from "../changefeed.js"
+import { deepClonePlain } from "../clone.js"
 import { findOpaqueBoundary } from "../fold-path.js"
 import type { Path } from "../interpret.js"
 import type { WritableContext } from "../interpreters/writable.js"
 import { buildWritableContext } from "../interpreters/writable.js"
-import { deepClonePlain, invert } from "../inverse.js"
+import { invert } from "../inverse.js"
 import { RawPath } from "../path.js"
 import {
   decodePlainPosition,

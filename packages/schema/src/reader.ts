@@ -6,8 +6,8 @@
 // to eliminate cross-module coupling.
 
 import type { ChangeBase, ReplaceChange } from "./change.js"
+import { deepClonePlain } from "./clone.js"
 import { isNonNullObject } from "./guards.js"
-import { deepClonePlain } from "./inverse.js"
 import type { Path } from "./path.js"
 import { step } from "./step.js"
 import type { BatchOptions } from "./substrate.js"

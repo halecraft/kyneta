@@ -90,6 +90,8 @@ export {
   getOrCreateChangefeed,
   hasRecursiveChangefeed,
 } from "./changefeed.js"
+// Clone — the shared deep-copy primitive (leaf module, no imports)
+export { deepClonePlain } from "./clone.js"
 // Create-doc — generic document construction for any substrate
 export { createDoc, createDocAs, createRef } from "./create-doc.js"
 export { describe } from "./describe.js"
@@ -288,7 +290,6 @@ export {
 } from "./interpreters/writable.js"
 // Inverse — reverse arrows for the change groupoid (atomic abort)
 export {
-  deepClonePlain,
   invert,
   invertIncrement,
   invertMap,
