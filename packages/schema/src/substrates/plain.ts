@@ -49,7 +49,12 @@ import {
   type PositionCapable,
   type Side,
 } from "../position.js"
-import { applyChange, type PlainState, plainReader } from "../reader.js"
+import {
+  applyChange,
+  ownedForStore,
+  type PlainState,
+  plainReader,
+} from "../reader.js"
 import type { Schema as SchemaNode } from "../schema.js"
 import type {
   BatchOptions,
@@ -302,7 +307,7 @@ export function createPlainSubstrate<V extends Version>(
         const inverse = invert(pre, change)
         record(path, inverse)
       }
-      applyChange(doc, path, change)
+      applyChange(doc, path, ownedForStore(change, options))
       // Freeze to an immutable RawPath before the op enters the log. The live
       // AddressedPath aliases memoized registry Address objects that a later
       // delete tombstones and a later insert re-indexes, in place — logging it

@@ -31,7 +31,12 @@ import {
   type PositionCapable,
   type Side,
 } from "../position.js"
-import { applyChange, type PlainState, plainReader } from "../reader.js"
+import {
+  applyChange,
+  ownedForStore,
+  type PlainState,
+  plainReader,
+} from "../reader.js"
 import type { Schema as SchemaNode } from "../schema.js"
 import type {
   BatchOptions,
@@ -285,7 +290,7 @@ export function createStateSubstrate(
       }
 
       // We apply the change directly to the shadow PlainState
-      applyChange(shadow, path, change)
+      applyChange(shadow, path, ownedForStore(change, options))
 
       // Then, we apply the change to the StateTree so that ONLY
       // the mutated fields get their timestamps bumped — UNLESS this

@@ -398,6 +398,7 @@ export type {
 // Reader — shared utilities for reading/writing plain state objects
 export {
   applyChange,
+  ownedForStore,
   plainReader,
   syncShadow,
   writeByPath,

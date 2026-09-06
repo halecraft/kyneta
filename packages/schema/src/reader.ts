@@ -5,10 +5,12 @@
 // (writable, plain, validate, changefeed). Extracted from writable.ts
 // to eliminate cross-module coupling.
 
-import type { ChangeBase } from "./change.js"
+import type { ChangeBase, ReplaceChange } from "./change.js"
 import { isNonNullObject } from "./guards.js"
+import { deepClonePlain } from "./inverse.js"
 import type { Path } from "./path.js"
 import { step } from "./step.js"
+import type { BatchOptions } from "./substrate.js"
 
 // ---------------------------------------------------------------------------
 // FlatTreeNodeTopology — topology projection without per-node data
@@ -247,6 +249,47 @@ export function syncShadow(target: PlainState, source: PlainState): void {
       delete target[key]
     }
   }
+}
+
+/**
+ * The change to hand the store: either the same object, or one whose payload
+ * is a private copy.
+ *
+ * A `replace` payload arrives holding whatever the caller passed in, and the
+ * store writes that value in by reference. Two things then share one object —
+ * the op a subscriber will receive, and the subtree inside the store. A later
+ * write into that subtree mutates the op, so the op ends up reporting a value
+ * the batch never wrote. Copying here severs that.
+ *
+ * Skipped for `replay` and `projection` batches. Those changes were built by
+ * the sending peer or by a decay tick rather than by a caller here, so nothing
+ * local shares them — and they arrive in bulk on the highest-volume path in the
+ * system, where a copy per op is pure cost.
+ *
+ * Deliberately a transform rather than a `shouldCopy()` predicate. Four
+ * substrates call this; a predicate would let a caller ask the question and
+ * then forget to act on the answer, or copy the wrong thing. Handing back the
+ * change to store cannot be used incorrectly.
+ *
+ * The caller's half of this is enforced separately, at compile time — see
+ * `Owned` in `change.ts`.
+ */
+export function ownedForStore(
+  change: ChangeBase,
+  options?: BatchOptions,
+): ChangeBase {
+  if (options?.replay || options?.projection) return change
+  if (change.type !== "replace") return change
+  // Narrowed by the discriminant just above; `ChangeBase` is only `{ type }`,
+  // so the payload is not reachable without saying which change this is.
+  const replace = change as ReplaceChange
+  // Primitives cannot alias, so they never need a copy.
+  if (replace.value === null || typeof replace.value !== "object") return change
+  const copied: ReplaceChange = {
+    ...replace,
+    value: deepClonePlain(replace.value),
+  }
+  return copied
 }
 
 export function applyChange(

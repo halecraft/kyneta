@@ -55,6 +55,7 @@ import {
   isJsonBoundary,
   KIND,
   type MarkConfig,
+  ownedForStore,
   type Path,
   type PlainState,
   type PositionCapable,
@@ -373,7 +374,7 @@ export function createLoroSubstrate(
 
       // Local write — σ advances eagerly so reads are immediately
       // consistent regardless of where λ is in the bracket.
-      applyChange(shadow, path, change)
+      applyChange(shadow, path, ownedForStore(change, options))
 
       // JSON-boundary write: every write targeting a path that
       // crosses a struct.json/list.json/record.json boundary is
