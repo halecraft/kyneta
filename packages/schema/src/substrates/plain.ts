@@ -41,7 +41,7 @@ import type { Op } from "../changefeed.js"
 import type { Path } from "../interpret.js"
 import type { WritableContext } from "../interpreters/writable.js"
 import { buildWritableContext, executeBatch } from "../interpreters/writable.js"
-import { deepClonePlain, invert } from "../inverse.js"
+import { invert } from "../inverse.js"
 import { RawPath } from "../path.js"
 import {
   decodePlainPosition,
@@ -303,7 +303,12 @@ export function createPlainSubstrate<V extends Version>(
           | undefined
       )?.[RECORD_INVERSE]
       if (record && !options?.compensating && !options?.replay) {
-        const pre = deepClonePlain(path.read(doc))
+        // Read, don't copy. `invert` snapshots whatever it retains — see
+        // `invertReplace`, `invertMap`, `invertSequence` and the rich-text
+        // marks in `inverse.ts`, each of which deep-clones the pre-state it
+        // captures. Copying here as well protected nothing and cost a deep
+        // clone of the written subtree on every local write.
+        const pre = path.read(doc)
         const inverse = invert(pre, change)
         record(path, inverse)
       }

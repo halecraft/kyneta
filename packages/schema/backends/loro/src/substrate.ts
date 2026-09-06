@@ -46,7 +46,6 @@ import {
   DEVTOOLS_HISTORY,
   type DevtoolsHistory,
   type DevtoolsHistorySummary,
-  deepClonePlain,
   deriveSchemaBinding,
   executeBatch,
   fieldAbsPath,
@@ -367,7 +366,12 @@ export function createLoroSubstrate(
           | undefined
       )?.[RECORD_INVERSE]
       if (record && !options?.compensating) {
-        const pre = deepClonePlain(path.read(shadow))
+        // Read, don't copy. `invert` snapshots whatever it retains — see
+        // `invertReplace`, `invertMap`, `invertSequence` and the rich-text
+        // marks in `inverse.ts`, each of which deep-clones the pre-state it
+        // captures. Copying here as well protected nothing and cost a deep
+        // clone of the written subtree on every local write.
+        const pre = path.read(shadow)
         const inverse = invert(pre, change)
         record(path, inverse)
       }
