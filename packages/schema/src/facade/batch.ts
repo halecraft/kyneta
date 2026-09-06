@@ -69,7 +69,7 @@ export interface CommitOptions {
  * captured forward changes as `Op[]`.
  *
  * This is the batching primitive: every helper call inside `fn` collapses
- * into a single commit and one `Changeset` per affected subscriber path.
+ * into a single commit and one `Changeset` per affected subscriber.
  * A *single* mutation needs no `batch()` — a bare helper call auto-commits.
  * Reach for `batch()` to group ≥2 writes (atomically), to capture the
  * returned `Op[]`, or to attach `origin`/`source` provenance.
@@ -78,8 +78,14 @@ export interface CommitOptions {
  * - **Read-your-writes inside the block.** σ advances eagerly on every
  *   helper call, so subsequent reads see prior writes:
  *   `d.todos.push("a"); d.todos.push("b")` appends in order.
- * - **One Changeset per outermost block** per affected subscriber path.
- *   Multi-helper blocks collapse into one batched Changeset.
+ * - **One Changeset per outermost block, per affected subscriber.** A
+ *   subscriber sees everything the block wrote inside its own subtree, in one
+ *   changeset, whether that touched one path or twenty. Deeper subscribers are
+ *   called before shallower ones.
+ * - **Ops arrive in dispatch order.** A subscriber's `changes` are the `Op[]`
+ *   this function returns, filtered to its subtree and rebased to relative
+ *   paths — so relaying them onward through `applyChanges` reproduces the
+ *   writes exactly.
  * - **Atomic abort via inverse compensation.** If `fn` throws, every
  *   change recorded in this block is undone inside the same commit by
  *   replaying inverses LIFO. External observers see one batched native

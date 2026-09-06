@@ -478,10 +478,10 @@ describe("YjsSubstrate", () => {
         d.items.push("b")
       })
 
-      // Tree-level subscribe fires once per affected container in the
-      // flush cycle. Three containers changed (title + count + items) → 3 fires.
-      // This matches LoroSubstrate and PlainSubstrate behavior.
-      expect(received.length).toBe(3)
+      // A deep subscriber hears one changeset per flush covering its whole
+      // subtree, so all three containers arrive together — one fire, not one
+      // per container. This matches LoroSubstrate and PlainSubstrate behavior.
+      expect(received.length).toBe(1)
       expect(doc.title()).toBe("Hello")
       expect(doc.count()).toBe(42)
       // Both items present. Order within a single transaction batch is

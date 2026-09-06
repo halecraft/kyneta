@@ -237,17 +237,20 @@ export {
 } from "./interpreters/with-caching.js"
 // Path types — re-exported from path.ts via interpret.ts
 // (Path, RawPath, RawSegment, Segment, etc. are exported above)
-export type { NotificationPlan } from "./interpreters/with-changefeed.js"
 // Changefeed observation layer.
 //
-// `attachChangefeed` and `withChangefeed` used to be exported here. Neither had
-// an importer outside this package, and `withChangefeed` is reached through the
-// public `observation` layer that wraps it (see `layers.ts`) — which is what the
-// interpreter-stack docs tell callers to compose with. Removed in 4.0.
+// The notification engine itself is no longer exported. `planDelivery` (was
+// `planNotifications`), `deliverNotifications`, `DeliveryPlan` (was
+// `NotificationPlan`), `attachChangefeed` and `withChangefeed` were all public
+// with no importer outside this package. `withChangefeed` is reached through
+// the `observation` layer that wraps it (see `layers.ts`), which is the
+// composition the interpreter-stack docs point callers at. Removed in 4.0.
+//
+// What remains is the populated protocol, kept deliberately: `POPULATED` has no
+// external importer either, but removing a protocol symbol would foreclose
+// implementing that protocol outside this package.
 export {
-  deliverNotifications,
   POPULATED,
-  planNotifications,
   populated,
   populatedFeed,
 } from "./interpreters/with-changefeed.js"

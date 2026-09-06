@@ -682,10 +682,13 @@ describe("round-trip: subscribeDescendants output → applyChanges input", () =>
       d.count.increment(5)
     })
 
-    // Tree subscribers receive one Changeset<Op> per affected
-    // child path (propagated independently through the tree). Two
-    // different paths → two changesets.
-    expect(treeChangesets).toHaveLength(2)
+    // A deep subscriber receives one Changeset<Op> per flush covering its
+    // whole subtree, so both paths arrive in a single changeset — and its
+    // `changes` are in dispatch order, which is what makes this round-trip
+    // sound. Relaying a reordered log through applyChanges would not
+    // reconstruct docA's state whenever an ancestor write sits between two
+    // writes to the same descendant.
+    expect(treeChangesets).toHaveLength(1)
 
     // Reconstruct Op[] from all tree events.
     // Op.path is relative to the subscription point (root in
@@ -719,18 +722,16 @@ describe("round-trip: subscribeDescendants output → applyChanges input", () =>
       d.settings.fontSize.set(24)
     })
 
-    // Each leaf child propagates independently → two changesets
-    expect(treeChangesets).toHaveLength(2)
+    // Both leaves lie under the subscription point, so they arrive in one
+    // changeset — in dispatch order.
+    expect(treeChangesets).toHaveLength(1)
 
-    // Each changeset has one Op with a relative path
-    expect(treeChangesets[0]?.changes).toHaveLength(1)
-    expect(treeChangesets[0]?.changes[0]?.path.key).toBe(
-      RawPath.empty.field("darkMode").key,
-    )
-    expect(treeChangesets[1]?.changes).toHaveLength(1)
-    expect(treeChangesets[1]?.changes[0]?.path.key).toBe(
-      RawPath.empty.field("fontSize").key,
-    )
+    // Each Op carries its path relative to the subscription point, not its
+    // absolute path in the document.
+    const ops = treeChangesets[0]?.changes ?? []
+    expect(ops).toHaveLength(2)
+    expect(ops[0]?.path.key).toBe(RawPath.empty.field("darkMode").key)
+    expect(ops[1]?.path.key).toBe(RawPath.empty.field("fontSize").key)
 
     // To apply to docB, we need to prepend the "settings" prefix
     const absoluteOps: Op[] = treeChangesets.flatMap(cs =>

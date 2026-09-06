@@ -14,13 +14,20 @@
 // there is no graph to go stale.
 //
 // The batching and relative-path cases are pinned here because they are easy to
-// "tidy" into something subtly different, and `@kyneta/reactive` and
-// `@kyneta/index` both consume the exact shape.
+// "tidy" into something subtly different. What they pin changed in 4.0: a batch
+// now reaches each subscriber as one changeset covering its whole subtree, in
+// dispatch order, rather than one changeset per changed path.
 
 import type { Changeset } from "@kyneta/changefeed"
 import { describe, expect, it } from "vitest"
 import type { Op } from "../basic/index.js"
-import { batch, createDoc, Schema, subscribe } from "../basic/index.js"
+import {
+  batch,
+  createDoc,
+  Schema,
+  subscribe,
+  subscribeNode,
+} from "../basic/index.js"
 import { remove } from "../index.js"
 
 const Inner = Schema.struct({ from: Schema.number(), to: Schema.number() })
@@ -121,10 +128,17 @@ describe("a subscription survives the document changing shape", () => {
 // ===========================================================================
 
 describe("delivery shape", () => {
-  it("delivers one changeset PER CHANGED PATH, not one per batch", () => {
-    // Three writes in one batch produce three changesets, each with one change.
-    // Grouping them into a single changeset would be tidier and would break
-    // `@kyneta/reactive` and `@kyneta/index`, which consume this shape.
+  it("delivers one changeset PER SUBSCRIBER, not one per changed path", () => {
+    // Three writes in one batch reach this subscriber as one changeset of
+    // three ops, in the order they were dispatched.
+    //
+    // This file used to pin the opposite, on the grounds that merging "would
+    // break `@kyneta/reactive` and `@kyneta/index`, which consume this shape."
+    // Neither does. `@kyneta/index` subscribes only through `subscribeNode`
+    // (see the "subscribeNode, NOT subscribe" note in its `source.ts`), which
+    // is the own-path channel and is unaffected. `@kyneta/reactive` passes
+    // `onInvalidate` to the deep channel and discards the changeset entirely,
+    // so fewer, larger changesets are strictly less work for it.
     const doc: any = createDoc(Doc)
     const seen = record(doc)
 
@@ -134,11 +148,10 @@ describe("delivery shape", () => {
       writable.top.set(3)
     })
 
-    expect(seen.changesets).toHaveLength(3)
-    expect(
-      seen.changesets.every(changeset => changeset.changes.length === 1),
-    ).toBe(true)
-    expect(seen.paths.sort()).toEqual(["outer.x", "outer.y", "top"])
+    expect(seen.changesets).toHaveLength(1)
+    expect(seen.changesets[0]?.changes).toHaveLength(3)
+    // Not sorted — dispatch order is the contract.
+    expect(seen.paths).toEqual(["outer.x", "outer.y", "top"])
   })
 
   it("paths are relative to the subscription point", () => {
@@ -170,5 +183,195 @@ describe("delivery shape", () => {
     expect(atItem.paths).toEqual(["title"])
     expect(atRoot.paths).toHaveLength(1)
     expect(atRoot.paths[0]).toContain("title")
+  })
+})
+
+// ===========================================================================
+// One batch, one changeset per subscriber
+// ===========================================================================
+
+describe("a batch is one unit of delivery", () => {
+  // The example `packages/schema/TECHNICAL.md` has used to describe this
+  // contract since the descendant-delivery rewrite. Promoted to an executable
+  // pin so the claim is anchored to something that runs.
+  it("delivers the documented shape: one changeset to every level", () => {
+    const doc: any = createDoc(Doc)
+    batch(doc, (d: any) => d.items.push({ title: "a" }))
+
+    const atRoot = record(doc)
+    const atItems = record(doc.items)
+    const atItem = record(doc.items.at(0))
+    const atTitle = record(doc.items.at(0).title)
+
+    batch(doc, (d: any) => {
+      d.items.at(0).title.set("b")
+      d.top.set(7)
+    })
+
+    // The root sees both writes together; the deeper subscribers see only
+    // what lies in their own subtree.
+    expect(atRoot.changesets).toHaveLength(1)
+    expect(atRoot.changesets[0]?.changes).toHaveLength(2)
+    expect(atItems.changesets).toHaveLength(1)
+    expect(atItem.changesets).toHaveLength(1)
+    expect(atTitle.changesets).toHaveLength(1)
+    expect(atTitle.paths).toEqual(["root"])
+  })
+
+  it("keeps ops in dispatch order, not grouped by path", () => {
+    const doc: any = createDoc(Doc)
+    const seen = record(doc)
+
+    batch(doc, (d: any) => {
+      d.outer.x.set(1)
+      d.top.set(2)
+      d.outer.y.set(3)
+    })
+
+    expect(seen.paths).toEqual(["outer.x", "top", "outer.y"])
+  })
+
+  it("keeps an ancestor write between the two descendant writes it separates", () => {
+    // Grouping by path would float `outer` past both `outer.x` writes, and
+    // replaying that order reaches a different state than the writes produced.
+    const doc: any = createDoc(Doc)
+    const seen = record(doc)
+
+    batch(doc, (d: any) => {
+      d.outer.x.set(1)
+      d.outer.set({ x: 9, y: 9 })
+      d.outer.x.set(2)
+    })
+
+    expect(seen.paths).toEqual(["outer.x", "outer", "outer.x"])
+  })
+
+  it("fires deep subscribers deepest-first", () => {
+    const doc: any = createDoc(Doc)
+    const order: string[] = []
+    subscribe(doc, () => order.push("root"))
+    subscribe(doc.outer, () => order.push("outer"))
+
+    batch(doc, (d: any) => {
+      d.top.set(1)
+      d.outer.x.set(2)
+    })
+
+    expect(order).toEqual(["outer", "root"])
+  })
+
+  it("fires every own-path callback before any deep callback", () => {
+    // The one ordering this change deliberately alters. Delivery used to
+    // interleave the channels per changed path; planning before firing groups
+    // them instead. Pinned so the trade stays visible.
+    const doc: any = createDoc(Doc)
+    const order: string[] = []
+    subscribe(doc, () => order.push("deep:root"))
+    subscribeNode(doc.top, () => order.push("own:top"))
+    subscribeNode(doc.outer.x, () => order.push("own:outer.x"))
+
+    batch(doc, (d: any) => {
+      d.top.set(1)
+      d.outer.x.set(2)
+    })
+
+    expect(order).toEqual(["own:top", "own:outer.x", "deep:root"])
+  })
+
+  it("merges a node's own change with its descendants' into one changeset", () => {
+    const doc: any = createDoc(Doc)
+    const atOuter = record(doc.outer)
+
+    batch(doc, (d: any) => {
+      d.outer.set({ x: 1, y: 2 })
+      d.outer.x.set(3)
+    })
+
+    expect(atOuter.changesets).toHaveLength(1)
+    // The node's own change carries the empty relative path, rendered "root".
+    expect(atOuter.paths).toEqual(["root", "x"])
+  })
+
+  it("leaves the own-path channel untouched", () => {
+    const doc: any = createDoc(Doc)
+    const seen: Changeset<Op>[] = []
+    subscribeNode(doc.outer.x, cs => seen.push(cs as any))
+
+    batch(doc, (d: any) => {
+      d.outer.x.set(1)
+      d.outer.x.set(2)
+      d.top.set(3)
+    })
+
+    // Two changes at this node, one changeset, and nothing from `top`.
+    expect(seen).toHaveLength(1)
+    expect(seen[0]?.changes).toHaveLength(2)
+  })
+
+  it("carries aborted and the whole writer log when a batch throws", () => {
+    const doc: any = createDoc(Doc)
+    const seen = record(doc)
+
+    expect(() =>
+      batch(doc, (d: any) => {
+        d.top.set(1)
+        d.outer.x.set(2)
+        throw new Error("boom")
+      }),
+    ).toThrow("boom")
+
+    // One changeset, flagged, holding forward and inverse entries that net to
+    // identity at every path.
+    expect(seen.changesets).toHaveLength(1)
+    expect(seen.changesets[0]?.aborted).toBe(true)
+    expect(seen.changesets[0]?.changes.length).toBeGreaterThan(2)
+  })
+
+  it("shares one changeset object across every callback at a key", () => {
+    const doc: any = createDoc(Doc)
+    const received: Changeset<Op>[] = []
+    subscribe(doc, cs => received.push(cs))
+    subscribe(doc, cs => received.push(cs))
+
+    batch(doc, (d: any) => d.top.set(1))
+
+    expect(received).toHaveLength(2)
+    expect(received[0]).toBe(received[1])
+  })
+
+  it("commits to the substrate before any subscriber runs", () => {
+    // `wrappedFlush` calls the substrate's flush before delivering, so a
+    // subscriber reading document state sees the finished batch.
+    const doc: any = createDoc(Doc)
+    let seenTop: number | undefined
+    subscribe(doc, () => {
+      seenTop = doc.top()
+    })
+
+    batch(doc, (d: any) => {
+      d.top.set(41)
+      d.top.set(42)
+    })
+
+    expect(seenTop).toBe(42)
+  })
+
+  it("puts a re-entrant batch's changes in a separate changeset", () => {
+    const doc: any = createDoc(Doc)
+    const seen = record(doc)
+    let reentered = false
+
+    subscribe(doc, () => {
+      if (reentered) return
+      reentered = true
+      batch(doc, (d: any) => d.top.set(99))
+    })
+
+    batch(doc, (d: any) => d.outer.x.set(1))
+
+    // The originating batch, then the re-entrant one in a fresh sub-tick.
+    expect(seen.changesets).toHaveLength(2)
+    expect(seen.changesets[0]?.changes[0]?.path.format()).toBe("outer.x")
+    expect(seen.changesets[1]?.changes[0]?.path.format()).toBe("top")
   })
 })

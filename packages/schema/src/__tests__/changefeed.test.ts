@@ -669,10 +669,10 @@ describe("changefeed: batch() block integration", () => {
       d.settings.fontSize.set(18)
     })
 
-    // Each child path gets its own Changeset propagated via subscription
-    // composition from child → parent. darkMode and fontSize are at
-    // different paths, so 2 tree changesets.
-    expect(treeChangesets).toHaveLength(2)
+    // One changeset, as the test's name has always said. darkMode and
+    // fontSize are at different paths, but both lie in this subscriber's
+    // subtree, so they arrive together — the batch is one unit of delivery.
+    expect(treeChangesets).toHaveLength(1)
     const allEvents = treeChangesets.flatMap(changeset => changeset.changes)
     expect(allEvents).toHaveLength(2)
 

@@ -768,10 +768,10 @@ describe("transaction support", () => {
       d.count.increment(10)
     })
 
-    // Tree-level subscribe fires once per affected container in the
-    // flush cycle. Two containers changed (title + count) → 2 fires.
-    // This matches PlainSubstrate behavior.
-    expect(fireCount).toBe(2)
+    // A deep subscriber hears one changeset per flush covering its whole
+    // subtree, so both writes arrive together — one fire, not one per
+    // container. This matches PlainSubstrate behavior.
+    expect(fireCount).toBe(1)
 
     // Both changes should be applied
     expect(doc.title()).toBe("Hello")

@@ -136,71 +136,127 @@ export function attachChangefeed(
 // ---------------------------------------------------------------------------
 
 /**
- * A notification plan groups accumulated `{path, change}` pairs by
- * `pathKey` so that each listener path receives exactly one `Changeset`
- * per flush cycle.
+ * A membership test, structurally satisfied by both `Map` and `Set`.
  *
- * This is the Functional Core of the changefeed notification pipeline,
- * following the same FC/IS pattern as `planCacheUpdate`/`applyCacheOps`
- * in `withCaching`.
+ * The planner only needs to ask "is anyone listening at this key?", so taking
+ * this shape lets the shell hand over its live subscriber registries directly
+ * — no copying a `Map`'s keys into a `Set` on every flush — while keeping the
+ * planner a pure function of plain data for testing.
  */
-export interface NotificationPlan {
-  /**
-   * Per-path grouped changes. Map key is `pathKey(path)`.
-   * Each entry is the array of `ChangeBase` objects dispatched at
-   * that path during this batch.
-   */
-  readonly grouped: ReadonlyMap<string, readonly ChangeBase[]>
-  /**
-   * One representative `Path` per group key.
-   *
-   * Descendant delivery walks each changed path's ancestors, and that walk has
-   * to work on the segments — the key string alone cannot support it. See the
-   * note on `deliverNotifications` for why deriving ancestors from the key
-   * string is wrong rather than merely inelegant.
-   */
-  readonly paths: ReadonlyMap<string, Path>
+export interface KeySet {
+  has(key: string): boolean
 }
 
 /**
- * Given accumulated pending changes, group them by `pathKey`.
+ * What one flush delivers, to whom, and in what order.
  *
- * Pure function — no mutation, no side effects. Returns fresh data.
+ * The two channels group differently, and the reason is structural. A node's
+ * own path is a single key, so own-path changes can only ever come from one
+ * place. A node's *subtree* spans many paths, so a deep subscriber's changeset
+ * has to gather ops from all of them — which is exactly the merge this type
+ * exists to express.
  *
- * This is table-testable: "given 3 changes at 2 paths, the plan
- * produces 2 entries with the correct grouping."
- *
- * @param pending - Accumulated `{path, change}` pairs from prepare calls.
- * @returns A `NotificationPlan` with changes grouped by pathKey.
+ * This is the Functional Core of the notification pipeline, following the same
+ * FC/IS pattern as `planCacheUpdate`/`applyCacheOps` in `withCaching`.
  */
-export function planNotifications(pending: readonly Op[]): NotificationPlan {
-  const grouped = new Map<string, ChangeBase[]>()
-  const paths = new Map<string, Path>()
+export interface DeliveryPlan {
+  /**
+   * Own-path channel: subscriber key → the changes dispatched at exactly that
+   * path, in dispatch order. Insertion order is first-touch order, which is
+   * the order these callbacks fire in.
+   */
+  readonly ownPath: ReadonlyMap<string, readonly ChangeBase[]>
+  /**
+   * Deep channel: subscriber key → every op in that subscriber's subtree,
+   * already rebased to the subscriber's relative path, in dispatch order.
+   */
+  readonly deep: ReadonlyMap<string, readonly Op[]>
+  /** Deep subscriber keys, deepest-first — the order those callbacks fire in. */
+  readonly deepOrder: readonly string[]
+}
+
+/**
+ * Plan one flush: walk the ops once and answer both channels.
+ *
+ * The single pass is not just an optimisation. The deep channel needs ops in
+ * *dispatch* order, and any grouping step destroys that: if an ancestor write
+ * lands between two writes to the same descendant, grouping by path floats the
+ * ancestor past both of them, and replaying the result reaches a different
+ * state than the writes produced.
+ *
+ * Walking `pending` in order and appending as we go preserves it for free. The
+ * two channels also share work — at `i === path.length` the ancestor key *is*
+ * the op's own path key — so computing them separately would repeat a lookup.
+ *
+ * @param pending - Accumulated ops from prepare calls, in dispatch order.
+ * @param ownPathKeys - Keys with own-path subscribers.
+ * @param deepKeys - Keys with deep (descendant) subscribers.
+ */
+export function planDelivery(
+  pending: readonly Op[],
+  ownPathKeys: KeySet,
+  deepKeys: KeySet,
+): DeliveryPlan {
+  const ownPath = new Map<string, ChangeBase[]>()
+  const deep = new Map<string, Op[]>()
+  // Depth per deep key, recorded on first sight so the ordering sort below
+  // does not have to re-derive it from the key string.
+  const depths = new Map<string, number>()
+
   for (const { path, change } of pending) {
     const key = path.key
-    let changesAtPath = grouped.get(key)
-    if (!changesAtPath) {
-      changesAtPath = []
-      grouped.set(key, changesAtPath)
-      paths.set(key, path)
+
+    if (ownPathKeys.has(key)) {
+      const at = ownPath.get(key)
+      if (at) at.push(change)
+      else ownPath.set(key, [change])
     }
-    changesAtPath.push(change)
+
+    // A change at `a/b/c` concerns subscribers at `a/b/c`, `a/b`, `a`, and the
+    // root. That set is just the path's ancestor chain, so it is derived here
+    // from the path itself rather than maintained between flushes.
+    for (let i = path.length; i >= 0; i--) {
+      // Structural: take the first `i` segments, then compute THAT path's key.
+      //
+      // A key is its segments joined by a separator, so ancestor keys look like
+      // prefixes of the key string, and cutting the string would be cheaper. It
+      // is also wrong. Joining is lossy: a segment whose own text contains the
+      // separator makes the split invent a level that never existed, and a
+      // subscriber at that phantom path would receive changes from an unrelated
+      // subtree. Slicing segments cannot produce a level that is not there.
+      // `markPopulated` walks structurally for the same reason.
+      const ancestorKey = i === path.length ? key : path.slice(0, i).key
+      if (!deepKeys.has(ancestorKey)) continue
+
+      // Rebase only where someone is listening, so a deep document with few
+      // subscribers pays for lookups but not for allocation. `path.slice(i)` is
+      // the changed path relative to this ancestor; at `i === path.length` that
+      // is the empty path, which is exactly the own-path case seen from the
+      // deep channel.
+      const op: Op = { path: path.slice(i), change }
+      const buffer = deep.get(ancestorKey)
+      if (buffer) buffer.push(op)
+      else {
+        deep.set(ancestorKey, [op])
+        depths.set(ancestorKey, i)
+      }
+    }
   }
-  return { grouped, paths }
+
+  // Deepest-first. The order is chosen here rather than emerging from the shape
+  // of a subscription graph, which is what determined it before — delivery
+  // order used to depend on the sequence in which subscribers happened to
+  // register.
+  //
+  // `sort` has been specified stable since ES2019, and this relies on it: keys
+  // at equal depth keep the insertion order above, which is first-touch order.
+  const deepOrder = [...deep.keys()].sort(
+    (a, b) => (depths.get(b) ?? 0) - (depths.get(a) ?? 0),
+  )
+
+  return { ownPath, deep, deepOrder }
 }
 
-/**
- * Deliver notifications from a plan to listeners.
- *
- * Imperative Shell — trivial delivery. Builds one `Changeset` per path
- * that has listeners and fires all registered callbacks.
- *
- * @param plan - The notification plan from `planNotifications`.
- * @param listeners - The path-keyed listener map (from `ensurePrepareWiring`).
- * @param options - Optional `BatchOptions`. `options?.origin` is attached
- *   to each emitted `Changeset` as the app-level label;
- *   `options?.replay` is attached as the structural directive.
- */
 /**
  * Register a descendant subscriber at a node's own path.
  *
@@ -234,8 +290,32 @@ export function listenDescendants(
   }
 }
 
+/**
+ * Fire a plan's callbacks. Imperative Shell — all the deciding happened in
+ * `planDelivery`; this only builds changesets and calls functions.
+ *
+ * **Ordering.** Every own-path callback fires first, in first-touch order, then
+ * every deep callback, deepest-first. Before the per-subscriber merge the two
+ * channels interleaved per changed path — own(P1), deep(P1→root), own(P2),
+ * deep(P2→root) — because delivery happened inside the walk. Planning before
+ * firing is what collapses a subscriber's several changesets into one, and this
+ * ordering is the price of that. It is a deliberate trade, not a side effect.
+ *
+ * One `Changeset` is built per *key* and shared by every callback registered
+ * there. Several ref carriers can sit at the same path (see "Per-ref-instance
+ * listener multiplication" in TECHNICAL.md), and allocating per callback would
+ * multiply garbage for no benefit.
+ *
+ * @param plan - From `planDelivery`.
+ * @param listeners - Own-path subscribers, keyed by path (from `ensurePrepareWiring`).
+ * @param descendants - Deep subscribers, keyed by their own path.
+ * @param options - `BatchOptions`. All four `BatchMetadata` channels ride
+ *   unchanged onto every emitted `Changeset`: `origin` (app label), `replay`
+ *   (state authored elsewhere), `aborted` (the block threw and was
+ *   compensated), and `source` (echo-suppression token).
+ */
 export function deliverNotifications(
-  plan: NotificationPlan,
+  plan: DeliveryPlan,
   listeners: ReadonlyMap<
     string,
     Set<(changeset: Changeset<ChangeBase>) => void>
@@ -243,59 +323,32 @@ export function deliverNotifications(
   descendants: ReadonlyMap<string, Set<(changeset: Changeset<Op>) => void>>,
   options?: BatchOptions,
 ): void {
-  for (const [key, changes] of plan.grouped) {
-    // Own-path channel — subscribers watching exactly this node.
+  for (const [key, changes] of plan.ownPath) {
     const set = listeners.get(key)
-    if (set && set.size > 0) {
-      const changeset: Changeset<ChangeBase> = {
-        changes,
-        origin: options?.origin,
-        replay: options?.replay,
-        aborted: options?.aborted,
-        source: options?.source,
-      }
-      for (const callback of set) callback(changeset)
+    if (!set || set.size === 0) continue
+    const changeset: Changeset<ChangeBase> = {
+      changes,
+      origin: options?.origin,
+      replay: options?.replay,
+      aborted: options?.aborted,
+      source: options?.source,
     }
+    for (const callback of set) callback(changeset)
+  }
 
-    // Descendant channel — every subscriber at this path or above it. The set
-    // of ancestors is derivable from the path itself, so nothing has to be
-    // maintained between flushes; `markPopulated` below answers the same
-    // "tell everyone above me" question the same way.
-    if (descendants.size === 0) continue
-    const path = plan.paths.get(key)
-    if (!path) continue
-
-    // Deepest-first. The order is chosen here rather than emerging from the
-    // shape of a subscription graph, which is what determined it before —
-    // delivery order used to depend on the sequence in which subscribers
-    // happened to register.
-    for (let i = path.length; i >= 0; i--) {
-      // Structural: take the first `i` segments, then compute THAT path's key.
-      //
-      // A key is its segments joined by a separator, so ancestor keys look like
-      // prefixes of the key string, and cutting the string would be cheaper.
-      // It is also wrong. Joining is lossy: a segment whose own text contains
-      // the separator makes the split invent a level that never existed, and a
-      // subscriber at that phantom path would receive changes from an unrelated
-      // subtree. Slicing segments cannot produce a level that is not there.
-      const ancestorKey = i === path.length ? key : path.slice(0, i).key
-      const subscribersHere = descendants.get(ancestorKey)
-      if (!subscribersHere || subscribersHere.size === 0) continue
-
-      // Rebase only where someone is listening, so a deep document with few
-      // subscribers pays for lookups but not for allocation. `path.slice(i)`
-      // is the changed path relative to this ancestor; at `i === path.length`
-      // that is the empty path, which is exactly the own-path case.
-      const relative = path.slice(i)
-      const rebased: Changeset<Op> = {
-        changes: changes.map(change => ({ path: relative, change })),
-        origin: options?.origin,
-        replay: options?.replay,
-        aborted: options?.aborted,
-        source: options?.source,
-      }
-      for (const callback of subscribersHere) callback(rebased)
+  for (const key of plan.deepOrder) {
+    const subscribersHere = descendants.get(key)
+    if (!subscribersHere || subscribersHere.size === 0) continue
+    const changes = plan.deep.get(key)
+    if (!changes) continue
+    const changeset: Changeset<Op> = {
+      changes,
+      origin: options?.origin,
+      replay: options?.replay,
+      aborted: options?.aborted,
+      source: options?.source,
     }
+    for (const callback of subscribersHere) callback(changeset)
   }
 }
 
@@ -453,7 +506,7 @@ const contextState = new WeakMap<RefContext, ContextWiringState>()
  *   write), marks the path populated, then dispatches an `accumulate`
  *   Msg into the per-context dispatcher to queue this Op for notification.
  * - `flush` wrapping: dispatches a `flush` Msg. The dispatcher's handler
- *   snapshots the queued accumulator, calls `planNotifications` (pure),
+ *   snapshots the queued accumulator, calls `planDelivery` (pure),
  *   calls the inner flush (so the substrate's version and log are
  *   up-to-date), then `deliverNotifications` (imperative) to fire
  *   listeners. Re-entrant `batch()` calls from inside a subscriber land
@@ -505,7 +558,7 @@ function ensurePrepareWiring(ctx: RefContext): ChangefeedChannels {
   const descendants = new Map<string, Set<(changeset: Changeset<Op>) => void>>()
   // The change-Writer monad's log — sum-typed `Forward Op | Inverse Op`.
   // `batch(doc, fn)` slices this via FORWARD_OPS_MARKER/SINCE to recover
-  // its forward-only return value. planNotifications consumes the whole
+  // its forward-only return value. planDelivery consumes the whole
   // log (both forward and inverse entries) so subscribers see the full
   // op trace on aborted Changesets.
   const accumulator: AccumulatorEntry[] = []
@@ -531,11 +584,20 @@ function ensurePrepareWiring(ctx: RefContext): ChangefeedChannels {
         originalFlush(msg.options)
         return
       }
-      // planNotifications consumes the whole log — both forward and
-      // inverse entries land in the delivered Changeset. Subscribers
-      // see the full op log on aborted Changesets (forward+inverse
-      // pairs that net to identity).
-      const plan = planNotifications(accumulator.map(e => e.op))
+      // The planner consumes the whole log — both forward and inverse
+      // entries land in the delivered Changeset. Subscribers see the full
+      // op log on aborted Changesets (forward+inverse pairs that net to
+      // identity), so the `compensating` tag is deliberately not filtered
+      // here. It exists for the writer log's own forward-only slicing.
+      //
+      // `listeners` and `descendants` are passed as membership tests: the
+      // planner only asks whether a key has subscribers, so there is no need
+      // to snapshot their keys.
+      const plan = planDelivery(
+        accumulator.map(e => e.op),
+        listeners,
+        descendants,
+      )
       accumulator.length = 0
       // Commit to the substrate first so version() and delta() reflect
       // the just-flushed operations when subscribers read them.

@@ -263,7 +263,7 @@ export interface WritableContext extends RefContext {
    * substrate bracket and without flushing — the depth-0 transition is
    * the single delivery point per outermost block. This preserves the
    * "one Changeset per outermost `batch(doc, fn)` per affected
-   * subscriber path" contract.
+   * subscriber" contract.
    */
   readonly runBatch: (work: () => void, options?: BatchOptions) => void
   /** Depth-aware combinator: outside any frame opens an implicit
