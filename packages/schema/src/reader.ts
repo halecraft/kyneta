@@ -261,10 +261,19 @@ export function syncShadow(target: PlainState, source: PlainState): void {
  * write into that subtree mutates the op, so the op ends up reporting a value
  * the batch never wrote. Copying here severs that.
  *
- * Skipped for `replay` and `projection` batches. Those changes were built by
- * the sending peer or by a decay tick rather than by a caller here, so nothing
- * local shares them — and they arrive in bulk on the highest-volume path in the
- * system, where a copy per op is pure cost.
+ * Replayed changes are copied too. It is tempting to skip them — they were
+ * built by the sending peer, so there is no local caller to protect — but that
+ * confuses the two edges. Having no caller means no `own()` is needed at
+ * construction; it says nothing about the store, which takes the payload and
+ * later mutates it. A merge's changesets reach subscribers like any other, so
+ * an uncopied replay payload is a live view of the store handed to whoever
+ * subscribed. The cost is near zero in practice: `expandMapOpsToLeaves` turns a
+ * merge into per-key leaf replaces, which are overwhelmingly scalars, and a
+ * scalar short-circuits in ~1ns.
+ *
+ * Skipped for `projection` batches only. Those are decay ticks whose payload is
+ * the substrate's own shadow, passed to wake subscribers and never read —
+ * copying a whole presence document per tick would be pure waste.
  *
  * Deliberately a transform rather than a `shouldCopy()` predicate. Four
  * substrates call this; a predicate would let a caller ask the question and
@@ -278,7 +287,7 @@ export function ownedForStore(
   change: ChangeBase,
   options?: BatchOptions,
 ): ChangeBase {
-  if (options?.replay || options?.projection) return change
+  if (options?.projection) return change
   if (change.type !== "replace") return change
   // Narrowed by the discriminant just above; `ChangeBase` is only `{ type }`,
   // so the payload is not reachable without saying which change this is.

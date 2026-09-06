@@ -43,6 +43,10 @@ import { Schema } from "../schema.js"
  * broad: a scalar, a nested struct, a list of structs and a record, so that one
  * batch can touch several sibling subtrees at different depths.
  *
+ * `blob` exists for the payload-stability invariant. Aliasing needs an object
+ * payload to alias — the rest of this fixture is scalars all the way down, so
+ * without it the invariant would check the one shape that cannot fail.
+ *
  * The suite owns this rather than accepting it from the factory, because the
  * assertions below refer to specific paths within it.
  */
@@ -51,6 +55,7 @@ export const DeliveryFixture = Schema.struct({
   outer: Schema.struct({ x: Schema.number(), y: Schema.number() }),
   items: Schema.list(Schema.struct({ title: Schema.string() })),
   entries: Schema.record(Schema.number()),
+  blob: Schema.struct({ label: Schema.string(), count: Schema.number() }),
 })
 
 // ---------------------------------------------------------------------------
@@ -348,6 +353,29 @@ export function deliveryConformance(
             expect(rootPaths).toContain(absolute)
           }
           expect(atOuter.paths().length).toBeGreaterThan(0)
+        })
+
+        // =================================================================
+        // Payload stability
+        // =================================================================
+
+        it("payload stability: a captured op does not change under later writes", () => {
+          const env = factory()
+          const atRoot = probe(env.doc)
+
+          driver.write(env, d => d.blob.set({ label: "first", count: 1 }))
+          const captured = atRoot.changesets
+            .flatMap(cs => cs.changes)
+            .find(op => op.path.format().includes("blob"))?.change as
+            | { value?: { label?: string; count?: number } }
+            | undefined
+          const before = JSON.stringify(captured?.value ?? null)
+
+          // A second, unrelated write into the same subtree. If the op aliased
+          // the store, this would rewrite what the first subscriber received.
+          driver.write(env, d => d.blob.label.set("second"))
+
+          expect(JSON.stringify(captured?.value ?? null)).toBe(before)
         })
 
         it("conservation: op count at the root matches the union below it", () => {

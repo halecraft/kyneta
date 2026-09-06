@@ -126,11 +126,18 @@ describe("ownedForStore", () => {
     expect(out.value).not.toBe(value)
   })
 
-  it("leaves replay and projection batches alone", () => {
-    // These changes were built by the sending peer or by a decay tick, so
-    // nothing local shares them — and they arrive in bulk on the merge path.
+  it("copies a replayed payload too", () => {
+    // No local caller built it, so no `own()` is needed at construction — but
+    // the store still takes it and later mutates it, and a merge's changesets
+    // reach subscribers like any other.
     const change = replaceChange(own(value))
-    expect(ownedForStore(change, { replay: true })).toBe(change)
+    expect(ownedForStore(change, { replay: true })).not.toBe(change)
+  })
+
+  it("leaves projection batches alone", () => {
+    // A decay tick whose payload is the substrate's own shadow, passed to wake
+    // subscribers and never read. Copying it per tick would be pure waste.
+    const change = replaceChange(own(value))
     expect(ownedForStore(change, { replay: true, projection: true })).toBe(
       change,
     )
@@ -158,10 +165,12 @@ describe("ownedForStore", () => {
 // ---------------------------------------------------------------------------
 
 describe("paths that deliberately hand the store an unshared value", () => {
-  it("a replay batch reaches the store as the very object that arrived", () => {
+  it("a projection reaches the store as the very object that arrived", () => {
     const change = replaceChange(own({ dark: true, font: 9 }))
-    // Identity, not equality: a copy here would be pure cost on the merge path.
-    expect(ownedForStore(change, { replay: true })).toBe(change)
+    // Identity, not equality: the ephemeral trigger passes the whole shadow.
+    expect(ownedForStore(change, { projection: true, replay: true })).toBe(
+      change,
+    )
   })
 
   it("root-path replaces are still copied for local writes", () => {
