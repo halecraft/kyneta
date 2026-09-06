@@ -318,7 +318,7 @@ export function installSequenceCaching(
 
   Object.defineProperty(result, "at", {
     value: (index: number): unknown => {
-      const addressTable = (result as any)[addressTableSym] as
+      const addressTable = result[addressTableSym] as
         | {
             byIndex: Map<number, any>
             byId: Map<number, { address: any; ref: unknown }>

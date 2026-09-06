@@ -91,7 +91,7 @@ export const BACKING_DOC = Symbol.for("kyneta:backingDoc")
  */
 export const TREE_NODE_ALLOCATE: unique symbol = Symbol.for(
   "kyneta:tree-node-allocate",
-) as any
+)
 
 /** Marker for contexts that implement `TREE_NODE_ALLOCATE`. */
 export interface HasTreeNodeAllocation {
@@ -166,7 +166,7 @@ export interface DevtoolsHistory {
 /** Symbol under which a replica/substrate exposes {@link DevtoolsHistory}. */
 export const DEVTOOLS_HISTORY: unique symbol = Symbol.for(
   "kyneta:devtools-history",
-) as any
+)
 
 /** Marker for replicas/substrates that implement {@link DEVTOOLS_HISTORY}. */
 export interface HasDevtoolsHistory {
@@ -524,9 +524,7 @@ export interface BatchOptions extends BatchMetadata {
  *
  * Context: jj:ryquprut (three-primitive substrate refactor).
  */
-export const RECORD_INVERSE: unique symbol = Symbol.for(
-  "kyneta:record-inverse",
-) as any
+export const RECORD_INVERSE: unique symbol = Symbol.for("kyneta:record-inverse")
 
 /**
  * The shape of the inverse-recording callback threaded through prepare

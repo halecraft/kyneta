@@ -33,7 +33,7 @@ export function extractValue(resolved: unknown): unknown {
 
   switch (kind) {
     case "Text":
-      return (resolved as any).toString()
+      return resolved.toString()
     case "Counter":
       return (resolved as any).value
     case "Map":

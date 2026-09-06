@@ -219,7 +219,7 @@ export function createYjsSubstrate(
     // ultra-rare case where `_item` is undefined (freshly-created
     // shared types before they're attached). Combine with key/index
     // for a unique slot — repeat writes to the same slot overwrite.
-    const targetId = `${(target as any)._item?.id?.client ?? "root"}:${(target as any)._item?.id?.clock ?? "root"}`
+    const targetId = `${target._item?.id?.client ?? "root"}:${(target as any)._item?.id?.clock ?? "root"}`
     const slot = `${targetId}/${String(key)}`
     jsonBoundaryBuffer.set(slot, { target, key, value })
   }

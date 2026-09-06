@@ -131,7 +131,7 @@ export function withReadable<A extends HasNavigation>(
       item: (index: number) => A & HasRead,
     ): A & HasRead {
       const baseItem = item as (index: number) => A
-      const result = base.sequence(ctx, path, schema, baseItem) as any
+      const result = base.sequence(ctx, path, schema, baseItem)
       installSequenceReadable(result, ctx, path)
       return result as A & HasRead
     },
@@ -144,7 +144,7 @@ export function withReadable<A extends HasNavigation>(
       item: (key: string) => A & HasRead,
     ): A & HasRead {
       const baseItem = item as (key: string) => A
-      const result = base.map(ctx, path, schema, baseItem) as any
+      const result = base.map(ctx, path, schema, baseItem)
       installKeyedReadable(result, ctx, path)
       return result as A & HasRead
     },
@@ -201,7 +201,7 @@ export function withReadable<A extends HasNavigation>(
       item: (key: string) => A & HasRead,
     ): A & HasRead {
       const baseItem = item as (key: string) => A
-      const result = base.set(ctx, path, schema, baseItem) as any
+      const result = base.set(ctx, path, schema, baseItem)
       installSetReadable(result, ctx, path)
       return result as A & HasRead
     },
@@ -218,7 +218,7 @@ export function withReadable<A extends HasNavigation>(
     ): A & HasRead {
       const baseNodes = nodes as unknown as () => readonly FlatTreeNode<A>[]
       const baseNode = node as unknown as (id: string) => A
-      const result = base.tree(ctx, path, schema, baseNodes, baseNode) as any
+      const result = base.tree(ctx, path, schema, baseNodes, baseNode)
       installTreeReadable(result, ctx, path, node)
       return result as A & HasRead
     },
@@ -231,7 +231,7 @@ export function withReadable<A extends HasNavigation>(
       item: (index: number) => A & HasRead,
     ): A & HasRead {
       const baseItem = item as (index: number) => A
-      const result = base.movable(ctx, path, schema, baseItem) as any
+      const result = base.movable(ctx, path, schema, baseItem)
       installSequenceReadable(result, ctx, path)
       return result as A & HasRead
     },

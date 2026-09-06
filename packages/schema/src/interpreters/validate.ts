@@ -312,7 +312,7 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
       // All variants failed
       if (nullable) {
         // Describe the inner (second) variant for a helpful message
-        const inner = posSchema.variants[1] as any
+        const inner = posSchema.variants[1]
         const innerDesc = innerSchemaExpected(inner)
         ctx.errors.push(
           new SchemaValidationError(
@@ -461,7 +461,7 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
 
     for (let i = 0; i < value.length; i++) {
       const span = value[i]
-      if (!isPlainObject(span) || typeof (span as any).text !== "string") {
+      if (!isPlainObject(span) || typeof span.text !== "string") {
         ctx.errors.push(
           new SchemaValidationError(
             `${path.format()}[${i}]`,
@@ -543,7 +543,7 @@ export function validate<S extends Schema>(
   const result = interpret(schema, validateInterpreter, ctx)
 
   if (ctx.errors.length > 0) {
-    throw ctx.errors[0] as any
+    throw ctx.errors[0]
   }
 
   return result as Plain<S>

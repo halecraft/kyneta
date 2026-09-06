@@ -204,7 +204,7 @@ export function dispatchSum<A>(
     // Fallback: first variant
     const keys = Object.keys(discSchema.variantMap)
     if (keys.length > 0) {
-      return variants.byKey(keys[0] as any)
+      return variants.byKey(keys[0])
     }
     return undefined
   }
@@ -478,7 +478,7 @@ export function interpret(
     return interpretImpl(
       schema,
       interpOrCtx as Interpreter<any, any>,
-      ctx as any,
+      ctx,
       path,
     )
   }
@@ -586,7 +586,7 @@ function interpretImpl<Ctx, A>(
       // so that ctx.rootPath set by withAddressing is picked up.
       const fieldThunks: Record<string, () => A> = {}
       for (const key of Object.keys(schema.fields)) {
-        const fieldSchema = schema.fields[key] as any
+        const fieldSchema = schema.fields[key]
         fieldThunks[key] = () => {
           const childPath = effectivePath().field(key)
           const result = interpretImpl(fieldSchema, interp, ctx, childPath)

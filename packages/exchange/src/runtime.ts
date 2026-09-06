@@ -1396,7 +1396,7 @@ export class Runtime {
       const now = Date.now()
       for (const [, entry] of this.#docCache) {
         if (entry.mode !== "interpret") continue
-        const substrate = (entry.ref as any)?.[SUBSTRATE]
+        const substrate = entry.ref?.[SUBSTRATE]
         // `tick` is optional on the Substrate interface, and most substrates
         // have no use for it — only `ephemeral` does, to re-project decayed
         // leaves as their structural zeros. Everything durable skips this.

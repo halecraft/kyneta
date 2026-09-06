@@ -123,7 +123,7 @@ export function batch<D extends object>(
         "Use a ref produced by interpret() with withWritable.",
     )
   }
-  const ctx: WritableContext = (ref as any)[TRANSACT]
+  const ctx: WritableContext = ref[TRANSACT]
   const opts = options
     ? { origin: options.origin, source: options.source }
     : undefined
@@ -180,7 +180,7 @@ export function applyChanges(
         "Use a ref produced by interpret() with withWritable.",
     )
   }
-  const ctx: WritableContext = (ref as any)[TRANSACT]
+  const ctx: WritableContext = ref[TRANSACT]
 
   // Empty ops → no-op. No prepare, no flush, no notification.
   if (ops.length === 0) return ops

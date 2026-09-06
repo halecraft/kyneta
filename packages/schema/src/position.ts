@@ -87,7 +87,7 @@ export interface Position {
  * `NATIVE`, `CALL`. Uses `Symbol.for` so multiple copies of this module
  * share identity.
  */
-export const POSITION: unique symbol = Symbol.for("kyneta:position") as any
+export const POSITION: unique symbol = Symbol.for("kyneta:position")
 
 // ---------------------------------------------------------------------------
 // PositionCapable — factory interface

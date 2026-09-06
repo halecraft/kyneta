@@ -199,7 +199,7 @@ function applyRichTextChange(
     if ("delete" in inst) return { delete: inst.delete }
     throw new Error("applyRichTextChange: unknown instruction type")
   })
-  resolved.applyDelta(delta as any)
+  resolved.applyDelta(delta)
 }
 
 // ---------------------------------------------------------------------------
@@ -503,7 +503,7 @@ function yjsPathToKynetaPath(
         schema = (schema as ProductSchema | undefined)?.fields[leaf]
       } else if (kind === "map" || kind === "set" || kind === "tree") {
         path = path.entry(leaf)
-        schema = (schema as any)?.item
+        schema = schema?.item
       } else {
         // Unknown / sum / unrecognized — fall back to entry. Subsequent
         // segments are likely walking plain JSON inside a sum variant.
@@ -514,7 +514,7 @@ function yjsPathToKynetaPath(
       path = path.item(segment)
       const kind = schema?.[KIND]
       if (kind === "sequence" || kind === "movable") {
-        schema = (schema as any).item
+        schema = schema.item
       } else {
         schema = undefined
       }
@@ -595,14 +595,14 @@ function richTextEventToChange(event: Y.YEvent<any>): RichTextChange {
 
   for (const delta of event.delta) {
     if (delta.retain !== undefined) {
-      const attrs = (delta as any).attributes
+      const attrs = delta.attributes
       if (attrs && Object.keys(attrs).length > 0) {
         instructions.push({ format: delta.retain as number, marks: attrs })
       } else {
         instructions.push({ retain: delta.retain as number })
       }
     } else if (delta.insert !== undefined) {
-      const attrs = (delta as any).attributes
+      const attrs = delta.attributes
       if (attrs && Object.keys(attrs).length > 0) {
         instructions.push({ insert: delta.insert as string, marks: attrs })
       } else {

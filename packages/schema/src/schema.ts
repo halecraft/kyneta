@@ -748,19 +748,19 @@ function counter(): CounterSchema<"additive"> {
 function set<I extends Schema>(
   item: I,
 ): SetSchema<I, "add-wins-per-key" | ExtractLaws<I>> {
-  return { [KIND]: "set", item } as any
+  return { [KIND]: "set", item }
 }
 
 function tree<S extends Schema>(
   item: S,
 ): TreeSchema<S, "tree-move" | ExtractLaws<S>> {
-  return { [KIND]: "tree", item } as any
+  return { [KIND]: "tree", item }
 }
 
 function movableList<I extends Schema>(
   item: I,
 ): MovableSequenceSchema<I, "positional-ot-move" | ExtractLaws<I>> {
-  return { [KIND]: "movable", item } as any
+  return { [KIND]: "movable", item }
 }
 
 function richText(marks: MarkConfig): RichTextSchema<"positional-ot"> {

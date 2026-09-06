@@ -27,7 +27,7 @@ export function hasKind(value: unknown): value is { kind(): string } {
     value !== undefined &&
     typeof value === "object" &&
     "kind" in value &&
-    typeof (value as any).kind === "function"
+    typeof value.kind === "function"
   )
 }
 
@@ -53,7 +53,7 @@ export function isLoroContainer(
     value !== undefined &&
     typeof value === "object" &&
     "kind" in value &&
-    typeof (value as any).kind === "function" &&
+    typeof value.kind === "function" &&
     "id" in value
   )
 }
@@ -76,6 +76,6 @@ export function isLoroDoc(value: unknown): value is LoroDoc {
     typeof value === "object" &&
     "peerIdStr" in value &&
     "commit" in value &&
-    typeof (value as any).commit === "function"
+    typeof value.commit === "function"
   )
 }

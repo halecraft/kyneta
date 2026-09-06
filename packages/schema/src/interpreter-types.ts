@@ -23,9 +23,7 @@ import type { Reader } from "./reader.js"
  * Uses `Symbol.for` so that multiple copies of this module (e.g. in
  * different bundle chunks) share the same symbol identity.
  */
-export const INTERPRETER: unique symbol = Symbol.for(
-  "kyneta:interpreter",
-) as any
+export const INTERPRETER: unique symbol = Symbol.for("kyneta:interpreter")
 
 // ---------------------------------------------------------------------------
 // PlainFlatTreeNode — Plain-form flat-forest node (matches the shadow)

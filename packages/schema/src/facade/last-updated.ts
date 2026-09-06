@@ -45,7 +45,7 @@ export function lastUpdated(ref: unknown): number | null {
 
   if (!(BACKING_DOC in ctx)) return null
 
-  const backingDoc = (ctx as any)[BACKING_DOC]
+  const backingDoc = ctx[BACKING_DOC]
 
   // The backing doc for a `ephemeral` substrate is a StateTree.
   // We need to traverse the path to find the tuple.

@@ -68,7 +68,7 @@ import { installSequenceCaching } from "./sequence-helpers.js"
  *
  * Uses `Symbol.for` so multiple copies of this module share identity.
  */
-export const INVALIDATE: unique symbol = Symbol.for("kyneta:invalidate") as any
+export const INVALIDATE: unique symbol = Symbol.for("kyneta:invalidate")
 
 // ---------------------------------------------------------------------------
 // ADDRESS_TABLE discovery (via Symbol.for to avoid import coupling)
@@ -119,7 +119,7 @@ const cacheContextState = new WeakMap<object, CacheWiringState>()
 function hasPrepare(ctx: RefContext): ctx is RefContext & {
   prepare: (path: Path, change: ChangeBase, options?: BatchOptions) => void
 } {
-  return "prepare" in ctx && typeof (ctx as any).prepare === "function"
+  return "prepare" in ctx && typeof ctx.prepare === "function"
 }
 
 /**
@@ -293,8 +293,8 @@ export function withCaching<A extends HasNavigation>(
       // Override each field getter with memoization
       for (const key of Object.keys(fields)) {
         if (key === discKey) continue
-        const thunk = fields[key] as any
-        const state = fieldState[key] as any
+        const thunk = fields[key]
+        const state = fieldState[key]
         Object.defineProperty(result, key, {
           get() {
             if (!state.resolved) {
@@ -311,8 +311,8 @@ export function withCaching<A extends HasNavigation>(
       // INVALIDATE handler: clear all field caches.
       const invalidateProduct = (_change: ChangeBase): void => {
         for (const key of Object.keys(fieldState)) {
-          ;(fieldState[key] as any).resolved = false
-          ;(fieldState[key] as any).cached = undefined
+          fieldState[key].resolved = false
+          fieldState[key].cached = undefined
         }
       }
 
@@ -335,7 +335,7 @@ export function withCaching<A extends HasNavigation>(
       item: (index: number) => A & HasCaching,
     ): A & HasCaching {
       const baseItem = item as (index: number) => A
-      const result = base.sequence(ctx, path, schema, baseItem) as any
+      const result = base.sequence(ctx, path, schema, baseItem)
       installSequenceCaching(
         result,
         path,
@@ -356,7 +356,7 @@ export function withCaching<A extends HasNavigation>(
       item: (key: string) => A & HasCaching,
     ): A & HasCaching {
       const baseItem = item as (key: string) => A
-      const result = base.map(ctx, path, schema, baseItem) as any
+      const result = base.map(ctx, path, schema, baseItem)
       installKeyedCaching(
         result,
         path,
@@ -469,7 +469,7 @@ export function withCaching<A extends HasNavigation>(
       item: (index: number) => A & HasCaching,
     ): A & HasCaching {
       const baseItem = item as (index: number) => A
-      const result = base.movable(ctx, path, schema, baseItem) as any
+      const result = base.movable(ctx, path, schema, baseItem)
       installSequenceCaching(
         result,
         path,

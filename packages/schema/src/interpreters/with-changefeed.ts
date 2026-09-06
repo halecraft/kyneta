@@ -68,7 +68,7 @@ import type { BatchOptions } from "../substrate.js"
 import type { HasRead } from "./bottom.js"
 import { CALL } from "./bottom.js"
 
-export const POPULATED: unique symbol = Symbol.for("kyneta:populated") as any
+export const POPULATED: unique symbol = Symbol.for("kyneta:populated")
 
 /**
  * Returns true if the ref has been populated (received at least one mutation —
@@ -481,9 +481,9 @@ function hasPreparePipeline(ctx: RefContext): ctx is RefContext & {
 } {
   return (
     "prepare" in ctx &&
-    typeof (ctx as any).prepare === "function" &&
+    typeof ctx.prepare === "function" &&
     "flush" in ctx &&
-    typeof (ctx as any).flush === "function"
+    typeof ctx.flush === "function"
   )
 }
 
@@ -876,7 +876,7 @@ function attachIsPopulated(
   // Also make it callable: populatedRef() returns the boolean
   const callable = function (this: unknown) {
     return changefeed.current
-  } as any
+  }
   Object.defineProperty(callable, CHANGEFEED, {
     value: changefeed,
     enumerable: false,
@@ -1218,7 +1218,7 @@ export function withChangefeed<A extends HasRead>(
     ): A & HasChangefeed {
       const result = base.scalar(ctx, path, schema)
       wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createLeafChangefeed(channels, nodePath, () => (result as any)[CALL]()),
+        createLeafChangefeed(channels, nodePath, () => result[CALL]()),
       )
       return result as A & HasChangefeed
     },
@@ -1232,9 +1232,7 @@ export function withChangefeed<A extends HasRead>(
     ): A & HasChangefeed {
       const result = base.product(ctx, path, schema, fields)
       wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createProductChangefeed(channels, nodePath, () =>
-          (result as any)[CALL](),
-        ),
+        createProductChangefeed(channels, nodePath, () => result[CALL]()),
       )
       return result as A & HasChangefeed
     },
@@ -1248,9 +1246,7 @@ export function withChangefeed<A extends HasRead>(
     ): A & HasChangefeed {
       const result = base.sequence(ctx, path, schema, item)
       wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createSequenceChangefeed(channels, nodePath, () =>
-          (result as any)[CALL](),
-        ),
+        createSequenceChangefeed(channels, nodePath, () => result[CALL]()),
       )
       return result as A & HasChangefeed
     },
@@ -1264,7 +1260,7 @@ export function withChangefeed<A extends HasRead>(
     ): A & HasChangefeed {
       const result = base.map(ctx, path, schema, item)
       wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createMapChangefeed(channels, nodePath, () => (result as any)[CALL]()),
+        createMapChangefeed(channels, nodePath, () => result[CALL]()),
       )
       return result as A & HasChangefeed
     },
@@ -1290,7 +1286,7 @@ export function withChangefeed<A extends HasRead>(
     text(ctx: RefContext, path: Path, schema: TextSchema): A & HasChangefeed {
       const result = base.text(ctx, path, schema)
       wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createLeafChangefeed(channels, nodePath, () => (result as any)[CALL]()),
+        createLeafChangefeed(channels, nodePath, () => result[CALL]()),
       )
       return result as A & HasChangefeed
     },
@@ -1304,7 +1300,7 @@ export function withChangefeed<A extends HasRead>(
     ): A & HasChangefeed {
       const result = base.counter(ctx, path, schema)
       wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createLeafChangefeed(channels, nodePath, () => (result as any)[CALL]()),
+        createLeafChangefeed(channels, nodePath, () => result[CALL]()),
       )
       return result as A & HasChangefeed
     },
@@ -1321,7 +1317,7 @@ export function withChangefeed<A extends HasRead>(
     ): A & HasChangefeed {
       const result = base.set(ctx, path, schema, item)
       wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createLeafChangefeed(channels, nodePath, () => (result as any)[CALL]()),
+        createLeafChangefeed(channels, nodePath, () => result[CALL]()),
       )
       return result as A & HasChangefeed
     },
@@ -1338,7 +1334,7 @@ export function withChangefeed<A extends HasRead>(
     ): A & HasChangefeed {
       const result = base.tree(ctx, path, schema, nodes, node)
       wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createTreeChangefeed(channels, nodePath, () => (result as any)[CALL]()),
+        createTreeChangefeed(channels, nodePath, () => result[CALL]()),
       )
       return result as A & HasChangefeed
     },
@@ -1353,9 +1349,7 @@ export function withChangefeed<A extends HasRead>(
     ): A & HasChangefeed {
       const result = base.movable(ctx, path, schema, item)
       wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createSequenceChangefeed(channels, nodePath, () =>
-          (result as any)[CALL](),
-        ),
+        createSequenceChangefeed(channels, nodePath, () => result[CALL]()),
       )
       return result as A & HasChangefeed
     },
@@ -1369,7 +1363,7 @@ export function withChangefeed<A extends HasRead>(
     ): A & HasChangefeed {
       const result = base.richtext(ctx, path, schema)
       wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createLeafChangefeed(channels, nodePath, () => (result as any)[CALL]()),
+        createLeafChangefeed(channels, nodePath, () => result[CALL]()),
       )
       return result as A & HasChangefeed
     },

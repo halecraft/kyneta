@@ -45,5 +45,5 @@ export function unwrap<R extends HasNativeAny>(ref: R): R[typeof NATIVE] {
   if (!isPropertyHost(ref)) {
     throw new Error("unwrap() requires a ref object.")
   }
-  return (ref as any)[NATIVE]
+  return ref[NATIVE]
 }

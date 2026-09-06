@@ -418,7 +418,7 @@ export function isBoundSchema(value: unknown): value is BoundSchema {
     value !== undefined &&
     typeof value === "object" &&
     "_brand" in value &&
-    (value as any)._brand === "BoundSchema"
+    value._brand === "BoundSchema"
   )
 }
 

@@ -97,8 +97,8 @@ type WritableDiscriminantProductRef<F extends Record<string, Schema>> = {
  *
  * Uses `Symbol.for` so multiple copies share the same identity.
  */
-export const TRANSACT: unique symbol = Symbol.for("kyneta:transact") as any
-export const PATH: unique symbol = Symbol.for("kyneta:path") as any
+export const TRANSACT: unique symbol = Symbol.for("kyneta:transact")
+export const PATH: unique symbol = Symbol.for("kyneta:path")
 
 /**
  * An object that carries a `[TRANSACT]` symbol referencing the
@@ -135,7 +135,7 @@ export function hasTransact(value: unknown): value is HasTransact {
  *
  * Uses `Symbol.for` so multiple copies share the same identity.
  */
-export const REMOVE: unique symbol = Symbol.for("kyneta:remove") as any
+export const REMOVE: unique symbol = Symbol.for("kyneta:remove")
 
 /**
  * An object that carries a `[REMOVE]` method for self-removal.
@@ -177,7 +177,7 @@ export function hasRemove(value: unknown): value is HasRemove {
  */
 export const FORWARD_OPS_MARKER: unique symbol = Symbol.for(
   "kyneta:forward-ops-marker",
-) as any
+)
 
 /**
  * Slice the writer log from `marker` to the current length, filtering
@@ -189,7 +189,7 @@ export const FORWARD_OPS_MARKER: unique symbol = Symbol.for(
  */
 export const FORWARD_OPS_SINCE: unique symbol = Symbol.for(
   "kyneta:forward-ops-since",
-) as any
+)
 
 // ---------------------------------------------------------------------------
 // WritableContext — shared state flowing through the tree
@@ -462,7 +462,7 @@ export function buildWritableContext(
         const frameStart = frameStarts.pop() as any
         try {
           for (let i = inverseStack.length - 1; i >= frameStart; i--) {
-            const { path, inverse } = inverseStack[i] as any
+            const { path, inverse } = inverseStack[i]
             ctx.prepare(path, inverse, { ...opts, compensating: true })
           }
           inverseStack.length = frameStart
@@ -476,7 +476,7 @@ export function buildWritableContext(
         } catch (compErr: any) {
           const err =
             compErr instanceof Error ? compErr : new Error(String(compErr))
-          ;(err as any).cause = e
+          err.cause = e
           throw err
         }
         throw e
@@ -540,7 +540,7 @@ export function buildWritableContext(
     [FORWARD_OPS_SINCE]: (marker: number) => {
       const out: Op[] = []
       for (let i = marker; i < writerLog.length; i++) {
-        const entry = writerLog[i] as any
+        const entry = writerLog[i]
         if (entry.compensating) continue
         out.push(entry.op)
       }
@@ -971,7 +971,7 @@ export function withWritable<A>(
       nodes: () => readonly FlatTreeNode<A>[],
       node: (id: string) => A,
     ): A & HasTransact {
-      const result = base.tree(ctx, path, schema, nodes, node) as any
+      const result = base.tree(ctx, path, schema, nodes, node)
       installTreeWriteOps(result, ctx, path)
       attachTransact(result, ctx, path)
       return result as A & HasTransact

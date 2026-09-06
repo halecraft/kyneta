@@ -70,7 +70,7 @@ export type INVALIDATE_TYPE = typeof INVALIDATE_SYMBOL
  *
  * Uses `Symbol.for` so multiple copies of this module share identity.
  */
-export const CALL: unique symbol = Symbol.for("kyneta:call") as any
+export const CALL: unique symbol = Symbol.for("kyneta:call")
 
 // ---------------------------------------------------------------------------
 // Phantom brand symbols — compile-time only, zero runtime cost

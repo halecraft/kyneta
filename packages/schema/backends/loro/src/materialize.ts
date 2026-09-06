@@ -47,7 +47,7 @@ function createLoroResolver(
     resolveText(path: Path): string | undefined {
       const { resolved } = resolveContainer(doc, rootSchema, path, binding)
       if (hasKind(resolved) && resolved.kind() === "Text") {
-        return (resolved as any).toString() as string
+        return resolved.toString() as string
       }
       const value = extractValue(resolved)
       return typeof value === "string" ? value : undefined

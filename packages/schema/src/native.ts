@@ -28,7 +28,7 @@ import type { PlainState } from "./reader.js"
  * Typed via `HasNative<T>` intersected into `SchemaRef` at every node.
  * Read via `unwrap(ref)` or directly as `ref[NATIVE]`.
  */
-export const NATIVE: unique symbol = Symbol.for("kyneta:native") as any
+export const NATIVE: unique symbol = Symbol.for("kyneta:native")
 
 // ---------------------------------------------------------------------------
 // SUBSTRATE — internal, root only
@@ -41,7 +41,7 @@ export const NATIVE: unique symbol = Symbol.for("kyneta:native") as any
  * `exportSince`, `merge`) to recover the substrate from a root ref.
  * Not part of the public type API — not threaded through the type system.
  */
-export const SUBSTRATE: unique symbol = Symbol.for("kyneta:substrate") as any
+export const SUBSTRATE: unique symbol = Symbol.for("kyneta:substrate")
 
 // ---------------------------------------------------------------------------
 // NativeMap — the functor interface

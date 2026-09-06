@@ -32,7 +32,7 @@ export class AsyncQueue<T> {
     if (this.#closed) return
     this.#closed = true
     for (const waiter of this.#waiters) {
-      waiter({ value: undefined as any, done: true })
+      waiter({ value: undefined, done: true })
     }
     this.#waiters.length = 0
   }
@@ -53,7 +53,7 @@ export class AsyncQueue<T> {
       return Promise.resolve({ value, done: false })
     }
     if (this.#closed) {
-      return Promise.resolve({ value: undefined as any, done: true })
+      return Promise.resolve({ value: undefined, done: true })
     }
     return new Promise<IteratorResult<T>>(resolve => {
       this.#waiters.push(resolve)
@@ -65,7 +65,7 @@ export class AsyncQueue<T> {
       next: () => this.#next(),
       return: async () => {
         this.close()
-        return { value: undefined as any, done: true }
+        return { value: undefined, done: true }
       },
       [Symbol.asyncIterator]() {
         return this

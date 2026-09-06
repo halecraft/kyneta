@@ -501,7 +501,7 @@ function sequenceChangeToDiff(
   const sk = structuralKind(targetSchema)
   const itemSchema =
     sk === "sequence" && "item" in targetSchema
-      ? ((targetSchema as any).item as SchemaNode)
+      ? (targetSchema.item as SchemaNode)
       : undefined
 
   for (const inst of change.instructions as readonly SequenceInstruction[]) {
@@ -554,7 +554,7 @@ function mapChangeToDiff(
   const sk = structuralKind(targetSchema)
   const valueSchema =
     sk === "map" && "item" in targetSchema
-      ? ((targetSchema as any).item as SchemaNode)
+      ? (targetSchema.item as SchemaNode)
       : undefined
 
   const keyFor = (key: string): { mapKey: string; childAbs: string } => {
@@ -782,7 +782,7 @@ function loroPathToKynetaPath(
       // the inverse-lookup branch below.
       if (schema?.[KIND] === "tree") {
         path = path.entry(segment)
-        schema = (schema as any).item
+        schema = schema.item
         continue
       }
       // Inverse-lookup recovers the original declared field name when
@@ -796,7 +796,7 @@ function loroPathToKynetaPath(
       const kind = schema?.[KIND]
       if (kind === "product") {
         path = path.field(leaf)
-        schema = (schema as any).fields[leaf]
+        schema = schema.fields[leaf]
       } else if (kind === "map" || kind === "set") {
         path = path.entry(leaf)
         schema = (schema as any).item
@@ -808,7 +808,7 @@ function loroPathToKynetaPath(
       path = path.item(segment)
       const kind = schema?.[KIND]
       if (kind === "sequence" || kind === "movable") {
-        schema = (schema as any).item
+        schema = schema.item
       } else {
         schema = undefined
       }
@@ -821,7 +821,7 @@ function loroPathToKynetaPath(
           : ""
       if (treeId && schema?.[KIND] === "tree") {
         path = path.entry(treeId)
-        schema = (schema as any).item
+        schema = schema.item
       }
     }
   }
@@ -890,7 +890,7 @@ function richTextDiffToChange(diff: TextDiff): RichTextChange {
   const instructions: RichTextInstruction[] = diff.diff.map(
     (delta: Delta<string>) => {
       if (delta.insert !== undefined) {
-        const attrs = (delta as any).attributes
+        const attrs = delta.attributes
         if (attrs && Object.keys(attrs).length > 0) {
           return { insert: delta.insert, marks: attrs }
         }
@@ -900,7 +900,7 @@ function richTextDiffToChange(diff: TextDiff): RichTextChange {
         return { delete: delta.delete }
       }
       if (delta.retain !== undefined) {
-        const attrs = (delta as any).attributes
+        const attrs = delta.attributes
         if (attrs && Object.keys(attrs).length > 0) {
           return { format: delta.retain, marks: attrs }
         }
@@ -970,7 +970,7 @@ function mapDiffToChange(diff: MapDiff, binding?: SchemaBinding): MapChange {
       deleteKeys.push(key)
     } else if (hasKind(value)) {
       // Container value — convert to plain JSON
-      set[key] = (value as any).toJSON()
+      set[key] = value.toJSON()
     } else {
       set[key] = value
     }

@@ -193,6 +193,6 @@ export const observation: InterpreterLayer<
 export const tracking: InterpreterLayer<RefContext, RefContext> = {
   name: "tracking",
   transform(base) {
-    return withTracking(base as any) as any
+    return withTracking(base) as any
   },
 }

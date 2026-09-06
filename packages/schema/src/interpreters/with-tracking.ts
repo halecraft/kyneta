@@ -161,25 +161,25 @@ export function withTracking<A extends HasNavigation & HasRead>(
     [INTERPRETER]: true,
 
     scalar(ctx: RefContext, path: Path, schema: ScalarSchema): A {
-      const result = base.scalar(ctx, path, schema) as any
+      const result = base.scalar(ctx, path, schema)
       wrapLeafCall(result)
       return result as A
     },
 
     text(ctx: RefContext, path: Path, schema: TextSchema): A {
-      const result = base.text(ctx, path, schema) as any
+      const result = base.text(ctx, path, schema)
       wrapLeafCall(result)
       return result as A
     },
 
     counter(ctx: RefContext, path: Path, schema: CounterSchema): A {
-      const result = base.counter(ctx, path, schema) as any
+      const result = base.counter(ctx, path, schema)
       wrapLeafCall(result)
       return result as A
     },
 
     richtext(ctx: RefContext, path: Path, schema: RichTextSchema): A {
-      const result = base.richtext(ctx, path, schema) as any
+      const result = base.richtext(ctx, path, schema)
       wrapLeafCall(result)
       return result as A
     },
@@ -192,7 +192,7 @@ export function withTracking<A extends HasNavigation & HasRead>(
       schema: SetSchema,
       item: (key: string) => A,
     ): A {
-      const result = base.set(ctx, path, schema, item) as any
+      const result = base.set(ctx, path, schema, item)
       wrapLeafCall(result)
       wrapMethod(result, "has", "value")
       wrapMethod(result, Symbol.iterator, "value")
@@ -206,7 +206,7 @@ export function withTracking<A extends HasNavigation & HasRead>(
       schema: ProductSchema,
       fields: Readonly<Record<string, () => A>>,
     ): A {
-      const result = base.product(ctx, path, schema, fields) as any
+      const result = base.product(ctx, path, schema, fields)
       // Products have static fields — navigation reports nothing; only the
       // whole-value `()` read is a (deep) dependency. Field getters return
       // child carriers, which report their own reads.
@@ -220,7 +220,7 @@ export function withTracking<A extends HasNavigation & HasRead>(
       schema: SequenceSchema,
       item: (index: number) => A,
     ): A {
-      const result = base.sequence(ctx, path, schema, item) as any
+      const result = base.sequence(ctx, path, schema, item)
       wrapCompositeCall(result)
       wrapMethod(result, "at", "structure")
       wrapMethod(result, Symbol.iterator, "structure")
@@ -234,7 +234,7 @@ export function withTracking<A extends HasNavigation & HasRead>(
       schema: MovableSequenceSchema,
       item: (index: number) => A,
     ): A {
-      const result = base.movable(ctx, path, schema, item) as any
+      const result = base.movable(ctx, path, schema, item)
       wrapCompositeCall(result)
       wrapMethod(result, "at", "structure")
       wrapMethod(result, Symbol.iterator, "structure")
@@ -248,7 +248,7 @@ export function withTracking<A extends HasNavigation & HasRead>(
       schema: MapSchema,
       item: (key: string) => A,
     ): A {
-      const result = base.map(ctx, path, schema, item) as any
+      const result = base.map(ctx, path, schema, item)
       wrapCompositeCall(result)
       // All of these read the substrate directly (reader.keys / hasKey),
       // so each must report — they do not all route through `.at`.
@@ -269,7 +269,7 @@ export function withTracking<A extends HasNavigation & HasRead>(
       nodes: () => readonly FlatTreeNode<A>[],
       node: (id: string) => A,
     ): A {
-      const result = base.tree(ctx, path, schema, nodes, node) as any
+      const result = base.tree(ctx, path, schema, nodes, node)
       wrapCompositeCall(result)
       wrapMethod(result, "node", "structure")
       wrapMethod(result, Symbol.iterator, "structure")

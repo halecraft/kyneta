@@ -292,7 +292,7 @@ export function attach(
     // Apply via batch() tagged with our source token so the resulting
     // echo through cf.subscribe() can be identified and skipped.
     batch(
-      textRef as any,
+      textRef,
       (ref: any) => {
         if (deleteCount > 0) ref.delete(offset, deleteCount)
         if (insertText) ref.insert(offset, insertText)

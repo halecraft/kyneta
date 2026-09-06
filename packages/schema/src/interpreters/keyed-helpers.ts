@@ -198,7 +198,7 @@ export function installKeyedCaching(
 
   Object.defineProperty(result, "at", {
     value: (key: string): unknown => {
-      const addressTable = (result as any)[addressTableSym] as
+      const addressTable = result[addressTableSym] as
         | { byKey: Map<string, { address: any; ref: unknown }> }
         | undefined
 

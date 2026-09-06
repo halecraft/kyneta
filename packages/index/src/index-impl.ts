@@ -164,7 +164,7 @@ function by<V>(
   }
 
   // Bootstrap: index all existing collection entries
-  for (const [entryKey, value] of collection as any) {
+  for (const [entryKey, value] of collection) {
     addEntry(entryKey, value)
   }
 
@@ -175,7 +175,7 @@ function by<V>(
 
       for (const change of changeset.changes) {
         if (change.type === "added") {
-          const value = (collection as any).get(change.key)
+          const value = collection.get(change.key)
           if (value !== undefined) {
             indexChanges.push(...addEntry(change.key, value))
           }
@@ -230,7 +230,7 @@ function by<V>(
       const entryKeys = groups.get(groupKey)
       if (entryKeys) {
         for (const entryKey of entryKeys) {
-          const value = (collection as any).get(entryKey)
+          const value = collection.get(entryKey)
           if (value !== undefined) {
             mapHandle.set(entryKey, value)
           }
@@ -243,7 +243,7 @@ function by<V>(
         for (const change of changeset.changes) {
           if (change.groupKey !== groupKey) continue
           if (change.type === "group-added") {
-            const value = (collection as any).get(change.entryKey)
+            const value = collection.get(change.entryKey)
             if (value !== undefined) {
               mapHandle.set(change.entryKey, value)
               filtered.push(change)

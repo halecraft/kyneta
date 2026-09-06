@@ -96,7 +96,7 @@ export function nodeSize(
     case "product": {
       let size = 2 // open + close
       for (const key of Object.keys(schema.fields)) {
-        size += nodeSize(reader, schema.fields[key] as any, path.field(key))
+        size += nodeSize(reader, schema.fields[key], path.field(key))
       }
       return size
     }
@@ -136,11 +136,11 @@ export function nodeSize(
       const result = dispatchSum(value, sumSchema, {
         byKey: (key: string) => {
           const disc = sumSchema as DiscriminatedSumSchema
-          return nodeSize(reader, disc.variantMap[key] as any, path)
+          return nodeSize(reader, disc.variantMap[key], path)
         },
         byIndex: (index: number) => {
           const pos = sumSchema as PositionalSumSchema
-          return nodeSize(reader, pos.variants[index] as any, path)
+          return nodeSize(reader, pos.variants[index], path)
         },
       })
       return result ?? 0
@@ -295,7 +295,7 @@ export function flattenDocPosition(
   let currentPath: Path = RawPath.empty
 
   for (let depth = 0; depth < segments.length; depth++) {
-    const segment = segments[depth] as any
+    const segment = segments[depth]
 
     const children = getChildren(reader, currentSchema, currentPath)
 
@@ -376,7 +376,7 @@ function getChildren(
       const result: ChildInfo[] = []
       for (const key of Object.keys(schema.fields)) {
         result.push({
-          schema: schema.fields[key] as any,
+          schema: schema.fields[key],
           path: path.field(key),
           key,
         })
@@ -429,11 +429,11 @@ function getChildren(
       const result = dispatchSum<ChildInfo[]>(value, sumSchema, {
         byKey: (key: string) => {
           const disc = sumSchema as DiscriminatedSumSchema
-          return getChildren(reader, disc.variantMap[key] as any, path)
+          return getChildren(reader, disc.variantMap[key], path)
         },
         byIndex: (index: number) => {
           const pos = sumSchema as PositionalSumSchema
-          return getChildren(reader, pos.variants[index] as any, path)
+          return getChildren(reader, pos.variants[index], path)
         },
       })
       return result ?? []

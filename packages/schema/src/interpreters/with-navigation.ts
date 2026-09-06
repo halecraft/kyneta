@@ -93,7 +93,7 @@ export function withNavigation<A extends HasCall>(
     ): A & HasNavigation {
       // Downcast thunks for the base interpreter
       const baseFields = fields as Readonly<Record<string, () => A>>
-      const result = base.product(ctx, path, schema, baseFields) as any
+      const result = base.product(ctx, path, schema, baseFields)
 
       // Define enumerable getters for each schema field.
       // NO caching — each access forces the thunk afresh.
@@ -113,7 +113,7 @@ export function withNavigation<A extends HasCall>(
             configurable: true,
           })
         } else {
-          const thunk = fields[key] as any
+          const thunk = fields[key]
           Object.defineProperty(result, key, {
             get() {
               return thunk()
@@ -136,7 +136,7 @@ export function withNavigation<A extends HasCall>(
       item: (index: number) => A & HasNavigation,
     ): A & HasNavigation {
       const baseItem = item as (index: number) => A
-      const result = base.sequence(ctx, path, schema, baseItem) as any
+      const result = base.sequence(ctx, path, schema, baseItem)
       installSequenceNavigation(result, ctx, path, item)
       return result as A & HasNavigation
     },
@@ -151,7 +151,7 @@ export function withNavigation<A extends HasCall>(
       item: (key: string) => A & HasNavigation,
     ): A & HasNavigation {
       const baseItem = item as (key: string) => A
-      const result = base.map(ctx, path, schema, baseItem) as any
+      const result = base.map(ctx, path, schema, baseItem)
       installKeyedNavigation(result, ctx, path, item)
       return result as A & HasNavigation
     },
@@ -242,7 +242,7 @@ export function withNavigation<A extends HasCall>(
     ): A & HasNavigation {
       const baseNodes = nodes as unknown as () => readonly FlatTreeNode<A>[]
       const baseNode = node as unknown as (id: string) => A
-      const result = base.tree(ctx, path, schema, baseNodes, baseNode) as any
+      const result = base.tree(ctx, path, schema, baseNodes, baseNode)
       installTreeNavigation(result, ctx, path, node)
       return result as A & HasNavigation
     },
@@ -256,7 +256,7 @@ export function withNavigation<A extends HasCall>(
       item: (index: number) => A & HasNavigation,
     ): A & HasNavigation {
       const baseItem = item as (index: number) => A
-      const result = base.movable(ctx, path, schema, baseItem) as any
+      const result = base.movable(ctx, path, schema, baseItem)
       installSequenceNavigation(result, ctx, path, item)
       return result as A & HasNavigation
     },

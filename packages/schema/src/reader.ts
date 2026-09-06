@@ -158,7 +158,7 @@ export function writeByPath(
   const segments = path.segments
   let current: Record<string | number, unknown> = state
   for (let i = 0; i < segments.length - 1; i++) {
-    const seg = segments[i] as any
+    const seg = segments[i]
     const k = seg.resolve()
     // Symmetric to `AbstractPath.read`: `entry` traversal over the flat-
     // forest shadow looks up by id and steps into the node's `.data` so
@@ -188,7 +188,7 @@ export function writeByPath(
     current = current[k] as Record<string | number, unknown>
   }
   // Terminal segment — same flat-forest discrimination as the loop above.
-  const last = segments[segments.length - 1] as any
+  const last = segments[segments.length - 1]
   const lastKey = last.resolve()
   if (
     last.role === "entry" &&
