@@ -18,6 +18,7 @@
 export type { ChangeBase } from "@kyneta/changefeed"
 
 import type { ChangeBase } from "@kyneta/changefeed"
+import { deepClonePlain } from "./clone.js"
 
 // ---------------------------------------------------------------------------
 // Text actions — cursor-based retain/insert/delete over characters
@@ -234,7 +235,59 @@ export function mapChange(
   return { type: "map", set, delete: del }
 }
 
-export function replaceChange<T>(value: T): ReplaceChange<T> {
+// ---------------------------------------------------------------------------
+// Owned — a payload the change layer may keep
+// ---------------------------------------------------------------------------
+
+declare const OWNED: unique symbol
+
+/**
+ * A value a change may retain: either freshly copied, or vouched for.
+ *
+ * A change holds its payload by reference and hands it to subscribers. If that
+ * payload is still the object the caller passed in, then the caller can rewrite
+ * what a subscriber sees, long after the write — no second write, no changeset,
+ * nothing in the log. The document itself is safe (the store takes its own copy
+ * at the boundary; see `ownedForStore` in `reader.ts`), but the op is not.
+ *
+ * Requiring `Owned<T>` here makes that a compile error rather than a silent
+ * default. Every construction site has to say which it is: `own(value)` to copy,
+ * or `trustAsOwned(value)` to assert nobody else holds it.
+ *
+ * Only object payloads carry the brand. A primitive cannot be aliased — there
+ * is nothing to hold a reference to — so `replaceChange(1)` stays as it reads,
+ * and the requirement shows up exactly where a real hazard exists.
+ *
+ * Deliberately *shallow*: one conditional and an intersection. A
+ * `DeepReadonly<T>` would express more but recurses through the payload, and
+ * this codebase already runs close to the TS2589 instantiation ceiling — see
+ * the workarounds in `@kyneta/exchange`.
+ */
+export type Owned<T> = T extends object ? T & { readonly [OWNED]: true } : T
+
+/**
+ * Copy a caller-supplied value so the change can keep it.
+ *
+ * The normal choice. Costs a `structuredClone` for objects and nothing for
+ * primitives.
+ */
+export function own<T>(value: T): Owned<T> {
+  return deepClonePlain(value) as Owned<T>
+}
+
+/**
+ * Assert a value is already unshared, so no copy is needed.
+ *
+ * Legitimate when the value was just built here, or arrived deserialized from
+ * the wire, and nothing else holds a reference. Every use wants a one-line
+ * reason next to it — this is the escape hatch, and an unexplained one is
+ * indistinguishable from someone silencing the compiler.
+ */
+export function trustAsOwned<T>(value: T): Owned<T> {
+  return value as Owned<T>
+}
+
+export function replaceChange<T>(value: Owned<T>): ReplaceChange<T> {
   return { type: "replace", value }
 }
 

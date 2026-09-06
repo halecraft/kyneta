@@ -1,5 +1,6 @@
 import { CHANGEFEED } from "@kyneta/changefeed"
 import { describe, expect, it } from "vitest"
+import { own } from "../change.js"
 import {
   ADDRESS_TABLE,
   applyChanges,
@@ -363,7 +364,7 @@ describe("withAddressing: ReplaceChange", () => {
     applyChanges(doc, [
       {
         path: RawPath.empty.field("todos"),
-        change: replaceChange([{ text: "gamma", done: true }]),
+        change: replaceChange(own([{ text: "gamma", done: true }])),
       },
     ])
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { own } from "../change.js"
 import {
   interpret,
   mapChange,
@@ -331,7 +332,7 @@ describe("withCaching: hybrid discriminant", () => {
 
     // Mutate store and invalidate
     ;(store as any).item = { type: "image", url: "pic.png" }
-    doc.item[INVALIDATE](replaceChange({ type: "image", url: "pic.png" }))
+    doc.item[INVALIDATE](replaceChange(own({ type: "image", url: "pic.png" })))
 
     // Discriminant reads live from store
     expect(doc.item.type).toBe("image")
@@ -362,10 +363,12 @@ describe("withCaching: INVALIDATE product", () => {
     expect(settingsBefore).toBe(doc.settings) // cached
 
     doc[INVALIDATE](
-      replaceChange({
-        settings: { darkMode: true, fontSize: 20 },
-        metadata: {},
-      }),
+      replaceChange(
+        own({
+          settings: { darkMode: true, fontSize: 20 },
+          metadata: {},
+        }),
+      ),
     )
 
     const settingsAfter = doc.settings
@@ -396,10 +399,12 @@ describe("withCaching: INVALIDATE product", () => {
     // Mutate store directly and invalidate
     ;(store as any).settings = { darkMode: true, fontSize: 20 }
     doc[INVALIDATE](
-      replaceChange({
-        settings: { darkMode: true, fontSize: 20 },
-        metadata: {},
-      }),
+      replaceChange(
+        own({
+          settings: { darkMode: true, fontSize: 20 },
+          metadata: {},
+        }),
+      ),
     )
 
     // Fresh refs read new data
@@ -750,7 +755,9 @@ describe("withCaching: read-only stack backward compatibility", () => {
     // Direct [INVALIDATE] clears memoized children — after store update
     // and invalidation, re-reading returns the new value.
     store.settings = { darkMode: true, fontSize: 24 }
-    doc.settings[INVALIDATE](replaceChange({ darkMode: true, fontSize: 24 }))
+    doc.settings[INVALIDATE](
+      replaceChange(own({ darkMode: true, fontSize: 24 })),
+    )
     expect(doc.settings.darkMode()).toBe(true)
     expect(doc.settings.fontSize()).toBe(24)
   })

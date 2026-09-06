@@ -8,6 +8,7 @@
 // end-to-end through the substrate.
 
 import { describe, expect, it } from "vitest"
+import { own } from "../change.js"
 import { replaceChange, Schema } from "../index.js"
 import { RawPath } from "../path.js"
 import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
@@ -37,7 +38,7 @@ describe("applyChangeToStateTree stores a sum as one atomic tuple", () => {
     applyChangeToStateTree(
       tree,
       shapePath,
-      replaceChange({ kind: "square", side: 3 }),
+      replaceChange(own({ kind: "square", side: 3 })),
       200,
       Doc,
     )
@@ -49,7 +50,7 @@ describe("applyChangeToStateTree stores a sum as one atomic tuple", () => {
   it("deep-clones the value so the tree does not alias the caller", () => {
     const tree: StateTree = {}
     const value = { kind: "circle", radius: 5 }
-    applyChangeToStateTree(tree, shapePath, replaceChange(value), 100, Doc)
+    applyChangeToStateTree(tree, shapePath, replaceChange(own(value)), 100, Doc)
     value.radius = 999 // mutate the caller's object after the write
     expect(asRecord(tree).shape[0].radius).toBe(5)
   })
@@ -62,7 +63,7 @@ describe("applyChangeToStateTree stores a sum as one atomic tuple", () => {
     applyChangeToStateTree(
       tree,
       RawPath.empty.field("user"),
-      replaceChange({ x: 1, y: 2 }),
+      replaceChange(own({ x: 1, y: 2 })),
       100,
       Prod,
     )
@@ -129,7 +130,7 @@ describe(".json() blob is an atomic register", () => {
     applyChangeToStateTree(
       tree,
       RawPath.empty.field("blob"),
-      replaceChange({ a: 1, b: 2 }),
+      replaceChange(own({ a: 1, b: 2 })),
       100,
       JsonDoc,
     )
@@ -153,7 +154,7 @@ describe("nullable struct is an atomic register", () => {
     applyChangeToStateTree(
       tree,
       RawPath.empty.field("opt"),
-      replaceChange({ x: 1, y: 2 }),
+      replaceChange(own({ x: 1, y: 2 })),
       100,
       NullDoc,
     )

@@ -1,5 +1,6 @@
 import { hasChangefeed } from "@kyneta/changefeed"
 import { describe, expect, it } from "vitest"
+import { own } from "../change.js"
 import type { Readable, RefContext } from "../index.js"
 import {
   bottomInterpreter,
@@ -386,7 +387,7 @@ describe("readable: sequence ref", () => {
     expect(doc.messages.get(0)).toEqual({ author: "Alice", body: "Hi" })
     // Mutate store directly
     ;(store.messages as unknown[]).push({ author: "Bob", body: "Hey" })
-    doc.messages[INVALIDATE](replaceChange([]))
+    doc.messages[INVALIDATE](replaceChange(own([])))
     expect(doc.messages.get(1)).toEqual({ author: "Bob", body: "Hey" })
   })
 })

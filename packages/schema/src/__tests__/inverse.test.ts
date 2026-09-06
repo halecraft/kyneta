@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest"
 import {
   incrementChange,
   mapChange,
+  own,
   replaceChange,
   richTextChange,
   sequenceChange,
@@ -40,13 +41,13 @@ describe("inverse: groupoid identity — replace", () => {
 
   it("object replace", () => {
     const pre = { a: 1, b: [1, 2] }
-    const c = replaceChange({ a: 2 })
+    const c = replaceChange(own({ a: 2 }))
     expect(step(step(pre, c), invert(pre, c))).toEqual(pre)
   })
 
   it("array replace", () => {
     const pre = [1, 2, 3]
-    const c = replaceChange([4, 5])
+    const c = replaceChange(own([4, 5]))
     expect(step(step(pre, c), invert(pre, c))).toEqual(pre)
   })
 

@@ -17,7 +17,7 @@
 // log (`exportSince` returns `null`).
 
 import type { ChangeBase } from "../change.js"
-import { replaceChange } from "../change.js"
+import { replaceChange, trustAsOwned } from "../change.js"
 import type { Op } from "../changefeed.js"
 import { deepClonePlain } from "../clone.js"
 import { findOpaqueBoundary } from "../fold-path.js"
@@ -438,7 +438,11 @@ export function createStateSubstrate(
         // Replay flag ensures the changefeed doesn't rebroadcast.
         core.pendingOps.push({
           path: RawPath.empty,
-          change: replaceChange(shadow), // the content doesn't matter, it's just a trigger
+          // The shadow itself, deliberately: this op exists to wake
+          // subscribers, and its payload is never read. Copying a whole
+          // presence document on every merge to satisfy the type would be
+          // pure waste.
+          change: replaceChange(trustAsOwned(shadow)),
         })
         substrate.afterBatch(replayOptions)
       } else {
@@ -492,7 +496,8 @@ export function createStateSubstrate(
       const ctx = cachedCtx
       ctx.runBatch(
         () => {
-          ctx.prepare(RawPath.empty, replaceChange(shadow), {
+          // Same trigger, on the decay path — see the note in `merge`.
+          ctx.prepare(RawPath.empty, replaceChange(trustAsOwned(shadow)), {
             replay: true,
             projection: true,
           })

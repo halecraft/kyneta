@@ -1,5 +1,7 @@
 import { CHANGEFEED, type HasChangefeed } from "@kyneta/changefeed"
 import { describe, expect, expectTypeOf, it } from "vitest"
+import type { ReplaceChange } from "../change.js"
+import { own, replaceChange, trustAsOwned } from "../change.js"
 import {
   BACKING_DOC,
   batch,
@@ -2302,5 +2304,32 @@ describe("type-level: .json() constructors enforce PlainSchema constraint", () =
       x: Schema.struct.json({ y: Schema.string() }),
     })
     expectTypeOf(s).toMatchTypeOf<ProductSchema>()
+  })
+})
+
+// ===========================================================================
+// Owned — the change constructors require an owned payload
+// ===========================================================================
+
+describe("type-level: Owned<T> on change constructors", () => {
+  it("an object payload must be owned", () => {
+    // @ts-expect-error — a raw object is not Owned; call own() or trustAsOwned()
+    replaceChange({ a: 1 })
+    expectTypeOf(replaceChange(own({ a: 1 }))).toMatchTypeOf<
+      ReplaceChange<{ a: number }>
+    >()
+    expectTypeOf(replaceChange(trustAsOwned({ a: 1 }))).toMatchTypeOf<
+      ReplaceChange<{ a: number }>
+    >()
+  })
+
+  it("a primitive payload needs no brand — nothing can alias it", () => {
+    expectTypeOf(replaceChange(1)).toMatchTypeOf<ReplaceChange<number>>()
+    expectTypeOf(replaceChange("x")).toMatchTypeOf<ReplaceChange<string>>()
+  })
+
+  it("Owned<T> is assignable wherever T is", () => {
+    const owned = own({ a: 1 })
+    expectTypeOf(owned).toMatchTypeOf<{ a: number }>()
   })
 })

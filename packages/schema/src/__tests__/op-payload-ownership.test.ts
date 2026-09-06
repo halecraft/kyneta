@@ -12,7 +12,7 @@
 
 import { describe, expect, it } from "vitest"
 import type { ReplaceChange } from "../change.js"
-import { replaceChange } from "../change.js"
+import { own, replaceChange, trustAsOwned } from "../change.js"
 // Everything from one entrypoint: binding compares schema identity, and
 // `../basic/index.js` is a separate module instance whose schemas this
 // entrypoint's binder does not recognise.
@@ -120,7 +120,7 @@ describe("ownedForStore", () => {
   const value = { a: 1 }
 
   it("copies a local replace payload", () => {
-    const change = replaceChange(value)
+    const change = replaceChange(own(value))
     const out = ownedForStore(change) as typeof change
     expect(out.value).toEqual(value)
     expect(out.value).not.toBe(value)
@@ -129,7 +129,7 @@ describe("ownedForStore", () => {
   it("leaves replay and projection batches alone", () => {
     // These changes were built by the sending peer or by a decay tick, so
     // nothing local shares them — and they arrive in bulk on the merge path.
-    const change = replaceChange(value)
+    const change = replaceChange(own(value))
     expect(ownedForStore(change, { replay: true })).toBe(change)
     expect(ownedForStore(change, { replay: true, projection: true })).toBe(
       change,
@@ -145,7 +145,7 @@ describe("ownedForStore", () => {
 
   it("does not deep-freeze or otherwise alter the payload's contents", () => {
     const nested = { outer: { inner: [1, 2, 3] } }
-    const out = ownedForStore(replaceChange(nested)) as ReplaceChange<
+    const out = ownedForStore(replaceChange(own(nested))) as ReplaceChange<
       typeof nested
     >
     expect(out.value).toEqual(nested)
@@ -159,13 +159,13 @@ describe("ownedForStore", () => {
 
 describe("paths that deliberately hand the store an unshared value", () => {
   it("a replay batch reaches the store as the very object that arrived", () => {
-    const change = replaceChange({ dark: true, font: 9 })
+    const change = replaceChange(own({ dark: true, font: 9 }))
     // Identity, not equality: a copy here would be pure cost on the merge path.
     expect(ownedForStore(change, { replay: true })).toBe(change)
   })
 
   it("root-path replaces are still copied for local writes", () => {
-    const change = replaceChange({ tick: 1 })
+    const change = replaceChange(own({ tick: 1 }))
     expect(ownedForStore(change, {})).not.toBe(change)
     expect(ownedForStore(change, {})).toEqual(change)
     void RawPath.empty
@@ -211,5 +211,41 @@ describe("inverse capture owns its own snapshot", () => {
     ).toThrow("abort")
 
     expect(doc.settings()).toEqual({ dark: false, font: 1 })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The caller edge
+// ---------------------------------------------------------------------------
+
+describe("a caller cannot rewrite an op after handing over its object", () => {
+  it("mutating the object passed to .set() changes neither the document nor the op", () => {
+    const doc: any = createDoc(json.bind(Doc))
+    let captured: ReturnType<typeof settingsOp>
+    subscribe(doc, (cs: any) => {
+      captured ??= settingsOp(cs.changes)
+    })
+
+    const obj = { dark: false, font: 1 }
+    batch(doc, (d: any) => d.settings.set(obj))
+    obj.dark = true // the caller keeps its reference and reuses it
+
+    expect(doc.settings().dark).toBe(false)
+    expect(captured?.value).toEqual({ dark: false, font: 1 })
+  })
+})
+
+describe("Owned", () => {
+  it("own() copies; trustAsOwned() does not", () => {
+    const value = { a: 1 }
+    expect(own(value)).not.toBe(value)
+    expect(own(value)).toEqual(value)
+    expect(trustAsOwned(value)).toBe(value)
+  })
+
+  it("leaves primitives alone — nothing can hold a reference to one", () => {
+    expect(own(42)).toBe(42)
+    expect(own("x")).toBe("x")
+    expect(own(null)).toBe(null)
   })
 })

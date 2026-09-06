@@ -34,7 +34,7 @@ import {
 export type { Op }
 
 import type { ChangeBase } from "../change.js"
-import { incrementChange, replaceChange } from "../change.js"
+import { incrementChange, own, replaceChange } from "../change.js"
 import type { PositionCapable } from "../position.js"
 import type {
   CounterSchema,
@@ -832,7 +832,11 @@ export function withWritable<A>(
       const result = base.scalar(ctx, path, schema) as any
 
       result.set = (value: unknown): void => {
-        const change = replaceChange(value)
+        // `own` copies the caller's object so the op keeps a value rather than a
+        // view. Without it, a caller reusing the object it passed would rewrite what
+        // subscribers see, with no write recorded and no changeset emitted. The store
+        // takes its own copy separately, at `ownedForStore`.
+        const change = replaceChange(own(value))
         ctx.dispatch(path, change)
       }
 
@@ -853,7 +857,11 @@ export function withWritable<A>(
 
       Object.defineProperty(result, "set", {
         value: (value: unknown): void => {
-          const change = replaceChange(value)
+          // `own` copies the caller's object so the op keeps a value rather than a
+          // view. Without it, a caller reusing the object it passed would rewrite what
+          // subscribers see, with no write recorded and no changeset emitted. The store
+          // takes its own copy separately, at `ownedForStore`.
+          const change = replaceChange(own(value))
           ctx.dispatch(path, change)
         },
         enumerable: false,

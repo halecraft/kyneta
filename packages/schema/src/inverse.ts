@@ -36,6 +36,7 @@ import type {
 import {
   incrementChange,
   mapChange,
+  own,
   replaceChange,
   richTextChange,
   sequenceChange,
@@ -58,7 +59,9 @@ export function invertReplace<T>(
   pre: T,
   _change: ReplaceChange<T>,
 ): ReplaceChange<T> {
-  return replaceChange(deepClonePlain(pre))
+  // `own` is exactly this clone: the inverse must hold a value, not a view
+  // of the state the forward change is about to move on from.
+  return replaceChange(own(pre))
 }
 
 // ---------------------------------------------------------------------------
