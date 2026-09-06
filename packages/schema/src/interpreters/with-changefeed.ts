@@ -633,6 +633,53 @@ function listenAtPath(
   }
 }
 
+/**
+ * The own-path half of a node's changefeed: the subscriber set plus the
+ * `subscribe` method every factory returns.
+ *
+ * Each node keeps its *own* set of own-path subscribers and registers a single
+ * callback in the shared `listeners` map that fans out to it. The indirection
+ * buys per-node teardown: a subscriber leaves by dropping out of the local set,
+ * without touching the shared map that other ref instances at the same path
+ * also write into.
+ *
+ * Note that the shared registration itself is never released — see
+ * "Per-ref-instance listener multiplication" in `packages/schema/TECHNICAL.md`.
+ * That is pre-existing behaviour, preserved here deliberately rather than
+ * changed as a side effect of extracting this helper.
+ */
+/**
+ * Wire a node's own-path channel: allocate its subscriber set, register one
+ * shared listener that fans out to that set, and return the `subscribe`
+ * implementation.
+ *
+ * Every changefeed factory needs exactly this, which is why it lives here
+ * rather than being written out five times.
+ *
+ * @param onChangeset - Extra work to run after the fan-out, on the same
+ *   changeset. Only the tree uses it, to spot delete instructions and
+ *   synthesize a terminal event for the node that went away.
+ */
+function fanOutOwnPath(
+  channels: ChangefeedChannels,
+  path: Path,
+  onChangeset?: (changeset: Changeset<ChangeBase>) => void,
+): (callback: (changeset: Changeset<ChangeBase>) => void) => () => void {
+  const subscribers = new Set<(changeset: Changeset<ChangeBase>) => void>()
+
+  listenAtPath(channels.listeners, path, changeset => {
+    for (const callback of subscribers) callback(changeset)
+    onChangeset?.(changeset)
+  })
+
+  return callback => {
+    subscribers.add(callback)
+    return () => {
+      subscribers.delete(callback)
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Populated tracking
 // ---------------------------------------------------------------------------
@@ -818,11 +865,16 @@ function getPopulatedState(ctx: RefContext): {
 /**
  * Builds the `RecursiveChangefeedProtocol` for a structurally-leaf node.
  *
- * Parallel structure with composite factories: shared `ownPathSubscribers` /
- * `treeSubs` sets, one own-path listener registered via `listenAtPath`
- * that delegates fan-out to `fanOutOwnPath`. The leaf's `subscribeDescendants`
- * is the trivial own-path → Op lift with `path.root()` as the relative
- * path (a leaf is a tree of size 1).
+ * Structurally identical to the composite factories: `fanOutOwnPath` for the
+ * own-path channel, `listenDescendants` for the deep one. A leaf registers its
+ * deep subscribers in the shared descendant map exactly like a composite does,
+ * and the ancestor walk reaches them at relative path `[]` — a leaf is a tree
+ * of size 1, so its own change *is* its whole subtree.
+ *
+ * (Do not confuse this with the *populated* feed further up, whose
+ * `subscribeDescendants` really is an own-path → Op lift via `liftToOps`. That
+ * feed reports readiness rather than content, and it is the only deep channel
+ * in the file that does not go through the ancestor walk.)
  *
  * The factory name retains "Leaf" because it refers to the *input*
  * (leaf-shaped carrier), not the output protocol.
@@ -832,24 +884,13 @@ function createLeafChangefeed(
   path: Path,
   readCurrent: () => unknown,
 ): RecursiveChangefeedProtocol<unknown, ChangeBase> {
-  const ownPathSubscribers = new Set<
-    (changeset: Changeset<ChangeBase>) => void
-  >()
-
-  listenAtPath(channels.listeners, path, changeset => {
-    for (const callback of ownPathSubscribers) callback(changeset)
-  })
+  const subscribeOwnPath = fanOutOwnPath(channels, path)
 
   return {
     get current() {
       return readCurrent()
     },
-    subscribe(callback) {
-      ownPathSubscribers.add(callback)
-      return () => {
-        ownPathSubscribers.delete(callback)
-      }
-    },
+    subscribe: subscribeOwnPath,
     // A leaf is a tree of size one, so its deep channel carries exactly its own
     // change — delivered by the ancestor walk at relative path `[]`.
     subscribeDescendants(callback) {
@@ -878,26 +919,13 @@ function createProductChangefeed(
   path: Path,
   readCurrent: () => unknown,
 ): RecursiveChangefeedProtocol<unknown, ChangeBase> {
-  const ownPathSubscribers = new Set<
-    (changeset: Changeset<ChangeBase>) => void
-  >()
-
-  listenAtPath(channels.listeners, path, changeset => {
-    for (const callback of ownPathSubscribers) callback(changeset)
-  })
+  const subscribeOwnPath = fanOutOwnPath(channels, path)
 
   return {
     get current() {
       return readCurrent()
     },
-    subscribe(
-      callback: (changeset: Changeset<ChangeBase>) => void,
-    ): () => void {
-      ownPathSubscribers.add(callback)
-      return () => {
-        ownPathSubscribers.delete(callback)
-      }
-    },
+    subscribe: subscribeOwnPath,
     subscribeDescendants(
       callback: (changeset: Changeset<Op>) => void,
     ): () => void {
@@ -911,24 +939,13 @@ function createSequenceChangefeed(
   path: Path,
   readCurrent: () => unknown,
 ): RecursiveChangefeedProtocol<unknown, ChangeBase> {
-  const ownPathSubscribers = new Set<
-    (changeset: Changeset<ChangeBase>) => void
-  >()
-
-  listenAtPath(channels.listeners, path, changeset => {
-    for (const callback of ownPathSubscribers) callback(changeset)
-  })
+  const subscribeOwnPath = fanOutOwnPath(channels, path)
 
   return {
     get current() {
       return readCurrent()
     },
-    subscribe(callback) {
-      ownPathSubscribers.add(callback)
-      return () => {
-        ownPathSubscribers.delete(callback)
-      }
-    },
+    subscribe: subscribeOwnPath,
     // No child wiring, and nothing to rebuild when this collection changes
     // shape. Delivery locates subscribers by walking each changed path's
     // ancestors, so a subscription is never bound to a child ref object.
@@ -950,24 +967,13 @@ function createMapChangefeed(
   path: Path,
   readCurrent: () => unknown,
 ): RecursiveChangefeedProtocol<unknown, ChangeBase> {
-  const ownPathSubscribers = new Set<
-    (changeset: Changeset<ChangeBase>) => void
-  >()
-
-  listenAtPath(channels.listeners, path, changeset => {
-    for (const callback of ownPathSubscribers) callback(changeset)
-  })
+  const subscribeOwnPath = fanOutOwnPath(channels, path)
 
   return {
     get current() {
       return readCurrent()
     },
-    subscribe(callback) {
-      ownPathSubscribers.add(callback)
-      return () => {
-        ownPathSubscribers.delete(callback)
-      }
-    },
+    subscribe: subscribeOwnPath,
     // No child wiring, and nothing to rebuild when this collection changes
     // shape. Delivery locates subscribers by walking each changed path's
     // ancestors, so a subscription is never bound to a child ref object.
@@ -999,10 +1005,6 @@ function createTreeChangefeed(
   path: Path,
   readCurrent: () => unknown,
 ): RecursiveChangefeedProtocol<unknown, ChangeBase> {
-  const ownPathSubscribers = new Set<
-    (changeset: Changeset<ChangeBase>) => void
-  >()
-
   function deliverDeleteTerminal(id: string): void {
     // Delivered straight to the deleted node's own key rather than through the
     // notification plan, and deliberately so: it must reach that node only.
@@ -1031,9 +1033,10 @@ function createTreeChangefeed(
     }
   }
 
-  listenAtPath(channels.listeners, path, changeset => {
-    for (const callback of ownPathSubscribers) callback(changeset)
-
+  // The tree is the one factory that needs more than a fan-out: after its own
+  // subscribers have seen the changeset, it scans for delete instructions so a
+  // vanishing node can be told it is gone.
+  const subscribeOwnPath = fanOutOwnPath(channels, path, changeset => {
     for (const change of changeset.changes) {
       if (!isTreeChange(change)) continue
       for (const inst of change.instructions) {
@@ -1046,14 +1049,7 @@ function createTreeChangefeed(
     get current() {
       return readCurrent()
     },
-    subscribe(
-      callback: (changeset: Changeset<ChangeBase>) => void,
-    ): () => void {
-      ownPathSubscribers.add(callback)
-      return () => {
-        ownPathSubscribers.delete(callback)
-      }
-    },
+    subscribe: subscribeOwnPath,
     subscribeDescendants(
       callback: (changeset: Changeset<Op>) => void,
     ): () => void {
