@@ -107,6 +107,8 @@ Every callback receives a `Changeset<C>`, never a bare change (source: `packages
 
 Auto-commit produces a degenerate changeset of one. Transactions and `applyChanges` in `@kyneta/schema` produce multi-change batches. The subscriber API is uniform across both cases.
 
+A `Changeset`'s changes are safe to retain. `@kyneta/schema` gives each op a payload it owns, so holding one past the callback — queueing it for a later send, keeping it for an undo stack — reads the value that was written, not whatever the document became afterwards.
+
 This package defines only the envelope: a changeset is *some* batch of changes with metadata, and how producers decide what to put in one is their business. `@kyneta/schema` makes the strongest promise of any producer here — one changeset per subscriber per transaction, covering that subscriber's whole subtree, with changes in dispatch order. See its TECHNICAL.md under "Tree-observable changefeeds". Do not assume that guarantee of a changefeed you did not get from a schema ref.
 
 ### `BatchMetadata` — four orthogonal channels on every batch

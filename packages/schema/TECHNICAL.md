@@ -679,6 +679,34 @@ End-to-end flow:
 
 The substrate's `runBatch` bracket invocation is gated on `frameStarts.length === 0`: substrate.runBatch is invoked at most once per outermost block, regardless of how deeply `dispatch` nests. The exchange sees the transaction as a single `merge` source: after commit the substrate's `exportSince()` captures the entire delta.
 
+### Op payloads are snapshots, not views
+
+An op's payload is a value, not a window onto the store. Two independent copies make that true, and one alone cannot: there are three parties — the caller, the op, and the store — and each of the latter two must be immune to mutation by the others.
+
+- **`own(value)`**, at construction, in the `.set()` family. Copies the caller's object so the op keeps a value. Enforced by the type system: `replaceChange` takes `Owned<T>`, so a construction site must call either `own` (copy) or `trustAsOwned` (assert nobody else holds it). The brand covers object payloads only — a primitive cannot be aliased, and branding them multiplied the call-site edits sixfold for no safety.
+- **`ownedForStore(change, options)`**, at the store boundary, in each substrate's `prepare`. Copies the payload before `applyChange` writes it in, so a later write into that subtree cannot rewrite an op a subscriber is still holding.
+
+The store edge applies to **all four `PlainState`-backed substrates**: plain, ephemeral, and both CRDT backends, whose shadow (σ) is a plain object mutated by the same `applyChange` even though their native tree (λ) is not.
+
+Replayed changes are copied too. It is tempting to skip them, since a wire-built op has no local caller — but that is a fact about the *caller* edge. The store still takes the payload and later mutates it, and a merge's changesets reach subscribers like any other. Only `projection` batches skip the copy: those are decay ticks whose payload is the substrate's own shadow, passed to wake subscribers and never read.
+
+**Cost, measured end-to-end** (µs per `batch()`, 200-entry record, 200-item list):
+
+| write | before | after |
+|---|---|---|
+| scalar | 5.12 | 5.29 |
+| container replace | 5.45 | 5.72 |
+| list item | 5.36 | 5.41 |
+| record entry | 29.18 | **11.42** |
+
+A few percent on small writes, and a 2.6x improvement on writes into a large collection — because removing the inverse-path clone below matters more than adding the ownership copies. That clone captured pre-state at the write's path, which for a record entry is the *whole record*: the old cost scaled with collection size, and the new one does not.
+
+Comparing clone costs in isolation predicts the opposite (~3x worse on container writes) and is misleading twice over: `batch()` carries ~5µs of fixed overhead that dominates a 200ns copy, and it ignores what the change removes.
+
+**The inverse path does not need its own copy.** Each substrate used to `deepClonePlain` the pre-state before handing it to `invert`. `invert` already snapshots whatever it retains — `invertReplace`, `invertMap`, `invertSequence` and the rich-text marks each clone what they capture — so the substrate-side copy protected nothing and cost a deep clone of the written subtree on every local write.
+
+**Finding every aliasing site.** Reading the code is not sufficient here; it missed a whole substrate. The reliable method is to make the hazard loud: wrap `replaceChange`'s payload in a deep freeze and run the suites, and every mutation through an alias throws at the frame responsible. Three paths hand the store a value they legitimately own and must be excluded from such a run, or they report artifacts rather than defects: genesis (`objectToReplaceOps` in `buildUpgrade`, applied directly and never delivered), and the ephemeral substrate's two wake-up triggers.
+
 ### `applyChanges(ref, changes)`: declarative application
 
 Source: `src/facade/batch.ts`.

@@ -40,6 +40,7 @@ import {
   getOrCreateChangefeed,
   type ReplaceChange,
   replaceChange,
+  trustAsOwned,
 } from "@kyneta/schema"
 
 // ---------------------------------------------------------------------------
@@ -165,7 +166,13 @@ export function state<T>(initial: T): LocalRef<T> {
   // .set() — write and notify
   ref.set = (newValue: T): void => {
     value = newValue
-    const change = replaceChange(newValue)
+    // A LocalRef is a plain reactive cell, not a document: nothing else takes
+    // a reference to the value, and a later `.set()` rebinds rather than
+    // mutating, so an earlier changeset's payload stays intact on its own.
+    // Copying here would make `state()` a copying cell, which is not what a
+    // reactive variable should be — a caller that keeps its object and
+    // mutates it sees that, exactly as it would with `useState`.
+    const change = replaceChange(trustAsOwned(newValue))
     const changeset: Changeset<ReplaceChange<T>> = { changes: [change] }
     for (const cb of subscribers) {
       cb(changeset)

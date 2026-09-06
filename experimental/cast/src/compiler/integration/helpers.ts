@@ -19,6 +19,7 @@ import {
   replaceChange,
   type SequenceInstruction,
   type TextInstruction,
+  trustAsOwned,
 } from "@kyneta/schema"
 import { JSDOM } from "jsdom"
 import ts from "typescript"
@@ -609,7 +610,9 @@ export function createMockPlainRef<T>(initial: T): {
     set(v: T): void {
       value = v
       const changeset: Changeset<ChangeBase> = {
-        changes: [replaceChange(v) as ChangeBase],
+        // Test double for a LocalRef — same reasoning as `local-ref.ts`:
+        // a plain cell, with nothing else holding the value.
+        changes: [replaceChange(trustAsOwned(v)) as ChangeBase],
       }
       for (const cb of subscribers) {
         cb(changeset)

@@ -168,6 +168,8 @@ One `batch()` reaches each subscriber as **one `Changeset`**, covering everythin
 
 Within a changeset, `changes` are in the order they were written. That makes the list a faithful log: a root subscriber's `changes` are exactly the `Op[]` that `batch()` returned, and handing them to `applyChanges()` on another document reproduces the same writes. Deeper subscribers are called before shallower ones.
 
+Ops are yours to keep. A change's payload is a snapshot taken when the write was dispatched, so you can queue one for a later network send, hold it for an undo stack, or forward it to another document, and it will still describe what was written. Neither a later write nor the caller that supplied the value can reach back and alter it.
+
 Origin provenance (`{ origin: "sync" }`) flows through from `batch()` and `applyChanges()`.
 
 ## Data readiness

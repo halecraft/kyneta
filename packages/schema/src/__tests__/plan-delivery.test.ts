@@ -195,11 +195,12 @@ describe("planDelivery: change data integrity", () => {
     expect(changes[0]).toBe(change) // Same reference — no cloning
   })
 
-  // The no-cloning property has a wider blast radius now that one flush can
-  // reach a change from several buffers at once. Note also that change objects
-  // can alias live store state on the plain substrate, so a consumer must not
-  // hold one past the callback — see the op-aliasing note in the changefeed's
-  // TECHNICAL.md.
+  // The no-copying property has a wider blast radius now that one flush can
+  // reach a change from several buffers at once. It is a statement about the
+  // *planner*: it groups and rebases, it does not duplicate. Ownership is
+  // settled before the planner ever sees a change — `own` at construction,
+  // `ownedForStore` at the store boundary — so a consumer may hold a delivered
+  // op indefinitely.
   it("shares one change object between the own-path and deep buffers", () => {
     const path = RawPath.empty.field("settings").field("dark")
     const change = { type: "replace" as const, value: true }

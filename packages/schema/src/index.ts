@@ -39,6 +39,7 @@ export type {
   InstructionFold,
   MapChange,
   MarkMap,
+  Owned,
   ReplaceChange,
   RichTextChange,
   RichTextDelta,
@@ -69,6 +70,7 @@ export {
   isTextChange,
   isTreeChange,
   mapChange,
+  own,
   replaceChange,
   richTextChange,
   sequenceChange,
@@ -78,6 +80,7 @@ export {
   textInstructionsToPatches,
   transformIndex,
   treeChange,
+  trustAsOwned,
 } from "./change.js"
 export type {
   HasRecursiveChangefeed,
