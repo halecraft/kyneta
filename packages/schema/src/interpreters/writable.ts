@@ -793,7 +793,7 @@ export type Writable<S extends Schema> =
  * doc.title()                    // "Hello" via withReadable
  * ```
  */
-export function withWritable<A>(
+export function withWritable<A extends object>(
   base: Interpreter<RefContext, A>,
 ): Interpreter<WritableContext, A & HasTransact> {
   // Attach [TRANSACT] and [PATH] as non-enumerable symbol properties.
@@ -809,27 +809,43 @@ export function withWritable<A>(
   // carriers, and the package's only Proxy — the sum carrier in
   // `with-navigation.ts` — never reaches this function, because `sum` is a
   // pass-through in every augmenting layer.)
-  function attachTransact(
-    result: unknown,
+  function attachTransact<T extends object>(
+    result: T,
     ctx: WritableContext,
     path: Path,
-  ): void {
-    if (
-      result !== null &&
-      result !== undefined &&
-      (typeof result === "object" || typeof result === "function")
-    ) {
-      Object.defineProperty(result, TRANSACT, {
-        value: ctx,
-        enumerable: false,
-        configurable: true,
-      })
-      Object.defineProperty(result, PATH, {
-        value: path,
-        enumerable: false,
-        configurable: true,
-      })
-    }
+  ): asserts result is T & HasTransact {
+    Object.defineProperty(result, TRANSACT, {
+      value: ctx,
+      enumerable: false,
+      configurable: true,
+    })
+    Object.defineProperty(result, PATH, {
+      value: path,
+      enumerable: false,
+      configurable: true,
+    })
+  }
+
+  /**
+   * Attach a method that does not show up among a ref's own enumerable keys.
+   *
+   * A product ref exposes its schema fields as properties, so an enumerable
+   * `set` would appear alongside them — in `Object.keys(ref)`, in a spread, in
+   * anything that walks the ref's shape. `defineProperty` keeps the two apart.
+   *
+   * The assertion signature is what lets the caller keep the member in its
+   * type afterwards, which a plain `void` helper cannot do.
+   */
+  function defineMethod<T extends object, K extends string, F>(
+    target: T,
+    name: K,
+    fn: F,
+  ): asserts target is T & { readonly [P in K]: F } {
+    Object.defineProperty(target, name, {
+      value: fn,
+      enumerable: false,
+      configurable: true,
+    })
   }
 
   return {
@@ -839,41 +855,31 @@ export function withWritable<A>(
     // Every node dispatches at its own path — no upward reference.
 
     // ---------------------------------------------------------------------
-    // A note on `base.X(...) as any`, which appears in every case below.
+    // Each case adds members to the carrier the layer below produced.
+    // `Object.assign` types that — `<T, U>(target: T, source: U): T & U` — and
+    // `defineMethod` does it for members that must stay off a ref's enumerable
+    // keys. Assigning to a property of a value typed as the parameter `A` is a
+    // type error, which is why these used to open with `as any`.
     //
-    // Each case takes the value the base interpreter produced and adds members
-    // to it, then returns it as `A & Has…`. Expressing that in the type system
-    // needs a way to say "an `A`, plus these members, still an `A`" — and `A`
-    // is the interpreter's carrier type parameter, so this is a statement
-    // *about* a type variable. TypeScript has no higher-kinded types, so it
-    // cannot be written.
-    //
-    // These sites sit inside the interpreter's generic recursion, which is
-    // where `TS2589` ("type instantiation is excessively deep") originates in
-    // this codebase; `@kyneta/exchange` already carries workarounds for it. An
-    // augmentation helper is the fix, and it belongs in its own change with its
-    // own depth budget rather than riding along with cast cleanup.
-    //
-    // Some of these are load-bearing for a second, unrelated reason: a map ref
-    // is proxy-backed, so plain assignment would hit a `set` trap and the code
-    // uses `Object.defineProperty`. Those stay regardless of what the types
-    // eventually allow.
+    // Cases that delegate to an `install…WriteOps` helper still gain nothing
+    // in their own type: those helpers take `result: any` and are typed in
+    // their own modules, not here.
     // ---------------------------------------------------------------------
     scalar(
       ctx: WritableContext,
       path: Path,
       schema: ScalarSchema,
     ): A & HasTransact {
-      const result = base.scalar(ctx, path, schema) as any
-
-      result.set = (value: unknown): void => {
-        // `own` copies the caller's object so the op keeps a value rather than a
-        // view. Without it, a caller reusing the object it passed would rewrite what
-        // subscribers see, with no write recorded and no changeset emitted. The store
-        // takes its own copy separately, at `ownedForStore`.
-        const change = replaceChange(own(value))
-        ctx.dispatch(path, change)
-      }
+      const result = Object.assign(base.scalar(ctx, path, schema), {
+        set: (value: unknown): void => {
+          // `own` copies the caller's object so the op keeps a value rather than a
+          // view. Without it, a caller reusing the object it passed would rewrite what
+          // subscribers see, with no write recorded and no changeset emitted. The store
+          // takes its own copy separately, at `ownedForStore`.
+          const change = replaceChange(own(value))
+          ctx.dispatch(path, change)
+        },
+      })
 
       attachTransact(result, ctx, path)
       return result
@@ -888,19 +894,15 @@ export function withWritable<A>(
       schema: ProductSchema,
       fields: Readonly<Record<string, () => A>>,
     ): A & HasTransact {
-      const result = base.product(ctx, path, schema, fields) as any
+      const result = base.product(ctx, path, schema, fields)
 
-      Object.defineProperty(result, "set", {
-        value: (value: unknown): void => {
-          // `own` copies the caller's object so the op keeps a value rather than a
-          // view. Without it, a caller reusing the object it passed would rewrite what
-          // subscribers see, with no write recorded and no changeset emitted. The store
-          // takes its own copy separately, at `ownedForStore`.
-          const change = replaceChange(own(value))
-          ctx.dispatch(path, change)
-        },
-        enumerable: false,
-        configurable: true,
+      defineMethod(result, "set", (value: unknown): void => {
+        // `own` copies the caller's object so the op keeps a value rather than a
+        // view. Without it, a caller reusing the object it passed would rewrite what
+        // subscribers see, with no write recorded and no changeset emitted. The store
+        // takes its own copy separately, at `ownedForStore`.
+        const change = replaceChange(own(value))
+        ctx.dispatch(path, change)
       })
 
       attachTransact(result, ctx, path)
@@ -915,7 +917,7 @@ export function withWritable<A>(
       schema: SequenceSchema,
       item: (index: number) => A,
     ): A & HasTransact {
-      const result = base.sequence(ctx, path, schema, item) as any
+      const result = base.sequence(ctx, path, schema, item)
       installListWriteOps(result, ctx, path)
       attachTransact(result, ctx, path)
       return result
@@ -929,7 +931,7 @@ export function withWritable<A>(
       schema: MapSchema,
       item: (key: string) => A,
     ): A & HasTransact {
-      const result = base.map(ctx, path, schema, item) as any
+      const result = base.map(ctx, path, schema, item)
       installKeyedWriteOps(result, ctx, path)
       attachTransact(result, ctx, path)
       return result
@@ -958,7 +960,7 @@ export function withWritable<A>(
       path: Path,
       schema: TextSchema,
     ): A & HasTransact {
-      const result = base.text(ctx, path, schema) as any
+      const result = base.text(ctx, path, schema)
       installTextWriteOps(result, ctx, path)
       attachTransact(result, ctx, path)
       return result
@@ -972,15 +974,14 @@ export function withWritable<A>(
       path: Path,
       schema: CounterSchema,
     ): A & HasTransact {
-      const result = base.counter(ctx, path, schema) as any
-
-      result.increment = (n: number = 1): void => {
-        ctx.dispatch(path, incrementChange(n))
-      }
-
-      result.decrement = (n: number = 1): void => {
-        ctx.dispatch(path, incrementChange(-n))
-      }
+      const result = Object.assign(base.counter(ctx, path, schema), {
+        increment: (n: number = 1): void => {
+          ctx.dispatch(path, incrementChange(n))
+        },
+        decrement: (n: number = 1): void => {
+          ctx.dispatch(path, incrementChange(-n))
+        },
+      })
 
       attachTransact(result, ctx, path)
       return result
@@ -997,7 +998,7 @@ export function withWritable<A>(
       schema: SetSchema,
       item: (key: string) => A,
     ): A & HasTransact {
-      const result = base.set(ctx, path, schema, item) as any
+      const result = base.set(ctx, path, schema, item)
       installSetWriteOps(result, ctx, path)
       attachTransact(result, ctx, path)
       return result
@@ -1029,7 +1030,7 @@ export function withWritable<A>(
       schema: MovableSequenceSchema,
       item: (index: number) => A,
     ): A & HasTransact {
-      const result = base.movable(ctx, path, schema, item) as any
+      const result = base.movable(ctx, path, schema, item)
       installListWriteOps(result, ctx, path)
       attachTransact(result, ctx, path)
       return result
@@ -1042,7 +1043,7 @@ export function withWritable<A>(
       path: Path,
       schema: RichTextSchema,
     ): A & HasTransact {
-      const result = base.richtext(ctx, path, schema) as any
+      const result = base.richtext(ctx, path, schema)
       installRichTextWriteOps(result, ctx, path)
       attachTransact(result, ctx, path)
       return result
