@@ -16,6 +16,12 @@
 - **Type guards for six symbol-keyed protocols** (`@kyneta/schema`). `hasSubstrate`, `hasBackingDoc`, `hasMigrationChain`, `hasPopulated` and `hasDeleted`, each with its `Has…` interface, following `hasChangefeed`'s established shape. `hasTransact` already existed. Reaching these slots previously meant `(x as any)[SYMBOL]` at each call site, which switched off checking for the whole expression rather than just the property access.
 - **Per-kind schema guards** (`@kyneta/schema`). `isScalarSchema`, `isProductSchema`, `isSequenceSchema`, `isMapSchema`, `isSetSchema`, `isTreeSchema`, `isMovableSchema`, `isTextSchema`, `isCounterSchema` and `isRichTextSchema` narrow the `Schema` union on its `[KIND]` discriminant, as `isMapChange` and siblings already did for `ChangeBase`. There is deliberately no `isSumSchema`: three interfaces carry `[KIND]: "sum"`, so the discriminant alone does not identify one type.
 
+- **`markRead` and `markCaching`** (`@kyneta/schema`). Assertion functions that claim a carrier's phantom capability brand. Both have empty bodies, which is the honest shape: the brands are declared but never assigned, so they have no runtime representation and nothing structural can produce them. Exported alongside `HasRead` and `HasCaching`.
+
+## Changed
+
+- **`withWritable` requires an object carrier** (`@kyneta/schema`). Its type parameter is now `A extends object`, which is what lets the interpreter layers express result augmentation instead of asserting it. `object` admits functions, and every carrier the interpreter produces is one or the other, so no in-repo usage changes. A custom interpreter layer instantiating `withWritable` with a non-object carrier would need updating — there is no such thing in practice, since a carrier must hold properties to be useful.
+
 ## Removed
 
 - **The changefeed notification engine is no longer exported** (`@kyneta/schema`). `planNotifications` (now `planDelivery`, internal), `deliverNotifications`, `NotificationPlan`, `attachChangefeed` and `withChangefeed` were public with no importer outside the package. Compose the observation layer with `observation`, which is what the interpreter-stack documentation already pointed at. `POPULATED`, `populated`, `populatedFeed` and `expandMapOpsToLeaves` are unchanged — `POPULATED` is kept deliberately even though nothing external imports it, because removing a protocol symbol would foreclose implementing that protocol outside the package.

@@ -193,10 +193,6 @@ export const observation: InterpreterLayer<
 export const tracking: InterpreterLayer<RefContext, RefContext> = {
   name: "tracking",
   transform(base) {
-    // `withTracking` returns an interpreter whose carrier gains members, and
-    // `InterpreterLayer` describes the transform without a way to say the
-    // output carrier extends the input one. That needs higher-kinded types —
-    // the same limit documented at length in `writable.ts`.
-    return withTracking(base) as any
+    return withTracking(base)
   },
 }

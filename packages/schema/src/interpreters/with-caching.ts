@@ -49,6 +49,7 @@ import type {
 import type { BatchOptions } from "../substrate.js"
 
 import type { HasCaching, HasNavigation } from "./bottom.js"
+import { markCaching } from "./bottom.js"
 import { installKeyedCaching } from "./keyed-helpers.js"
 import { installSequenceCaching } from "./sequence-helpers.js"
 
@@ -277,11 +278,7 @@ export function withCaching<A extends HasNavigation>(
     ): A & HasCaching {
       // Downcast thunks for the base interpreter
       const baseFields = fields as Readonly<Record<string, () => A>>
-      // `as any`: augmenting the base interpreter's result with more members
-      // and returning it as `A & …`. That is a statement about the carrier
-      // type parameter `A`, which needs higher-kinded types to express — see
-      // the longer note in `writable.ts`.
-      const result = base.product(ctx, path, schema, baseFields) as any
+      const result = base.product(ctx, path, schema, baseFields)
 
       // Build per-field memoization state.
       // Skip the discriminant field — it's a raw store read from
@@ -320,14 +317,18 @@ export function withCaching<A extends HasNavigation>(
         }
       }
 
-      // Attach [INVALIDATE] on the ref (public API, direct use)
-      result[INVALIDATE] = invalidateProduct
+      // Attach [INVALIDATE] on the ref (public API, direct use).
+      // `HasCaching` declares this slot optional — not every node kind gets a
+      // cache — so it is attached here rather than being part of the brand.
+      ;(result as { [INVALIDATE]?: (change: ChangeBase) => void })[INVALIDATE] =
+        invalidateProduct
 
       // Register in the prepare pipeline (writable stacks only)
       const handlers = ensureCacheWiring(ctx)
       registerCacheHandler(handlers, path, path, invalidateProduct)
 
-      return result as A & HasCaching
+      markCaching(result)
+      return result
     },
 
     // --- Sequence ---------------------------------------------------------------

@@ -162,6 +162,20 @@ export function markRead<T>(carrier: T): asserts carrier is T & HasRead {
 }
 
 /**
+ * Mark a carrier as cache-enabled.
+ *
+ * The counterpart to {@link markRead}, and empty for the same reason:
+ * `HasCaching` carries a phantom brand that has no runtime existence, so
+ * claiming it is a statement of intent rather than a fact about the object.
+ * The `[INVALIDATE]` slot it also declares is optional, and is attached
+ * separately by `withCaching` where a node actually gets a cache.
+ */
+export function markCaching<T>(carrier: T): asserts carrier is T & HasCaching {
+  // Intentionally empty — see {@link markRead}.
+  void carrier
+}
+
+/**
  * A carrier that has child caching and change-driven cache invalidation.
  * Extends `HasNavigation`.
  *
