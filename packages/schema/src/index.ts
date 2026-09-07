@@ -471,8 +471,18 @@ export type {
 // Schema — unified recursive grammar (backend-agnostic)
 export {
   buildVariantMap,
+  isCounterSchema,
   isJsonBoundary,
+  isMapSchema,
+  isMovableSchema,
   isNullableSum,
+  isProductSchema,
+  isRichTextSchema,
+  isScalarSchema,
+  isSequenceSchema,
+  isSetSchema,
+  isTextSchema,
+  isTreeSchema,
   JSON_BOUNDARY,
   KIND,
   LAWS,

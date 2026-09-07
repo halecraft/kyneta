@@ -53,6 +53,12 @@ import {
   hasBackingDoc,
   invert,
   isJsonBoundary,
+  isMapSchema,
+  isMovableSchema,
+  isProductSchema,
+  isSequenceSchema,
+  isSetSchema,
+  isTreeSchema,
   KIND,
   type MarkConfig,
   ownedForStore,
@@ -917,16 +923,16 @@ function collectMarkConfigs(schema: SchemaNode): MarkConfig {
         }
         result[name] = config
       }
-    } else if (s[KIND] === "product") {
-      for (const fieldSchema of Object.values((s as any).fields)) {
-        walk(fieldSchema as SchemaNode)
+    } else if (isProductSchema(s)) {
+      for (const fieldSchema of Object.values(s.fields)) {
+        walk(fieldSchema)
       }
-    } else if (s[KIND] === "sequence" || s[KIND] === "movable") {
-      walk((s as any).item)
-    } else if (s[KIND] === "map" || s[KIND] === "set") {
-      walk((s as any).item)
-    } else if (s[KIND] === "tree") {
-      walk((s as any).item)
+    } else if (isSequenceSchema(s) || isMovableSchema(s)) {
+      walk(s.item)
+    } else if (isMapSchema(s) || isSetSchema(s)) {
+      walk(s.item)
+    } else if (isTreeSchema(s)) {
+      walk(s.item)
     }
     // scalar, text, counter, sum — no recursion needed (leaves or no richtext children in sums)
   }

@@ -722,8 +722,14 @@ function discriminatedSum<D extends string, V extends PlainProductSchema[]>(
   const variantMap = buildVariantMap(discriminant, variants)
   // Stamp each variant with the discriminant key so interpreter layers
   // can identify and special-case the discriminant field at runtime.
+  //
+  // `discriminantKey` is declared `readonly`, which describes the schema as
+  // callers see it. This is the one place still assembling it: the variants
+  // are built before the sum that gives them a discriminant, so the field is
+  // filled in afterwards. The assertion drops `readonly` and nothing else —
+  // it does not stop checking that the value is a string.
   for (const variant of variants) {
-    ;(variant as any).discriminantKey = discriminant
+    ;(variant as { discriminantKey?: string }).discriminantKey = discriminant
   }
   return withPlainModifiers({
     [KIND]: "sum",
@@ -1077,6 +1083,68 @@ export function structuralKind(schema: Schema): StructuralKind {
     default:
       return schema[KIND]
   }
+}
+
+// ---------------------------------------------------------------------------
+// Per-kind guards — narrowing the Schema union
+// ---------------------------------------------------------------------------
+
+/**
+ * `Schema` is a union discriminated on `[KIND]`, exactly as `ChangeBase` is
+ * discriminated on `type`. These are its narrowing guards, and they follow
+ * `isMapChange` and siblings in `change.ts` deliberately: same one-line body,
+ * same naming, so a reader who knows one knows both.
+ *
+ * They exist because the alternative in use was `(s as any).fields`, which
+ * reaches the property by switching off checking for the whole expression —
+ * including whether `s` is a schema at all, and what the field's type is. A
+ * guard reaches the same property while keeping both.
+ *
+ * `sum` deliberately has no guard here. Three different interfaces carry
+ * `[KIND]: "sum"` — positional, discriminated and the internal form — so the
+ * discriminant alone does not identify one type, and a guard claiming
+ * otherwise would narrow to something the value might not be.
+ */
+export function isScalarSchema(schema: Schema): schema is ScalarSchema {
+  return schema[KIND] === "scalar"
+}
+
+export function isProductSchema(schema: Schema): schema is ProductSchema {
+  return schema[KIND] === "product"
+}
+
+export function isSequenceSchema(schema: Schema): schema is SequenceSchema {
+  return schema[KIND] === "sequence"
+}
+
+export function isMapSchema(schema: Schema): schema is MapSchema {
+  return schema[KIND] === "map"
+}
+
+export function isSetSchema(schema: Schema): schema is SetSchema {
+  return schema[KIND] === "set"
+}
+
+export function isTreeSchema(schema: Schema): schema is TreeSchema {
+  return schema[KIND] === "tree"
+}
+
+export function isMovableSchema(
+  schema: Schema,
+): schema is MovableSequenceSchema {
+  return schema[KIND] === "movable"
+}
+
+export function isTextSchema(schema: Schema): schema is TextSchema {
+  return schema[KIND] === "text"
+}
+
+export function isCounterSchema(schema: Schema): schema is CounterSchema {
+  return schema[KIND] === "counter"
+}
+
+export function isRichTextSchema(schema: Schema): schema is RichTextSchema {
+  return schema[KIND] === "richtext"
 }
 
 /**

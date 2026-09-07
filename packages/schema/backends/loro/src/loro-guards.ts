@@ -79,3 +79,26 @@ export function isLoroDoc(value: unknown): value is LoroDoc {
     typeof value.commit === "function"
   )
 }
+
+// ---------------------------------------------------------------------------
+// isPlainProjectable — container with a plain-value projection
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns true if `value` is a Loro container that can project itself to a
+ * plain JS value via `.toJSON()`.
+ *
+ * Narrower than `hasKind`, and deliberately separate from it. `hasKind` answers
+ * "is this a Loro container?" and several call sites only ever ask that, so
+ * widening it would make them assert a method they never call. This one is for
+ * the sites that go on to serialize, and it checks the method it promises —
+ * `loro-crdt` types container values loosely enough that nothing upstream
+ * guarantees `toJSON` is there.
+ */
+export function isPlainProjectable(
+  value: unknown,
+): value is { kind(): string; toJSON(): unknown } {
+  return (
+    hasKind(value) && "toJSON" in value && typeof value.toJSON === "function"
+  )
+}

@@ -285,5 +285,8 @@ export function hasRecursiveChangefeed<
 >(value: unknown): value is HasRecursiveChangefeed<S, A> {
   if (!hasChangefeed(value)) return false
   const cf = value[CHANGEFEED]
-  return typeof (cf as any).subscribeDescendants === "function"
+  return (
+    "subscribeDescendants" in cf &&
+    typeof cf.subscribeDescendants === "function"
+  )
 }

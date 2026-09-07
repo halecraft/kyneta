@@ -30,6 +30,7 @@
 // payloads without schema knowledge.
 
 import type { ChangeBase, MapChange } from "../change.js"
+import { isReplaceChange } from "../change.js"
 import { deepClonePlain } from "../clone.js"
 import { walkPath } from "../fold-path.js"
 import type { Path } from "../interpret.js"
@@ -561,8 +562,8 @@ export function applyChangeToStateTree(
   schema: SchemaNode | undefined,
 ): void {
   if (path.length === 0) {
-    if (change.type === "replace") {
-      const val = (change as any).value
+    if (isReplaceChange(change)) {
+      const val = change.value
       if (typeof val === "object" && val !== null && !Array.isArray(val)) {
         // Deep replace of the whole root (always a product). Decompose so
         // nested registers still land atomically (schema threaded through).
@@ -605,8 +606,8 @@ export function applyChangeToStateTree(
   const key = String(lastSegment.resolve())
   const target = current as Record<string, StateTree>
 
-  if (change.type === "replace") {
-    const val = (change as any).value
+  if (isReplaceChange(change)) {
+    const val = change.value
     if (isDecomposedContainer(val, targetSchema)) {
       const newTree: Record<string, StateTree> = {}
       syncStateTreeToShadow(newTree, val, targetSchema, timestamp)

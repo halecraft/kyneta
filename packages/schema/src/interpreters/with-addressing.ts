@@ -188,7 +188,7 @@ const addressingContextState = new WeakMap<object, AddressingState>()
 function hasPrepare(ctx: RefContext): ctx is RefContext & {
   prepare: (path: Path, change: ChangeBase, options?: BatchOptions) => void
 } {
-  return "prepare" in ctx && typeof (ctx as any).prepare === "function"
+  return "prepare" in ctx && typeof ctx.prepare === "function"
 }
 
 /**

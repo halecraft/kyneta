@@ -37,6 +37,8 @@ import {
   expandMapOpsToLeaves,
   extendSchemaPathKey,
   fieldAbsPath,
+  isMapSchema,
+  isSetSchema,
   KIND,
   type MaterializedNode,
   materializeValue,
@@ -62,7 +64,7 @@ import type {
   TreeDiff,
   Value,
 } from "loro-crdt"
-import { hasKind, isLoroContainer } from "./loro-guards.js"
+import { hasKind, isLoroContainer, isPlainProjectable } from "./loro-guards.js"
 import { PROPS_KEY, resolveContainer } from "./loro-resolve.js"
 
 // ---------------------------------------------------------------------------
@@ -797,9 +799,9 @@ function loroPathToKynetaPath(
       if (kind === "product") {
         path = path.field(leaf)
         schema = schema.fields[leaf]
-      } else if (kind === "map" || kind === "set") {
+      } else if (schema && (isMapSchema(schema) || isSetSchema(schema))) {
         path = path.entry(leaf)
-        schema = (schema as any).item
+        schema = schema.item
       } else {
         path = path.entry(leaf)
         schema = undefined
@@ -925,8 +927,8 @@ function listDiffToChange(diff: ListDiff): SequenceChange {
       if (delta.insert !== undefined) {
         // Convert container objects to plain values
         const items = (delta.insert as unknown[]).map(item => {
-          if (hasKind(item)) {
-            return (item as any).toJSON()
+          if (isPlainProjectable(item)) {
+            return item.toJSON()
           }
           return item
         })
@@ -1034,7 +1036,9 @@ function treeDiffToChange(diff: TreeDiff): TreeChange {
             index: item.index,
           }
         default:
-          throw new Error(`Unknown tree action: ${(item as any).action}`)
+          throw new Error(
+            `Unknown tree action: ${(item as { action?: unknown }).action}`,
+          )
       }
     },
   )
