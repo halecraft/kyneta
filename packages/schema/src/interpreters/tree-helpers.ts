@@ -30,12 +30,19 @@ import type { WritableContext } from "./writable.js"
  * flat shadow returns numeric indices, not node ids, so trees need this
  * topology-aware path instead of `installKeyedNavigation`.
  */
-export function installTreeNavigation(
-  result: any,
+export interface TreeNavigation {
+  readonly node: (id: string) => unknown
+  readonly has: (id: string) => boolean
+  readonly ids: () => string[]
+  readonly size: number
+}
+
+export function installTreeNavigation<T extends object>(
+  result: T,
   ctx: RefContext,
   path: Path,
   node: (id: string) => unknown,
-): void {
+): asserts result is T & TreeNavigation {
   Object.defineProperty(result, "node", {
     value: (id: string): unknown => {
       const topology = ctx.reader.forestTopology(path)
@@ -86,12 +93,18 @@ export function installTreeNavigation(
  * tree-version bump). The snapshot matches `Plain<TreeSchema<I>>` so
  * `doc.tree()` and the wire format agree.
  */
-export function installTreeReadable(
-  result: any,
+export interface TreeReadable {
+  readonly roots: readonly ForestNode<unknown>[]
+  readonly [Symbol.iterator]: () => IterableIterator<ForestNode<unknown>>
+  readonly [CALL]: () => unknown
+}
+
+export function installTreeReadable<T extends object>(
+  result: T,
   ctx: RefContext,
   path: Path,
   node: (id: string) => unknown,
-): void {
+): asserts result is T & TreeReadable {
   // Each ForestNode's `data` is the per-node ref (from the `node` closure),
   // not the per-node plain value — `.roots[i].data.label()` keeps working
   // because `data` is a live ref carrying its own [CALL] surface.
@@ -134,23 +147,28 @@ export function installTreeReadable(
   // `()` returns the flat-forest plain shape (`Plain<TreeSchema<I>>`),
   // with each node's `data` forced to plain via its `[CALL]`. Forcing here
   // (instead of returning live refs) is what makes `ref()` a snapshot.
-  result[CALL] = (): unknown => {
-    const topology = ctx.reader.forestTopology(path)
-    return topology.map(t => {
-      const childRef = node(t.id)
-      const data =
-        childRef !== undefined &&
-        typeof (childRef as { [CALL]?: () => unknown })[CALL] === "function"
-          ? (childRef as { [CALL]: () => unknown })[CALL]()
-          : childRef
-      return {
-        id: t.id,
-        parent: t.parent,
-        index: t.index,
-        data,
-      }
-    })
-  }
+  Object.defineProperty(result, CALL, {
+    enumerable: true,
+    configurable: true,
+    writable: true,
+    value: (): unknown => {
+      const topology = ctx.reader.forestTopology(path)
+      return topology.map(t => {
+        const childRef = node(t.id)
+        const data =
+          childRef !== undefined &&
+          typeof (childRef as { [CALL]?: () => unknown })[CALL] === "function"
+            ? (childRef as { [CALL]: () => unknown })[CALL]()
+            : childRef
+        return {
+          id: t.id,
+          parent: t.parent,
+          index: t.index,
+          data,
+        }
+      })
+    },
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -170,11 +188,24 @@ export function installTreeReadable(
  * the pre-transaction topology and produces an empty instruction list.
  * Split such cases across separate transactions.
  */
-export function installTreeWriteOps(
-  result: any,
+export interface TreeWriteOps {
+  readonly create: (opts?: {
+    parent?: string | null
+    index?: number
+    data?: Record<string, unknown>
+  }) => string
+  readonly delete: (id: string) => void
+  readonly move: (
+    id: string,
+    opts: { parent: string | null; index: number },
+  ) => void
+}
+
+export function installTreeWriteOps<T extends object>(
+  result: T,
   ctx: WritableContext,
   path: Path,
-): void {
+): asserts result is T & TreeWriteOps {
   function readTopology() {
     return ctx.reader.forestTopology(path)
   }

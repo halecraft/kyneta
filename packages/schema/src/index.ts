@@ -191,7 +191,18 @@ export {
   bottomInterpreter,
   CALL,
   makeCarrier,
+  markCaching,
+  markNavigation,
+  markRead,
 } from "./interpreters/bottom.js"
+// Carrier surfaces — what each `install…` helper attaches. Exported so a
+// custom interpreter layer can name the same shapes rather than redeclaring
+// them; the public ref types come from the facade's `DocRef` family instead.
+export type {
+  KeyedNavigation,
+  KeyedReadable,
+  KeyedWriteOps,
+} from "./interpreters/keyed-helpers.js"
 // Built-in interpreters
 // Materialize interpreter — generic CRDT→PlainState materialization
 export type {
@@ -217,8 +228,21 @@ export type {
   ReadableSequenceRef,
   ReadableSetRef,
 } from "./interpreters/readable.js"
+export type {
+  ListWriteOps,
+  RichTextWriteOps,
+  SequenceNavigation,
+  SequenceReadable,
+  TextWriteOps,
+} from "./interpreters/sequence-helpers.js"
 // Positional algebra — cursor-positioning kernel
 export { at } from "./interpreters/sequence-helpers.js"
+export type { SetReadable, SetWriteOps } from "./interpreters/set-helpers.js"
+export type {
+  TreeNavigation,
+  TreeReadable,
+  TreeWriteOps,
+} from "./interpreters/tree-helpers.js"
 export type { ValidateContext } from "./interpreters/validate.js"
 // Validate interpreter — schema-driven validation with collecting errors
 export {

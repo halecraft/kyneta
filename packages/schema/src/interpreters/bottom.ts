@@ -125,6 +125,33 @@ export interface HasNavigation extends HasCall {
 }
 
 /**
+ * Strip `readonly` so an installer can fill in the members it is declaring.
+ *
+ * The surfaces installers attach are declared `readonly` because that is how
+ * callers should see them — nobody outside should be reassigning a ref's
+ * `.push`. The installer itself has to write them once, and this names that
+ * exception rather than reaching for `any`.
+ *
+ * Deliberately not called `Writable`: that name is taken by the public
+ * writable-document ref type, and the two have nothing to do with each other.
+ */
+export type Mutable<T> = { -readonly [K in keyof T]: T[K] }
+
+/**
+ * Mark a carrier as navigable.
+ *
+ * One of three brand markers — see {@link markRead} for why the body is empty.
+ * `HasNavigation`'s brand is what lets `withCaching` require navigation as a
+ * precondition without describing the navigation surface structurally.
+ */
+export function markNavigation<T>(
+  carrier: T,
+): asserts carrier is T & HasNavigation {
+  // Intentionally empty — see {@link markRead}.
+  void carrier
+}
+
+/**
  * A carrier whose `[CALL]` slot has been filled with a reader — calling
  * the carrier returns a meaningful value. Extends `HasNavigation`.
  *

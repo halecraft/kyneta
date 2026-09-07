@@ -36,7 +36,7 @@ import { richTextChange, sequenceChange, textChange } from "../change.js"
 import { isPropertyHost } from "../guards.js"
 import type { Path } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
-import { CALL } from "./bottom.js"
+import { CALL, type Mutable } from "./bottom.js"
 import type { WritableContext } from "./writable.js"
 
 // ---------------------------------------------------------------------------
@@ -68,20 +68,28 @@ export const at = <T>(index: number, op: T): (T | { retain: number })[] =>
  * uses `richTextChange` instead of `textChange`. What IS shared is
  * `at()`, the cursor-positioning primitive.
  */
-export function installTextWriteOps(
-  result: any,
+export interface TextWriteOps {
+  readonly insert: (index: number, content: string) => void
+  readonly delete: (index: number, length: number) => void
+  readonly update: (content: string) => void
+}
+
+export function installTextWriteOps<T extends object>(
+  result: T,
   ctx: WritableContext,
   path: Path,
-): void {
-  result.insert = (index: number, content: string): void => {
+): asserts result is T & TextWriteOps {
+  const ops = result as Mutable<TextWriteOps>
+
+  ops.insert = (index: number, content: string): void => {
     ctx.dispatch(path, textChange(at(index, { insert: content })))
   }
 
-  result.delete = (index: number, length: number): void => {
+  ops.delete = (index: number, length: number): void => {
     ctx.dispatch(path, textChange(at(index, { delete: length })))
   }
 
-  result.update = (content: string): void => {
+  ops.update = (content: string): void => {
     // Read current text length via store inspection (not carrier call)
     // so navigate+write stacks work without a reading layer.
     const current = ctx.reader.read(path)
@@ -108,12 +116,31 @@ export function installTextWriteOps(
  * optional marks and uses `richTextChange` instead of `textChange`.
  * What IS shared is `at()`, the cursor-positioning primitive.
  */
-export function installRichTextWriteOps(
-  result: any,
+export interface RichTextWriteOps {
+  readonly insert: (
+    index: number,
+    content: string,
+    marks?: Record<string, unknown>,
+  ) => void
+  readonly delete: (index: number, length: number) => void
+  readonly update: (content: string) => void
+  readonly mark: (
+    start: number,
+    end: number,
+    key: string,
+    value: unknown,
+  ) => void
+  readonly unmark: (start: number, end: number, key: string) => void
+}
+
+export function installRichTextWriteOps<T extends object>(
+  result: T,
   ctx: WritableContext,
   path: Path,
-): void {
-  result.insert = (
+): asserts result is T & RichTextWriteOps {
+  const ops = result as Mutable<RichTextWriteOps>
+
+  ops.insert = (
     index: number,
     content: string,
     marks?: Record<string, unknown>,
@@ -126,11 +153,11 @@ export function installRichTextWriteOps(
     )
   }
 
-  result.delete = (index: number, length: number): void => {
+  ops.delete = (index: number, length: number): void => {
     ctx.dispatch(path, richTextChange(at(index, { delete: length })))
   }
 
-  result.update = (content: string): void => {
+  ops.update = (content: string): void => {
     const current = ctx.reader.read(path)
     const currentLength = Array.isArray(current)
       ? (current as Array<{ text: string }>).reduce(
@@ -147,7 +174,7 @@ export function installRichTextWriteOps(
     )
   }
 
-  result.mark = (
+  ops.mark = (
     start: number,
     end: number,
     key: string,
@@ -161,7 +188,7 @@ export function installRichTextWriteOps(
     )
   }
 
-  result.unmark = (start: number, end: number, key: string): void => {
+  ops.unmark = (start: number, end: number, key: string): void => {
     ctx.dispatch(
       path,
       richTextChange(
@@ -182,22 +209,30 @@ export function installRichTextWriteOps(
  * for annotated lists (future). Both would be added as additional wiring
  * functions, not modifications to this one.
  */
-export function installListWriteOps(
-  result: any,
+export interface ListWriteOps {
+  readonly push: (...items: unknown[]) => void
+  readonly insert: (index: number, ...items: unknown[]) => void
+  readonly delete: (index: number, count?: number) => void
+}
+
+export function installListWriteOps<T extends object>(
+  result: T,
   ctx: WritableContext,
   path: Path,
-): void {
-  result.push = (...items: unknown[]): void => {
+): asserts result is T & ListWriteOps {
+  const ops = result as Mutable<ListWriteOps>
+
+  ops.push = (...items: unknown[]): void => {
     const length = ctx.reader.arrayLength(path)
     const change = sequenceChange([{ retain: length }, { insert: items }])
     ctx.dispatch(path, change)
   }
 
-  result.insert = (index: number, ...items: unknown[]): void => {
+  ops.insert = (index: number, ...items: unknown[]): void => {
     ctx.dispatch(path, sequenceChange(at(index, { insert: items })))
   }
 
-  result.delete = (index: number, count: number = 1): void => {
+  ops.delete = (index: number, count: number = 1): void => {
     ctx.dispatch(path, sequenceChange(at(index, { delete: count })))
   }
 }
@@ -207,29 +242,46 @@ export function installListWriteOps(
 // ---------------------------------------------------------------------------
 
 /** Install the CALL slot (array snapshot) and `.get(i)` onto a sequence ref. */
-export function installSequenceReadable(
-  result: any,
+export interface SequenceReadable {
+  readonly [CALL]: () => unknown[]
+  readonly get: (index: number) => unknown
+}
+
+export function installSequenceReadable<T extends object>(
+  result: T,
   ctx: RefContext,
   path: Path,
-): void {
+): asserts result is T & SequenceReadable {
+  // `.at` comes from `installSequenceNavigation`, one layer further in. Layers
+  // describe each other with phantom brands rather than structurally, so it is
+  // not visible in `T` — named here rather than hidden behind `any`.
+  const navigable = result as { at: (index: number) => unknown }
+
   // Snapshot goes through result.at(i) — not the raw item closure —
   // to respect caching/addressing identity.
-  result[CALL] = () => {
-    const len = ctx.reader.arrayLength(path)
-    const snapshot: unknown[] = []
-    for (let i = 0; i < len; i++) {
-      const child: unknown = result.at(i)
-      snapshot.push(
-        typeof child === "function" ? (child as () => unknown)() : child,
-      )
-    }
-    return snapshot
-  }
+  Object.defineProperty(result, CALL, {
+    value: (): unknown[] => {
+      const len = ctx.reader.arrayLength(path)
+      const snapshot: unknown[] = []
+      for (let i = 0; i < len; i++) {
+        const child: unknown = navigable.at(i)
+        snapshot.push(
+          typeof child === "function" ? (child as () => unknown)() : child,
+        )
+      }
+      return snapshot
+    },
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  })
 
   Object.defineProperty(result, "get", {
     value: (index: number): unknown => {
-      const child = result.at(index)
-      return child !== undefined ? child() : undefined
+      const child = navigable.at(index)
+      return typeof child === "function"
+        ? (child as () => unknown)()
+        : undefined
     },
     enumerable: false,
     configurable: true,
@@ -241,12 +293,21 @@ export function installSequenceReadable(
 // ---------------------------------------------------------------------------
 
 /** Install positional navigation (`.at(i)`, `.length`, `[Symbol.iterator]`) onto a sequence ref. */
-export function installSequenceNavigation(
-  result: any,
+export interface SequenceNavigation {
+  readonly at: (index: number) => unknown
+  readonly length: number
+  readonly [Symbol.iterator]: () => IterableIterator<unknown>
+}
+
+export function installSequenceNavigation<T extends object>(
+  result: T,
   ctx: RefContext,
   path: Path,
   item: (index: number) => unknown,
-): void {
+): asserts result is T & SequenceNavigation {
+  // Iterate through the carrier's own `.at`, so a later caching or addressing
+  // layer that overrides it is respected.
+  const navigable = result as Mutable<SequenceNavigation>
   Object.defineProperty(result, "at", {
     value: (index: number): unknown => {
       const len = ctx.reader.arrayLength(path)
@@ -265,10 +326,10 @@ export function installSequenceNavigation(
     configurable: true,
   })
 
-  result[Symbol.iterator] = function* () {
+  navigable[Symbol.iterator] = function* (): IterableIterator<unknown> {
     const len = ctx.reader.arrayLength(path)
     for (let i = 0; i < len; i++) {
-      yield result.at(i)
+      yield navigable.at(i)
     }
   }
 }
@@ -279,7 +340,7 @@ export function installSequenceNavigation(
 
 /** Expose the address table via a symbol property and register a prepare handler for address advancement. */
 export function installSequenceAddressing(
-  result: any,
+  result: object,
   path: Path,
   addressTableSymbol: symbol,
   getTable: () => unknown,
@@ -308,17 +369,22 @@ export function installSequenceAddressing(
 
 /** Override `.at()` with address-table-backed lookup for stable ref identity across mutations. */
 export function installSequenceCaching(
-  result: any,
+  result: object,
   path: Path,
   addressTableSym: symbol,
   invalidateSym: symbol,
   registerHandler: (path: Path, handler: (change: any) => void) => void,
 ): void {
-  const baseAt = result.at as (index: number) => unknown
+  // Both symbols arrive as parameters, so neither slot can be named in a type.
+  // This helper narrows rather than asserts for that reason.
+  const slots = result as Record<symbol, unknown> & {
+    at: (index: number) => unknown
+  }
+  const baseAt = slots.at
 
   Object.defineProperty(result, "at", {
     value: (index: number): unknown => {
-      const addressTable = result[addressTableSym] as
+      const addressTable = slots[addressTableSym] as
         | {
             byIndex: Map<number, any>
             byId: Map<number, { address: any; ref: unknown }>
@@ -345,7 +411,7 @@ export function installSequenceCaching(
   // layer has nothing to invalidate.
   const invalidateSequence = (_change: any): void => {}
 
-  result[invalidateSym] = invalidateSequence
+  slots[invalidateSym] = invalidateSequence
 
   registerHandler(path, invalidateSequence)
 }

@@ -90,10 +90,18 @@ function emit(carrier: object, aspect: Aspect): void {
 // Accessor-wrapping toolkit
 // ---------------------------------------------------------------------------
 
+/** A carrier seen only through the slot these wrappers replace. */
+type Callable = { [CALL]: (...args: unknown[]) => unknown }
+
 /** Wrap the `[CALL]` slot of a LEAF carrier — calling reports `value`. */
-function wrapLeafCall(result: any): void {
-  const orig = result[CALL] as (...a: unknown[]) => unknown
-  result[CALL] = (...args: unknown[]): unknown => {
+function wrapLeafCall(result: object): void {
+  // These wrappers *replace* an existing member rather than adding one, so
+  // there is nothing for an assertion function to claim — the carrier's type
+  // is unchanged afterwards. Narrowing to the slot being replaced is the whole
+  // of what they need to see.
+  const carrier = result as Callable
+  const orig = carrier[CALL]
+  carrier[CALL] = (...args: unknown[]): unknown => {
     if (currentScope()) emit(result, "value")
     return orig.apply(result, args)
   }
@@ -104,9 +112,10 @@ function wrapLeafCall(result: any): void {
  * `deep` dep, then folds the snapshot with reads suppressed (the `deep` dep
  * subsumes the entire subtree, so per-descendant reports are redundant).
  */
-function wrapCompositeCall(result: any): void {
-  const orig = result[CALL] as (...a: unknown[]) => unknown
-  result[CALL] = (...args: unknown[]): unknown => {
+function wrapCompositeCall(result: object): void {
+  const carrier = result as Callable
+  const orig = carrier[CALL]
+  carrier[CALL] = (...args: unknown[]): unknown => {
     if (!currentScope()) return orig.apply(result, args)
     emit(result, "deep")
     return withoutTracking(() => orig.apply(result, args))
@@ -114,7 +123,7 @@ function wrapCompositeCall(result: any): void {
 }
 
 /** Wrap a method-valued accessor so calling it first reports `aspect`. */
-function wrapMethod(result: any, name: PropertyKey, aspect: Aspect): void {
+function wrapMethod(result: object, name: PropertyKey, aspect: Aspect): void {
   const desc = Object.getOwnPropertyDescriptor(result, name)
   if (!desc || typeof desc.value !== "function") return
   const orig = desc.value as (...a: unknown[]) => unknown
@@ -128,7 +137,7 @@ function wrapMethod(result: any, name: PropertyKey, aspect: Aspect): void {
 }
 
 /** Wrap a getter-valued accessor so reading it first reports `aspect`. */
-function wrapGetter(result: any, name: PropertyKey, aspect: Aspect): void {
+function wrapGetter(result: object, name: PropertyKey, aspect: Aspect): void {
   const desc = Object.getOwnPropertyDescriptor(result, name)
   if (!desc || typeof desc.get !== "function") return
   const origGet = desc.get

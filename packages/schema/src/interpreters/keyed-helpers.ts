@@ -21,11 +21,17 @@ import type { WritableContext } from "./writable.js"
  * Shared by both `map` and `set` kinds — the mutation surface is
  * identical (set a key, delete a key, clear all keys).
  */
-export function installKeyedWriteOps(
-  result: any,
+export interface KeyedWriteOps {
+  readonly set: (key: string, value: unknown) => void
+  readonly delete: (key: string) => void
+  readonly clear: () => void
+}
+
+export function installKeyedWriteOps<T extends object>(
+  result: T,
   ctx: WritableContext,
   path: Path,
-): void {
+): asserts result is T & KeyedWriteOps {
   Object.defineProperty(result, "set", {
     value: (key: string, value: unknown): void => {
       const change = mapChange({ [key]: value })
@@ -62,28 +68,47 @@ export function installKeyedWriteOps(
 // ---------------------------------------------------------------------------
 
 /** Install the CALL slot (record snapshot) and `.get(key)` onto a keyed ref. */
-export function installKeyedReadable(
-  result: any,
+export interface KeyedReadable {
+  readonly [CALL]: () => Record<string, unknown>
+  readonly get: (key: string) => unknown
+}
+
+export function installKeyedReadable<T extends object>(
+  result: T,
   ctx: RefContext,
   path: Path,
-): void {
+): asserts result is T & KeyedReadable {
+  // `.at` was installed by `installKeyedNavigation`, one layer further in.
+  // That surface is not visible in `T`: layers describe each other with
+  // phantom brands (`HasNavigation`) rather than structurally, so the type
+  // cannot carry it across the boundary. Naming the one member being relied on
+  // states the dependency instead of hiding it.
+  const navigable = result as { at: (key: string) => unknown }
+
   // Snapshot goes through result.at(key) — not the raw item closure —
   // to respect caching/addressing identity.
-  result[CALL] = () => {
-    const keys = ctx.reader.keys(path)
-    const snapshot: Record<string, unknown> = {}
-    for (const key of keys) {
-      const child: unknown = result.at(key)
-      snapshot[key] =
-        typeof child === "function" ? (child as () => unknown)() : child
-    }
-    return snapshot
-  }
+  Object.defineProperty(result, CALL, {
+    value: (): Record<string, unknown> => {
+      const keys = ctx.reader.keys(path)
+      const snapshot: Record<string, unknown> = {}
+      for (const key of keys) {
+        const child: unknown = navigable.at(key)
+        snapshot[key] =
+          typeof child === "function" ? (child as () => unknown)() : child
+      }
+      return snapshot
+    },
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  })
 
   Object.defineProperty(result, "get", {
     value: (key: string): unknown => {
-      const child = result.at(key)
-      return child !== undefined ? child() : undefined
+      const child = navigable.at(key)
+      return typeof child === "function"
+        ? (child as () => unknown)()
+        : undefined
     },
     enumerable: false,
     configurable: true,
@@ -91,12 +116,26 @@ export function installKeyedReadable(
 }
 
 /** Install `.at(key)`, `.has()`, `.keys()`, `.size`, `.entries()`, `.values()`, and `[Symbol.iterator]` onto a keyed ref. */
-export function installKeyedNavigation(
-  result: any,
+export interface KeyedNavigation {
+  readonly at: (key: string) => unknown
+  readonly has: (key: string) => boolean
+  readonly keys: () => string[]
+  readonly size: number
+  readonly entries: () => IterableIterator<[string, unknown]>
+  readonly values: () => IterableIterator<unknown>
+  readonly [Symbol.iterator]: () => IterableIterator<[string, unknown]>
+}
+
+export function installKeyedNavigation<T extends object>(
+  result: T,
   ctx: RefContext,
   path: Path,
   item: (key: string) => unknown,
-): void {
+): asserts result is T & KeyedNavigation {
+  // Read back through the carrier rather than calling `item` directly, so
+  // `entries`/`values` respect whatever caching or addressing a later layer
+  // installs over `.at`. Same cross-layer situation as `installKeyedReadable`.
+  const navigable = result as { at: (key: string) => unknown }
   Object.defineProperty(result, "at", {
     value: (key: string): unknown => {
       if (!ctx.reader.hasKey(path, key)) {
@@ -133,7 +172,7 @@ export function installKeyedNavigation(
   Object.defineProperty(result, "entries", {
     value: function* (): IterableIterator<[string, unknown]> {
       for (const key of ctx.reader.keys(path)) {
-        yield [key, result.at(key)]
+        yield [key, navigable.at(key)]
       }
     },
     enumerable: false,
@@ -143,7 +182,7 @@ export function installKeyedNavigation(
   Object.defineProperty(result, "values", {
     value: function* (): IterableIterator<unknown> {
       for (const key of ctx.reader.keys(path)) {
-        yield result.at(key)
+        yield navigable.at(key)
       }
     },
     enumerable: false,
@@ -153,7 +192,7 @@ export function installKeyedNavigation(
   Object.defineProperty(result, Symbol.iterator, {
     value: function* (): IterableIterator<[string, unknown]> {
       for (const key of ctx.reader.keys(path)) {
-        yield [key, result.at(key)]
+        yield [key, navigable.at(key)]
       }
     },
     enumerable: false,
@@ -163,7 +202,7 @@ export function installKeyedNavigation(
 
 /** Expose the address table via a well-known symbol and register a prepare handler for key-based address tracking. */
 export function installKeyedAddressing(
-  result: any,
+  result: object,
   path: Path,
   addressTableSymbol: symbol,
   getTable: () => unknown,
@@ -188,17 +227,23 @@ export function installKeyedAddressing(
 
 /** Override `.at(key)` with address-table-backed lookup and register an invalidation handler. */
 export function installKeyedCaching(
-  result: any,
+  result: object,
   path: Path,
   addressTableSym: symbol,
   invalidateSym: symbol,
   registerHandler: (path: Path, handler: (change: any) => void) => void,
 ): void {
-  const baseAt = result.at as (key: string) => unknown
+  // Both symbols arrive as parameters, so neither the slot being read nor the
+  // one being written can be named in a type. This helper narrows rather than
+  // asserts for that reason — the members it touches are dynamic by design.
+  const slots = result as Record<symbol, unknown> & {
+    at: (key: string) => unknown
+  }
+  const baseAt = slots.at
 
   Object.defineProperty(result, "at", {
     value: (key: string): unknown => {
-      const addressTable = result[addressTableSym] as
+      const addressTable = slots[addressTableSym] as
         | { byKey: Map<string, { address: any; ref: unknown }> }
         | undefined
 
@@ -219,7 +264,7 @@ export function installKeyedCaching(
   // layer has nothing to invalidate.
   const invalidateKeyed = (_change: any): void => {}
 
-  result[invalidateSym] = invalidateKeyed
+  slots[invalidateSym] = invalidateKeyed
 
   registerHandler(path, invalidateKeyed)
 }

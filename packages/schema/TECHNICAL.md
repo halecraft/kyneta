@@ -1384,7 +1384,7 @@ independence bought with four assertions.
 Counts, not a line-by-line inventory, which would go stale immediately.
 `packages/schema` production source, excluding tests and the example app.
 
-10 casts, plus comments that mention `as any` while explaining something and
+10 casts, plus 8 comments that mention `as any` while explaining something and
 are not casts at all. (Counting is easy to get wrong here — see the note on
 `grep` below.)
 
@@ -1462,15 +1462,25 @@ Use a word boundary.
 
 ### The deferred piece
 
-**Typing the write-op installers.** Six cases in `writable.ts` delegate to
-`install…WriteOps` helpers in `sequence-helpers.ts`, `keyed-helpers.ts`,
-`set-helpers.ts` and `tree-helpers.ts`, each still taking `result: any`. The
-members they attach — `push`, `insert`, `delete`, `add`, `mark`, `create`,
-`move` and the rest — are therefore absent from the carrier's type. Each helper
-adds a small fixed set, so converting them to assertion functions is mechanical;
-it is separate only because it touches four modules the interpreter layers do
-not own.
+**Nothing in this category remains.** The installers were typed too — 17
+`install…` helpers across `sequence-helpers.ts`, `keyed-helpers.ts`,
+`set-helpers.ts` and `tree-helpers.ts` that used to take `result: any`. Those
+that *add* members are assertion functions declaring what they attach
+(`ListWriteOps`, `KeyedNavigation`, `TreeReadable` and so on), so a member
+installed in one place is visible in the carrier's type at the call site.
 
-Note that this does not affect the *public* ref types, which come from the
-facade's `DocRef` family rather than from the interpreter's carrier parameter.
-What it costs is checking inside the helpers themselves.
+Four of them still cannot assert: `installKeyedAddressing`,
+`installKeyedCaching`, `installSequenceAddressing` and
+`installSequenceCaching` take the symbol they attach as a *parameter*, so there
+is no member to name in a type. They take `result: object` and narrow
+internally, which is honest about their being dynamic by design.
+
+One structural fact is worth knowing before touching this code. **Layers
+describe each other with phantom brands, not structurally.** `installKeyedReadable`
+calls `.at`, which the navigation layer installed further in — but
+`HasNavigation` is a brand, so that surface is invisible in the type at the
+readable layer. Each such helper names the single member it depends on rather
+than reaching for `any`. Making the brands structural would remove those
+narrowings and is the obvious next question; it would also mean every layer's
+return type carrying its full installed surface, which is where the depth
+budget would get spent.

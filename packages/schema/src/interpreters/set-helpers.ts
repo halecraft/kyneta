@@ -37,17 +37,29 @@ import type { WritableContext } from "./writable.js"
  * `T[]` storage shape directly. Membership is content-equal via
  * `isSameSetMember` (not identity).
  */
-export function installSetReadable(
-  result: any,
+export interface SetReadable {
+  readonly [CALL]: () => unknown[]
+  readonly has: (value: unknown) => boolean
+  readonly size: number
+  readonly [Symbol.iterator]: () => IterableIterator<unknown>
+}
+
+export function installSetReadable<T extends object>(
+  result: T,
   ctx: RefContext,
   path: Path,
-): void {
+): asserts result is T & SetReadable {
   function readMembers(): unknown[] {
     const value = ctx.reader.read(path)
     return Array.isArray(value) ? value : []
   }
 
-  result[CALL] = (): unknown[] => readMembers()
+  Object.defineProperty(result, CALL, {
+    value: (): unknown[] => readMembers(),
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  })
 
   Object.defineProperty(result, "has", {
     value: (value: unknown): boolean =>
@@ -91,11 +103,17 @@ export function installSetReadable(
  * - `.clear()` reads current members and dispatches a single
  *   `setOpChange([], current)`. This is the one place set writes read.
  */
-export function installSetWriteOps(
-  result: any,
+export interface SetWriteOps {
+  readonly add: (value: unknown) => void
+  readonly delete: (value: unknown) => boolean
+  readonly clear: () => void
+}
+
+export function installSetWriteOps<T extends object>(
+  result: T,
   ctx: WritableContext,
   path: Path,
-): void {
+): asserts result is T & SetWriteOps {
   function readMembers(): unknown[] {
     const value = ctx.reader.read(path)
     return Array.isArray(value) ? value : []

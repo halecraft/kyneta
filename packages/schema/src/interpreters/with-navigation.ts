@@ -35,7 +35,12 @@ import type {
   TextSchema,
   TreeSchema,
 } from "../schema.js"
-import { type HasCall, type HasNavigation, makeCarrier } from "./bottom.js"
+import {
+  type HasCall,
+  type HasNavigation,
+  makeCarrier,
+  markNavigation,
+} from "./bottom.js"
 import { installKeyedNavigation } from "./keyed-helpers.js"
 import { installSequenceNavigation } from "./sequence-helpers.js"
 import { installTreeNavigation } from "./tree-helpers.js"
@@ -124,7 +129,8 @@ export function withNavigation<A extends HasCall>(
         }
       }
 
-      return result as A & HasNavigation
+      markNavigation(result)
+      return result
     },
 
     // --- Sequence --------------------------------------------------------------
@@ -138,7 +144,8 @@ export function withNavigation<A extends HasCall>(
       const baseItem = item as (index: number) => A
       const result = base.sequence(ctx, path, schema, baseItem)
       installSequenceNavigation(result, ctx, path, item)
-      return result as A & HasNavigation
+      markNavigation(result)
+      return result
     },
 
     // --- Map -------------------------------------------------------------------
@@ -153,7 +160,8 @@ export function withNavigation<A extends HasCall>(
       const baseItem = item as (key: string) => A
       const result = base.map(ctx, path, schema, baseItem)
       installKeyedNavigation(result, ctx, path, item)
-      return result as A & HasNavigation
+      markNavigation(result)
+      return result
     },
 
     // --- Sum -------------------------------------------------------------------
@@ -258,7 +266,8 @@ export function withNavigation<A extends HasCall>(
       const baseNode = node as unknown as (id: string) => A
       const result = base.tree(ctx, path, schema, baseNodes, baseNode)
       installTreeNavigation(result, ctx, path, node)
-      return result as A & HasNavigation
+      markNavigation(result)
+      return result
     },
 
     // --- Movable ---------------------------------------------------------------
@@ -272,7 +281,8 @@ export function withNavigation<A extends HasCall>(
       const baseItem = item as (index: number) => A
       const result = base.movable(ctx, path, schema, baseItem)
       installSequenceNavigation(result, ctx, path, item)
-      return result as A & HasNavigation
+      markNavigation(result)
+      return result
     },
 
     // --- RichText --------------------------------------------------------------

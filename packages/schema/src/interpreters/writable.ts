@@ -861,9 +861,10 @@ export function withWritable<A extends object>(
     // keys. Assigning to a property of a value typed as the parameter `A` is a
     // type error, which is why these used to open with `as any`.
     //
-    // Cases that delegate to an `install…WriteOps` helper still gain nothing
-    // in their own type: those helpers take `result: any` and are typed in
-    // their own modules, not here.
+    // Cases that delegate to an `install…WriteOps` helper get their members
+    // from that helper's assertion signature — `installListWriteOps` declares
+    // `ListWriteOps` and asserts it onto the carrier, so `.push` and friends
+    // are in the type here without being written here.
     // ---------------------------------------------------------------------
     scalar(
       ctx: WritableContext,
