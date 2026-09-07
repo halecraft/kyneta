@@ -154,6 +154,45 @@ Context: jj:wpvtoxmw.
 
 ---
 
+## `hasChangefeed` is the reference pattern for protocol guards
+
+Across the monorepo, a "protocol" is a capability carried under a symbol-keyed
+slot rather than declared on a public type — `[CHANGEFEED]`, `[POSITION]`,
+`[SUBSTRATE]`, `[BACKING_DOC]` and others. Reaching one needs a runtime check,
+and `hasChangefeed` is the shape all of them follow:
+
+```ts
+export function hasChangefeed<S = unknown, A extends ChangeBase = ChangeBase>(
+  value: unknown,
+): value is HasChangefeed<S, A> {
+  return (
+    value !== null &&
+    value !== undefined &&
+    (typeof value === "object" || typeof value === "function") &&
+    CHANGEFEED in (value as object)
+  )
+}
+```
+
+Three details are load-bearing and easy to drop when reinventing it.
+
+**`typeof value === "function"` is not redundant.** Carriers are often
+callable — `populatedFeed(ref)` returns a function that also implements the
+protocol — and an object-only check rejects them.
+
+**The type parameters are asserted, not checked.** The guard verifies the slot
+exists; naming `S` is the caller stating what it holds. That is deliberate, and
+it is still a large improvement on a bare cast: one named type in one place
+instead of switching off checking for the whole expression.
+
+**Ship the `Has…` interface with the `has…` function**, beside the symbol's
+declaration. A protocol whose guard lives somewhere else, or does not exist,
+gets reached by `(x as any)[SYMBOL]` at every call site — which is what
+happened to six protocols in `@kyneta/schema` before they were given guards.
+See "Where types are lost, and why" in `packages/schema/TECHNICAL.md`.
+
+---
+
 ## `CallableChangefeed` — the function-object variant
 
 `CallableChangefeed<S, C>` is the intersection `Changefeed<S, C> & (() => S)` (source: `packages/changefeed/src/callable.ts` → `CallableChangefeed`). Calling the feed returns its current value; the `.current` / `.subscribe` / `[CHANGEFEED]` surface is preserved as properties on the function-object.

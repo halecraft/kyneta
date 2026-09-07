@@ -11,6 +11,11 @@
 
 - **Change constructors require an `Owned` payload** (`@kyneta/schema`). `replaceChange` now takes `Owned<T>` for object payloads, so a construction site must say whether it is handing over a copy (`own(value)`) or asserting nobody else holds the value (`trustAsOwned(value)`). This closes the other half of the aliasing problem: a caller that reuses the object it passed to `.set()` could previously rewrite what subscribers saw, with no write recorded and no changeset emitted. Primitive payloads are unbranded — nothing can hold a reference to one. `deepClonePlain` moved to its own module so `own` could sit beside the constructors it guards; its export path is unchanged.
 
+## Added
+
+- **Type guards for six symbol-keyed protocols** (`@kyneta/schema`). `hasSubstrate`, `hasBackingDoc`, `hasMigrationChain`, `hasPopulated` and `hasDeleted`, each with its `Has…` interface, following `hasChangefeed`'s established shape. `hasTransact` already existed. Reaching these slots previously meant `(x as any)[SYMBOL]` at each call site, which switched off checking for the whole expression rather than just the property access.
+- **Per-kind schema guards** (`@kyneta/schema`). `isScalarSchema`, `isProductSchema`, `isSequenceSchema`, `isMapSchema`, `isSetSchema`, `isTreeSchema`, `isMovableSchema`, `isTextSchema`, `isCounterSchema` and `isRichTextSchema` narrow the `Schema` union on its `[KIND]` discriminant, as `isMapChange` and siblings already did for `ChangeBase`. There is deliberately no `isSumSchema`: three interfaces carry `[KIND]: "sum"`, so the discriminant alone does not identify one type.
+
 ## Removed
 
 - **The changefeed notification engine is no longer exported** (`@kyneta/schema`). `planNotifications` (now `planDelivery`, internal), `deliverNotifications`, `NotificationPlan`, `attachChangefeed` and `withChangefeed` were public with no importer outside the package. Compose the observation layer with `observation`, which is what the interpreter-stack documentation already pointed at. `POPULATED`, `populated`, `populatedFeed` and `expandMapOpsToLeaves` are unchanged — `POPULATED` is kept deliberately even though nothing external imports it, because removing a protocol symbol would foreclose implementing that protocol outside the package.

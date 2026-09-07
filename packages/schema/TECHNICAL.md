@@ -1319,6 +1319,144 @@ These are the primitives `step`, `with-changefeed`, and `Position` build on.
 
 ---
 
+## Where types are lost, and why
+
+Source: everywhere, which is the point of writing it down here.
+
+A cast is a place where the type system was switched off. Most of them are not
+statements about the code being hard — they are statements about a specific
+limit, and a reader should be able to tell which limit, and whether it still
+holds. This section records the limits. Every remaining cast in
+`packages/schema` carries a comment naming which of them it sits on.
+
+### The erasure frontier
+
+**No higher-kinded types.** The interpreter is a catamorphism over the schema
+functor: each layer takes the value the layer below produced and adds members
+to it, returning `A & Has…`. Saying that in the type system means saying "an
+`A`, plus these members, still an `A`" — a statement *about* a type variable,
+which TypeScript cannot express. This is the single largest cause: 16 of the
+remaining casts are exactly this shape, in `writable.ts`, `with-readable.ts`,
+`with-caching.ts` and `layers.ts`. An augmentation helper would fix it; see the
+deferral note below for why it has not been attempted.
+
+**The `TS2589` depth ceiling.** "Type instantiation is excessively deep" is a
+hard compiler limit, not a warning, and this codebase runs near it. The
+interpreter's generic recursion is where it originates, and consumers inherit
+the depth: `@kyneta/exchange` carries documented workarounds in `exchange.ts`
+and `runtime.ts` — a deferred conditional to avoid tripping the `SchemaRef`
+tree, a non-generic internal path, an `as never` bridge. `create-doc.ts` casts
+the interpreter builder for the same reason, with the reason written next to
+it. Anything that deepens instantiation must be checked against `@kyneta/
+exchange` *first*, because it has the least headroom.
+
+**The third-party boundary.** `loro-crdt` and `yjs` do not describe every value
+they return. `resolveContainer` hands back `unknown` because what a path
+resolves to depends on the schema there, and neither library exports a
+discriminated union that answers "which container kind is this?". That gap is
+now confined: `backends/loro/src/loro-guards.ts` holds one shape per container
+kind, listing only the members this integration calls, plus `applyDiffGroup`,
+`mapDiffUpdated` and `listDiffDeltas` for the places the published types are
+narrower than the runtime. Adding a member there is the way to extend it;
+casting at a call site is not.
+
+**Structural interface parameters.** The substrate capability interfaces
+declare callback parameters structurally (`path: { segments: readonly
+unknown[] }`) so they do not depend on `Path`. The value really is a `Path`,
+and both backends assert that back. This is a deliberate trade — substrate
+independence bought with four assertions.
+
+### The census
+
+Counts, not a line-by-line inventory, which would go stale immediately.
+`packages/schema` production source, excluding tests and the example app.
+
+26 casts, plus 8 comments that mention `as any` while explaining something and
+are not casts at all. (Counting is easy to get wrong here — see the note on
+`grep` below.)
+
+| Cause | n | Fixable? |
+|---|---|---|
+| Interpreter result augmentation | 16 | Needs higher-kinded types; some also need `defineProperty` on proxy-backed refs regardless |
+| Structural interface parameters | 4 | Deliberate — the price of substrate-agnostic capability interfaces |
+| Third-party CRDT gaps | 3 | `configTextStyle`, `applyDelta`, and Yjs's internal `_item`; upstream could close all three |
+| Runtime attachment before the slot exists | 2 | No — the property does not exist until the next statement |
+| Documented `TS2589` workaround | 1 | Only by reducing generic depth |
+
+Before this work the same source held 111 (counting the same way, and including
+the example app's 7, which are demonstration code). The difference was not one
+kind of fix: 17 were symbol protocols reachable by guard, 11 were union
+narrowings, 24 were third-party shapes that belonged at a boundary, and 18 more
+turned out to be inert while trying to write down what they asserted.
+
+### Guards are the general answer
+
+Two patterns cover most of what used to be cast, and both were already in the
+codebase before this work — they were simply not applied everywhere.
+
+**Protocol guards** narrow over a symbol-keyed slot. `hasChangefeed`
+(`packages/changefeed/src/changefeed.ts`) is the reference; `hasPosition`,
+`hasTreeNodeAllocation`, `hasDevtoolsHistory`, `hasSubstrate`,
+`hasBackingDoc`, `hasMigrationChain`, `hasPopulated` and `hasDeleted` all
+follow it exactly. A new symbol protocol should ship its `Has…` interface and
+`has…` guard beside the symbol, in the same shape.
+
+**Union guards** narrow a discriminated union. `isMapChange` and siblings do it
+for `ChangeBase` on `type`; `isProductSchema` and siblings now do it for
+`Schema` on `[KIND]`. Note `sum` deliberately has no guard: three interfaces
+carry `[KIND]: "sum"`, so the discriminant alone does not identify a type.
+
+Where a guard's type parameter cannot be checked at runtime — `hasBackingDoc<Y.Doc>`
+is the clearest case, since the whole point of the slot is that each substrate
+stores something only it understands — the guard verifies the slot and the
+caller asserts the type by naming it. `hasChangefeed` takes its parameters on
+the same terms. That is still a large improvement on a bare cast: the assertion
+is one named type in one place, rather than everything about the expression.
+
+### How to test whether a cast is load-bearing
+
+Reusable and non-obvious, so it is written down. The first sweep against this
+codebase deleted 161 inert casts using it.
+
+```
+strip one cast -> tsc (that package)          -> individually clean?
+apply all clean ones in a file -> tsc         -> cumulatively clean?
+rebuild schema -> tsc every consumer          -> cross-package TS2589?
+time tsc, best of three, vs baseline          -> depth cost without an error?
+introduce a deliberate typo where it was      -> checking actually restored?
+```
+
+Three of those steps exist because of specific failures.
+
+**Cumulative, not individual.** Removals that are each clean alone can fail
+together. `with-addressing.ts` is the worked example: eight casts, each
+individually removable, none removable as a set.
+
+**Consumers, not just the package.** Strengthening an internal type can widen
+an emitted `.d.ts` and cost depth downstream, where the error surfaces as
+`TS2589` in a package you did not edit.
+
+**The deliberate typo.** Compilation succeeding proves nothing about whether
+checking came back. A guard declared `value is any` passes every runtime test
+and every type-check, while restoring nothing. Put an error where the cast used
+to be and confirm the compiler objects.
+
+A note on counting them: `grep "as any"` also matches the prose "h*as any*".
+Use a word boundary.
+
+### The deferred piece
+
+**Interpreter result augmentation**, the 16 sites above, wants its own change.
+The fix is a helper expressing "take an `A`, return an `A` with more on it",
+but the sites sit inside the generic recursion where `TS2589` originates, and
+`@kyneta/exchange` already spends its depth budget working around that. Kept
+separate so a depth regression there cannot block work that carries no such
+risk. Some of the sites are load-bearing for an unrelated second reason — a map
+ref is proxy-backed, so assignment would hit a `set` trap and the code uses
+`Object.defineProperty` — and those stay whatever the types eventually allow.
+
+---
+
 ## The plain substrate
 
 Source: `packages/schema/src/substrates/plain.ts`.
