@@ -59,8 +59,8 @@ import type { Schema as SchemaNode } from "./schema.js"
  *
  * This symbol is NOT on the `Replica<V>` or `Substrate<V>` interfaces —
  * it's a convention that all kyneta-produced implementations follow.
- * Factories recover the backing state via `(replica as any)[BACKING_DOC]`
- * and cast to the concrete type they know they created.
+ * Factories recover the backing state via `hasBackingDoc(replica)`, naming
+ * the concrete type they know they created.
  *
  * Exported from the barrel for substrate packages (`@kyneta/loro-schema`,
  * `@kyneta/yjs-schema`) that need it in their `upgrade()` methods.
@@ -68,7 +68,39 @@ import type { Schema as SchemaNode } from "./schema.js"
  *
  * Context: jj:smmulzkm (two-phase substrate construction)
  */
-export const BACKING_DOC = Symbol.for("kyneta:backingDoc")
+export const BACKING_DOC: unique symbol = Symbol.for("kyneta:backingDoc")
+
+/**
+ * An object carrying its substrate-specific backing state under
+ * `[BACKING_DOC]`.
+ *
+ * `D` is the backing type — `PlainState`, `Y.Doc`, `LoroDoc` — and is
+ * **not checked at runtime**, because there is nothing generic to check it
+ * against: the whole point of the symbol is that each substrate stores
+ * something only it understands. The guard verifies the slot exists; naming
+ * `D` is the caller stating which substrate's replica it is holding, and it
+ * is the caller's job to be right about that. `hasChangefeed` takes its type
+ * parameters on the same terms.
+ */
+export interface HasBackingDoc<D = unknown> {
+  readonly [BACKING_DOC]: D
+}
+
+/**
+ * Returns `true` if `value` carries a `[BACKING_DOC]` property.
+ *
+ * @see HasBackingDoc for why `D` is an assertion rather than a check.
+ */
+export function hasBackingDoc<D = unknown>(
+  value: unknown,
+): value is HasBackingDoc<D> {
+  return (
+    value !== null &&
+    value !== undefined &&
+    (typeof value === "object" || typeof value === "function") &&
+    BACKING_DOC in (value as object)
+  )
+}
 
 // ---------------------------------------------------------------------------
 // TREE_NODE_ALLOCATE — capability symbol for substrate-provided id allocation

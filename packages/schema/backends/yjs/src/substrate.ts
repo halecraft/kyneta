@@ -72,6 +72,7 @@ import {
   executeBatch,
   fieldAbsPath,
   findOpaqueBoundary,
+  hasBackingDoc,
   invert,
   KIND,
   ownedForStore,
@@ -702,7 +703,10 @@ export const yjsSubstrateFactory: SubstrateFactory<YjsVersion> = {
     replica: Replica<YjsVersion>,
     schema: SchemaNode,
   ): Substrate<YjsVersion> {
-    const doc = (replica as any)[BACKING_DOC] as Y.Doc
+    if (!hasBackingDoc<Y.Doc>(replica)) {
+      throw new Error("upgrade() requires a replica produced by this factory.")
+    }
+    const doc = replica[BACKING_DOC]
     const binding = trivialBinding(schema)
     // No identity injection for the standalone factory (no peerId).
     ensureContainers(doc, schema, binding)

@@ -5,7 +5,7 @@
 // They discover the substrate via the `[SUBSTRATE]` symbol property on
 // the root ref — no WeakMaps needed.
 
-import { SUBSTRATE } from "./native.js"
+import { hasSubstrate, SUBSTRATE } from "./native.js"
 import type {
   BatchOptions,
   Substrate,
@@ -24,7 +24,7 @@ import type {
  *   or refs not created by createDoc/exchange.get).
  */
 function getSubstrate(ref: object): Substrate<Version> {
-  const substrate = (ref as any)[SUBSTRATE]
+  const substrate = hasSubstrate(ref) ? ref[SUBSTRATE] : undefined
   if (!substrate) {
     throw new Error(
       "Sync functions (version, exportEntirety, exportSince, merge) require " +

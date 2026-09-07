@@ -12,6 +12,7 @@
 // Substrate instance for sync functions (version, exportEntirety, etc.).
 
 import type { PlainState } from "./reader.js"
+import type { Substrate, Version } from "./substrate.js"
 
 // ---------------------------------------------------------------------------
 // NATIVE — typed escape hatch symbol
@@ -42,6 +43,32 @@ export const NATIVE: unique symbol = Symbol.for("kyneta:native")
  * Not part of the public type API — not threaded through the type system.
  */
 export const SUBSTRATE: unique symbol = Symbol.for("kyneta:substrate")
+
+/**
+ * An object carrying its `Substrate` under the `[SUBSTRATE]` symbol — a root
+ * ref produced by `createDoc` or `exchange.get`.
+ *
+ * Child refs do not carry it, which is the distinction the guard below exists
+ * to make: sync functions work on a document, not on a node inside one.
+ */
+export interface HasSubstrate<V extends Version = Version> {
+  readonly [SUBSTRATE]: Substrate<V>
+}
+
+/**
+ * Returns `true` if `value` has a `[SUBSTRATE]` property, i.e. it is a root
+ * ref rather than a node within a document.
+ */
+export function hasSubstrate<V extends Version = Version>(
+  value: unknown,
+): value is HasSubstrate<V> {
+  return (
+    value !== null &&
+    value !== undefined &&
+    (typeof value === "object" || typeof value === "function") &&
+    SUBSTRATE in (value as object)
+  )
+}
 
 // ---------------------------------------------------------------------------
 // NativeMap — the functor interface

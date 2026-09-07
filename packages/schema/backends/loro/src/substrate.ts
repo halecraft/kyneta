@@ -50,6 +50,7 @@ import {
   executeBatch,
   fieldAbsPath,
   findOpaqueBoundary,
+  hasBackingDoc,
   invert,
   isJsonBoundary,
   KIND,
@@ -853,7 +854,10 @@ export const loroSubstrateFactory: SubstrateFactory<LoroVersion> = {
     replica: Replica<LoroVersion>,
     schema: SchemaNode,
   ): Substrate<LoroVersion> {
-    const doc = (replica as any)[BACKING_DOC] as LoroDocType
+    if (!hasBackingDoc<LoroDocType>(replica)) {
+      throw new Error("upgrade() requires a replica produced by this factory.")
+    }
+    const doc = replica[BACKING_DOC]
     const binding = trivialBinding(schema)
     ensureLoroContainers(doc, schema, binding)
     return createLoroSubstrate(doc, schema, binding)

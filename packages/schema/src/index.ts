@@ -233,6 +233,8 @@ export {
   DELETED,
   deleted,
   deletedFeed,
+  type HasDeleted,
+  hasDeleted,
   withAddressing,
 } from "./interpreters/with-addressing.js"
 // withCaching — interposition transformer (identity-preserving caching + INVALIDATE)
@@ -255,6 +257,8 @@ export {
 // external importer either, but removing a protocol symbol would foreclose
 // implementing that protocol outside this package.
 export {
+  type HasPopulated,
+  hasPopulated,
   POPULATED,
   populated,
   populatedFeed,
@@ -347,6 +351,8 @@ export {
   deriveStepTier,
   deriveTier,
   getMigrationChain,
+  type HasMigrationChain,
+  hasMigrationChain,
   MIGRATION_CHAIN,
   Migration,
   migrationMethods,
@@ -360,7 +366,12 @@ export type {
   PlainNativeMap,
   UnknownNativeMap,
 } from "./native.js"
-export { NATIVE, SUBSTRATE } from "./native.js"
+export {
+  type HasSubstrate,
+  hasSubstrate,
+  NATIVE,
+  SUBSTRATE,
+} from "./native.js"
 // Re-export path types from their canonical location
 export type {
   Address,
@@ -516,6 +527,8 @@ export {
   computeSchemaHash,
   DEVTOOLS_HISTORY,
   HASH_ALGORITHM_VERSION,
+  type HasBackingDoc,
+  hasBackingDoc,
   hasDevtoolsHistory,
   hasTreeNodeAllocation,
   mismatchForInterpretation,

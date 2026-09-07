@@ -104,15 +104,44 @@ export const ADDRESS_TABLE: unique symbol = Symbol.for(
 export const DELETED: unique symbol = Symbol.for("kyneta:deleted") as any
 
 /**
+ * A ref that tracks whether it has been deleted from its parent container.
+ *
+ * Sequence items and map entries carry this; a document root or a struct
+ * field does not, because neither can be removed from anything. The slot
+ * holds a *carrier*: a function returning the boolean, which also carries its
+ * own `[CHANGEFEED]` so the transition can be subscribed to. Mirrors
+ * `HasPopulated` in `with-changefeed.ts`.
+ */
+export interface HasDeleted {
+  readonly [DELETED]: (() => boolean) & HasChangefeed<boolean>
+}
+
+/**
+ * Returns `true` if `value` has a `[DELETED]` property, i.e. it tracks
+ * deletion.
+ */
+export function hasDeleted(value: unknown): value is HasDeleted {
+  return (
+    value !== null &&
+    value !== undefined &&
+    (typeof value === "object" || typeof value === "function") &&
+    DELETED in (value as object)
+  )
+}
+
+/**
  * Returns true if the ref has been deleted (its parent container was mutated
- * to remove it). Returns false if the ref is alive, or if it is not a ref
- * that tracks deletion (like a top-level document or product field).
+ * to remove it). Returns false if the ref is alive, or if it is not a ref that
+ * tracks deletion.
+ *
+ * Every ref inside a document tracks deletion, including struct fields — a
+ * field cannot itself be removed, but the container holding it can be, and the
+ * field must be able to report that. The document root is the one ref that
+ * carries no deletion state, having no parent to be removed from.
  */
 export function deleted(ref: unknown): boolean {
-  if (ref === null || ref === undefined) return false
-  const deletedCf = (ref as any)[DELETED]
-  if (!deletedCf) return false
-  return deletedCf() === true
+  if (!hasDeleted(ref)) return false
+  return ref[DELETED]() === true
 }
 
 /**
@@ -133,12 +162,12 @@ export function deletedFeed(
   ref: unknown,
 ): ((() => boolean) & HasChangefeed<boolean>) | undefined {
   if (ref === null || ref === undefined) return undefined
-  if (!(DELETED in (ref as object))) {
+  if (!hasDeleted(ref)) {
     throw new Error(
       "deletedFeed() requires a ref that tracks deletion (e.g. a sequence item or map entry)",
     )
   }
-  return (ref as any)[DELETED]
+  return ref[DELETED]
 }
 
 // ---------------------------------------------------------------------------
@@ -458,7 +487,12 @@ export function withAddressing<A extends HasNavigation>(
                       : `The entry "${lastAddr.key}" this ref pointed to has been removed.`
                   throw new Error(`Cannot remove a dead ref. ${detail}`)
                 }
-                const wctx: WritableContext = (ref as any)[TRANSACT]
+                if (!hasTransact(ref)) {
+                  throw new Error(
+                    "Cannot remove a ref that carries no writable context.",
+                  )
+                }
+                const wctx: WritableContext = ref[TRANSACT]
                 if (lastAddr.kind === "index") {
                   const index = lastAddr.index
                   wctx.dispatch(

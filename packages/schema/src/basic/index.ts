@@ -55,7 +55,7 @@ export { exportEntirety } from "../sync.js"
 import type { Op } from "../changefeed.js"
 import { createRef } from "../create-doc.js"
 import type { PlainNativeMap } from "../native.js"
-import { SUBSTRATE } from "../native.js"
+import { hasSubstrate, SUBSTRATE } from "../native.js"
 import { RawPath } from "../path.js"
 import type { DocRef } from "../ref.js"
 import type { ProductSchema } from "../schema.js"
@@ -118,7 +118,11 @@ export const createDocFromEntirety: CreateDocFromEntirety = ((
  * @throws If `doc` was not created by `createDoc` / `createDocFromEntirety`.
  */
 export function version(doc: object): number {
-  const substrate = (doc as any)[SUBSTRATE]
+  // `PlainVersion` is an assertion, not a check — the guard can only see that
+  // the slot exists. Both functions here are documented as plain-substrate
+  // conveniences, so naming the version type once here is what lets the rest
+  // of the body read `.value` and `.lineage` without casting for it.
+  const substrate = hasSubstrate<PlainVersion>(doc) ? doc[SUBSTRATE] : undefined
   if (!substrate) {
     throw new Error("version() requires a root ref created by createDoc().")
   }
@@ -141,11 +145,12 @@ export function version(doc: object): number {
  * @throws If `doc` was not created by `createDoc` / `createDocFromEntirety`.
  */
 export function delta(doc: object, fromVersion: number): Op[] {
-  const substrate = (doc as any)[SUBSTRATE]
+  // Plain-substrate specific — see the note in `version` above.
+  const substrate = hasSubstrate<PlainVersion>(doc) ? doc[SUBSTRATE] : undefined
   if (!substrate) {
     throw new Error("delta() requires a root ref created by createDoc().")
   }
-  const currentLineage = (substrate.version() as PlainVersion).lineage
+  const currentLineage = substrate.version().lineage
   const since = new PlainVersion(fromVersion, currentLineage)
   const payload = substrate.exportSince(since)
   if (!payload) return []

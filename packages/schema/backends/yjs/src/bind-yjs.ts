@@ -36,6 +36,7 @@ import type {
 import {
   BACKING_DOC,
   createBindingTarget,
+  hasBackingDoc,
   STRUCTURAL_YJS_CLIENT_ID,
   SYNC_COLLABORATIVE,
 } from "@kyneta/schema"
@@ -127,11 +128,12 @@ function createYjsFactory(
       // Claim identity now: this is the two-phase path, so any import has
       // already happened and the clock for our id is wherever that history
       // left it. Writes continue from there rather than colliding with it.
-      return buildSubstrate(
-        (replica as any)[BACKING_DOC] as Y.Doc,
-        schema,
-        true,
-      )
+      if (!hasBackingDoc<Y.Doc>(replica)) {
+        throw new Error(
+          "upgrade() requires a replica produced by this factory.",
+        )
+      }
+      return buildSubstrate(replica[BACKING_DOC], schema, true)
     },
 
     create(schema: SchemaNode): Substrate<YjsVersion> {

@@ -32,6 +32,7 @@ import type {
 import {
   BACKING_DOC,
   createBindingTarget,
+  hasBackingDoc,
   SYNC_COLLABORATIVE,
 } from "@kyneta/schema"
 import type { LoroDoc as LoroDocType, PeerID } from "loro-crdt"
@@ -127,11 +128,12 @@ function createLoroFactory(
       // Claim identity now: this is the two-phase path, so any import has
       // already happened and the op counter for our PeerID resumes past it
       // rather than colliding with it.
-      return buildSubstrate(
-        (replica as any)[BACKING_DOC] as LoroDocType,
-        schema,
-        true,
-      )
+      if (!hasBackingDoc<LoroDocType>(replica)) {
+        throw new Error(
+          "upgrade() requires a replica produced by this factory.",
+        )
+      }
+      return buildSubstrate(replica[BACKING_DOC], schema, true)
     },
 
     create(schema: SchemaNode): Substrate<LoroVersion> {

@@ -55,7 +55,32 @@ export type MigratedSchema<S extends ProductSchema = ProductSchema> = S & {
  * `Symbol.for` so dual-loaded copies share identity — see `KIND` for
  * the same rationale.
  */
-export const MIGRATION_CHAIN = Symbol.for("kyneta:migrationChain")
+export const MIGRATION_CHAIN: unique symbol = Symbol.for(
+  "kyneta:migrationChain",
+)
+
+/**
+ * A schema carrying its migration history under `[MIGRATION_CHAIN]`.
+ *
+ * Attached by the migration builders rather than declared on `Schema`, which
+ * is why reaching it needs a guard: most schemas have never been migrated and
+ * do not carry the slot at all.
+ */
+export interface HasMigrationChain {
+  readonly [MIGRATION_CHAIN]: MigrationChain
+}
+
+/**
+ * Returns `true` if `value` carries a `[MIGRATION_CHAIN]` property.
+ */
+export function hasMigrationChain(value: unknown): value is HasMigrationChain {
+  return (
+    value !== null &&
+    value !== undefined &&
+    (typeof value === "object" || typeof value === "function") &&
+    MIGRATION_CHAIN in (value as object)
+  )
+}
 
 // ---------------------------------------------------------------------------
 // NodeIdentity — opaque 128-bit identity hash
@@ -961,9 +986,11 @@ function deriveBindingRecursive(
     const node = fieldSchema as SchemaNode
     if (node[KIND] === "product") {
       const nestedSchema = node as ProductSchema
-      const nestedChain = (nestedSchema as any)[MIGRATION_CHAIN] as
-        | MigrationChain
-        | undefined
+      const nestedChain = (
+        hasMigrationChain(nestedSchema)
+          ? nestedSchema[MIGRATION_CHAIN]
+          : undefined
+      ) as MigrationChain | undefined
 
       if (nestedChain) {
         // Nested schema has its own migration chain. Derive its manifest
@@ -1129,7 +1156,7 @@ export const migrationMethods = {
 
 /** Get the existing chain from a schema, or create an empty one. */
 function getChain(schema: ProductSchema): MigrationChain {
-  const chain = (schema as any)[MIGRATION_CHAIN] as MigrationChain | undefined
+  const chain = hasMigrationChain(schema) ? schema[MIGRATION_CHAIN] : undefined
   return chain ?? { base: null, entries: [] }
 }
 
@@ -1161,7 +1188,7 @@ function cloneWithChain(
  */
 export function getMigrationChain(schema: SchemaNode): MigrationChain | null {
   if (schema[KIND] !== "product") return null
-  return ((schema as any)[MIGRATION_CHAIN] as MigrationChain) ?? null
+  return hasMigrationChain(schema) ? schema[MIGRATION_CHAIN] : null
 }
 
 // =========================================================================

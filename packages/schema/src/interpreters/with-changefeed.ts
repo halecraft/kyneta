@@ -71,6 +71,31 @@ import { CALL } from "./bottom.js"
 export const POPULATED: unique symbol = Symbol.for("kyneta:populated")
 
 /**
+ * A ref that tracks whether data has arrived at its path.
+ *
+ * The slot holds a *carrier*: a function returning the boolean, which also
+ * carries its own `[CHANGEFEED]` so the transition can be subscribed to.
+ * Not every ref has one — a ref produced outside `withChangefeed` will not —
+ * which is why reaching it goes through the guard.
+ */
+export interface HasPopulated {
+  readonly [POPULATED]: (() => boolean) & HasChangefeed<boolean>
+}
+
+/**
+ * Returns `true` if `value` has a `[POPULATED]` property, i.e. it tracks
+ * population.
+ */
+export function hasPopulated(value: unknown): value is HasPopulated {
+  return (
+    value !== null &&
+    value !== undefined &&
+    (typeof value === "object" || typeof value === "function") &&
+    POPULATED in (value as object)
+  )
+}
+
+/**
  * Returns true if the ref has been populated (received at least one mutation —
  * local, remote, or replayed from storage). Returns false if it has not, or if
  * it is not a ref that tracks population.
@@ -79,10 +104,8 @@ export const POPULATED: unique symbol = Symbol.for("kyneta:populated")
  * form, use {@link populatedFeed}.
  */
 export function populated(ref: unknown): boolean {
-  if (ref === null || ref === undefined) return false
-  const populatedCf = (ref as any)[POPULATED]
-  if (!populatedCf) return false
-  return populatedCf() === true
+  if (!hasPopulated(ref)) return false
+  return ref[POPULATED]() === true
 }
 
 /**
@@ -103,12 +126,12 @@ export function populated(ref: unknown): boolean {
 export function populatedFeed(
   ref: unknown,
 ): (() => boolean) & HasChangefeed<boolean> {
-  if (!ref || !(POPULATED in (ref as object))) {
+  if (!hasPopulated(ref)) {
     throw new Error(
       "populatedFeed() requires a ref that tracks population (e.g. a ref produced by withChangefeed)",
     )
   }
-  return (ref as any)[POPULATED]
+  return ref[POPULATED]
 }
 
 // ---------------------------------------------------------------------------

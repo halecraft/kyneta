@@ -66,7 +66,7 @@ import type {
   SubstratePayload,
   Version,
 } from "../substrate.js"
-import { BACKING_DOC, RECORD_INVERSE } from "../substrate.js"
+import { BACKING_DOC, hasBackingDoc, RECORD_INVERSE } from "../substrate.js"
 import { versionVectorCompare, versionVectorMeet } from "../version-vector.js"
 import { Zero } from "../zero.js"
 
@@ -1038,7 +1038,12 @@ export function buildUpgrade<V extends Version>(
   adoptLineage?: (next: string) => void,
   getLineage?: () => string,
 ): Substrate<V> {
-  const materializedState = (replica as any)[BACKING_DOC] as PlainState
+  if (!hasBackingDoc<PlainState>(replica)) {
+    throw new Error(
+      "upgrade() requires a replica produced by this substrate factory.",
+    )
+  }
+  const materializedState = replica[BACKING_DOC]
 
   // Create a fresh doc seeded from the replica's materialized state.
   // The substrate owns this doc — the replica's state is not shared.
