@@ -2,7 +2,7 @@
 // the shared registry.
 //
 // A ref carrier is not unique per path. Every call to the catamorphism's
-// per-id child closure mints a fresh one (see "Per-ref-instance listener
+// per-id child closure mints a fresh one (see "Per-ref-instance carrier
 // multiplication" in `packages/schema/TECHNICAL.md`), and each one wires its
 // own changefeed. Registering at carrier-construction time therefore left one
 // permanent entry per carrier ever created, with nothing able to remove it:

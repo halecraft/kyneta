@@ -330,7 +330,7 @@ function releaseFrom<C>(
  *
  * One `Changeset` is built per *key* and shared by every callback registered
  * there. Several ref carriers can sit at the same path (see "Per-ref-instance
- * listener multiplication" in TECHNICAL.md), and allocating per callback would
+ * carrier multiplication" in TECHNICAL.md), and allocating per callback would
  * multiply garbage for no benefit.
  *
  * @param plan - From `planDelivery`.
@@ -751,7 +751,7 @@ function listenAtPath(
  * and put one fan-out shim into the shared registry on its behalf, so a
  * subscriber left by dropping out of the local set and the shim stayed behind
  * forever. Carriers are not unique per path — every call to the catamorphism's
- * per-id child closure mints a fresh one (see "Per-ref-instance listener
+ * per-id child closure mints a fresh one (see "Per-ref-instance carrier
  * multiplication" in `packages/schema/TECHNICAL.md`) — so that meant one
  * permanent entry per carrier ever created, with nothing able to remove it.
  * JavaScript offers no destructor, and the changefeed layer holds no reference

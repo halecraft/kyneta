@@ -964,21 +964,41 @@ Delivering directly means feeding **both** channels by hand — the facade `subs
 
 The payload is built by the pure `synthesizeTreeDeleteTerminal(id)` helper. Subscribers pattern-match on `cs.changes[0].change.type === "tree" && instructions[0].action === "delete"` to detect end-of-stream.
 
+The scan that drives this is the one own-path registration not owned by a subscriber — see [One registration discipline for both channels](#one-registration-discipline-for-both-channels) for why it has to outlive them.
+
 The asymmetry with sequence and map is justified by **identity semantics**: TreeIDs are CRDT-stable identifiers (minted at create-time, never reused, never re-anchored on shifts), and a subscriber at `d.tree.node(id)` holds a meaningful identity reference. Map keys are user-chosen strings that can come and go without identity meaning (re-adding the same key creates "the same" entry); sequence items are positional and shift under structural change. Only tree carries the identity invariant that warrants a lifecycle-end signal.
 
-### Per-ref-instance listener multiplication
+### Per-ref-instance carrier multiplication
 
-Each call to the catamorphism's per-id child closure (sequence's `itemFn`, map's `itemFn`, tree's `nodeFn`) produces a fresh ref carrier. Each carrier's interpreter recursion calls `wireChangefeed` → `attachChangefeed` → its own `[CHANGEFEED]` protocol; each protocol's own-path listener registers a callback in the shared listener-Map entry at the same path key.
+Each call to the catamorphism's per-id child closure (sequence's `itemFn`, map's `itemFn`, tree's `nodeFn`) produces a fresh ref carrier. Each carrier's interpreter recursion calls `wireChangefeed` → `attachChangefeed` → its own `[CHANGEFEED]` protocol.
 
-So multiple ref instances at the same path → multiple callbacks → multiple fan-outs per flush. The listener-Map keyed by `path.key` is *shared* (via `listenAtPath`), but each ref instance is independent. Correct by construction — `Changeset` delivery to N callbacks at the same path key is exactly N invocations — but not free.
+So multiple ref instances can exist at the same path key. Correct by construction, but not free: each is an object with its own protocol. Note that `withCaching` memoizes what it can — struct fields, and sequence/map entries reached through the address table — so `doc.items.at(0)` hands back the same carrier every time. `doc.tree.node(id)` is the case that reliably mints a new one.
 
-Profiling memory or callback counts on tree-heavy docs (where re-accessing `d.tree.node(id)` in subscriber callbacks is common) may surface this as a future optimization target: catamorphism-side memoization keyed by `(parentPath, id)` would collapse the ref-instance count to one per id. Documented here to surface the property; not currently fixed.
+Catamorphism-side memoization keyed by `(parentPath, id)` would collapse the count to one per id. Documented here to surface the property; not currently fixed.
 
-**The shared registration is never released.** `fanOutOwnPath` discards the unsubscribe that `listenAtPath` returns, so the set does not merely grow large — it grows *monotonically*, one dead entry per discarded carrier, for the lifetime of the document. Each costs an iteration over an empty local set per flush plus a retained closure. Combined with the absence of memoization above, that means the workload this section calls out as common is also the one that accumulates.
+**Registrations no longer multiply with carriers.** They used to, and that was the sharper half of this problem. Own-path listeners were registered when a carrier was *built*, and `fanOutOwnPath` discarded the unsubscribe `listenAtPath` returned, so the shared set grew *monotonically* — one dead entry per discarded carrier, for the document's lifetime, each costing an iteration over an empty set per flush plus a retained closure. The workload named above as common was also the one that accumulated fastest: thirty `d.tree.node(id)` read-and-write cycles left sixty dead entries at one path key.
 
-The deep channel has no equivalent problem: `subscribeDescendants` hands `listenDescendants`'s unsubscribe straight back to the caller, so a deep subscriber really does go away. The asymmetry is not principled, and fixing it would make the factory-local `ownPathSubscribers` set redundant — both channels would collapse to the same registration shape. Left alone deliberately for now, because it changes subscription lifecycle semantics and wants its own "carrier discarded, listener removed" test rather than riding along with a delivery change.
+Registration now follows subscribers — established on the first, released on the last — so a carrier nobody subscribes to never enters the registry, and carrier multiplication costs only the carriers themselves. `src/__tests__/listener-registration.test.ts` pins this.
 
-One thing this multiplication does *not* cost is changeset allocation. `deliverNotifications` builds one `Changeset` per key and shares it across every callback registered there.
+One thing carrier multiplication does *not* cost is changeset allocation. `deliverNotifications` builds one `Changeset` per key and shares it across every callback registered there.
+
+### One registration discipline for both channels
+
+Both channels now register the subscriber's real callback in a shared path-keyed registry and hand back a teardown that removes it — `listenOwnPath` over `channels.listeners`, `listenDescendants` over `channels.descendants`. The own-path channel used to differ: each node kept a *local* subscriber set and put a fan-out shim into the shared registry on its behalf, which is what made its registrations outlive its subscribers.
+
+Two consequences worth knowing.
+
+**The tree's delete scan is the one registration not tied to a subscription.** It has to see every changeset so a vanishing node can be told it is gone (see [Terminal-on-delete](#terminal-on-delete)), and that must happen whether or not anyone subscribed to the tree — so `createTreeChangefeed` registers it directly and never releases it. It is registered before any subscriber can be, and the registry iterates in insertion order, so a deleted node learns it is gone before the tree's own-path subscribers hear about the batch that removed it.
+
+**Teardown guards on set membership**, which makes it idempotent and stops a stale teardown from evicting a later subscriber at the same path. The subtlety: a teardown closes over the set that existed when its subscriber registered, and emptying a key deletes it from the registry, so subscribing there again installs a *different* set. The old teardown cannot damage it, because a set is only ever orphaned at the moment it becomes empty and nothing can refill it afterwards — registration always looks the key up fresh. An orphaned set is empty forever, so the membership check short-circuits before the size check it would otherwise get wrong.
+
+#### Delivery snapshots its subscriber sets
+
+`deliverNotifications` copies each subscriber set before calling into it. The hazard is not the obvious one: under `Set` semantics a callback that unsubscribes *itself* is harmless, because it has already been visited.
+
+What is not harmless is **adding**. A `Set` visits entries added during iteration, so a subscriber registered from inside a callback would receive the changeset already in flight — one planned, and committed to the substrate, before that subscriber existed. Someone subscribing at a *different* path in the same callback receives nothing, since `planDelivery` runs to completion before any callback fires. Snapshotting makes the same-path case agree.
+
+It also settles the unsubscribe direction: a peer unsubscribed mid-delivery still receives the batch in flight, and the unsubscribe takes effect from the next one, rather than that peer being skipped depending on where the loop had got to.
 
 ---
 
@@ -1609,7 +1629,7 @@ The worked example is `__getCacheHandlerCountAtPath` (`src/interpreters/with-cac
 | `src/interpreters/with-addressing.ts` | ~500 | Address-table layer. Sequence/movable and map/set cases delegate to shared helpers. |
 | `src/interpreters/with-caching.ts` | ~380 | Identity-preserving memoization + `INVALIDATE`. Sequence/movable and map/set cases delegate to shared helpers. |
 | `src/interpreters/writable.ts` | ~700 | Mutation primitives + `REMOVE` + `TRANSACT` + `executeBatch`. Text/sequence/movable/map/set cases delegate to shared helpers. |
-| `src/interpreters/with-changefeed.ts` | ~1300 | Observation layer + `planDelivery` + `deliverNotifications` + `fanOutOwnPath` + `wireChangefeed`. All cases use `wireChangefeed` to unify changefeed boilerplate. The notification engine itself is internal — not exported since 4.0. |
+| `src/interpreters/with-changefeed.ts` | ~1300 | Observation layer + `planDelivery` + `deliverNotifications` + `listenOwnPath`/`listenDescendants` + `wireChangefeed`. All cases use `wireChangefeed` to unify changefeed boilerplate. The notification engine itself is internal — not exported since 4.0. |
 | `src/interpreters/validate.ts` | ~200 | Validation interpreter. |
 | `src/interpreters/plain.ts` | ~100 | Plain-state interpreter (reader + canonical shape). |
 | `src/interpreters/navigable.ts`, `readable.ts` | ~100 each | Type-interface modules. |
