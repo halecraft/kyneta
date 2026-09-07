@@ -26,7 +26,14 @@ import {
 } from "@kyneta/schema"
 import type { Delta, LoroDoc } from "loro-crdt"
 import { extractValue, loroDeltaToRichTextDelta } from "./loro-extract.js"
-import { hasKind } from "./loro-guards.js"
+import {
+  hasKind,
+  isLoroCounter,
+  isLoroList,
+  isLoroMap,
+  isLoroText,
+  isLoroTree,
+} from "./loro-guards.js"
 import { resolveContainer } from "./loro-resolve.js"
 
 // ---------------------------------------------------------------------------
@@ -55,8 +62,8 @@ function createLoroResolver(
 
     resolveCounter(path: Path): number | undefined {
       const { resolved } = resolveContainer(doc, rootSchema, path, binding)
-      if (hasKind(resolved) && resolved.kind() === "Counter") {
-        return (resolved as any).value as number
+      if (isLoroCounter(resolved)) {
+        return resolved.value
       }
       const value = extractValue(resolved)
       return typeof value === "number" ? value : undefined
@@ -64,39 +71,29 @@ function createLoroResolver(
 
     resolveRichText(path: Path): RichTextDelta | undefined {
       const { resolved } = resolveContainer(doc, rootSchema, path, binding)
-      if (hasKind(resolved) && resolved.kind() === "Text") {
-        const deltas = (resolved as any).toDelta() as Delta<string>[]
-        return loroDeltaToRichTextDelta(deltas)
+      if (isLoroText(resolved)) {
+        return loroDeltaToRichTextDelta(resolved.toDelta() as Delta<string>[])
       }
       return undefined
     },
 
     resolveLength(path: Path): number {
       const { resolved } = resolveContainer(doc, rootSchema, path, binding)
-      if (!hasKind(resolved)) {
-        return Array.isArray(resolved) ? resolved.length : 0
-      }
-      const kind = resolved.kind()
-      if (kind === "List" || kind === "MovableList") {
-        return (resolved as any).length as number
-      }
-      return 0
+      if (isLoroList(resolved)) return resolved.length
+      if (hasKind(resolved)) return 0
+      return Array.isArray(resolved) ? resolved.length : 0
     },
 
     resolveKeys(path: Path): string[] {
       const { resolved } = resolveContainer(doc, rootSchema, path, binding)
-      if (!hasKind(resolved)) {
-        return isNonNullObject(resolved) ? Object.keys(resolved) : []
-      }
-      if (resolved.kind() === "Map") {
-        return (resolved as any).keys() as string[]
-      }
-      return []
+      if (isLoroMap(resolved)) return resolved.keys()
+      if (hasKind(resolved)) return []
+      return isNonNullObject(resolved) ? Object.keys(resolved) : []
     },
 
     resolveForest(path: Path): readonly FlatTreeNodeTopology[] {
       const { resolved } = resolveContainer(doc, rootSchema, path, binding)
-      if (!hasKind(resolved) || resolved.kind() !== "Tree") return []
+      if (!isLoroTree(resolved)) return []
       // LoroTree.toArray() returns a NESTED `TreeNodeValue[]` (roots at
       // top, descendants under `.children`). The kyneta topology contract
       // is flat — walk depth-first and emit each node with its parent
@@ -119,7 +116,7 @@ function createLoroResolver(
           if (row.children?.length) walk(row.children, row.id)
         }
       }
-      walk((resolved as any).toArray() as NestedRow[], null)
+      walk(resolved.toArray() as NestedRow[], null)
       return flat
     },
   }

@@ -92,7 +92,14 @@ import type {
 } from "loro-crdt"
 import { Cursor, LoroDoc } from "loro-crdt"
 import { batchToOps, changeToDiff } from "./change-mapping.js"
-import { isLoroContainer } from "./loro-guards.js"
+import {
+  applyDiffGroup,
+  isLoroContainer,
+  isLoroText,
+  isLoroTree,
+  listDiffDeltas,
+  mapDiffUpdated,
+} from "./loro-guards.js"
 import { PROPS_KEY, resolveContainer } from "./loro-resolve.js"
 import { materializeLoroShadow } from "./materialize.js"
 import { LoroPosition, toLoroSide } from "./position.js"
@@ -109,7 +116,7 @@ import { LoroVersion } from "./version.js"
  * routes them to the immediate-apply path with a buffer force-flush.
  */
 function hasJsonContainerRef(diff: Diff | JsonDiff): boolean {
-  const updated = (diff as any).updated
+  const updated = mapDiffUpdated(diff)
   if (!updated) return false
   for (const value of Object.values(updated)) {
     if (typeof value === "string" && value.startsWith("🦜:")) return true
@@ -137,7 +144,7 @@ function isStructuralGroup(
   const [, diff] = group[0]
   if (diff.type === "map") return hasJsonContainerRef(diff)
   if (diff.type === "list") {
-    const deltas = (diff as any).diff as Array<Record<string, unknown>>
+    const deltas = listDiffDeltas(diff)
     if (!deltas) return false
     for (const delta of deltas) {
       const inserts = (delta as { insert?: readonly unknown[] }).insert
@@ -252,7 +259,7 @@ export function createLoroSubstrate(
   function flushCoalesceBuffer(): void {
     if (coalesceBuffer.size === 0) return
     for (const [cid, updated] of coalesceBuffer) {
-      doc.applyDiff([[cid, { type: "map", updated } as any]] as any)
+      applyDiffGroup(doc, [[cid, { type: "map", updated }]])
     }
     coalesceBuffer.clear()
   }
@@ -318,9 +325,9 @@ export function createLoroSubstrate(
         if (index > 0) deltas.push({ retain: index })
         deltas.push({ delete: 1 })
         deltas.push({ insert: [value] })
-        doc.applyDiff([
-          [parentResolved.id, { type: "list", diff: deltas } as any],
-        ] as any)
+        applyDiffGroup(doc, [
+          [parentResolved.id, { type: "list", diff: deltas }],
+        ])
         return
       }
       throw new Error(
@@ -425,7 +432,7 @@ export function createLoroSubstrate(
       if (isStructuralGroup(group)) {
         flushCoalesceBuffer()
       }
-      doc.applyDiff(group as any)
+      applyDiffGroup(doc, group)
     },
 
     afterBatch(options?: BatchOptions): void {
@@ -487,16 +494,13 @@ export function createLoroSubstrate(
                   path as any,
                   binding,
                 ).resolved
-                if (
-                  !resolved ||
-                  typeof (resolved as any).getCursor !== "function"
-                ) {
+                if (!isLoroText(resolved)) {
                   throw new Error(
                     `positionResolver: path does not resolve to a LoroText`,
                   )
                 }
                 const loroSide = toLoroSide(side)
-                const cursor = (resolved as any).getCursor(index, loroSide) as
+                const cursor = resolved.getCursor(index, loroSide) as
                   | Cursor
                   | undefined
                 if (!cursor) {
@@ -523,20 +527,12 @@ export function createLoroSubstrate(
               treePath,
               binding,
             )
-            if (
-              !resolved ||
-              typeof (resolved as any).kind !== "function" ||
-              (resolved as any).kind() !== "Tree"
-            ) {
+            if (!isLoroTree(resolved)) {
               throw new Error(
                 "TREE_NODE_ALLOCATE: path does not resolve to a LoroTree container",
               )
             }
-            const node = (resolved as any).createNode(
-              parent ?? undefined,
-              index,
-            ) as { id: string }
-            return node.id
+            return resolved.createNode(parent ?? undefined, index).id
           },
         })
       }

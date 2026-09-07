@@ -18,6 +18,7 @@ import type {
   ChangeBase,
   IncrementChange,
   MapChange,
+  NodeIdentity,
   Op,
   Path,
   ReplaceChange,
@@ -64,7 +65,12 @@ import type {
   TreeDiff,
   Value,
 } from "loro-crdt"
-import { hasKind, isLoroContainer, isPlainProjectable } from "./loro-guards.js"
+import {
+  hasKind,
+  isLoroContainer,
+  isPlainProjectable,
+  type LoroDocLike,
+} from "./loro-guards.js"
 import { PROPS_KEY, resolveContainer } from "./loro-resolve.js"
 
 // ---------------------------------------------------------------------------
@@ -286,8 +292,7 @@ export function changeToDiff(
     )
     if (!isLoroContainer(parentResolved)) {
       // Parent is the LoroDoc (root level) — use the _props map
-      const propsMap = (parentResolved as any).getMap(PROPS_KEY)
-      targetCID = propsMap.id as ContainerID
+      targetCID = (parentResolved as LoroDocLike).getMap(PROPS_KEY).id
     } else {
       targetCID = parentResolved.id
     }
@@ -664,8 +669,7 @@ function replaceChangeToDiff(
 
   if (!isLoroContainer(parentResolved)) {
     if (lastSeg.role === "field" || lastSeg.role === "entry") {
-      const propsMap = (parentResolved as any).getMap(PROPS_KEY)
-      const propsCID = propsMap.id as ContainerID
+      const propsCID = (parentResolved as LoroDocLike).getMap(PROPS_KEY).id
       return [
         [
           propsCID,
@@ -790,7 +794,7 @@ function loroPathToKynetaPath(
       // Inverse-lookup recovers the original declared field name when
       // the segment IS an identity hash; otherwise we keep the string.
       let leaf = segment
-      const absPath = binding?.inverse.get(segment as any)
+      const absPath = binding?.inverse.get(segment as NodeIdentity)
       if (absPath) {
         const lastDot = absPath.lastIndexOf(".")
         leaf = lastDot >= 0 ? absPath.slice(lastDot + 1) : absPath
@@ -961,7 +965,7 @@ function mapDiffToChange(diff: MapDiff, binding?: SchemaBinding): MapChange {
     // Loro map diffs use identity-keyed keys; kyneta Changes use field names.
     let key = loroKey
     if (binding) {
-      const absPath = binding.inverse.get(loroKey as any)
+      const absPath = binding.inverse.get(loroKey as NodeIdentity)
       if (absPath) {
         const lastDot = absPath.lastIndexOf(".")
         key = lastDot >= 0 ? absPath.slice(lastDot + 1) : absPath
@@ -978,14 +982,14 @@ function mapDiffToChange(diff: MapDiff, binding?: SchemaBinding): MapChange {
     }
   }
 
-  const result: MapChange = { type: "map" }
-  if (Object.keys(set).length > 0) {
-    ;(result as any).set = set
+  // Built in one expression rather than stamped afterwards: `set` and
+  // `delete` are declared `readonly`, so assigning to them needed an assertion
+  // that dropped every other check with it.
+  return {
+    type: "map",
+    ...(Object.keys(set).length > 0 ? { set } : {}),
+    ...(deleteKeys.length > 0 ? { delete: deleteKeys } : {}),
   }
-  if (deleteKeys.length > 0) {
-    ;(result as any).delete = deleteKeys
-  }
-  return result
 }
 
 /**

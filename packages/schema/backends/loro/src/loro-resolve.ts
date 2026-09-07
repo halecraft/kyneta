@@ -27,7 +27,7 @@ import {
   type Segment,
 } from "@kyneta/schema"
 import type { LoroDoc, LoroList, LoroMap, LoroMovableList } from "loro-crdt"
-import { hasKind, isLoroDoc } from "./loro-guards.js"
+import { hasKind, isLoroDoc, isLoroTree } from "./loro-guards.js"
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -138,10 +138,8 @@ function stepFromContainer(
       // is not a Loro container (no `.kind()`, its `.id` is a TreeID, not
       // a ContainerID); only `node.data` is a true container. Returning
       // `undefined` for an unknown/dead TreeID short-circuits foldPath.
-      const node = (container as any).getNodeByID(
-        identity ?? (resolved as string),
-      )
-      return node?.data
+      if (!isLoroTree(container)) return undefined
+      return container.getNodeByID(identity ?? (resolved as string))?.data
     }
 
     default:

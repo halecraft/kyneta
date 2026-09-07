@@ -5,7 +5,7 @@
 
 import type { RichTextDelta, RichTextSpan } from "@kyneta/schema"
 import type { Delta } from "loro-crdt"
-import { hasKind } from "./loro-guards.js"
+import { hasKind, isLoroCounter, isLoroList, isLoroMap } from "./loro-guards.js"
 
 /**
  * Extract a scalar value from a Loro container or return a plain value as-is.
@@ -29,18 +29,15 @@ export function extractValue(resolved: unknown): unknown {
     return resolved
   }
 
+  if (isLoroCounter(resolved)) return resolved.value
+  if (isLoroMap(resolved)) return resolved.toJSON()
+  if (isLoroList(resolved)) return resolved.toJSON()
+
   const kind = resolved.kind()
 
   switch (kind) {
     case "Text":
       return resolved.toString()
-    case "Counter":
-      return (resolved as any).value
-    case "Map":
-      return (resolved as any).toJSON()
-    case "List":
-    case "MovableList":
-      return (resolved as any).toJSON()
     default:
       // Tree falls through here — handled separately by `resolveForest`.
       return resolved

@@ -20,6 +20,7 @@ import type {
   ChangeBase,
   IncrementChange,
   MapChange,
+  NodeIdentity,
   Op,
   Path,
   ProductSchema,
@@ -492,7 +493,7 @@ function yjsPathToKynetaPath(
       // Inverse-lookup recovers the original declared field name when
       // the segment IS an identity hash; otherwise we keep the string.
       let leaf = segment
-      const absPath = binding?.inverse.get(segment as any)
+      const absPath = binding?.inverse.get(segment as NodeIdentity)
       if (absPath) {
         const lastDot = absPath.lastIndexOf(".")
         leaf = lastDot >= 0 ? absPath.slice(lastDot + 1) : absPath
@@ -662,7 +663,7 @@ function mapEventToChange(
 
   event.changes.keys.forEach((change: { action: string }, key: string) => {
     // Reverse-map identity hash → absolute schema path → leaf field name.
-    const absPath = binding?.inverse.get(key as any)
+    const absPath = binding?.inverse.get(key as NodeIdentity)
     const fieldName = absPath
       ? absPath.lastIndexOf(".") >= 0
         ? absPath.slice(absPath.lastIndexOf(".") + 1)
