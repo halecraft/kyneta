@@ -184,6 +184,13 @@ export function withNavigation<A extends HasCall>(
           return Reflect.has(getActive(), prop)
         },
         set(_target, prop, value) {
+          // Note where this lands: on the *resolved variant*, not on the proxy
+          // itself. A property assigned to a sum carrier therefore disappears
+          // the next time the variant shifts. No layer does that today —
+          // `sum` is a pass-through everywhere, so nothing augments this
+          // carrier — but a layer that stopped passing it through would need
+          // `Object.defineProperty`, which has no trap here and so lands on
+          // the proxy's own stable target.
           return Reflect.set(getActive(), prop, value)
         },
         ownKeys(_target) {

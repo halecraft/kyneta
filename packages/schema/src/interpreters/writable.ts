@@ -796,8 +796,19 @@ export type Writable<S extends Schema> =
 export function withWritable<A>(
   base: Interpreter<RefContext, A>,
 ): Interpreter<WritableContext, A & HasTransact> {
-  // Helper: attach [TRANSACT] and [PATH] as non-enumerable symbol properties.
-  // Uses Object.defineProperty to bypass Proxy set traps on map refs.
+  // Attach [TRANSACT] and [PATH] as non-enumerable symbol properties.
+  //
+  // `Object.defineProperty` rather than assignment, and the reason is
+  // `enumerable: false`: an assigned symbol is enumerable, and object spread
+  // (`{...ref}`) copies enumerable own symbols, so a copy of a ref would carry
+  // a live context and path it has no claim to. Nothing in the suite catches
+  // that today, which is exactly why it is written down here.
+  //
+  // (An earlier version of this comment said the call was here to bypass
+  // Proxy `set` traps on map refs. That is not so: map refs are plain
+  // carriers, and the package's only Proxy — the sum carrier in
+  // `with-navigation.ts` — never reaches this function, because `sum` is a
+  // pass-through in every augmenting layer.)
   function attachTransact(
     result: unknown,
     ctx: WritableContext,

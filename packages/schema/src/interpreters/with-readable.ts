@@ -42,7 +42,7 @@ import type {
 } from "../schema.js"
 
 import type { HasNavigation, HasRead } from "./bottom.js"
-import { CALL } from "./bottom.js"
+import { CALL, markRead } from "./bottom.js"
 import { installKeyedReadable } from "./keyed-helpers.js"
 import { installSequenceReadable } from "./sequence-helpers.js"
 import { installSetReadable } from "./set-helpers.js"
@@ -83,39 +83,31 @@ export function withReadable<A extends HasNavigation>(
     [INTERPRETER]: true,
     // --- Scalar ---------------------------------------------------------------
     // ---------------------------------------------------------------------
-    // A note on `base.X(...) as any`, which appears in every case below.
+    // Each case takes the carrier the layer below produced, adds members, and
+    // returns it. `Object.assign` is what types that: its signature is
+    // `<T, U>(target: T, source: U): T & U`, which is exactly "a `T`, plus
+    // these members, still a `T`". Assigning to a property of a value typed as
+    // the parameter `A` is a type error — `A` might have that member at
+    // another type — which is why these used to open with `as any`.
     //
-    // Each case takes the value the base interpreter produced and adds members
-    // to it, then returns it as `A & Has…`. Expressing that in the type system
-    // needs a way to say "an `A`, plus these members, still an `A`" — and `A`
-    // is the interpreter's carrier type parameter, so this is a statement
-    // *about* a type variable. TypeScript has no higher-kinded types, so it
-    // cannot be written.
-    //
-    // These sites sit inside the interpreter's generic recursion, which is
-    // where `TS2589` ("type instantiation is excessively deep") originates in
-    // this codebase; `@kyneta/exchange` already carries workarounds for it. An
-    // augmentation helper is the fix, and it belongs in its own change with its
-    // own depth budget rather than riding along with cast cleanup.
-    //
-    // Some of these are load-bearing for a second, unrelated reason: a map ref
-    // is proxy-backed, so plain assignment would hit a `set` trap and the code
-    // uses `Object.defineProperty`. Those stay regardless of what the types
-    // eventually allow.
+    // `markRead` at the end of each case is irreducible and small. `HasRead`
+    // is a *phantom brand*: a symbol declared but never assigned at runtime,
+    // marking "this carrier's `[CALL]` returns a real value". Nothing
+    // structural can produce it, so claiming it is precisely what an assertion
+    // is for. Everything before that line is now checked.
     // ---------------------------------------------------------------------
     scalar(ctx: RefContext, path: Path, schema: ScalarSchema): A & HasRead {
-      const result = base.scalar(ctx, path, schema) as any
+      const result = Object.assign(base.scalar(ctx, path, schema), {
+        [CALL]: () => ctx.reader.read(path),
+        // Hint-aware toPrimitive for template literal coercion
+        [Symbol.toPrimitive]: (hint: string) => {
+          const v = ctx.reader.read(path)
+          return hint === "string" ? String(v) : v
+        },
+      })
 
-      // Fill CALL slot
-      result[CALL] = () => ctx.reader.read(path)
-
-      // Hint-aware toPrimitive for template literal coercion
-      result[Symbol.toPrimitive] = (hint: string) => {
-        const v = ctx.reader.read(path)
-        return hint === "string" ? String(v) : v
-      }
-
-      return result as A & HasRead
+      markRead(result)
+      return result
     },
 
     // --- Product ---------------------------------------------------------------
@@ -127,21 +119,28 @@ export function withReadable<A extends HasNavigation>(
     ): A & HasRead {
       // Downcast thunks for the base interpreter
       const baseFields = fields as Readonly<Record<string, () => A>>
-      const result = base.product(ctx, path, schema, baseFields) as any
+      const carrier = base.product(ctx, path, schema, baseFields)
+      // The product's fields are read back by name, and those names come from
+      // the schema rather than the type — so this view is genuinely untyped,
+      // and says only that much.
+      const byFieldName = carrier as Record<string, unknown>
 
-      // Fill CALL slot — fold child values through the carrier's navigation
-      // surface (property getters) to produce a fresh snapshot. This goes
-      // through withCaching's memoized getters when present.
-      result[CALL] = () => {
-        const snapshot: Record<string, unknown> = {}
-        for (const key of Object.keys(fields)) {
-          const child = result[key]
-          snapshot[key] = typeof child === "function" ? child() : child
-        }
-        return snapshot
-      }
+      const result = Object.assign(carrier, {
+        // Fill CALL slot — fold child values through the carrier's navigation
+        // surface (property getters) to produce a fresh snapshot. This goes
+        // through withCaching's memoized getters when present.
+        [CALL]: () => {
+          const snapshot: Record<string, unknown> = {}
+          for (const key of Object.keys(fields)) {
+            const child = byFieldName[key]
+            snapshot[key] = typeof child === "function" ? child() : child
+          }
+          return snapshot
+        },
+      })
 
-      return result as A & HasRead
+      markRead(result)
+      return result
     },
 
     // --- Sequence --------------------------------------------------------------
@@ -154,7 +153,8 @@ export function withReadable<A extends HasNavigation>(
       const baseItem = item as (index: number) => A
       const result = base.sequence(ctx, path, schema, baseItem)
       installSequenceReadable(result, ctx, path)
-      return result as A & HasRead
+      markRead(result)
+      return result
     },
 
     // --- Map -------------------------------------------------------------------
@@ -167,7 +167,8 @@ export function withReadable<A extends HasNavigation>(
       const baseItem = item as (key: string) => A
       const result = base.map(ctx, path, schema, baseItem)
       installKeyedReadable(result, ctx, path)
-      return result as A & HasRead
+      markRead(result)
+      return result
     },
 
     // --- Sum -------------------------------------------------------------------
@@ -185,30 +186,32 @@ export function withReadable<A extends HasNavigation>(
     // --- Text ------------------------------------------------------------------
     // Text: callable returning string, text-specific toPrimitive.
     text(ctx: RefContext, path: Path, schema: TextSchema): A & HasRead {
-      const result = base.text(ctx, path, schema) as any
-
-      result[CALL] = () => {
+      const read = (): string => {
         const v = ctx.reader.read(path)
         return typeof v === "string" ? v : String(v ?? "")
       }
-      result[Symbol.toPrimitive] = (_hint: string) => result[CALL]()
-      return result as A & HasRead
+      const result = Object.assign(base.text(ctx, path, schema), {
+        [CALL]: read,
+        [Symbol.toPrimitive]: (_hint: string) => read(),
+      })
+      markRead(result)
+      return result
     },
 
     // --- Counter ---------------------------------------------------------------
     // Counter: callable returning number, hint-aware toPrimitive.
     counter(ctx: RefContext, path: Path, schema: CounterSchema): A & HasRead {
-      const result = base.counter(ctx, path, schema) as any
-
-      result[CALL] = () => {
+      const read = (): number => {
         const v = ctx.reader.read(path)
         return typeof v === "number" ? v : 0
       }
-      result[Symbol.toPrimitive] = (hint: string) => {
-        const v = result[CALL]()
-        return hint === "string" ? String(v) : v
-      }
-      return result as A & HasRead
+      const result = Object.assign(base.counter(ctx, path, schema), {
+        [CALL]: read,
+        [Symbol.toPrimitive]: (hint: string) =>
+          hint === "string" ? String(read()) : read(),
+      })
+      markRead(result)
+      return result
     },
 
     // --- Set -------------------------------------------------------------------
@@ -224,7 +227,8 @@ export function withReadable<A extends HasNavigation>(
       const baseItem = item as (key: string) => A
       const result = base.set(ctx, path, schema, baseItem)
       installSetReadable(result, ctx, path)
-      return result as A & HasRead
+      markRead(result)
+      return result
     },
 
     // --- Tree ------------------------------------------------------------------
@@ -241,7 +245,8 @@ export function withReadable<A extends HasNavigation>(
       const baseNode = node as unknown as (id: string) => A
       const result = base.tree(ctx, path, schema, baseNodes, baseNode)
       installTreeReadable(result, ctx, path, node)
-      return result as A & HasRead
+      markRead(result)
+      return result
     },
 
     // --- Movable ---------------------------------------------------------------
@@ -254,23 +259,25 @@ export function withReadable<A extends HasNavigation>(
       const baseItem = item as (index: number) => A
       const result = base.movable(ctx, path, schema, baseItem)
       installSequenceReadable(result, ctx, path)
-      return result as A & HasRead
+      markRead(result)
+      return result
     },
 
     // --- RichText --------------------------------------------------------------
     // RichText: callable returning string, text-specific toPrimitive.
     richtext(ctx: RefContext, path: Path, schema: RichTextSchema): A & HasRead {
-      const result = base.richtext(ctx, path, schema) as any
-
-      result[CALL] = () => ctx.reader.read(path)
-      result[Symbol.toPrimitive] = (_hint: string) => {
-        const v = ctx.reader.read(path)
-        if (Array.isArray(v)) {
-          return (v as Array<{ text: string }>).map(s => s.text).join("")
-        }
-        return ""
-      }
-      return result as A & HasRead
+      const result = Object.assign(base.richtext(ctx, path, schema), {
+        [CALL]: () => ctx.reader.read(path),
+        [Symbol.toPrimitive]: (_hint: string) => {
+          const v = ctx.reader.read(path)
+          if (Array.isArray(v)) {
+            return (v as Array<{ text: string }>).map(s => s.text).join("")
+          }
+          return ""
+        },
+      })
+      markRead(result)
+      return result
     },
   }
 }

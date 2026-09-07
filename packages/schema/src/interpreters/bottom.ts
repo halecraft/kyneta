@@ -143,6 +143,25 @@ export interface HasRead extends HasNavigation {
 }
 
 /**
+ * Mark a carrier as read-filled.
+ *
+ * **The empty body is the point.** `HasRead`'s brand is declared but never
+ * assigned, so it does not exist at runtime and nothing structural can produce
+ * it — `Object.assign` cannot, and neither can anything else. Claiming the
+ * brand is therefore a statement about intent, not about the object, and an
+ * assertion function with no body says exactly that.
+ *
+ * Used by `withReadable` once per case, after the `[CALL]` slot is filled. It
+ * replaces a `as any` that used to sit at the top of each case and disable
+ * checking for the whole body; now only the brand is asserted, and the members
+ * being added are checked.
+ */
+export function markRead<T>(carrier: T): asserts carrier is T & HasRead {
+  // Intentionally empty — see above.
+  void carrier
+}
+
+/**
  * A carrier that has child caching and change-driven cache invalidation.
  * Extends `HasNavigation`.
  *

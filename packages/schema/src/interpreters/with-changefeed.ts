@@ -140,7 +140,17 @@ export function populatedFeed(
 
 /**
  * Attaches a `[CHANGEFEED]` symbol property non-enumerably to `target`.
- * Uses `Object.defineProperty` to bypass Proxy `set` traps on map refs.
+ *
+ * `Object.defineProperty` rather than assignment for the descriptor flags:
+ * `enumerable: false` keeps the slot out of object spread (`{...ref}` copies
+ * enumerable own symbols, which would hand a copy someone else's changefeed),
+ * and `writable: false` stops the slot being replaced after attachment.
+ *
+ * (An earlier version of this comment said the call was here to bypass Proxy
+ * `set` traps on map refs. It is not: map refs are plain carriers, and the
+ * package's only Proxy — the sum carrier in `with-navigation.ts` — never
+ * reaches this function, because `sum` is a pass-through in every augmenting
+ * layer.)
  */
 export function attachChangefeed(
   target: object,
