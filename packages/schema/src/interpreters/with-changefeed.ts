@@ -667,6 +667,23 @@ function ensurePrepareWiring(ctx: RefContext): ChangefeedChannels {
 }
 
 /**
+ * Number of own-path listener registrations at `pathKey` for the given context.
+ *
+ * @internal Not exported from the package barrel.
+ *
+ * Test-only, and modelled on `__getCacheHandlerCountAtPath` in
+ * `with-caching.ts` — the same problem one interpreter over. A registration
+ * that outlives its subscriber costs memory and per-flush work and nothing
+ * else: delivery still calls exactly the callbacks that are subscribed, so a
+ * test counting callbacks passes whether or not the registry accretes. Reading
+ * the structure is the test that actually holds.
+ */
+export function __getListenerCountAtPath(ctx: object, pathKey: string): number {
+  const state = contextState.get(ctx as RefContext)
+  return state?.listeners.get(pathKey)?.size ?? 0
+}
+
+/**
  * Registers a listener for changes at a specific path.
  * Returns an unsubscribe function.
  *
@@ -696,27 +713,29 @@ function listenAtPath(
 }
 
 /**
- * The own-path half of a node's changefeed: the subscriber set plus the
- * `subscribe` method every factory returns.
- *
- * Each node keeps its *own* set of own-path subscribers and registers a single
- * callback in the shared `listeners` map that fans out to it. The indirection
- * buys per-node teardown: a subscriber leaves by dropping out of the local set,
- * without touching the shared map that other ref instances at the same path
- * also write into.
- *
- * Note that the shared registration itself is never released — see
- * "Per-ref-instance listener multiplication" in `packages/schema/TECHNICAL.md`.
- * That is pre-existing behaviour, preserved here deliberately rather than
- * changed as a side effect of extracting this helper.
- */
-/**
  * Wire a node's own-path channel: allocate its subscriber set, register one
  * shared listener that fans out to that set, and return the `subscribe`
  * implementation.
  *
  * Every changefeed factory needs exactly this, which is why it lives here
  * rather than being written out five times.
+ *
+ * Each node keeps its *own* set of own-path subscribers and puts a single
+ * callback in the shared `listeners` map that fans out to it. The indirection
+ * buys per-node teardown: a subscriber leaves by dropping out of the local set,
+ * without touching the shared map that other ref instances at the same path
+ * also write into.
+ *
+ * **The shared registration follows the subscribers, not the carrier.** It is
+ * established when the first subscriber arrives and released when the last one
+ * leaves. This matters because carriers are not unique per path: every call to
+ * the catamorphism's per-id child closure mints a fresh one (see
+ * "Per-ref-instance listener multiplication" in `packages/schema/TECHNICAL.md`),
+ * each of which wires its own changefeed. Registering at construction time
+ * meant one permanent entry per carrier ever created, with nothing to remove it
+ * — JavaScript offers no destructor, and the changefeed layer holds no
+ * reference to the carrier it could weaken. Registering on demand sidesteps the
+ * question: a carrier nobody subscribes to never appears in the map at all.
  *
  * @param onChangeset - Extra work to run after the fan-out, on the same
  *   changeset. Only the tree uses it, to spot delete instructions and
@@ -729,15 +748,36 @@ function fanOutOwnPath(
 ): (callback: (changeset: Changeset<ChangeBase>) => void) => () => void {
   const subscribers = new Set<(changeset: Changeset<ChangeBase>) => void>()
 
-  listenAtPath(channels.listeners, path, changeset => {
+  const fanOut = (changeset: Changeset<ChangeBase>): void => {
     for (const callback of subscribers) callback(changeset)
     onChangeset?.(changeset)
-  })
+  }
+
+  // The rule: a node with side effects on the changeset registers eagerly and
+  // keeps its registration for good; a node that only fans out registers on
+  // demand. The tree is the only eager case — it has to watch every changeset
+  // for delete instructions so a vanishing node can be told it is gone, and
+  // that has to happen whether or not anyone subscribed to the tree.
+  const permanent = onChangeset !== undefined
+
+  // `undefined` means "not registered". Holding the teardown rather than a
+  // boolean is what makes re-subscription work: a node that empties and later
+  // refills establishes a *fresh* registration instead of assuming its old one
+  // is still in the map.
+  let unlisten = permanent
+    ? listenAtPath(channels.listeners, path, fanOut)
+    : undefined
 
   return callback => {
     subscribers.add(callback)
+    unlisten ??= listenAtPath(channels.listeners, path, fanOut)
     return () => {
-      subscribers.delete(callback)
+      // Guard on membership, not on set size, so calling a teardown twice
+      // cannot release a registration that a later subscriber established.
+      if (!subscribers.delete(callback)) return
+      if (permanent || subscribers.size > 0) return
+      unlisten?.()
+      unlisten = undefined
     }
   }
 }
