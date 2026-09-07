@@ -605,9 +605,9 @@ The 11 interpreter cases fall into four structural categories. The first three a
 
 | Family | Cases | Shared helpers | Shared algebra |
 |--------|-------|---------------|----------------|
-| **Indexed** (positional) | `text`, `sequence`, `movable`, `richtext` | `sequence-helpers.ts` — `at()`, `installTextWriteOps`, `installListWriteOps`, `installRichTextWriteOps`, `installSequenceReadable`, `installSequenceNavigation`, `installSequenceAddressing`, `installSequenceCaching` | `Instruction`, `foldInstructions`, `transformIndex`, `advanceAddresses` |
-| **Keyed** (named) | `map` | `keyed-helpers.ts` — `installKeyedWriteOps`, `installKeyedReadable`, `installKeyedNavigation`, `installKeyedAddressing`, `installKeyedCaching` | `MapChange`, keyed addressing/tombstoning |
-| **Leaf** (terminal) | `scalar`, `text`, `counter`, `richtext`, **`set`** | `wireChangefeed` in `with-changefeed.ts` unifies changefeed boilerplate; `set-helpers.ts` provides `installSetReadable` and `installSetWriteOps` for the value-addressed set surface | `createLeafChangefeed`, `SetChange`, `isSameSetMember` |
+| **Indexed** (positional) | `text`, `sequence`, `movable`, `richtext` | `sequence-helpers.ts` — `at()`, `installTextWriteOps`, `installListWriteOps`, `installRichTextWriteOps`, `installSequenceReadable`, `installSequenceNavigation`, `installSequenceCaching` | `Instruction`, `foldInstructions`, `transformIndex`, `advanceAddresses` |
+| **Keyed** (named) | `map` | `keyed-helpers.ts` — `installKeyedWriteOps`, `installKeyedReadable`, `installKeyedNavigation`, `installKeyedCaching` (address-table exposure is `installAddressTable` in `with-addressing.ts`, shared with sequences) | `MapChange`, keyed addressing/tombstoning |
+| **Leaf** (terminal) | `scalar`, `text`, `counter`, `richtext`, **`set`** | `wireChangefeed` in `with-changefeed.ts` unifies changefeed boilerplate; `set-helpers.ts` provides `installSetReadable` and `installSetWriteOps` for the value-addressed set surface | `createNodeChangefeed`, `SetChange`, `isSameSetMember` |
 | **Structural** (unique) | `product`, `sum`, `tree` | None — each has unique per-case logic | Product: schema-driven fields + discriminant. Sum: store-based variant dispatch. Tree: thin pass-through. |
 
 **`text` and `richtext` straddle two families.** They are indexed for writable (share `at()` and the retain/insert/delete instruction stream with sequence/movable) but leaf for readable, navigation, and changefeed (return `string` / delta directly, not a fold over children). Characters are not independently addressable refs.
@@ -1345,13 +1345,22 @@ with `Object.defineProperty`. What the conversion actually needed was one
 constraint: `withWritable<A extends object>`, because `Object.assign` will not
 take an unconstrained type parameter.
 
-**Phantom brands.** `HasRead` and `HasCaching` each carry a symbol that is
-declared but never assigned, marking a capability that has no runtime
-representation. Nothing structural can produce one, so `markRead` and
-`markCaching` in `bottom.ts` are assertion functions **with empty bodies** —
-the honest shape for a claim that is entirely type-level. They are the reason
-those layers still end each case with an assertion, and the assertion is now
-one named call rather than `as any` over the whole body.
+**Phantom brands.** `HasNavigation`, `HasRead` and `HasCaching` each carry a
+symbol that is declared but never assigned, marking a capability with no
+runtime representation. Nothing structural can produce one, so `markNavigation`,
+`markRead` and `markCaching` in `bottom.ts` are assertion functions **with
+empty bodies** — the honest shape for a claim that is entirely type-level. They
+are the reason those layers still end each case with an assertion, and the
+assertion is now one named call rather than `as any` over the whole body.
+
+The brands have a second consequence, which is where most of the remaining
+narrowings come from. Because a brand says *that* a capability exists without
+saying what it looks like, a layer cannot see the surface an inner layer
+installed: the readable layer calls `.at`, but its carrier type does not carry
+it. `NavigableCarrier<K>` names that dependency at each site instead of
+reaching for `any`. Making the brands structural would remove those narrowings
+and move the cost into every layer's return type, which is where the `TS2589`
+budget would go.
 
 **The `TS2589` depth ceiling.** "Type instantiation is excessively deep" is a
 hard compiler limit, not a warning, and this codebase runs near it. The
@@ -1469,11 +1478,15 @@ that *add* members are assertion functions declaring what they attach
 (`ListWriteOps`, `KeyedNavigation`, `TreeReadable` and so on), so a member
 installed in one place is visible in the carrier's type at the call site.
 
-Four of them still cannot assert: `installKeyedAddressing`,
-`installKeyedCaching`, `installSequenceAddressing` and
-`installSequenceCaching` take the symbol they attach as a *parameter*, so there
-is no member to name in a type. They take `result: object` and narrow
-internally, which is honest about their being dynamic by design.
+Three still cannot assert: `installKeyedCaching`, `installSequenceCaching` and
+`installAddressTable` (in `with-addressing.ts`) take the symbol they attach as
+a *parameter*, so there is no member to name in a type. They take
+`result: object` and narrow internally, which is honest about their being
+dynamic by design.
+
+`installAddressTable` is shared: sequences and maps had one installer each,
+character-for-character identical, because every difference between them is
+passed in as an argument. It lives in `with-addressing.ts`, its only caller.
 
 One structural fact is worth knowing before touching this code. **Layers
 describe each other with phantom brands, not structurally.** `installKeyedReadable`

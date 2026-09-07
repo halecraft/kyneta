@@ -9,10 +9,9 @@
 // point if keyed kinds gain new operations in the future.
 
 import { mapChange } from "../change.js"
-import { isPropertyHost } from "../guards.js"
 import type { Path } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
-import { CALL } from "./bottom.js"
+import { CALL, type NavigableCarrier } from "./bottom.js"
 import type { WritableContext } from "./writable.js"
 
 /**
@@ -83,7 +82,7 @@ export function installKeyedReadable<T extends object>(
   // phantom brands (`HasNavigation`) rather than structurally, so the type
   // cannot carry it across the boundary. Naming the one member being relied on
   // states the dependency instead of hiding it.
-  const navigable = result as { at: (key: string) => unknown }
+  const navigable = result as NavigableCarrier<string>
 
   // Snapshot goes through result.at(key) — not the raw item closure —
   // to respect caching/addressing identity.
@@ -135,7 +134,7 @@ export function installKeyedNavigation<T extends object>(
   // Read back through the carrier rather than calling `item` directly, so
   // `entries`/`values` respect whatever caching or addressing a later layer
   // installs over `.at`. Same cross-layer situation as `installKeyedReadable`.
-  const navigable = result as { at: (key: string) => unknown }
+  const navigable = result as NavigableCarrier<string>
   Object.defineProperty(result, "at", {
     value: (key: string): unknown => {
       if (!ctx.reader.hasKey(path, key)) {
@@ -200,31 +199,6 @@ export function installKeyedNavigation<T extends object>(
   })
 }
 
-/** Expose the address table via a well-known symbol and register a prepare handler for key-based address tracking. */
-export function installKeyedAddressing(
-  result: object,
-  path: Path,
-  addressTableSymbol: symbol,
-  getTable: () => unknown,
-  registerHandler: (path: Path, handler: (change: any) => void) => void,
-  handleChange: (table: unknown, change: any) => void,
-): void {
-  if (isPropertyHost(result)) {
-    Object.defineProperty(result, addressTableSymbol, {
-      get() {
-        return getTable()
-      },
-      enumerable: false,
-      configurable: true,
-    })
-  }
-
-  registerHandler(path, (change: any) => {
-    const t = getTable()
-    if (t) handleChange(t, change)
-  })
-}
-
 /** Override `.at(key)` with address-table-backed lookup and register an invalidation handler. */
 export function installKeyedCaching(
   result: object,
@@ -236,9 +210,7 @@ export function installKeyedCaching(
   // Both symbols arrive as parameters, so neither the slot being read nor the
   // one being written can be named in a type. This helper narrows rather than
   // asserts for that reason — the members it touches are dynamic by design.
-  const slots = result as Record<symbol, unknown> & {
-    at: (key: string) => unknown
-  }
+  const slots = result as Record<symbol, unknown> & NavigableCarrier<string>
   const baseAt = slots.at
 
   Object.defineProperty(result, "at", {

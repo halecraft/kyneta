@@ -33,10 +33,9 @@
 // addressable refs.
 
 import { richTextChange, sequenceChange, textChange } from "../change.js"
-import { isPropertyHost } from "../guards.js"
 import type { Path } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
-import { CALL, type Mutable } from "./bottom.js"
+import { CALL, type Mutable, type NavigableCarrier } from "./bottom.js"
 import type { WritableContext } from "./writable.js"
 
 // ---------------------------------------------------------------------------
@@ -255,7 +254,7 @@ export function installSequenceReadable<T extends object>(
   // `.at` comes from `installSequenceNavigation`, one layer further in. Layers
   // describe each other with phantom brands rather than structurally, so it is
   // not visible in `T` — named here rather than hidden behind `any`.
-  const navigable = result as { at: (index: number) => unknown }
+  const navigable = result as NavigableCarrier<number>
 
   // Snapshot goes through result.at(i) — not the raw item closure —
   // to respect caching/addressing identity.
@@ -335,35 +334,6 @@ export function installSequenceNavigation<T extends object>(
 }
 
 // ---------------------------------------------------------------------------
-// installSequenceAddressing — address table getter + prepare handler
-// ---------------------------------------------------------------------------
-
-/** Expose the address table via a symbol property and register a prepare handler for address advancement. */
-export function installSequenceAddressing(
-  result: object,
-  path: Path,
-  addressTableSymbol: symbol,
-  getTable: () => unknown,
-  registerHandler: (path: Path, handler: (change: any) => void) => void,
-  handleChange: (table: unknown, change: any) => void,
-): void {
-  if (isPropertyHost(result)) {
-    Object.defineProperty(result, addressTableSymbol, {
-      get() {
-        return getTable()
-      },
-      enumerable: false,
-      configurable: true,
-    })
-  }
-
-  registerHandler(path, (change: any) => {
-    const t = getTable()
-    if (t) handleChange(t, change)
-  })
-}
-
-// ---------------------------------------------------------------------------
 // installSequenceCaching — address-table-backed .at() override + INVALIDATE
 // ---------------------------------------------------------------------------
 
@@ -377,9 +347,7 @@ export function installSequenceCaching(
 ): void {
   // Both symbols arrive as parameters, so neither slot can be named in a type.
   // This helper narrows rather than asserts for that reason.
-  const slots = result as Record<symbol, unknown> & {
-    at: (index: number) => unknown
-  }
+  const slots = result as Record<symbol, unknown> & NavigableCarrier<number>
   const baseAt = slots.at
 
   Object.defineProperty(result, "at", {

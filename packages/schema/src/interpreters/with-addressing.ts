@@ -67,10 +67,50 @@ import type {
 import type { BatchOptions } from "../substrate.js"
 import { currentScope, dependencyKey, reportRead } from "../tracking.js"
 import type { HasNavigation } from "./bottom.js"
-import { installKeyedAddressing } from "./keyed-helpers.js"
-import { installSequenceAddressing } from "./sequence-helpers.js"
 import type { WritableContext } from "./writable.js"
 import { hasTransact, REMOVE, TRANSACT } from "./writable.js"
+
+/**
+ * Expose a node's address table under a symbol, and register the prepare
+ * handler that keeps it current.
+ *
+ * **One function for sequences and maps.** They previously had an
+ * `installSequenceAddressing` and an `installKeyedAddressing` that were
+ * character-for-character identical — nothing here is positional or keyed,
+ * because every difference between the two is supplied by the caller as an
+ * argument: which table to fetch, and what to do with a change.
+ *
+ * It lives here rather than in the helper modules because this is its only
+ * caller, and because "expose a table, register a handler" is addressing's own
+ * concern rather than something the sequence or map surfaces need to know.
+ *
+ * The `isPropertyHost` guard skips carriers that cannot hold properties;
+ * registration still happens for those, since the handler is what advances
+ * addresses and it must run whether or not anyone can read the table.
+ */
+function installAddressTable(
+  result: object,
+  path: Path,
+  addressTableSymbol: symbol,
+  getTable: () => unknown,
+  registerHandler: (path: Path, handler: (change: any) => void) => void,
+  handleChange: (table: unknown, change: any) => void,
+): void {
+  if (isPropertyHost(result)) {
+    Object.defineProperty(result, addressTableSymbol, {
+      get() {
+        return getTable()
+      },
+      enumerable: false,
+      configurable: true,
+    })
+  }
+
+  registerHandler(path, (change: any) => {
+    const t = getTable()
+    if (t) handleChange(t, change)
+  })
+}
 
 let nextDeletedId = 1
 const deletedIds = new WeakMap<object, number>()
@@ -558,7 +598,7 @@ export function withAddressing<A extends HasNavigation>(
       const registry = getOrCreateRegistry(ctx)
       const result = base.sequence(ctx, path, schema, item)
       const seqPathKey = path.key
-      installSequenceAddressing(
+      installAddressTable(
         result,
         path,
         ADDRESS_TABLE,
@@ -581,7 +621,7 @@ export function withAddressing<A extends HasNavigation>(
       const registry = getOrCreateRegistry(ctx)
       const result = base.map(ctx, path, schema, item)
       const mapPathKey = path.key
-      installKeyedAddressing(
+      installAddressTable(
         result,
         path,
         ADDRESS_TABLE,
@@ -651,7 +691,7 @@ export function withAddressing<A extends HasNavigation>(
       const registry = getOrCreateRegistry(ctx)
       const result = base.movable(ctx, path, schema, item)
       const seqPathKey = path.key
-      installSequenceAddressing(
+      installAddressTable(
         result,
         path,
         ADDRESS_TABLE,

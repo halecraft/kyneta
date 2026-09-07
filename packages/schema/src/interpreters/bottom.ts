@@ -125,6 +125,27 @@ export interface HasNavigation extends HasCall {
 }
 
 /**
+ * A carrier seen only through the `.at` that an inner layer installed.
+ *
+ * **Why this needs a name.** Layers describe each other with *phantom brands*
+ * — `HasNavigation` marks "structural addressing is available" without saying
+ * what that addressing looks like. So when the readable or caching layer wants
+ * to call `.at`, which the navigation layer installed further in, the type it
+ * has in hand does not carry it. The dependency is real and ordered; it is
+ * simply not expressible through a brand.
+ *
+ * Naming it makes each of those sites state the one member it depends on,
+ * rather than reaching for `any` and dropping every other check with it. `K` is
+ * `number` for positional carriers and `string` for keyed ones.
+ *
+ * Making the brands structural would remove these narrowings altogether. It
+ * would also mean every layer's return type carrying its full installed
+ * surface, which is where the `TS2589` budget would go — see "Where types are
+ * lost, and why" in `packages/schema/TECHNICAL.md`.
+ */
+export type NavigableCarrier<K> = { at: (key: K) => unknown }
+
+/**
  * Strip `readonly` so an installer can fill in the members it is declaring.
  *
  * The surfaces installers attach are declared `readonly` because that is how
