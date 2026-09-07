@@ -283,11 +283,38 @@ export function listenDescendants(
     set = new Set()
     descendants.set(key, set)
   }
+  const registered = set
   set.add(callback)
-  return () => {
-    set?.delete(callback)
-    if (set?.size === 0) descendants.delete(key)
-  }
+  return () => releaseFrom(descendants, key, registered, callback)
+}
+
+/**
+ * Remove one callback from the subscriber set it was registered in, and drop
+ * the registry key if that leaves the set empty. Shared by both channels,
+ * which hand this teardown straight to callers.
+ *
+ * **The membership check is what makes a teardown safe to call twice**, and it
+ * is doing more work than it looks like. The teardown closes over the set that
+ * existed when the subscriber registered, and that set can stop being the
+ * registry's: emptying a key deletes it, and subscribing at that path again
+ * puts a *new* set in its place. A stale teardown firing after that must not
+ * delete the key out from under the new subscribers.
+ *
+ * It cannot, and the reason is worth stating because it is not obvious. A set
+ * is only ever orphaned at the moment it becomes empty, and nothing can refill
+ * it afterwards — registration always looks the key up fresh, so it reaches the
+ * replacement set instead. An orphaned set is therefore empty forever, so
+ * `delete` on it returns false and the stale teardown stops right here, before
+ * the size check it would otherwise get wrong.
+ */
+function releaseFrom<C>(
+  registry: Map<string, Set<C>>,
+  key: string,
+  set: Set<C>,
+  callback: C,
+): void {
+  if (!set.delete(callback)) return
+  if (set.size === 0) registry.delete(key)
 }
 
 /**
@@ -333,7 +360,11 @@ export function deliverNotifications(
       aborted: options?.aborted,
       source: options?.source,
     }
-    for (const callback of set) callback(changeset)
+    // Snapshot before calling. A callback is free to unsubscribe — itself or
+    // anyone else — and a `Set` being iterated live would then skip a
+    // subscriber it had not reached yet, silencing someone who never asked to
+    // leave. The copy costs one small array per key that has subscribers.
+    for (const callback of [...set]) callback(changeset)
   }
 
   for (const key of plan.deepOrder) {
@@ -348,7 +379,8 @@ export function deliverNotifications(
       aborted: options?.aborted,
       source: options?.source,
     }
-    for (const callback of subscribersHere) callback(changeset)
+    // Snapshot for the same reason as the own-path loop above.
+    for (const callback of [...subscribersHere]) callback(changeset)
   }
 }
 
@@ -703,83 +735,37 @@ function listenAtPath(
     set = new Set()
     listeners.set(key, set)
   }
+  const registered = set
   set.add(callback)
-  return () => {
-    set?.delete(callback)
-    if (set?.size === 0) {
-      listeners.delete(key)
-    }
-  }
+  return () => releaseFrom(listeners, key, registered, callback)
 }
 
 /**
- * Wire a node's own-path channel: allocate its subscriber set, register one
- * shared listener that fans out to that set, and return the `subscribe`
- * implementation.
+ * Register a subscriber on a node's own-path channel.
  *
- * Every changefeed factory needs exactly this, which is why it lives here
- * rather than being written out five times.
+ * The mirror of `listenDescendants` for the shallow channel, and deliberately
+ * the same shape: a subscriber goes straight into the shared registry, and the
+ * teardown it gets back really removes it.
  *
- * Each node keeps its *own* set of own-path subscribers and puts a single
- * callback in the shared `listeners` map that fans out to it. The indirection
- * buys per-node teardown: a subscriber leaves by dropping out of the local set,
- * without touching the shared map that other ref instances at the same path
- * also write into.
+ * Own-path used to be the odd one out. Each node kept a *local* subscriber set
+ * and put one fan-out shim into the shared registry on its behalf, so a
+ * subscriber left by dropping out of the local set and the shim stayed behind
+ * forever. Carriers are not unique per path — every call to the catamorphism's
+ * per-id child closure mints a fresh one (see "Per-ref-instance listener
+ * multiplication" in `packages/schema/TECHNICAL.md`) — so that meant one
+ * permanent entry per carrier ever created, with nothing able to remove it.
+ * JavaScript offers no destructor, and the changefeed layer holds no reference
+ * to the carrier it could weaken.
  *
- * **The shared registration follows the subscribers, not the carrier.** It is
- * established when the first subscriber arrives and released when the last one
- * leaves. This matters because carriers are not unique per path: every call to
- * the catamorphism's per-id child closure mints a fresh one (see
- * "Per-ref-instance listener multiplication" in `packages/schema/TECHNICAL.md`),
- * each of which wires its own changefeed. Registering at construction time
- * meant one permanent entry per carrier ever created, with nothing to remove it
- * — JavaScript offers no destructor, and the changefeed layer holds no
- * reference to the carrier it could weaken. Registering on demand sidesteps the
- * question: a carrier nobody subscribes to never appears in the map at all.
- *
- * @param onChangeset - Extra work to run after the fan-out, on the same
- *   changeset. Only the tree uses it, to spot delete instructions and
- *   synthesize a terminal event for the node that went away.
+ * Registering the real callback sidesteps the question entirely: there is no
+ * shim whose lifetime has to be guessed at, and a carrier nobody subscribes to
+ * never appears in the registry at all.
  */
-function fanOutOwnPath(
+function listenOwnPath(
   channels: ChangefeedChannels,
   path: Path,
-  onChangeset?: (changeset: Changeset<ChangeBase>) => void,
 ): (callback: (changeset: Changeset<ChangeBase>) => void) => () => void {
-  const subscribers = new Set<(changeset: Changeset<ChangeBase>) => void>()
-
-  const fanOut = (changeset: Changeset<ChangeBase>): void => {
-    for (const callback of subscribers) callback(changeset)
-    onChangeset?.(changeset)
-  }
-
-  // The rule: a node with side effects on the changeset registers eagerly and
-  // keeps its registration for good; a node that only fans out registers on
-  // demand. The tree is the only eager case — it has to watch every changeset
-  // for delete instructions so a vanishing node can be told it is gone, and
-  // that has to happen whether or not anyone subscribed to the tree.
-  const permanent = onChangeset !== undefined
-
-  // `undefined` means "not registered". Holding the teardown rather than a
-  // boolean is what makes re-subscription work: a node that empties and later
-  // refills establishes a *fresh* registration instead of assuming its old one
-  // is still in the map.
-  let unlisten = permanent
-    ? listenAtPath(channels.listeners, path, fanOut)
-    : undefined
-
-  return callback => {
-    subscribers.add(callback)
-    unlisten ??= listenAtPath(channels.listeners, path, fanOut)
-    return () => {
-      // Guard on membership, not on set size, so calling a teardown twice
-      // cannot release a registration that a later subscriber established.
-      if (!subscribers.delete(callback)) return
-      if (permanent || subscribers.size > 0) return
-      unlisten?.()
-      unlisten = undefined
-    }
-  }
+  return callback => listenAtPath(channels.listeners, path, callback)
 }
 
 // ---------------------------------------------------------------------------
@@ -967,7 +953,7 @@ function getPopulatedState(ctx: RefContext): {
 /**
  * Builds the `RecursiveChangefeedProtocol` for a structurally-leaf node.
  *
- * Structurally identical to the composite factories: `fanOutOwnPath` for the
+ * Structurally identical to the composite factories: `listenOwnPath` for the
  * own-path channel, `listenDescendants` for the deep one. A leaf registers its
  * deep subscribers in the shared descendant map exactly like a composite does,
  * and the ancestor walk reaches them at relative path `[]` — a leaf is a tree
@@ -986,7 +972,7 @@ function createLeafChangefeed(
   path: Path,
   readCurrent: () => unknown,
 ): RecursiveChangefeedProtocol<unknown, ChangeBase> {
-  const subscribeOwnPath = fanOutOwnPath(channels, path)
+  const subscribeOwnPath = listenOwnPath(channels, path)
 
   return {
     get current() {
@@ -1021,7 +1007,7 @@ function createProductChangefeed(
   path: Path,
   readCurrent: () => unknown,
 ): RecursiveChangefeedProtocol<unknown, ChangeBase> {
-  const subscribeOwnPath = fanOutOwnPath(channels, path)
+  const subscribeOwnPath = listenOwnPath(channels, path)
 
   return {
     get current() {
@@ -1041,7 +1027,7 @@ function createSequenceChangefeed(
   path: Path,
   readCurrent: () => unknown,
 ): RecursiveChangefeedProtocol<unknown, ChangeBase> {
-  const subscribeOwnPath = fanOutOwnPath(channels, path)
+  const subscribeOwnPath = listenOwnPath(channels, path)
 
   return {
     get current() {
@@ -1069,7 +1055,7 @@ function createMapChangefeed(
   path: Path,
   readCurrent: () => unknown,
 ): RecursiveChangefeedProtocol<unknown, ChangeBase> {
-  const subscribeOwnPath = fanOutOwnPath(channels, path)
+  const subscribeOwnPath = listenOwnPath(channels, path)
 
   return {
     get current() {
@@ -1135,10 +1121,18 @@ function createTreeChangefeed(
     }
   }
 
-  // The tree is the one factory that needs more than a fan-out: after its own
-  // subscribers have seen the changeset, it scans for delete instructions so a
-  // vanishing node can be told it is gone.
-  const subscribeOwnPath = fanOutOwnPath(channels, path, changeset => {
+  // The delete scan is the tree's one job that is not a subscription, so it
+  // gets its own registration and keeps it for the life of the carrier. Every
+  // other entry in the own-path registry belongs to a subscriber and leaves
+  // when that subscriber does; this one has to see every changeset whether or
+  // not anyone is listening to the tree, because the node being deleted may
+  // have subscribers even when the tree itself has none.
+  //
+  // Registered here rather than on first subscription, which also fixes the
+  // ordering: it is added before any subscriber, and the registry iterates in
+  // insertion order, so a node learns it is gone before the tree's own-path
+  // subscribers hear about the batch that removed it.
+  listenAtPath(channels.listeners, path, changeset => {
     for (const change of changeset.changes) {
       if (!isTreeChange(change)) continue
       for (const inst of change.instructions) {
@@ -1151,7 +1145,7 @@ function createTreeChangefeed(
     get current() {
       return readCurrent()
     },
-    subscribe: subscribeOwnPath,
+    subscribe: listenOwnPath(channels, path),
     subscribeDescendants(
       callback: (changeset: Changeset<Op>) => void,
     ): () => void {
