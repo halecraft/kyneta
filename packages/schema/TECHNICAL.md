@@ -948,7 +948,7 @@ A single `MapChange` (e.g. `replaceEntry("alice", {...})`) represents a structur
 
 Sequence, map, and tree used to share a pattern: an own-path listener plus a **per-key forwarder map** holding `child[CHANGEFEED].subscribeDescendants(...)` unsubscribes, plus **structural-change-driven wire/unwire** triggered from the own-path callback. Each kept its forwarders keyed by something stable — the sequence by address ID from `withAddressing`, the map by entry key, the tree by TreeID — and each rebuilt them as items came and went.
 
-All of it is gone. Those three mechanisms existed to keep a *derived* structure aligned with a document whose shape changes at runtime, and the relation they encoded — "which subscribers care about this change" — is recomputable in O(depth) at delivery from the changed path alone. The factories are now the same three lines each: register own-path subscribers via `listenAtPath`, register deep subscribers via `listenDescendants`, done. None of them touches a child ref.
+All of it is gone. Those three mechanisms existed to keep a *derived* structure aligned with a document whose shape changes at runtime, and the relation they encoded — "which subscribers care about this change" — is recomputable in O(depth) at delivery from the changed path alone. There is no longer a factory *per kind* at all: `createNodeChangefeed` serves every schema case except `tree`, and does nothing but register own-path subscribers in one registry and deep subscribers in the other. None of them touches a child ref.
 
 The bug that forced the question was in `product`, which had **no** repair machinery because a struct's fields are fixed. That is true of the fields, and not of what sits behind them: `withChangefeed.sum()` is a pass-through, so a `.nullable()` field's `[CHANGEFEED]` resolves to *the live variant's* feed. A product that subscribed to its fields once captured the null variant's feed, and a later variant shift left it listening to nothing. Subscribing to a document before an optional field was populated meant never hearing about writes inside it, permanently — and because the Exchange wires its document subscription at creation time, that was every synced document.
 
@@ -976,7 +976,7 @@ So multiple ref instances can exist at the same path key. Correct by constructio
 
 Catamorphism-side memoization keyed by `(parentPath, id)` would collapse the count to one per id. Documented here to surface the property; not currently fixed.
 
-**Registrations no longer multiply with carriers.** They used to, and that was the sharper half of this problem. Own-path listeners were registered when a carrier was *built*, and `fanOutOwnPath` discarded the unsubscribe `listenAtPath` returned, so the shared set grew *monotonically* — one dead entry per discarded carrier, for the document's lifetime, each costing an iteration over an empty set per flush plus a retained closure. The workload named above as common was also the one that accumulated fastest: thirty `d.tree.node(id)` read-and-write cycles left sixty dead entries at one path key.
+**Registrations no longer multiply with carriers.** They used to, and that was the sharper half of this problem. Own-path listeners were registered when a carrier was *built*, by a fan-out shim that discarded the unsubscribe it was handed, so the shared set grew *monotonically* — one dead entry per discarded carrier, for the document's lifetime, each costing an iteration over an empty set per flush plus a retained closure. The workload named above as common was also the one that accumulated fastest: thirty `d.tree.node(id)` read-and-write cycles left sixty dead entries at one path key.
 
 Registration now follows subscribers — established on the first, released on the last — so a carrier nobody subscribes to never enters the registry, and carrier multiplication costs only the carriers themselves. `src/__tests__/listener-registration.test.ts` pins this.
 
@@ -984,7 +984,7 @@ One thing carrier multiplication does *not* cost is changeset allocation. `deliv
 
 ### One registration discipline for both channels
 
-Both channels now register the subscriber's real callback in a shared path-keyed registry and hand back a teardown that removes it — `listenOwnPath` over `channels.listeners`, `listenDescendants` over `channels.descendants`. The own-path channel used to differ: each node kept a *local* subscriber set and put a fan-out shim into the shared registry on its behalf, which is what made its registrations outlive its subscribers.
+Both channels now register the subscriber's real callback in a shared path-keyed registry and hand back a teardown that removes it. They use **the same function** to do it — `listenIn(registry, path, callback)`, generic over what a callback receives — so there is one registration discipline rather than two that happen to agree. The own-path channel used to differ: each node kept a *local* subscriber set and put a fan-out shim into the shared registry on its behalf, which is what made its registrations outlive its subscribers.
 
 Two consequences worth knowing.
 
@@ -1629,7 +1629,7 @@ The worked example is `__getCacheHandlerCountAtPath` (`src/interpreters/with-cac
 | `src/interpreters/with-addressing.ts` | ~500 | Address-table layer. Sequence/movable and map/set cases delegate to shared helpers. |
 | `src/interpreters/with-caching.ts` | ~380 | Identity-preserving memoization + `INVALIDATE`. Sequence/movable and map/set cases delegate to shared helpers. |
 | `src/interpreters/writable.ts` | ~700 | Mutation primitives + `REMOVE` + `TRANSACT` + `executeBatch`. Text/sequence/movable/map/set cases delegate to shared helpers. |
-| `src/interpreters/with-changefeed.ts` | ~1300 | Observation layer + `planDelivery` + `deliverNotifications` + `listenOwnPath`/`listenDescendants` + `wireChangefeed`. All cases use `wireChangefeed` to unify changefeed boilerplate. The notification engine itself is internal — not exported since 4.0. |
+| `src/interpreters/with-changefeed.ts` | ~1270 | Observation layer + `planDelivery` + `deliverNotifications` + `listenIn` + `createNodeChangefeed` + `wireChangefeed`. All cases use `wireChangefeed` to unify changefeed boilerplate. The notification engine itself is internal — not exported since 4.0. |
 | `src/interpreters/validate.ts` | ~200 | Validation interpreter. |
 | `src/interpreters/plain.ts` | ~100 | Plain-state interpreter (reader + canonical shape). |
 | `src/interpreters/navigable.ts`, `readable.ts` | ~100 each | Type-interface modules. |

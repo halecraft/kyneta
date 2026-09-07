@@ -148,6 +148,29 @@ export interface KeySet {
 }
 
 /**
+ * A path-keyed registry of subscriber callbacks — the shape both channels use.
+ *
+ * Written out as a type because the two registries are otherwise spelled at
+ * length in a dozen places, and the point worth seeing is that they differ in
+ * exactly one thing: what a callback is handed.
+ */
+type Registry<C> = Map<string, Set<C>>
+
+/** Own-path subscribers. They receive the node's own changes, without paths. */
+type OwnPathRegistry = Registry<(changeset: Changeset<ChangeBase>) => void>
+
+/**
+ * Deep subscribers, keyed by the path they subscribed AT — not by the paths
+ * they are interested in. A subscriber says "I am at P" once, and delivery
+ * finds it by walking each changed path's ancestors.
+ *
+ * Kept separate from the own-path registry because the two channels carry
+ * different shapes: a deep subscriber gets an `Op` per change, carrying that
+ * change's path relative to the subscription point.
+ */
+type DeepRegistry = Registry<(changeset: Changeset<Op>) => void>
+
+/**
  * What one flush delivers, to whom, and in what order.
  *
  * The two channels group differently, and the reason is structural. A node's
@@ -258,63 +281,59 @@ export function planDelivery(
 }
 
 /**
- * Register a descendant subscriber at a node's own path.
+ * Register a subscriber at a path, and hand back the teardown that removes it.
  *
- * The counterpart to `listenAtPath` for the deep channel. There is no wiring
- * here and nothing to tear down when the document changes shape: a subscriber
- * records where it sits, and `deliverNotifications` finds it by walking each
- * changed path upward.
+ * **One function serves both channels**, which is the point. They differ only
+ * in what a callback receives — own-path subscribers get the node's own
+ * changes, deep subscribers get an `Op` per change — so the registration
+ * discipline itself is shared, and there is no second copy to drift.
  *
- * That is the whole reason this exists. The previous design had each composite
- * subscribe to its children's changefeeds and forward their changes upward,
- * which meant holding references to the child ref objects that existed at
- * wiring time. Those references go stale whenever the document's shape changes
- * — most sharply for a sum, whose carrier is swapped out on a variant shift —
- * and each dynamic composite had grown its own machinery to rebuild them.
+ * There is no wiring here, and nothing to tear down when the document changes
+ * shape: a subscriber records where it sits, and `deliverNotifications` finds
+ * it by walking each changed path upward. That is the whole reason this is so
+ * small. The previous design had each composite subscribe to its children's
+ * changefeeds and forward their changes upward, which meant holding references
+ * to the child ref objects that existed at wiring time. Those references go
+ * stale whenever the document's shape changes — most sharply for a sum, whose
+ * carrier is swapped out on a variant shift — and each dynamic composite had
+ * grown its own machinery to rebuild them.
+ *
+ * Registration happens here and nowhere else, so it happens when a *subscriber*
+ * arrives rather than when a ref carrier is built. That distinction is load-
+ * bearing: carriers are not unique per path (see "Per-ref-instance carrier
+ * multiplication" in `packages/schema/TECHNICAL.md`), and registering per
+ * carrier left one permanent entry per carrier ever created, with nothing able
+ * to remove it. JavaScript offers no destructor, and the changefeed layer holds
+ * no reference to a carrier it could weaken.
+ *
+ * **The membership check in the teardown is doing more work than it looks
+ * like.** It makes a doubled teardown harmless, and it also stops a *stale*
+ * teardown from evicting a later subscriber. The teardown closes over the set
+ * that existed when its subscriber registered, and that set can stop being the
+ * registry's: emptying a key deletes it, and subscribing at that path again
+ * puts a new set in its place. The old teardown cannot damage the replacement,
+ * because a set is only ever orphaned at the moment it becomes empty and
+ * nothing can refill it afterwards — registration always looks the key up
+ * fresh. An orphaned set is empty forever, so `delete` returns false and the
+ * stale teardown stops before the size check it would otherwise get wrong.
  */
-export function listenDescendants(
-  descendants: Map<string, Set<(changeset: Changeset<Op>) => void>>,
+function listenIn<C>(
+  registry: Registry<C>,
   path: Path,
-  callback: (changeset: Changeset<Op>) => void,
+  callback: C,
 ): () => void {
   const key = path.key
-  let set = descendants.get(key)
+  let set = registry.get(key)
   if (!set) {
     set = new Set()
-    descendants.set(key, set)
+    registry.set(key, set)
   }
   const registered = set
-  set.add(callback)
-  return () => releaseFrom(descendants, key, registered, callback)
-}
-
-/**
- * Remove one callback from the subscriber set it was registered in, and drop
- * the registry key if that leaves the set empty. Shared by both channels,
- * which hand this teardown straight to callers.
- *
- * **The membership check is what makes a teardown safe to call twice**, and it
- * is doing more work than it looks like. The teardown closes over the set that
- * existed when the subscriber registered, and that set can stop being the
- * registry's: emptying a key deletes it, and subscribing at that path again
- * puts a *new* set in its place. A stale teardown firing after that must not
- * delete the key out from under the new subscribers.
- *
- * It cannot, and the reason is worth stating because it is not obvious. A set
- * is only ever orphaned at the moment it becomes empty, and nothing can refill
- * it afterwards — registration always looks the key up fresh, so it reaches the
- * replacement set instead. An orphaned set is therefore empty forever, so
- * `delete` on it returns false and the stale teardown stops right here, before
- * the size check it would otherwise get wrong.
- */
-function releaseFrom<C>(
-  registry: Map<string, Set<C>>,
-  key: string,
-  set: Set<C>,
-  callback: C,
-): void {
-  if (!set.delete(callback)) return
-  if (set.size === 0) registry.delete(key)
+  registered.add(callback)
+  return () => {
+    if (!registered.delete(callback)) return
+    if (registered.size === 0) registry.delete(key)
+  }
 }
 
 /**
@@ -345,9 +364,9 @@ export function deliverNotifications(
   plan: DeliveryPlan,
   listeners: ReadonlyMap<
     string,
-    Set<(changeset: Changeset<ChangeBase>) => void>
+    ReadonlySet<(cs: Changeset<ChangeBase>) => void>
   >,
-  descendants: ReadonlyMap<string, Set<(changeset: Changeset<Op>) => void>>,
+  descendants: ReadonlyMap<string, ReadonlySet<(cs: Changeset<Op>) => void>>,
   options?: BatchOptions,
 ): void {
   for (const [key, changes] of plan.ownPath) {
@@ -436,8 +455,9 @@ export function synthesizeTreeDeleteTerminal(
 /**
  * Per-context state for the changefeed layer's prepare/flush wrapping.
  *
- * - `listeners`: path-keyed map of subscriber callbacks. Each changefeed
- *   factory registers its own listener here via `listenAtPath`.
+ * - `listeners` / `descendants`: the two subscriber registries, written into
+ *   by `listenIn` when someone subscribes. Together they are the
+ *   `ChangefeedChannels` a factory is handed.
  * - `originalPrepare` / `originalFlush`: the unwrapped methods, called
  *   before/after the changefeed layer's logic.
  * - `populated`: monotonic set of path keys that have received at least
@@ -453,20 +473,8 @@ export function synthesizeTreeDeleteTerminal(
  * per-context dispatcher and drain in a fresh sub-tick.
  */
 interface ContextWiringState {
-  readonly listeners: Map<
-    string,
-    Set<(changeset: Changeset<ChangeBase>) => void>
-  >
-  /**
-   * Descendant subscribers, keyed by the path they subscribed AT — not by the
-   * paths they are interested in. A subscriber says "I am at P" once, and
-   * delivery finds it by walking each changed path's ancestors.
-   *
-   * Kept separate from `listeners` because the two channels carry different
-   * shapes: own-path subscribers get `Changeset<ChangeBase>`, descendant
-   * subscribers get `Changeset<Op>` with a relative path per change.
-   */
-  readonly descendants: Map<string, Set<(changeset: Changeset<Op>) => void>>
+  readonly listeners: OwnPathRegistry
+  readonly descendants: DeepRegistry
   readonly originalPrepare: (
     path: Path,
     change: ChangeBase,
@@ -562,11 +570,8 @@ const readOnlyState = new WeakMap<RefContext, ChangefeedChannels>()
  * every factory growing a second parameter it may not use.
  */
 interface ChangefeedChannels {
-  readonly listeners: Map<
-    string,
-    Set<(changeset: Changeset<ChangeBase>) => void>
-  >
-  readonly descendants: Map<string, Set<(changeset: Changeset<Op>) => void>>
+  readonly listeners: OwnPathRegistry
+  readonly descendants: DeepRegistry
 }
 
 function ensurePrepareWiring(ctx: RefContext): ChangefeedChannels {
@@ -583,11 +588,8 @@ function ensurePrepareWiring(ctx: RefContext): ChangefeedChannels {
   if (state)
     return { listeners: state.listeners, descendants: state.descendants }
 
-  const listeners = new Map<
-    string,
-    Set<(changeset: Changeset<ChangeBase>) => void>
-  >()
-  const descendants = new Map<string, Set<(changeset: Changeset<Op>) => void>>()
+  const listeners: OwnPathRegistry = new Map()
+  const descendants: DeepRegistry = new Map()
   // The change-Writer monad's log — sum-typed `Forward Op | Inverse Op`.
   // `batch(doc, fn)` slices this via FORWARD_OPS_MARKER/SINCE to recover
   // its forward-only return value. planDelivery consumes the whole
@@ -713,59 +715,6 @@ function ensurePrepareWiring(ctx: RefContext): ChangefeedChannels {
 export function __getListenerCountAtPath(ctx: object, pathKey: string): number {
   const state = contextState.get(ctx as RefContext)
   return state?.listeners.get(pathKey)?.size ?? 0
-}
-
-/**
- * Registers a listener for changes at a specific path.
- * Returns an unsubscribe function.
- *
- * Listeners receive `Changeset<ChangeBase>` — a batch of one or more
- * changes with optional origin. Auto-commit produces a degenerate
- * changeset of one; transactions and `applyChanges` produce multi-change
- * batches.
- */
-function listenAtPath(
-  listeners: Map<string, Set<(changeset: Changeset<ChangeBase>) => void>>,
-  path: Path,
-  callback: (changeset: Changeset<ChangeBase>) => void,
-): () => void {
-  const key = path.key
-  let set = listeners.get(key)
-  if (!set) {
-    set = new Set()
-    listeners.set(key, set)
-  }
-  const registered = set
-  set.add(callback)
-  return () => releaseFrom(listeners, key, registered, callback)
-}
-
-/**
- * Register a subscriber on a node's own-path channel.
- *
- * The mirror of `listenDescendants` for the shallow channel, and deliberately
- * the same shape: a subscriber goes straight into the shared registry, and the
- * teardown it gets back really removes it.
- *
- * Own-path used to be the odd one out. Each node kept a *local* subscriber set
- * and put one fan-out shim into the shared registry on its behalf, so a
- * subscriber left by dropping out of the local set and the shim stayed behind
- * forever. Carriers are not unique per path — every call to the catamorphism's
- * per-id child closure mints a fresh one (see "Per-ref-instance carrier
- * multiplication" in `packages/schema/TECHNICAL.md`) — so that meant one
- * permanent entry per carrier ever created, with nothing able to remove it.
- * JavaScript offers no destructor, and the changefeed layer holds no reference
- * to the carrier it could weaken.
- *
- * Registering the real callback sidesteps the question entirely: there is no
- * shim whose lifetime has to be guessed at, and a carrier nobody subscribes to
- * never appears in the registry at all.
- */
-function listenOwnPath(
-  channels: ChangefeedChannels,
-  path: Path,
-): (callback: (changeset: Changeset<ChangeBase>) => void) => () => void {
-  return callback => listenAtPath(channels.listeners, path, callback)
 }
 
 // ---------------------------------------------------------------------------
@@ -951,123 +900,46 @@ function getPopulatedState(ctx: RefContext): {
 // ---------------------------------------------------------------------------
 
 /**
- * Builds the `RecursiveChangefeedProtocol` for a structurally-leaf node.
+ * Builds the `RecursiveChangefeedProtocol` for a node — any node.
  *
- * Structurally identical to the composite factories: `listenOwnPath` for the
- * own-path channel, `listenDescendants` for the deep one. A leaf registers its
- * deep subscribers in the shared descendant map exactly like a composite does,
- * and the ancestor walk reaches them at relative path `[]` — a leaf is a tree
- * of size 1, so its own change *is* its whole subtree.
+ * One factory serves every schema kind except `tree`. That is not a
+ * simplification applied on top; it is what the design reduced to. Sequence,
+ * map and tree used to each carry a per-key map of forwarder subscriptions
+ * plus wire/unwire machinery to rebuild it as entries came and went, and a
+ * product used to subscribe to its own fields. All of it existed to keep a
+ * derived structure aligned with a document whose shape changes at runtime.
+ *
+ * Delivery no longer needs that structure. A subscriber records the path it
+ * sits at, and `deliverNotifications` finds it by walking each changed path's
+ * ancestors — recomputed per flush from the path alone, so there is nothing to
+ * keep aligned and no reference to a child ref object that could go stale. See
+ * "Why there are no dynamic-collection changefeed factories" in
+ * `packages/schema/TECHNICAL.md` for what that machinery was and the bug that
+ * forced the question.
+ *
+ * What remains is the same for a scalar and a record: register own-path
+ * subscribers in one registry, deep subscribers in the other. Even the leaf
+ * case is not special — a leaf is a tree of size one, so its own change *is*
+ * its whole subtree, and the ancestor walk reaches its deep subscribers at
+ * relative path `[]`.
  *
  * (Do not confuse this with the *populated* feed further up, whose
  * `subscribeDescendants` really is an own-path → Op lift via `liftToOps`. That
  * feed reports readiness rather than content, and it is the only deep channel
  * in the file that does not go through the ancestor walk.)
- *
- * The factory name retains "Leaf" because it refers to the *input*
- * (leaf-shaped carrier), not the output protocol.
  */
-function createLeafChangefeed(
+function createNodeChangefeed(
   channels: ChangefeedChannels,
   path: Path,
   readCurrent: () => unknown,
 ): RecursiveChangefeedProtocol<unknown, ChangeBase> {
-  const subscribeOwnPath = listenOwnPath(channels, path)
-
   return {
     get current() {
       return readCurrent()
     },
-    subscribe: subscribeOwnPath,
-    // A leaf is a tree of size one, so its deep channel carries exactly its own
-    // change — delivered by the ancestor walk at relative path `[]`.
-    subscribeDescendants(callback) {
-      return listenDescendants(channels.descendants, path, callback)
-    },
-  }
-}
-
-/**
- * Creates a RecursiveChangefeedProtocol for a product (struct) node.
- *
- * `subscribe` fires only on changes at this node's own path.
- * `subscribeDescendants` fires for any change at or beneath it, each carrying
- * its path relative to this node.
- *
- * A product no longer subscribes to its fields. It used to, forwarding each
- * child's changes upward with the field name prepended — which meant holding a
- * reference to the child ref object that existed when the first descendant
- * subscriber arrived. For a fixed set of struct fields that looks safe, and for
- * a `.nullable()` field it is not: a sum has no changefeed of its own, so the
- * reference captured was the live variant's, and a later variant shift left it
- * pointing at a feed nobody writes to.
- */
-function createProductChangefeed(
-  channels: ChangefeedChannels,
-  path: Path,
-  readCurrent: () => unknown,
-): RecursiveChangefeedProtocol<unknown, ChangeBase> {
-  const subscribeOwnPath = listenOwnPath(channels, path)
-
-  return {
-    get current() {
-      return readCurrent()
-    },
-    subscribe: subscribeOwnPath,
-    subscribeDescendants(
-      callback: (changeset: Changeset<Op>) => void,
-    ): () => void {
-      return listenDescendants(channels.descendants, path, callback)
-    },
-  }
-}
-
-function createSequenceChangefeed(
-  channels: ChangefeedChannels,
-  path: Path,
-  readCurrent: () => unknown,
-): RecursiveChangefeedProtocol<unknown, ChangeBase> {
-  const subscribeOwnPath = listenOwnPath(channels, path)
-
-  return {
-    get current() {
-      return readCurrent()
-    },
-    subscribe: subscribeOwnPath,
-    // No child wiring, and nothing to rebuild when this collection changes
-    // shape. Delivery locates subscribers by walking each changed path's
-    // ancestors, so a subscription is never bound to a child ref object.
-    subscribeDescendants(callback) {
-      return listenDescendants(channels.descendants, path, callback)
-    },
-  }
-}
-
-/**
- * Creates a RecursiveChangefeedProtocol for a map (record) node.
- *
- * `subscribe` fires on MapChange at this node's own path;
- * `subscribeDescendants` additionally fires for per-entry content changes,
- * with the entry's path relative to this node.
- */
-function createMapChangefeed(
-  channels: ChangefeedChannels,
-  path: Path,
-  readCurrent: () => unknown,
-): RecursiveChangefeedProtocol<unknown, ChangeBase> {
-  const subscribeOwnPath = listenOwnPath(channels, path)
-
-  return {
-    get current() {
-      return readCurrent()
-    },
-    subscribe: subscribeOwnPath,
-    // No child wiring, and nothing to rebuild when this collection changes
-    // shape. Delivery locates subscribers by walking each changed path's
-    // ancestors, so a subscription is never bound to a child ref object.
-    subscribeDescendants(callback) {
-      return listenDescendants(channels.descendants, path, callback)
-    },
+    subscribe: callback => listenIn(channels.listeners, path, callback),
+    subscribeDescendants: callback =>
+      listenIn(channels.descendants, path, callback),
   }
 }
 
@@ -1110,7 +982,9 @@ function createTreeChangefeed(
 
     const ownPathSubscribers = channels.listeners.get(nodeKey)
     if (ownPathSubscribers && ownPathSubscribers.size > 0) {
-      // Snapshot — a subscriber may unsubscribe itself on receiving a terminal.
+      // Snapshot, for the same reason `deliverNotifications` does: a callback
+      // may change this set while it is being walked, and a `Set` visits
+      // entries added mid-iteration.
       for (const callback of [...ownPathSubscribers]) callback(synthetic)
     }
 
@@ -1132,7 +1006,7 @@ function createTreeChangefeed(
   // ordering: it is added before any subscriber, and the registry iterates in
   // insertion order, so a node learns it is gone before the tree's own-path
   // subscribers hear about the batch that removed it.
-  listenAtPath(channels.listeners, path, changeset => {
+  listenIn(channels.listeners, path, changeset => {
     for (const change of changeset.changes) {
       if (!isTreeChange(change)) continue
       for (const inst of change.instructions) {
@@ -1145,12 +1019,9 @@ function createTreeChangefeed(
     get current() {
       return readCurrent()
     },
-    subscribe: listenOwnPath(channels, path),
-    subscribeDescendants(
-      callback: (changeset: Changeset<Op>) => void,
-    ): () => void {
-      return listenDescendants(channels.descendants, path, callback)
-    },
+    subscribe: callback => listenIn(channels.listeners, path, callback),
+    subscribeDescendants: callback =>
+      listenIn(channels.descendants, path, callback),
   }
 }
 
@@ -1252,7 +1123,7 @@ export function withChangefeed<A extends HasRead>(
     ): A & HasChangefeed {
       const result = base.scalar(ctx, path, schema)
       wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createLeafChangefeed(channels, nodePath, () => result[CALL]()),
+        createNodeChangefeed(channels, nodePath, () => result[CALL]()),
       )
       return result as A & HasChangefeed
     },
@@ -1266,7 +1137,7 @@ export function withChangefeed<A extends HasRead>(
     ): A & HasChangefeed {
       const result = base.product(ctx, path, schema, fields)
       wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createProductChangefeed(channels, nodePath, () => result[CALL]()),
+        createNodeChangefeed(channels, nodePath, () => result[CALL]()),
       )
       return result as A & HasChangefeed
     },
@@ -1280,7 +1151,7 @@ export function withChangefeed<A extends HasRead>(
     ): A & HasChangefeed {
       const result = base.sequence(ctx, path, schema, item)
       wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createSequenceChangefeed(channels, nodePath, () => result[CALL]()),
+        createNodeChangefeed(channels, nodePath, () => result[CALL]()),
       )
       return result as A & HasChangefeed
     },
@@ -1294,7 +1165,7 @@ export function withChangefeed<A extends HasRead>(
     ): A & HasChangefeed {
       const result = base.map(ctx, path, schema, item)
       wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createMapChangefeed(channels, nodePath, () => result[CALL]()),
+        createNodeChangefeed(channels, nodePath, () => result[CALL]()),
       )
       return result as A & HasChangefeed
     },
@@ -1320,7 +1191,7 @@ export function withChangefeed<A extends HasRead>(
     text(ctx: RefContext, path: Path, schema: TextSchema): A & HasChangefeed {
       const result = base.text(ctx, path, schema)
       wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createLeafChangefeed(channels, nodePath, () => result[CALL]()),
+        createNodeChangefeed(channels, nodePath, () => result[CALL]()),
       )
       return result as A & HasChangefeed
     },
@@ -1334,7 +1205,7 @@ export function withChangefeed<A extends HasRead>(
     ): A & HasChangefeed {
       const result = base.counter(ctx, path, schema)
       wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createLeafChangefeed(channels, nodePath, () => result[CALL]()),
+        createNodeChangefeed(channels, nodePath, () => result[CALL]()),
       )
       return result as A & HasChangefeed
     },
@@ -1351,7 +1222,7 @@ export function withChangefeed<A extends HasRead>(
     ): A & HasChangefeed {
       const result = base.set(ctx, path, schema, item)
       wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createLeafChangefeed(channels, nodePath, () => result[CALL]()),
+        createNodeChangefeed(channels, nodePath, () => result[CALL]()),
       )
       return result as A & HasChangefeed
     },
@@ -1383,7 +1254,7 @@ export function withChangefeed<A extends HasRead>(
     ): A & HasChangefeed {
       const result = base.movable(ctx, path, schema, item)
       wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createSequenceChangefeed(channels, nodePath, () => result[CALL]()),
+        createNodeChangefeed(channels, nodePath, () => result[CALL]()),
       )
       return result as A & HasChangefeed
     },
@@ -1397,7 +1268,7 @@ export function withChangefeed<A extends HasRead>(
     ): A & HasChangefeed {
       const result = base.richtext(ctx, path, schema)
       wireChangefeed(result, ctx, path, (channels, nodePath) =>
-        createLeafChangefeed(channels, nodePath, () => result[CALL]()),
+        createNodeChangefeed(channels, nodePath, () => result[CALL]()),
       )
       return result as A & HasChangefeed
     },
