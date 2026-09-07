@@ -866,7 +866,10 @@ function string_<V extends string = string>(
 ): ScalarSchema<"string", V> {
   return (
     options.length > 0 ? scalar("string", options) : scalar("string")
-  ) as any
+  ) as ScalarSchema<"string", V>
+  // The two arms differ in their `V` type argument — constrained vs open —
+  // and TypeScript widens the union rather than picking the declared return
+  // type. Naming that type asserts only which arm's shape wins.
 }
 
 /**
@@ -882,7 +885,10 @@ function number_<V extends number = number>(
 ): ScalarSchema<"number", V> {
   return (
     options.length > 0 ? scalar("number", options) : scalar("number")
-  ) as any
+  ) as ScalarSchema<"number", V>
+  // The two arms differ in their `V` type argument — constrained vs open —
+  // and TypeScript widens the union rather than picking the declared return
+  // type. Naming that type asserts only which arm's shape wins.
 }
 
 /**
@@ -898,7 +904,10 @@ function boolean_<V extends boolean = boolean>(
 ): ScalarSchema<"boolean", V> {
   return (
     options.length > 0 ? scalar("boolean", options) : scalar("boolean")
-  ) as any
+  ) as ScalarSchema<"boolean", V>
+  // The two arms differ in their `V` type argument — constrained vs open —
+  // and TypeScript widens the union rather than picking the declared return
+  // type. Naming that type asserts only which arm's shape wins.
 }
 
 /** Scalar null. Produces `scalar("null")`. */

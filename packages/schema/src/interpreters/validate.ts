@@ -161,9 +161,20 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
       return undefined
     }
 
-    // Check constraint
+    // Check constraint.
+    //
+    // This is a runtime check and cannot be anything else. `value` was read
+    // out of the document as `unknown`, so no static membership test is
+    // available — a value's presence in the constraint list is exactly the
+    // kind of fact that is only knowable at runtime, which is why this
+    // validator exists.
+    //
+    // The `as never` that used to sit on `value` here suggested otherwise. It
+    // was inert: `ScalarSchema`'s default type arguments erase `constraint` to
+    // `readonly unknown[]`, whose `.includes` already accepts anything.
+    // Removing it restored no checking, because there was none to restore.
     if (schema.constraint !== undefined && schema.constraint.length > 0) {
-      if (!schema.constraint.includes(value as never)) {
+      if (!schema.constraint.includes(value)) {
         const allowed = schema.constraint
           .map(serializeConstraintValue)
           .join(" | ")

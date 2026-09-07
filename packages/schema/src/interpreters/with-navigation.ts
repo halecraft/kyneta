@@ -193,7 +193,14 @@ export function withNavigation<A extends HasCall>(
           return Reflect.getOwnPropertyDescriptor(getActive(), prop)
         },
         apply(_target, thisArg, argArray) {
-          return Reflect.apply(getActive() as any, thisArg, argArray)
+          // The active carrier is callable when this trap fires — the trap
+          // only exists on a function target. `Reflect.apply` wants a
+          // `Function`, and the carrier's type does not say it is one.
+          return Reflect.apply(
+            getActive() as unknown as (...args: unknown[]) => unknown,
+            thisArg,
+            argArray,
+          )
         },
       }) as A & HasNavigation
     },

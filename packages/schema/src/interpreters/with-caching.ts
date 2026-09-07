@@ -277,6 +277,10 @@ export function withCaching<A extends HasNavigation>(
     ): A & HasCaching {
       // Downcast thunks for the base interpreter
       const baseFields = fields as Readonly<Record<string, () => A>>
+      // `as any`: augmenting the base interpreter's result with more members
+      // and returning it as `A & …`. That is a statement about the carrier
+      // type parameter `A`, which needs higher-kinded types to express — see
+      // the longer note in `writable.ts`.
       const result = base.product(ctx, path, schema, baseFields) as any
 
       // Build per-field memoization state.

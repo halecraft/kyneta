@@ -166,6 +166,9 @@ function applyTextChange(
 
   // Yjs Y.Text.applyDelta uses the Quill Delta format, which is
   // structurally identical to kyneta TextInstruction[].
+  // `yjs` types `applyDelta` against its own delta shape. Kyneta's text
+  // instructions are structurally the same — retain/insert/delete — but are a
+  // separately-declared type, and there is no conversion to do at runtime.
   resolved.applyDelta(change.instructions as any)
 }
 

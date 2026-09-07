@@ -97,11 +97,9 @@ function getDeletedKey(callable: object): string {
  *
  * Uses `Symbol.for` so multiple copies of this module share identity.
  */
-export const ADDRESS_TABLE: unique symbol = Symbol.for(
-  "kyneta:addressTable",
-) as any
+export const ADDRESS_TABLE: unique symbol = Symbol.for("kyneta:addressTable")
 
-export const DELETED: unique symbol = Symbol.for("kyneta:deleted") as any
+export const DELETED: unique symbol = Symbol.for("kyneta:deleted")
 
 /**
  * A ref that tracks whether it has been deleted from its parent container.
@@ -425,10 +423,17 @@ export function withAddressing<A extends HasNavigation>(
               reportRead({
                 key: getDeletedKey(callable),
                 aspect: "value",
+                // The dependency tracker records refs as opaque handles;
+                // this one is a function carrying `[CHANGEFEED]`, which the
+                // `ref` field's type does not describe.
                 ref: callable as any,
               })
             }
             return deletedCf.current
+            // The callable is built as a plain function and then has
+            // `[CHANGEFEED]` attached by `defineProperty` below. Its declared
+            // type includes that slot; the function expression alone cannot,
+            // because the property does not exist until the next statement.
           } as any
 
           Object.defineProperty(callable, CHANGEFEED, {

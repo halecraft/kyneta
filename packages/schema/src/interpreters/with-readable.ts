@@ -82,6 +82,27 @@ export function withReadable<A extends HasNavigation>(
   return {
     [INTERPRETER]: true,
     // --- Scalar ---------------------------------------------------------------
+    // ---------------------------------------------------------------------
+    // A note on `base.X(...) as any`, which appears in every case below.
+    //
+    // Each case takes the value the base interpreter produced and adds members
+    // to it, then returns it as `A & Has…`. Expressing that in the type system
+    // needs a way to say "an `A`, plus these members, still an `A`" — and `A`
+    // is the interpreter's carrier type parameter, so this is a statement
+    // *about* a type variable. TypeScript has no higher-kinded types, so it
+    // cannot be written.
+    //
+    // These sites sit inside the interpreter's generic recursion, which is
+    // where `TS2589` ("type instantiation is excessively deep") originates in
+    // this codebase; `@kyneta/exchange` already carries workarounds for it. An
+    // augmentation helper is the fix, and it belongs in its own change with its
+    // own depth budget rather than riding along with cast cleanup.
+    //
+    // Some of these are load-bearing for a second, unrelated reason: a map ref
+    // is proxy-backed, so plain assignment would hit a `set` trap and the code
+    // uses `Object.defineProperty`. Those stay regardless of what the types
+    // eventually allow.
+    // ---------------------------------------------------------------------
     scalar(ctx: RefContext, path: Path, schema: ScalarSchema): A & HasRead {
       const result = base.scalar(ctx, path, schema) as any
 

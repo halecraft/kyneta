@@ -479,6 +479,11 @@ export function createLoroSubstrate(
             if (path.segments.length === 0) return doc
             if (nodeSchema[KIND] === "scalar" || nodeSchema[KIND] === "sum")
               return undefined
+            // The substrate capability interfaces declare this callback's
+            // `path` structurally (`{ segments: readonly unknown[] }`) so they
+            // stay substrate-agnostic and do not depend on `Path`. The value
+            // really is a `Path`; the assertion recovers what the interface
+            // deliberately does not state.
             return resolveContainer(doc, schema, path as any, binding).resolved
           },
           positionResolver: (
@@ -488,6 +493,7 @@ export function createLoroSubstrate(
             return {
               createPosition(index: number, side: Side) {
                 // Resolve path to the LoroText container
+                // Structurally-declared `path` — see the note above.
                 const resolved = resolveContainer(
                   doc,
                   schema,
@@ -945,6 +951,9 @@ export function ensureLoroContainers(
   // Loro requires configTextStyle() to be called before mark/unmark ops.
   const markConfig = collectMarkConfigs(schema)
   if (Object.keys(markConfig).length > 0) {
+    // `loro-crdt` types `configTextStyle` against its own mark-config shape.
+    // Kyneta's `MarkConfig` is the same record of `{ expand }` entries under a
+    // different declaration, with no runtime conversion to do.
     doc.configTextStyle(markConfig as any)
   }
 

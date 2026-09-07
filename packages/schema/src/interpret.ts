@@ -554,15 +554,18 @@ function interpretImpl<Ctx, A>(
   // (field thunks, itemFn, innerThunk) re-read ctx.rootPath at execution
   // time so that withAddressing's rootPath is picked up.
   const isRootCall = path === undefined
-  const resolvedPath: Path = path ?? (ctx as any)?.rootPath ?? RawPath.empty
+  // `rootPath` and `onRefCreated` below are installed on the context by
+  // `withAddressing` at runtime; `RefContext` does not declare them, because a
+  // stack composed without that layer has neither. Naming the optional shape
+  // asks the question without switching off checking on `ctx` entirely.
+  const resolvedPath: Path =
+    path ?? (ctx as { rootPath?: Path })?.rootPath ?? RawPath.empty
 
   // onRefCreated hook — called after each child ref is created.
   // Installed by withAddressing for ref registration and deleted getter.
   // Read lazily so that hooks installed during interpretation are visible.
   const getOnRefCreated = () =>
-    (ctx as any)?.onRefCreated as
-      | ((path: Path, ref: unknown) => void)
-      | undefined
+    (ctx as { onRefCreated?: (path: Path, ref: unknown) => void })?.onRefCreated
 
   // For the root call, child-deriving closures need the path that
   // ctx.rootPath resolves to AFTER the first interpreter method has run
@@ -570,7 +573,7 @@ function interpretImpl<Ctx, A>(
   // use the explicitly-passed resolvedPath directly.
   const effectivePath = (): Path => {
     if (isRootCall) {
-      return (ctx as any)?.rootPath ?? resolvedPath
+      return (ctx as { rootPath?: Path })?.rootPath ?? resolvedPath
     }
     return resolvedPath
   }

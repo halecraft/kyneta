@@ -221,7 +221,8 @@ export function subtreeIds(
   if (!flat.some(n => n.id === rootId)) return []
   queue.push(rootId)
   while (queue.length > 0) {
-    const id = queue.shift() as any
+    const id = queue.shift()
+    if (id === undefined) break
     if (ids.has(id)) continue
     ids.add(id)
     const kids = childrenByParent.get(id) ?? []

@@ -459,7 +459,10 @@ export function buildWritableContext(
         // changefeed accumulator filling so subscribers see the full op
         // log on the aborted Changeset; the `compensating: true` flag
         // tells substrates to skip recording the inverse-of-the-inverse.
-        const frameStart = frameStarts.pop() as any
+        // `?? 0` rather than an assertion: the push/pop are paired by
+        // construction, so an empty stack cannot happen — and if it ever did,
+        // compensating the whole log is the safe reading, not crashing.
+        const frameStart = frameStarts.pop() ?? 0
         try {
           for (let i = inverseStack.length - 1; i >= frameStart; i--) {
             const { path, inverse } = inverseStack[i]
@@ -824,6 +827,27 @@ export function withWritable<A>(
     // Add .set() to the base scalar ref.
     // Every node dispatches at its own path — no upward reference.
 
+    // ---------------------------------------------------------------------
+    // A note on `base.X(...) as any`, which appears in every case below.
+    //
+    // Each case takes the value the base interpreter produced and adds members
+    // to it, then returns it as `A & Has…`. Expressing that in the type system
+    // needs a way to say "an `A`, plus these members, still an `A`" — and `A`
+    // is the interpreter's carrier type parameter, so this is a statement
+    // *about* a type variable. TypeScript has no higher-kinded types, so it
+    // cannot be written.
+    //
+    // These sites sit inside the interpreter's generic recursion, which is
+    // where `TS2589` ("type instantiation is excessively deep") originates in
+    // this codebase; `@kyneta/exchange` already carries workarounds for it. An
+    // augmentation helper is the fix, and it belongs in its own change with its
+    // own depth budget rather than riding along with cast cleanup.
+    //
+    // Some of these are load-bearing for a second, unrelated reason: a map ref
+    // is proxy-backed, so plain assignment would hit a `set` trap and the code
+    // uses `Object.defineProperty`. Those stay regardless of what the types
+    // eventually allow.
+    // ---------------------------------------------------------------------
     scalar(
       ctx: WritableContext,
       path: Path,

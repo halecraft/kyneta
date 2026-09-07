@@ -220,6 +220,10 @@ export function createYjsSubstrate(
     // ultra-rare case where `_item` is undefined (freshly-created
     // shared types before they're attached). Combine with key/index
     // for a unique slot — repeat writes to the same slot overwrite.
+    // `_item` is a Yjs internal — not in its published types, and the only
+    // way to get a stable identity for a shared type. The first access
+    // type-checks because `AbstractType` declares it; the second is on a
+    // narrower subtype where it is absent.
     const targetId = `${target._item?.id?.client ?? "root"}:${(target as any)._item?.id?.clock ?? "root"}`
     const slot = `${targetId}/${String(key)}`
     jsonBoundaryBuffer.set(slot, { target, key, value })
@@ -344,6 +348,11 @@ export function createYjsSubstrate(
             if (path.segments.length === 0) return doc
             if (nodeSchema[KIND] === "scalar" || nodeSchema[KIND] === "sum")
               return undefined
+            // The substrate capability interfaces declare this callback's
+            // `path` structurally (`{ segments: readonly unknown[] }`) so they
+            // stay substrate-agnostic and do not depend on `Path`. The value
+            // really is a `Path`; the assertion recovers what the interface
+            // deliberately does not state.
             return resolveYjsType(rootMap, schema, path as any, binding)
               .resolved
           },
@@ -357,6 +366,7 @@ export function createYjsSubstrate(
                 const { resolved: ytype } = resolveYjsType(
                   rootMap,
                   schema,
+                  // Structurally-declared `path` — see the note above.
                   path as any,
                   binding,
                 )

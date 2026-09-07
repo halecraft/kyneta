@@ -175,10 +175,10 @@ export function delta(doc: object, fromVersion: number): Op[] {
     path: op.path.reduce(
       (p: RawPath, seg) =>
         seg.type === "field"
-          ? p.field(seg.field as any)
+          ? p.field(seg.field as string)
           : seg.type === "entry"
-            ? p.entry(seg.entry as any)
-            : p.item(seg.index as any),
+            ? p.entry(seg.entry as string)
+            : p.item(seg.index as number),
       RawPath.empty,
     ),
     change: op.change,

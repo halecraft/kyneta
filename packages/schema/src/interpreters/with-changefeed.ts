@@ -911,11 +911,18 @@ function getPopulatedState(ctx: RefContext): {
   }
   // ensurePrepareWiring hasn't been called yet — call it to initialize
   ensurePrepareWiring(ctx)
-  const state2 = contextState.get(ctx) as any
-  return {
-    populated: state2.populated,
-    populatedListeners: state2.populatedListeners,
+  const initialized = contextState.get(ctx)
+  if (initialized) {
+    return {
+      populated: initialized.populated,
+      populatedListeners: initialized.populatedListeners,
+    }
   }
+  // Unreachable in practice — `ensurePrepareWiring` populates the map for any
+  // context with a prepare pipeline, and the read-only case returned above.
+  // Answering with empties rather than asserting keeps that assumption from
+  // becoming a crash if a future context shape breaks it.
+  return { populated: new Set(), populatedListeners: new Map() }
 }
 
 // ---------------------------------------------------------------------------

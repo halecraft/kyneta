@@ -1317,7 +1317,7 @@ function* expandNested(
     const fields: Record<string, SchemaNode> = {}
     for (let i = 0; i < fieldNames.length; i++) {
       const name = fieldNames[i]
-      const variant = fieldVariants[i][indices[i] as any] as any
+      const variant = fieldVariants[i][indices[i]]
       fields[name] = variant
     }
     yield { ...schema, fields } as ProductSchema
@@ -1325,7 +1325,7 @@ function* expandNested(
     let k = indices.length - 1
     while (k >= 0) {
       indices[k] = indices[k] + 1
-      if (indices[k] < (fieldVariants[k] as any).length) break
+      if (indices[k] < fieldVariants[k].length) break
       indices[k] = 0
       k--
     }
