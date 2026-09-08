@@ -208,7 +208,7 @@ That granularity is the whole point. A presence roster where each peer writes
 only its own key is the motivating case, and it is unusable under
 whole-document last-writer-wins, where whichever peer wrote most recently
 clobbers everyone else. Kyneta shipped exactly that substrate through 2.x under
-this same name; 3.0 replaced its implementation. See the CHANGELOG.
+this same name with a different implementation. See the CHANGELOG.
 
 Two properties follow from being snapshot-only and transient:
 
@@ -397,7 +397,7 @@ A `Substrate` adds interpretation:
 
 ### The `SubstratePrepare` pipeline
 
-Mutations apply eagerly per the σ-eager design (jj:kqnkxrkl). For each `prepare(path, change)`:
+Mutations apply eagerly per the σ-eager design. For each `prepare(path, change)`:
 
 1. Capture `pre = path.read(σ)` (deep-cloned) before the change applies.
 2. Compute `inverse = invert(pre, change)` — the reverse arrow in the change groupoid.
@@ -426,9 +426,9 @@ For substrates whose `V` is a map of `PeerId → number` (Lamport-style vectors)
 
 Both are pure. Loro and Yjs substrates use these directly for their Lamport vectors; substrates with different version shapes (wall clock, Loro's opaque version) implement their own comparison.
 
-`PlainVersion` (the plain substrate's version, below) **is** a version vector — a single authored *lineage* entry `{lineage: value}`, with genesis (`DEFAULT_LINEAGE`) projecting to the **empty** vector ⊥. Its `compare`/`meet` delegate to `versionVectorCompare`/`versionVectorMeet` over that projection (`PlainVersion.#toVector`) — the same lattice Loro/Yjs use, with no Plain-specific case matrix. `Version.lineage` is the version-vector *lineage key* (the writer/identity coordinate), not a scalar bolted on beside the counter. A serialized writer holds at most one authored lineage at a time (prune-on-reset), so the vector is single-entry. Context: jj:kxswmuzx.
+`PlainVersion` (the plain substrate's version, below) **is** a version vector — a single authored *lineage* entry `{lineage: value}`, with genesis (`DEFAULT_LINEAGE`) projecting to the **empty** vector ⊥. Its `compare`/`meet` delegate to `versionVectorCompare`/`versionVectorMeet` over that projection (`PlainVersion.#toVector`) — the same lattice Loro/Yjs use, with no Plain-specific case matrix. `Version.lineage` is the version-vector *lineage key* (the writer/identity coordinate), not a scalar bolted on beside the counter. A serialized writer holds at most one authored lineage at a time (prune-on-reset), so the vector is single-entry.
 
-`Version.lineage` (renamed from `Version.epoch` — jj:pwymxzwq) is the identity coordinate on every `Version`: for `PlainVersion` a REAL lineage minted on the first authored write (genesis ⊥ before that); for Loro/Yjs/StateVersion a constant `DEFAULT_LINEAGE` (their identity lives in their own native vectors). The lattice operations never branch on the raw string — `PlainVersion` projects it to a vector and `versionVectorCompare` does the rest; genuine cross-lineage divergence surfaces as `"concurrent"`. **The word `epoch` is now reserved for the deliberate T3 _migration_ boundary** (`.epoch()` / `EpochStep` / `MigrationTier` T3 — see [Migration and identity](#migration-and-identity)): *lineage* (writer identity, per-VV-key, minted automatically) and *epoch* (migration generation, global, developer-declared) are now distinct axes with distinct names.
+`Version.lineage` (formerly `Version.epoch`) is the identity coordinate on every `Version`: for `PlainVersion` a REAL lineage minted on the first authored write (genesis ⊥ before that); for Loro/Yjs/StateVersion a constant `DEFAULT_LINEAGE` (their identity lives in their own native vectors). The lattice operations never branch on the raw string — `PlainVersion` projects it to a vector and `versionVectorCompare` does the rest; genuine cross-lineage divergence surfaces as `"concurrent"`. **The word `epoch` is now reserved for the deliberate T3 _migration_ boundary** (`.epoch()` / `EpochStep` / `MigrationTier` T3 — see [Migration and identity](#migration-and-identity)): *lineage* (writer identity, per-VV-key, minted automatically) and *epoch* (migration generation, global, developer-declared) are now distinct axes with distinct names.
 
 ---
 
@@ -455,8 +455,8 @@ The hash is carried in every `present` message (the exchange's doc-announcement 
 
 The 2-char prefix is a TLV-style algorithm-version tag. Bumping it signals a coordinated change to the hash bytes (algorithm swap, canonicalization change, or input-encoding shift). Current value is `"02"`. Retired versions:
 
-- `"00"` — two-pass FNV-1a-64 with a shared prime over UTF-16 code units; overstated its effective entropy (`jj:snrmsznm`).
-- `"01"` — single-pass FNV-1a-128 over UTF-8, but with an S-expression canonicalization that dispatched on `[KIND]` only: it was *boundary-blind* (`struct` ≡ `struct.json`) and *non-injective* (unescaped field names / constraint values could collide). Replaced by the injective JSON-tuple form (`jj:qnmtvtwn`).
+- `"00"` — two-pass FNV-1a-64 with a shared prime over UTF-16 code units; overstated its effective entropy.
+- `"01"` — single-pass FNV-1a-128 over UTF-8, but with an S-expression canonicalization that dispatched on `[KIND]` only: it was *boundary-blind* (`struct` ≡ `struct.json`) and *non-injective* (unescaped field names / constraint values could collide). Replaced by the injective JSON-tuple form.
 
 Ecosystem code that asserts on the prefix (wire-format validators, store-migration tooling) should import `HASH_ALGORITHM_VERSION` rather than hardcoding the string.
 
@@ -589,7 +589,7 @@ Source: `packages/schema/src/materialize-value.ts` → `materializeValue`, `Mate
 
 `createMaterializeInterpreter` (above) reads a CRDT container tree **into** a plain value. `materializeValue` is its write-side counterpart — it unfolds a plain value **into** a backend-agnostic container-shape IR (`MaterializedNode`), the operation behind `structRef.set({...})` and structured inserts. Where `foldPath` (`fold-path.ts`) owns the identity-keying rule for *navigation*, `materializeValue` owns it for *construction*: at every product-field boundary it keys the child by `containerKey(binding, extendSchemaPathKey(prefix, field), field)`, and map/set entries and list items keep their runtime key/index (matching `foldPath`'s "only `field` segments contribute to the abs-path" rule via the shared `fieldAbsPath`). Sum and json-boundary schemas short-circuit to an opaque `{kind:"plain"}` node.
 
-`materializeValue` is **pure** — no substrate handles, no synthetic ContainerIDs, no global counters — so the identity-keying is unit-testable without any backend (`src/__tests__/materialize-value.test.ts`). Each backend supplies a thin realizer that turns the IR into native form: `realizeYjs` (post-order populate-then-attach) and `realizeLoro` (pre-order, minting Loro synthetic CIDs). Backends never compute a container key or read `binding`, so writer keys and reader keys agree **by construction** (jj:vlnkqyvq) — a whole-struct write cannot land under a key the reader won't look up. The `EagerPolicy` argument (`"leaf-containers"` for Yjs, `"all-containers"` for Loro) selects how aggressively declared-but-absent container fields are pre-created; the two backends genuinely differ (Loro needs the container to exist before a nested write can land on it).
+`materializeValue` is **pure** — no substrate handles, no synthetic ContainerIDs, no global counters — so the identity-keying is unit-testable without any backend (`src/__tests__/materialize-value.test.ts`). Each backend supplies a thin realizer that turns the IR into native form: `realizeYjs` (post-order populate-then-attach) and `realizeLoro` (pre-order, minting Loro synthetic CIDs). Backends never compute a container key or read `binding`, so writer keys and reader keys agree **by construction** — a whole-struct write cannot land under a key the reader won't look up. The `EagerPolicy` argument (`"leaf-containers"` for Yjs, `"all-containers"` for Loro) selects how aggressively declared-but-absent container fields are pre-created; the two backends genuinely differ (Loro needs the container to exist before a nested write can land on it).
 
 `"leaf-containers"` is a strict **subset** of `"all-containers"`, as the names promise: the first creates only the leaf containers (`text`, `richtext`), the second creates those *and* the structural ones. That relation now holds structurally, because both branches are expressed against the single `storageClass` classification (`schema.ts`) rather than against two switches that happened to line up. It did not always hold — `richtext` was missing from `needsContainer`'s switch and fell through its `default`, so `"all-containers"` skipped a container the narrower policy created. `materialize-value.test.ts` asserts the subset relation directly rather than per-kind expectations, so it keeps holding as kinds are added.
 
@@ -630,7 +630,7 @@ Application code rarely touches `[NATIVE]`. Backends use it to dispatch to subst
 
 ### Read tracking — `withTracking` + the tracking context
 
-Source: `src/interpreters/with-tracking.ts` (the layer) + `src/tracking.ts` (the pure context). Consumed by `@kyneta/reactive` (jj:kpywvkpr) for fine-grained auto-tracked reactivity (`useSelector`/`useValue` ultimately rest on it).
+Source: `src/interpreters/with-tracking.ts` (the layer) + `src/tracking.ts` (the pure context). Consumed by `@kyneta/reactive` for fine-grained auto-tracked reactivity (`useSelector`/`useValue` ultimately rest on it).
 
 `withTracking` is the **outermost** layer in the canonical `createRef` stack (`.with(readable).with(writable).with(observation).with(tracking)`). When a *tracking scope* is active, every user-facing read reports a `Dependency` (a stable handle + an `Aspect`); when no scope is active, every wrapped accessor is a one-guard passthrough (the full suite passes unchanged either way). Subscription *policy* (aspect → changefeed primitive) lives in the runtime, not here.
 
@@ -646,7 +646,7 @@ Source: `src/interpreters/with-tracking.ts` (the layer) + `src/tracking.ts` (the
 
 Products report nothing on field navigation (fixed fields); the child carrier reports its own reads. **`identity` is folded into `structure` for v1**: navigating a dynamic container reports `structure`, which soundly catches moves/deletes — so the runtime needs only `subscribeNode`/`subscribeDescendants`, no `address.listeners` wiring. Completeness (no missed reads) is verified against the helpers: every accessor that touches the substrate is wrapped, or delegates to one that is (`.get`/iteration route through `.at`; map `.has`/`.keys`/`.size`/`.entries`/`.values` read `reader.keys`/`hasKey` directly, so all are wrapped).
 
-**Stable keys without addressing internals.** Dependency keys are derived from the carrier's *object identity* (a `WeakMap<carrier, id>`), which is already **cursor-stable** — `.at(i)` is backed by the address table keyed on `Address.id` (`sequence-helpers.ts:329`), so the same logical element yields the same carrier object across structural change. A dep key is therefore invariant under inserts/deletes (an insert before a tracked element does not change its key) while keying transitively on `Address.id` — no addressing-internals integration needed.
+**Stable keys without addressing internals.** Dependency keys are derived from the carrier's *object identity* (a `WeakMap<carrier, id>`), which is already **cursor-stable** — `.at(i)` is backed by the address table keyed on `Address.id` (`installSequenceCaching` in `sequence-helpers.ts`), so the same logical element yields the same carrier object across structural change. A dep key is therefore invariant under inserts/deletes (an insert before a tracked element does not change its key) while keying transitively on `Address.id` — no addressing-internals integration needed.
 
 The aspect vocabulary harmonizes with `@kyneta/compiler`'s `DependencyClassification` (`experimental/compiler/src/classify.ts` — `structural`/`item`/`external`): `structural` is shared; `value`/`identity` refine the compiler's `item`; the compiler's `external` (reading another reactive source) is the runtime's plain-`HasChangefeed` `.subscribe` branch, not a schema-ref read. One classification model — the compiler is its AOT face, `withTracking` its JIT face.
 
@@ -656,7 +656,7 @@ The aspect vocabulary harmonizes with `@kyneta/compiler`'s `DependencyClassifica
 
 Source: `packages/schema/src/facade/batch.ts`, `src/step.ts`, `src/inverse.ts`, `src/interpreters/with-changefeed.ts`, `src/interpreters/writable.ts`.
 
-`batch(doc, fn)` is the atomic mutation facade. Under the three-primitive substrate contract (jj:ryquprut), it is implemented as a thin `runWriter` / `execWriter` wrapper around `ctx.runBatch`:
+`batch(doc, fn)` is the atomic mutation facade. Under the three-primitive substrate contract, it is implemented as a thin `runWriter` / `execWriter` wrapper around `ctx.runBatch`:
 
 ```ts
 batch(doc, fn) = ctx.runBatch(() => {
@@ -666,7 +666,7 @@ batch(doc, fn) = ctx.runBatch(() => {
 }, opts)
 ```
 
-**Convention.** A single mutation needs no `batch()` — a bare helper call (`doc.x.set(v)`) opens an implicit single-op `runBatch` and auto-commits (jj:kqnkxrkl). Reach for `batch()` only to (a) group ≥2 writes into one atomic commit + one `Changeset`, (b) capture the returned `Op[]`, or (c) attach `origin`/`source` provenance. The name leads with batching; the atomic-abort guarantee (a throwing block compensates LIFO and emits one `Changeset` with `aborted: true`) is the contract that makes a multi-write batch safe — it is still a *transaction in the algebraic sense*, just not a DB-style transaction with isolation/durability.
+**Convention.** A single mutation needs no `batch()` — a bare helper call (`doc.x.set(v)`) opens an implicit single-op `runBatch` and auto-commits. Reach for `batch()` only to (a) group ≥2 writes into one atomic commit + one `Changeset`, (b) capture the returned `Op[]`, or (c) attach `origin`/`source` provenance. The name leads with batching; the atomic-abort guarantee (a throwing block compensates LIFO and emits one `Changeset` with `aborted: true`) is the contract that makes a multi-write batch safe — it is still a *transaction in the algebraic sense*, just not a DB-style transaction with isolation/durability.
 
 End-to-end flow:
 
@@ -690,18 +690,9 @@ The store edge applies to **all four `PlainState`-backed substrates**: plain, ep
 
 Replayed changes are copied too. It is tempting to skip them, since a wire-built op has no local caller — but that is a fact about the *caller* edge. The store still takes the payload and later mutates it, and a merge's changesets reach subscribers like any other. Only `projection` batches skip the copy: those are decay ticks whose payload is the substrate's own shadow, passed to wake subscribers and never read.
 
-**Cost, measured end-to-end** (µs per `batch()`, 200-entry record, 200-item list):
+**The cost, measured end-to-end, is a few percent on small writes and a large *improvement* on writes into a big collection** — because removing the inverse-path clone below matters more than adding the ownership copies. That clone captured pre-state at the write's path, which for a record entry is the *whole record*: the old cost scaled with collection size, and the new one does not.
 
-| write | before | after |
-|---|---|---|
-| scalar | 5.12 | 5.29 |
-| container replace | 5.45 | 5.72 |
-| list item | 5.36 | 5.41 |
-| record entry | 29.18 | **11.42** |
-
-A few percent on small writes, and a 2.6x improvement on writes into a large collection — because removing the inverse-path clone below matters more than adding the ownership copies. That clone captured pre-state at the write's path, which for a record entry is the *whole record*: the old cost scaled with collection size, and the new one does not.
-
-Comparing clone costs in isolation predicts the opposite (~3x worse on container writes) and is misleading twice over: `batch()` carries ~5µs of fixed overhead that dominates a 200ns copy, and it ignores what the change removes.
+Comparing clone costs in isolation predicts the opposite, and is misleading twice over: `batch()` carries fixed overhead that dwarfs a small copy, and it ignores what the change removes. Measure the whole write.
 
 **The inverse path does not need its own copy.** Each substrate used to `deepClonePlain` the pre-state before handing it to `invert`. `invert` already snapshots whatever it retains — `invertReplace`, `invertMap`, `invertSequence` and the rich-text marks each clone what they capture — so the substrate-side copy protected nothing and cost a deep clone of the written subtree on every local write.
 
@@ -727,7 +718,7 @@ For testing and reasoning, `step(state, change)` → `state` is the pure transit
 
 ### What the write path is NOT
 
-- **Read-your-writes inside `fn`** (post-jj:ryquprut). σ advances eagerly on every prepare, so reads inside `batch(doc, fn)` reflect prior writes within the same block. `d.todos.push("a"); d.todos.push("b")` appends in order. Pre-refactor this silently reordered because length-derived helpers read a stale σ.
+- **Read-your-writes inside `fn`.** σ advances eagerly on every prepare, so reads inside `batch(doc, fn)` reflect prior writes within the same block. `d.todos.push("a"); d.todos.push("b")` appends in order. Pre-refactor this silently reordered because length-derived helpers read a stale σ.
 - **Not async.** `batch()` is synchronous. The substrate's writes happen synchronously during `fn`. Notifications for the originating transaction fire synchronously at commit; re-entrant `batch()` calls from inside a subscriber land in the per-context dispatcher's pending queue and produce a separate `Changeset` in a fresh sub-tick of the same outer call — still synchronous from the caller's perspective.
 - **Not an effect system.** Side effects inside `fn` (network calls, DOM writes) run where they are called. Only the substrate-writable mutations are captured.
 
@@ -737,7 +728,7 @@ Subscriber callbacks may mutate freely. `batch()` invoked from inside `subscribe
 
 Substrate writes inside the re-entrant `batch()` remain **synchronous** — subsequent reads see the new state. The sub-tick's mutations produce their own `Changeset` once the inner `batch()` commits, delivered to subscribers after the originating Changeset.
 
-When the host is an `Exchange`, every per-doc dispatcher shares the Exchange's `Lease` with the Synchronizer. Cross-doc A→B→A cascades, and tick-induced re-entry through the synchronizer, are bounded by one cooperating budget. A runaway oscillation throws `BudgetExhaustedError` whose message names the cascade's entry-point frame, a top-N message-type histogram, and a recent-event tail — the label histogram is the cascade *topology* and the count distribution names the *hot path*, so users can locate the responsible subscriber without ad-hoc instrumentation (`jj:tozwpvuu`).
+When the host is an `Exchange`, every per-doc dispatcher shares the Exchange's `Lease` with the Synchronizer. Cross-doc A→B→A cascades, and tick-induced re-entry through the synchronizer, are bounded by one cooperating budget. A runaway oscillation throws `BudgetExhaustedError` whose message names the cascade's entry-point frame, a top-N message-type histogram, and a recent-event tail — the label histogram is the cascade *topology* and the count distribution names the *hot path*, so users can locate the responsible subscriber without ad-hoc instrumentation.
 
 See `@kyneta/machine`'s TECHNICAL.md §"Drain to quiescence and shared leases" for the primitive.
 
@@ -759,7 +750,7 @@ Two guidances:
 - The `Changeset` you receive describes the transaction that triggered your callback.
 - The substrate state you read (and can safely write through) reflects everything up to now, including re-entrant writes from earlier subscribers in the same deliver batch.
 
-To derive "pure pre-mutation state," consume the `Changeset` semantically; do not infer it by reading the substrate. This was always true in spirit — subscribers run after substrate commit — and the dispatcher refactor only changes whether re-entry from S1 succeeds (now) or throws (pre-1.6.0).
+To derive "pure pre-mutation state," consume the `Changeset` semantically; do not infer it by reading the substrate. This was always true in spirit — subscribers run after substrate commit — and the dispatcher is what makes re-entry from S1 succeed rather than throw.
 
 ### `Changeset.aborted`
 
@@ -769,7 +760,7 @@ The `aborted` flag is tightened: `true` iff the outermost block threw. Auto-comm
 
 ### `runBatch` — one bracket, three handlers
 
-Under the three-primitive substrate contract (jj:ryquprut), `ctx.runBatch` is **one bracket primitive with three handlers**, not three concentric brackets. Inside the bracket, `prepare` is the single effect; the three handlers all key off the same `frameStarts.length` depth:
+Under the three-primitive substrate contract, `ctx.runBatch` is **one bracket primitive with three handlers**, not three concentric brackets. Inside the bracket, `prepare` is the single effect; the three handlers all key off the same `frameStarts.length` depth:
 
 1. **Substrate handler** — invoked only at the depth-0 entry. Loro: `doc.commit()` at the wrap-end. Yjs: `Y.transact(doc, work, KYNETA_ORIGIN)`. PlainSubstrate omits this method; the ctx-level wrapper invokes the body directly. The Loro per-substrate depth counter is no longer needed — ctx-level outermost detection subsumes it.
 
@@ -799,9 +790,9 @@ Substrate.runBatch is invoked at most once per outermost `batch(doc, fn)` — re
 
 These four fields are *orthogonal* — they form a two-axis classification (app-set / subscriber-set / kyneta-set × provenance / outcome). See `BatchMetadata` in `@kyneta/changefeed`'s TECHNICAL.md for the full table.
 
-Layered consumers that need to discriminate "echo from sync" from "local write" — notably `@kyneta/exchange`'s auto-subscribe filter — read `Changeset.replay` rather than parsing the `origin` string. This closes a fragile string-collision surface where `batch(doc, fn, { origin: "sync" })` was accidentally suppressed and `doc.import(payload, "from-some-other-pubsub")` would echo to peers. Context: jj:qpultxsw.
+Layered consumers that need to discriminate "echo from sync" from "local write" — notably `@kyneta/exchange`'s auto-subscribe filter — read `Changeset.replay` rather than parsing the `origin` string. This closes a fragile string-collision surface where `batch(doc, fn, { origin: "sync" })` was accidentally suppressed and `doc.import(payload, "from-some-other-pubsub")` would echo to peers.
 
-The "schema layer and exchange never branch on origin's value" invariant is again **structurally true** after jj:wpvtoxmw — the conflation that had crept into `text-adapter` (`origin === "local"` for echo suppression) and `Line` (a dead `origin === "local"` filter) was rectified by introducing the identity-typed `source` channel and removing the dead Line filter.
+The "schema layer and exchange never branch on origin's value" invariant is **structurally true** — a conflation that once crept into `text-adapter` (`origin === "local"` for echo suppression) and `Line` (a dead `origin === "local"` filter) was rectified by introducing the identity-typed `source` channel and removing the dead Line filter.
 
 ### Origin-free discriminator
 
@@ -822,7 +813,6 @@ Loro models commits as a discrete API call (`doc.commit()` is separate from the 
 #### Known limitation (both substrates)
 Mixing raw CRDT mutations with kyneta `batch()` calls inside the same atomic unit (Yjs `transact` body, or Loro pending ops accumulated before a kyneta-issued commit) is unsupported. The raw mutations will be silently absorbed into kyneta's own-commit skip and not bridged to the changefeed. Use separate transacts/commits for raw mutations. This is a fundamental limit of commit-level discrimination — no origin-free approach can address it without op-level provenance, which neither CRDT exposes.
 
-Context: jj:uvykupvx.
 
 ### Substrate algebra vocabulary
 
@@ -864,12 +854,9 @@ Substrates capture `pre = path.read(σ)` (deep-cloned via `deepClonePlain`) befo
 
 ### Depth-aware `dispatch`
 
-`WritableContext.dispatch` is a depth-aware combinator. The 5 ref-helper files (`scalar.set`, `sequence.push`, etc.) and the addressing layer's `REMOVE` handler all route through it. Its polymorphism shifted under jj:ryquprut:
+`WritableContext.dispatch` is a depth-aware combinator. The 5 ref-helper files (`scalar.set`, `sequence.push`, etc.) and the addressing layer's `REMOVE` handler all route through it, and it branches on one local condition: `dispatch = frameStarts.length === 0 ? implicitSingleOpRunBatch : justPrepare`. Inside a batch a dispatch is just a prepare, because the outer frame owns the flush boundary; outside one it opens an auto-committing single-op `runBatch`.
 
-- Pre-refactor: `dispatch = inTransaction ? buffer : applyImmediately`. Buffered changes accumulated in `pending`; commit flushed them.
-- Post-refactor: `dispatch = frameStarts.length === 0 ? implicitSingleOpRunBatch : justPrepare`. In-block dispatch is just a prepare (the outer frame owns the flush boundary); out-of-block dispatch opens an auto-commit single-op runBatch.
-
-Both shapes are polymorphic combinators with a local condition; the new role is structurally simpler. Keeping the combinator avoids 5+1 files of mechanical helper conversion and eliminates per-helper substrate-bracket re-entry overhead — in-block helpers collapse into one substrate commit + one Changeset.
+Keeping the combinator rather than converting every helper is what lets in-block helpers collapse into one substrate commit and one `Changeset`, with no per-helper bracket re-entry.
 
 ---
 
@@ -893,7 +880,7 @@ Every node — leaf or composite — registers its deep subscribers at **its own
 
 Facade vs. protocol vocabulary inversion: facade `subscribe` is deep delivery (`Changeset<Op>`); the protocol-level `ChangefeedProtocol.subscribe` is own-path delivery (`Changeset<ChangeBase>`). The facade hides this; power users reaching directly into `ref[CHANGEFEED]` should know it.
 
-> **Principle.** Facade-level entry points should hide protocol-method-set distinctions when the user's semantic is well-defined regardless of carrier kind. "Subscribe to changes under this ref" is well-defined for any reactive value; whether the value happens to have children is a structural concern, not an observation concern. Pre-1.6.0 the facade threw on `subscribe(leaf)` because leaves lacked `subscribeDescendants`; 1.6.0 retires that leak by lifting `subscribeDescendants` to every schema-issued changefeed.
+> **Principle.** Facade-level entry points should hide protocol-method-set distinctions when the user's semantic is well-defined regardless of carrier kind. "Subscribe to changes under this ref" is well-defined for any reactive value; whether the value happens to have children is a structural concern, not an observation concern. The facade once threw on `subscribe(leaf)` because leaves lacked `subscribeDescendants`; lifting `subscribeDescendants` to every schema-issued changefeed retired that leak.
 
 **The pure helper.** `liftToOps(cs, path): Changeset<Op<C>>` raises shape from `Changeset<C>` to `Changeset<Op<C>>` at a constant path. It is used for the tree's synthesized delete terminal, which is the one event not derived from an op. Ordinary delivery needs no shape transform beyond the one `deliverNotifications` performs when it rebases a change to a subscriber's relative path — computed once, at the point of delivery. (`prefixOps`, which prepended a prefix at each level as a change propagated up the subscription graph, is gone with the graph.)
 
@@ -914,7 +901,7 @@ The walk is **structural**: take the first N segments, then compute that path's 
 
 This is how a transaction that modifies `doc.items[0].title` and `doc.items[0].count` delivers one changeset to `subscribe(doc)` (two ops), one to `subscribe(doc.items)` (two ops), one to `subscribe(doc.items[0])` (two ops), and one each to `subscribe(doc.items[0].title)` / `subscribe(doc.items[0].count)` (one op each) — all synchronously, all deduplicated.
 
-> That example described the intended contract for two major versions while the implementation delivered one changeset per *changed path*, so `subscribe(doc)` really received two. 4.0 makes the code match. `src/__tests__/delivery-conformance.test.ts` now runs the example, so the claim is anchored to something executable rather than to prose that can drift again.
+> That example described the intended contract for a long time while the implementation delivered one changeset per *changed path*, so `subscribe(doc)` really received two. `src/__tests__/delivery-conformance.test.ts` runs the example, so the claim is anchored to something executable rather than to prose that can drift again.
 
 Delivery is a single pass because grouping destroys ordering. If an ancestor write lands between two writes to the same descendant, grouping by path floats the ancestor past both of them, and replaying the result reaches a different state than the writes produced. Walking the ops in order and appending as we go preserves dispatch order for free. The two channels also share work: at `i === path.length` the ancestor key *is* the op's own path key, so computing them separately would repeat a lookup.
 
@@ -926,13 +913,13 @@ Three guarantees, all pinned:
 
 - **Dispatch order within a changeset.** A subscriber's `changes` are the ops it would have received individually, in the order they were dispatched. For a root subscriber that is exactly `batch()`'s return value, filtered to its subtree — which is what makes relaying through `applyChanges` sound.
 - **Deepest-first across deep subscribers.** Chosen, not inherited: before the ancestor walk, cross-level delivery order was an artifact of the sequence in which subscribers happened to register, and reversing registration reversed delivery.
-- **Every own-path callback before every deep callback.** This one *changed* in 4.0. The channels used to interleave per changed path — own(P1), deep(P1→root), own(P2), deep(P2→root) — because delivery happened inside the walk. Planning before firing is what collapses a subscriber's several changesets into one, and this ordering is the price. It is a trade, not an oversight.
+- **Every own-path callback before every deep callback.** This is the one ordering that is a *choice*. The channels used to interleave per changed path — own(P1), deep(P1→root), own(P2), deep(P2→root) — because delivery happened inside the walk. Planning before firing is what collapses a subscriber's several changesets into one, and this ordering is the price. It is a trade, not an oversight.
 
 Ordering *across changed paths* used to be first-touch order and was never contractual. It is now subsumed: a subscriber above several paths receives one changeset, so there is no cross-path order left to observe.
 
 #### Replay is where the fan-out is largest
 
-The local-`batch()` framing hides the high-traffic case. A replay batch bypasses `ctx.runBatch` but calls `ctx.flush` **once** for its whole payload (`executeBatch`, `src/interpreters/writable.ts`), so one incoming sync merge is one flush over every op in it. Before 4.0 an `offer` touching fifty paths delivered **fifty** changesets to every doc-root subscriber; now it delivers one. The factor is the number of distinct paths in a merge payload, which is unbounded in practice, and `@kyneta/exchange`, `@kyneta/react` and `@kyneta/devtools` all sit on that path.
+The local-`batch()` framing hides the high-traffic case. A replay batch bypasses `ctx.runBatch` but calls `ctx.flush` **once** for its whole payload (`executeBatch`, `src/interpreters/writable.ts`), so one incoming sync merge is one flush over every op in it. An `offer` touching fifty paths once delivered **fifty** changesets to every doc-root subscriber; it delivers one. The factor is the number of distinct paths in a merge payload, which is unbounded in practice, and `@kyneta/exchange`, `@kyneta/react` and `@kyneta/devtools` all sit on that path.
 
 Ordering has two halves here, and only one is universal. The engine preserves the relative order of the ops it is handed — that holds on every substrate and both entry points. That those ops arrive in *write* order is true only of a local batch: a merge carries a CRDT diff, so the event bridge reconstructs ops by enumerating what changed rather than replaying a write log. `deliveryConformance` pins the universal half for both drivers and the dispatch-order half for local writes.
 
@@ -1391,28 +1378,22 @@ independence bought with four assertions.
 ### The census
 
 Counts, not a line-by-line inventory, which would go stale immediately.
-`packages/schema` production source, excluding tests and the example app.
+What remains in `packages/schema` falls into four causes, and every surviving
+cast carries a comment naming which one it sits on. The interpreter layers hold
+none.
 
-10 casts, plus 8 comments that mention `as any` while explaining something and
-are not casts at all. (Counting is easy to get wrong here — see the note on
-`grep` below.)
+| Cause | Fixable? |
+|---|---|
+| Structural interface parameters | Deliberate — the price of substrate-agnostic capability interfaces |
+| Third-party CRDT gaps | `configTextStyle`, `applyDelta`, and Yjs's internal `_item`; upstream could close all three |
+| Runtime attachment before the slot exists | No — the property does not exist until the next statement |
+| Documented `TS2589` workaround | Only by reducing generic depth |
 
-The interpreter layers — `writable.ts`, `with-readable.ts`, `with-caching.ts`,
-`layers.ts` — are now at zero. That was the largest row in this table, 16 of
-26, and it closed once the augmentation was expressed rather than asserted.
-
-| Cause | n | Fixable? |
-|---|---|---|
-| Structural interface parameters | 4 | Deliberate — the price of substrate-agnostic capability interfaces |
-| Third-party CRDT gaps | 3 | `configTextStyle`, `applyDelta`, and Yjs's internal `_item`; upstream could close all three |
-| Runtime attachment before the slot exists | 2 | No — the property does not exist until the next statement |
-| Documented `TS2589` workaround | 1 | Only by reducing generic depth |
-
-Before this work the same source held 111 (counting the same way, and including
-the example app's 7, which are demonstration code). The difference was not one
-kind of fix: 17 were symbol protocols reachable by guard, 11 were union
-narrowings, 24 were third-party shapes that belonged at a boundary, and 18 more
-turned out to be inert while trying to write down what they asserted.
+The population was once far larger, and it did not shrink by one kind of fix:
+symbol protocols became reachable by guard, union narrowings got guards of their
+own, third-party shapes moved to a boundary module — and a substantial number
+turned out to be inert the moment someone tried to write down what they
+asserted. (Counting casts is easy to get wrong; see the note on `grep` below.)
 
 ### Guards are the general answer
 
@@ -1529,7 +1510,7 @@ class PlainVersion {
 }
 ```
 
-A **single-entry version vector**: at most one authored *lineage* `{lineage: value}`, with genesis (`DEFAULT_LINEAGE`) as the empty vector ⊥ (see [§Version vector algebra](#version-vector-algebra)). `serialize()` produces `"lineage:value"` (genesis serializes as `"kyneta.genesis:0"`); `parseVersion` also accepts legacy bare-integer strings (e.g. `"5"`), which parse as belonging to `LEGACY_EPOCH`. Context: jj:kxswmuzx.
+A **single-entry version vector**: at most one authored *lineage* `{lineage: value}`, with genesis (`DEFAULT_LINEAGE`) as the empty vector ⊥ (see [§Version vector algebra](#version-vector-algebra)). `serialize()` produces `"lineage:value"` (genesis serializes as `"kyneta.genesis:0"`); `parseVersion` also accepts legacy bare-integer strings (e.g. `"5"`), which parse as belonging to `LEGACY_EPOCH`.
 
 `lineage` is the version-vector *lineage key* — the identity coordinate, universal to every `Version` (see [§Version vector algebra](#version-vector-algebra)). Plain is the substrate where the lineage changes during normal operation (a fresh REAL lineage is minted on the first authored write, or on a writer restart with no persisted store); CRDT substrates (Loro, Yjs) and `ephemeral` hold a constant `DEFAULT_LINEAGE`, their identity living in their own native vectors.
 
@@ -1552,7 +1533,7 @@ The lineage now travels as an explicit field, `SubstratePayload.lineage`, set by
 
 ### The op-log holds immutable `RawPath` (authoring-time freeze)
 
-**Invariant: the op-log is history — immutable values, never references into the live addressing registry.** A logged `Op` is a fact about the past; a since-deleted key is still the correct thing that op did. `AddressedPath` segments are memoized, *mutable* `Address` objects (an entry delete sets `dead = true`; a sequence edit advances `index` — both in place, see [§The interpreter stack](#the-interpreter-stack) addressing and `change.ts` `advanceAddresses`). If the log stored the live path, a later mutation would corrupt a historical op: `exportSince` → `serializeOps` would throw `"Ref access on deleted map entry"` on a tombstoned entry segment, or silently serialize a *drifted* index. Context: jj:mlurlzqt.
+**Invariant: the op-log is history — immutable values, never references into the live addressing registry.** A logged `Op` is a fact about the past; a since-deleted key is still the correct thing that op did. `AddressedPath` segments are memoized, *mutable* `Address` objects (an entry delete sets `dead = true`; a sequence edit advances `index` — both in place, see [§The interpreter stack](#the-interpreter-stack) addressing and `change.ts` `advanceAddresses`). If the log stored the live path, a later mutation would corrupt a historical op: `exportSince` → `serializeOps` would throw `"Ref access on deleted map entry"` on a tombstoned entry segment, or silently serialize a *drifted* index.
 
 The fix is a one-token change at the authoring seam: `PlainSubstrate.prepare` (and the `ephemeral` substrate's) pushes `{ path: path.toRaw(), change }`, not `{ path, change }`. `Path.toRaw()` (`path.ts`) is a pure projection — `RawPath.toRaw()` returns `this`; `AddressedPath.toRaw()` reads each segment's **`coord()`** (never `resolve()`, so it succeeds even for a dead address). It is the named inverse of `resolveToAddressed`. Two consequences worth internalizing:
 
@@ -1566,7 +1547,7 @@ A path segment (`RawSegment` | `Address`, `path.ts`) exposes two coordinate acce
 - **`coord()`** — total, pure, never throws (even for a dead `Address`). The coordinate is an *invariant* of the segment (`readonly key` / `index`). Use it for **history, diagnostics, identity, and reads**: serialization, `format()`, the `\0`-joined `key`, schema/position walks (`fold-path.ts`, `doc-position.ts`, `schema.ts` — a deleted *instance* keeps its static *schema*), and `AbstractPath.read`.
 - **`resolve()`** — projects the coordinate but *asserts liveness*, throwing on a dead `Address`. This is the loud-failure backstop for a **stale ref that tries to navigate or write**. It survives only at the genuine guard sites: the `Address` factories themselves, `writeByPath` (writing through a deleted path must fail), and the live ref-navigation surface.
 
-Two totality rules follow (both fixed as part of jj:mlurlzqt):
+Two totality rules follow:
 
 - **Diagnostics never throw.** `format()`/`key` route through `coord()`. Previously they used `resolve()`, so formatting a path with a dead segment threw *while building an error message* (e.g. `withAddressing`'s `onRefCreated` throw), masking the original error.
 - **Reads are total; a deleted key is absent.** `path.read(store)` of a deleted key returns `undefined` (via the natural `store[key]` miss), **not** a throw. Deletion remains observable via `deletedFeed(ref)` (or `deleted(ref)` for a plain boolean); **writes** still throw (that guard belongs on the write path, not the read). This is the intended contract — see the `with-addressing` "delete → read undefined, write throws, deleted is true" tests.
@@ -1633,7 +1614,7 @@ function foldPath(
    - A `sum` (which is what `.nullable()` expands to). Sum variants are `PlainSchema` by construction, so no CRDT container can exist inside one.
    - A `.json()` node. The whole subtree is one plain JSON blob by definition of the modifier.
 
-   These were documented as *two* invariants until 2.3.x, and the split was itself the bug: a walker could learn the json half and miss the sum half, which is exactly what happened. They are one rule because they describe one storage decision.
+   These were once documented as *two* invariants, and the split was itself the bug: a walker could learn the json half and miss the sum half, which is exactly what happened. They are one rule because they describe one storage decision.
 
    **That constraint is now retired rather than restated.** This document used to say the walk-side predicate and `needsContainer` (`materialize-value.ts`) "must agree", which is the same kind of prose invariant the section below diagnoses — a rule living in a doc comment, enforced by review. Both are now one-line derivations of `storageClass` (`schema.ts`), the single place the decision is made: `isOpaqueBoundary` asks it the walk-side question, `needsContainer` the write-side one. They cannot disagree, so nothing has to remember that they must.
 
@@ -1653,7 +1634,7 @@ Before this primitive, both Loro's `resolveContainer` and Yjs's `resolveYjsType`
 
 > After the consolidation, `advanceSchema` has exactly one production caller — `foldPath` itself — and the sum-boundary rule is structural, not exception-based.
 
-By 2.3.x there were three production callers. `findJsonBoundary` arrived with the `.json()` boundary work as a *second* hand-rolled walk, and learned only the json half of the boundary rule; `schemaAtPath` (`state-tree.ts`) arrived as a third and reached for `try/catch`. Each shipped a different bug from the same missing case: one crashed on a legitimate path, one silently discarded fields from replicated state.
+At one point there were three production callers. `findJsonBoundary` arrived with the `.json()` boundary work as a *second* hand-rolled walk, and learned only the json half of the boundary rule; `schemaAtPath` (`state-tree.ts`) arrived as a third and reached for `try/catch`. Each shipped a different bug from the same missing case: one crashed on a legitimate path, one silently discarded fields from replicated state.
 
 The claim was true when written. What made it decay is that nothing enforced it — the rule lived in a doc comment, and `advanceSchema` was exported, so hand-rolling a fourth walk was the path of least resistance. **A stated invariant is not an enforced one.**
 
@@ -1810,7 +1791,7 @@ The worked example is `__getCacheHandlerCountAtPath` (`src/interpreters/with-cac
 | `src/interpreters/with-addressing.ts` | Address-table layer. Sequence/movable and map/set cases delegate to shared helpers. |
 | `src/interpreters/with-caching.ts` | Identity-preserving memoization + `INVALIDATE`. Sequence/movable and map/set cases delegate to shared helpers. |
 | `src/interpreters/writable.ts` | Mutation primitives + `REMOVE` + `TRANSACT` + `executeBatch`. Text/sequence/movable/map/set cases delegate to shared helpers. |
-| `src/interpreters/with-changefeed.ts` | Observation layer + `planDelivery` + `deliverNotifications` + `listenIn` + `createNodeChangefeed` + `wireChangefeed`. All cases use `wireChangefeed` to unify changefeed boilerplate. The notification engine itself is internal — not exported since 4.0. |
+| `src/interpreters/with-changefeed.ts` | Observation layer + `planDelivery` + `deliverNotifications` + `listenIn` + `createNodeChangefeed` + `wireChangefeed`. All cases use `wireChangefeed` to unify changefeed boilerplate. The notification engine itself is internal — not exported. |
 | `src/interpreters/validate.ts` | Validation interpreter. |
 | `src/interpreters/plain.ts` | Plain-state interpreter (reader + canonical shape). |
 | `src/interpreters/navigable.ts`, `readable.ts` | ~100 each | Type-interface modules. |
