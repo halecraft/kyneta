@@ -1014,7 +1014,11 @@ describe("sync-program", () => {
       expect(defined(docSync).status).toBe("pending")
     })
 
-    it("non-reciprocating interest for an authoritative doc marks the peer synced immediately", () => {
+    it("a non-reciprocating interest marks the peer pending and asks the shell to classify its version", () => {
+      // `reciprocate: false` exists to stop two peers exchanging interests
+      // forever. It says nothing about whether the sender has state we need
+      // — that is a version comparison, and only the shell can parse a
+      // version. So the program marks `pending` and emits the question.
       const update = makeUpdate()
       let model = initSync(alice)
       ;[model] = addPeer(update, model, "bob", bob)
@@ -1022,7 +1026,7 @@ describe("sync-program", () => {
         syncMode: SYNC_AUTHORITATIVE,
       })
 
-      const [m2] = receiveMessage(update, model, "bob", {
+      const [m2, effects] = receiveMessage(update, model, "bob", {
         type: "interest",
         docId: "doc-1",
         version: "v0",
@@ -1030,15 +1034,20 @@ describe("sync-program", () => {
       })
 
       const docSync = defined(m2.peers.get("bob")).docSyncStates.get("doc-1")
-      expect(defined(docSync).status).toBe("synced")
+      expect(defined(docSync).status).toBe("pending")
+      expect(effects).toContainEqual({
+        type: "classify-peer-version",
+        docId: "doc-1",
+        peerId: "bob",
+        version: "v0",
+      })
     })
 
-    it("non-reciprocating interest for an ephemeral doc also marks the peer synced immediately", () => {
-      // SYNC_EPHEMERAL sets reciprocate: false, same as SYNC_AUTHORITATIVE —
-      // this handler's behavior does not distinguish sync modes. Whether
-      // this premature "synced" marking is safe for a given sync mode is
-      // the concern of isLegacyReset's own durability check in the
-      // Synchronizer, not of this per-message-type transition.
+    it("an ephemeral doc's non-reciprocating interest takes the same path", () => {
+      // SYNC_EPHEMERAL sets reciprocate: false, same as SYNC_AUTHORITATIVE.
+      // The handler does not distinguish sync modes: every interest is a
+      // request for our state, answered with an offer, and the sender's own
+      // standing is decided by its version.
       const update = makeUpdate()
       let model = initSync(alice)
       ;[model] = addPeer(update, model, "bob", bob)
@@ -1046,7 +1055,7 @@ describe("sync-program", () => {
         syncMode: SYNC_EPHEMERAL,
       })
 
-      const [m2] = receiveMessage(update, model, "bob", {
+      const [m2, effects] = receiveMessage(update, model, "bob", {
         type: "interest",
         docId: "doc-1",
         version: "v0",
@@ -1054,7 +1063,117 @@ describe("sync-program", () => {
       })
 
       const docSync = defined(m2.peers.get("bob")).docSyncStates.get("doc-1")
-      expect(defined(docSync).status).toBe("synced")
+      expect(defined(docSync).status).toBe("pending")
+      expect(effects.some(e => e.type === "classify-peer-version")).toBe(true)
+    })
+
+    it("does not reconcile the authority on its interest — only on its offer", () => {
+      // The reported defect, pinned where it lives. A fresh client at genesis
+      // receives the authority's interest before the authority's offer. Over
+      // a websocket those are separate tasks, and `whenSettled` — which reads
+      // the reconciliation latch — resolved in the gap, with the document
+      // still empty. The latch must not move until state has arrived.
+      const update = makeUpdate()
+      let model = initSync(alice)
+      ;[model] = addPeer(update, model, "bob", bob)
+      ;[model] = ensureDoc(update, model, "doc-1", {
+        syncMode: SYNC_AUTHORITATIVE,
+        version: "kyneta.genesis:0",
+      })
+      expect(hasReconciled(model, "doc-1")).toBe(false)
+
+      ;[model] = receiveMessage(update, model, "bob", {
+        type: "interest",
+        docId: "doc-1",
+        version: "bob:54",
+        reciprocate: false,
+      })
+      expect(hasReconciled(model, "doc-1")).toBe(false)
+
+      // The offer arrives and merges; the shell reports it.
+      ;[model] = update(
+        {
+          type: "sync/doc-imported",
+          docId: "doc-1",
+          version: "bob:54",
+          fromPeerId: "bob",
+        },
+        model,
+      )
+      expect(hasReconciled(model, "doc-1")).toBe(true)
+      expect(
+        defined(defined(model.peers.get("bob")).docSyncStates.get("doc-1"))
+          .status,
+      ).toBe("synced")
+    })
+
+    it("a reciprocating interest also marks pending and asks for classification", () => {
+      // Reconnect: a peer we had as `synced` sends a reciprocal interest.
+      // It flips to `pending`; whether it flips straight back is the shell's
+      // call from its version, which is what lets a peer at our version
+      // re-settle without waiting for the offer round trip.
+      const update = makeUpdate()
+      let model = initSync(alice)
+      ;[model] = addPeer(update, model, "bob", bob)
+      ;[model] = ensureDoc(update, model, "doc-1")
+      ;[model] = update(
+        {
+          type: "sync/doc-imported",
+          docId: "doc-1",
+          version: "v1",
+          fromPeerId: "bob",
+        },
+        model,
+      )
+
+      const [m2, effects] = receiveMessage(update, model, "bob", {
+        type: "interest",
+        docId: "doc-1",
+        version: "v1",
+        reciprocate: true,
+      })
+
+      expect(
+        defined(defined(m2.peers.get("bob")).docSyncStates.get("doc-1")).status,
+      ).toBe("pending")
+      expect(effects).toContainEqual({
+        type: "classify-peer-version",
+        docId: "doc-1",
+        peerId: "bob",
+        version: "v1",
+      })
+    })
+
+    it("a peer left pending by an interest still receives pushes", () => {
+      // Routing was never the problem: `getSyncedPeers` sends to
+      // `synced | pending`. Pinned because a tightened `pending` rule is the
+      // regression this change would most plausibly cause — a read-only
+      // client that got its first offer and then silence.
+      const update = makeUpdate()
+      let model = initSync(alice)
+      ;[model] = addPeer(update, model, "bob", bob)
+      ;[model] = ensureDoc(update, model, "doc-1", {
+        syncMode: SYNC_AUTHORITATIVE,
+      })
+      ;[model] = receiveMessage(update, model, "bob", {
+        type: "interest",
+        docId: "doc-1",
+        version: "v0",
+        reciprocate: false,
+      })
+      expect(
+        defined(defined(model.peers.get("bob")).docSyncStates.get("doc-1"))
+          .status,
+      ).toBe("pending")
+
+      const [, effects] = applyUpdate(
+        update,
+        { type: "sync/local-doc-change", docId: "doc-1", version: "v2" },
+        model,
+      )
+      const offers = effectsOfType(effects, "send-offers")
+      expect(offers.length).toBe(1)
+      expect(defined(offers[0]).to).toContain("bob")
     })
 
     // The by-id request path. Announcing a doc has always been gated by

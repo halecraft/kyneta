@@ -198,7 +198,7 @@ export type SynchronizerParams = {
 // Version-gap planning helpers
 // ---------------------------------------------------------------------------
 
-type VersionGapResult =
+export type VersionGapResult =
   | { kind: "parse-error"; error: unknown }
   | { kind: "no-gap"; comparison: "behind" | "equal" }
   | {
@@ -255,6 +255,42 @@ function resolveInboundVersionGap(
     (parsed, current) => parsed.compare(current),
   )
   return result
+}
+
+/**
+ * What a peer's version tells us about them, as the next transition — or
+ * nothing.
+ *
+ * This is the whole of the decision that turns a version comparison into a
+ * sync-state change, kept pure so it can be table-tested without a runtime.
+ * Two paths ask it: the offer path, when a peer sends us its state, and the
+ * interest path, when a peer asks for ours. Both are answering the same
+ * question — does this peer have anything we still need? — and `synced` must
+ * mean the same thing whichever way it was reached.
+ *
+ * - `"absent"` — the peer sent no version at all. `InterestMsg.version` is
+ *   optional, and the wire decoder omits it when the frame carries none; a
+ *   peer that cannot state a version holds nothing we need. `synced`.
+ * - `no-gap` — behind or equal. Nothing to receive. `synced`.
+ * - `gap` — ahead or concurrent. Their offer is coming; stay `pending`.
+ * - `parse-error` — a version we cannot read must not be assumed either way.
+ *   Stay `pending`; the caller warns.
+ *
+ * The `version: ""` in the `"absent"` case is a value the model already
+ * holds — the interest handler used to write `message.version || ""` — and
+ * the lowest-common-version computation excludes entries that do not parse,
+ * so an empty string is safe downstream.
+ */
+export function transitionForPeerVersion(
+  gap: VersionGapResult | "absent",
+  docId: DocId,
+  peerId: PeerId,
+  version: string | undefined,
+): Extract<SyncInput, { type: "sync/peer-synced" }> | null {
+  if (gap === "absent" || gap.kind === "no-gap") {
+    return { type: "sync/peer-synced", docId, version: version ?? "", peerId }
+  }
+  return null
 }
 
 function resolveOutboundVersionGap(
@@ -1319,6 +1355,9 @@ export class Synchronizer {
       case "import-doc-data":
         this.#executeImportDocData(effect)
         break
+      case "classify-peer-version":
+        this.#executeClassifyPeerVersion(effect)
+        break
       case "ensure-doc":
         this.#docCreationCallback?.(
           effect.docId,
@@ -1448,6 +1487,66 @@ export class Synchronizer {
   // IMPORT DOC DATA — merge inbound data and notify model on success
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
+  /**
+   * Compare a peer's version against ours, mark it `synced` if there is
+   * nothing left to receive, and hand back the gap only when there is one.
+   *
+   * This is the single place a version comparison becomes a `synced`
+   * transition: the offer path continues into a merge when a gap comes back,
+   * and the interest path stops here. `sync/peer-synced` has no other
+   * producer in the shell, which is what makes "every `synced` follows a
+   * version comparison" true by construction rather than by discipline.
+   */
+  #classifyPeer(
+    runtime: DocRuntime,
+    docId: DocId,
+    peerId: PeerId,
+    version: string | undefined,
+  ): Extract<VersionGapResult, { kind: "gap" }> | null {
+    const gap: VersionGapResult | "absent" =
+      version === undefined
+        ? "absent"
+        : resolveInboundVersionGap(
+            runtime.replica,
+            runtime.replicaFactory,
+            version,
+          )
+
+    if (gap !== "absent" && gap.kind === "parse-error") {
+      console.warn(
+        `[exchange] version parse failed for doc '${docId}':`,
+        gap.error,
+      )
+      return null
+    }
+
+    const transition = transitionForPeerVersion(gap, docId, peerId, version)
+    if (transition) {
+      this.#dispatchSync(transition)
+      return null
+    }
+
+    return gap === "absent" || gap.kind !== "gap" ? null : gap
+  }
+
+  /**
+   * An inbound `interest` told the program a peer wants our state. Whether we
+   * also want theirs is the same question the offer path asks — see
+   * `#classifyPeer` — so this is that call and nothing more. A peer whose
+   * version is ahead stays `pending` until its offer arrives and takes the
+   * `doc-imported` path.
+   */
+  #executeClassifyPeerVersion(effect: {
+    type: "classify-peer-version"
+    docId: DocId
+    peerId: PeerId
+    version: string | undefined
+  }): void {
+    const runtime = this.#docRuntimes.get(effect.docId)
+    if (!runtime) return
+    this.#classifyPeer(runtime, effect.docId, effect.peerId, effect.version)
+  }
+
   #executeImportDocData(effect: {
     type: "import-doc-data"
     docId: DocId
@@ -1458,32 +1557,13 @@ export class Synchronizer {
     const runtime = this.#docRuntimes.get(effect.docId)
     if (!runtime) return
 
-    const gap = resolveInboundVersionGap(
-      runtime.replica,
-      runtime.replicaFactory,
+    const gap = this.#classifyPeer(
+      runtime,
+      effect.docId,
+      effect.fromPeerId,
       effect.version,
     )
-
-    switch (gap.kind) {
-      case "parse-error":
-        console.warn(
-          `[exchange] version parse failed for doc '${effect.docId}':`,
-          gap.error,
-        )
-        return
-
-      case "no-gap":
-        this.#dispatchSync({
-          type: "sync/peer-synced",
-          docId: effect.docId,
-          version: effect.version,
-          peerId: effect.fromPeerId,
-        })
-        return
-
-      case "gap":
-        break
-    }
+    if (!gap) return
 
     // Does this offer mean "reconcile with me" or "take my word for it"?
     // `classifyResetTrigger` holds that entire decision — see its doc comment

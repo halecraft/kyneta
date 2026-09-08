@@ -260,6 +260,24 @@ export type SyncEffect =
       fromPeerId: PeerId
     }
   | {
+      /**
+       * Compare a peer's version against ours and mark it `synced` if there
+       * is nothing left to receive from it. Emitted on an inbound `interest`.
+       *
+       * Versions are opaque strings to this program — parsing one needs the
+       * substrate's replica factory — so the comparison is the shell's job.
+       * The offer path already works this way (`import-doc-data` → the shell
+       * classifies → `sync/peer-synced` or `sync/doc-imported` comes back);
+       * this is the same question asked when a peer *asks* for our state
+       * rather than when it *offers* its own.
+       */
+      type: "classify-peer-version"
+      docId: DocId
+      peerId: PeerId
+      /** The sender's serialized version, or `undefined` when the interest carried none. */
+      version: string | undefined
+    }
+  | {
       type: "ensure-doc"
       docId: DocId
       peer: PeerIdentityDetails
@@ -1341,7 +1359,8 @@ function handleInterest(
 
 /**
  * Handle a normal interest for a doc that exists. Responds based on
- * sync protocol and updates peer sync state to "pending".
+ * sync protocol, marks the peer `pending`, and asks the shell whether the
+ * peer's version leaves us anything to receive.
  */
 function handleInterestForKnownDoc(
   fromPeerId: PeerId,
@@ -1354,19 +1373,31 @@ function handleInterestForKnownDoc(
 
   const effects = buildInterestResponse(fromPeerId, message, docEntry)
 
-  // Reciprocate ⇒ we expect an offer back (pending); otherwise the peer is
-  // read-only and we treat it as synced immediately. Both fold through the
-  // single fold point (the old pending/synced if/else for the dedup list
-  // was redundant — both branches appended the same docId).
-  const next: PeerDocSyncState = message.reciprocate
-    ? { status: "pending", lastUpdated: new Date() }
-    : {
-        status: "synced",
-        lastKnownVersion: message.version || "",
-        lastUpdated: new Date(),
-      }
+  // An interest tells us the sender *wants our state*. It says nothing about
+  // whether we want theirs — that depends on their version, which only the
+  // shell can read. So the peer is `pending` here, and `synced` follows from
+  // the classification below or from the offer they send us.
+  //
+  // `synced` means "nothing left to receive from this peer". It used to be
+  // inferred from `reciprocate: false`, a flag that exists to stop two peers
+  // exchanging interests forever and carries no other meaning. On a document
+  // whose sync mode is not bidirectional, every interest is
+  // `reciprocate: false` in both directions — so a client marked its
+  // authority `synced` on receiving the authority's *request*, the
+  // reconciliation latch recorded it, and `whenSettled` resolved before the
+  // authority's state had arrived.
+  const next: PeerDocSyncState = { status: "pending", lastUpdated: new Date() }
 
-  return [setPeerDocState(model, fromPeerId, message.docId, next), ...effects]
+  return [
+    setPeerDocState(model, fromPeerId, message.docId, next),
+    ...effects,
+    {
+      type: "classify-peer-version",
+      docId: message.docId,
+      peerId: fromPeerId,
+      version: message.version,
+    },
+  ]
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
