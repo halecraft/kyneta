@@ -26,6 +26,8 @@ Imported by every other Kyneta package that touches documents: the CRDT backends
 - How does the exchange decide whether two peers' docs are compatible? → [`schemaHash` and compatibility](#schemahash-and-compatibility)
 - What is the `CHANGEFEED` surface over a composite ref? → [Tree-observable changefeeds](#tree-observable-changefeeds)
 
+---
+
 ## Vocabulary
 
 | Term | Means | Not to be confused with |
@@ -197,79 +199,10 @@ Kyneta exports four pre-configured binding targets:
 | `loro` | `@kyneta/loro-schema` | `SYNC_COLLABORATIVE` | `LoroLaws` (full CRDT set minus `"add-wins-per-key"`) | Loro CRDT doc |
 | `yjs` | `@kyneta/yjs-schema` | `SYNC_COLLABORATIVE` | `YjsLaws` (text + structural laws) | Yjs doc |
 
-#### What `ephemeral` is
-
-A **field-level LWW map**, and a state-based CRDT (CvRDT) — peers exchange whole
-states and reconcile them with a join, rather than shipping an op log. The
-substrate keeps a `StateTuple` — `[value, timestamp]` — for every scalar leaf,
-so concurrent writes merge field by field.
-
-That granularity is the whole point. A presence roster where each peer writes
-only its own key is the motivating case, and it is unusable under
-whole-document last-writer-wins, where whichever peer wrote most recently
-clobbers everyone else. Kyneta shipped exactly that substrate through 2.x under
-this same name with a different implementation. See the CHANGELOG.
-
-Two properties follow from being snapshot-only and transient:
-
-- A `sum`/discriminated-union variant and a `.json()` blob are stored as a
-  **single atomic register** tuple holding the whole value, not decomposed — so
-  a concurrent variant switch resolves to one coherent variant and never blends
-  fields across two.
-- There is no op log, so nothing accumulates and nothing is persisted.
-  `.decay()` can retire a leaf on a timer, which is meaningful only here.
-
-##### The merge rule, in full
-
-Highest timestamp wins; **on a tie, the greater `JSON.stringify(value)` wins**. State both halves — the tie is the half a reader will meet in production and not in testing, and getting it wrong is invisible.
-
-The tie rule is not a detail. Timestamps come from `Date.now()`, so a tie means two peers wrote in the same millisecond — routine for presence traffic, which arrives in bursts from many peers at once. A merge that resolved ties by preferring "the remote value" would be deterministic but *not commutative*: each peer would keep its own value and the two would diverge permanently, with no error raised and no convergence to follow. Commutativity, associativity and idempotence are pinned as laws in `ephemeral-lattice.test.ts`.
-
-On a tie the greater **value** wins, not the later writer — a tie *is* simultaneity, so there is no later writer to prefer. Comparing serialisations is sound because both peers compare the same pair of strings and so reach the same verdict, and because string comparison is a total order, which is what makes the join associative across three or more tied peers. Only the tie path pays for `stringify`.
-
-##### Deletion
-
-`mergeStateTree` unions keys, so **absence carries no information**: a key one peer lacks is indistinguishable from a key it has never seen. Simply removing a key therefore survives only until the next merge with anyone who still holds it. A `Schema.record` used as a roster could gain members but never lose them.
-
-A delete instead writes a **tombstone** — a `StateTuple` whose third slot is `true`. It is an ordinary value that wins or loses by the rule above, so `mergeStateTree` needs no knowledge of it, which is what keeps the merge schema-blind for headless relays. Reads project a tombstoned key as absent.
-
-Deleting an entry whose value is a *container* tombstones every leaf inside it rather than replacing the subtree with a single tuple. This is deliberate and load-bearing. Replacing it would make two peers disagree about a node's **shape** — one holding a leaf where the other holds a container — and resolving a shape disagreement means discarding one side's contents, which breaks associativity: with a leaf `L` (t=300) and containers `B` (newest t=150) and `C` (newest t=400), `(L ⊔ B) ⊔ C` discards B's leaves while `L ⊔ (B ⊔ C)` keeps them, so two peers given the same three updates in different orders end up with different state. Tombstoning leaf-by-leaf keeps every shape stable, confining the join to leaf-against-leaf where it is provably a lattice. The merge still has a leaf-versus-container branch for malformed or mismatched-schema payloads; it is commutative but explicitly *not* associative, and well-formed peers cannot reach it.
-
-An entry drops out of the projection only when **every** leaf beneath it is tombstoned. That is what distinguishes a deleted entry from a legitimately empty container — an empty record still reads as `{}`.
-
-**This is LWW-Element-Set, not OR-Set.** Concurrent add and remove resolve by timestamp: a later add beats an earlier delete, and a later delete beats an earlier add. Anyone who reads "tombstone" is likely to assume observed-remove semantics, where a concurrent add always wins regardless of clock — that is *not* what this does. LWW is the correct reading for a target advertising `lww-per-key`, OR-Set would require per-element causal metadata a snapshot-only substrate does not carry, and for presence it is the behaviour you want: a peer removed and rejoining should be present again.
-
-**Tombstones do not need collecting.** Deleting *replaces* a tuple rather than adding one, and re-adding replaces it back, so they accumulate per **key**, not per operation — 500 alternating delete/add cycles leave one tuple. The tree stays bounded by the set of keys ever written, which is the bound it had when nothing was ever deleted. The only cost is that a currently-deleted key occupies a tuple where it would otherwise be absent. The phrase "tombstone garbage collection" is imported from CRDTs where deletes genuinely accumulate without bound; here they do not. If bounding this ever did matter, note that **`.decay()` cannot be the mechanism** — it never mutates the tree (see below). Collection would need a real tree mutation with its own safety argument, and on a snapshot-only log-free CvRDT that means causal stability, which is not available here.
-
-##### What `.decay()` is
-
-A **read-time projection**, not a deletion mechanism. `tick(now)` re-projects the tree into the shadow, showing any leaf older than its `decayMs` as `Zero.structural` instead of its stored value. It runs with `projection: true` and `replay: true`: the tree is untouched, the version clock does not advance, and nothing is broadcast.
-
-Decay removes nothing. It is the rule *"when reading, treat a leaf older than `decayMs` as its zero value"*, and it converges across peers with **no communication at all**, because every peer applies the same age test to the same stored timestamp and therefore reaches the same answer.
-
-It does not interact with tombstones, and cannot be used to collect them — dropping a tombstone would be a tree mutation, which is exactly what decay does not do.
-
-##### Where `.decay()` may be attached
-
-Decay works **per leaf tuple**: it compares one stored timestamp against `now`. That fixes where it can legally sit.
-
-An atomic register — a `sum` variant or a `.json()` blob — is stored as ONE tuple holding the whole value, so a field inside it has no timestamp of its own and can never age out independently. `decayMs` is therefore **legal at or above an opaque boundary and illegal strictly below one**, and `bind()` rejects the illegal case (`validateDecayConstraints`, `bind.ts`). Attaching it to the sum or `.json()` node itself is supported and means what it says: the whole variant decays to its structural zero together.
-
-Two rules now live in that validator, checked in order — never on a durable substrate, then never below a boundary. The order is deliberate. A schema can break both at once, and the two are independent, so leading with the boundary message would tell a caller to move an annotation when their real problem is that the substrate supports no decay at all. Asking *where* decay may sit only has meaning once decay is permitted somewhere.
-
-Before this check existed, `decayMs` below a boundary bound cleanly and then silently never fired — no throw, no log, just a field that never decayed.
-
-##### Atomic registers in the StateTree
-
-A `StateTuple` is `[value, timestamp, deleted?]`. The third slot is present only on a tombstone (see "Deletion" above); the marker lives in its own slot rather than in the value because it has to be **out-of-band from the value domain** — `null` is a legitimate value under a nullable schema, and any in-band sentinel is something a `.json()` blob could legitimately contain. Note that `isStateTuple` deliberately does **not** check the tuple's length: an array in a StateTree is always a leaf, since sequences are not a supported container here, and an arity check would have to be revised every time the tuple gains a slot. Getting that wrong is quiet and expensive — a tuple the guard rejects is treated as a container, and its slots are then merged and projected as if they were keys.
-
-The leaf-vs-container decision reuses `needsContainer` (`materialize-value.ts`), the same predicate the Loro/Yjs backends use for insert detection: `product`/`map` decompose into per-field tuples (that is what gives `ephemeral` its field-level merge), while `scalar`, `sum`, and `.json()` nodes are stored as one leaf tuple. Storing a register whole is deliberate — a sum variant is an opaque LWW value (variant fields are not independently addressable; a switch is one whole-value `.set()`, per the `WritableDiscriminantProductRef` contract), so decomposing it would let the schema-blind `mergeStateTree` interleave fields from different variants.
-
-A write aimed *at or inside* a register is re-aimed at the register itself before it reaches the tree (`state.ts:prepare`, via the same `findOpaqueBoundary` the CRDT backends use). Applying such a write literally would split the tuple into per-field tuples and drop every sibling field the change never mentioned. This is easy to miss in testing: `prepare` updates the plain-object shadow that local reads are served from, so the document reads back correctly on the peer that made the write, and only replicated state is damaged. Assert on the exported tree, not on the document.
-
-The property this buys — a concurrent variant switch resolving to one coherent variant, never a blend of two — is asserted across every substrate in `tests/conformance`, not just for `ephemeral`. If you change how registers are stored, that is where the cross-substrate guard lives.
-
-Crucially, atomicity is encoded in the tree's *shape* (register = leaf tuple), **not** in the merge logic. That is why `mergeStateTree` stays schema-blind: a headless relay/store merges raw entirety payloads by timestamp without ever needing the schema. The schema is consulted only when translating between plain values and the tree (build via `applyChangeToStateTree`/`syncStateTreeToShadow`, extract via `extractPlainState`), which always runs on a schema-aware peer. Register values are deep-cloned (`deepClonePlain`) at the tree↔shadow boundary so the two never alias.
+`ephemeral` is the one target whose substrate this document describes in
+full — see [The ephemeral substrate](#the-ephemeral-substrate). `json` is
+[the plain substrate](#the-plain-substrate); `loro` and `yjs` have their own
+documents.
 
 Usage:
 
@@ -432,46 +365,246 @@ Both are pure. Loro and Yjs substrates use these directly for their Lamport vect
 
 ---
 
-## `schemaHash` and compatibility
+## The plain substrate
 
-Source: `packages/schema/src/hash.ts` → `computeSchemaHash`, `HASH_ALGORITHM_VERSION`, `fnv1aHex`.
+Source: `packages/schema/src/substrates/plain.ts`.
 
-`computeSchemaHash(schema)` is a pure, content-addressed function:
+The built-in substrate. Stores state as plain JS objects, tracks a monotonic integer version scoped to an lineage (see `PlainVersion` below), and merges by total-order last-writer-wins within an lineage. Used for:
 
-1. Build a **canonical tuple** (`canonicalTuple`): a recursively-nested value of **arrays and strings only — never objects** (object key order is engine-defined; array order is positional and stable). Field names are alphabetized; the `JSON_BOUNDARY` marker (`.json()`) is emitted as a `["j", inner]` tag; scalar constraint values go through `serializeConstraintValue` (shared with `describe`/`validate`).
-2. Serialize once with `JSON.stringify`. Because JSON escapes every user-controlled string (field names, constraint values, mark names), they cannot forge structural delimiters — canonicalization is **injective by construction** (distinct schemas ⟹ distinct bytes), not by a per-site escaping discipline.
-3. Hash with single-pass FNV-1a-128 over UTF-8 bytes (`@sindresorhus/fnv1a` at `size: 128`).
-4. Return a **34-character** lowercase string: `HASH_ALGORITHM_VERSION` (2 chars) + 32-char hex of the 128-bit hash.
+- The default binding when no CRDT is needed (`Schema.string`, small configs, ephemeral UI state).
+- Reference implementation for testing the `Substrate<V>` contract.
 
-`canonicalTuple` assumes a finite, eager, acyclic node tree — guaranteed by the grammar (see [What the grammar is NOT](#what-the-grammar-is-not)) — and guards the unsupported `as any`-forced-cycle case with a recursion depth cap that throws a clear error rather than overflowing the stack.
+All substrates now share the same read semantics: reads go through `plainReader` backed by a `PlainState` object. For the plain substrate this is trivially the substrate's own state. For CRDT substrates (Loro, Yjs), the `PlainState` is a shadow that is kept in sync — eagerly on local writes, re-materialized from the CRDT doc on replay. See [§The functional shadow](#the-functional-shadow).
 
-The hash is carried in every `present` message (the exchange's doc-announcement protocol). Receivers compare the incoming hash against their local `BoundSchema.schemaHash`:
+Key functions:
 
-- **Match** → structurally identical schemas; safe to sync.
-- **Mismatch** → different schemas; receiver consults `supportedHashes` (from the `MigrationChain` walk) to see if a compatible ancestor exists.
-- **No compatible version** → reject.
+- `createPlainSubstrate(schema, context)` → `Substrate<PlainVersion>`.
+- `createPlainReplica(context)` → `Replica<PlainVersion>`.
+- `plainSubstrateFactory` / `plainReplicaFactory` — exported factory instances.
+- `buildUpgrade(schema)` → function that re-derives internal structures after hydration.
+- `objectToReplaceOps(obj)` → flatten a plain object into a sequence of `ReplaceChange` ops for migration.
 
-### `HASH_ALGORITHM_VERSION` — the prefix is part of the wire format
+### `PlainVersion`
 
-The 2-char prefix is a TLV-style algorithm-version tag. Bumping it signals a coordinated change to the hash bytes (algorithm swap, canonicalization change, or input-encoding shift). Current value is `"02"`. Retired versions:
+```
+class PlainVersion {
+  constructor(value: number, lineage: string)
+  readonly value: number
+  readonly lineage: string
+}
+```
 
-- `"00"` — two-pass FNV-1a-64 with a shared prime over UTF-16 code units; overstated its effective entropy.
-- `"01"` — single-pass FNV-1a-128 over UTF-8, but with an S-expression canonicalization that dispatched on `[KIND]` only: it was *boundary-blind* (`struct` ≡ `struct.json`) and *non-injective* (unescaped field names / constraint values could collide). Replaced by the injective JSON-tuple form.
+A **single-entry version vector**: at most one authored *lineage* `{lineage: value}`, with genesis (`DEFAULT_LINEAGE`) as the empty vector ⊥ (see [§Version vector algebra](#version-vector-algebra)). `serialize()` produces `"lineage:value"` (genesis serializes as `"kyneta.genesis:0"`); `parseVersion` also accepts legacy bare-integer strings (e.g. `"5"`), which parse as belonging to `LEGACY_EPOCH`.
 
-Ecosystem code that asserts on the prefix (wire-format validators, store-migration tooling) should import `HASH_ALGORITHM_VERSION` rather than hardcoding the string.
+`lineage` is the version-vector *lineage key* — the identity coordinate, universal to every `Version` (see [§Version vector algebra](#version-vector-algebra)). Plain is the substrate where the lineage changes during normal operation (a fresh REAL lineage is minted on the first authored write, or on a writer restart with no persisted store); CRDT substrates (Loro, Yjs) and `ephemeral` hold a constant `DEFAULT_LINEAGE`, their identity living in their own native vectors.
 
-### Why single-pass FNV-1a-128
+`compare()`/`meet()` delegate to `versionVectorCompare`/`versionVectorMeet` over `#toVector()` (`DEFAULT_LINEAGE` → empty map; REAL → `{lineage: value}`) — **no** Plain-specific case matrix:
+- Two genesis versions → `equal` (both ⊥); genesis vs a REAL lineage → `behind`/`ahead` (⊥ is a subset).
+- Same REAL lineage → total order on `value`.
+- Two different REAL lineages → `concurrent` (disjoint keys); their `meet` is the empty vector → genesis (a valid compaction floor).
 
-- **Fast and deterministic** across JS runtimes (no `crypto.subtle`, no WASM). BigInt-native in the library.
-- **128 bits** is wide enough to eliminate collision concern for the hundreds-to-millions of distinct schemas any real deployment will see.
-- **Hex-encoded** for readability in logs, wire frames, and test assertions.
-- **Standards-conformant** — `@sindresorhus/fnv1a` hashes UTF-8 bytes (the canonical FNV-1a interpretation). The previous in-house implementation hashed UTF-16 code units; standards-conformance was one motivation for the swap.
+**Op-free genesis.** A freshly created doc is the empty vector: `buildUpgrade` applies structural defaults directly to the doc *without* flushing them into the log (structure is schema-derived and reconstructed by every interpreter), so `version()` starts at `DEFAULT_LINEAGE:0`. Identity is minted lazily by `createPlainSubstrate.afterBatch` on the first **local, non-`replay`** authored flush (via `adoptEpoch(randomHex(8))`) — never in `strategy.current()` (a pure projection now), and never on a merge/replica that merely *absorbs* a peer's ops, so absorbed content never causes a peer to invent an identity.
 
-### What `schemaHash` is NOT
+`merge()` adopts an incoming lineage (via the `adoptEpoch` closure) only while the current lineage is still `DEFAULT_LINEAGE` — accepting the substrate's first real lineage. Genuine lineage-boundary resets (a REAL lineage transitioning to a *different* REAL lineage) are handled by `resetFromEntirety` (see `Substrate.resetFromEntirety` and `@kyneta/exchange`'s [Compaction and lineage boundaries](../exchange/TECHNICAL.md#compaction-and-lineage-boundaries)), which the Synchronizer invokes on an explicit mismatch — `merge()` never adopts across two REAL lineages. `SubstratePayload.lineage` is the preferred source for the incoming lineage; `parsePlainPayload`'s legacy `{ i, s|b }` envelope extraction is the fallback for peers that pre-date lineage support.
 
-- **Not cryptographic.** FNV-1a is not collision-resistant against adversaries. It is collision-resistant against natural schema variation. Kyneta does not use the hash for authentication.
-- **Not random.** Rebuilding a schema identically produces the same hash in every run. This is what makes the wire protocol deterministic across deployments.
-- **Not a version number.** Two different schemas do not have "newer" / "older" hashes; they are different identities. Migration chains express evolution.
+### Wire-codec opacity
+
+The plain substrate's `serializeOps` / `deserializeOps` embed `Op.change` by reference — the change is JSON-stringified as-is and passed through `WireOfferMsg.d` (an opaque `string | Uint8Array` payload). The exchange wire codec never inspects schema-level change types; it carries them as JSON inside the substrate payload. Adding a new `ChangeBase` variant (e.g. `SetChange { type: "set-op" }`) is purely additive — no exchange codec change required. The only caveat is for out-of-monorepo consumers parsing the plain JSON wire format with a strict change-type whitelist: those need to extend their whitelist when new change variants land.
+
+The lineage now travels as an explicit field, `SubstratePayload.lineage`, set by every substrate's `exportEntirety`/`exportSince` (Plain sets it to the current lineage; Loro/Yjs/`ephemeral` set it to `DEFAULT_LINEAGE`). Plain's own `data` payload is simply `JSON.stringify(materialize())` for entirety and `JSON.stringify(serializedBatches)` for since — no inner envelope. This is a simplification from an earlier design where Plain's JSON payload wrapped state/ops in an inline envelope (`{ i: string, s: PlainState }` / `{ i: string, b: SerializedOp[][] }`); that inline lineage field duplicated information already available via the parsed `Version` (which encodes as `"${lineage}:${value}"`) and via the new `SubstratePayload.lineage` field, creating a desync hazard between the wire-level version and the body-embedded lineage.
+
+`parsePlainPayload` still parses the legacy `{ i, s|b }` envelope for backward compatibility with peers/payloads that pre-date `SubstratePayload.lineage` — `SubstratePayload.lineage` is the preferred source when present; `parsePlainPayload`'s extracted `i` field is the fallback. Bare state objects / bare op-batch arrays (no `i` field, no `SubstratePayload.lineage`) still parse correctly via the same helper, one level further back in the compatibility chain.
+
+### The op-log holds immutable `RawPath` (authoring-time freeze)
+
+**Invariant: the op-log is history — immutable values, never references into the live addressing registry.** A logged `Op` is a fact about the past; a since-deleted key is still the correct thing that op did. `AddressedPath` segments are memoized, *mutable* `Address` objects (an entry delete sets `dead = true`; a sequence edit advances `index` — both in place, see [§The interpreter stack](#the-interpreter-stack) addressing and `change.ts` `advanceAddresses`). If the log stored the live path, a later mutation would corrupt a historical op: `exportSince` → `serializeOps` would throw `"Ref access on deleted map entry"` on a tombstoned entry segment, or silently serialize a *drifted* index.
+
+The fix is a one-token change at the authoring seam: `PlainSubstrate.prepare` (and the `ephemeral` substrate's) pushes `{ path: path.toRaw(), change }`, not `{ path, change }`. `Path.toRaw()` (`path.ts`) is a pure projection — `RawPath.toRaw()` returns `this`; `AddressedPath.toRaw()` reads each segment's **`coord()`** (never `resolve()`, so it succeeds even for a dead address). It is the named inverse of `resolveToAddressed`. Two consequences worth internalizing:
+
+- **Freeze at *push*, not flush.** Index addresses advance in place *within* a batch, before `log.push([...pendingOps])` runs, so freezing later would capture the post-advance index. Push-time captures the coordinate as-authored. (The addressing prepare-handler fires *before* `substrate.prepare` for the same change, but an op's own path coordinate is stable under its own change — structural effects live in the change *payload* at the container path, not in the op's path segments; `index`/`entry` segments appear only on *nested* writes, which don't advance the address they sit on.)
+- **The log is now byte-shape-homogeneous.** Local-write ops and merge ops (which were already `RawPath` via `deserializeOps`) are the same value type, replayed by the same `applyChange`. `serializeOps` needs no special case: its `seg.resolve()` runs only on total `RawSegment`s and never throws — the defect was the *input*, not the code.
+
+### `resolve()` vs `coord()` — liveness assertion vs coordinate projection
+
+A path segment (`RawSegment` | `Address`, `path.ts`) exposes two coordinate accessors, and the distinction is load-bearing:
+
+- **`coord()`** — total, pure, never throws (even for a dead `Address`). The coordinate is an *invariant* of the segment (`readonly key` / `index`). Use it for **history, diagnostics, identity, and reads**: serialization, `format()`, the `\0`-joined `key`, schema/position walks (`fold-path.ts`, `doc-position.ts`, `schema.ts` — a deleted *instance* keeps its static *schema*), and `AbstractPath.read`.
+- **`resolve()`** — projects the coordinate but *asserts liveness*, throwing on a dead `Address`. This is the loud-failure backstop for a **stale ref that tries to navigate or write**. It survives only at the genuine guard sites: the `Address` factories themselves, `writeByPath` (writing through a deleted path must fail), and the live ref-navigation surface.
+
+Two totality rules follow:
+
+- **Diagnostics never throw.** `format()`/`key` route through `coord()`. Previously they used `resolve()`, so formatting a path with a dead segment threw *while building an error message* (e.g. `withAddressing`'s `onRefCreated` throw), masking the original error.
+- **Reads are total; a deleted key is absent.** `path.read(store)` of a deleted key returns `undefined` (via the natural `store[key]` miss), **not** a throw. Deletion remains observable via `deletedFeed(ref)` (or `deleted(ref)` for a plain boolean); **writes** still throw (that guard belongs on the write path, not the read). This is the intended contract — see the `with-addressing` "delete → read undefined, write throws, deleted is true" tests.
+
+---
+
+## The ephemeral substrate
+
+A **field-level LWW map**, and a state-based CRDT (CvRDT) — peers exchange whole
+states and reconcile them with a join, rather than shipping an op log. The
+substrate keeps a `StateTuple` — `[value, timestamp]` — for every scalar leaf,
+so concurrent writes merge field by field.
+
+That granularity is the whole point. A presence roster where each peer writes
+only its own key is the motivating case, and it is unusable under
+whole-document last-writer-wins, where whichever peer wrote most recently
+clobbers everyone else. Kyneta shipped exactly that substrate through 2.x under
+this same name with a different implementation. See the CHANGELOG.
+
+Two properties follow from being snapshot-only and transient:
+
+- A `sum`/discriminated-union variant and a `.json()` blob are stored as a
+  **single atomic register** tuple holding the whole value, not decomposed — so
+  a concurrent variant switch resolves to one coherent variant and never blends
+  fields across two.
+- There is no op log, so nothing accumulates and nothing is persisted.
+  `.decay()` can retire a leaf on a timer, which is meaningful only here.
+
+### The merge rule, in full
+
+Highest timestamp wins; **on a tie, the greater `JSON.stringify(value)` wins**. State both halves — the tie is the half a reader will meet in production and not in testing, and getting it wrong is invisible.
+
+The tie rule is not a detail. Timestamps come from `Date.now()`, so a tie means two peers wrote in the same millisecond — routine for presence traffic, which arrives in bursts from many peers at once. A merge that resolved ties by preferring "the remote value" would be deterministic but *not commutative*: each peer would keep its own value and the two would diverge permanently, with no error raised and no convergence to follow. Commutativity, associativity and idempotence are pinned as laws in `ephemeral-lattice.test.ts`.
+
+On a tie the greater **value** wins, not the later writer — a tie *is* simultaneity, so there is no later writer to prefer. Comparing serialisations is sound because both peers compare the same pair of strings and so reach the same verdict, and because string comparison is a total order, which is what makes the join associative across three or more tied peers. Only the tie path pays for `stringify`.
+
+### Deletion
+
+`mergeStateTree` unions keys, so **absence carries no information**: a key one peer lacks is indistinguishable from a key it has never seen. Simply removing a key therefore survives only until the next merge with anyone who still holds it. A `Schema.record` used as a roster could gain members but never lose them.
+
+A delete instead writes a **tombstone** — a `StateTuple` whose third slot is `true`. It is an ordinary value that wins or loses by the rule above, so `mergeStateTree` needs no knowledge of it, which is what keeps the merge schema-blind for headless relays. Reads project a tombstoned key as absent.
+
+Deleting an entry whose value is a *container* tombstones every leaf inside it rather than replacing the subtree with a single tuple. This is deliberate and load-bearing. Replacing it would make two peers disagree about a node's **shape** — one holding a leaf where the other holds a container — and resolving a shape disagreement means discarding one side's contents, which breaks associativity: with a leaf `L` (t=300) and containers `B` (newest t=150) and `C` (newest t=400), `(L ⊔ B) ⊔ C` discards B's leaves while `L ⊔ (B ⊔ C)` keeps them, so two peers given the same three updates in different orders end up with different state. Tombstoning leaf-by-leaf keeps every shape stable, confining the join to leaf-against-leaf where it is provably a lattice. The merge still has a leaf-versus-container branch for malformed or mismatched-schema payloads; it is commutative but explicitly *not* associative, and well-formed peers cannot reach it.
+
+An entry drops out of the projection only when **every** leaf beneath it is tombstoned. That is what distinguishes a deleted entry from a legitimately empty container — an empty record still reads as `{}`.
+
+**This is LWW-Element-Set, not OR-Set.** Concurrent add and remove resolve by timestamp: a later add beats an earlier delete, and a later delete beats an earlier add. Anyone who reads "tombstone" is likely to assume observed-remove semantics, where a concurrent add always wins regardless of clock — that is *not* what this does. LWW is the correct reading for a target advertising `lww-per-key`, OR-Set would require per-element causal metadata a snapshot-only substrate does not carry, and for presence it is the behaviour you want: a peer removed and rejoining should be present again.
+
+**Tombstones do not need collecting.** Deleting *replaces* a tuple rather than adding one, and re-adding replaces it back, so they accumulate per **key**, not per operation — 500 alternating delete/add cycles leave one tuple. The tree stays bounded by the set of keys ever written, which is the bound it had when nothing was ever deleted. The only cost is that a currently-deleted key occupies a tuple where it would otherwise be absent. The phrase "tombstone garbage collection" is imported from CRDTs where deletes genuinely accumulate without bound; here they do not. If bounding this ever did matter, note that **`.decay()` cannot be the mechanism** — it never mutates the tree (see below). Collection would need a real tree mutation with its own safety argument, and on a snapshot-only log-free CvRDT that means causal stability, which is not available here.
+
+### What `.decay()` is
+
+A **read-time projection**, not a deletion mechanism. `tick(now)` re-projects the tree into the shadow, showing any leaf older than its `decayMs` as `Zero.structural` instead of its stored value. It runs with `projection: true` and `replay: true`: the tree is untouched, the version clock does not advance, and nothing is broadcast.
+
+Decay removes nothing. It is the rule *"when reading, treat a leaf older than `decayMs` as its zero value"*, and it converges across peers with **no communication at all**, because every peer applies the same age test to the same stored timestamp and therefore reaches the same answer.
+
+It does not interact with tombstones, and cannot be used to collect them — dropping a tombstone would be a tree mutation, which is exactly what decay does not do.
+
+### Where `.decay()` may be attached
+
+Decay works **per leaf tuple**: it compares one stored timestamp against `now`. That fixes where it can legally sit.
+
+An atomic register — a `sum` variant or a `.json()` blob — is stored as ONE tuple holding the whole value, so a field inside it has no timestamp of its own and can never age out independently. `decayMs` is therefore **legal at or above an opaque boundary and illegal strictly below one**, and `bind()` rejects the illegal case (`validateDecayConstraints`, `bind.ts`). Attaching it to the sum or `.json()` node itself is supported and means what it says: the whole variant decays to its structural zero together.
+
+Two rules now live in that validator, checked in order — never on a durable substrate, then never below a boundary. The order is deliberate. A schema can break both at once, and the two are independent, so leading with the boundary message would tell a caller to move an annotation when their real problem is that the substrate supports no decay at all. Asking *where* decay may sit only has meaning once decay is permitted somewhere.
+
+Before this check existed, `decayMs` below a boundary bound cleanly and then silently never fired — no throw, no log, just a field that never decayed.
+
+### Atomic registers in the StateTree
+
+A `StateTuple` is `[value, timestamp, deleted?]`. The third slot is present only on a tombstone (see "Deletion" above); the marker lives in its own slot rather than in the value because it has to be **out-of-band from the value domain** — `null` is a legitimate value under a nullable schema, and any in-band sentinel is something a `.json()` blob could legitimately contain. Note that `isStateTuple` deliberately does **not** check the tuple's length: an array in a StateTree is always a leaf, since sequences are not a supported container here, and an arity check would have to be revised every time the tuple gains a slot. Getting that wrong is quiet and expensive — a tuple the guard rejects is treated as a container, and its slots are then merged and projected as if they were keys.
+
+The leaf-vs-container decision reuses `needsContainer` (`materialize-value.ts`), the same predicate the Loro/Yjs backends use for insert detection: `product`/`map` decompose into per-field tuples (that is what gives `ephemeral` its field-level merge), while `scalar`, `sum`, and `.json()` nodes are stored as one leaf tuple. Storing a register whole is deliberate — a sum variant is an opaque LWW value (variant fields are not independently addressable; a switch is one whole-value `.set()`, per the `WritableDiscriminantProductRef` contract), so decomposing it would let the schema-blind `mergeStateTree` interleave fields from different variants.
+
+A write aimed *at or inside* a register is re-aimed at the register itself before it reaches the tree (`state.ts:prepare`, via the same `findOpaqueBoundary` the CRDT backends use). Applying such a write literally would split the tuple into per-field tuples and drop every sibling field the change never mentioned. This is easy to miss in testing: `prepare` updates the plain-object shadow that local reads are served from, so the document reads back correctly on the peer that made the write, and only replicated state is damaged. Assert on the exported tree, not on the document.
+
+The property this buys — a concurrent variant switch resolving to one coherent variant, never a blend of two — is asserted across every substrate in `tests/conformance`, not just for `ephemeral`. If you change how registers are stored, that is where the cross-substrate guard lives.
+
+Crucially, atomicity is encoded in the tree's *shape* (register = leaf tuple), **not** in the merge logic. That is why `mergeStateTree` stays schema-blind: a headless relay/store merges raw entirety payloads by timestamp without ever needing the schema. The schema is consulted only when translating between plain values and the tree (build via `applyChangeToStateTree`/`syncStateTreeToShadow`, extract via `extractPlainState`), which always runs on a schema-aware peer. Register values are deep-cloned (`deepClonePlain`) at the tree↔shadow boundary so the two never alias.
+
+---
+
+## The functional shadow
+
+CRDT substrates (Loro, Yjs) maintain a **shadow**: a `PlainState` object that serves as the canonical read surface for all interpreter-stack reads. The architecture separates four surfaces:
+
+| Surface | Backing | Purpose |
+|---------|---------|---------|
+| **Read surface** | `PlainState` + `plainReader` | All `ref.field()` reads, subscriber reads, interpreter-stack caching |
+| **Sync surface** | CRDT doc (`LoroDoc` / `Y.Doc`) | `exportSince`, `merge`, `import` — replication and conflict resolution |
+| **Position surface** | CRDT doc | `positionResolver` — cursor / relative-position operations that require CRDT structure |
+| **Native escape hatch** | CRDT doc | `nativeResolver` — direct access to the underlying CRDT container for advanced use |
+
+**On local writes**, `prepare` calls `applyChange(shadow, path, change)` — the same pure `step` function used by the plain substrate — making the write immediately visible to reads. CRDT diffs are buffered and applied to the CRDT doc in `onFlush`. This two-phase design means the read surface is always ahead of (or equal to) the sync surface during a transaction.
+
+**On replay (merge)**, the CRDT doc absorbs the remote state first (via `doc.import` or `Y.applyUpdate`). `onFlush` then re-materializes the shadow from the CRDT doc, ensuring `ctx.reader` reflects the merged state for subscriber callbacks.
+
+**Initialization.** The shadow is created at substrate construction time via `materializeLoroShadow` (Loro) or `materializeYjsShadow` (Yjs). These functions now delegate to `createMaterializeInterpreter` with a backend-specific `MaterializeResolver`, rather than defining bespoke 370-line interpreters. The resolver closes over the CRDT doc and binding; the generic materializer walks the schema and calls resolver methods to produce a plain JS object matching the schema's shape. The shadow is also re-materialized on upgrade and after any replay flush.
+
+**`Reader` vs `MaterializeResolver`.** `Reader` (4 methods) is the runtime read interface backed by the `PlainState` shadow — schema-blind, live. `MaterializeResolver` (6 methods) is the materialization interface backed by the CRDT — schema-aware via catamorphism dispatch, one-shot. They share a conceptual lineage — the resolver is what a CRDT Reader would look like if it were schema-aware and didn't need liveness.
+
+This design makes the read-your-writes invariant true by construction for all substrates: reads always go through `plainReader(shadow)`, and local writes always land in the shadow eagerly. No coordination, no flags, no special-casing per substrate.
+
+---
+
+## `foldPath` — schema-guided path resolution
+
+Source: `packages/schema/src/fold-path.ts`.
+
+`walkPath` is the one schema-guided traversal, and `foldPath` is its value-resolving projection — the schema-guided sibling of `Path.read(state)`. Where `Path.read` walks a plain JS object by segment-resolved keys, this walks a substrate-native container tree by composing a total single-step descent with a backend-supplied `PathStepper` (per-step substrate dispatch). Backends carry only the `PathStepper`; the traversal lives once in core.
+
+```
+walkPath              reports where the walk stopped; never throws
+  ├─ foldPath         resolves a substrate value; throws on a bad path
+  ├─ pathSchema       returns just the schema
+  └─ findOpaqueBoundary   reports where an opaque subtree begins
+```
+
+The `ephemeral` substrate's schema lookup (`state-tree.ts:schemaAtPath`) is a fourth projection. `walkPath` returns a `PathWalk`: `complete`, `boundary` (with `consumed` marking where value-level resolution takes over), or `mismatch` (carrying a ready-to-throw reason rather than raising). Each projection picks its own policy — `foldPath` throws on `mismatch`, the `ephemeral` lookup answers `undefined` — which is the functional-core / imperative-shell split: the traversal reports what happened, its callers decide what to do about it.
+
+```ts
+type PathStepper = (
+  current: unknown,
+  nextSchema: SchemaNode,
+  segment: Segment,
+  identity: string | undefined,
+) => unknown
+
+function foldPath(
+  root, rootSchema, path, stepInto, binding?
+): { resolved, schema }
+```
+
+`stepInto` is the only substrate-specific piece. The Loro backend's `stepIntoLoro` dispatches on `LoroDoc` (root) vs. container `.kind()`; the Yjs backend's `stepIntoYjs` dispatches on `instanceof Y.Map | Y.Array | Y.Text`. `resolveContainer` / `resolveYjsType` are 1-line wrappers around `foldPath(..., stepInto*, ...)`.
+
+### Two semantic invariants live in `walkPath`, in one place
+
+1. **Identity-keying at product-field boundaries only.** When `seg.role === "field"`, the absolute schema path is extended via `extendSchemaPathKey(prev, segment)` and used to look up `binding.forward.get(key)`. `entry` (map/set/tree) and `index` (sequence/movable) segments pass through with the raw key — they are not identity-keyed. The writer side of this contract — `deriveBindingRecursive` in `migration.ts` — uses the same `extendSchemaPathKey` accumulator, so the writer/reader key construction is byte-identical by construction.
+
+2. **Opaque-boundary stop.** Some subtrees are stored as ONE plain value in the parent container rather than as nested CRDT containers, and once a walk reaches one the schema has nothing further to offer — remaining segments resolve against the *value*. `walkPath` reports this as a `boundary` stop; each projection decides what to do about it. Two schema shapes qualify:
+
+   - A `sum` (which is what `.nullable()` expands to). Sum variants are `PlainSchema` by construction, so no CRDT container can exist inside one.
+   - A `.json()` node. The whole subtree is one plain JSON blob by definition of the modifier.
+
+   These were once documented as *two* invariants, and the split was itself the bug: a walker could learn the json half and miss the sum half, which is exactly what happened. They are one rule because they describe one storage decision.
+
+   **That constraint is now retired rather than restated.** This document used to say the walk-side predicate and `needsContainer` (`materialize-value.ts`) "must agree", which is the same kind of prose invariant the section below diagnoses — a rule living in a doc comment, enforced by review. Both are now one-line derivations of `storageClass` (`schema.ts`), the single place the decision is made: `isOpaqueBoundary` asks it the walk-side question, `needsContainer` the write-side one. They cannot disagree, so nothing has to remember that they must.
+
+   There is now a third consumer outside the traversal entirely: `validateDecayConstraints` (`bind.ts`) uses `isOpaqueBoundary` to find where a register begins, because `.decay()` is illegal below one (see §"Where `.decay()` may be attached"). Under the old arrangement that would have meant a third hand-written copy of the rule, since `isJsonBoundary` and `KIND` are both public and the disjunction is one line away. Sharing the predicate is what makes the validator agree with the traversal by construction rather than by review — and note that `!needsContainer` is *not* a substitute for it, because that is also false for scalars, which are leaves rather than boundaries.
+
+   The cost of the old arrangement was paid: `richtext` was classified as a container by one and a leaf by the other, which broke the `EagerPolicy` subset relation described in §"Value materialization — the write-side unfold".
+
+### `pathSchema` — the schema-only specialization
+
+`pathSchema(rootSchema, path, binding?)` is `foldPath` with a no-op stepper, returning only `.schema`. Used by callers that need the schema at a path but not the substrate value: changefeed kind classification (`changefeed.ts:resolveSchemaKindAtPath`), change-mapping target resolution (Loro `changeToDiff` / `batchToOps`, Yjs `applySequenceChange` / `applyMapChange` / `applyReplaceChange` / `eventToChange`). The opaque-boundary rule applies uniformly — on a path leading into a sum or a `.json()` subtree, `pathSchema` returns the boundary node's own schema, because the variant cannot be determined without a value at parse time.
+
+### Why one traversal, not many
+
+Before this primitive, both Loro's `resolveContainer` and Yjs's `resolveYjsType` re-implemented the same left-fold over `Path.segments`, and four schema-only walks (one in `changefeed.ts`, one in `yjs/change-mapping.ts`, two inline in `loro/change-mapping.ts`) re-implemented the schema-only variant with subtly different sum-boundary handling (three explicit short-circuits, one try/catch).
+
+**That consolidation did not hold, and how it came apart is the most useful thing in this section.** This document previously claimed:
+
+> After the consolidation, `advanceSchema` has exactly one production caller — `foldPath` itself — and the sum-boundary rule is structural, not exception-based.
+
+At one point there were three production callers. `findJsonBoundary` arrived with the `.json()` boundary work as a *second* hand-rolled walk, and learned only the json half of the boundary rule; `schemaAtPath` (`state-tree.ts`) arrived as a third and reached for `try/catch`. Each shipped a different bug from the same missing case: one crashed on a legitimate path, one silently discarded fields from replicated state.
+
+The claim was true when written. What made it decay is that nothing enforced it — the rule lived in a doc comment, and `advanceSchema` was exported, so hand-rolling a fourth walk was the path of least resistance. **A stated invariant is not an enforced one.**
+
+The current arrangement is structural instead. `walkPath` is the only traversal; `foldPath`, `pathSchema`, `findOpaqueBoundary`, and the `ephemeral` substrate's schema lookup are projections of it that differ only in policy. The single-step primitive underneath (`stepSchema`) is package-internal and deliberately *not* exported, because handing it out is what made a divergent walker easy to write.
+
+`advanceSchema` — the public throwing wrapper over that primitive — has been removed. It was retained through 2.x on the reasoning that it had lost its callers but was still public, and it was pinned with tests so its behaviour could not drift. That retention was the last piece of the decayed arrangement still standing: an exported single-step descent is precisely what the paragraph above identifies as the hazard, and keeping it meant the package's most thorough descent tests pointed at a function nothing called. Those tests now target `stepSchema` directly (`src/__tests__/step-schema.test.ts`), including the `descend`-versus-`boundary` distinction the wrapper could not express. `walkPath` is the supported replacement for outside callers.
+
+Notably, the boundary rule needed no separate implementation once the walkers were consolidated. Reporting a `boundary` from one place meant every projection inherited it — the rule was never a policy anyone had to write down, only a question that had been asked in three places instead of one.
 
 ---
 
@@ -649,6 +782,89 @@ Products report nothing on field navigation (fixed fields); the child carrier re
 **Stable keys without addressing internals.** Dependency keys are derived from the carrier's *object identity* (a `WeakMap<carrier, id>`), which is already **cursor-stable** — `.at(i)` is backed by the address table keyed on `Address.id` (`installSequenceCaching` in `sequence-helpers.ts`), so the same logical element yields the same carrier object across structural change. A dep key is therefore invariant under inserts/deletes (an insert before a tracked element does not change its key) while keying transitively on `Address.id` — no addressing-internals integration needed.
 
 The aspect vocabulary harmonizes with `@kyneta/compiler`'s `DependencyClassification` (`experimental/compiler/src/classify.ts` — `structural`/`item`/`external`): `structural` is shared; `value`/`identity` refine the compiler's `item`; the compiler's `external` (reading another reactive source) is the runtime's plain-`HasChangefeed` `.subscribe` branch, not a schema-ref read. One classification model — the compiler is its AOT face, `withTracking` its JIT face.
+
+---
+
+## Validation
+
+Source: `packages/schema/src/interpreters/validate.ts`.
+
+A separate interpreter — not required by the stack, not automatic. `validate(schema, value)` returns `ValidationResult` collecting every error in the tree; `tryValidate` throws on the first. `SchemaValidationError` carries a structured `path` and a human-readable `message`.
+
+Validation is an *interpretation* of the schema. The same `Schema` value that builds a ref also validates untrusted input. Errors format via `path.format()` for human-readable output.
+
+Not used by the exchange. Not automatic on `bind`. Opt-in at boundaries where untrusted data enters the system.
+
+---
+
+## Zero / defaults
+
+Source: `packages/schema/src/zero.ts`.
+
+`Zero(schema)` computes a default `Plain<S>` value for any schema. Defaults:
+
+- `string` → `""`, `number` → `0`, `boolean` → `false`, `null` → `null`, `bytes` → empty `Uint8Array`.
+- Product → each field's default.
+- Sequence / movable → `[]`.
+- Map → `{}`.
+- Set → `[]` (matches `Plain<SetSchema<I>> = Plain<I>[]` — distinct from map, which is `Record<string, T>`).
+- Sum → first variant's default.
+- Text → empty text.
+- Counter → `0`.
+- Tree → empty forest `[]` (matches `Plain<TreeSchema<I>> = readonly PlainFlatTreeNode<I>[]`).
+
+`scalarDefault(kind)` is the scalar-only version. Used by `createDoc` when no initial state is supplied, by migrations' `setDefault` primitive, and by tests.
+
+The materializer is the canonical consumer of zeros for CRDT substrates — the `zeroInterpreter` is the single source of truth, and zeros are no longer eagerly written during CRDT initialization. CRDT initialization routines (`ensureRootContainer`, `ensureContainers`) now only create structural containers.
+
+---
+
+## Describe
+
+Source: `packages/schema/src/describe.ts`.
+
+`describe(schema)` returns a human-readable ASCII tree of the schema structure. Used in tests, logs, and documentation. Not used at runtime by any interpreter.
+
+---
+
+## Change vocabulary
+
+Source: `packages/schema/src/change.ts`.
+
+Every mutation flows through a `Change` — a discriminated union identified by `type`. The built-in types:
+
+| `type` | Shape | Composition law | Used by |
+|--------|-------|-----------------|---------|
+| `"text"` | `{ instructions: TextInstruction[] }` — retain / insert / delete over characters | `positional-ot` | Text CRDTs |
+| `"sequence"` | `{ instructions: SequenceInstruction[] }` — retain / insert / delete over items | `positional-ot` | Lists, movable lists |
+| `"map"` | `{ entries: MapInstruction[] }` — set / delete over keys | `lww-per-key` | Maps, sets |
+| `"tree"` | `{ instructions: TreeInstruction[] }` — create / move / delete nodes | `tree-move` | Trees |
+| `"replace"` | `{ value: unknown }` — overwrite this node | `lww` | Scalars, plain JSON sub-trees |
+| `"increment"` | `{ delta: number }` — counter increment | `additive` | Counters |
+| `"richtext"` | `{ instructions: RichTextInstruction[] }` — retain / insert / delete / format over characters | `positional-ot` | Rich text CRDTs |
+
+Note: `TextChange` and `SequenceChange` are parameterizations of the same positional algebra, unified by the `Instruction` type. Both use `retain`/`insert`/`delete` cursor instructions; the only difference is the content type (`string` vs `T[]`). The shared algebra is captured by `foldInstructions`, `transformIndex`, and `advanceAddresses`, which operate on `Instruction` generically.
+
+`ChangeBase` is re-exported from `@kyneta/changefeed` — the open protocol base. Third-party backends may extend with additional `type` values; the exchange and interpreters treat unknown types as opaque, passing them through.
+
+### `Change` flows both ways
+
+- **Inbound** (developer → substrate): the proxy in `batch(doc, fn)` records changes describing *intent*.
+- **Outbound** (substrate → subscribers): the substrate's changefeed emits changes describing *what happened*.
+
+The shapes are identical. The substrate's `prepare` pipeline consumes the inbound changes, applies them, and re-emits (potentially transformed) outbound changes.
+
+### Constructors, guards, and transforms
+
+For every built-in change type:
+
+- Constructor: `textChange(instructions)`, `sequenceChange(instructions)`, `mapChange(entries)`, etc.
+- Type guard: `isTextChange(change)`, `isSequenceChange(change)`, etc.
+- Pure transformer: `foldInstructions(instructions)`, `advanceIndex(index, instructions)`, `advanceAddresses(addresses, instructions)`.
+
+`applyTextInstructions(target, instructions)` replays a `TextInstruction[]` delta onto a live `TextRef`. It is the **imperative shell over `textInstructionsToPatches`** — it converts the cursor-based instructions to absolute-offset patches, then dispatches each to `TextRef.insert`/`.delete` (the `TextRef` counterpart to applying those patches to a DOM `Text` node via `insertData`/`deleteData`; see [Position algebra](#transformindex-and-textinstructionstopatches)). It is *not* built on `foldInstructions`: that is a dual source/target cursor fold for diffs, whose `insert` case carries only a length, not content — the wrong sibling for single-cursor, content-carrying replay.
+
+These are the primitives `step`, `with-changefeed`, and `Position` build on.
 
 ---
 
@@ -1134,6 +1350,49 @@ Why move composes *alongside* the instruction stream: move is absolute-index-to-
 
 ---
 
+## `schemaHash` and compatibility
+
+Source: `packages/schema/src/hash.ts` → `computeSchemaHash`, `HASH_ALGORITHM_VERSION`, `fnv1aHex`.
+
+`computeSchemaHash(schema)` is a pure, content-addressed function:
+
+1. Build a **canonical tuple** (`canonicalTuple`): a recursively-nested value of **arrays and strings only — never objects** (object key order is engine-defined; array order is positional and stable). Field names are alphabetized; the `JSON_BOUNDARY` marker (`.json()`) is emitted as a `["j", inner]` tag; scalar constraint values go through `serializeConstraintValue` (shared with `describe`/`validate`).
+2. Serialize once with `JSON.stringify`. Because JSON escapes every user-controlled string (field names, constraint values, mark names), they cannot forge structural delimiters — canonicalization is **injective by construction** (distinct schemas ⟹ distinct bytes), not by a per-site escaping discipline.
+3. Hash with single-pass FNV-1a-128 over UTF-8 bytes (`@sindresorhus/fnv1a` at `size: 128`).
+4. Return a **34-character** lowercase string: `HASH_ALGORITHM_VERSION` (2 chars) + 32-char hex of the 128-bit hash.
+
+`canonicalTuple` assumes a finite, eager, acyclic node tree — guaranteed by the grammar (see [What the grammar is NOT](#what-the-grammar-is-not)) — and guards the unsupported `as any`-forced-cycle case with a recursion depth cap that throws a clear error rather than overflowing the stack.
+
+The hash is carried in every `present` message (the exchange's doc-announcement protocol). Receivers compare the incoming hash against their local `BoundSchema.schemaHash`:
+
+- **Match** → structurally identical schemas; safe to sync.
+- **Mismatch** → different schemas; receiver consults `supportedHashes` (from the `MigrationChain` walk) to see if a compatible ancestor exists.
+- **No compatible version** → reject.
+
+### `HASH_ALGORITHM_VERSION` — the prefix is part of the wire format
+
+The 2-char prefix is a TLV-style algorithm-version tag. Bumping it signals a coordinated change to the hash bytes (algorithm swap, canonicalization change, or input-encoding shift). Current value is `"02"`. Retired versions:
+
+- `"00"` — two-pass FNV-1a-64 with a shared prime over UTF-16 code units; overstated its effective entropy.
+- `"01"` — single-pass FNV-1a-128 over UTF-8, but with an S-expression canonicalization that dispatched on `[KIND]` only: it was *boundary-blind* (`struct` ≡ `struct.json`) and *non-injective* (unescaped field names / constraint values could collide). Replaced by the injective JSON-tuple form.
+
+Ecosystem code that asserts on the prefix (wire-format validators, store-migration tooling) should import `HASH_ALGORITHM_VERSION` rather than hardcoding the string.
+
+### Why single-pass FNV-1a-128
+
+- **Fast and deterministic** across JS runtimes (no `crypto.subtle`, no WASM). BigInt-native in the library.
+- **128 bits** is wide enough to eliminate collision concern for the hundreds-to-millions of distinct schemas any real deployment will see.
+- **Hex-encoded** for readability in logs, wire frames, and test assertions.
+- **Standards-conformant** — `@sindresorhus/fnv1a` hashes UTF-8 bytes (the canonical FNV-1a interpretation). The previous in-house implementation hashed UTF-16 code units; standards-conformance was one motivation for the swap.
+
+### What `schemaHash` is NOT
+
+- **Not cryptographic.** FNV-1a is not collision-resistant against adversaries. It is collision-resistant against natural schema variation. Kyneta does not use the hash for authentication.
+- **Not random.** Rebuilding a schema identically produces the same hash in every run. This is what makes the wire protocol deterministic across deployments.
+- **Not a version number.** Two different schemas do not have "newer" / "older" hashes; they are different identities. Migration chains express evolution.
+
+---
+
 ## Migration and identity
 
 Source: `packages/schema/src/migration.ts`.
@@ -1262,47 +1521,6 @@ The required-ness is deliberate. A read capability is always derived locally fro
 - **Not SQL-style migrations.** No `up` / `down`, no runtime execution of migration code. The chain declares the identity map; the substrate reads identity-keyed data.
 - **Not version numbers.** Two schemas with different migration histories may have the same shape but different identity spaces — and therefore cannot sync. The chain is part of the identity, not metadata about it.
 - **Not bidirectional.** An epoch step is a one-way break. T0 / T1 primitives are reversible in principle, but Kyneta does not support "downgrading" a document — sync fails instead.
-
----
-
-## Change vocabulary
-
-Source: `packages/schema/src/change.ts`.
-
-Every mutation flows through a `Change` — a discriminated union identified by `type`. The built-in types:
-
-| `type` | Shape | Composition law | Used by |
-|--------|-------|-----------------|---------|
-| `"text"` | `{ instructions: TextInstruction[] }` — retain / insert / delete over characters | `positional-ot` | Text CRDTs |
-| `"sequence"` | `{ instructions: SequenceInstruction[] }` — retain / insert / delete over items | `positional-ot` | Lists, movable lists |
-| `"map"` | `{ entries: MapInstruction[] }` — set / delete over keys | `lww-per-key` | Maps, sets |
-| `"tree"` | `{ instructions: TreeInstruction[] }` — create / move / delete nodes | `tree-move` | Trees |
-| `"replace"` | `{ value: unknown }` — overwrite this node | `lww` | Scalars, plain JSON sub-trees |
-| `"increment"` | `{ delta: number }` — counter increment | `additive` | Counters |
-| `"richtext"` | `{ instructions: RichTextInstruction[] }` — retain / insert / delete / format over characters | `positional-ot` | Rich text CRDTs |
-
-Note: `TextChange` and `SequenceChange` are parameterizations of the same positional algebra, unified by the `Instruction` type. Both use `retain`/`insert`/`delete` cursor instructions; the only difference is the content type (`string` vs `T[]`). The shared algebra is captured by `foldInstructions`, `transformIndex`, and `advanceAddresses`, which operate on `Instruction` generically.
-
-`ChangeBase` is re-exported from `@kyneta/changefeed` — the open protocol base. Third-party backends may extend with additional `type` values; the exchange and interpreters treat unknown types as opaque, passing them through.
-
-### `Change` flows both ways
-
-- **Inbound** (developer → substrate): the proxy in `batch(doc, fn)` records changes describing *intent*.
-- **Outbound** (substrate → subscribers): the substrate's changefeed emits changes describing *what happened*.
-
-The shapes are identical. The substrate's `prepare` pipeline consumes the inbound changes, applies them, and re-emits (potentially transformed) outbound changes.
-
-### Constructors, guards, and transforms
-
-For every built-in change type:
-
-- Constructor: `textChange(instructions)`, `sequenceChange(instructions)`, `mapChange(entries)`, etc.
-- Type guard: `isTextChange(change)`, `isSequenceChange(change)`, etc.
-- Pure transformer: `foldInstructions(instructions)`, `advanceIndex(index, instructions)`, `advanceAddresses(addresses, instructions)`.
-
-`applyTextInstructions(target, instructions)` replays a `TextInstruction[]` delta onto a live `TextRef`. It is the **imperative shell over `textInstructionsToPatches`** — it converts the cursor-based instructions to absolute-offset patches, then dispatches each to `TextRef.insert`/`.delete` (the `TextRef` counterpart to applying those patches to a DOM `Text` node via `insertData`/`deleteData`; see [Position algebra](#transformindex-and-textinstructionstopatches)). It is *not* built on `foldInstructions`: that is a dual source/target cursor fold for diffs, whose `insert` case carries only a length, not content — the wrong sibling for single-cursor, content-carrying replay.
-
-These are the primitives `step`, `with-changefeed`, and `Position` build on.
 
 ---
 
@@ -1481,213 +1699,6 @@ budget would get spent.
 
 ---
 
-## The plain substrate
-
-Source: `packages/schema/src/substrates/plain.ts`.
-
-The built-in substrate. Stores state as plain JS objects, tracks a monotonic integer version scoped to an lineage (see `PlainVersion` below), and merges by total-order last-writer-wins within an lineage. Used for:
-
-- The default binding when no CRDT is needed (`Schema.string`, small configs, ephemeral UI state).
-- Reference implementation for testing the `Substrate<V>` contract.
-
-All substrates now share the same read semantics: reads go through `plainReader` backed by a `PlainState` object. For the plain substrate this is trivially the substrate's own state. For CRDT substrates (Loro, Yjs), the `PlainState` is a shadow that is kept in sync — eagerly on local writes, re-materialized from the CRDT doc on replay. See [§The functional shadow](#the-functional-shadow).
-
-Key functions:
-
-- `createPlainSubstrate(schema, context)` → `Substrate<PlainVersion>`.
-- `createPlainReplica(context)` → `Replica<PlainVersion>`.
-- `plainSubstrateFactory` / `plainReplicaFactory` — exported factory instances.
-- `buildUpgrade(schema)` → function that re-derives internal structures after hydration.
-- `objectToReplaceOps(obj)` → flatten a plain object into a sequence of `ReplaceChange` ops for migration.
-
-### `PlainVersion`
-
-```
-class PlainVersion {
-  constructor(value: number, lineage: string)
-  readonly value: number
-  readonly lineage: string
-}
-```
-
-A **single-entry version vector**: at most one authored *lineage* `{lineage: value}`, with genesis (`DEFAULT_LINEAGE`) as the empty vector ⊥ (see [§Version vector algebra](#version-vector-algebra)). `serialize()` produces `"lineage:value"` (genesis serializes as `"kyneta.genesis:0"`); `parseVersion` also accepts legacy bare-integer strings (e.g. `"5"`), which parse as belonging to `LEGACY_EPOCH`.
-
-`lineage` is the version-vector *lineage key* — the identity coordinate, universal to every `Version` (see [§Version vector algebra](#version-vector-algebra)). Plain is the substrate where the lineage changes during normal operation (a fresh REAL lineage is minted on the first authored write, or on a writer restart with no persisted store); CRDT substrates (Loro, Yjs) and `ephemeral` hold a constant `DEFAULT_LINEAGE`, their identity living in their own native vectors.
-
-`compare()`/`meet()` delegate to `versionVectorCompare`/`versionVectorMeet` over `#toVector()` (`DEFAULT_LINEAGE` → empty map; REAL → `{lineage: value}`) — **no** Plain-specific case matrix:
-- Two genesis versions → `equal` (both ⊥); genesis vs a REAL lineage → `behind`/`ahead` (⊥ is a subset).
-- Same REAL lineage → total order on `value`.
-- Two different REAL lineages → `concurrent` (disjoint keys); their `meet` is the empty vector → genesis (a valid compaction floor).
-
-**Op-free genesis.** A freshly created doc is the empty vector: `buildUpgrade` applies structural defaults directly to the doc *without* flushing them into the log (structure is schema-derived and reconstructed by every interpreter), so `version()` starts at `DEFAULT_LINEAGE:0`. Identity is minted lazily by `createPlainSubstrate.afterBatch` on the first **local, non-`replay`** authored flush (via `adoptEpoch(randomHex(8))`) — never in `strategy.current()` (a pure projection now), and never on a merge/replica that merely *absorbs* a peer's ops, so absorbed content never causes a peer to invent an identity.
-
-`merge()` adopts an incoming lineage (via the `adoptEpoch` closure) only while the current lineage is still `DEFAULT_LINEAGE` — accepting the substrate's first real lineage. Genuine lineage-boundary resets (a REAL lineage transitioning to a *different* REAL lineage) are handled by `resetFromEntirety` (see `Substrate.resetFromEntirety` and `@kyneta/exchange`'s [Compaction and lineage boundaries](../exchange/TECHNICAL.md#compaction-and-lineage-boundaries)), which the Synchronizer invokes on an explicit mismatch — `merge()` never adopts across two REAL lineages. `SubstratePayload.lineage` is the preferred source for the incoming lineage; `parsePlainPayload`'s legacy `{ i, s|b }` envelope extraction is the fallback for peers that pre-date lineage support.
-
-### Wire-codec opacity
-
-The plain substrate's `serializeOps` / `deserializeOps` embed `Op.change` by reference — the change is JSON-stringified as-is and passed through `WireOfferMsg.d` (an opaque `string | Uint8Array` payload). The exchange wire codec never inspects schema-level change types; it carries them as JSON inside the substrate payload. Adding a new `ChangeBase` variant (e.g. `SetChange { type: "set-op" }`) is purely additive — no exchange codec change required. The only caveat is for out-of-monorepo consumers parsing the plain JSON wire format with a strict change-type whitelist: those need to extend their whitelist when new change variants land.
-
-The lineage now travels as an explicit field, `SubstratePayload.lineage`, set by every substrate's `exportEntirety`/`exportSince` (Plain sets it to the current lineage; Loro/Yjs/`ephemeral` set it to `DEFAULT_LINEAGE`). Plain's own `data` payload is simply `JSON.stringify(materialize())` for entirety and `JSON.stringify(serializedBatches)` for since — no inner envelope. This is a simplification from an earlier design where Plain's JSON payload wrapped state/ops in an inline envelope (`{ i: string, s: PlainState }` / `{ i: string, b: SerializedOp[][] }`); that inline lineage field duplicated information already available via the parsed `Version` (which encodes as `"${lineage}:${value}"`) and via the new `SubstratePayload.lineage` field, creating a desync hazard between the wire-level version and the body-embedded lineage.
-
-`parsePlainPayload` still parses the legacy `{ i, s|b }` envelope for backward compatibility with peers/payloads that pre-date `SubstratePayload.lineage` — `SubstratePayload.lineage` is the preferred source when present; `parsePlainPayload`'s extracted `i` field is the fallback. Bare state objects / bare op-batch arrays (no `i` field, no `SubstratePayload.lineage`) still parse correctly via the same helper, one level further back in the compatibility chain.
-
-### The op-log holds immutable `RawPath` (authoring-time freeze)
-
-**Invariant: the op-log is history — immutable values, never references into the live addressing registry.** A logged `Op` is a fact about the past; a since-deleted key is still the correct thing that op did. `AddressedPath` segments are memoized, *mutable* `Address` objects (an entry delete sets `dead = true`; a sequence edit advances `index` — both in place, see [§The interpreter stack](#the-interpreter-stack) addressing and `change.ts` `advanceAddresses`). If the log stored the live path, a later mutation would corrupt a historical op: `exportSince` → `serializeOps` would throw `"Ref access on deleted map entry"` on a tombstoned entry segment, or silently serialize a *drifted* index.
-
-The fix is a one-token change at the authoring seam: `PlainSubstrate.prepare` (and the `ephemeral` substrate's) pushes `{ path: path.toRaw(), change }`, not `{ path, change }`. `Path.toRaw()` (`path.ts`) is a pure projection — `RawPath.toRaw()` returns `this`; `AddressedPath.toRaw()` reads each segment's **`coord()`** (never `resolve()`, so it succeeds even for a dead address). It is the named inverse of `resolveToAddressed`. Two consequences worth internalizing:
-
-- **Freeze at *push*, not flush.** Index addresses advance in place *within* a batch, before `log.push([...pendingOps])` runs, so freezing later would capture the post-advance index. Push-time captures the coordinate as-authored. (The addressing prepare-handler fires *before* `substrate.prepare` for the same change, but an op's own path coordinate is stable under its own change — structural effects live in the change *payload* at the container path, not in the op's path segments; `index`/`entry` segments appear only on *nested* writes, which don't advance the address they sit on.)
-- **The log is now byte-shape-homogeneous.** Local-write ops and merge ops (which were already `RawPath` via `deserializeOps`) are the same value type, replayed by the same `applyChange`. `serializeOps` needs no special case: its `seg.resolve()` runs only on total `RawSegment`s and never throws — the defect was the *input*, not the code.
-
-### `resolve()` vs `coord()` — liveness assertion vs coordinate projection
-
-A path segment (`RawSegment` | `Address`, `path.ts`) exposes two coordinate accessors, and the distinction is load-bearing:
-
-- **`coord()`** — total, pure, never throws (even for a dead `Address`). The coordinate is an *invariant* of the segment (`readonly key` / `index`). Use it for **history, diagnostics, identity, and reads**: serialization, `format()`, the `\0`-joined `key`, schema/position walks (`fold-path.ts`, `doc-position.ts`, `schema.ts` — a deleted *instance* keeps its static *schema*), and `AbstractPath.read`.
-- **`resolve()`** — projects the coordinate but *asserts liveness*, throwing on a dead `Address`. This is the loud-failure backstop for a **stale ref that tries to navigate or write**. It survives only at the genuine guard sites: the `Address` factories themselves, `writeByPath` (writing through a deleted path must fail), and the live ref-navigation surface.
-
-Two totality rules follow:
-
-- **Diagnostics never throw.** `format()`/`key` route through `coord()`. Previously they used `resolve()`, so formatting a path with a dead segment threw *while building an error message* (e.g. `withAddressing`'s `onRefCreated` throw), masking the original error.
-- **Reads are total; a deleted key is absent.** `path.read(store)` of a deleted key returns `undefined` (via the natural `store[key]` miss), **not** a throw. Deletion remains observable via `deletedFeed(ref)` (or `deleted(ref)` for a plain boolean); **writes** still throw (that guard belongs on the write path, not the read). This is the intended contract — see the `with-addressing` "delete → read undefined, write throws, deleted is true" tests.
-
-## The functional shadow
-
-CRDT substrates (Loro, Yjs) maintain a **shadow**: a `PlainState` object that serves as the canonical read surface for all interpreter-stack reads. The architecture separates four surfaces:
-
-| Surface | Backing | Purpose |
-|---------|---------|---------|
-| **Read surface** | `PlainState` + `plainReader` | All `ref.field()` reads, subscriber reads, interpreter-stack caching |
-| **Sync surface** | CRDT doc (`LoroDoc` / `Y.Doc`) | `exportSince`, `merge`, `import` — replication and conflict resolution |
-| **Position surface** | CRDT doc | `positionResolver` — cursor / relative-position operations that require CRDT structure |
-| **Native escape hatch** | CRDT doc | `nativeResolver` — direct access to the underlying CRDT container for advanced use |
-
-**On local writes**, `prepare` calls `applyChange(shadow, path, change)` — the same pure `step` function used by the plain substrate — making the write immediately visible to reads. CRDT diffs are buffered and applied to the CRDT doc in `onFlush`. This two-phase design means the read surface is always ahead of (or equal to) the sync surface during a transaction.
-
-**On replay (merge)**, the CRDT doc absorbs the remote state first (via `doc.import` or `Y.applyUpdate`). `onFlush` then re-materializes the shadow from the CRDT doc, ensuring `ctx.reader` reflects the merged state for subscriber callbacks.
-
-**Initialization.** The shadow is created at substrate construction time via `materializeLoroShadow` (Loro) or `materializeYjsShadow` (Yjs). These functions now delegate to `createMaterializeInterpreter` with a backend-specific `MaterializeResolver`, rather than defining bespoke 370-line interpreters. The resolver closes over the CRDT doc and binding; the generic materializer walks the schema and calls resolver methods to produce a plain JS object matching the schema's shape. The shadow is also re-materialized on upgrade and after any replay flush.
-
-**`Reader` vs `MaterializeResolver`.** `Reader` (4 methods) is the runtime read interface backed by the `PlainState` shadow — schema-blind, live. `MaterializeResolver` (6 methods) is the materialization interface backed by the CRDT — schema-aware via catamorphism dispatch, one-shot. They share a conceptual lineage — the resolver is what a CRDT Reader would look like if it were schema-aware and didn't need liveness.
-
-This design makes the read-your-writes invariant true by construction for all substrates: reads always go through `plainReader(shadow)`, and local writes always land in the shadow eagerly. No coordination, no flags, no special-casing per substrate.
-
----
-
-## `foldPath` — schema-guided path resolution
-
-Source: `packages/schema/src/fold-path.ts`.
-
-`walkPath` is the one schema-guided traversal, and `foldPath` is its value-resolving projection — the schema-guided sibling of `Path.read(state)`. Where `Path.read` walks a plain JS object by segment-resolved keys, this walks a substrate-native container tree by composing a total single-step descent with a backend-supplied `PathStepper` (per-step substrate dispatch). Backends carry only the `PathStepper`; the traversal lives once in core.
-
-```
-walkPath              reports where the walk stopped; never throws
-  ├─ foldPath         resolves a substrate value; throws on a bad path
-  ├─ pathSchema       returns just the schema
-  └─ findOpaqueBoundary   reports where an opaque subtree begins
-```
-
-The `ephemeral` substrate's schema lookup (`state-tree.ts:schemaAtPath`) is a fourth projection. `walkPath` returns a `PathWalk`: `complete`, `boundary` (with `consumed` marking where value-level resolution takes over), or `mismatch` (carrying a ready-to-throw reason rather than raising). Each projection picks its own policy — `foldPath` throws on `mismatch`, the `ephemeral` lookup answers `undefined` — which is the functional-core / imperative-shell split: the traversal reports what happened, its callers decide what to do about it.
-
-```ts
-type PathStepper = (
-  current: unknown,
-  nextSchema: SchemaNode,
-  segment: Segment,
-  identity: string | undefined,
-) => unknown
-
-function foldPath(
-  root, rootSchema, path, stepInto, binding?
-): { resolved, schema }
-```
-
-`stepInto` is the only substrate-specific piece. The Loro backend's `stepIntoLoro` dispatches on `LoroDoc` (root) vs. container `.kind()`; the Yjs backend's `stepIntoYjs` dispatches on `instanceof Y.Map | Y.Array | Y.Text`. `resolveContainer` / `resolveYjsType` are 1-line wrappers around `foldPath(..., stepInto*, ...)`.
-
-### Two semantic invariants live in `walkPath`, in one place
-
-1. **Identity-keying at product-field boundaries only.** When `seg.role === "field"`, the absolute schema path is extended via `extendSchemaPathKey(prev, segment)` and used to look up `binding.forward.get(key)`. `entry` (map/set/tree) and `index` (sequence/movable) segments pass through with the raw key — they are not identity-keyed. The writer side of this contract — `deriveBindingRecursive` in `migration.ts` — uses the same `extendSchemaPathKey` accumulator, so the writer/reader key construction is byte-identical by construction.
-
-2. **Opaque-boundary stop.** Some subtrees are stored as ONE plain value in the parent container rather than as nested CRDT containers, and once a walk reaches one the schema has nothing further to offer — remaining segments resolve against the *value*. `walkPath` reports this as a `boundary` stop; each projection decides what to do about it. Two schema shapes qualify:
-
-   - A `sum` (which is what `.nullable()` expands to). Sum variants are `PlainSchema` by construction, so no CRDT container can exist inside one.
-   - A `.json()` node. The whole subtree is one plain JSON blob by definition of the modifier.
-
-   These were once documented as *two* invariants, and the split was itself the bug: a walker could learn the json half and miss the sum half, which is exactly what happened. They are one rule because they describe one storage decision.
-
-   **That constraint is now retired rather than restated.** This document used to say the walk-side predicate and `needsContainer` (`materialize-value.ts`) "must agree", which is the same kind of prose invariant the section below diagnoses — a rule living in a doc comment, enforced by review. Both are now one-line derivations of `storageClass` (`schema.ts`), the single place the decision is made: `isOpaqueBoundary` asks it the walk-side question, `needsContainer` the write-side one. They cannot disagree, so nothing has to remember that they must.
-
-   There is now a third consumer outside the traversal entirely: `validateDecayConstraints` (`bind.ts`) uses `isOpaqueBoundary` to find where a register begins, because `.decay()` is illegal below one (see §"Where `.decay()` may be attached"). Under the old arrangement that would have meant a third hand-written copy of the rule, since `isJsonBoundary` and `KIND` are both public and the disjunction is one line away. Sharing the predicate is what makes the validator agree with the traversal by construction rather than by review — and note that `!needsContainer` is *not* a substitute for it, because that is also false for scalars, which are leaves rather than boundaries.
-
-   The cost of the old arrangement was paid: `richtext` was classified as a container by one and a leaf by the other, which broke the `EagerPolicy` subset relation described in §"Value materialization — the write-side unfold".
-
-### `pathSchema` — the schema-only specialization
-
-`pathSchema(rootSchema, path, binding?)` is `foldPath` with a no-op stepper, returning only `.schema`. Used by callers that need the schema at a path but not the substrate value: changefeed kind classification (`changefeed.ts:resolveSchemaKindAtPath`), change-mapping target resolution (Loro `changeToDiff` / `batchToOps`, Yjs `applySequenceChange` / `applyMapChange` / `applyReplaceChange` / `eventToChange`). The opaque-boundary rule applies uniformly — on a path leading into a sum or a `.json()` subtree, `pathSchema` returns the boundary node's own schema, because the variant cannot be determined without a value at parse time.
-
-### Why one traversal, not many
-
-Before this primitive, both Loro's `resolveContainer` and Yjs's `resolveYjsType` re-implemented the same left-fold over `Path.segments`, and four schema-only walks (one in `changefeed.ts`, one in `yjs/change-mapping.ts`, two inline in `loro/change-mapping.ts`) re-implemented the schema-only variant with subtly different sum-boundary handling (three explicit short-circuits, one try/catch).
-
-**That consolidation did not hold, and how it came apart is the most useful thing in this section.** This document previously claimed:
-
-> After the consolidation, `advanceSchema` has exactly one production caller — `foldPath` itself — and the sum-boundary rule is structural, not exception-based.
-
-At one point there were three production callers. `findJsonBoundary` arrived with the `.json()` boundary work as a *second* hand-rolled walk, and learned only the json half of the boundary rule; `schemaAtPath` (`state-tree.ts`) arrived as a third and reached for `try/catch`. Each shipped a different bug from the same missing case: one crashed on a legitimate path, one silently discarded fields from replicated state.
-
-The claim was true when written. What made it decay is that nothing enforced it — the rule lived in a doc comment, and `advanceSchema` was exported, so hand-rolling a fourth walk was the path of least resistance. **A stated invariant is not an enforced one.**
-
-The current arrangement is structural instead. `walkPath` is the only traversal; `foldPath`, `pathSchema`, `findOpaqueBoundary`, and the `ephemeral` substrate's schema lookup are projections of it that differ only in policy. The single-step primitive underneath (`stepSchema`) is package-internal and deliberately *not* exported, because handing it out is what made a divergent walker easy to write.
-
-`advanceSchema` — the public throwing wrapper over that primitive — has been removed. It was retained through 2.x on the reasoning that it had lost its callers but was still public, and it was pinned with tests so its behaviour could not drift. That retention was the last piece of the decayed arrangement still standing: an exported single-step descent is precisely what the paragraph above identifies as the hazard, and keeping it meant the package's most thorough descent tests pointed at a function nothing called. Those tests now target `stepSchema` directly (`src/__tests__/step-schema.test.ts`), including the `descend`-versus-`boundary` distinction the wrapper could not express. `walkPath` is the supported replacement for outside callers.
-
-Notably, the boundary rule needed no separate implementation once the walkers were consolidated. Reporting a `boundary` from one place meant every projection inherited it — the rule was never a policy anyone had to write down, only a question that had been asked in three places instead of one.
-
----
-
-## Validation
-
-Source: `packages/schema/src/interpreters/validate.ts`.
-
-A separate interpreter — not required by the stack, not automatic. `validate(schema, value)` returns `ValidationResult` collecting every error in the tree; `tryValidate` throws on the first. `SchemaValidationError` carries a structured `path` and a human-readable `message`.
-
-Validation is an *interpretation* of the schema. The same `Schema` value that builds a ref also validates untrusted input. Errors format via `path.format()` for human-readable output.
-
-Not used by the exchange. Not automatic on `bind`. Opt-in at boundaries where untrusted data enters the system.
-
----
-
-## Zero / defaults
-
-Source: `packages/schema/src/zero.ts`.
-
-`Zero(schema)` computes a default `Plain<S>` value for any schema. Defaults:
-
-- `string` → `""`, `number` → `0`, `boolean` → `false`, `null` → `null`, `bytes` → empty `Uint8Array`.
-- Product → each field's default.
-- Sequence / movable → `[]`.
-- Map → `{}`.
-- Set → `[]` (matches `Plain<SetSchema<I>> = Plain<I>[]` — distinct from map, which is `Record<string, T>`).
-- Sum → first variant's default.
-- Text → empty text.
-- Counter → `0`.
-- Tree → empty forest `[]` (matches `Plain<TreeSchema<I>> = readonly PlainFlatTreeNode<I>[]`).
-
-`scalarDefault(kind)` is the scalar-only version. Used by `createDoc` when no initial state is supplied, by migrations' `setDefault` primitive, and by tests.
-
-The materializer is the canonical consumer of zeros for CRDT substrates — the `zeroInterpreter` is the single source of truth, and zeros are no longer eagerly written during CRDT initialization. CRDT initialization routines (`ensureRootContainer`, `ensureContainers`) now only create structural containers.
-
----
-
-## Describe
-
-Source: `packages/schema/src/describe.ts`.
-
-`describe(schema)` returns a human-readable ASCII tree of the schema structure. Used in tests, logs, and documentation. Not used at runtime by any interpreter.
-
----
-
 ## Key Types
 
 Selection of the most-used types. Full list in the **Canonical symbols** line at the top of this document.
@@ -1723,6 +1734,8 @@ Selection of the most-used types. Full list in the **Canonical symbols** line at
 | `Reader`, `PlainState` | `src/reader.ts` | Plain-state reader primitive. |
 | `Path`, `Segment`, `Address`, `AddressTableRegistry` | `src/path.ts` | Path and address types. |
 | `walkPath`, `PathWalk`, `foldPath`, `pathSchema`, `findOpaqueBoundary`, `OpaqueBoundaryHit`, `PathStepper`, `PathFoldResult`, `extendSchemaPathKey` | `src/fold-path.ts` | The one schema-guided traversal and its projections (the substrate-blind sibling of `Path.read(state)`), plus the shared binding-key accumulator. The single-step primitive `stepSchema` is package-internal by design — see [Why one traversal, not many](#why-one-traversal-not-many). |
+
+---
 
 ## Build & Exports
 
@@ -1772,6 +1785,8 @@ The marker asserts two things at once: this is package-internal despite the `exp
 
 The worked example is `__getCacheHandlerCountAtPath` (`src/interpreters/with-caching.ts`), a backdoor for asserting that cache-invalidation handlers do not accrete across re-interpretations. It earns its place because that invariant's only symptom is memory and per-write work — there is no public-surface proxy, so a behavioural test would pass whether or not handlers accreted. Where the sole symptom is resource growth, inspecting the structure is the honest instrument; what was missing was the label.
 
+---
+
 ## File Map
 
 | File | Role |
@@ -1820,6 +1835,8 @@ The worked example is `__getCacheHandlerCountAtPath` (`src/interpreters/with-cac
 | `src/basic/index.ts` | — | Test-only helpers (re-exports). |
 | `src/sync.ts` | `version`, `exportEntirety`, `exportSince`, `merge` — generic over `ref[SUBSTRATE]`. |
 | `src/__tests__/` | ~56 files | Every test file is pure; no I/O, no timers. |
+
+---
 
 ## Testing
 
