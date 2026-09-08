@@ -24,7 +24,7 @@ Imported by every other Kyneta package that touches documents: the CRDT backends
 - What is a `Position` and why can't I just use an integer index? → [Position algebra](#position-algebra)
 - How do migrations keep a document's identity stable across schema changes? → [Migration and identity](#migration-and-identity)
 - How does the exchange decide whether two peers' docs are compatible? → [`schemaHash` and compatibility](#schemahash-and-compatibility)
-- What is the `CHANGEFEED` surface over a composite ref? → [Composed changefeeds](#composed-changefeeds)
+- What is the `CHANGEFEED` surface over a composite ref? → [Tree-observable changefeeds](#tree-observable-changefeeds)
 
 ## Vocabulary
 
@@ -45,7 +45,7 @@ Imported by every other Kyneta package that touches documents: the CRDT backends
 | `Interpreter<Ctx, A>` | The F-algebra: one method per `[KIND]` value, collapsing a schema tree into a value of type `A`. | A parser, a visitor, a validator alone |
 | `InterpreterLayer` | A typed transformer from one interpreter to another (e.g. `withReadable` transforms `Interpreter<Ctx, R>` into `Interpreter<Ctx, R & Readable>`). | A middleware — layers compose statically via `.with()` |
 | `Ref<S>` | The developer-facing handle: callable, navigable, readable, writable, observable. The result of `interpret(schema, ctx)...done()`. | A React ref, a DOM ref — this is a substrate-backed document reference |
-| `Change` | The universal currency of change — discriminated union with `type` (`"text" \| "sequence" \| "map" \| "tree" \| "replace" \| "increment"` and extensible). Flows both inbound (intent) and outbound (notification). | A diff, a patch — `Change` is applied atomically by the substrate |
+| `Change` | The universal currency of change — discriminated union with `type` (`"text" \| "sequence" \| "map" \| "tree" \| "replace" \| "increment" \| "richtext" \| "set-op"`, and extensible). Flows both inbound (intent) and outbound (notification). | A diff, a patch — `Change` is applied atomically by the substrate |
 | `SubstratePayload` | `{ kind: "entirety" \| "since", encoding: "json" \| "binary", data: string \| Uint8Array }` — opaque state carrier. Produced by the substrate, carried by the exchange. | A `ChannelMsg` — payloads ride *inside* `offer` messages |
 
 | `SyncMode` | Structured record decomposing sync semantics into three orthogonal axes: `WriterModel` (`"serialized"` / `"concurrent"`), `Delivery` (`"delta-capable"` / `"snapshot-only"`), `Durability` (`"persistent"` / `"transient"`). Three constants: `SYNC_AUTHORITATIVE`, `SYNC_COLLABORATIVE`, `SYNC_EPHEMERAL`. `requiresBidirectionalSync(mode)` is the helper predicate. `durability: "transient"` is a commitment the exchange enforces — such a document is never read from, written to, or deleted from a store. | A string enum, a CRDT algorithm |
@@ -55,7 +55,7 @@ Imported by every other Kyneta package that touches documents: the CRDT backends
 | `POSITION` | Capability symbol: `hasPosition(ref)` returns true when the substrate supports positions for this ref. | The `Position` interface |
 | `Migration` | The namespace of 14 migration primitives (`renameField`, `dropField`, `extractField`, `mergeFields`, `splitField`, `transformField`, `setDefault`, `addField`, `wrapField`, `unwrapField`, `promoteField`, `demoteField`, `epoch`, `identity`) organized into four tiers. | A database migration — this is a pure algebraic operation on schema + data |
 | `MIGRATION_CHAIN` | Symbol-keyed slot on a `ProductSchema` carrying its `MigrationChain` (sequence of migration steps + epochs). Invisible to `JSON.stringify` / `Object.keys`. | The chain's content — the symbol is just the slot |
-| `SchemaBinding` | `{ forward: Map<string, Hash>, backward: Map<Hash, string> }` — the identity map from human-facing field names to content-addressed identity hashes for one schema snapshot. | Schema validation rules |
+| `SchemaBinding` | `{ forward: Map<string, NodeIdentity>, inverse: Map<NodeIdentity, string> }` — the identity map from human-facing field names to content-addressed identity hashes for one schema snapshot. | Schema validation rules |
 | `Op` | The expanded-to-leaves notification emitted by the composed changefeed. `{ path, change }`. | `Change` alone — `Op` adds the path |
 
 ---
@@ -219,7 +219,7 @@ Two properties follow from being snapshot-only and transient:
 - There is no op log, so nothing accumulates and nothing is persisted.
   `.decay()` can retire a leaf on a timer, which is meaningful only here.
 
-###### The merge rule, in full
+##### The merge rule, in full
 
 Highest timestamp wins; **on a tie, the greater `JSON.stringify(value)` wins**. State both halves — the tie is the half a reader will meet in production and not in testing, and getting it wrong is invisible.
 
@@ -227,7 +227,7 @@ The tie rule is not a detail. Timestamps come from `Date.now()`, so a tie means 
 
 On a tie the greater **value** wins, not the later writer — a tie *is* simultaneity, so there is no later writer to prefer. Comparing serialisations is sound because both peers compare the same pair of strings and so reach the same verdict, and because string comparison is a total order, which is what makes the join associative across three or more tied peers. Only the tie path pays for `stringify`.
 
-###### Deletion
+##### Deletion
 
 `mergeStateTree` unions keys, so **absence carries no information**: a key one peer lacks is indistinguishable from a key it has never seen. Simply removing a key therefore survives only until the next merge with anyone who still holds it. A `Schema.record` used as a roster could gain members but never lose them.
 
@@ -241,7 +241,7 @@ An entry drops out of the projection only when **every** leaf beneath it is tomb
 
 **Tombstones do not need collecting.** Deleting *replaces* a tuple rather than adding one, and re-adding replaces it back, so they accumulate per **key**, not per operation — 500 alternating delete/add cycles leave one tuple. The tree stays bounded by the set of keys ever written, which is the bound it had when nothing was ever deleted. The only cost is that a currently-deleted key occupies a tuple where it would otherwise be absent. The phrase "tombstone garbage collection" is imported from CRDTs where deletes genuinely accumulate without bound; here they do not. If bounding this ever did matter, note that **`.decay()` cannot be the mechanism** — it never mutates the tree (see below). Collection would need a real tree mutation with its own safety argument, and on a snapshot-only log-free CvRDT that means causal stability, which is not available here.
 
-###### What `.decay()` is
+##### What `.decay()` is
 
 A **read-time projection**, not a deletion mechanism. `tick(now)` re-projects the tree into the shadow, showing any leaf older than its `decayMs` as `Zero.structural` instead of its stored value. It runs with `projection: true` and `replay: true`: the tree is untouched, the version clock does not advance, and nothing is broadcast.
 
@@ -249,7 +249,7 @@ Decay removes nothing. It is the rule *"when reading, treat a leaf older than `d
 
 It does not interact with tombstones, and cannot be used to collect them — dropping a tombstone would be a tree mutation, which is exactly what decay does not do.
 
-###### Where `.decay()` may be attached
+##### Where `.decay()` may be attached
 
 Decay works **per leaf tuple**: it compares one stored timestamp against `now`. That fixes where it can legally sit.
 
@@ -752,7 +752,7 @@ This invariant is uniform across all substrates — plain, Loro, Yjs — because
 
 Concretely, the projection law `σ ≡ Π(λ)` (the naturality condition of the materialisation catamorphism) holds at every prepare boundary. A re-entrant subscriber may either read through σ (via the Reader / the ref `[CALL]`) or write through λ (via re-entrant `batch()`, which itself walks λ through `changeToDiff`/`applyChangeToYjs`) — both views are coherent.
 
-When the outer batch is a **replay** batch from a substrate event bridge (e.g. an incoming sync merge), S1's local re-entrant write inside the replay-batch delivery is *not* a replay (the user code constructs a normal `batch(doc, ...)` with no `replay` flag), so the substrate's `prepare`/`afterBatch` apply it natively. Pre-fix this case was the source of a hidden invariant hole on CRDT substrates: an `inEventHandler`/`inOurTransaction` global flag wrapped the entire event-bridge call and caused the substrate to silently drop S1's write. Resolved by threading `BatchOptions.replay` as a typed parameter; see [§Origin vs replay](#origin-vs-replay).
+When the outer batch is a **replay** batch from a substrate event bridge (e.g. an incoming sync merge), S1's local re-entrant write inside the replay-batch delivery is *not* a replay (the user code constructs a normal `batch(doc, ...)` with no `replay` flag), so the substrate's `prepare`/`afterBatch` apply it natively. Pre-fix this case was the source of a hidden invariant hole on CRDT substrates: an `inEventHandler`/`inOurTransaction` global flag wrapped the entire event-bridge call and caused the substrate to silently drop S1's write. Resolved by threading `BatchOptions.replay` as a typed parameter; see [§Origin vs replay](#batch-metadata-origin--replay--source--aborted).
 
 Two guidances:
 
@@ -1184,7 +1184,7 @@ Source: `packages/schema/src/migration.ts` → `deriveIdentity`, `deriveManifest
 
 - `deriveIdentity(schema, chain)` → `NodeIdentity` — the content-addressed identity of every `ProductSchema` field, as a tree mirroring the schema shape.
 - `deriveManifest(schema)` → `IdentityManifest` — the full identity tree for a schema, used in `bind()` to cache for `computeSchemaHash`.
-- `deriveSchemaBinding(manifest)` → `{ forward: Map<string, Hash>, backward: Map<Hash, string> }` — the runtime lookup used by substrates to key their CRDT containers.
+- `deriveSchemaBinding(manifest)` → `{ forward: Map<string, NodeIdentity>, inverse: Map<NodeIdentity, string> }` — the runtime lookup used by substrates to key their CRDT containers.
 
 The substrate consumes the `SchemaBinding` in its `factoryBuilder` context. Loro and Yjs backends use `forward` to determine container keys: a product field named `"title"` with identity hash `"abc123…"` is stored at `LoroMap.getMap("abc123…")`, not at `LoroMap.getMap("title")`. Renaming a field changes its display name, not its stored identity — the CRDT state survives the rename.
 
@@ -1709,7 +1709,7 @@ Source: `packages/schema/src/describe.ts`.
 
 ## Key Types
 
-Selection of the most-used types. Full list in [Canonical symbols](#canonical-symbols) at the top of this document.
+Selection of the most-used types. Full list in the **Canonical symbols** line at the top of this document.
 
 | Type | File | Role |
 |------|------|------|
