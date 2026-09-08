@@ -270,24 +270,24 @@ const exchange = new Exchange({
 
 ## File Map
 
-| File | Lines | Role |
-|------|-------|------|
-| `src/browser.ts` | 49 | `./browser` entry — client factory + client types. |
-| `src/server.ts` | 59 | `./server` entry — server transport + drain types + `createServiceWebsocketClient` + wrappers. |
-| `src/bun.ts` | 24 | `./bun` entry — Bun wrapper + `BunWebsocketData`. |
-| `src/types.ts` | 378 | `Socket`, `WebSocketLike`, wrappers, `DisconnectReason`, state type. |
-| `src/client-program.ts` | 272 | Pure `createWsClientProgram` Mealy machine. |
-| `src/client-transport.ts` | 621 | Imperative shell: runs the program, owns the socket, runs the alias-aware binary pipeline, fragments. |
-| `src/server-transport.ts` | 406 | Server-side `Transport<...>`: accepts connections, dispatches to `WebsocketConnection`, owns graceful drain. |
-| `src/drain.ts` | 136 | Pure drain scheduling core: `planDrainSchedule`, `resolveDrainOptions`, `DrainOptions`/`DrainResult`, `DEFAULT_DRAIN`. |
-| `src/connection.ts` | 206 | Per-connection alias-aware binary pipeline + fragment reassembler + channel ownership. |
-| `src/service-client.ts` | 52 | `createServiceWebsocketClient` factory (headers). |
-| `src/bun-websocket.ts` | 163 | `wrapBunWebsocket` + `BunWebsocketData`. |
-| `src/__tests__/client-program.test.ts` | 760 | Pure tests: every state transition and effect asserted on data. No sockets. |
-| `src/__tests__/client-transport.test.ts` | 167 | Imperative-shell tests: socket creation, close, reconnect scheduling. |
-| `src/__tests__/drain.test.ts` | 81 | Pure tests for `planDrainSchedule` and `resolveDrainOptions`. |
-| `src/__tests__/server-transport.test.ts` | 101 | Drain + stop-accepting guard, driven with fake timers and `mock-socket.ts`. |
-| `src/__tests__/mock-socket.ts` | 55 | Minimal server-side `Socket` mock; `close()` fires `onClose` (the drain completion signal). |
+| File | Role |
+|------|------|
+| `src/browser.ts` | `./browser` entry — client factory + client types. |
+| `src/server.ts` | `./server` entry — server transport + drain types + `createServiceWebsocketClient` + wrappers. |
+| `src/bun.ts` | `./bun` entry — Bun wrapper + `BunWebsocketData`. |
+| `src/types.ts` | `Socket`, `WebSocketLike`, wrappers, `DisconnectReason`, state type. |
+| `src/client-program.ts` | Pure `createWsClientProgram` Mealy machine. |
+| `src/client-transport.ts` | Imperative shell: runs the program, owns the socket, runs the alias-aware binary pipeline, fragments. |
+| `src/server-transport.ts` | Server-side `Transport<...>`: accepts connections, dispatches to `WebsocketConnection`, owns graceful drain. |
+| `src/drain.ts` | Pure drain scheduling core: `planDrainSchedule`, `resolveDrainOptions`, `DrainOptions`/`DrainResult`, `DEFAULT_DRAIN`. |
+| `src/connection.ts` | Per-connection alias-aware binary pipeline + fragment reassembler + channel ownership. |
+| `src/service-client.ts` | `createServiceWebsocketClient` factory (headers). |
+| `src/bun-websocket.ts` | `wrapBunWebsocket` + `BunWebsocketData`. |
+| `src/__tests__/client-program.test.ts` | Pure tests: every state transition and effect asserted on data. No sockets. |
+| `src/__tests__/client-transport.test.ts` | Imperative-shell tests: socket creation, close, reconnect scheduling. |
+| `src/__tests__/drain.test.ts` | Pure tests for `planDrainSchedule` and `resolveDrainOptions`. |
+| `src/__tests__/server-transport.test.ts` | Drain + stop-accepting guard, driven with fake timers and `mock-socket.ts`. |
+| `src/__tests__/mock-socket.ts` | Minimal server-side `Socket` mock; `close()` fires `onClose` (the drain completion signal). |
 
 ## Testing
 

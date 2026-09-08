@@ -489,29 +489,29 @@ const Todo = loro.bind(Schema.struct({
 
 ## File Map
 
-| File | Lines | Role |
-|------|-------|------|
-| `src/index.ts` | 63 | Public barrel. Re-exports generic API from `@kyneta/schema`; exports Loro-specific symbols. |
-| `src/bind-loro.ts` | 174 | `loro.bind` / `loro.replica` binding target; `LoroLaws`. |
-| `src/substrate.ts` | 671 | `LoroSubstrate`, factories, prepare/flush, event bridge, `ensureLoroContainers`, `mergePendingGroups`. |
-| `src/change-mapping.ts` | 866 | Pure `changeToDiff` + `batchToOps` for every kyneta change type and every Loro container kind. |
-| `src/loro-resolve.ts` | 187 | `stepIntoLoro`, `stepFromDoc`, `PROPS_KEY`; `resolveContainer` is a thin wrapper over the core `foldPath` primitive. |
-| `src/reader.ts` | 139 | `loroReader` — reads via `resolveContainer` + container-kind extraction. |
-| `src/loro-guards.ts` | 85 | `hasKind` / `isLoroContainer` / `isLoroDoc` runtime guards. |
-| `src/version.ts` | 103 | `LoroVersion` (wraps `VersionVector`). |
-| `src/position.ts` | 61 | `LoroPosition` (wraps `Cursor`), `fromLoroSide`, `toLoroSide`. |
-| `src/native-map.ts` | 45 | `LoroNativeMap` type-level functor. |
-| `src/__tests__/create.test.ts` | 339 | End-to-end: `createDoc(loro.bind(schema))` → read/write round-trips. |
-| `src/__tests__/substrate.test.ts` | 788 | Substrate contract conformance (subset of the `@kyneta/schema` suite). |
-| `src/__tests__/reader.test.ts` | 487 | `loroReader` over every container kind + scalar variants. |
-| `src/__tests__/record-counter-spike.test.ts` | 588 | Focus tests for `Schema.record(Schema.counter())` and related combinations. |
-| `src/__tests__/structural-merge.test.ts` | 214 | `merge()` and `applyDiff` round-trips; identity-keyed container compatibility. |
-| `src/__tests__/position.test.ts` | 361 | `LoroPosition` cursor stability across concurrent edits. |
-| `src/__tests__/bind-constraints.test.ts` | 315 | Compile-time composition-law enforcement (schemas outside `LoroLaws` are rejected). |
-| `src/__tests__/bind-loro.test.ts` | 131 | `loro.bind` API surface. |
-| `src/__tests__/native.test.ts` | 102 | `unwrap(ref)` returns the right native container at every depth. |
-| `src/__tests__/loro-guards.test.ts` | 47 | `hasKind`, `isLoroContainer`, `isLoroDoc` runtime behaviour. |
-| `src/__tests__/version.test.ts` | 231 | `LoroVersion` serialize/parse, `compare`, `meet` algebraic properties. |
+| File | Role |
+|------|------|
+| `src/index.ts` | Public barrel. Re-exports generic API from `@kyneta/schema`; exports Loro-specific symbols. |
+| `src/bind-loro.ts` | `loro.bind` / `loro.replica` binding target; `LoroLaws`. |
+| `src/substrate.ts` | `LoroSubstrate`, factories, prepare/flush, event bridge, `ensureLoroContainers`, `mergePendingGroups`. |
+| `src/change-mapping.ts` | Pure `changeToDiff` + `batchToOps` for every kyneta change type and every Loro container kind. |
+| `src/loro-resolve.ts` | `stepIntoLoro`, `stepFromDoc`, `PROPS_KEY`; `resolveContainer` is a thin wrapper over the core `foldPath` primitive. |
+| `src/reader.ts` | `loroReader` — reads via `resolveContainer` + container-kind extraction. |
+| `src/loro-guards.ts` | `hasKind` / `isLoroContainer` / `isLoroDoc` runtime guards. |
+| `src/version.ts` | `LoroVersion` (wraps `VersionVector`). |
+| `src/position.ts` | `LoroPosition` (wraps `Cursor`), `fromLoroSide`, `toLoroSide`. |
+| `src/native-map.ts` | `LoroNativeMap` type-level functor. |
+| `src/__tests__/create.test.ts` | End-to-end: `createDoc(loro.bind(schema))` → read/write round-trips. |
+| `src/__tests__/substrate.test.ts` | Substrate contract conformance (subset of the `@kyneta/schema` suite). |
+| `src/__tests__/reader.test.ts` | `loroReader` over every container kind + scalar variants. |
+| `src/__tests__/record-counter-spike.test.ts` | Focus tests for `Schema.record(Schema.counter())` and related combinations. |
+| `src/__tests__/structural-merge.test.ts` | `merge()` and `applyDiff` round-trips; identity-keyed container compatibility. |
+| `src/__tests__/position.test.ts` | `LoroPosition` cursor stability across concurrent edits. |
+| `src/__tests__/bind-constraints.test.ts` | Compile-time composition-law enforcement (schemas outside `LoroLaws` are rejected). |
+| `src/__tests__/bind-loro.test.ts` | `loro.bind` API surface. |
+| `src/__tests__/native.test.ts` | `unwrap(ref)` returns the right native container at every depth. |
+| `src/__tests__/loro-guards.test.ts` | `hasKind`, `isLoroContainer`, `isLoroDoc` runtime behaviour. |
+| `src/__tests__/version.test.ts` | `LoroVersion` serialize/parse, `compare`, `meet` algebraic properties. |
 
 ## Testing
 

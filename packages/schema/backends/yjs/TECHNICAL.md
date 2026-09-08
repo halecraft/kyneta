@@ -484,27 +484,27 @@ This is the same mechanism as the Loro backend, exercised with a narrower law se
 
 ## File Map
 
-| File | Lines | Role |
-|------|-------|------|
-| `src/index.ts` | 64 | Public barrel. Re-exports generic API from `@kyneta/schema`; exports Yjs-specific symbols. |
-| `src/bind-yjs.ts` | 171 | `yjs.bind` / `yjs.replica` binding target; `YjsLaws`. |
-| `src/substrate.ts` | 499 | `YjsSubstrate`, factories, prepare/flush, `Y.transact` wrapping, `observeDeep` event bridge, origin-based suppression. |
-| `src/change-mapping.ts` | 666 | `applyChangeToYjs` (per kyneta change type → Yjs mutations) + `realizeYjs` (`MaterializedNode` → Yjs shared type, populate-then-attach) + `eventsToOps` (Yjs events → kyneta `Op[]`). |
-| `src/yjs-resolve.ts` | 88 | `stepIntoYjs`; `resolveYjsType` is a thin wrapper over the core `foldPath` primitive. |
-| `src/populate.ts` | 249 | `ensureContainers` (conditional doc-init structural creation, `clientID:0`, identity-keyed via shared `containerKey`). Value-driven population lives in `realizeYjs` (`src/change-mapping.ts`), not here. |
-| `src/reader.ts` | 131 | `yjsReader` — reads via `resolveYjsType` + per-type extraction. |
-| `src/version.ts` | 240 | `YjsVersion` (SV + delete-set digest), two-part serialisation, legacy SV-only compat. |
-| `src/position.ts` | 45 | `YjsPosition` (wraps `Y.RelativePosition`), `toYjsAssoc`. |
-| `src/native-map.ts` | 37 | `YjsNativeMap` type-level functor. |
-| `src/__tests__/create.test.ts` | 665 | End-to-end: `createDoc(yjs.bind(schema))` → read/write round-trips. |
-| `src/__tests__/substrate.test.ts` | 610 | Substrate contract conformance (subset of the `@kyneta/schema` suite). |
-| `src/__tests__/reader.test.ts` | 685 | `yjsReader` over every Yjs shared type + scalar variants. |
-| `src/__tests__/record-text-spike.test.ts` | 438 | Focus tests for `Schema.record(Schema.text())` and related combinations. |
-| `src/__tests__/structural-merge.test.ts` | 419 | Two-peer `ensureContainers` convergence under concurrent upgrade; identity-keyed container compatibility. |
-| `src/__tests__/position.test.ts` | 376 | `YjsPosition` cursor stability across concurrent edits. |
-| `src/__tests__/bind-constraints.test.ts` | 325 | Compile-time composition-law enforcement (`counter`, `movable`, `tree`, `set` all rejected). |
-| `src/__tests__/bind-yjs.test.ts` | 311 | `yjs.bind` API surface. |
-| `src/__tests__/version.test.ts` | 380 | `YjsVersion` serialise/parse (both formats), `compare`, `meet`; delete-set distinguishing cases. |
+| File | Role |
+|------|------|
+| `src/index.ts` | Public barrel. Re-exports generic API from `@kyneta/schema`; exports Yjs-specific symbols. |
+| `src/bind-yjs.ts` | `yjs.bind` / `yjs.replica` binding target; `YjsLaws`. |
+| `src/substrate.ts` | `YjsSubstrate`, factories, prepare/flush, `Y.transact` wrapping, `observeDeep` event bridge, origin-based suppression. |
+| `src/change-mapping.ts` | `applyChangeToYjs` (per kyneta change type → Yjs mutations) + `realizeYjs` (`MaterializedNode` → Yjs shared type, populate-then-attach) + `eventsToOps` (Yjs events → kyneta `Op[]`). |
+| `src/yjs-resolve.ts` | `stepIntoYjs`; `resolveYjsType` is a thin wrapper over the core `foldPath` primitive. |
+| `src/populate.ts` | `ensureContainers` (conditional doc-init structural creation, `clientID:0`, identity-keyed via shared `containerKey`). Value-driven population lives in `realizeYjs` (`src/change-mapping.ts`), not here. |
+| `src/reader.ts` | `yjsReader` — reads via `resolveYjsType` + per-type extraction. |
+| `src/version.ts` | `YjsVersion` (SV + delete-set digest), two-part serialisation, legacy SV-only compat. |
+| `src/position.ts` | `YjsPosition` (wraps `Y.RelativePosition`), `toYjsAssoc`. |
+| `src/native-map.ts` | `YjsNativeMap` type-level functor. |
+| `src/__tests__/create.test.ts` | End-to-end: `createDoc(yjs.bind(schema))` → read/write round-trips. |
+| `src/__tests__/substrate.test.ts` | Substrate contract conformance (subset of the `@kyneta/schema` suite). |
+| `src/__tests__/reader.test.ts` | `yjsReader` over every Yjs shared type + scalar variants. |
+| `src/__tests__/record-text-spike.test.ts` | Focus tests for `Schema.record(Schema.text())` and related combinations. |
+| `src/__tests__/structural-merge.test.ts` | Two-peer `ensureContainers` convergence under concurrent upgrade; identity-keyed container compatibility. |
+| `src/__tests__/position.test.ts` | `YjsPosition` cursor stability across concurrent edits. |
+| `src/__tests__/bind-constraints.test.ts` | Compile-time composition-law enforcement (`counter`, `movable`, `tree`, `set` all rejected). |
+| `src/__tests__/bind-yjs.test.ts` | `yjs.bind` API surface. |
+| `src/__tests__/version.test.ts` | `YjsVersion` serialise/parse (both formats), `compare`, `meet`; delete-set distinguishing cases. |
 
 ## Testing
 

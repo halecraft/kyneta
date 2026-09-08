@@ -523,45 +523,45 @@ All inherit from `Error` with a `code` field (typed as `KynetaErrorCode`) and an
 
 ## File Map
 
-| File | Lines | Role |
-|------|-------|------|
+| File | Role |
+|------|------|
 | `src/index.ts` | — | Public barrel. Re-exports mount, hydrate, regions, scope, subscribe, state, types, errors. |
 | `src/errors.ts` | — | Error types (Kyneta-prefixed canonical + Kinetic-prefixed deprecated aliases). |
 | `src/types.ts` | — | Public type declarations: `MountOptions`, `MountResult`, `Scope`, handlers, ops. |
-| `src/types/elements.d.ts` | 206 | Ambient element-factory declarations (`div`, `h1`, `li`, …). |
-| `src/types/reactive-view.d.ts` | 75 | Ambient reactive-view type declarations. |
-| `src/runtime/mount.ts` | 111 | `mount(element, container, options?)`. |
-| `src/runtime/hydrate.ts` | 597 | `hydrate(element, container)` — claim existing DOM. |
-| `src/runtime/scope.ts` | 236 | `Scope` class, `setRootScope`. |
-| `src/runtime/subscribe.ts` | 222 | Scope-registered `[CHANGEFEED]` subscription. |
-| `src/runtime/regions.ts` | 1401 | All five region functions + `inputTextRegion`. |
-| `src/runtime/text-patch.ts` | 226 | `patchInputValue`, `diffText` — selection-stable text patching. |
-| `src/runtime/index.ts` | 53 | Runtime barrel. |
-| `src/reactive/local-ref.ts` | 215 | `state`, `LocalRef<T>`, `isLocalRef`. |
-| `src/reactive/index.ts` | 12 | Reactive barrel. |
-| `src/compiler/transform.ts` | 591 | Compilation orchestrator. |
+| `src/types/elements.d.ts` | Ambient element-factory declarations (`div`, `h1`, `li`, …). |
+| `src/types/reactive-view.d.ts` | Ambient reactive-view type declarations. |
+| `src/runtime/mount.ts` | `mount(element, container, options?)`. |
+| `src/runtime/hydrate.ts` | `hydrate(element, container)` — claim existing DOM. |
+| `src/runtime/scope.ts` | `Scope` class, `setRootScope`. |
+| `src/runtime/subscribe.ts` | Scope-registered `[CHANGEFEED]` subscription. |
+| `src/runtime/regions.ts` | All five region functions + `inputTextRegion`. |
+| `src/runtime/text-patch.ts` | `patchInputValue`, `diffText` — selection-stable text patching. |
+| `src/runtime/index.ts` | Runtime barrel. |
+| `src/reactive/local-ref.ts` | `state`, `LocalRef<T>`, `isLocalRef`. |
+| `src/reactive/index.ts` | Reactive barrel. |
+| `src/compiler/transform.ts` | Compilation orchestrator. |
 | `src/compiler/codegen/dom.ts` | — | Client-side (DOM) codegen. |
 | `src/compiler/codegen/html.ts` | — | Server-side (HTML / SSR) codegen. |
 | `src/compiler/transform.test.ts` | — | end-to-end compilation. |
 | `src/compiler/integration/reactive.test.ts` | — | Reactive-content compilation tests. |
 | `src/compiler/integration/statements.test.ts` | — | Statement-node integration tests. |
-| `src/unplugin/index.ts` | 164 | Universal plugin factory. |
-| `src/unplugin/transform.ts` | 73 | Thin wrapper over `transformKynetaSource`. |
-| `src/unplugin/filter.ts` | 56 | `shouldTransform` predicate. |
-| `src/vite/plugin.ts` | 21 | Vite adapter (`kyneta(...).vite`). |
-| `src/vite/plugin.test.ts` | 337 | Vite-specific transform behaviour. |
-| `src/testing/counting-dom.ts` | 245 | Minimal DOM mock with op counters. |
-| `src/testing/counting-dom.test.ts` | 197 | Tests for `counting-dom` itself. |
-| `src/testing/runtime.ts` | 39 | Test-runtime utilities. |
-| `src/testing/index.ts` | 58 | Testing barrel. |
-| `src/runtime/mount.test.ts` | 328 | Mount lifecycle, dispose, error handling. |
-| `src/runtime/hydrate.test.ts` | 461 | Hydration for every IR shape. |
-| `src/runtime/scope.test.ts` | 333 | Scope creation, child dispose order, `ScopeDisposedError`. |
-| `src/runtime/regions.test.ts` | 2226 | Exhaustive region coverage — every delta shape. |
-| `src/runtime/subscribe.test.ts` | 406 | Subscription lifecycle + scope integration. |
-| `src/runtime/text-patch.test.ts` | 966 | `diffText` / `patchInputValue` — edit detection, selection rebasing. |
-| `src/reactive/local-ref.test.ts` | 311 | `state` / `LocalRef` / brand detection. |
-| `src/types/reactive-view.test.ts` | 250 | Ambient declaration behaviour. |
+| `src/unplugin/index.ts` | Universal plugin factory. |
+| `src/unplugin/transform.ts` | Thin wrapper over `transformKynetaSource`. |
+| `src/unplugin/filter.ts` | `shouldTransform` predicate. |
+| `src/vite/plugin.ts` | Vite adapter (`kyneta(...).vite`). |
+| `src/vite/plugin.test.ts` | Vite-specific transform behaviour. |
+| `src/testing/counting-dom.ts` | Minimal DOM mock with op counters. |
+| `src/testing/counting-dom.test.ts` | Tests for `counting-dom` itself. |
+| `src/testing/runtime.ts` | Test-runtime utilities. |
+| `src/testing/index.ts` | Testing barrel. |
+| `src/runtime/mount.test.ts` | Mount lifecycle, dispose, error handling. |
+| `src/runtime/hydrate.test.ts` | Hydration for every IR shape. |
+| `src/runtime/scope.test.ts` | Scope creation, child dispose order, `ScopeDisposedError`. |
+| `src/runtime/regions.test.ts` | Exhaustive region coverage — every delta shape. |
+| `src/runtime/subscribe.test.ts` | Subscription lifecycle + scope integration. |
+| `src/runtime/text-patch.test.ts` | `diffText` / `patchInputValue` — edit detection, selection rebasing. |
+| `src/reactive/local-ref.test.ts` | `state` / `LocalRef` / brand detection. |
+| `src/types/reactive-view.test.ts` | Ambient declaration behaviour. |
 | `src/errors.test.ts` | — | Error-type round-trips, code mapping. |
 
 ## Testing

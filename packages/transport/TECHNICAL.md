@@ -329,20 +329,20 @@ Scheduling (`setTimeout`, retry on failure) happens inside each concrete transpo
 
 ## File Map
 
-| File | Lines | Role |
-|------|-------|------|
-| `src/index.ts` | ~110 | Public exports + re-exports from `@kyneta/wire`. |
-| `src/types.ts` | ~32 | Identity type aliases and `PeerIdentityDetails`. |
-| `src/messages.ts` | ~165 | The six-message vocabulary, unions, type guards, envelopes. |
-| `src/channel.ts` | ~115 | Channel lifecycle types and `isEstablished` guard. |
-| `src/channel-directory.ts` | ~75 | `ChannelDirectory<G>` — channel store; caller supplies the id. |
-| `src/transport.ts` | ~266 | `Transport<G>` abstract class, lifecycle, internal `_initialize` / `_start` / `_stop` / `_send`. |
-| `src/pipeline.ts` | ~115 | `Pipeline<S, R>` — imperative shell wrapping step functions. |
-| `src/pipeline-core.ts` | ~130 | `sendStep` / `receiveStep` — pure step functions (functional core). |
-| `src/alias-table.ts` | ~510 | `AliasState`, `applyOutboundAliasing`, `applyInboundAliasing` — ChannelMsg ↔ WireMessage. |
-| `src/frame-stream-parser.ts` | ~30 | `FrameStreamParser` — imperative shell for stream parsing. |
-| `src/frame-stream-parser-core.ts` | ~155 | `feedBytesStep` — pure stream frame extraction. |
-| `src/reconnect.ts` | ~122 | `computeBackoffDelay`, `shouldReconnect`, `DEFAULT_RECONNECT`, `JITTER_FRACTION`, `ReconnectDecision`. |
+| File | Role |
+|------|------|
+| `src/index.ts` | Public exports + re-exports from `@kyneta/wire`. |
+| `src/types.ts` | Identity type aliases and `PeerIdentityDetails`. |
+| `src/messages.ts` | The six-message vocabulary, unions, type guards, envelopes. |
+| `src/channel.ts` | Channel lifecycle types and `isEstablished` guard. |
+| `src/channel-directory.ts` | `ChannelDirectory<G>` — channel store; caller supplies the id. |
+| `src/transport.ts` | `Transport<G>` abstract class, lifecycle, internal `_initialize` / `_start` / `_stop` / `_send`. |
+| `src/pipeline.ts` | `Pipeline<S, R>` — imperative shell wrapping step functions. |
+| `src/pipeline-core.ts` | `sendStep` / `receiveStep` — pure step functions (functional core). |
+| `src/alias-table.ts` | `AliasState`, `applyOutboundAliasing`, `applyInboundAliasing` — ChannelMsg ↔ WireMessage. |
+| `src/frame-stream-parser.ts` | `FrameStreamParser` — imperative shell for stream parsing. |
+| `src/frame-stream-parser-core.ts` | `feedBytesStep` — pure stream frame extraction. |
+| `src/reconnect.ts` | `computeBackoffDelay`, `shouldReconnect`, `DEFAULT_RECONNECT`, `JITTER_FRACTION`, `ReconnectDecision`. |
 
 ## Testing
 

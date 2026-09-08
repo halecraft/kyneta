@@ -264,15 +264,15 @@ The callable returns a **snapshot** — a new `Map` on each call. This mirrors h
 
 ## File Map
 
-| File | Lines | Role |
-|------|-------|------|
-| `src/index.ts` | 27 | Public exports. |
-| `src/changefeed.ts` | 250 | `CHANGEFEED` symbol, protocol/developer types, `createChangefeed`, `changefeed`, `hasChangefeed`, `staticChangefeed`. |
-| `src/change.ts` | 28 | `ChangeBase` — the open change protocol. |
-| `src/callable.ts` | 82 | `CallableChangefeed`, `createCallable`. |
-| `src/reactive-map.ts` | 162 | `ReactiveMap`, `ReactiveMapHandle`, `createReactiveMap`. |
-| `src/__tests__/changefeed.test.ts` | 347 | Protocol tests: symbol identity, `createChangefeed`/`changefeed`/`staticChangefeed`, subscribe semantics. |
-| `src/__tests__/reactive-map.test.ts` | 324 | `ReactiveMap` tests: lifted accessors, handle semantics, batched emit, subscriber fan-out. |
+| File | Role |
+|------|------|
+| `src/index.ts` | Public exports. |
+| `src/changefeed.ts` | `CHANGEFEED` symbol, protocol/developer types, `createChangefeed`, `changefeed`, `hasChangefeed`, `staticChangefeed`. |
+| `src/change.ts` | `ChangeBase` — the open change protocol. |
+| `src/callable.ts` | `CallableChangefeed`, `createCallable`. |
+| `src/reactive-map.ts` | `ReactiveMap`, `ReactiveMapHandle`, `createReactiveMap`. |
+| `src/__tests__/changefeed.test.ts` | Protocol tests: symbol identity, `createChangefeed`/`changefeed`/`staticChangefeed`, subscribe semantics. |
+| `src/__tests__/reactive-map.test.ts` | `ReactiveMap` tests: lifted accessors, handle semantics, batched emit, subscriber fan-out. |
 
 ## Testing
 

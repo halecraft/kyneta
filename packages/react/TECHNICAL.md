@@ -627,27 +627,27 @@ This is a convenience, not a hard coupling — direct imports from the upstream 
 
 ## File Map
 
-| File | Lines | Role |
-|------|-------|------|
-| `src/index.ts` | 90 | Public barrel + curated re-exports from upstream packages. |
-| `src/store.ts` | ~95 | Pure store factories: `createSyncStore`, `createNullishStore`, `CallableRef`, `ExternalStore`. (`createChangefeedStore` removed in jj:smkurmok — subsumed by `@kyneta/reactive`.) Zero React imports. |
-| `src/use-tracked.ts` | ~55 | `useTracked` — `useSyncExternalStore` over a `@kyneta/reactive` computation. |
-| `src/use-selector.ts` | ~30 | `useSelector` — `useTracked(() => select(ref))`. |
-| `src/text-adapter.ts` | 355 | Pure text-adapter: `attach`, `diffText`, `transformSelection`, `TextRefLike`, `AttachOptions`. Zero React imports. |
-| `src/exchange-context.tsx` | 96 | `ExchangeProvider`, `useExchange`, `ExchangeProviderProps`. |
-| `src/use-value.ts` | ~45 | `useValue` — now `useTracked(() => track(ref))` (derivation; nullish passthrough). |
-| `src/use-document.ts` | 67 | `useDocument` — memoized `exchange.get(docId, bound)`. |
-| `src/use-sync-state.ts` | 44 | `useSyncState` — `useSyncExternalStore` wrapper over `createSyncStore`. |
-| `src/use-doc-ready.ts` | ~40 | `useDocReady` — sugar over `useDocStatus` (`status !== "pending"`). |
-| `src/use-text.ts` | 82 | `useText` — ref callback wrapping `attach`. |
-| `src/__tests__/store.test.ts` | ~125 | `createNullishStore` + `createSyncStore`. (The `createChangefeedStore` cases moved to `@kyneta/reactive`'s `reactive.test.ts`.) No React. |
-| `src/__tests__/use-selector.test.tsx` | ~90 | `useSelector` — the todos parsimony scenario (text edit → no re-render; done flip → re-render) + no-deps + dispose. |
-| `src/__tests__/text-adapter.test.ts` | 543 | `diffText`, `transformSelection`, `attach` — edit detection, selection rebasing, IME composition, undo interception. |
-| `src/__tests__/collaborative-text.test.ts` | 354 | End-to-end: two textareas bound to concurrently-syncing text refs, verifying cursor stability during remote edits. |
-| `src/__tests__/use-value.test.tsx` | 113 | `useValue` hook — React Testing Library against real refs. |
-| `src/__tests__/use-document.test.tsx` | 71 | `useDocument` hook — memoization and ref stability. |
-| `src/__tests__/use-text.test.tsx` | 220 | `useText` hook — ref-callback lifecycle, element bind/unbind. |
-| `src/__tests__/exchange-context.test.tsx` | 62 | `ExchangeProvider` + `useExchange` — context publication, missing-provider error. |
+| File | Role |
+|------|------|
+| `src/index.ts` | Public barrel + curated re-exports from upstream packages. |
+| `src/store.ts` | Pure store factories: `createSyncStore`, `createNullishStore`, `CallableRef`, `ExternalStore`. (`createChangefeedStore` removed in jj:smkurmok — subsumed by `@kyneta/reactive`.) Zero React imports. |
+| `src/use-tracked.ts` | `useTracked` — `useSyncExternalStore` over a `@kyneta/reactive` computation. |
+| `src/use-selector.ts` | `useSelector` — `useTracked(() => select(ref))`. |
+| `src/text-adapter.ts` | Pure text-adapter: `attach`, `diffText`, `transformSelection`, `TextRefLike`, `AttachOptions`. Zero React imports. |
+| `src/exchange-context.tsx` | `ExchangeProvider`, `useExchange`, `ExchangeProviderProps`. |
+| `src/use-value.ts` | `useValue` — now `useTracked(() => track(ref))` (derivation; nullish passthrough). |
+| `src/use-document.ts` | `useDocument` — memoized `exchange.get(docId, bound)`. |
+| `src/use-sync-state.ts` | `useSyncState` — `useSyncExternalStore` wrapper over `createSyncStore`. |
+| `src/use-doc-ready.ts` | `useDocReady` — sugar over `useDocStatus` (`status !== "pending"`). |
+| `src/use-text.ts` | `useText` — ref callback wrapping `attach`. |
+| `src/__tests__/store.test.ts` | `createNullishStore` + `createSyncStore`. (The `createChangefeedStore` cases moved to `@kyneta/reactive`'s `reactive.test.ts`.) No React. |
+| `src/__tests__/use-selector.test.tsx` | `useSelector` — the todos parsimony scenario (text edit → no re-render; done flip → re-render) + no-deps + dispose. |
+| `src/__tests__/text-adapter.test.ts` | `diffText`, `transformSelection`, `attach` — edit detection, selection rebasing, IME composition, undo interception. |
+| `src/__tests__/collaborative-text.test.ts` | End-to-end: two textareas bound to concurrently-syncing text refs, verifying cursor stability during remote edits. |
+| `src/__tests__/use-value.test.tsx` | `useValue` hook — React Testing Library against real refs. |
+| `src/__tests__/use-document.test.tsx` | `useDocument` hook — memoization and ref stability. |
+| `src/__tests__/use-text.test.tsx` | `useText` hook — ref-callback lifecycle, element bind/unbind. |
+| `src/__tests__/exchange-context.test.tsx` | `ExchangeProvider` + `useExchange` — context publication, missing-provider error. |
 
 ## Testing
 

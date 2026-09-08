@@ -317,30 +317,30 @@ Inbound:
 
 ## File Map
 
-| File | Lines | Role |
-|------|-------|------|
-| `src/index.ts` | 48 | Public exports. |
-| `src/types.ts` | 222 | `UnixSocket`, client state, disconnect reason, runtime wrappers. |
-| `src/socket-transport.ts` | 61 | `SocketTransport` base + `ChannelSink` (no `peerId` map; `generate` binds send to the connection). |
-| `src/attach-socket.ts` | 37 | The one socket → live-channel routine, shared by both drivers. |
-| `src/connection.ts` | 221 | Per-connection parser state, write queue. Constructed `(socket)`. |
-| `src/client-program.ts` | 198 | Pure `createUnixSocketClientProgram` Mealy machine. |
-| `src/connector-driver.ts` | 169 | Connect + bounded reconnect; one outbound channel; `onExhausted`. |
-| `src/listener-driver.ts` | 112 | Listen + accept; N inbound channels; socket-file lifecycle. |
-| `src/client-transport.ts` | 115 | Fixed-role client: thin `SocketTransport` over `ConnectorDriver`. |
-| `src/server-transport.ts` | 62 | Fixed-role server: thin `SocketTransport` over `ListenerDriver`. |
-| `src/peer-program.ts` | 132 | Pure `createPeerProgram` Mealy machine (`{ role }` model). |
-| `src/peer-transport.ts` | 159 | `UnixSocketPeerTransport`: drives a connector/listener driver per role, in place. |
-| `src/peer.ts` | 65 | `createUnixSocketPeer` factory → `UnixSocketPeerHandle`. |
-| `src/probe.ts` | 29 | Classify a socket path (`connected`/`enoent`/`econnrefused`/`eaddrinuse`). |
-| `src/connect.ts` | 105 | Runtime-detected connect helper. |
-| `src/listen.ts` | 128 | Runtime-detected listen helper. |
-| `src/__tests__/client-program.test.ts` | 574 | Pure tests: every client state transition and effect asserted on data. |
-| `src/__tests__/peer-program.test.ts` | 293 | Pure tests: every peer state transition and effect asserted on data. |
-| `src/__tests__/connection.test.ts` | 345 | Stream framing round-trips, backpressure, write queue. |
-| `src/__tests__/peer-role-flip.test.ts` | 125 | E2E: the in-place connector→listener heal (transportId stable, docs survive, probe silence). |
-| `src/__tests__/unix-socket-transport.test.ts` | 360 | E2E with real Unix sockets: client reconnects after server restart, full sync round-trips. |
-| `src/__tests__/mock-unix-socket.ts` | 130 | A test-only `UnixSocket` with scripted behaviour and backpressure control. |
+| File | Role |
+|------|------|
+| `src/index.ts` | Public exports. |
+| `src/types.ts` | `UnixSocket`, client state, disconnect reason, runtime wrappers. |
+| `src/socket-transport.ts` | `SocketTransport` base + `ChannelSink` (no `peerId` map; `generate` binds send to the connection). |
+| `src/attach-socket.ts` | The one socket → live-channel routine, shared by both drivers. |
+| `src/connection.ts` | Per-connection parser state, write queue. Constructed `(socket)`. |
+| `src/client-program.ts` | Pure `createUnixSocketClientProgram` Mealy machine. |
+| `src/connector-driver.ts` | Connect + bounded reconnect; one outbound channel; `onExhausted`. |
+| `src/listener-driver.ts` | Listen + accept; N inbound channels; socket-file lifecycle. |
+| `src/client-transport.ts` | Fixed-role client: thin `SocketTransport` over `ConnectorDriver`. |
+| `src/server-transport.ts` | Fixed-role server: thin `SocketTransport` over `ListenerDriver`. |
+| `src/peer-program.ts` | Pure `createPeerProgram` Mealy machine (`{ role }` model). |
+| `src/peer-transport.ts` | `UnixSocketPeerTransport`: drives a connector/listener driver per role, in place. |
+| `src/peer.ts` | `createUnixSocketPeer` factory → `UnixSocketPeerHandle`. |
+| `src/probe.ts` | Classify a socket path (`connected`/`enoent`/`econnrefused`/`eaddrinuse`). |
+| `src/connect.ts` | Runtime-detected connect helper. |
+| `src/listen.ts` | Runtime-detected listen helper. |
+| `src/__tests__/client-program.test.ts` | Pure tests: every client state transition and effect asserted on data. |
+| `src/__tests__/peer-program.test.ts` | Pure tests: every peer state transition and effect asserted on data. |
+| `src/__tests__/connection.test.ts` | Stream framing round-trips, backpressure, write queue. |
+| `src/__tests__/peer-role-flip.test.ts` | E2E: the in-place connector→listener heal (transportId stable, docs survive, probe silence). |
+| `src/__tests__/unix-socket-transport.test.ts` | E2E with real Unix sockets: client reconnects after server restart, full sync round-trips. |
+| `src/__tests__/mock-unix-socket.ts` | A test-only `UnixSocket` with scripted behaviour and backpressure control. |
 
 ## Testing
 

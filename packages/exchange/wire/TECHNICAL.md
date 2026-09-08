@@ -284,24 +284,24 @@ Discriminated union of all wire-pipeline error variants:
 
 ## File Map
 
-| File | Lines | Role |
-|------|-------|------|
-| `src/index.ts` | ~170 | Public exports. |
-| `src/constants.ts` | ~70 | Wire protocol constants (`WIRE_VERSION = 3`, header/fragment sizes, identifier caps). |
-| `src/frame-types.ts` | ~120 | `Frame<T>`, `Complete<T>`, `Fragment<T>` + guards. |
-| `src/cbor-encoding.ts` | ~550 | Internal CBOR encoder/decoder (RFC 8949, major types 0–7). |
-| `src/wire-types.ts` | ~250 | Compact wire-message shape + enums. |
-| `src/wire-message-helpers.ts` | ~170 | `encodeWireMessage`/`decodeWireMessage` + text variants — WireMessage ↔ bytes/string. |
-| `src/frame.ts` | ~220 | Binary frame encode/decode + `BINARY_CODEC` record. |
-| `src/text-frame.ts` | ~300 | Text frame encode/decode + `TEXT_CODEC` record. |
-| `src/fragment-generic.ts` | ~130 | `SubstrateOps<T>`, `WireCodec<T>`, `fragmentGeneric<T>`, `nextFrameSeq`. |
-| `src/fragment-collector.ts` | ~550 | Generic `FragmentCollector<T>` + pure `decideFragment`. |
-| `src/reassembler-generic.ts` | ~160 | `Reassembler<T>` — generic reassembler wrapping `FragmentCollector<T>`. |
-| `src/validate-wire-message.ts` | ~250 | `validateWireMessage` — runtime shape validation at the decoder seam. |
-| `src/validate-identifiers.ts` | ~60 | `validateDocId`, `validateSchemaHash` — UTF-8 byte-length caps. |
-| `src/alias-error.ts` | ~40 | `AliasResolutionError` discriminated union (for `WireError`). |
-| `src/wire-error.ts` | ~25 | `WireError` discriminated union. |
-| `src/result.ts` | ~25 | `Result<T, E>`, `Ok<T>`, `Err<E>`, `ok`, `err`. |
+| File | Role |
+|------|------|
+| `src/index.ts` | Public exports. |
+| `src/constants.ts` | Wire protocol constants (`WIRE_VERSION = 3`, header/fragment sizes, identifier caps). |
+| `src/frame-types.ts` | `Frame<T>`, `Complete<T>`, `Fragment<T>` + guards. |
+| `src/cbor-encoding.ts` | Internal CBOR encoder/decoder (RFC 8949, major types 0–7). |
+| `src/wire-types.ts` | Compact wire-message shape + enums. |
+| `src/wire-message-helpers.ts` | `encodeWireMessage`/`decodeWireMessage` + text variants — WireMessage ↔ bytes/string. |
+| `src/frame.ts` | Binary frame encode/decode + `BINARY_CODEC` record. |
+| `src/text-frame.ts` | Text frame encode/decode + `TEXT_CODEC` record. |
+| `src/fragment-generic.ts` | `SubstrateOps<T>`, `WireCodec<T>`, `fragmentGeneric<T>`, `nextFrameSeq`. |
+| `src/fragment-collector.ts` | Generic `FragmentCollector<T>` + pure `decideFragment`. |
+| `src/reassembler-generic.ts` | `Reassembler<T>` — generic reassembler wrapping `FragmentCollector<T>`. |
+| `src/validate-wire-message.ts` | `validateWireMessage` — runtime shape validation at the decoder seam. |
+| `src/validate-identifiers.ts` | `validateDocId`, `validateSchemaHash` — UTF-8 byte-length caps. |
+| `src/alias-error.ts` | `AliasResolutionError` discriminated union (for `WireError`). |
+| `src/wire-error.ts` | `WireError` discriminated union. |
+| `src/result.ts` | `Result<T, E>`, `Ok<T>`, `Err<E>`, `ok`, `err`. |
 
 ## Testing
 

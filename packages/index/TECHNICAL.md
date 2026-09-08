@@ -438,25 +438,25 @@ A `KeySpec<V>` tells `Index.by` how to derive group keys from a value. Three com
 
 ## File Map
 
-| File | Lines | Role |
-|------|-------|------|
-| `src/index.ts` | 79 | Public barrel. Exports `Source`, `Collection`, `SecondaryIndex`, `JoinIndex`, `Index`, `ZSet` + operators, `KeySpec` helpers. |
-| `src/zset.ts` | ~115 | `ZSet` type + pure abelian-group operators (incl. `diff`). |
-| `src/source.ts` | ~1000 | `Source` contract (`subscribe` / `snapshot` / `snapshotZSet` / `dispose`) + six constructors (incl. `fromReactiveMap` + its pure `diffValueMaps`) + four combinators (`filter` with optional `watch`, `union`, `map`, `flatMap`). |
-| `src/collection.ts` | ~155 | `Collection.from` — dual-weight integrator. Pure `integrate()` + imperative shell. |
-| `src/watcher-table.ts` | ~75 | `createWatcherTable` — per-key install/teardown helper shared by `fromList`, `flatMap`, `filter`, `Index.by`. |
-| `src/index-impl.ts` | ~310 | `Index.by` → `SecondaryIndex` — grouping with structural + reactive watchers (uses `WatcherTable`). |
-| `src/join.ts` | 176 | `Index.join` → `JoinIndex` — bilinear incremental join. |
-| `src/key-spec.ts` | 106 | `KeySpec` type, `field`, `keys`. |
-| `src/__tests__/zset.test.ts` | 195 | Abelian-group laws: associativity, commutativity, identity, inverse; `positive` / `negate` / `fromKeys` / `entries`. |
-| `src/__tests__/source.test.ts` | 512 | All five constructors; bootstrap; delta emission; representational invariant; dispose. |
-| `src/__tests__/from-reactive-map.test.ts` | 207 | `Source.fromReactiveMap` — pure `diffValueMaps` (add/remove/update/no-op/mixed); Collection bootstrap + add/remove/in-place-update + `equals` suppression; `Index.by` regroup-on-update + stable-key refresh; reader-not-owner dispose. |
-| `src/__tests__/source-of.test.ts` | 481 | `Source.of` over exchange — full lifecycle under real doc mutations. |
-| `src/__tests__/flatmap.test.ts` | 379 | `Source.flatMap` — outer/inner permutations, key composition, inner-source disposal. |
-| `src/__tests__/collection.test.ts` | 166 | `Collection.from` — snapshot, deltas, remove-before-add ordering, disposal. |
-| `src/__tests__/index.test.ts` | 531 | `Index.by` — identity grouping, field grouping, multi-key grouping, field-mutation watchers, structural changes. |
-| `src/__tests__/join.test.ts` | 479 | `Index.join` — bilinear maintenance under left-only, right-only, and paired deltas. |
-| `src/__tests__/key-spec.test.ts` | 265 | `field`, `keys`, composition, multi-key emission. |
+| File | Role |
+|------|------|
+| `src/index.ts` | Public barrel. Exports `Source`, `Collection`, `SecondaryIndex`, `JoinIndex`, `Index`, `ZSet` + operators, `KeySpec` helpers. |
+| `src/zset.ts` | `ZSet` type + pure abelian-group operators (incl. `diff`). |
+| `src/source.ts` | `Source` contract (`subscribe` / `snapshot` / `snapshotZSet` / `dispose`) + six constructors (incl. `fromReactiveMap` + its pure `diffValueMaps`) + four combinators (`filter` with optional `watch`, `union`, `map`, `flatMap`). |
+| `src/collection.ts` | `Collection.from` — dual-weight integrator. Pure `integrate()` + imperative shell. |
+| `src/watcher-table.ts` | `createWatcherTable` — per-key install/teardown helper shared by `fromList`, `flatMap`, `filter`, `Index.by`. |
+| `src/index-impl.ts` | `Index.by` → `SecondaryIndex` — grouping with structural + reactive watchers (uses `WatcherTable`). |
+| `src/join.ts` | `Index.join` → `JoinIndex` — bilinear incremental join. |
+| `src/key-spec.ts` | `KeySpec` type, `field`, `keys`. |
+| `src/__tests__/zset.test.ts` | Abelian-group laws: associativity, commutativity, identity, inverse; `positive` / `negate` / `fromKeys` / `entries`. |
+| `src/__tests__/source.test.ts` | All five constructors; bootstrap; delta emission; representational invariant; dispose. |
+| `src/__tests__/from-reactive-map.test.ts` | `Source.fromReactiveMap` — pure `diffValueMaps` (add/remove/update/no-op/mixed); Collection bootstrap + add/remove/in-place-update + `equals` suppression; `Index.by` regroup-on-update + stable-key refresh; reader-not-owner dispose. |
+| `src/__tests__/source-of.test.ts` | `Source.of` over exchange — full lifecycle under real doc mutations. |
+| `src/__tests__/flatmap.test.ts` | `Source.flatMap` — outer/inner permutations, key composition, inner-source disposal. |
+| `src/__tests__/collection.test.ts` | `Collection.from` — snapshot, deltas, remove-before-add ordering, disposal. |
+| `src/__tests__/index.test.ts` | `Index.by` — identity grouping, field grouping, multi-key grouping, field-mutation watchers, structural changes. |
+| `src/__tests__/join.test.ts` | `Index.join` — bilinear maintenance under left-only, right-only, and paired deltas. |
+| `src/__tests__/key-spec.test.ts` | `field`, `keys`, composition, multi-key emission. |
 
 ## Known limitations
 
@@ -475,7 +475,7 @@ Most tests are pure JS — no real substrates needed for the core ℤ-set algebr
 Exchange-backed source tests are deliberately split across two files, and knowing which is which is how you put a new test in the right place.
 
 | File | Instrument | What it is for |
-|------|-----------|----------------|
+|------|------|
 | `source-of.test.ts` | A hand-built mock exchange | The adapter's own logic — delta shape, key mapping, entity extraction, namespacing. A mock makes these deterministic without a document lifecycle in the way. |
 | `source-exchange.test.ts` | A real `Exchange` | The exchange contract — phases, suspension, promotion, event timing. |
 

@@ -251,21 +251,21 @@ if (result.type === "messages") {
 
 ## File Map
 
-| File | Lines | Role |
-|------|-------|------|
-| `src/client.ts` | 36 | `./client` entry — client factory + client types + re-exported machine types. |
-| `src/server.ts` | 33 | `./server` entry — server transport + connection + shared types. |
-| `src/express.ts` | 29 | `./express` entry — Express router factory + re-exported server + handler primitives. |
-| `src/types.ts` | 102 | `SseClientState`, `DisconnectReason`, connection handles. |
-| `src/client-program.ts` | 207 | Pure `createSseClientProgram` Mealy machine. |
-| `src/client-transport.ts` | 653 | Imperative shell: runs the program, owns `EventSource` + POST queue + `AbortController`s. |
-| `src/server-transport.ts` | 225 | Server-side `Transport<...>`: `registerConnection`, `deliverPostBody`, dispatch to `SseConnection`. |
-| `src/connection.ts` | ~220 | Per-connection asymmetric `Pipeline` + channel ownership. |
-| `src/sse-handler.ts` | 116 | Pure `parseTextPostBody` + result types — the functional core. |
-| `src/express-router.ts` | 231 | Express `Router` factory mounting both endpoints with peer-ID negotiation. |
-| `src/__tests__/client-program.test.ts` | 513 | Pure tests: every state transition and effect asserted on data. No `EventSource`. |
-| `src/__tests__/connection.test.ts` | 190 | `SseConnection` encoding / fragmentation / reassembly tests. |
-| `src/__tests__/sse-handler.test.ts` | 148 | `parseTextPostBody` — every `SsePostResult` variant. |
+| File | Role |
+|------|------|
+| `src/client.ts` | `./client` entry — client factory + client types + re-exported machine types. |
+| `src/server.ts` | `./server` entry — server transport + connection + shared types. |
+| `src/express.ts` | `./express` entry — Express router factory + re-exported server + handler primitives. |
+| `src/types.ts` | `SseClientState`, `DisconnectReason`, connection handles. |
+| `src/client-program.ts` | Pure `createSseClientProgram` Mealy machine. |
+| `src/client-transport.ts` | Imperative shell: runs the program, owns `EventSource` + POST queue + `AbortController`s. |
+| `src/server-transport.ts` | Server-side `Transport<...>`: `registerConnection`, `deliverPostBody`, dispatch to `SseConnection`. |
+| `src/connection.ts` | Per-connection asymmetric `Pipeline` + channel ownership. |
+| `src/sse-handler.ts` | Pure `parseTextPostBody` + result types — the functional core. |
+| `src/express-router.ts` | Express `Router` factory mounting both endpoints with peer-ID negotiation. |
+| `src/__tests__/client-program.test.ts` | Pure tests: every state transition and effect asserted on data. No `EventSource`. |
+| `src/__tests__/connection.test.ts` | `SseConnection` encoding / fragmentation / reassembly tests. |
+| `src/__tests__/sse-handler.test.ts` | `parseTextPostBody` — every `SsePostResult` variant. |
 
 ## Testing
 

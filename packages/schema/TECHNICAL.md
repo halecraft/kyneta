@@ -1793,51 +1793,51 @@ The worked example is `__getCacheHandlerCountAtPath` (`src/interpreters/with-cac
 
 ## File Map
 
-| File | Lines | Role |
-|------|-------|------|
-| `src/index.ts` | ~400 | Public barrel — exports every public symbol. |
-| `src/schema.ts` | ~800 | The grammar: types + `Schema.*` constructors + `stepSchema` (the total single-step descent, package-internal) + `buildVariantMap` + `isNullableSum`. |
-| `src/bind.ts` | ~500 | `bind`, `BoundSchema`, `BoundReplica`, `BindingTarget`, `createBindingTarget`, `json`, `ephemeral`, resolve outcomes, `FactoryBuilder`. |
-| `src/substrate.ts` | ~300 | `Substrate<V>`, `Replica<V>`, factories, `BACKING_DOC`. Re-exports `computeSchemaHash` and `HASH_ALGORITHM_VERSION` from `src/hash.ts`. |
-| `src/migration.ts` | ~1000 | 14 primitives, 4 tiers, identity derivation, chain validation, `MIGRATION_CHAIN`. |
-| `src/change.ts` | ~600 | Change vocabulary, constructors, guards, `transformIndex`, `textInstructionsToPatches`, `advanceAddresses`. |
-| `src/interpret.ts` | ~400 | `interpret`, `Interpreter`, `InterpretBuilder`, `InterpreterLayer`, `dispatchSum`, `RawPath`. |
-| `src/interpreters/bottom.ts` | ~200 | Bottom layer: `[CHANGEFEED]`, `[NATIVE]`, `[SUBSTRATE]`, `[CALL]`. |
-| `src/interpreters/sequence-helpers.ts` | ~280 | Shared indexed-coalgebra helpers: `at()`, `installTextWriteOps`, `installListWriteOps`, `installRichTextWriteOps`, `installSequenceReadable`, `installSequenceNavigation`, `installSequenceAddressing`, `installSequenceCaching`. |
-| `src/interpreters/keyed-helpers.ts` | ~235 | Shared keyed-coalgebra helpers: `installKeyedWriteOps`, `installKeyedReadable`, `installKeyedNavigation`, `installKeyedAddressing`, `installKeyedCaching`. |
-| `src/interpreters/with-navigation.ts` | ~235 | Structural descent. Sequence/movable and map/set cases delegate to shared helpers. |
-| `src/interpreters/with-readable.ts` | ~225 | `.current`, `()`, read-by-path. Sequence/movable and map/set cases delegate to shared helpers. |
-| `src/interpreters/with-addressing.ts` | ~500 | Address-table layer. Sequence/movable and map/set cases delegate to shared helpers. |
-| `src/interpreters/with-caching.ts` | ~380 | Identity-preserving memoization + `INVALIDATE`. Sequence/movable and map/set cases delegate to shared helpers. |
-| `src/interpreters/writable.ts` | ~700 | Mutation primitives + `REMOVE` + `TRANSACT` + `executeBatch`. Text/sequence/movable/map/set cases delegate to shared helpers. |
-| `src/interpreters/with-changefeed.ts` | ~1270 | Observation layer + `planDelivery` + `deliverNotifications` + `listenIn` + `createNodeChangefeed` + `wireChangefeed`. All cases use `wireChangefeed` to unify changefeed boilerplate. The notification engine itself is internal — not exported since 4.0. |
-| `src/interpreters/validate.ts` | ~200 | Validation interpreter. |
-| `src/interpreters/plain.ts` | ~100 | Plain-state interpreter (reader + canonical shape). |
+| File | Role |
+|------|------|
+| `src/index.ts` | Public barrel — exports every public symbol. |
+| `src/schema.ts` | The grammar: types + `Schema.*` constructors + `stepSchema` (the total single-step descent, package-internal) + `buildVariantMap` + `isNullableSum`. |
+| `src/bind.ts` | `bind`, `BoundSchema`, `BoundReplica`, `BindingTarget`, `createBindingTarget`, `json`, `ephemeral`, resolve outcomes, `FactoryBuilder`. |
+| `src/substrate.ts` | `Substrate<V>`, `Replica<V>`, factories, `BACKING_DOC`. Re-exports `computeSchemaHash` and `HASH_ALGORITHM_VERSION` from `src/hash.ts`. |
+| `src/migration.ts` | 14 primitives, 4 tiers, identity derivation, chain validation, `MIGRATION_CHAIN`. |
+| `src/change.ts` | Change vocabulary, constructors, guards, `transformIndex`, `textInstructionsToPatches`, `advanceAddresses`. |
+| `src/interpret.ts` | `interpret`, `Interpreter`, `InterpretBuilder`, `InterpreterLayer`, `dispatchSum`, `RawPath`. |
+| `src/interpreters/bottom.ts` | Bottom layer: `[CHANGEFEED]`, `[NATIVE]`, `[SUBSTRATE]`, `[CALL]`. |
+| `src/interpreters/sequence-helpers.ts` | Shared indexed-coalgebra helpers: `at()`, `installTextWriteOps`, `installListWriteOps`, `installRichTextWriteOps`, `installSequenceReadable`, `installSequenceNavigation`, `installSequenceAddressing`, `installSequenceCaching`. |
+| `src/interpreters/keyed-helpers.ts` | Shared keyed-coalgebra helpers: `installKeyedWriteOps`, `installKeyedReadable`, `installKeyedNavigation`, `installKeyedAddressing`, `installKeyedCaching`. |
+| `src/interpreters/with-navigation.ts` | Structural descent. Sequence/movable and map/set cases delegate to shared helpers. |
+| `src/interpreters/with-readable.ts` | `.current`, `()`, read-by-path. Sequence/movable and map/set cases delegate to shared helpers. |
+| `src/interpreters/with-addressing.ts` | Address-table layer. Sequence/movable and map/set cases delegate to shared helpers. |
+| `src/interpreters/with-caching.ts` | Identity-preserving memoization + `INVALIDATE`. Sequence/movable and map/set cases delegate to shared helpers. |
+| `src/interpreters/writable.ts` | Mutation primitives + `REMOVE` + `TRANSACT` + `executeBatch`. Text/sequence/movable/map/set cases delegate to shared helpers. |
+| `src/interpreters/with-changefeed.ts` | Observation layer + `planDelivery` + `deliverNotifications` + `listenIn` + `createNodeChangefeed` + `wireChangefeed`. All cases use `wireChangefeed` to unify changefeed boilerplate. The notification engine itself is internal — not exported since 4.0. |
+| `src/interpreters/validate.ts` | Validation interpreter. |
+| `src/interpreters/plain.ts` | Plain-state interpreter (reader + canonical shape). |
 | `src/interpreters/navigable.ts`, `readable.ts` | ~100 each | Type-interface modules. |
-| `src/layers.ts` | ~100 | Pre-built `navigation`, `readable`, `addressing`, `writable`, `observation` layer values. |
-| `src/ref.ts` | ~150 | `Ref<S>`, `RRef<S>`, `RWRef<S>`, `DocRef<S>`, `Wrap`, `RefMode`. |
-| `src/position.ts` | ~300 | `Position`, `Side`, `POSITION`, `HasPosition`, `PlainPosition`, `decodePlainPosition`. |
-| `src/tree-position.ts` | ~620 | Tree-position algebra: `nodeSize`, `contentSize`, `isLeaf`, `resolveTreePosition`, `flattenTreePosition`, `ResolvedTreePosition`. Pure functions over `Reader` + `Schema` for flat↔tree position mapping (ProseMirror convention). |
-| `src/changefeed.ts` | ~150 | `Op`, `RecursiveChangefeedProtocol`, `HasRecursiveChangefeed`, `expandMapOpsToLeaves`. |
-| `src/facade/batch.ts` | ~250 | `batch(ref, fn)`, `applyChanges`, `remove`, `CommitOptions`. |
-| `src/facade/observe.ts` | ~100 | `subscribe`, `subscribeNode`. |
-| `src/step.ts` | ~300 | Pure state transitions: `step`, per-change-type step functions. |
-| `src/reader.ts` | ~150 | `Reader`, `plainReader`, `writeByPath`, `applyChange`. |
-| `src/unwrap.ts` | ~50 | Typed escape hatch to `[NATIVE]`. |
-| `src/version-vector.ts` | ~90 | `versionVectorMeet`, `versionVectorCompare`. |
-| `src/hash.ts` | ~50 | FNV-1a-128. |
-| `src/native.ts` | ~100 | `NativeMap`, `NATIVE`, `SUBSTRATE`, `HasNative`. |
-| `src/path.ts` | ~200 | Path/segment/address types + constructors + `AddressedPath`. |
-| `src/create-doc.ts` | ~100 | `createDoc`, `createRef` — convenience factories. |
-| `src/describe.ts` | ~150 | ASCII schema tree printer. |
-| `src/zero.ts` | ~150 | `Zero`, `scalarDefault`. |
-| `src/interpreters/materialize.ts` | ~70 | Generic CRDT→PlainState materialization: `MaterializeResolver` interface, `createMaterializeInterpreter`. |
-| `src/guards.ts` | ~30 | `isNonNullObject`, `isPropertyHost`. |
-| `src/base64.ts` | ~30 | Platform-agnostic base64. |
-| `src/substrates/plain.ts` | ~400 | Plain substrate + factories. |
+| `src/layers.ts` | Pre-built `navigation`, `readable`, `addressing`, `writable`, `observation` layer values. |
+| `src/ref.ts` | `Ref<S>`, `RRef<S>`, `RWRef<S>`, `DocRef<S>`, `Wrap`, `RefMode`. |
+| `src/position.ts` | `Position`, `Side`, `POSITION`, `HasPosition`, `PlainPosition`, `decodePlainPosition`. |
+| `src/tree-position.ts` | Tree-position algebra: `nodeSize`, `contentSize`, `isLeaf`, `resolveTreePosition`, `flattenTreePosition`, `ResolvedTreePosition`. Pure functions over `Reader` + `Schema` for flat↔tree position mapping (ProseMirror convention). |
+| `src/changefeed.ts` | `Op`, `RecursiveChangefeedProtocol`, `HasRecursiveChangefeed`, `expandMapOpsToLeaves`. |
+| `src/facade/batch.ts` | `batch(ref, fn)`, `applyChanges`, `remove`, `CommitOptions`. |
+| `src/facade/observe.ts` | `subscribe`, `subscribeNode`. |
+| `src/step.ts` | Pure state transitions: `step`, per-change-type step functions. |
+| `src/reader.ts` | `Reader`, `plainReader`, `writeByPath`, `applyChange`. |
+| `src/unwrap.ts` | Typed escape hatch to `[NATIVE]`. |
+| `src/version-vector.ts` | `versionVectorMeet`, `versionVectorCompare`. |
+| `src/hash.ts` | FNV-1a-128. |
+| `src/native.ts` | `NativeMap`, `NATIVE`, `SUBSTRATE`, `HasNative`. |
+| `src/path.ts` | Path/segment/address types + constructors + `AddressedPath`. |
+| `src/create-doc.ts` | `createDoc`, `createRef` — convenience factories. |
+| `src/describe.ts` | ASCII schema tree printer. |
+| `src/zero.ts` | `Zero`, `scalarDefault`. |
+| `src/interpreters/materialize.ts` | Generic CRDT→PlainState materialization: `MaterializeResolver` interface, `createMaterializeInterpreter`. |
+| `src/guards.ts` | `isNonNullObject`, `isPropertyHost`. |
+| `src/base64.ts` | Platform-agnostic base64. |
+| `src/substrates/plain.ts` | Plain substrate + factories. |
 | `src/substrates/ephemeral.ts`, `substrates/state-tree.ts` | ~570 + ~770 | Ephemeral substrate: CvRDT field-level LWW and its state space. |
 | `src/basic/index.ts` | — | Test-only helpers (re-exports). |
-| `src/sync.ts` | ~100 | `version`, `exportEntirety`, `exportSince`, `merge` — generic over `ref[SUBSTRATE]`. |
+| `src/sync.ts` | `version`, `exportEntirety`, `exportSince`, `merge` — generic over `ref[SUBSTRATE]`. |
 | `src/__tests__/` | ~56 files | Every test file is pure; no I/O, no timers. |
 
 ## Testing

@@ -453,34 +453,34 @@ isDOMProducing({ kind: "statement" })  // false
 
 ## File Map
 
-| File | Lines | Role |
-|------|-------|------|
-| `src/index.ts` | 303 | Public barrel. Exports types, analyzer, walker, transforms, helpers. |
-| `src/ir.ts` | 1598 | All IR node types and their predicates. The largest file — every node kind's shape and classification field lives here. |
+| File | Role |
+|------|------|
+| `src/index.ts` | Public barrel. Exports types, analyzer, walker, transforms, helpers. |
+| `src/ir.ts` | All IR node types and their predicates. The largest file — every node kind's shape and classification field lives here. |
 | `src/expression-ir.ts` | ~ | Expression-level IR types. |
 | `src/expression-build.ts` | ~ | AST → `ExpressionIR` construction. |
 | `src/analyze.ts` | ~ | AST → IR. Walks builder calls, produces `BuilderNode` trees. |
-| `src/project.ts` | 182 | `parseSource`, `findBuilderCalls` — ts-morph wrapper + regex pre-scan. |
-| `src/reactive-detection.ts` | 520 | Type-based reactive detection: does this type carry `[CHANGEFEED]`? |
+| `src/project.ts` | `parseSource`, `findBuilderCalls` — ts-morph wrapper + regex pre-scan. |
+| `src/reactive-detection.ts` | Type-based reactive detection: does this type carry `[CHANGEFEED]`? |
 | `src/binding-scope.ts` | ~ | Identifier → binding resolution with dependency composition. |
 | `src/classify.ts` | ~ | Loop-relative dependency classification. |
-| `src/patterns.ts` | 179 | Filter-pattern detection. |
-| `src/template.ts` | 543 | Template extraction + hole plan. |
-| `src/walk.ts` | 565 | Generator-based walker + `WalkEvent` types. |
-| `src/transforms.ts` | 226 | `dissolveConditionals`, `filterTargetBlocks`, `mergeSiblings`. |
+| `src/patterns.ts` | Filter-pattern detection. |
+| `src/template.ts` | Template extraction + hole plan. |
+| `src/walk.ts` | Generator-based walker + `WalkEvent` types. |
+| `src/transforms.ts` | `dissolveConditionals`, `filterTargetBlocks`, `mergeSiblings`. |
 | `src/html-constants.ts` | ~ | `escapeHtml`, `VOID_ELEMENTS`. |
 | `src/__tests__/analyze.test.ts` | — | AST → IR: covers every node kind + classification path. |
 | `src/__tests__/expression-build.test.ts` | — | covers `ExpressionIR` construction. |
 | `src/__tests__/expression-ir.test.ts` | — | covers expression-level types. |
-| `src/__tests__/ir.test.ts` | 954 | Core IR predicates + type guards. |
-| `src/__tests__/template.test.ts` | 817 | template extraction, hole assignment, `planWalk`. |
-| `src/__tests__/walk.test.ts` | 561 | walker event order for every IR shape. |
-| `src/__tests__/transforms.test.ts` | 1050 | `dissolveConditionals`, `filterTargetBlocks`, `mergeSiblings`. |
-| `src/__tests__/tree-merge.test.ts` | 560 | Sibling-merge edge cases. |
+| `src/__tests__/ir.test.ts` | Core IR predicates + type guards. |
+| `src/__tests__/template.test.ts` | template extraction, hole assignment, `planWalk`. |
+| `src/__tests__/walk.test.ts` | walker event order for every IR shape. |
+| `src/__tests__/transforms.test.ts` | `dissolveConditionals`, `filterTargetBlocks`, `mergeSiblings`. |
+| `src/__tests__/tree-merge.test.ts` | Sibling-merge edge cases. |
 | `src/__tests__/binding-scope.test.ts` | — | Binding-resolution tests (under `binding-analysis.test.ts`). |
 | `src/__tests__/binding-analysis.test.ts` | — | Transitive-binding dependency extraction. |
 | `src/__tests__/classify.test.ts` | — | Classification: structural / item / external. |
-| `src/__tests__/patterns.test.ts` | 575 | 19 filter-pattern detection tests. |
+| `src/__tests__/patterns.test.ts` | 19 filter-pattern detection tests. |
 | `src/__tests__/filter-integration.test.ts` | — | 4 end-to-end filter-compilation tests. |
 
 ## Testing

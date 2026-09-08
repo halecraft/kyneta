@@ -189,11 +189,11 @@ Types imported (not defined here): `Store`, `StoreRecord`, `StoreMeta`, `DocId`,
 
 ## File Map
 
-| File | Lines | Role |
-|------|-------|------|
-| `src/index.ts` | ~240 | Entire public surface: IDB wrappers, row shapes, `IndexedDBStore`, `createIndexedDBStore`, `deleteIndexedDBStore`. |
-| `src/__tests__/indexeddb-storage.test.ts` | ~180 | Conformance suite (`describeStore`) + IndexedDB-specific tests: close+reopen persistence, append-after-reopen ordering, replace+reopen, `listDocIds` after reopen, database isolation between separate `dbName`s, `deleteDatabase` cleanup. |
-| `src/__tests__/setup.ts` | 1 | Imports `fake-indexeddb/auto` to provide the `indexedDB` global in Node.js test environments. |
+| File | Role |
+|------|------|
+| `src/index.ts` | Entire public surface: IDB wrappers, row shapes, `IndexedDBStore`, `createIndexedDBStore`, `deleteIndexedDBStore`. |
+| `src/__tests__/indexeddb-storage.test.ts` | Conformance suite (`describeStore`) + IndexedDB-specific tests: close+reopen persistence, append-after-reopen ordering, replace+reopen, `listDocIds` after reopen, database isolation between separate `dbName`s, `deleteDatabase` cleanup. |
+| `src/__tests__/setup.ts` | Imports `fake-indexeddb/auto` to provide the `indexedDB` global in Node.js test environments. |
 
 ## Testing
 

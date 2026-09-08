@@ -1126,24 +1126,24 @@ For durability guarantees, use the `cohort` predicate to prevent compaction past
 
 ## File Map
 
-| File | Lines | Role |
-|------|-------|------|
-| `src/index.ts` | 228 | Public barrel. Re-exports `bind` / `json` / `ephemeral` / `SyncMode` / `SYNC_COLLABORATIVE` / `SYNC_AUTHORITATIVE` / `SYNC_EPHEMERAL` / `requiresBidirectionalSync` from `@kyneta/schema`; exports exchange-specific types. |
-| `src/exchange.ts` | 1290 | `Exchange` class, `ExchangeParams`, disposition types, `phaseOf`, `peerId` validation, `registerReplica`, `registerPolicy`, reactive-collection wiring. |
-| `src/synchronizer.ts` | 1517 | Shell. Dispatch queue, `DocRuntime` map, effect interpreter, emit methods (`#emitPeerSyncChanges`, `#emitStateAdvanced`, `#emitDocEvents`, `#emitPeerEvents`), `declareVacant` / `hasReconciled` / `reconciledMatching` / `connectivity` / `awaitReconciliation`, local-change subscription, transport + storage integration. |
-| `src/session-program.ts` | 543 | Pure session program: `SessionModel`, inputs, effects, `updateSession`, transition collapse. |
-| `src/sync-program.ts` | 1455 | Pure sync program: `SyncModel`, `DocEntry`, inputs, effects, `updateSync`, per-message handlers. |
-| `src/program-types.ts` | 48 | Shared `Transition` and `collapse` helper for both programs. |
-| `src/governance.ts` | 282 | `Policy`, `GatePredicate`, `EpochBoundaryPredicate`, `Governance`, `composeGate`. |
-| `src/capabilities.ts` | 284 | `Capabilities`, `ReplicaKey`, `ReplicaEntry`, `DEFAULT_REPLICAS`, `createCapabilities`. |
-| `src/line.ts` | 745 | `Line`, `LineProtocol`, envelope schema, ack-based pruning. |
-| `src/async-queue.ts` | 69 | Bounded async queue used by `Line`. |
-| `src/persistent-peer-id.ts` | 216 | Browser-tab peer-ID lease; FC/IS split. Imports `randomPeerId` and `randomHex` from `@kyneta/random`. |
-| `src/interpret.ts` | 101 | Pure phase classifier: `DocPhase`, `InterpretAction`, `planInterpretation`. The one rule all three interpretation doors consult. |
-| `src/sync.ts` | 276 | `sync(doc)` helper + `registerSync`. |
-| `src/types.ts` | 135 | `DocChange`, `DocInfo`, `PeerChange`, `PeerDocSyncState`, `PeerState`, `PeerSyncState`, `Connectivity`. |
+| File | Role |
+|------|------|
+| `src/index.ts` | Public barrel. Re-exports `bind` / `json` / `ephemeral` / `SyncMode` / `SYNC_COLLABORATIVE` / `SYNC_AUTHORITATIVE` / `SYNC_EPHEMERAL` / `requiresBidirectionalSync` from `@kyneta/schema`; exports exchange-specific types. |
+| `src/exchange.ts` | `Exchange` class, `ExchangeParams`, disposition types, `phaseOf`, `peerId` validation, `registerReplica`, `registerPolicy`, reactive-collection wiring. |
+| `src/synchronizer.ts` | Shell. Dispatch queue, `DocRuntime` map, effect interpreter, emit methods (`#emitPeerSyncChanges`, `#emitStateAdvanced`, `#emitDocEvents`, `#emitPeerEvents`), `declareVacant` / `hasReconciled` / `reconciledMatching` / `connectivity` / `awaitReconciliation`, local-change subscription, transport + storage integration. |
+| `src/session-program.ts` | Pure session program: `SessionModel`, inputs, effects, `updateSession`, transition collapse. |
+| `src/sync-program.ts` | Pure sync program: `SyncModel`, `DocEntry`, inputs, effects, `updateSync`, per-message handlers. |
+| `src/program-types.ts` | Shared `Transition` and `collapse` helper for both programs. |
+| `src/governance.ts` | `Policy`, `GatePredicate`, `EpochBoundaryPredicate`, `Governance`, `composeGate`. |
+| `src/capabilities.ts` | `Capabilities`, `ReplicaKey`, `ReplicaEntry`, `DEFAULT_REPLICAS`, `createCapabilities`. |
+| `src/line.ts` | `Line`, `LineProtocol`, envelope schema, ack-based pruning. |
+| `src/async-queue.ts` | Bounded async queue used by `Line`. |
+| `src/persistent-peer-id.ts` | Browser-tab peer-ID lease; FC/IS split. Imports `randomPeerId` and `randomHex` from `@kyneta/random`. |
+| `src/interpret.ts` | Pure phase classifier: `DocPhase`, `InterpretAction`, `planInterpretation`. The one rule all three interpretation doors consult. |
+| `src/sync.ts` | `sync(doc)` helper + `registerSync`. |
+| `src/types.ts` | `DocChange`, `DocInfo`, `PeerChange`, `PeerDocSyncState`, `PeerState`, `PeerSyncState`, `Connectivity`. |
 | `src/observe.ts` | — | DevTools observation protocol (`ObsEvent`), bus (`createObservationBus`), and pure effect/msg/changeset/frame mappers. Experimental. |
-| `src/utils.ts` | 50 | `validatePeerId`. (Random ID generation extracted to `@kyneta/random`.) |
+| `src/utils.ts` | `validatePeerId`. (Random ID generation extracted to `@kyneta/random`.) |
 | `src/store/` | — | `Store` interface, in-memory implementation, shared utilities (`seq-tracker.ts`, `validateAppend` in `store.ts`). |
 | `src/transport/` | — | Transport-manager glue. |
 | `src/testing/` | — | Test-only helpers exported from `@kyneta/exchange/testing`. |

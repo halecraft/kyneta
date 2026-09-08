@@ -273,10 +273,10 @@ Types imported (not defined here): `Store`, `StoreRecord`, `StoreMeta`, `DocId` 
 
 ## File Map
 
-| File | Lines | Role |
-|------|-------|------|
-| `src/index.ts` | ~350 | Entire public surface: envelope v2, key helpers, `LevelDBStore`, `createLevelDBStore`. |
-| `src/__tests__/leveldb-storage.test.ts` | ~300 | Full integration tests: conformance suite, close+reopen persistence, `currentMeta` lookup, append ordering, `loadAll` iteration order, cold-start seqNo discovery, `replace` atomicity, `delete`, `listDocIds` with prefix, envelope round-trips (meta + entry kinds, edge cases, flags-byte assertions). |
+| File | Role |
+|------|------|
+| `src/index.ts` | Entire public surface: envelope v2, key helpers, `LevelDBStore`, `createLevelDBStore`. |
+| `src/__tests__/leveldb-storage.test.ts` | Full integration tests: conformance suite, close+reopen persistence, `currentMeta` lookup, append ordering, `loadAll` iteration order, cold-start seqNo discovery, `replace` atomicity, `delete`, `listDocIds` with prefix, envelope round-trips (meta + entry kinds, edge cases, flags-byte assertions). |
 
 ## Testing
 

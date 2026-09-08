@@ -234,14 +234,14 @@ createWebrtcTransport({
 
 ## File Map
 
-| File | Lines | Role |
-|------|-------|------|
-| `src/index.ts` | 16 | Public exports. |
-| `src/data-channel-like.ts` | 104 | The `DataChannelLike` interface + its doc contract. |
-| `src/webrtc-transport.ts` | 434 | `WebrtcTransport`, `createWebrtcTransport`, attach/detach, binary pipeline wiring. |
-| `src/__tests__/mock-data-channel.ts` | 94 | A test-only `DataChannelLike` implementation with scripted `readyState` transitions. |
-| `src/__tests__/webrtc-transport.test.ts` | 517 | Attach/detach lifecycle, readiness gating, binary pipeline, fragmentation. |
-| `src/__tests__/simple-peer-bridge.test.ts` | 197 | Demonstrates bridging an EventEmitter-shaped channel to `DataChannelLike`; verifies the bridge pattern works end-to-end. |
+| File | Role |
+|------|------|
+| `src/index.ts` | Public exports. |
+| `src/data-channel-like.ts` | The `DataChannelLike` interface + its doc contract. |
+| `src/webrtc-transport.ts` | `WebrtcTransport`, `createWebrtcTransport`, attach/detach, binary pipeline wiring. |
+| `src/__tests__/mock-data-channel.ts` | A test-only `DataChannelLike` implementation with scripted `readyState` transitions. |
+| `src/__tests__/webrtc-transport.test.ts` | Attach/detach lifecycle, readiness gating, binary pipeline, fragmentation. |
+| `src/__tests__/simple-peer-bridge.test.ts` | Demonstrates bridging an EventEmitter-shaped channel to `DataChannelLike`; verifies the bridge pattern works end-to-end. |
 
 ## Testing
 
