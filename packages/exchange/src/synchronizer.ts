@@ -198,7 +198,8 @@ export type SynchronizerParams = {
 // Version-gap planning helpers
 // ---------------------------------------------------------------------------
 
-export type VersionGapResult =
+/** What comparing a *stated* version against ours can yield. */
+type StatedVersionGap =
   | { kind: "parse-error"; error: unknown }
   | { kind: "no-gap"; comparison: "behind" | "equal" }
   | {
@@ -206,6 +207,17 @@ export type VersionGapResult =
       comparison: "ahead" | "concurrent"
       parsed: Version
     }
+
+export type VersionGapResult =
+  | StatedVersionGap
+  /**
+   * The peer sent no version at all. Only an inbound `interest` can produce
+   * this — `InterestMsg.version` is optional and the wire decoder omits it
+   * when the frame carries none — and it means the peer holds nothing we
+   * need. Offers always carry a version, so `classifyVersionGap` and the
+   * outbound resolver never yield this and their callers need not handle it.
+   */
+  | { kind: "absent" }
 
 /**
  * Common parse + compare + classify pipeline. Comparison *direction* is
@@ -220,7 +232,7 @@ function classifyVersionGap(
     parsed: Version,
     current: Version,
   ) => "behind" | "equal" | "ahead" | "concurrent",
-): VersionGapResult {
+): StatedVersionGap {
   let parsed: Version
   try {
     parsed = replicaFactory.parseVersion(serializedVersion)
@@ -246,8 +258,9 @@ function classifyVersionGap(
 function resolveInboundVersionGap(
   replica: ReplicaLike,
   replicaFactory: ReplicaFactoryLike,
-  serializedVersion: string,
+  serializedVersion: string | undefined,
 ): VersionGapResult {
+  if (serializedVersion === undefined) return { kind: "absent" }
   const result = classifyVersionGap(
     replica,
     replicaFactory,
@@ -268,9 +281,8 @@ function resolveInboundVersionGap(
  * question — does this peer have anything we still need? — and `synced` must
  * mean the same thing whichever way it was reached.
  *
- * - `"absent"` — the peer sent no version at all. `InterestMsg.version` is
- *   optional, and the wire decoder omits it when the frame carries none; a
- *   peer that cannot state a version holds nothing we need. `synced`.
+ * - `absent` — the peer sent no version at all; a peer that cannot state a
+ *   version holds nothing we need. `synced`.
  * - `no-gap` — behind or equal. Nothing to receive. `synced`.
  * - `gap` — ahead or concurrent. Their offer is coming; stay `pending`.
  * - `parse-error` — a version we cannot read must not be assumed either way.
@@ -282,22 +294,26 @@ function resolveInboundVersionGap(
  * so an empty string is safe downstream.
  */
 export function transitionForPeerVersion(
-  gap: VersionGapResult | "absent",
+  gap: VersionGapResult,
   docId: DocId,
   peerId: PeerId,
   version: string | undefined,
 ): Extract<SyncInput, { type: "sync/peer-synced" }> | null {
-  if (gap === "absent" || gap.kind === "no-gap") {
-    return { type: "sync/peer-synced", docId, version: version ?? "", peerId }
+  switch (gap.kind) {
+    case "absent":
+    case "no-gap":
+      return { type: "sync/peer-synced", docId, version: version ?? "", peerId }
+    case "gap":
+    case "parse-error":
+      return null
   }
-  return null
 }
 
 function resolveOutboundVersionGap(
   replica: ReplicaLike,
   replicaFactory: ReplicaFactoryLike,
   serializedVersion: string,
-): VersionGapResult {
+): StatedVersionGap {
   const result = classifyVersionGap(
     replica,
     replicaFactory,
@@ -1503,30 +1519,28 @@ export class Synchronizer {
     peerId: PeerId,
     version: string | undefined,
   ): Extract<VersionGapResult, { kind: "gap" }> | null {
-    const gap: VersionGapResult | "absent" =
-      version === undefined
-        ? "absent"
-        : resolveInboundVersionGap(
-            runtime.replica,
-            runtime.replicaFactory,
-            version,
-          )
+    const gap = resolveInboundVersionGap(
+      runtime.replica,
+      runtime.replicaFactory,
+      version,
+    )
 
-    if (gap !== "absent" && gap.kind === "parse-error") {
-      console.warn(
-        `[exchange] version parse failed for doc '${docId}':`,
-        gap.error,
-      )
-      return null
+    switch (gap.kind) {
+      case "parse-error":
+        console.warn(
+          `[exchange] version parse failed for doc '${docId}':`,
+          gap.error,
+        )
+        return null
+      case "absent":
+      case "no-gap": {
+        const transition = transitionForPeerVersion(gap, docId, peerId, version)
+        if (transition) this.#dispatchSync(transition)
+        return null
+      }
+      case "gap":
+        return gap
     }
-
-    const transition = transitionForPeerVersion(gap, docId, peerId, version)
-    if (transition) {
-      this.#dispatchSync(transition)
-      return null
-    }
-
-    return gap === "absent" || gap.kind !== "gap" ? null : gap
   }
 
   /**

@@ -66,7 +66,9 @@ describe("transitionForPeerVersion", () => {
     // nothing we need. `""` is already a value the model holds for this
     // case, and the lowest-common-version computation skips entries that do
     // not parse, so it is safe downstream.
-    expect(transitionForPeerVersion("absent", "d", "p", undefined)).toEqual({
+    expect(
+      transitionForPeerVersion({ kind: "absent" }, "d", "p", undefined),
+    ).toEqual({
       type: "sync/peer-synced",
       docId: "d",
       peerId: "p",
