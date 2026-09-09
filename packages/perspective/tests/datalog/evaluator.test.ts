@@ -3041,3 +3041,58 @@ describe("mixed retract+insert steps with negation over a derived predicate", ()
     )
   })
 })
+
+// ---------------------------------------------------------------------------
+// Ground relations are sets at the stratum boundary
+//
+// A ground fact's Z-set weight is a reference count: the fact is present while
+// the count is positive. Strata read presence, so what they must be told is
+// that a fact appeared or disappeared, once, when its count crosses zero. If
+// the raw weight leaks through instead, derived counts pick up a multiplicity
+// that no later retraction can fully take back.
+// ---------------------------------------------------------------------------
+
+describe("ground facts reach strata as presence flips, not raw weights", () => {
+  const both: Rule = rule(atom("d", [varTerm("X")]), [
+    positiveAtom(atom("a", [varTerm("X")])),
+    positiveAtom(atom("b", [varTerm("X")])),
+  ])
+
+  it("a fact inserted at weight 2 does not strand what it derives", () => {
+    const evaluator = createEvaluator([both])
+    const d = () => evaluator.currentDatabase().getRelation("d")
+
+    evaluator.step(factsToZSet([fact("b", [1])]), zsetEmpty())
+    // The same fact twice in one step sums to weight 2.
+    evaluator.step(factsToZSet([fact("a", [1]), fact("a", [1])]), zsetEmpty())
+    expect(d().has([1])).toBe(true)
+
+    const result = evaluator.step(
+      factsToZSet([fact("b", [1])], -1),
+      zsetEmpty(),
+    )
+    expect(d().has([1])).toBe(false)
+    expect(result.deltaDerived.get(factKey(fact("d", [1])))?.weight).toBe(-1)
+  })
+
+  it("retracted once, a weight-2 fact is still present; twice, it is gone", () => {
+    // Guards the fix from the wrong shape: clamping the delta to its sign
+    // would retract on the first step.
+    const evaluator = createEvaluator([both])
+    const d = () => evaluator.currentDatabase().getRelation("d")
+
+    evaluator.step(factsToZSet([fact("b", [1])]), zsetEmpty())
+    evaluator.step(factsToZSet([fact("a", [1]), fact("a", [1])]), zsetEmpty())
+
+    const first = evaluator.step(factsToZSet([fact("a", [1])], -1), zsetEmpty())
+    expect(zsetIsEmpty(first.deltaDerived)).toBe(true)
+    expect(d().has([1])).toBe(true)
+
+    const second = evaluator.step(
+      factsToZSet([fact("a", [1])], -1),
+      zsetEmpty(),
+    )
+    expect(second.deltaDerived.get(factKey(fact("d", [1])))?.weight).toBe(-1)
+    expect(d().has([1])).toBe(false)
+  })
+})

@@ -862,6 +862,8 @@ Those two encodings agree only while every derived fact has exactly one derivati
 
 Worth noticing: the old behavior could produce a P_old entry with weight −1, describing a fact that had been present negative-one times before the step. Two tests asserted that value. An impossible number sitting in a test is a good place to look when something nearby is wrong.
 
+The same mismatch was sitting at the other end of the pipeline, and writing up the theory afterwards is what found it. `step` fed strata a ground fact's raw Z-set weight, while every read of a relation was clamped to presence. A fact inserted at weight 2 derived at count 2; retracting its join partner took back 1; batch said the derived fact was gone. The rule is the same at both boundaries, and it is worth stating as a rule because code that looked locally right violated it twice: a stratum sees presence flips, and nothing else.
+
 ### Randomized Differential Testing Found What Targeted Tests Could Not
 
 Both defects above had existed through Plans 006, 006.1, 006.2 and 007, under a suite of 1,436 tests including a three-way oracle. They survived because every negation test changed one thing at a time. The bug needs two changes in one step, and the second bug additionally needs a derived fact with two derivation paths.

@@ -959,20 +959,26 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
   }
 
   /**
-   * Apply a ground-fact delta to `db`. Returns the predicates touched.
+   * Apply a ground-fact delta to `db` and return what the strata should see:
+   * +1 or −1 for each fact whose presence changed. A ground fact's Z-set
+   * weight is a reference count and strata read presence, so the raw weight
+   * must not leak through: a fact arriving at weight 2 would derive at count
+   * 2, and a later retraction could only take back 1.
    */
-  function applyGroundDelta(deltaFacts: ZSet<Fact>): Set<string> {
-    const changedPreds = new Set<string>()
+  function applyGroundDelta(deltaFacts: ZSet<Fact>): Database {
+    const flips = new Database()
     zsetForEach(deltaFacts, (entry, key) => {
-      const pred = entry.element.predicate
-      db.relation(pred).addWeightedByKey(
-        tupleKeyFor(key, entry.element),
-        entry.element.values,
-        entry.weight,
-      )
-      changedPreds.add(pred)
+      const { predicate, values } = entry.element
+      const rel = db.relation(predicate)
+      const tupleKey = tupleKeyFor(key, entry.element)
+      const before = rel.getWeightByKey(tupleKey)
+      const after = rel.addWeightedByKey(tupleKey, values, entry.weight)
+      const change = presenceChange(before, after)
+      if (change !== 0) {
+        flips.relation(predicate).addWeightedByKey(tupleKey, values, change)
+      }
     })
-    return changedPreds
+    return flips
   }
 
   // --- Public interface ---
@@ -1085,12 +1091,13 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
 
     hasBeenStepped = true
 
-    // 1. Apply the ground-fact delta to the accumulated db.
-    const changedPreds = applyGroundDelta(deltaFacts)
+    // 1. Apply the ground-fact delta to the accumulated db. Its presence
+    //    flips are the first stratum input.
+    const currentInputDelta = applyGroundDelta(deltaFacts)
 
     // 2. Determine affected strata.
     const affectedIndices = computeAffectedStrata(
-      changedPreds,
+      new Set(currentInputDelta.predicates()),
       strata,
       predToStrata,
     )
@@ -1099,19 +1106,7 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
       return EMPTY_STEP_RESULT
     }
 
-    // 3. Build initial input delta from ground fact changes.
-    const currentInputDelta = new Database()
-    zsetForEach(deltaFacts, (entry, key) => {
-      currentInputDelta
-        .relation(entry.element.predicate)
-        .addWeightedByKey(
-          tupleKeyFor(key, entry.element),
-          entry.element.values,
-          entry.weight,
-        )
-    })
-
-    // 4. Evaluate affected strata bottom-up.
+    // 3. Evaluate affected strata bottom-up.
     // Each stratum's output delta feeds the next stratum's input.
     // The unified loop handles all stratum types (positive, negation,
     // mixed) uniformly — no retractionsPresent flag needed.
