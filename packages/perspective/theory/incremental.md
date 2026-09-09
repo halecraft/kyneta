@@ -975,11 +975,11 @@ contributed to each derivation.
 
 **Status: Implemented in Plan 006.1** via Z-set weights with `distinct`.
 
-DBSP's approach uses Z-set multiplicities: a derived fact's weight
-encodes how many independent derivation paths lead to it.  When an
-input fact is removed (weight −1), the weight of every derivation that
-used it decrements.  If the weight reaches 0, the derived fact is
-retracted.
+DBSP's approach uses Z-set multiplicities.  In this implementation a
+derived fact's weight is its number of one-step supports: body
+instantiations over facts currently present that derive it.  When an
+input fact is removed (weight −1), every support that used it is
+subtracted.  If the weight reaches 0, the derived fact is retracted.
 
 The implementation delivers:
 
@@ -997,7 +997,7 @@ The implementation delivers:
    (Z-set addition).
 
 3. **`distinct` after each iteration**: A dirty map
-   (`Map<string, { fact, preWeight }>`) tracks facts modified during
+   (predicate → tuple key → `{ tuple, preWeight }`) tracks facts modified during
    stratum evaluation.  After each semi-naive iteration, weights are
    clamped to 0/1 on dirty entries only — O(|modified|) per iteration,
    not O(|relation|).  This prevents weight explosion from transitive
@@ -1023,6 +1023,19 @@ The asymmetric join (`ΔA ⋈ P_new + P_old ⋈ ΔB`) prevents self-join
 double-counting.  All non-aggregation strata use the unified
 O(|Δ|×|DB|) loop.  Only aggregation strata retain wipe-and-recompute
 (scoped limitation — no default rules use aggregation).
+
+**Where counting stops (2026-09-08):** a support count is the counting
+algorithm of Gupta, Mumick and Subrahmanian (1993): sound for
+non-recursive strata and for recursion over acyclic data, unsound for
+retraction from recursion over cyclic data, where two facts hold each
+other up after their real support is gone.  DBSP proper avoids this
+with nested streams (§5–6): the fixpoint is indexed by round, so a
+support always comes from an earlier round and cannot be circular.
+This implementation collapses the round index into one integer per
+fact.  Until per-round counts are built (roadmap Plan 006.3), the
+evaluator recomputes a recursive stratum that a retraction reaches
+(`recomputeStratum` in `datalog/evaluator.ts`); see TECHNICAL.md,
+"Known follow-ups".
 
 ### 9.5 Monotone Strata (Fugue Rules)
 

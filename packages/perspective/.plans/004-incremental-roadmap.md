@@ -269,6 +269,45 @@ performance", item 5).
 
 ---
 
+## Plan 006.3: Per-Round Counts for Recursive Strata
+
+**Theory:** incremental.md §9.4 (where counting stops), DBSP §5–6 (nested streams)
+**Status:** Not started. A stopgap stands in for it: `recomputeStratum` in
+`datalog/evaluator.ts` recomputes a recursive stratum whenever a delta can
+remove one of its derivations. Added 2026-09-08, after a randomized sweep
+showed counting stranding facts under retraction over cyclic data.
+
+### Goal
+
+Make retraction into a recursive stratum incremental. A derived fact's
+weight is a one-step support count, which cannot tell real support from
+circular support: over a symmetric `adj`, `reach(a)` and `reach(b)` hold
+each other up after the path to both is cut. DBSP's nested streams index
+the fixpoint by round, so a support always comes from an earlier round and
+cannot be circular. Retraction then costs what actually changed, not the
+stratum.
+
+### Scope
+
+1. Predicates derived by recursive strata carry per-round weights; every
+   other predicate keeps its single weight.
+2. The loop propagates a retraction round by round, as DBSP §6 does,
+   instead of subtracting from one integrated count.
+3. Round histories compact below the stability frontier of Plan 007.
+4. Remove the stopgap: `retractsIntoRecursion`, `retractsInto` and their
+   dispatch in `evaluateStratumFromDelta` (`recomputeStratum` stays; it is
+   how aggregation strata are evaluated). The cyclic sweep in
+   `tests/datalog/evaluator.test.ts` and the recursive-move ceiling in
+   `tests/datalog/roguelike-bench.test.ts` must still pass, the ceiling by
+   a wide margin.
+
+### Dependencies
+
+Benefits from Plan 007 (history compaction shares its frontier) but does
+not require it.
+
+---
+
 ## Plan 007: Settled Sets, Working Sets, and Compaction 🟡
 
 **Spec:** §11, §12

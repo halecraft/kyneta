@@ -305,4 +305,29 @@ describe("roguelike: performance", () => {
     expect(evaluator.currentDatabase().getRelation("exploded").size).toBe(200)
     expect(p95).toBeLessThan(5)
   })
+
+  it("retracting into the recursive flood recomputes it in tens of milliseconds", () => {
+    // The stopgap for retraction into recursion (TECHNICAL.md, "Known
+    // follow-ups") derives the stratum again from scratch, so this tick costs
+    // the flood rather than the change: measured ~13 ms p50, ~16 ms p95 on
+    // the 100x30 world, ceiling ~7x. Plan 006.3 (per-round counts) should
+    // bring it near the single-fact tick above; tighten this when it lands.
+    const { facts } = buildGrid(100, 30)
+    const evaluator = createEvaluator([fireSpread])
+    evaluator.step(factsToZSet([...facts, fact("lit", [0, 0])]), zsetEmpty())
+    expect(evaluator.currentDatabase().getRelation("lit").size).toBe(3000)
+
+    const ticks: number[] = []
+    for (let i = 0; i < 20; i++) {
+      const cell = fact("flammable", [1 + ((i * 37) % 99), (i * 11) % 30])
+      const started = performance.now()
+      evaluator.step(factsToZSet([cell], -1), zsetEmpty()) // recomputed
+      ticks.push(performance.now() - started)
+      evaluator.step(factsToZSet([cell]), zsetEmpty()) // incremental
+    }
+
+    expect(evaluator.currentDatabase().getRelation("lit").size).toBe(3000)
+    ticks.sort((a, b) => a - b)
+    expect(ticks[Math.floor(ticks.length * 0.95)]!).toBeLessThan(100)
+  })
 })

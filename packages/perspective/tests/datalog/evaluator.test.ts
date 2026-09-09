@@ -3,7 +3,7 @@
 // `evaluate.ts` (batch) and `incremental-evaluate.ts` (incremental).
 //
 // Test categories:
-//   - Dirty-map infrastructure: touchFact, applyDistinct, extractDelta
+//   - Dirty-map infrastructure: applyDerivedFact, applyDistinct, extractDelta
 //   - evaluateStratumFromDelta: unit tests with small rule sets
 //   - createEvaluator + step: incremental evaluation tests
 //   - Batch wrappers: evaluateUnified, evaluatePositiveUnified
@@ -13,6 +13,8 @@
 //   - Rule changes
 //   - Resolution extraction
 //   - Weight propagation through strata
+//   - Randomized differential sweeps: mixed retract+insert steps vs batch
+//   - Ground facts as presence flips; predicates both inserted and derived
 
 import { describe, expect, it } from "vitest"
 import type { ZSet } from "../../src/base/zset.js"
@@ -57,7 +59,6 @@ import {
   positiveAtom,
   Relation,
   rule,
-  serializeTuple,
   varTerm,
 } from "../../src/datalog/types.js"
 import { EMPTY_SUBSTITUTION } from "../../src/datalog/unify.js"
@@ -2935,7 +2936,7 @@ describe("mixed retract+insert steps with negation over a derived predicate", ()
       const out: string[] = []
       for (const pred of derivedPreds) {
         for (const tuple of db.getRelation(pred).tuples()) {
-          out.push(`${pred}(${serializeTuple(tuple)})`)
+          out.push(factKey({ predicate: pred, values: tuple }))
         }
       }
       return out.sort()
@@ -2946,10 +2947,25 @@ describe("mixed retract+insert steps with negation over a derived predicate", ()
       const pick = (n: number) => Math.floor(rand() * n)
 
       const evaluator = createEvaluator(rules)
+      // Derived facts as the step deltas alone describe them. The deltas are
+      // what a consumer sees, so they must agree with the database exactly.
+      const shadow = new Set<string>()
+      const step = (delta: ZSet<Fact>): void => {
+        const { deltaDerived } = evaluator.step(delta, zsetEmpty())
+        zsetForEach(deltaDerived, (entry, key) => {
+          if (entry.weight > 0) {
+            expect(shadow.has(key), `duplicate +1 for ${key}`).toBe(false)
+            shadow.add(key)
+          } else {
+            expect(shadow.has(key), `-1 for absent ${key}`).toBe(true)
+            shadow.delete(key)
+          }
+        })
+      }
       const ground = new Map<string, Fact>()
       const opening = terrain(symmetric)
       for (const f of opening) ground.set(factKey(f), f)
-      evaluator.step(factsToZSet(opening), zsetEmpty())
+      step(factsToZSet(opening))
 
       const pos: Record<string, [number, number]> = {
         hero: [0, 0],
@@ -2958,7 +2974,7 @@ describe("mixed retract+insert steps with negation over a derived predicate", ()
       for (const [e, [x, y]] of Object.entries(pos)) {
         const placed = [fact("at", [e, x, y]), fact("solid", [e])]
         for (const f of placed) ground.set(factKey(f), f)
-        evaluator.step(factsToZSet(placed), zsetEmpty())
+        step(factsToZSet(placed))
       }
 
       for (let tick = 0; tick < 12; tick++) {
@@ -2981,11 +2997,10 @@ describe("mixed retract+insert steps with negation over a derived predicate", ()
           entries.push([wall, ground.has(factKey(wall)) ? -1 : 1])
         }
 
-        evaluator.step(
+        step(
           zsetFromEntries(
             entries.map(([f, w]) => [factKey(f), { element: f, weight: w }]),
           ),
-          zsetEmpty(),
         )
         for (const [f, w] of entries) {
           if (w > 0) ground.set(factKey(f), f)
@@ -2995,10 +3010,15 @@ describe("mixed retract+insert steps with negation over a derived predicate", ()
         const oracle = createEvaluator(rules)
         oracle.step(factsToZSet([...ground.values()]), zsetEmpty())
 
+        const expected = snapshot(oracle.currentDatabase())
         expect(
           snapshot(evaluator.currentDatabase()),
           `seed ${seed}, tick ${tick}`,
-        ).toEqual(snapshot(oracle.currentDatabase()))
+        ).toEqual(expected)
+        expect(
+          [...shadow].sort(),
+          `deltas, seed ${seed}, tick ${tick}`,
+        ).toEqual(expected)
       }
     }
   }
@@ -3019,25 +3039,56 @@ describe("mixed retract+insert steps with negation over a derived predicate", ()
     )
   })
 
-  // Known limitation, deliberately encoded as a failing expectation so that
-  // fixing it trips this test and prompts its removal.
-  //
   // With adjacency symmetric, `reach` is recursive over a cyclic graph, and
-  // two reachable tiles support each other: reach(a) derives reach(b) and
-  // reach(b) derives reach(a). When the real support is cut — a wall appears,
-  // or a solid entity moves in — weight propagation alone cannot tell that the
-  // remaining support is circular, so the facts sustain themselves and are
-  // never retracted. Batch evaluation, which derives from scratch, drops them.
-  //
-  // This is the classic reason incremental Datalog engines carry either
-  // Delete-Rederive or explicit provenance for recursive views; Z-set counting
-  // is not sufficient on its own. It only shows up under RETRACTION — a purely
-  // additive workload (fire spreading, a growing reachable set) is unaffected.
-  it.fails("KNOWN LIMITATION: recursive rules over cyclic support strand facts under retraction", () => {
+  // two reachable tiles support each other. Counting alone cannot tell that
+  // the remaining support is circular once the real support is cut, so the
+  // evaluator recomputes a recursive stratum that a retraction reaches
+  // (`recomputeStratum`, a stopgap until per-round counts). This test is
+  // what that stopgap exists for, and must keep passing without it.
+  it("recursive rule over cyclic support matches batch under retraction", () => {
     differentialSweep(
       [...blockedRules, ...reachRules],
       ["blocked", "reach"],
       true,
+    )
+  })
+
+  it("retracting a cycle's only real support retracts the whole cycle", () => {
+    // A 3-cycle hanging off a ground `reach(0)`: the predicate is both
+    // inserted and derived, as `lit(0, 0)` seeds the fire in the bench. After
+    // the edge from 0 is cut, every node in the cycle still has a neighbour
+    // deriving it; only 0 itself is really supported.
+    const cyc: Rule[] = [
+      rule(atom("reach", [varTerm("Y")]), [
+        positiveAtom(atom("reach", [varTerm("X")])),
+        positiveAtom(atom("edge", [varTerm("X"), varTerm("Y")])),
+      ]),
+    ]
+    const evaluator = createEvaluator(cyc)
+    evaluator.step(
+      factsToZSet([
+        fact("reach", [0]),
+        fact("edge", [0, 1]),
+        fact("edge", [1, 2]),
+        fact("edge", [2, 3]),
+        fact("edge", [3, 1]),
+      ]),
+      zsetEmpty(),
+    )
+    expect(evaluator.currentDatabase().getRelation("reach").size).toBe(4)
+
+    const result = evaluator.step(
+      factsToZSet([fact("edge", [0, 1])], -1),
+      zsetEmpty(),
+    )
+    expect(evaluator.currentDatabase().getRelation("reach").tuples()).toEqual([
+      [0],
+    ])
+    const retracted = [...result.deltaDerived.entries()]
+      .map(([key, entry]) => [key, entry.weight])
+      .sort()
+    expect(retracted).toEqual(
+      [1, 2, 3].map(n => [factKey(fact("reach", [n])), -1]),
     )
   })
 })
@@ -3094,5 +3145,104 @@ describe("ground facts reach strata as presence flips, not raw weights", () => {
     )
     expect(second.deltaDerived.get(factKey(fact("d", [1])))?.weight).toBe(-1)
     expect(d().has([1])).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// A predicate that is both inserted and derived
+//
+// `lit(0, 0)` seeds the fire that derives the rest of `lit`. The database
+// holds the sum, so every path that derives a stratum again from scratch
+// (aggregation, retraction into recursion, a rule change) must wipe only the
+// derived part and keep the ground part to seed the replay.
+// ---------------------------------------------------------------------------
+
+describe("a predicate that is both inserted and derived", () => {
+  const spread: Rule = rule(atom("reach", [varTerm("Y")]), [
+    positiveAtom(atom("reach", [varTerm("X")])),
+    positiveAtom(atom("edge", [varTerm("X"), varTerm("Y")])),
+  ])
+  const line = [fact("reach", [0]), fact("edge", [0, 1]), fact("edge", [1, 2])]
+  const weights = (zs: ZSet<Fact>): [string, number][] =>
+    [...zs.entries()].map(([key, entry]) => [key, entry.weight]).sort()
+
+  it("keeps its ground facts through a rule change, and afterwards", () => {
+    const evaluator = createEvaluator([spread])
+    evaluator.step(factsToZSet(line), zsetEmpty())
+    expect(evaluator.currentDatabase().getRelation("reach").size).toBe(3)
+
+    // Adding a rule derives every stratum again; the ground `reach(0)` must
+    // survive the wipe and seed the replay, so `reach` does not change.
+    const mark: Rule = rule(atom("mark", [varTerm("X")]), [
+      positiveAtom(atom("reach", [varTerm("X")])),
+    ])
+    const added = evaluator.step(zsetEmpty(), zsetSingleton("mark", mark, 1))
+    expect(evaluator.currentDatabase().getRelation("reach").size).toBe(3)
+    expect(weights(added.deltaDerived)).toEqual(
+      [0, 1, 2].map(n => [factKey(fact("mark", [n])), 1]),
+    )
+
+    // The ground part is still known after the change: a retraction into
+    // the recursive stratum recomputes it from `reach(0)` again.
+    const cut = evaluator.step(
+      factsToZSet([fact("edge", [1, 2])], -1),
+      zsetEmpty(),
+    )
+    expect(evaluator.currentDatabase().getRelation("reach").tuples()).toEqual([
+      [0],
+      [1],
+    ])
+    expect(weights(cut.deltaDerived)).toEqual([
+      [factKey(fact("mark", [2])), -1],
+      [factKey(fact("reach", [2])), -1],
+    ])
+  })
+
+  it("empties the closure when the ground seed itself is retracted", () => {
+    const evaluator = createEvaluator([spread])
+    evaluator.step(factsToZSet(line), zsetEmpty())
+
+    const result = evaluator.step(
+      factsToZSet([fact("reach", [0])], -1),
+      zsetEmpty(),
+    )
+    expect(evaluator.currentDatabase().getRelation("reach").size).toBe(0)
+    // The seed's own retraction is a ground change, not a derived one.
+    expect(weights(result.deltaDerived)).toEqual(
+      [1, 2].map(n => [factKey(fact("reach", [n])), -1]),
+    )
+  })
+
+  it("survives a recompute of an aggregation stratum it belongs to", () => {
+    // `total` is inserted directly and also derived by count; a recompute
+    // wipes the derived total and keeps the inserted one.
+    const count: Rule = rule(atom("total", [varTerm("N")]), [
+      aggregation({
+        fn: "count",
+        groupBy: [],
+        over: "X",
+        result: "N",
+        source: atom("item", [varTerm("X")]),
+      }),
+    ])
+    const evaluator = createEvaluator([count])
+    evaluator.step(
+      factsToZSet([fact("total", [99]), fact("item", [1]), fact("item", [2])]),
+      zsetEmpty(),
+    )
+    expect(evaluator.currentDatabase().getRelation("total").tuples()).toEqual([
+      [99],
+      [2],
+    ])
+
+    const result = evaluator.step(factsToZSet([fact("item", [3])]), zsetEmpty())
+    expect(evaluator.currentDatabase().getRelation("total").tuples()).toEqual([
+      [99],
+      [3],
+    ])
+    expect(weights(result.deltaDerived)).toEqual([
+      [factKey(fact("total", [2])), -1],
+      [factKey(fact("total", [3])), 1],
+    ])
   })
 })

@@ -265,6 +265,9 @@ export class DatabaseView implements ReadonlyDatabase {
   }
 }
 
+/** For callers with no ground part to protect. Never written to. */
+const NO_GROUND: ReadonlyDatabase = new Database()
+
 /**
  * Evaluate a single stratum given an input delta, using the unified
  * weighted semi-naive loop with deferred delta, asymmetric join, and
@@ -280,9 +283,10 @@ export class DatabaseView implements ReadonlyDatabase {
  * The asymmetric join prevents self-join double-counting. Differential
  * negation handles sign inversion for negated predicates.
  *
- * **Aggregation strata** are the sole exception: they delegate to
- * `recomputeAggregationStratum` (wipe-and-recompute), because
- * differential aggregation requires per-group state tracking.
+ * Two exceptions recompute the stratum from scratch instead. **Aggregation
+ * strata** always do, because a change in an aggregated relation is not a
+ * delta source for the rule. **A recursive stratum that a retraction
+ * reaches** does, as a stopgap: see `recomputeStratum`.
  *
  * **Asymmetric join**: `db` arrives as P_new (the input delta is
  * already applied by the caller). The seed phase constructs
@@ -293,6 +297,9 @@ export class DatabaseView implements ReadonlyDatabase {
  * @param db           The accumulated database (mutated in place).
  *                     Must be P_new (post-delta) on entry.
  * @param inputDelta   The input delta — facts whose weight changed.
+ * @param ground       The ground part of any predicate this stratum derives.
+ *                     A predicate can be both inserted and derived; a
+ *                     recompute wipes only the derived part.
  * @returns            Output delta Database (facts with weight +1 or −1).
  *
  * See Plan 006.2, Phase 2, Tasks 2.2–2.5.
@@ -302,12 +309,26 @@ export function evaluateStratumFromDelta(
   rules: readonly Rule[],
   db: Database,
   inputDelta: Database,
+  ground: ReadonlyDatabase = NO_GROUND,
 ): Database {
-  // Aggregation strata: wipe-and-recompute (scoped limitation).
-  if (stratumHasAggregation(rules)) {
-    return recomputeAggregationStratum(rules, db)
+  if (
+    stratumHasAggregation(rules) ||
+    retractsIntoRecursion(rules, db, inputDelta)
+  ) {
+    return recomputeStratum(rules, db, ground)
   }
+  return evaluateStratumSemiNaive(rules, db, inputDelta)
+}
 
+/**
+ * The weighted semi-naive loop: a seed phase over the asymmetric join, then
+ * iterate on presence flips until nothing changes.
+ */
+function evaluateStratumSemiNaive(
+  rules: readonly Rule[],
+  db: Database,
+  inputDelta: Database,
+): Database {
   const dirty: DirtyMap = new Map()
 
   // --- Seed phase (asymmetric join) ---
@@ -459,64 +480,131 @@ export function evaluateStratumFromDelta(
 }
 
 /**
- * Wipe-and-recompute for aggregation-only strata.
+ * Reduce each of `heads` to its ground part, and report every fact that was
+ * present before with its weight, keyed like the dirty map.
  *
- * Aggregation is a group-by boundary that resets provenance. Differential
- * aggregation would require maintaining per-group state — substantially
- * more complex than differential negation. This is retained as a scoped
- * limitation for aggregation strata only.
- *
- * See Plan 006.2, Phase 2, Tasks 2.6–2.7.
+ * A predicate can be both inserted directly and derived by rules: a ground
+ * `lit(0, 0)` seeds the fire that derives the rest of `lit`. The database
+ * holds the sum, so a recompute must wipe only the derived part.
  */
-function recomputeAggregationStratum(
-  rules: readonly Rule[],
+function wipeDerived(
+  heads: ReadonlySet<string>,
   db: Database,
-): Database {
-  const dirty: DirtyMap = new Map()
-
-  // Record pre-wipe weights in the dirty map and delete all derived facts.
-  for (const pred of headPredicates(rules)) {
+  ground: ReadonlyDatabase,
+): DirtyMap {
+  const wiped: DirtyMap = new Map()
+  for (const pred of heads) {
     const rel = db.getRelation(pred)
-    const dirtyRel = new Map<string, DirtyEntry>()
-    const present: [string, FactTuple, number][] = []
+    const groundRel = ground.getRelation(pred)
+    const wipedRel = new Map<string, DirtyEntry>()
     rel.forEachEntry((tupleKey, tuple, weight) => {
-      if (weight > 0) present.push([tupleKey, tuple, weight])
+      if (weight > 0) wipedRel.set(tupleKey, { tuple, preWeight: weight })
     })
-    for (const [tupleKey, tuple, weight] of present) {
-      dirtyRel.set(tupleKey, { tuple, preWeight: weight })
-      rel.addWeightedByKey(tupleKey, tuple, -weight)
-    }
-    if (dirtyRel.size > 0) dirty.set(pred, dirtyRel)
-  }
-
-  // Naive iteration: re-derive all facts.
-  let changed = true
-  let iterations = 0
-  while (changed && iterations < MAX_ITERATIONS) {
-    changed = false
-    iterations++
-    for (const rule of rules) {
-      const derived = evaluateRule(rule, db, db)
-      for (const wf of derived) {
-        const pred = wf.fact.predicate
-        const rel = db.relation(pred)
-        if (wf.weight > 0 && rel.getWeightByKey(wf.tupleKey) <= 0) {
-          let dirtyRel = dirty.get(pred)
-          if (dirtyRel === undefined) {
-            dirtyRel = new Map()
-            dirty.set(pred, dirtyRel)
-          }
-          if (!dirtyRel.has(wf.tupleKey)) {
-            dirtyRel.set(wf.tupleKey, { tuple: wf.fact.values, preWeight: 0 })
-          }
-          rel.addWeightedByKey(wf.tupleKey, wf.fact.values, 1)
-          changed = true
-        }
+    for (const [tupleKey, { tuple, preWeight }] of wipedRel) {
+      const keep = Math.max(groundRel.getWeightByKey(tupleKey), 0)
+      if (keep !== preWeight) {
+        rel.addWeightedByKey(tupleKey, tuple, keep - preWeight)
       }
     }
+    if (wipedRel.size > 0) wiped.set(pred, wipedRel)
+  }
+  return wiped
+}
+
+/**
+ * Does `inputDelta` retract into a recursive stratum that has something to
+ * lose? A stratum with nothing derived yet has nothing to strand, so the
+ * loop from the delta is exact and a first load never pays for a recompute.
+ */
+function retractsIntoRecursion(
+  rules: readonly Rule[],
+  db: Database,
+  inputDelta: Database,
+): boolean {
+  const heads = headPredicates(rules)
+  const recursive = rules.some(rule => {
+    for (const pred of bodyPredicates(rule.body)) {
+      if (heads.has(pred)) return true
+    }
+    return false
+  })
+  if (!recursive) return false
+  let derived = false
+  for (const pred of heads) {
+    if (db.getRelation(pred).allEntryCount > 0) derived = true
+  }
+  return derived && retractsInto(rules, inputDelta)
+}
+
+/**
+ * Can `inputDelta` remove a derivation of these rules? A retraction from a
+ * positively read predicate can; so can an insertion into a negated one.
+ */
+function retractsInto(rules: readonly Rule[], inputDelta: Database): boolean {
+  const retracting = new Set<string>()
+  const inserting = new Set<string>()
+  for (const pred of inputDelta.predicates()) {
+    inputDelta.getRelation(pred).forEachEntry((_key, _tuple, weight) => {
+      if (weight < 0) retracting.add(pred)
+      else if (weight > 0) inserting.add(pred)
+    })
+  }
+  return rules.some(rule =>
+    rule.body.some(
+      el =>
+        (el.kind === "atom" && retracting.has(el.atom.predicate)) ||
+        (el.kind === "negation" && inserting.has(el.atom.predicate)),
+    ),
+  )
+}
+
+/**
+ * Wipe a stratum's derived facts and derive them again from its inputs,
+ * returning the presence delta.
+ *
+ * Aggregation strata always come here, because a change in an aggregated
+ * relation is not a delta source for the rule.
+ *
+ * Retraction into a recursive stratum comes here as a STOPGAP. Counting
+ * cannot tell real support from circular support: over cyclic data,
+ * `reach(a)` and `reach(b)` hold each other up after the path to both is
+ * cut, and the counting loop never retracts them. Per-round counts (DBSP
+ * nested streams) fix this at a cost proportional to the change; until then
+ * such a retraction costs the whole stratum. Delete `retractsIntoRecursion`
+ * and its dispatch in `evaluateStratumFromDelta` when the per-round work
+ * lands. See TECHNICAL.md, "Known follow-ups".
+ */
+function recomputeStratum(
+  rules: readonly Rule[],
+  db: Database,
+  ground: ReadonlyDatabase,
+): Database {
+  const heads = headPredicates(rules)
+
+  // The wipe emits −1 per fact it removes and the replay emits +1 per fact
+  // it derives, so a fact present both before and after cancels out.
+  const delta = extractDelta(db, wipeDerived(heads, db, ground))
+
+  // Every input the stratum reads, as +1: to the loop, all of it is new.
+  // That includes the ground part of its own heads, which seeds it. This is
+  // the batch path's seed, and it costs the flood, not the seeding.
+  const inputDelta = new Database()
+  const seeded = new Set<string>()
+  const seed = (pred: string): void => {
+    if (seeded.has(pred)) return
+    seeded.add(pred)
+    const inputRel = inputDelta.relation(pred)
+    db.getRelation(pred).forEachEntry((tupleKey, tuple, weight) => {
+      if (weight > 0) inputRel.addWeightedByKey(tupleKey, tuple, 1)
+    })
+  }
+  for (const pred of heads) seed(pred)
+  for (const rule of rules) {
+    for (const pred of bodyPredicates(rule.body)) seed(pred)
   }
 
-  return extractDelta(db, dirty)
+  delta.addAllWeighted(evaluateStratumSemiNaive(rules, db, inputDelta))
+  return delta
 }
 
 // ---------------------------------------------------------------------------
@@ -597,17 +685,6 @@ function computeAffectedStrata(
 
   // Return in ascending order (bottom-up evaluation).
   return [...affected].sort((a, b) => a - b)
-}
-
-// ---------------------------------------------------------------------------
-// Stratum helpers (migrated from incremental-evaluate.ts)
-// ---------------------------------------------------------------------------
-
-/**
- * Get the set of head predicates for a stratum (the "derived" predicates).
- */
-function stratumDerivedPredicates(stratum: Stratum): Set<string> {
-  return headPredicates(stratum.rules)
 }
 
 // ---------------------------------------------------------------------------
@@ -905,6 +982,17 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
   /** All derived predicates across all strata. */
   let allDerivedPreds: Set<string> = new Set()
 
+  /**
+   * The ground part of every predicate rules have ever derived. A predicate
+   * can be both inserted and derived; `db` holds the sum, and a recompute
+   * wipes only the derived part. Tracking starts the moment a predicate
+   * becomes derived, so it stays exact across rule changes.
+   */
+  let groundInDerived = new Database()
+
+  /** The predicates `groundInDerived` tracks. */
+  let trackedGround: Set<string> = new Set()
+
   /** Whether step() has ever been called. Used by batch wrappers to
    *  ensure strata are evaluated even with zero ground facts (rules
    *  with empty bodies must still fire on first invocation). */
@@ -941,21 +1029,20 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
     }
     predToStrata = buildPredicateToAffectedStrata(strata)
     allDerivedPreds = headPredicates(rules)
+    trackGround()
   }
 
-  /** Present tuples of `preds`, by predicate and tuple key. */
-  function presenceSnapshot(
-    preds: ReadonlySet<string>,
-  ): Map<string, Map<string, FactTuple>> {
-    const snapshot = new Map<string, Map<string, FactTuple>>()
-    for (const pred of preds) {
-      const present = new Map<string, FactTuple>()
+  /** Start keeping the ground part of predicates that have become derived. */
+  function trackGround(): void {
+    for (const pred of allDerivedPreds) {
+      if (trackedGround.has(pred)) continue
+      trackedGround.add(pred)
+      // Nothing derived it until now, so what it holds is all ground.
+      const groundRel = groundInDerived.relation(pred)
       db.getRelation(pred).forEachEntry((tupleKey, tuple, weight) => {
-        if (weight > 0) present.set(tupleKey, tuple)
+        groundRel.addWeightedByKey(tupleKey, tuple, weight)
       })
-      snapshot.set(pred, present)
     }
-    return snapshot
   }
 
   /**
@@ -973,6 +1060,11 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
       const tupleKey = tupleKeyFor(key, entry.element)
       const before = rel.getWeightByKey(tupleKey)
       const after = rel.addWeightedByKey(tupleKey, values, entry.weight)
+      if (trackedGround.has(predicate)) {
+        groundInDerived
+          .relation(predicate)
+          .addWeightedByKey(tupleKey, values, entry.weight)
+      }
       const change = presenceChange(before, after)
       if (change !== 0) {
         flips.relation(predicate).addWeightedByKey(tupleKey, values, change)
@@ -1002,71 +1094,24 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
         }
       })
 
-      // Track all derived preds (old + new) for complete snapshot.
       const oldDerivedPreds = new Set(allDerivedPreds)
-
-      // Restratify with new rules.
       restratify()
 
-      // Union of old and new derived preds for snapshot scope.
-      const allRelevantPreds = new Set([...oldDerivedPreds, ...allDerivedPreds])
+      // A predicate no rule derives any more keeps only its ground part.
+      const orphaned = new Set(
+        [...oldDerivedPreds].filter(pred => !allDerivedPreds.has(pred)),
+      )
+      const delta = extractDelta(db, wipeDerived(orphaned, db, groundInDerived))
 
-      // Snapshot what is derived now, then wipe it. This path still uses
-      // snapshot-and-diff (Plan 006.1 retired it elsewhere); it is rare.
-      const before = presenceSnapshot(allRelevantPreds)
-      for (const [pred, present] of before) {
-        const rel = db.getRelation(pred)
-        for (const [tupleKey, tuple] of present) {
-          rel.addWeightedByKey(tupleKey, tuple, -rel.getWeightByKey(tupleKey))
-        }
-      }
-
-      // Apply ground fact delta first (if any).
       applyGroundDelta(deltaFacts)
 
-      // Replay all strata from scratch.
+      // Derive every stratum again from scratch, bottom-up. Rule changes are
+      // rare enough that a full recompute is fine.
       for (const stratum of strata) {
         if (stratum.rules.length === 0) continue
-
-        // For full replay, seed with all ground facts that are inputs
-        // to this stratum.
-        const inputDelta = new Database()
-        for (const pred of db.predicates()) {
-          if (!allDerivedPreds.has(pred)) {
-            // Ground predicate — include all facts as input delta.
-            for (const tuple of db.getRelation(pred).tuples()) {
-              inputDelta.addFact({ predicate: pred, values: tuple })
-            }
-          }
-        }
-        // Also include derived facts from lower strata (already computed).
-        for (const s of strata) {
-          if (s.index >= stratum.index) break
-          for (const pred of stratumDerivedPredicates(s)) {
-            for (const tuple of db.getRelation(pred).tuples()) {
-              inputDelta.addFact({ predicate: pred, values: tuple })
-            }
-          }
-        }
-
-        evaluateStratumFromDelta(stratum.rules, db, inputDelta)
-      }
-
-      // Diff presence before and after into a delta database.
-      const delta = new Database()
-      for (const [pred, wasPresent] of before) {
-        const rel = db.getRelation(pred)
-        const deltaRel = delta.relation(pred)
-        rel.forEachEntry((tupleKey, tuple, weight) => {
-          if (weight > 0 && !wasPresent.has(tupleKey)) {
-            deltaRel.addWeightedByKey(tupleKey, tuple, 1)
-          }
-        })
-        for (const [tupleKey, tuple] of wasPresent) {
-          if (rel.getWeightByKey(tupleKey) <= 0) {
-            deltaRel.addWeightedByKey(tupleKey, tuple, -1)
-          }
-        }
+        delta.addAllWeighted(
+          recomputeStratum(stratum.rules, db, groundInDerived),
+        )
       }
       return resultFromDelta(delta)
     }
@@ -1083,7 +1128,12 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
       for (const stratum of strata) {
         if (stratum.rules.length === 0) continue
         outputDelta.addAllWeighted(
-          evaluateStratumFromDelta(stratum.rules, db, new Database()),
+          evaluateStratumFromDelta(
+            stratum.rules,
+            db,
+            new Database(),
+            groundInDerived,
+          ),
         )
       }
       return resultFromDelta(outputDelta)
@@ -1120,6 +1170,7 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
         stratum.rules,
         db,
         currentInputDelta,
+        groundInDerived,
       )
 
       // The stratum's output joins the cumulative output and feeds higher
@@ -1174,6 +1225,8 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
     strataByIndex = new Map()
     predToStrata = new Map()
     allDerivedPreds = new Set()
+    groundInDerived = new Database()
+    trackedGround = new Set()
     hasBeenStepped = false
   }
 
