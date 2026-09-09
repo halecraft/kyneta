@@ -21,6 +21,7 @@ import {
   zsetAdd,
   zsetEmpty,
   zsetForEach,
+  zsetFromEntries,
   zsetIsEmpty,
   zsetSingleton,
   zsetSize,
@@ -39,6 +40,7 @@ import {
   evaluatePositiveUnified,
   evaluateStratumFromDelta,
   evaluateUnified,
+  factsToZSet,
 } from "../../src/datalog/evaluator.js"
 import type { Fact, Rule, Value } from "../../src/datalog/types.js"
 import {
@@ -123,22 +125,11 @@ function permutations<T>(arr: T[]): T[][] {
   return result
 }
 
-/** Build a ZSet<Fact> from an array of facts, all at weight +1. */
-function factsToZSet(facts: Fact[]): ZSet<Fact> {
-  let zs = zsetEmpty<Fact>()
-  for (const f of facts) {
-    zs = zsetAdd(zs, zsetSingleton(factKey(f), f, 1))
-  }
-  return zs
-}
-
-/** Build a ZSet<Fact> with specified weight for each fact. */
+/** Build a ZSet<Fact> with a weight per fact, keyed the way `step` expects. */
 function factsToWeightedZSet(facts: [Fact, number][]): ZSet<Fact> {
-  let zs = zsetEmpty<Fact>()
-  for (const [f, w] of facts) {
-    zs = zsetAdd(zs, zsetSingleton(factKey(f), f, w))
-  }
-  return zs
+  return zsetFromEntries(
+    facts.map(([f, w]) => [factKey(f), { element: f, weight: w }]),
+  )
 }
 
 /** Count facts with weight > 0 for a predicate. */
@@ -1330,6 +1321,18 @@ describe("evaluateStratumFromDelta", () => {
 // Unified evaluator: LWW resolution with default rules
 // ---------------------------------------------------------------------------
 
+describe("factsToZSet", () => {
+  it("keys by factKey, applies the weight, and sums duplicates", () => {
+    const a = fact("p", [1])
+    const b = fact("p", [2])
+    const zs = factsToZSet([a, b, a], -1)
+
+    expect(zsetSize(zs)).toBe(2)
+    expect(zs.get(factKey(a))).toEqual({ element: a, weight: -2 })
+    expect(zs.get(factKey(b))).toEqual({ element: b, weight: -1 })
+  })
+})
+
 describe("Unified Evaluator", () => {
   describe("LWW resolution with default rules", () => {
     const lwwRules = buildDefaultLWWRules()
@@ -1524,6 +1527,42 @@ describe("Unified Evaluator", () => {
 
       expect(incRes.winners.size).toBe(1)
       expect(incRes.winners.get(slotId)?.content).toBe(batchWinner[2])
+    })
+
+    it("accepts a Z-set keyed by zsetSingleton(factKey(f)) as well as factsToZSet", () => {
+      // `step` trusts the key it is given instead of recomputing it, so the
+      // contract is that every producer keys by `factKey`. Both blessed
+      // ways of building the input must agree with batch.
+      const facts = [
+        makeActiveValueFact("alice", 1, slotId, "Hello", 10),
+        makeActiveValueFact("bob", 1, slotId, "World", 20),
+      ]
+      const batchResult = evaluate(lwwRules, facts)
+      if (!batchResult.ok) throw new Error("batch eval failed")
+      const batchWinner = batchResult.value.getRelation("winner").tuples()[0]!
+
+      const viaHelper = createEvaluator(lwwRules)
+      viaHelper.step(factsToZSet(facts), zsetEmpty())
+
+      const viaSingletons = createEvaluator(lwwRules)
+      for (const f of facts) {
+        viaSingletons.step(zsetSingleton(factKey(f), f, 1), zsetEmpty())
+      }
+
+      expect(viaHelper.currentResolution().winners.get(slotId)?.content).toBe(
+        batchWinner[2],
+      )
+      expect(
+        viaSingletons.currentResolution().winners.get(slotId)?.content,
+      ).toBe(batchWinner[2])
+      // And a retraction keyed the same way is honoured.
+      viaSingletons.step(
+        zsetSingleton(factKey(facts[1]!), facts[1]!, -1),
+        zsetEmpty(),
+      )
+      expect(
+        viaSingletons.currentResolution().winners.get(slotId)?.content,
+      ).toBe("Hello")
     })
 
     it("three-way oracle with transitive closure", () => {

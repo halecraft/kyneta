@@ -44,57 +44,95 @@ import type {
   AtomElement,
   BodyElement,
   Fact,
+  FactTuple,
   ReadonlyDatabase,
   Result,
   Rule,
   StratificationError,
   Term,
 } from "./types.js"
-import { Database, err, factKey, ok, type Relation } from "./types.js"
+import {
+  Database,
+  err,
+  factKey,
+  factKeyFromTupleKey,
+  ok,
+  type Relation,
+  serializeTuple,
+  tupleKeyFromFactKey,
+} from "./types.js"
 
 // ---------------------------------------------------------------------------
 // Dirty Map — tracks facts modified during stratum evaluation
+//
+// Key discipline: a fact's key is computed once, where the fact is created
+// (`factsToZSet` for ground facts, `groundHead` for derived), and carried.
+// Relations and this map use the tuple key; Z-sets at the boundary use the
+// fact key. Re-keying a fact the evaluator already holds was its top cost.
 // ---------------------------------------------------------------------------
 
 /**
- * A dirty-map entry records a fact and its weight *before* the current
- * stratum evaluation began. The key is `factKey(fact)`.
- *
- * `preWeight` is captured on first touch and never overwritten. After
- * convergence, comparing `preWeight` to the current weight in the db
- * reveals which facts crossed zero (the output delta).
+ * A dirty-map entry records a derived fact's weight *before* the current
+ * stratum evaluation began. `preWeight` is captured on first touch and never
+ * overwritten. After convergence, comparing `preWeight` to the current weight
+ * in the db reveals which facts crossed zero (the output delta).
  */
 interface DirtyEntry {
-  readonly fact: Fact
+  readonly tuple: FactTuple
   readonly preWeight: number
 }
 
-/** The dirty map type: factKey → DirtyEntry. */
-type DirtyMap = Map<string, DirtyEntry>
+/** predicate → tupleKey → entry. Two levels so the inner key is the relation's own. */
+type DirtyMap = Map<string, Map<string, DirtyEntry>>
 
 // ---------------------------------------------------------------------------
 // Dirty-map helpers
 // ---------------------------------------------------------------------------
 
 /**
- * Apply a weighted fact delta to the database, recording the pre-weight
- * in the dirty map on first touch.
- *
- * Returns the new weight of the fact in the database.
+ * Did a weight change cross the presence boundary? +1 for absent→present,
+ * −1 for present→absent, 0 otherwise. A change from 2 to 1 is 0: only
+ * presence matters to the next semi-naive iteration and to the output delta.
  */
-function touchFact(
+function presenceChange(before: number, after: number): -1 | 0 | 1 {
+  const was = before > 0
+  const is = after > 0
+  if (!was && is) return 1
+  if (was && !is) return -1
+  return 0
+}
+
+/**
+ * Apply a derived weighted fact to the database, record its pre-weight in
+ * the dirty map on first touch, and add it to `delta` if its presence
+ * changed. Facts whose presence changed seed the next semi-naive iteration.
+ */
+function applyDerivedFact(
+  wf: WeightedFact,
   db: Database,
   dirty: DirtyMap,
-  f: Fact,
-  weightDelta: number,
-): number {
-  const key = factKey(f)
-  if (!dirty.has(key)) {
-    // First touch — record pre-weight before mutation.
-    const preWeight = db.getRelation(f.predicate).getWeight(f.values)
-    dirty.set(key, { fact: f, preWeight })
+  delta: Database,
+): void {
+  if (wf.weight === 0) return
+
+  const pred = wf.fact.predicate
+  const rel = db.relation(pred)
+  const before = rel.getWeightByKey(wf.tupleKey)
+
+  let dirtyRel = dirty.get(pred)
+  if (dirtyRel === undefined) {
+    dirtyRel = new Map()
+    dirty.set(pred, dirtyRel)
   }
-  return db.addWeightedFact(f, weightDelta)
+  if (!dirtyRel.has(wf.tupleKey)) {
+    dirtyRel.set(wf.tupleKey, { tuple: wf.fact.values, preWeight: before })
+  }
+
+  const after = rel.addWeightedByKey(wf.tupleKey, wf.fact.values, wf.weight)
+  const change = presenceChange(before, after)
+  if (change !== 0) {
+    delta.relation(pred).addWeightedByKey(wf.tupleKey, wf.fact.values, change)
+  }
 }
 
 /**
@@ -118,43 +156,35 @@ function touchFact(
  */
 function applyDistinct(db: Database, dirty: DirtyMap): boolean {
   let clamped = false
-  for (const { fact } of dirty.values()) {
-    const rel = db.getRelation(fact.predicate)
-    const w = rel.getWeight(fact.values)
-    if (w < 0) {
-      // Floor to 0: add (-w) to reach 0, which prunes the entry.
-      rel.addWeighted(fact.values, -w)
-      clamped = true
+  for (const [pred, dirtyRel] of dirty) {
+    const rel = db.getRelation(pred)
+    for (const [tupleKey, { tuple }] of dirtyRel) {
+      const w = rel.getWeightByKey(tupleKey)
+      if (w < 0) {
+        // Floor to 0: add (-w) to reach 0, which prunes the entry.
+        rel.addWeightedByKey(tupleKey, tuple, -w)
+        clamped = true
+      }
+      // weight >= 0: no action. True multiplicity (weight > 1) is preserved.
+      // clampedWeight is already correct from eager update in addWeighted.
     }
-    // weight >= 0: no action. True multiplicity (weight > 1) is preserved.
-    // clampedWeight is already correct from eager update in addWeighted.
   }
   return clamped
 }
 
 /**
- * Extract the output delta from the dirty map after stratum convergence.
- *
- * For each dirty entry, compare `preWeight` to the current weight in db.
- * Facts that crossed zero go into the returned delta `Database`:
- * - preWeight ≤ 0 and current > 0 → emit +1 (newly derived)
- * - preWeight > 0 and current ≤ 0 → emit −1 (retracted)
- *
- * The delta Database contains facts with weight +1 or −1 only.
+ * Extract the output delta from the dirty map after stratum convergence:
+ * every dirty fact whose presence differs from its `preWeight`, as +1 or −1.
  */
 function extractDelta(db: Database, dirty: DirtyMap): Database {
   const delta = new Database()
-  for (const { fact, preWeight } of dirty.values()) {
-    const currentWeight = db.getRelation(fact.predicate).getWeight(fact.values)
-    const wasPresentBefore = preWeight > 0
-    const isPresentNow = currentWeight > 0
-
-    if (!wasPresentBefore && isPresentNow) {
-      // Newly derived: emit +1.
-      delta.addWeightedFact(fact, 1)
-    } else if (wasPresentBefore && !isPresentNow) {
-      // Retracted: emit −1.
-      delta.addWeightedFact(fact, -1)
+  for (const [pred, dirtyRel] of dirty) {
+    const rel = db.getRelation(pred)
+    for (const [tupleKey, { tuple, preWeight }] of dirtyRel) {
+      const change = presenceChange(preWeight, rel.getWeightByKey(tupleKey))
+      if (change !== 0) {
+        delta.relation(pred).addWeightedByKey(tupleKey, tuple, change)
+      }
     }
   }
   return delta
@@ -444,23 +474,19 @@ function recomputeAggregationStratum(
 ): Database {
   const dirty: DirtyMap = new Map()
 
-  // Determine which predicates this stratum derives.
-  const derivedPreds = headPredicates(rules)
-
   // Record pre-wipe weights in the dirty map and delete all derived facts.
-  for (const pred of derivedPreds) {
-    const tuples = db.getRelation(pred).tuples() // snapshot weight > 0
-    for (const tuple of tuples) {
-      const f: Fact = { predicate: pred, values: tuple }
-      const key = factKey(f)
-      if (!dirty.has(key)) {
-        dirty.set(key, {
-          fact: f,
-          preWeight: db.getRelation(pred).getWeight(tuple),
-        })
-      }
-      db.removeFact(f)
+  for (const pred of headPredicates(rules)) {
+    const rel = db.getRelation(pred)
+    const dirtyRel = new Map<string, DirtyEntry>()
+    const present: [string, FactTuple, number][] = []
+    rel.forEachEntry((tupleKey, tuple, weight) => {
+      if (weight > 0) present.push([tupleKey, tuple, weight])
+    })
+    for (const [tupleKey, tuple, weight] of present) {
+      dirtyRel.set(tupleKey, { tuple, preWeight: weight })
+      rel.addWeightedByKey(tupleKey, tuple, -weight)
     }
+    if (dirtyRel.size > 0) dirty.set(pred, dirtyRel)
   }
 
   // Naive iteration: re-derive all facts.
@@ -472,12 +498,18 @@ function recomputeAggregationStratum(
     for (const rule of rules) {
       const derived = evaluateRule(rule, db, db)
       for (const wf of derived) {
-        if (wf.weight > 0 && !db.hasFact(wf.fact)) {
-          const key = factKey(wf.fact)
-          if (!dirty.has(key)) {
-            dirty.set(key, { fact: wf.fact, preWeight: 0 })
+        const pred = wf.fact.predicate
+        const rel = db.relation(pred)
+        if (wf.weight > 0 && rel.getWeightByKey(wf.tupleKey) <= 0) {
+          let dirtyRel = dirty.get(pred)
+          if (dirtyRel === undefined) {
+            dirtyRel = new Map()
+            dirty.set(pred, dirtyRel)
           }
-          db.addFact(wf.fact)
+          if (!dirtyRel.has(wf.tupleKey)) {
+            dirtyRel.set(wf.tupleKey, { tuple: wf.fact.values, preWeight: 0 })
+          }
+          rel.addWeightedByKey(wf.tupleKey, wf.fact.values, 1)
           changed = true
         }
       }
@@ -485,45 +517,6 @@ function recomputeAggregationStratum(
   }
 
   return extractDelta(db, dirty)
-}
-
-/**
- * Apply a derived weighted fact to the database and the current delta.
- *
- * The fact is applied via touchFact (which records preWeight in the
- * dirty map). If the fact's presence crossed zero — in either direction
- * — it's added to the delta for the next semi-naive iteration:
- *
- * - absent→present (weight crosses from ≤0 to >0): add +1 to delta.
- * - present→absent (weight crosses from >0 to ≤0): add −1 to delta.
- *
- * A fact whose weight changes from 2 to 1 does NOT cross zero — no
- * delta entry. Only zero-crossings (changes in `clampedWeight`) matter
- * for convergence.
- *
- * See Plan 006.2, Phase 2, Task 2.1.
- */
-function applyDerivedFact(
-  wf: WeightedFact,
-  db: Database,
-  dirty: DirtyMap,
-  delta: Database,
-): void {
-  if (wf.weight === 0) return
-
-  const prevWeight = db.getRelation(wf.fact.predicate).getWeight(wf.fact.values)
-  const newWeight = touchFact(db, dirty, wf.fact, wf.weight)
-
-  const wasPresentBefore = prevWeight > 0
-  const isPresentNow = newWeight > 0
-
-  if (!wasPresentBefore && isPresentNow) {
-    // Newly derived — seed the next semi-naive iteration with +1.
-    delta.addFact(wf.fact)
-  } else if (wasPresentBefore && !isPresentNow) {
-    // Retracted — seed the next semi-naive iteration with −1.
-    delta.addWeightedFact(wf.fact, -1)
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -766,21 +759,63 @@ function fuguePairFactsToResolution(deltaDb: Database): ZSet<FugueBeforePair> {
 function derivedFactsToZSet(deltaDb: Database): ZSet<Fact> {
   const entries: [string, ZSetEntry<Fact>][] = []
   for (const pred of deltaDb.predicates()) {
-    for (const { tuple, weight } of deltaDb
-      .getRelation(pred)
-      .allWeightedTuples()) {
-      const f: Fact = { predicate: pred, values: tuple }
-      entries.push([factKey(f), { element: f, weight: weight > 0 ? 1 : -1 }])
-    }
+    deltaDb.getRelation(pred).forEachEntry((tupleKey, tuple, weight) => {
+      entries.push([
+        factKeyFromTupleKey(pred, tupleKey),
+        {
+          element: { predicate: pred, values: tuple },
+          weight: weight > 0 ? 1 : -1,
+        },
+      ])
+    })
   }
   return zsetFromEntries(entries)
 }
 
-/** Convert ground facts into an insertion Z-set (every weight +1). */
-function groundFactsToZSet(facts: readonly Fact[]): ZSet<Fact> {
-  return zsetFromEntries(
-    facts.map(f => [factKey(f), { element: f, weight: 1 }]),
-  )
+const EMPTY_STEP_RESULT: EvaluatorStepResult = {
+  deltaResolved: zsetEmpty<ResolvedWinner>(),
+  deltaFuguePairs: zsetEmpty<FugueBeforePair>(),
+  deltaDerived: zsetEmpty<Fact>(),
+}
+
+/**
+ * The step result for a delta database: winner and Fugue pair deltas for
+ * the skeleton, plus every derived fact that changed. All three `step`
+ * paths end here.
+ */
+function resultFromDelta(delta: Database): EvaluatorStepResult {
+  if (!delta.hasAnyEntries()) return EMPTY_STEP_RESULT
+  return {
+    deltaResolved: winnerFactsToResolution(delta),
+    deltaFuguePairs: fuguePairFactsToResolution(delta),
+    deltaDerived: derivedFactsToZSet(delta),
+  }
+}
+
+/**
+ * Build `step` input from plain facts: every entry keyed by `factKey`, with
+ * the given weight (+1 to insert, −1 to retract). Duplicate facts sum into
+ * one entry.
+ *
+ * This is the documented way to key a `ZSet<Fact>` for the evaluator, which
+ * trusts the key rather than recomputing it. Built in one pass; a fold over
+ * `zsetAdd` is quadratic (see TECHNICAL.md, "Evaluator performance").
+ */
+/**
+ * The tuple key for a fact the caller supplied a Z-set key for.
+ *
+ * `factsToZSet` keys by `factKey`, which is `predicate|tupleKey`, so the tuple
+ * key is already in hand and costs a slice rather than a re-serialization —
+ * the reason `step` takes keyed input at all. A caller that keys its Z-set
+ * some other way is not punished with a wrong answer: the key is checked
+ * against the predicate, and anything else is serialized the slow way.
+ */
+function tupleKeyFor(zsetKey: string, f: Fact): string {
+  return tupleKeyFromFactKey(zsetKey, f.predicate) ?? serializeTuple(f.values)
+}
+
+export function factsToZSet(facts: readonly Fact[], weight = 1): ZSet<Fact> {
+  return zsetFromEntries(facts.map(f => [factKey(f), { element: f, weight }]))
 }
 
 // ---------------------------------------------------------------------------
@@ -870,9 +905,6 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
   /** All derived predicates across all strata. */
   let allDerivedPreds: Set<string> = new Set()
 
-  /** Accumulated ground facts for rule-change replay. */
-  let accumulatedGroundFacts: Map<string, Fact> = new Map()
-
   /** Whether step() has ever been called. Used by batch wrappers to
    *  ensure strata are evaluated even with zero ground facts (rules
    *  with empty bodies must still fire on first invocation). */
@@ -911,38 +943,36 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
     allDerivedPreds = headPredicates(rules)
   }
 
+  /** Present tuples of `preds`, by predicate and tuple key. */
+  function presenceSnapshot(
+    preds: ReadonlySet<string>,
+  ): Map<string, Map<string, FactTuple>> {
+    const snapshot = new Map<string, Map<string, FactTuple>>()
+    for (const pred of preds) {
+      const present = new Map<string, FactTuple>()
+      db.getRelation(pred).forEachEntry((tupleKey, tuple, weight) => {
+        if (weight > 0) present.set(tupleKey, tuple)
+      })
+      snapshot.set(pred, present)
+    }
+    return snapshot
+  }
+
   /**
-   * Build a ZSet<Fact> delta from all derived facts whose weight
-   * changed between two snapshots (before/after).
+   * Apply a ground-fact delta to `db`. Returns the predicates touched.
    */
-  function diffDerivedSnapshots(
-    before: Database,
-    after: Database,
-    derivedPreds: ReadonlySet<string>,
-  ): ZSet<Fact> {
-    const entries: [string, ZSetEntry<Fact>][] = []
-
-    // Facts added (in after but not before).
-    for (const pred of derivedPreds) {
-      for (const tuple of after.getRelation(pred).tuples()) {
-        const f: Fact = { predicate: pred, values: tuple }
-        if (!before.hasFact(f)) {
-          entries.push([factKey(f), { element: f, weight: 1 }])
-        }
-      }
-    }
-
-    // Facts removed (in before but not after).
-    for (const pred of derivedPreds) {
-      for (const tuple of before.getRelation(pred).tuples()) {
-        const f: Fact = { predicate: pred, values: tuple }
-        if (!after.hasFact(f)) {
-          entries.push([factKey(f), { element: f, weight: -1 }])
-        }
-      }
-    }
-
-    return zsetFromEntries(entries)
+  function applyGroundDelta(deltaFacts: ZSet<Fact>): Set<string> {
+    const changedPreds = new Set<string>()
+    zsetForEach(deltaFacts, (entry, key) => {
+      const pred = entry.element.predicate
+      db.relation(pred).addWeightedByKey(
+        tupleKeyFor(key, entry.element),
+        entry.element.values,
+        entry.weight,
+      )
+      changedPreds.add(pred)
+    })
+    return changedPreds
   }
 
   // --- Public interface ---
@@ -951,12 +981,6 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
     deltaFacts: ZSet<Fact>,
     deltaRules: ZSet<Rule>,
   ): EvaluatorStepResult {
-    const emptyResult: EvaluatorStepResult = {
-      deltaResolved: zsetEmpty<ResolvedWinner>(),
-      deltaFuguePairs: zsetEmpty<FugueBeforePair>(),
-      deltaDerived: zsetEmpty<Fact>(),
-    }
-
     // --- Handle rule changes ---
     if (!zsetIsEmpty(deltaRules)) {
       // Apply rule changes.
@@ -981,36 +1005,18 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
       // Union of old and new derived preds for snapshot scope.
       const allRelevantPreds = new Set([...oldDerivedPreds, ...allDerivedPreds])
 
-      // Snapshot derived facts before wipe.
-      const beforeSnapshot = new Database()
-      for (const pred of allRelevantPreds) {
-        for (const { tuple, weight } of db.getRelation(pred).weightedTuples()) {
-          beforeSnapshot.addWeightedFact(
-            { predicate: pred, values: tuple },
-            weight,
-          )
-        }
-      }
-
-      // Wipe all derived facts.
-      for (const pred of allRelevantPreds) {
-        for (const tuple of db.getRelation(pred).tuples()) {
-          db.removeFact({ predicate: pred, values: tuple })
+      // Snapshot what is derived now, then wipe it. This path still uses
+      // snapshot-and-diff (Plan 006.1 retired it elsewhere); it is rare.
+      const before = presenceSnapshot(allRelevantPreds)
+      for (const [pred, present] of before) {
+        const rel = db.getRelation(pred)
+        for (const [tupleKey, tuple] of present) {
+          rel.addWeightedByKey(tupleKey, tuple, -rel.getWeightByKey(tupleKey))
         }
       }
 
       // Apply ground fact delta first (if any).
-      if (!zsetIsEmpty(deltaFacts)) {
-        zsetForEach(deltaFacts, entry => {
-          const key = factKey(entry.element)
-          if (entry.weight > 0) {
-            accumulatedGroundFacts.set(key, entry.element)
-          } else if (entry.weight < 0) {
-            accumulatedGroundFacts.delete(key)
-          }
-          db.addWeightedFact(entry.element, entry.weight)
-        })
-      }
+      applyGroundDelta(deltaFacts)
 
       // Replay all strata from scratch.
       for (const stratum of strata) {
@@ -1040,100 +1046,47 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
         evaluateStratumFromDelta(stratum.rules, db, inputDelta)
       }
 
-      // Snapshot derived facts after replay.
-      const afterSnapshot = new Database()
-      for (const pred of allRelevantPreds) {
-        for (const { tuple, weight } of db.getRelation(pred).weightedTuples()) {
-          afterSnapshot.addWeightedFact(
-            { predicate: pred, values: tuple },
-            weight,
-          )
+      // Diff presence before and after into a delta database.
+      const delta = new Database()
+      for (const [pred, wasPresent] of before) {
+        const rel = db.getRelation(pred)
+        const deltaRel = delta.relation(pred)
+        rel.forEachEntry((tupleKey, tuple, weight) => {
+          if (weight > 0 && !wasPresent.has(tupleKey)) {
+            deltaRel.addWeightedByKey(tupleKey, tuple, 1)
+          }
+        })
+        for (const [tupleKey, tuple] of wasPresent) {
+          if (rel.getWeightByKey(tupleKey) <= 0) {
+            deltaRel.addWeightedByKey(tupleKey, tuple, -1)
+          }
         }
       }
-
-      // Diff snapshots to produce derived delta.
-      const deltaDerived = diffDerivedSnapshots(
-        beforeSnapshot,
-        afterSnapshot,
-        allRelevantPreds,
-      )
-
-      if (zsetIsEmpty(deltaDerived)) return emptyResult
-
-      // Build a delta Database from deltaDerived for resolution extraction.
-      const deltaDb = new Database()
-      zsetForEach(deltaDerived, entry => {
-        deltaDb.addWeightedFact(entry.element, entry.weight)
-      })
-
-      const deltaResolved = winnerFactsToResolution(deltaDb)
-      const deltaFuguePairs = fuguePairFactsToResolution(deltaDb)
-
-      return { deltaResolved, deltaFuguePairs, deltaDerived }
+      return resultFromDelta(delta)
     }
 
     // --- No rule change — incremental evaluation ---
 
     if (zsetIsEmpty(deltaFacts)) {
-      if (hasBeenStepped) return emptyResult
+      if (hasBeenStepped) return EMPTY_STEP_RESULT
       // First invocation with no facts — still need to evaluate strata
       // for rules with empty bodies (e.g., axiom(42) :- .).
       hasBeenStepped = true
-      if (strata.length === 0) return emptyResult
 
-      // Evaluate all strata with empty input delta.
       const outputDelta = new Database()
       for (const stratum of strata) {
         if (stratum.rules.length === 0) continue
-        const stratumDelta = evaluateStratumFromDelta(
-          stratum.rules,
-          db,
-          new Database(),
+        outputDelta.addAllWeighted(
+          evaluateStratumFromDelta(stratum.rules, db, new Database()),
         )
-        for (const pred of stratumDelta.predicates()) {
-          for (const { tuple, weight } of stratumDelta
-            .getRelation(pred)
-            .allWeightedTuples()) {
-            outputDelta.addWeightedFact(
-              { predicate: pred, values: tuple },
-              weight,
-            )
-          }
-        }
       }
-
-      let outputHasEntries = false
-      for (const pred of outputDelta.predicates()) {
-        if (outputDelta.getRelation(pred).allEntryCount > 0) {
-          outputHasEntries = true
-          break
-        }
-      }
-      if (!outputHasEntries) return emptyResult
-
-      const deltaResolved = winnerFactsToResolution(outputDelta)
-      const deltaFuguePairs = fuguePairFactsToResolution(outputDelta)
-      return {
-        deltaResolved,
-        deltaFuguePairs,
-        deltaDerived: derivedFactsToZSet(outputDelta),
-      }
+      return resultFromDelta(outputDelta)
     }
 
     hasBeenStepped = true
 
-    // 1. Track ground facts and apply weighted delta to accumulated db.
-    const changedPreds = new Set<string>()
-    zsetForEach(deltaFacts, entry => {
-      const key = factKey(entry.element)
-      if (entry.weight > 0) {
-        accumulatedGroundFacts.set(key, entry.element)
-      } else if (entry.weight < 0) {
-        accumulatedGroundFacts.delete(key)
-      }
-      db.addWeightedFact(entry.element, entry.weight)
-      changedPreds.add(entry.element.predicate)
-    })
+    // 1. Apply the ground-fact delta to the accumulated db.
+    const changedPreds = applyGroundDelta(deltaFacts)
 
     // 2. Determine affected strata.
     const affectedIndices = computeAffectedStrata(
@@ -1143,13 +1096,19 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
     )
 
     if (affectedIndices.length === 0) {
-      return emptyResult
+      return EMPTY_STEP_RESULT
     }
 
     // 3. Build initial input delta from ground fact changes.
     const currentInputDelta = new Database()
-    zsetForEach(deltaFacts, entry => {
-      currentInputDelta.addWeightedFact(entry.element, entry.weight)
+    zsetForEach(deltaFacts, (entry, key) => {
+      currentInputDelta
+        .relation(entry.element.predicate)
+        .addWeightedByKey(
+          tupleKeyFor(key, entry.element),
+          entry.element.values,
+          entry.weight,
+        )
     })
 
     // 4. Evaluate affected strata bottom-up.
@@ -1168,59 +1127,13 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
         currentInputDelta,
       )
 
-      // Merge stratum output into the cumulative output delta.
-      // Use allWeightedTuples() because delta databases contain both
-      // +1 (new) and -1 (retracted) entries.
-      for (const pred of stratumDelta.predicates()) {
-        for (const { tuple, weight } of stratumDelta
-          .getRelation(pred)
-          .allWeightedTuples()) {
-          outputDelta.addWeightedFact(
-            { predicate: pred, values: tuple },
-            weight,
-          )
-        }
-      }
-
-      // Propagate this stratum's output as input to the next stratum.
-      // Merge it into currentInputDelta so higher strata see changes
-      // from both ground facts and lower-stratum derivations.
-      for (const pred of stratumDelta.predicates()) {
-        for (const { tuple, weight } of stratumDelta
-          .getRelation(pred)
-          .allWeightedTuples()) {
-          currentInputDelta.addWeightedFact(
-            { predicate: pred, values: tuple },
-            weight,
-          )
-        }
-      }
+      // The stratum's output joins the cumulative output and feeds higher
+      // strata, which see changes from ground facts and lower derivations.
+      outputDelta.addAllWeighted(stratumDelta)
+      currentInputDelta.addAllWeighted(stratumDelta)
     }
 
-    // 6. Extract resolution deltas from the collected output delta.
-    // Check allEntryCount (not size) because delta databases contain
-    // negative-weight entries that size would miss.
-    let outputHasEntries = false
-    for (const pred of outputDelta.predicates()) {
-      if (outputDelta.getRelation(pred).allEntryCount > 0) {
-        outputHasEntries = true
-        break
-      }
-    }
-    if (!outputHasEntries) {
-      return emptyResult
-    }
-
-    const deltaResolved = winnerFactsToResolution(outputDelta)
-    const deltaFuguePairs = fuguePairFactsToResolution(outputDelta)
-
-    // 7. Build deltaDerived ZSet from the output delta Database.
-    // Use allWeightedTuples() to include negative-weight (retracted) entries.
-    return {
-      deltaResolved,
-      deltaFuguePairs,
-      deltaDerived: derivedFactsToZSet(outputDelta),
-    }
+    return resultFromDelta(outputDelta)
   }
 
   function currentDatabase(): Database {
@@ -1266,7 +1179,6 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
     strataByIndex = new Map()
     predToStrata = new Map()
     allDerivedPreds = new Set()
-    accumulatedGroundFacts = new Map()
     hasBeenStepped = false
   }
 
@@ -1302,20 +1214,7 @@ export function evaluateUnified(
     }
   }
 
-  const db = new Database()
-  for (const f of facts) {
-    db.addFact(f)
-  }
-
-  if (rules.length === 0) {
-    return ok(db)
-  }
-
-  // Create evaluator and step with all facts.
-  const evaluator = createEvaluator(rules)
-  evaluator.step(groundFactsToZSet(facts), zsetEmpty())
-
-  return ok(evaluator.currentDatabase())
+  return ok(evaluateBatch(rules, facts))
 }
 
 /**
@@ -1330,17 +1229,28 @@ export function evaluatePositiveUnified(
   rules: readonly Rule[],
   facts: readonly Fact[],
 ): Database {
-  const db = new Database()
-  for (const f of facts) {
-    db.addFact(f)
-  }
+  return evaluateBatch(rules, facts)
+}
 
+/** One fresh evaluator, every fact as +1, its database as the result. */
+function evaluateBatch(
+  rules: readonly Rule[],
+  facts: readonly Fact[],
+): Database {
   if (rules.length === 0) {
+    // No rules means no strata, so an evaluator would have nothing to seed;
+    // the result is just the ground facts.
+    const db = new Database()
+    for (const f of facts) {
+      db.addFact(f)
+    }
     return db
   }
 
+  // The evaluator's own database is the result. Filling a separate one first
+  // used to cost a full serialize-and-insert pass that was then thrown away.
   const evaluator = createEvaluator(rules)
-  evaluator.step(groundFactsToZSet(facts), zsetEmpty())
+  evaluator.step(factsToZSet(facts), zsetEmpty())
 
   return evaluator.currentDatabase()
 }

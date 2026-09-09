@@ -193,11 +193,11 @@ output must match the incremental Datalog output for default rules.
 
 ---
 
-## Plan 006.1: Unified Weighted Datalog Evaluator
+## Plan 006.1: Unified Weighted Datalog Evaluator ✅
 
 **Spec:** §B.3 (evaluator requirements), §B.4 (default rules), §B.7 (native optimization)
 **Theory:** incremental.md §9.4 (provenance requirement), DBSP §3.2 (Z-set joins), §4–5 (nested streams)
-**Status:** Not started.
+**Status:** Complete. `datalog/evaluator.ts` is the single evaluator; `evaluate` is a wrapper over `createEvaluator`.
 **Full plan:** [006.1-unified-weighted-evaluator.md](./006.1-unified-weighted-evaluator.md)
 
 ### Goal
@@ -255,10 +255,28 @@ closure, making weights safe for the `fugue_descendant` rules.
 
 ---
 
-## Plan 007: Settled Sets, Working Sets, and Compaction
+## Plan 006.2: Differential Negation ✅
+
+**Status:** Complete. Negation strata run through the same weighted
+semi-naive loop as positive strata (asymmetric join, differential
+negation); DRed and wipe-and-recompute remain only for aggregation strata.
+**Full plan:** [006.2-differential-negation.md](./006.2-differential-negation.md)
+
+Later, outside this roadmap's numbering: the evaluator's string-key cost
+was cut by keying each fact once and carrying the key
+(`PLAN-2026-09-08-perspective-key-cost`; see TECHNICAL.md, "Evaluator
+performance", item 5).
+
+---
+
+## Plan 007: Settled Sets, Working Sets, and Compaction 🟡
 
 **Spec:** §11, §12
 **Theory:** incremental.md §7 (settled/working), §8 (compaction)
+**Status:** Phases 1 (frontier infrastructure, finer stratification, partition
+keys) and 1.5 (lazy `DatabaseView`) complete. Phases 2–6 (partition-aware
+`Relation`, partitioned evaluation, dormancy, compaction, docs) not started.
+**Full plan:** [007-partitioned-settling.md](./007-partitioned-settling.md)
 
 ### Goal
 

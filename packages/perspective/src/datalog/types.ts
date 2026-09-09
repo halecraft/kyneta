@@ -602,23 +602,35 @@ export class Relation {
    * Returns the new weight.
    */
   addWeighted(tuple: FactTuple, weight: number): number {
+    return this.addWeightedByKey(serializeTuple(tuple), tuple, weight)
+  }
+
+  /**
+   * `addWeighted` for a caller that already holds the tuple key. The
+   * evaluator computes a fact's key once, when the fact is created, and
+   * carries it from then on; re-serializing at every hand-off was the
+   * evaluator's single largest cost.
+   */
+  addWeightedByKey(tupleKey: string, tuple: FactTuple, weight: number): number {
+    const existing = this._map.get(tupleKey)
     if (weight === 0) {
-      const entry = this._map.get(serializeTuple(tuple))
-      return entry !== undefined ? entry.weight : 0
+      return existing !== undefined ? existing.weight : 0
     }
-    const key = serializeTuple(tuple)
-    const existing = this._map.get(key)
     if (existing !== undefined) {
       const newWeight = existing.weight + weight
       if (newWeight === 0) {
-        this.dropEntry(key, existing)
+        this.dropEntry(tupleKey, existing)
         return 0
       }
       existing.weight = newWeight
       existing.clampedWeight = newWeight > 0 ? 1 : 0
       return newWeight
     }
-    this.putEntry(key, { tuple, weight, clampedWeight: weight > 0 ? 1 : 0 })
+    this.putEntry(tupleKey, {
+      tuple,
+      weight,
+      clampedWeight: weight > 0 ? 1 : 0,
+    })
     return weight
   }
 
@@ -630,8 +642,27 @@ export class Relation {
    * in `applyDerivedFact`.
    */
   getWeight(tuple: FactTuple): number {
-    const entry = this._map.get(serializeTuple(tuple))
+    return this.getWeightByKey(serializeTuple(tuple))
+  }
+
+  /** `getWeight` for a caller that already holds the tuple key. */
+  getWeightByKey(tupleKey: string): number {
+    const entry = this._map.get(tupleKey)
     return entry !== undefined ? entry.weight : 0
+  }
+
+  /**
+   * Visit every stored entry, including negative weights, with its tuple
+   * key. Callback form so that merging one relation into another allocates
+   * nothing per entry; `allWeightedTuples` builds an array and an object
+   * per entry, which is fine for a read but not for a hot merge.
+   */
+  forEachEntry(
+    fn: (tupleKey: string, tuple: FactTuple, weight: number) => void,
+  ): void {
+    for (const [key, entry] of this._map) {
+      fn(key, entry.tuple, entry.weight)
+    }
   }
 
   /**
@@ -871,6 +902,21 @@ export class Database implements ReadonlyDatabase {
   }
 
   /**
+   * Z-set addition: add every entry of `other`, summing weights and pruning
+   * zeros. Negative weights carry over, which is what makes this the right
+   * way to merge delta databases (a −1 there is a retraction). `mergeFrom`
+   * is the presence-only, weight-1 union and drops them.
+   */
+  addAllWeighted(other: Database): void {
+    for (const pred of other.predicates()) {
+      const rel = this.relation(pred)
+      other.getRelation(pred).forEachEntry((key, tuple, weight) => {
+        rel.addWeightedByKey(key, tuple, weight)
+      })
+    }
+  }
+
+  /**
    * Create a deep clone of this database.
    *
    * Preserves all weights faithfully (including weight ≤ 0 entries)
@@ -936,7 +982,12 @@ export class Database implements ReadonlyDatabase {
 export function serializeValue(v: Value): string {
   if (v === null) return "N"
   if (typeof v === "boolean") return v ? "T" : "F"
-  if (typeof v === "number") return `f:${Object.is(v, -0) ? "-0" : String(v)}`
+  if (typeof v === "number") {
+    // int32 fast path; the general path below was the profile's top cost.
+    // `(v | 0) === v` also accepts -0, which must keep its distinct key.
+    if ((v | 0) === v && (v !== 0 || 1 / v > 0)) return `f:${v}`
+    return `f:${Object.is(v, -0) ? "-0" : String(v)}`
+  }
   if (typeof v === "bigint") return `i:${String(v)}`
   if (typeof v === "string") return `s:${v.length}:${v}`
   if (v instanceof Uint8Array) {
@@ -987,6 +1038,11 @@ export const ALL_POSITIONS = -1
  * limited to arity ≤ 31 and callers must guard it — `planRuleEvaluation` in
  * `evaluate.ts` does, by planning `mask = 0` (full scan) for wider atoms.
  *
+ * **The format is frozen.** Downstream code sorts facts by these strings and
+ * compares trace snapshots built from them, so a change here reorders their
+ * output. `tests/datalog/types.test.ts` pins the format to its original
+ * definition.
+ *
  * Naming note: `resolve.ts` documents a `*Key` convention (`cnIdKey`,
  * `factKey`, `fuguePairKey`) for functions that produce an *identity*. This is
  * deliberately not a member of that family — it is the primitive those are
@@ -996,13 +1052,17 @@ export function serializeTuple(
   tuple: FactTuple,
   mask: number = ALL_POSITIONS,
 ): string {
-  const parts: string[] = []
+  let key = ""
+  let first = true
   for (let i = 0; i < tuple.length; i++) {
     if ((mask & (1 << i)) !== 0) {
-      parts.push(serializeValue(tuple[i]!))
+      key = first
+        ? serializeValue(tuple[i]!)
+        : `${key}|${serializeValue(tuple[i]!)}`
+      first = false
     }
   }
-  return parts.join("|")
+  return key
 }
 
 /**
@@ -1016,7 +1076,44 @@ export function serializeTuple(
  * incremental projection's Z-set keying (Plan 005, Phase 5).
  */
 export function factKey(f: Fact): string {
-  return `${f.predicate}|${serializeTuple(f.values)}`
+  return factKeyFromTupleKey(f.predicate, serializeTuple(f.values))
+}
+
+/**
+ * The fact-key format, written down once: the predicate, `|`, then the
+ * tuple key. A **tuple key** (`serializeTuple`) identifies a tuple inside one
+ * relation; a **fact key** identifies a fact across relations and is what
+ * Z-sets use. Callers that already hold a tuple key build the fact key with
+ * this instead of re-serializing.
+ */
+export function factKeyFromTupleKey(
+  predicate: string,
+  tupleKey: string,
+): string {
+  return `${predicate}|${tupleKey}`
+}
+
+/** `"|".charCodeAt(0)` — the separator between a predicate and its tuple key. */
+const PIPE_CHAR = 124
+
+/**
+ * Recover the tuple key from a fact key. Slices by the predicate's length
+ * rather than searching for `|`, so a predicate containing `|` is harmless.
+ *
+ * Returns `null` if `factKey` is not this predicate's fact key, which is the
+ * caller's signal to serialize the tuple instead. Reading a foreign key as a
+ * tuple key would be silent corruption rather than a visible error: two
+ * different facts can map to the same slice and merge into one relation entry.
+ */
+export function tupleKeyFromFactKey(
+  factKey: string,
+  predicate: string,
+): string | null {
+  return factKey.length > predicate.length &&
+    factKey.charCodeAt(predicate.length) === PIPE_CHAR &&
+    factKey.startsWith(predicate)
+    ? factKey.slice(predicate.length + 1)
+    : null
 }
 
 // ---------------------------------------------------------------------------

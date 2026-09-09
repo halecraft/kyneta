@@ -28,6 +28,7 @@ export {
   evaluatePositiveUnified as evaluatePositive,
   evaluateStratumFromDelta,
   evaluateUnified as evaluate,
+  factsToZSet,
 } from "./evaluator.js"
 // --- Stratification ---
 export type {
@@ -82,6 +83,7 @@ export {
   evaluateGuardOp,
   fact,
   factKey,
+  factKeyFromTupleKey,
   gt,
   gte,
   lt,
@@ -95,6 +97,7 @@ export {
   rule,
   serializeTuple,
   serializeValue,
+  tupleKeyFromFactKey,
   valuesEqual,
   varTerm,
   type WeightedTuple,

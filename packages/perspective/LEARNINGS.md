@@ -832,6 +832,20 @@ Rule evaluation used to interleave four decisions with the work: source database
 
 The payoff was concrete rather than aesthetic. Join order became a golden test over relation sizes with no `Database` in sight, which is how the batch-versus-tick conflict got caught: a fixed "delta source first" rule fixes the per-tick case (0.99 ms → 0.030 ms) and *regresses* batch (61 ms → 73 ms), because during a batch seed the "delta" is the entire ground fact set. Neither fixed order wins; a greedy smallest-first rule gets both. That is not something the benchmark would have shown, since it only exercised one of the two shapes.
 
+### The Fifth Cost Was Building Strings, and It Had Always Been There
+
+After the four super-linear costs above were gone, a downstream profile of a 100×30 world said almost none of a tick was logic. A CPU profile of a batch `evaluate` agreed: about two thirds of self time was in `serializeTuple`'s array-and-join and in `serializeValue`, with rule logic under 5%. None of it was new. The serializer had been the same since the first commit; the earlier fixes removed enough algorithmic work to leave it standing alone at the top.
+
+Three habits made it expensive, and none was an algorithm. The serializer allocated an array per tuple. The batch wrappers filled a whole `Database` they then discarded. And the same fact was re-keyed at every hand-off — a ground fact five times per `step`, a derived fact about six times between `groundHead` and the output delta — because each function took a `Fact` and recomputed the key it needed. The fix is a discipline: compute the key where the fact is created and carry it (`factsToZSet`, `WeightedFact.tupleKey`, `Relation.addWeightedByKey`). The flood went from 67 ms to 29 ms.
+
+Two things worth keeping. First, a discipline is easier to erode than an algorithm: any new hand-off that calls `factKey` or `serializeTuple` on a fact the evaluator already holds silently puts the cost back, which is why `evaluator.ts` now says so at the top. Second, the serializer's output format turned out to be a contract with downstream code that sorts and snapshots by it, and nothing had said so; the rewrite is pinned byte-for-byte to the original by test.
+
+### A Write-Only Map Survived Three Plans
+
+`accumulatedGroundFacts` was a map of every ground fact, keyed by `factKey`, updated on every `step`, and read by nothing. It was introduced for the rule-change replay in Plan 006, made redundant when that path started re-reading ground facts from the database itself, and then carried through Plans 006.1, 006.2 and 007 — each of which edited the function it lived in. It cost a serialization and a map insert per ground fact per step, plus a second reference to every ground fact for the life of the evaluator.
+
+It survived because nothing measured it and nothing failed. A write-only field produces no wrong answers, so tests cannot see it; the profile attributed its cost to `factKey` and `Map.set`, which had plenty of legitimate callers. The check that would have caught it is mechanical and cheap: for each piece of mutable state in a closure, find one reader. It is worth doing whenever a plan touches a long-lived function, before profiling.
+
 ## Open Questions
 
 1. **Can constraint compaction be made safe in a decentralized system?** Compacting requires knowing what all peers have seen. Without a central coordinator, this requires something like a "compaction frontier" protocol. For Lists, tombstone compaction is especially tricky due to origin references.

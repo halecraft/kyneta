@@ -364,8 +364,7 @@ Each kernel algorithm has an incremental counterpart in `src/kernel/incremental/
 | `incremental/validity.ts` | `validity.ts` — deltas in the store produce deltas in `Valid(S)`. |
 | `incremental/retraction.ts` | `retraction.ts` — retraction-graph updates. |
 | `incremental/projection.ts` | `projection.ts` — fact deltas from constraint deltas. |
-| `incremental/evaluate.ts` | `datalog/evaluate.ts` — semi-naïve variant over deltas. |
-| `incremental/resolve.ts` | `resolve.ts` — delta-aware resolution extraction. |
+| `incremental/evaluation.ts` | The evaluation stage: native LWW/Fugue fast paths for the default rules, or a `createEvaluator` from `datalog/evaluator.ts` for custom ones. Resolution deltas come straight out of the stage; there is no separate resolve variant. |
 
 Composing them: `updateReality(prevState, constraintDelta) → (nextState, realityDelta)`. Application code maintains `prevState` and feeds new constraints in.
 
@@ -450,6 +449,20 @@ Unification counts for the full three-rule program on a 50×30 grid, after each 
 
 **The sequencing is the lesson.** Fixes 1 and 2 account for 99.995% of the *work*, but until fix 3 also landed the *clock* barely moved. Any one of them alone looks like a disappointment. A profiler run after each change was worth more than the static reading that found the first one.
 
+5. **String keys rebuilt at every hand-off.** Once the four fixes above had removed the algorithmic waste, a CPU profile of a batch `evaluate` over the 100×30 world was about two thirds string building: the native `join` inside `serializeTuple` (38% of self time), `serializeValue` (23%), and the wrappers around them (4%). Map operations were 12% and the actual rule logic under 5%. The serializer allocated an array per tuple, the batch wrappers filled a whole `Database` they then discarded, and the same fact was re-serialized at every hand-off: a ground fact five times per `step`, a derived fact about six times between `groundHead` and the output delta. A write-only map of every ground fact (`accumulatedGroundFacts`) had also survived three plans because nothing measured it and nothing failed.
+
+   The fix is a discipline, not an algorithm: **a fact's key is computed once, where the fact is created, and travels with it.** Ground facts arrive keyed by `factKey` in the Z-set (`factsToZSet` is the blessed constructor); derived facts carry `WeightedFact.tupleKey` from `groundHead`; `Relation` exposes `addWeightedByKey` / `getWeightByKey` / `forEachEntry` for callers that hold the key; `Database.addAllWeighted` merges deltas without re-keying. The serializer itself lost its intermediate array and gained an int32 fast path, with its output pinned byte-for-byte to the original by test because downstream code sorts and snapshots by it.
+
+   | Shape (vitest on Node, medians) | Before | After |
+   |---|---|---|
+   | Batch `evaluate`, 100×30 fire flood | 67 ms | 29 ms |
+   | Batch `evaluate`, fire + spores + negation stratum | 74 ms | 31 ms |
+   | Long-lived evaluator, initial load of the world | 15 ms | 7 ms |
+   | 3,000 facts retracted + 3,000 inserted in one step | 4 ms | 2 ms |
+   | One-fact step | 0.01 ms | 0.01 ms |
+
+   Two key spaces now exist and their names keep them apart: a **tuple key** (`serializeTuple(values)`) identifies a tuple inside one relation and is what `Relation`, the dirty map and `WeightedFact.tupleKey` use; a **fact key** (`predicate|tupleKey`, built by `factKeyFromTupleKey`) identifies a fact across relations and is what Z-sets use. `tupleKeyFromFactKey` recovers one from the other by length, so a `|` in a predicate name is harmless.
+
 ### The join index
 
 Source: `src/datalog/types.ts` → `Relation.candidates`.
@@ -466,6 +479,7 @@ Every mutation of a relation's membership funnels through two private methods (`
 
 ### Gotchas
 
+- **`step` takes the Z-set key as the fact key.** A `ZSet<Fact>` passed to `Evaluator.step` should be keyed by `factKey` — the evaluator slices the tuple key out of it instead of re-serializing. Build inputs with `factsToZSet` (or `zsetSingleton(factKey(f), f, w)` for one fact). A key in any other shape is detected by a prefix check and serialized the slow way, so the result is still correct; the fast path is simply lost. The check is not optional politeness: without it a foreign key becomes a relation key, and two different facts can collapse into one entry.
 - **`Relation.size` is O(n), not `Map.size`.** It counts present tuples by iterating, because presence is derived from each entry's clamp rather than stored. Use `allEntryCount` when you want the O(1) count and do not care about presence — query planning does exactly that.
 - **A `Value` placed in a relation is owned by the relation.** Mutating it afterwards corrupts tuple identity: `has` / `getWeight` / `remove` recompute the key from the mutated bytes and miss. Only `Uint8Array` values are mutable, so this is the only way to hit it. Pre-existing, but the join index makes the failure quieter — a stale bucket entry yields a wrong candidate set rather than a missed lookup.
 - **`extractWinners` assumes one winner per slot.** It does `winners.set(slotId, ...)` while iterating the `winner` relation, so a second winner for the same slot would silently overwrite the first. The LWW rules guarantee exactly one; selectivity-ordered evaluation makes relation iteration order less predictable, so the invariant is worth stating rather than assuming.
@@ -473,10 +487,11 @@ Every mutation of a relation's membership funnels through two private methods (`
 
 ### Known follow-ups
 
-Both are visible in the post-change profile and are deliberately not done:
+All three are visible in the post-change profile and are deliberately not done:
 
-- `weightedTuples()` allocates a fresh array per call, and after indexing the unbound path (delta scans) is its only heavy user — still the second-largest self-time entry. An iterator variant removes it but changes a public array-returning method that tests index into.
+- `weightedTuples()` allocates a fresh array per call, and after indexing the unbound path (delta scans) is its only heavy user. An iterator variant removes it but changes a public array-returning method that tests index into. (`forEachEntry` is the callback-style read for internal merges; the public array methods are unchanged.)
 - `extendSubstitution` does `new Map(sub.bindings)` per bound variable, so a 4-arity atom copies the map four times per candidate. The fix is slot arrays instead of `Map`s, and the rule evaluation plan is its prerequisite — which is the argument for having built the plan.
+- The rule-change path in `step` (a rule added or retracted mid-stream) still wipes every derived fact, replays all strata, and diffs a presence snapshot. Plan 006.1 retired snapshot-and-diff everywhere else; this path is rare and was left as is.
 
 ### What the evaluator is NOT
 
@@ -498,7 +513,7 @@ Both are visible in the post-change profile and are deliberately not done:
 | `Agent` / `createAgent` | `src/kernel/agent.ts` | Signing identity. |
 | `Rule` / `Atom` / `PositiveAtom` / `Negation` / `Aggregation` / `Term` / `VarTerm` / `ConstTerm` | `src/datalog/types.ts` | Datalog language. |
 | `rule` / `atom` / `positiveAtom` / `negation` / `eq` / `neq` / `lt` / `gt` / `varTerm` / `constTerm` / `_` | `src/datalog/types.ts` | Datalog constructors. |
-| `evaluate` | `src/datalog/evaluate.ts` | Top-level Datalog fixed-point entry. |
+| `evaluate` / `createEvaluator` / `factsToZSet` | `src/datalog/evaluator.ts` | Batch entry, the long-lived evaluator, and the keyed Z-set constructor for `step`. |
 | `stratify` | `src/datalog/stratify.ts` | Rule stratification. |
 | `unify` | `src/datalog/unify.ts` | Term unification. |
 | `ResolutionResult` / `extractResolution` | `src/kernel/resolve.ts` | Datalog facts → typed winners. |
@@ -541,8 +556,8 @@ Both are visible in the post-change profile and are deliberately not done:
 | `src/datalog/stratify.ts` | Rule stratification. |
 | `src/datalog/unify.ts` | Unification. |
 | `src/datalog/aggregate.ts` | Aggregation operators. |
-| `src/datalog/evaluator.ts` | Semi-naïve fixed-point loop. |
-| `src/datalog/evaluate.ts` | Top-level `evaluate`. |
+| `src/datalog/evaluator.ts` | `createEvaluator` (the stratum loop over deltas, dirty map, `step`), the batch wrappers `evaluate` / `evaluatePositive`, and `factsToZSet`. |
+| `src/datalog/evaluate.ts` | Per-rule evaluation: the rule evaluation plan and its fold, `groundHead`. |
 | `src/datalog/index.ts` | Datalog barrel. |
 | `src/solver/lww.ts` / `incremental-lww.ts` | Native LWW fast paths. |
 | `src/solver/fugue.ts` / `incremental-fugue.ts` | Native Fugue fast paths. |
@@ -560,4 +575,4 @@ Every test file is pure — no I/O, no timers. The cross-validation suites (`tes
 
 The Unified CCS Engine Specification in `theory/unified-engine.md` is the reference document. Every invariant in this TECHNICAL.md traces to a `§` reference there; the specification overrules this document wherever they differ.
 
-**Run tests**: `cd experimental/perspective && pnpm exec vitest run`
+**Run tests**: `cd packages/perspective && pnpm exec vitest run` (also included in the root `turbo test`).

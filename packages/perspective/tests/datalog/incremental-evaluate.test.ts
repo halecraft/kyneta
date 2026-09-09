@@ -12,6 +12,7 @@ import {
   zsetAdd,
   zsetEmpty,
   zsetForEach,
+  zsetFromEntries,
   zsetIsEmpty,
   zsetSingleton,
   zsetSize,
@@ -26,6 +27,7 @@ import {
   createEvaluator,
   evaluateUnified as evaluate,
   evaluatePositiveUnified as evaluatePositive,
+  factsToZSet,
 } from "../../src/datalog/evaluator.js"
 import type { Fact, Rule, Value } from "../../src/datalog/types.js"
 import {
@@ -41,6 +43,7 @@ import {
   positiveAtom,
   Relation,
   rule,
+  serializeTuple,
   varTerm,
 } from "../../src/datalog/types.js"
 import {
@@ -114,22 +117,11 @@ function permutations<T>(arr: T[]): T[][] {
   return result
 }
 
-/** Build a ZSet<Fact> from an array of facts, all at weight +1. */
-function factsToZSet(facts: Fact[]): ZSet<Fact> {
-  let zs = zsetEmpty<Fact>()
-  for (const f of facts) {
-    zs = zsetAdd(zs, zsetSingleton(factKey(f), f, 1))
-  }
-  return zs
-}
-
-/** Build a ZSet<Fact> with specified weight for each fact. */
+/** Build a ZSet<Fact> with a weight per fact, keyed the way `step` expects. */
 function factsToWeightedZSet(facts: [Fact, number][]): ZSet<Fact> {
-  let zs = zsetEmpty<Fact>()
-  for (const [f, w] of facts) {
-    zs = zsetAdd(zs, zsetSingleton(factKey(f), f, w))
-  }
-  return zs
+  return zsetFromEntries(
+    facts.map(([f, w]) => [factKey(f), { element: f, weight: w }]),
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -1208,6 +1200,11 @@ describe("weighted groundHead sums weights for duplicate facts", () => {
     expect(factB).toBeDefined()
     expect(factA?.weight).toBe(3) // 1 + 2
     expect(factB?.weight).toBe(5)
+
+    // The tuple key rides along so the evaluator never re-serializes.
+    for (const wf of results) {
+      expect(wf.tupleKey).toBe(serializeTuple(wf.fact.values))
+    }
   })
 
   it("weights that sum to zero are pruned", () => {

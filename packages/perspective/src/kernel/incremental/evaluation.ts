@@ -31,7 +31,11 @@ import {
   zsetIsEmpty,
   zsetSingleton,
 } from "../../base/zset.js"
-import { createEvaluator, type Evaluator } from "../../datalog/evaluator.js"
+import {
+  createEvaluator,
+  type Evaluator,
+  factsToZSet,
+} from "../../datalog/evaluator.js"
 import type { Fact, Rule } from "../../datalog/types.js"
 import { factKey } from "../../datalog/types.js"
 import {
@@ -286,18 +290,6 @@ function datalogCurrentResolution(datalog: Evaluator): ResolutionResult {
     fuguePairs: res.fuguePairs,
     fromDatalog: true,
   }
-}
-
-/**
- * Convert a Fact[] array into a ZSet<Fact> with all weights +1.
- * Used for bootstrapping a strategy from accumulated facts.
- */
-function factsToZSet(facts: readonly Fact[]): ZSet<Fact> {
-  // Built in one pass. This runs over the *whole* accumulated fact set, not a
-  // small delta, so folding singletons here was genuinely quadratic.
-  return zsetFromEntries(
-    facts.map(f => [factKey(f), { element: f, weight: 1 }]),
-  )
 }
 
 // ---------------------------------------------------------------------------

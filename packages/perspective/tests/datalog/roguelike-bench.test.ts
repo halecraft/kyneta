@@ -14,28 +14,27 @@
 // fact base with no coordinating code. That is the whole point of rules that
 // merge by set union.
 //
-// NOTE ON CI: this package is excluded from the monorepo's test and verify
-// entry points (`turbo test --filter='!@kyneta/perspective'`), so nothing here
-// runs unless you invoke it directly:
+// This file runs with the rest of the package under the root `turbo test`,
+// or on its own:
 //
-//     cd experimental/perspective && pnpm exec vitest run
+//     cd packages/perspective && pnpm exec vitest run tests/datalog/roguelike-bench.test.ts
 //
-// Treat the timing assertions as a local smoke test, not a CI gate. They are
-// set with roughly an order of magnitude of headroom so that a genuine
-// algorithmic regression trips them while a loaded machine does not.
+// Treat the timing assertions as a smoke test, not a benchmark. They are set
+// with roughly an order of magnitude of headroom so that a genuine algorithmic
+// regression trips them while a loaded machine does not.
 
 import { describe, expect, it } from "vitest"
-import { zsetEmpty, zsetFromEntries } from "../../src/base/zset.js"
+import { zsetEmpty } from "../../src/base/zset.js"
 import {
   createEvaluator,
   evaluateUnified as evaluate,
   evaluatePositiveUnified as evaluatePositive,
+  factsToZSet,
 } from "../../src/datalog/evaluator.js"
 import type { Fact, Rule } from "../../src/datalog/types.js"
 import {
   atom,
   fact,
-  factKey,
   negation,
   positiveAtom,
   rule,
@@ -120,9 +119,6 @@ const unburned: Rule = rule(atom("unburned", [$("X"), $("Y")]), [
   positiveAtom(atom("flammable", [$("X"), $("Y")])),
   negation(atom("lit", [$("X"), $("Y")])),
 ])
-
-const zsetOf = (facts: readonly Fact[]) =>
-  zsetFromEntries(facts.map(f => [factKey(f), { element: f, weight: 1 }]))
 
 // ---------------------------------------------------------------------------
 // Correctness
@@ -230,13 +226,14 @@ describe("roguelike: composition and negation", () => {
 // Performance
 //
 // Before the join index, delta-source pruning and linear Z-set construction,
-// the 100x30 flood took ~32 s. These ceilings are ~7x the measured time, which
-// is loose enough for a busy machine and tight enough that losing the index
-// (which would cost ~500x) trips them immediately.
+// the 100x30 flood took ~32 s; keying each fact once instead of at every
+// hand-off then took it from ~67 ms to ~29 ms. These ceilings are ~7x the
+// measured time, which is loose enough for a busy machine and tight enough
+// that losing the index (which would cost ~500x) trips them immediately.
 // ---------------------------------------------------------------------------
 
 describe("roguelike: performance", () => {
-  it("floods 100x30 in well under half a second", () => {
+  it("floods 100x30 in well under a quarter of a second", () => {
     const { facts } = buildGrid(100, 30)
     const seed = [...facts, fact("lit", [0, 0])]
 
@@ -245,7 +242,23 @@ describe("roguelike: performance", () => {
     const elapsed = performance.now() - started
 
     expect(db.getRelation("lit").size).toBe(3000)
-    expect(elapsed).toBeLessThan(500)
+    expect(elapsed).toBeLessThan(250)
+  })
+
+  it("a full batch evaluate of the world stays around the flood's cost", () => {
+    // The shape a batch-per-tick consumer pays: stratify, ingest every fact,
+    // derive everything, from scratch. Fire plus spores plus the negation
+    // stratum measured ~31 ms; the ceiling is ~7x that.
+    const { facts } = buildGrid(100, 30, { spores: true })
+    const seed = [...facts, fact("lit", [0, 0])]
+
+    evaluate([fireSpread, sporeBoom, unburned], seed) // warm
+    const started = performance.now()
+    const result = evaluate([fireSpread, sporeBoom, unburned], seed)
+    const elapsed = performance.now() - started
+
+    expect(result.ok).toBe(true)
+    expect(elapsed).toBeLessThan(220)
   })
 
   it("scales sub-quadratically in the number of facts", () => {
@@ -274,15 +287,15 @@ describe("roguelike: performance", () => {
     const { facts } = buildGrid(100, 30)
     const evaluator = createEvaluator([fireSpread, sporeBoom])
 
-    evaluator.step(zsetOf(facts), zsetEmpty())
-    evaluator.step(zsetOf([fact("lit", [0, 0])]), zsetEmpty())
+    evaluator.step(factsToZSet(facts), zsetEmpty())
+    evaluator.step(factsToZSet([fact("lit", [0, 0])]), zsetEmpty())
     expect(evaluator.currentDatabase().getRelation("lit").size).toBe(3000)
 
     const ticks: number[] = []
     for (let i = 0; i < 200; i++) {
       const spore = fact("spores", [i % 100, (i * 7) % 30])
       const started = performance.now()
-      evaluator.step(zsetOf([spore]), zsetEmpty())
+      evaluator.step(factsToZSet([spore]), zsetEmpty())
       ticks.push(performance.now() - started)
     }
 

@@ -97,6 +97,9 @@ export {
   type Fact,
   type FactTuple,
   fact,
+  factKey,
+  factKeyFromTupleKey,
+  factsToZSet,
   type GuardElement,
   type GuardOp,
   groundAtom,
@@ -124,6 +127,7 @@ export {
   stratify,
   // Types (Datalog-specific; kernel re-exports are above)
   type Term,
+  tupleKeyFromFactKey,
   unifyTermWithValue,
   type VarTerm,
   valuesEqual,

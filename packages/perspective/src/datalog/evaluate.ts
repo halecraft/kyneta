@@ -35,7 +35,7 @@ import type {
   Substitution,
   Term,
 } from "./types.js"
-import { Database, factKey } from "./types.js"
+import { Database, serializeTuple } from "./types.js"
 import {
   EMPTY_SUBSTITUTION,
   evaluateGuard,
@@ -59,6 +59,12 @@ import {
 export interface WeightedFact {
   readonly fact: Fact
   readonly weight: number
+  /**
+   * `serializeTuple(fact.values)`, computed once here and carried so the
+   * evaluator never re-serializes a fact it already holds. This is the
+   * *tuple* key (identity within one relation), not the fact key.
+   */
+  readonly tupleKey: string
 }
 
 // ---------------------------------------------------------------------------
@@ -803,27 +809,29 @@ export function groundHead(
   head: Atom,
   subs: readonly Substitution[],
 ): WeightedFact[] {
+  // Keyed by tuple key: every fact here shares the head's predicate.
   const weightMap = new Map<string, { fact: Fact; weight: number }>()
 
   for (const sub of subs) {
     const tuple = groundAtom(head, sub)
     if (tuple === null) continue
 
-    const fact: Fact = { predicate: head.predicate, values: tuple }
-    const key = factKey(fact)
-
+    const key = serializeTuple(tuple)
     const existing = weightMap.get(key)
     if (existing !== undefined) {
       existing.weight += sub.weight
     } else {
-      weightMap.set(key, { fact, weight: sub.weight })
+      weightMap.set(key, {
+        fact: { predicate: head.predicate, values: tuple },
+        weight: sub.weight,
+      })
     }
   }
 
   const results: WeightedFact[] = []
-  for (const entry of weightMap.values()) {
+  for (const [tupleKey, entry] of weightMap) {
     if (entry.weight !== 0) {
-      results.push({ fact: entry.fact, weight: entry.weight })
+      results.push({ fact: entry.fact, weight: entry.weight, tupleKey })
     }
   }
   return results
