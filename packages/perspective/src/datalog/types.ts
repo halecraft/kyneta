@@ -465,11 +465,9 @@ export class Relation {
   // Storage — the ONLY two methods that touch `_map`'s membership.
   //
   // Everything that adds or removes an entry goes through this pair, so index
-  // maintenance has exactly one insert point and one delete point. Before this
-  // funnel there were thirteen raw `_map.set` / `_map.delete` sites, six of
-  // which would have needed maintenance and seven of which (inside `union`,
-  // `difference`, `clone`) were safe only because those build a fresh
-  // relation — an invariant nobody adding a new factory would know.
+  // maintenance has exactly one insert point and one delete point. Factories
+  // that build a fresh relation (`clone`, `presenceBefore`) go through it too,
+  // so a new one cannot miss the index without knowing.
   //
   // Note that changing an existing entry's *weight* is not a membership
   // change and deliberately does not go through here: buckets hold entry
@@ -683,57 +681,6 @@ export class Relation {
     return true
   }
 
-  /**
-   * Create a new Relation containing all clampedWeight > 0 tuples from both.
-   * Presence semantics: uses clampedWeight for filtering, preserves
-   * original weights in the result.
-   */
-  union(other: Relation): Relation {
-    const result = new Relation()
-    for (const entry of this._map.values()) {
-      if (entry.clampedWeight > 0) {
-        result.putEntry(serializeTuple(entry.tuple), {
-          tuple: entry.tuple,
-          weight: entry.weight,
-          clampedWeight: entry.clampedWeight,
-        })
-      }
-    }
-    for (const entry of other._map.values()) {
-      if (entry.clampedWeight > 0) {
-        const key = serializeTuple(entry.tuple)
-        const existing = result._map.get(key)
-        if (existing === undefined) {
-          result.putEntry(key, {
-            tuple: entry.tuple,
-            weight: entry.weight,
-            clampedWeight: entry.clampedWeight,
-          })
-        }
-        // If already present from `this`, keep it (union = set union for clampedWeight > 0).
-      }
-    }
-    return result
-  }
-
-  /**
-   * Create a new Relation containing clampedWeight > 0 tuples in this
-   * but not in other.
-   */
-  difference(other: Relation): Relation {
-    const result = new Relation()
-    for (const entry of this._map.values()) {
-      if (entry.clampedWeight > 0 && !other.has(entry.tuple)) {
-        result.putEntry(serializeTuple(entry.tuple), {
-          tuple: entry.tuple,
-          weight: entry.weight,
-          clampedWeight: entry.clampedWeight,
-        })
-      }
-    }
-    return result
-  }
-
   /** True if no tuples have clampedWeight > 0. */
   isEmpty(): boolean {
     for (const entry of this._map.values()) {
@@ -861,28 +808,9 @@ export class Database implements ReadonlyDatabase {
   }
 
   /**
-   * Merge all facts from another database. For weight > 0 tuples in
-   * `other`, adds them with weight 1 (backward-compatible set union).
-   * Returns the number of newly-present facts.
-   */
-  mergeFrom(other: Database): number {
-    let count = 0
-    for (const pred of other.predicates()) {
-      const rel = this.relation(pred)
-      for (const tuple of other.getRelation(pred).tuples()) {
-        if (rel.add(tuple)) {
-          count++
-        }
-      }
-    }
-    return count
-  }
-
-  /**
    * Z-set addition: add every entry of `other`, summing weights and pruning
    * zeros. Negative weights carry over, which is what makes this the right
-   * way to merge delta databases (a −1 there is a retraction). `mergeFrom`
-   * is the presence-only, weight-1 union and drops them.
+   * way to merge delta databases (a −1 there is a retraction).
    */
   addAllWeighted(other: Database): void {
     for (const pred of other.predicates()) {
@@ -891,25 +819,6 @@ export class Database implements ReadonlyDatabase {
         rel.addWeightedByKey(key, tuple, weight)
       })
     }
-  }
-
-  /**
-   * Create a deep clone of this database.
-   *
-   * Preserves all weights faithfully (including weight ≤ 0 entries)
-   * by delegating to Relation.clone() which copies the internal map
-   * directly. Previously this iterated tuples() (weight > 0 only) and
-   * called add() (weight = 1), silently flattening weights — a footgun
-   * for any caller that snapshots mid-evaluation.
-   *
-   * See Plan 006.1, task 2.0.
-   */
-  clone(): Database {
-    const result = new Database()
-    for (const pred of this.predicates()) {
-      result._relations.set(pred, this.getRelation(pred).clone())
-    }
-    return result
   }
 
   /** Total number of facts with clampedWeight > 0 across all relations. */

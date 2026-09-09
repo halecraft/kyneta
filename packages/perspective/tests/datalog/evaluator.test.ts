@@ -13,7 +13,6 @@
 //   - Rule changes
 //   - Resolution extraction
 //   - Weight propagation through strata
-//   - Database.clone() preserves weights (task 2.0)
 
 import { describe, expect, it } from "vitest"
 import type { ZSet } from "../../src/base/zset.js"
@@ -269,37 +268,6 @@ describe("Dual-weight Relation (Plan 006.2 Phase 0)", () => {
     expect(cloned.getWeight(["b"])).toBe(-1)
     expect(cloned.has(["b"])).toBe(false)
     expect(cloned.allEntryCount).toBe(2)
-  })
-
-  it("union() uses clampedWeight for presence filtering", () => {
-    const r1 = new Relation()
-    r1.addWeighted(["a"], 3) // present (clampedWeight > 0)
-    r1.addWeighted(["b"], -1) // absent (clampedWeight = 0)
-
-    const r2 = new Relation()
-    r2.addWeighted(["c"], 1)
-
-    const u = r1.union(r2)
-    expect(u.has(["a"])).toBe(true)
-    expect(u.has(["b"])).toBe(false) // excluded by clampedWeight filter
-    expect(u.has(["c"])).toBe(true)
-    expect(u.size).toBe(2)
-  })
-
-  it("difference() uses clampedWeight for presence filtering", () => {
-    const r1 = new Relation()
-    r1.addWeighted(["a"], 3)
-    r1.addWeighted(["b"], 1)
-    r1.addWeighted(["c"], -1) // absent, excluded
-
-    const r2 = new Relation()
-    r2.addWeighted(["b"], 1)
-
-    const d = r1.difference(r2)
-    expect(d.has(["a"])).toBe(true)
-    expect(d.has(["b"])).toBe(false) // in other
-    expect(d.has(["c"])).toBe(false) // not present in this
-    expect(d.size).toBe(1)
   })
 })
 
@@ -719,43 +687,6 @@ describe("applyDistinct with dual-weight", () => {
     expect(db.getRelation("derived").getWeight(["a"])).toBeGreaterThanOrEqual(2)
     // weightedTuples() returns clampedWeight = 1.
     expect(db.getRelation("derived").weightedTuples()[0]?.weight).toBe(1)
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Database.clone() preserves weights (task 2.0)
-// ---------------------------------------------------------------------------
-
-describe("Database.clone() preserves weights", () => {
-  it("clones weight-1 entries faithfully", () => {
-    const db = new Database()
-    db.addFact(fact("p", ["a"]))
-    db.addFact(fact("p", ["b"]))
-
-    const cloned = db.clone()
-    expect(cloned.size).toBe(2)
-    expect(cloned.hasFact(fact("p", ["a"]))).toBe(true)
-    expect(cloned.hasFact(fact("p", ["b"]))).toBe(true)
-  })
-
-  it("clones higher weights faithfully", () => {
-    const db = new Database()
-    // Manually create a weight-3 entry.
-    db.addWeightedFact(fact("p", ["a"]), 3)
-
-    const cloned = db.clone()
-    expect(cloned.getRelation("p").getWeight(["a"])).toBe(3)
-  })
-
-  it("clone is independent of the original", () => {
-    const db = new Database()
-    db.addFact(fact("p", ["a"]))
-
-    const cloned = db.clone()
-    db.addFact(fact("p", ["b"]))
-
-    expect(cloned.size).toBe(1)
-    expect(cloned.hasFact(fact("p", ["b"]))).toBe(false)
   })
 })
 

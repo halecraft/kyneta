@@ -466,7 +466,7 @@ describe("Relation join index", () => {
     agrees()
   })
 
-  it("gives clone(), union() and subtract() results their own index", () => {
+  it("gives clone() and presenceBefore() results their own index", () => {
     // These build a fresh Relation. If a copy ever shared or inherited the
     // source's index, mutating the source afterwards would corrupt the copy —
     // the failure a missed funnel site would produce.
@@ -482,12 +482,10 @@ describe("Relation join index", () => {
     expect(copy.candidates(probeAt(0, 0), false)).toHaveLength(2)
     expect(rel.candidates(probeAt(0, 0), false)).toHaveLength(3)
 
-    const empty = new Relation()
-    for (const built of [rel.union(empty), rel.presenceBefore(empty)]) {
-      expect(built.candidates(probeAt(0, 0), false)).toEqual(
-        scanFiltered(built, probeAt(0, 0), false),
-      )
-    }
+    const built = rel.presenceBefore(new Relation())
+    expect(built.candidates(probeAt(0, 0), false)).toEqual(
+      scanFiltered(built, probeAt(0, 0), false),
+    )
   })
 
   it("supports several masks over the same relation at once", () => {
@@ -598,31 +596,22 @@ describe("Relation keyed operations", () => {
 })
 
 describe("Database.addAllWeighted", () => {
-  it("is Z-set addition where mergeFrom is presence union", () => {
-    const base = () => {
-      const db = new Database()
-      db.addWeightedFact(fact("p", [1]), 1)
-      db.addWeightedFact(fact("p", [2]), 1)
-      return db
-    }
+  it("sums weights, carries retractions, and prunes zeros", () => {
+    const summed = new Database()
+    summed.addWeightedFact(fact("p", [1]), 1)
+    summed.addWeightedFact(fact("p", [2]), 1)
+
     const delta = new Database()
     delta.addWeightedFact(fact("p", [1]), 1) // now weight 2
     delta.addWeightedFact(fact("p", [2]), -1) // cancels to 0, pruned
     delta.addWeightedFact(fact("p", [3]), -1) // a retraction of nothing
     delta.addWeightedFact(fact("q", [1]), 1) // a new relation
 
-    const summed = base()
     summed.addAllWeighted(delta)
     expect(summed.getRelation("p").getWeight([1])).toBe(2)
     expect(summed.getRelation("p").allEntryCount).toBe(2) // [1] and [3]
     expect(summed.getRelation("p").getWeight([3])).toBe(-1)
     expect(summed.getRelation("q").getWeight([1])).toBe(1)
-
-    const unioned = base()
-    unioned.mergeFrom(delta)
-    expect(unioned.getRelation("p").getWeight([1])).toBe(2)
-    expect(unioned.getRelation("p").getWeight([2])).toBe(1) // not retracted
-    expect(unioned.getRelation("p").getWeight([3])).toBe(0) // not carried
   })
 })
 

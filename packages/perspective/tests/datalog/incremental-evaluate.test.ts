@@ -194,35 +194,6 @@ describe("Relation.remove", () => {
     expect(cloned.has(["c", "d"])).toBe(true)
     expect(cloned.has(["a", "b"])).toBe(false)
   })
-
-  it("union() after removal excludes removed tuples", () => {
-    const rel1 = new Relation()
-    rel1.add(["a", "b"])
-    rel1.add(["c", "d"])
-    rel1.remove(["a", "b"])
-
-    const rel2 = new Relation()
-    rel2.add(["e", "f"])
-
-    const unioned = rel1.union(rel2)
-    expect(unioned.size).toBe(2)
-    expect(unioned.has(["c", "d"])).toBe(true)
-    expect(unioned.has(["e", "f"])).toBe(true)
-    expect(unioned.has(["a", "b"])).toBe(false)
-  })
-
-  it("difference() after removal excludes removed tuples", () => {
-    const rel1 = new Relation()
-    rel1.add(["a", "b"])
-    rel1.add(["c", "d"])
-    rel1.remove(["a", "b"])
-
-    const rel2 = new Relation()
-    rel2.add(["c", "d"])
-
-    const diff = rel1.difference(rel2)
-    expect(diff.size).toBe(0)
-  })
 })
 
 // ---------------------------------------------------------------------------
@@ -262,18 +233,6 @@ describe("Database.removeFact", () => {
 
     db.removeFact(fact("p", ["a"]))
     expect(db.size).toBe(2)
-  })
-
-  it("clone() after removal reflects removals", () => {
-    const db = new Database()
-    db.addFact(fact("p", ["a"]))
-    db.addFact(fact("p", ["b"]))
-    db.removeFact(fact("p", ["a"]))
-
-    const cloned = db.clone()
-    expect(cloned.size).toBe(1)
-    expect(cloned.hasFact(fact("p", ["b"]))).toBe(true)
-    expect(cloned.hasFact(fact("p", ["a"]))).toBe(false)
   })
 })
 
