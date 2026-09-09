@@ -364,9 +364,8 @@ function sourceFor(
   // no delta, so P_old and P_new are the same database.
   if (deltaIdx < 0) return "new"
 
-  // Negations always read the current state: negation-as-failure asks whether
-  // the fact is absent *now*, not whether it was absent before the delta.
-  if (element.kind !== "atom") return "new"
+  // A guard reads no relation, and aggregation keeps source order anyway.
+  if (element.kind === "guard" || element.kind === "aggregation") return "new"
 
   return index < deltaIdx && deltaPreds.has(element.atom.predicate)
     ? "new"

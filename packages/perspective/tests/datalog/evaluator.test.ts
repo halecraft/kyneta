@@ -58,6 +58,7 @@ import {
   positiveAtom,
   Relation,
   rule,
+  serializeTuple,
   varTerm,
 } from "../../src/datalog/types.js"
 import { EMPTY_SUBSTITUTION } from "../../src/datalog/unify.js"
@@ -2901,5 +2902,211 @@ describe("Unified Evaluator", () => {
         "A",
       )
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Mixed retract-and-insert steps, against negation over a derived predicate
+//
+// The shape that motivated these tests: one step that both retracts a fact and
+// inserts another, where a rule negates a predicate derived from that same
+// fact. Both halves land in one delta, so the incremental decomposition has to
+// account for a derivation that the retraction removes and the newly-true
+// negation would independently have blocked. Get either side wrong and a fact
+// is stranded that batch evaluation does not derive.
+//
+// A downstream game engine hit this as a monster hunting from tiles it had
+// already left. The oracle throughout is a fresh evaluator over the
+// accumulated ground facts.
+// ---------------------------------------------------------------------------
+
+describe("mixed retract+insert steps with negation over a derived predicate", () => {
+  const WIDTH = 4
+  const HEIGHT = 3
+
+  /** `blocked` is derived, and both rules below read it under negation. */
+  const blockedRules: Rule[] = [
+    rule(atom("blocked", [varTerm("X"), varTerm("Y")]), [
+      positiveAtom(atom("wall", [varTerm("X"), varTerm("Y")])),
+    ]),
+    rule(atom("blocked", [varTerm("X"), varTerm("Y")]), [
+      positiveAtom(atom("at", [varTerm("E"), varTerm("X"), varTerm("Y")])),
+      positiveAtom(atom("solid", [varTerm("E")])),
+    ]),
+  ]
+
+  /** Non-recursive: one join away from the negated predicate. */
+  const stepToRule: Rule = rule(
+    atom("step_to", [varTerm("E"), varTerm("X2"), varTerm("Y2")]),
+    [
+      positiveAtom(atom("at", [varTerm("E"), varTerm("X"), varTerm("Y")])),
+      positiveAtom(
+        atom("adj", [varTerm("X"), varTerm("Y"), varTerm("X2"), varTerm("Y2")]),
+      ),
+      negation(atom("blocked", [varTerm("X2"), varTerm("Y2")])),
+    ],
+  )
+
+  /** Recursive: transitive reachability, gated by the same negation. */
+  const reachRules: Rule[] = [
+    rule(atom("reach", [varTerm("X"), varTerm("Y")]), [
+      positiveAtom(atom("source", [varTerm("X"), varTerm("Y")])),
+    ]),
+    rule(atom("reach", [varTerm("X2"), varTerm("Y2")]), [
+      positiveAtom(atom("reach", [varTerm("X"), varTerm("Y")])),
+      positiveAtom(
+        atom("adj", [varTerm("X"), varTerm("Y"), varTerm("X2"), varTerm("Y2")]),
+      ),
+      negation(atom("blocked", [varTerm("X2"), varTerm("Y2")])),
+    ]),
+  ]
+
+  /**
+   * The geography. `symmetric` decides whether adjacency runs both ways, which
+   * is what makes recursion over it cyclic.
+   */
+  function terrain(symmetric: boolean): Fact[] {
+    const facts: Fact[] = [fact("source", [0, 0])]
+    for (let x = 0; x < WIDTH; x++) {
+      for (let y = 0; y < HEIGHT; y++) {
+        if (x + 1 < WIDTH) {
+          facts.push(fact("adj", [x, y, x + 1, y]))
+          if (symmetric) facts.push(fact("adj", [x + 1, y, x, y]))
+        }
+        if (y + 1 < HEIGHT) {
+          facts.push(fact("adj", [x, y, x, y + 1]))
+          if (symmetric) facts.push(fact("adj", [x, y + 1, x, y]))
+        }
+      }
+    }
+    return facts
+  }
+
+  /** Deterministic PRNG, so a failure names a seed you can replay. */
+  function lcg(seed: number): () => number {
+    let s = seed >>> 0
+    return () => {
+      s = (Math.imul(s, 1664525) + 1013904223) >>> 0
+      return s / 0x100000000
+    }
+  }
+
+  /**
+   * Drive 40 randomized histories through the evaluator, comparing every
+   * derived relation against a fresh batch evaluation after each step.
+   */
+  function differentialSweep(
+    rules: readonly Rule[],
+    derivedPreds: readonly string[],
+    symmetric: boolean,
+  ): void {
+    const snapshot = (db: Database): string[] => {
+      const out: string[] = []
+      for (const pred of derivedPreds) {
+        for (const tuple of db.getRelation(pred).tuples()) {
+          out.push(`${pred}(${serializeTuple(tuple)})`)
+        }
+      }
+      return out.sort()
+    }
+
+    for (let seed = 1; seed <= 40; seed++) {
+      const rand = lcg(seed)
+      const pick = (n: number) => Math.floor(rand() * n)
+
+      const evaluator = createEvaluator(rules)
+      const ground = new Map<string, Fact>()
+      const opening = terrain(symmetric)
+      for (const f of opening) ground.set(factKey(f), f)
+      evaluator.step(factsToZSet(opening), zsetEmpty())
+
+      const pos: Record<string, [number, number]> = {
+        hero: [0, 0],
+        murk: [WIDTH - 1, HEIGHT - 1],
+      }
+      for (const [e, [x, y]] of Object.entries(pos)) {
+        const placed = [fact("at", [e, x, y]), fact("solid", [e])]
+        for (const f of placed) ground.set(factKey(f), f)
+        evaluator.step(factsToZSet(placed), zsetEmpty())
+      }
+
+      for (let tick = 0; tick < 12; tick++) {
+        // One step carrying a retraction and an insertion together: an entity
+        // leaves a tile and arrives at another, exactly as a move does.
+        const entity = pick(2) === 0 ? "hero" : "murk"
+        const [ox, oy] = pos[entity]!
+        const nx = pick(WIDTH)
+        const ny = pick(HEIGHT)
+        pos[entity] = [nx, ny]
+
+        const entries: [Fact, number][] = [
+          [fact("at", [entity, ox, oy]), -1],
+          [fact("at", [entity, nx, ny]), 1],
+        ]
+        // Sometimes toggle a wall in the same step, so two sources of the
+        // negated predicate change at once.
+        if (pick(3) === 0) {
+          const wall = fact("wall", [pick(WIDTH), pick(HEIGHT)])
+          entries.push([wall, ground.has(factKey(wall)) ? -1 : 1])
+        }
+
+        evaluator.step(
+          zsetFromEntries(
+            entries.map(([f, w]) => [factKey(f), { element: f, weight: w }]),
+          ),
+          zsetEmpty(),
+        )
+        for (const [f, w] of entries) {
+          if (w > 0) ground.set(factKey(f), f)
+          else ground.delete(factKey(f))
+        }
+
+        const oracle = createEvaluator(rules)
+        oracle.step(factsToZSet([...ground.values()]), zsetEmpty())
+
+        expect(
+          snapshot(evaluator.currentDatabase()),
+          `seed ${seed}, tick ${tick}`,
+        ).toEqual(snapshot(oracle.currentDatabase()))
+      }
+    }
+  }
+
+  it("non-recursive rule over a negated derived predicate matches batch", () => {
+    differentialSweep(
+      [...blockedRules, stepToRule],
+      ["blocked", "step_to"],
+      true,
+    )
+  })
+
+  it("recursive rule matches batch when the recursion is acyclic", () => {
+    differentialSweep(
+      [...blockedRules, ...reachRules],
+      ["blocked", "reach"],
+      false,
+    )
+  })
+
+  // Known limitation, deliberately encoded as a failing expectation so that
+  // fixing it trips this test and prompts its removal.
+  //
+  // With adjacency symmetric, `reach` is recursive over a cyclic graph, and
+  // two reachable tiles support each other: reach(a) derives reach(b) and
+  // reach(b) derives reach(a). When the real support is cut — a wall appears,
+  // or a solid entity moves in — weight propagation alone cannot tell that the
+  // remaining support is circular, so the facts sustain themselves and are
+  // never retracted. Batch evaluation, which derives from scratch, drops them.
+  //
+  // This is the classic reason incremental Datalog engines carry either
+  // Delete-Rederive or explicit provenance for recursive views; Z-set counting
+  // is not sufficient on its own. It only shows up under RETRACTION — a purely
+  // additive workload (fire spreading, a growing reachable set) is unaffected.
+  it.fails("KNOWN LIMITATION: recursive rules over cyclic support strand facts under retraction", () => {
+    differentialSweep(
+      [...blockedRules, ...reachRules],
+      ["blocked", "reach"],
+      true,
+    )
   })
 })

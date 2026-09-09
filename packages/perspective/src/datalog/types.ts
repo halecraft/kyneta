@@ -468,8 +468,8 @@ export class Relation {
   // maintenance has exactly one insert point and one delete point. Before this
   // funnel there were thirteen raw `_map.set` / `_map.delete` sites, six of
   // which would have needed maintenance and seven of which (inside `union`,
-  // `difference`, `subtract`, `clone`) were safe only because those build a
-  // fresh relation — an invariant nobody adding a new factory would know.
+  // `difference`, `clone`) were safe only because those build a fresh
+  // relation — an invariant nobody adding a new factory would know.
   //
   // Note that changing an existing entry's *weight* is not a membership
   // change and deliberately does not go through here: buckets hold entry
@@ -743,58 +743,35 @@ export class Relation {
   }
 
   /**
-   * Subtract another relation's weights from this one, returning a new
-   * Relation with weights `this.weight − other.weight` for each entry.
+   * This relation as it was before `delta` was applied.
    *
-   * Entries present in `this` but not in `other` are copied as-is.
-   * Entries present in `other` but not in `this` appear with negated
-   * weight. Entries whose resulting weight is 0 are pruned.
+   * `delta` records **presence flips**, always ±1: a fact appeared, or it
+   * disappeared. This relation records true multiplicity, because a derived
+   * fact can have several independent derivation paths. So the two do not
+   * subtract. `blocked(1, 1)` derived both from a wall and from a solid entity
+   * standing there has weight 2 and is still reported as a single `+1`;
+   * subtracting would leave weight 1 and claim the fact was already there.
    *
-   * Used by `DatabaseView` to lazily compute P_old = P_new − Δ for
-   * the asymmetric join in `evaluateStratumFromDelta`.
+   * Undoing the flip is what is meant and what is correct, and presence is all
+   * the callers need: `weightedTuples` clamps to 1, and negation only asks
+   * whether a fact is there. Weights of facts the delta does not mention are
+   * carried over untouched.
    *
-   * See Plan 007, Phase 1.5, Task 1.5.3.
+   * This is P_old for the asymmetric join. See `DatabaseView` in
+   * `evaluator.ts`, which is its only caller.
    */
-  subtract(other: Relation): Relation {
-    const result = new Relation()
-
-    // Copy all entries from this, subtracting other's weights where present.
-    for (const [key, entry] of this._map) {
-      const otherEntry = other._map.get(key)
-      if (otherEntry === undefined) {
-        // No corresponding entry in other — copy as-is.
-        result.putEntry(key, {
-          tuple: entry.tuple,
-          weight: entry.weight,
-          clampedWeight: entry.clampedWeight,
-        })
-      } else {
-        const newWeight = entry.weight - otherEntry.weight
-        if (newWeight !== 0) {
-          result.putEntry(key, {
-            tuple: entry.tuple,
-            weight: newWeight,
-            clampedWeight: newWeight > 0 ? 1 : 0,
-          })
-        }
-        // newWeight === 0 → prune (don't add to result).
+  presenceBefore(delta: Relation): Relation {
+    const result = this.clone()
+    for (const [key, entry] of delta._map) {
+      const now = result.getWeightByKey(key)
+      if (entry.weight > 0) {
+        // Appeared in this step, so it was absent before.
+        if (now > 0) result.addWeightedByKey(key, entry.tuple, -now)
+      } else if (entry.weight < 0) {
+        // Disappeared in this step, so it was present before.
+        if (now <= 0) result.addWeightedByKey(key, entry.tuple, 1 - now)
       }
     }
-
-    // Entries in other but not in this → negated weight.
-    for (const [key, entry] of other._map) {
-      if (!this._map.has(key)) {
-        const negWeight = -entry.weight
-        if (negWeight !== 0) {
-          result.putEntry(key, {
-            tuple: entry.tuple,
-            weight: negWeight,
-            clampedWeight: negWeight > 0 ? 1 : 0,
-          })
-        }
-      }
-    }
-
     return result
   }
 

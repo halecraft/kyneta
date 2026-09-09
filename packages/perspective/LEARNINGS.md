@@ -846,6 +846,28 @@ Two things worth keeping. First, a discipline is easier to erode than an algorit
 
 It survived because nothing measured it and nothing failed. A write-only field produces no wrong answers, so tests cannot see it; the profile attributed its cost to `factKey` and `Map.set`, which had plenty of legitimate callers. The check that would have caught it is mechanical and cheap: for each piece of mutable state in a closure, find one reader. It is worth doing whenever a plan touches a long-lived function, before profiling.
 
+### Negation Is a Factor, and the Delta Decomposition Does Not Care What It Means
+
+The incremental evaluator pinned negated atoms to P_new, with a comment that read as obviously right: negation-as-failure asks whether a fact is absent *now*, not whether it was absent before the delta. That sentence is true about the semantics of negation and irrelevant to the incremental decomposition, which is the trap.
+
+What the decomposition needs is a telescoping sum over factors, and a negated atom is a factor: the derived set is the join times an indicator. Pinning one factor to a fixed side drops a cross term. The visible symptom needed two changes in one step to appear — retract a fact that supports a derivation, and insert one that makes that derivation's negation newly fail. Driving from the retraction evaluated the negation against the new state and discarded the substitution; driving from the negation evaluated the positive atoms against the new state and never saw the old position. Each drive threw away exactly the evidence the other needed, and the derived fact was stranded. Applying the same move as two steps was exact, which is a good tell for a missing cross term.
+
+The lesson generalizes past this bug: when a rule element is given a special case in an algebraic decomposition, the justification has to be algebraic. "Negation means X" is a statement about semantics; the decomposition only knows about factors.
+
+### A Delta Says "Appeared", the Database Says "Twice"
+
+The same investigation turned up a second defect underneath the first. Stratum output deltas are normalized to ±1 presence flips — that is deliberate, it is what makes `distinct` and the fixpoint terminate. The accumulated database, meanwhile, stores true Z-set multiplicity. `DatabaseView` reconstructed P_old by subtracting one from the other.
+
+Those two encodings agree only while every derived fact has exactly one derivation path. `blocked(1,1)` derived both from a wall and from a solid entity standing on the tile has weight 2, and the stratum reports +1. Subtracting leaves 1, so P_old claims the fact was already present before the step, and every retraction gated on it is silently lost. Rebuilding P_old by undoing the presence flip fixes it, and is well-defined because everything reading P_old reads presence: `weightedTuples` clamps to 1, and negation only asks whether a fact is there.
+
+Worth noticing: the old behavior could produce a P_old entry with weight −1, describing a fact that had been present negative-one times before the step. Two tests asserted that value. An impossible number sitting in a test is a good place to look when something nearby is wrong.
+
+### Randomized Differential Testing Found What Targeted Tests Could Not
+
+Both defects above had existed through Plans 006, 006.1, 006.2 and 007, under a suite of 1,436 tests including a three-way oracle. They survived because every negation test changed one thing at a time. The bug needs two changes in one step, and the second bug additionally needs a derived fact with two derivation paths.
+
+Forty seeded histories of "move an entity, sometimes toggle a wall, compare against batch after every step" found both within minutes, and then found the cyclic-support limitation as well. The cost was about sixty lines. For an incremental engine whose whole contract is "equals the batch result", the oracle is free and the inputs are the only thing worth designing — the shapes to reach for are concurrent change, multiple derivation paths, and cycles.
+
 ## Open Questions
 
 1. **Can constraint compaction be made safe in a decentralized system?** Compacting requires knowing what all peers have seen. Without a central coordinator, this requires something like a "compaction frontier" protocol. For Lists, tombstone compaction is especially tricky due to origin references.

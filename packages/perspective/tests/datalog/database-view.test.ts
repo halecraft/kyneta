@@ -1,12 +1,11 @@
-// === DatabaseView and Relation.subtract Tests (Plan 007, Phase 1.5) ===
+// === DatabaseView and Relation.presenceBefore Tests (Plan 007, Phase 1.5) ===
 //
 // Tests for the lazy-view optimization that replaces the eager O(|db|)
-// `constructDbOld` with a lazy `DatabaseView` that materializes
-// P_old = P_new − Δ only for predicates actually accessed during
-// rule evaluation.
+// `constructDbOld` with a lazy `DatabaseView` that materializes P_old only
+// for predicates actually accessed during rule evaluation.
 //
 // Test categories:
-//   - Relation.subtract: Z-set subtraction with correct weight semantics
+//   - Relation.presenceBefore: P_old undoes presence flips, not weights
 //   - DatabaseView: lazy materialization, caching, identity sharing
 //   - ReadonlyDatabase: interface conformance
 //   - Integration: evaluateStratumFromDelta produces identical results
@@ -16,7 +15,12 @@ import {
   DatabaseView,
   evaluateStratumFromDelta,
 } from "../../src/datalog/evaluator.js"
-import type { Fact, ReadonlyDatabase, Rule } from "../../src/datalog/types.js"
+import type {
+  Fact,
+  FactTuple,
+  ReadonlyDatabase,
+  Rule,
+} from "../../src/datalog/types.js"
 import {
   _,
   atom,
@@ -53,167 +57,60 @@ function _addWeighted(
   )
 }
 
-function getWeight(rel: Relation, tuple: readonly unknown[]): number {
-  return rel.getWeight(
-    tuple as readonly (
-      | string
-      | number
-      | boolean
-      | bigint
-      | null
-      | Uint8Array
-      | { ref: { peer: string; counter: number } }
-    )[],
-  )
-}
-
 // ---------------------------------------------------------------------------
-// Relation.subtract
+// Relation.presenceBefore
 // ---------------------------------------------------------------------------
 
-describe("Relation.subtract", () => {
-  it("returns empty when subtracting identical relation", () => {
-    const a = new Relation()
-    a.addWeighted(["x", 1], 1)
-    a.addWeighted(["y", 2], 1)
+describe("Relation.presenceBefore", () => {
+  const rel = (entries: [FactTuple, number][]): Relation => {
+    const r = new Relation()
+    for (const [tuple, weight] of entries) r.addWeighted(tuple, weight)
+    return r
+  }
 
-    const b = new Relation()
-    b.addWeighted(["x", 1], 1)
-    b.addWeighted(["y", 2], 1)
-
-    const result = a.subtract(b)
-    expect(result.allEntryCount).toBe(0)
+  it("undoes an appearance, whatever the multiplicity", () => {
+    // The case this method exists for. Two derivation paths make the weight 2;
+    // the delta still reports a single +1, because a delta records presence.
+    // Subtracting would leave 1 and claim the fact was there all along.
+    const before = rel([[["x"], 2]]).presenceBefore(rel([[["x"], 1]]))
+    expect(before.has(["x"])).toBe(false)
+    expect(before.allEntryCount).toBe(0)
   })
 
-  it("copies entries from this when other is empty", () => {
-    const a = new Relation()
-    a.addWeighted(["x", 1], 3)
-    a.addWeighted(["y", 2], 1)
-
-    const empty = new Relation()
-    const result = a.subtract(empty)
-
-    expect(result.allEntryCount).toBe(2)
-    expect(getWeight(result, ["x", 1])).toBe(3)
-    expect(getWeight(result, ["y", 2])).toBe(1)
+  it("undoes a disappearance", () => {
+    const before = rel([]).presenceBefore(rel([[["x"], -1]]))
+    expect(before.has(["x"])).toBe(true)
   })
 
-  it("returns negated entries when this is empty", () => {
-    const empty = new Relation()
-    const b = new Relation()
-    b.addWeighted(["x", 1], 2)
-
-    const result = empty.subtract(b)
-    expect(result.allEntryCount).toBe(1)
-    expect(getWeight(result, ["x", 1])).toBe(-2)
+  it("leaves facts the delta does not mention untouched, weights and all", () => {
+    const before = rel([
+      [["keep"], 3],
+      [["gone"], 1],
+    ]).presenceBefore(rel([[["gone"], 1]]))
+    expect(before.getWeight(["keep"])).toBe(3)
+    expect(before.has(["gone"])).toBe(false)
   })
 
-  it("correctly subtracts weights for overlapping entries", () => {
-    const a = new Relation()
-    a.addWeighted(["x", 1], 5)
-
-    const b = new Relation()
-    b.addWeighted(["x", 1], 3)
-
-    const result = a.subtract(b)
-    expect(result.allEntryCount).toBe(1)
-    expect(getWeight(result, ["x", 1])).toBe(2)
+  it("is a no-op for an empty delta", () => {
+    const before = rel([[["x"], 2]]).presenceBefore(new Relation())
+    expect(before.getWeight(["x"])).toBe(2)
   })
 
-  it("produces negative weights when other weight exceeds this", () => {
-    const a = new Relation()
-    a.addWeighted(["x", 1], 1)
-
-    const b = new Relation()
-    b.addWeighted(["x", 1], 3)
-
-    const result = a.subtract(b)
-    expect(result.allEntryCount).toBe(1)
-    expect(getWeight(result, ["x", 1])).toBe(-2)
-    // clampedWeight should be 0 for negative weights
-    expect(result.has(["x", 1] as any)).toBe(false)
+  it("does not mutate either operand", () => {
+    const base = rel([[["x"], 2]])
+    const delta = rel([[["x"], 1]])
+    base.presenceBefore(delta)
+    expect(base.getWeight(["x"])).toBe(2)
+    expect(delta.getWeight(["x"])).toBe(1)
   })
 
-  it("prunes entries with resulting weight 0", () => {
-    const a = new Relation()
-    a.addWeighted(["x", 1], 2)
-    a.addWeighted(["y", 2], 1)
-
-    const b = new Relation()
-    b.addWeighted(["x", 1], 2) // exact cancel
-
-    const result = a.subtract(b)
-    expect(result.allEntryCount).toBe(1)
-    expect(getWeight(result, ["x", 1])).toBe(0) // pruned — getWeight returns 0 for absent
-    expect(getWeight(result, ["y", 2])).toBe(1)
-  })
-
-  it("handles mixed overlap and non-overlap correctly", () => {
-    const a = new Relation()
-    a.addWeighted(["a"], 1)
-    a.addWeighted(["b"], 2)
-    a.addWeighted(["c"], 3)
-
-    const b = new Relation()
-    b.addWeighted(["b"], 1)
-    b.addWeighted(["d"], 4)
-
-    const result = a.subtract(b)
-    // 'a': 1 (only in a)
-    // 'b': 2 - 1 = 1
-    // 'c': 3 (only in a)
-    // 'd': -4 (only in b, negated)
-    expect(result.allEntryCount).toBe(4)
-    expect(getWeight(result, ["a"])).toBe(1)
-    expect(getWeight(result, ["b"])).toBe(1)
-    expect(getWeight(result, ["c"])).toBe(3)
-    expect(getWeight(result, ["d"])).toBe(-4)
-  })
-
-  it("sets clampedWeight correctly for positive and negative results", () => {
-    const a = new Relation()
-    a.addWeighted(["pos"], 3)
-    a.addWeighted(["neg"], 1)
-
-    const b = new Relation()
-    b.addWeighted(["pos"], 1)
-    b.addWeighted(["neg"], 5)
-
-    const result = a.subtract(b)
-    // 'pos': 3 - 1 = 2 → present (clampedWeight > 0)
-    expect(result.has(["pos"] as any)).toBe(true)
-    // 'neg': 1 - 5 = -4 → absent (clampedWeight = 0)
-    expect(result.has(["neg"] as any)).toBe(false)
-  })
-
-  it("does not mutate the original relations", () => {
-    const a = new Relation()
-    a.addWeighted(["x"], 5)
-
-    const b = new Relation()
-    b.addWeighted(["x"], 3)
-
-    a.subtract(b)
-
-    expect(getWeight(a, ["x"])).toBe(5)
-    expect(getWeight(b, ["x"])).toBe(3)
-  })
-
-  it("handles negative weights in source relations", () => {
-    const a = new Relation()
-    a.addWeighted(["x"], -2)
-
-    const b = new Relation()
-    b.addWeighted(["x"], 3)
-
-    const result = a.subtract(b)
-    expect(getWeight(result, ["x"])).toBe(-5)
+  it("never reports a fact as having been present a negative number of times", () => {
+    // The old arithmetic could produce weight −1 here, which cannot describe
+    // any previous state. Presence has only two answers.
+    const before = rel([]).presenceBefore(rel([[["x"], 1]]))
+    expect(before.getWeight(["x"])).toBe(0)
   })
 })
-
-// ---------------------------------------------------------------------------
-// DatabaseView
-// ---------------------------------------------------------------------------
 
 describe("DatabaseView", () => {
   it("returns the base relation unchanged when delta has no entries for that predicate", () => {
@@ -338,7 +235,7 @@ describe("DatabaseView", () => {
     expect(view.hasFact(fact("r", ["y"]))).toBe(false)
   })
 
-  it("handles predicate with no base entries but delta entries", () => {
+  it("a fact that appeared in this step is simply absent from P_old", () => {
     const db = new Database()
     // 'r' not present in base
 
@@ -348,12 +245,14 @@ describe("DatabaseView", () => {
     const view = new DatabaseView(db, delta)
     const rel = view.getRelation("r")
 
-    // P_old = empty - delta → negative weight entry
-    expect(rel.allEntryCount).toBe(1)
-    expect(rel.getWeight(["x"] as any)).toBe(-1)
+    // Subtracting arithmetically would leave a weight −1 entry, which cannot
+    // describe a previous state: a fact is not present −1 times. P_old undoes
+    // the presence flip instead, so the fact is just not there.
+    expect(rel.allEntryCount).toBe(0)
+    expect(rel.has(["x"] as never)).toBe(false)
   })
 
-  it("handles retraction deltas (negative weights in delta)", () => {
+  it("a fact that disappeared in this step is present in P_old", () => {
     const db = new Database()
     db.addWeightedFact(fact("r", ["x"]), 1)
 
@@ -364,8 +263,22 @@ describe("DatabaseView", () => {
     const view = new DatabaseView(db, delta)
     const rel = view.getRelation("r")
 
-    // P_old = P_new - delta = 1 - (-1) = 2
-    expect(rel.getWeight(["x"] as any)).toBe(2)
+    expect(rel.has(["x"] as never)).toBe(true)
+  })
+
+  it("P_old ignores multiplicity, because a delta records presence not weight", () => {
+    // The case that made this the rule. A derived fact with two independent
+    // derivation paths carries weight 2, but the stratum that derived it
+    // reports a single +1: it appeared. Subtracting would leave weight 1 and
+    // claim the fact was already there before the step.
+    const db = new Database()
+    db.addWeightedFact(fact("blocked", [1, 1]), 2)
+
+    const delta = new Database()
+    delta.addWeightedFact(fact("blocked", [1, 1]), 1)
+
+    const view = new DatabaseView(db, delta)
+    expect(view.getRelation("blocked").has([1, 1] as never)).toBe(false)
   })
 })
 

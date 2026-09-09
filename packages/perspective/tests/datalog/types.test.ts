@@ -483,7 +483,7 @@ describe("Relation join index", () => {
     expect(rel.candidates(probeAt(0, 0), false)).toHaveLength(3)
 
     const empty = new Relation()
-    for (const built of [rel.union(empty), rel.subtract(empty)]) {
+    for (const built of [rel.union(empty), rel.presenceBefore(empty)]) {
       expect(built.candidates(probeAt(0, 0), false)).toEqual(
         scanFiltered(built, probeAt(0, 0), false),
       )

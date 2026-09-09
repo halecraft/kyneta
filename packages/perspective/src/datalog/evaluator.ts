@@ -212,18 +212,19 @@ function stratumHasAggregation(rules: readonly Rule[]): boolean {
 }
 
 /**
- * Lazy read-only view of a database with a delta subtracted.
+ * Lazy read-only view of the database as it was before a delta.
  *
- * Computes P_old = P_new − Δ lazily: `getRelation(pred)` returns the
- * base relation unchanged when the delta has no entries for that
- * predicate, and materializes `base.subtract(delta)` on first access
- * otherwise. Materialized results are cached for the lifetime of the
- * view instance.
+ * `getRelation(pred)` returns the base relation unchanged when the delta has
+ * no entries for that predicate, and otherwise materializes P_old once,
+ * caching it for the lifetime of the view.
  *
- * This replaces the eager `constructDbOld` which called `db.clone()`
- * (O(|db|) — copying every predicate's entire relation) followed by
- * weight subtraction. The lazy view is O(|delta|) in the common case
- * where rule bodies reference many predicates but the delta touches
+ * P_old is rebuilt by `Relation.presenceBefore`, which undoes each presence
+ * flip rather than subtracting weights — see there for why the distinction
+ * matters.
+ *
+ * This replaces the eager `constructDbOld`, which cloned every predicate's
+ * entire relation on every call. The lazy view is O(|delta|) in the common
+ * case where rule bodies reference many predicates but the delta touches
  * only a few.
  *
  * Used for the asymmetric join: positions after deltaIdx use P_old,
@@ -250,8 +251,7 @@ export class DatabaseView implements ReadonlyDatabase {
     // No delta entries for this predicate — share the base relation directly.
     if (deltaRel.allEntryCount === 0) return baseRel
 
-    // Materialize P_old for this predicate: base − delta.
-    const result = baseRel.subtract(deltaRel)
+    const result = baseRel.presenceBefore(deltaRel)
     this._cache.set(predicate, result)
     return result
   }
@@ -313,9 +313,9 @@ export function evaluateStratumFromDelta(
   // --- Seed phase (asymmetric join) ---
   //
   // db is P_new (input delta already applied by the caller).
-  // Construct a lazy view for P_old = P_new - inputDelta.
-  // The DatabaseView only materializes the subtraction for predicates
-  // actually accessed during rule evaluation — O(|delta|), not O(|db|).
+  // Construct a lazy view of the state before inputDelta. The DatabaseView
+  // only materializes P_old for predicates actually accessed during rule
+  // evaluation — O(|delta|), not O(|db|).
   //
   // The asymmetric join ensures each derivation path is counted
   // exactly once: positions after deltaIdx use P_old (the view),
