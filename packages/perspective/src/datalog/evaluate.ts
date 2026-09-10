@@ -6,6 +6,7 @@
 // - Substitutions carry weights through evaluation.
 // - Positive atom join: weight = sub.weight × tuple.weight (provenance product).
 // - Negation/guard: weight preserved on pass, substitution dropped on fail.
+// - Compute: a host function of bound values binds its result; weight preserved.
 // - Differential negation: weight = sub.weight × (-deltaWeight) (sign inversion).
 // - Aggregation: output weight = 1 (group-by boundary resets provenance).
 // - groundHead: duplicate facts sum weights (Z-set addition).
@@ -24,25 +25,31 @@
 // - DBSP (Budiu & McSherry, 2023) §3.2 (Z-set joins)
 
 import { evaluateAggregation } from "./aggregate.js"
+import type { Host, HostFunction } from "./host.js"
+import { hostFunctions, NO_FUNCTIONS } from "./host.js"
 import type {
   AggregationClause,
   Atom,
   BodyElement,
+  ComputeElement,
   Fact,
   GuardElement,
   ReadonlyDatabase,
   Rule,
   Substitution,
   Term,
+  Value,
 } from "./types.js"
-import { Database, serializeTuple } from "./types.js"
+import { Database, serializeTuple, valuesEqual } from "./types.js"
 import {
   EMPTY_SUBSTITUTION,
   evaluateGuard,
+  extendSubstitution,
   groundAtom,
   knownPositions,
   matchAtomWithTuple,
   probeFor,
+  resolveGuardTerm,
 } from "./unify.js"
 
 // ---------------------------------------------------------------------------
@@ -84,7 +91,9 @@ export interface WeightedFact {
 export function evaluateNaive(
   rules: readonly Rule[],
   facts: readonly Fact[],
+  host?: Host,
 ): Database {
+  const functions = hostFunctions(host)
   const db = new Database()
   for (const f of facts) {
     db.addFact(f)
@@ -99,7 +108,7 @@ export function evaluateNaive(
   while (changed) {
     changed = false
     for (const rule of rules) {
-      const derived = evaluateRule(rule, db, db)
+      const derived = evaluateRule(rule, db, db, functions)
       for (const wf of derived) {
         if (wf.weight > 0 && db.addFact(wf.fact)) {
           changed = true
@@ -203,7 +212,8 @@ const EMPTY_PREDICATES: ReadonlySet<string> = new Set<string>()
  * only if every substitution arriving at a step has the same set of bound
  * variables. That holds because binding is structural: a positive atom binds
  * all of its variables or the substitution is discarded, negation and guards
- * bind nothing, and aggregation binds its `groupBy` variables plus `result`.
+ * bind nothing, aggregation binds its `groupBy` variables plus `result`, and a
+ * compute element binds its result variable for every row or drops the row.
  * Nothing in the evaluator can produce two substitutions at the same step with
  * different domains. This was always true and never written down; the planner
  * is where it now has to hold explicitly.
@@ -337,6 +347,12 @@ function estimateCost(
     case "guard":
       return guardBound(element, bound) ? COST_FILTER : Number.POSITIVE_INFINITY
 
+    case "compute":
+      // A guard that binds: a filter once its arguments are known.
+      return allBound(element.args, bound)
+        ? COST_FILTER
+        : Number.POSITIVE_INFINITY
+
     case "aggregation":
       // Unreachable — a body with an aggregation keeps source order.
       return Number.POSITIVE_INFINITY
@@ -364,8 +380,9 @@ function sourceFor(
   // no delta, so P_old and P_new are the same database.
   if (deltaIdx < 0) return "new"
 
-  // A guard reads no relation, and aggregation keeps source order anyway.
-  if (element.kind === "guard" || element.kind === "aggregation") return "new"
+  // Guards and compute elements read no relation, and aggregation keeps
+  // source order anyway.
+  if (element.kind !== "atom" && element.kind !== "negation") return "new"
 
   return index < deltaIdx && deltaPreds.has(element.atom.predicate)
     ? "new"
@@ -383,6 +400,9 @@ function bindVariables(element: BodyElement, bound: Set<string>): void {
     case "aggregation":
       for (const v of element.agg.groupBy) bound.add(v)
       bound.add(element.agg.result)
+      break
+    case "compute":
+      if (element.result.kind === "var") bound.add(element.result.name)
       break
     // Negation and guards filter; they never bind.
     case "negation":
@@ -408,16 +428,18 @@ function bindVariables(element: BodyElement, bound: Set<string>): void {
  * `deltaIdx = -1` so those paths get indexed lookups too; skipping it would
  * leave the slowest remaining path on a full scan.
  *
- * @param rule     The rule to evaluate.
- * @param fullDb   The full database (for general matching and negation).
- * @param matchDb  The database to match positive atoms against
- *                 (could be delta for semi-naive).
- * @returns        Weighted derived facts from this rule.
+ * @param rule       The rule to evaluate.
+ * @param fullDb     The full database (for general matching and negation).
+ * @param matchDb    The database to match positive atoms against
+ *                   (could be delta for semi-naive).
+ * @param functions  The host's point functions, for compute elements.
+ * @returns          Weighted derived facts from this rule.
  */
 export function evaluateRule(
   rule: Rule,
   fullDb: ReadonlyDatabase,
   matchDb: ReadonlyDatabase,
+  functions: ReadonlyMap<string, HostFunction> = NO_FUNCTIONS,
 ): WeightedFact[] {
   const plan = planRuleEvaluation(rule, -1, EMPTY_PREDICATES, {
     current: matchDb,
@@ -449,6 +471,9 @@ export function evaluateRule(
         break
       case "guard":
         subs = evaluateGuardElement(element, subs)
+        break
+      case "compute":
+        subs = evaluateComputeElement(element, functions, subs)
         break
     }
   }
@@ -493,6 +518,7 @@ export function evaluateRule(
  * @param fullDbNew  Post-update database (P_new = P_old + delta).
  * @param delta      The delta database (changed entries only).
  * @param deltaIdx   Index of the body element driven by the delta.
+ * @param functions  The host's point functions, for compute elements.
  * @returns          Weighted derived facts with duplicate-summing.
  *
  * See Plan 006.2, Phase 1, Task 1.2.
@@ -504,6 +530,7 @@ export function evaluateRuleDelta(
   fullDbNew: ReadonlyDatabase,
   delta: ReadonlyDatabase,
   deltaIdx: number,
+  functions: ReadonlyMap<string, HostFunction> = NO_FUNCTIONS,
 ): WeightedFact[] {
   // Collect predicates present in the delta for asymmetric join dispatch.
   const deltaPreds = new Set<string>(delta.predicates())
@@ -551,6 +578,9 @@ export function evaluateRuleDelta(
         break
       case "guard":
         subs = evaluateGuardElement(element, subs)
+        break
+      case "compute":
+        subs = evaluateComputeElement(element, functions, subs)
         break
     }
   }
@@ -766,6 +796,59 @@ export function evaluateGuardElement(
     const result = evaluateGuard(guard, sub)
     if (result !== null) {
       results.push(result)
+    }
+  }
+  return results
+}
+
+/**
+ * Evaluate a compute body element: apply the named host function to each
+ * substitution's resolved arguments and unify the value with `result`.
+ *
+ * Linear per row, weight preserved, never a delta source: it is a guard
+ * that binds, and takes part in the incremental decomposition without any
+ * new theory. An argument that resolves to nothing drops the row, as an
+ * unresolvable guard does; so does a function returning `undefined`.
+ *
+ * A missing function throws. `hostErrors` runs before any evaluation, so
+ * reaching this means validation was bypassed, and a wrong answer must not
+ * be the outcome.
+ */
+export function evaluateComputeElement(
+  element: ComputeElement,
+  functions: ReadonlyMap<string, HostFunction>,
+  subs: readonly Substitution[],
+): Substitution[] {
+  const fn = functions.get(element.fn)
+  if (fn === undefined) {
+    throw new Error(
+      `host function "${element.fn}" is not registered; hostErrors would have reported it`,
+    )
+  }
+
+  const results: Substitution[] = []
+  const args: Value[] = new Array(element.args.length)
+  rows: for (const sub of subs) {
+    for (let i = 0; i < element.args.length; i++) {
+      const value = resolveGuardTerm(element.args[i]!, sub)
+      if (value === undefined) continue rows
+      args[i] = value
+    }
+    const value = fn(args)
+    if (value === undefined) continue
+
+    const result = element.result
+    if (result.kind === "wildcard") {
+      results.push(sub)
+    } else if (result.kind === "const") {
+      if (valuesEqual(result.value, value)) results.push(sub)
+    } else {
+      const existing = resolveGuardTerm(result, sub)
+      if (existing === undefined) {
+        results.push(extendSubstitution(sub, result.name, value))
+      } else if (valuesEqual(existing, value)) {
+        results.push(sub)
+      }
     }
   }
   return results

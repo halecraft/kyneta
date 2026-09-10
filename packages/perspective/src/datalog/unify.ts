@@ -313,12 +313,17 @@ export function evaluateGuard(
 }
 
 /**
- * Resolve a term for guard evaluation. Unlike `resolveTerm`, this
- * distinguishes "bound to null" from "unresolvable" more carefully.
+ * Resolve a term for guard or compute evaluation. Unlike `resolveTerm`, this
+ * distinguishes "bound to null" from "unresolvable": null is a value, an
+ * unbound variable is not. Compute elements resolve their arguments through
+ * it for the same reason guards do.
  *
  * Returns the resolved Value, or `undefined` if unresolvable.
  */
-function resolveGuardTerm(term: Term, sub: Substitution): Value | undefined {
+export function resolveGuardTerm(
+  term: Term,
+  sub: Substitution,
+): Value | undefined {
   if (term.kind === "const") {
     return term.value
   }

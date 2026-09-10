@@ -43,6 +43,7 @@ import {
   evaluateUnified,
   factsToZSet,
 } from "../../src/datalog/evaluator.js"
+import type { Host } from "../../src/datalog/host.js"
 import type { Fact, Rule, Value } from "../../src/datalog/types.js"
 import {
   _,
@@ -69,6 +70,7 @@ import {
   fuguePairDeltas,
   winnerDeltas,
 } from "../../src/kernel/resolve.js"
+import { DISTANCE_FIELD } from "./fields.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -2924,6 +2926,7 @@ describe("mixed retract+insert steps with negation over a derived predicate", ()
     rules: readonly Rule[],
     derivedPreds: readonly string[],
     symmetric: boolean,
+    host?: Host,
   ): void {
     const snapshot = (db: Database): string[] => {
       const out: string[] = []
@@ -2939,7 +2942,7 @@ describe("mixed retract+insert steps with negation over a derived predicate", ()
       const rand = lcg(seed)
       const pick = (n: number) => Math.floor(rand() * n)
 
-      const evaluator = createEvaluator(rules)
+      const evaluator = createEvaluator(rules, host)
       // Derived facts as the step deltas alone describe them. The deltas are
       // what a consumer sees, so they must agree with the database exactly.
       const shadow = new Set<string>()
@@ -2966,6 +2969,7 @@ describe("mixed retract+insert steps with negation over a derived predicate", ()
       }
       for (const [e, [x, y]] of Object.entries(pos)) {
         const placed = [fact("at", [e, x, y]), fact("solid", [e])]
+        if (e === "hero") placed.push(fact("player", [e]))
         for (const f of placed) ground.set(factKey(f), f)
         step(factsToZSet(placed))
       }
@@ -3000,7 +3004,7 @@ describe("mixed retract+insert steps with negation over a derived predicate", ()
           else ground.delete(factKey(f))
         }
 
-        const oracle = createEvaluator(rules)
+        const oracle = createEvaluator(rules, host)
         oracle.step(factsToZSet([...ground.values()]))
 
         const expected = snapshot(oracle.currentDatabase())
@@ -3043,6 +3047,46 @@ describe("mixed retract+insert steps with negation over a derived predicate", ()
       [...blockedRules, ...reachRules],
       ["blocked", "reach"],
       true,
+    )
+  })
+
+  it("a foreign distance field over the terrain matches batch under every kind of change", () => {
+    // The third shape: a host-computed relation (the breadth-first field in
+    // `fields.ts`) between the derived `blocked` and `origin` below it and a
+    // rule reading it above. Walls toggle and entities move, sometimes in the
+    // same step, and both the database and the step deltas must match batch.
+    const originRule = rule(atom("origin", [varTerm("X"), varTerm("Y")]), [
+      positiveAtom(atom("player", [varTerm("P")])),
+      positiveAtom(atom("at", [varTerm("P"), varTerm("X"), varTerm("Y")])),
+    ])
+    const towardRule = rule(
+      atom("toward", [
+        varTerm("X"),
+        varTerm("Y"),
+        varTerm("X2"),
+        varTerm("Y2"),
+      ]),
+      [
+        positiveAtom(atom("dist", [varTerm("X"), varTerm("Y"), varTerm("D")])),
+        positiveAtom(
+          atom("adj", [
+            varTerm("X"),
+            varTerm("Y"),
+            varTerm("X2"),
+            varTerm("Y2"),
+          ]),
+        ),
+        positiveAtom(
+          atom("dist", [varTerm("X2"), varTerm("Y2"), varTerm("D2")]),
+        ),
+        lt(varTerm("D2"), varTerm("D")),
+      ],
+    )
+    differentialSweep(
+      [...blockedRules, originRule, towardRule],
+      ["blocked", "origin", "dist", "toward"],
+      true,
+      { relations: [DISTANCE_FIELD] },
     )
   })
 

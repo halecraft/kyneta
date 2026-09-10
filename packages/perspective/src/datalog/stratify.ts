@@ -21,6 +21,12 @@
 // - Apt, Blair, Walker, "Towards a Theory of Declarative Knowledge" (1988)
 // - .plans/007-partitioned-settling.md § Phase 1
 
+import {
+  type ForeignRelation,
+  foreignRelations,
+  type Host,
+  hostErrors,
+} from "./host.js"
 import type {
   BodyElement,
   Result,
@@ -62,11 +68,23 @@ export interface DependencyGraph {
  * - Each negated body atom creates a negative edge from head to body predicate.
  * - Each aggregation source atom creates a negative edge (aggregation, like negation,
  *   requires the source to be fully computed before use — it's stratified).
+ *
+ * For each foreign relation (`host.ts`): a node, and a negative edge to every
+ * input. An edge from a rule *into* a foreign predicate is negative as well.
+ * Strict in both directions means the relation is alone in its stratum, fully
+ * computed before any reader runs and never inside a recursion. The inward
+ * strictness is not optional: with a positive edge a reader could share the
+ * relation's level, and the order of two strata at one level comes from the
+ * SCC numbering, which is topological today by property rather than by rule.
  */
-export function buildDependencyGraph(rules: readonly Rule[]): DependencyGraph {
+export function buildDependencyGraph(
+  rules: readonly Rule[],
+  foreign: readonly ForeignRelation[] = [],
+): DependencyGraph {
   const predicates = new Set<string>()
   const edges: DependencyEdge[] = []
   const adjacency = new Map<string, DependencyEdge[]>()
+  const foreignPreds = new Set(foreign.map(f => f.predicate))
 
   function addEdge(from: string, to: string, negative: boolean): void {
     const edge: DependencyEdge = { from, to, negative }
@@ -87,7 +105,11 @@ export function buildDependencyGraph(rules: readonly Rule[]): DependencyGraph {
       switch (element.kind) {
         case "atom": {
           predicates.add(element.atom.predicate)
-          addEdge(headPred, element.atom.predicate, false)
+          addEdge(
+            headPred,
+            element.atom.predicate,
+            foreignPreds.has(element.atom.predicate),
+          )
           break
         }
         case "negation": {
@@ -102,12 +124,21 @@ export function buildDependencyGraph(rules: readonly Rule[]): DependencyGraph {
           addEdge(headPred, element.agg.source.predicate, true)
           break
         }
-        case "guard": {
-          // Guards are binary constraints on terms — they don't reference
-          // any predicate and introduce no dependency edges.
+        case "guard":
+        case "compute": {
+          // Guards and compute elements constrain or bind terms — they
+          // reference no predicate and introduce no dependency edges.
           break
         }
       }
+    }
+  }
+
+  for (const f of foreign) {
+    predicates.add(f.predicate)
+    for (const input of f.inputs) {
+      predicates.add(input)
+      addEdge(f.predicate, input, true)
     }
   }
 
@@ -575,6 +606,11 @@ export interface Stratum {
   readonly rules: readonly Rule[]
   /** Partition key information for this stratum. */
   readonly partitionKey: PartitionKeyInfo
+  /**
+   * Set when this stratum is a host-computed relation rather than rules. It
+   * then has no rules and exactly one predicate. See `host.ts`.
+   */
+  readonly foreign?: ForeignRelation
 }
 
 /**
@@ -594,12 +630,17 @@ export interface Stratum {
  */
 export function stratify(
   rules: readonly Rule[],
+  host?: Host,
 ): Result<readonly Stratum[], StratificationError> {
-  if (rules.length === 0) {
+  const problems = hostErrors(rules, host)
+  if (problems.length > 0) return err(problems[0]!)
+
+  const foreign = foreignRelations(host)
+  if (rules.length === 0 && foreign.length === 0) {
     return ok([])
   }
 
-  const graph = buildDependencyGraph(rules)
+  const graph = buildDependencyGraph(rules, foreign)
 
   // Step 1: Check for cyclic negation.
   // An SCC with more than one node that has an internal negative edge,
@@ -654,10 +695,14 @@ export function stratify(
     sccLevel[i] = maxLevel
   }
 
-  // Step 3: Identify derived predicates (those that appear as rule heads).
-  // Ground predicates (body-only) are excluded from the connectivity
-  // test in Step 4.
+  // Step 3: Identify derived predicates: rule heads, and foreign predicates,
+  // which the host derives. Ground predicates (body-only) are excluded from
+  // the connectivity test in Step 4.
   const derivedPredicates = headPredicates(rules)
+  const foreignByPredicate = new Map(
+    foreign.map(f => [f.predicate, f] as const),
+  )
+  for (const pred of foreignByPredicate.keys()) derivedPredicates.add(pred)
 
   // Step 4: Group SCCs at the same level into connected components.
   //
@@ -796,6 +841,14 @@ export function stratify(
       // Collect rules whose heads are in this component.
       const componentRules = rules.filter(r => preds.has(r.head.predicate))
 
+      // A foreign predicate is alone in its component: every edge touching
+      // it is strict, so nothing shares its level and connects to it.
+      let foreignHere: ForeignRelation | undefined
+      for (const pred of preds) {
+        const f = foreignByPredicate.get(pred)
+        if (f !== undefined) foreignHere = f
+      }
+
       // Only include non-empty strata (have predicates or rules).
       if (preds.size > 0 || componentRules.length > 0) {
         strata.push({
@@ -803,6 +856,7 @@ export function stratify(
           predicates: preds,
           rules: componentRules,
           partitionKey: extractPartitionKey(componentRules),
+          ...(foreignHere !== undefined ? { foreign: foreignHere } : {}),
         })
         nextIndex++
       }
@@ -871,7 +925,8 @@ export function bodyPredicates(body: readonly BodyElement[]): Set<string> {
         preds.add(elem.agg.source.predicate)
         break
       case "guard":
-        // Guards reference no predicates.
+      case "compute":
+        // Guards and compute elements reference no predicates.
         break
     }
   }

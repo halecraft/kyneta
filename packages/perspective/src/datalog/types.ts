@@ -154,11 +154,29 @@ export interface AggregationElement {
   readonly agg: AggregationClause
 }
 
+/**
+ * A host function applied inside the join: a guard that binds.
+ *
+ * `fn` is a name, resolved against the host registry the evaluator was
+ * created with, so the rule stays data and can travel; what it costs is that
+ * the name must resolve identically wherever the rule runs (see `host.ts`).
+ * `result` is a term on purpose: an unbound variable is bound to the value, a
+ * bound variable or a constant is compared with it and the row kept only on
+ * equality, and a wildcard keeps the row without binding.
+ */
+export interface ComputeElement {
+  readonly kind: "compute"
+  readonly fn: string
+  readonly args: readonly Term[]
+  readonly result: Term
+}
+
 export type BodyElement =
   | AtomElement
   | NegationElement
   | AggregationElement
   | GuardElement
+  | ComputeElement
 
 // ---------------------------------------------------------------------------
 // Body element constructors
@@ -174,6 +192,15 @@ export function negation(a: Atom): NegationElement {
 
 export function aggregation(agg: AggregationClause): AggregationElement {
   return { kind: "aggregation", agg }
+}
+
+/** `result = fn(...args)`, with `fn` a name in the host registry. */
+export function compute(
+  fn: string,
+  args: readonly Term[],
+  result: Term,
+): ComputeElement {
+  return { kind: "compute", fn, args, result }
 }
 
 // ---------------------------------------------------------------------------
@@ -1258,4 +1285,31 @@ export interface CyclicNegationError {
   readonly cycle: readonly string[] // predicate names involved in the cycle
 }
 
-export type StratificationError = CyclicNegationError
+/** A rule names a host function the registry does not have. */
+export interface UnknownHostFunctionError {
+  readonly kind: "unknownHostFunction"
+  readonly fn: string
+  readonly rule: Rule
+}
+
+/** A rule tries to derive a relation the host computes. */
+export interface ForeignPredicateDerivedError {
+  readonly kind: "foreignPredicateDerived"
+  readonly predicate: string
+  readonly rule: Rule
+}
+
+/** A compute element's argument is bound by nothing in its body. */
+export interface UnboundComputeArgumentError {
+  readonly kind: "unboundComputeArgument"
+  readonly fn: string
+  readonly variable: string
+  readonly rule: Rule
+}
+
+export type HostError =
+  | UnknownHostFunctionError
+  | ForeignPredicateDerivedError
+  | UnboundComputeArgumentError
+
+export type StratificationError = CyclicNegationError | HostError

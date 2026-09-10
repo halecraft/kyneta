@@ -1220,6 +1220,8 @@ native_fugue(parent) = fugue_tree_walk(active_structure_seq(parent))
 
 **Engine version scope:** Only native solvers require versioning. The kernel (Layer 0) is specified by this document and does not vary. The Datalog evaluator is specified by Datalog's fixed-point semantics and does not vary. Native solvers are the only component where implementation choice could affect results — hence the version pin.
 
+**Host relations and functions (provisional, 2026-09-10).** The reference implementation also lets rules reference host code by name: a *foreign relation* the evaluator does not derive but calls a host function for, and a *compute* body element that applies a host function inside a join. These extend the engine-version pin: a reality that uses them must pin their names and versions alongside the engine version, and every agent must register the same names with the same behaviour. The engine verifies presence, not agreement. The constraint that would carry such declarations in the store is not yet specified; until it is, host code is per-agent configuration outside the replicated semantics, and a rule that names it is valid everywhere but solves only where it is registered.
+
 ### B.8 Reality Bootstrap
 
 When a new reality is created, the creation constraint carries:

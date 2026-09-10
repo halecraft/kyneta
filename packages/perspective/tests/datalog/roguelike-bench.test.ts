@@ -36,12 +36,14 @@ import {
   fact,
   factKey,
   factsToZSet,
+  lt,
   negation,
   positiveAtom,
   rule,
   varTerm,
   zsetAdd,
 } from "../../src/index.js"
+import { DISTANCE_FIELD } from "./fields.js"
 
 const $ = varTerm
 
@@ -341,6 +343,68 @@ describe("roguelike: performance", () => {
 
     expect(evaluator.currentDatabase().getRelation("exploded").size).toBe(200)
     expect(p95).toBeLessThan(5)
+  })
+
+  it("a foreign distance field follows a moving player at a few milliseconds a tick", () => {
+    // The workload that retires a downstream engine's settle loop: the
+    // breadth-first field in `fields.ts` as a foreign stratum, with `origin`
+    // and `blocked` derived below it and a hunt rule reading it above. Each
+    // tick moves the player, so `origin` flips and the field is run again and
+    // diffed. Measured ~8 ms p50, ~10 ms p95 on the 100x30 world; the ceiling
+    // is ~10x that. This is the number the settle loop paid ~125 ms for.
+    const { facts } = buildGrid(100, 30)
+    for (let y = 2; y < 28; y += 4) facts.push(fact("wall", [50, y]))
+    const origin = rule(atom("origin", [$("X"), $("Y")]), [
+      positiveAtom(atom("player", [$("P")])),
+      positiveAtom(atom("at", [$("P"), $("X"), $("Y")])),
+    ])
+    const blocked = rule(atom("blocked", [$("X"), $("Y")]), [
+      positiveAtom(atom("wall", [$("X"), $("Y")])),
+    ])
+    const hunt = rule(atom("hunt", [$("M"), $("X2"), $("Y2")]), [
+      positiveAtom(atom("murk", [$("M")])),
+      positiveAtom(atom("at", [$("M"), $("X"), $("Y")])),
+      positiveAtom(atom("dist", [$("X"), $("Y"), $("D")])),
+      positiveAtom(atom("adj", [$("X"), $("Y"), $("X2"), $("Y2")])),
+      positiveAtom(atom("dist", [$("X2"), $("Y2"), $("D2")])),
+      lt($("D2"), $("D")),
+    ])
+    const evaluator = createEvaluator([origin, blocked, hunt], {
+      relations: [DISTANCE_FIELD],
+    })
+    evaluator.step(
+      factsToZSet([
+        ...facts,
+        fact("player", ["hero"]),
+        fact("at", ["hero", 0, 0]),
+        fact("murk", ["m"]),
+        fact("at", ["m", 99, 29]),
+      ]),
+    )
+    expect(evaluator.currentDatabase().getRelation("dist").size).toBe(2993)
+    expect(
+      evaluator.currentDatabase().getRelation("hunt").size,
+    ).toBeGreaterThan(0)
+
+    const ticks: number[] = []
+    let [hx, hy] = [0, 0]
+    for (let i = 1; i <= 30; i++) {
+      const [nx, ny] = [i, (i * 7) % 30]
+      const move = new Map([
+        ...factsToZSet([fact("at", ["hero", hx, hy])], -1),
+        ...factsToZSet([fact("at", ["hero", nx, ny])]),
+      ])
+      ;[hx, hy] = [nx, ny]
+      const started = performance.now()
+      evaluator.step(move)
+      ticks.push(performance.now() - started)
+    }
+
+    expect(
+      evaluator.currentDatabase().getRelation("dist").has([hx, hy, 0]),
+    ).toBe(true)
+    ticks.sort((a, b) => a - b)
+    expect(ticks[Math.floor(ticks.length * 0.95)]!).toBeLessThan(100)
   })
 
   it("retracting into the recursive flood recomputes it in tens of milliseconds", () => {

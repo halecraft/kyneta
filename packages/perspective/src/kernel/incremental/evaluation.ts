@@ -40,6 +40,7 @@ import {
   type Evaluator,
   factsToZSet,
 } from "../../datalog/evaluator.js"
+import type { Host } from "../../datalog/host.js"
 import type { Fact, Rule } from "../../datalog/types.js"
 import { factKey } from "../../datalog/types.js"
 import {
@@ -304,7 +305,9 @@ function resolutionDeltas(derived: ZSet<Fact>): {
  *
  * @returns An IncrementalEvaluation instance with empty state.
  */
-export function createIncrementalEvaluation(): IncrementalEvaluation {
+export function createIncrementalEvaluation(
+  host?: Host,
+): IncrementalEvaluation {
   // --- Strategy state ---
   let strategy: ResolutionStrategy = "native"
   let lww: IncrementalLWW = createIncrementalLWW()
@@ -376,7 +379,7 @@ export function createIncrementalEvaluation(): IncrementalEvaluation {
 
     // Create the unified Datalog evaluator with current rules.
     const rules = extractRules(getActiveConstraints())
-    datalog = createEvaluator(rules)
+    datalog = createEvaluator(rules, host)
 
     // Bootstrap from accumulated ground facts.
     const accFacts = getAccumulatedFacts()

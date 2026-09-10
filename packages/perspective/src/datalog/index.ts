@@ -30,6 +30,15 @@ export {
   evaluateUnified as evaluate,
   factsToZSet,
 } from "./evaluator.js"
+// --- Host relations and functions ---
+export type {
+  DeclarationError,
+  ForeignDeclaration,
+  ForeignRelation,
+  Host,
+  HostFunction,
+} from "./host.js"
+export { declarationErrors, hostErrors } from "./host.js"
 // --- Stratification ---
 export type {
   DependencyEdge,
@@ -52,12 +61,14 @@ export type {
   AtomElement,
   BodyElement,
   CnId,
+  ComputeElement,
   ConstTerm,
   CyclicNegationError,
   Fact,
   FactTuple,
   GuardElement,
   GuardOp,
+  HostError,
   NegationElement,
   ReadonlyDatabase,
   Result,
@@ -76,6 +87,7 @@ export {
   aggregation,
   atom,
   compareValues,
+  compute,
   constTerm,
   Database,
   eq,

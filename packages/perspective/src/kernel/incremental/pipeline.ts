@@ -106,7 +106,7 @@ export function createIncrementalPipeline(
   const retraction = createIncrementalRetraction(retractionConfig)
   const projection = createIncrementalProjection(() => structureIndex.current())
   const skeleton = createIncrementalSkeleton(() => structureIndex.current())
-  const evaluation = createIncrementalEvaluation()
+  const evaluation = createIncrementalEvaluation(config.host)
 
   // --- DAG wiring ---
 

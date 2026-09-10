@@ -35,6 +35,15 @@ import {
   getPositiveAtomIndices,
 } from "./evaluate.js"
 import {
+  EMPTY_HOST,
+  type ForeignRelation,
+  foreignRelations,
+  type Host,
+  type HostFunction,
+  hostFunctions,
+  NO_FUNCTIONS,
+} from "./host.js"
+import {
   bodyPredicates,
   headPredicates,
   type Stratum,
@@ -300,6 +309,7 @@ const NO_GROUND: ReadonlyDatabase = new Database()
  * @param ground       The ground part of any predicate this stratum derives.
  *                     A predicate can be both inserted and derived; a
  *                     recompute wipes only the derived part.
+ * @param functions    The host's point functions, for compute elements.
  * @returns            Output delta Database (facts with weight +1 or −1).
  *
  * See Plan 006.2, Phase 2, Tasks 2.2–2.5.
@@ -310,14 +320,15 @@ export function evaluateStratumFromDelta(
   db: Database,
   inputDelta: Database,
   ground: ReadonlyDatabase = NO_GROUND,
+  functions: ReadonlyMap<string, HostFunction> = NO_FUNCTIONS,
 ): Database {
   if (
     stratumHasAggregation(rules) ||
     retractsIntoRecursion(rules, db, inputDelta)
   ) {
-    return recomputeStratum(rules, db, ground)
+    return recomputeStratum(rules, db, ground, functions)
   }
-  return evaluateStratumSemiNaive(rules, db, inputDelta)
+  return evaluateStratumSemiNaive(rules, db, inputDelta, functions)
 }
 
 /**
@@ -328,6 +339,7 @@ function evaluateStratumSemiNaive(
   rules: readonly Rule[],
   db: Database,
   inputDelta: Database,
+  functions: ReadonlyMap<string, HostFunction>,
 ): Database {
   const dirty: DirtyMap = new Map()
 
@@ -354,7 +366,7 @@ function evaluateStratumSemiNaive(
     if (positiveAtomIndices.length === 0 && negationAtomIndices.length === 0) {
       // Rule with no positive or negation atoms (empty body or only guards).
       // Evaluate against db (P_new) — these fire unconditionally.
-      const derived = evaluateRule(rule, db, db)
+      const derived = evaluateRule(rule, db, db, functions)
       for (const wf of derived) {
         seedDerived.push(wf)
       }
@@ -375,7 +387,14 @@ function evaluateStratumSemiNaive(
         const atomPred = (rule.body[deltaIdx]! as AtomElement).atom.predicate
         if (inputDelta.getRelation(atomPred).allEntryCount === 0) continue
 
-        const derived = evaluateRuleDelta(rule, dbOld, db, inputDelta, deltaIdx)
+        const derived = evaluateRuleDelta(
+          rule,
+          dbOld,
+          db,
+          inputDelta,
+          deltaIdx,
+          functions,
+        )
         for (const wf of derived) {
           seedDerived.push(wf)
         }
@@ -390,7 +409,14 @@ function evaluateStratumSemiNaive(
           }
         ).atom
         if (inputDelta.getRelation(negAtom.predicate).allEntryCount > 0) {
-          const derived = evaluateRuleDelta(rule, dbOld, db, inputDelta, negIdx)
+          const derived = evaluateRuleDelta(
+            rule,
+            dbOld,
+            db,
+            inputDelta,
+            negIdx,
+            functions,
+          )
           for (const wf of derived) {
             seedDerived.push(wf)
           }
@@ -442,6 +468,7 @@ function evaluateStratumSemiNaive(
           db,
           currentDelta,
           deltaIdx,
+          functions,
         )
         for (const wf of derived) {
           applyDerivedFact(wf, db, dirty, nextDelta)
@@ -464,6 +491,7 @@ function evaluateStratumSemiNaive(
             db,
             currentDelta,
             negIdx,
+            functions,
           )
           for (const wf of derived) {
             applyDerivedFact(wf, db, dirty, nextDelta)
@@ -578,6 +606,7 @@ function recomputeStratum(
   rules: readonly Rule[],
   db: Database,
   ground: ReadonlyDatabase,
+  functions: ReadonlyMap<string, HostFunction>,
 ): Database {
   const heads = headPredicates(rules)
 
@@ -603,8 +632,88 @@ function recomputeStratum(
     for (const pred of bodyPredicates(rule.body)) seed(pred)
   }
 
-  delta.addAllWeighted(evaluateStratumSemiNaive(rules, db, inputDelta))
+  delta.addAllWeighted(
+    evaluateStratumSemiNaive(rules, db, inputDelta, functions),
+  )
   return delta
+}
+
+/**
+ * A read-only window onto the database that answers only for a foreign
+ * relation's declared inputs. Anything else throws: an undeclared read would
+ * see a relation the stratifier never ordered before this one, and fail
+ * silently and late instead of loudly and here.
+ */
+class HostView implements ReadonlyDatabase {
+  private readonly inputs: ReadonlySet<string>
+
+  constructor(
+    private readonly db: Database,
+    private readonly foreign: ForeignRelation,
+  ) {
+    this.inputs = new Set(foreign.inputs)
+  }
+
+  getRelation(predicate: string): Relation {
+    if (!this.inputs.has(predicate)) {
+      throw new Error(
+        `foreign relation "${this.foreign.predicate}" read "${predicate}", which it does not declare as an input`,
+      )
+    }
+    return this.db.getRelation(predicate)
+  }
+
+  predicates(): Iterable<string> {
+    return this.inputs
+  }
+
+  hasFact(f: Fact): boolean {
+    return this.getRelation(f.predicate).has(f.values)
+  }
+}
+
+/**
+ * Run a foreign relation and return its presence delta.
+ *
+ * An opaque operator has no algebraic delta form, so its incremental version
+ * is DBSP's general one: run it on the new state and diff against what it
+ * produced last time. That is the aggregation path with a function in place
+ * of a rule body, built from the same parts. `wipeDerived` takes the head
+ * down to its ground part and records every wiped fact's pre-weight; the
+ * function's tuples are added through the first-touch idiom
+ * `applyDerivedFact` uses, into that same map; one `extractDelta` over the
+ * map is then the whole diff: wiped and back is 0, wiped and gone is −1, new
+ * is +1. `changed` is passed on as a hint for a memo inside the function and
+ * decides nothing here.
+ */
+function recomputeForeign(
+  foreign: ForeignRelation,
+  db: Database,
+  changed: ReadonlySet<string>,
+  ground: ReadonlyDatabase,
+): Database {
+  const dirty = wipeDerived(new Set([foreign.predicate]), db, ground)
+  let dirtyRel = dirty.get(foreign.predicate)
+  if (dirtyRel === undefined) {
+    dirtyRel = new Map()
+    dirty.set(foreign.predicate, dirtyRel)
+  }
+  const rel = db.relation(foreign.predicate)
+
+  // Set semantics: the function describes a relation, so a tuple it yields
+  // twice is present once.
+  const seen = new Set<string>()
+  for (const tuple of foreign.compute(new HostView(db, foreign), changed)) {
+    const tupleKey = serializeTuple(tuple)
+    if (seen.has(tupleKey)) continue
+    seen.add(tupleKey)
+    if (!dirtyRel.has(tupleKey)) {
+      dirtyRel.set(tupleKey, { tuple, preWeight: rel.getWeightByKey(tupleKey) })
+    }
+    rel.addWeightedByKey(tupleKey, tuple, 1)
+  }
+
+  return extractDelta(db, dirty)
 }
 
 // ---------------------------------------------------------------------------
@@ -622,16 +731,17 @@ function buildPredicateToAffectedStrata(
   const result = new Map<string, Set<number>>()
 
   for (const stratum of strata) {
+    const reads = new Set<string>(stratum.foreign?.inputs ?? [])
     for (const rule of stratum.rules) {
-      const preds = bodyPredicates(rule.body)
-      for (const pred of preds) {
-        let set = result.get(pred)
-        if (set === undefined) {
-          set = new Set()
-          result.set(pred, set)
-        }
-        set.add(stratum.index)
+      for (const pred of bodyPredicates(rule.body)) reads.add(pred)
+    }
+    for (const pred of reads) {
+      let set = result.get(pred)
+      if (set === undefined) {
+        set = new Set()
+        result.set(pred, set)
       }
+      set.add(stratum.index)
     }
   }
 
@@ -656,6 +766,7 @@ function computeAffectedStrata(
   const stratumHeads = new Map<number, Set<string>>()
   for (const stratum of strata) {
     const heads = headPredicates(stratum.rules)
+    if (stratum.foreign !== undefined) heads.add(stratum.foreign.predicate)
     stratumHeads.set(stratum.index, heads)
   }
 
@@ -722,6 +833,8 @@ function bodyElementId(b: BodyElement): string {
       return `g:${b.op}(${termId(b.left)},${termId(b.right)})`
     case "aggregation":
       return `a:${b.agg.fn}`
+    case "compute":
+      return `c:${b.fn}(${b.args.map(termId).join(",")})->${termId(b.result)}`
   }
 }
 
@@ -827,9 +940,15 @@ export interface Evaluator {
  * returns the derived-fact delta.
  *
  * @param initialRules - The initial set of rules.
+ * @param host - Host-computed relations and point functions the rules may
+ *   reference by name (see `host.ts`). A rule naming something the host
+ *   lacks throws here rather than deriving an empty relation later.
  * @returns An Evaluator holding no facts.
  */
-export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
+export function createEvaluator(
+  initialRules: readonly Rule[],
+  host: Host = EMPTY_HOST,
+): Evaluator {
   // --- Mutable state ---
 
   /** Accumulated database: ground + derived facts. */
@@ -861,25 +980,20 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
   /** The predicates `groundInDerived` tracks. */
   const trackedGround = new Set<string>()
 
+  /** The host's point functions, resolved once. */
+  const functions = hostFunctions(host)
+
   // Stratify, then derive what needs no facts at all: a rule with an empty
-  // body holds from the start, and what it derives may feed a higher stratum.
-  // `changeRules` recomputes every stratum from scratch and so fires such
-  // rules again on its own.
+  // body holds from the start, a foreign relation with no inputs likewise,
+  // and what they derive may feed a higher stratum. Recomputing each stratum
+  // bottom-up over an empty database is exactly that.
   restratify()
-  {
-    const seed = new Database()
-    for (const stratum of strata) {
-      if (stratum.rules.length === 0) continue
-      seed.addAllWeighted(
-        evaluateStratumFromDelta(stratum.rules, db, seed, groundInDerived),
-      )
-    }
-  }
+  for (const stratum of strata) recomputeStratumOf(stratum)
 
   // --- Internal helpers ---
 
   function restratify(): void {
-    if (rules.length === 0) {
+    if (rules.length === 0 && foreignRelations(host).length === 0) {
       strata = []
       strataByIndex = new Map()
       predToStrata = new Map()
@@ -887,8 +1001,13 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
       return
     }
 
-    const result = stratify(rules)
+    const result = stratify(rules, host)
     if (!result.ok) {
+      // A rule that needs host code the host lacks is a configuration error,
+      // not a data condition: fail here, loudly.
+      if (result.error.kind !== "cyclicNegation") {
+        throw new Error(describeHostError(result.error))
+      }
       // Cyclic negation — clear strata.
       strata = []
       strataByIndex = new Map()
@@ -904,7 +1023,43 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
     }
     predToStrata = buildPredicateToAffectedStrata(strata)
     allDerivedPreds = headPredicates(rules)
+    for (const s of strata) {
+      if (s.foreign !== undefined) allDerivedPreds.add(s.foreign.predicate)
+    }
     trackGround()
+  }
+
+  /** Derive one stratum from an input delta: what `step` does per stratum. */
+  function deriveStratum(stratum: Stratum, inputDelta: Database): Database {
+    if (stratum.foreign !== undefined) {
+      const changed = new Set<string>()
+      for (const input of stratum.foreign.inputs) {
+        if (inputDelta.getRelation(input).allEntryCount > 0) changed.add(input)
+      }
+      return recomputeForeign(stratum.foreign, db, changed, groundInDerived)
+    }
+    if (stratum.rules.length === 0) return new Database()
+    return evaluateStratumFromDelta(
+      stratum.rules,
+      db,
+      inputDelta,
+      groundInDerived,
+      functions,
+    )
+  }
+
+  /** Derive one stratum again from scratch: what `changeRules` does per stratum. */
+  function recomputeStratumOf(stratum: Stratum): Database {
+    if (stratum.foreign !== undefined) {
+      return recomputeForeign(
+        stratum.foreign,
+        db,
+        new Set(stratum.foreign.inputs),
+        groundInDerived,
+      )
+    }
+    if (stratum.rules.length === 0) return new Database()
+    return recomputeStratum(stratum.rules, db, groundInDerived, functions)
   }
 
   /** Start keeping the ground part of predicates that have become derived. */
@@ -977,8 +1132,7 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
     // Derive every stratum again from scratch, bottom-up. Rule changes are
     // rare enough that a full recompute is fine.
     for (const stratum of strata) {
-      if (stratum.rules.length === 0) continue
-      delta.addAllWeighted(recomputeStratum(stratum.rules, db, groundInDerived))
+      delta.addAllWeighted(recomputeStratumOf(stratum))
     }
     return derivedFactsToZSet(delta)
   }
@@ -1003,14 +1157,9 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
     const outputDelta = new Database()
     for (const stratumIdx of affectedIndices) {
       const stratum = strataByIndex.get(stratumIdx)
-      if (stratum === undefined || stratum.rules.length === 0) continue
+      if (stratum === undefined) continue
 
-      const stratumDelta = evaluateStratumFromDelta(
-        stratum.rules,
-        db,
-        currentInputDelta,
-        groundInDerived,
-      )
+      const stratumDelta = deriveStratum(stratum, currentInputDelta)
 
       // The stratum's output joins the cumulative output and feeds higher
       // strata, which see changes from ground facts and lower derivations.
@@ -1048,16 +1197,17 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
 export function evaluateUnified(
   rules: readonly Rule[],
   facts: readonly Fact[],
+  host?: Host,
 ): Result<Database, StratificationError> {
   // Validate stratification upfront for the error path.
-  if (rules.length > 0) {
-    const stratResult = stratify(rules)
+  if (rules.length > 0 || foreignRelations(host).length > 0) {
+    const stratResult = stratify(rules, host)
     if (!stratResult.ok) {
       return err(stratResult.error)
     }
   }
 
-  return ok(evaluateBatch(rules, facts))
+  return ok(evaluateBatch(rules, facts, host))
 }
 
 /**
@@ -1071,16 +1221,18 @@ export function evaluateUnified(
 export function evaluatePositiveUnified(
   rules: readonly Rule[],
   facts: readonly Fact[],
+  host?: Host,
 ): Database {
-  return evaluateBatch(rules, facts)
+  return evaluateBatch(rules, facts, host)
 }
 
 /** One fresh evaluator, every fact as +1, its database as the result. */
 function evaluateBatch(
   rules: readonly Rule[],
   facts: readonly Fact[],
+  host?: Host,
 ): Database {
-  if (rules.length === 0) {
+  if (rules.length === 0 && foreignRelations(host).length === 0) {
     // No rules means no strata, so an evaluator would have nothing to seed;
     // the result is just the ground facts.
     const db = new Database()
@@ -1092,8 +1244,22 @@ function evaluateBatch(
 
   // The evaluator's own database is the result. Filling a separate one first
   // used to cost a full serialize-and-insert pass that was then thrown away.
-  const evaluator = createEvaluator(rules)
+  const evaluator = createEvaluator(rules, host)
   evaluator.step(factsToZSet(facts))
 
   return evaluator.currentDatabase()
+}
+
+/** One line a thrown host error can carry. */
+function describeHostError(error: StratificationError): string {
+  switch (error.kind) {
+    case "unknownHostFunction":
+      return `rule for "${error.rule.head.predicate}" names host function "${error.fn}", which is not registered`
+    case "foreignPredicateDerived":
+      return `rule derives "${error.predicate}", which is a foreign relation the host computes`
+    case "unboundComputeArgument":
+      return `rule for "${error.rule.head.predicate}" passes unbound variable "${error.variable}" to host function "${error.fn}"`
+    case "cyclicNegation":
+      return `cyclic negation through ${error.cycle.join(", ")}`
+  }
 }

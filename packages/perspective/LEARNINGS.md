@@ -880,6 +880,12 @@ The theory doc had the boundary right the whole time: §5.6 is evaluation, emitt
 
 The check worth adopting: before exporting an interface, compare it against the theory's stage boundaries, not against its one existing caller. A caller that is also the author will never ask for less than it gets.
 
+### The Settle Loop Was a Second Stratifier, and the Hard Part Was Not the Code
+
+A downstream engine computed its distance field outside the evaluator: derive, ask which inputs changed, measure, feed the result back as ephemeral facts, derive again, stop when a round measured nothing. Small, correct, and a re-implementation of stratification and change detection with string names and a memo the evaluator could not see. Moving it inside took about forty lines, because every part already existed: the stratifier orders a relation after its inputs, `computeAffectedStrata` knows which strata a change reaches, and the retraction recompute had already made wipe-to-ground, run, diff a single shared path. A foreign relation is that path with a function in place of a rule body.
+
+What took the time was deciding what is data and what is code before writing the API. Rules travel in the store and any two implementations must agree on the reality; a host function cannot travel and can differ between peers. The spec had already faced this for native solvers and answered with an engine version pinned as data. Applying the same split, declaration as data and implementation as registered code joined by a name, meant the registration API was designed as engine configuration from the outset rather than discovered to be that later. The check worth keeping: when something new has to live outside the store, find the precedent for how the spec already keeps such things honest, and copy its shape.
+
 ## Open Questions
 
 1. **Can constraint compaction be made safe in a decentralized system?** Compacting requires knowing what all peers have seen. Without a central coordinator, this requires something like a "compaction frontier" protocol. For Lists, tombstone compaction is especially tricky due to origin references.

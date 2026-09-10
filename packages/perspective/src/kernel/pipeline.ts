@@ -18,6 +18,7 @@
 // See unified-engine.md §7.1, §7.2, §B.1, §B.4, §B.7.
 
 import { evaluateUnified as evaluate } from "../datalog/evaluator.js"
+import type { Host } from "../datalog/host.js"
 import { buildNativeResolution } from "./native-resolution.js"
 import { type ProjectionResult, projectToFacts } from "./projection.js"
 import { extractResolution, type ResolutionResult } from "./resolve.js"
@@ -63,6 +64,16 @@ export interface PipelineConfig {
    * respect rules-as-data (custom rules are ignored).
    */
   readonly enableDatalogEvaluation?: boolean
+
+  /**
+   * Host-computed relations and point functions that rules may reference by
+   * name (see `datalog/host.ts`). Unlike `enableDatalogEvaluation`, this
+   * changes results: it is the per-relation form of the engine-version pin
+   * in spec §B.7, and a reality that uses it must have every peer register
+   * the same names with the same behaviour. The engine checks presence, not
+   * agreement.
+   */
+  readonly host?: Host
 }
 
 // ---------------------------------------------------------------------------
@@ -199,7 +210,7 @@ export function solveFull(
     nativeFastPath = enableDatalog ? true : null
   } else {
     // Custom or modified rules — use Datalog evaluation (primary path).
-    const evalResult = evaluate(rules, projectionResult.facts)
+    const evalResult = evaluate(rules, projectionResult.facts, config.host)
     if (evalResult.ok) {
       resolutionResult = extractResolution(evalResult.value)
     } else {

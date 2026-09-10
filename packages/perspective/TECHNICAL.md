@@ -7,7 +7,8 @@
 > **Canonical symbols**: `createReality`, `solve`, `insert`, `produceRoot`, `produceMapChild`, `produceSeqChild`, `produceValue`, `retract`, `ConstraintStore`, `createStore`, `Constraint`, `Rule`, `Agent`, `createAgent`, `CnId`, `createCnId`, `PeerID`, `VersionVector`, `AuthorityConstraint`, `PipelineConfig`, `RetractionConfig`, `evaluate`, `createEvaluator`, `stratify`, `unify`, `aggregate`, `Fugue`, `LWW`, `incrementalFugue`, `incrementalLWW`, `ZSet` + operators, `STUB_SIGNATURE`
 > **Key invariant(s)**:
 > 1. **Rules are data, not code.** LWW value resolution and Fugue sequence ordering are ordinary `rule` constraints asserted at reality bootstrap. They travel in the store. Any agent with `CreateRule + Retract` capabilities can replace them — the reality changes, the engine doesn't.
-> 2. **Given the same store, any two correct implementations produce identical results.** Layer 0 (kernel) algorithms are mechanical; Layer 1 (Datalog evaluator) is deterministic. Implementation languages and optimization strategies are free to vary; the resolved reality is not.
+> 2. **Given the same store and the same host registry, any two correct implementations produce identical results.** Layer 0 (kernel) algorithms are mechanical; Layer 1 (Datalog evaluator) is deterministic. Implementation languages and optimization strategies are free to vary; the resolved reality is not.
+> 4. **Host code is engine configuration referenced by name; its declarations are data.** A relation or function the evaluator cannot derive is registered on the engine and named by rules. The name, inputs and version can travel; the code cannot. The engine checks that every name it needs is present and cannot check that two peers' code agrees. See [Host relations and functions](#host-relations-and-functions).
 > 3. **Merge is set union.** Two constraint stores combine via pointwise set union — no ordering, no conflict resolution at merge time. All resolution happens at solve time.
 
 A self-contained implementation of the Unified CCS Engine Specification (see `theory/unified-engine.md`). Every structural or content change is modeled as a *constraint* — a signed, CnId-addressed assertion. Stores merge via set union. To compute the current state, the solver runs a Datalog program over the constraints; the default LWW + Fugue rules are themselves constraints in the store.
@@ -298,6 +299,7 @@ The engine doesn't change. The reality does.
 - **Not unrestricted eval.** Rules must pass Datalog's stratification check — no arbitrary recursion with negation. Malformed rules are rejected at validity time.
 - **Not a scripting language.** Rules are pure Datalog — no side effects, no I/O.
 - **Not free.** Every rule is evaluated at every solve. Complex rules cost solve time.
+- **Not host code.** A rule may name a host function or read a host-computed relation, but the code does not travel with the rule; only its name, inputs and version do. This is the split spec §B.7 makes for native solvers, where the engine version pinned in the creation constraint is data and the solver is code. The engine verifies presence, never agreement: a peer missing a name fails to solve, and two peers with different code for the same name diverge silently. See [Host relations and functions](#host-relations-and-functions).
 
 ---
 
@@ -446,6 +448,27 @@ interface Evaluator {
 
 The tick shape: build the delta as new minus old (`factsToZSet(retracted, -1)` added to `factsToZSet(inserted)`), so facts that did not change cancel and never reach the evaluator; call `step`; read either the returned delta or `currentDatabase()`. A rule change is `changeRules`, a separate method because it costs a full recompute and returns a full diff, which an optional parameter on `step` would hide. Winners and Fugue ordering are the kernel's reading of the derived delta (`winnerDeltas`, `fuguePairDeltas`, `extractResolution` in `src/kernel/resolve.ts`) and are not part of this interface.
 
+### Host relations and functions
+
+Source: `src/datalog/host.ts`; the stratifier and `evaluator.ts` for placement and running.
+
+Some relations cannot be written as rules: a breadth-first distance field, a keyed hash per tile. The host supplies them as code, and the evaluator treats them as one of two things.
+
+**A foreign relation is a stratum whose body is a function.** It is declared with its name, the relations it reads, and a version, and registered with a `compute(read, changed)` that returns the whole relation for the current inputs. The stratifier gives it strict edges in both directions, to its inputs and from its readers, so it is alone in its stratum, fully computed before any reader runs and never inside a recursion. It runs at construction, on every step in which an input's presence changes, and on a rule change. It is incremental the way an aggregation stratum is, because an opaque operator has no algebraic delta: wipe the relation to its ground part, run the function, and one `extractDelta` over the dirty map is the presence diff, so only what changed propagates. `changed` names the inputs that flipped and is a hint for a memo inside the function, never something the output may depend on. The function reads through a view scoped to its declared inputs; anything else throws.
+
+**A compute element is a guard that binds.** `compute("hash", [T, X, Y], V)` in a rule body applies the named function to bound arguments and unifies the value with `result`: an unbound variable is bound, a bound variable or constant is compared and the row kept on equality, a wildcard keeps the row. It is linear per row, preserves weight, reads no relation, is never a delta source, and so takes part in the incremental decomposition with no new theory. Rules with compute elements never recompute.
+
+**The demand pattern needs nothing from the engine.** Hoist the body before a field atom into an ordinary rule, `origin(X, Y) :- player(P), at(P, X, Y)`, and declare `origin` as an input. A demand tuple that disappears takes its outputs with it through the diff.
+
+**What the engine checks, and what it does not.** `hostErrors(rules, host)` runs before evaluation, on construction and on every rule change: a function the host lacks, a rule deriving a foreign predicate, or a compute argument nothing binds (computed to a fixed point, so computes may feed each other in any order) is a stratification error, and `createEvaluator` throws on it. `declarationErrors(declarations, host)` is the consumer's check when it links a pack that declared what it expects. Purity and determinism are the author's obligations, stated once in `host.ts`. In the CCS pipeline these are solve-time errors and deliberately not validity-time ones: validity is a Layer 0 algorithm every implementation must compute identically, and letting it consult the local host registry would make validity itself peer-dependent. A rule constraint naming an unregistered function is valid everywhere and fails to solve here, and the batch pipeline then degrades to native resolution as it does for any Datalog error.
+
+```ts
+createEvaluator(rules, { relations: [distField], functions: { hash } })
+solve(store, { creator, host })          // the same registry, through PipelineConfig
+```
+
+`tests/datalog/fields.ts` is the worked example: a breadth-first `dist` over `adj` honouring `blocked`, reading adjacency through `Relation.candidates` with a probe rather than a scan. On the 100×30 world a player moving every tick, which flips `origin` and re-runs the field over about 3,000 tiles with a hunt rule reading it, costs about 8 ms p50 and 10 ms p95 (`tests/datalog/roguelike-bench.test.ts`).
+
 ### Evaluator performance
 
 The Datalog evaluator had **four independent super-linear costs**, found while the Grame team was evaluating this package as a game runtime. A 100×30 grid with materialized 4-neighbour adjacency (14,741 facts) took **32 s** to flood; it now takes **~70 ms**. Per-tick incremental cost — one ground fact in, one derived fact out, over an 18k-fact database — went from 0.83 ms to **0.016 ms**.
@@ -503,6 +526,8 @@ Every mutation of a relation's membership funnels through two private methods (`
 - **P_old is rebuilt from presence, not by subtracting weights.** A delta says a fact appeared or disappeared, always ±1, while the database stores true multiplicity. A fact with two derivation paths has weight 2 and still arrives as +1, so `base − delta` would leave 1 and claim it was there before the step. `Relation.presenceBefore` undoes the presence flip instead, and is what `DatabaseView` calls. Everything that reads P_old reads presence, so this is both sufficient and correct.
 - **Ground relations are sets at the stratum boundary.** A ground fact's Z-set weight is a reference count, and strata are told only when it crosses zero: `step` feeds them the presence flip, never the raw weight. A fact inserted at weight 2 used to derive at count 2, and retracting its join partner could take back only 1.
 - **A predicate can be both inserted and derived.** `lit(0, 0)` seeds the fire that derives the rest of `lit`, and the database holds the sum. `createEvaluator` keeps the ground part of every predicate rules have ever derived, so that a recompute, whether for aggregation, for retraction into recursion, or for a rule change, wipes only the derived part and the ground part seeds the replay. Before this, all three paths wiped the ground facts too.
+- **A foreign relation cannot be a rule head, and may read only its inputs.** The first is a stratification error; the second throws from the scoped view with the predicate named, because an undeclared read would see a relation the stratifier never ordered before it and fail silently and late otherwise.
+- **A foreign function's output must be total over its current inputs.** `changed` only says what a memo may keep. A function that returns different values for equal arguments, or a relation that depends on anything but its declared inputs, diverges peers silently and no test here can see it.
 - **`Relation.size` is O(n), not `Map.size`.** It counts present tuples by iterating, because presence is derived from each entry's clamp rather than stored. Use `allEntryCount` when you want the O(1) count and do not care about presence — query planning does exactly that.
 - **A `Value` placed in a relation is owned by the relation.** Mutating it afterwards corrupts tuple identity: `has` / `getWeight` / `remove` recompute the key from the mutated bytes and miss. Only `Uint8Array` values are mutable, so this is the only way to hit it. Pre-existing, but the join index makes the failure quieter — a stale bucket entry yields a wrong candidate set rather than a missed lookup.
 - **`extractWinners` assumes one winner per slot.** It does `winners.set(slotId, ...)` while iterating the `winner` relation, so a second winner for the same slot would silently overwrite the first. The LWW rules guarantee exactly one; selectivity-ordered evaluation makes relation iteration order less predictable, so the invariant is worth stating rather than assuming.
@@ -538,7 +563,8 @@ The first three are visible in the post-change profile and are deliberately not 
 | `Agent` / `createAgent` | `src/kernel/agent.ts` | Signing identity. |
 | `Rule` / `Atom` / `PositiveAtom` / `Negation` / `Aggregation` / `Term` / `VarTerm` / `ConstTerm` | `src/datalog/types.ts` | Datalog language. |
 | `rule` / `atom` / `positiveAtom` / `negation` / `eq` / `neq` / `lt` / `gt` / `varTerm` / `constTerm` / `_` | `src/datalog/types.ts` | Datalog constructors. |
-| `evaluate` / `createEvaluator` / `Evaluator` / `factsToZSet` | `src/datalog/evaluator.ts` | Batch entry; the long-lived evaluator, whose `step(delta)` and `changeRules(delta)` return a `ZSet<Fact>` of derived-fact changes; the keyed Z-set constructor for `step`. |
+| `evaluate` / `createEvaluator` / `Evaluator` / `factsToZSet` | `src/datalog/evaluator.ts` | Batch entry; the long-lived evaluator, whose `step(delta)` and `changeRules(delta)` return a `ZSet<Fact>` of derived-fact changes; the keyed Z-set constructor for `step`. Both take an optional `Host`. |
+| `Host` / `ForeignRelation` / `ForeignDeclaration` / `HostFunction` / `hostErrors` / `declarationErrors` / `compute` | `src/datalog/host.ts`, `src/datalog/types.ts` | Host-computed relations and point functions, referenced by name; the engine's and the consumer's checks; the compute body element. |
 | `stratify` | `src/datalog/stratify.ts` | Rule stratification. |
 | `unify` | `src/datalog/unify.ts` | Term unification. |
 | `ResolutionResult` / `extractResolution` / `winnerDeltas` / `fuguePairDeltas` | `src/kernel/resolve.ts` | Datalog facts → typed winners, whole (`extractResolution`) or as deltas over what the evaluator returns. |
@@ -582,7 +608,8 @@ The first three are visible in the post-change profile and are deliberately not 
 | `src/datalog/unify.ts` | Unification. |
 | `src/datalog/aggregate.ts` | Aggregation operators. |
 | `src/datalog/evaluator.ts` | `createEvaluator` (the stratum loop over deltas, dirty map, `step`), the batch wrappers `evaluate` / `evaluatePositive`, and `factsToZSet`. |
-| `src/datalog/evaluate.ts` | Per-rule evaluation: the rule evaluation plan and its fold, `groundHead`. |
+| `src/datalog/evaluate.ts` | Per-rule evaluation: the rule evaluation plan and its fold, `groundHead`, `evaluateComputeElement`. |
+| `src/datalog/host.ts` | Foreign relations and host functions: declaration types, the registry, `hostErrors`, `declarationErrors`. |
 | `src/datalog/index.ts` | Datalog barrel. |
 | `src/solver/lww.ts` / `incremental-lww.ts` | Native LWW fast paths. |
 | `src/solver/fugue.ts` / `incremental-fugue.ts` | Native Fugue fast paths. |
