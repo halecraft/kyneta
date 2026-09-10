@@ -872,6 +872,14 @@ Both defects above had existed through Plans 006, 006.1, 006.2 and 007, under a 
 
 Forty seeded histories of "move an entity, sometimes toggle a wall, compare against batch after every step" found both within minutes, and then found the cyclic-support limitation as well. The cost was about sixty lines. For an incremental engine whose whole contract is "equals the batch result", the oracle is free and the inputs are the only thing worth designing — the shapes to reach for are concurrent change, multiple derivation paths, and cycles.
 
+### A Stage's Return Type Leaked Into a General Engine
+
+`createEvaluator` was written in Plan 006.1 as the kernel's incremental evaluation stage, and it kept the stage's output: winner and Fugue-pair deltas came out of `step` next to the derived facts, `currentResolution` re-implemented `extractResolution`, and the datalog layer imported kernel types to do it. Nobody noticed for four plans because the stage was the only caller. The first outside consumer, a game engine with no constraints at all, could not use the evaluator without receiving winners it had never asked for, and could not reach it from the root barrel either.
+
+The theory doc had the boundary right the whole time: §5.6 is evaluation, emitting a delta of derived facts, and §5.7 is resolution extraction, a linear stage over that delta. The code had folded 5.7 into 5.6. Moving it back was mostly deletion, and it removed three copies of the winner column layout on the way.
+
+The check worth adopting: before exporting an interface, compare it against the theory's stage boundaries, not against its one existing caller. A caller that is also the author will never ask for less than it gets.
+
 ## Open Questions
 
 1. **Can constraint compaction be made safe in a decentralized system?** Compacting requires knowing what all peers have seen. Without a central coordinator, this requires something like a "compaction frontier" protocol. For Lists, tombstone compaction is especially tricky due to origin references.

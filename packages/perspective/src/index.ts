@@ -76,12 +76,14 @@ export {
   computeSCCs,
   // Term constructors
   constTerm,
+  createEvaluator,
   Database,
   // Stratification
   type DependencyEdge,
   type DependencyGraph,
   // Unification
   EMPTY_SUBSTITUTION,
+  type Evaluator,
   // Guard constructors
   eq,
   // Evaluation

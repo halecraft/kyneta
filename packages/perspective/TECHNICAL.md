@@ -4,7 +4,7 @@
 > **Role**: Convergent Constraint Systems (CCS) — a constraint-based approach to CRDTs. Agents assert constraints; merge is pure set union; a stratified Datalog evaluator derives the shared reality. Ships with an incremental DBSP-grounded pipeline for O(|Δ|) updates.
 > **Depends on**: zero runtime dependencies
 > **Depended on by**: Standalone published package — not imported by any other Kyneta package. Published at 0.1.0 under independent versioning.
-> **Canonical symbols**: `createReality`, `solve`, `insert`, `produceRoot`, `produceMapChild`, `produceSeqChild`, `produceValue`, `retract`, `ConstraintStore`, `createStore`, `Constraint`, `Rule`, `Agent`, `createAgent`, `CnId`, `createCnId`, `PeerID`, `VersionVector`, `AuthorityConstraint`, `PipelineConfig`, `RetractionConfig`, `evaluate`, `stratify`, `unify`, `aggregate`, `Fugue`, `LWW`, `incrementalFugue`, `incrementalLWW`, `ZSet` + operators, `STUB_SIGNATURE`
+> **Canonical symbols**: `createReality`, `solve`, `insert`, `produceRoot`, `produceMapChild`, `produceSeqChild`, `produceValue`, `retract`, `ConstraintStore`, `createStore`, `Constraint`, `Rule`, `Agent`, `createAgent`, `CnId`, `createCnId`, `PeerID`, `VersionVector`, `AuthorityConstraint`, `PipelineConfig`, `RetractionConfig`, `evaluate`, `createEvaluator`, `stratify`, `unify`, `aggregate`, `Fugue`, `LWW`, `incrementalFugue`, `incrementalLWW`, `ZSet` + operators, `STUB_SIGNATURE`
 > **Key invariant(s)**:
 > 1. **Rules are data, not code.** LWW value resolution and Fugue sequence ordering are ordinary `rule` constraints asserted at reality bootstrap. They travel in the store. Any agent with `CreateRule + Retract` capabilities can replace them — the reality changes, the engine doesn't.
 > 2. **Given the same store, any two correct implementations produce identical results.** Layer 0 (kernel) algorithms are mechanical; Layer 1 (Datalog evaluator) is deterministic. Implementation languages and optimization strategies are free to vary; the resolved reality is not.
@@ -194,7 +194,7 @@ Conversely, the Datalog evaluator doesn't know about constraints, CnIds, signatu
 
 ### What the layers are NOT
 
-- **Not coupled.** The kernel defines `projection` and `resolve` as pure functions. The Datalog evaluator has no knowledge of kernel types.
+- **Not coupled.** The kernel defines `projection` and `resolve` as pure functions. The Datalog evaluator has no knowledge of kernel types. That is true of the imports again as of the evaluator split (2026-09-09): between Plan 006.1 and then, `datalog/evaluator.ts` imported winner and Fugue-pair types from the kernel, because it had been built as the kernel's evaluation stage and kept that stage's output shape.
 - **Not replaceable independently.** Both layers together define the semantics. A different kernel or a different evaluator produces a different reality.
 - **Not complete without §B.7 fast paths for performance.** Pure Datalog LWW over large stores is O(n²); the native solvers bring it to O(n log n).
 
@@ -364,7 +364,7 @@ Each kernel algorithm has an incremental counterpart in `src/kernel/incremental/
 | `incremental/validity.ts` | `validity.ts` — deltas in the store produce deltas in `Valid(S)`. |
 | `incremental/retraction.ts` | `retraction.ts` — retraction-graph updates. |
 | `incremental/projection.ts` | `projection.ts` — fact deltas from constraint deltas. |
-| `incremental/evaluation.ts` | The evaluation stage: native LWW/Fugue fast paths for the default rules, or a `createEvaluator` from `datalog/evaluator.ts` for custom ones. Resolution deltas come straight out of the stage; there is no separate resolve variant. |
+| `incremental/evaluation.ts` | The evaluation stage: native LWW/Fugue fast paths for the default rules, or a `createEvaluator` from `datalog/evaluator.ts` for custom ones. On the Datalog path it is R(E(Δ)) in the theory doc's notation: the evaluator returns a delta of derived facts, and `winnerDeltas` / `fuguePairDeltas` in `resolve.ts` read winners and pairs out of it. There is no separate incremental resolve stage because those two are linear over the delta. |
 
 Composing them: `updateReality(prevState, constraintDelta) → (nextState, realityDelta)`. Application code maintains `prevState` and feeds new constraints in.
 
@@ -430,6 +430,22 @@ Two things this buys beyond tidiness. The mask is computed once per rule instead
 
 **Ordering is smallest-first, greedily.** An atom with no known position enumerates its whole relation; one with a known position is an indexed lookup. So the planner repeatedly takes whichever element is cheapest right now, since each choice binds variables that make the rest cheaper. Neither fixed order works: leading with the delta is right for a one-fact tick but wrong during a batch seed, where the "delta" is every ground fact. A body containing an `aggregation` keeps source order — aggregation is a group-by boundary that resets provenance weight and does not commute with joins.
 
+### Using the evaluator on its own
+
+Source: `src/datalog/evaluator.ts` → `createEvaluator`, `factsToZSet`; both exported from the root.
+
+The evaluator is a Datalog engine with no knowledge of constraints. `evaluate(rules, facts)` runs a batch. `createEvaluator(rules)` holds a database across calls:
+
+```ts
+interface Evaluator {
+  step(delta: ZSet<Fact>): ZSet<Fact>         // ground facts in, derived facts out
+  changeRules(delta: ZSet<Rule>): ZSet<Fact>  // every stratum derived again
+  currentDatabase(): Database                 // live, not a snapshot
+}
+```
+
+The tick shape: build the delta as new minus old (`factsToZSet(retracted, -1)` added to `factsToZSet(inserted)`), so facts that did not change cancel and never reach the evaluator; call `step`; read either the returned delta or `currentDatabase()`. A rule change is `changeRules`, a separate method because it costs a full recompute and returns a full diff, which an optional parameter on `step` would hide. Winners and Fugue ordering are the kernel's reading of the derived delta (`winnerDeltas`, `fuguePairDeltas`, `extractResolution` in `src/kernel/resolve.ts`) and are not part of this interface.
+
 ### Evaluator performance
 
 The Datalog evaluator had **four independent super-linear costs**, found while the Grame team was evaluating this package as a game runtime. A 100×30 grid with materialized 4-neighbour adjacency (14,741 facts) took **32 s** to flood; it now takes **~70 ms**. Per-tick incremental cost — one ground fact in, one derived fact out, over an 18k-fact database — went from 0.83 ms to **0.016 ms**.
@@ -482,6 +498,8 @@ Every mutation of a relation's membership funnels through two private methods (`
 ### Gotchas
 
 - **`step` takes the Z-set key as the fact key.** A `ZSet<Fact>` passed to `Evaluator.step` should be keyed by `factKey` — the evaluator slices the tuple key out of it instead of re-serializing. Build inputs with `factsToZSet` (or `zsetSingleton(factKey(f), f, w)` for one fact). A key in any other shape is detected by a prefix check and serialized the slow way, so the result is still correct; the fast path is simply lost. The check is not optional politeness: without it a foreign key becomes a relation key, and two different facts can collapse into one entry.
+- **`currentDatabase()` is the live database, not a snapshot.** The next `step` mutates it. Read what you need, or keep the returned delta, before stepping again; anything that holds two databases to compare them is comparing one object with itself.
+- **A rule with an empty body fires on every seed of its stratum.** Its fact holds from construction, and its count goes up by one each time the stratum is touched. Presence is unaffected and a recompute resets the count. Pre-existing and harmless; noted so the number does not surprise anyone reading weights.
 - **P_old is rebuilt from presence, not by subtracting weights.** A delta says a fact appeared or disappeared, always ±1, while the database stores true multiplicity. A fact with two derivation paths has weight 2 and still arrives as +1, so `base − delta` would leave 1 and claim it was there before the step. `Relation.presenceBefore` undoes the presence flip instead, and is what `DatabaseView` calls. Everything that reads P_old reads presence, so this is both sufficient and correct.
 - **Ground relations are sets at the stratum boundary.** A ground fact's Z-set weight is a reference count, and strata are told only when it crosses zero: `step` feeds them the presence flip, never the raw weight. A fact inserted at weight 2 used to derive at count 2, and retracting its join partner could take back only 1.
 - **A predicate can be both inserted and derived.** `lit(0, 0)` seeds the fire that derives the rest of `lit`, and the database holds the sum. `createEvaluator` keeps the ground part of every predicate rules have ever derived, so that a recompute, whether for aggregation, for retraction into recursion, or for a rule change, wipes only the derived part and the ground part seeds the replay. Before this, all three paths wiped the ground facts too.
@@ -520,10 +538,10 @@ The first three are visible in the post-change profile and are deliberately not 
 | `Agent` / `createAgent` | `src/kernel/agent.ts` | Signing identity. |
 | `Rule` / `Atom` / `PositiveAtom` / `Negation` / `Aggregation` / `Term` / `VarTerm` / `ConstTerm` | `src/datalog/types.ts` | Datalog language. |
 | `rule` / `atom` / `positiveAtom` / `negation` / `eq` / `neq` / `lt` / `gt` / `varTerm` / `constTerm` / `_` | `src/datalog/types.ts` | Datalog constructors. |
-| `evaluate` / `createEvaluator` / `factsToZSet` | `src/datalog/evaluator.ts` | Batch entry, the long-lived evaluator, and the keyed Z-set constructor for `step`. |
+| `evaluate` / `createEvaluator` / `Evaluator` / `factsToZSet` | `src/datalog/evaluator.ts` | Batch entry; the long-lived evaluator, whose `step(delta)` and `changeRules(delta)` return a `ZSet<Fact>` of derived-fact changes; the keyed Z-set constructor for `step`. |
 | `stratify` | `src/datalog/stratify.ts` | Rule stratification. |
 | `unify` | `src/datalog/unify.ts` | Term unification. |
-| `ResolutionResult` / `extractResolution` | `src/kernel/resolve.ts` | Datalog facts → typed winners. |
+| `ResolutionResult` / `extractResolution` / `winnerDeltas` / `fuguePairDeltas` | `src/kernel/resolve.ts` | Datalog facts → typed winners, whole (`extractResolution`) or as deltas over what the evaluator returns. |
 | `StructureIndex` / `buildStructureIndex` | `src/kernel/structure-index.ts` | Tree structure from structure constraints. |
 | `Skeleton` / `buildSkeleton` | `src/kernel/skeleton.ts` | Reality tree construction. |
 | `PipelineConfig` | `src/kernel/pipeline.ts` | Solver configuration. |
@@ -552,7 +570,7 @@ The first three are visible in the post-change profile and are deliberately not 
 | `src/kernel/retraction.ts` | Retraction graph + dominance. |
 | `src/kernel/structure-index.ts` | Tree-structure index. |
 | `src/kernel/projection.ts` | Active constraints → Datalog facts. |
-| `src/kernel/resolve.ts` | Datalog facts → typed winners. |
+| `src/kernel/resolve.ts` | Datalog facts → typed winners: one row parser per predicate, the whole-database extractors, and the delta forms the incremental stage applies. |
 | `src/kernel/rule-detection.ts` | Pattern match for §B.7 native-solver dispatch. |
 | `src/kernel/native-resolution.ts` | Native-solver entry. |
 | `src/kernel/skeleton.ts` | Skeleton construction. |

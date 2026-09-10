@@ -11,7 +11,7 @@
 //   - Retraction through negation without DRed
 //   - Transitive closure with distinct
 //   - Rule changes
-//   - Resolution extraction
+//   - Resolution extraction, through kernel/resolve.ts
 //   - Weight propagation through strata
 //   - Randomized differential sweeps: mixed retract+insert steps vs batch
 //   - Ground facts as presence flips; predicates both inserted and derived
@@ -1284,10 +1284,11 @@ describe("Unified Evaluator", () => {
 
       const result = evaluator.step(delta)
 
-      expect(zsetIsEmpty(winnerDeltas(result))).toBe(false)
-      expect(zsetSize(winnerDeltas(result))).toBe(1)
+      const winners = winnerDeltas(result)
+      expect(zsetIsEmpty(winners)).toBe(false)
+      expect(zsetSize(winners)).toBe(1)
 
-      const winnerEntry = [...winnerDeltas(result).values()][0]!
+      const winnerEntry = [...winners.values()][0]!
       expect(winnerEntry.weight).toBe(1)
       expect(winnerEntry.element.slotId).toBe(slotId)
       expect(winnerEntry.element.content).toBe("Hello")
@@ -1969,24 +1970,6 @@ describe("Unified Evaluator", () => {
   })
 
   // ---------------------------------------------------------------------------
-  // Reset
-  // ---------------------------------------------------------------------------
-
-  describe("reset", () => {
-    it("clears all state", () => {
-      const evaluator = createEvaluator(buildDefaultLWWRules())
-      const f = makeActiveValueFact("alice", 1, "slot:title", "Hello", 10)
-      evaluator.step(factsToZSet([f]))
-
-      evaluator.reset()
-      expect(evaluator.currentDatabase().size).toBe(0)
-      expect(extractResolution(evaluator.currentDatabase()).winners.size).toBe(
-        0,
-      )
-    })
-  })
-
-  // ---------------------------------------------------------------------------
   // Negation stratum with stratified negation
   // ---------------------------------------------------------------------------
 
@@ -2231,10 +2214,7 @@ describe("Unified Evaluator", () => {
       }
       const beforeReset = extractResolution(evaluator.currentDatabase())
 
-      // Reset and replay.
-      evaluator.reset()
-
-      // Re-add rules (reset clears them).
+      // Replay into a fresh evaluator.
       const freshEval = createEvaluator(lwwRules)
       for (const f of facts) {
         freshEval.step(factsToZSet([f]))
@@ -2528,7 +2508,7 @@ describe("Unified Evaluator", () => {
           ?.content,
       ).toBe("World")
 
-      // deltaResolved should reflect the change.
+      // The winner delta should reflect the change.
       expect(zsetIsEmpty(winnerDeltas(result))).toBe(false)
     })
 
@@ -2564,7 +2544,7 @@ describe("Unified Evaluator", () => {
           ?.content,
       ).toBe("A")
 
-      // deltaResolved should contain the winner change.
+      // The winner delta should contain the change.
       expect(zsetIsEmpty(winnerDeltas(result))).toBe(false)
 
       // deltaDerived should contain both −1 (old winner/superseded) and +1 (new winner).
@@ -2800,7 +2780,7 @@ describe("Unified Evaluator", () => {
       expect(hasPositive).toBe(true)
       expect(hasNegative).toBe(true)
 
-      // deltaResolved should contain the winner change.
+      // The winner delta should contain the change.
       let resolvedCount = 0
       zsetForEach(winnerDeltas(result), () => {
         resolvedCount++

@@ -676,6 +676,13 @@ to a typed result.  For a Z-set delta of derived facts:
 
 **Cost:** O(|Δ_derived|), typically O(1).
 
+**As implemented (2026-09-09):** the code matches this shape. The
+evaluator's `step` returns Δ_derived and nothing else; `winnerDeltas` and
+`fuguePairDeltas` in `kernel/resolve.ts` are R, and the incremental
+evaluation stage composes them as R(E(Δ)). The Datalog path keeps no
+accumulated ResolutionResult of its own: `current()` is
+`extractResolution` over the evaluator's live database.
+
 ### 5.8 Skeleton / Reality Tree (K)
 
 **Batch:** `K(X, A, Res) = buildSkeleton(X, A, Res)`

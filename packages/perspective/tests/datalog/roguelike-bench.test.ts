@@ -24,21 +24,24 @@
 // regression trips them while a loaded machine does not.
 
 import { describe, expect, it } from "vitest"
-import {
-  createEvaluator,
-  evaluateUnified as evaluate,
-  evaluatePositiveUnified as evaluatePositive,
-  factsToZSet,
-} from "../../src/datalog/evaluator.js"
-import type { Fact, Rule } from "../../src/datalog/types.js"
+// Everything here comes through the package's root barrel on purpose: this
+// file is the workload a downstream engine shares, so it exercises the
+// surface that engine can reach.
+import type { Fact, Rule } from "../../src/index.js"
 import {
   atom,
+  createEvaluator,
+  evaluate,
+  evaluatePositive,
   fact,
+  factKey,
+  factsToZSet,
   negation,
   positiveAtom,
   rule,
   varTerm,
-} from "../../src/datalog/types.js"
+  zsetAdd,
+} from "../../src/index.js"
 
 const $ = varTerm
 
@@ -218,6 +221,41 @@ describe("roguelike: composition and negation", () => {
 
     // And the near half did burn, so the wall blocked rather than smothered.
     expect(result.value.getRelation("lit").size).toBe(wallX * h)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The public surface, end to end
+// ---------------------------------------------------------------------------
+
+describe("roguelike: the long-lived evaluator through the root barrel", () => {
+  it("loads a world, then ticks with a retraction and an insertion in one delta", () => {
+    const { facts } = buildGrid(20, 15)
+    const evaluator = createEvaluator([fireSpread, sporeBoom])
+    evaluator.step(
+      factsToZSet([...facts, fact("lit", [0, 0]), fact("spores", [2, 0])]),
+    )
+    expect(
+      evaluator.currentDatabase().getRelation("exploded").has([2, 0]),
+    ).toBe(true)
+
+    // One tick: the spores move. Build the delta as new minus old.
+    const delta = evaluator.step(
+      zsetAdd(
+        factsToZSet([fact("spores", [2, 0])], -1),
+        factsToZSet([fact("spores", [1, 0])]),
+      ),
+    )
+    const changed = [...delta.entries()]
+      .map(([key, entry]) => [key, entry.weight])
+      .sort()
+    expect(changed).toEqual([
+      [factKey(fact("exploded", [1, 0])), 1],
+      [factKey(fact("exploded", [2, 0])), -1],
+    ])
+    const exploded = evaluator.currentDatabase().getRelation("exploded")
+    expect(exploded.has([1, 0])).toBe(true)
+    expect(exploded.has([2, 0])).toBe(false)
   })
 })
 

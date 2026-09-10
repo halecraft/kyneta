@@ -52,7 +52,7 @@ An operation says "do this." A constraint says "this should be true." Each agent
 The engine has exactly two mandatory components:
 
 - **Layer 0 Kernel** — Constraint storage, set union merge, CnId generation, Lamport clocks, signatures, authority/validity, retraction/dominance, version vectors. Mechanical algorithms — no inference, no search.
-- **Datalog Evaluator** — Stratified, bottom-up, semi-naive. Evaluates rule constraints from the store over facts derived from active constraints, producing the reality.
+- **Datalog Evaluator** — Stratified, bottom-up, semi-naive. Evaluates rule constraints from the store over facts derived from active constraints, producing the reality. It is also usable on its own, with no constraints in sight: `evaluate(rules, facts)` for a batch, or `createEvaluator(rules)` with `factsToZSet` for a long-lived evaluator that takes fact deltas and returns derived-fact deltas. See [TECHNICAL.md, "Using the evaluator on its own"](./TECHNICAL.md#using-the-evaluator-on-its-own).
 
 Everything else — LWW value resolution, Fugue sequence ordering, custom conflict resolution — is expressed as **Datalog rules that travel in the constraint store**. Changing the rules changes the reality, not the engine.
 
@@ -100,7 +100,7 @@ The solver is a pure function parameterized by a version vector. `solve(S, V)` c
 | **Plan 006.1: Unified Evaluator** | ✅ | Weighted Relation/Substitution, dirty-map distinct + delta extraction, single evaluator replacing four loops |
 | **Plan 006.2: Differential Negation** | ✅ | Dual-weight Relation, asymmetric join, differential negation, unified semi-naive loop for all strata |
 
-**1426 tests across 34 files, all passing.**
+**1441 tests across 38 files, all passing.**
 
 See [.plans/002-unified-ccs-engine.md](./.plans/002-unified-ccs-engine.md) for the batch engine plan, [.plans/005-incremental-kernel-pipeline.md](./.plans/005-incremental-kernel-pipeline.md) for the incremental kernel plan, [.plans/006-incremental-datalog-evaluator.md](./.plans/006-incremental-datalog-evaluator.md) for the incremental Datalog plan, and [.plans/006.2-differential-negation.md](./.plans/006.2-differential-negation.md) for the differential negation plan.
 
@@ -151,7 +151,7 @@ prism/
 │   │   └── incremental-fugue.ts  Per-parent Fugue tree maintenance (Plan 006)
 │   ├── bootstrap.ts          Reality creation + default solver rules (§B.8)
 │   └── index.ts              Public API
-├── tests/                    1304 tests across 34 files
+├── tests/                    1441 tests across 38 files
 │   ├── base/                 Z-set algebra
 │   ├── datalog/              Evaluator, unification, stratification, rules, differential negation
 │   ├── kernel/               Store, agent, authority, pipeline, skeleton, ...

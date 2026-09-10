@@ -261,10 +261,11 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
 
       const result = evaluator.step(delta)
 
-      expect(zsetIsEmpty(winnerDeltas(result))).toBe(false)
-      expect(zsetSize(winnerDeltas(result))).toBe(1)
+      const winners = winnerDeltas(result)
+      expect(zsetIsEmpty(winners)).toBe(false)
+      expect(zsetSize(winners)).toBe(1)
 
-      const winnerEntry = [...winnerDeltas(result).values()][0]!
+      const winnerEntry = [...winners.values()][0]!
       expect(winnerEntry.weight).toBe(1)
       expect(winnerEntry.element.slotId).toBe(slotId)
       expect(winnerEntry.element.content).toBe("Hello")
@@ -707,24 +708,6 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
     })
   })
 
-  describe("reset", () => {
-    it("clears all state", () => {
-      const evaluator = createEvaluator(buildDefaultLWWRules())
-
-      const f = makeActiveValueFact("alice", 1, "slot:title", "Hello", 10)
-      evaluator.step(factsToZSet([f]))
-      expect(extractResolution(evaluator.currentDatabase()).winners.size).toBe(
-        1,
-      )
-
-      evaluator.reset()
-      expect(extractResolution(evaluator.currentDatabase()).winners.size).toBe(
-        0,
-      )
-      expect(evaluator.currentDatabase().size).toBe(0)
-    })
-  })
-
   describe("negation stratum with stratified negation", () => {
     // Simple reachable/unreachable pattern:
     // reachable(X) :- start(X).
@@ -865,7 +848,7 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
       const f = makeActiveValueFact("alice", 1, "slot:title", "Hello", 10)
       const result = evaluator.step(factsToZSet([f]))
 
-      // Every entry in deltaResolved should correspond to a winner fact
+      // Every entry of winnerDeltas should correspond to a winner fact
       // in deltaDerived.
       const derivedWinnerCount = countByPredicate(result, "winner")
       expect(zsetSize(winnerDeltas(result))).toBe(derivedWinnerCount)

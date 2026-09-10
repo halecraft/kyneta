@@ -813,9 +813,6 @@ export interface Evaluator {
    * `step` mutates it, so read what you need before stepping again.
    */
   currentDatabase(): Database
-
-  /** Reset to empty state: no facts, no rules. */
-  reset(): void
 }
 
 // ---------------------------------------------------------------------------
@@ -836,10 +833,10 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
   // --- Mutable state ---
 
   /** Accumulated database: ground + derived facts. */
-  let db = new Database()
+  const db = new Database()
 
   /** Current rules. */
-  let rules: Rule[] = [...initialRules]
+  const rules: Rule[] = [...initialRules]
 
   /** Current stratification (recomputed on rule changes). */
   let strata: readonly Stratum[] = []
@@ -859,10 +856,10 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
    * wipes only the derived part. Tracking starts the moment a predicate
    * becomes derived, so it stays exact across rule changes.
    */
-  let groundInDerived = new Database()
+  const groundInDerived = new Database()
 
   /** The predicates `groundInDerived` tracks. */
-  let trackedGround: Set<string> = new Set()
+  const trackedGround = new Set<string>()
 
   // Stratify, then derive what needs no facts at all: a rule with an empty
   // body holds from the start, and what it derives may feed a higher stratum.
@@ -1028,18 +1025,7 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
     return db
   }
 
-  function reset(): void {
-    db = new Database()
-    rules = []
-    strata = []
-    strataByIndex = new Map()
-    predToStrata = new Map()
-    allDerivedPreds = new Set()
-    groundInDerived = new Database()
-    trackedGround = new Set()
-  }
-
-  return { step, changeRules, currentDatabase, reset }
+  return { step, changeRules, currentDatabase }
 }
 
 // ---------------------------------------------------------------------------
