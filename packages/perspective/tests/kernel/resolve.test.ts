@@ -8,14 +8,16 @@
 // - PipelineResult resolution metadata
 
 import { describe, expect, it } from "vitest"
+import { zsetFromEntries, zsetGet, zsetSize } from "../../src/base/zset.js"
 import { buildDefaultRules } from "../../src/bootstrap.js"
-import type { Rule } from "../../src/datalog/types.js"
+import type { Fact, Rule } from "../../src/datalog/types.js"
 import {
   _,
   atom,
   Database,
   eq,
   fact,
+  factKey,
   lt,
   negation,
   neq,
@@ -34,9 +36,12 @@ import {
   extractResolution,
   extractWinners,
   type FugueBeforePair,
+  fuguePairDeltas,
+  fuguePairKey,
   nativeResolution,
   type ResolvedWinner,
   topologicalOrderFromPairs,
+  winnerDeltas,
 } from "../../src/kernel/resolve.js"
 import { computeActive } from "../../src/kernel/retraction.js"
 import { STUB_SIGNATURE } from "../../src/kernel/signature.js"
@@ -322,6 +327,66 @@ describe("resolve: extractResolution", () => {
     expect(result.fromDatalog).toBe(true)
     expect(result.winners.size).toBe(1)
     expect(result.fuguePairs.size).toBe(1)
+  })
+})
+
+describe("resolve: winnerDeltas and fuguePairDeltas", () => {
+  // What the Datalog evaluator emits: derived facts at +1 or −1, keyed by
+  // factKey. The kernel reads winners and pairs out of that.
+  const derived = (entries: [Fact, number][]) =>
+    zsetFromEntries(
+      entries.map(([f, w]) => [factKey(f), { element: f, weight: w }]),
+    )
+  const winner = (cn: string, content: string) =>
+    fact("winner", ["slot-1", cn, content])
+
+  it("a new winner is +1 and a removed winner is −1, keyed by slot", () => {
+    const added = winnerDeltas(derived([[winner("cn-a", "A"), 1]]))
+    expect(zsetGet(added, "slot-1")).toEqual({
+      element: { slotId: "slot-1", winnerCnIdKey: "cn-a", content: "A" },
+      weight: 1,
+    })
+
+    const removed = winnerDeltas(derived([[winner("cn-a", "A"), -1]]))
+    expect(zsetGet(removed, "slot-1")?.weight).toBe(-1)
+  })
+
+  it("a changed winner emits only the +1, because the skeleton keys by slot", () => {
+    const changed = winnerDeltas(
+      derived([
+        [winner("cn-a", "A"), -1],
+        [winner("cn-b", "B"), 1],
+      ]),
+    )
+    expect(zsetSize(changed)).toBe(1)
+    expect(zsetGet(changed, "slot-1")?.weight).toBe(1)
+    expect(zsetGet(changed, "slot-1")?.element.content).toBe("B")
+  })
+
+  it("ignores facts of other predicates", () => {
+    const mixed = derived([
+      [fact("superseded", ["cn-a", "slot-1"]), 1],
+      [fact("fugue_before", ["p", "a", "b"]), 1],
+    ])
+    expect(zsetSize(winnerDeltas(mixed))).toBe(0)
+    expect(zsetSize(fuguePairDeltas(mixed))).toBe(1)
+  })
+
+  it("keys pairs by fuguePairKey with ±1 weights", () => {
+    const pair: FugueBeforePair = { parentKey: "p", a: "a", b: "b" }
+    const deltas = fuguePairDeltas(
+      derived([
+        [fact("fugue_before", ["p", "a", "b"]), 1],
+        [fact("fugue_before", ["p", "b", "c"]), -1],
+      ]),
+    )
+    expect(zsetGet(deltas, fuguePairKey(pair))).toEqual({
+      element: pair,
+      weight: 1,
+    })
+    expect(
+      zsetGet(deltas, fuguePairKey({ parentKey: "p", a: "b", b: "c" }))?.weight,
+    ).toBe(-1)
   })
 })
 

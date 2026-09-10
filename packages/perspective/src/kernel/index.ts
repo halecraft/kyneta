@@ -73,12 +73,14 @@ export {
   extractFugueOrdering,
   extractResolution,
   extractWinners,
+  fuguePairDeltas,
   fuguePairKey,
   nativeResolution,
   type ParsedSeqStructureFact,
   parseLWWFact,
   parseSeqStructureFact,
   topologicalOrderFromPairs,
+  winnerDeltas,
 } from "./resolve.js"
 // --- Retraction (§6) ---
 export type {

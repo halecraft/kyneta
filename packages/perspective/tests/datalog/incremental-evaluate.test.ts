@@ -55,6 +55,11 @@ import type {
   FugueBeforePair,
   ResolvedWinner,
 } from "../../src/kernel/resolve.js"
+import {
+  extractResolution,
+  fuguePairDeltas,
+  winnerDeltas,
+} from "../../src/kernel/resolve.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -254,12 +259,12 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
       const f = makeActiveValueFact("alice", 1, slotId, "Hello", 10)
       const delta = factsToZSet([f])
 
-      const result = evaluator.step(delta, zsetEmpty())
+      const result = evaluator.step(delta)
 
-      expect(zsetIsEmpty(result.deltaResolved)).toBe(false)
-      expect(zsetSize(result.deltaResolved)).toBe(1)
+      expect(zsetIsEmpty(winnerDeltas(result))).toBe(false)
+      expect(zsetSize(winnerDeltas(result))).toBe(1)
 
-      const winnerEntry = [...result.deltaResolved.values()][0]!
+      const winnerEntry = [...winnerDeltas(result).values()][0]!
       expect(winnerEntry.weight).toBe(1)
       expect(winnerEntry.element.slotId).toBe(slotId)
       expect(winnerEntry.element.content).toBe("Hello")
@@ -270,18 +275,18 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
 
       // Insert first value (lamport 10).
       const f1 = makeActiveValueFact("alice", 1, slotId, "Hello", 10)
-      evaluator.step(factsToZSet([f1]), zsetEmpty())
+      evaluator.step(factsToZSet([f1]))
 
       // Insert superseding value (lamport 20).
       const f2 = makeActiveValueFact("bob", 1, slotId, "World", 20)
-      const result = evaluator.step(factsToZSet([f2]), zsetEmpty())
+      const result = evaluator.step(factsToZSet([f2]))
 
       // Should have winner changes.
-      expect(zsetIsEmpty(result.deltaResolved)).toBe(false)
+      expect(zsetIsEmpty(winnerDeltas(result))).toBe(false)
 
       // Collect all winner deltas.
       const entries: { element: ResolvedWinner; weight: number }[] = []
-      zsetForEach(result.deltaResolved, e => entries.push(e))
+      zsetForEach(winnerDeltas(result), e => entries.push(e))
 
       // There should be a −1 for the old winner and +1 for the new winner.
       // However, since both share the same slotId key, zsetMap collapses
@@ -290,7 +295,7 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
       // so the diff should show the change.
 
       // The new winner should be bob's value.
-      const resolution = evaluator.currentResolution()
+      const resolution = extractResolution(evaluator.currentDatabase())
       expect(resolution.winners.size).toBe(1)
       const winner = resolution.winners.get(slotId)!
       expect(winner.content).toBe("World")
@@ -302,14 +307,14 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
 
       // Insert the winner first (lamport 20).
       const f1 = makeActiveValueFact("bob", 1, slotId, "World", 20)
-      evaluator.step(factsToZSet([f1]), zsetEmpty())
+      evaluator.step(factsToZSet([f1]))
 
       // Insert a loser (lamport 10).
       const f2 = makeActiveValueFact("alice", 1, slotId, "Hello", 10)
-      const _result = evaluator.step(factsToZSet([f2]), zsetEmpty())
+      const _result = evaluator.step(factsToZSet([f2]))
 
       // The winner should still be bob's value — no change in winners.
-      const resolution = evaluator.currentResolution()
+      const resolution = extractResolution(evaluator.currentDatabase())
       expect(resolution.winners.size).toBe(1)
       expect(resolution.winners.get(slotId)?.content).toBe("World")
     })
@@ -320,19 +325,20 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
       // Insert two values.
       const f1 = makeActiveValueFact("alice", 1, slotId, "Hello", 10)
       const f2 = makeActiveValueFact("bob", 1, slotId, "World", 20)
-      evaluator.step(factsToZSet([f1, f2]), zsetEmpty())
+      evaluator.step(factsToZSet([f1, f2]))
 
       // Winner should be bob (lamport 20).
-      expect(evaluator.currentResolution().winners.get(slotId)?.content).toBe(
-        "World",
-      )
+      expect(
+        extractResolution(evaluator.currentDatabase()).winners.get(slotId)
+          ?.content,
+      ).toBe("World")
 
       // Retract bob's value.
       const retractDelta = factsToWeightedZSet([[f2, -1]])
-      const _result = evaluator.step(retractDelta, zsetEmpty())
+      const _result = evaluator.step(retractDelta)
 
       // Winner should now be alice.
-      const resolution = evaluator.currentResolution()
+      const resolution = extractResolution(evaluator.currentDatabase())
       expect(resolution.winners.size).toBe(1)
       expect(resolution.winners.get(slotId)?.content).toBe("Hello")
     })
@@ -341,15 +347,12 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
       const evaluator = createEvaluator(lwwRules)
 
       const f1 = makeActiveValueFact("alice", 1, slotId, "Hello", 10)
-      evaluator.step(factsToZSet([f1]), zsetEmpty())
+      evaluator.step(factsToZSet([f1]))
 
       // Retract it.
-      const _result = evaluator.step(
-        factsToWeightedZSet([[f1, -1]]),
-        zsetEmpty(),
-      )
+      const _result = evaluator.step(factsToWeightedZSet([[f1, -1]]))
 
-      const resolution = evaluator.currentResolution()
+      const resolution = extractResolution(evaluator.currentDatabase())
       expect(resolution.winners.size).toBe(0)
     })
 
@@ -359,9 +362,9 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
       const f1 = makeActiveValueFact("alice", 1, "slot:title", "Title", 10)
       const f2 = makeActiveValueFact("alice", 2, "slot:body", "Body", 10)
 
-      evaluator.step(factsToZSet([f1, f2]), zsetEmpty())
+      evaluator.step(factsToZSet([f1, f2]))
 
-      const resolution = evaluator.currentResolution()
+      const resolution = extractResolution(evaluator.currentDatabase())
       expect(resolution.winners.size).toBe(2)
       expect(resolution.winners.get("slot:title")?.content).toBe("Title")
       expect(resolution.winners.get("slot:body")?.content).toBe("Body")
@@ -374,9 +377,9 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
       const f1 = makeActiveValueFact("bob", 1, slotId, "Bob", 20)
       const f2 = makeActiveValueFact("charlie", 1, slotId, "Charlie", 20)
 
-      evaluator.step(factsToZSet([f1, f2]), zsetEmpty())
+      evaluator.step(factsToZSet([f1, f2]))
 
-      const resolution = evaluator.currentResolution()
+      const resolution = extractResolution(evaluator.currentDatabase())
       expect(resolution.winners.get(slotId)?.content).toBe("Charlie")
     })
   })
@@ -396,7 +399,7 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
 
       // Feed incrementally.
       for (const f of facts) {
-        evaluator.step(factsToZSet([f]), zsetEmpty())
+        evaluator.step(factsToZSet([f]))
       }
 
       // Batch evaluate.
@@ -405,7 +408,7 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
       const batchDb = batchResult.value
 
       // Compare winners.
-      const incRes = evaluator.currentResolution()
+      const incRes = extractResolution(evaluator.currentDatabase())
       const batchWinners = new Map<string, { slotId: string; content: Value }>()
       for (const tuple of batchDb.getRelation("winner").tuples()) {
         batchWinners.set(tuple[0] as string, {
@@ -431,14 +434,14 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
       ]
 
       // Feed all at once.
-      evaluator.step(factsToZSet(facts), zsetEmpty())
+      evaluator.step(factsToZSet(facts))
 
       // Batch evaluate.
       const batchResult = evaluate(lwwRules, facts)
       if (!batchResult.ok) throw new Error("batch eval failed")
       const batchDb = batchResult.value
 
-      const incRes = evaluator.currentResolution()
+      const incRes = extractResolution(evaluator.currentDatabase())
       const batchWinner = batchDb.getRelation("winner").tuples()[0]!
 
       expect(incRes.winners.size).toBe(1)
@@ -468,9 +471,9 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
       for (const perm of permutations(facts)) {
         const evaluator = createEvaluator(lwwRules)
         for (const f of perm) {
-          evaluator.step(factsToZSet([f]), zsetEmpty())
+          evaluator.step(factsToZSet([f]))
         }
-        const resolution = evaluator.currentResolution()
+        const resolution = extractResolution(evaluator.currentDatabase())
         expect(resolution.winners.size).toBe(1)
         expect(resolution.winners.get(slotId)?.content).toBe(expectedContent)
       }
@@ -494,18 +497,18 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
       const evaluator = createEvaluator(rules)
 
       // Add edge(a, b).
-      evaluator.step(factsToZSet([fact("edge", ["a", "b"])]), zsetEmpty())
+      evaluator.step(factsToZSet([fact("edge", ["a", "b"])]))
       let db = evaluator.currentDatabase()
       expect(db.hasFact(fact("path", ["a", "b"]))).toBe(true)
 
       // Add edge(b, c).
-      evaluator.step(factsToZSet([fact("edge", ["b", "c"])]), zsetEmpty())
+      evaluator.step(factsToZSet([fact("edge", ["b", "c"])]))
       db = evaluator.currentDatabase()
       expect(db.hasFact(fact("path", ["b", "c"]))).toBe(true)
       expect(db.hasFact(fact("path", ["a", "c"]))).toBe(true) // transitive
 
       // Add edge(c, d).
-      evaluator.step(factsToZSet([fact("edge", ["c", "d"])]), zsetEmpty())
+      evaluator.step(factsToZSet([fact("edge", ["c", "d"])]))
       db = evaluator.currentDatabase()
       expect(db.hasFact(fact("path", ["c", "d"]))).toBe(true)
       expect(db.hasFact(fact("path", ["b", "d"]))).toBe(true)
@@ -532,7 +535,7 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
       // Incremental.
       const evaluator = createEvaluator(rules)
       for (const e of edges) {
-        evaluator.step(factsToZSet([e]), zsetEmpty())
+        evaluator.step(factsToZSet([e]))
       }
 
       // Batch.
@@ -569,7 +572,7 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
       ])
       const peerFact = fact("constraint_peer", [childKey, "alice"])
 
-      evaluator.step(factsToZSet([seqFact, peerFact]), zsetEmpty())
+      evaluator.step(factsToZSet([seqFact, peerFact]))
 
       const db = evaluator.currentDatabase()
 
@@ -605,9 +608,9 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
       ])
       const peer2 = fact("constraint_peer", [child2Key, "bob"])
 
-      evaluator.step(factsToZSet([seq1, peer1, seq2, peer2]), zsetEmpty())
+      evaluator.step(factsToZSet([seq1, peer1, seq2, peer2]))
 
-      const resolution = evaluator.currentResolution()
+      const resolution = extractResolution(evaluator.currentDatabase())
       expect(resolution.fuguePairs.size).toBeGreaterThan(0)
 
       // There should be a before pair for these two children.
@@ -628,12 +631,13 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
       // Insert two competing values.
       const f1 = makeActiveValueFact("alice", 1, slotId, "Hello", 10)
       const f2 = makeActiveValueFact("bob", 1, slotId, "World", 20)
-      evaluator.step(factsToZSet([f1, f2]), zsetEmpty())
+      evaluator.step(factsToZSet([f1, f2]))
 
       // With default rules, bob wins (lamport 20 > 10).
-      expect(evaluator.currentResolution().winners.get(slotId)?.content).toBe(
-        "World",
-      )
+      expect(
+        extractResolution(evaluator.currentDatabase()).winners.get(slotId)
+          ?.content,
+      ).toBe("World")
 
       // Add a custom rule that makes LOWER lamport win (reverses comparison).
       const customRule = rule(
@@ -673,11 +677,11 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
       ruleDelta = zsetAdd(ruleDelta, zsetSingleton(ruleKey2, lwwRules[1]!, -1))
       ruleDelta = zsetAdd(ruleDelta, zsetSingleton(ruleKey3, customRule, 1))
 
-      evaluator.step(zsetEmpty(), ruleDelta)
+      evaluator.changeRules(ruleDelta)
 
       // Now alice should win (lamport 10 < 20, and with reversed rule,
       // the higher lamport is superseded).
-      const resolution = evaluator.currentResolution()
+      const resolution = extractResolution(evaluator.currentDatabase())
       expect(resolution.winners.get(slotId)?.content).toBe("Hello")
     })
   })
@@ -685,21 +689,21 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
   describe("empty inputs", () => {
     it("empty delta produces empty result", () => {
       const evaluator = createEvaluator(buildDefaultLWWRules())
-      const result = evaluator.step(zsetEmpty(), zsetEmpty())
+      const result = evaluator.step(zsetEmpty())
 
-      expect(zsetIsEmpty(result.deltaResolved)).toBe(true)
-      expect(zsetIsEmpty(result.deltaFuguePairs)).toBe(true)
-      expect(zsetIsEmpty(result.deltaDerived)).toBe(true)
+      expect(zsetIsEmpty(winnerDeltas(result))).toBe(true)
+      expect(zsetIsEmpty(fuguePairDeltas(result))).toBe(true)
+      expect(zsetIsEmpty(result)).toBe(true)
     })
 
     it("evaluator with no rules produces no derived facts", () => {
       const evaluator = createEvaluator([])
 
       const f = makeActiveValueFact("alice", 1, "slot:title", "Hello", 10)
-      const result = evaluator.step(factsToZSet([f]), zsetEmpty())
+      const result = evaluator.step(factsToZSet([f]))
 
-      expect(zsetIsEmpty(result.deltaResolved)).toBe(true)
-      expect(zsetIsEmpty(result.deltaDerived)).toBe(true)
+      expect(zsetIsEmpty(winnerDeltas(result))).toBe(true)
+      expect(zsetIsEmpty(result)).toBe(true)
     })
   })
 
@@ -708,11 +712,15 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
       const evaluator = createEvaluator(buildDefaultLWWRules())
 
       const f = makeActiveValueFact("alice", 1, "slot:title", "Hello", 10)
-      evaluator.step(factsToZSet([f]), zsetEmpty())
-      expect(evaluator.currentResolution().winners.size).toBe(1)
+      evaluator.step(factsToZSet([f]))
+      expect(extractResolution(evaluator.currentDatabase()).winners.size).toBe(
+        1,
+      )
 
       evaluator.reset()
-      expect(evaluator.currentResolution().winners.size).toBe(0)
+      expect(extractResolution(evaluator.currentDatabase()).winners.size).toBe(
+        0,
+      )
       expect(evaluator.currentDatabase().size).toBe(0)
     })
   })
@@ -748,7 +756,7 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
         fact("edge", ["a", "b"]),
       ]
 
-      evaluator.step(factsToZSet(initialFacts), zsetEmpty())
+      evaluator.step(factsToZSet(initialFacts))
 
       let db = evaluator.currentDatabase()
       expect(db.hasFact(fact("reachable", ["a"]))).toBe(true)
@@ -759,7 +767,7 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
       expect(db.hasFact(fact("unreachable", ["b"]))).toBe(false)
 
       // Add edge b→c. Now c becomes reachable, so unreachable(c) should retract.
-      evaluator.step(factsToZSet([fact("edge", ["b", "c"])]), zsetEmpty())
+      evaluator.step(factsToZSet([fact("edge", ["b", "c"])]))
 
       db = evaluator.currentDatabase()
       expect(db.hasFact(fact("reachable", ["c"]))).toBe(true)
@@ -793,7 +801,7 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
       // Incremental: feed one at a time.
       const evaluator = createEvaluator(rules)
       for (const f of allFacts) {
-        evaluator.step(factsToZSet([f]), zsetEmpty())
+        evaluator.step(factsToZSet([f]))
       }
 
       // Batch.
@@ -830,19 +838,19 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
   })
 
   describe("resolution extraction from derived facts", () => {
-    it("deltaDerived contains winner facts with correct structure", () => {
+    it("the derived delta contains winner facts with the winner column layout", () => {
       const evaluator = createEvaluator(buildDefaultLWWRules())
       const slotId = "slot:title"
 
       const f = makeActiveValueFact("alice", 1, slotId, "Hello", 10)
-      const result = evaluator.step(factsToZSet([f]), zsetEmpty())
+      const result = evaluator.step(factsToZSet([f]))
 
       // deltaDerived should contain winner and superseded facts.
-      expect(zsetIsEmpty(result.deltaDerived)).toBe(false)
+      expect(zsetIsEmpty(result)).toBe(false)
 
       // Check that we can find a winner fact in the derived delta.
       let foundWinner = false
-      zsetForEach(result.deltaDerived, entry => {
+      zsetForEach(result, entry => {
         if (entry.element.predicate === "winner") {
           foundWinner = true
           expect(entry.weight).toBe(1)
@@ -851,16 +859,16 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
       expect(foundWinner).toBe(true)
     })
 
-    it("deltaResolved and deltaDerived are consistent", () => {
+    it("winnerDeltas agrees with the winner facts in the derived delta", () => {
       const evaluator = createEvaluator(buildDefaultLWWRules())
 
       const f = makeActiveValueFact("alice", 1, "slot:title", "Hello", 10)
-      const result = evaluator.step(factsToZSet([f]), zsetEmpty())
+      const result = evaluator.step(factsToZSet([f]))
 
       // Every entry in deltaResolved should correspond to a winner fact
       // in deltaDerived.
-      const derivedWinnerCount = countByPredicate(result.deltaDerived, "winner")
-      expect(zsetSize(result.deltaResolved)).toBe(derivedWinnerCount)
+      const derivedWinnerCount = countByPredicate(result, "winner")
+      expect(zsetSize(winnerDeltas(result))).toBe(derivedWinnerCount)
     })
   })
 
@@ -869,7 +877,7 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
       const evaluator = createEvaluator(buildDefaultLWWRules())
 
       const f = makeActiveValueFact("alice", 1, "slot:title", "Hello", 10)
-      evaluator.step(factsToZSet([f]), zsetEmpty())
+      evaluator.step(factsToZSet([f]))
 
       const db = evaluator.currentDatabase()
 
@@ -884,10 +892,10 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
       const evaluator = createEvaluator(buildDefaultLWWRules())
 
       const f = makeActiveValueFact("alice", 1, "slot:title", "Hello", 10)
-      evaluator.step(factsToZSet([f]), zsetEmpty())
+      evaluator.step(factsToZSet([f]))
       expect(evaluator.currentDatabase().hasFact(f)).toBe(true)
 
-      evaluator.step(factsToWeightedZSet([[f, -1]]), zsetEmpty())
+      evaluator.step(factsToWeightedZSet([[f, -1]]))
       expect(evaluator.currentDatabase().hasFact(f)).toBe(false)
     })
   })
@@ -910,7 +918,7 @@ describe("Unified Evaluator (migrated from IncrementalDatalogEvaluator)", () => 
 
       // Feed incrementally.
       for (const f of facts) {
-        evaluator.step(factsToZSet([f]), zsetEmpty())
+        evaluator.step(factsToZSet([f]))
       }
 
       // Batch.

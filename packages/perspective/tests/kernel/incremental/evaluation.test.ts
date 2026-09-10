@@ -34,6 +34,7 @@ import {
   negation,
   neq,
   positiveAtom,
+  rule,
   varTerm,
 } from "../../../src/datalog/types.js"
 import { cnIdKey, createCnId } from "../../../src/kernel/cnid.js"
@@ -773,6 +774,80 @@ describe("IncrementalEvaluation", () => {
       const current = evaluation.current()
       expect(current.winners.size).toBe(1)
       expect(current.winners.get(slotId)?.content).toBe("LowLamport")
+    })
+
+    it("one step carrying both a fact delta and a rule delta nets the two on the datalog path", () => {
+      // The stage answers this with changeRules then step, summed. The
+      // winner must end where a fresh evaluation over everything ends, and
+      // the summed delta must carry the replacement as a single +1.
+      const evaluation = createIncrementalEvaluation()
+      const { activeConstraints, customRuleConstraints } =
+        buildReversedRuleConstraints()
+      let ruleDelta = zsetEmpty<Rule>()
+      for (const rc of customRuleConstraints) {
+        const r: Rule = { head: rc.payload.head, body: rc.payload.body }
+        ruleDelta = zsetAdd(ruleDelta, zsetSingleton(cnIdKey(rc.id), r, 1))
+      }
+      evaluation.step(
+        zsetEmpty(),
+        ruleDelta,
+        () => [],
+        () => activeConstraints,
+      )
+
+      const f1 = makeActiveValueFact("alice", 3, slotId, "LowLamport", 10)
+      evaluation.step(
+        zsetSingleton(`v|${cnIdKey(createCnId("alice", 3))}`, f1, 1),
+        zsetEmpty(),
+        () => [f1],
+        () => activeConstraints,
+      )
+      expect(evaluation.current().winners.get(slotId)?.content).toBe(
+        "LowLamport",
+      )
+
+      // A further Layer 2 rule, so the strategy stays datalog, and a value
+      // that wins under the reversed rules, in the same step.
+      const marker: Rule = rule(atom("marked", [varTerm("S")]), [
+        positiveAtom(
+          atom("winner", [varTerm("S"), varTerm("C"), varTerm("V")]),
+        ),
+      ])
+      const markerConstraint = makeRuleConstraint("alice", 300, 2, marker)
+      const f2 = makeActiveValueFact("bob", 1, slotId, "LowerLamport", 5)
+      const { deltaResolved } = evaluation.step(
+        zsetSingleton(`v|${cnIdKey(createCnId("bob", 1))}`, f2, 1),
+        zsetSingleton(cnIdKey(markerConstraint.id), marker, 1),
+        () => [f1, f2],
+        () => [...activeConstraints, markerConstraint],
+      )
+
+      expect(evaluation.current().winners.get(slotId)?.content).toBe(
+        "LowerLamport",
+      )
+      expect(deltaResolved.get(slotId)?.weight).toBe(1)
+      expect(deltaResolved.get(slotId)?.element.content).toBe("LowerLamport")
+
+      const fresh = createIncrementalEvaluation()
+      fresh.step(
+        zsetEmpty(),
+        zsetAdd(
+          ruleDelta,
+          zsetSingleton(cnIdKey(markerConstraint.id), marker, 1),
+        ),
+        () => [],
+        () => [...activeConstraints, markerConstraint],
+      )
+      fresh.step(
+        zsetAdd(
+          zsetSingleton(`v|${cnIdKey(createCnId("alice", 3))}`, f1, 1),
+          zsetSingleton(`v|${cnIdKey(createCnId("bob", 1))}`, f2, 1),
+        ),
+        zsetEmpty(),
+        () => [f1, f2],
+        () => [...activeConstraints, markerConstraint],
+      )
+      expect(evaluation.current().winners).toEqual(fresh.current().winners)
     })
 
     it("rule addition mid-stream: values re-resolved under new rules", () => {

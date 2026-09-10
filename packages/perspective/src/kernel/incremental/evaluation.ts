@@ -3,9 +3,13 @@
 // (LWW + Fugue) or the unified weighted Datalog evaluator, based on
 // active rules.
 //
-// This stage sits between projection and skeleton in the incremental DAG:
+// This stage sits between projection and skeleton in the incremental DAG. On
+// the Datalog path it is R(E(Δ)), in the notation of theory/incremental.md
+// §5.6–5.7: E, the evaluator, emits Δ_derived, a delta of derived facts that
+// knows nothing about constraints; R, `winnerDeltas` and `fuguePairDeltas`
+// in `resolve.ts`, reads `winner` and `fugue_before` out of it.
 //
-//   P^Δ (projection) → Δ_facts → E^Δ (this stage) → { Δ_resolved, Δ_fuguePairs } → K^Δ (skeleton)
+//   P^Δ (projection) → Δ_facts → E^Δ → Δ_derived → R → { Δ_resolved, Δ_fuguePairs } → K^Δ (skeleton)
 //
 // The native path (Phase 2–3) handles default LWW/Fugue rules in O(|Δ|).
 // The Datalog path uses the unified evaluator from Plan 006.1, which
@@ -52,7 +56,13 @@ import type {
   ResolutionResult,
   ResolvedWinner,
 } from "../resolve.js"
-import { fuguePairKey, nativeResolution } from "../resolve.js"
+import {
+  extractResolution,
+  fuguePairDeltas,
+  fuguePairKey,
+  nativeResolution,
+  winnerDeltas,
+} from "../resolve.js"
 import {
   extractRules,
   type ResolutionStrategy,
@@ -274,21 +284,14 @@ function diffResolution(
   return { deltaResolved, deltaFuguePairs: zsetFromEntries(pairChanges) }
 }
 
-// ---------------------------------------------------------------------------
-// Helper: build a ResolutionResult from incremental Datalog output
-// ---------------------------------------------------------------------------
-
-/**
- * Convert the unified Datalog evaluator's `currentResolution()`
- * into a full `ResolutionResult` for the `current()` method and
- * strategy-switch diffing.
- */
-function datalogCurrentResolution(datalog: Evaluator): ResolutionResult {
-  const res = datalog.currentResolution()
+/** R applied to E's output: the resolution deltas the skeleton consumes. */
+function resolutionDeltas(derived: ZSet<Fact>): {
+  deltaResolved: ZSet<ResolvedWinner>
+  deltaFuguePairs: ZSet<FugueBeforePair>
+} {
   return {
-    winners: res.winners,
-    fuguePairs: res.fuguePairs,
-    fromDatalog: true,
+    deltaResolved: winnerDeltas(derived),
+    deltaFuguePairs: fuguePairDeltas(derived),
   }
 }
 
@@ -341,10 +344,7 @@ export function createIncrementalEvaluation(): IncrementalEvaluation {
   /**
    * Run the incremental Datalog path: delegate to the evaluator.
    */
-  function stepDatalog(
-    deltaFacts: ZSet<Fact>,
-    deltaRules: ZSet<Rule>,
-  ): {
+  function stepDatalog(deltaFacts: ZSet<Fact>): {
     deltaResolved: ZSet<ResolvedWinner>
     deltaFuguePairs: ZSet<FugueBeforePair>
   } {
@@ -352,12 +352,7 @@ export function createIncrementalEvaluation(): IncrementalEvaluation {
       // Should not happen — datalog is created on switch.
       return { deltaResolved: zsetEmpty(), deltaFuguePairs: zsetEmpty() }
     }
-
-    const result = datalog.step(deltaFacts, deltaRules)
-    return {
-      deltaResolved: result.deltaResolved,
-      deltaFuguePairs: result.deltaFuguePairs,
-    }
+    return resolutionDeltas(datalog.step(deltaFacts))
   }
 
   /**
@@ -386,12 +381,12 @@ export function createIncrementalEvaluation(): IncrementalEvaluation {
     // Bootstrap from accumulated ground facts.
     const accFacts = getAccumulatedFacts()
     if (accFacts.length > 0) {
-      datalog.step(factsToZSet(accFacts), zsetEmpty())
+      datalog.step(factsToZSet(accFacts))
     }
 
     strategy = "datalog"
 
-    const newResolution = datalogCurrentResolution(datalog)
+    const newResolution = extractResolution(datalog.currentDatabase())
     return diffResolution(oldResolution, newResolution)
   }
 
@@ -410,7 +405,7 @@ export function createIncrementalEvaluation(): IncrementalEvaluation {
   } {
     const oldResolution =
       datalog !== null
-        ? datalogCurrentResolution(datalog)
+        ? extractResolution(datalog.currentDatabase())
         : nativeResolution(new Map(), new Map())
 
     // Rebuild native solvers from accumulated facts
@@ -492,7 +487,7 @@ export function createIncrementalEvaluation(): IncrementalEvaluation {
           if (strategy === "native") {
             factDelta = stepNative(deltaFacts)
           } else {
-            factDelta = stepDatalog(deltaFacts, zsetEmpty())
+            factDelta = stepDatalog(deltaFacts)
           }
 
           return {
@@ -513,13 +508,13 @@ export function createIncrementalEvaluation(): IncrementalEvaluation {
       // Strategy didn't change, but rules changed — if we're on the
       // Datalog path, forward the rule delta to the evaluator.
       if (strategy === "datalog" && datalog !== null) {
-        // Rules changed but strategy stays 'datalog'. Process both
-        // deltaFacts and deltaRules through the evaluator together.
-        const result = datalog.step(deltaFacts, deltaRules)
-        return {
-          deltaResolved: result.deltaResolved,
-          deltaFuguePairs: result.deltaFuguePairs,
-        }
+        // Rules changed but strategy stays 'datalog'. The rule change is a
+        // full recompute over the facts as they were; the fact delta then
+        // applies incrementally. Z-set addition nets the two: a fact that
+        // flipped in both cancels out.
+        return resolutionDeltas(
+          zsetAdd(datalog.changeRules(deltaRules), datalog.step(deltaFacts)),
+        )
       }
     }
 
@@ -534,7 +529,7 @@ export function createIncrementalEvaluation(): IncrementalEvaluation {
     if (strategy === "native") {
       return stepNative(deltaFacts)
     } else {
-      return stepDatalog(deltaFacts, deltaRules)
+      return stepDatalog(deltaFacts)
     }
   }
 
@@ -542,7 +537,7 @@ export function createIncrementalEvaluation(): IncrementalEvaluation {
     if (strategy === "native") {
       return nativeCurrentResolution()
     } else if (datalog !== null) {
-      return datalogCurrentResolution(datalog)
+      return extractResolution(datalog.currentDatabase())
     } else {
       // No strategy active — return empty.
       return nativeResolution(new Map(), new Map())

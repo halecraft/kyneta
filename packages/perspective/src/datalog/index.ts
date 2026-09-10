@@ -22,7 +22,7 @@ export {
   groundHead,
 } from "./evaluate.js"
 // --- Unified Evaluator (Plan 006.1) ---
-export type { Evaluator, EvaluatorStepResult } from "./evaluator.js"
+export type { Evaluator } from "./evaluator.js"
 export {
   createEvaluator,
   evaluatePositiveUnified as evaluatePositive,

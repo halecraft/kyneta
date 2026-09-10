@@ -219,6 +219,7 @@ export {
   filterActive,
   filterByVersion,
   filterValid,
+  fuguePairDeltas,
   fuguePairKey,
   generateKeypair,
   getCapabilities,
@@ -323,6 +324,7 @@ export {
   vvToObject,
   vvToString,
   vvTotalOps,
+  winnerDeltas,
 } from "./kernel/index.js"
 // === Pipeline (§7) ===
 export {

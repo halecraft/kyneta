@@ -15,7 +15,9 @@
 //
 // See unified-engine.md §7.2, §B.4, §B.7.
 
-import type { Database, Fact } from "../datalog/types.js"
+import type { ZSet, ZSetEntry } from "../base/zset.js"
+import { zsetFilter, zsetFromEntries, zsetMap } from "../base/zset.js"
+import type { Database, Fact, FactTuple } from "../datalog/types.js"
 import type { LWWEntry } from "../solver/lww.js"
 import { cnIdFromString } from "./cnid.js"
 import { ACTIVE_STRUCTURE_SEQ, ACTIVE_VALUE } from "./projection.js"
@@ -213,11 +215,6 @@ export function parseSeqStructureFact(f: Fact): ParsedSeqStructureFact {
  * Reads the `winner(Slot, CnId, Value)` relation and converts each
  * fact tuple back into a typed `ResolvedWinner`.
  *
- * Column positions (must match the rule head in §B.4):
- *   [0] Slot   — slot identity string
- *   [1] CnId   — cnIdKey string of the winning value constraint
- *   [2] Value  — the resolved content
- *
  * @param db - The Datalog database after evaluation.
  * @returns Map from slotId to ResolvedWinner.
  */
@@ -225,16 +222,10 @@ export function extractWinners(
   db: Database,
 ): ReadonlyMap<string, ResolvedWinner> {
   const winners = new Map<string, ResolvedWinner>()
-  const winnerRelation = db.getRelation("winner")
-
-  for (const tuple of winnerRelation.tuples()) {
-    const slotId = tuple[0] as string
-    const winnerCnIdKey = tuple[1] as string
-    const content = tuple[2] as Value
-
-    winners.set(slotId, { slotId, winnerCnIdKey, content })
+  for (const tuple of db.getRelation("winner").tuples()) {
+    const winner = winnerFromTuple(tuple)
+    winners.set(winner.slotId, winner)
   }
-
   return winners
 }
 
@@ -244,11 +235,6 @@ export function extractWinners(
  * Reads the `fugue_before(Parent, A, B)` relation and groups the
  * pairs by parent container.
  *
- * Column positions (must match the rule head):
- *   [0] Parent — cnIdKey string of the parent seq container
- *   [1] A      — cnIdKey string of the element that comes first
- *   [2] B      — cnIdKey string of the element that comes second
- *
  * @param db - The Datalog database after evaluation.
  * @returns Map from parent cnIdKey to array of FugueBeforePair.
  */
@@ -256,23 +242,15 @@ export function extractFugueOrdering(
   db: Database,
 ): ReadonlyMap<string, FugueBeforePair[]> {
   const pairs = new Map<string, FugueBeforePair[]>()
-  const beforeRelation = db.getRelation("fugue_before")
-
-  for (const tuple of beforeRelation.tuples()) {
-    const parentKey = tuple[0] as string
-    const a = tuple[1] as string
-    const b = tuple[2] as string
-
-    const pair: FugueBeforePair = { parentKey, a, b }
-
-    let existing = pairs.get(parentKey)
+  for (const tuple of db.getRelation("fugue_before").tuples()) {
+    const pair = fuguePairFromTuple(tuple)
+    let existing = pairs.get(pair.parentKey)
     if (existing === undefined) {
       existing = []
-      pairs.set(parentKey, existing)
+      pairs.set(pair.parentKey, existing)
     }
     existing.push(pair)
   }
-
   return pairs
 }
 
@@ -292,6 +270,95 @@ export function extractResolution(db: Database): ResolutionResult {
     fuguePairs: extractFugueOrdering(db),
     fromDatalog: true,
   }
+}
+
+// ---------------------------------------------------------------------------
+// Row parsers and delta forms
+//
+// The column layout of `winner` and `fugue_before` is a contract with the rule
+// heads in §B.4. It is written down once per predicate, here, and every reader
+// goes through these two parsers: the full extractors above, and the delta
+// forms below that the incremental evaluation stage applies to what the
+// Datalog evaluator emits.
+// ---------------------------------------------------------------------------
+
+/**
+ * `winner(Slot, CnId, Value)`:
+ *   [0] Slot   — slot identity string
+ *   [1] CnId   — cnIdKey string of the winning value constraint
+ *   [2] Value  — the resolved content
+ */
+function winnerFromTuple(tuple: FactTuple): ResolvedWinner {
+  return {
+    slotId: tuple[0] as string,
+    winnerCnIdKey: tuple[1] as string,
+    content: tuple[2] as Value,
+  }
+}
+
+/**
+ * `fugue_before(Parent, A, B)`:
+ *   [0] Parent — cnIdKey string of the parent seq container
+ *   [1] A      — cnIdKey string of the element that comes first
+ *   [2] B      — cnIdKey string of the element that comes second
+ */
+function fuguePairFromTuple(tuple: FactTuple): FugueBeforePair {
+  return {
+    parentKey: tuple[0] as string,
+    a: tuple[1] as string,
+    b: tuple[2] as string,
+  }
+}
+
+/**
+ * Winner changes in a delta of derived facts, keyed by slot.
+ *
+ * The evaluator reports a changed winner as two facts: the old one at −1 and
+ * the new one at +1. The skeleton keys winners by slot and reads a +1 as a
+ * replacement, so only the +1 is emitted; a −1 on its own means the slot has
+ * no winner any more. That is why this is a hand-written fold and not
+ * `zsetMap` keyed by slot: `zsetMap` sums colliding keys, and the −1 and the
+ * +1 would annihilate. `diffResolution` in `incremental/evaluation.ts` applies
+ * the same rule when it diffs two whole resolutions.
+ */
+export function winnerDeltas(derived: ZSet<Fact>): ZSet<ResolvedWinner> {
+  const bySlot = new Map<
+    string,
+    { plus: ResolvedWinner | null; minus: ResolvedWinner | null }
+  >()
+  for (const { element, weight } of derived.values()) {
+    if (element.predicate !== "winner") continue
+    const winner = winnerFromTuple(element.values)
+    let slot = bySlot.get(winner.slotId)
+    if (slot === undefined) {
+      slot = { plus: null, minus: null }
+      bySlot.set(winner.slotId, slot)
+    }
+    if (weight > 0) slot.plus = winner
+    else if (weight < 0) slot.minus = winner
+  }
+
+  const resolved: [string, ZSetEntry<ResolvedWinner>][] = []
+  for (const [slotId, slot] of bySlot) {
+    if (slot.plus !== null) {
+      resolved.push([slotId, { element: slot.plus, weight: 1 }])
+    } else if (slot.minus !== null) {
+      resolved.push([slotId, { element: slot.minus, weight: -1 }])
+    }
+  }
+  return zsetFromEntries(resolved)
+}
+
+/**
+ * Fugue pair changes in a delta of derived facts, keyed by `fuguePairKey`.
+ * A pair only ever appears or disappears, so `zsetMap` is exact here.
+ */
+export function fuguePairDeltas(derived: ZSet<Fact>): ZSet<FugueBeforePair> {
+  return zsetMap(
+    zsetFilter(derived, entry => entry.element.predicate === "fugue_before"),
+    fuguePairKey,
+    f => fuguePairFromTuple(f.values),
+  )
 }
 
 // ---------------------------------------------------------------------------

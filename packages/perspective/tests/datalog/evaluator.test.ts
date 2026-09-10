@@ -64,6 +64,11 @@ import {
 import { EMPTY_SUBSTITUTION } from "../../src/datalog/unify.js"
 import { cnIdKey, createCnId } from "../../src/kernel/cnid.js"
 import type { FugueBeforePair } from "../../src/kernel/resolve.js"
+import {
+  extractResolution,
+  fuguePairDeltas,
+  winnerDeltas,
+} from "../../src/kernel/resolve.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1277,12 +1282,12 @@ describe("Unified Evaluator", () => {
       const f = makeActiveValueFact("alice", 1, slotId, "Hello", 10)
       const delta = factsToZSet([f])
 
-      const result = evaluator.step(delta, zsetEmpty())
+      const result = evaluator.step(delta)
 
-      expect(zsetIsEmpty(result.deltaResolved)).toBe(false)
-      expect(zsetSize(result.deltaResolved)).toBe(1)
+      expect(zsetIsEmpty(winnerDeltas(result))).toBe(false)
+      expect(zsetSize(winnerDeltas(result))).toBe(1)
 
-      const winnerEntry = [...result.deltaResolved.values()][0]!
+      const winnerEntry = [...winnerDeltas(result).values()][0]!
       expect(winnerEntry.weight).toBe(1)
       expect(winnerEntry.element.slotId).toBe(slotId)
       expect(winnerEntry.element.content).toBe("Hello")
@@ -1293,17 +1298,17 @@ describe("Unified Evaluator", () => {
 
       // Insert first value (lamport 10).
       const f1 = makeActiveValueFact("alice", 1, slotId, "Hello", 10)
-      evaluator.step(factsToZSet([f1]), zsetEmpty())
+      evaluator.step(factsToZSet([f1]))
 
       // Insert superseding value (lamport 20).
       const f2 = makeActiveValueFact("bob", 1, slotId, "World", 20)
-      const result = evaluator.step(factsToZSet([f2]), zsetEmpty())
+      const result = evaluator.step(factsToZSet([f2]))
 
       // Should have winner changes.
-      expect(zsetIsEmpty(result.deltaResolved)).toBe(false)
+      expect(zsetIsEmpty(winnerDeltas(result))).toBe(false)
 
       // The new winner should be bob's value.
-      const resolution = evaluator.currentResolution()
+      const resolution = extractResolution(evaluator.currentDatabase())
       expect(resolution.winners.size).toBe(1)
       const winner = resolution.winners.get(slotId)!
       expect(winner.content).toBe("World")
@@ -1315,14 +1320,14 @@ describe("Unified Evaluator", () => {
 
       // Insert the winner first (lamport 20).
       const f1 = makeActiveValueFact("bob", 1, slotId, "World", 20)
-      evaluator.step(factsToZSet([f1]), zsetEmpty())
+      evaluator.step(factsToZSet([f1]))
 
       // Insert a loser (lamport 10).
       const f2 = makeActiveValueFact("alice", 1, slotId, "Hello", 10)
-      evaluator.step(factsToZSet([f2]), zsetEmpty())
+      evaluator.step(factsToZSet([f2]))
 
       // The winner should still be bob's value.
-      const resolution = evaluator.currentResolution()
+      const resolution = extractResolution(evaluator.currentDatabase())
       expect(resolution.winners.size).toBe(1)
       expect(resolution.winners.get(slotId)?.content).toBe("World")
     })
@@ -1333,19 +1338,20 @@ describe("Unified Evaluator", () => {
       // Insert two values.
       const f1 = makeActiveValueFact("alice", 1, slotId, "Hello", 10)
       const f2 = makeActiveValueFact("bob", 1, slotId, "World", 20)
-      evaluator.step(factsToZSet([f1, f2]), zsetEmpty())
+      evaluator.step(factsToZSet([f1, f2]))
 
       // Winner should be bob (lamport 20).
-      expect(evaluator.currentResolution().winners.get(slotId)?.content).toBe(
-        "World",
-      )
+      expect(
+        extractResolution(evaluator.currentDatabase()).winners.get(slotId)
+          ?.content,
+      ).toBe("World")
 
       // Retract bob's value.
       const retractDelta = factsToWeightedZSet([[f2, -1]])
-      evaluator.step(retractDelta, zsetEmpty())
+      evaluator.step(retractDelta)
 
       // Winner should now be alice — via weight propagation, not DRed.
-      const resolution = evaluator.currentResolution()
+      const resolution = extractResolution(evaluator.currentDatabase())
       expect(resolution.winners.size).toBe(1)
       expect(resolution.winners.get(slotId)?.content).toBe("Hello")
     })
@@ -1354,12 +1360,12 @@ describe("Unified Evaluator", () => {
       const evaluator = createEvaluator(lwwRules)
 
       const f1 = makeActiveValueFact("alice", 1, slotId, "Hello", 10)
-      evaluator.step(factsToZSet([f1]), zsetEmpty())
+      evaluator.step(factsToZSet([f1]))
 
       // Retract it.
-      evaluator.step(factsToWeightedZSet([[f1, -1]]), zsetEmpty())
+      evaluator.step(factsToWeightedZSet([[f1, -1]]))
 
-      const resolution = evaluator.currentResolution()
+      const resolution = extractResolution(evaluator.currentDatabase())
       expect(resolution.winners.size).toBe(0)
     })
 
@@ -1369,9 +1375,9 @@ describe("Unified Evaluator", () => {
       const f1 = makeActiveValueFact("alice", 1, "slot:title", "Title", 10)
       const f2 = makeActiveValueFact("alice", 2, "slot:body", "Body", 10)
 
-      evaluator.step(factsToZSet([f1, f2]), zsetEmpty())
+      evaluator.step(factsToZSet([f1, f2]))
 
-      const resolution = evaluator.currentResolution()
+      const resolution = extractResolution(evaluator.currentDatabase())
       expect(resolution.winners.size).toBe(2)
       expect(resolution.winners.get("slot:title")?.content).toBe("Title")
       expect(resolution.winners.get("slot:body")?.content).toBe("Body")
@@ -1383,9 +1389,9 @@ describe("Unified Evaluator", () => {
       const f1 = makeActiveValueFact("bob", 1, slotId, "Bob", 20)
       const f2 = makeActiveValueFact("charlie", 1, slotId, "Charlie", 20)
 
-      evaluator.step(factsToZSet([f1, f2]), zsetEmpty())
+      evaluator.step(factsToZSet([f1, f2]))
 
-      const resolution = evaluator.currentResolution()
+      const resolution = extractResolution(evaluator.currentDatabase())
       expect(resolution.winners.get(slotId)?.content).toBe("Charlie")
     })
   })
@@ -1412,13 +1418,13 @@ describe("Unified Evaluator", () => {
 
       // Path 2: unified evaluator, single step with all facts.
       const singleStep = createEvaluator(lwwRules)
-      singleStep.step(factsToZSet(facts), zsetEmpty())
+      singleStep.step(factsToZSet(facts))
       const _singleStepDb = singleStep.currentDatabase()
 
       // Path 3: unified evaluator, one fact per step.
       const oneAtATime = createEvaluator(lwwRules)
       for (const f of facts) {
-        oneAtATime.step(factsToZSet([f]), zsetEmpty())
+        oneAtATime.step(factsToZSet([f]))
       }
       const _oneAtATimeDb = oneAtATime.currentDatabase()
 
@@ -1428,8 +1434,12 @@ describe("Unified Evaluator", () => {
         batchWinners.set(tuple[0] as string, tuple[2]!)
       }
 
-      const singleStepWinners = singleStep.currentResolution().winners
-      const oneAtATimeWinners = oneAtATime.currentResolution().winners
+      const singleStepWinners = extractResolution(
+        singleStep.currentDatabase(),
+      ).winners
+      const oneAtATimeWinners = extractResolution(
+        oneAtATime.currentDatabase(),
+      ).winners
 
       // All should have the same number of winners.
       expect(singleStepWinners.size).toBe(batchWinners.size)
@@ -1453,9 +1463,9 @@ describe("Unified Evaluator", () => {
       const batchDb = batchResult.value
 
       const evaluator = createEvaluator(lwwRules)
-      evaluator.step(factsToZSet(facts), zsetEmpty())
+      evaluator.step(factsToZSet(facts))
 
-      const incRes = evaluator.currentResolution()
+      const incRes = extractResolution(evaluator.currentDatabase())
       const batchWinner = batchDb.getRelation("winner").tuples()[0]!
 
       expect(incRes.winners.size).toBe(1)
@@ -1475,26 +1485,26 @@ describe("Unified Evaluator", () => {
       const batchWinner = batchResult.value.getRelation("winner").tuples()[0]!
 
       const viaHelper = createEvaluator(lwwRules)
-      viaHelper.step(factsToZSet(facts), zsetEmpty())
+      viaHelper.step(factsToZSet(facts))
 
       const viaSingletons = createEvaluator(lwwRules)
       for (const f of facts) {
-        viaSingletons.step(zsetSingleton(factKey(f), f, 1), zsetEmpty())
+        viaSingletons.step(zsetSingleton(factKey(f), f, 1))
       }
 
-      expect(viaHelper.currentResolution().winners.get(slotId)?.content).toBe(
-        batchWinner[2],
-      )
       expect(
-        viaSingletons.currentResolution().winners.get(slotId)?.content,
+        extractResolution(viaHelper.currentDatabase()).winners.get(slotId)
+          ?.content,
+      ).toBe(batchWinner[2])
+      expect(
+        extractResolution(viaSingletons.currentDatabase()).winners.get(slotId)
+          ?.content,
       ).toBe(batchWinner[2])
       // And a retraction keyed the same way is honoured.
-      viaSingletons.step(
-        zsetSingleton(factKey(facts[1]!), facts[1]!, -1),
-        zsetEmpty(),
-      )
+      viaSingletons.step(zsetSingleton(factKey(facts[1]!), facts[1]!, -1))
       expect(
-        viaSingletons.currentResolution().winners.get(slotId)?.content,
+        extractResolution(viaSingletons.currentDatabase()).winners.get(slotId)
+          ?.content,
       ).toBe("Hello")
     })
 
@@ -1520,12 +1530,12 @@ describe("Unified Evaluator", () => {
 
       // Path 2: unified single step.
       const singleStep = createEvaluator(rules)
-      singleStep.step(factsToZSet(edges), zsetEmpty())
+      singleStep.step(factsToZSet(edges))
 
       // Path 3: unified one-at-a-time.
       const oneAtATime = createEvaluator(rules)
       for (const e of edges) {
-        oneAtATime.step(factsToZSet([e]), zsetEmpty())
+        oneAtATime.step(factsToZSet([e]))
       }
 
       const batchPaths = batchDb.getRelation("path").tuples()
@@ -1687,9 +1697,9 @@ describe("Unified Evaluator", () => {
       for (const perm of permutations(facts)) {
         const evaluator = createEvaluator(lwwRules)
         for (const f of perm) {
-          evaluator.step(factsToZSet([f]), zsetEmpty())
+          evaluator.step(factsToZSet([f]))
         }
-        const resolution = evaluator.currentResolution()
+        const resolution = extractResolution(evaluator.currentDatabase())
         expect(resolution.winners.size).toBe(1)
         expect(resolution.winners.get(slotId)?.content).toBe(expectedContent)
       }
@@ -1715,18 +1725,18 @@ describe("Unified Evaluator", () => {
       const evaluator = createEvaluator(rules)
 
       // Add edge(a, b).
-      evaluator.step(factsToZSet([fact("edge", ["a", "b"])]), zsetEmpty())
+      evaluator.step(factsToZSet([fact("edge", ["a", "b"])]))
       let db = evaluator.currentDatabase()
       expect(db.hasFact(fact("path", ["a", "b"]))).toBe(true)
 
       // Add edge(b, c).
-      evaluator.step(factsToZSet([fact("edge", ["b", "c"])]), zsetEmpty())
+      evaluator.step(factsToZSet([fact("edge", ["b", "c"])]))
       db = evaluator.currentDatabase()
       expect(db.hasFact(fact("path", ["b", "c"]))).toBe(true)
       expect(db.hasFact(fact("path", ["a", "c"]))).toBe(true)
 
       // Add edge(c, d).
-      evaluator.step(factsToZSet([fact("edge", ["c", "d"])]), zsetEmpty())
+      evaluator.step(factsToZSet([fact("edge", ["c", "d"])]))
       db = evaluator.currentDatabase()
       expect(db.hasFact(fact("path", ["c", "d"]))).toBe(true)
       expect(db.hasFact(fact("path", ["b", "d"]))).toBe(true)
@@ -1753,7 +1763,7 @@ describe("Unified Evaluator", () => {
       // Incremental.
       const evaluator = createEvaluator(rules)
       for (const e of edges) {
-        evaluator.step(factsToZSet([e]), zsetEmpty())
+        evaluator.step(factsToZSet([e]))
       }
 
       // Batch.
@@ -1791,7 +1801,7 @@ describe("Unified Evaluator", () => {
       ]
 
       const evaluator = createEvaluator(rules)
-      evaluator.step(factsToZSet(edges), zsetEmpty())
+      evaluator.step(factsToZSet(edges))
 
       const db = evaluator.currentDatabase()
       // path(a,d) derivable via a→b→d and a→c→d — present.
@@ -1826,7 +1836,7 @@ describe("Unified Evaluator", () => {
       ])
       const peerFact = fact("constraint_peer", [childKey, "alice"])
 
-      evaluator.step(factsToZSet([seqFact, peerFact]), zsetEmpty())
+      evaluator.step(factsToZSet([seqFact, peerFact]))
 
       const db = evaluator.currentDatabase()
       const fugueChildTuples = db.getRelation("fugue_child").tuples()
@@ -1858,9 +1868,9 @@ describe("Unified Evaluator", () => {
       ])
       const peer2 = fact("constraint_peer", [child2Key, "bob"])
 
-      evaluator.step(factsToZSet([seq1, peer1, seq2, peer2]), zsetEmpty())
+      evaluator.step(factsToZSet([seq1, peer1, seq2, peer2]))
 
-      const resolution = evaluator.currentResolution()
+      const resolution = extractResolution(evaluator.currentDatabase())
       expect(resolution.fuguePairs.size).toBeGreaterThan(0)
 
       const allPairs: FugueBeforePair[] = []
@@ -1884,12 +1894,13 @@ describe("Unified Evaluator", () => {
       // Insert two competing values.
       const f1 = makeActiveValueFact("alice", 1, slotId, "Hello", 10)
       const f2 = makeActiveValueFact("bob", 1, slotId, "World", 20)
-      evaluator.step(factsToZSet([f1, f2]), zsetEmpty())
+      evaluator.step(factsToZSet([f1, f2]))
 
       // With default rules, bob wins (lamport 20 > 10).
-      expect(evaluator.currentResolution().winners.get(slotId)?.content).toBe(
-        "World",
-      )
+      expect(
+        extractResolution(evaluator.currentDatabase()).winners.get(slotId)
+          ?.content,
+      ).toBe("World")
 
       // Add a custom rule that makes LOWER lamport win.
       const customRule = rule(
@@ -1924,10 +1935,10 @@ describe("Unified Evaluator", () => {
       ruleDelta = zsetAdd(ruleDelta, zsetSingleton("rule2", lwwRules[1]!, -1))
       ruleDelta = zsetAdd(ruleDelta, zsetSingleton("rule3", customRule, 1))
 
-      evaluator.step(zsetEmpty(), ruleDelta)
+      evaluator.changeRules(ruleDelta)
 
       // Now alice should win (lamport 10 < 20).
-      const resolution = evaluator.currentResolution()
+      const resolution = extractResolution(evaluator.currentDatabase())
       expect(resolution.winners.get(slotId)?.content).toBe("Hello")
     })
   })
@@ -1939,21 +1950,21 @@ describe("Unified Evaluator", () => {
   describe("empty inputs", () => {
     it("empty delta produces empty result", () => {
       const evaluator = createEvaluator(buildDefaultLWWRules())
-      const result = evaluator.step(zsetEmpty(), zsetEmpty())
+      const result = evaluator.step(zsetEmpty())
 
-      expect(zsetIsEmpty(result.deltaResolved)).toBe(true)
-      expect(zsetIsEmpty(result.deltaFuguePairs)).toBe(true)
-      expect(zsetIsEmpty(result.deltaDerived)).toBe(true)
+      expect(zsetIsEmpty(winnerDeltas(result))).toBe(true)
+      expect(zsetIsEmpty(fuguePairDeltas(result))).toBe(true)
+      expect(zsetIsEmpty(result)).toBe(true)
     })
 
     it("evaluator with no rules produces no derived facts", () => {
       const evaluator = createEvaluator([])
       const f = makeActiveValueFact("alice", 1, "slot:title", "Hello", 10)
-      const result = evaluator.step(factsToZSet([f]), zsetEmpty())
+      const result = evaluator.step(factsToZSet([f]))
 
       // Ground fact is stored, but no derived facts.
       expect(evaluator.currentDatabase().hasFact(f)).toBe(true)
-      expect(zsetIsEmpty(result.deltaDerived)).toBe(true)
+      expect(zsetIsEmpty(result)).toBe(true)
     })
   })
 
@@ -1965,11 +1976,13 @@ describe("Unified Evaluator", () => {
     it("clears all state", () => {
       const evaluator = createEvaluator(buildDefaultLWWRules())
       const f = makeActiveValueFact("alice", 1, "slot:title", "Hello", 10)
-      evaluator.step(factsToZSet([f]), zsetEmpty())
+      evaluator.step(factsToZSet([f]))
 
       evaluator.reset()
       expect(evaluator.currentDatabase().size).toBe(0)
-      expect(evaluator.currentResolution().winners.size).toBe(0)
+      expect(extractResolution(evaluator.currentDatabase()).winners.size).toBe(
+        0,
+      )
     })
   })
 
@@ -2006,7 +2019,7 @@ describe("Unified Evaluator", () => {
         fact("edge", ["b", "c"]),
       ]
 
-      evaluator.step(factsToZSet(initialFacts), zsetEmpty())
+      evaluator.step(factsToZSet(initialFacts))
 
       const db = evaluator.currentDatabase()
       expect(db.hasFact(fact("reachable", ["a", "b"]))).toBe(true)
@@ -2048,7 +2061,7 @@ describe("Unified Evaluator", () => {
 
       // Incremental.
       const evaluator = createEvaluator(rules)
-      evaluator.step(factsToZSet(allFacts), zsetEmpty())
+      evaluator.step(factsToZSet(allFacts))
 
       // Batch.
       const batchResult = evaluate(rules, allFacts)
@@ -2088,15 +2101,15 @@ describe("Unified Evaluator", () => {
   // ---------------------------------------------------------------------------
 
   describe("resolution extraction from derived facts", () => {
-    it("deltaDerived contains winner facts with correct structure", () => {
+    it("the derived delta contains winner facts with the winner column layout", () => {
       const evaluator = createEvaluator(buildDefaultLWWRules())
       const slotId = "slot:title"
       const f = makeActiveValueFact("alice", 1, slotId, "Hello", 10)
 
-      const result = evaluator.step(factsToZSet([f]), zsetEmpty())
+      const result = evaluator.step(factsToZSet([f]))
 
       let foundWinner = false
-      zsetForEach(result.deltaDerived, entry => {
+      zsetForEach(result, entry => {
         if (entry.element.predicate === "winner") {
           foundWinner = true
           expect(entry.weight).toBe(1)
@@ -2107,18 +2120,18 @@ describe("Unified Evaluator", () => {
       expect(foundWinner).toBe(true)
     })
 
-    it("deltaResolved and deltaDerived are consistent", () => {
+    it("winnerDeltas agrees with the winner facts in the derived delta", () => {
       const evaluator = createEvaluator(buildDefaultLWWRules())
       const f = makeActiveValueFact("alice", 1, "slot:title", "Hello", 10)
-      const result = evaluator.step(factsToZSet([f]), zsetEmpty())
+      const result = evaluator.step(factsToZSet([f]))
 
       // Count winner facts in deltaDerived.
       let derivedWinnerCount = 0
-      zsetForEach(result.deltaDerived, entry => {
+      zsetForEach(result, entry => {
         if (entry.element.predicate === "winner") derivedWinnerCount++
       })
 
-      expect(zsetSize(result.deltaResolved)).toBe(derivedWinnerCount)
+      expect(zsetSize(winnerDeltas(result))).toBe(derivedWinnerCount)
     })
   })
 
@@ -2130,7 +2143,7 @@ describe("Unified Evaluator", () => {
     it("currentDatabase contains both ground and derived facts", () => {
       const evaluator = createEvaluator(buildDefaultLWWRules())
       const f = makeActiveValueFact("alice", 1, "slot:title", "Hello", 10)
-      evaluator.step(factsToZSet([f]), zsetEmpty())
+      evaluator.step(factsToZSet([f]))
 
       const db = evaluator.currentDatabase()
       // Ground fact should be there.
@@ -2142,10 +2155,10 @@ describe("Unified Evaluator", () => {
     it("after retraction, ground fact is removed from database", () => {
       const evaluator = createEvaluator(buildDefaultLWWRules())
       const f = makeActiveValueFact("alice", 1, "slot:title", "Hello", 10)
-      evaluator.step(factsToZSet([f]), zsetEmpty())
+      evaluator.step(factsToZSet([f]))
       expect(evaluator.currentDatabase().hasFact(f)).toBe(true)
 
-      evaluator.step(factsToWeightedZSet([[f, -1]]), zsetEmpty())
+      evaluator.step(factsToWeightedZSet([[f, -1]]))
       expect(evaluator.currentDatabase().hasFact(f)).toBe(false)
     })
   })
@@ -2167,7 +2180,7 @@ describe("Unified Evaluator", () => {
       ]
 
       // Feed incrementally.
-      evaluator.step(factsToZSet(facts), zsetEmpty())
+      evaluator.step(factsToZSet(facts))
 
       // Batch.
       const batchResult = evaluate(allRules, facts)
@@ -2214,9 +2227,9 @@ describe("Unified Evaluator", () => {
 
       // Accumulate.
       for (const f of facts) {
-        evaluator.step(factsToZSet([f]), zsetEmpty())
+        evaluator.step(factsToZSet([f]))
       }
-      const beforeReset = evaluator.currentResolution()
+      const beforeReset = extractResolution(evaluator.currentDatabase())
 
       // Reset and replay.
       evaluator.reset()
@@ -2224,9 +2237,9 @@ describe("Unified Evaluator", () => {
       // Re-add rules (reset clears them).
       const freshEval = createEvaluator(lwwRules)
       for (const f of facts) {
-        freshEval.step(factsToZSet([f]), zsetEmpty())
+        freshEval.step(factsToZSet([f]))
       }
-      const afterReplay = freshEval.currentResolution()
+      const afterReplay = extractResolution(freshEval.currentDatabase())
 
       expect(afterReplay.winners.size).toBe(beforeReset.winners.size)
       for (const [slot, winner] of beforeReset.winners) {
@@ -2400,8 +2413,8 @@ describe("Unified Evaluator", () => {
       const evaluator = createEvaluator(rules)
       const f = fact("base", ["a"])
 
-      evaluator.step(factsToZSet([f]), zsetEmpty())
-      evaluator.step(factsToZSet([f]), zsetEmpty())
+      evaluator.step(factsToZSet([f]))
+      evaluator.step(factsToZSet([f]))
 
       const db = evaluator.currentDatabase()
       expect(db.hasFact(fact("derived", ["a"]))).toBe(true)
@@ -2430,7 +2443,7 @@ describe("Unified Evaluator", () => {
         makeActiveValueFact("charlie", 1, slotId, "C", 30),
       ]
 
-      evaluator.step(factsToZSet(facts), zsetEmpty())
+      evaluator.step(factsToZSet(facts))
 
       const db = evaluator.currentDatabase()
       const aliceKey = cnIdKey(createCnId("alice", 1))
@@ -2452,16 +2465,16 @@ describe("Unified Evaluator", () => {
   // ---------------------------------------------------------------------------
 
   describe("output delta correctness", () => {
-    it("step result deltaDerived has weights +1 or -1 only", () => {
+    it("step results carry weights +1 or -1 only", () => {
       const lwwRules = buildDefaultLWWRules()
       const evaluator = createEvaluator(lwwRules)
       const slotId = "slot:title"
 
       const f = makeActiveValueFact("alice", 1, slotId, "Hello", 10)
-      const result = evaluator.step(factsToZSet([f]), zsetEmpty())
+      const result = evaluator.step(factsToZSet([f]))
 
       // All derived deltas should be +1 or -1.
-      zsetForEach(result.deltaDerived, entry => {
+      zsetForEach(result, entry => {
         expect(Math.abs(entry.weight)).toBe(1)
       })
     })
@@ -2472,12 +2485,12 @@ describe("Unified Evaluator", () => {
       const slotId = "slot:title"
 
       const f = makeActiveValueFact("alice", 1, slotId, "Hello", 10)
-      evaluator.step(factsToZSet([f]), zsetEmpty())
+      evaluator.step(factsToZSet([f]))
 
-      const result = evaluator.step(factsToWeightedZSet([[f, -1]]), zsetEmpty())
+      const result = evaluator.step(factsToWeightedZSet([[f, -1]]))
 
       let hasNegative = false
-      zsetForEach(result.deltaDerived, entry => {
+      zsetForEach(result, entry => {
         expect(Math.abs(entry.weight)).toBe(1)
         if (entry.weight === -1) hasNegative = true
       })
@@ -2502,20 +2515,21 @@ describe("Unified Evaluator", () => {
 
       // Insert first value.
       const f1 = makeActiveValueFact("alice", 1, slotId, "Hello", 10)
-      evaluator.step(factsToZSet([f1]), zsetEmpty())
+      evaluator.step(factsToZSet([f1]))
 
       // Insert superseding value — must propagate superseded in stratum 0,
       // then update winner in stratum 1.
       const f2 = makeActiveValueFact("bob", 1, slotId, "World", 20)
-      const result = evaluator.step(factsToZSet([f2]), zsetEmpty())
+      const result = evaluator.step(factsToZSet([f2]))
 
       // Winner should have changed.
-      expect(evaluator.currentResolution().winners.get(slotId)?.content).toBe(
-        "World",
-      )
+      expect(
+        extractResolution(evaluator.currentDatabase()).winners.get(slotId)
+          ?.content,
+      ).toBe("World")
 
       // deltaResolved should reflect the change.
-      expect(zsetIsEmpty(result.deltaResolved)).toBe(false)
+      expect(zsetIsEmpty(winnerDeltas(result))).toBe(false)
     })
 
     it("retraction in stratum 0 cascades through stratum 1 negation via step()", () => {
@@ -2535,29 +2549,28 @@ describe("Unified Evaluator", () => {
 
       const alice = makeActiveValueFact("alice", 1, slotId, "A", 10)
       const bob = makeActiveValueFact("bob", 1, slotId, "B", 20)
-      evaluator.step(factsToZSet([alice, bob]), zsetEmpty())
-      expect(evaluator.currentResolution().winners.get(slotId)?.content).toBe(
-        "B",
-      )
+      evaluator.step(factsToZSet([alice, bob]))
+      expect(
+        extractResolution(evaluator.currentDatabase()).winners.get(slotId)
+          ?.content,
+      ).toBe("B")
 
       // Retract bob — the −1 must propagate: stratum 0 retracts
       // superseded(alice), stratum 1 derives winner(alice).
-      const result = evaluator.step(
-        factsToWeightedZSet([[bob, -1]]),
-        zsetEmpty(),
-      )
+      const result = evaluator.step(factsToWeightedZSet([[bob, -1]]))
 
-      expect(evaluator.currentResolution().winners.get(slotId)?.content).toBe(
-        "A",
-      )
+      expect(
+        extractResolution(evaluator.currentDatabase()).winners.get(slotId)
+          ?.content,
+      ).toBe("A")
 
       // deltaResolved should contain the winner change.
-      expect(zsetIsEmpty(result.deltaResolved)).toBe(false)
+      expect(zsetIsEmpty(winnerDeltas(result))).toBe(false)
 
       // deltaDerived should contain both −1 (old winner/superseded) and +1 (new winner).
       let hasNeg = false
       let hasPos = false
-      zsetForEach(result.deltaDerived, entry => {
+      zsetForEach(result, entry => {
         if (entry.weight < 0) hasNeg = true
         if (entry.weight > 0) hasPos = true
       })
@@ -2576,24 +2589,28 @@ describe("Unified Evaluator", () => {
       const alice = makeActiveValueFact("alice", 1, slotId, "A", 10)
 
       // Insert.
-      evaluator.step(factsToZSet([alice]), zsetEmpty())
-      expect(evaluator.currentResolution().winners.get(slotId)?.content).toBe(
-        "A",
-      )
+      evaluator.step(factsToZSet([alice]))
+      expect(
+        extractResolution(evaluator.currentDatabase()).winners.get(slotId)
+          ?.content,
+      ).toBe("A")
 
       // Retract.
-      evaluator.step(factsToWeightedZSet([[alice, -1]]), zsetEmpty())
-      expect(evaluator.currentResolution().winners.size).toBe(0)
+      evaluator.step(factsToWeightedZSet([[alice, -1]]))
+      expect(extractResolution(evaluator.currentDatabase()).winners.size).toBe(
+        0,
+      )
 
       // Re-insert — derived facts must reappear.
-      const result = evaluator.step(factsToZSet([alice]), zsetEmpty())
-      expect(evaluator.currentResolution().winners.get(slotId)?.content).toBe(
-        "A",
-      )
+      const result = evaluator.step(factsToZSet([alice]))
+      expect(
+        extractResolution(evaluator.currentDatabase()).winners.get(slotId)
+          ?.content,
+      ).toBe("A")
 
       // The re-insertion should produce +1 derived deltas.
       let hasPositive = false
-      zsetForEach(result.deltaDerived, entry => {
+      zsetForEach(result, entry => {
         if (entry.weight > 0) hasPositive = true
       })
       expect(hasPositive).toBe(true)
@@ -2620,12 +2637,13 @@ describe("Unified Evaluator", () => {
       const bob = makeActiveValueFact("bob", 1, slotId, "B", 20)
       const charlie = makeActiveValueFact("charlie", 1, slotId, "C", 30)
 
-      evaluator.step(factsToZSet([alice, bob, charlie]), zsetEmpty())
+      evaluator.step(factsToZSet([alice, bob, charlie]))
 
       // Charlie wins (lamport 30).
-      expect(evaluator.currentResolution().winners.get(slotId)?.content).toBe(
-        "C",
-      )
+      expect(
+        extractResolution(evaluator.currentDatabase()).winners.get(slotId)
+          ?.content,
+      ).toBe("C")
 
       // Both alice and bob should be superseded.
       const db = evaluator.currentDatabase()
@@ -2639,13 +2657,10 @@ describe("Unified Evaluator", () => {
       ).toBe(true)
 
       // Retract charlie.
-      const result = evaluator.step(
-        factsToWeightedZSet([[charlie, -1]]),
-        zsetEmpty(),
-      )
+      const result = evaluator.step(factsToWeightedZSet([[charlie, -1]]))
 
       // Winner should change to bob (not alice).
-      const resolution = evaluator.currentResolution()
+      const resolution = extractResolution(evaluator.currentDatabase())
       expect(resolution.winners.get(slotId)?.content).toBe("B")
 
       // superseded(alice) should SURVIVE — bob still supersedes alice.
@@ -2664,7 +2679,7 @@ describe("Unified Evaluator", () => {
       ).toBe(false)
 
       // deltaResolved should reflect the winner change.
-      expect(zsetIsEmpty(result.deltaResolved)).toBe(false)
+      expect(zsetIsEmpty(winnerDeltas(result))).toBe(false)
     })
 
     it("recursive retraction cascade via createEvaluator: edge removal retracts transitive paths", () => {
@@ -2688,17 +2703,14 @@ describe("Unified Evaluator", () => {
         fact("edge", ["b", "c"]),
         fact("edge", ["c", "d"]),
       ]
-      evaluator.step(factsToZSet(edges), zsetEmpty())
+      evaluator.step(factsToZSet(edges))
 
       const db1 = evaluator.currentDatabase()
       expect(db1.hasFact(fact("reachable", ["a", "d"]))).toBe(true)
       expect(db1.hasFact(fact("reachable", ["b", "d"]))).toBe(true)
 
       // Retract edge b→c.
-      evaluator.step(
-        factsToWeightedZSet([[fact("edge", ["b", "c"]), -1]]),
-        zsetEmpty(),
-      )
+      evaluator.step(factsToWeightedZSet([[fact("edge", ["b", "c"]), -1]]))
 
       const db2 = evaluator.currentDatabase()
       // Paths through b→c are gone.
@@ -2733,7 +2745,7 @@ describe("Unified Evaluator", () => {
         fact("edge", ["b", "c"]),
         fact("edge", ["a", "c"]), // Direct edge: alternative support.
       ]
-      evaluator.step(factsToZSet(edges), zsetEmpty())
+      evaluator.step(factsToZSet(edges))
 
       const db1 = evaluator.currentDatabase()
       expect(db1.hasFact(fact("reachable", ["a", "b"]))).toBe(true)
@@ -2741,10 +2753,7 @@ describe("Unified Evaluator", () => {
       expect(db1.hasFact(fact("reachable", ["b", "c"]))).toBe(true)
 
       // Retract a→b. The path a→b→c is gone, but a→c (direct) remains.
-      evaluator.step(
-        factsToWeightedZSet([[fact("edge", ["a", "b"]), -1]]),
-        zsetEmpty(),
-      )
+      evaluator.step(factsToWeightedZSet([[fact("edge", ["a", "b"]), -1]]))
 
       const db2 = evaluator.currentDatabase()
       // a→b is gone — reachable(a,b) retracted.
@@ -2764,24 +2773,26 @@ describe("Unified Evaluator", () => {
       const slotId = "slot:title"
 
       const alice = makeActiveValueFact("alice", 1, slotId, "A", 10)
-      evaluator.step(factsToZSet([alice]), zsetEmpty())
-      expect(evaluator.currentResolution().winners.get(slotId)?.content).toBe(
-        "A",
-      )
+      evaluator.step(factsToZSet([alice]))
+      expect(
+        extractResolution(evaluator.currentDatabase()).winners.get(slotId)
+          ?.content,
+      ).toBe("A")
 
       // Insert bob — supersedes alice.
       const bob = makeActiveValueFact("bob", 1, slotId, "B", 20)
-      const result = evaluator.step(factsToZSet([bob]), zsetEmpty())
+      const result = evaluator.step(factsToZSet([bob]))
 
       // Winner changed to bob.
-      expect(evaluator.currentResolution().winners.get(slotId)?.content).toBe(
-        "B",
-      )
+      expect(
+        extractResolution(evaluator.currentDatabase()).winners.get(slotId)
+          ?.content,
+      ).toBe("B")
 
       // deltaDerived should contain both +1 and −1 entries.
       let hasPositive = false
       let hasNegative = false
-      zsetForEach(result.deltaDerived, entry => {
+      zsetForEach(result, entry => {
         if (entry.weight > 0) hasPositive = true
         if (entry.weight < 0) hasNegative = true
       })
@@ -2791,7 +2802,7 @@ describe("Unified Evaluator", () => {
 
       // deltaResolved should contain the winner change.
       let resolvedCount = 0
-      zsetForEach(result.deltaResolved, () => {
+      zsetForEach(winnerDeltas(result), () => {
         resolvedCount++
       })
       expect(resolvedCount).toBeGreaterThan(0)
@@ -2807,11 +2818,12 @@ describe("Unified Evaluator", () => {
 
       const alice = makeActiveValueFact("alice", 1, slotId, "A", 10)
       const bob = makeActiveValueFact("bob", 1, slotId, "B", 20)
-      evaluator.step(factsToZSet([alice, bob]), zsetEmpty())
+      evaluator.step(factsToZSet([alice, bob]))
 
-      expect(evaluator.currentResolution().winners.get(slotId)?.content).toBe(
-        "B",
-      )
+      expect(
+        extractResolution(evaluator.currentDatabase()).winners.get(slotId)
+          ?.content,
+      ).toBe("B")
 
       // Verify superseded(alice) exists with weight 1.
       const db1 = evaluator.currentDatabase()
@@ -2822,7 +2834,7 @@ describe("Unified Evaluator", () => {
       ).toBe(1)
 
       // Retract bob.
-      evaluator.step(factsToWeightedZSet([[bob, -1]]), zsetEmpty())
+      evaluator.step(factsToWeightedZSet([[bob, -1]]))
 
       const db2 = evaluator.currentDatabase()
       // superseded(alice) retracted — weight crossed zero.
@@ -2830,9 +2842,10 @@ describe("Unified Evaluator", () => {
         false,
       )
       // alice is now the winner.
-      expect(evaluator.currentResolution().winners.get(slotId)?.content).toBe(
-        "A",
-      )
+      expect(
+        extractResolution(evaluator.currentDatabase()).winners.get(slotId)
+          ?.content,
+      ).toBe("A")
     })
   })
 })
@@ -2951,7 +2964,7 @@ describe("mixed retract+insert steps with negation over a derived predicate", ()
       // what a consumer sees, so they must agree with the database exactly.
       const shadow = new Set<string>()
       const step = (delta: ZSet<Fact>): void => {
-        const { deltaDerived } = evaluator.step(delta, zsetEmpty())
+        const deltaDerived = evaluator.step(delta)
         zsetForEach(deltaDerived, (entry, key) => {
           if (entry.weight > 0) {
             expect(shadow.has(key), `duplicate +1 for ${key}`).toBe(false)
@@ -3008,7 +3021,7 @@ describe("mixed retract+insert steps with negation over a derived predicate", ()
         }
 
         const oracle = createEvaluator(rules)
-        oracle.step(factsToZSet([...ground.values()]), zsetEmpty())
+        oracle.step(factsToZSet([...ground.values()]))
 
         const expected = snapshot(oracle.currentDatabase())
         expect(
@@ -3073,18 +3086,14 @@ describe("mixed retract+insert steps with negation over a derived predicate", ()
         fact("edge", [2, 3]),
         fact("edge", [3, 1]),
       ]),
-      zsetEmpty(),
     )
     expect(evaluator.currentDatabase().getRelation("reach").size).toBe(4)
 
-    const result = evaluator.step(
-      factsToZSet([fact("edge", [0, 1])], -1),
-      zsetEmpty(),
-    )
+    const result = evaluator.step(factsToZSet([fact("edge", [0, 1])], -1))
     expect(evaluator.currentDatabase().getRelation("reach").tuples()).toEqual([
       [0],
     ])
-    const retracted = [...result.deltaDerived.entries()]
+    const retracted = [...result.entries()]
       .map(([key, entry]) => [key, entry.weight])
       .sort()
     expect(retracted).toEqual(
@@ -3113,17 +3122,14 @@ describe("ground facts reach strata as presence flips, not raw weights", () => {
     const evaluator = createEvaluator([both])
     const d = () => evaluator.currentDatabase().getRelation("d")
 
-    evaluator.step(factsToZSet([fact("b", [1])]), zsetEmpty())
+    evaluator.step(factsToZSet([fact("b", [1])]))
     // The same fact twice in one step sums to weight 2.
-    evaluator.step(factsToZSet([fact("a", [1]), fact("a", [1])]), zsetEmpty())
+    evaluator.step(factsToZSet([fact("a", [1]), fact("a", [1])]))
     expect(d().has([1])).toBe(true)
 
-    const result = evaluator.step(
-      factsToZSet([fact("b", [1])], -1),
-      zsetEmpty(),
-    )
+    const result = evaluator.step(factsToZSet([fact("b", [1])], -1))
     expect(d().has([1])).toBe(false)
-    expect(result.deltaDerived.get(factKey(fact("d", [1])))?.weight).toBe(-1)
+    expect(result.get(factKey(fact("d", [1])))?.weight).toBe(-1)
   })
 
   it("retracted once, a weight-2 fact is still present; twice, it is gone", () => {
@@ -3132,18 +3138,15 @@ describe("ground facts reach strata as presence flips, not raw weights", () => {
     const evaluator = createEvaluator([both])
     const d = () => evaluator.currentDatabase().getRelation("d")
 
-    evaluator.step(factsToZSet([fact("b", [1])]), zsetEmpty())
-    evaluator.step(factsToZSet([fact("a", [1]), fact("a", [1])]), zsetEmpty())
+    evaluator.step(factsToZSet([fact("b", [1])]))
+    evaluator.step(factsToZSet([fact("a", [1]), fact("a", [1])]))
 
-    const first = evaluator.step(factsToZSet([fact("a", [1])], -1), zsetEmpty())
-    expect(zsetIsEmpty(first.deltaDerived)).toBe(true)
+    const first = evaluator.step(factsToZSet([fact("a", [1])], -1))
+    expect(zsetIsEmpty(first)).toBe(true)
     expect(d().has([1])).toBe(true)
 
-    const second = evaluator.step(
-      factsToZSet([fact("a", [1])], -1),
-      zsetEmpty(),
-    )
-    expect(second.deltaDerived.get(factKey(fact("d", [1])))?.weight).toBe(-1)
+    const second = evaluator.step(factsToZSet([fact("a", [1])], -1))
+    expect(second.get(factKey(fact("d", [1])))?.weight).toBe(-1)
     expect(d().has([1])).toBe(false)
   })
 })
@@ -3168,7 +3171,7 @@ describe("a predicate that is both inserted and derived", () => {
 
   it("keeps its ground facts through a rule change, and afterwards", () => {
     const evaluator = createEvaluator([spread])
-    evaluator.step(factsToZSet(line), zsetEmpty())
+    evaluator.step(factsToZSet(line))
     expect(evaluator.currentDatabase().getRelation("reach").size).toBe(3)
 
     // Adding a rule derives every stratum again; the ground `reach(0)` must
@@ -3176,23 +3179,20 @@ describe("a predicate that is both inserted and derived", () => {
     const mark: Rule = rule(atom("mark", [varTerm("X")]), [
       positiveAtom(atom("reach", [varTerm("X")])),
     ])
-    const added = evaluator.step(zsetEmpty(), zsetSingleton("mark", mark, 1))
+    const added = evaluator.changeRules(zsetSingleton("mark", mark, 1))
     expect(evaluator.currentDatabase().getRelation("reach").size).toBe(3)
-    expect(weights(added.deltaDerived)).toEqual(
+    expect(weights(added)).toEqual(
       [0, 1, 2].map(n => [factKey(fact("mark", [n])), 1]),
     )
 
     // The ground part is still known after the change: a retraction into
     // the recursive stratum recomputes it from `reach(0)` again.
-    const cut = evaluator.step(
-      factsToZSet([fact("edge", [1, 2])], -1),
-      zsetEmpty(),
-    )
+    const cut = evaluator.step(factsToZSet([fact("edge", [1, 2])], -1))
     expect(evaluator.currentDatabase().getRelation("reach").tuples()).toEqual([
       [0],
       [1],
     ])
-    expect(weights(cut.deltaDerived)).toEqual([
+    expect(weights(cut)).toEqual([
       [factKey(fact("mark", [2])), -1],
       [factKey(fact("reach", [2])), -1],
     ])
@@ -3200,15 +3200,12 @@ describe("a predicate that is both inserted and derived", () => {
 
   it("empties the closure when the ground seed itself is retracted", () => {
     const evaluator = createEvaluator([spread])
-    evaluator.step(factsToZSet(line), zsetEmpty())
+    evaluator.step(factsToZSet(line))
 
-    const result = evaluator.step(
-      factsToZSet([fact("reach", [0])], -1),
-      zsetEmpty(),
-    )
+    const result = evaluator.step(factsToZSet([fact("reach", [0])], -1))
     expect(evaluator.currentDatabase().getRelation("reach").size).toBe(0)
     // The seed's own retraction is a ground change, not a derived one.
-    expect(weights(result.deltaDerived)).toEqual(
+    expect(weights(result)).toEqual(
       [1, 2].map(n => [factKey(fact("reach", [n])), -1]),
     )
   })
@@ -3228,21 +3225,53 @@ describe("a predicate that is both inserted and derived", () => {
     const evaluator = createEvaluator([count])
     evaluator.step(
       factsToZSet([fact("total", [99]), fact("item", [1]), fact("item", [2])]),
-      zsetEmpty(),
     )
     expect(evaluator.currentDatabase().getRelation("total").tuples()).toEqual([
       [99],
       [2],
     ])
 
-    const result = evaluator.step(factsToZSet([fact("item", [3])]), zsetEmpty())
+    const result = evaluator.step(factsToZSet([fact("item", [3])]))
     expect(evaluator.currentDatabase().getRelation("total").tuples()).toEqual([
       [99],
       [3],
     ])
-    expect(weights(result.deltaDerived)).toEqual([
+    expect(weights(result)).toEqual([
       [factKey(fact("total", [2])), -1],
       [factKey(fact("total", [3])), 1],
     ])
+  })
+})
+
+describe("rules with an empty body", () => {
+  it("hold from construction; an empty step derives nothing new; changeRules reports only what is new", () => {
+    const evaluator = createEvaluator([
+      rule(atom("axiom", [constTerm(42)]), []),
+    ])
+    const axioms = () => evaluator.currentDatabase().getRelation("axiom")
+    expect(axioms().has([42])).toBe(true)
+    expect(zsetIsEmpty(evaluator.step(zsetEmpty()))).toBe(true)
+    expect(axioms().getWeight([42])).toBe(1)
+
+    const seven = rule(atom("axiom", [constTerm(7)]), [])
+    const added = evaluator.changeRules(zsetSingleton("seven", seven, 1))
+    expect([...added.keys()]).toEqual([factKey(fact("axiom", [7]))])
+    expect(added.get(factKey(fact("axiom", [7])))?.weight).toBe(1)
+    expect(axioms().getWeight([42])).toBe(1)
+  })
+
+  it("feed higher strata even with no ground facts at all", () => {
+    // A pre-existing gap: the old first-step path ran each stratum with an
+    // empty delta, so `q` never saw `p`'s axiom.
+    const result = evaluate(
+      [
+        rule(atom("p", [constTerm(1)]), []),
+        rule(atom("q", [varTerm("X")]), [
+          positiveAtom(atom("p", [varTerm("X")])),
+        ]),
+      ],
+      [],
+    )
+    expect(result.ok && result.value.getRelation("q").has([1])).toBe(true)
   })
 })

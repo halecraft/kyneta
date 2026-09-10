@@ -1,22 +1,24 @@
-// === Unified Weighted Datalog Evaluator ===
-// Replaces both `evaluate.ts` (batch) and `incremental-evaluate.ts`
-// (incremental) with a single evaluator implementation based on DBSP
-// Z-set weight propagation.
+// === Weighted Datalog Evaluator ===
+// The stratum loop over deltas (`evaluateStratumFromDelta`), the long-lived
+// `createEvaluator`, the batch wrappers `evaluate` / `evaluatePositive`, and
+// `factsToZSet`, the keyed constructor for `step` input.
+//
+// Facts in, derived facts out. The evaluator knows nothing about constraints,
+// winners or Fugue ordering. Those belong to the kernel: `kernel/resolve.ts`
+// reads them out of the derived-fact deltas this module returns.
 //
 // Key design:
-// - `Relation` stores `{ tuple, weight }` per entry (Phase 1).
-// - `Substitution` carries `{ bindings, weight }` (Phase 1).
-// - Rule evaluation threads weights through joins (Phase 1).
+// - `Relation` stores `{ tuple, weight }` per entry; `Substitution` carries
+//   `{ bindings, weight }`; rule evaluation threads weights through joins.
 // - A **dirty map** tracks which facts were modified during stratum
 //   evaluation. `distinct` clamps weights to 0/1 on dirty entries only.
 //   Delta extraction compares pre-weights to post-weights via the dirty
 //   map — no snapshot-and-diff.
-// - One `createEvaluator(rules)` subsumes both batch and incremental
-//   paths. `evaluate(rules, facts)` is a convenience wrapper.
+// - One `createEvaluator(rules)` serves both batch and incremental use;
+//   `evaluate(rules, facts)` is a wrapper over it.
 //
-// See Plan 006.1, Phase 2.
 // See DBSP (Budiu & McSherry, 2023) §3.2 (Z-set joins), §4–5.
-// See theory/incremental.md §9.
+// See theory/incremental.md §5.6 (this stage) and §9.
 
 import type { ZSet, ZSetEntry } from "../base/zset.js"
 import {
@@ -25,8 +27,6 @@ import {
   zsetFromEntries,
   zsetIsEmpty,
 } from "../base/zset.js"
-import type { FugueBeforePair, ResolvedWinner } from "../kernel/resolve.js"
-import { fuguePairKey } from "../kernel/resolve.js"
 import type { WeightedFact } from "./evaluate.js"
 import {
   evaluateRule,
@@ -726,114 +726,19 @@ function bodyElementId(b: BodyElement): string {
 }
 
 // ---------------------------------------------------------------------------
-// Resolution extraction from delta Database
+// Delta conversion
 // ---------------------------------------------------------------------------
 
 /**
- * Convert winner fact deltas from a delta `Database` into a
- * `ZSet<ResolvedWinner>`.
- *
- * Winner fact schema: `winner(SlotId, CnIdKey, Content)`
- *
- * The delta Database has weight +1 (new winner) or −1 (retracted winner).
- * We group by slotId and apply replacement semantics:
- *   - Both +1 and −1 for same slot → emit only +1 (replacement).
- *   - Only +1 → emit +1 (new winner).
- *   - Only −1 → emit −1 (winner removed).
- *
- * This matches the skeleton's expectation and the native LWW solver's
- * delta contract.
- */
-function winnerFactsToResolution(deltaDb: Database): ZSet<ResolvedWinner> {
-  const rel = deltaDb.getRelation("winner")
-  const entries = rel.allWeightedTuples()
-
-  if (entries.length === 0) {
-    return zsetEmpty<ResolvedWinner>()
-  }
-
-  // Group by slotId for replacement semantics.
-  const bySlot = new Map<
-    string,
-    { plus: ResolvedWinner | null; minus: ResolvedWinner | null }
-  >()
-
-  for (const { tuple, weight } of entries) {
-    const slotId = tuple[0] as string
-    const winner: ResolvedWinner = {
-      slotId,
-      winnerCnIdKey: tuple[1] as string,
-      content: tuple[2]!,
-    }
-
-    let slot = bySlot.get(slotId)
-    if (slot === undefined) {
-      slot = { plus: null, minus: null }
-      bySlot.set(slotId, slot)
-    }
-
-    if (weight > 0) {
-      slot.plus = winner
-    } else if (weight < 0) {
-      slot.minus = winner
-    }
-  }
-
-  // Produce resolution delta with replacement semantics.
-  const resolved: [string, ZSetEntry<ResolvedWinner>][] = []
-
-  for (const [slotId, slot] of bySlot) {
-    if (slot.plus !== null) {
-      // New winner, or a replacement (both +1 and −1 present for the slot):
-      // either way only the +1 is emitted.
-      resolved.push([slotId, { element: slot.plus, weight: 1 }])
-    } else if (slot.minus !== null) {
-      // Winner removed: emit −1.
-      resolved.push([slotId, { element: slot.minus, weight: -1 }])
-    }
-  }
-
-  return zsetFromEntries(resolved)
-}
-
-/**
- * Convert fugue_before fact deltas from a delta `Database` into a
- * `ZSet<FugueBeforePair>`.
- *
- * Fugue before fact schema: `fugue_before(Parent, A, B)`
- */
-function fuguePairFactsToResolution(deltaDb: Database): ZSet<FugueBeforePair> {
-  const rel = deltaDb.getRelation("fugue_before")
-  const entries = rel.allWeightedTuples()
-
-  if (entries.length === 0) {
-    return zsetEmpty<FugueBeforePair>()
-  }
-
-  const pairs: [string, ZSetEntry<FugueBeforePair>][] = []
-
-  for (const { tuple, weight } of entries) {
-    const pair: FugueBeforePair = {
-      parentKey: tuple[0] as string,
-      a: tuple[1] as string,
-      b: tuple[2] as string,
-    }
-    pairs.push([
-      fuguePairKey(pair),
-      { element: pair, weight: weight > 0 ? 1 : -1 },
-    ])
-  }
-
-  return zsetFromEntries(pairs)
-}
-
-/**
- * Convert a delta `Database` into a `ZSet<Fact>` of everything it changed.
+ * Convert a delta `Database` into the `ZSet<Fact>` that `step` and
+ * `changeRules` return: everything that appeared or disappeared, keyed by
+ * `factKey`. Every path through the evaluator ends here.
  *
  * Weights are normalised to ±1: the delta already records presence changes,
  * so multiplicity carries no extra information downstream.
  */
 function derivedFactsToZSet(deltaDb: Database): ZSet<Fact> {
+  if (!deltaDb.hasAnyEntries()) return zsetEmpty()
   const entries: [string, ZSetEntry<Fact>][] = []
   for (const pred of deltaDb.predicates()) {
     deltaDb.getRelation(pred).forEachEntry((tupleKey, tuple, weight) => {
@@ -849,35 +754,6 @@ function derivedFactsToZSet(deltaDb: Database): ZSet<Fact> {
   return zsetFromEntries(entries)
 }
 
-const EMPTY_STEP_RESULT: EvaluatorStepResult = {
-  deltaResolved: zsetEmpty<ResolvedWinner>(),
-  deltaFuguePairs: zsetEmpty<FugueBeforePair>(),
-  deltaDerived: zsetEmpty<Fact>(),
-}
-
-/**
- * The step result for a delta database: winner and Fugue pair deltas for
- * the skeleton, plus every derived fact that changed. All three `step`
- * paths end here.
- */
-function resultFromDelta(delta: Database): EvaluatorStepResult {
-  if (!delta.hasAnyEntries()) return EMPTY_STEP_RESULT
-  return {
-    deltaResolved: winnerFactsToResolution(delta),
-    deltaFuguePairs: fuguePairFactsToResolution(delta),
-    deltaDerived: derivedFactsToZSet(delta),
-  }
-}
-
-/**
- * Build `step` input from plain facts: every entry keyed by `factKey`, with
- * the given weight (+1 to insert, −1 to retract). Duplicate facts sum into
- * one entry.
- *
- * This is the documented way to key a `ZSet<Fact>` for the evaluator, which
- * trusts the key rather than recomputing it. Built in one pass; a fold over
- * `zsetAdd` is quadratic (see TECHNICAL.md, "Evaluator performance").
- */
 /**
  * The tuple key for a fact the caller supplied a Z-set key for.
  *
@@ -891,6 +767,15 @@ function tupleKeyFor(zsetKey: string, f: Fact): string {
   return tupleKeyFromFactKey(zsetKey, f.predicate) ?? serializeTuple(f.values)
 }
 
+/**
+ * Build `step` input from plain facts: every entry keyed by `factKey`, with
+ * the given weight (+1 to insert, −1 to retract). Duplicate facts sum into
+ * one entry.
+ *
+ * This is the documented way to key a `ZSet<Fact>` for the evaluator, which
+ * trusts the key rather than recomputing it. Built in one pass; a fold over
+ * `zsetAdd` is quadratic (see TECHNICAL.md, "Evaluator performance").
+ */
 export function factsToZSet(facts: readonly Fact[], weight = 1): ZSet<Fact> {
   return zsetFromEntries(facts.map(f => [factKey(f), { element: f, weight }]))
 }
@@ -900,49 +785,36 @@ export function factsToZSet(facts: readonly Fact[], weight = 1): ZSet<Fact> {
 // ---------------------------------------------------------------------------
 
 /**
- * The step result from the unified evaluator.
- */
-export interface EvaluatorStepResult {
-  /** Resolution deltas for the skeleton stage. */
-  readonly deltaResolved: ZSet<ResolvedWinner>
-  /** Fugue pair deltas for the skeleton stage. */
-  readonly deltaFuguePairs: ZSet<FugueBeforePair>
-  /** All derived fact deltas (for downstream consumers). */
-  readonly deltaDerived: ZSet<Fact>
-}
-
-/**
- * A unified Datalog evaluator that subsumes both batch and incremental
- * evaluation.
+ * A long-lived Datalog evaluator: ground facts go in as deltas, derived
+ * facts come out as deltas, and the database accumulates between calls.
  *
- * Follows the three shared conventions:
- *   1. step(deltaFacts, deltaRules) — process deltas, return resolution deltas
- *   2. currentDatabase() — return full accumulated Database
- *   3. reset() — return to empty state
+ * Both `step` and `changeRules` return the same thing, a `ZSet<Fact>` of the
+ * derived facts that appeared (+1) or disappeared (−1), keyed by `factKey`.
+ * They are separate methods because they cost different things: a fact
+ * delta is incremental, while a rule change derives every stratum again and
+ * returns a full diff. An optional parameter would hide that.
  */
 export interface Evaluator {
   /**
-   * Process a delta of ground facts and optional rule changes.
-   *
-   * @param deltaFacts - Z-set delta of ground facts.
-   * @param deltaRules - Changed rules (+1 = added, −1 = retracted).
-   *   Empty on most insertions.
-   * @returns Resolution deltas and derived fact deltas.
+   * Apply a delta of ground facts and return the derived facts that
+   * changed. Key entries by `factKey` (`factsToZSet` does); the evaluator
+   * reads the tuple key out of it instead of re-serializing.
    */
-  step(deltaFacts: ZSet<Fact>, deltaRules: ZSet<Rule>): EvaluatorStepResult
-
-  /** The full accumulated Database (ground + derived facts). */
-  currentDatabase(): Database
+  step(delta: ZSet<Fact>): ZSet<Fact>
 
   /**
-   * Extract the current resolution from the accumulated Database.
+   * Add (+1) or retract (−1) rules, then derive every stratum again from
+   * scratch. Returns the derived facts that changed as a result.
    */
-  currentResolution(): {
-    winners: ReadonlyMap<string, ResolvedWinner>
-    fuguePairs: ReadonlyMap<string, readonly FugueBeforePair[]>
-  }
+  changeRules(delta: ZSet<Rule>): ZSet<Fact>
 
-  /** Reset to empty state. */
+  /**
+   * The live database, ground plus derived facts. Not a snapshot: the next
+   * `step` mutates it, so read what you need before stepping again.
+   */
+  currentDatabase(): Database
+
+  /** Reset to empty state: no facts, no rules. */
   reset(): void
 }
 
@@ -951,15 +823,14 @@ export interface Evaluator {
 // ---------------------------------------------------------------------------
 
 /**
- * Create a new unified Datalog evaluator.
+ * Create a long-lived evaluator over `initialRules`.
  *
- * The evaluator maintains persistent state across time steps. Each call
- * to `step(deltaFacts, deltaRules)` applies the delta to the accumulated
- * database, evaluates affected strata using weighted semi-naive, and
- * returns the resolution delta.
+ * Each `step` applies a ground-fact delta to the accumulated database,
+ * evaluates the affected strata with the weighted semi-naive loop, and
+ * returns the derived-fact delta.
  *
  * @param initialRules - The initial set of rules.
- * @returns An Evaluator instance with empty state.
+ * @returns An Evaluator holding no facts.
  */
 export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
   // --- Mutable state ---
@@ -993,13 +864,20 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
   /** The predicates `groundInDerived` tracks. */
   let trackedGround: Set<string> = new Set()
 
-  /** Whether step() has ever been called. Used by batch wrappers to
-   *  ensure strata are evaluated even with zero ground facts (rules
-   *  with empty bodies must still fire on first invocation). */
-  let hasBeenStepped = false
-
-  // Initialize stratification.
+  // Stratify, then derive what needs no facts at all: a rule with an empty
+  // body holds from the start, and what it derives may feed a higher stratum.
+  // `changeRules` recomputes every stratum from scratch and so fires such
+  // rules again on its own.
   restratify()
+  {
+    const seed = new Database()
+    for (const stratum of strata) {
+      if (stratum.rules.length === 0) continue
+      seed.addAllWeighted(
+        evaluateStratumFromDelta(stratum.rules, db, seed, groundInDerived),
+      )
+    }
+  }
 
   // --- Internal helpers ---
 
@@ -1075,71 +953,41 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
 
   // --- Public interface ---
 
-  function step(
-    deltaFacts: ZSet<Fact>,
-    deltaRules: ZSet<Rule>,
-  ): EvaluatorStepResult {
-    // --- Handle rule changes ---
-    if (!zsetIsEmpty(deltaRules)) {
-      // Apply rule changes.
-      zsetForEach(deltaRules, entry => {
-        if (entry.weight > 0) {
-          rules.push(entry.element)
-        } else if (entry.weight < 0) {
-          const rKey = ruleIdentity(entry.element)
-          const idx = rules.findIndex(r => ruleIdentity(r) === rKey)
-          if (idx !== -1) {
-            rules.splice(idx, 1)
-          }
+  function changeRules(deltaRules: ZSet<Rule>): ZSet<Fact> {
+    if (zsetIsEmpty(deltaRules)) return zsetEmpty()
+
+    zsetForEach(deltaRules, entry => {
+      if (entry.weight > 0) {
+        rules.push(entry.element)
+      } else if (entry.weight < 0) {
+        const rKey = ruleIdentity(entry.element)
+        const idx = rules.findIndex(r => ruleIdentity(r) === rKey)
+        if (idx !== -1) {
+          rules.splice(idx, 1)
         }
-      })
-
-      const oldDerivedPreds = new Set(allDerivedPreds)
-      restratify()
-
-      // A predicate no rule derives any more keeps only its ground part.
-      const orphaned = new Set(
-        [...oldDerivedPreds].filter(pred => !allDerivedPreds.has(pred)),
-      )
-      const delta = extractDelta(db, wipeDerived(orphaned, db, groundInDerived))
-
-      applyGroundDelta(deltaFacts)
-
-      // Derive every stratum again from scratch, bottom-up. Rule changes are
-      // rare enough that a full recompute is fine.
-      for (const stratum of strata) {
-        if (stratum.rules.length === 0) continue
-        delta.addAllWeighted(
-          recomputeStratum(stratum.rules, db, groundInDerived),
-        )
       }
-      return resultFromDelta(delta)
+    })
+
+    const oldDerivedPreds = new Set(allDerivedPreds)
+    restratify()
+
+    // A predicate no rule derives any more keeps only its ground part.
+    const orphaned = new Set(
+      [...oldDerivedPreds].filter(pred => !allDerivedPreds.has(pred)),
+    )
+    const delta = extractDelta(db, wipeDerived(orphaned, db, groundInDerived))
+
+    // Derive every stratum again from scratch, bottom-up. Rule changes are
+    // rare enough that a full recompute is fine.
+    for (const stratum of strata) {
+      if (stratum.rules.length === 0) continue
+      delta.addAllWeighted(recomputeStratum(stratum.rules, db, groundInDerived))
     }
+    return derivedFactsToZSet(delta)
+  }
 
-    // --- No rule change — incremental evaluation ---
-
-    if (zsetIsEmpty(deltaFacts)) {
-      if (hasBeenStepped) return EMPTY_STEP_RESULT
-      // First invocation with no facts — still need to evaluate strata
-      // for rules with empty bodies (e.g., axiom(42) :- .).
-      hasBeenStepped = true
-
-      const outputDelta = new Database()
-      for (const stratum of strata) {
-        if (stratum.rules.length === 0) continue
-        outputDelta.addAllWeighted(
-          evaluateStratumFromDelta(
-            stratum.rules,
-            db,
-            new Database(),
-            groundInDerived,
-          ),
-        )
-      }
-      return resultFromDelta(outputDelta)
-    }
-
-    hasBeenStepped = true
+  function step(deltaFacts: ZSet<Fact>): ZSet<Fact> {
+    if (zsetIsEmpty(deltaFacts)) return zsetEmpty()
 
     // 1. Apply the ground-fact delta to the accumulated db. Its presence
     //    flips are the first stratum input.
@@ -1151,17 +999,11 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
       strata,
       predToStrata,
     )
+    if (affectedIndices.length === 0) return zsetEmpty()
 
-    if (affectedIndices.length === 0) {
-      return EMPTY_STEP_RESULT
-    }
-
-    // 3. Evaluate affected strata bottom-up.
-    // Each stratum's output delta feeds the next stratum's input.
-    // The unified loop handles all stratum types (positive, negation,
-    // mixed) uniformly — no retractionsPresent flag needed.
+    // 3. Evaluate affected strata bottom-up. Each stratum's output delta
+    //    feeds the next stratum's input.
     const outputDelta = new Database()
-
     for (const stratumIdx of affectedIndices) {
       const stratum = strataByIndex.get(stratumIdx)
       if (stratum === undefined || stratum.rules.length === 0) continue
@@ -1179,43 +1021,11 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
       currentInputDelta.addAllWeighted(stratumDelta)
     }
 
-    return resultFromDelta(outputDelta)
+    return derivedFactsToZSet(outputDelta)
   }
 
   function currentDatabase(): Database {
     return db
-  }
-
-  function currentResolution(): {
-    winners: ReadonlyMap<string, ResolvedWinner>
-    fuguePairs: ReadonlyMap<string, readonly FugueBeforePair[]>
-  } {
-    // Extract winners from the winner relation.
-    const winners = new Map<string, ResolvedWinner>()
-    for (const tuple of db.getRelation("winner").tuples()) {
-      const slotId = tuple[0] as string
-      const winnerCnIdKey = tuple[1] as string
-      const content = tuple[2]!
-      winners.set(slotId, { slotId, winnerCnIdKey, content })
-    }
-
-    // Extract fugue pairs from the fugue_before relation.
-    const fuguePairs = new Map<string, FugueBeforePair[]>()
-    for (const tuple of db.getRelation("fugue_before").tuples()) {
-      const parentKey = tuple[0] as string
-      const a = tuple[1] as string
-      const b = tuple[2] as string
-      const pair: FugueBeforePair = { parentKey, a, b }
-
-      let existing = fuguePairs.get(parentKey)
-      if (existing === undefined) {
-        existing = []
-        fuguePairs.set(parentKey, existing)
-      }
-      existing.push(pair)
-    }
-
-    return { winners, fuguePairs }
   }
 
   function reset(): void {
@@ -1227,10 +1037,9 @@ export function createEvaluator(initialRules: readonly Rule[]): Evaluator {
     allDerivedPreds = new Set()
     groundInDerived = new Database()
     trackedGround = new Set()
-    hasBeenStepped = false
   }
 
-  return { step, currentDatabase, currentResolution, reset }
+  return { step, changeRules, currentDatabase, reset }
 }
 
 // ---------------------------------------------------------------------------
@@ -1298,7 +1107,7 @@ function evaluateBatch(
   // The evaluator's own database is the result. Filling a separate one first
   // used to cost a full serialize-and-insert pass that was then thrown away.
   const evaluator = createEvaluator(rules)
-  evaluator.step(factsToZSet(facts), zsetEmpty())
+  evaluator.step(factsToZSet(facts))
 
   return evaluator.currentDatabase()
 }

@@ -24,7 +24,6 @@
 // regression trips them while a loaded machine does not.
 
 import { describe, expect, it } from "vitest"
-import { zsetEmpty } from "../../src/base/zset.js"
 import {
   createEvaluator,
   evaluateUnified as evaluate,
@@ -287,15 +286,15 @@ describe("roguelike: performance", () => {
     const { facts } = buildGrid(100, 30)
     const evaluator = createEvaluator([fireSpread, sporeBoom])
 
-    evaluator.step(factsToZSet(facts), zsetEmpty())
-    evaluator.step(factsToZSet([fact("lit", [0, 0])]), zsetEmpty())
+    evaluator.step(factsToZSet(facts))
+    evaluator.step(factsToZSet([fact("lit", [0, 0])]))
     expect(evaluator.currentDatabase().getRelation("lit").size).toBe(3000)
 
     const ticks: number[] = []
     for (let i = 0; i < 200; i++) {
       const spore = fact("spores", [i % 100, (i * 7) % 30])
       const started = performance.now()
-      evaluator.step(factsToZSet([spore]), zsetEmpty())
+      evaluator.step(factsToZSet([spore]))
       ticks.push(performance.now() - started)
     }
 
@@ -314,16 +313,16 @@ describe("roguelike: performance", () => {
     // bring it near the single-fact tick above; tighten this when it lands.
     const { facts } = buildGrid(100, 30)
     const evaluator = createEvaluator([fireSpread])
-    evaluator.step(factsToZSet([...facts, fact("lit", [0, 0])]), zsetEmpty())
+    evaluator.step(factsToZSet([...facts, fact("lit", [0, 0])]))
     expect(evaluator.currentDatabase().getRelation("lit").size).toBe(3000)
 
     const ticks: number[] = []
     for (let i = 0; i < 20; i++) {
       const cell = fact("flammable", [1 + ((i * 37) % 99), (i * 11) % 30])
       const started = performance.now()
-      evaluator.step(factsToZSet([cell], -1), zsetEmpty()) // recomputed
+      evaluator.step(factsToZSet([cell], -1)) // recomputed
       ticks.push(performance.now() - started)
-      evaluator.step(factsToZSet([cell]), zsetEmpty()) // incremental
+      evaluator.step(factsToZSet([cell])) // incremental
     }
 
     expect(evaluator.currentDatabase().getRelation("lit").size).toBe(3000)
