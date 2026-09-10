@@ -2,8 +2,8 @@
 // Tests for authority chain replay, capability computation,
 // revoke-wins semantics, and capability containment.
 
+import { atom, positiveAtom, varTerm } from "@kyneta/datalog"
 import { describe, expect, it } from "vitest"
-import { atom, positiveAtom, varTerm } from "../../src/datalog/types.js"
 import { createAgent } from "../../src/kernel/agent.js"
 import {
   capabilityCovers,

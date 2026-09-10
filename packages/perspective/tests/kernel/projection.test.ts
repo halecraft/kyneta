@@ -2,9 +2,9 @@
 // Tests for converting active constraints into Datalog ground facts
 // via the structure index join.
 
+import type { Fact } from "@kyneta/datalog"
+import { fact } from "@kyneta/datalog"
 import { describe, expect, it } from "vitest"
-import type { Fact } from "../../src/datalog/types.js"
-import { fact } from "../../src/datalog/types.js"
 import { cnIdKey, createCnId } from "../../src/kernel/cnid.js"
 import {
   ACTIVE_STRUCTURE_SEQ,

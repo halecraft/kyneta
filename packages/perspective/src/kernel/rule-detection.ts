@@ -10,7 +10,7 @@
 // See unified-engine.md §B.4 (default solver rules), §B.7 (native solver
 // optimization), §14 (stratification layers).
 
-import type { Rule } from "../datalog/types.js"
+import type { Rule } from "@kyneta/datalog"
 import type { Constraint, RuleConstraint } from "./types.js"
 
 // ---------------------------------------------------------------------------
@@ -126,6 +126,30 @@ export function isDefaultRulesOnly(
 }
 
 /**
+ * Does this rule read `predicate` as a *positive* body atom?
+ *
+ * Deliberately not `bodyPredicates` from `@kyneta/datalog`: that returns one
+ * set covering positive atoms, negations and aggregation sources alike. The
+ * whole point of these detectors is to tell those apart — a rule that
+ * *negated* `active_value` would answer yes to "mentions active_value" and is
+ * emphatically not the default LWW rule. Since a wrong yes here means
+ * bypassing the evaluator for a rule set nobody checked, the distinction is
+ * the safety property, not a detail.
+ */
+function readsFrom(rule: Rule, predicate: string): boolean {
+  return rule.body.some(
+    b => b.kind === "atom" && b.atom.predicate === predicate,
+  )
+}
+
+/** Does this rule carry `not predicate(...)` in its body? */
+function negates(rule: Rule, predicate: string): boolean {
+  return rule.body.some(
+    b => b.kind === "negation" && b.atom.predicate === predicate,
+  )
+}
+
+/**
  * Check if the rules contain the default LWW pattern.
  *
  * Default LWW consists of 3 rules:
@@ -142,25 +166,16 @@ export function hasDefaultLWWRules(rules: readonly Rule[]): boolean {
   let hasWinner = false
 
   for (const r of rules) {
-    if (r.head.predicate === "superseded") {
-      const hasActiveValue = r.body.some(
-        b => b.kind === "atom" && b.atom.predicate === "active_value",
-      )
-      if (hasActiveValue) {
-        hasSuperseded = true
-      }
+    if (r.head.predicate === "superseded" && readsFrom(r, "active_value")) {
+      hasSuperseded = true
     }
 
-    if (r.head.predicate === "winner") {
-      const hasActiveValue = r.body.some(
-        b => b.kind === "atom" && b.atom.predicate === "active_value",
-      )
-      const negatesSuperseded = r.body.some(
-        b => b.kind === "negation" && b.atom.predicate === "superseded",
-      )
-      if (hasActiveValue && negatesSuperseded) {
-        hasWinner = true
-      }
+    if (
+      r.head.predicate === "winner" &&
+      readsFrom(r, "active_value") &&
+      negates(r, "superseded")
+    ) {
+      hasWinner = true
     }
   }
 
@@ -180,22 +195,15 @@ export function hasDefaultFugueRules(rules: readonly Rule[]): boolean {
   let hasFugueBefore = false
 
   for (const r of rules) {
-    if (r.head.predicate === "fugue_child") {
-      const hasSeqStructure = r.body.some(
-        b => b.kind === "atom" && b.atom.predicate === "active_structure_seq",
-      )
-      if (hasSeqStructure) {
-        hasFugueChild = true
-      }
+    if (
+      r.head.predicate === "fugue_child" &&
+      readsFrom(r, "active_structure_seq")
+    ) {
+      hasFugueChild = true
     }
 
-    if (r.head.predicate === "fugue_before") {
-      const hasFugueChildBody = r.body.some(
-        b => b.kind === "atom" && b.atom.predicate === "fugue_child",
-      )
-      if (hasFugueChildBody) {
-        hasFugueBefore = true
-      }
+    if (r.head.predicate === "fugue_before" && readsFrom(r, "fugue_child")) {
+      hasFugueBefore = true
     }
   }
 

@@ -180,7 +180,6 @@ export type {
   Policy,
   Reality,
   RealityNode,
-  Result,
   RetractConstraint,
   RetractPayload,
   RetractScope,
@@ -199,7 +198,7 @@ export type {
   WildcardTerm,
 } from "./types.js"
 // --- Type utilities ---
-export { err, isSafeUint, ok } from "./types.js"
+export { isSafeUint } from "./types.js"
 // --- Validity (§5.2–§5.3) ---
 export type {
   InvalidConstraint,

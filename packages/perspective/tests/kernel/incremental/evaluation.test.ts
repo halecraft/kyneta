@@ -11,20 +11,7 @@
 // - Custom LWW rule: reversed lamport comparison (Phase 6)
 // - Rule addition/retraction mid-stream (Phase 6)
 
-import { describe, expect, it } from "vitest"
-import type { ZSet } from "../../../src/base/zset.js"
-import {
-  zsetAdd,
-  zsetEmpty,
-  zsetIsEmpty,
-  zsetSingleton,
-  zsetSize,
-} from "../../../src/base/zset.js"
-import {
-  buildDefaultFugueRules,
-  buildDefaultLWWRules,
-} from "../../../src/bootstrap.js"
-import type { Fact, Rule } from "../../../src/datalog/types.js"
+import type { Fact, Rule } from "@kyneta/datalog"
 import {
   atom,
   eq,
@@ -36,7 +23,20 @@ import {
   positiveAtom,
   rule,
   varTerm,
-} from "../../../src/datalog/types.js"
+} from "@kyneta/datalog"
+import type { ZSet } from "@kyneta/zset"
+import {
+  zsetAdd,
+  zsetEmpty,
+  zsetIsEmpty,
+  zsetSingleton,
+  zsetSize,
+} from "@kyneta/zset"
+import { describe, expect, it } from "vitest"
+import {
+  buildDefaultFugueRules,
+  buildDefaultLWWRules,
+} from "../../../src/bootstrap.js"
 import { cnIdKey, createCnId } from "../../../src/kernel/cnid.js"
 import {
   createIncrementalEvaluation,

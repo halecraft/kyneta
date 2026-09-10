@@ -5,10 +5,7 @@
 // and read a foreign relation, and the reality shows it. The constraint
 // itself is plain data: the function is a name, resolved on this peer.
 
-import { describe, expect, it } from "vitest"
-import { buildDefaultRules } from "../../src/bootstrap.js"
-import type { ForeignRelation, Host } from "../../src/datalog/host.js"
-import type { Rule } from "../../src/datalog/types.js"
+import type { ForeignRelation, Host, Rule } from "@kyneta/datalog"
 import {
   _,
   atom,
@@ -17,7 +14,9 @@ import {
   positiveAtom,
   rule,
   varTerm,
-} from "../../src/datalog/types.js"
+} from "@kyneta/datalog"
+import { describe, expect, it } from "vitest"
+import { buildDefaultRules } from "../../src/bootstrap.js"
 import { createCnId } from "../../src/kernel/cnid.js"
 import { createIncrementalPipeline } from "../../src/kernel/incremental/pipeline.js"
 import { type PipelineConfig, solveFull } from "../../src/kernel/pipeline.js"

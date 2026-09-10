@@ -1,0 +1,51 @@
+{
+  "name": "@kyneta/zset",
+  "version": "0.1.0",
+  "versioning": "independent",
+  "description": "DBSP ℤ-set type and algebra — weighted sets keyed by string identity",
+  "author": "Duane Johnson",
+  "license": "MIT",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/halecraft/kyneta",
+    "directory": "packages/zset"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "test": "verify logic",
+    "verify": "verify"
+  },
+  "keywords": [
+    "zset",
+    "dbsp",
+    "incremental",
+    "algebra"
+  ],
+  "devDependencies": {
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

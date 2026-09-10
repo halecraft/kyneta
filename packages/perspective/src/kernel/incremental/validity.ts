@@ -29,8 +29,8 @@
 // See .plans/005-incremental-kernel-pipeline.md § Phase 6.
 // See theory/incremental.md §5.2.
 
-import type { ZSet, ZSetEntry } from "../../base/zset.js"
-import { zsetEmpty, zsetForEach, zsetFromEntries } from "../../base/zset.js"
+import type { ZSet, ZSetEntry } from "@kyneta/zset"
+import { zsetEmpty, zsetForEach, zsetFromEntries } from "@kyneta/zset"
 import {
   type AuthorityState,
   computeAuthority,

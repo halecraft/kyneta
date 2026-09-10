@@ -23,8 +23,8 @@
 // See .plans/005-incremental-kernel-pipeline.md § Phase 4.
 // See theory/incremental.md §5.3.
 
-import type { ZSet } from "../../base/zset.js"
-import { zsetForEach } from "../../base/zset.js"
+import type { ZSet } from "@kyneta/zset"
+import { zsetForEach } from "@kyneta/zset"
 import { cnIdKey } from "../cnid.js"
 import {
   childKey,

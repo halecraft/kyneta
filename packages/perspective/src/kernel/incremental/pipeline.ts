@@ -19,8 +19,7 @@
 // See .plans/006-incremental-datalog-evaluator.md § Phase 4, Phase 6.
 // See theory/incremental.md §2–§6, §9.7.
 
-import { zsetIsEmpty, zsetSingleton } from "../../base/zset.js"
-import type { BootstrapResult } from "../../bootstrap.js"
+import { zsetIsEmpty, zsetSingleton } from "@kyneta/zset"
 import { cnIdKey } from "../cnid.js"
 import type { PipelineConfig } from "../pipeline.js"
 import { solve } from "../pipeline.js"
@@ -224,36 +223,31 @@ export function createIncrementalPipeline(
 }
 
 // ---------------------------------------------------------------------------
-// Bootstrap Construction
+// Warm start from an existing store
 // ---------------------------------------------------------------------------
 
 /**
- * Create an incremental pipeline pre-populated with bootstrap constraints.
+ * Create an incremental pipeline pre-populated from a store that already
+ * holds constraints — typically the store a `createReality()` bootstrap
+ * returns, but any store works. The kernel does not know that bootstrap
+ * exists; it is handed a store and a config, nothing more.
  *
- * The store from the BootstrapResult already contains the bootstrap
- * constraints. We create the pipeline with that store and replay
- * all existing constraints through the DAG to build up accumulated
- * state.
+ * Every constraint is replayed through the DAG in the store's iteration
+ * order so each incremental stage builds up its accumulated state exactly
+ * as it would have by live insertion. For a bootstrap store that order is
+ * admin grant first, then the LWW rules, then the Fugue rules.
  *
- * @param result - The BootstrapResult from createReality().
- * @returns A new IncrementalPipeline with bootstrap state.
+ * @param store - A store whose constraints should seed the pipeline.
+ * @param config - The pipeline configuration.
+ * @returns A new IncrementalPipeline reflecting every constraint in `store`.
  */
-export function createIncrementalPipelineFromBootstrap(
-  result: BootstrapResult,
+export function createIncrementalPipelineFromStore(
+  store: ConstraintStore,
+  config: PipelineConfig,
 ): IncrementalPipeline {
-  // Create pipeline with the bootstrap store.
-  // We pass a fresh store and manually insert+process each constraint
-  // so the incremental stages build up their accumulated state.
-  const pipeline = createIncrementalPipeline(result.config)
-
-  // Replay all bootstrap constraints through the pipeline.
-  // The order from allConstraints is the Map insertion order,
-  // which matches the bootstrap insertion order (admin grant first,
-  // then LWW rules, then Fugue rules).
-  const constraints = allConstraints(result.store)
-  for (const c of constraints) {
+  const pipeline = createIncrementalPipeline(config)
+  for (const c of allConstraints(store)) {
     pipeline.insert(c)
   }
-
   return pipeline
 }

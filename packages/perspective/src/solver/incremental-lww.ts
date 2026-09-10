@@ -17,9 +17,9 @@
 // See Plan 005 Learnings: Resolution Diffing Must Not Emit Opposing Weights
 // on the Same Key.
 
-import type { ZSet, ZSetEntry } from "../base/zset.js"
-import { zsetForEach, zsetFromEntries } from "../base/zset.js"
-import type { Fact } from "../datalog/types.js"
+import type { Fact } from "@kyneta/datalog"
+import type { ZSet, ZSetEntry } from "@kyneta/zset"
+import { zsetForEach, zsetFromEntries } from "@kyneta/zset"
 import { cnIdKey } from "../kernel/cnid.js"
 import { ACTIVE_VALUE } from "../kernel/projection.js"
 import type { ResolvedWinner } from "../kernel/resolve.js"

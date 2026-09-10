@@ -13,13 +13,8 @@
 // - Removal (weight −1) handling
 // - Differential equivalence with batch computeActive
 
+import { type ZSet, zsetAdd, zsetEmpty, zsetSingleton } from "@kyneta/zset"
 import { describe, expect, it } from "vitest"
-import {
-  type ZSet,
-  zsetAdd,
-  zsetEmpty,
-  zsetSingleton,
-} from "../../../src/base/zset.js"
 import { cnIdKey, createCnId } from "../../../src/kernel/cnid.js"
 import {
   createIncrementalRetraction,

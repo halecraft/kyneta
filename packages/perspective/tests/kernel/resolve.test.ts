@@ -7,10 +7,7 @@
 // - Structure index built from valid set, not active set (§7.2)
 // - PipelineResult resolution metadata
 
-import { describe, expect, it } from "vitest"
-import { zsetFromEntries, zsetGet, zsetSize } from "../../src/base/zset.js"
-import { buildDefaultRules } from "../../src/bootstrap.js"
-import type { Fact, Rule } from "../../src/datalog/types.js"
+import type { Fact, Rule } from "@kyneta/datalog"
 import {
   _,
   atom,
@@ -24,7 +21,10 @@ import {
   positiveAtom,
   rule,
   varTerm,
-} from "../../src/datalog/types.js"
+} from "@kyneta/datalog"
+import { zsetFromEntries, zsetGet, zsetSize } from "@kyneta/zset"
+import { describe, expect, it } from "vitest"
+import { buildDefaultRules } from "../../src/bootstrap.js"
 import { cnIdKey, createCnId } from "../../src/kernel/cnid.js"
 import {
   type PipelineConfig,

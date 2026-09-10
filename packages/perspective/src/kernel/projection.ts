@@ -18,8 +18,8 @@
 //
 // See unified-engine.md §7.2, §8, §B.4.
 
-import type { Fact } from "../datalog/types.js"
-import { fact } from "../datalog/types.js"
+import type { Fact } from "@kyneta/datalog"
+import { fact } from "@kyneta/datalog"
 import { cnIdKey } from "./cnid.js"
 import type { StructureIndex } from "./structure-index.js"
 import type {

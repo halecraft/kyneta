@@ -25,10 +25,10 @@
 // See .plans/005-incremental-kernel-pipeline.md § Phase 5.
 // See theory/incremental.md §5.5.
 
-import type { ZSet, ZSetEntry } from "../../base/zset.js"
-import { zsetForEach, zsetFromEntries } from "../../base/zset.js"
-import type { Fact } from "../../datalog/types.js"
-import { fact, factKey } from "../../datalog/types.js"
+import type { Fact } from "@kyneta/datalog"
+import { fact, factKey } from "@kyneta/datalog"
+import type { ZSet, ZSetEntry } from "@kyneta/zset"
+import { zsetForEach, zsetFromEntries } from "@kyneta/zset"
 import { cnIdKey } from "../cnid.js"
 import {
   ACTIVE_STRUCTURE_SEQ,

@@ -3,17 +3,17 @@
 // ZSet<FugueBeforePair> deltas and that its accumulated state matches
 // the batch `buildNativeFuguePairs` for all insertion orderings.
 
-import { describe, expect, it } from "vitest"
-import type { ZSet } from "../../src/base/zset.js"
+import type { Fact } from "@kyneta/datalog"
+import { fact } from "@kyneta/datalog"
+import type { ZSet } from "@kyneta/zset"
 import {
   zsetAdd,
   zsetForEach,
   zsetIsEmpty,
   zsetSingleton,
   zsetSize,
-} from "../../src/base/zset.js"
-import type { Fact } from "../../src/datalog/types.js"
-import { fact } from "../../src/datalog/types.js"
+} from "@kyneta/zset"
+import { describe, expect, it } from "vitest"
 import { cnIdKey, createCnId } from "../../src/kernel/cnid.js"
 import { buildNativeFuguePairs } from "../../src/kernel/native-resolution.js"
 import {

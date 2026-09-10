@@ -25,13 +25,8 @@
 // See .plans/005-incremental-kernel-pipeline.md § Phase 3.
 // See theory/incremental.md §5.4.
 
-import type { ZSet, ZSetEntry } from "../../base/zset.js"
-import {
-  zsetAdd,
-  zsetEmpty,
-  zsetForEach,
-  zsetFromEntries,
-} from "../../base/zset.js"
+import type { ZSet, ZSetEntry } from "@kyneta/zset"
+import { zsetAdd, zsetEmpty, zsetForEach, zsetFromEntries } from "@kyneta/zset"
 import { cnIdKey } from "../cnid.js"
 import type {
   RetractionConfig,

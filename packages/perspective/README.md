@@ -90,7 +90,7 @@ The solver is a pure function parameterized by a version vector. `solve(S, V)` c
 | 2. Kernel Types & Store | ✅ | CnId, Lamport, version vectors, constraint store with O(1) insert |
 | 2.5 Prototype Removal | ✅ | Clean break from v0 codebase |
 | 3. Authority & Retraction | ✅ | Capability model, validity filter, retraction graph with dominance |
-| 3.5 Shared Base Types | ✅ | `CnId`, `Value`, `PeerID` extracted to `base/` |
+| 3.5 Shared Base Types | ✅ | `CnId`, `Value`, `PeerID` extracted to a shared module (later split: identity to `kernel/`, `Value` to `@kyneta/datalog`) |
 | 4. Skeleton & Pipeline | ✅ | Full solver pipeline, structure index, projection, skeleton builder |
 | 4.5 Datalog-Driven Resolution | ✅ | Datalog as primary path; native solvers as §B.7 fast path |
 | 4.6 Pre-Bootstrap Correctness | ✅ | Semantic refs, complete Fugue rules, store O(1), skeleton tests |
@@ -100,21 +100,19 @@ The solver is a pure function parameterized by a version vector. `solve(S, V)` c
 | **Plan 006.1: Unified Evaluator** | ✅ | Weighted Relation/Substitution, dirty-map distinct + delta extraction, single evaluator replacing four loops |
 | **Plan 006.2: Differential Negation** | ✅ | Dual-weight Relation, asymmetric join, differential negation, unified semi-naive loop for all strata |
 
-**1441 tests across 38 files, all passing.**
+**978 tests, all passing** — plus 394 in `@kyneta/datalog` and 61 in `@kyneta/zset`.
 
 See [.plans/002-unified-ccs-engine.md](./.plans/002-unified-ccs-engine.md) for the batch engine plan, [.plans/005-incremental-kernel-pipeline.md](./.plans/005-incremental-kernel-pipeline.md) for the incremental kernel plan, [.plans/006-incremental-datalog-evaluator.md](./.plans/006-incremental-datalog-evaluator.md) for the incremental Datalog plan, and [.plans/006.2-differential-negation.md](./.plans/006.2-differential-negation.md) for the differential negation plan.
 
 ## Architecture
 
 ```
-prism/
+@kyneta/zset ──► @kyneta/datalog ──► @kyneta/perspective
+
+packages/perspective/
 ├── src/
-│   ├── base/                 Shared types and algebra
-│   │   ├── types.ts            CnId, Value, PeerID
-│   │   ├── result.ts           Result<T, E>
-│   │   └── zset.ts             Z-set type and algebra (DBSP foundation)
 │   ├── kernel/               Layer 0 — the engine's mandatory kernel
-│   │   ├── types.ts            Six constraint types (discriminated union)
+│   │   ├── types.ts            Identity (CnId, PeerID, Lamport) + six constraint types
 │   │   ├── store.ts            CnId-keyed set, insert, set union merge
 │   │   ├── agent.ts            Stateful constraint factory (counter, lamport, refs)
 │   │   ├── authority.ts        Capability chain replay
@@ -137,13 +135,6 @@ prism/
 │   │       ├── skeleton.ts       Mutable tree with NodeDelta emission
 │   │       ├── pipeline.ts       Incremental composition root (DAG wiring)
 │   │       └── index.ts          Barrel export
-│   ├── datalog/              Stratified bottom-up evaluator
-│   │   ├── types.ts            Atoms, terms, rules, facts, dual-weight Relation, Database
-│   │   ├── unify.ts            Variable binding, substitution, guards
-│   │   ├── stratify.ts         Dependency graph, SCC, stratum ordering
-│   │   ├── evaluate.ts         Per-rule core: evaluateRuleDelta (asymmetric join), differentialNegation, groundHead
-│   │   ├── evaluator.ts        Unified evaluator: createEvaluator, evaluateStratumFromDelta, batch wrappers
-│   │   └── aggregate.ts        min, max, count, sum
 │   ├── solver/               Native optimizations (§B.7)
 │   │   ├── lww.ts              Batch LWW: max_by(lamport, peer)
 │   │   ├── fugue.ts            Batch Fugue: tree walk over structure(seq)
@@ -151,16 +142,16 @@ prism/
 │   │   └── incremental-fugue.ts  Per-parent Fugue tree maintenance (Plan 006)
 │   ├── bootstrap.ts          Reality creation + default solver rules (§B.8)
 │   └── index.ts              Public API
-├── tests/                    1441 tests across 38 files
-│   ├── base/                 Z-set algebra
-│   ├── datalog/              Evaluator, unification, stratification, rules, differential negation
+├── tests/
 │   ├── kernel/               Store, agent, authority, pipeline, skeleton, ...
 │   │   └── incremental/        Incremental stages, evaluation, pipeline (differential)
+│   ├── default-rules/        The §B.4 LWW + Fugue rule program, evaluated
 │   ├── solver/               LWW/Fugue equivalence + incremental solver tests
 │   └── integration.test.ts   Multi-agent bootstrap, sync, retraction, time travel
 └── theory/
     └── unified-engine.md     The authoritative specification
 ```
+
 
 ## Theoretical Foundation
 
@@ -188,12 +179,14 @@ npm install @kyneta/perspective
 ```bash
 bun install          # Install dependencies
 bun run test         # Run tests in watch mode
-bun run test:run     # Run tests once (1426 tests)
+pnpm verify          # Format, typecheck, and test
 bun run typecheck    # TypeScript type checking
 ```
 
 ## Documentation
 
+- [`@kyneta/datalog`](../datalog) — the evaluator, its value domain, and host relations
+- [`@kyneta/zset`](../zset) — the ℤ-set algebra both packages build on
 - [Unified CCS Engine Spec](./theory/unified-engine.md) — The authoritative specification
 - [Incremental Theory](./theory/incremental.md) — DBSP foundation for incremental evaluation
 - [TECHNICAL.md](./TECHNICAL.md) — Architecture, solver pipeline, design decisions

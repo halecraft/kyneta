@@ -5,11 +5,10 @@
 // The native solver is an optimization (§B.7) — it MUST be semantically
 // equivalent to the rules-as-data evaluator.
 
+import type { Fact } from "@kyneta/datalog"
+import { evaluate, fact } from "@kyneta/datalog"
 import { describe, expect, it } from "vitest"
 import { buildDefaultLWWRules } from "../../src/bootstrap.js"
-import { evaluateUnified as evaluate } from "../../src/datalog/evaluator.js"
-import type { Fact } from "../../src/datalog/types.js"
-import { fact } from "../../src/datalog/types.js"
 import { cnIdKey, createCnId } from "../../src/kernel/cnid.js"
 import { STUB_SIGNATURE } from "../../src/kernel/signature.js"
 import { buildStructureIndex } from "../../src/kernel/structure-index.js"

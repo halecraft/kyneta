@@ -15,7 +15,7 @@
 // - Differential equivalence with batch computeValid
 // - All-permutation differential tests
 
-import { describe, expect, it } from "vitest"
+import { atom, positiveAtom, varTerm } from "@kyneta/datalog"
 import {
   type ZSet,
   type ZSetEntry,
@@ -26,8 +26,8 @@ import {
   zsetPositive,
   zsetSingleton,
   zsetSize,
-} from "../../../src/base/zset.js"
-import { atom, positiveAtom, varTerm } from "../../../src/datalog/types.js"
+} from "@kyneta/zset"
+import { describe, expect, it } from "vitest"
 import { cnIdKey, createCnId } from "../../../src/kernel/cnid.js"
 import {
   createIncrementalValidity,

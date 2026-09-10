@@ -3,10 +3,10 @@
 // ZSet<ResolvedWinner> deltas and that its accumulated state matches
 // the batch `resolveLWW` for all insertion orderings.
 
+import type { Fact } from "@kyneta/datalog"
+import { fact } from "@kyneta/datalog"
+import { zsetIsEmpty, zsetSingleton, zsetSize } from "@kyneta/zset"
 import { describe, expect, it } from "vitest"
-import { zsetIsEmpty, zsetSingleton, zsetSize } from "../../src/base/zset.js"
-import type { Fact } from "../../src/datalog/types.js"
-import { fact } from "../../src/datalog/types.js"
 import { cnIdKey, createCnId } from "../../src/kernel/cnid.js"
 import { ACTIVE_VALUE } from "../../src/kernel/projection.js"
 import type { ResolvedWinner } from "../../src/kernel/resolve.js"

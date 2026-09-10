@@ -194,6 +194,14 @@ Note: structural fields on constraints (`counter`, `lamport`, `layer`) are NOT `
 
 **Why no compound values?** In CCS, all structure is expressed through `structure` constraints. An "object" is a Map-policy node; an "array" is a Seq-policy node. Allowing compound values (nested objects, arrays) inside a single `value` constraint would create structure outside the constraint model — structure that cannot be individually addressed, retracted, or resolved by the solver. The `ref(CnId)` type is the bridge: it lets a value point to a subtree, keeping all structure in the tree.
 
+> **Implementation note.** `ref(CnId)` is realized as `{ ref: ValueRef }` in
+> `@kyneta/datalog`, where `ValueRef` is `{ peer: string; counter: number }` —
+> structurally identical to `CnId`, so a reference is a Datalog value with no
+> conversion and no dependency between the two packages. The value domain is closed
+> and compiler-checked, which is what keeps this type's serialization and ordering
+> the same on every peer. Note that the skeleton builder does not yet dereference a
+> `ref`: nesting is specified here and reserved in the type, not implemented.
+
 **Nesting example:**
 
 ```
@@ -1077,6 +1085,13 @@ Every agent must implement these components. They are mechanical algorithms — 
 ### B.3 Datalog Evaluator (mandatory)
 
 Every agent must implement a stratified Datalog evaluator. This is the solver. It evaluates rule constraints from the store over the facts derived from active constraints, producing the reality.
+
+> **Implementation note.** In this reference implementation the evaluator is a
+> separate package, `@kyneta/datalog`, which knows nothing about constraints: its
+> input is facts and its output is derived facts. It is usable with no CCS in sight.
+> The translation in both directions — `kernel/projection.ts` for constraints to
+> facts, `kernel/resolve.ts` for derived facts to winners and Fugue ordering — stays
+> with the kernel, which is what "mandatory" attaches to here.
 
 **Why Datalog and not Prolog:**
 

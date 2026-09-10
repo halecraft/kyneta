@@ -21,14 +21,9 @@
 // See Plan 006, Phase 3.
 // See theory/incremental.md §9.7.
 
-import type { ZSet, ZSetEntry } from "../base/zset.js"
-import {
-  zsetAdd,
-  zsetEmpty,
-  zsetForEach,
-  zsetFromEntries,
-} from "../base/zset.js"
-import type { Fact } from "../datalog/types.js"
+import type { Fact } from "@kyneta/datalog"
+import type { ZSet, ZSetEntry } from "@kyneta/zset"
+import { zsetAdd, zsetEmpty, zsetForEach, zsetFromEntries } from "@kyneta/zset"
 import { cnIdFromString } from "../kernel/cnid.js"
 import { ACTIVE_STRUCTURE_SEQ, CONSTRAINT_PEER } from "../kernel/projection.js"
 import type { FugueBeforePair } from "../kernel/resolve.js"

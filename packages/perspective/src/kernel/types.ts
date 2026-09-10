@@ -8,26 +8,6 @@
 // the type system.
 
 // ---------------------------------------------------------------------------
-// Result type — re-exported from shared base.
-// ---------------------------------------------------------------------------
-
-export { err, ok, type Result } from "../base/result.js"
-
-// ---------------------------------------------------------------------------
-// Shared identity and value types — re-exported from shared base so
-// downstream consumers can import everything from kernel/types.
-// ---------------------------------------------------------------------------
-
-export {
-  type CnId,
-  type Counter,
-  isSafeUint,
-  type Lamport,
-  type PeerID,
-  type Value,
-} from "../base/types.js"
-
-// ---------------------------------------------------------------------------
 // Datalog types — re-exported so RulePayload is properly typed and
 // downstream consumers can import everything from kernel/types.
 // ---------------------------------------------------------------------------
@@ -44,11 +24,67 @@ export type {
   NegationElement,
   Rule,
   Term,
+  Value,
   VarTerm,
   WildcardTerm,
-} from "../datalog/types.js"
+} from "@kyneta/datalog"
 
-import type { CnId, Counter, Lamport, PeerID, Value } from "../base/types.js"
+import type { Value } from "@kyneta/datalog"
+
+// ---------------------------------------------------------------------------
+// Identity (§1)
+//
+// These are the kernel's own. The Datalog engine never sees a peer or a
+// counter; when a constraint id needs to travel in a fact it goes as a
+// string key (`cnIdKey`) or, for nesting, as a `{ ref }` value whose shape
+// `ValueRef` in `@kyneta/datalog` declares structurally — `CnId` satisfies it
+// without either package importing the other.
+// ---------------------------------------------------------------------------
+
+/**
+ * Peer identifier — public key or hash thereof.
+ *
+ * In production this is a public key. For testing we use human-readable
+ * strings like "alice", "bob".
+ */
+export type PeerID = string
+
+/**
+ * Monotonically increasing per-peer operation counter.
+ *
+ * Must satisfy: `Number.isSafeInteger(x) && x >= 0`.
+ * Enforced at Agent construction and store insertion boundaries.
+ */
+export type Counter = number
+
+/**
+ * Lamport timestamp for causal ordering.
+ *
+ * Must satisfy: `Number.isSafeInteger(x) && x >= 0`.
+ * Enforced at Agent construction and store insertion boundaries.
+ */
+export type Lamport = number
+
+/**
+ * Constraint Id — globally unique identifier for a constraint.
+ *
+ * The pair (peer, counter) is globally unique because each peer
+ * maintains a monotonically increasing counter.
+ */
+export interface CnId {
+  readonly peer: PeerID
+  readonly counter: Counter
+}
+
+/**
+ * Check that a number is a safe unsigned integer (0 ≤ x ≤ 2^53 − 1).
+ *
+ * Structural integer fields (counter, lamport, layer) must pass this check.
+ * See unified-engine.md §1 for rationale.
+ */
+export function isSafeUint(x: number): boolean {
+  return Number.isSafeInteger(x) && x >= 0
+}
 
 // ---------------------------------------------------------------------------
 // Version Vector (type alias only — functions live in version-vector.ts)
@@ -119,8 +155,8 @@ export interface RetractPayload {
  */
 export interface RulePayload {
   readonly layer: number // Layer 1 = default solver rules (bootstrap); Layer ≥ 2 = user rules (Agent)
-  readonly head: import("../datalog/types.js").Atom
-  readonly body: readonly import("../datalog/types.js").BodyElement[]
+  readonly head: import("@kyneta/datalog").Atom
+  readonly body: readonly import("@kyneta/datalog").BodyElement[]
 }
 
 // §2.5 — Authority

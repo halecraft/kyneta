@@ -9,7 +9,7 @@
 //
 // See unified-engine.md §B.5, §1.
 
-import type { Atom, BodyElement } from "../datalog/types.js"
+import type { Atom, BodyElement } from "@kyneta/datalog"
 import { createCnId } from "./cnid.js"
 import {
   createLamportClock,

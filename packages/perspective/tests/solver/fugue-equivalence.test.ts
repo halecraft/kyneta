@@ -12,11 +12,10 @@
 //
 // See unified-engine.md §8.2, §B.4, §B.7.
 
+import type { Fact } from "@kyneta/datalog"
+import { evaluate, fact } from "@kyneta/datalog"
 import { describe, expect, it } from "vitest"
 import { buildDefaultFugueRules } from "../../src/bootstrap.js"
-import { evaluateUnified as evaluate } from "../../src/datalog/evaluator.js"
-import type { Fact } from "../../src/datalog/types.js"
-import { fact } from "../../src/datalog/types.js"
 import { cnIdKey, createCnId } from "../../src/kernel/cnid.js"
 import { STUB_SIGNATURE } from "../../src/kernel/signature.js"
 import type {

@@ -13,14 +13,14 @@
 // - Differential equivalence with batch buildStructureIndex
 // - All-permutation differential tests
 
-import { describe, expect, it } from "vitest"
 import {
   type ZSet,
   type ZSetEntry,
   zsetEmpty,
   zsetFromEntries,
   zsetSingleton,
-} from "../../../src/base/zset.js"
+} from "@kyneta/zset"
+import { describe, expect, it } from "vitest"
 import { cnIdKey, createCnId } from "../../../src/kernel/cnid.js"
 import { createIncrementalStructureIndex } from "../../../src/kernel/incremental/structure-index.js"
 import { structureIndexDeltaEmpty } from "../../../src/kernel/incremental/types.js"

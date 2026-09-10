@@ -9,13 +9,13 @@
 // - Authority change cascade: queued constraints become valid after grant
 // - Orphaned value resolution: value before structure
 // - Out-of-order sync: non-causal delivery order
-// - Bootstrap warm-start: createIncrementalPipelineFromBootstrap matches batch
+// - Warm start: createIncrementalPipelineFromStore over a bootstrap store matches batch
 // - Empty delta: duplicate constraint produces empty RealityDelta
 // - Multi-removal retraction fix (Task 8.1a): multiple active removals
 //   in a single delta are all processed correctly
 
+import { zsetFromEntries } from "@kyneta/zset"
 import { describe, expect, it } from "vitest"
-import { zsetFromEntries } from "../../../src/base/zset.js"
 import {
   BOOTSTRAP_CONSTRAINT_COUNT,
   createReality,
@@ -29,7 +29,7 @@ import {
 import { cnIdKey } from "../../../src/kernel/cnid.js"
 import {
   createIncrementalPipeline,
-  createIncrementalPipelineFromBootstrap,
+  createIncrementalPipelineFromStore,
   type IncrementalPipeline,
 } from "../../../src/kernel/incremental/pipeline.js"
 import { createIncrementalRetraction } from "../../../src/kernel/incremental/retraction.js"
@@ -157,9 +157,12 @@ describe("IncrementalPipeline", () => {
   // =========================================================================
 
   describe("bootstrap warm-start", () => {
-    it("createIncrementalPipelineFromBootstrap produces same initial reality as batch", () => {
+    it("createIncrementalPipelineFromStore over a bootstrap store produces the same initial reality as batch", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
 
       const incremental = pipeline.current()
       const batch = solve(result.store, result.config)
@@ -169,7 +172,10 @@ describe("IncrementalPipeline", () => {
 
     it("pipeline store contains all bootstrap constraints", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
 
       // The pipeline's store should have the same number of constraints
       // as the bootstrap result's store
@@ -178,7 +184,10 @@ describe("IncrementalPipeline", () => {
 
     it("pipeline config matches bootstrap config", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
 
       expect(pipeline.config.creator).toBe("alice")
       expect(pipeline.config.retractionConfig).toEqual(
@@ -188,7 +197,10 @@ describe("IncrementalPipeline", () => {
 
     it("empty reality (only bootstrap) produces empty root", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
 
       const reality = pipeline.current()
       expect(reality.root.children.size).toBe(0)
@@ -203,7 +215,10 @@ describe("IncrementalPipeline", () => {
   describe("empty delta", () => {
     it("inserting a duplicate constraint produces empty RealityDelta", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
 
       // Get a bootstrap constraint and try to re-insert it
       const bootstrapConstraints = allConstraints(result.store)
@@ -216,7 +231,10 @@ describe("IncrementalPipeline", () => {
 
     it("insertMany with empty array produces empty RealityDelta", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
 
       const delta = pipeline.insertMany([])
       expect(delta.isEmpty).toBe(true)
@@ -224,7 +242,10 @@ describe("IncrementalPipeline", () => {
 
     it("insertMany with all duplicates produces empty RealityDelta", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
 
       const dups = allConstraints(result.store).slice(0, 3)
       const delta = pipeline.insertMany(dups)
@@ -239,7 +260,10 @@ describe("IncrementalPipeline", () => {
   describe("differential equivalence: simple map", () => {
     it("single root + map child + value matches batch at every step", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
       const agent = result.agent
 
       // Step 1: create root
@@ -277,7 +301,10 @@ describe("IncrementalPipeline", () => {
 
     it("multiple map children under same parent match batch", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
       const agent = result.agent
 
       const { constraint: rootC, id: rootId } = produceRoot(agent, "doc", "map")
@@ -315,7 +342,10 @@ describe("IncrementalPipeline", () => {
 
     it("nested map containers match batch", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
       const agent = result.agent
 
       const { constraint: rootC, id: rootId } = produceRoot(agent, "app", "map")
@@ -354,7 +384,10 @@ describe("IncrementalPipeline", () => {
   describe("differential equivalence: sequence", () => {
     it("sequential elements match batch at every step", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
       const agent = result.agent
 
       const { constraint: rootC, id: rootId } = produceRoot(
@@ -417,7 +450,10 @@ describe("IncrementalPipeline", () => {
   describe("differential equivalence: mixed containers", () => {
     it("map with nested seq matches batch", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
       const agent = result.agent
 
       const { constraint: rootC, id: rootId } = produceRoot(
@@ -460,7 +496,10 @@ describe("IncrementalPipeline", () => {
 
     it("reality with both map and seq containers matches batch", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
       const agent = result.agent
 
       // Map container
@@ -530,7 +569,10 @@ describe("IncrementalPipeline", () => {
   describe("retraction cascade", () => {
     it("insert value, retract it — value disappears and matches batch", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
       const agent = result.agent
 
       const { constraint: rootC, id: rootId } = produceRoot(agent, "doc", "map")
@@ -566,7 +608,10 @@ describe("IncrementalPipeline", () => {
 
     it("retract + undo — value reappears and matches batch", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
       const agent = result.agent
 
       const { constraint: rootC, id: rootId } = produceRoot(agent, "doc", "map")
@@ -602,7 +647,10 @@ describe("IncrementalPipeline", () => {
 
     it("seq value retraction makes element a tombstone", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
       const agent = result.agent
 
       const { constraint: rootC, id: rootId } = produceRoot(
@@ -670,7 +718,10 @@ describe("IncrementalPipeline", () => {
   describe("LWW resolution", () => {
     it("higher lamport wins and matches batch", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
       const agent = result.agent
 
       const { constraint: rootC, id: rootId } = produceRoot(agent, "doc", "map")
@@ -700,7 +751,10 @@ describe("IncrementalPipeline", () => {
 
     it("null value via LWW (map deletion) matches batch", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
       const agent = result.agent
 
       const { constraint: rootC, id: rootId } = produceRoot(agent, "doc", "map")
@@ -733,7 +787,10 @@ describe("IncrementalPipeline", () => {
   describe("authority change cascade", () => {
     it("grant capability to peer — queued constraints become valid", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
       const alice = result.agent
 
       // Alice creates structure
@@ -780,7 +837,10 @@ describe("IncrementalPipeline", () => {
 
     it("revoke capability — peer constraints become invalid", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
       const alice = result.agent
 
       // Alice creates structure and grants Bob
@@ -826,7 +886,10 @@ describe("IncrementalPipeline", () => {
   describe("orphaned value resolution", () => {
     it("value constraint arrives before target structure — resolved later", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
       const agent = result.agent
 
       // Create root structure
@@ -866,7 +929,10 @@ describe("IncrementalPipeline", () => {
   describe("out-of-order sync", () => {
     it("child structure before parent structure — both appear when parent arrives", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
       const agent = result.agent
 
       // Create root and child (but insert child first)
@@ -894,7 +960,10 @@ describe("IncrementalPipeline", () => {
 
     it("retract before target — target is dominated on arrival", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
       const agent = result.agent
 
       const { constraint: rootC, id: rootId } = produceRoot(agent, "doc", "map")
@@ -928,7 +997,10 @@ describe("IncrementalPipeline", () => {
 
     it("constraint before enabling authority grant", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
       const alice = result.agent
 
       const { constraint: rootC, id: rootId } = produceRoot(alice, "doc", "map")
@@ -962,7 +1034,10 @@ describe("IncrementalPipeline", () => {
 
     it("complex out-of-order: retract + child + value + grant all jumbled", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
       const alice = result.agent
 
       // Plan: Alice creates structure, grants Bob.
@@ -1015,7 +1090,10 @@ describe("IncrementalPipeline", () => {
     it("two pipelines converge after bidirectional constraint exchange", () => {
       // Alice creates reality
       const aliceResult = createReality({ creator: "alice" })
-      const alicePipeline = createIncrementalPipelineFromBootstrap(aliceResult)
+      const alicePipeline = createIncrementalPipelineFromStore(
+        aliceResult.store,
+        aliceResult.config,
+      )
       const alice = aliceResult.agent
 
       // Alice grants Bob admin
@@ -1095,7 +1173,10 @@ describe("IncrementalPipeline", () => {
 
     it("concurrent writes to same key — LWW resolves identically on both sides", () => {
       const aliceResult = createReality({ creator: "alice" })
-      const alicePipeline = createIncrementalPipelineFromBootstrap(aliceResult)
+      const alicePipeline = createIncrementalPipelineFromStore(
+        aliceResult.store,
+        aliceResult.config,
+      )
       const alice = aliceResult.agent
 
       // Setup
@@ -1173,16 +1254,12 @@ describe("IncrementalPipeline", () => {
       agent.observe(valueC)
 
       // Pipeline A: sequential
-      const pA = createIncrementalPipelineFromBootstrap(result)
+      const pA = createIncrementalPipelineFromStore(result.store, result.config)
       pA.insert(rootC)
       pA.insert(keyC)
       pA.insert(valueC)
 
-      // Pipeline B: batch
-      const _pB = createIncrementalPipelineFromBootstrap(
-        createReality({ creator: "alice" }),
-      )
-      // Need to use same constraints... let's just re-create
+      // Pipeline B: the same constraints re-created from a fresh bootstrap
       const result2 = createReality({ creator: "alice" })
       const agent2 = result2.agent
       const { constraint: rootC2, id: rootId2 } = produceRoot(
@@ -1200,7 +1277,10 @@ describe("IncrementalPipeline", () => {
       const valueC2 = agent2.produceValue(keyId2, "hello")
       agent2.observe(valueC2)
 
-      const pB2 = createIncrementalPipelineFromBootstrap(result2)
+      const pB2 = createIncrementalPipelineFromStore(
+        result2.store,
+        result2.config,
+      )
       const batchDelta = pB2.insertMany([rootC2, keyC2, valueC2])
 
       // Both should match batch
@@ -1219,7 +1299,10 @@ describe("IncrementalPipeline", () => {
   describe("recompute", () => {
     it("recompute returns same result as solve(store, config)", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
       const agent = result.agent
 
       const { constraint: rootC, id: rootId } = produceRoot(agent, "doc", "map")
@@ -1367,7 +1450,10 @@ describe("IncrementalPipeline", () => {
   describe("integration scenario replay", () => {
     it("simple map scenario from integration tests", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
       const agent = result.agent
 
       const { constraint: rootC, id: rootId } = produceRoot(
@@ -1397,7 +1483,10 @@ describe("IncrementalPipeline", () => {
 
     it("seq ordering scenario from integration tests", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
       const agent = result.agent
 
       const { constraint: rootC, id: rootId } = produceRoot(
@@ -1445,7 +1534,10 @@ describe("IncrementalPipeline", () => {
 
     it("retraction sync scenario from integration tests", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
       const agent = result.agent
 
       const { constraint: rootC, id: rootId } = produceRoot(agent, "doc", "map")
@@ -1475,7 +1567,10 @@ describe("IncrementalPipeline", () => {
 
     it("undo scenario from integration tests", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
       const agent = result.agent
 
       const { constraint: rootC, id: rootId } = produceRoot(agent, "doc", "map")
@@ -1510,7 +1605,10 @@ describe("IncrementalPipeline", () => {
     it("two-agent sync scenario from integration tests", () => {
       // Alice creates reality
       const aliceResult = createReality({ creator: "alice" })
-      const alicePipeline = createIncrementalPipelineFromBootstrap(aliceResult)
+      const alicePipeline = createIncrementalPipelineFromStore(
+        aliceResult.store,
+        aliceResult.config,
+      )
       const alice = aliceResult.agent
 
       // Grant Bob admin
@@ -1577,7 +1675,10 @@ describe("IncrementalPipeline", () => {
 
     it("three-agent sync scenario from integration tests", () => {
       const aliceResult = createReality({ creator: "alice" })
-      const alicePipeline = createIncrementalPipelineFromBootstrap(aliceResult)
+      const alicePipeline = createIncrementalPipelineFromStore(
+        aliceResult.store,
+        aliceResult.config,
+      )
       const alice = aliceResult.agent
 
       // Grants
@@ -1683,7 +1784,10 @@ describe("IncrementalPipeline", () => {
 
     it("multi-container scenario from integration tests", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
       const agent = result.agent
 
       // Map container
@@ -1749,7 +1853,10 @@ describe("IncrementalPipeline", () => {
 
     it("authorized agent after grant — integration test scenario", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
       const alice = result.agent
 
       const grantBob = alice.produceAuthority("bob", "grant", { kind: "admin" })
@@ -1786,7 +1893,10 @@ describe("IncrementalPipeline", () => {
   describe("edge cases", () => {
     it("invalid constraint (store rejects) returns empty delta", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
 
       // Create a constraint with an invalid counter (not safe uint)
       const badConstraint: Constraint = {
@@ -1804,7 +1914,10 @@ describe("IncrementalPipeline", () => {
 
     it("bookmark constraints pass through without affecting reality", () => {
       const result = createReality({ creator: "alice" })
-      const pipeline = createIncrementalPipelineFromBootstrap(result)
+      const pipeline = createIncrementalPipelineFromStore(
+        result.store,
+        result.config,
+      )
       const agent = result.agent
 
       const { constraint: rootC, id: _rootId } = produceRoot(
@@ -1828,7 +1941,10 @@ describe("IncrementalPipeline", () => {
 
     it("concurrent seq inserts by different peers converge", () => {
       const aliceResult = createReality({ creator: "alice" })
-      const alicePipeline = createIncrementalPipelineFromBootstrap(aliceResult)
+      const alicePipeline = createIncrementalPipelineFromStore(
+        aliceResult.store,
+        aliceResult.config,
+      )
       const alice = aliceResult.agent
 
       const grantBob = alice.produceAuthority("bob", "grant", { kind: "admin" })

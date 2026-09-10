@@ -14,7 +14,8 @@
 // - Differential equivalence with batch projectToFacts
 // - All-permutation differential tests
 
-import { describe, expect, it } from "vitest"
+import type { Fact } from "@kyneta/datalog"
+import { factKey } from "@kyneta/datalog"
 import {
   type ZSet,
   type ZSetEntry,
@@ -22,9 +23,8 @@ import {
   zsetForEach,
   zsetFromEntries,
   zsetSingleton,
-} from "../../../src/base/zset.js"
-import type { Fact } from "../../../src/datalog/types.js"
-import { factKey } from "../../../src/datalog/types.js"
+} from "@kyneta/zset"
+import { describe, expect, it } from "vitest"
 import { cnIdKey, createCnId } from "../../../src/kernel/cnid.js"
 import { createIncrementalProjection } from "../../../src/kernel/incremental/projection.js"
 import { createIncrementalStructureIndex } from "../../../src/kernel/incremental/structure-index.js"

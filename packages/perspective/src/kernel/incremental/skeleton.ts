@@ -28,8 +28,8 @@
 // See .plans/005-incremental-kernel-pipeline.md § Phase 7.
 // See theory/incremental.md §5.7.
 
-import type { ZSet } from "../../base/zset.js"
-import { zsetForEach } from "../../base/zset.js"
+import type { ZSet } from "@kyneta/zset"
+import { zsetForEach } from "@kyneta/zset"
 import { cnIdKey, createCnId } from "../cnid.js"
 import type { FugueBeforePair, ResolvedWinner } from "../resolve.js"
 import { topologicalOrderFromPairs } from "../resolve.js"

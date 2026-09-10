@@ -22,27 +22,6 @@
  * @packageDocumentation
  */
 
-// === Z-Set Algebra (DBSP) ===
-export {
-  type ZSet,
-  type ZSetEntry,
-  zsetAdd,
-  zsetElements,
-  zsetEmpty,
-  zsetFilter,
-  zsetForEach,
-  zsetFromEntries,
-  zsetGet,
-  zsetHas,
-  zsetIsEmpty,
-  zsetKeys,
-  zsetMap,
-  zsetNegate,
-  zsetNegative,
-  zsetPositive,
-  zsetSingleton,
-  zsetSize,
-} from "./base/zset.js"
 // === Bootstrap (§B.8) ===
 export {
   BOOTSTRAP_CONSTRAINT_COUNT,
@@ -54,105 +33,11 @@ export {
   createReality,
   DEFAULT_RETRACTION_DEPTH,
 } from "./bootstrap.js"
-// === Datalog Evaluator ===
-export {
-  _,
-  type AggregationClause,
-  type AggregationElement,
-  type AggregationFn,
-  // Value utilities
-  ALL_POSITIONS,
-  type Atom,
-  type AtomElement,
-  aggregation,
-  // Atom & rule constructors
-  atom,
-  type BodyElement,
-  bodyPredicates,
-  buildDependencyGraph,
-  type ComputeElement,
-  type ConstTerm,
-  type CyclicNegationError,
-  compareValues,
-  compute,
-  computeSCCs,
-  // Term constructors
-  constTerm,
-  createEvaluator,
-  Database,
-  type DeclarationError,
-  // Stratification
-  type DependencyEdge,
-  type DependencyGraph,
-  declarationErrors,
-  // Unification
-  EMPTY_SUBSTITUTION,
-  type Evaluator,
-  // Guard constructors
-  eq,
-  // Evaluation
-  evaluate,
-  // Aggregation
-  evaluateAggregation,
-  evaluateAggregationForSubs,
-  evaluateGuard,
-  evaluateGuardOp,
-  evaluateNaive,
-  evaluatePositive,
-  extendSubstitution,
-  type Fact,
-  type FactTuple,
-  type ForeignDeclaration,
-  type ForeignRelation,
-  fact,
-  factKey,
-  factKeyFromTupleKey,
-  factsToZSet,
-  type GuardElement,
-  type GuardOp,
-  groundAtom,
-  gt,
-  gte,
-  type Host,
-  type HostError,
-  type HostFunction,
-  headPredicates,
-  hostErrors,
-  lt,
-  lte,
-  matchAtomWithTuple,
-  type NegationElement,
-  negation,
-  neq,
-  type Probe,
-  positiveAtom,
-  // Data structures
-  Relation,
-  type Rule,
-  resolveTerm,
-  rule,
-  type StratificationError,
-  type Stratum,
-  type Substitution,
-  serializeTuple,
-  serializeValue,
-  stratify,
-  // Types (Datalog-specific; kernel re-exports are above)
-  type Term,
-  tupleKeyFromFactKey,
-  unifyTermWithValue,
-  type VarTerm,
-  valuesEqual,
-  varTerm,
-  type WeightedTuple,
-  type WildcardTerm,
-  wildcard,
-} from "./datalog/index.js"
 // === Incremental Pipeline (Plan 005) ===
 export {
   createIncrementalEvaluation,
   createIncrementalPipeline,
-  createIncrementalPipelineFromBootstrap,
+  createIncrementalPipelineFromStore,
   extractRuleDeltasFromActive,
   type IncrementalEvaluation,
   type IncrementalPipeline,
@@ -221,7 +106,6 @@ export {
   createStore,
   createVersionVector,
   DEFAULT_RETRACTION_CONFIG,
-  err,
   exportDelta,
   extractFugueOrdering,
   extractResolution,
@@ -266,7 +150,6 @@ export {
   mergeStores,
   nativeResolution,
   // Type utilities
-  ok,
   // Types
   type PeerID,
   type Policy,
@@ -283,7 +166,6 @@ export {
   type ResolutionStrategy,
   // Resolution (§B.4, §B.7 — Datalog→kernel bridge)
   type ResolvedWinner,
-  type Result,
   type RetractConstraint,
   // Retraction (§6)
   type RetractionConfig,

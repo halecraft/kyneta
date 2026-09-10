@@ -12,6 +12,8 @@
 //
 // See unified-engine.md §4, §B.2.
 
+import type { Result } from "@kyneta/datalog"
+import { err, ok } from "@kyneta/datalog"
 import { cnIdKey } from "./cnid.js"
 import { verify } from "./signature.js"
 import type {
@@ -20,10 +22,9 @@ import type {
   InsertError,
   Lamport,
   MutableVersionVector,
-  Result,
   VersionVector,
 } from "./types.js"
-import { err, isSafeUint, ok } from "./types.js"
+import { isSafeUint } from "./types.js"
 import {
   createVersionVector,
   vvClone,

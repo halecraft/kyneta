@@ -15,9 +15,9 @@
 //
 // See unified-engine.md §7.2, §B.4, §B.7.
 
-import type { ZSet, ZSetEntry } from "../base/zset.js"
-import { zsetFilter, zsetFromEntries, zsetMap } from "../base/zset.js"
-import type { Database, Fact, FactTuple } from "../datalog/types.js"
+import type { Database, Fact, FactTuple } from "@kyneta/datalog"
+import type { ZSet, ZSetEntry } from "@kyneta/zset"
+import { zsetFilter, zsetFromEntries, zsetMap } from "@kyneta/zset"
 import type { LWWEntry } from "../solver/lww.js"
 import { cnIdFromString } from "./cnid.js"
 import { ACTIVE_STRUCTURE_SEQ, ACTIVE_VALUE } from "./projection.js"

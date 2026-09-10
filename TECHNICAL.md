@@ -105,7 +105,11 @@ See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the 30,000-foot design — thesis
 
 ### Standalone (independent versioning)
 
-**`@kyneta/perspective`** — Convergent Constraint Systems (CCS). Agents assert constraints; merge is set union; a stratified Datalog evaluator derives the shared reality. LWW and Fugue are Datalog rules that travel in the store — not hardcoded algorithms. Two-layer engine (Layer 0 kernel + Layer 1 Datalog evaluator), §B.7 native-solver fast paths, incremental pipeline with ℤ-set algebra for O(|Δ|) updates. Zero runtime dependencies, zero Kyneta dependencies. Published at 0.1.0 under independent versioning — it does not ride the 3.x core version train. → `packages/perspective/TECHNICAL.md`.
+**`@kyneta/zset`** — The DBSP ℤ-set: a weighted set keyed by string identity, plus the pure algebra over it. `ZSet<T> = ReadonlyMap<string, { element, weight }>`, no zero-weight entries, caller-supplied keys. Two things to know: `zsetPositive` filters and does not clamp (it is not DBSP `distinct`, which `@kyneta/index`'s same-named function *is*), and `zsetAdd` is a group on weights only — a key collision keeps the second operand's element. Zero dependencies. → `packages/zset/TECHNICAL.md`.
+
+**`@kyneta/datalog`** — A stratified, semi-naive, incremental Datalog evaluator: rules and facts in, derived facts out, as a batch or as deltas over a long-lived database. Negation, aggregation, guards, a join index, and host-computed relations referenced from rules by name. Owns the `Value` domain, which is closed and compiler-checked on purpose. Knows nothing about constraints — `@kyneta/perspective` is one consumer, and a game runtime is another. Depends on `@kyneta/zset`. → `packages/datalog/TECHNICAL.md`.
+
+**`@kyneta/perspective`** — Convergent Constraint Systems (CCS). Agents assert constraints; merge is set union; a stratified Datalog evaluator derives the shared reality. LWW and Fugue are Datalog rules that travel in the store — not hardcoded algorithms. Two-layer engine (Layer 0 kernel + the Layer 1 evaluator, now `@kyneta/datalog`), §B.7 native-solver fast paths, incremental pipeline with ℤ-set algebra for O(|Δ|) updates. Depends on `@kyneta/datalog` and `@kyneta/zset`, and on nothing else in Kyneta. Published at 0.x under independent versioning — it does not ride the 3.x core version train. → `packages/perspective/TECHNICAL.md`.
 
 ### Internal
 
@@ -219,6 +223,8 @@ kyneta/
 │   │       ├── postgres/     # @kyneta/postgres-store
 │   │       └── prisma/       # @kyneta/prisma-store
 │   ├── index/                # @kyneta/index
+│   ├── zset/                 # @kyneta/zset (independent 0.x versioning)
+│   ├── datalog/              # @kyneta/datalog (independent 0.x versioning)
 │   ├── perspective/          # @kyneta/perspective (independent 0.x versioning)
 │   ├── react/                # @kyneta/react
 │   └── devtools/             # @kyneta/devtools
@@ -259,8 +265,8 @@ is a two-policy model:
 - **Uniform (default)** — packages ride their group's version train. A core
   release bumps every core package to one version and tags it `v<version>`.
 - **Independent** — a package declares `"versioning": "independent"` in its
-  own `package.json` (`@kyneta/perspective` at 0.x) and is skipped by group
-  and default bumps. Bump it alone with `--packages` and a release that ships
+  own `package.json` (`@kyneta/zset`, `@kyneta/datalog` and `@kyneta/perspective`,
+  all at 0.x) and is skipped by group and default bumps. Bump it alone with `--packages` and a release that ships
   it tags `@scope/name@version`.
 
 Groups are declared in `release.config.ts`, mirroring the directory layout:

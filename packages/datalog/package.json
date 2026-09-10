@@ -1,0 +1,56 @@
+{
+  "name": "@kyneta/datalog",
+  "version": "0.1.0",
+  "versioning": "independent",
+  "description": "Stratified, semi-naive, incremental Datalog evaluator with negation, aggregation, guards, and host-computed relations",
+  "author": "Duane Johnson",
+  "license": "MIT",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/halecraft/kyneta",
+    "directory": "packages/datalog"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "test": "verify logic",
+    "verify": "verify"
+  },
+  "keywords": [
+    "datalog",
+    "evaluator",
+    "incremental",
+    "stratified",
+    "rules",
+    "dbsp"
+  ],
+  "dependencies": {
+    "@kyneta/zset": "workspace:^"
+  },
+  "devDependencies": {
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

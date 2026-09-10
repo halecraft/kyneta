@@ -13,7 +13,7 @@
 //
 // See unified-engine.md §B.4, §B.8, §14 (Layer 1).
 
-import type { Rule } from "./datalog/types.js"
+import type { Rule } from "@kyneta/datalog"
 import {
   _,
   atom,
@@ -26,7 +26,7 @@ import {
   positiveAtom,
   rule,
   varTerm,
-} from "./datalog/types.js"
+} from "@kyneta/datalog"
 import { type Agent, createAgent } from "./kernel/agent.js"
 import { createCnId } from "./kernel/cnid.js"
 import type { PipelineConfig } from "./kernel/pipeline.js"

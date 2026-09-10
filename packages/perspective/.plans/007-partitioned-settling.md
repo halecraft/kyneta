@@ -648,6 +648,13 @@ to equal `pipeline.current()`.
 
 ---
 
+> **Note (PLAN-2026-09-10-split-datalog-zset).** The evaluator moved to its own
+> package, `@kyneta/datalog`. Paths below that read `src/datalog/…` are now
+> `packages/datalog/src/…`, and `src/kernel/…` is `packages/perspective/src/kernel/…`.
+> Phase 1's partition-key extraction (tasks 1.5–1.6) was removed on the way, because
+> it ran on every stratification and nothing read it; `theory/partitioned-settling.md`
+> §3.2 has the algorithm, to be rebuilt alongside Phase 2, its first consumer.
+
 ## Phases and Tasks
 
 ### Phase 1: Frontier Infrastructure 🟢 (complete)
@@ -693,6 +700,12 @@ pipeline beyond stratification producing more strata.
 
 - **1.6** Extend `Stratum` interface with `readonly partitionKey: PartitionKeyInfo`.
   Populate during `stratify()`. 🟢
+
+  > **Removed after completion** (PLAN-2026-09-10-split-datalog-zset). Tasks 1.5
+  > and 1.6 ran on every stratification and nothing in `src/` ever read
+  > `Stratum.partitionKey`; the phases that would have (2–3) had not started.
+  > The theory is in `theory/partitioned-settling.md` §3.2. When Phase 2 begins,
+  > rebuild `extractPartitionKey` from it alongside its first consumer.
 
 - **1.7** Add `constraintKeyFromFact(f: Fact): string | null` to
   `kernel/projection.ts`. Reads `f.values[0]` for known fact predicates.
@@ -1369,10 +1382,10 @@ Dormancy is explicitly **not** monotonic. Verify the full lifecycle:
 | `theory/partitioned-settling.md` | Full theoretical foundation |
 | `theory/incremental.md` §7, §8 | Settled/working theory |
 | `theory/unified-engine.md` §11, §12 | Spec for settled sets and compaction |
-| `src/datalog/types.ts` | `Relation`, `Database`, `RelationEntry` |
-| `src/datalog/evaluator.ts` | `createEvaluator`, `evaluateStratumFromDelta`, `step()` |
-| `src/datalog/evaluate.ts` | `evaluateRuleDelta`, `evaluatePositiveAtom` |
-| `src/datalog/stratify.ts` | `stratify()`, `Stratum`, `bodyPredicates`, `headPredicates` |
+| `@kyneta/datalog` → `src/types.ts` | `Relation`, `Database`, `RelationEntry` |
+| `@kyneta/datalog` → `src/evaluator.ts` | `createEvaluator`, `evaluateStratumFromDelta`, `step()` |
+| `@kyneta/datalog` → `src/evaluate.ts` | `evaluateRuleDelta`, `evaluatePositiveAtom` |
+| `@kyneta/datalog` → `src/stratify.ts` | `stratify()`, `Stratum`, `bodyPredicates`, `headPredicates` |
 | `src/kernel/version-vector.ts` | VV algebra |
 | `src/kernel/retraction.ts` | `RetractionConfig`, `computeActive`, dominance |
 | `src/kernel/incremental/retraction.ts` | `IncrementalRetraction`, `domStatus`, graph |
@@ -1389,11 +1402,11 @@ Dormancy is explicitly **not** monotonic. Verify the full lifecycle:
 | File | Changes | Status |
 |------|---------|--------|
 | `src/kernel/version-vector.ts` | Add `vvMin`, `isConstraintBelowFrontier` | ✅ Phase 1 |
-| `src/datalog/stratify.ts` | Finer-grained stratification (split independent SCCs), add `extractPartitionKey`, extend `Stratum` | ✅ Phase 1 |
-| `src/datalog/types.ts` | Add `ReadonlyDatabase` interface, `Relation.subtract()` (Phase 1.5); add partition mode with dormancy to `Relation` (Phase 2) | ⚬ `ReadonlyDatabase` + `subtract()` done (Phase 1.5); partition mode in Phase 2 |
-| `src/datalog/evaluator.ts` | `DatabaseView` lazy-view replacement for `constructDbOld` (Phase 1.5); partition routing in `step()`, partition-scoped `DatabaseView`, partition setup in `createEvaluator`, rule-change `wakeAll` (Phase 3) | ⚬ `strataByIndex` Map done (Phase 1); `DatabaseView` done (Phase 1.5); partition routing in Phase 3 |
-| `src/datalog/evaluate.ts` | Widen `Database` params to `ReadonlyDatabase` where read-only | ✅ Phase 1.5 |
-| `src/datalog/aggregate.ts` | Widen `Database` params to `ReadonlyDatabase` where read-only | ✅ Phase 1.5 |
+| `@kyneta/datalog` → `src/stratify.ts` | Finer-grained stratification (split independent SCCs) ✅; `extractPartitionKey` and `Stratum.partitionKey` were landed and then **removed** — see task 1.6 | ⚬ rebuild the partition key with its first reader |
+| `@kyneta/datalog` → `src/types.ts` | Add `ReadonlyDatabase` interface, `Relation.subtract()` (Phase 1.5); add partition mode with dormancy to `Relation` (Phase 2) | ⚬ `ReadonlyDatabase` + `subtract()` done (Phase 1.5); partition mode in Phase 2 |
+| `@kyneta/datalog` → `src/evaluator.ts` | `DatabaseView` lazy-view replacement for `constructDbOld` (Phase 1.5); partition routing in `step()`, partition-scoped `DatabaseView`, partition setup in `createEvaluator`, rule-change `wakeAll` (Phase 3) | ⚬ `strataByIndex` Map done (Phase 1); `DatabaseView` done (Phase 1.5); partition routing in Phase 3 |
+| `@kyneta/datalog` → `src/evaluate.ts` | Widen `Database` params to `ReadonlyDatabase` where read-only | ✅ Phase 1.5 |
+| `@kyneta/datalog` → `src/aggregate.ts` | Widen `Database` params to `ReadonlyDatabase` where read-only | ✅ Phase 1.5 |
 | `src/kernel/projection.ts` | Add `constraintKeyFromFact` utility | ✅ Phase 1 |
 | `src/kernel/incremental/projection.ts` | `constraintToFacts` reverse index, `factsForConstraint` | ✅ Phase 1 |
 | `src/kernel/incremental/evaluation.ts` | `applyDormancy` delegation | Phase 4 |

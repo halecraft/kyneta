@@ -12,7 +12,7 @@ export {
 export type { IncrementalPipeline } from "./pipeline.js"
 export {
   createIncrementalPipeline,
-  createIncrementalPipelineFromBootstrap,
+  createIncrementalPipelineFromStore,
 } from "./pipeline.js"
 // --- Incremental Projection (Phase 5) ---
 export type { IncrementalProjection } from "./projection.js"

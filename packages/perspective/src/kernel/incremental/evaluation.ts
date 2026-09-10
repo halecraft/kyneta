@@ -26,7 +26,14 @@
 // See Plan 006.1 Phase 3: Wire Unified Evaluator into Pipeline.
 // See theory/incremental.md §9.7 (native solver fast path).
 
-import type { ZSet, ZSetEntry } from "../../base/zset.js"
+import type { Fact, Host, Rule } from "@kyneta/datalog"
+import {
+  createEvaluator,
+  type Evaluator,
+  factKey,
+  factsToZSet,
+} from "@kyneta/datalog"
+import type { ZSet, ZSetEntry } from "@kyneta/zset"
 import {
   zsetAdd,
   zsetEmpty,
@@ -34,15 +41,7 @@ import {
   zsetFromEntries,
   zsetIsEmpty,
   zsetSingleton,
-} from "../../base/zset.js"
-import {
-  createEvaluator,
-  type Evaluator,
-  factsToZSet,
-} from "../../datalog/evaluator.js"
-import type { Host } from "../../datalog/host.js"
-import type { Fact, Rule } from "../../datalog/types.js"
-import { factKey } from "../../datalog/types.js"
+} from "@kyneta/zset"
 import {
   createIncrementalFugue,
   type IncrementalFugue,
