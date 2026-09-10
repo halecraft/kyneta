@@ -146,7 +146,7 @@ createEvaluator(rules, { relations: [distField], functions: { hash } })
 solve(store, { creator, host })          // the same registry, through PipelineConfig
 ```
 
-`tests/fields.ts` is the worked example: a breadth-first `dist` over `adj` honouring `blocked`, reading adjacency through `Relation.candidates` with a probe rather than a scan. On the 100×30 world a player moving every tick, which flips `origin` and re-runs the field over about 3,000 tiles with a hunt rule reading it, costs about 8 ms p50 and 10 ms p95 (`tests/roguelike-bench.test.ts`).
+`tests/fields.ts` is the worked example: a breadth-first `dist` over `adj` honouring `blocked`, reading adjacency through `Relation.candidates` with a probe rather than a scan. On a 100×30 world a player moving every tick, which flips `origin` and re-runs the field over about 3,000 tiles with a hunt rule reading it, measured about 8 ms p50 and 10 ms p95.
 
 ### Evaluator performance
 
@@ -183,6 +183,20 @@ Unification counts for the full three-rule program on a 50×30 grid, after each 
 
    Two key spaces now exist and their names keep them apart: a **tuple key** (`serializeTuple(values)`) identifies a tuple inside one relation and is what `Relation`, the dirty map and `WeightedFact.tupleKey` use; a **fact key** (`predicate|tupleKey`, built by `factKeyFromTupleKey`) identifies a fact across relations and is what Z-sets use. `tupleKeyFromFactKey` recovers one from the other by length, so a `|` in a predicate name is harmless.
 
+6. **A delta-driven negation planned as binding nothing.** `bindVariables` recorded every negation as a pure filter. That is right for `evaluateNegation`, and wrong for `evaluateDifferentialNegation` — the form a negation takes when the delta drives it — which matches the negated atom against each delta tuple and carries the bindings forward exactly as a positive atom does. So every element planned after such a negation saw an empty binding set, took `mask = 0`, and scanned its relation once per substitution.
+
+   `estimateCost` had priced this correctly all along ("a delta-driven negation must read the delta and can bind through it, so it is priced like an atom"); only the plan disagreed. Nothing failed, because a stale mask degrades to a full scan, which is correct at any cost.
+
+   Last-writer-wins is where it showed: `winner(Slot, CnId, Value) :- active_value(...), not superseded(CnId, Slot)` cost |superseded| × |active_value| per round — 48M unifications at 8k values, and the reason this package's own documentation claimed pure-Datalog LWW was inherently quadratic. It is not.
+
+   | Shape (medians, 4 writers per slot) | Before | After |
+   |---|---|---|
+   | `winner` alone, 8k values | 1,160 ms | **29 ms** |
+   | Full LWW program, 8k values | 1,188 ms | **63 ms** |
+   | Growth per 4× the facts | ×14.7 | **×4.0** |
+
+   `tests/negation-scaling.test.ts` and the mask cases in `tests/plan.test.ts` hold this. Both assert ratios rather than wall-clock ceilings, so they mean the same thing on a loaded machine.
+
 ### The join index
 
 Source: `src/types.ts` → `Relation.candidates`.
@@ -218,7 +232,7 @@ The first three are visible in the post-change profile and are deliberately not 
 - `weightedTuples()` allocates a fresh array per call, and after indexing the unbound path (delta scans) is its only heavy user. An iterator variant removes it but changes a public array-returning method that tests index into. (`forEachEntry` is the callback-style read for internal merges; the public array methods are unchanged.)
 - `extendSubstitution` does `new Map(sub.bindings)` per bound variable, so a 4-arity atom copies the map four times per candidate. The fix is slot arrays instead of `Map`s, and the rule evaluation plan is its prerequisite — which is the argument for having built the plan.
 - The rule-change path in `step` (a rule added or retracted mid-stream) derives every stratum again from scratch, through the same per-stratum recompute the stopgap below uses. It is rare and was left at that.
-- **Retraction into a recursive stratum recomputes the stratum.** A derived fact's weight is a one-step support count, and a count cannot tell real support from circular support: over a symmetric `adj`, `reach(a)` and `reach(b)` hold each other up after the path to both is cut, and counting never retracts them. So `evaluateStratumFromDelta` dispatches to `recomputeStratum` whenever a delta can remove a derivation of a recursive stratum (a retraction from a positively read predicate, or an insertion into a negated one): wipe, derive again, emit the presence diff. Correct everywhere, at the stratum's cost instead of the delta's. On the 100×30 world a solid entity moving through a 3,000-cell spread stratum costs about 13 ms p50 and 16 ms p95 per tick, against 0.03 ms for the same move with no recursive stratum, and against 23 ms for one batch evaluate of the whole world. The fix proper is per-round counts, which is how DBSP's nested streams avoid circular support: a fact carries the round it appeared in and support only counts from earlier rounds. That is Plan 006.3 in `.plans/004-incremental-roadmap.md`. When it lands, delete `retractsIntoRecursion`, `retractsInto` and their dispatch, and keep `recomputeStratum`, which is also how aggregation strata are evaluated; the cyclic sweep in `tests/evaluator.test.ts` and the recompute ceiling in `tests/roguelike-bench.test.ts` are the tests that must still pass.
+- **Retraction into a recursive stratum recomputes the stratum.** A derived fact's weight is a one-step support count, and a count cannot tell real support from circular support: over a symmetric `adj`, `reach(a)` and `reach(b)` hold each other up after the path to both is cut, and counting never retracts them. So `evaluateStratumFromDelta` dispatches to `recomputeStratum` whenever a delta can remove a derivation of a recursive stratum (a retraction from a positively read predicate, or an insertion into a negated one): wipe, derive again, emit the presence diff. Correct everywhere, at the stratum's cost instead of the delta's. On the 100×30 world a solid entity moving through a 3,000-cell spread stratum costs about 13 ms p50 and 16 ms p95 per tick, against 0.03 ms for the same move with no recursive stratum, and against 23 ms for one batch evaluate of the whole world. The fix proper is per-round counts, which is how DBSP's nested streams avoid circular support: a fact carries the round it appeared in and support only counts from earlier rounds. That is Plan 006.3 in `.plans/004-incremental-roadmap.md`. When it lands, delete `retractsIntoRecursion`, `retractsInto` and their dispatch, and keep `recomputeStratum`, which is also how aggregation strata are evaluated; the cyclic sweep in `tests/evaluator.test.ts` is the test that must still pass.
 
 ### What the evaluator is NOT
 
@@ -230,13 +244,16 @@ The first three are visible in the post-change profile and are deliberately not 
 
 ## Testing
 
-Every test file is pure — no I/O, no timers. `tests/roguelike-bench.test.ts` is the
-workload a downstream game engine shares with this package: a 100×30 grid with
-materialized 4-neighbour adjacency, recursive fire spread, spores that explode where
-fire reaches them, and a negation stratum for what never burned. Its timing assertions
-are a smoke test with roughly an order of magnitude of headroom, not a benchmark — they
-trip on an algorithmic regression, not on a loaded machine. It imports through this
-package's barrel on purpose, so it exercises the surface a consumer can actually reach.
+Every test file is pure — no I/O, no timers.
+
+**Performance is asserted as a ratio, never as a clock.** `tests/negation-scaling.test.ts`
+is the pattern: it measures the same program at 2k and 8k facts and asserts the *growth*,
+because a shape reads the same on a loaded CI box as on an idle laptop. The package used
+to carry a `roguelike-bench.test.ts` full of wall-clock ceilings instead, and it taught
+the opposite lesson — it failed under `turbo test`'s parallelism while the code was fine,
+and it passed unchanged straight through a 40× planner regression. Ceilings measure the
+machine; ratios measure the code. It imports through this package's barrel on purpose, so
+it exercises the surface a consumer can actually reach.
 
 `tests/types.test.ts` pins `serializeValue` and `serializeTuple` byte-for-byte against a
 reference implementation. If a change makes that test need editing, it is changing a

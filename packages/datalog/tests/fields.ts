@@ -4,8 +4,8 @@
 // never entering a `blocked` tile. The kind of relation a game engine
 // measures outside Datalog: a breadth-first search is not a rule.
 //
-// Shared by the differential sweep in `evaluator.test.ts` and the bench in
-// `roguelike-bench.test.ts`, and written the way a host function should be:
+// Shared by the differential sweep in `evaluator.test.ts` and the host sweep
+// in `host.test.ts`, and written the way a host function should be:
 // it reads adjacency through `Relation.candidates` with a probe, an indexed
 // lookup, not a scan of the whole relation per tile.
 //

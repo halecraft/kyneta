@@ -123,13 +123,27 @@ That diagnosis was correct and incomplete. There were four independent super-lin
 
 The practical rule: when a system has multiple super-linear costs, they mask each other. Re-profile after every fix, and do not judge a fix by the clock until the others are gone.
 
-### "The Evaluator Did O(|db|) Work Per Iteration" Has Been the Answer Three Times
+### "The Evaluator Did O(|db|) Work Per Iteration" Has Been the Answer Five Times
 
-Plan 007 replaced an eager `constructDbOld` — a full `db.clone()` per semi-naive iteration — with the lazy `DatabaseView`. Plan 006.1 replaced snapshot-and-diff delta extraction with the dirty map, for the same reason. The join-index work found two more instances: scanning a whole relation per substitution, and `applyDistinct` walking the entire accumulated dirty map per iteration.
+Plan 007 replaced an eager `constructDbOld` — a full `db.clone()` per semi-naive iteration — with the lazy `DatabaseView`. Plan 006.1 replaced snapshot-and-diff delta extraction with the dirty map, for the same reason. The join-index work found two more instances: scanning a whole relation per substitution, and `applyDistinct` walking the entire accumulated dirty map per iteration. The fifth is below — the same scan-per-substitution as the third, reached by a different route.
 
-Four occurrences of one shape. In a semi-naive loop, *anything* proportional to the database rather than the delta is a bug waiting to be measured, because the loop runs once per iteration and iterations scale with the data. It is worth grepping for the shape directly — a full-collection scan inside the fixpoint — rather than waiting for it to show up in a profile.
+Five occurrences of one shape. In a semi-naive loop, *anything* proportional to the database rather than the delta is a bug waiting to be measured, because the loop runs once per iteration and iterations scale with the data. It is worth grepping for the shape directly — a full-collection scan inside the fixpoint — rather than waiting for it to show up in a profile.
 
 (One instance of the shape turned out not to matter: restricting `applyDistinct` to the facts touched in the current iteration is provably equivalent and measured 1,275 ms → 1,268 ms, i.e. nothing, because Z-set construction dominated it. Recorded so the next reader does not re-derive it.)
+
+### The Cost Model Knew; the Plan Did Not
+
+Last-writer-wins ran at 1,190 ms over 8k values and grew quadratically, and the documented explanation was that the rule deserved it: `superseded` pairs values against each other, so the join "genuinely has n² answers". Measuring the two strata separately killed that story immediately — the pairing was linear, and 91% of the time was in the `winner` rule, whose only distinguishing feature is a negation.
+
+The obvious suspect was the negation's own lookup. It was not: a CPU profile put `evaluateNegation` at 0.3 ms and 79% of the wall clock in `evaluateRuleDelta → evaluatePositiveAtom`. The cost was the atom *beside* the negation. When a delta drives a negation it runs as `evaluateDifferentialNegation`, which matches the negated atom against each delta tuple and carries the bindings forward exactly as a positive atom does — but `bindVariables` recorded a negation as binding nothing, so everything planned after it saw an empty binding set, got `mask = 0`, and scanned. `evaluatePositiveAtom` hoists that scan once and walks it per substitution, so the program cost |superseded| × |active_value|: 48M unifications, and 40× slower than it needed to be.
+
+Two things are worth carrying forward.
+
+**The two halves of one decision drifted apart.** `estimateCost` already said, in a comment, that a delta-driven negation "can bind through it, so it is priced like an atom". Pricing knew. Binding did not. Nothing failed, because a stale mask degrades to `0`, which means *scan everything* — a correct answer at any cost. A performance-only invariant split across two functions has no test holding the halves together, and the silent-correct fallback is what let it sit.
+
+**The counter that looked innocent.** Instrumenting `Relation` to count materialized tuples showed 22,000 — nothing. That was the wrong counter: the hoisted array is materialized *once* and iterated per substitution, so the 48M reads were invisible to it. The number that would have shown it is unifications, not tuples. When a counter exonerates a suspect the profiler is still pointing at, the counter is measuring the wrong noun.
+
+`tests/negation-scaling.test.ts` guards the outcome and `tests/plan.test.ts` guards the mask. Both assert *ratios*, never a clock — the failure being caught is a change in shape, and a shape reads the same on a loaded CI box as on an idle laptop.
 
 ### Separating Plan from Execution Made the Risky Change Testable
 

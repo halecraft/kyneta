@@ -8,7 +8,7 @@
 // `declarationErrors` for a consumer linking a pack.
 //
 // The differential sweep over the grid terrain lives in `evaluator.test.ts`,
-// beside the other sweeps; the bench in `roguelike-bench.test.ts`.
+// beside the other sweeps.
 
 import { zsetIsEmpty, zsetSingleton, zsetSize } from "@kyneta/zset"
 import { describe, expect, it } from "vitest"

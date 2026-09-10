@@ -78,7 +78,7 @@ Plus a top-level bootstrap (`src/bootstrap.ts`) that creates a new reality with 
 - **Not integrated with the rest of Kyneta.** Separate dependency graph, separate experimental status. Designed to be evaluated in isolation.
 - **Not a database.** No query language beyond the solver. No indexes for arbitrary lookup.
 - **Not production-ready.** Published at 0.x under independent versioning — it does not ride the Kyneta core version train. The Unified CCS Engine Specification is the authoritative document; this is its reference implementation.
-- **Not performant at scale without the §B.7 fast paths *for the default rules*.** Pure Datalog evaluation of LWW over 10⁴ values is O(n²) without the native solver shortcut — but note that quadratic is in the *rule*, not the evaluator: `superseded` pairs every value against every other, so the join genuinely has n² answers. That is what §B.7 exists for. General Datalog joins are indexed (see [Evaluator performance](#evaluator-performance)); a rule whose output is linear now evaluates in linear time.
+- **Not tuned for a single slot with many concurrent writers.** `superseded` pairs the values written to one slot against each other, so a slot holding all *n* values genuinely has n² answers — a property of the rule that no evaluator can plan away. With writers per slot bounded, which is the shape real stores have, pairs grow with the slot count and pure-Datalog LWW is linear; measured at 8k values it is ~63 ms and doubles when the store doubles. General Datalog joins are indexed (see [Evaluator performance](#evaluator-performance)).
 
 ---
 
@@ -190,7 +190,7 @@ Conversely, the Datalog evaluator doesn't know about constraints, CnIds, signatu
 
 - **Not coupled.** They are separate packages, and the dependency runs one way: perspective depends on `@kyneta/datalog`, never the reverse. The kernel defines `projection` and `resolve` as pure functions at the boundary. The one place the two meet at the type level is the value domain — `@kyneta/datalog` declares `ValueRef` as `{ peer: string; counter: number }` and the kernel's `CnId` satisfies it structurally, with no import either way. `tests/kernel/value-ref.test.ts` is what fails if a field is renamed.
 - **Not replaceable independently.** Both layers together define the semantics. A different kernel or a different evaluator produces a different reality.
-- **Not complete without §B.7 fast paths for performance.** Pure Datalog LWW over large stores is O(n²); the native solvers bring it to O(n log n).
+- **Not dependent on the §B.7 fast paths for performance.** Pure Datalog LWW over large stores is linear in the store, for the realistic shape where writers per slot are bounded. See [Native solvers](#native-solvers--the-b7-fast-path) for what the fast paths do and do not buy.
 
 ---
 
@@ -300,8 +300,6 @@ The engine doesn't change. The reality does.
 
 Source: `src/solver/`.
 
-The Datalog evaluator is correct but slow for the common cases: plain LWW over `n` values is O(n²) because every value pairs against every other to compute `superseded`. Fugue over `n` ordered inserts is similarly quadratic.
-
 The specification's §B.7 permits *native solvers* — host-language implementations of LWW / Fugue that produce identical outputs to the Datalog rules they replace. A native solver activates only when:
 
 1. The active rule set structurally matches a known default pattern.
@@ -309,11 +307,15 @@ The specification's §B.7 permits *native solvers* — host-language implementat
 
 ```
 if (rulesMatchDefaultLWW(activeRules) && config.enableNativeSolvers) {
-  return nativeLWW(valueFacts)             // O(n log n)
+  return nativeLWW(valueFacts)
 } else {
-  return evaluate(activeRules, valueFacts) // O(n²) but general
+  return evaluate(activeRules, valueFacts) // general
 }
 ```
+
+**On the performance argument.** §B.7 justifies itself with "evaluating LWW via Datalog is correct but inefficient", and this document used to repeat that as O(n²) — every value pairing against every other to compute `superseded`. That was measured and it did not hold up. The pairing was already linear once join indexes landed; the quadratic that remained was a planner bug, not the rules. A negation driven by a delta binds its atom's variables, but the planner recorded it as binding nothing, so the atom beside it fell back to a scan per substitution and `winner` cost |superseded| × |active_value|. Fixing that took full LWW at 8k values from ~1,190 ms to ~63 ms, and made it linear; `@kyneta/datalog`'s `tests/negation-scaling.test.ts` holds it there.
+
+What survives is narrower than it looks: a single slot with *n* concurrent writers really does give `superseded` n² answers, and that is inherent to the rule. Bounded writers per slot — what real stores have — is linear without any native solver.
 
 When custom rules are present, the pipeline falls back to Datalog automatically. No rule changes; no code changes.
 
@@ -424,7 +426,7 @@ Composing them: `updateReality(prevState, constraintDelta) → (nextState, reali
 
 Every test file is pure — no I/O, no timers. The cross-validation suites (`tests/solver/incremental-lww.test.ts`, `tests/solver/incremental-fugue.test.ts`) run randomized inputs through both the Datalog evaluator and the native solver, asserting identical outputs — this is the §B.7 correctness contract in test form. `STUB_SIGNATURE` is used throughout so tests don't require key generation; real-signature round-trips live in the dedicated signature suite.
 
-Perspective's tests run against `@kyneta/datalog`'s **built** output, resolved through its `exports` map, which is why `turbo test` depends on `build`. The evaluator's own suite — including the roguelike benchmark and its wall-clock assertions — imports its source directly, so those numbers stay comparable.
+Perspective's tests run against `@kyneta/datalog`'s **built** output, resolved through its `exports` map, which is why `turbo test` depends on `build`. The evaluator's own suite — including its scaling assertions — imports its source directly, so those measurements stay comparable.
 
 ### Gotchas
 

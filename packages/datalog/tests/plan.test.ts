@@ -63,6 +63,19 @@ const fireSpread: Rule = rule(atom("lit", [$("X2"), $("Y2")]), [
   positiveAtom(atom("flammable", [$("X2"), $("Y2")])),
 ])
 
+// Last-writer-wins, as `@kyneta/perspective` bootstraps it. The negation is
+// the point: whether the planner credits it with bindings decides whether the
+// atom beside it is a lookup or a scan.
+const winnerRule: Rule = rule(
+  atom("winner", [$("Slot"), $("CnId"), $("Value")]),
+  [
+    positiveAtom(
+      atom("active_value", [$("CnId"), $("Slot"), $("Value"), _, _]),
+    ),
+    negation(atom("superseded", [$("CnId"), $("Slot")])),
+  ],
+)
+
 describe("planRuleEvaluation — structure", () => {
   it("marks exactly one delta source, at the requested index", () => {
     const plan = planRuleEvaluation(fireSpread, 1, new Set(["adj"]))
@@ -156,6 +169,36 @@ describe("planRuleEvaluation — known positions", () => {
       positiveAtom(atom("q", [$("X"), _])),
     ])
     expect(planRuleEvaluation(r, -1, NO_DELTA_PREDS)[1]?.mask).toBe(0b01)
+  })
+
+  it("marks the variables a delta-driven negation bound", () => {
+    // LWW's `winner` rule, with a `superseded` delta driving the negation.
+    // That negation runs as *differential* negation, which matches its atom
+    // against each delta tuple and carries the bindings forward exactly as a
+    // positive atom would — so `active_value` is an indexed lookup on CnId
+    // and Slot. Planning it as a scan instead costs |superseded| x
+    // |active_value| per round, which is what made pure-Datalog LWW look
+    // inherently quadratic.
+    const plan = planRuleEvaluation(winnerRule, 1, new Set(["superseded"]), {
+      current: withSizes({ active_value: 8000, superseded: 6000 }),
+      delta: sized("superseded", 6000),
+    })
+
+    expect(predicateOrder(plan)).toEqual(["superseded", "active_value"])
+    expect(plan[1]?.mask).toBe(0b00011)
+  })
+
+  it("marks nothing from a negation the delta does not drive", () => {
+    // The same rule the other way round: `active_value` drives, so the
+    // negation is an ordinary boolean filter that binds nothing. It sorts
+    // last, and the atom that leads knows nothing yet.
+    const plan = planRuleEvaluation(winnerRule, 0, new Set(["active_value"]), {
+      current: withSizes({ active_value: 8000, superseded: 6000 }),
+      delta: sized("active_value", 8000),
+    })
+
+    expect(predicateOrder(plan)).toEqual(["active_value", "superseded"])
+    expect(plan[0]?.mask).toBe(0)
   })
 
   it("falls back to a full scan for atoms too wide to mask", () => {
