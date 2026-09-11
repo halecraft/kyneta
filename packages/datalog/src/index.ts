@@ -3,9 +3,11 @@
 // What this barrel exports is a compatibility promise. It is deliberately
 // smaller than the module surface: the rule *language*, the *engine* that runs
 // it, the *host* registry, and the value/fact primitives a caller needs to feed
-// it. The evaluator's internals — per-rule evaluation, unification,
-// substitution plumbing, the dependency graph — are reachable by relative
-// import inside this package, and by nothing outside it.
+// it, and the *substitution* — what a match is — because a consumer that
+// binds variables itself needs to say so in the same vocabulary. The
+// evaluator's internals — per-rule evaluation, the join planner and its
+// probes, unification against stored tuples, the dependency graph — are
+// reachable by relative import inside this package, and by nothing outside it.
 
 // --- The engine ---
 export type { Evaluator } from "./evaluator.js"
@@ -58,6 +60,7 @@ export type {
   ReadonlyDatabase,
   Rule,
   StratificationError,
+  Substitution,
   Term,
   Value,
   ValueRef,
@@ -92,3 +95,29 @@ export {
   varTerm,
   wildcard,
 } from "./types.js"
+// --- Substitutions ---
+//
+// A `Substitution` is a set of variable bindings plus a Z-set weight: what
+// the evaluator carries while it works through a rule body, and what a
+// consumer building bindings of its own has to produce to ground a head.
+// Start from `EMPTY_SUBSTITUTION`, extend it, then `groundAtom` the head.
+//
+// Two traps, both of which the engine handles internally and a consumer must
+// not rediscover the hard way:
+//
+//   - `resolveTerm` returns `undefined` for an unbound variable *and* for a
+//     wildcard, while `null` is a perfectly good bound `Value`. Use
+//     `sub.bindings.has(name)` to tell "bound to null" from "not bound".
+//   - `groundAtom` returns `null` rather than throwing when the atom is not
+//     fully ground — a wildcard in head position included, since a head must
+//     be ground. Check it; do not assume a head always grounds.
+//
+// The `weight` carries Z-set provenance and multiplies through joins. A
+// consumer assembling its own substitution should leave it at the 1 that
+// `EMPTY_SUBSTITUTION` starts with and `extendSubstitution` preserves.
+export {
+  EMPTY_SUBSTITUTION,
+  extendSubstitution,
+  groundAtom,
+  resolveTerm,
+} from "./unify.js"

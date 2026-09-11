@@ -4,7 +4,7 @@
 > **Role**: A stratified, semi-naive, incremental Datalog evaluator. Rules and ground facts in, derived facts out — as a batch, or as deltas over a long-lived database.
 > **Depends on**: `@kyneta/zset`
 > **Depended on by**: `@kyneta/perspective`
-> **Canonical symbols**: `Value`, `ValueRef`, `Term`, `Atom`, `Rule`, `BodyElement`, `Fact`, `FactTuple`, `Database`, `Relation`, `Probe`, `Evaluator`, `evaluate`, `evaluatePositive`, `createEvaluator`, `factsToZSet`, `stratify`, `Stratum`, `Host`, `ForeignRelation`, `HostFunction`, `hostErrors`, `declarationErrors`, `Result`
+> **Canonical symbols**: `Value`, `ValueRef`, `Term`, `Atom`, `Rule`, `BodyElement`, `Fact`, `FactTuple`, `Database`, `Relation`, `Probe`, `Evaluator`, `evaluate`, `evaluatePositive`, `createEvaluator`, `factsToZSet`, `stratify`, `Stratum`, `Host`, `ForeignRelation`, `HostFunction`, `hostErrors`, `declarationErrors`, `Result`, `Substitution`, `EMPTY_SUBSTITUTION`, `extendSubstitution`, `resolveTerm`, `groundAtom`
 > **Key invariant(s)**: The evaluator knows nothing about its caller's domain. Its input is facts, its output is derived facts, and every extension point — foreign relations, host functions — is referenced from a rule **by name only**.
 
 The engine that `@kyneta/perspective` runs its solver rules on, extracted so that it can be used on its own. Nothing here mentions a constraint, a peer or a reality; those are one consumer's vocabulary.
@@ -16,6 +16,7 @@ The engine that `@kyneta/perspective` runs its solver rules on, extracted so tha
 - How do I run rules over facts, once or incrementally? → [Using the evaluator on its own](#using-the-evaluator-on-its-own)
 - What can a `Value` be, and why is there a `ref` case? → [The value domain](#the-value-domain)
 - Why was this slow, and what made it fast? → [Evaluator performance](#evaluator-performance)
+- How do I ground a head from bindings I made myself? → [Grounding a head from bindings you made yourself](#grounding-a-head-from-bindings-you-made-yourself)
 - How does a rule reach code the host supplies? → [Host relations and functions](#host-relations-and-functions)
 - What will bite me? → [Gotchas](#gotchas)
 
@@ -126,6 +127,31 @@ interface Evaluator {
 ```
 
 The tick shape: build the delta as new minus old (`factsToZSet(retracted, -1)` added to `factsToZSet(inserted)`), so facts that did not change cancel and never reach the evaluator; call `step`; read either the returned delta or `currentDatabase()`. A rule change is `changeRules`, a separate method because it costs a full recompute and returns a full diff, which an optional parameter on `step` would hide. Winners and Fugue ordering are the kernel's reading of the derived delta (`winnerDeltas`, `fuguePairDeltas`, `extractResolution` in `@kyneta/perspective`'s `kernel/resolve.ts`) and are not part of this interface.
+
+### Grounding a head from bindings you made yourself
+
+Source: `src/unify.ts` → `EMPTY_SUBSTITUTION`, `extendSubstitution`, `resolveTerm`, `groundAtom`; all exported from the barrel, with the `Substitution` type.
+
+A consumer that produces bindings by its own means — an effect layer matching an event against a pattern, rather than running a rule — still has to hand this engine a *ground* atom. That is one operation and these are the names for it:
+
+```ts
+const head = atom("damaged", [varTerm("Target"), varTerm("Amount")])
+const sub = extendSubstitution(
+  extendSubstitution(EMPTY_SUBSTITUTION, "Target", "goblin"),
+  "Amount",
+  7,
+)
+groundAtom(head, sub) // ["goblin", 7], or null if the head is not fully ground
+```
+
+A `Substitution` is `{ bindings: ReadonlyMap<string, Value>, weight: number }`. The weight is Z-set provenance and multiplies through joins; a consumer assembling its own bindings should leave it at the 1 that `EMPTY_SUBSTITUTION` starts with and `extendSubstitution` preserves.
+
+Two edges are worth knowing before you meet them:
+
+- **`resolveTerm` returns `undefined` for an unbound variable *and* for a wildcard**, while `null` is a perfectly good bound `Value`. `sub.bindings.has(name)` is what separates "bound to null" from "not bound".
+- **`groundAtom` returns `null` rather than throwing** when the atom is not fully ground — including a wildcard in head position, which is a logical error rather than a hole to fill, since a head must be ground.
+
+What stays internal is the engine that *derives* bindings: `planRuleEvaluation`, `evaluateRuleDelta`, `matchAtomWithTuple`, `probeFor` and the join masks. `tests/substitution-api.test.ts` pins the barrel surface, importing through `src/index.js` so a relative import cannot make it pass while the promise is broken.
 
 ### Host relations and functions
 
