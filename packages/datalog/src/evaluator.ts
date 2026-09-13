@@ -328,8 +328,31 @@ export function evaluateStratumFromDelta(
   ) {
     return recomputeStratum(rules, db, ground, functions)
   }
-  return evaluateStratumSemiNaive(rules, db, inputDelta, functions)
+  return evaluateStratumSemiNaive(rules, db, inputDelta, functions, "step")
 }
+
+/**
+ * Why a rule with no positive atoms needs to know which of these it is.
+ *
+ * Such a rule has nothing to join against, so no arriving data can start it.
+ * Its answer changes for exactly two reasons: the rule set changed, or one of
+ * its negated predicates changed. Those want opposite treatment.
+ *
+ * - `"recompute"` — the caller has just wiped this stratum's heads and is
+ *   deriving them again. There is no delta to be driven by, and nothing to
+ *   strand, so every rule with no positive atoms fires unconditionally.
+ *   Without this, `h :- not p.` is never evaluated while `p` is empty — the
+ *   one state in which it is most obviously true.
+ *
+ * - `"step"` — an incremental update. Only a rule that reads *no relation at
+ *   all* (empty body, guards, computes) may fire unconditionally, because its
+ *   answer is constant and re-deriving it is idempotent. A rule with a
+ *   negation must go through differential negation instead: firing it
+ *   unconditionally is additive, so when `p` gains a fact the rule would
+ *   simply derive nothing and leave the previously-derived head stranded in
+ *   the database with no retraction to remove it.
+ */
+type StratumPass = "recompute" | "step"
 
 /**
  * The weighted semi-naive loop: a seed phase over the asymmetric join, then
@@ -340,6 +363,7 @@ function evaluateStratumSemiNaive(
   db: Database,
   inputDelta: Database,
   functions: ReadonlyMap<string, HostFunction>,
+  pass: StratumPass,
 ): Database {
   const dirty: DirtyMap = new Map()
 
@@ -363,8 +387,14 @@ function evaluateStratumSemiNaive(
     const positiveAtomIndices = getPositiveAtomIndices(rule.body)
     const negationAtomIndices = getNegationAtomIndices(rule.body)
 
-    if (positiveAtomIndices.length === 0 && negationAtomIndices.length === 0) {
-      // Rule with no positive or negation atoms (empty body or only guards).
+    // Nothing to join against, so no delta can drive it: the rule set is what
+    // decides when this runs. On a `"step"` that still excludes negations,
+    // which need the differential pass below to retract. See `StratumPass`.
+    const drivenByTheRuleSet =
+      positiveAtomIndices.length === 0 &&
+      (negationAtomIndices.length === 0 || pass === "recompute")
+
+    if (drivenByTheRuleSet) {
       // Evaluate against db (P_new) — these fire unconditionally.
       const derived = evaluateRule(rule, db, db, functions)
       for (const wf of derived) {
@@ -633,7 +663,7 @@ function recomputeStratum(
   }
 
   delta.addAllWeighted(
-    evaluateStratumSemiNaive(rules, db, inputDelta, functions),
+    evaluateStratumSemiNaive(rules, db, inputDelta, functions, "recompute"),
   )
   return delta
 }

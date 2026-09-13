@@ -2110,3 +2110,135 @@ describe("rules with an empty body", () => {
     expect(result.ok && result.value.getRelation("q").has([1])).toBe(true)
   })
 })
+
+describe("rules with no positive atoms but a negation", () => {
+  // `ask(2) :- not locked(door_1).` is range-restricted (it has no variables
+  // at all) and has an unambiguous least model: with `locked` empty the
+  // negation holds and `ask(2)` is derived. Every textbook Datalog derives it.
+  //
+  // This engine used not to. Such a rule has no positive atom to join against,
+  // so nothing in an arriving delta can drive it, and the seed phase only fired
+  // rules with *no* body atoms of any kind. It therefore stayed dormant until
+  // `locked` happened to appear in some delta — after which it behaved
+  // correctly forever. Intermittent, and a different reality from the same
+  // store depending on the engine, which is what `host.ts`'s invariant forbids.
+  const askUnlocked = rule(atom("ask", [constTerm(2)]), [
+    negation(atom("locked", [constTerm("door_1")])),
+  ])
+  // The same claim with a positive atom in front: the control that always worked.
+  const askUnlockedGuarded = rule(atom("ask", [constTerm(3)]), [
+    positiveAtom(atom("grid", [constTerm(8), constTerm(5)])),
+    negation(atom("locked", [constTerm("door_1")])),
+  ])
+  const grid = fact("grid", [8, 5])
+  const locked = fact("locked", ["door_1"])
+
+  it("derives in batch when the negated predicate has never held a fact", () => {
+    const noFactsAtAll = evaluate([askUnlocked], [])
+    expect(
+      noFactsAtAll.ok && noFactsAtAll.value.getRelation("ask").tuples(),
+    ).toEqual([[2]])
+
+    // And alongside the control, which used to be the only one that fired.
+    const withGrid = evaluate([askUnlocked, askUnlockedGuarded], [grid])
+    expect(withGrid.ok && withGrid.value.getRelation("ask").tuples()).toEqual([
+      [2],
+      [3],
+    ])
+  })
+
+  it("does not derive in batch when the negated fact is present", () => {
+    const result = evaluate([askUnlocked, askUnlockedGuarded], [grid, locked])
+    expect(result.ok && result.value.getRelation("ask").tuples()).toEqual([])
+  })
+
+  it("holds from construction, then tracks the negated predicate both ways", () => {
+    const evaluator = createEvaluator([askUnlocked, askUnlockedGuarded])
+    const asks = () => evaluator.currentDatabase().getRelation("ask").tuples()
+
+    // Established before any fact has ever been stepped in.
+    expect(asks()).toEqual([[2]])
+
+    evaluator.step(factsToZSet([grid]))
+    expect(asks()).toEqual([[2], [3]])
+
+    // Locking retracts both. This is the case the obvious one-line fix breaks:
+    // firing a negation rule unconditionally on a step is purely additive, so
+    // it would derive nothing here and leave `ask(2)` stranded with nothing to
+    // remove it. Negations must keep going through the differential pass.
+    evaluator.step(factsToZSet([locked]))
+    expect(asks()).toEqual([])
+
+    evaluator.step(factsToZSet([locked], -1))
+    expect(asks()).toEqual([[2], [3]])
+  })
+
+  it("does not accumulate weight when stepped repeatedly", () => {
+    const evaluator = createEvaluator([askUnlocked])
+    for (let i = 0; i < 3; i++) evaluator.step(factsToZSet([grid]))
+
+    expect(evaluator.currentDatabase().getRelation("ask").getWeight([2])).toBe(
+      1,
+    )
+  })
+
+  it("is established by changeRules, not only at construction", () => {
+    const evaluator = createEvaluator([])
+    const added = evaluator.changeRules(
+      zsetSingleton("ask-unlocked", askUnlocked, 1),
+    )
+
+    expect([...added.keys()]).toEqual([factKey(fact("ask", [2]))])
+    expect(evaluator.currentDatabase().getRelation("ask").tuples()).toEqual([
+      [2],
+    ])
+  })
+
+  it("retracts when a lower stratum derives the negated fact mid-run", () => {
+    // The negated predicate is derived, not ground, so the trigger has to
+    // arrive as a lower stratum's *output* delta rather than as a stepped
+    // fact. `ask(2)` holds until `sealed` makes `locked` non-empty.
+    const evaluator = createEvaluator([
+      rule(atom("locked", [varTerm("D")]), [
+        positiveAtom(atom("sealed", [varTerm("D")])),
+      ]),
+      askUnlocked,
+    ])
+    const asks = () => evaluator.currentDatabase().getRelation("ask").tuples()
+
+    expect(asks()).toEqual([[2]])
+
+    evaluator.step(factsToZSet([fact("sealed", ["door_1"])]))
+    expect(
+      evaluator.currentDatabase().getRelation("locked").has(["door_1"]),
+    ).toBe(true)
+    expect(asks()).toEqual([])
+
+    evaluator.step(factsToZSet([fact("sealed", ["door_1"])], -1))
+    expect(asks()).toEqual([[2]])
+  })
+
+  it("works when the negated predicate is derived rather than ground", () => {
+    // `locked` is now a head of a lower stratum that derives nothing, so the
+    // negation is over an empty *derived* relation rather than an absent one.
+    const result = evaluate(
+      [
+        rule(atom("locked", [varTerm("D")]), [
+          positiveAtom(atom("sealed", [varTerm("D")])),
+        ]),
+        askUnlocked,
+      ],
+      [],
+    )
+    expect(result.ok && result.value.getRelation("ask").tuples()).toEqual([[2]])
+  })
+
+  it("still respects a guard alongside the negation", () => {
+    const withFalseGuard = rule(atom("ask", [constTerm(9)]), [
+      negation(atom("locked", [constTerm("door_1")])),
+      gt(constTerm(1), constTerm(2)),
+    ])
+    const result = evaluate([withFalseGuard], [])
+    expect(result.ok && result.value.getRelation("ask").tuples()).toEqual([])
+  })
+})
