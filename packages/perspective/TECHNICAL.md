@@ -41,7 +41,7 @@ Standalone — does not integrate with `@kyneta/schema`, `@kyneta/exchange`, or 
 | Layer 0 Kernel | Mechanical algorithms: storage, CnId computation, Lamport clocks, signatures, authority, retraction, version vectors, tree skeleton. Pure, deterministic. | A "kernel" in the OS sense |
 | Layer 1 Datalog Evaluator | Stratified, bottom-up, semi-naïve fixed-point evaluation with aggregation. Evaluates `rule` constraints from the store over facts derived from active constraints. | Prolog, SQL — Datalog is strictly less expressive and always terminating |
 | Layer 2+ Rules | Application-specific rules (app-authored). Extend the default LWW + Fugue rules. | Default rules — those are the bootstrap set |
-| §B.7 Native Solvers | Host-language LWW and Fugue implementations. Activate only when active rules match known default patterns; must produce identical results to the Datalog rules they replace. | A replacement for the Datalog evaluator — they are a fast path |
+| §B.7 Native Solvers | Host-language LWW and Fugue implementations that must produce identical results to the Datalog rules they replace. Note the dispatch is broader than "fast path" suggests — see [Native solvers](#native-solvers--the-b7-fast-path). | A replacement for the Datalog evaluator — but in practice they are the *default* path, which is not what this row used to claim |
 | `Rule` | A Datalog rule: head + body (positive and negative atoms, comparison predicates, aggregations). Stored as a `rule` constraint. | A `Policy` in `@kyneta/exchange` |
 | Fact | A ground atom — no variables. Produced by projecting constraints; consumed by the evaluator. | A theorem; a premise |
 | Active constraints | Constraints that are valid (well-formed, signed, within-capability) and not dominated by a retraction. | Valid constraints — "valid" is necessary; "active" is valid + not-retracted |
@@ -66,7 +66,7 @@ Four sub-systems:
 | Sub-system | Source | Role |
 |------------|--------|------|
 | Kernel (Layer 0) | `src/kernel/` | Storage, CnId, signatures, authority, validity, retraction, version vectors, skeleton, pipeline composition. Mechanical. |
-| Native Solvers (§B.7) | `src/solver/` | Host-language LWW and Fugue. Optional fast paths; activate only on default rules. |
+| Native Solvers (§B.7) | `src/solver/` | Host-language LWW and Fugue. Selected whenever rules match the defaults, the store holds no rules, or Datalog is disabled — i.e. by default. |
 | Datalog Evaluator (Layer 1) | `@kyneta/datalog` | Stratified bottom-up fixed-point evaluation with aggregation and negation. Evaluates `rule` constraints. A separate package with its own consumers. |
 | ℤ-set algebra | `@kyneta/zset` | The delta type every incremental stage speaks. Separate package, zero dependencies. |
 
@@ -328,7 +328,7 @@ When custom rules are present, the pipeline falls back to Datalog automatically.
 
 ### What native solvers are NOT
 
-- **Not a replacement.** The Datalog evaluator is the primary path; native solvers are fast paths under constraint.
+- **Not the exception they read as.** This document long described the Datalog evaluator as the primary path and native solvers as a fast path under constraint. `selectResolutionStrategy` returns `"native"` in three of its four cases — matching defaults, an empty rule set, or Datalog disabled — and `createIncrementalEvaluation` starts there and builds the Datalog evaluator lazily. A store that never installs a custom rule never runs Datalog. Plan 008 retires this arrangement; until it lands, read "fast path" as "default path".
 - **Not silently divergent.** Every native solver is tested against its Datalog equivalent over randomized inputs. If they diverge, the test fails.
 - **Not user-extensible via code.** Adding new fast paths means adding new Rust/TypeScript — not new store constraints. User-added rules without matching native solvers run in Datalog.
 
@@ -424,7 +424,7 @@ Composing them: `updateReality(prevState, constraintDelta) → (nextState, reali
 
 ## Testing
 
-Every test file is pure — no I/O, no timers. The cross-validation suites (`tests/solver/incremental-lww.test.ts`, `tests/solver/incremental-fugue.test.ts`) run randomized inputs through both the Datalog evaluator and the native solver, asserting identical outputs — this is the §B.7 correctness contract in test form. `STUB_SIGNATURE` is used throughout so tests don't require key generation; real-signature round-trips live in the dedicated signature suite.
+Every test file is pure — no I/O, no timers. The cross-validation suites are `tests/solver/lww-equivalence.test.ts` and `tests/solver/fugue-equivalence.test.ts`: they run inputs through both the Datalog evaluator and the native solver and assert identical outputs, which is the §B.7 correctness contract in test form. Do not confuse them with `tests/solver/incremental-{lww,fugue}.test.ts`, which compare the *incremental* native solver against the *batch* native solver for all insertion orderings and never invoke Datalog at all — those check one solver against itself, not against the rules. `STUB_SIGNATURE` is used throughout so tests don't require key generation; real-signature round-trips live in the dedicated signature suite.
 
 Perspective's tests run against `@kyneta/datalog`'s **built** output, resolved through its `exports` map, which is why `turbo test` depends on `build`. The evaluator's own suite — including its scaling assertions — imports its source directly, so those measurements stay comparable.
 
