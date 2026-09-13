@@ -31,7 +31,6 @@ import {
   evaluateDifferentialNegation,
   evaluatePositiveAtom,
   evaluateRuleDelta,
-  getNegationAtomIndices,
 } from "../src/evaluate.js"
 import {
   createEvaluator,
@@ -41,6 +40,7 @@ import {
   evaluateStratumFromDelta,
   evaluateUnified,
   factsToZSet,
+  ruleDeltaShape,
 } from "../src/evaluator.js"
 import type { Host } from "../src/host.js"
 import type { Fact, Rule, Value } from "../src/types.js"
@@ -552,31 +552,58 @@ describe("evaluateRuleDelta (Plan 006.2 Phase 1)", () => {
   })
 })
 
-describe("getNegationAtomIndices (Plan 006.2 Phase 1)", () => {
-  it("returns indices of negation body elements", () => {
+describe("ruleDeltaShape", () => {
+  it("lists positive atoms first, then negations, each with its predicate", () => {
+    // The order is load-bearing: it is the order derived facts land in, and
+    // therefore the order of every array downstream of `tuples()`.
     const body = [
       positiveAtom(atom("a", [varTerm("X")])),
       negation(atom("b", [varTerm("X")])),
       positiveAtom(atom("c", [varTerm("X")])),
       negation(atom("d", [varTerm("X")])),
     ]
-    expect(getNegationAtomIndices(body)).toEqual([1, 3])
+    const shape = ruleDeltaShape(body)
+
+    expect(shape.sources).toEqual([
+      [0, "a"],
+      [2, "c"],
+      [1, "b"],
+      [3, "d"],
+    ])
+    expect(shape.hasPositiveAtom).toBe(true)
+    expect(shape.hasNegation).toBe(true)
   })
 
-  it("returns empty for body with no negations", () => {
-    const body = [
+  it("reports a body with no negations", () => {
+    const shape = ruleDeltaShape([
       positiveAtom(atom("a", [varTerm("X")])),
       positiveAtom(atom("b", [varTerm("X")])),
-    ]
-    expect(getNegationAtomIndices(body)).toEqual([])
+    ])
+    expect(shape.sources).toEqual([
+      [0, "a"],
+      [1, "b"],
+    ])
+    expect(shape.hasNegation).toBe(false)
   })
 
-  it("returns all indices for all-negation body", () => {
-    const body = [
+  it("reports a body with no positive atoms — the shape the rule set drives", () => {
+    const shape = ruleDeltaShape([
       negation(atom("a", [varTerm("X")])),
       negation(atom("b", [varTerm("X")])),
-    ]
-    expect(getNegationAtomIndices(body)).toEqual([0, 1])
+    ])
+    expect(shape.sources).toEqual([
+      [0, "a"],
+      [1, "b"],
+    ])
+    expect(shape.hasPositiveAtom).toBe(false)
+  })
+
+  it("ignores elements that name no relation", () => {
+    const shape = ruleDeltaShape([
+      positiveAtom(atom("a", [varTerm("X")])),
+      gt(varTerm("X"), constTerm(3)),
+    ])
+    expect(shape.sources).toEqual([[0, "a"]])
   })
 })
 

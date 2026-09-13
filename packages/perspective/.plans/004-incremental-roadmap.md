@@ -297,9 +297,13 @@ stratum.
 4. Remove the stopgap: `retractsIntoRecursion`, `retractsInto` and their
    dispatch in `evaluateStratumFromDelta` (`recomputeStratum` stays; it is
    how aggregation strata are evaluated). The cyclic sweep in
-   `tests/datalog/evaluator.test.ts` and the recursive-move ceiling in
-   `tests/datalog/roguelike-bench.test.ts` must still pass, the ceiling by
-   a wide margin.
+   `@kyneta/datalog`'s `tests/evaluator.test.ts` must still pass. The
+   recursive-move ceiling that used to gate this lived in a wall-clock bench
+   that has since been deleted for measuring the machine rather than the code;
+   a replacement should assert the *shape* the way
+   `tests/negation-scaling.test.ts` does — per-round counts should make this
+   cost the delta rather than the stratum, which is a change in growth, not a
+   number of milliseconds.
 
 ### Dependencies
 

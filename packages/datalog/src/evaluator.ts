@@ -29,12 +29,7 @@ import {
   zsetIsEmpty,
 } from "@kyneta/zset"
 import type { WeightedFact } from "./evaluate.js"
-import {
-  evaluateRule,
-  evaluateRuleDelta,
-  getNegationAtomIndices,
-  getPositiveAtomIndices,
-} from "./evaluate.js"
+import { evaluateRule, evaluateRuleDelta } from "./evaluate.js"
 import {
   EMPTY_HOST,
   type ForeignRelation,
@@ -53,7 +48,6 @@ import {
   stratify,
 } from "./stratify.js"
 import type {
-  AtomElement,
   BodyElement,
   Fact,
   FactTuple,
@@ -332,6 +326,79 @@ export function evaluateStratumFromDelta(
 }
 
 /**
+ * A body element a delta can drive, as its index in the body and the relation
+ * it names.
+ */
+type DeltaSource = readonly [index: number, predicate: string]
+
+/** What the two delta-driven loops need to know about one rule's body. */
+interface RuleDeltaShape {
+  /** Positive atoms first, then negations — the order derivations land in. */
+  readonly sources: readonly DeltaSource[]
+  readonly hasPositiveAtom: boolean
+  readonly hasNegation: boolean
+}
+
+/**
+ * Work out a rule body's delta sources once. Bodies do not change while a
+ * stratum is being evaluated, so the fixpoint loop below reuses this rather
+ * than rebuilding two index arrays per rule per iteration.
+ */
+export function ruleDeltaShape(body: readonly BodyElement[]): RuleDeltaShape {
+  const positives: DeltaSource[] = []
+  const negations: DeltaSource[] = []
+  for (let i = 0; i < body.length; i++) {
+    const el = body[i]!
+    if (el.kind === "atom") positives.push([i, el.atom.predicate])
+    else if (el.kind === "negation") negations.push([i, el.atom.predicate])
+  }
+  return {
+    sources: [...positives, ...negations],
+    hasPositiveAtom: positives.length > 0,
+    hasNegation: negations.length > 0,
+  }
+}
+
+/**
+ * Drive every body element whose predicate changed in `delta`, handing each
+ * derived fact to `emit`.
+ *
+ * A positive atom and a negation are the same shape here: each names a
+ * relation, each is worth driving only when that relation changed, and
+ * `evaluateRuleDelta` reads the element's own kind to decide how to drive it.
+ * Skipping an unchanged predicate is not a heuristic — the delta holds nothing
+ * for it, so the join yields no substitutions and `evaluateRuleDelta` provably
+ * returns [].
+ *
+ * This was four near-identical loops, two per phase. The skip guard existed in
+ * the negation copies and not the positive ones for long enough to cost a full
+ * |body[0]| x |body[1]| scan per iteration per unchanged predicate, which is
+ * the argument for there being one copy.
+ */
+function driveDeltaSources(
+  rule: Rule,
+  shape: RuleDeltaShape,
+  dbOld: ReadonlyDatabase,
+  db: Database,
+  delta: Database,
+  functions: ReadonlyMap<string, HostFunction>,
+  emit: (wf: WeightedFact) => void,
+): void {
+  for (const [deltaIdx, predicate] of shape.sources) {
+    if (delta.getRelation(predicate).allEntryCount === 0) continue
+    const derived = evaluateRuleDelta(
+      rule,
+      dbOld,
+      db,
+      delta,
+      deltaIdx,
+      functions,
+    )
+    for (const wf of derived) emit(wf)
+  }
+}
+
+/**
  * Why a rule with no positive atoms needs to know which of these it is.
  *
  * Such a rule has nothing to join against, so no arriving data can start it.
@@ -380,78 +447,31 @@ function evaluateStratumSemiNaive(
 
   const dbOld: ReadonlyDatabase = new DatabaseView(db, inputDelta)
 
+  // Body shapes are fixed for this whole evaluation; both phases read them.
+  const shapes = rules.map(rule => ruleDeltaShape(rule.body))
+
   // Collect all seed-derived facts without applying them yet.
   const seedDerived: WeightedFact[] = []
 
-  for (const rule of rules) {
-    const positiveAtomIndices = getPositiveAtomIndices(rule.body)
-    const negationAtomIndices = getNegationAtomIndices(rule.body)
+  for (let r = 0; r < rules.length; r++) {
+    const rule = rules[r]!
+    const shape = shapes[r]!
 
     // Nothing to join against, so no delta can drive it: the rule set is what
     // decides when this runs. On a `"step"` that still excludes negations,
     // which need the differential pass below to retract. See `StratumPass`.
     const drivenByTheRuleSet =
-      positiveAtomIndices.length === 0 &&
-      (negationAtomIndices.length === 0 || pass === "recompute")
+      !shape.hasPositiveAtom && (!shape.hasNegation || pass === "recompute")
 
     if (drivenByTheRuleSet) {
       // Evaluate against db (P_new) — these fire unconditionally.
-      const derived = evaluateRule(rule, db, db, functions)
-      for (const wf of derived) {
+      for (const wf of evaluateRule(rule, db, db, functions)) {
         seedDerived.push(wf)
       }
     } else if (inputDelta.hasAnyEntries()) {
-      // Positive atom delta sources.
-      //
-      // Only atoms whose predicate actually changed are worth driving. If the
-      // delta holds nothing for this atom's predicate, `evaluatePositiveAtom`
-      // matches against an empty relation, yields zero substitutions, and
-      // `evaluateRuleDelta` provably returns []. Skipping is not a heuristic —
-      // it removes a call whose result is already known.
-      //
-      // Worth knowing: the negation loop below has always had this guard. The
-      // positive loop did not, and the cost was invisible because it produced
-      // no wrong answers, only a full |body[0]| x |body[1]| scan per iteration
-      // per predicate that happened not to have changed.
-      for (const deltaIdx of positiveAtomIndices) {
-        const atomPred = (rule.body[deltaIdx]! as AtomElement).atom.predicate
-        if (inputDelta.getRelation(atomPred).allEntryCount === 0) continue
-
-        const derived = evaluateRuleDelta(
-          rule,
-          dbOld,
-          db,
-          inputDelta,
-          deltaIdx,
-          functions,
-        )
-        for (const wf of derived) {
-          seedDerived.push(wf)
-        }
-      }
-
-      // Negation atom delta sources (differential negation).
-      for (const negIdx of negationAtomIndices) {
-        const negAtom = (
-          rule.body[negIdx]! as {
-            kind: "negation"
-            atom: { predicate: string }
-          }
-        ).atom
-        if (inputDelta.getRelation(negAtom.predicate).allEntryCount > 0) {
-          const derived = evaluateRuleDelta(
-            rule,
-            dbOld,
-            db,
-            inputDelta,
-            negIdx,
-            functions,
-          )
-          for (const wf of derived) {
-            seedDerived.push(wf)
-          }
-        }
-      }
+      driveDeltaSources(rule, shape, dbOld, db, inputDelta, functions, wf =>
+        seedDerived.push(wf),
+      )
     }
   }
 
@@ -484,50 +504,16 @@ function evaluateStratumSemiNaive(
 
     const nextDelta = new Database()
 
-    for (const rule of rules) {
-      // Positive atom delta sources (asymmetric semi-naive).
-      // Same skip as the seed phase — see the comment there.
-      const positiveAtomIndices = getPositiveAtomIndices(rule.body)
-      for (const deltaIdx of positiveAtomIndices) {
-        const atomPred = (rule.body[deltaIdx]! as AtomElement).atom.predicate
-        if (currentDelta.getRelation(atomPred).allEntryCount === 0) continue
-
-        const derived = evaluateRuleDelta(
-          rule,
-          dbOldIter,
-          db,
-          currentDelta,
-          deltaIdx,
-          functions,
-        )
-        for (const wf of derived) {
-          applyDerivedFact(wf, db, dirty, nextDelta)
-        }
-      }
-
-      // Negation atom delta sources (differential negation).
-      const negationAtomIndices = getNegationAtomIndices(rule.body)
-      for (const negIdx of negationAtomIndices) {
-        const negAtom = (
-          rule.body[negIdx]! as {
-            kind: "negation"
-            atom: { predicate: string }
-          }
-        ).atom
-        if (currentDelta.getRelation(negAtom.predicate).allEntryCount > 0) {
-          const derived = evaluateRuleDelta(
-            rule,
-            dbOldIter,
-            db,
-            currentDelta,
-            negIdx,
-            functions,
-          )
-          for (const wf of derived) {
-            applyDerivedFact(wf, db, dirty, nextDelta)
-          }
-        }
-      }
+    for (let r = 0; r < rules.length; r++) {
+      driveDeltaSources(
+        rules[r]!,
+        shapes[r]!,
+        dbOldIter,
+        db,
+        currentDelta,
+        functions,
+        wf => applyDerivedFact(wf, db, dirty, nextDelta),
+      )
     }
 
     applyDistinct(db, dirty)

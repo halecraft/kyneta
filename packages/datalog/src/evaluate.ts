@@ -155,9 +155,14 @@ export interface EvalStep {
   /** True for the element the delta drives (at most one per plan). */
   readonly isDeltaSource: boolean
   /**
-   * Bitmask of this atom's positions whose values are already known when the
-   * step runs — constants, plus variables bound by earlier steps. Feeds the
-   * join index; `0` means "nothing known", i.e. a full scan.
+   * Bitmask of this element's atom positions whose values are already known
+   * when the step runs — constants, plus variables bound by earlier steps.
+   * Feeds the join index; `0` means "nothing known", i.e. a full scan.
+   *
+   * Filled in for negations as well as positive atoms: a negated atom's lookup
+   * is the same indexed probe, and leaving it to be re-derived at execution
+   * time from `subs[0]` put one of the executor's decisions back in the
+   * executor. Elements with no atom (guards, computes) carry `0`.
    */
   readonly mask: number
 }
@@ -242,7 +247,10 @@ export function planRuleEvaluation(
       element,
       source: sourceFor(element, i, deltaIdx, deltaPreds),
       isDeltaSource: i === deltaIdx,
-      mask: element.kind === "atom" ? knownPositions(element.atom, bound) : 0,
+      mask:
+        element.kind === "atom" || element.kind === "negation"
+          ? knownPositions(element.atom, bound)
+          : 0,
     })
 
     bindVariables(element, bound, i === deltaIdx)
@@ -489,7 +497,7 @@ export function evaluateRule(
         )
         break
       case "negation":
-        subs = evaluateNegation(element.atom, fullDb, subs)
+        subs = evaluateNegation(element.atom, fullDb, subs, step.mask)
         break
       case "aggregation":
         subs = evaluateAggregationElement(element.agg, fullDb, subs)
@@ -590,11 +598,21 @@ export function evaluateRuleDelta(
         if (step.isDeltaSource) {
           // Differential negation: process the delta entries with
           // sign inversion (appearance blocks, disappearance unblocks).
-          subs = evaluateDifferentialNegation(element.atom, delta, subs)
+          subs = evaluateDifferentialNegation(
+            element.atom,
+            delta,
+            subs,
+            step.mask,
+          )
         } else {
           // Non-delta negation: boolean negation-as-failure against
           // the current (post-update) state.
-          subs = evaluateNegation(element.atom, dbFor(step.source), subs)
+          subs = evaluateNegation(
+            element.atom,
+            dbFor(step.source),
+            subs,
+            step.mask,
+          )
         }
         break
       }
@@ -704,13 +722,9 @@ export function evaluateNegation(
   a: Atom,
   db: ReadonlyDatabase,
   subs: readonly Substitution[],
+  mask: number = 0,
 ): Substitution[] {
   const relation = db.getRelation(a.predicate)
-
-  // Negation safety requires the negated atom's variables to be bound already,
-  // so the probe is normally full-arity and the lookup is effectively a
-  // membership test. Computed per substitution because only the values differ.
-  const mask = maskFromSubs(a, subs)
 
   const results: Substitution[] = []
   for (const sub of subs) {
@@ -735,20 +749,6 @@ export function evaluateNegation(
     }
   }
   return results
-}
-
-/**
- * Positions of `a` that are known under these substitutions.
- *
- * Negation and differential negation are reached without a plan step of their
- * own, so unlike positive atoms they work the mask out from the substitutions
- * they were handed. All substitutions arriving at one body element share a
- * binding domain (see `planRuleEvaluation`), so the first one is
- * representative; an empty list means there is nothing to probe for anyway.
- */
-function maskFromSubs(a: Atom, subs: readonly Substitution[]): number {
-  const first = subs[0]
-  return first === undefined ? 0 : knownPositions(a, first.bindings)
 }
 
 /**
@@ -781,11 +781,11 @@ export function evaluateDifferentialNegation(
   a: Atom,
   delta: ReadonlyDatabase,
   subs: readonly Substitution[],
+  mask: number = 0,
 ): Substitution[] {
   const relation = delta.getRelation(a.predicate)
   if (relation.allEntryCount === 0) return []
 
-  const mask = maskFromSubs(a, subs)
   const scanned = mask === 0 ? relation.allWeightedTuples() : null
 
   const results: Substitution[] = []
@@ -947,34 +947,3 @@ export function groundHead(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Get indices of positive atom body elements (for semi-naive evaluation).
- */
-export function getPositiveAtomIndices(body: readonly BodyElement[]): number[] {
-  const indices: number[] = []
-  for (let i = 0; i < body.length; i++) {
-    if (body[i]?.kind === "atom") {
-      indices.push(i)
-    }
-  }
-  return indices
-}
-
-/**
- * Get indices of negation body elements (for differential negation).
- *
- * Mirrors `getPositiveAtomIndices`. Used by the unified semi-naive loop
- * to enumerate negation atoms as potential delta sources.
- *
- * See Plan 006.2, Phase 1, Task 1.3.
- */
-export function getNegationAtomIndices(body: readonly BodyElement[]): number[] {
-  const indices: number[] = []
-  for (let i = 0; i < body.length; i++) {
-    if (body[i]?.kind === "negation") {
-      indices.push(i)
-    }
-  }
-  return indices
-}

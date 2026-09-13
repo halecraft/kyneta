@@ -201,6 +201,29 @@ describe("planRuleEvaluation — known positions", () => {
     expect(plan[0]?.mask).toBe(0)
   })
 
+  it("masks a negation's own atom, not only positive ones", () => {
+    // A negated atom's lookup is the same indexed probe as a positive one, so
+    // the plan decides it in the same place. It used to be re-derived at
+    // execution time from `subs[0]`, which put one of the executor's decisions
+    // back inside the executor.
+    const plan = planRuleEvaluation(winnerRule, -1, NO_DELTA_PREDS)
+
+    expect(predicateOrder(plan)).toEqual(["active_value", "superseded"])
+    // CnId and Slot are bound by `active_value`, so both of `superseded`'s
+    // positions are known: a membership test, not a scan.
+    expect(plan[1]?.mask).toBe(0b11)
+  })
+
+  it("leaves elements with no atom at mask 0", () => {
+    const r = rule(atom("h", [$("X")]), [
+      positiveAtom(atom("p", [$("X")])),
+      gt($("X"), constTerm(3)),
+    ])
+    const plan = planRuleEvaluation(r, -1, NO_DELTA_PREDS)
+    const guard = plan.find(s => s.element.kind === "guard")
+    expect(guard?.mask).toBe(0)
+  })
+
   it("falls back to a full scan for atoms too wide to mask", () => {
     // The mask is 32 bits. Wider atoms are unreachable in practice but must
     // degrade to scanning rather than mask a wrong position.
