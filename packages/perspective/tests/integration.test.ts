@@ -185,7 +185,6 @@ describe("bootstrap", () => {
 
     expect(config.creator).toBe("alice")
     expect(config.retractionConfig?.maxDepth).toBe(2)
-    expect(config.enableDatalogEvaluation).toBe(true)
   })
 
   it("custom retraction depth is reflected in pipeline config", () => {
@@ -1113,7 +1112,7 @@ describe("version-parameterized solving", () => {
 // ===========================================================================
 
 describe("pipeline metadata with bootstrap", () => {
-  it("native fast path activates for default rules", () => {
+  it("a bootstrapped reality resolves through the rules bootstrap installed", () => {
     const { store, agent: alice, config } = createReality({ creator: "alice" })
 
     const { constraint: rootC, id: rootId } = produceRoot(alice, "doc", "map")
@@ -1133,8 +1132,11 @@ describe("pipeline metadata with bootstrap", () => {
     alice.observe(val)
 
     const result = solveFull(store, config)
-    // Default rules should trigger native fast path
-    expect(result.nativeFastPath).toBe(true)
+
+    // `createReality` asserts the default LWW + Fugue rules into the store, so
+    // the value resolves — and it resolves *because of those constraints*,
+    // not because the engine has a built-in notion of last-writer-wins.
+    expect(result.resolutionResult.winners.size).toBe(1)
     expect(getNode(result.reality, "doc", "field")?.value).toBe("hello")
   })
 

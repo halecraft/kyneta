@@ -46,7 +46,6 @@ export {
   type RealityDelta,
   realityDeltaEmpty,
   realityDeltaFrom,
-  routeFactsByPredicate,
   type StructureIndexDelta,
   structureIndexDeltaEmpty,
   structureIndexDeltaFrom,
@@ -64,12 +63,8 @@ export {
   // Authority (§5)
   type AuthorityState,
   allConstraints,
-  allPairsFromOrdered,
   type BookmarkConstraint,
   type BookmarkPayload,
-  buildNativeFuguePairs,
-  // Native Resolution (§B.7)
-  buildNativeResolution,
   // Skeleton (§7.3)
   buildSkeleton,
   buildStructureIndex,
@@ -130,15 +125,12 @@ export {
   getVersionVector,
   hasCapability,
   hasConstraint,
-  hasDefaultFugueRules,
-  hasDefaultLWWRules,
   hasStructure,
   type InsertError,
   type InvalidConstraint,
   importDelta,
   insert,
   insertMany,
-  isDefaultRulesOnly,
   isSafeUint,
   type Lamport,
   // Lamport clock
@@ -148,7 +140,6 @@ export {
   lamportObserve,
   type MutableVersionVector,
   mergeStores,
-  nativeResolution,
   // Type utilities
   // Types
   type PeerID,
@@ -163,7 +154,6 @@ export {
   type RealityNode,
   type ResolutionResult,
   // Rule Detection (§B.7)
-  type ResolutionStrategy,
   // Resolution (§B.4, §B.7 — Datalog→kernel bridge)
   type ResolvedWinner,
   type RetractConstraint,
@@ -177,6 +167,7 @@ export {
   type RuleConstraint,
   type RulePayload,
   requiredCapability,
+  resolutionOf,
   // Structure Index (§8)
   type SlotGroup,
   STUB_PRIVATE_KEY,
@@ -185,7 +176,6 @@ export {
   type StructureConstraint,
   type StructureIndex,
   type StructurePayload,
-  selectResolutionStrategy,
   sign,
   slotId,
   tick,

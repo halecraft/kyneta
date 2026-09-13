@@ -594,7 +594,6 @@ export function createReality(config: BootstrapConfig): BootstrapResult {
   const pipelineConfig: PipelineConfig = {
     creator,
     retractionConfig,
-    enableDatalogEvaluation: true,
   }
 
   return {

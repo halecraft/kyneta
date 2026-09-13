@@ -41,10 +41,6 @@ export {
   tick,
 } from "./lamport.js"
 // --- Native Resolution (§B.7) ---
-export {
-  buildNativeFuguePairs,
-  buildNativeResolution,
-} from "./native-resolution.js"
 // --- Pipeline (§7) ---
 export type {
   PipelineConfig,
@@ -69,16 +65,12 @@ export type {
   ResolvedWinner,
 } from "./resolve.js"
 export {
-  allPairsFromOrdered,
   extractFugueOrdering,
   extractResolution,
   extractWinners,
   fuguePairDeltas,
   fuguePairKey,
-  nativeResolution,
-  type ParsedSeqStructureFact,
-  parseLWWFact,
-  parseSeqStructureFact,
+  resolutionOf,
   topologicalOrderFromPairs,
   winnerDeltas,
 } from "./resolve.js"
@@ -94,15 +86,8 @@ export {
   DEFAULT_RETRACTION_CONFIG,
   filterActive,
 } from "./retraction.js"
-// --- Rule Detection (§B.7) ---
-export type { ResolutionStrategy } from "./rule-detection.js"
-export {
-  extractRules,
-  hasDefaultFugueRules,
-  hasDefaultLWWRules,
-  isDefaultRulesOnly,
-  selectResolutionStrategy,
-} from "./rule-detection.js"
+// --- Rules ---
+export { extractRules } from "./rules.js"
 // --- Signature (stub) ---
 export {
   generateKeypair,

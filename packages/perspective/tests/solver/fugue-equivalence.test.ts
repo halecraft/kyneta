@@ -27,7 +27,7 @@ import {
   buildFugueNodes,
   type FugueNode,
   orderFugueNodes,
-} from "../../src/solver/fugue.js"
+} from "../oracles/fugue.js"
 
 // ---------------------------------------------------------------------------
 // Helpers

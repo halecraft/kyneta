@@ -149,10 +149,6 @@ export function createIncrementalPipeline(
     const { deltaResolved, deltaFuguePairs } = evaluation.step(
       factsDelta,
       ruleDeltas,
-      // Lazy getters — only called on strategy switches (bootstrapping
-      // the new strategy from accumulated facts).
-      () => projection.current(),
-      () => retraction.current(),
     )
 
     // Step 6: K^Δ — Skeleton (three-input)

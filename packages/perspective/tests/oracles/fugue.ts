@@ -1,27 +1,34 @@
-// === Native Fugue Solver ===
-// Implements the Fugue sequence CRDT ordering algorithm adapted for
-// CnId-based structure(seq) constraints.
+// === §B.7 Fugue solver — TEST ORACLE ONLY ===
 //
-// This is the native (host-language) optimization described in §B.7.
-// It MUST produce identical ordering to the Fugue Datalog rules for
-// the simplified subset, and handles the full algorithm (recursive
-// tree walk, originRight disambiguation) that the simplified Datalog
-// rules cannot express.
+// This is a hand-written implementation of Fugue sequence ordering, the same semantics the
+// default rules in `bootstrap.ts` express as Datalog. It used to run in place
+// of those rules whenever the store's rule set matched the known defaults —
+// the "native fast path" spec §B.7 permits.
 //
-// Key concepts (from Weidner & Kleppmann 2023):
-// - Each seq element has a CnId, originLeft, and originRight.
-// - originLeft determines the tree structure (parent-child relationship).
-// - Sibling ordering uses Fugue's interleaving rules:
-//   1. Same originRight: lower peer ID goes left.
-//   2. Different originRight: element whose originRight is further left goes first.
-// - Depth-first traversal of the tree produces the total order.
+// It no longer ships. The performance argument for the fast path was measured
+// and did not hold (the quadratic was a query-planner bug in `@kyneta/datalog`,
+// not a property of the rules), and a second live implementation of resolution
+// is a liability: two peers running different native code diverge silently from
+// the same store, which is why §B.7 requires an engine version pinned in the
+// creation constraint — a mechanism this package never built.
 //
-// Adapted from reference/fugue-v0.ts for CnId-based structure constraints.
+// It is kept **here**, outside `src/`, because it is worth more as an oracle
+// than as an optimization. With the fast path gone the Datalog rules are the
+// *only* implementation of Fugue sequence ordering, and `tests/solver/fugue-equivalence.test.ts`
+// is what checks them: it runs the same inputs through `evaluate()` and through
+// this file and asserts the answers match. Deleting this would have removed the
+// independent implementation at exactly the moment it became the only
+// cross-check.
 //
-// See unified-engine.md §8.2, §B.4, §B.7.
+// Nothing in `src/` may import it. See
+// `.plans/008-retire-the-native-fast-path.md`.
 
-import { cnIdKey } from "../kernel/cnid.js"
-import type { CnId, PeerID, StructureConstraint } from "../kernel/types.js"
+import { cnIdKey } from "../../src/kernel/cnid.js"
+import type {
+  CnId,
+  PeerID,
+  StructureConstraint,
+} from "../../src/kernel/types.js"
 
 // ---------------------------------------------------------------------------
 // Types

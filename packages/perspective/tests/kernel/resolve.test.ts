@@ -24,7 +24,6 @@ import {
 } from "@kyneta/datalog"
 import { zsetFromEntries, zsetGet, zsetSize } from "@kyneta/zset"
 import { describe, expect, it } from "vitest"
-import { buildDefaultRules } from "../../src/bootstrap.js"
 import { cnIdKey, createCnId } from "../../src/kernel/cnid.js"
 import {
   type PipelineConfig,
@@ -38,8 +37,8 @@ import {
   type FugueBeforePair,
   fuguePairDeltas,
   fuguePairKey,
-  nativeResolution,
   type ResolvedWinner,
+  resolutionOf,
   topologicalOrderFromPairs,
   winnerDeltas,
 } from "../../src/kernel/resolve.js"
@@ -63,6 +62,7 @@ import type {
   Value,
   ValueConstraint,
 } from "../../src/kernel/types.js"
+import { defaultRuleConstraints, makeRuleConstraint } from "../helpers/rules.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -174,27 +174,6 @@ function grantAdmin(
   }
 }
 
-function makeRuleConstraint(
-  peer: PeerID,
-  counter: number,
-  layer: number,
-  datalogRule: Rule,
-  lamport?: number,
-): RuleConstraint {
-  return {
-    id: createCnId(peer, counter),
-    lamport: lamport ?? counter,
-    refs: [],
-    sig: STUB_SIGNATURE,
-    type: "rule",
-    payload: {
-      layer,
-      head: datalogRule.head,
-      body: datalogRule.body,
-    },
-  }
-}
-
 function buildStore(constraints: Constraint[]): ConstraintStore {
   const store = createStore()
   const result = insertMany(store, constraints)
@@ -213,33 +192,11 @@ function getNode(reality: Reality, ...path: string[]): RealityNode | undefined {
 }
 
 // ---------------------------------------------------------------------------
-// Default Rules — imported from bootstrap.ts (single source of truth)
-// ---------------------------------------------------------------------------
-
-/**
- * Create rule constraints for the default LWW + Fugue rules at Layer 1,
- * as they would appear after reality bootstrap.
- */
-function defaultRuleConstraints(
-  peer: PeerID,
-  startCounter: number,
-): RuleConstraint[] {
-  const rules = buildDefaultRules()
-  return rules.map((r, i) => makeRuleConstraint(peer, startCounter + i, 1, r))
-}
-
-// ---------------------------------------------------------------------------
 // Configs
 // ---------------------------------------------------------------------------
 
-const NATIVE_CONFIG: PipelineConfig = {
+const CONFIG: PipelineConfig = {
   creator: "alice",
-  enableDatalogEvaluation: false,
-}
-
-const DATALOG_CONFIG: PipelineConfig = {
-  creator: "alice",
-  enableDatalogEvaluation: true,
 }
 
 // ===========================================================================
@@ -324,7 +281,6 @@ describe("resolve: extractResolution", () => {
     db.addFact(fact("fugue_before", ["parent1", "a", "b"]))
 
     const result = extractResolution(db)
-    expect(result.fromDatalog).toBe(true)
     expect(result.winners.size).toBe(1)
     expect(result.fuguePairs.size).toBe(1)
   })
@@ -390,8 +346,8 @@ describe("resolve: winnerDeltas and fuguePairDeltas", () => {
   })
 })
 
-describe("resolve: nativeResolution", () => {
-  it("creates a ResolutionResult marked as native", () => {
+describe("resolve: resolutionOf", () => {
+  it("packages winners and pairs with no other state", () => {
     const winners = new Map<string, ResolvedWinner>()
     winners.set("slot:title", {
       slotId: "slot:title",
@@ -399,8 +355,7 @@ describe("resolve: nativeResolution", () => {
       content: "Hi",
     })
 
-    const result = nativeResolution(winners, new Map())
-    expect(result.fromDatalog).toBe(false)
+    const result = resolutionOf(winners, new Map())
     expect(result.winners.size).toBe(1)
   })
 })
@@ -472,8 +427,8 @@ describe("pipeline: Datalog-primary equivalence", () => {
       ...ruleConstraints,
     ])
 
-    const nativeReality = solve(store, NATIVE_CONFIG)
-    const datalogReality = solve(store, DATALOG_CONFIG)
+    const nativeReality = solve(store, CONFIG)
+    const datalogReality = solve(store, CONFIG)
 
     // Higher lamport wins: Alice's value at lamport 5 wins
     expect(getNode(nativeReality, "profile", "name")?.value).toBe("Alice")
@@ -498,8 +453,8 @@ describe("pipeline: Datalog-primary equivalence", () => {
       ...ruleConstraints,
     ])
 
-    const nativeReality = solve(store, NATIVE_CONFIG)
-    const datalogReality = solve(store, DATALOG_CONFIG)
+    const nativeReality = solve(store, CONFIG)
+    const datalogReality = solve(store, CONFIG)
 
     expect(getNode(nativeReality, "profile", "name")?.value).toBe("Bob")
     expect(getNode(datalogReality, "profile", "name")?.value).toBe("Bob")
@@ -525,8 +480,8 @@ describe("pipeline: Datalog-primary equivalence", () => {
       ...ruleConstraints,
     ])
 
-    const nativeReality = solve(store, NATIVE_CONFIG)
-    const datalogReality = solve(store, DATALOG_CONFIG)
+    const nativeReality = solve(store, CONFIG)
+    const datalogReality = solve(store, CONFIG)
 
     const nativeList = getNode(nativeReality, "list")!
     const datalogList = getNode(datalogReality, "list")!
@@ -554,8 +509,8 @@ describe("pipeline: Datalog-primary equivalence", () => {
     const ruleConstraints = defaultRuleConstraints("alice", 10)
     const store = buildStore([root, child, val1, val2, ...ruleConstraints])
 
-    const nativeReality = solve(store, NATIVE_CONFIG)
-    const datalogReality = solve(store, DATALOG_CONFIG)
+    const nativeReality = solve(store, CONFIG)
+    const datalogReality = solve(store, CONFIG)
 
     // null wins → key absent from reality
     const nativeProfile = getNode(nativeReality, "profile")!
@@ -585,8 +540,8 @@ describe("pipeline: Datalog-primary equivalence", () => {
       ...ruleConstraints,
     ])
 
-    const nativeReality = solve(store, NATIVE_CONFIG)
-    const datalogReality = solve(store, DATALOG_CONFIG)
+    const nativeReality = solve(store, CONFIG)
+    const datalogReality = solve(store, CONFIG)
 
     expect(getNode(nativeReality, "doc", "title")?.value).toBe("B")
     expect(getNode(datalogReality, "doc", "title")?.value).toBe("B")
@@ -594,8 +549,8 @@ describe("pipeline: Datalog-primary equivalence", () => {
 
   it("empty store produces empty reality for both paths", () => {
     const store = createStore()
-    const nativeReality = solve(store, NATIVE_CONFIG)
-    const datalogReality = solve(store, DATALOG_CONFIG)
+    const nativeReality = solve(store, CONFIG)
+    const datalogReality = solve(store, CONFIG)
 
     expect(nativeReality.root.children.size).toBe(0)
     expect(datalogReality.root.children.size).toBe(0)
@@ -604,108 +559,6 @@ describe("pipeline: Datalog-primary equivalence", () => {
 
 // ---------------------------------------------------------------------------
 // Native fast path detection
-// ---------------------------------------------------------------------------
-
-describe("pipeline: native fast path detection", () => {
-  it("default LWW + Fugue rules trigger native fast path", () => {
-    const root = makeStructureRoot("alice", 0, "profile")
-    const child = makeStructureMap("alice", 1, root.id, "name")
-    const val = makeValue("alice", 2, child.id, "Alice", 3)
-
-    const ruleConstraints = defaultRuleConstraints("alice", 10)
-    const store = buildStore([root, child, val, ...ruleConstraints])
-
-    const result = solveFull(store, DATALOG_CONFIG)
-    expect(result.nativeFastPath).toBe(true)
-  })
-
-  it("no rules in store triggers native fast path", () => {
-    const root = makeStructureRoot("alice", 0, "profile")
-    const child = makeStructureMap("alice", 1, root.id, "name")
-    const val = makeValue("alice", 2, child.id, "Alice", 3)
-
-    const store = buildStore([root, child, val])
-
-    const result = solveFull(store, DATALOG_CONFIG)
-    expect(result.nativeFastPath).toBe(true)
-  })
-
-  it("additional Layer 2 rule triggers Datalog path", () => {
-    const root = makeStructureRoot("alice", 0, "profile")
-    const child = makeStructureMap("alice", 1, root.id, "name")
-    const val = makeValue("alice", 2, child.id, "Alice", 3)
-
-    // Default rules (Layer 1)
-    const ruleConstraints = defaultRuleConstraints("alice", 10)
-
-    // Custom Layer 2 rule — just a dummy rule that derives something
-    const customRule: Rule = rule(atom("custom_derived", [varTerm("X")]), [
-      positiveAtom(atom("active_value", [varTerm("X"), _, _, _, _])),
-    ])
-    const customRuleConstraint = makeRuleConstraint("alice", 30, 2, customRule)
-
-    const store = buildStore([
-      root,
-      child,
-      val,
-      ...ruleConstraints,
-      customRuleConstraint,
-    ])
-
-    const result = solveFull(store, DATALOG_CONFIG)
-    expect(result.nativeFastPath).toBe(false)
-    // Should still produce correct reality
-    expect(getNode(result.reality, "profile", "name")?.value).toBe("Alice")
-  })
-
-  it("Datalog disabled sets nativeFastPath to null", () => {
-    const root = makeStructureRoot("alice", 0, "profile")
-    const child = makeStructureMap("alice", 1, root.id, "name")
-    const val = makeValue("alice", 2, child.id, "Alice", 3)
-
-    const store = buildStore([root, child, val])
-
-    const result = solveFull(store, NATIVE_CONFIG)
-    expect(result.nativeFastPath).toBeNull()
-  })
-
-  it("modified LWW rules (different head predicate) trigger Datalog path", () => {
-    const root = makeStructureRoot("alice", 0, "profile")
-    const child = makeStructureMap("alice", 1, root.id, "name")
-    const val = makeValue("alice", 2, child.id, "Alice", 3)
-
-    // A rule that looks like LWW but uses a different predicate name
-    const fakeWinner: Rule = rule(
-      atom("custom_winner", [
-        varTerm("Slot"),
-        varTerm("CnId"),
-        varTerm("Value"),
-      ]),
-      [
-        positiveAtom(
-          atom("active_value", [
-            varTerm("CnId"),
-            varTerm("Slot"),
-            varTerm("Value"),
-            _,
-            _,
-          ]),
-        ),
-      ],
-    )
-    const ruleConstraint = makeRuleConstraint("alice", 10, 1, fakeWinner)
-
-    const store = buildStore([root, child, val, ruleConstraint])
-
-    const result = solveFull(store, DATALOG_CONFIG)
-    // No 'superseded', 'winner', 'fugue_child', or 'fugue_before' heads →
-    // detection fails → Datalog path used.
-    expect(result.nativeFastPath).toBe(false)
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Custom resolution rules
 // ---------------------------------------------------------------------------
 
 describe("pipeline: custom resolution rules", () => {
@@ -809,13 +662,11 @@ describe("pipeline: custom resolution rules", () => {
       ...customRules,
     ])
 
-    // Native path would pick alice (lamport 10 > 2)
-    const nativeReality = solve(store, NATIVE_CONFIG)
-    expect(getNode(nativeReality, "data", "field")?.value).toBe("Alice")
-
-    // Datalog path with custom rules should pick bob (lamport 2 < 10 → lowest wins)
-    const datalogReality = solve(store, DATALOG_CONFIG)
-    expect(getNode(datalogReality, "data", "field")?.value).toBe("Bob")
+    // Lowest lamport wins under these rules, so bob (2) beats alice (10).
+    // Under the default rules it would be the other way round — which is the
+    // point: the rules in the store decide, not the engine.
+    const reality = solve(store, CONFIG)
+    expect(getNode(reality, "data", "field")?.value).toBe("Bob")
   })
 
   it("custom rules with only winner (no superseded) pick any value", () => {
@@ -847,8 +698,7 @@ describe("pipeline: custom resolution rules", () => {
 
     // Should not throw — the skeleton should handle multiple winners for the same slot
     // by using whichever one the Datalog database returns first.
-    const result = solveFull(store, DATALOG_CONFIG)
-    expect(result.nativeFastPath).toBe(false)
+    const result = solveFull(store, CONFIG)
 
     const field = getNode(result.reality, "data", "field")
     expect(field).toBeDefined()
@@ -890,8 +740,15 @@ describe("retraction: authority constraint immunity", () => {
     // Alice tries to retract the authority grant
     const retract = makeRetract("alice", 3, grant.id, 5, [grant.id])
 
-    const store = buildStore([root, child, grant, bobVal, retract])
-    const reality = solve(store, NATIVE_CONFIG)
+    const store = buildStore([
+      root,
+      child,
+      grant,
+      bobVal,
+      retract,
+      ...defaultRuleConstraints("alice", 100),
+    ])
+    const reality = solve(store, CONFIG)
 
     // Bob's value should still be visible because the authority grant
     // is immune to retraction — Bob still has Admin capability.
@@ -928,7 +785,7 @@ describe("pipeline: structure index from valid set", () => {
 
     const store = buildStore([root, child, val, retract])
 
-    const result = solveFull(store, NATIVE_CONFIG)
+    const result = solveFull(store, CONFIG)
 
     // Structure index should have both root and child
     expect(result.structureIndex.roots.size).toBe(1)
@@ -948,8 +805,14 @@ describe("pipeline: structure index from valid set", () => {
     // Only title has a value
     const titleVal = makeValue("alice", 3, title.id, "Hello", 4)
 
-    const store = buildStore([root, title, body, titleVal])
-    const result = solveFull(store, NATIVE_CONFIG)
+    const store = buildStore([
+      root,
+      title,
+      body,
+      titleVal,
+      ...defaultRuleConstraints("alice", 100),
+    ])
+    const result = solveFull(store, CONFIG)
 
     // All 3 structure constraints should be in the index
     expect(result.structureIndex.byId.size).toBe(3)
@@ -972,12 +835,16 @@ describe("pipeline: resolution metadata in PipelineResult", () => {
     const child = makeStructureMap("alice", 1, root.id, "name")
     const val = makeValue("alice", 2, child.id, "Alice", 3)
 
-    const store = buildStore([root, child, val])
-    const result = solveFull(store, NATIVE_CONFIG)
+    const store = buildStore([
+      root,
+      child,
+      val,
+      ...defaultRuleConstraints("alice", 100),
+    ])
+    const result = solveFull(store, CONFIG)
 
     expect(result.resolutionResult).toBeDefined()
     expect(result.resolutionResult.winners.size).toBe(1)
-    expect(result.resolutionResult.fromDatalog).toBe(false)
   })
 
   it("Datalog path sets fromDatalog=true in resolution result", () => {
@@ -1003,23 +870,13 @@ describe("pipeline: resolution metadata in PipelineResult", () => {
     const ruleConstraint = makeRuleConstraint("alice", 10, 2, customRule)
 
     const store = buildStore([root, child, val, ruleConstraint])
-    const result = solveFull(store, DATALOG_CONFIG)
+    const result = solveFull(store, CONFIG)
 
-    expect(result.resolutionResult.fromDatalog).toBe(true)
-    expect(result.nativeFastPath).toBe(false)
-  })
-
-  it("native fast path sets fromDatalog=false in resolution result", () => {
-    const root = makeStructureRoot("alice", 0, "profile")
-    const child = makeStructureMap("alice", 1, root.id, "name")
-    const val = makeValue("alice", 2, child.id, "Alice", 3)
-    const ruleConstraints = defaultRuleConstraints("alice", 10)
-
-    const store = buildStore([root, child, val, ...ruleConstraints])
-    const result = solveFull(store, DATALOG_CONFIG)
-
-    expect(result.resolutionResult.fromDatalog).toBe(false)
-    expect(result.nativeFastPath).toBe(true)
+    // Assert the *outcome*, not only the flags. A test that forces a path and
+    // then checks nothing but metadata will keep passing even if that path
+    // stops resolving anything at all. With a single value and a rule that
+    // makes every `active_value` a winner, this is the one value.
+    expect(getNode(result.reality, "profile", "name")?.value).toBe("Alice")
   })
 
   it("resolution result contains correct LWW winner data", () => {
@@ -1027,8 +884,13 @@ describe("pipeline: resolution metadata in PipelineResult", () => {
     const child = makeStructureMap("alice", 1, root.id, "name")
     const val = makeValue("alice", 2, child.id, "Alice", 3)
 
-    const store = buildStore([root, child, val])
-    const result = solveFull(store, NATIVE_CONFIG)
+    const store = buildStore([
+      root,
+      child,
+      val,
+      ...defaultRuleConstraints("alice", 100),
+    ])
+    const result = solveFull(store, CONFIG)
 
     const winners = result.resolutionResult.winners
     expect(winners.size).toBe(1)
@@ -1042,57 +904,3 @@ describe("pipeline: resolution metadata in PipelineResult", () => {
 // ---------------------------------------------------------------------------
 // Existing pipeline tests still pass (spot checks)
 // ---------------------------------------------------------------------------
-
-describe("pipeline: backwards compatibility", () => {
-  it("single map container with native config still works", () => {
-    const root = makeStructureRoot("alice", 0, "profile")
-    const child = makeStructureMap("alice", 1, root.id, "name")
-    const val = makeValue("alice", 2, child.id, "Alice", 3)
-
-    const store = buildStore([root, child, val])
-    const reality = solve(store, NATIVE_CONFIG)
-
-    expect(getNode(reality, "profile", "name")?.value).toBe("Alice")
-  })
-
-  it("retracted value excluded from reality", () => {
-    const root = makeStructureRoot("alice", 0, "profile")
-    const child = makeStructureMap("alice", 1, root.id, "name")
-    const val = makeValue("alice", 2, child.id, "Alice", 3)
-    const retract = makeRetract("alice", 3, val.id, 4, [val.id])
-
-    const store = buildStore([root, child, val, retract])
-    const reality = solve(store, NATIVE_CONFIG)
-
-    expect(getNode(reality, "profile", "name")?.value).toBeUndefined()
-  })
-
-  it("un-retracted value reappears", () => {
-    const root = makeStructureRoot("alice", 0, "profile")
-    const child = makeStructureMap("alice", 1, root.id, "name")
-    const val = makeValue("alice", 2, child.id, "Alice", 3)
-    const retract1 = makeRetract("alice", 3, val.id, 4, [val.id])
-    const retract2 = makeRetract("alice", 4, retract1.id, 5, [retract1.id])
-
-    const store = buildStore([root, child, val, retract1, retract2])
-    const reality = solve(store, NATIVE_CONFIG)
-
-    expect(getNode(reality, "profile", "name")?.value).toBe("Alice")
-  })
-
-  it("seq container with native config still works", () => {
-    const root = makeStructureRoot("alice", 0, "list", "seq")
-    const e1 = makeStructureSeq("alice", 1, root.id, null, null, 2)
-    const e2 = makeStructureSeq("alice", 2, root.id, e1.id, null, 3)
-    const v1 = makeValue("alice", 3, e1.id, "First", 4)
-    const v2 = makeValue("alice", 4, e2.id, "Second", 5)
-
-    const store = buildStore([root, e1, e2, v1, v2])
-    const reality = solve(store, NATIVE_CONFIG)
-
-    const list = getNode(reality, "list")!
-    expect(list.children.size).toBe(2)
-    expect(list.children.get("0")?.value).toBe("First")
-    expect(list.children.get("1")?.value).toBe("Second")
-  })
-})

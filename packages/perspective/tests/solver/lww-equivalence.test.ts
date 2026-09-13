@@ -20,7 +20,7 @@ import type {
   Value,
   ValueConstraint,
 } from "../../src/kernel/types.js"
-import { resolveLWW } from "../../src/solver/lww.js"
+import { resolveLWW } from "../oracles/lww.js"
 
 // ---------------------------------------------------------------------------
 // Helpers

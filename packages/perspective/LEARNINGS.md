@@ -451,7 +451,7 @@ The spec says `Reality { root: Node }` but a reality can have multiple top-level
 
 ### Native Solvers Are Primary, Datalog Is Validation ✅ (Corrected in Phase 4.5)
 
-**Corrected**: Phase 4.5 restructured the pipeline so Datalog evaluation is the **primary** resolution path. The skeleton builder now receives a `ResolutionResult` (from either Datalog or native solvers) and is resolution-agnostic. `resolve.ts` bridges Datalog output → kernel types (symmetric counterpart of `projection.ts`). Native solvers activate as a §B.7 fast path only when `isDefaultRulesOnly()` detects that active rules structurally match the known LWW + Fugue patterns. Custom or modified rules automatically fall back to Datalog evaluation. The `enableDatalogEvaluation` flag still exists for testing/benchmarking but defaults to `true`.
+**Corrected**: Phase 4.5 restructured the pipeline so Datalog evaluation is the **primary** resolution path. The skeleton builder now receives a `ResolutionResult` (from either Datalog or native solvers) and is resolution-agnostic. `resolve.ts` bridges Datalog output → kernel types (symmetric counterpart of `projection.ts`). Native solvers activated as a §B.7 fast path when `isDefaultRulesOnly()` detected that active rules structurally matched the known LWW + Fugue patterns, and an `enableDatalogEvaluation` flag could bypass Datalog entirely. **Both are gone** — see "Retiring the §B.7 native fast path" at the end of this file. The dispatch turned out to select native in three of four cases, so the "primary path" described here was in practice the exception.
 
 ### Fugue Equivalence Is Scoped to the Simplified Subset ✅ (Resolved in Phase 4.6)
 
@@ -796,3 +796,83 @@ originals they shadowed and replaced them.
 more honestly than the import graph, because a test reaches for whatever is convenient.
 When looking for a seam, read the tests.
 
+
+## Retiring the §B.7 native fast path
+
+### An optimization's justification is a claim, and claims expire
+
+The native LWW and Fugue solvers existed because §B.7 says "evaluating LWW via
+Datalog is correct but inefficient", and this package's own `TECHNICAL.md`
+sharpened that into O(n²): `superseded` pairs every value against every other, so
+the join genuinely has n² answers. That is a good argument, and it was wrong.
+
+Measuring the two strata separately killed it in one run. The pairing was linear;
+91% of the time was in the `winner` rule, whose only distinguishing feature is a
+negation. The quadratic turned out to be a query-planner bug in
+`@kyneta/datalog` — a delta-driven negation binds its atom's variables, and the
+planner recorded it as binding nothing, so the atom beside it scanned once per
+substitution. Full LWW at 8k values: ~1,190 ms → ~63 ms, and linear.
+
+Roughly 3,800 lines existed to avoid a cost that a three-line planner fix
+removed. The lesson is not "don't optimize" — it is that a performance
+justification written into a design document acquires the authority of a
+requirement, and nothing re-checks it. This one had survived a join-index
+rewrite that had already invalidated it.
+
+### "It's just a fast path" described the docs, not the code
+
+The plan was scoped as "delete a dispatch". Tracing it first turned up something
+else: `selectResolutionStrategy` returned `"native"` in three of its four cases —
+rules matching the defaults, an empty rule set, or Datalog disabled — and the
+incremental stage initialised to native and created its evaluator lazily. **A
+store that never installed a custom rule never ran Datalog at all.** The
+documentation said "the Datalog evaluator is the primary path; native solvers are
+fast paths under constraint". The code said the reverse, and had for a long time.
+
+Two more consumers only showed up under tracing: graceful degradation when a rule
+set fails to stratify, and two fallbacks inside `skeleton.ts`. Retiring an
+optimization meant deciding error semantics — which is not a refactor.
+
+### The tests had been leaning on it, and the sweep that found them was not the obvious one
+
+Forcing the Datalog path and running the suite failed **37 of 981** tests. The
+headline: `tests/kernel/pipeline.test.ts` held 29 tests and **zero rule
+constraints** while asserting "concurrent writes resolved by LWW (higher lamport
+wins)" and "concurrent seq inserts: lower peer goes first". Those outcomes came
+from `resolveLWW`. The file's config even said `// Match production default:
+Datalog is primary` — and with no rules in the store, the strategy selector
+returned native.
+
+So the package's central claim — resolution semantics are data, in the store,
+replaceable by anyone with permission — was not covered by its primary pipeline
+test. The helper that installs the default rules existed in one test file and was
+unreachable from the other, which is plausibly the whole story.
+
+Three things worth carrying forward:
+
+- **A test that asserts what rules do must put the rules in the store.** Obvious
+  once stated; invisible while a fallback silently supplies them.
+- **The blunt probe lied.** Forcing `"datalog"` unconditionally produced failures
+  that looked like a Fugue coverage gap and were actually the empty-rule-set case.
+  Isolating the one branch under test turned 38 failures into 4.
+- **Absence of failure proves nothing until you show the path is exercised.**
+  After the Fugue fallback stopped firing, the same probe was moved to the
+  *success* branch to confirm it was reached 32 times on real multi-element
+  sequences. Without that second check, "the fallback is dead" would have been
+  indistinguishable from "no test covers this at all".
+
+### Delete the thing that requires agreement; keep the thing that checks it
+
+The machinery was two implementations of one decision with nothing structurally
+enforcing that they agree — the same shape as two evaluator bugs fixed in the
+same stretch of work, where `estimateCost` knew a delta-driven negation binds and
+`bindVariables` did not. Drift happens when agreement is a convention.
+
+Here the enforcement mechanism is the equivalence suite, and that is exactly what
+was kept: `src/solver/` moved to `tests/oracles/`, unimportable from shipping
+code, still running against `evaluate()`. Deleting it outright would have
+discarded the only independent implementation of LWW and Fugue at the moment the
+rules became the sole one. It also closed a liability for free — §B.7 needs an
+engine version pinned in the creation constraint so two peers with different
+native code cannot diverge silently, `bootstrap.ts` never emitted one, and with
+no native code live there is nothing to disagree about.

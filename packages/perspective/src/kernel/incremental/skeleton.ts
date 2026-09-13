@@ -4,7 +4,7 @@
 // changed in the tree after each step.
 //
 // Correctness invariant:
-//   current() == buildSkeleton(accumulated index, accumulated active, accumulated resolution)
+//   current() == buildSkeleton(accumulated index, accumulated resolution)
 //
 // This mirrors the batch `buildSkeleton()` in `kernel/skeleton.ts` but
 // maintains state across calls rather than rebuilding from scratch.

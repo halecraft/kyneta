@@ -1,35 +1,37 @@
-// === Native LWW Solver ===
-// Resolves value conflicts using Last-Writer-Wins semantics:
-// highest lamport wins; peer ID breaks ties (lexicographically greater wins).
+// === §B.7 LWW solver — TEST ORACLE ONLY ===
 //
-// This is the native (host-language) optimization described in §B.7.
-// It MUST produce identical results to the LWW Datalog rules from §B.4:
+// This is a hand-written implementation of last-writer-wins value resolution, the same semantics the
+// default rules in `bootstrap.ts` express as Datalog. It used to run in place
+// of those rules whenever the store's rule set matched the known defaults —
+// the "native fast path" spec §B.7 permits.
 //
-//   superseded(CnId, Slot) :-
-//     active_value(CnId, Slot, _, L1, _),
-//     active_value(CnId2, Slot, _, L2, _),
-//     CnId ≠ CnId2, L2 > L1.
+// It no longer ships. The performance argument for the fast path was measured
+// and did not hold (the quadratic was a query-planner bug in `@kyneta/datalog`,
+// not a property of the rules), and a second live implementation of resolution
+// is a liability: two peers running different native code diverge silently from
+// the same store, which is why §B.7 requires an engine version pinned in the
+// creation constraint — a mechanism this package never built.
 //
-//   superseded(CnId, Slot) :-
-//     active_value(CnId, Slot, _, L1, P1),
-//     active_value(CnId2, Slot, _, L2, P2),
-//     CnId ≠ CnId2, L2 == L1, P2 > P1.
+// It is kept **here**, outside `src/`, because it is worth more as an oracle
+// than as an optimization. With the fast path gone the Datalog rules are the
+// *only* implementation of last-writer-wins value resolution, and `tests/solver/lww-equivalence.test.ts`
+// is what checks them: it runs the same inputs through `evaluate()` and through
+// this file and asserts the answers match. Deleting this would have removed the
+// independent implementation at exactly the moment it became the only
+// cross-check.
 //
-//   winner(Slot, CnId, Value) :-
-//     active_value(CnId, Slot, Value, _, _),
-//     not superseded(CnId, Slot).
-//
-// See unified-engine.md §7.2, §8, §B.7.
+// Nothing in `src/` may import it. See
+// `.plans/008-retire-the-native-fast-path.md`.
 
-import { cnIdKey } from "../kernel/cnid.js"
-import type { StructureIndex } from "../kernel/structure-index.js"
+import { cnIdKey } from "../../src/kernel/cnid.js"
+import type { StructureIndex } from "../../src/kernel/structure-index.js"
 import type {
   CnId,
   Lamport,
   PeerID,
   Value,
   ValueConstraint,
-} from "../kernel/types.js"
+} from "../../src/kernel/types.js"
 
 // ---------------------------------------------------------------------------
 // Types

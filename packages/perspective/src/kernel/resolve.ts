@@ -18,7 +18,6 @@
 import type { Database, Fact, FactTuple } from "@kyneta/datalog"
 import type { ZSet, ZSetEntry } from "@kyneta/zset"
 import { zsetFilter, zsetFromEntries, zsetMap } from "@kyneta/zset"
-import type { LWWEntry } from "../solver/lww.js"
 import { cnIdFromString } from "./cnid.js"
 import { ACTIVE_STRUCTURE_SEQ, ACTIVE_VALUE } from "./projection.js"
 import type { Value } from "./types.js"
@@ -70,38 +69,6 @@ export function fuguePairKey(p: FugueBeforePair): string {
 }
 
 /**
- * Generate all (A, B) before-pairs from an ordered list of element keys.
- *
- * Given elements in total order [e0, e1, e2, ...], produces pairs
- * (e0, e1), (e0, e2), (e1, e2), ... — every (i, j) where i < j.
- * This matches the Datalog `fugue_before(Parent, A, B)` relation shape.
- *
- * @param parentKey - The parent container's CnId key string.
- * @param ordered - Elements in Fugue total order. Only `idKey` is read.
- * @returns Array of FugueBeforePair. Empty if fewer than 2 elements.
- */
-export function allPairsFromOrdered(
-  parentKey: string,
-  ordered: readonly { readonly idKey: string }[],
-): FugueBeforePair[] {
-  if (ordered.length <= 1) return []
-
-  const pairs: FugueBeforePair[] = []
-  for (let i = 0; i < ordered.length; i++) {
-    for (let j = i + 1; j < ordered.length; j++) {
-      pairs.push({
-        parentKey,
-        // biome-ignore lint/style/noNonNullAssertion: ordered[i] is guaranteed to exist within loop bounds
-        a: ordered[i]!.idKey,
-        // biome-ignore lint/style/noNonNullAssertion: ordered[j] is guaranteed to exist within loop bounds
-        b: ordered[j]!.idKey,
-      })
-    }
-  }
-  return pairs
-}
-
-/**
  * The complete resolution result extracted from Datalog evaluation.
  *
  * Consumed by the skeleton builder to populate the reality tree
@@ -122,12 +89,6 @@ export interface ResolutionResult {
    * topological sort.
    */
   readonly fuguePairs: ReadonlyMap<string, readonly FugueBeforePair[]>
-
-  /**
-   * Whether this resolution was produced from Datalog evaluation
-   * (true) or from native solvers (false).
-   */
-  readonly fromDatalog: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -138,72 +99,6 @@ export interface ResolutionResult {
 // projection.ts and are used by both the incremental native solvers and
 // the incremental Datalog evaluator's resolution extraction.
 // ---------------------------------------------------------------------------
-
-/**
- * Parse an `active_value` fact into an `LWWEntry`.
- *
- * Fact schema: `active_value(CnId, Slot, Content, Lamport, Peer)`
- * Column positions from `ACTIVE_VALUE` in `kernel/projection.ts`.
- *
- * This is the inverse of `projectValue` in `projection.ts`.
- *
- * @param f - A fact with predicate `active_value`.
- * @returns The parsed LWWEntry.
- */
-export function parseLWWFact(f: Fact): LWWEntry {
-  const values = f.values
-  const cnIdKeyStr = values[ACTIVE_VALUE.CNID] as string
-  const slotId = values[ACTIVE_VALUE.SLOT] as string
-  const content = values[ACTIVE_VALUE.CONTENT] as Value
-  const lamport = values[ACTIVE_VALUE.LAMPORT] as number
-  const peer = values[ACTIVE_VALUE.PEER] as string
-
-  return {
-    id: cnIdFromString(cnIdKeyStr),
-    slotId,
-    content,
-    lamport,
-    peer,
-  }
-}
-
-/**
- * Parsed result of an `active_structure_seq` fact.
- *
- * Contains the same information as a seq `StructureConstraint.payload`
- * but extracted from a flat fact tuple with string CnId keys.
- */
-export interface ParsedSeqStructureFact {
-  /** CnId key string of the seq structure constraint. */
-  readonly cnIdKey: string
-  /** CnId key string of the parent container. */
-  readonly parentKey: string
-  /** CnId key string of the origin-left element, or null. */
-  readonly originLeft: string | null
-  /** CnId key string of the origin-right element, or null. */
-  readonly originRight: string | null
-}
-
-/**
- * Parse an `active_structure_seq` fact into a typed structure.
- *
- * Fact schema: `active_structure_seq(CnId, Parent, OriginLeft, OriginRight)`
- * Column positions from `ACTIVE_STRUCTURE_SEQ` in `kernel/projection.ts`.
- *
- * This is the inverse of `projectStructure` in `projection.ts`.
- *
- * @param f - A fact with predicate `active_structure_seq`.
- * @returns The parsed structure fields.
- */
-export function parseSeqStructureFact(f: Fact): ParsedSeqStructureFact {
-  const values = f.values
-  return {
-    cnIdKey: values[ACTIVE_STRUCTURE_SEQ.CNID] as string,
-    parentKey: values[ACTIVE_STRUCTURE_SEQ.PARENT] as string,
-    originLeft: values[ACTIVE_STRUCTURE_SEQ.ORIGIN_LEFT] as string | null,
-    originRight: values[ACTIVE_STRUCTURE_SEQ.ORIGIN_RIGHT] as string | null,
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Extract from Datalog Database
@@ -268,7 +163,6 @@ export function extractResolution(db: Database): ResolutionResult {
   return {
     winners: extractWinners(db),
     fuguePairs: extractFugueOrdering(db),
-    fromDatalog: true,
   }
 }
 
@@ -376,15 +270,11 @@ export function fuguePairDeltas(derived: ZSet<Fact>): ZSet<FugueBeforePair> {
  * @param fuguePairs - Map from parent key to FugueBeforePair[] (from native Fugue).
  * @returns A ResolutionResult marked as from native solvers.
  */
-export function nativeResolution(
+export function resolutionOf(
   winners: ReadonlyMap<string, ResolvedWinner>,
   fuguePairs: ReadonlyMap<string, readonly FugueBeforePair[]>,
 ): ResolutionResult {
-  return {
-    winners,
-    fuguePairs,
-    fromDatalog: false,
-  }
+  return { winners, fuguePairs }
 }
 
 // ---------------------------------------------------------------------------

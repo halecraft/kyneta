@@ -24,21 +24,16 @@
 //
 // See unified-engine.md §7.2, §7.3, §8.
 
-import { buildFugueNodes, orderFugueNodes } from "../solver/fugue.js"
-import type { LWWEntry } from "../solver/lww.js"
-import { resolveLWWSlot } from "../solver/lww.js"
 import { cnIdKey, createCnId } from "./cnid.js"
 import type { ResolutionResult } from "./resolve.js"
 import { topologicalOrderFromPairs } from "./resolve.js"
 import type { SlotGroup, StructureIndex } from "./structure-index.js"
 import { getChildrenOfSlotGroup } from "./structure-index.js"
 import type {
-  Constraint,
   Reality,
   RealityNode,
   StructureConstraint,
   Value,
-  ValueConstraint,
 } from "./types.js"
 
 // ---------------------------------------------------------------------------
@@ -55,26 +50,21 @@ import type {
  * 3. Recursively builds each container and its children.
  *
  * @param structureIndex - Precomputed structure index from valid/active constraints.
- * @param activeConstraints - All active constraints (we filter to values internally).
- * @param resolution - Optional pre-computed resolution from Datalog or native solvers.
- *                     When provided, the skeleton reads winners/ordering from it.
- *                     When absent, falls back to native solvers.
+ * @param resolution - What the store's rules decided: the winner per slot and
+ *                     the before-pairs per sequence parent. Required. The
+ *                     skeleton attaches these; it does not resolve anything
+ *                     itself, and used to accept no resolution and fall back to
+ *                     hand-written solvers, which meant it could disagree with
+ *                     the rules.
  * @returns The complete Reality tree.
  */
 export function buildSkeleton(
   structureIndex: StructureIndex,
-  activeConstraints: Iterable<Constraint>,
-  resolution?: ResolutionResult,
+  resolution: ResolutionResult,
 ): Reality {
-  // Step 1: Build value index — maps slotId → LWWEntry[] for resolution.
-  // Always built: used as fallback when resolution doesn't cover a slot,
-  // and needed for seq tombstone detection.
-  const valueIndex = buildValueIndex(activeConstraints, structureIndex)
-
   const ctx: BuildContext = {
     structureIndex,
-    valueIndex,
-    resolution: resolution ?? null,
+    resolution,
   }
 
   // Step 2: Build child nodes for each root container.
@@ -107,61 +97,12 @@ export function buildSkeleton(
  */
 interface BuildContext {
   readonly structureIndex: StructureIndex
-  readonly valueIndex: ValueIndex
-  readonly resolution: ResolutionResult | null
+  readonly resolution: ResolutionResult
 }
 
 // ---------------------------------------------------------------------------
 // Value Index
 // ---------------------------------------------------------------------------
-
-/**
- * Maps slotId → array of LWWEntry for value resolution.
- *
- * Each value constraint is joined with the structure index to determine
- * its slot, then collected into the index.
- */
-type ValueIndex = ReadonlyMap<string, LWWEntry[]>
-
-/**
- * Build the value index from active constraints and the structure index.
- */
-function buildValueIndex(
-  activeConstraints: Iterable<Constraint>,
-  structureIndex: StructureIndex,
-): ValueIndex {
-  const index = new Map<string, LWWEntry[]>()
-
-  for (const c of activeConstraints) {
-    if (c.type !== "value") continue
-
-    const vc = c as ValueConstraint
-    const targetKey = cnIdKey(vc.payload.target)
-    const slotIdStr = structureIndex.structureToSlot.get(targetKey)
-
-    if (slotIdStr === undefined) {
-      // Orphaned value — target structure not found. Skip.
-      continue
-    }
-
-    const entry: LWWEntry = {
-      id: vc.id,
-      slotId: slotIdStr,
-      content: vc.payload.content,
-      lamport: vc.lamport,
-      peer: vc.id.peer,
-    }
-
-    let entries = index.get(slotIdStr)
-    if (entries === undefined) {
-      entries = []
-      index.set(slotIdStr, entries)
-    }
-    entries.push(entry)
-  }
-
-  return index
-}
 
 // ---------------------------------------------------------------------------
 // Value Resolution
@@ -177,34 +118,21 @@ function resolveSlotValue(
   slotId: string,
   ctx: BuildContext,
 ): Value | undefined {
-  // Try ResolutionResult first.
-  if (ctx.resolution !== null) {
-    const winner = ctx.resolution.winners.get(slotId)
-    if (winner !== undefined) {
-      return winner.content
-    }
-    // No winner in Datalog result for this slot — the slot has no
-    // active value (or the rules didn't derive a winner). Return undefined.
-    // But we also check the value index to see if there are entries —
-    // if there are entries but no Datalog winner, it means the rules
-    // decided no one wins (shouldn't happen with standard LWW rules,
-    // but could happen with custom rules).
-    const entries = ctx.valueIndex.get(slotId)
-    if (entries === undefined || entries.length === 0) {
-      return undefined
-    }
-    // Entries exist but no Datalog winner — return undefined.
-    // The rules did not derive a winner for this slot.
-    return undefined
+  const winner = ctx.resolution.winners.get(slotId)
+  if (winner !== undefined) {
+    return winner.content
   }
 
-  // Fallback: native LWW.
-  const entries = ctx.valueIndex.get(slotId)
-  if (entries === undefined || entries.length === 0) {
-    return undefined
-  }
-  const winner = resolveLWWSlot(entries)
-  return winner !== undefined ? winner.content : undefined
+  // No winner for this slot. That is a legitimate answer, not a gap to fill:
+  // the slot may hold no active value, or the store's rules may have declined
+  // to pick one (a custom rule set is free to leave a slot unresolved).
+  //
+  // There used to be a fallback here that ran the hand-written LWW solver
+  // whenever no `ResolutionResult` was supplied. Nothing in production ever
+  // supplied none — `kernel/pipeline.ts` passes one in every branch — so it
+  // served only tests, where it quietly meant they were checking the solver
+  // rather than the rules. See `.plans/008-retire-the-native-fast-path.md`.
+  return undefined
 }
 
 /**
@@ -213,13 +141,7 @@ function resolveSlotValue(
  * value entries is a tombstone regardless of resolution strategy.
  */
 function slotHasValues(slotId: string, ctx: BuildContext): boolean {
-  // If we have a resolution result, check if there's a winner.
-  if (ctx.resolution !== null) {
-    return ctx.resolution.winners.has(slotId)
-  }
-  // Fallback: check the value index.
-  const entries = ctx.valueIndex.get(slotId)
-  return entries !== undefined && entries.length > 0
+  return ctx.resolution.winners.has(slotId)
 }
 
 // ---------------------------------------------------------------------------
@@ -416,39 +338,38 @@ function orderSeqElements(
   seqConstraints: readonly StructureConstraint[],
   ctx: BuildContext,
 ): string[] {
-  // If we have a resolution result with Fugue pairs, use topological sort.
-  if (ctx.resolution !== null) {
-    // Collect all element keys.
-    const allElementKeys = seqConstraints.map(sc => cnIdKey(sc.id))
+  const allElementKeys = seqConstraints.map(sc => cnIdKey(sc.id))
 
-    // Find the parent — all seq constraints in this group share the same parent.
-    // biome-ignore lint/style/noNonNullAssertion: seqConstraints is non-empty when called
-    const firstPayload = seqConstraints[0]!.payload
-    if (firstPayload.kind !== "seq") {
-      // Should not happen — we've already filtered to seq.
-      return allElementKeys
-    }
-    const parentKey = cnIdKey(firstPayload.parent)
+  // All seq constraints in a group share a parent, so the first one names it.
+  // biome-ignore lint/style/noNonNullAssertion: seqConstraints is non-empty when called
+  const firstPayload = seqConstraints[0]!.payload
+  if (firstPayload.kind !== "seq") {
+    // Should not happen — we've already filtered to seq.
+    return allElementKeys
+  }
+  const parentKey = cnIdKey(firstPayload.parent)
 
-    // Get the before-pairs for this parent.
-    const pairs = ctx.resolution.fuguePairs.get(parentKey)
-
-    if (pairs !== undefined && pairs.length > 0) {
-      return topologicalOrderFromPairs(pairs, allElementKeys)
-    }
-
-    // No pairs for this parent — might be a single element or no
-    // Datalog Fugue rules. Fall through to native solver.
-    if (allElementKeys.length <= 1) {
-      return allElementKeys
-    }
-
-    // Fall back to native for this parent (Datalog rules might not
-    // have derived ordering for this specific parent).
+  const pairs = ctx.resolution.fuguePairs.get(parentKey)
+  if (pairs !== undefined && pairs.length > 0) {
+    return topologicalOrderFromPairs(pairs, allElementKeys)
   }
 
-  // Fallback: native Fugue solver.
-  const fugueNodes = buildFugueNodes(seqConstraints)
-  const ordered = orderFugueNodes(fugueNodes)
-  return ordered.map(n => n.idKey)
+  // A single element needs no ordering.
+  if (allElementKeys.length <= 1) {
+    return allElementKeys
+  }
+
+  // More than one element and no derived ordering.
+  //
+  // This used to fall through to the hand-written Fugue solver, which quietly
+  // supplied an order the store's rules had not asked for. Phase 0 of the
+  // retirement plan measured that fallback and found it dead — the default
+  // Fugue rules derive before-pairs for every parent with more than one
+  // element — so reaching here means the active rule set cannot order this
+  // sequence. Saying so is more useful than inventing an order, because the
+  // alternative is a reality that no peer running the same rules would agree
+  // with. See `.plans/008-retire-the-native-fast-path.md`.
+  throw new Error(
+    `cannot order sequence under parent ${parentKey}: ${allElementKeys.length} elements, but the store's rules derived no ordering for it`,
+  )
 }

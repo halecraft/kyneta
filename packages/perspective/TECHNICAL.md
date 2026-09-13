@@ -24,7 +24,7 @@ Standalone — does not integrate with `@kyneta/schema`, `@kyneta/exchange`, or 
 - What is the two-layer engine and why that split? → [Two layers — kernel and Datalog](#two-layers--kernel-and-datalog)
 - What does the solver pipeline look like? → [The solver pipeline](#the-solver-pipeline)
 - Why are rules in the store, not in the code? → [Rules as data](#rules-as-data)
-- What does the native-solver fast path do? → [Native solvers — the §B.7 fast path](#native-solvers--the-b7-fast-path)
+- What happened to the native-solver fast path? → [Native solvers — retired (§B.7)](#native-solvers--retired-b7)
 - How does the incremental pipeline work? → [The incremental pipeline](#the-incremental-pipeline)
 - What does a CnId identify? → [CnId — content-addressed identity](#cnid--content-addressed-identity)
 
@@ -41,7 +41,7 @@ Standalone — does not integrate with `@kyneta/schema`, `@kyneta/exchange`, or 
 | Layer 0 Kernel | Mechanical algorithms: storage, CnId computation, Lamport clocks, signatures, authority, retraction, version vectors, tree skeleton. Pure, deterministic. | A "kernel" in the OS sense |
 | Layer 1 Datalog Evaluator | Stratified, bottom-up, semi-naïve fixed-point evaluation with aggregation. Evaluates `rule` constraints from the store over facts derived from active constraints. | Prolog, SQL — Datalog is strictly less expressive and always terminating |
 | Layer 2+ Rules | Application-specific rules (app-authored). Extend the default LWW + Fugue rules. | Default rules — those are the bootstrap set |
-| §B.7 Native Solvers | Host-language LWW and Fugue implementations that must produce identical results to the Datalog rules they replace. Note the dispatch is broader than "fast path" suggests — see [Native solvers](#native-solvers--the-b7-fast-path). | A replacement for the Datalog evaluator — but in practice they are the *default* path, which is not what this row used to claim |
+| §B.7 Native Solvers | Host-language LWW and Fugue. **Retired** — they no longer ship, and survive only as test oracles in `tests/oracles/`. See [Native solvers — retired](#native-solvers--retired-b7). | A live resolution path — there is exactly one, the rules in the store |
 | `Rule` | A Datalog rule: head + body (positive and negative atoms, comparison predicates, aggregations). Stored as a `rule` constraint. | A `Policy` in `@kyneta/exchange` |
 | Fact | A ground atom — no variables. Produced by projecting constraints; consumed by the evaluator. | A theorem; a premise |
 | Active constraints | Constraints that are valid (well-formed, signed, within-capability) and not dominated by a retraction. | Valid constraints — "valid" is necessary; "active" is valid + not-retracted |
@@ -66,7 +66,7 @@ Four sub-systems:
 | Sub-system | Source | Role |
 |------------|--------|------|
 | Kernel (Layer 0) | `src/kernel/` | Storage, CnId, signatures, authority, validity, retraction, version vectors, skeleton, pipeline composition. Mechanical. |
-| Native Solvers (§B.7) | `src/solver/` | Host-language LWW and Fugue. Selected whenever rules match the defaults, the store holds no rules, or Datalog is disabled — i.e. by default. |
+| Native Solvers (§B.7) | `tests/oracles/` | Retired from the engine; kept as the cross-check the equivalence suites run against. |
 | Datalog Evaluator (Layer 1) | `@kyneta/datalog` | Stratified bottom-up fixed-point evaluation with aggregation and negation. Evaluates `rule` constraints. A separate package with its own consumers. |
 | ℤ-set algebra | `@kyneta/zset` | The delta type every incremental stage speaks. Separate package, zero dependencies. |
 
@@ -190,7 +190,7 @@ Conversely, the Datalog evaluator doesn't know about constraints, CnIds, signatu
 
 - **Not coupled.** They are separate packages, and the dependency runs one way: perspective depends on `@kyneta/datalog`, never the reverse. The kernel defines `projection` and `resolve` as pure functions at the boundary. The one place the two meet at the type level is the value domain — `@kyneta/datalog` declares `ValueRef` as `{ peer: string; counter: number }` and the kernel's `CnId` satisfies it structurally, with no import either way. `tests/kernel/value-ref.test.ts` is what fails if a field is renamed.
 - **Not replaceable independently.** Both layers together define the semantics. A different kernel or a different evaluator produces a different reality.
-- **Not dependent on the §B.7 fast paths for performance.** Pure Datalog LWW over large stores is linear in the store, for the realistic shape where writers per slot are bounded. See [Native solvers](#native-solvers--the-b7-fast-path) for what the fast paths do and do not buy.
+- **Not dependent on native solvers at all.** They have been retired. Pure Datalog LWW over large stores is linear in the store, for the realistic shape where writers per slot are bounded. See [Native solvers — retired](#native-solvers--retired-b7).
 
 ---
 
@@ -220,10 +220,9 @@ ConstraintStore (S) + VersionVector (V)
          ├─ projectToFacts                        ── projection.ts
          │    └─ active constraints → Datalog facts
          │
-         ├─ EITHER evaluate(rules, facts)         ── datalog/evaluate.ts
-         │         └─ Datalog fixed-point
-         │
-         │         OR native fast path            ── §B.7, when rules match
+         ├─ evaluate(rules, facts)                ── @kyneta/datalog
+         │    └─ Datalog fixed-point
+         │       (throws if the rule set cannot be evaluated)
          │
          └─ extractResolution                     ── resolve.ts
               └─ Datalog facts → typed winners
@@ -296,43 +295,72 @@ The engine doesn't change. The reality does.
 
 ---
 
-## Native solvers — the §B.7 fast path
+## Native solvers — retired (§B.7)
 
-Source: `src/solver/`.
+Source: `tests/oracles/` (test-only). Plan: `.plans/008-retire-the-native-fast-path.md`.
 
-The specification's §B.7 permits *native solvers* — host-language implementations of LWW / Fugue that produce identical outputs to the Datalog rules they replace. A native solver activates only when:
+§B.7 of the specification *permits* native solvers — host-language
+implementations of LWW and Fugue that a peer may run in place of the Datalog
+rules, provided they produce identical output. This package built them, ran them
+by default, and has now retired them. **There is one resolution path: the rules
+in the store, evaluated by `@kyneta/datalog`.**
 
-1. The active rule set structurally matches a known default pattern.
-2. `PipelineConfig.enableNativeSolvers` is true.
+**Why they went.** §B.7 justifies itself with "evaluating LWW via Datalog is
+correct but inefficient", and this document used to repeat that as O(n²) — every
+value pairing against every other to compute `superseded`. That was measured and
+did not hold up. The pairing was already linear once join indexes landed; the
+quadratic that remained was a planner bug in the evaluator, not a property of the
+rules. A negation driven by a delta binds its atom's variables, but the planner
+recorded it as binding nothing, so the atom beside it fell back to a scan per
+substitution and `winner` cost |superseded| × |active_value|. Fixing that took
+full LWW at 8k values from ~1,190 ms to ~63 ms and made it linear;
+`@kyneta/datalog`'s `tests/negation-scaling.test.ts` holds it there.
 
-```
-if (rulesMatchDefaultLWW(activeRules) && config.enableNativeSolvers) {
-  return nativeLWW(valueFacts)
-} else {
-  return evaluate(activeRules, valueFacts) // general
-}
-```
+What survives of the original claim is narrower than it looks: a single slot with
+*n* concurrent writers really does give `superseded` n² answers, and that is
+inherent to the rule. Bounded writers per slot — what real stores have — is
+linear with no native solver.
 
-**On the performance argument.** §B.7 justifies itself with "evaluating LWW via Datalog is correct but inefficient", and this document used to repeat that as O(n²) — every value pairing against every other to compute `superseded`. That was measured and it did not hold up. The pairing was already linear once join indexes landed; the quadratic that remained was a planner bug, not the rules. A negation driven by a delta binds its atom's variables, but the planner recorded it as binding nothing, so the atom beside it fell back to a scan per substitution and `winner` cost |superseded| × |active_value|. Fixing that took full LWW at 8k values from ~1,190 ms to ~63 ms, and made it linear; `@kyneta/datalog`'s `tests/negation-scaling.test.ts` holds it there.
+**They were never the fast path they were described as.** `selectResolutionStrategy`
+chose native in three of its four cases — rules matching the defaults, an empty
+rule set, or Datalog disabled by config — and the incremental stage started
+native and built its evaluator lazily. A store that never installed a custom rule
+never ran Datalog at all. The doc said optimization; the code said default.
 
-What survives is narrower than it looks: a single slot with *n* concurrent writers really does give `superseded` n² answers, and that is inherent to the rule. Bounded writers per slot — what real stores have — is linear without any native solver.
+**What changed for callers.**
 
-When custom rules are present, the pipeline falls back to Datalog automatically. No rule changes; no code changes.
+| before | after |
+|---|---|
+| a store with **no rules** resolved by built-in LWW | resolves to structure with no values |
+| a rule set that **fails to stratify** silently fell back to native | `solveFull` throws, naming the rule and the reason |
+| `PipelineConfig.enableDatalogEvaluation` | removed |
+| `PipelineResult.nativeFastPath` | removed |
+| `ResolutionResult.fromDatalog` | removed — there is one source |
 
-| Module | Role |
-|--------|------|
-| `src/solver/lww.ts` | Batch LWW — full resolve. |
-| `src/solver/incremental-lww.ts` | Incremental LWW — `O(|Δ|)` update given previous state + delta. |
-| `src/solver/fugue.ts` | Batch Fugue — full sequence resolve. |
-| `src/solver/incremental-fugue.ts` | Incremental Fugue — `O(|Δ|)` update. |
+The first two are the interesting ones and both are the same correction. If
+resolution semantics are data, a store that does not carry them does not have
+them, and a store whose rules cannot be evaluated is asking for something this
+peer cannot provide. Answering either with *some other rule set's* answer
+produces a reality the peer's own constraints do not describe, silently, with no
+way for the caller to notice.
 
-### What native solvers are NOT
+**The solvers are kept as test oracles**, in `tests/oracles/`, and nothing in
+`src/` may import them. With the fast path gone the Datalog rules are the only
+implementation of LWW and Fugue, so the independent implementation is worth more
+as a cross-check than it ever was as an optimization —
+`tests/solver/{lww,fugue}-equivalence.test.ts` runs both and asserts they agree.
+That is the §B.7 correctness contract, and it is the reason to demote rather than
+delete: **the thing that required agreement is gone; the thing that checks it
+stays.**
 
-- **Not the exception they read as.** This document long described the Datalog evaluator as the primary path and native solvers as a fast path under constraint. `selectResolutionStrategy` returns `"native"` in three of its four cases — matching defaults, an empty rule set, or Datalog disabled — and `createIncrementalEvaluation` starts there and builds the Datalog evaluator lazily. A store that never installs a custom rule never runs Datalog. Plan 008 retires this arrangement; until it lands, read "fast path" as "default path".
-- **Not silently divergent.** Every native solver is tested against its Datalog equivalent over randomized inputs. If they diverge, the test fails.
-- **Not user-extensible via code.** Adding new fast paths means adding new Rust/TypeScript — not new store constraints. User-added rules without matching native solvers run in Datalog.
+**One liability closed for free.** §B.7 requires an engine version pinned in the
+reality's creation constraint, because two peers running different native
+implementations diverge silently from the same store. `bootstrap.ts` never
+emitted one. With no native code live at runtime there is nothing for two peers
+to disagree about, so the gap closes by construction rather than by building the
+versioning machinery to protect an optimization that is no longer needed. If the
+fast path is ever revived, that obligation comes back with it.
 
----
 
 ## The incremental pipeline
 
@@ -407,16 +435,15 @@ Composing them: `updateReality(prevState, constraintDelta) → (nextState, reali
 | `src/kernel/structure-index.ts` | Tree-structure index. |
 | `src/kernel/projection.ts` | Active constraints → Datalog facts. |
 | `src/kernel/resolve.ts` | Datalog facts → typed winners: one row parser per predicate, the whole-database extractors, and the delta forms the incremental stage applies. |
-| `src/kernel/rule-detection.ts` | Pattern match for §B.7 native-solver dispatch. |
-| `src/kernel/native-resolution.ts` | Native-solver entry. |
+| `src/kernel/rules.ts` | Pull the Datalog rules out of a store's rule constraints. |
 | `src/kernel/skeleton.ts` | Skeleton construction. |
 | `src/kernel/pipeline.ts` | Composition root — `solve(store, config)`. |
 | `src/kernel/index.ts` | Kernel barrel. |
 | `@kyneta/datalog` | The rule language, the evaluator, host relations, the `Value` domain, `Result`. |
 | `@kyneta/zset` | ℤ-set type and algebra. |
 | `src/kernel/incremental/` | Incremental variants of the kernel algorithms. |
-| `src/solver/lww.ts` / `incremental-lww.ts` | Native LWW fast paths. |
-| `src/solver/fugue.ts` / `incremental-fugue.ts` | Native Fugue fast paths. |
+| `tests/oracles/lww.ts` | Hand-written LWW. Test oracle only — not shipped, not importable from `src/`. |
+| `tests/oracles/fugue.ts` | Hand-written Fugue. Same. |
 | `theory/unified-engine.md` | The authoritative specification. This package is its reference implementation. |
 | `tests/kernel/` | 35+ test files covering pipeline, authority, validity, cnid, Lamport, retraction, skeleton, projection, resolve, structure-index, version-vector, incremental variants. |
 | `tests/default-rules/` | The §B.4 LWW + Fugue rule program, run through the evaluator: which value wins a slot, how sequence elements order, what a rule change does. |

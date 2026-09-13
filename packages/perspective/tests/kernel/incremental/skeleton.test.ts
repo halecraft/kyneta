@@ -39,8 +39,8 @@ import {
 } from "../../../src/kernel/incremental/types.js"
 import {
   type FugueBeforePair,
-  nativeResolution,
   type ResolvedWinner,
+  resolutionOf,
 } from "../../../src/kernel/resolve.js"
 import { STUB_SIGNATURE } from "../../../src/kernel/signature.js"
 import { buildSkeleton } from "../../../src/kernel/skeleton.js"
@@ -990,7 +990,10 @@ describe("IncrementalSkeleton", () => {
 
       // Batch
       const batchIndex = buildStructureIndex([root])
-      const batchReality = buildSkeleton(batchIndex, [])
+      const batchReality = buildSkeleton(
+        batchIndex,
+        resolutionOf(new Map(), new Map()),
+      )
 
       expect(realityToPlain(skeleton.current())).toEqual(
         realityToPlain(batchReality),
@@ -1014,12 +1017,8 @@ describe("IncrementalSkeleton", () => {
 
       // Batch
       const batchIndex = buildStructureIndex([root, child])
-      const resolution = nativeResolution(new Map([[sid, winner]]), new Map())
-      const batchReality = buildSkeleton(
-        batchIndex,
-        [root, child, vc],
-        resolution,
-      )
+      const resolution = resolutionOf(new Map([[sid, winner]]), new Map())
+      const batchReality = buildSkeleton(batchIndex, resolution)
 
       expect(realityToPlain(skeleton.current())).toEqual(
         realityToPlain(batchReality),
@@ -1049,8 +1048,8 @@ describe("IncrementalSkeleton", () => {
       const structures = [root, section, title, body]
       const batchIndex = buildStructureIndex(structures)
       const winnerMap = new Map(winners.map(w => [w.slotId, w]))
-      const resolution = nativeResolution(winnerMap, new Map())
-      const batchReality = buildSkeleton(batchIndex, structures, resolution)
+      const resolution = resolutionOf(winnerMap, new Map())
+      const batchReality = buildSkeleton(batchIndex, resolution)
 
       expect(realityToPlain(skeleton.current())).toEqual(
         realityToPlain(batchReality),
@@ -1083,8 +1082,8 @@ describe("IncrementalSkeleton", () => {
         [w2.slotId, w2],
       ])
       const pairsMap = new Map([[parentKey, [pair]]])
-      const resolution = nativeResolution(winnerMap, pairsMap)
-      const batchReality = buildSkeleton(batchIndex, structures, resolution)
+      const resolution = resolutionOf(winnerMap, pairsMap)
+      const batchReality = buildSkeleton(batchIndex, resolution)
 
       expect(realityToPlain(skeleton.current())).toEqual(
         realityToPlain(batchReality),
@@ -1105,8 +1104,8 @@ describe("IncrementalSkeleton", () => {
       // Batch (sees everything at once)
       const structures = [root, child]
       const batchIndex = buildStructureIndex(structures)
-      const resolution = nativeResolution(new Map([[sid, winner]]), new Map())
-      const batchReality = buildSkeleton(batchIndex, structures, resolution)
+      const resolution = resolutionOf(new Map([[sid, winner]]), new Map())
+      const batchReality = buildSkeleton(batchIndex, resolution)
 
       expect(realityToPlain(skeleton.current())).toEqual(
         realityToPlain(batchReality),
@@ -1134,8 +1133,8 @@ describe("IncrementalSkeleton", () => {
         [nw.slotId, nw],
         [tw.slotId, tw],
       ])
-      const resolution = nativeResolution(winnerMap, new Map())
-      const batchReality = buildSkeleton(batchIndex, structures, resolution)
+      const resolution = resolutionOf(winnerMap, new Map())
+      const batchReality = buildSkeleton(batchIndex, resolution)
 
       expect(realityToPlain(skeleton.current())).toEqual(
         realityToPlain(batchReality),

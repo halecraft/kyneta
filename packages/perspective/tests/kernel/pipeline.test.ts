@@ -3,6 +3,15 @@
 // Tests cover simple map, simple sequence, nested containers,
 // retraction effects, version-parameterized solving, and
 // native solver equivalence.
+//
+// **Every store here installs the default LWW + Fugue rules**, via `buildStore`
+// or `bootstrapFirstStore`. That is not incidental setup. This package's claim
+// is that resolution semantics live in the constraint store rather than in the
+// engine, so a test asserting "higher lamport wins" has to put the rule that
+// says so into the store it builds. For a long time this file did not: its 29
+// tests ran over stores with no rule constraints at all and passed on the §B.7
+// native solver instead, which meant the primary pipeline test was exercising
+// the solver while appearing to exercise the engine.
 
 import { describe, expect, it } from "vitest"
 import {
@@ -36,6 +45,7 @@ import type {
   ValueConstraint,
 } from "../../src/kernel/types.js"
 import { vvFromObject } from "../../src/kernel/version-vector.js"
+import { defaultRuleConstraints } from "../helpers/rules.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -152,7 +162,32 @@ function grantAdmin(
   }
 }
 
+/** How many constraints the default LWW + Fugue rule set produces. */
+const RULE_COUNT = defaultRuleConstraints("alice", 0).length
+
+/**
+ * Where the default rules sit in the creator's counter space.
+ *
+ * Only the reality's creator holds implicit `createRule` capability, so the
+ * rules have to be asserted by `alice` here or they are rejected as invalid and
+ * the store ends up with no resolution semantics at all. A high start counter
+ * keeps them clear of the counters each test uses for its own constraints.
+ *
+ * The version-parameterized tests below cannot use this: a version vector
+ * selects a *prefix* of a peer's counters, so rules at 100 are invisible to any
+ * vector that also hides an application constraint at 3. Those tests place the
+ * rules first instead — which is what real bootstrap does — and start their own
+ * constraints above them. See `bootstrapFirstStore`.
+ */
+const RULE_START = 100
+
 function buildStore(constraints: Constraint[]): ConstraintStore {
+  // Every store gets the default LWW + Fugue rules, because this package's
+  // claim is that those rules *are* the resolution semantics — a store without
+  // them has none. They are asserted by their own peer so that the
+  // version-parameterized tests below can say "this version has seen the rules"
+  // independently of how far along alice's own constraints they are.
+  constraints = [...defaultRuleConstraints("alice", RULE_START), ...constraints]
   const store = createStore()
   const result = insertMany(store, constraints)
   if (!result.ok)
@@ -162,12 +197,7 @@ function buildStore(constraints: Constraint[]): ConstraintStore {
 
 const DEFAULT_CONFIG: PipelineConfig = {
   creator: "alice",
-  enableDatalogEvaluation: true, // Match production default: Datalog is primary
-}
-
-const NATIVE_ONLY_CONFIG: PipelineConfig = {
-  creator: "alice",
-  enableDatalogEvaluation: false, // Explicit native-only for bypass testing
+  enableDatalogEvaluation: true,
 }
 
 /** Get all child keys of a reality node. */
@@ -176,6 +206,29 @@ function childKeys(node: RealityNode): string[] {
 }
 
 /** Get a child node by key path from the reality root. */
+/**
+ * A store whose rules occupy the creator's *first* counters, exactly as
+ * `createReality` lays them out at bootstrap.
+ *
+ * The version-parameterized tests need this because a version vector admits a
+ * prefix of each peer's counters. With the rules first, any vector that reaches
+ * the application constraints has necessarily already seen the rules — which is
+ * the real causal story: you cannot resolve a reality at a past version unless
+ * you had the rules at that version.
+ *
+ * Callers must number their own constraints from `RULE_COUNT` upward.
+ */
+function bootstrapFirstStore(constraints: Constraint[]): ConstraintStore {
+  const store = createStore()
+  const result = insertMany(store, [
+    ...defaultRuleConstraints("alice", 0),
+    ...constraints,
+  ])
+  if (!result.ok)
+    throw new Error(`insertMany failed: ${JSON.stringify(result.error)}`)
+  return store
+}
+
 function getNode(reality: Reality, ...path: string[]): RealityNode | undefined {
   let current: RealityNode | undefined = reality.root
   for (const key of path) {
@@ -516,18 +569,29 @@ describe("pipeline: retraction", () => {
 // ---------------------------------------------------------------------------
 
 describe("pipeline: version-parameterized solving", () => {
+  // These build their stores with `bootstrapFirstStore`: the rules take the
+  // creator's first counters and each test numbers its own constraints from
+  // `RULE_COUNT` upward. A version vector admits a prefix of a peer's counters,
+  // so this is the only layout in which a vector can hide a late value while
+  // still having seen the rules that resolve the early one.
+  const n = RULE_COUNT
+
   it("solve(S, V_past) returns historical reality", () => {
-    const root = makeStructureRoot("alice", 0, "profile")
-    const child = makeStructureMap("alice", 1, root.id, "name")
+    const root = makeStructureRoot("alice", n, "profile")
+    const child = makeStructureMap("alice", n + 1, root.id, "name")
 
-    // Alice writes "First" at counter 2, then "Second" at counter 3
-    const val1 = makeValue("alice", 2, child.id, "First", 3)
-    const val2 = makeValue("alice", 3, child.id, "Second", 5)
+    // Alice writes "First", then "Second"
+    const val1 = makeValue("alice", n + 2, child.id, "First", 3)
+    const val2 = makeValue("alice", n + 3, child.id, "Second", 5)
 
-    const store = buildStore([root, child, val1, val2])
+    const store = bootstrapFirstStore([root, child, val1, val2])
 
-    // Solve at V={alice:3} — should see only root, child, val1
-    const pastReality = solve(store, DEFAULT_CONFIG, vvFromObject({ alice: 3 }))
+    // Seeing everything up to and including val1, but not val2.
+    const pastReality = solve(
+      store,
+      DEFAULT_CONFIG,
+      vvFromObject({ alice: n + 3 }),
+    )
     expect(getNode(pastReality, "profile", "name")?.value).toBe("First")
 
     // Solve at current (no version filter) — should see everything
@@ -536,29 +600,28 @@ describe("pipeline: version-parameterized solving", () => {
   })
 
   it("solve(S, V) where V excludes all constraints returns empty reality", () => {
-    const root = makeStructureRoot("alice", 0, "profile")
-    const child = makeStructureMap("alice", 1, root.id, "name")
-    const val = makeValue("alice", 2, child.id, "Hello", 3)
+    const root = makeStructureRoot("alice", n, "profile")
+    const child = makeStructureMap("alice", n + 1, root.id, "name")
+    const val = makeValue("alice", n + 2, child.id, "Hello", 3)
 
-    const store = buildStore([root, child, val])
+    const store = bootstrapFirstStore([root, child, val])
 
-    // V={alice:0} means we haven't seen anything from alice
+    // V={alice:0} means we haven't seen anything from alice — not even the rules.
     const reality = solve(store, DEFAULT_CONFIG, vvFromObject({ alice: 0 }))
     expect(reality.root.children.size).toBe(0)
   })
 
   it("solve(S, V_current) returns same as solve(S) without version", () => {
-    const root = makeStructureRoot("alice", 0, "profile")
-    const child = makeStructureMap("alice", 1, root.id, "name")
-    const val = makeValue("alice", 2, child.id, "Hello", 3)
+    const root = makeStructureRoot("alice", n, "profile")
+    const child = makeStructureMap("alice", n + 1, root.id, "name")
+    const val = makeValue("alice", n + 2, child.id, "Hello", 3)
 
-    const store = buildStore([root, child, val])
+    const store = bootstrapFirstStore([root, child, val])
 
-    // V={alice:3} includes all 3 constraints (counters 0,1,2)
     const versionedReality = solve(
       store,
       DEFAULT_CONFIG,
-      vvFromObject({ alice: 3 }),
+      vvFromObject({ alice: n + 3 }),
     )
     const unversionedReality = solve(store, DEFAULT_CONFIG)
 
@@ -567,28 +630,28 @@ describe("pipeline: version-parameterized solving", () => {
   })
 
   it("version filter with multiple peers", () => {
-    const root = makeStructureRoot("alice", 0, "profile")
-    const child = makeStructureMap("alice", 1, root.id, "name")
-    const grant = grantAdmin("alice", 2, "bob")
+    const root = makeStructureRoot("alice", n, "profile")
+    const child = makeStructureMap("alice", n + 1, root.id, "name")
+    const grant = grantAdmin("alice", n + 2, "bob")
 
-    const aliceVal = makeValue("alice", 3, child.id, "Alice", 3)
+    const aliceVal = makeValue("alice", n + 3, child.id, "Alice", 3)
     const bobVal = makeValue("bob", 0, child.id, "Bob", 5)
 
-    const store = buildStore([root, child, grant, aliceVal, bobVal])
+    const store = bootstrapFirstStore([root, child, grant, aliceVal, bobVal])
 
-    // V={alice:4, bob:0} — see alice's constraints (including grant) but not bob's
+    // See alice's constraints (rules, structures, grant, value) but not bob's.
     const pastReality = solve(
       store,
       DEFAULT_CONFIG,
-      vvFromObject({ alice: 4, bob: 0 }),
+      vvFromObject({ alice: n + 4, bob: 0 }),
     )
     expect(getNode(pastReality, "profile", "name")?.value).toBe("Alice")
 
-    // V={alice:4, bob:1} — see both
+    // See both.
     const fullReality = solve(
       store,
       DEFAULT_CONFIG,
-      vvFromObject({ alice: 4, bob: 1 }),
+      vvFromObject({ alice: n + 4, bob: 1 }),
     )
     expect(getNode(fullReality, "profile", "name")?.value).toBe("Bob")
   })
@@ -607,15 +670,19 @@ describe("solveFull", () => {
     const store = buildStore([root, child, val])
     const result = solveFull(store, DEFAULT_CONFIG)
 
+    // Three constraints of this test's own, plus the default rule set that
+    // `buildStore` installs — the rules are constraints like any other.
+    const total = 3 + RULE_COUNT
+
     // All constraints pass version filter (no version specified)
-    expect(result.versionFiltered).toHaveLength(3)
+    expect(result.versionFiltered).toHaveLength(total)
 
     // All are valid (creator is alice, stub signatures)
-    expect(result.validityResult.valid).toHaveLength(3)
+    expect(result.validityResult.valid).toHaveLength(total)
     expect(result.validityResult.invalid).toHaveLength(0)
 
     // All are active (no retractions)
-    expect(result.retractionResult.active).toHaveLength(3)
+    expect(result.retractionResult.active).toHaveLength(total)
     expect(result.retractionResult.dominated).toHaveLength(0)
 
     // Structure index has the root and child
@@ -680,7 +747,12 @@ describe("pipeline: agent integration", () => {
     const valueC = agent.produceValue(childId, "Alice")
     agent.observe(valueC)
 
+    // This test drives the agent API rather than the constraint builders, so it
+    // builds its own store — and therefore has to install the rules itself.
     const store = createStore()
+    for (const rule of defaultRuleConstraints("alice", RULE_START)) {
+      insert(store, rule)
+    }
     insert(store, rootC)
     insert(store, childC)
     insert(store, valueC)
@@ -735,69 +807,49 @@ describe("pipeline: agent integration", () => {
 // Native-only bypass (explicit opt-out from Datalog)
 // ---------------------------------------------------------------------------
 
-describe("pipeline: native-only bypass", () => {
-  it("native-only config produces same reality as Datalog-enabled (no rules in store)", () => {
+describe("pipeline: a store with no rules", () => {
+  // This is a deliberate behaviour change, recorded here so it cannot be
+  // mistaken for a regression.
+  //
+  // There used to be a second resolution path — hand-written LWW and Fugue
+  // solvers (spec §B.7) — and one of the conditions that selected it was "the
+  // store holds no rule constraints". So a store with no rules still resolved
+  // values by last-writer-wins, supplied by the engine rather than by the
+  // store. With that path gone, an empty rule set derives nothing.
+  //
+  // The new behaviour is the honest reading of this package's central claim:
+  // if resolution semantics are data, a store that does not carry them does
+  // not have them, and the engine has no business inventing a default.
+
+  it("has structure but no resolved values", () => {
+    const root = makeStructureRoot("alice", 0, "profile")
+    const child = makeStructureMap("alice", 1, root.id, "name")
+    const val = makeValue("alice", 2, child.id, "Alice")
+
+    // Deliberately not `buildStore`, which installs the default rules.
+    const store = createStore()
+    const inserted = insertMany(store, [root, child, val])
+    expect(inserted.ok).toBe(true)
+
+    const reality = solve(store, DEFAULT_CONFIG)
+
+    // The skeleton is built from structure constraints, which no rule governs,
+    // so the tree still has its shape.
+    const name = getNode(reality, "profile", "name")
+    expect(name).toBeDefined()
+
+    // But nothing resolved the value, because nothing in the store says how.
+    expect(name?.value).toBeUndefined()
+  })
+
+  it("resolves that same value once the rules are in the store", () => {
     const root = makeStructureRoot("alice", 0, "profile")
     const child = makeStructureMap("alice", 1, root.id, "name")
     const val = makeValue("alice", 2, child.id, "Alice")
 
     const store = buildStore([root, child, val])
-    const realityDatalog = solve(store, DEFAULT_CONFIG)
-    const realityNative = solve(store, NATIVE_ONLY_CONFIG)
+    const reality = solve(store, DEFAULT_CONFIG)
 
-    expect(getNode(realityDatalog, "profile", "name")?.value).toBe("Alice")
-    expect(getNode(realityNative, "profile", "name")?.value).toBe("Alice")
-  })
-
-  it("solveFull with native-only reports nativeFastPath as null", () => {
-    const root = makeStructureRoot("alice", 0, "doc")
-    const child = makeStructureMap("alice", 1, root.id, "title")
-    const val = makeValue("alice", 2, child.id, "Hello")
-
-    const store = buildStore([root, child, val])
-    const result = solveFull(store, NATIVE_ONLY_CONFIG)
-
-    // enableDatalogEvaluation: false → nativeFastPath is null (bypass mode)
-    expect(result.nativeFastPath).toBe(null)
-  })
-
-  it("solveFull with Datalog enabled and no rules reports nativeFastPath as true", () => {
-    const root = makeStructureRoot("alice", 0, "doc")
-    const child = makeStructureMap("alice", 1, root.id, "title")
-    const val = makeValue("alice", 2, child.id, "Hello")
-
-    const store = buildStore([root, child, val])
-    const result = solveFull(store, DEFAULT_CONFIG)
-
-    // No rules in store → falls through to native solvers
-    expect(result.nativeFastPath).toBe(true)
-  })
-
-  it("native-only seq ordering matches Datalog-enabled ordering", () => {
-    const root = makeStructureRoot("alice", 0, "list", "seq")
-    const grant = grantAdmin("alice", 1, "bob")
-    const e1 = makeStructureSeq("alice", 2, root.id, null, null)
-    const e2 = makeStructureSeq("bob", 0, root.id, null, null)
-    const v1 = makeValue("alice", 3, e1.id, "Alice")
-    const v2 = makeValue("bob", 1, e2.id, "Bob")
-
-    const store = buildStore([root, grant, e1, e2, v1, v2])
-    const realityDatalog = solve(store, DEFAULT_CONFIG)
-    const realityNative = solve(store, NATIVE_ONLY_CONFIG)
-
-    const listD = getNode(realityDatalog, "list")
-    const listN = getNode(realityNative, "list")
-    expect(listD).toBeDefined()
-    expect(listN).toBeDefined()
-    expect(listD?.children.size).toBe(listN?.children.size)
-
-    // Both should produce same ordering
-    // biome-ignore lint/style/noNonNullAssertion: listD is guaranteed present after assertions above
-    for (const [key, nodeD] of listD!.children) {
-      // biome-ignore lint/style/noNonNullAssertion: listN is guaranteed present after assertions above
-      const nodeN = listN!.children.get(key)
-      expect(nodeN).toBeDefined()
-      expect(nodeD.value).toBe(nodeN?.value)
-    }
+    expect(getNode(reality, "profile", "name")?.value).toBe("Alice")
   })
 })

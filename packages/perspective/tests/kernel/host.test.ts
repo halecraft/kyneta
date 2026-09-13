@@ -173,7 +173,6 @@ describe("host code through the pipeline", () => {
     expect(inserted.ok).toBe(true)
 
     const result = solveFull(store, CONFIG)
-    expect(result.nativeFastPath).toBe(false)
     expect(node(result.reality, "data", "field")?.value).toBe("BOB")
   })
 
@@ -184,12 +183,18 @@ describe("host code through the pipeline", () => {
     expect(node(pipeline.recompute(), "data", "field")?.value).toBe("BOB")
   })
 
-  it("without the host the batch solve degrades to native resolution rather than a wrong Datalog answer", () => {
+  it("without the host the batch solve refuses rather than resolving some other way", () => {
+    // A rule naming host code the engine was not given cannot be evaluated.
+    // This used to fall back to the hand-written solvers and return a reality
+    // under the *default* rules — a reality this store does not describe,
+    // produced silently, with no way for the caller to notice. Refusing is the
+    // lesser harm: the store is asking for something this peer cannot provide,
+    // and that is exactly what it should hear.
     const store = createStore()
     insertMany(store, constraints())
-    const result = solveFull(store, { creator: "alice" })
-    // Datalog evaluation returns the host error; the pipeline falls back to
-    // the native solvers, which pick the higher lamport as written.
-    expect(node(result.reality, "data", "field")?.value).toBe("Bob")
+
+    expect(() => solveFull(store, { creator: "alice" })).toThrow(
+      /cannot solve: the store's rule set cannot be evaluated/,
+    )
   })
 })

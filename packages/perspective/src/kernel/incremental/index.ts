@@ -6,7 +6,6 @@ export type { IncrementalEvaluation } from "./evaluation.js"
 export {
   createIncrementalEvaluation,
   extractRuleDeltasFromActive,
-  routeFactsByPredicate,
 } from "./evaluation.js"
 // --- Incremental Pipeline (Phase 8) ---
 export type { IncrementalPipeline } from "./pipeline.js"

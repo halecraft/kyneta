@@ -12,13 +12,17 @@
 //
 // These tests exercise skeleton.ts in isolation, without the full pipeline.
 
+import { evaluate } from "@kyneta/datalog"
 import { describe, expect, it } from "vitest"
+import { buildDefaultRules } from "../../src/bootstrap.js"
 import { cnIdKey, createCnId } from "../../src/kernel/cnid.js"
+import { projectToFacts } from "../../src/kernel/projection.js"
 import {
+  extractResolution,
   type FugueBeforePair,
-  nativeResolution,
   type ResolutionResult,
   type ResolvedWinner,
+  resolutionOf,
 } from "../../src/kernel/resolve.js"
 import { STUB_SIGNATURE } from "../../src/kernel/signature.js"
 import { buildSkeleton } from "../../src/kernel/skeleton.js"
@@ -132,7 +136,7 @@ function makeResolution(
   for (const w of winners) {
     winnersMap.set(w.slotId, w)
   }
-  return nativeResolution(winnersMap, fuguePairs ?? new Map())
+  return resolutionOf(winnersMap, fuguePairs ?? new Map())
 }
 
 function childKeys(node: RealityNode): string[] {
@@ -156,17 +160,49 @@ function getNode(reality: Reality, ...path: string[]): RealityNode | undefined {
 // Tests
 // ---------------------------------------------------------------------------
 
+/**
+ * The resolution the default rules produce for these constraints.
+ *
+ * `buildSkeleton` is a pure function of a `ResolutionResult` — it attaches
+ * values and orders sequences according to what the rules already decided. It
+ * used to accept no resolution at all and fall back to calling the
+ * hand-written LWW and Fugue solvers directly, which is what most of the tests
+ * below relied on. That fallback is gone: nothing in production ever took it
+ * (`kernel/pipeline.ts` supplies a resolution in every branch), and while it
+ * existed these tests were checking the solver rather than the rules.
+ *
+ * Running the real rule set here keeps them honest and costs one short
+ * evaluation per test.
+ */
+function resolutionFor(
+  active: readonly Constraint[],
+  structureIndex: StructureIndex,
+): ResolutionResult {
+  const { facts } = projectToFacts(active, structureIndex)
+  const result = evaluate(buildDefaultRules(), facts)
+  if (!result.ok) {
+    throw new Error(`default rules failed to evaluate: ${result.error.kind}`)
+  }
+  return extractResolution(result.value)
+}
+
 describe("skeleton: empty containers", () => {
   it("empty store produces reality with no containers", () => {
     const { structureIndex, active } = setup([])
-    const reality = buildSkeleton(structureIndex, active)
+    const reality = buildSkeleton(
+      structureIndex,
+      resolutionFor(active, structureIndex),
+    )
     expect(reality.root.children.size).toBe(0)
   })
 
   it("root with no children has no child nodes", () => {
     const root = makeRoot("alice", 0, "profile")
     const { structureIndex, active } = setup([root])
-    const reality = buildSkeleton(structureIndex, active)
+    const reality = buildSkeleton(
+      structureIndex,
+      resolutionFor(active, structureIndex),
+    )
 
     const profile = getNode(reality, "profile")
     expect(profile).toBeDefined()
@@ -177,7 +213,10 @@ describe("skeleton: empty containers", () => {
   it("root with policy seq and no children has no child nodes", () => {
     const root = makeRoot("alice", 0, "todos", "seq")
     const { structureIndex, active } = setup([root])
-    const reality = buildSkeleton(structureIndex, active)
+    const reality = buildSkeleton(
+      structureIndex,
+      resolutionFor(active, structureIndex),
+    )
 
     const todos = getNode(reality, "todos")
     expect(todos).toBeDefined()
@@ -188,7 +227,10 @@ describe("skeleton: empty containers", () => {
     const root = makeRoot("alice", 0, "profile")
     const child = makeMapChild("alice", 1, root.id, "name")
     const { structureIndex, active } = setup([root, child])
-    const reality = buildSkeleton(structureIndex, active)
+    const reality = buildSkeleton(
+      structureIndex,
+      resolutionFor(active, structureIndex),
+    )
 
     const name = getNode(reality, "profile", "name")
     expect(name).toBeDefined()
@@ -203,7 +245,10 @@ describe("skeleton: map null-deletion", () => {
     const val = makeValue("alice", 2, 2, child.id, null)
 
     const { structureIndex, active } = setup([root, child, val])
-    const reality = buildSkeleton(structureIndex, active)
+    const reality = buildSkeleton(
+      structureIndex,
+      resolutionFor(active, structureIndex),
+    )
 
     const profile = getNode(reality, "profile")
     expect(profile).toBeDefined()
@@ -225,7 +270,10 @@ describe("skeleton: map null-deletion", () => {
       valAddress,
       valCity,
     ])
-    const reality = buildSkeleton(structureIndex, active)
+    const reality = buildSkeleton(
+      structureIndex,
+      resolutionFor(active, structureIndex),
+    )
 
     // address has null value but has a child (city) — should be present
     const addressNode = getNode(reality, "profile", "address")
@@ -242,7 +290,10 @@ describe("skeleton: map null-deletion", () => {
     const val = makeValue("alice", 2, 2, child.id, "Alice")
 
     const { structureIndex, active } = setup([root, child, val])
-    const reality = buildSkeleton(structureIndex, active)
+    const reality = buildSkeleton(
+      structureIndex,
+      resolutionFor(active, structureIndex),
+    )
 
     const name = getNode(reality, "profile", "name")
     expect(name).toBeDefined()
@@ -259,7 +310,10 @@ describe("skeleton: seq tombstones", () => {
     const v1 = makeValue("alice", 3, 3, e1.id, "Buy milk")
 
     const { structureIndex, active } = setup([root, e1, e2, v1])
-    const reality = buildSkeleton(structureIndex, active)
+    const reality = buildSkeleton(
+      structureIndex,
+      resolutionFor(active, structureIndex),
+    )
 
     const todos = getNode(reality, "todos")
     expect(todos).toBeDefined()
@@ -275,7 +329,10 @@ describe("skeleton: seq tombstones", () => {
     // No values for any element
 
     const { structureIndex, active } = setup([root, e1, e2])
-    const reality = buildSkeleton(structureIndex, active)
+    const reality = buildSkeleton(
+      structureIndex,
+      resolutionFor(active, structureIndex),
+    )
 
     const list = getNode(reality, "list")
     expect(list).toBeDefined()
@@ -300,7 +357,10 @@ describe("skeleton: slot group merging (concurrent map creation)", () => {
       aliceVal,
       bobVal,
     ])
-    const reality = buildSkeleton(structureIndex, active)
+    const reality = buildSkeleton(
+      structureIndex,
+      resolutionFor(active, structureIndex),
+    )
 
     const profile = getNode(reality, "profile")
     expect(profile).toBeDefined()
@@ -333,7 +393,10 @@ describe("skeleton: slot group merging (concurrent map creation)", () => {
       lang,
       langVal,
     ])
-    const reality = buildSkeleton(structureIndex, active)
+    const reality = buildSkeleton(
+      structureIndex,
+      resolutionFor(active, structureIndex),
+    )
 
     const settings = getNode(reality, "data", "settings")
     expect(settings).toBeDefined()
@@ -352,7 +415,10 @@ describe("skeleton: mixed nesting", () => {
     const valCity = makeValue("alice", 3, 3, city.id, "Springfield")
 
     const { structureIndex, active } = setup([root, address, city, valCity])
-    const reality = buildSkeleton(structureIndex, active)
+    const reality = buildSkeleton(
+      structureIndex,
+      resolutionFor(active, structureIndex),
+    )
 
     expect(getNode(reality, "doc", "address", "city")?.value).toBe(
       "Springfield",
@@ -377,7 +443,10 @@ describe("skeleton: mixed nesting", () => {
       v1,
       v2,
     ])
-    const reality = buildSkeleton(structureIndex, active)
+    const reality = buildSkeleton(
+      structureIndex,
+      resolutionFor(active, structureIndex),
+    )
 
     const tags = getNode(reality, "doc", "tags")
     expect(tags).toBeDefined()
@@ -395,7 +464,10 @@ describe("skeleton: mixed nesting", () => {
     const v2 = makeValue("alice", 4, 4, e2.id, "second")
 
     const { structureIndex, active } = setup([root, e1, e2, v1, v2])
-    const reality = buildSkeleton(structureIndex, active)
+    const reality = buildSkeleton(
+      structureIndex,
+      resolutionFor(active, structureIndex),
+    )
 
     const items = getNode(reality, "items")
     expect(items).toBeDefined()
@@ -420,7 +492,10 @@ describe("skeleton: mixed nesting", () => {
       valName,
       valTheme,
     ])
-    const reality = buildSkeleton(structureIndex, active)
+    const reality = buildSkeleton(
+      structureIndex,
+      resolutionFor(active, structureIndex),
+    )
 
     expect(childKeys(reality.root).sort()).toEqual(["profile", "settings"])
     expect(getNode(reality, "profile", "name")?.value).toBe("Alice")
@@ -435,7 +510,10 @@ describe("skeleton: mixed nesting", () => {
     const val = makeValue("alice", 4, 4, l3.id, "deep")
 
     const { structureIndex, active } = setup([root, l1, l2, l3, val])
-    const reality = buildSkeleton(structureIndex, active)
+    const reality = buildSkeleton(
+      structureIndex,
+      resolutionFor(active, structureIndex),
+    )
 
     expect(getNode(reality, "doc", "level1", "level2", "level3")?.value).toBe(
       "deep",
@@ -465,7 +543,7 @@ describe("skeleton: ResolutionResult path", () => {
       },
     ])
 
-    const reality = buildSkeleton(structureIndex, active, resolution)
+    const reality = buildSkeleton(structureIndex, resolution)
     const name = getNode(reality, "profile", "name")
     expect(name).toBeDefined()
     expect(name?.value).toBe("Alice")
@@ -480,7 +558,10 @@ describe("skeleton: ResolutionResult path", () => {
     const { structureIndex, active } = setup([root, child, val1, val2])
 
     // No resolution result — falls back to native LWW
-    const reality = buildSkeleton(structureIndex, active)
+    const reality = buildSkeleton(
+      structureIndex,
+      resolutionFor(active, structureIndex),
+    )
     const name = getNode(reality, "profile", "name")
     expect(name).toBeDefined()
     // Native LWW: Bob wins (lamport 10 > 5)
@@ -496,7 +577,10 @@ describe("skeleton: ResolutionResult path", () => {
     const { structureIndex, active } = setup([root, child, val1, val2])
 
     // Native fallback
-    const realityNative = buildSkeleton(structureIndex, active)
+    const realityNative = buildSkeleton(
+      structureIndex,
+      resolutionFor(active, structureIndex),
+    )
 
     // Resolution result matching native LWW behavior
     const slotId = `map:${cnIdKey(root.id)}:name`
@@ -507,7 +591,7 @@ describe("skeleton: ResolutionResult path", () => {
         content: "Second",
       },
     ])
-    const realityResolved = buildSkeleton(structureIndex, active, resolution)
+    const realityResolved = buildSkeleton(structureIndex, resolution)
 
     expect(getNode(realityNative, "profile", "name")?.value).toBe("Second")
     expect(getNode(realityResolved, "profile", "name")?.value).toBe("Second")
@@ -523,7 +607,7 @@ describe("skeleton: ResolutionResult path", () => {
     // Resolution result with no winner for this slot (custom rules decided no winner)
     const resolution = makeResolution([])
 
-    const reality = buildSkeleton(structureIndex, active, resolution)
+    const reality = buildSkeleton(structureIndex, resolution)
     const name = getNode(reality, "profile", "name")
     expect(name).toBeDefined()
     expect(name?.value).toBeUndefined()
@@ -563,7 +647,7 @@ describe("skeleton: ResolutionResult path", () => {
       fuguePairs,
     )
 
-    const reality = buildSkeleton(structureIndex, active, resolution)
+    const reality = buildSkeleton(structureIndex, resolution)
     const list = getNode(reality, "list")
     expect(list).toBeDefined()
     expect(list?.children.size).toBe(2)
@@ -581,7 +665,10 @@ describe("skeleton: LWW value resolution (native fallback)", () => {
     const val2 = makeValue("alice", 3, 5, child.id, "Final")
 
     const { structureIndex, active } = setup([root, child, val1, val2])
-    const reality = buildSkeleton(structureIndex, active)
+    const reality = buildSkeleton(
+      structureIndex,
+      resolutionFor(active, structureIndex),
+    )
 
     expect(getNode(reality, "doc", "title")?.value).toBe("Final")
   })
@@ -594,7 +681,10 @@ describe("skeleton: LWW value resolution (native fallback)", () => {
     const val2 = makeValue("bob", 0, 5, child.id, "Bob Version")
 
     const { structureIndex, active } = setup([root, child, val1, val2])
-    const reality = buildSkeleton(structureIndex, active)
+    const reality = buildSkeleton(
+      structureIndex,
+      resolutionFor(active, structureIndex),
+    )
 
     // 'bob' > 'alice' lexicographically
     expect(getNode(reality, "doc", "title")?.value).toBe("Bob Version")
@@ -621,7 +711,10 @@ describe("skeleton: orphaned values", () => {
       orphanedVal,
       realVal,
     ])
-    const reality = buildSkeleton(structureIndex, active)
+    const reality = buildSkeleton(
+      structureIndex,
+      resolutionFor(active, structureIndex),
+    )
 
     const name = getNode(reality, "profile", "name")
     expect(name).toBeDefined()
@@ -640,7 +733,10 @@ describe("skeleton: seq ordering (native Fugue fallback)", () => {
     const v3 = makeValue("alice", 6, 6, e3.id, "C")
 
     const { structureIndex, active } = setup([root, e1, e2, e3, v1, v2, v3])
-    const reality = buildSkeleton(structureIndex, active)
+    const reality = buildSkeleton(
+      structureIndex,
+      resolutionFor(active, structureIndex),
+    )
 
     const list = getNode(reality, "list")
     expect(list).toBeDefined()
@@ -659,7 +755,10 @@ describe("skeleton: seq ordering (native Fugue fallback)", () => {
     const vBob = makeValue("bob", 1, 1, eBob.id, "Bob")
 
     const { structureIndex, active } = setup([root, eAlice, eBob, vAlice, vBob])
-    const reality = buildSkeleton(structureIndex, active)
+    const reality = buildSkeleton(
+      structureIndex,
+      resolutionFor(active, structureIndex),
+    )
 
     const list = getNode(reality, "list")
     expect(list).toBeDefined()

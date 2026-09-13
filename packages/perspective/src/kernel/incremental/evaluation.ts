@@ -24,96 +24,30 @@
 //
 // See Plan 006 §Architecture, §Functional Core / Imperative Shell.
 // See Plan 006.1 Phase 3: Wire Unified Evaluator into Pipeline.
-// See theory/incremental.md §9.7 (native solver fast path).
+// The §B.7 native-solver fast path this stage used to switch between is gone;
+// see .plans/008-retire-the-native-fast-path.md.
 
 import type { Fact, Host, Rule } from "@kyneta/datalog"
-import {
-  createEvaluator,
-  type Evaluator,
-  factKey,
-  factsToZSet,
-} from "@kyneta/datalog"
-import type { ZSet, ZSetEntry } from "@kyneta/zset"
+import { createEvaluator, type Evaluator } from "@kyneta/datalog"
+import type { ZSet } from "@kyneta/zset"
 import {
   zsetAdd,
   zsetEmpty,
   zsetForEach,
-  zsetFromEntries,
   zsetIsEmpty,
   zsetSingleton,
 } from "@kyneta/zset"
-import {
-  createIncrementalFugue,
-  type IncrementalFugue,
-} from "../../solver/incremental-fugue.js"
-import {
-  createIncrementalLWW,
-  type IncrementalLWW,
-} from "../../solver/incremental-lww.js"
 import { cnIdKey } from "../cnid.js"
 import type {
   FugueBeforePair,
   ResolutionResult,
   ResolvedWinner,
 } from "../resolve.js"
-import {
-  extractResolution,
-  fuguePairDeltas,
-  fuguePairKey,
-  nativeResolution,
-  winnerDeltas,
-} from "../resolve.js"
-import {
-  extractRules,
-  type ResolutionStrategy,
-  selectResolutionStrategy,
-} from "../rule-detection.js"
+import { extractResolution, fuguePairDeltas, winnerDeltas } from "../resolve.js"
 import type { Constraint, RuleConstraint } from "../types.js"
 
 // ---------------------------------------------------------------------------
-// Pure utility: fact routing
-// ---------------------------------------------------------------------------
-
-/**
- * Split a mixed `ZSet<Fact>` by predicate into separate Z-sets.
- *
- * This is a pure function — independently testable.
- * The evaluation stage uses it to route facts to the appropriate
- * native solver (LWW gets `active_value`, Fugue gets
- * `active_structure_seq` + `constraint_peer`).
- */
-export function routeFactsByPredicate(deltaFacts: ZSet<Fact>): {
-  lwwFacts: ZSet<Fact>
-  fugueFacts: ZSet<Fact>
-  otherFacts: ZSet<Fact>
-} {
-  // One bucket per destination, filled in a single pass. Folding singletons
-  // with `zsetAdd` would copy each growing bucket per fact — quadratic.
-  const lww: [string, ZSetEntry<Fact>][] = []
-  const fugue: [string, ZSetEntry<Fact>][] = []
-  const other: [string, ZSetEntry<Fact>][] = []
-
-  zsetForEach(deltaFacts, (entry, key) => {
-    const pred = entry.element.predicate
-
-    if (pred === "active_value") {
-      lww.push([key, entry])
-    } else if (pred === "active_structure_seq" || pred === "constraint_peer") {
-      fugue.push([key, entry])
-    } else {
-      other.push([key, entry])
-    }
-  })
-
-  return {
-    lwwFacts: zsetFromEntries(lww),
-    fugueFacts: zsetFromEntries(fugue),
-    otherFacts: zsetFromEntries(other),
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Pure utility: rule delta extraction
+// Pure utility: rule deltas
 // ---------------------------------------------------------------------------
 
 /**
@@ -165,20 +99,22 @@ export interface IncrementalEvaluation {
   /**
    * Process a delta of projected facts and return resolution deltas.
    *
+   * This used to take two more parameters — lazy getters for the whole
+   * accumulated fact set and the whole active constraint set. They existed
+   * only so that a switch between the Datalog evaluator and the hand-written
+   * §B.7 solvers could rebuild the newly-chosen one from the entire world.
+   * With one evaluation path there is nothing to switch, and the stage is a
+   * function of its own delta and its own accumulated state — which is what a
+   * DBSP pipeline stage is supposed to be.
+   *
    * @param deltaFacts - Z-set delta from the projection stage.
    * @param deltaRules - Changed rules (weight +1 = added, −1 = retracted).
    *                     Empty on most insertions.
-   * @param getAccumulatedFacts - Lazy getter for full accumulated facts.
-   *   Only called on strategy switches (bootstrapping the new strategy).
-   * @param getActiveConstraints - Lazy getter for full active constraint set.
-   *   Only called on rule changes (for strategy detection).
    * @returns Resolution deltas for the skeleton stage.
    */
   step(
     deltaFacts: ZSet<Fact>,
     deltaRules: ZSet<Rule>,
-    getAccumulatedFacts: () => Fact[],
-    getActiveConstraints: () => readonly Constraint[],
   ): {
     deltaResolved: ZSet<ResolvedWinner>
     deltaFuguePairs: ZSet<FugueBeforePair>
@@ -189,99 +125,6 @@ export interface IncrementalEvaluation {
 
   /** Reset to empty state. */
   reset(): void
-}
-
-// ---------------------------------------------------------------------------
-// Resolution diffing (for strategy switches)
-// ---------------------------------------------------------------------------
-
-/**
- * Diff two ResolutionResults to produce Z-set deltas.
- *
- * Used when switching strategies — the old strategy's accumulated
- * resolution is compared against the new strategy's resolution to
- * produce the minimal delta for the skeleton.
- *
- * Winner key = slotId. Changed winners emit only +1 (not −1 then +1)
- * because both entries share the same Z-set key and would annihilate.
- * See Plan 005 Learnings: Resolution Diffing.
- */
-function diffResolution(
-  oldRes: ResolutionResult | null,
-  newRes: ResolutionResult,
-): {
-  deltaResolved: ZSet<ResolvedWinner>
-  deltaFuguePairs: ZSet<FugueBeforePair>
-} {
-  let deltaResolved = zsetEmpty<ResolvedWinner>()
-
-  const oldWinners = oldRes?.winners ?? new Map<string, ResolvedWinner>()
-  const newWinners = newRes.winners
-
-  for (const [slotId, newWinner] of newWinners) {
-    const oldWinner = oldWinners.get(slotId)
-    if (oldWinner === undefined) {
-      deltaResolved = zsetAdd(
-        deltaResolved,
-        zsetSingleton(slotId, newWinner, 1),
-      )
-    } else if (
-      oldWinner.winnerCnIdKey !== newWinner.winnerCnIdKey ||
-      oldWinner.content !== newWinner.content
-    ) {
-      // Changed winner — emit only +1 (skeleton handles replacement)
-      deltaResolved = zsetAdd(
-        deltaResolved,
-        zsetSingleton(slotId, newWinner, 1),
-      )
-    }
-  }
-
-  for (const [slotId, oldWinner] of oldWinners) {
-    if (!newWinners.has(slotId)) {
-      deltaResolved = zsetAdd(
-        deltaResolved,
-        zsetSingleton(slotId, oldWinner, -1),
-      )
-    }
-  }
-
-  // Fugue pair diffing
-  const oldPairsMap =
-    oldRes?.fuguePairs ?? new Map<string, readonly FugueBeforePair[]>()
-  const newPairsMap = newRes.fuguePairs
-
-  const oldFlat = new Map<string, FugueBeforePair>()
-  for (const pairs of oldPairsMap.values()) {
-    for (const p of pairs) {
-      oldFlat.set(fuguePairKey(p), p)
-    }
-  }
-
-  const newFlat = new Map<string, FugueBeforePair>()
-  for (const pairs of newPairsMap.values()) {
-    for (const p of pairs) {
-      newFlat.set(fuguePairKey(p), p)
-    }
-  }
-
-  // Collect then build once: `zsetAdd` copies its larger operand, so folding
-  // singletons over a diff would be quadratic in the number of changed pairs.
-  const pairChanges: [string, ZSetEntry<FugueBeforePair>][] = []
-
-  for (const [key, p] of newFlat) {
-    if (!oldFlat.has(key)) {
-      pairChanges.push([key, { element: p, weight: 1 }])
-    }
-  }
-
-  for (const [key, p] of oldFlat) {
-    if (!newFlat.has(key)) {
-      pairChanges.push([key, { element: p, weight: -1 }])
-    }
-  }
-
-  return { deltaResolved, deltaFuguePairs: zsetFromEntries(pairChanges) }
 }
 
 /** R applied to E's output: the resolution deltas the skeleton consumes. */
@@ -302,256 +145,51 @@ function resolutionDeltas(derived: ZSet<Fact>): {
 /**
  * Create a new incremental evaluation stage.
  *
+ * The stage owns one long-lived Datalog evaluator. Rules reach it the same way
+ * facts do — as a delta — because rules are constraints, so a rule arriving or
+ * being retracted is just another change in the store.
+ *
  * @returns An IncrementalEvaluation instance with empty state.
  */
 export function createIncrementalEvaluation(
   host?: Host,
 ): IncrementalEvaluation {
-  // --- Strategy state ---
-  let strategy: ResolutionStrategy = "native"
-  let lww: IncrementalLWW = createIncrementalLWW()
-  let fugue: IncrementalFugue = createIncrementalFugue()
-
-  // Unified Datalog evaluator — lazily created on first switch
-  // to 'datalog' strategy. Holds its own accumulated Database.
-  let datalog: Evaluator | null = null
-
-  // Accumulated rules for strategy detection on rule changes.
-  let accumulatedRules: Rule[] = []
-
-  // --- Internal helpers ---
-
-  /**
-   * Build a ResolutionResult from the native solvers' current state.
-   */
-  function nativeCurrentResolution(): ResolutionResult {
-    return nativeResolution(lww.current(), fugue.current())
-  }
-
-  /**
-   * Run the native path: route facts to LWW and Fugue, combine deltas.
-   */
-  function stepNative(deltaFacts: ZSet<Fact>): {
-    deltaResolved: ZSet<ResolvedWinner>
-    deltaFuguePairs: ZSet<FugueBeforePair>
-  } {
-    const { lwwFacts, fugueFacts } = routeFactsByPredicate(deltaFacts)
-
-    const deltaResolved = lww.step(lwwFacts)
-    const deltaFuguePairs = fugue.step(fugueFacts)
-
-    return { deltaResolved, deltaFuguePairs }
-  }
-
-  /**
-   * Run the incremental Datalog path: delegate to the evaluator.
-   */
-  function stepDatalog(deltaFacts: ZSet<Fact>): {
-    deltaResolved: ZSet<ResolvedWinner>
-    deltaFuguePairs: ZSet<FugueBeforePair>
-  } {
-    if (datalog === null) {
-      // Should not happen — datalog is created on switch.
-      return { deltaResolved: zsetEmpty(), deltaFuguePairs: zsetEmpty() }
-    }
-    return resolutionDeltas(datalog.step(deltaFacts))
-  }
-
-  /**
-   * Switch from native to incremental Datalog.
-   *
-   * Creates a new unified Evaluator, bootstraps it from accumulated
-   * ground facts, and diffs against the native path's accumulated
-   * resolution.
-   *
-   * Returns only the switch diff — the caller is responsible for
-   * processing deltaFacts through the new strategy afterward.
-   */
-  function switchToDatalog(
-    getAccumulatedFacts: () => Fact[],
-    getActiveConstraints: () => readonly Constraint[],
-  ): {
-    deltaResolved: ZSet<ResolvedWinner>
-    deltaFuguePairs: ZSet<FugueBeforePair>
-  } {
-    const oldResolution = nativeCurrentResolution()
-
-    // Create the unified Datalog evaluator with current rules.
-    const rules = extractRules(getActiveConstraints())
-    datalog = createEvaluator(rules, host)
-
-    // Bootstrap from accumulated ground facts.
-    const accFacts = getAccumulatedFacts()
-    if (accFacts.length > 0) {
-      datalog.step(factsToZSet(accFacts))
-    }
-
-    strategy = "datalog"
-
-    const newResolution = extractResolution(datalog.currentDatabase())
-    return diffResolution(oldResolution, newResolution)
-  }
-
-  /**
-   * Switch from incremental Datalog back to native.
-   *
-   * Rebuilds native solvers from accumulated ground facts, diffs
-   * against the Datalog evaluator's accumulated resolution.
-   *
-   * Returns only the switch diff — the caller is responsible for
-   * processing deltaFacts through the new strategy afterward.
-   */
-  function switchToNative(getAccumulatedFacts: () => Fact[]): {
-    deltaResolved: ZSet<ResolvedWinner>
-    deltaFuguePairs: ZSet<FugueBeforePair>
-  } {
-    const oldResolution =
-      datalog !== null
-        ? extractResolution(datalog.currentDatabase())
-        : nativeResolution(new Map(), new Map())
-
-    // Rebuild native solvers from accumulated facts
-    lww = createIncrementalLWW()
-    fugue = createIncrementalFugue()
-
-    // Feed all accumulated facts through the native solvers.
-    const accFacts = getAccumulatedFacts()
-    for (const f of accFacts) {
-      const key = factKey(f)
-      const singleton = zsetSingleton(key, f, 1)
-      if (f.predicate === "active_value") {
-        lww.step(singleton)
-      } else if (
-        f.predicate === "active_structure_seq" ||
-        f.predicate === "constraint_peer"
-      ) {
-        fugue.step(singleton)
-      }
-    }
-
-    // Discard Datalog state.
-    datalog = null
-    strategy = "native"
-
-    const newResolution = nativeCurrentResolution()
-    return diffResolution(oldResolution, newResolution)
-  }
-
-  // --- Public interface ---
+  // Created eagerly and empty. It used to be built lazily, on the first switch
+  // away from the native solvers; with no switch there is no reason to defer.
+  // An evaluator with no rules derives nothing, which is the right answer for
+  // a store that has not been bootstrapped yet.
+  let datalog: Evaluator = createEvaluator([], host)
 
   function step(
     deltaFacts: ZSet<Fact>,
     deltaRules: ZSet<Rule>,
-    getAccumulatedFacts: () => Fact[],
-    getActiveConstraints: () => readonly Constraint[],
   ): {
     deltaResolved: ZSet<ResolvedWinner>
     deltaFuguePairs: ZSet<FugueBeforePair>
   } {
-    // --- Handle rule changes ---
-    if (!zsetIsEmpty(deltaRules)) {
-      // Update accumulated rules.
-      // Rather than tracking incremental adds/removes, just rebuild
-      // from active constraints — rules are rare (typically ~11 default).
-      accumulatedRules = extractRules(getActiveConstraints())
-
-      const newStrategy = selectResolutionStrategy(
-        true, // always enable Datalog for strategy detection
-        accumulatedRules,
-        getActiveConstraints(),
-      )
-
-      if (newStrategy !== strategy) {
-        // Strategy switch needed.
-        let switchDelta: {
-          deltaResolved: ZSet<ResolvedWinner>
-          deltaFuguePairs: ZSet<FugueBeforePair>
-        }
-
-        if (newStrategy === "datalog") {
-          switchDelta = switchToDatalog(
-            getAccumulatedFacts,
-            getActiveConstraints,
-          )
-        } else {
-          switchDelta = switchToNative(getAccumulatedFacts)
-        }
-
-        // Fix: process deltaFacts through the newly-activated strategy
-        // AFTER the switch, then combine with the switch diff.
-        // Previously, deltaFacts were dropped on strategy switch.
-        if (!zsetIsEmpty(deltaFacts)) {
-          let factDelta: {
-            deltaResolved: ZSet<ResolvedWinner>
-            deltaFuguePairs: ZSet<FugueBeforePair>
-          }
-
-          if (strategy === "native") {
-            factDelta = stepNative(deltaFacts)
-          } else {
-            factDelta = stepDatalog(deltaFacts)
-          }
-
-          return {
-            deltaResolved: zsetAdd(
-              switchDelta.deltaResolved,
-              factDelta.deltaResolved,
-            ),
-            deltaFuguePairs: zsetAdd(
-              switchDelta.deltaFuguePairs,
-              factDelta.deltaFuguePairs,
-            ),
-          }
-        }
-
-        return switchDelta
-      }
-
-      // Strategy didn't change, but rules changed — if we're on the
-      // Datalog path, forward the rule delta to the evaluator.
-      if (strategy === "datalog" && datalog !== null) {
-        // Rules changed but strategy stays 'datalog'. The rule change is a
-        // full recompute over the facts as they were; the fact delta then
-        // applies incrementally. Z-set addition nets the two: a fact that
-        // flipped in both cancels out.
-        return resolutionDeltas(
-          zsetAdd(datalog.changeRules(deltaRules), datalog.step(deltaFacts)),
-        )
-      }
-    }
-
-    // --- No strategy change — process facts through active strategy ---
     if (zsetIsEmpty(deltaFacts) && zsetIsEmpty(deltaRules)) {
-      return {
-        deltaResolved: zsetEmpty(),
-        deltaFuguePairs: zsetEmpty(),
-      }
+      return { deltaResolved: zsetEmpty(), deltaFuguePairs: zsetEmpty() }
     }
 
-    if (strategy === "native") {
-      return stepNative(deltaFacts)
-    } else {
-      return stepDatalog(deltaFacts)
+    if (!zsetIsEmpty(deltaRules)) {
+      // A rule change re-derives every stratum over the facts as they stand;
+      // the fact delta then applies incrementally on top. Z-set addition nets
+      // the two, so a fact that flipped in both directions cancels out and the
+      // skeleton sees one clean delta.
+      return resolutionDeltas(
+        zsetAdd(datalog.changeRules(deltaRules), datalog.step(deltaFacts)),
+      )
     }
+
+    return resolutionDeltas(datalog.step(deltaFacts))
   }
 
   function current(): ResolutionResult {
-    if (strategy === "native") {
-      return nativeCurrentResolution()
-    } else if (datalog !== null) {
-      return extractResolution(datalog.currentDatabase())
-    } else {
-      // No strategy active — return empty.
-      return nativeResolution(new Map(), new Map())
-    }
+    return extractResolution(datalog.currentDatabase())
   }
 
   function reset(): void {
-    strategy = "native"
-    lww = createIncrementalLWW()
-    fugue = createIncrementalFugue()
-    datalog = null
-    accumulatedRules = []
+    datalog = createEvaluator([], host)
   }
 
   return { step, current, reset }

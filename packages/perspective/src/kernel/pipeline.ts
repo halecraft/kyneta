@@ -17,9 +17,8 @@
 //
 // See unified-engine.md §7.1, §7.2, §B.1, §B.4, §B.7.
 
-import type { Host } from "@kyneta/datalog"
+import type { Host, StratificationError } from "@kyneta/datalog"
 import { evaluate } from "@kyneta/datalog"
-import { buildNativeResolution } from "./native-resolution.js"
 import { type ProjectionResult, projectToFacts } from "./projection.js"
 import { extractResolution, type ResolutionResult } from "./resolve.js"
 import {
@@ -28,7 +27,7 @@ import {
   type RetractionConfig,
   type RetractionResult,
 } from "./retraction.js"
-import { extractRules, selectResolutionStrategy } from "./rule-detection.js"
+import { extractRules } from "./rules.js"
 import { buildSkeleton } from "./skeleton.js"
 import type { ConstraintStore } from "./store.js"
 import { allConstraints } from "./store.js"
@@ -52,23 +51,9 @@ export interface PipelineConfig {
   readonly retractionConfig?: RetractionConfig
 
   /**
-   * Whether to enable Datalog evaluation for resolution.
-   *
-   * When true (default), the pipeline uses Datalog evaluation as the
-   * primary resolution path (§B.1). If the active rules match the known
-   * default LWW/Fugue patterns and no custom rules exist, native solvers
-   * are used as a fast path (§B.7).
-   *
-   * When false, only native solvers are used. This bypasses the rule
-   * system entirely — useful for testing or benchmarking, but does NOT
-   * respect rules-as-data (custom rules are ignored).
-   */
-  readonly enableDatalogEvaluation?: boolean
-
-  /**
    * Host-computed relations and point functions that rules may reference by
-   * name (see `@kyneta/datalog`). Unlike `enableDatalogEvaluation`, this
-   * changes results: it is the per-relation form of the engine-version pin
+   * name (see `@kyneta/datalog`). This changes results: it is the
+   * per-relation form of the engine-version pin
    * in spec §B.7, and a reality that uses it must have every peer register
    * the same names with the same behaviour. The engine checks presence, not
    * agreement.
@@ -109,15 +94,6 @@ export interface PipelineResult {
    * which resolution path was used.
    */
   readonly resolutionResult: ResolutionResult
-
-  /**
-   * Whether the native solver fast path was used.
-   *
-   * true  = native solvers (§B.7 optimization — rules matched defaults)
-   * false = Datalog evaluation (primary path — rules are custom or absent)
-   * null  = Datalog was disabled via config (testing/benchmark mode)
-   */
-  readonly nativeFastPath: boolean | null
 }
 
 // ---------------------------------------------------------------------------
@@ -158,13 +134,33 @@ export function solve(
  * Same as `solve()` but exposes every intermediate stage for debugging
  * and testing.
  */
+/**
+ * One line describing why a rule set could not be stratified.
+ *
+ * Stratification is the check that negation never loops: a rule may only negate
+ * a relation computed *before* it, so `a :- not b.` and `b :- not a.` have no
+ * least model and the evaluator refuses them. The other cases are a rule naming
+ * host code the engine was not given.
+ */
+function describeRuleSetError(error: StratificationError): string {
+  switch (error.kind) {
+    case "cyclicNegation":
+      return `negation forms a cycle through ${error.cycle.join(" → ")}`
+    case "unknownHostFunction":
+      return `rule for "${error.rule.head.predicate}" names host function "${error.fn}", which is not registered`
+    case "foreignPredicateDerived":
+      return `a rule derives "${error.predicate}", which is a host-computed relation`
+    case "unboundComputeArgument":
+      return `rule for "${error.rule.head.predicate}" passes unbound variable "${error.variable}" to host function "${error.fn}"`
+  }
+}
+
 export function solveFull(
   store: ConstraintStore,
   config: PipelineConfig,
   version?: VersionVector,
 ): PipelineResult {
   const retractionConfig = config.retractionConfig ?? DEFAULT_RETRACTION_CONFIG
-  const enableDatalog = config.enableDatalogEvaluation ?? true
 
   // Step 1: Version filter (§7.1).
   const all = allConstraints(store)
@@ -191,45 +187,37 @@ export function solveFull(
     structureIndex,
   )
 
-  // Step 6: Resolution — Datalog primary, native fast path optional.
-  let resolutionResult: ResolutionResult
-  let nativeFastPath: boolean | null
-
+  // Step 6: Resolution — the Datalog rules in the store, and nothing else.
+  //
+  // There used to be a second path here: hand-written LWW and Fugue solvers
+  // that ran whenever the store's rules matched the known defaults (spec §B.7).
+  // They existed on a performance argument that was measured and did not hold
+  // — the quadratic they were avoiding turned out to be a query-planner bug in
+  // `@kyneta/datalog`, not a property of the rules. See
+  // `.plans/008-retire-the-native-fast-path.md`.
+  //
+  // A store with no rule constraints therefore resolves to an empty reality
+  // rather than to LWW-by-default. That is the honest reading of "rules are
+  // data": resolution semantics live in the store, so a store that does not
+  // carry them does not have them.
   const rules = extractRules(retractionResult.active)
-  const strategy = selectResolutionStrategy(
-    enableDatalog,
-    rules,
-    retractionResult.active,
-  )
+  const evalResult = evaluate(rules, projectionResult.facts, config.host)
 
-  if (strategy === "native") {
-    resolutionResult = buildNativeResolution(
-      retractionResult.active,
-      structureIndex,
+  // A rule set that cannot be stratified is a defect in the store, not a
+  // condition to route around. Resolving it with some other rule set would
+  // compute a reality that this peer's own constraints do not describe, and
+  // would do it silently — which is worse than refusing, because the caller
+  // has no way to notice. (The previous behaviour was exactly that: fall back
+  // to the native solvers and return a reality under the default rules.)
+  if (!evalResult.ok) {
+    throw new Error(
+      `cannot solve: the store's rule set cannot be evaluated — ${describeRuleSetError(evalResult.error)}`,
     )
-    nativeFastPath = enableDatalog ? true : null
-  } else {
-    // Custom or modified rules — use Datalog evaluation (primary path).
-    const evalResult = evaluate(rules, projectionResult.facts, config.host)
-    if (evalResult.ok) {
-      resolutionResult = extractResolution(evalResult.value)
-    } else {
-      // Datalog evaluation failed (e.g., cyclic negation).
-      // Fall back to native solvers as graceful degradation.
-      resolutionResult = buildNativeResolution(
-        retractionResult.active,
-        structureIndex,
-      )
-    }
-    nativeFastPath = false
   }
+  const resolutionResult = extractResolution(evalResult.value)
 
   // Step 7: Skeleton — build the reality tree from resolution result.
-  const reality = buildSkeleton(
-    structureIndex,
-    retractionResult.active,
-    resolutionResult,
-  )
+  const reality = buildSkeleton(structureIndex, resolutionResult)
 
   return {
     reality,
@@ -239,6 +227,5 @@ export function solveFull(
     structureIndex,
     projectionResult,
     resolutionResult,
-    nativeFastPath,
   }
 }

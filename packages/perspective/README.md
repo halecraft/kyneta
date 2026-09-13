@@ -92,7 +92,7 @@ The solver is a pure function parameterized by a version vector. `solve(S, V)` c
 | 3. Authority & Retraction | ✅ | Capability model, validity filter, retraction graph with dominance |
 | 3.5 Shared Base Types | ✅ | `CnId`, `Value`, `PeerID` extracted to a shared module (later split: identity to `kernel/`, `Value` to `@kyneta/datalog`) |
 | 4. Skeleton & Pipeline | ✅ | Full solver pipeline, structure index, projection, skeleton builder |
-| 4.5 Datalog-Driven Resolution | ✅ | Datalog as primary path; native solvers as §B.7 fast path |
+| 4.5 Datalog-Driven Resolution | ✅ | Datalog is the only resolution path; the §B.7 native solvers are retired and kept as test oracles |
 | 4.6 Pre-Bootstrap Correctness | ✅ | Semantic refs, complete Fugue rules, store O(1), skeleton tests |
 | 5. Bootstrap & Integration | ✅ | `createReality()`, default rules, multi-agent sync, 30 integration tests |
 | **Plan 005: Incremental Kernel** | ✅ | Z-set algebra, incremental kernel stages, pipeline composition, 42 differential tests |
@@ -123,28 +123,24 @@ packages/perspective/
 │   │   ├── resolve.ts          Datalog derived facts → typed resolution result
 │   │   ├── skeleton.ts         Reality tree builder (reads ResolutionResult)
 │   │   ├── pipeline.ts         Batch composition root: solve(S, V?) → Reality
-│   │   ├── rule-detection.ts   Shared strategy selection (Plan 006)
-│   │   ├── native-resolution.ts  Shared native resolution (Plan 006)
+│   │   ├── rules.ts            Rule constraints → Datalog rules
 │   │   └── incremental/        Incremental pipeline (Plan 005 + 006)
 │   │       ├── types.ts          StructureIndexDelta, NodeDelta, RealityDelta
 │   │       ├── validity.ts       Authority replay + per-peer re-check
 │   │       ├── retraction.ts     Persistent retraction graph, dominance cascade
 │   │       ├── structure-index.ts  Append-only slot group accumulator
 │   │       ├── projection.ts     Bilinear join with orphan resolution
-│   │       ├── evaluation.ts     Strategy wrapper: native or incremental Datalog
+│   │       ├── evaluation.ts     Incremental Datalog: fact + rule deltas in, resolution deltas out
 │   │       ├── skeleton.ts       Mutable tree with NodeDelta emission
 │   │       ├── pipeline.ts       Incremental composition root (DAG wiring)
 │   │       └── index.ts          Barrel export
-│   ├── solver/               Native optimizations (§B.7)
-│   │   ├── lww.ts              Batch LWW: max_by(lamport, peer)
-│   │   ├── fugue.ts            Batch Fugue: tree walk over structure(seq)
-│   │   ├── incremental-lww.ts  Per-slot O(1) winner tracking (Plan 006)
-│   │   └── incremental-fugue.ts  Per-parent Fugue tree maintenance (Plan 006)
 │   ├── bootstrap.ts          Reality creation + default solver rules (§B.8)
 │   └── index.ts              Public API
 ├── tests/
 │   ├── kernel/               Store, agent, authority, pipeline, skeleton, ...
 │   │   └── incremental/        Incremental stages, evaluation, pipeline (differential)
+│   ├── oracles/              Hand-written LWW + Fugue, retired from the engine (§B.7).
+│   │                         Test-only — the equivalence suites check the rules against them.
 │   ├── default-rules/        The §B.4 LWW + Fugue rule program, evaluated
 │   ├── solver/               LWW/Fugue equivalence + incremental solver tests
 │   └── integration.test.ts   Multi-agent bootstrap, sync, retraction, time travel
