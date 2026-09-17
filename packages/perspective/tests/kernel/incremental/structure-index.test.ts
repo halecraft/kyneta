@@ -39,6 +39,7 @@ import type {
   StructureConstraint,
   ValueConstraint,
 } from "../../../src/kernel/types.js"
+import { defined } from "../../helpers/defined.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -157,7 +158,8 @@ function assertIndexEquals(
   expect(actual.byId.size, `${prefix}byId.size`).toBe(expected.byId.size)
   for (const [key, sc] of expected.byId) {
     expect(actual.byId.has(key), `${prefix}byId has ${key}`).toBe(true)
-    expect(cnIdKey(actual.byId.get(key)?.id)).toBe(cnIdKey(sc.id))
+    const found = defined(actual.byId.get(key), `${prefix}byId[${key}]`)
+    expect(cnIdKey(found.id)).toBe(cnIdKey(sc.id))
   }
 
   // Compare slotGroups
@@ -268,14 +270,14 @@ describe("IncrementalStructureIndex", () => {
       expect(delta.updates.size).toBe(1)
 
       const sid = slotId(root)
-      const group = delta.updates.get(sid)
-      expect(group).toBeDefined()
-      expect(group?.slotId).toBe(sid)
-      expect(group?.policy).toBe("map")
-      expect(group?.childKey).toBe("doc")
-      expect(group?.structures.length).toBe(1)
-      expect(cnIdKey(group?.structures[0]?.id)).toBe(cnIdKey(root.id))
-      expect(group?.structureKeys.has(cnIdKey(root.id))).toBe(true)
+      const group = defined(delta.updates.get(sid), `an update for ${sid}`)
+      expect(group.slotId).toBe(sid)
+      expect(group.policy).toBe("map")
+      expect(group.childKey).toBe("doc")
+      expect(group.structures.length).toBe(1)
+      const structure = defined(group.structures[0], "the group's structure")
+      expect(cnIdKey(structure.id)).toBe(cnIdKey(root.id))
+      expect(group.structureKeys.has(cnIdKey(root.id))).toBe(true)
 
       // Also in current()
       const index = stage.current()

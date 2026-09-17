@@ -7,7 +7,7 @@
 //
 // The stratifier's own tests live with it, in `@kyneta/datalog`.
 
-import type { Rule } from "@kyneta/datalog"
+import type { Rule, Stratum } from "@kyneta/datalog"
 import {
   _,
   atom,
@@ -19,6 +19,22 @@ import {
 } from "@kyneta/datalog"
 import { describe, expect, it } from "vitest"
 import { buildDefaultLWWRules, buildDefaultRules } from "../../src/bootstrap.js"
+import { defined } from "../helpers/defined.js"
+
+/**
+ * The stratum that holds `predicate`, or a failure naming it.
+ *
+ * Every test here locates strata this way, so "the program did not stratify
+ * the way this test assumes" fails once, here, with the predicate named —
+ * rather than as an `undefined.index` further down, or as a `?.index`
+ * comparison that quietly passes.
+ */
+function stratumFor(strata: readonly Stratum[], predicate: string): Stratum {
+  return defined(
+    strata.find(s => s.predicates.has(predicate)),
+    `a stratum holding "${predicate}"`,
+  )
+}
 
 // ---------------------------------------------------------------------------
 // Finer-Grained Stratification (Plan 007, Phase 1, Task 1.3)
@@ -38,35 +54,29 @@ describe("finer-grained stratification", () => {
     expect(strataWithRules.length).toBe(4)
 
     // Stratum for superseded: 2 rules (supersededByLamport, supersededByPeer)
-    const supersededStratum = strata.find(s => s.predicates.has("superseded"))
-    expect(supersededStratum).toBeDefined()
-    expect(supersededStratum?.rules.length).toBe(2)
+    const supersededStratum = stratumFor(strata, "superseded")
+    expect(supersededStratum.rules.length).toBe(2)
 
     // Stratum for fugue_child + fugue_descendant: 3 rules
-    const fugueChildStratum = strata.find(s => s.predicates.has("fugue_child"))
-    expect(fugueChildStratum).toBeDefined()
-    expect(fugueChildStratum?.predicates.has("fugue_descendant")).toBe(true)
-    expect(fugueChildStratum?.rules.length).toBe(3)
+    const fugueChildStratum = stratumFor(strata, "fugue_child")
+    expect(fugueChildStratum.predicates.has("fugue_descendant")).toBe(true)
+    expect(fugueChildStratum.rules.length).toBe(3)
 
     // Stratum for winner: 1 rule
-    const winnerStratum = strata.find(s => s.predicates.has("winner"))
-    expect(winnerStratum).toBeDefined()
-    expect(winnerStratum?.rules.length).toBe(1)
+    const winnerStratum = stratumFor(strata, "winner")
+    expect(winnerStratum.rules.length).toBe(1)
 
     // Stratum for fugue_before: 5 rules
-    const fugueBeforeStratum = strata.find(s =>
-      s.predicates.has("fugue_before"),
-    )
-    expect(fugueBeforeStratum).toBeDefined()
-    expect(fugueBeforeStratum?.rules.length).toBe(5)
+    const fugueBeforeStratum = stratumFor(strata, "fugue_before")
+    expect(fugueBeforeStratum.rules.length).toBe(5)
 
     // Ordering: level 0 strata before level 1 strata.
-    expect(supersededStratum?.index).toBeLessThan(winnerStratum?.index)
-    expect(fugueChildStratum?.index).toBeLessThan(fugueBeforeStratum?.index)
+    expect(supersededStratum.index).toBeLessThan(winnerStratum.index)
+    expect(fugueChildStratum.index).toBeLessThan(fugueBeforeStratum.index)
 
     // LWW and Fugue strata are separate at each level.
-    expect(supersededStratum?.index).not.toBe(fugueChildStratum?.index)
-    expect(winnerStratum?.index).not.toBe(fugueBeforeStratum?.index)
+    expect(supersededStratum.index).not.toBe(fugueChildStratum.index)
+    expect(winnerStratum.index).not.toBe(fugueBeforeStratum.index)
   })
 
   it("strata at the same dependency level are independent (no cross-references)", () => {
@@ -76,15 +86,13 @@ describe("finer-grained stratification", () => {
     if (!result.ok) return
 
     const strata = result.value
-    const supersededStratum = strata.find(s => s.predicates.has("superseded"))!
-    const fugueChildStratum = strata.find(s => s.predicates.has("fugue_child"))!
+    const supersededStratum = stratumFor(strata, "superseded")
+    const fugueChildStratum = stratumFor(strata, "fugue_child")
 
     // Verify they are at the same dependency level (both at level 0).
     // They should have separate indices but both come before the level-1 strata.
-    const winnerStratum = strata.find(s => s.predicates.has("winner"))!
-    const fugueBeforeStratum = strata.find(s =>
-      s.predicates.has("fugue_before"),
-    )!
+    const winnerStratum = stratumFor(strata, "winner")
+    const fugueBeforeStratum = stratumFor(strata, "fugue_before")
 
     expect(supersededStratum.index).toBeLessThan(winnerStratum.index)
     expect(supersededStratum.index).toBeLessThan(fugueBeforeStratum.index)
@@ -124,9 +132,9 @@ describe("finer-grained stratification", () => {
     // The cross rule should merge superseded and fugue_child into one
     // component at level 0 (since mixed depends on both derived preds
     // at level 0).
-    const supersededStratum = strata.find(s => s.predicates.has("superseded"))!
-    const fugueChildStratum = strata.find(s => s.predicates.has("fugue_child"))!
-    const mixedStratum = strata.find(s => s.predicates.has("mixed"))!
+    const supersededStratum = stratumFor(strata, "superseded")
+    const fugueChildStratum = stratumFor(strata, "fugue_child")
+    const mixedStratum = stratumFor(strata, "mixed")
 
     // mixed, superseded, and fugue_child should all be in the same stratum
     // because mixed references derived predicates from both families at level 0.
@@ -145,11 +153,9 @@ describe("finer-grained stratification", () => {
     const strataWithRules = strata.filter(s => s.rules.length > 0)
     expect(strataWithRules.length).toBe(2)
 
-    const supersededStratum = strata.find(s => s.predicates.has("superseded"))
-    const winnerStratum = strata.find(s => s.predicates.has("winner"))
-    expect(supersededStratum).toBeDefined()
-    expect(winnerStratum).toBeDefined()
-    expect(winnerStratum?.index).toBeGreaterThan(supersededStratum?.index)
+    const supersededStratum = stratumFor(strata, "superseded")
+    const winnerStratum = stratumFor(strata, "winner")
+    expect(winnerStratum.index).toBeGreaterThan(supersededStratum.index)
   })
 
   it("ground predicates do not bridge independent families", () => {
@@ -170,8 +176,8 @@ describe("finer-grained stratification", () => {
     if (!result.ok) return
 
     const strata = result.value
-    const aStratum = strata.find(s => s.predicates.has("derived_a"))!
-    const bStratum = strata.find(s => s.predicates.has("derived_b"))!
+    const aStratum = stratumFor(strata, "derived_a")
+    const bStratum = stratumFor(strata, "derived_b")
 
     // They should be in separate strata — ground_input doesn't bridge them.
     expect(aStratum.index).not.toBe(bStratum.index)

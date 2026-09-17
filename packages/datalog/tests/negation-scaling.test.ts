@@ -33,6 +33,17 @@ import {
   varTerm,
 } from "../src/index.js"
 
+/**
+ * `performance` is a standard global in every runtime this package targets,
+ * but its declaration lives in `lib.dom.d.ts` and `@types/node` — and this
+ * package pulls in neither, so that nothing in `src` can reach for a platform
+ * API without saying so. Declaring the one member the measurement uses keeps
+ * that line where it belongs. `Date.now` is not a substitute: the ratio below
+ * floors its denominator at half a millisecond, which needs sub-millisecond
+ * resolution to mean anything.
+ */
+declare const performance: { now(): number }
+
 const $ = varTerm
 
 /** Competing writers per slot. Bounded, as concurrent writes to one field are. */

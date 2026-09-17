@@ -2029,7 +2029,9 @@ describe("a predicate that is both inserted and derived", () => {
   ])
   const line = [fact("reach", [0]), fact("edge", [0, 1]), fact("edge", [1, 2])]
   const weights = (zs: ZSet<Fact>): [string, number][] =>
-    [...zs.entries()].map(([key, entry]) => [key, entry.weight]).sort()
+    [...zs.entries()]
+      .map(([key, entry]) => [key, entry.weight] as [string, number])
+      .sort()
 
   it("keeps its ground facts through a rule change, and afterwards", () => {
     const evaluator = createEvaluator([spread])

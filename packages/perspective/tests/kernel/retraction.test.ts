@@ -21,6 +21,7 @@ import type {
   StructureConstraint,
   ValueConstraint,
 } from "../../src/kernel/types.js"
+import { defined } from "../helpers/defined.js"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -819,7 +820,9 @@ describe("filterActive", () => {
 
     const active = filterActive([v1, r1])
     expect(active.length).toBe(1)
-    expect(cnIdKey(active[0]?.id)).toBe("alice@1")
+    expect(cnIdKey(defined(active[0], "the surviving constraint").id)).toBe(
+      "alice@1",
+    )
   })
 
   it("returns all when no retractions", () => {

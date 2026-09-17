@@ -16,6 +16,7 @@ import {
   evaluatePositiveAtom,
   groundHead,
 } from "../src/evaluate.js"
+import type { Value } from "../src/types.js"
 import {
   atom,
   constTerm,

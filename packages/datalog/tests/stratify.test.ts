@@ -12,9 +12,15 @@ import {
   buildDependencyGraph,
   computeSCCs,
   headPredicates,
+  type Stratum,
   stratify,
 } from "../src/stratify.js"
-import type { AggregationClause, Rule } from "../src/types.js"
+import type {
+  AggregationClause,
+  CyclicNegationError,
+  Rule,
+  StratificationError,
+} from "../src/types.js"
 import {
   _,
   aggregation,
@@ -28,6 +34,35 @@ import {
   rule,
   varTerm,
 } from "../src/types.js"
+import { defined } from "./defined.js"
+
+/**
+ * The stratum that holds `predicate`, or a failure naming it.
+ *
+ * Locating strata this way means "the program did not stratify the way this
+ * test assumes" fails once, with the predicate named, rather than as a
+ * `?.index` comparison that quietly passes on `undefined`.
+ */
+function stratumFor(strata: readonly Stratum[], predicate: string): Stratum {
+  return defined(
+    strata.find(s => s.predicates.has(predicate)),
+    `a stratum holding "${predicate}"`,
+  )
+}
+
+/**
+ * The error as a cyclic-negation error, or a failure saying what it was.
+ *
+ * Asserting `error.kind` and then reading `error.cycle` does not narrow the
+ * union: the read is unchecked, so a different error kind reaches the next
+ * line as a TypeError instead of a failed expectation.
+ */
+function cyclicNegation(error: StratificationError): CyclicNegationError {
+  if (error.kind !== "cyclicNegation") {
+    throw new Error(`expected a cyclicNegation error, got "${error.kind}"`)
+  }
+  return error
+}
 
 // ---------------------------------------------------------------------------
 // Dependency Graph Construction
@@ -304,12 +339,10 @@ describe("stratify", () => {
     const strata = result.value
 
     // Find which stratum each predicate is in
-    const derivedStratum = strata.find(s => s.predicates.has("derived"))
-    const filteredStratum = strata.find(s => s.predicates.has("filtered"))
+    const derivedStratum = stratumFor(strata, "derived")
+    const filteredStratum = stratumFor(strata, "filtered")
 
-    expect(derivedStratum).toBeDefined()
-    expect(filteredStratum).toBeDefined()
-    expect(filteredStratum?.index).toBeGreaterThan(derivedStratum?.index)
+    expect(filteredStratum.index).toBeGreaterThan(derivedStratum.index)
   })
 
   it("handles three-level stratification", () => {
@@ -335,15 +368,12 @@ describe("stratify", () => {
     if (!result.ok) return
 
     const strata = result.value
-    const s0 = strata.find(s => s.predicates.has("level0"))
-    const s1 = strata.find(s => s.predicates.has("level1"))
-    const s2 = strata.find(s => s.predicates.has("level2"))
+    const s0 = stratumFor(strata, "level0")
+    const s1 = stratumFor(strata, "level1")
+    const s2 = stratumFor(strata, "level2")
 
-    expect(s0).toBeDefined()
-    expect(s1).toBeDefined()
-    expect(s2).toBeDefined()
-    expect(s1?.index).toBeGreaterThan(s0?.index)
-    expect(s2?.index).toBeGreaterThan(s1?.index)
+    expect(s1.index).toBeGreaterThan(s0.index)
+    expect(s2.index).toBeGreaterThan(s1.index)
   })
 
   it("puts aggregation source in lower stratum", () => {
@@ -382,12 +412,10 @@ describe("stratify", () => {
     if (!result.ok) return
 
     const strata = result.value
-    const derivedStratum = strata.find(s => s.predicates.has("derived"))
-    const maxStratum = strata.find(s => s.predicates.has("max_derived"))
+    const derivedStratum = stratumFor(strata, "derived")
+    const maxStratum = stratumFor(strata, "max_derived")
 
-    expect(derivedStratum).toBeDefined()
-    expect(maxStratum).toBeDefined()
-    expect(maxStratum?.index).toBeGreaterThan(derivedStratum?.index)
+    expect(maxStratum.index).toBeGreaterThan(derivedStratum.index)
   })
 
   it("strata are in evaluation order (lower index first)", () => {
@@ -407,7 +435,10 @@ describe("stratify", () => {
 
     const strata = result.value
     for (let i = 1; i < strata.length; i++) {
-      expect(strata[i]?.index).toBeGreaterThanOrEqual(strata[i - 1]?.index)
+      const previous = defined(strata[i - 1], `stratum ${i - 1}`)
+      expect(defined(strata[i], `stratum ${i}`).index).toBeGreaterThanOrEqual(
+        previous.index,
+      )
     }
   })
 
@@ -434,13 +465,11 @@ describe("stratify", () => {
     if (!result.ok) return
 
     const strata = result.value
-    const aStratum = strata.find(s => s.predicates.has("a"))
-    const bStratum = strata.find(s => s.predicates.has("b"))
+    const aStratum = stratumFor(strata, "a")
+    const bStratum = stratumFor(strata, "b")
 
-    expect(aStratum).toBeDefined()
-    expect(bStratum).toBeDefined()
     // a and b are in the same SCC, so same stratum
-    expect(aStratum?.index).toBe(bStratum?.index)
+    expect(aStratum.index).toBe(bStratum.index)
   })
 
   it("rules are assigned to the correct stratum", () => {
@@ -459,13 +488,13 @@ describe("stratify", () => {
     if (!result.ok) return
 
     const strata = result.value
-    const aStratum = strata.find(s => s.predicates.has("a"))
-    const bStratum = strata.find(s => s.predicates.has("b"))
+    const aStratum = stratumFor(strata, "a")
+    const bStratum = stratumFor(strata, "b")
 
-    expect(aStratum?.rules).toContain(r1)
-    expect(bStratum?.rules).toContain(r2)
-    expect(aStratum?.rules).not.toContain(r2)
-    expect(bStratum?.rules).not.toContain(r1)
+    expect(aStratum.rules).toContain(r1)
+    expect(bStratum.rules).toContain(r2)
+    expect(aStratum.rules).not.toContain(r2)
+    expect(bStratum.rules).not.toContain(r1)
   })
 })
 
@@ -488,7 +517,7 @@ describe("cyclic negation detection", () => {
     if (result.ok) return
 
     expect(result.error.kind).toBe("cyclicNegation")
-    expect(result.error.cycle).toContain("a")
+    expect(cyclicNegation(result.error).cycle).toContain("a")
   })
 
   it("rejects mutual cyclic negation", () => {
@@ -510,7 +539,7 @@ describe("cyclic negation detection", () => {
     if (result.ok) return
 
     expect(result.error.kind).toBe("cyclicNegation")
-    expect(result.error.cycle.length).toBeGreaterThanOrEqual(2)
+    expect(cyclicNegation(result.error).cycle.length).toBeGreaterThanOrEqual(2)
   })
 
   it("rejects cyclic negation through positive intermediate", () => {
@@ -640,8 +669,8 @@ describe("cyclic negation detection", () => {
 
     expect(result.error.kind).toBe("cyclicNegation")
     // The cycle should mention both p and q
-    expect(result.error.cycle).toContain("p")
-    expect(result.error.cycle).toContain("q")
+    expect(cyclicNegation(result.error).cycle).toContain("p")
+    expect(cyclicNegation(result.error).cycle).toContain("q")
   })
 })
 
@@ -823,12 +852,10 @@ describe("complex stratification", () => {
     if (!result.ok) return
 
     const strata = result.value
-    const supersededStratum = strata.find(s => s.predicates.has("superseded"))
-    const winnerStratum = strata.find(s => s.predicates.has("winner"))
+    const supersededStratum = stratumFor(strata, "superseded")
+    const winnerStratum = stratumFor(strata, "winner")
 
-    expect(supersededStratum).toBeDefined()
-    expect(winnerStratum).toBeDefined()
-    expect(winnerStratum?.index).toBeGreaterThan(supersededStratum?.index)
+    expect(winnerStratum.index).toBeGreaterThan(supersededStratum.index)
 
     // Guards produce no dependency graph edges — verify the graph
     // only has edges for the relational atoms (active_value, superseded)
@@ -840,11 +867,11 @@ describe("complex stratification", () => {
     }
 
     // superseded rules should be in the superseded stratum
-    expect(supersededStratum?.rules).toContain(supersededByLamport)
-    expect(supersededStratum?.rules).toContain(supersededByPeer)
+    expect(supersededStratum.rules).toContain(supersededByLamport)
+    expect(supersededStratum.rules).toContain(supersededByPeer)
 
     // winner rule should be in the winner stratum
-    expect(winnerStratum?.rules).toContain(winnerRule)
+    expect(winnerStratum.rules).toContain(winnerRule)
   })
 
   it("handles diamond dependency without negation", () => {
@@ -904,11 +931,9 @@ describe("complex stratification", () => {
     if (!result.ok) return
 
     const strata = result.value
-    const cStratum = strata.find(s => s.predicates.has("c"))
-    const aStratum = strata.find(s => s.predicates.has("a"))
+    const cStratum = stratumFor(strata, "c")
+    const aStratum = stratumFor(strata, "a")
 
-    expect(cStratum).toBeDefined()
-    expect(aStratum).toBeDefined()
-    expect(aStratum?.index).toBeGreaterThan(cStratum?.index)
+    expect(aStratum.index).toBeGreaterThan(cStratum.index)
   })
 })
