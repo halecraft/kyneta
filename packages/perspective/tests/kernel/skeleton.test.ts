@@ -7,7 +7,7 @@
 // - Seq tombstone detection (elements without active values)
 // - Slot group merging (multiple peers creating same map key)
 // - Mixed nesting (map-in-seq, seq-in-map, seq-in-seq)
-// - ResolutionResult path vs. native fallback path
+// - An explicit ResolutionResult vs. the store's default rules
 // - Empty containers
 //
 // These tests exercise skeleton.ts in isolation, without the full pipeline.
@@ -522,7 +522,7 @@ describe("skeleton: mixed nesting", () => {
 })
 
 describe("skeleton: ResolutionResult path", () => {
-  it("uses ResolutionResult winners instead of native LWW", () => {
+  it("uses ResolutionResult winners instead of the default LWW rules", () => {
     const root = makeRoot("alice", 0, "profile")
     const child = makeMapChild("alice", 1, root.id, "name")
 
@@ -530,7 +530,7 @@ describe("skeleton: ResolutionResult path", () => {
     const val1 = makeValue("alice", 2, 5, child.id, "Alice")
     const val2 = makeValue("bob", 0, 10, child.id, "Bob")
 
-    const { structureIndex, active } = setup([root, child, val1, val2])
+    const { structureIndex } = setup([root, child, val1, val2])
 
     // Build a ResolutionResult that picks Alice (despite Bob having higher lamport)
     // This simulates a custom resolution rule
@@ -549,7 +549,7 @@ describe("skeleton: ResolutionResult path", () => {
     expect(name?.value).toBe("Alice")
   })
 
-  it("native fallback produces correct result when no ResolutionResult", () => {
+  it("the default rules produce the LWW result when none is supplied", () => {
     const root = makeRoot("alice", 0, "profile")
     const child = makeMapChild("alice", 1, root.id, "name")
     const val1 = makeValue("alice", 2, 5, child.id, "Alice")
@@ -557,18 +557,18 @@ describe("skeleton: ResolutionResult path", () => {
 
     const { structureIndex, active } = setup([root, child, val1, val2])
 
-    // No resolution result — falls back to native LWW
+    // The resolution the default rules compute for these constraints.
     const reality = buildSkeleton(
       structureIndex,
       resolutionFor(active, structureIndex),
     )
     const name = getNode(reality, "profile", "name")
     expect(name).toBeDefined()
-    // Native LWW: Bob wins (lamport 10 > 5)
+    // Default LWW: Bob wins (lamport 10 > 5)
     expect(name?.value).toBe("Bob")
   })
 
-  it("ResolutionResult and native fallback produce same result for standard LWW", () => {
+  it("an explicit ResolutionResult and the default rules agree for standard LWW", () => {
     const root = makeRoot("alice", 0, "profile")
     const child = makeMapChild("alice", 1, root.id, "name")
     const val1 = makeValue("alice", 2, 3, child.id, "First")
@@ -576,13 +576,13 @@ describe("skeleton: ResolutionResult path", () => {
 
     const { structureIndex, active } = setup([root, child, val1, val2])
 
-    // Native fallback
-    const realityNative = buildSkeleton(
+    // What the default rules resolve.
+    const realityFromRules = buildSkeleton(
       structureIndex,
       resolutionFor(active, structureIndex),
     )
 
-    // Resolution result matching native LWW behavior
+    // An explicit resolution result matching what the rules decided.
     const slotId = `map:${cnIdKey(root.id)}:name`
     const resolution = makeResolution([
       {
@@ -593,7 +593,7 @@ describe("skeleton: ResolutionResult path", () => {
     ])
     const realityResolved = buildSkeleton(structureIndex, resolution)
 
-    expect(getNode(realityNative, "profile", "name")?.value).toBe("Second")
+    expect(getNode(realityFromRules, "profile", "name")?.value).toBe("Second")
     expect(getNode(realityResolved, "profile", "name")?.value).toBe("Second")
   })
 
@@ -602,7 +602,7 @@ describe("skeleton: ResolutionResult path", () => {
     const child = makeMapChild("alice", 1, root.id, "name")
     const val = makeValue("alice", 2, 2, child.id, "Alice")
 
-    const { structureIndex, active } = setup([root, child, val])
+    const { structureIndex } = setup([root, child, val])
 
     // Resolution result with no winner for this slot (custom rules decided no winner)
     const resolution = makeResolution([])
@@ -621,7 +621,7 @@ describe("skeleton: ResolutionResult path", () => {
     const v1 = makeValue("alice", 2, 2, e1.id, "alice-item")
     const v2 = makeValue("bob", 1, 1, e2.id, "bob-item")
 
-    const { structureIndex, active } = setup([root, e1, e2, v1, v2])
+    const { structureIndex } = setup([root, e1, e2, v1, v2])
 
     // Build resolution with explicit ordering: bob before alice
     const parentKey = cnIdKey(root.id)
@@ -657,7 +657,7 @@ describe("skeleton: ResolutionResult path", () => {
   })
 })
 
-describe("skeleton: LWW value resolution (native fallback)", () => {
+describe("skeleton: LWW value resolution (default rules)", () => {
   it("higher lamport wins", () => {
     const root = makeRoot("alice", 0, "doc")
     const child = makeMapChild("alice", 1, root.id, "title")
@@ -722,7 +722,7 @@ describe("skeleton: orphaned values", () => {
   })
 })
 
-describe("skeleton: seq ordering (native Fugue fallback)", () => {
+describe("skeleton: seq ordering (default Fugue rules)", () => {
   it("sequential inserts preserve order", () => {
     const root = makeRoot("alice", 0, "list", "seq")
     const e1 = makeSeqChild("alice", 1, root.id, null, null)

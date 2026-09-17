@@ -1,7 +1,6 @@
 // === Skeleton Builder ===
-// Builds the reality tree from the StructureIndex, using either
-// Datalog-derived resolution results or native solvers for value
-// resolution and sequence ordering.
+// Builds the reality tree from the StructureIndex and a ResolutionResult —
+// the winners and Fugue ordering the rules have already derived.
 //
 // The skeleton is the structural backbone of the reality — a rooted tree
 // where each node has an identity (CnId), a policy, children, and a
@@ -12,15 +11,12 @@
 // 2. Recursively builds child nodes using the structure index.
 // 3. For Map parents, children are grouped by (parent, key) via slot groups.
 // 4. For Seq parents, children are ordered by Fugue interleaving.
-// 5. Values are resolved by LWW across all active value constraints
-//    targeting any structure in a slot group.
+// 5. Values come from the resolution's winner for the slot group.
 //
-// Resolution source (Phase 4.5):
-// When a ResolutionResult is provided, the skeleton reads pre-resolved
-// winners and Fugue ordering from it — the Datalog evaluator (or native
-// solvers packaged as a ResolutionResult) has already done the work.
-// When no ResolutionResult is provided, the skeleton falls back to
-// calling native solvers directly (legacy/test path).
+// The builder resolves nothing itself. It reads the winners and the Fugue
+// pairs the evaluator derived and attaches them to the tree, which is why a
+// reality is a function of the rules in the store and of nothing else. The
+// resolution is required: there is no second path that computes one here.
 //
 // See unified-engine.md §7.2, §7.3, §8.
 
@@ -44,10 +40,8 @@ import type {
  * Build a Reality tree from the structure index and active constraints.
  *
  * This is the main entry point for skeleton construction. It:
- * 1. Builds a value index (slot → LWWEntry[]) for fast resolution
- *    (used when no ResolutionResult or as fallback).
- * 2. Creates the synthetic root node.
- * 3. Recursively builds each container and its children.
+ * 1. Recursively builds each root container and its children.
+ * 2. Creates the synthetic root node above them.
  *
  * @param structureIndex - Precomputed structure index from valid/active constraints.
  * @param resolution - What the store's rules decided: the winner per slot and
@@ -67,7 +61,7 @@ export function buildSkeleton(
     resolution,
   }
 
-  // Step 2: Build child nodes for each root container.
+  // Step 1: Build child nodes for each root container.
   const rootChildren = new Map<string, RealityNode>()
 
   for (const [containerId, rootGroup] of structureIndex.roots) {
@@ -75,7 +69,7 @@ export function buildSkeleton(
     rootChildren.set(containerId, node)
   }
 
-  // Step 3: Create the synthetic root.
+  // Step 2: Create the synthetic root.
   // The synthetic root has a well-known CnId that no real agent will produce.
   const syntheticRoot: RealityNode = {
     id: createCnId("__reality__", 0),
@@ -101,16 +95,11 @@ interface BuildContext {
 }
 
 // ---------------------------------------------------------------------------
-// Value Index
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // Value Resolution
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve the value for a slot, using the ResolutionResult if available,
- * otherwise falling back to native LWW.
+ * The value the resolution gives this slot.
  *
  * @returns The resolved value, or undefined if no value exists for the slot.
  */
@@ -258,10 +247,9 @@ function buildMapChildren(
 /**
  * Build children for a Seq parent.
  *
- * Collects all seq structure constraints, orders them using either
- * Datalog-derived `fugue_before` pairs or the native Fugue solver,
- * then builds a RealityNode for each. Children are keyed by their
- * positional index ("0", "1", "2", ...).
+ * Collects all seq structure constraints, orders them by the resolution's
+ * `fugue_before` pairs, then builds a RealityNode for each. Children are
+ * keyed by their positional index ("0", "1", "2", ...).
  *
  * Seq elements whose value has been retracted (no active value constraint)
  * are structurally present (for ordering) but excluded from the visible
@@ -329,8 +317,7 @@ function buildSeqChildren(
 }
 
 /**
- * Order seq elements using either Datalog-derived fugue_before pairs
- * or the native Fugue solver.
+ * Order seq elements by the resolution's fugue_before pairs.
  *
  * @returns Ordered array of CnId key strings.
  */

@@ -11,10 +11,9 @@
 //
 //   P^Δ (projection) → Δ_facts → E^Δ → Δ_derived → R → { Δ_resolved, Δ_fuguePairs } → K^Δ (skeleton)
 //
-// The native path (Phase 2–3) handles default LWW/Fugue rules in O(|Δ|).
-// The Datalog path uses the unified evaluator from Plan 006.1, which
-// replaces the old incremental-evaluate.ts with weighted semi-naive
-// evaluation and dirty-map-based delta extraction.
+// Evaluation is the unified evaluator from Plan 006.1, which replaced the
+// old incremental-evaluate.ts with weighted semi-naive evaluation and
+// dirty-map-based delta extraction.
 //
 // Strategy switching occurs when rule constraints are added or retracted.
 // On switch, the new strategy is bootstrapped from accumulated facts and

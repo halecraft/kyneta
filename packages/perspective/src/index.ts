@@ -153,8 +153,7 @@ export {
   type Reality,
   type RealityNode,
   type ResolutionResult,
-  // Rule Detection (§B.7)
-  // Resolution (§B.4, §B.7 — Datalog→kernel bridge)
+  // Resolution (§B.4 — Datalog→kernel bridge)
   type ResolvedWinner,
   type RetractConstraint,
   // Retraction (§6)

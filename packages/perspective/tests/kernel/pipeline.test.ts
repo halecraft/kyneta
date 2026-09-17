@@ -197,7 +197,6 @@ function buildStore(constraints: Constraint[]): ConstraintStore {
 
 const DEFAULT_CONFIG: PipelineConfig = {
   creator: "alice",
-  enableDatalogEvaluation: true,
 }
 
 /** Get all child keys of a reality node. */

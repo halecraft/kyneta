@@ -13,13 +13,11 @@
 //   winner(Slot, CnId, Value)         — from LWW rules (§B.4)
 //   fugue_before(Parent, A, B)        — from Fugue rules (§B.4)
 //
-// See unified-engine.md §7.2, §B.4, §B.7.
+// See unified-engine.md §7.2, §B.4.
 
 import type { Database, Fact, FactTuple } from "@kyneta/datalog"
 import type { ZSet, ZSetEntry } from "@kyneta/zset"
 import { zsetFilter, zsetFromEntries, zsetMap } from "@kyneta/zset"
-import { cnIdFromString } from "./cnid.js"
-import { ACTIVE_STRUCTURE_SEQ, ACTIVE_VALUE } from "./projection.js"
 import type { Value } from "./types.js"
 
 // ---------------------------------------------------------------------------
@@ -71,8 +69,7 @@ export function fuguePairKey(p: FugueBeforePair): string {
 /**
  * The complete resolution result extracted from Datalog evaluation.
  *
- * Consumed by the skeleton builder to populate the reality tree
- * without calling native solvers directly.
+ * Consumed by the skeleton builder to populate the reality tree.
  */
 export interface ResolutionResult {
   /**
@@ -96,8 +93,8 @@ export interface ResolutionResult {
 //
 // These parse ground fact tuples (from projection) back into typed kernel
 // structures. They are the inverse of the projection functions in
-// projection.ts and are used by both the incremental native solvers and
-// the incremental Datalog evaluator's resolution extraction.
+// projection.ts, and are what the batch and incremental evaluators' resolution
+// extraction is built from.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -256,19 +253,16 @@ export function fuguePairDeltas(derived: ZSet<Fact>): ZSet<FugueBeforePair> {
 }
 
 // ---------------------------------------------------------------------------
-// Resolution from native solvers
-//
-// These helpers allow the pipeline to produce a ResolutionResult from
-// native solver output, giving the skeleton builder a uniform interface
-// regardless of whether the Datalog or native path was used.
+// A resolution from parts
 // ---------------------------------------------------------------------------
 
 /**
- * Create a ResolutionResult from native solver output.
+ * Assemble a ResolutionResult from winners and Fugue pairs already in hand,
+ * rather than from a database. What the equivalence oracles and the skeleton
+ * tests use to hand the builder a resolution they chose themselves.
  *
- * @param winners - Map from slotId to ResolvedWinner (from native LWW).
- * @param fuguePairs - Map from parent key to FugueBeforePair[] (from native Fugue).
- * @returns A ResolutionResult marked as from native solvers.
+ * @param winners - Map from slotId to ResolvedWinner.
+ * @param fuguePairs - Map from parent key to FugueBeforePair[].
  */
 export function resolutionOf(
   winners: ReadonlyMap<string, ResolvedWinner>,

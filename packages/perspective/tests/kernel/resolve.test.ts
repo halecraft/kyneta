@@ -1,7 +1,6 @@
 // === Phase 4.5 Tests: Datalog-Driven Resolution ===
 // Tests cover:
-// - Datalog-primary path producing identical realities to native-only path
-// - Native fast path detection (default rules → native; custom rules → Datalog)
+// - The Datalog→kernel bridge: winners and fugue pairs out of a database
 // - Custom resolution rules replacing defaults
 // - Authority retraction immunity (§2.5)
 // - Structure index built from valid set, not active set (§7.2)
@@ -57,7 +56,6 @@ import type {
   Reality,
   RealityNode,
   RetractConstraint,
-  RuleConstraint,
   StructureConstraint,
   Value,
   ValueConstraint,
@@ -847,7 +845,7 @@ describe("pipeline: resolution metadata in PipelineResult", () => {
     expect(result.resolutionResult.winners.size).toBe(1)
   })
 
-  it("Datalog path sets fromDatalog=true in resolution result", () => {
+  it("a custom winner rule decides the resolution", () => {
     const root = makeStructureRoot("alice", 0, "profile")
     const child = makeStructureMap("alice", 1, root.id, "name")
     const val = makeValue("alice", 2, child.id, "Alice", 3)

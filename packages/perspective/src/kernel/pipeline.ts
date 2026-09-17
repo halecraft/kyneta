@@ -4,18 +4,17 @@
 //   S → S_V → Valid(S_V) → { AllStructure(Valid(S_V)), Active(Valid(S_V)) }
 //     → StructureIndex → Projection → Resolution → Skeleton → Reality
 //
-// Resolution follows the spec's architecture (§B.1, §B.4, §B.7):
-//   - Datalog evaluation is the PRIMARY resolution path.
-//   - Native solvers are an OPTIONAL optimization (§B.7) that activates
-//     only when the active rules match known default patterns.
-//   - If rules are retracted/replaced, the pipeline falls back to Datalog.
+// Resolution is Datalog evaluation of the rules in the store, and nothing
+// else (§B.1, §B.4). There is no second path and no fallback: a store that
+// carries no rules resolves to structure with no values, and a rule set that
+// cannot be evaluated throws. See Step 6 below.
 //
 // The structure index is built from AllStructure(Valid(S_V)) — all valid
 // structure constraints regardless of dominance (§7.2). Structure constraints
 // are permanent and immune to retraction, so this is equivalent to building
 // from Active(S_V), but the code matches the spec's two-path pipeline design.
 //
-// See unified-engine.md §7.1, §7.2, §B.1, §B.4, §B.7.
+// See unified-engine.md §7.1, §7.2, §B.1, §B.4.
 
 import type { Host, StratificationError } from "@kyneta/datalog"
 import { evaluate } from "@kyneta/datalog"
@@ -112,7 +111,7 @@ export interface PipelineResult {
  * 3. **Structure index** (§7.2, §8): Build from AllStructure(Valid(S_V)).
  * 4. **Retraction** (§6): Compute Active(Valid(S_V)).
  * 5. **Projection**: Convert active constraints → Datalog ground facts.
- * 6. **Resolution**: Datalog evaluation (primary) or native solvers (§B.7).
+ * 6. **Resolution** (§B.4): Datalog evaluation of the store's rules.
  * 7. **Skeleton**: Build the reality tree from resolution result.
  *
  * @param store - The constraint store.

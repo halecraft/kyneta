@@ -40,7 +40,6 @@ export {
   observe as lamportObserve,
   tick,
 } from "./lamport.js"
-// --- Native Resolution (§B.7) ---
 // --- Pipeline (§7) ---
 export type {
   PipelineConfig,
@@ -58,7 +57,7 @@ export {
   CONSTRAINT_PEER,
   projectToFacts,
 } from "./projection.js"
-// --- Resolution (§B.4, §B.7 — Datalog→kernel bridge) ---
+// --- Resolution (§B.4 — Datalog→kernel bridge) ---
 export type {
   FugueBeforePair,
   ResolutionResult,

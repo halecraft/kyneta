@@ -19,7 +19,6 @@ import {
   produceSeqChild,
 } from "../src/kernel/agent.js"
 import { createCnId } from "../src/kernel/cnid.js"
-import type { PipelineConfig } from "../src/kernel/pipeline.js"
 import { solve, solveFull } from "../src/kernel/pipeline.js"
 import { STUB_SIGNATURE } from "../src/kernel/signature.js"
 import type { ConstraintStore } from "../src/kernel/store.js"
@@ -1138,44 +1137,5 @@ describe("pipeline metadata with bootstrap", () => {
     // not because the engine has a built-in notion of last-writer-wins.
     expect(result.resolutionResult.winners.size).toBe(1)
     expect(getNode(result.reality, "doc", "field")?.value).toBe("hello")
-  })
-
-  it("Datalog path produces identical result to native path", () => {
-    const { store, agent: alice, config } = createReality({ creator: "alice" })
-
-    const { constraint: rootC, id: rootId } = produceRoot(alice, "doc", "map")
-    insert(store, rootC)
-    alice.observe(rootC)
-
-    const { constraint: keyC, id: keyId } = produceMapChild(
-      alice,
-      rootId,
-      "field",
-    )
-    insert(store, keyC)
-    alice.observe(keyC)
-
-    const val = alice.produceValue(keyId, "hello")
-    insert(store, val)
-    alice.observe(val)
-
-    // Force Datalog path by disabling native
-    const datalogConfig: PipelineConfig = {
-      ...config,
-      enableDatalogEvaluation: true,
-    }
-
-    // Force native path
-    const nativeConfig: PipelineConfig = {
-      ...config,
-      enableDatalogEvaluation: false,
-    }
-
-    const datalogResult = solveFull(store, datalogConfig)
-    const nativeResult = solveFull(store, nativeConfig)
-
-    // Both should produce the same reality
-    expect(getNode(datalogResult.reality, "doc", "field")?.value).toBe("hello")
-    expect(getNode(nativeResult.reality, "doc", "field")?.value).toBe("hello")
   })
 })

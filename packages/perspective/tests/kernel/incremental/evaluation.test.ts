@@ -4,10 +4,9 @@
 // Covers:
 // - Pure fact router: correctly splits mixed ZSet<Fact> by predicate
 // - Rule delta extraction from active-set delta
-// - Native path produces correct resolution deltas
-// - Strategy switching: native → datalog on custom rule, datalog → native on retraction
+// - Resolution through the default rules, which the stage must be told
 // - Incremental Datalog path produces correct results (Phase 6)
-// - Strategy switch with simultaneous deltaFacts: facts are not dropped (Phase 6)
+// - A rule delta and a fact delta in one step: the fact is not dropped
 // - Custom LWW rule: reversed lamport comparison (Phase 6)
 // - Rule addition/retraction mid-stream (Phase 6)
 
@@ -233,7 +232,7 @@ describe("extractRuleDeltasFromActive", () => {
 })
 
 // ---------------------------------------------------------------------------
-// IncrementalEvaluation — native path tests
+// IncrementalEvaluation — resolution tests
 // ---------------------------------------------------------------------------
 
 /**
@@ -501,47 +500,24 @@ describe("IncrementalEvaluation", () => {
     ]
 
     /**
-     * Build a set of active constraints that uses reversed LWW rules
-     * (all at Layer 2) alongside the default Fugue rules (at Layer 1).
-     * The default LWW rules are NOT included.
+     * The reversed LWW rules as Layer 2 rule constraints.
+     *
+     * The tests below hand these to the evaluation as a rule delta and
+     * nothing else: `step` is a delta → delta function of its own state, so
+     * the constraint *set* they would belong to is not something the stage
+     * reads. It used to be assembled here — default Fugue at Layer 1 beside
+     * these, with the default LWW rules dominated — for a stage that is gone.
      */
-    function buildReversedRuleConstraints(): {
-      ruleConstraints: RuleConstraint[]
-      activeConstraints: Constraint[]
-      /** The Layer 2 rule constraints (for building rule deltas). */
-      customRuleConstraints: RuleConstraint[]
-      /** The Layer 1 default constraints (LWW + Fugue). */
-      defaultRuleConstraints: RuleConstraint[]
-    } {
-      const defaultLWW = buildDefaultLWWRules()
-      const defaultFugue = buildDefaultFugueRules()
-      const allDefaults = [...defaultLWW, ...defaultFugue]
-      const defaultRuleConstraints: RuleConstraint[] = allDefaults.map((r, i) =>
-        makeRuleConstraint("alice", 100 + i, 1, r),
+    function buildReversedRuleConstraints(): RuleConstraint[] {
+      return reversedLWWRules.map((r, i) =>
+        makeRuleConstraint("alice", 200 + i, 2, r),
       )
-      const customRuleConstraints: RuleConstraint[] = reversedLWWRules.map(
-        (r, i) => makeRuleConstraint("alice", 200 + i, 2, r),
-      )
-      // Active constraints: default Fugue (Layer 1) + reversed LWW (Layer 2).
-      // Default LWW rules are dominated/retracted (not present).
-      const fugueOnlyDefaults = defaultRuleConstraints.filter(rc => {
-        const pred = rc.payload.head.predicate
-        return pred !== "superseded" && pred !== "winner"
-      })
-      const ruleConstraints = [...fugueOnlyDefaults, ...customRuleConstraints]
-      return {
-        ruleConstraints,
-        activeConstraints: ruleConstraints as Constraint[],
-        customRuleConstraints,
-        defaultRuleConstraints,
-      }
     }
 
     it("incremental Datalog produces correct winners for custom rules", () => {
       const evaluation = createIncrementalEvaluation()
 
-      const { activeConstraints, customRuleConstraints } =
-        buildReversedRuleConstraints()
+      const customRuleConstraints = buildReversedRuleConstraints()
 
       // Switch to datalog by adding the custom rules.
       let ruleDelta = zsetEmpty<Rule>()
@@ -577,8 +553,7 @@ describe("IncrementalEvaluation", () => {
       // winner must end where a fresh evaluation over everything ends, and
       // the summed delta must carry the replacement as a single +1.
       const evaluation = createIncrementalEvaluation()
-      const { activeConstraints, customRuleConstraints } =
-        buildReversedRuleConstraints()
+      const customRuleConstraints = buildReversedRuleConstraints()
       let ruleDelta = zsetEmpty<Rule>()
       for (const rc of customRuleConstraints) {
         const r: Rule = { head: rc.payload.head, body: rc.payload.body }
@@ -595,8 +570,8 @@ describe("IncrementalEvaluation", () => {
         "LowLamport",
       )
 
-      // A further Layer 2 rule, so the strategy stays datalog, and a value
-      // that wins under the reversed rules, in the same step.
+      // A further Layer 2 rule, and a value that wins under the reversed
+      // rules, in the same step.
       const marker: Rule = rule(atom("marked", [varTerm("S")]), [
         positiveAtom(
           atom("winner", [varTerm("S"), varTerm("C"), varTerm("V")]),
@@ -662,7 +637,7 @@ describe("IncrementalEvaluation", () => {
       // rebuilt itself from the active constraint set on a strategy switch, so
       // the test could send only the additions and let the rebuild drop the
       // rest. With one path the delta has to say what actually changed.
-      const { customRuleConstraints } = buildReversedRuleConstraints()
+      const customRuleConstraints = buildReversedRuleConstraints()
       let ruleDelta = defaultLWWDelta(-1)
       for (const rc of customRuleConstraints) {
         const r: Rule = { head: rc.payload.head, body: rc.payload.body }
@@ -683,7 +658,7 @@ describe("IncrementalEvaluation", () => {
     it("rule retraction mid-stream: values re-resolved under restored defaults", () => {
       const evaluation = createIncrementalEvaluation()
 
-      const { customRuleConstraints } = buildReversedRuleConstraints()
+      const customRuleConstraints = buildReversedRuleConstraints()
 
       // Start with the reversed LWW rules and the default Fugue rules.
       let addRuleDelta = defaultFugueDelta(1)
@@ -739,23 +714,21 @@ describe("IncrementalEvaluation", () => {
       expect(current.winners.get(slotId)?.content).toBe("HighLamport")
     })
 
-    it("strategy switch with simultaneous deltaFacts: facts are not dropped", () => {
+    it("a rule delta and a fact delta in one step: the fact is not dropped", () => {
       const evaluation = createIncrementalEvaluation()
 
-      const { activeConstraints, customRuleConstraints } =
-        buildReversedRuleConstraints()
+      const customRuleConstraints = buildReversedRuleConstraints()
 
-      // Build rule delta for the switch.
+      // The rules arriving in this step.
       let ruleDelta = zsetEmpty<Rule>()
       for (const rc of customRuleConstraints) {
         const r: Rule = { head: rc.payload.head, body: rc.payload.body }
         ruleDelta = zsetAdd(ruleDelta, zsetSingleton(cnIdKey(rc.id), r, 1))
       }
 
-      // Send a value fact AND a rule delta in the SAME step.
-      // The rule triggers native→datalog switch. The value fact must
-      // not be dropped — it should be processed through the newly-active
-      // Datalog strategy.
+      // Send a value fact AND a rule delta in the SAME step. The value fact
+      // must not be dropped — it should be evaluated against the rules that
+      // arrived alongside it.
       const f = makeActiveValueFact("alice", 3, slotId, "Hello", 10)
 
       const { deltaResolved: _deltaResolved } = evaluation.step(
@@ -772,8 +745,7 @@ describe("IncrementalEvaluation", () => {
     it("incremental Datalog processes subsequent fact deltas without batch calls", () => {
       const evaluation = createIncrementalEvaluation()
 
-      const { activeConstraints, customRuleConstraints } =
-        buildReversedRuleConstraints()
+      const customRuleConstraints = buildReversedRuleConstraints()
 
       // Switch to Datalog.
       let ruleDelta = zsetEmpty<Rule>()
