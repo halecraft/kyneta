@@ -17,12 +17,14 @@
 // module extends that.
 //
 // What the engine can and cannot check. It verifies that every name a rule
-// needs is registered, and refuses to run otherwise (`hostErrors`). It cannot
-// verify that two peers' registrations agree; that is the author's obligation,
-// stated once here: same inputs, same output, on every peer, or the reality
-// diverges silently.
+// needs is registered and that every atom matching a foreign relation has the
+// width that relation declares, and refuses to run otherwise (`hostErrors`).
+// It cannot verify that two peers' registrations agree; that is the author's
+// obligation, stated once here: same inputs, same output, on every peer, or
+// the reality diverges silently.
 
 import type {
+  Atom,
   BodyElement,
   FactTuple,
   HostError,
@@ -42,6 +44,16 @@ import type {
 export interface ForeignDeclaration {
   readonly predicate: string
   /**
+   * The width of the tuples the relation holds.
+   *
+   * A name that resolves is not the same as a shape that fits: an atom
+   * matching this relation at any other width unifies with nothing, so the
+   * rule derives nothing and nothing complains. Declaring the width turns
+   * that silence into a link error — `hostErrors` refuses the atom, and
+   * `compute` yielding a tuple of another width throws.
+   */
+  readonly arity: number
+  /**
    * The relations the function reads. The stratifier places the relation
    * strictly above all of them, and the function may read nothing else.
    */
@@ -57,7 +69,8 @@ export interface ForeignDeclaration {
 export interface ForeignRelation extends ForeignDeclaration {
   /**
    * The whole relation for the current inputs, as tuples of the declared
-   * predicate. Must be pure and total: a function of `read` alone.
+   * predicate, each of the declared `arity`. Must be pure and total: a
+   * function of `read` alone.
    *
    * `changed` names the inputs whose presence changed since the last run, so
    * a memo inside the function knows what it may keep. It is a hint, not a
@@ -113,11 +126,17 @@ export function foreignRelations(
  * evaluation, on construction and on every rule change; `stratify` returns
  * the first one through the error channel it already has.
  *
- * The third kind is static safety. A compute element whose argument nothing
- * binds would otherwise be scheduled last by the planner and drop every row,
- * which for a compute whose result the head needs is an empty relation with
- * no error. Binding is computed to a fixed point, so a compute may feed
- * another compute in either textual order, but never itself or a cycle.
+ * **Shape.** A rule references host code by name, so a name that resolves is
+ * all a rule can normally be held to — and an atom that matches a foreign
+ * relation at the wrong width resolves perfectly and then unifies with
+ * nothing, which reaches the caller as an empty relation rather than as an
+ * error. The declared `arity` is what makes that a link error here.
+ *
+ * **Static safety.** A compute element whose argument nothing binds would
+ * otherwise be scheduled last by the planner and drop every row, which for a
+ * compute whose result the head needs is an empty relation with no error.
+ * Binding is computed to a fixed point, so a compute may feed another compute
+ * in either textual order, but never itself or a cycle.
  */
 export function hostErrors(
   rules: readonly Rule[],
@@ -125,13 +144,29 @@ export function hostErrors(
 ): HostError[] {
   const errors: HostError[] = []
   const functions = host?.functions ?? {}
-  const foreign = new Set(foreignRelations(host).map(f => f.predicate))
+  const arities = new Map(
+    foreignRelations(host).map(f => [f.predicate, f.arity] as const),
+  )
 
   for (const rule of rules) {
-    if (foreign.has(rule.head.predicate)) {
+    if (arities.has(rule.head.predicate)) {
       errors.push({
         kind: "foreignPredicateDerived",
         predicate: rule.head.predicate,
+        rule,
+      })
+    }
+
+    for (const element of rule.body) {
+      const matched = matchedAtom(element)
+      if (matched === undefined) continue
+      const arity = arities.get(matched.predicate)
+      if (arity === undefined || matched.terms.length === arity) continue
+      errors.push({
+        kind: "foreignArityMismatch",
+        predicate: matched.predicate,
+        declared: arity,
+        found: matched.terms.length,
         rule,
       })
     }
@@ -172,6 +207,24 @@ export function hostErrors(
   }
 
   return errors
+}
+
+/**
+ * The atom a body element matches against a stored relation: a positive atom,
+ * a negated one, or an aggregation's source. A guard and a compute match no
+ * relation, so neither has an arity to get wrong.
+ */
+function matchedAtom(element: BodyElement): Atom | undefined {
+  switch (element.kind) {
+    case "atom":
+    case "negation":
+      return element.atom
+    case "aggregation":
+      return element.agg.source
+    case "guard":
+    case "compute":
+      return undefined
+  }
 }
 
 /** Variables a body binds without any compute element: atoms and aggregation. */
@@ -223,6 +276,7 @@ export function declarationErrors(
         predicate: declared.predicate,
       })
     } else if (
+      found.arity !== declared.arity ||
       found.version !== declared.version ||
       found.inputs.length !== declared.inputs.length ||
       found.inputs.some((input, i) => input !== declared.inputs[i])
@@ -233,6 +287,7 @@ export function declarationErrors(
         declared,
         registered: {
           predicate: found.predicate,
+          arity: found.arity,
           inputs: found.inputs,
           version: found.version,
         },

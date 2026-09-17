@@ -113,6 +113,7 @@ function node(reality: Reality, ...path: string[]): RealityNode | undefined {
 /** Prefers whichever value's content starts with "B". Reads `active_value`. */
 const PREFERRED: ForeignRelation = {
   predicate: "preferred",
+  arity: 1,
   inputs: ["active_value"],
   version: "1",
   compute(read) {

@@ -150,6 +150,8 @@ function describeRuleSetError(error: StratificationError): string {
       return `rule for "${error.rule.head.predicate}" names host function "${error.fn}", which is not registered`
     case "foreignPredicateDerived":
       return `a rule derives "${error.predicate}", which is a host-computed relation`
+    case "foreignArityMismatch":
+      return `rule for "${error.rule.head.predicate}" matches host-computed relation "${error.predicate}" with ${error.found} terms, but it holds ${error.declared}-tuples`
     case "unboundComputeArgument":
       return `rule for "${error.rule.head.predicate}" passes unbound variable "${error.variable}" to host function "${error.fn}"`
   }

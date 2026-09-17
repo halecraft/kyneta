@@ -19,6 +19,7 @@ const FROM_TILE = 0b0011
 
 export const DISTANCE_FIELD: ForeignRelation = {
   predicate: "dist",
+  arity: 3,
   inputs: ["origin", "adj", "blocked"],
   version: "1",
 

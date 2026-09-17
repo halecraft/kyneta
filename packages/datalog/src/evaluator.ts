@@ -701,6 +701,11 @@ class HostView implements ReadonlyDatabase {
  * map is then the whole diff: wiped and back is 0, wiped and gone is −1, new
  * is +1. `changed` is passed on as a hint for a memo inside the function and
  * decides nothing here.
+ *
+ * A tuple of the wrong width throws, for the reason an undeclared read does:
+ * the declared arity is what every reader's atom was checked against, so an
+ * implementation that disagrees with its own declaration has to fail here
+ * rather than as a join that matches nothing.
  */
 function recomputeForeign(
   foreign: ForeignRelation,
@@ -720,6 +725,11 @@ function recomputeForeign(
   // twice is present once.
   const seen = new Set<string>()
   for (const tuple of foreign.compute(new HostView(db, foreign), changed)) {
+    if (tuple.length !== foreign.arity) {
+      throw new Error(
+        `foreign relation "${foreign.predicate}" declares arity ${foreign.arity} and yielded a tuple of ${tuple.length}`,
+      )
+    }
     const tupleKey = serializeTuple(tuple)
     if (seen.has(tupleKey)) continue
     seen.add(tupleKey)
@@ -1273,6 +1283,8 @@ function describeHostError(error: StratificationError): string {
       return `rule for "${error.rule.head.predicate}" names host function "${error.fn}", which is not registered`
     case "foreignPredicateDerived":
       return `rule derives "${error.predicate}", which is a foreign relation the host computes`
+    case "foreignArityMismatch":
+      return `rule for "${error.rule.head.predicate}" matches foreign relation "${error.predicate}" with ${error.found} terms, but it holds ${error.declared}-tuples`
     case "unboundComputeArgument":
       return `rule for "${error.rule.head.predicate}" passes unbound variable "${error.variable}" to host function "${error.fn}"`
     case "cyclicNegation":

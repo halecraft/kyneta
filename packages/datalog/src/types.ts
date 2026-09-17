@@ -1339,6 +1339,21 @@ export interface ForeignPredicateDerivedError {
   readonly rule: Rule
 }
 
+/**
+ * A rule matches a host-computed relation at a width it does not hold.
+ * Such an atom unifies with nothing, so the rule would derive nothing and
+ * report nothing — see `arity` in `host.ts`.
+ */
+export interface ForeignArityMismatchError {
+  readonly kind: "foreignArityMismatch"
+  readonly predicate: string
+  /** The arity the host declares for the relation. */
+  readonly declared: number
+  /** The number of terms the body atom carries. */
+  readonly found: number
+  readonly rule: Rule
+}
+
 /** A compute element's argument is bound by nothing in its body. */
 export interface UnboundComputeArgumentError {
   readonly kind: "unboundComputeArgument"
@@ -1350,6 +1365,7 @@ export interface UnboundComputeArgumentError {
 export type HostError =
   | UnknownHostFunctionError
   | ForeignPredicateDerivedError
+  | ForeignArityMismatchError
   | UnboundComputeArgumentError
 
 export type StratificationError = CyclicNegationError | HostError

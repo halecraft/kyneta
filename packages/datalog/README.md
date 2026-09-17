@@ -97,6 +97,7 @@ Some relations cannot be written as rules: a breadth-first distance field, a key
 const host = {
   relations: [{
     predicate: "dist",
+    arity: 3,
     inputs: ["origin", "adj", "blocked"],
     version: "1",
     compute(read, changed) { /* yield [x, y, d] tuples */ },
@@ -107,7 +108,7 @@ const host = {
 const evaluator = createEvaluator(rules, host)
 ```
 
-Rules reference host code **by name only**. The engine checks that every name a rule needs is registered and refuses to run otherwise; it cannot check that two machines registered the same implementation, and says so rather than pretending.
+Rules reference host code **by name only**. The engine checks that every name a rule needs is registered, and — because a declaration carries its `arity` — that every atom matching a foreign relation has the width that relation holds. A body reading `dist(X, Y)` when `dist` holds 3-tuples is a link error rather than a join that quietly matches nothing. What the engine cannot check is that two machines registered the same implementation, and it says so rather than pretending.
 
 ## Who uses it
 

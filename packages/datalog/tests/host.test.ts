@@ -28,6 +28,7 @@ import { stratify } from "../src/stratify.js"
 import type { Fact, Rule } from "../src/types.js"
 import {
   _,
+  aggregation,
   atom,
   compute,
   constTerm,
@@ -35,6 +36,7 @@ import {
   fact,
   factKey,
   lt,
+  negation,
   positiveAtom,
   rule,
   varTerm,
@@ -46,13 +48,17 @@ const NO_DELTA_PREDS: ReadonlySet<string> = new Set<string>()
 
 const double = (args: readonly unknown[]) => (args[0] as number) * 2
 
-/** A foreign relation with a body that returns nothing; enough for placement. */
+/**
+ * A foreign relation with a body that returns nothing; enough for placement.
+ * `arity` defaults to 1, the width every rule in this file reads it at.
+ */
 function foreign(
   predicate: string,
   inputs: readonly string[],
   body: ForeignRelation["compute"] = () => [],
+  arity = 1,
 ): ForeignRelation {
-  return { predicate, inputs, version: "1", compute: body }
+  return { predicate, arity, inputs, version: "1", compute: body }
 }
 
 /** Sorted `key: weight` pairs of a step delta, for exact comparisons. */
@@ -91,6 +97,53 @@ describe("hostErrors: what the engine checks before it runs", () => {
     ])
   })
 
+  it("refuses a body atom that matches a foreign relation at the wrong width", () => {
+    // `dist` holds 3-tuples. Each of these reads it at 2 and would unify with
+    // nothing, deriving an empty relation and reporting no error at all.
+    const field = { relations: [DISTANCE_FIELD] }
+
+    const positive = rule(atom("near", [$("X"), $("Y")]), [
+      positiveAtom(atom("dist", [$("X"), $("Y")])),
+    ])
+    expect(hostErrors([positive], field)).toEqual([
+      {
+        kind: "foreignArityMismatch",
+        predicate: "dist",
+        declared: 3,
+        found: 2,
+        rule: positive,
+      },
+    ])
+
+    const negated = rule(atom("unmeasured", [$("X"), $("Y")]), [
+      positiveAtom(atom("tile", [$("X"), $("Y")])),
+      negation(atom("dist", [$("X"), $("Y")])),
+    ])
+    expect(hostErrors([negated], field)).toMatchObject([
+      { kind: "foreignArityMismatch", predicate: "dist", found: 2 },
+    ])
+
+    const aggregated = rule(atom("reach", [$("X"), $("N")]), [
+      aggregation({
+        fn: "count",
+        groupBy: ["X"],
+        over: "D",
+        result: "N",
+        source: atom("dist", [$("X"), $("D")]),
+      }),
+    ])
+    expect(hostErrors([aggregated], field)).toMatchObject([
+      { kind: "foreignArityMismatch", predicate: "dist", found: 2 },
+    ])
+
+    // The declared width passes, in every position.
+    const right = rule(atom("near", [$("X"), $("Y")]), [
+      positiveAtom(atom("dist", [$("X"), $("Y"), $("D")])),
+      negation(atom("dist", [$("Y"), $("X"), constTerm(0)])),
+    ])
+    expect(hostErrors([right], field)).toEqual([])
+  })
+
   it("static safety: an argument nothing binds is an error; one bound by another compute is not", () => {
     const unbound = rule(atom("d", [$("Y")]), [
       compute("double", [$("X")], $("Y")),
@@ -119,6 +172,7 @@ describe("hostErrors: what the engine checks before it runs", () => {
 describe("declarationErrors: what a consumer checks when it links a pack", () => {
   const declared = {
     predicate: "dist",
+    arity: 3,
     inputs: ["origin", "adj", "blocked"],
     version: "1",
   }
@@ -135,7 +189,7 @@ describe("declarationErrors: what a consumer checks when it links a pack", () =>
     ])
   })
 
-  it("reports a different version or input list", () => {
+  it("reports a different version, input list or arity", () => {
     const other = { ...DISTANCE_FIELD, version: "2" }
     expect(declarationErrors([declared], { relations: [other] })).toMatchObject(
       [{ kind: "foreignDeclarationMismatch", predicate: "dist" }],
@@ -144,6 +198,16 @@ describe("declarationErrors: what a consumer checks when it links a pack", () =>
     expect(declarationErrors([declared], { relations: [fewer] })).toHaveLength(
       1,
     )
+    const narrower = { ...DISTANCE_FIELD, arity: 2 }
+    expect(
+      declarationErrors([declared], { relations: [narrower] }),
+    ).toMatchObject([
+      {
+        kind: "foreignDeclarationMismatch",
+        predicate: "dist",
+        registered: { arity: 2 },
+      },
+    ])
   })
 })
 
@@ -183,6 +247,23 @@ describe("foreign relations in the stratifier", () => {
     const { strata, indexOf } = strataFor([readsF], [f])
     expect(indexOf("r")).toBeGreaterThan(indexOf("f"))
     expect(strata.find(s => s.foreign === f)?.rules).toEqual([])
+  })
+
+  it("refuses a reader of the wrong width, where it would refuse a missing name", () => {
+    const readsWide = rule(atom("r", [$("X"), $("Y")]), [
+      positiveAtom(atom("f", [$("X"), $("Y")])),
+    ])
+    const host = { relations: [foreign("f", [])] }
+
+    const result = stratify([readsWide], host)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.kind).toBe("foreignArityMismatch")
+
+    // And it reaches a caller of the evaluator as a throw, not as an `r`
+    // nothing ever derived.
+    expect(() => createEvaluator([readsWide], host)).toThrow(
+      /"f" with 2 terms, but it holds 1-tuples/,
+    )
   })
 
   it("a rule deriving it is an error, and recursing through it is cyclic", () => {
@@ -328,6 +409,13 @@ describe("a foreign stratum at run time", () => {
     expect(
       evaluator.currentDatabase().getRelation("twice").getWeight([1]),
     ).toBe(1)
+  })
+
+  it("a tuple of a width the relation does not declare throws", () => {
+    const wide = foreign("w", ["g"], () => [[1, 2]])
+    expect(() => createEvaluator([], { relations: [wide] })).toThrow(
+      /"w" declares arity 1 and yielded a tuple of 2/,
+    )
   })
 
   it("an undeclared read throws, naming the predicate", () => {
