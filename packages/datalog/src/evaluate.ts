@@ -852,6 +852,13 @@ export function evaluateComputeElement(
   }
 
   const results: Substitution[] = []
+  // One array, reused for every row — allocating per row was measurable here.
+  //
+  // Two consequences worth knowing. It is why a declared function arity needs
+  // no run-time check: the width comes from the rule, so every call is made at
+  // exactly `element.args.length`. And it means a host function must not
+  // *retain* what it is handed — the contents change under it on the next row.
+  // Reading the values is fine; keeping the array is not.
   const args: Value[] = new Array(element.args.length)
   rows: for (const sub of subs) {
     for (let i = 0; i < element.args.length; i++) {
@@ -859,7 +866,7 @@ export function evaluateComputeElement(
       if (value === undefined) continue rows
       args[i] = value
     }
-    const value = fn(args)
+    const value = fn.apply(args)
     if (value === undefined) continue
 
     const result = element.result

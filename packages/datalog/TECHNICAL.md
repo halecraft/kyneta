@@ -4,7 +4,7 @@
 > **Role**: A stratified, semi-naive, incremental Datalog evaluator. Rules and ground facts in, derived facts out — as a batch, or as deltas over a long-lived database.
 > **Depends on**: `@kyneta/zset`
 > **Depended on by**: `@kyneta/perspective`
-> **Canonical symbols**: `Value`, `ValueRef`, `Term`, `Atom`, `Rule`, `BodyElement`, `Fact`, `FactTuple`, `Database`, `Relation`, `Probe`, `Evaluator`, `evaluate`, `evaluatePositive`, `createEvaluator`, `factsToZSet`, `stratify`, `Stratum`, `Host`, `ForeignRelation`, `HostFunction`, `hostErrors`, `declarationErrors`, `Result`, `Substitution`, `EMPTY_SUBSTITUTION`, `extendSubstitution`, `resolveTerm`, `groundAtom`
+> **Canonical symbols**: `Value`, `ValueRef`, `Term`, `Atom`, `Rule`, `BodyElement`, `Fact`, `FactTuple`, `Database`, `Relation`, `Probe`, `Evaluator`, `evaluate`, `evaluatePositive`, `createEvaluator`, `factsToZSet`, `stratify`, `Stratum`, `ProgramError`, `analyzeArity`, `describeProgramError`, `Host`, `HostDeclaration`, `ForeignRelation`, `HostFunction`, `hostErrors`, `declarationErrors`, `Result`, `Substitution`, `EMPTY_SUBSTITUTION`, `extendSubstitution`, `resolveTerm`, `groundAtom`
 > **Key invariant(s)**: The evaluator knows nothing about its caller's domain. Its input is facts, its output is derived facts, and every extension point — foreign relations, host functions — is referenced from a rule **by name only**.
 
 The engine that `@kyneta/perspective` runs its solver rules on, extracted so that it can be used on its own. Nothing here mentions a constraint, a peer or a reality; those are one consumer's vocabulary.
@@ -18,6 +18,7 @@ The engine that `@kyneta/perspective` runs its solver rules on, extracted so tha
 - Why was this slow, and what made it fast? → [Evaluator performance](#evaluator-performance)
 - How do I ground a head from bindings I made myself? → [Grounding a head from bindings you made yourself](#grounding-a-head-from-bindings-you-made-yourself)
 - How does a rule reach code the host supplies? → [Host relations and functions](#host-relations-and-functions)
+- Why does my rule derive nothing when the name resolves? → [Arity](#arity)
 - What will bite me? → [Gotchas](#gotchas)
 
 ## What this is
@@ -161,11 +162,11 @@ Some relations cannot be written as rules: a breadth-first distance field, a key
 
 **A foreign relation is a stratum whose body is a function.** It is declared with its name, its arity, the relations it reads, and a version, and registered with a `compute(read, changed)` that returns the whole relation for the current inputs. The stratifier gives it strict edges in both directions, to its inputs and from its readers, so it is alone in its stratum, fully computed before any reader runs and never inside a recursion. It runs at construction, on every step in which an input's presence changes, and on a rule change. It is incremental the way an aggregation stratum is, because an opaque operator has no algebraic delta: wipe the relation to its ground part, run the function, and one `extractDelta` over the dirty map is the presence diff, so only what changed propagates. `changed` names the inputs that flipped and is a hint for a memo inside the function, never something the output may depend on. The function reads through a view scoped to its declared inputs; anything else throws.
 
-**A compute element is a guard that binds.** `compute("hash", [T, X, Y], V)` in a rule body applies the named function to bound arguments and unifies the value with `result`: an unbound variable is bound, a bound variable or constant is compared and the row kept on equality, a wildcard keeps the row. It is linear per row, preserves weight, reads no relation, is never a delta source, and so takes part in the incremental decomposition with no new theory. Rules with compute elements never recompute.
+**A compute element is a guard that binds.** `compute("hash", [T, X, Y], V)` in a rule body applies the named function to bound arguments and unifies the value with `result`: an unbound variable is bound, a bound variable or constant is compared and the row kept on equality, a wildcard keeps the row. It is linear per row, preserves weight, reads no relation, is never a delta source, and so takes part in the incremental decomposition with no new theory. Rules with compute elements never recompute. Two argument shapes are refused up front, because both drop every row and leave an empty relation with no error: an argument nothing binds, and an argument that is a *wildcard* — a wildcard matches anything and binds nothing, so it never resolves to the value the function needs. A wildcard in `result` position is fine and means "call it, keep the row, discard the answer". A point function is *declared* like a relation is — `{ arity, version, apply }` — so a call at the wrong width is refused before anything runs. That check needs no run-time counterpart, unlike a relation's: the argument count comes from the rule rather than the data, so once it passes, every call is made at exactly the declared width.
 
 **The demand pattern needs nothing from the engine.** Hoist the body before a field atom into an ordinary rule, `origin(X, Y) :- player(P), at(P, X, Y)`, and declare `origin` as an input. A demand tuple that disappears takes its outputs with it through the diff.
 
-**What the engine checks, and what it does not.** `hostErrors(rules, host)` runs before evaluation, on construction and on every rule change: a function the host lacks, a rule deriving a foreign predicate, a body atom matching a foreign relation at a width it does not hold, or a compute argument nothing binds (computed to a fixed point, so computes may feed each other in any order) is a stratification error, and `createEvaluator` throws on it. The arity check is what a name-only reference otherwise cannot give: names are compared, so a name that resolves is all a rule is normally held to, and an atom of the wrong width resolves and then unifies with nothing — an empty relation and no error. Declaring the width makes it a link error at both ends, since a `compute` yielding a tuple of another width throws as an undeclared read does. `declarationErrors(declarations, host)` is the consumer's check when it links a pack that declared what it expects. Purity and determinism are the author's obligations, stated once in `host.ts`. In the CCS pipeline these are solve-time errors and deliberately not validity-time ones: validity is a Layer 0 algorithm every implementation must compute identically, and letting it consult the local host registry would make validity itself peer-dependent. A rule constraint naming an unregistered function is valid everywhere and fails to solve here, and the batch pipeline then degrades to native resolution as it does for any Datalog error.
+**What the engine checks, and what it does not.** A rule set has to pass three checks before it can be evaluated, and `stratify` runs all three — on construction and on every rule change. `hostErrors(rules, host)` covers *linkage and safety*: a function the host lacks, a rule deriving a foreign predicate, or a compute argument nothing binds (computed to a fixed point, so computes may feed each other in any order). `analyzeArity(rules, host)` covers *shape* — see [Arity](#arity) below. `stratify` itself covers *stratified negation*. Any of the three produces a `ProgramError`, and `createEvaluator` throws on every kind except cyclic negation, which the batch API already reports through `Result`. `describeProgramError` turns one into a sentence, and is the only function in the workspace that does — `@kyneta/perspective` calls it rather than keeping a parallel formatter. `declarationErrors(declaration, host)` is the consumer's check when it links a pack that declared what it expects — it takes a whole `HostDeclaration`, the data half of a `Host`, so relations and point functions are checked by one call. Purity and determinism are the author's obligations, stated once in `host.ts`. In the CCS pipeline these are solve-time errors and deliberately not validity-time ones: validity is a Layer 0 algorithm every implementation must compute identically, and letting it consult the local host registry would make validity itself peer-dependent. A rule constraint naming an unregistered function is valid everywhere and fails to solve on a peer that lacks it — `solve()` throws, naming the rule and the reason, because there is no second resolution path to fall back to.
 
 ```ts
 createEvaluator(rules, { relations: [distField], functions: { hash } })
@@ -173,6 +174,75 @@ solve(store, { creator, host })          // the same registry, through PipelineC
 ```
 
 `tests/fields.ts` is the worked example: a breadth-first `dist` over `adj` honouring `blocked`, reading adjacency through `Relation.candidates` with a probe rather than a scan. On a 100×30 world a player moving every tick, which flips `origin` and re-runs the field over about 3,000 tiles with a hunt rule reading it, measured about 8 ms p50 and 10 ms p95.
+
+### Arity
+
+Source: `src/arity.ts`.
+
+**A predicate has one arity, and every mention of it agrees.** "Arity" is the
+width of a relation — how many values each row carries. `dist(X, Y, D)` is
+arity 3.
+
+The engine has to enforce this because of a choice it made elsewhere. In
+classic Datalog, `p/2` and `p/3` are two *different* predicates, told apart by
+their width. This engine keys relations by **name alone**, so a program that
+mentions `foo` at two widths is not describing two relations — it is describing
+one relation incoherently. And the incoherence is invisible at run time:
+`matchAtomWithTuple` returns `null` the moment an atom's width differs from a
+tuple's, so rows of the wrong width sit in the relation, counted by `size`,
+matching nothing, forever. No error, no empty result to notice — just a rule
+that quietly never fires.
+
+`analyzeArity(rules, host)` returns the map *and* the disagreements in one
+value, deliberately. Split into two functions they would have to agree,
+silently, about what the map reports for a predicate that has a conflict.
+Returned together, the property the rest of the engine leans on is structural:
+**you cannot obtain the map without also obtaining the reasons it might be
+meaningless.**
+
+A `ForeignRelation` *declares* its arity, because its rows come from host code
+the engine cannot read. Every other predicate's arity is *inferred* from the
+rules. Both are the same law — a declaration is simply the case where the
+arity is stated rather than worked out — which is why `foreignArityMismatch`
+is an `ArityError` and not a `HostError`.
+
+The two disagreements read differently because they are different situations.
+A mention against a *declaration* has a right answer to point at
+(`foreignArityMismatch`: "it holds 3-tuples, you read 2"). Two mentions against
+*each other* do not, so `arityConflict` names both sites and lets the author
+decide which was meant. Every position counts toward width, wildcards included:
+`foo(X, _)` is arity 2.
+
+`analyzeArity` is exported for a reason beyond the engine's own use: a consumer
+that **generates** rule heads can run it over the rules it produced, before
+installing them, and find out that it emitted a head at the wrong width. That
+is the failure mode this law exists to catch, and generated heads are where it
+actually happens.
+
+**Ground facts are held to the same map.** The static half covers the rules;
+facts arrive at run time, where no static check can see them, and a `foo(1,2,3)`
+fed into a program that uses `foo/2` is the same bug as a rule heading `foo/3`.
+`step` therefore checks the incoming delta against the arity map before applying
+any of it, and throws naming both widths.
+
+That check is a **pre-pass, not a test inside the apply loop**, and the
+distinction is not stylistic. The apply loop mutates as it walks, so a throw
+part-way through would leave ground facts stored with none of their
+derivations — and semi-naive evaluation never revisits them, because a later
+`step` only processes the delta it is handed. Measured on a 500-fact delta
+rejected at position 300: the inline arrangement left 300 facts stored with 0
+derived, and a subsequent valid step produced 301 facts with 1 derivation
+instead of 301. It does not leave a partial write; it leaves a permanently
+wrong database that looks healthy. The extra walk costs 1–2% on a 40,000-fact
+batch and nothing measurable per tick.
+
+**Two limits, both deliberate.** A fact for a predicate the program never
+mentions is unchecked — it is inert data, and inferring an arity from the first
+fact seen would be stateful and surprising. And `changeRules` can *retroactively*
+invalidate what is already stored: accept `foo(1,2)` under a program using
+`foo/2`, then change the rules to use `foo/3`, and the database still holds the
+old rows. Re-validating the whole database on every rule change is O(|db|) and
+not worth it; knowing that it is not done is.
 
 ### Evaluator performance
 
@@ -246,6 +316,9 @@ Every mutation of a relation's membership funnels through two private methods (`
 - **P_old is rebuilt from presence, not by subtracting weights.** A delta says a fact appeared or disappeared, always ±1, while the database stores true multiplicity. A fact with two derivation paths has weight 2 and still arrives as +1, so `base − delta` would leave 1 and claim it was there before the step. `Relation.presenceBefore` undoes the presence flip instead, and is what `DatabaseView` calls. Everything that reads P_old reads presence, so this is both sufficient and correct.
 - **Ground relations are sets at the stratum boundary.** A ground fact's Z-set weight is a reference count, and strata are told only when it crosses zero: `step` feeds them the presence flip, never the raw weight. A fact inserted at weight 2 used to derive at count 2, and retracting its join partner could take back only 1.
 - **A predicate can be both inserted and derived.** `lit(0, 0)` seeds the fire that derives the rest of `lit`, and the database holds the sum. `createEvaluator` keeps the ground part of every predicate rules have ever derived, so that a recompute, whether for aggregation, for retraction into recursion, or for a rule change, wipes only the derived part and the ground part seeds the replay. Before this, all three paths wiped the ground facts too.
+- **A host function must not keep the array it is handed.** `evaluateComputeElement` allocates one argument array per compute element and refills it for every row, because allocating per row was measurable. A function that reads its arguments is fine; one that stores the array — memoising on it, say — will watch its own cache mutate. The same reuse is why a declared arity needs no run-time check: the width comes from the rule, never from the data.
+- **A host function is registered as an object, and a bare function is refused at construction.** `{ arity, version, apply }`, not `(args) => …`. The guard in `hostFunctions` exists because a bare function already *has* a built-in `.apply`: without it, a stale registration would be invoked as `Function.prototype.apply`, receiving the argument array as its `this` and no arguments at all, and would misbehave somewhere inside a join instead of failing at the seam. TypeScript rejects the old shape; the guard covers everyone else.
+- **A predicate has one arity, and the engine refuses a program where two mentions disagree.** Datalog traditionally treats `p/2` and `p/3` as different predicates; this engine keys relations by name alone, so it cannot. A rule heading `foo/3` among readers expecting `foo/2` writes rows nothing can ever match — not rejected, not merged, just present and unmatched. `analyzeArity` makes that a `ProgramError` instead. It bites hardest on *generated* heads, which is where it is most often deserved.
 - **A foreign relation cannot be a rule head, may read only its inputs, and holds tuples of exactly its declared arity.** The first is a stratification error, as is a body atom that reads it at another width; the second and third throw — from the scoped view with the predicate named, and from the recompute with both widths named. All three would otherwise fail silently and late: a relation the stratifier never ordered, or a join that matches nothing and derives nothing.
 - **A foreign function's output must be total over its current inputs.** `changed` only says what a memo may keep. A function that returns different values for equal arguments, or a relation that depends on anything but its declared inputs, diverges peers silently and no test here can see it.
 - **`Relation.size` is O(n), not `Map.size`.** It counts present tuples by iterating, because presence is derived from each entry's clamp rather than stored. Use `allEntryCount` when you want the O(1) count and do not care about presence — query planning does exactly that.

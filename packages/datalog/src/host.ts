@@ -16,15 +16,18 @@
 // constraint (`packages/perspective/theory/unified-engine.md` §B.7). This
 // module extends that.
 //
-// What the engine can and cannot check. It verifies that every name a rule
-// needs is registered and that every atom matching a foreign relation has the
-// width that relation declares, and refuses to run otherwise (`hostErrors`).
-// It cannot verify that two peers' registrations agree; that is the author's
-// obligation, stated once here: same inputs, same output, on every peer, or
-// the reality diverges silently.
+// What the engine can and cannot check. This module verifies *linkage*: that
+// every name a rule needs is registered, and that no rule tries to derive a
+// relation the host owns (`hostErrors`). Whether a rule uses one at the right
+// *shape* is the same law for host code and rules alike, so it lives in one
+// place for both — `analyzeArity` in `arity.ts`.
+//
+// What nothing can check is that two peers' registrations agree. That is the
+// author's obligation, stated once here: same inputs, same output, on every
+// peer, or the reality diverges silently. Declaring a `version` is what makes
+// a disagreement *detectable* — it does not make it impossible.
 
 import type {
-  Atom,
   BodyElement,
   FactTuple,
   HostError,
@@ -84,13 +87,66 @@ export interface ForeignRelation extends ForeignDeclaration {
 }
 
 /**
- * A point function over bound values, used by a `compute` body element.
+ * The data half of a point function — a function over single values, used by a
+ * `compute` body element, as opposed to a relation over whole tables.
+ *
+ * This mirrors `ForeignDeclaration`: the parts a pack or a store can carry,
+ * separated from the code, which cannot travel.
+ */
+export interface HostFunctionDeclaration {
+  /**
+   * How many arguments the function takes.
+   *
+   * Without it, a rule calling a 4-ary function with 3 arguments resolves by
+   * name and then misbehaves by shape: the function reads `undefined` for the
+   * missing argument and typically returns `NaN`, which the engine stores as
+   * an ordinary value. Since `NaN` equals `NaN` under `Object.is`, that value
+   * then joins with itself and spreads. Declaring the count makes it a link
+   * error instead — and the check is *total*, because the argument count comes
+   * from the rule rather than from the data, so every accepted program calls
+   * every function at exactly this width.
+   */
+  readonly arity: number
+  /**
+   * The declaration's version. Two peers register their own code under the
+   * same name; if the code differs they compute different realities from the
+   * same store, silently. The engine cannot compare code — it can compare a
+   * version a pack declares against a version a host registers, and refuse
+   * where they disagree. A version is a claim about *meaning*, not a
+   * fingerprint of bytes: two independent implementations should share one
+   * when they compute the same function.
+   */
+  readonly version: string
+}
+
+/**
+ * A declared point function with its implementation.
+ *
  * Must be pure and deterministic. `undefined` means no result: the row is
  * dropped, the way a failed guard drops it.
  */
-export type HostFunction = (args: readonly Value[]) => Value | undefined
+export interface HostFunction extends HostFunctionDeclaration {
+  apply(args: readonly Value[]): Value | undefined
+}
 
-/** What the engine receives at creation. Both parts optional. */
+/**
+ * The data half of a whole host — what a pack declares it needs, with no code
+ * in it. `declarationErrors` checks one of these against a real `Host`.
+ */
+export interface HostDeclaration {
+  readonly relations?: readonly ForeignDeclaration[]
+  readonly functions?: Readonly<Record<string, HostFunctionDeclaration>>
+}
+
+/**
+ * What the engine receives at creation. Both parts optional.
+ *
+ * Functions are keyed by name rather than carrying one, so the key is the
+ * single source of truth and a typo cannot put `{ name: "uppr" }` under
+ * `upper`. Relations carry `predicate` because a `ForeignRelation` travels on
+ * its own — the stratifier stores one in `Stratum.foreign` — while a function
+ * is only ever looked up by name.
+ */
 export interface Host {
   readonly relations?: readonly ForeignRelation[]
   readonly functions?: Readonly<Record<string, HostFunction>>
@@ -102,11 +158,36 @@ export const EMPTY_HOST: Host = {}
 /** Shared empty registry for the evaluation functions' default parameter. */
 export const NO_FUNCTIONS: ReadonlyMap<string, HostFunction> = new Map()
 
-/** The host's point functions as a map, built once per evaluator. */
+/**
+ * The host's point functions as a map, built once per evaluator — and the one
+ * place a registration is checked for shape.
+ *
+ * Why the check exists. A host function used to be a bare function, and a bare
+ * function already *has* a built-in `.apply`. So a registration left in the old
+ * form would not fail cleanly here; it would be invoked later as
+ * `Function.prototype.apply`, receiving the argument array as its `this` and no
+ * arguments at all, and misbehave somewhere inside a join. TypeScript rejects
+ * the old shape outright, so this guard is for everyone else — and it is the
+ * difference between a clear failure at construction and a baffling one at
+ * evaluation.
+ */
 export function hostFunctions(
   host: Host | undefined,
 ): ReadonlyMap<string, HostFunction> {
   if (host?.functions === undefined) return NO_FUNCTIONS
+  for (const [name, fn] of Object.entries(host.functions)) {
+    if (
+      typeof fn !== "object" ||
+      fn === null ||
+      typeof fn.arity !== "number" ||
+      typeof fn.version !== "string" ||
+      typeof fn.apply !== "function"
+    ) {
+      throw new Error(
+        `host function "${name}" must be registered as { arity, version, apply }, not as a bare function`,
+      )
+    }
+  }
   return new Map(Object.entries(host.functions))
 }
 
@@ -126,17 +207,20 @@ export function foreignRelations(
  * evaluation, on construction and on every rule change; `stratify` returns
  * the first one through the error channel it already has.
  *
- * **Shape.** A rule references host code by name, so a name that resolves is
- * all a rule can normally be held to — and an atom that matches a foreign
- * relation at the wrong width resolves perfectly and then unifies with
- * nothing, which reaches the caller as an empty relation rather than as an
- * error. The declared `arity` is what makes that a link error here.
+ * **Linkage.** A rule references host code by name, so the first thing that
+ * can go wrong is a name that does not resolve — or one that resolves on both
+ * sides at once, which is what a rule deriving a host-computed predicate is.
  *
  * **Static safety.** A compute element whose argument nothing binds would
  * otherwise be scheduled last by the planner and drop every row, which for a
  * compute whose result the head needs is an empty relation with no error.
  * Binding is computed to a fixed point, so a compute may feed another compute
  * in either textual order, but never itself or a cycle.
+ *
+ * What this function deliberately does *not* check is shape. Whether a rule
+ * mentions a relation at the width that relation holds is the same law for
+ * host-computed and rule-derived predicates alike, so it lives in one place
+ * for both: `analyzeArity` in `arity.ts`.
  */
 export function hostErrors(
   rules: readonly Rule[],
@@ -144,29 +228,13 @@ export function hostErrors(
 ): HostError[] {
   const errors: HostError[] = []
   const functions = host?.functions ?? {}
-  const arities = new Map(
-    foreignRelations(host).map(f => [f.predicate, f.arity] as const),
-  )
+  const foreign = new Set(foreignRelations(host).map(f => f.predicate))
 
   for (const rule of rules) {
-    if (arities.has(rule.head.predicate)) {
+    if (foreign.has(rule.head.predicate)) {
       errors.push({
         kind: "foreignPredicateDerived",
         predicate: rule.head.predicate,
-        rule,
-      })
-    }
-
-    for (const element of rule.body) {
-      const matched = matchedAtom(element)
-      if (matched === undefined) continue
-      const arity = arities.get(matched.predicate)
-      if (arity === undefined || matched.terms.length === arity) continue
-      errors.push({
-        kind: "foreignArityMismatch",
-        predicate: matched.predicate,
-        declared: arity,
-        found: matched.terms.length,
         rule,
       })
     }
@@ -177,6 +245,19 @@ export function hostErrors(
     for (const el of computes) {
       if (!(el.fn in functions)) {
         errors.push({ kind: "unknownHostFunction", fn: el.fn, rule })
+      }
+      // A wildcard never resolves to a value, so an argument position holding
+      // one drops every row the element sees. The binding check below cannot
+      // catch this: it only inspects `var` terms, and a wildcard is its own
+      // kind of term that is never "unbound" — it is never bound at all.
+      const wildcard = el.args.findIndex(t => t.kind === "wildcard")
+      if (wildcard !== -1) {
+        errors.push({
+          kind: "wildcardComputeArgument",
+          fn: el.fn,
+          index: wildcard,
+          rule,
+        })
       }
     }
 
@@ -209,24 +290,6 @@ export function hostErrors(
   return errors
 }
 
-/**
- * The atom a body element matches against a stored relation: a positive atom,
- * a negated one, or an aggregation's source. A guard and a compute match no
- * relation, so neither has an arity to get wrong.
- */
-function matchedAtom(element: BodyElement): Atom | undefined {
-  switch (element.kind) {
-    case "atom":
-    case "negation":
-      return element.atom
-    case "aggregation":
-      return element.agg.source
-    case "guard":
-    case "compute":
-      return undefined
-  }
-}
-
 /** Variables a body binds without any compute element: atoms and aggregation. */
 function structurallyBound(body: readonly BodyElement[]): Set<string> {
   const bound = new Set<string>()
@@ -253,23 +316,35 @@ export type DeclarationError =
       readonly declared: ForeignDeclaration
       readonly registered: ForeignDeclaration
     }
+  | { readonly kind: "unregisteredHostFunction"; readonly fn: string }
+  | {
+      readonly kind: "hostFunctionDeclarationMismatch"
+      readonly fn: string
+      readonly declared: HostFunctionDeclaration
+      readonly registered: HostFunctionDeclaration
+    }
 
 /**
- * Compare declarations that travelled with data against what this host
- * registers. The engine never calls this; a consumer runs it when it links
- * a pack, so that a missing or mismatched relation fails there and not as
- * an empty relation at solve time.
+ * Compare a declaration that travelled with data against what this host
+ * registers, for both halves of a host at once.
+ *
+ * The engine never calls this; a consumer runs it when it links a pack, so
+ * that a missing or mismatched name fails *there* rather than as an empty
+ * relation or a wrong answer at solve time. `HostDeclaration` is exactly the
+ * data half of `Host`, so "does this host satisfy this declaration" is one
+ * question with one answer rather than two parallel ones.
  */
 export function declarationErrors(
-  declarations: readonly ForeignDeclaration[],
+  declaration: HostDeclaration,
   host: Host | undefined,
 ): DeclarationError[] {
-  const registered = new Map(
+  const errors: DeclarationError[] = []
+
+  const relations = new Map(
     foreignRelations(host).map(f => [f.predicate, f] as const),
   )
-  const errors: DeclarationError[] = []
-  for (const declared of declarations) {
-    const found = registered.get(declared.predicate)
+  for (const declared of declaration.relations ?? []) {
+    const found = relations.get(declared.predicate)
     if (found === undefined) {
       errors.push({
         kind: "unregisteredForeignRelation",
@@ -294,5 +369,24 @@ export function declarationErrors(
       })
     }
   }
+
+  const functions = host?.functions ?? {}
+  for (const [fn, declared] of Object.entries(declaration.functions ?? {})) {
+    const found = functions[fn]
+    if (found === undefined) {
+      errors.push({ kind: "unregisteredHostFunction", fn })
+    } else if (
+      found.arity !== declared.arity ||
+      found.version !== declared.version
+    ) {
+      errors.push({
+        kind: "hostFunctionDeclarationMismatch",
+        fn,
+        declared,
+        registered: { arity: found.arity, version: found.version },
+      })
+    }
+  }
+
   return errors
 }

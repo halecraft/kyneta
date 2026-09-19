@@ -18,8 +18,8 @@ import {
 import type {
   AggregationClause,
   CyclicNegationError,
+  ProgramError,
   Rule,
-  StratificationError,
 } from "../src/types.js"
 import {
   _,
@@ -57,7 +57,7 @@ function stratumFor(strata: readonly Stratum[], predicate: string): Stratum {
  * union: the read is unchecked, so a different error kind reaches the next
  * line as a TypeError instead of a failed expectation.
  */
-function cyclicNegation(error: StratificationError): CyclicNegationError {
+function cyclicNegation(error: ProgramError): CyclicNegationError {
   if (error.kind !== "cyclicNegation") {
     throw new Error(`expected a cyclicNegation error, got "${error.kind}"`)
   }

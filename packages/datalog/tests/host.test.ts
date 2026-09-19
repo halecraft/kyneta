@@ -22,13 +22,13 @@ import {
   declarationErrors,
   type ForeignRelation,
   type Host,
+  type HostFunction,
   hostErrors,
 } from "../src/host.js"
 import { stratify } from "../src/stratify.js"
 import type { Fact, Rule } from "../src/types.js"
 import {
   _,
-  aggregation,
   atom,
   compute,
   constTerm,
@@ -36,7 +36,6 @@ import {
   fact,
   factKey,
   lt,
-  negation,
   positiveAtom,
   rule,
   varTerm,
@@ -46,7 +45,11 @@ import { countingDistanceField, DISTANCE_FIELD } from "./fields.js"
 const $ = varTerm
 const NO_DELTA_PREDS: ReadonlySet<string> = new Set<string>()
 
-const double = (args: readonly unknown[]) => (args[0] as number) * 2
+const double: HostFunction = {
+  arity: 1,
+  version: "1",
+  apply: args => (args[0] as number) * 2,
+}
 
 /**
  * A foreign relation with a body that returns nothing; enough for placement.
@@ -97,53 +100,6 @@ describe("hostErrors: what the engine checks before it runs", () => {
     ])
   })
 
-  it("refuses a body atom that matches a foreign relation at the wrong width", () => {
-    // `dist` holds 3-tuples. Each of these reads it at 2 and would unify with
-    // nothing, deriving an empty relation and reporting no error at all.
-    const field = { relations: [DISTANCE_FIELD] }
-
-    const positive = rule(atom("near", [$("X"), $("Y")]), [
-      positiveAtom(atom("dist", [$("X"), $("Y")])),
-    ])
-    expect(hostErrors([positive], field)).toEqual([
-      {
-        kind: "foreignArityMismatch",
-        predicate: "dist",
-        declared: 3,
-        found: 2,
-        rule: positive,
-      },
-    ])
-
-    const negated = rule(atom("unmeasured", [$("X"), $("Y")]), [
-      positiveAtom(atom("tile", [$("X"), $("Y")])),
-      negation(atom("dist", [$("X"), $("Y")])),
-    ])
-    expect(hostErrors([negated], field)).toMatchObject([
-      { kind: "foreignArityMismatch", predicate: "dist", found: 2 },
-    ])
-
-    const aggregated = rule(atom("reach", [$("X"), $("N")]), [
-      aggregation({
-        fn: "count",
-        groupBy: ["X"],
-        over: "D",
-        result: "N",
-        source: atom("dist", [$("X"), $("D")]),
-      }),
-    ])
-    expect(hostErrors([aggregated], field)).toMatchObject([
-      { kind: "foreignArityMismatch", predicate: "dist", found: 2 },
-    ])
-
-    // The declared width passes, in every position.
-    const right = rule(atom("near", [$("X"), $("Y")]), [
-      positiveAtom(atom("dist", [$("X"), $("Y"), $("D")])),
-      negation(atom("dist", [$("Y"), $("X"), constTerm(0)])),
-    ])
-    expect(hostErrors([right], field)).toEqual([])
-  })
-
   it("static safety: an argument nothing binds is an error; one bound by another compute is not", () => {
     const unbound = rule(atom("d", [$("Y")]), [
       compute("double", [$("X")], $("Y")),
@@ -179,28 +135,57 @@ describe("declarationErrors: what a consumer checks when it links a pack", () =>
 
   it("passes a host that registers what is declared", () => {
     expect(
-      declarationErrors([declared], { relations: [DISTANCE_FIELD] }),
+      declarationErrors(
+        { relations: [declared] },
+        { relations: [DISTANCE_FIELD] },
+      ),
     ).toEqual([])
   })
 
   it("reports a declaration with no registration", () => {
-    expect(declarationErrors([declared], {})).toEqual([
+    expect(declarationErrors({ relations: [declared] }, {})).toEqual([
       { kind: "unregisteredForeignRelation", predicate: "dist" },
     ])
   })
 
+  it("reports a declared function the host lacks, or one that differs", () => {
+    const needsHash = {
+      functions: { hash: { arity: 3, version: "1" } },
+    }
+    expect(declarationErrors(needsHash, {})).toEqual([
+      { kind: "unregisteredHostFunction", fn: "hash" },
+    ])
+
+    const hash = (arity: number, version: string): HostFunction => ({
+      arity,
+      version,
+      apply: args => String(args[0]),
+    })
+    expect(
+      declarationErrors(needsHash, { functions: { hash: hash(3, "1") } }),
+    ).toEqual([])
+
+    // A different arity, and a different version, each on their own.
+    expect(
+      declarationErrors(needsHash, { functions: { hash: hash(2, "1") } }),
+    ).toMatchObject([{ kind: "hostFunctionDeclarationMismatch", fn: "hash" }])
+    expect(
+      declarationErrors(needsHash, { functions: { hash: hash(3, "2") } }),
+    ).toMatchObject([{ kind: "hostFunctionDeclarationMismatch", fn: "hash" }])
+  })
+
   it("reports a different version, input list or arity", () => {
     const other = { ...DISTANCE_FIELD, version: "2" }
-    expect(declarationErrors([declared], { relations: [other] })).toMatchObject(
-      [{ kind: "foreignDeclarationMismatch", predicate: "dist" }],
-    )
+    expect(
+      declarationErrors({ relations: [declared] }, { relations: [other] }),
+    ).toMatchObject([{ kind: "foreignDeclarationMismatch", predicate: "dist" }])
     const fewer = { ...DISTANCE_FIELD, inputs: ["origin", "adj"] }
-    expect(declarationErrors([declared], { relations: [fewer] })).toHaveLength(
-      1,
-    )
+    expect(
+      declarationErrors({ relations: [declared] }, { relations: [fewer] }),
+    ).toHaveLength(1)
     const narrower = { ...DISTANCE_FIELD, arity: 2 }
     expect(
-      declarationErrors([declared], { relations: [narrower] }),
+      declarationErrors({ relations: [declared] }, { relations: [narrower] }),
     ).toMatchObject([
       {
         kind: "foreignDeclarationMismatch",
@@ -208,6 +193,22 @@ describe("declarationErrors: what a consumer checks when it links a pack", () =>
         registered: { arity: 2 },
       },
     ])
+  })
+})
+
+describe("registering a host function", () => {
+  it("refuses a bare function, naming it", () => {
+    // TypeScript rejects this outright — the cast is how the test expresses a
+    // JavaScript caller who did not get that warning. Without the guard the
+    // bare function's built-in `.apply` would be invoked later with the
+    // argument array as its `this` and no arguments, failing somewhere inside
+    // a join rather than here.
+    const stale = {
+      functions: { double: ((args: readonly unknown[]) => args[0]) as never },
+    }
+    expect(() => createEvaluator([], stale)).toThrow(
+      /host function "double" must be registered as \{ arity, version, apply \}/,
+    )
   })
 })
 
@@ -460,12 +461,20 @@ describe("compute elements: a guard that binds", () => {
   const host: Host = {
     functions: {
       double,
-      half: args => {
-        const n = args[0] as number
-        return n % 2 === 0 ? n / 2 : undefined
+      half: {
+        arity: 1,
+        version: "1",
+        apply: args => {
+          const n = args[0] as number
+          return n % 2 === 0 ? n / 2 : undefined
+        },
       },
-      isNull: args => args[0] === null,
-      tag: args => `${String(args[0])}:${String(args[1])}`,
+      isNull: { arity: 1, version: "1", apply: args => args[0] === null },
+      tag: {
+        arity: 2,
+        version: "1",
+        apply: args => `${String(args[0])}:${String(args[1])}`,
+      },
     },
   }
   const numbers = [fact("n", [1]), fact("n", [2]), fact("n", [3])]

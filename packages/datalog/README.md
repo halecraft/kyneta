@@ -76,6 +76,7 @@ A one-fact tick over an 18,000-fact database costs about **0.016 ms**.
 - **Guards** — `eq`, `neq`, `lt`, `lte`, `gt`, `gte` over bound terms.
 - **Aggregation** — `min`, `max`, `count`, `sum`, grouped by variables.
 - **Wildcards** — `_` matches anything and binds nothing. Each occurrence is independent, unlike a named variable.
+- **One arity per predicate** — a predicate has one width, and every mention of it must agree. `foo(X, Y)` in one rule and `foo(X, Y, Z)` in another is refused up front, as a value. Datalog usually treats those as two predicates; this engine keys relations by name alone, so a mixed-width relation would just be rows nothing matches.
 
 ## Values
 
@@ -102,13 +103,17 @@ const host = {
     version: "1",
     compute(read, changed) { /* yield [x, y, d] tuples */ },
   }],
-  functions: { hash: (args) => /* … */ },
+  functions: {
+    hash: { arity: 3, version: "1", apply: (args) => /* … */ },
+  },
 }
 
 const evaluator = createEvaluator(rules, host)
 ```
 
-Rules reference host code **by name only**. The engine checks that every name a rule needs is registered, and — because a declaration carries its `arity` — that every atom matching a foreign relation has the width that relation holds. A body reading `dist(X, Y)` when `dist` holds 3-tuples is a link error rather than a join that quietly matches nothing. What the engine cannot check is that two machines registered the same implementation, and it says so rather than pretending.
+Both halves are **declared**, not just registered. `arity` is how wide the thing is — how many columns a relation holds, how many arguments a function takes — and it turns a shape mistake into a link error: a body reading `dist(X, Y)` when `dist` holds 3-tuples, or a call passing 3 arguments to a 4-argument function, is refused before anything runs rather than quietly matching nothing or returning `NaN`. `version` is a claim about *meaning*, for the thing the engine genuinely cannot check: two machines register their own code under the same name, and if that code differs they compute different answers from the same facts. Comparing versions makes the disagreement visible; `declarationErrors` is where a consumer checks a pack's expectations against a host.
+
+Rules reference host code **by name only** — the declaration can travel, the code cannot.
 
 ## Who uses it
 

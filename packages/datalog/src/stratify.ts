@@ -18,6 +18,7 @@
 // - Apt, Blair, Walker, "Towards a Theory of Declarative Knowledge" (1988)
 // - `packages/perspective/.plans/007-partitioned-settling.md` § Phase 1
 
+import { analyzeArity, matchedAtom } from "./arity.js"
 import {
   type ForeignRelation,
   foreignRelations,
@@ -26,7 +27,7 @@ import {
 } from "./host.js"
 import type { Result } from "./result.js"
 import { err, ok } from "./result.js"
-import type { BodyElement, Rule, StratificationError } from "./types.js"
+import type { BodyElement, ProgramError, Rule } from "./types.js"
 
 // ---------------------------------------------------------------------------
 // Dependency Graph
@@ -273,9 +274,16 @@ export interface Stratum {
 export function stratify(
   rules: readonly Rule[],
   host?: Host,
-): Result<readonly Stratum[], StratificationError> {
+): Result<readonly Stratum[], ProgramError> {
+  // The three checks a rule set has to pass, in the order they can be made:
+  // does it fit its host, does it agree with itself about shapes, and does
+  // its negation terminate. The first two are pure functions of the rules;
+  // the third needs the dependency graph built below.
   const problems = hostErrors(rules, host)
   if (problems.length > 0) return err(problems[0]!)
+
+  const shapes = analyzeArity(rules, host)
+  if (shapes.errors.length > 0) return err(shapes.errors[0]!)
 
   const foreign = foreignRelations(host)
   if (rules.length === 0 && foreign.length === 0) {
@@ -521,7 +529,7 @@ export function stratify(
 function checkCyclicNegation(
   graph: DependencyGraph,
   sccs: readonly (readonly string[])[],
-): StratificationError | null {
+): ProgramError | null {
   for (const scc of sccs) {
     const sccSet = new Set(scc)
 
@@ -551,25 +559,15 @@ function checkCyclicNegation(
 
 /**
  * Extract all predicate names referenced in a rule's body elements.
+ *
+ * Which element reads which relation is decided once, by `matchedAtom` in
+ * `arity.ts`, so this answer cannot drift from the one the arity check uses.
  */
 export function bodyPredicates(body: readonly BodyElement[]): Set<string> {
   const preds = new Set<string>()
   for (const elem of body) {
-    switch (elem.kind) {
-      case "atom":
-        preds.add(elem.atom.predicate)
-        break
-      case "negation":
-        preds.add(elem.atom.predicate)
-        break
-      case "aggregation":
-        preds.add(elem.agg.source.predicate)
-        break
-      case "guard":
-      case "compute":
-        // Guards and compute elements reference no predicates.
-        break
-    }
+    const atom = matchedAtom(elem)
+    if (atom !== undefined) preds.add(atom.predicate)
   }
   return preds
 }

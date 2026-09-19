@@ -127,7 +127,13 @@ const PREFERRED: ForeignRelation = {
 
 const HOST: Host = {
   relations: [PREFERRED],
-  functions: { upper: args => String(args[0]).toUpperCase() },
+  functions: {
+    upper: {
+      arity: 1,
+      version: "1",
+      apply: args => String(args[0]).toUpperCase(),
+    },
+  },
 }
 
 /**

@@ -1317,7 +1317,17 @@ function compareSameType(
 }
 
 // ---------------------------------------------------------------------------
-// Stratification error types
+// Program error types
+//
+// Every way a rule set can fail to be a program this engine will run. There
+// are exactly three kinds of reason, and each has a home:
+//
+//   - it has no least model            → CyclicNegationError, found by `stratify`
+//   - it does not fit its host         → HostError, found by `hostErrors`
+//   - it contradicts itself on a shape → ArityError, found by `analyzeArity`
+//
+// The sub-unions exist because those checker functions return them; that is
+// the only reason to group them, and it keeps each module owning one law.
 // ---------------------------------------------------------------------------
 
 export interface CyclicNegationError {
@@ -1340,6 +1350,50 @@ export interface ForeignPredicateDerivedError {
 }
 
 /**
+ * One place a predicate was mentioned, and how wide it was there.
+ *
+ * An arity conflict is always a disagreement between *two* sites, so an error
+ * that reports one is only half a diagnosis. `position` says whether the
+ * mention was the rule's head — the relation it writes — or its body, a
+ * relation it reads.
+ */
+export interface ArityMention {
+  readonly arity: number
+  readonly rule: Rule
+  readonly position: "head" | "body"
+}
+
+/**
+ * Two mentions of the same predicate disagree about how wide it is.
+ *
+ * Which mention is `first` follows the order the rules arrived in, and is not
+ * meaningful: what matters is that the two disagree. See `arity.ts`.
+ */
+export interface ArityConflictError {
+  readonly kind: "arityConflict"
+  readonly predicate: string
+  readonly first: ArityMention
+  readonly second: ArityMention
+}
+
+/**
+ * A compute element calls a host function with the wrong number of arguments.
+ *
+ * Unlike a relation, this needs no run-time counterpart: the argument count
+ * comes from the rule, not from the data, so once this check passes every call
+ * is made at exactly the declared width. See `evaluateComputeElement`.
+ */
+export interface HostFunctionArityMismatchError {
+  readonly kind: "hostFunctionArityMismatch"
+  readonly fn: string
+  /** The arity the host registered for the function. */
+  readonly declared: number
+  /** How many arguments the compute element passes. */
+  readonly found: number
+  readonly rule: Rule
+}
+
+/**
  * A rule matches a host-computed relation at a width it does not hold.
  * Such an atom unifies with nothing, so the rule would derive nothing and
  * report nothing — see `arity` in `host.ts`.
@@ -1354,6 +1408,22 @@ export interface ForeignArityMismatchError {
   readonly rule: Rule
 }
 
+/**
+ * A compute element is passed a wildcard as an argument.
+ *
+ * A wildcard means "match anything, bind nothing", so it never resolves to a
+ * value. A host function needs a value for every argument, so the row is
+ * dropped — every row, silently, leaving an empty relation. Same shape of
+ * mistake as an unbound argument, and refused for the same reason.
+ */
+export interface WildcardComputeArgumentError {
+  readonly kind: "wildcardComputeArgument"
+  readonly fn: string
+  /** Which argument position holds the wildcard, counting from 0. */
+  readonly index: number
+  readonly rule: Rule
+}
+
 /** A compute element's argument is bound by nothing in its body. */
 export interface UnboundComputeArgumentError {
   readonly kind: "unboundComputeArgument"
@@ -1362,10 +1432,25 @@ export interface UnboundComputeArgumentError {
   readonly rule: Rule
 }
 
+/** A name a rule needs that the host does not supply, or an element that can never fire. */
 export type HostError =
   | UnknownHostFunctionError
   | ForeignPredicateDerivedError
-  | ForeignArityMismatchError
   | UnboundComputeArgumentError
+  | WildcardComputeArgumentError
 
-export type StratificationError = CyclicNegationError | HostError
+/**
+ * A shape the program disagrees with itself about.
+ *
+ * The law these share: a predicate or function has one arity, and every
+ * mention of it agrees. A declaration — a `ForeignRelation`'s `arity` — is
+ * simply the case where that arity is *stated* rather than inferred from the
+ * rules, which is why a mismatch against one belongs here rather than beside
+ * the "host is missing something" errors above.
+ */
+export type ArityError =
+  | ArityConflictError
+  | ForeignArityMismatchError
+  | HostFunctionArityMismatchError
+
+export type ProgramError = CyclicNegationError | HostError | ArityError

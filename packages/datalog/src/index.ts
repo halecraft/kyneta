@@ -9,10 +9,21 @@
 // probes, unification against stored tuples, the dependency graph — are
 // reachable by relative import inside this package, and by nothing outside it.
 
+// --- Arity ---
+//
+// `analyzeArity` is public for the same reason `bodyPredicates` is: it is a
+// utility over the rule *language*, not an evaluator internal. A consumer that
+// generates rule heads can run it over the rules it produced before installing
+// them, and learn that it emitted a head at the wrong width — which is exactly
+// the failure the engine would otherwise only reveal as a relation nothing
+// matches. `matchedAtom` stays module-internal; it has no consumer out here.
+export type { ArityAnalysis } from "./arity.js"
+export { analyzeArity } from "./arity.js"
 // --- The engine ---
 export type { Evaluator } from "./evaluator.js"
 export {
   createEvaluator,
+  describeProgramError,
   evaluatePositiveUnified as evaluatePositive,
   evaluateUnified as evaluate,
   factsToZSet,
@@ -44,6 +55,7 @@ export type {
   AggregationClause,
   AggregationElement,
   AggregationFn,
+  ArityError,
   Atom,
   AtomElement,
   BodyElement,
@@ -57,9 +69,9 @@ export type {
   HostError,
   NegationElement,
   Probe,
+  ProgramError,
   ReadonlyDatabase,
   Rule,
-  StratificationError,
   Substitution,
   Term,
   Value,

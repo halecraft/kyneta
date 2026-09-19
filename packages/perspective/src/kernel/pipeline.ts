@@ -16,8 +16,8 @@
 //
 // See unified-engine.md §7.1, §7.2, §B.1, §B.4.
 
-import type { Host, StratificationError } from "@kyneta/datalog"
-import { evaluate } from "@kyneta/datalog"
+import type { Host } from "@kyneta/datalog"
+import { describeProgramError, evaluate } from "@kyneta/datalog"
 import { type ProjectionResult, projectToFacts } from "./projection.js"
 import { extractResolution, type ResolutionResult } from "./resolve.js"
 import {
@@ -133,29 +133,6 @@ export function solve(
  * Same as `solve()` but exposes every intermediate stage for debugging
  * and testing.
  */
-/**
- * One line describing why a rule set could not be stratified.
- *
- * Stratification is the check that negation never loops: a rule may only negate
- * a relation computed *before* it, so `a :- not b.` and `b :- not a.` have no
- * least model and the evaluator refuses them. The other cases are a rule naming
- * host code the engine was not given.
- */
-function describeRuleSetError(error: StratificationError): string {
-  switch (error.kind) {
-    case "cyclicNegation":
-      return `negation forms a cycle through ${error.cycle.join(" → ")}`
-    case "unknownHostFunction":
-      return `rule for "${error.rule.head.predicate}" names host function "${error.fn}", which is not registered`
-    case "foreignPredicateDerived":
-      return `a rule derives "${error.predicate}", which is a host-computed relation`
-    case "foreignArityMismatch":
-      return `rule for "${error.rule.head.predicate}" matches host-computed relation "${error.predicate}" with ${error.found} terms, but it holds ${error.declared}-tuples`
-    case "unboundComputeArgument":
-      return `rule for "${error.rule.head.predicate}" passes unbound variable "${error.variable}" to host function "${error.fn}"`
-  }
-}
-
 export function solveFull(
   store: ConstraintStore,
   config: PipelineConfig,
@@ -204,15 +181,27 @@ export function solveFull(
   const rules = extractRules(retractionResult.active)
   const evalResult = evaluate(rules, projectionResult.facts, config.host)
 
-  // A rule set that cannot be stratified is a defect in the store, not a
-  // condition to route around. Resolving it with some other rule set would
-  // compute a reality that this peer's own constraints do not describe, and
-  // would do it silently — which is worse than refusing, because the caller
-  // has no way to notice. (The previous behaviour was exactly that: fall back
-  // to the native solvers and return a reality under the default rules.)
+  // A rule set the engine refuses is a defect in the store, not a condition to
+  // route around. Resolving it with some other rule set would compute a reality
+  // that this peer's own constraints do not describe, and would do it silently
+  // — which is worse than refusing, because the caller has no way to notice.
+  // (The previous behaviour was exactly that: fall back to the native solvers
+  // and return a reality under the default rules.)
+  //
+  // There are three ways a rule set can be refused. *Stratification* is the one
+  // this package cares about most: negation may not loop, so `a :- not b.` and
+  // `b :- not a.` have no least model. The others are a rule naming host code
+  // the engine was not given, and a rule contradicting itself about the shape
+  // of a relation.
+  //
+  // `@kyneta/datalog` owns the wording for all three, via `describeProgramError`.
+  // This package used to keep a parallel switch producing near-identical
+  // sentences; one formatter means a new engine error kind is described once,
+  // in the package that defines it, and cannot arrive here as an unlabelled
+  // string.
   if (!evalResult.ok) {
     throw new Error(
-      `cannot solve: the store's rule set cannot be evaluated — ${describeRuleSetError(evalResult.error)}`,
+      `cannot solve: the store's rule set cannot be evaluated — ${describeProgramError(evalResult.error)}`,
     )
   }
   const resolutionResult = extractResolution(evalResult.value)
