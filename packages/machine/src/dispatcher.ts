@@ -10,16 +10,19 @@
  *
  * A Lease is a plain mutable record. Dispatchers mutate its fields
  * directly; no methods. When `depth` goes 0→1 a dispatcher becomes the
- * owner and resets `iterations`/`history`/`counts`/`originStack` on its
+ * owner and resets `iterations`/`history`/`counts`/`origin` on its
  * eventual 1→0 exit.
  *
- * Diagnostic instrumentation (history, counts, originStack) supports
+ * Diagnostic instrumentation (history, counts, origin) supports
  * `BudgetExhaustedError`'s message:
  * - `history` — bounded ring buffer of recent `{label, type}` events.
  * - `counts` — cumulative `${label}:${type}` → count over the whole drain.
- * - `originStack` — captured at the cascade's entry point (depth 0→1).
- *   Names the boundary where the dispatch system was re-entered from
- *   outside (userland for client-side flows, transport for server-side).
+ * - `origin` — names the boundary where the dispatch system was entered
+ *   from outside (userland for client-side flows, transport for
+ *   server-side). Present only once a cascade stops looking ordinary;
+ *   see the capture site for why it is taken there and not at entry.
+ *   Held as the `Error`, not its `.stack` string — reading `.stack`
+ *   serializes the whole trace, so that cost belongs on the failure path.
  */
 export type Lease = {
   depth: number
@@ -28,7 +31,7 @@ export type Lease = {
   history: { label: string; type: string }[]
   readonly historyCapacity: number
   counts: Map<string, number>
-  originStack: string | undefined
+  origin: Error | undefined
 }
 
 export type LeaseOptions = {
@@ -44,7 +47,7 @@ export function createLease(options?: LeaseOptions): Lease {
     history: [],
     historyCapacity: options?.historyCapacity ?? 32,
     counts: new Map(),
-    originStack: undefined,
+    origin: undefined,
   }
 }
 
@@ -74,9 +77,10 @@ function recordDispatch(lease: Lease, label: string, type: string): void {
  * captured stack — it's the label we used to *construct* the Error solely
  * to grab a stack, not a meaningful frame.
  */
-export function formatOrigin(originStack: string | undefined): string {
-  if (!originStack) return ""
-  const lines = originStack.split("\n")
+export function formatOrigin(origin: Error | undefined): string {
+  const stack = origin?.stack
+  if (!stack) return ""
+  const lines = stack.split("\n")
   const start = lines[0]?.startsWith("Error") ? 1 : 0
   const frames = lines.slice(start).map(l => `    ${l.trim()}`)
   return `  cascade entered from:\n${frames.join("\n")}\n`
@@ -123,7 +127,7 @@ export class BudgetExhaustedError extends Error {
   constructor(label: string, lease: Lease) {
     const header = `[dispatcher:${label}] iteration budget exhausted (${lease.iterations} > ${lease.budget})`
     const body =
-      formatOrigin(lease.originStack) +
+      formatOrigin(lease.origin) +
       formatHistogram(lease.counts, lease.iterations, 5) +
       formatRecent(lease.history)
     super(body.length > 0 ? `${header}\n${body}` : header)
@@ -166,8 +170,19 @@ export function createDispatcher<Msg>(
 ): DispatcherHandle<Msg> {
   const lease = options?.lease ?? createLease()
   const label = options?.label ?? "dispatcher"
+  // A cursor, not `shift()`: draining by cursor is O(1) per message and
+  // needs no non-null assertion to type. The consumed prefix is dropped on
+  // the way out, so a handler that throws still leaves the unprocessed tail
+  // queued for the next drain.
   const pending: Msg[] = []
+  let head = 0
   let isDispatching = false
+  // The iteration count past which a cascade stops looking ordinary: the
+  // earlier of `history` beginning to drop events and the budget tripping.
+  // Taking the budget into account is what makes the origin diagnostic
+  // unconditional — a lease may be configured with a budget smaller than
+  // its history, and the frame has to exist by the time the error is built.
+  const originWatermark = Math.min(lease.historyCapacity, lease.budget)
 
   function dispatch(msg: Msg): void {
     pending.push(msg)
@@ -175,18 +190,26 @@ export function createDispatcher<Msg>(
 
     isDispatching = true
     const owns = lease.depth === 0
-    if (owns) {
-      // Capture the frame that opened this drain. Subscribers re-entering
-      // mid-cascade don't overwrite it — the owning drain resets it on
-      // exit. The frame names the *entry point* into the dispatch system
-      // (userland or transport), not necessarily user code.
-      lease.originStack = new Error("cascade origin").stack
-    }
     lease.depth += 1
     try {
-      while (pending.length > 0) {
-        const next = pending.shift()!
+      while (head < pending.length) {
+        const next = pending[head]
+        head += 1
         lease.iterations += 1
+        // Capture the cascade's provenance — late, and only once.
+        //
+        // `new Error` walks the stack: microseconds, on a path every write
+        // in the system goes through. Capturing at the entry point would
+        // buy a diagnostic for a failure that needs `budget` iterations to
+        // occur, and charge every ordinary cascade for it.
+        //
+        // Deferring loses nothing. The `dispatch` call that opened this
+        // drain has not returned — it is running this very loop — so its
+        // caller frames are still beneath us, and an Error built here names
+        // the same entry point. `originWatermark` picks the moment.
+        if (lease.origin === undefined && lease.iterations > originWatermark) {
+          lease.origin = new Error("cascade origin")
+        }
         const type =
           typeof next === "object" && next !== null && "type" in next
             ? String((next as { type: unknown }).type)
@@ -198,12 +221,14 @@ export function createDispatcher<Msg>(
         handler(next, dispatch)
       }
     } finally {
+      pending.splice(0, head)
+      head = 0
       lease.depth -= 1
       if (owns) {
         lease.iterations = 0
         lease.history.length = 0
         lease.counts.clear()
-        lease.originStack = undefined
+        lease.origin = undefined
       }
       isDispatching = false
     }
@@ -212,7 +237,7 @@ export function createDispatcher<Msg>(
   return {
     dispatch,
     get queueDepth(): number {
-      return pending.length
+      return pending.length - head
     },
   }
 }

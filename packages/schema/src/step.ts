@@ -20,7 +20,32 @@ import type {
   TextChange,
   TreeChange,
 } from "./change.js"
-import { isSameSetMember } from "./guards.js"
+import { isPlainObject, isSameSetMember } from "./guards.js"
+
+// ---------------------------------------------------------------------------
+// Container mutation primitives — shared by the pure and in-place duals
+// ---------------------------------------------------------------------------
+
+/**
+ * Splice `items` into `target` at `index` without `Array.prototype.splice`'s
+ * variadic call. A bulk insert can carry more items than an engine's argument
+ * limit, so `splice(i, 0, ...items)` is not a safe spelling of this.
+ *
+ * O(|target| - index + |items|); O(|items|) for the append that dominates
+ * real workloads.
+ */
+function insertItems<T>(target: T[], index: number, items: readonly T[]): void {
+  if (items.length === 0) return
+  if (index >= target.length) {
+    for (const item of items) target.push(item)
+    return
+  }
+  const shift = items.length
+  const end = target.length
+  target.length = end + shift
+  for (let i = end - 1; i >= index; i--) target[i + shift] = target[i]
+  for (let i = 0; i < shift; i++) target[index + i] = items[i]
+}
 
 // ---------------------------------------------------------------------------
 // stepText — apply retain/insert/delete ops to a string
@@ -81,36 +106,33 @@ export function stepSequence<T>(
   state: readonly T[],
   action: SequenceChange<T>,
 ): T[] {
-  const s = state ?? []
+  return mutateSequence([...(state ?? [])], action)
+}
+
+/**
+ * `stepSequence`'s mutating core. Retain never touches an element — it only
+ * advances the cursor — so the array's contents pass through untouched, and an
+ * append costs O(|insert|) rather than O(|state|).
+ */
+function mutateSequence<T>(target: T[], action: SequenceChange<T>): T[] {
   let cursor = 0
-  const result: T[] = []
 
   for (const op of action.instructions) {
     if ("retain" in op) {
-      for (let i = 0; i < (op as { retain: number }).retain; i++) {
-        if (cursor < s.length) {
-          const item = s[cursor]
-          if (item !== undefined) result.push(item)
-          cursor++
-        }
-      }
+      cursor = Math.min(
+        cursor + (op as { retain: number }).retain,
+        target.length,
+      )
     } else if ("insert" in op) {
-      for (const item of (op as { insert: readonly T[] }).insert) {
-        result.push(item)
-      }
+      const items = (op as { insert: readonly T[] }).insert
+      insertItems(target, cursor, items)
+      cursor += items.length
     } else if ("delete" in op) {
-      cursor += (op as { delete: number }).delete
+      target.splice(cursor, (op as { delete: number }).delete)
     }
   }
 
-  // Append any remaining items after the last op
-  while (cursor < s.length) {
-    const item = s[cursor]
-    if (item !== undefined) result.push(item)
-    cursor++
-  }
-
-  return result
+  return target
 }
 
 // ---------------------------------------------------------------------------
@@ -132,21 +154,29 @@ export function stepMap<T extends Record<string, unknown>>(
   state: T,
   action: MapChange,
 ): T {
-  const result = { ...(state ?? ({} as T)) }
+  return mutateMap({ ...(state ?? ({} as T)) }, action)
+}
+
+/** `stepMap`'s mutating core. O(|delete| + |set|). */
+function mutateMap<T extends Record<string, unknown>>(
+  target: T,
+  action: MapChange,
+): T {
+  const record = target as Record<string, unknown>
 
   if (action.delete) {
     for (const key of action.delete) {
-      delete (result as Record<string, unknown>)[key]
+      delete record[key]
     }
   }
 
   if (action.set) {
     for (const [key, value] of Object.entries(action.set)) {
-      ;(result as Record<string, unknown>)[key] = value
+      record[key] = value
     }
   }
 
-  return result
+  return target
 }
 
 // ---------------------------------------------------------------------------
@@ -354,30 +384,40 @@ export function stepRichText(
  * ```
  */
 export function stepSet<T>(state: readonly T[], change: SetChange<T>): T[] {
-  const current = state ?? []
+  return mutateSet([...(state ?? [])], change)
+}
+
+/**
+ * `stepSet`'s mutating core. Removal compacts in place; adds append.
+ */
+function mutateSet<T>(target: T[], change: SetChange<T>): T[] {
   const adds = change.add ?? []
   const removes = change.remove ?? []
 
-  // Remove-wins: build the effective add set excluding anything in remove.
+  // Remove-wins: an add that matches a removal is a no-op.
   const isRemoved = (v: unknown): boolean =>
     removes.some(r => isSameSetMember(r, v))
 
-  const result: T[] = []
-  // 1. Retain existing members not in `remove`.
-  for (const member of current) {
-    if (!isRemoved(member)) {
-      result.push(member)
+  // 1. Drop removed members, keeping the survivors' relative order.
+  if (removes.length > 0) {
+    let write = 0
+    for (const member of target) {
+      if (!isRemoved(member)) {
+        target[write] = member
+        write++
+      }
     }
+    target.length = write
   }
   // 2. Append new adds (in `add[]` order), skipping anything already
-  // present in result or marked for removal. Adds that match a removed
-  // value are no-ops; adds that match a retained member are no-ops.
+  // present or marked for removal. An add that matches a retained member
+  // is a no-op — it keeps its original position rather than re-appending.
   for (const candidate of adds) {
     if (isRemoved(candidate)) continue
-    if (result.some(m => isSameSetMember(m, candidate))) continue
-    result.push(candidate)
+    if (target.some(m => isSameSetMember(m, candidate))) continue
+    target.push(candidate)
   }
-  return result
+  return target
 }
 
 // ---------------------------------------------------------------------------
@@ -392,7 +432,15 @@ interface TreeNode {
 }
 
 export function stepTree(state: unknown[], action: TreeChange): unknown[] {
-  let result = [...state]
+  return mutateTree([...state], action)
+}
+
+/**
+ * `stepTree`'s mutating core. Mutates the array, never a node: `stepTree`
+ * copies the array but shares its nodes, so a node rewritten here would
+ * reach through the copy and out of the pure arrow.
+ */
+function mutateTree(target: unknown[], action: TreeChange): unknown[] {
   for (const inst of action.instructions) {
     switch (inst.action) {
       case "create": {
@@ -402,24 +450,31 @@ export function stepTree(state: unknown[], action: TreeChange): unknown[] {
           index: inst.index,
           data: {},
         }
-        result = [...result, node]
+        target.push(node)
         break
       }
       case "delete": {
-        result = result.filter(n => (n as TreeNode).id !== inst.target)
+        let write = 0
+        for (const node of target) {
+          if ((node as TreeNode).id !== inst.target) {
+            target[write] = node
+            write++
+          }
+        }
+        target.length = write
         break
       }
       case "move": {
-        result = result.map(n =>
-          (n as TreeNode).id === inst.target
-            ? { ...(n as TreeNode), parent: inst.parent, index: inst.index }
-            : n,
-        )
+        for (let i = 0; i < target.length; i++) {
+          const node = target[i] as TreeNode
+          if (node.id !== inst.target) continue
+          target[i] = { ...node, parent: inst.parent, index: inst.index }
+        }
         break
       }
     }
   }
-  return result
+  return target
 }
 
 // ---------------------------------------------------------------------------
@@ -483,4 +538,50 @@ export function step<S>(state: S, action: ChangeBase): S {
           `Use a specific step function for third-party action types.`,
       )
   }
+}
+
+// ---------------------------------------------------------------------------
+// stepInPlace — the mutating dual of `step`
+// ---------------------------------------------------------------------------
+
+/**
+ * The same arrow as {@link step}, for a caller that owns σ.
+ *
+ * `step` is pure: it returns a fresh σ' and therefore rebuilds the whole
+ * carrier, so k writes into a container of size n cost O(n·k). Every one of
+ * `step`'s container cases is already written as `copy-then-mutate`; this
+ * dual skips the copy. The cost becomes O(|δ|) for map set/delete and for
+ * sequence append — the two shapes a batch that fills a container is made of.
+ *
+ * Returns the advanced σ. That is `state` itself when δ's carrier is a
+ * container the document already holds; otherwise — a value carrier (text,
+ * scalar, counter, or a normalised rich-text delta), or a δ whose carrier does
+ * not match the σ found at the path — it is a new value the caller must write
+ * back. Compare with `!==` to tell the two apart.
+ *
+ * Substrates own their document and hand out live readers (see the liveness
+ * invariant on `plainReader`), and an inverse is recorded from σ *before* the
+ * write, so preserving container identity here is observationally equivalent
+ * to replacing it.
+ */
+export function stepInPlace(state: unknown, action: ChangeBase): unknown {
+  switch (action.type) {
+    case "map":
+      if (isPlainObject(state)) return mutateMap(state, action as MapChange)
+      break
+
+    case "sequence":
+      if (Array.isArray(state))
+        return mutateSequence(state, action as SequenceChange)
+      break
+
+    case "set-op":
+      if (Array.isArray(state)) return mutateSet(state, action as SetChange)
+      break
+
+    case "tree":
+      if (Array.isArray(state)) return mutateTree(state, action as TreeChange)
+      break
+  }
+  return step(state, action)
 }

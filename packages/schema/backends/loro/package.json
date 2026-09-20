@@ -39,12 +39,12 @@
   "peerDependencies": {
     "@kyneta/changefeed": "workspace:^",
     "@kyneta/schema": "workspace:^",
-    "loro-crdt": ">=1.8.0"
+    "loro-crdt": ">=1.13.4"
   },
   "devDependencies": {
     "@kyneta/changefeed": "workspace:^",
     "@kyneta/schema": "workspace:^",
-    "loro-crdt": "^1.10.0",
+    "loro-crdt": "^1.16.0",
     "tsdown": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

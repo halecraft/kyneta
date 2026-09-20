@@ -526,7 +526,7 @@ CRDT substrates (Loro, Yjs) maintain a **shadow**: a `PlainState` object that se
 | **Position surface** | CRDT doc | `positionResolver` — cursor / relative-position operations that require CRDT structure |
 | **Native escape hatch** | CRDT doc | `nativeResolver` — direct access to the underlying CRDT container for advanced use |
 
-**On local writes**, `prepare` calls `applyChange(shadow, path, change)` — the same pure `step` function used by the plain substrate — making the write immediately visible to reads. CRDT diffs are buffered and applied to the CRDT doc in `onFlush`. This two-phase design means the read surface is always ahead of (or equal to) the sync surface during a transaction.
+**On local writes**, `prepare` calls `applyChange(shadow, path, change)` — the same σ-advance the plain substrate uses — making the write immediately visible to reads. CRDT diffs are buffered and applied to the CRDT doc in `onFlush`. This two-phase design means the read surface is always ahead of (or equal to) the sync surface during a transaction.
 
 **On replay (merge)**, the CRDT doc absorbs the remote state first (via `doc.import` or `Y.applyUpdate`). `onFlush` then re-materializes the shadow from the CRDT doc, ensuring `ctx.reader` reflects the merged state for subscriber callbacks.
 
@@ -920,11 +920,19 @@ The three handlers are co-extensive — they all open and close at the same boun
 
 Substrate.runBatch is invoked at most once per outermost `batch(doc, fn)` — re-entrant subscriber writes open their own outermost runBatch (frameStarts goes to 0 between outer flush and subscriber re-entry), each block is its own atomic abort unit and gets its own commit.
 
-### Pure step function
+### The step function, and its mutating dual
 
 Source: `packages/schema/src/step.ts`.
 
-For testing and reasoning, `step(state, change)` → `state` is the pure transition function. It handles every built-in change type (`stepText`, `stepSequence`, `stepMap`, `stepReplace`, `stepIncrement`, `stepFold`). The plain substrate uses `step` internally; tests use it to verify change semantics without constructing a substrate.
+`step(state, change)` → `state` is the pure transition function — the algebra's arrow. It handles every built-in change type (`stepText`, `stepSequence`, `stepMap`, `stepReplace`, `stepIncrement`, `stepRichText`, `stepSet`, `stepTree`). Tests use it to verify change semantics without constructing a substrate.
+
+Purity has a cost that only shows up in bulk: returning a fresh σ' means rebuilding the whole carrier, so *k* writes into a container of size *n* cost O(n·k) — a batch that fills a list or a record is quadratic in its own size.
+
+Every container case of `step` is already `copy-then-mutate`. Those mutating cores are factored out, `step`'s container cases are defined as copy ∘ core, and `stepInPlace(state, change)` is the same arrow without the copy. There is one implementation of the semantics and two entry points into it; `src/__tests__/step.test.ts` pins both halves — that `step` never reaches through its copy into σ, and that the two duals agree.
+
+`stepInPlace` returns the σ it was given when δ's carrier is a container (map, sequence, set, tree), and a new value otherwise (text, scalar, counter, rich-text delta, or a δ whose carrier contradicts the σ at the path). `applyChange` compares identities and writes back only in the second case.
+
+Substrates use `stepInPlace`, and may, because each one owns its document: the reader is a documented live view of it (see the liveness invariant on `plainReader`), and `prepare` takes the inverse from σ *before* the write. Advancing a container's contents and replacing the container are therefore the same observation — at O(|δ|) instead of O(|σ|).
 
 ### Inverse algebra
 
@@ -1811,7 +1819,7 @@ The worked example is `__getCacheHandlerCountAtPath` (`src/interpreters/with-cac
 | `src/changefeed.ts` | `Op`, `RecursiveChangefeedProtocol`, `HasRecursiveChangefeed`, `expandMapOpsToLeaves`. |
 | `src/facade/batch.ts` | `batch(ref, fn)`, `applyChanges`, `remove`, `CommitOptions`. |
 | `src/facade/observe.ts` | `subscribe`, `subscribeNode`. |
-| `src/step.ts` | Pure state transitions: `step`, per-change-type step functions. |
+| `src/step.ts` | State transitions: `step` (pure) and `stepInPlace` (its mutating dual), over one set of per-change-type cores. |
 | `src/reader.ts` | `Reader`, `plainReader`, `writeByPath`, `applyChange`. |
 | `src/unwrap.ts` | Typed escape hatch to `[NATIVE]`. |
 | `src/version-vector.ts` | `versionVectorMeet`, `versionVectorCompare`. |

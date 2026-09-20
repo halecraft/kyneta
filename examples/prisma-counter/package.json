@@ -15,7 +15,7 @@
     "@kyneta/schema": "workspace:^",
     "@kyneta/websocket-transport": "workspace:^",
     "@prisma/client": "^6.0.0",
-    "loro-crdt": "^1.10.0",
+    "loro-crdt": "^1.16.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "ws": "^8"

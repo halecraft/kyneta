@@ -13,7 +13,7 @@
     "@kyneta/schema": "workspace:^",
     "@kyneta/yjs-schema": "workspace:^",
     "@types/node": "^22",
-    "loro-crdt": "^1.10.0",
+    "loro-crdt": "^1.16.0",
     "typescript": "catalog:",
     "vitest": "catalog:",
     "yjs": "^13.6.30"

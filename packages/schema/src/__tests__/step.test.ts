@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import type { ChangeBase } from "../index.js"
 import {
   incrementChange,
   isSameSetMember,
@@ -8,12 +9,14 @@ import {
   setOpChange,
   step,
   stepIncrement,
+  stepInPlace,
   stepMap,
   stepReplace,
   stepSequence,
   stepSet,
   stepText,
   textChange,
+  treeChange,
 } from "../index.js"
 
 describe("stepText", () => {
@@ -336,5 +339,123 @@ describe("isSameSetMember", () => {
     expect(isSameSetMember([1, 2], { 0: 1, 1: 2 })).toBe(false)
     expect(isSameSetMember(null, undefined)).toBe(false)
     expect(isSameSetMember(null, {})).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The two duals — `step` copies, `stepInPlace` does not, and they agree
+// ---------------------------------------------------------------------------
+
+/**
+ * Every container case of `step` is `copy-then-mutate` over a shared core,
+ * and `stepInPlace` is that core without the copy. Both halves of that
+ * factoring are laws, and neither is visible from a single call's return
+ * value: `step` may not reach through its copy into σ, and the two must
+ * produce the same σ'.
+ */
+const containerCases: {
+  name: string
+  state: () => unknown
+  change: ChangeBase
+}[] = [
+  {
+    name: "map",
+    state: () => ({ a: 1, b: 2 }),
+    change: mapChange({ a: 10, c: 3 }, ["b"]),
+  },
+  {
+    name: "sequence (append)",
+    state: () => [1, 2, 3],
+    change: sequenceChange([{ retain: 3 }, { insert: [4] }]),
+  },
+  {
+    name: "sequence (middle insert and delete)",
+    state: () => [1, 2, 3, 4],
+    change: sequenceChange([{ retain: 1 }, { insert: [9, 8] }, { delete: 2 }]),
+  },
+  {
+    name: "set-op",
+    state: () => ["a", "b"],
+    change: setOpChange(["c", "a"], ["b"]),
+  },
+  {
+    name: "tree (create)",
+    state: () => [{ id: "n1", parent: null, index: 0, data: {} }],
+    change: treeChange([
+      { action: "create", target: "n2", parent: null, index: 1 },
+    ]),
+  },
+  {
+    name: "tree (move)",
+    state: () => [
+      { id: "n1", parent: null, index: 0, data: {} },
+      { id: "n2", parent: null, index: 1, data: {} },
+    ],
+    change: treeChange([
+      { action: "move", target: "n2", parent: "n1", index: 0 },
+    ]),
+  },
+  {
+    name: "tree (delete)",
+    state: () => [
+      { id: "n1", parent: null, index: 0, data: {} },
+      { id: "n2", parent: null, index: 1, data: {} },
+    ],
+    change: treeChange([{ action: "delete", target: "n1" }]),
+  },
+]
+
+describe("step is pure", () => {
+  for (const { name, state, change } of containerCases) {
+    it(`${name}: σ is unchanged, down to the elements`, () => {
+      const before = state()
+      const pristine = structuredClone(before)
+      const next = step(before, change)
+      expect(before).toEqual(pristine)
+      expect(next).not.toBe(before)
+    })
+  }
+})
+
+describe("stepInPlace agrees with step", () => {
+  for (const { name, state, change } of containerCases) {
+    it(`${name}: same σ', on the container it was given`, () => {
+      const target = state()
+      const next = stepInPlace(target, change)
+      expect(next).toBe(target)
+      expect(next).toEqual(step(state(), change))
+    })
+  }
+
+  it("hands back a new value when the carrier is not a container", () => {
+    // Text, counters and scalars have nothing to advance in place — the
+    // caller has to write the result back.
+    expect(stepInPlace("Hello", textChange([{ insert: "Hi " }]))).toBe(
+      "Hi Hello",
+    )
+    expect(stepInPlace(10, incrementChange(5))).toBe(15)
+    expect(stepInPlace({ a: 1 }, replaceChange(7))).toBe(7)
+  })
+
+  it("falls back to the pure arrow when σ's shape contradicts the change", () => {
+    // A map change against an array, say — the fast path must not fire on a
+    // carrier it cannot advance.
+    expect(stepInPlace([1, 2], mapChange({ a: 1 }))).toEqual({
+      0: 1,
+      1: 2,
+      a: 1,
+    })
+  })
+})
+
+describe("stepSequence retains what it is told to retain", () => {
+  it("an `undefined` element survives a retain", () => {
+    // Retain means retain. An earlier formulation read each retained slot
+    // and dropped the ones holding `undefined`, which silently shortened the
+    // list and put every later index out of step with the ops addressing it.
+    const state = [1, undefined, 3]
+    expect(
+      stepSequence(state, sequenceChange([{ retain: 3 }, { insert: [4] }])),
+    ).toEqual([1, undefined, 3, 4])
   })
 })

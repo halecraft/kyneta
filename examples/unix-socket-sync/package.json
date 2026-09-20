@@ -11,7 +11,7 @@
     "@kyneta/schema": "workspace:^",
     "@kyneta/loro-schema": "workspace:^",
     "@kyneta/unix-socket-transport": "workspace:^",
-    "loro-crdt": "^1.10.0"
+    "loro-crdt": "^1.16.0"
   },
   "devDependencies": {
     "bun-types": "latest",

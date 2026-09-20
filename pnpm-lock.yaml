@@ -37,7 +37,7 @@ importers:
         version: 7.0.0-dev.20260322.1
       bun-types:
         specifier: ^1.3.11
-        version: 1.3.14
+        version: 1.4.2
       prosemirror-model:
         specifier: ^1.25.4
         version: 1.25.4
@@ -89,7 +89,7 @@ importers:
         version: 19.2.3(@types/react@19.2.14)
       bun-types:
         specifier: latest
-        version: 1.3.14
+        version: 1.4.2
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
@@ -121,8 +121,8 @@ importers:
         specifier: ^6.0.0
         version: 6.19.3(prisma@6.19.3(typescript@5.9.3))(typescript@5.9.3)
       loro-crdt:
-        specifier: ^1.10.0
-        version: 1.10.8
+        specifier: ^1.16.0
+        version: 1.16.1
       react:
         specifier: ^19.1.0
         version: 19.2.5
@@ -188,8 +188,8 @@ importers:
         specifier: workspace:^
         version: link:../../packages/schema/backends/yjs
       loro-crdt:
-        specifier: ^1.10.0
-        version: 1.10.8
+        specifier: ^1.16.0
+        version: 1.16.1
       yjs:
         specifier: ^13.6.30
         version: 13.6.30
@@ -199,7 +199,7 @@ importers:
         version: 8.18.1
       bun-types:
         specifier: latest
-        version: 1.3.14
+        version: 1.4.2
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
@@ -286,12 +286,12 @@ importers:
         specifier: workspace:^
         version: link:../../packages/exchange/transports/unix-socket
       loro-crdt:
-        specifier: ^1.10.0
-        version: 1.10.8
+        specifier: ^1.16.0
+        version: 1.16.1
     devDependencies:
       bun-types:
         specifier: latest
-        version: 1.3.14
+        version: 1.4.2
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
@@ -374,7 +374,7 @@ importers:
     devDependencies:
       bun-types:
         specifier: latest
-        version: 1.3.14
+        version: 1.4.2
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
@@ -472,8 +472,8 @@ importers:
         specifier: workspace:^
         version: link:../schema/backends/yjs
       loro-crdt:
-        specifier: ^1.10.0
-        version: 1.10.8
+        specifier: ^1.16.0
+        version: 1.16.1
       tsdown:
         specifier: 'catalog:'
         version: 0.22.0(@typescript/native-preview@7.0.0-dev.20260322.1)(tsx@4.21.0)(typescript@5.9.3)(unrun@0.2.36)
@@ -721,7 +721,7 @@ importers:
         version: 22.19.17
       bun-types:
         specifier: latest
-        version: 1.3.14
+        version: 1.4.2
       tsdown:
         specifier: 'catalog:'
         version: 0.22.0(@typescript/native-preview@7.0.0-dev.20260322.1)(tsx@4.21.0)(typescript@5.9.3)(unrun@0.2.36)
@@ -781,7 +781,7 @@ importers:
         version: 22.19.17
       bun-types:
         specifier: latest
-        version: 1.3.14
+        version: 1.4.2
       tsdown:
         specifier: 'catalog:'
         version: 0.22.0(@typescript/native-preview@7.0.0-dev.20260322.1)(tsx@4.21.0)(typescript@5.9.3)(unrun@0.2.36)
@@ -982,8 +982,8 @@ importers:
         specifier: workspace:^
         version: link:../..
       loro-crdt:
-        specifier: ^1.10.0
-        version: 1.10.8
+        specifier: ^1.16.0
+        version: 1.16.1
       tsdown:
         specifier: 'catalog:'
         version: 0.22.0(@typescript/native-preview@7.0.0-dev.20260322.1)(tsx@4.21.0)(typescript@5.9.3)(unrun@0.2.36)
@@ -1077,8 +1077,8 @@ importers:
         specifier: ^22
         version: 22.19.17
       loro-crdt:
-        specifier: ^1.10.0
-        version: 1.10.8
+        specifier: ^1.16.0
+        version: 1.16.1
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
@@ -1165,10 +1165,10 @@ importers:
         version: 11.10.0
       bun-types:
         specifier: ^1.3.11
-        version: 1.3.14
+        version: 1.4.2
       loro-crdt:
-        specifier: ^1.10.0
-        version: 1.10.8
+        specifier: ^1.16.0
+        version: 1.16.1
       pg:
         specifier: ^8.13.0
         version: 8.20.0
@@ -2994,8 +2994,8 @@ packages:
   buffer@6.0.3:
     resolution: {integrity: sha512-FTiCpNxtwiZZHEZbcbTIcZjERVICn9yq/pDFkTl95/AxzD1naBctN7YO68riM/gLSDY7sdrMby8hofADYuuqOA==}
 
-  bun-types@1.3.14:
-    resolution: {integrity: sha512-4N0ig0fEomHt5R0KCFWjovxow98rIoRwKolrYdCcknNwMekCXRnWEUvgu5soYV8QXtVsrUD8B95MBOZGPvr6KQ==}
+  bun-types@1.4.2:
+    resolution: {integrity: sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w==}
 
   bundle-name@3.0.0:
     resolution: {integrity: sha512-PKA4BeSvBpQKQ8iPOGCSiell+N8P+Tf1DlwqmYhpe2gAhKPHn8EYOxVT+ShuGmhg8lN8XiSlS80yiExKXrURlw==}
@@ -3935,8 +3935,8 @@ packages:
     resolution: {integrity: sha512-HgMmCqIJSAKqo68l0rS2AanEWfkxaZ5wNiEFb5ggm08lDs9Xl2KxBlX3PTcaD2chBM1gXAYf491/M2Rv8Jwayg==}
     engines: {node: '>= 0.6.0'}
 
-  loro-crdt@1.10.8:
-    resolution: {integrity: sha512-GvH8fSJST1VDHRGzlQml80pBYoFbIP4ULeV1S8fD4ffmA8m+icoPORyVUW2AkJBY3dxKIcMMn0WqaJmpCmnbkQ==}
+  loro-crdt@1.16.1:
+    resolution: {integrity: sha512-olUkbQEjeeE78Kx6BknYrpbaX43wxRAycoiLZUSLVcMFKMSZ8RxPfp244kNVQEM8MQfgkbnwrNOaHU/yUb5Ncg==}
 
   lru-cache@10.4.3:
     resolution: {integrity: sha512-JNAzZcXrCt42VGLuYz0zfAzDfAvJWW6AfYlDBQyDV5DClI2m5sAmK+OIO7s59XfsRsWHp02jAJrRadPRGTt6SQ==}
@@ -6699,7 +6699,7 @@ snapshots:
       base64-js: 1.5.1
       ieee754: 1.2.1
 
-  bun-types@1.3.14:
+  bun-types@1.4.2:
     dependencies:
       '@types/node': 22.19.15
 
@@ -7731,7 +7731,7 @@ snapshots:
 
   loglevel@1.9.2: {}
 
-  loro-crdt@1.10.8: {}
+  loro-crdt@1.16.1: {}
 
   lru-cache@10.4.3: {}
 

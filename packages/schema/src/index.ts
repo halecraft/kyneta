@@ -513,11 +513,12 @@ export {
   Schema,
   structuralKind,
 } from "./schema.js"
-// Step — pure state transitions: (State, Change) → State
+// Step — state transitions: (State, Change) → State, pure and in place
 export {
   normalizeSpans,
   step,
   stepIncrement,
+  stepInPlace,
   stepMap,
   stepReplace,
   stepRichText,

@@ -123,7 +123,9 @@ const handleB = createDispatcher(handlerB, { lease, label: "B" })
 
 When `lease.iterations > lease.budget`, the dispatcher throws `BudgetExhaustedError` carrying the lease snapshot and label. The error renders three diagnostic projections (`jj:tozwpvuu`):
 
-- `cascade entered from:` — a JS stack snapshot of the frame that opened the drain (`lease.depth` transitioning 0→1). For client-side cascades this is typically a userland `batch()` / `push()` / `set()` call; for server-side cascades it's typically a transport boundary like `WebSocketConnection.#handleMessage`. Both are useful anchors for finding the cascade's source.
+- `cascade entered from:` — a JS stack snapshot naming the frame that opened the drain. For client-side cascades this is typically a userland `batch()` / `push()` / `set()` call; for server-side cascades it's typically a transport boundary like `WebSocketConnection.#handleMessage`. Both are useful anchors for finding the cascade's source.
+
+  The `Error` is built inside the drain loop, not at entry, on the first iteration past `min(historyCapacity, budget)`. Capturing at entry would put a stack walk — microseconds — on the path every document write takes, to serve a diagnostic that needs `budget` iterations to occur. Deferring costs nothing: the `dispatch` call that opened the drain is still running the loop, so its caller frames are still on the stack. The lease holds the `Error`, not its `.stack` string; serializing a trace is likewise a failure-path cost.
 - `top message types:` — a width-aware histogram of `${label}:${type}` keys, sorted by count, top-5 displayed. The label set encodes the cascade *topology*; the count distribution names the *hot path* (e.g. a `changefeed:flush` row at 45% of iterations points the user at the busy subscriber, even if the recent-tail window evicted it).
 - `recent (N):` — a bounded ring-buffer tail of `{label, type}` entries (default capacity 32). Order-preserving; cumulatively dominated by the histogram for runaway cascades.
 
@@ -156,7 +158,7 @@ Transition listeners that throw are caught and swallowed (source: `packages/mach
 | `StateTransition<S>` | `src/observable.ts` | `{ from, to, timestamp }` — event type for transition listeners. |
 | `TransitionListener<S>` | `src/observable.ts` | `(transition) => void`. |
 | `DispatcherHandle<Msg>` | `src/dispatcher.ts` | `{ dispatch, queueDepth }` — the surface of a `createDispatcher`. |
-| `Lease` | `src/dispatcher.ts` | `{ depth, iterations, budget, history, historyCapacity, counts, originStack }` — shared cascade budget plus diagnostic projections (`counts` histogram, `originStack` entry-point frame). |
+| `Lease` | `src/dispatcher.ts` | `{ depth, iterations, budget, history, historyCapacity, counts, origin }` — shared cascade budget plus diagnostic projections (`counts` histogram, `origin` entry-point `Error`). |
 | `BudgetExhaustedError` | `src/dispatcher.ts` | Thrown by `createDispatcher` when iterations exceed budget. |
 
 ## File Map

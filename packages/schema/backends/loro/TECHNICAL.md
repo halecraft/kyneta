@@ -323,15 +323,11 @@ The ctx-level `WritableContext.runBatch` invokes `substrate.runBatch` only at th
 
 `doc.applyDiff(group)` does NOT fire `doc.subscribe` events; only `doc.commit()` does. This is what lets the substrate apply diffs throughout `prepare` without emitting intermediate events — only the outermost `runBatch` release commits and emits the single batched event. If a future Loro version were to fire subscribe events on `applyDiff`, the eager-prepare model would need per-prepare suppression flags or a different structure. Flag this invariant explicitly so any future Loro upgrade triggers a review of this assumption.
 
+**`loro-crdt >= 1.13.4`, and the peer range says so.** Through `1.13.3`, building the event for a commit that changed *k* map keys was O(k²) — but only when a subscriber was attached, which for this substrate is always: the event bridge registers one at construction. Lists were unaffected, and the map's existing size was irrelevant; the cost was in the number of keys touched by a single commit. Filling a record with 8 000 entries in one batch cost ~1 100 ms of wasm time on `1.13.3` and ~17 ms on `1.13.4`. The floor is a peer *dependency* rather than a note because nothing in this package's behaviour reveals the difference — a consumer on an older Loro gets a quadratic write path and no signal.
+
 ### What the write path is NOT
 
 - **Not a streaming write.** Each transaction is at most a handful of `applyDiff` calls (structural inserts apply immediately; plain MapDiffs coalesce into one per container per batch).
-- **Not transactional in Loro's sense.** Loro has its own transaction semantics; kyneta's `batch(doc, fn)` is an interpreter-stack transaction that commits a bundle of Loro writes atomically *from kyneta's perspective*. Loro ops can still interleave concurrently with other peers.
-- **Not reversible from the substrate.** There is no undo buffer in the substrate. Undo is an application concern.
-
-### What the write path is NOT
-
-- **Not a streaming write.** Each transaction is one `applyDiff` call (or one per container group). We don't write one op per mutation.
 - **Not transactional in Loro's sense.** Loro has its own transaction semantics; kyneta's `batch(doc, fn)` is an interpreter-stack transaction that commits a bundle of Loro writes atomically *from kyneta's perspective*. Loro ops can still interleave concurrently with other peers.
 - **Not reversible from the substrate.** There is no undo buffer in the substrate. Undo is an application concern.
 

@@ -4,6 +4,7 @@ import type { Op } from "../index.js"
 import {
   applyChanges,
   batch,
+  deepClonePlain,
   incrementChange,
   interpret,
   observation,
@@ -50,8 +51,11 @@ function createSeed() {
   }
 }
 
+// A substrate adopts the store it is handed and mutates it in place, all the
+// way down. Two documents seeded from one `storeOverrides` literal would
+// otherwise share its nested containers and see each other's writes.
 function createChatDoc(storeOverrides: Record<string, unknown> = {}) {
-  const store = { ...createSeed(), ...storeOverrides }
+  const store = { ...createSeed(), ...deepClonePlain(storeOverrides) }
   const ctx = plainContext(store)
   const doc = interpret(chatDocSchema, ctx)
     .with(readable)

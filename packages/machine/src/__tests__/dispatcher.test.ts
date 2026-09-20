@@ -150,28 +150,77 @@ describe("createDispatcher", () => {
 // ---------------------------------------------------------------------------
 
 describe("Lease diagnostic state", () => {
-  it("originStack is cleared when the owning drain exits cleanly", () => {
+  it("origin is cleared when the owning drain exits cleanly", () => {
     // Guards against a refactor of the cleanup block forgetting to
-    // clear originStack — stale stacks would bleed between cascades.
+    // clear origin — stale stacks would bleed between cascades.
     const lease = createLease()
     const handle = createDispatcher<{ type: "n" }>(() => {}, { lease })
     handle.dispatch({ type: "n" })
-    expect(lease.originStack).toBeUndefined()
+    expect(lease.origin).toBeUndefined()
   })
 
-  it("originStack is captured once per cascade — re-entrant dispatches see the same frame", () => {
-    const lease = createLease()
-    const seen: (string | undefined)[] = []
+  it("an ordinary cascade never pays for a stack walk", () => {
+    // A cascade that fits inside its own history buffer is not a runaway,
+    // and `new Error` is microseconds on the path every write takes.
+    const lease = createLease({ historyCapacity: 8 })
+    const seen: (Error | undefined)[] = []
     const handle = createDispatcher<{ type: "n"; depth: number }>(
       (msg, dispatch) => {
-        seen.push(lease.originStack)
+        seen.push(lease.origin)
         if (msg.depth < 3) dispatch({ type: "n", depth: msg.depth + 1 })
       },
       { lease },
     )
     handle.dispatch({ type: "n", depth: 0 })
-    expect(new Set(seen).size).toBe(1)
-    expect(seen[0]).toBeDefined()
+    expect(seen).toEqual([undefined, undefined, undefined, undefined])
+  })
+
+  it("origin is captured once, and names the frame that entered the cascade", () => {
+    // Captured on the iteration that first outruns `history` — by then the
+    // entering `dispatch` call is still on the stack, so the frames beneath
+    // are the same ones an entry-point capture would have found.
+    const lease = createLease({ historyCapacity: 4 })
+    const seen: (Error | undefined)[] = []
+    const handle = createDispatcher<{ type: "n"; depth: number }>(
+      (msg, dispatch) => {
+        seen.push(lease.origin)
+        if (msg.depth < 10) dispatch({ type: "n", depth: msg.depth + 1 })
+      },
+      { lease },
+    )
+    handle.dispatch({ type: "n", depth: 0 })
+    const captured = seen.filter(e => e !== undefined)
+    expect(new Set(captured).size).toBe(1)
+    expect(seen.slice(0, 4)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ])
+    expect(captured[0]?.stack).toContain("dispatcher.test")
+  })
+
+  it("origin is captured even when the budget trips before history fills", () => {
+    // A lease may be configured with a budget smaller than its history, and
+    // the origin frame has to exist by the time BudgetExhaustedError builds
+    // its message — so the watermark is the earlier of the two.
+    const lease = createLease({ budget: 4, historyCapacity: 64 })
+    const handle = createDispatcher<{ type: "n" }>(
+      (_msg, dispatch) => {
+        dispatch({ type: "n" })
+      },
+      { lease, label: "osc" },
+    )
+    let caught: unknown
+    try {
+      handle.dispatch({ type: "n" })
+    } catch (err) {
+      caught = err
+    }
+    const err = caught as BudgetExhaustedError
+    expect(err).toBeInstanceOf(BudgetExhaustedError)
+    expect(err.lease.origin).toBeDefined()
+    expect(err.message).toContain("cascade entered from:")
   })
 
   it("counts reset on owning drain exit so they don't accumulate across cascades", () => {
@@ -216,8 +265,8 @@ describe("BudgetExhaustedError diagnostic payload", () => {
     expect(err).toBeInstanceOf(BudgetExhaustedError)
 
     // Origin: snapshot present and names the test's call site.
-    expect(err.lease.originStack).toBeDefined()
-    expect(err.lease.originStack).toContain("dispatcher.test")
+    expect(err.lease.origin).toBeDefined()
+    expect(err.lease.origin?.stack).toContain("dispatcher.test")
 
     // Counts: Map snapshot is independent of the live lease (Map doesn't
     // spread, so the snapshot must explicitly clone).
@@ -277,8 +326,9 @@ describe("formatOrigin", () => {
     // The header is the label of the Error we constructed solely to
     // capture a stack; it's not a useful frame and would be misleading
     // at the top of the rendered block.
-    const stack = "Error: cascade origin\n    at testFn (file.ts:42:3)"
-    const out = formatOrigin(stack)
+    const origin = new Error("cascade origin")
+    origin.stack = "Error: cascade origin\n    at testFn (file.ts:42:3)"
+    const out = formatOrigin(origin)
     expect(out).toContain("cascade entered from:")
     expect(out).toContain("at testFn (file.ts:42:3)")
     expect(out).not.toContain("Error: cascade origin")

@@ -9,7 +9,7 @@ import type { ChangeBase, ReplaceChange } from "./change.js"
 import { deepClonePlain } from "./clone.js"
 import { isNonNullObject } from "./guards.js"
 import type { Path } from "./path.js"
-import { step } from "./step.js"
+import { stepInPlace } from "./step.js"
 import type { BatchOptions } from "./substrate.js"
 
 // ---------------------------------------------------------------------------
@@ -301,29 +301,30 @@ export function ownedForStore(
   return copied
 }
 
+/**
+ * Advance σ at `path` by `change`, in the document the caller owns.
+ *
+ * Uses `stepInPlace` rather than `step`: a substrate's document is its own,
+ * its reader is a live view of it, and the inverse for undo is taken from σ
+ * before this call — so advancing a container's contents means the same thing
+ * as replacing the container, and costs O(|change|) instead of O(|σ|).
+ * `stepInPlace` returns something other than `current` exactly when σ's
+ * carrier is a value rather than a container, and only then is a write-back
+ * needed.
+ */
 export function applyChange(
   state: PlainState,
   path: Path,
   change: ChangeBase,
 ): void {
+  const current = path.length === 0 ? state : path.read(state)
+  const next = stepInPlace(current, change)
+  if (next === current) return
   if (path.length === 0) {
-    // Root-level change — apply step to the state itself and merge back
-    const next = step(state as Record<string, unknown>, change)
-    if (isNonNullObject(next)) {
-      // Merge result keys into the state (preserving the state reference)
-      for (const key of Object.keys(next)) {
-        state[key] = next[key]
-      }
-      // Remove keys that were deleted
-      for (const key of Object.keys(state)) {
-        if (!(key in next)) {
-          delete state[key]
-        }
-      }
-    }
+    // The root object's identity is the document's — every reader closes
+    // over it — so a fresh σ is copied onto it rather than replacing it.
+    if (isNonNullObject(next)) syncShadow(state, next)
     return
   }
-  const current = path.read(state)
-  const next = step(current, change)
   writeByPath(state, path, next)
 }

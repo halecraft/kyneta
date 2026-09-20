@@ -198,12 +198,12 @@ describe("doc-layer re-entry: budget exhaustion spans synchronizer + changefeed"
     const err = error as {
       message: string
       lease: {
-        originStack: string | undefined
+        origin: Error | undefined
         counts: Map<string, number>
       }
     }
-    expect(err.lease.originStack).toBeDefined()
-    expect(err.lease.originStack).toContain("doc-layer-reentry.test")
+    expect(err.lease.origin).toBeDefined()
+    expect(err.lease.origin?.stack).toContain("doc-layer-reentry.test")
     expect(err.message).toContain("top message types:")
     const changefeedCount = [...err.lease.counts.keys()].filter(k =>
       k.startsWith("changefeed:"),
