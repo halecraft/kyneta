@@ -12,7 +12,7 @@
 
 import type { FlatTreeNode } from "../forest.js"
 import { validateForest } from "../forest.js"
-import { isPlainObject, isSameSetMember } from "../guards.js"
+import { isPlainObject, samePlainValue } from "../guards.js"
 import type { Interpreter, Path, SumVariants } from "../interpret.js"
 import { interpret } from "../interpret.js"
 import type { Plain } from "../interpreter-types.js"
@@ -393,11 +393,11 @@ export const validateInterpreter: Interpreter<ValidateContext, unknown> = {
     }
 
     // Enforce uniqueness — sets cannot contain two structurally-equal
-    // members. This is the single source of truth (via isSameSetMember)
+    // members. This is the single source of truth (via samePlainValue)
     // shared with stepSet and SetRef.has(value).
     for (let i = 0; i < value.length; i++) {
       for (let j = i + 1; j < value.length; j++) {
-        if (isSameSetMember(value[i], value[j])) {
+        if (samePlainValue(value[i], value[j])) {
           ctx.errors.push(
             new SchemaValidationError(
               path.format(),

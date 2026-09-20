@@ -119,7 +119,7 @@ export interface ReadableTreeRef<I extends Schema> {
  *
  * Sets are ref-layer **leaf-shaped** — there are no addressable per-member
  * child refs, no `.at(value)`. Membership is content-equal (via
- * `isSameSetMember`), not identity.
+ * `samePlainValue`), not identity.
  *
  * - Call signature `(): V[]` returns a plain array snapshot — matches
  *   `Plain<SetSchema<I>> = Plain<I>[]`.
@@ -130,7 +130,7 @@ export interface ReadableTreeRef<I extends Schema> {
 export interface ReadableSetRef<V = unknown> {
   /** Callable: returns a deep plain snapshot of the set as an array. */
   (): V[]
-  /** Structural-equality membership query (uses `isSameSetMember`). */
+  /** Structural-equality membership query (uses `samePlainValue`). */
   has(value: V): boolean
   /** Member count. */
   readonly size: number

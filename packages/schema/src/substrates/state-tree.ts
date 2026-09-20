@@ -33,6 +33,7 @@ import type { ChangeBase, MapChange } from "../change.js"
 import { isReplaceChange } from "../change.js"
 import { deepClonePlain } from "../clone.js"
 import { walkPath } from "../fold-path.js"
+import { samePlainValue } from "../guards.js"
 import type { Path } from "../interpret.js"
 import { needsContainer } from "../materialize-value.js"
 import type { PlainState } from "../reader.js"
@@ -270,28 +271,33 @@ export function mergeStateTree(local: StateTree, remote: StateTree): StateTree {
  * math is never mutated, so the version clock does not advance and the
  * network never sees a synthesized "absent" write.
  *
- * Returns `true` if any field was masked by decay (used by the substrate's
- * `tick()` to decide whether to fire the changefeed).
+ * Returns the root keys whose projection actually moved. Callers announce a
+ * re-projection to subscribers, and who hears it depends on naming the fields
+ * that changed — so the comparison happens here, where each value is written
+ * and the old one is still in hand, rather than by diffing a copy of the
+ * whole shadow afterwards.
  */
 export function extractPlainState(
   tree: StateTree,
   target: PlainState,
   schema?: SchemaNode,
   now?: number,
-): boolean {
+): ReadonlySet<string> {
   if (isStateTuple(tree)) {
     throw new Error(
       "extractPlainState requires a root container, received a tuple",
     )
   }
 
-  const { anyDecayed } = extractInto(
+  const changedKeys = new Set<string>()
+  extractInto(
     tree as Record<string, StateTree>,
     target,
     schema,
     now,
+    changedKeys,
   )
-  return anyDecayed
+  return changedKeys
 }
 
 /**
@@ -303,14 +309,17 @@ function extractInto(
   target: PlainState,
   schema: SchemaNode | undefined,
   now: number | undefined,
+  /** Set only by the outermost call, which is the level callers announce at. */
+  changedKeys?: Set<string>,
 ): {
-  anyDecayed: boolean
   maxTimestamp: number
   /** Whether this subtree should appear in the projection at all. */
   kept: boolean
+  /** Whether anything in this subtree's projection differs from before. */
+  changed: boolean
 } {
-  let anyDecayed = false
   let maxTimestamp = 0
+  let changed = false
   // A subtree drops out of the projection only when it is entirely tombstoned.
   // Tracking "has a tombstone" separately from "has a live leaf" is what
   // distinguishes a deleted entry from a legitimately EMPTY container: an
@@ -318,13 +327,21 @@ function extractInto(
   let anyLive = false
   let anyTombstone = false
 
+  /** Note a key whose projected value moved. */
+  const moved = (key: string): void => {
+    changed = true
+    changedKeys?.add(key)
+  }
+
   for (const key of Object.keys(source)) {
     const child = source[key]
     if (!isStateTuple(child)) {
       // Nested container. Resolve the child schema if we can.
       const childSchema = schema ? childSchemaForKey(schema, key) : undefined
+      let keyChanged = false
       if (typeof target[key] !== "object" || target[key] === null) {
         target[key] = {}
+        keyChanged = true
       }
       const result = extractInto(
         child,
@@ -332,16 +349,15 @@ function extractInto(
         childSchema,
         now,
       )
-      if (result.anyDecayed) {
-        anyDecayed = true
-      }
       if (result.kept) {
         anyLive = true
       } else {
         // Every leaf beneath it is tombstoned: the whole entry was deleted.
+        if (key in target) keyChanged = true
         delete target[key]
         anyTombstone = true
       }
+      if (keyChanged || result.changed) moved(key)
       maxTimestamp = Math.max(maxTimestamp, result.maxTimestamp)
       continue
     }
@@ -354,6 +370,7 @@ function extractInto(
     if (isTombstone(child)) {
       // Deleted: present in the tree so the delete can replicate, absent from
       // every read. The tuple stays; the projection drops it.
+      if (key in target) moved(key)
       delete target[key]
       anyTombstone = true
       continue
@@ -365,23 +382,19 @@ function extractInto(
       now !== undefined &&
       isExpired(childSchema, child, now)
 
-    if (decayed) {
-      target[key] = Zero.structural(childSchema)
-      anyDecayed = true
-    } else {
-      // A register (sum / .json()) is stored as one tuple whose value is a
-      // whole object; clone it so the shadow never aliases the StateTree.
-      const value = child[0]
-      target[key] =
-        typeof value === "object" && value !== null
-          ? deepClonePlain(value)
-          : value
-    }
+    // Compare before writing. An unchanged register also skips its clone,
+    // which is the bulk of a steady-state projection's work.
+    const next = decayed ? Zero.structural(childSchema) : child[0]
+    if (samePlainValue(target[key], next)) continue
+    moved(key)
+    target[key] =
+      typeof next === "object" && next !== null ? deepClonePlain(next) : next
   }
 
   // Remove keys that are in target but not in source.
   for (const key of Object.keys(target)) {
     if (!(key in source)) {
+      moved(key)
       delete target[key]
     }
   }
@@ -397,15 +410,18 @@ function extractInto(
     ) {
       // Reset the target to the structural zero of this container
       const structuralZero = Zero.structural(schema) as Record<string, unknown>
-      for (const key of Object.keys(target)) delete target[key]
-      for (const [key, val] of Object.entries(structuralZero)) {
-        target[key] = val
+      if (!samePlainValue(target, structuralZero)) {
+        changed = true
+        for (const key of Object.keys(target)) delete target[key]
+        for (const [key, val] of Object.entries(structuralZero)) {
+          target[key] = val
+          changedKeys?.add(key)
+        }
       }
-      anyDecayed = true
     }
   }
 
-  return { anyDecayed, maxTimestamp, kept: anyLive || !anyTombstone }
+  return { maxTimestamp, kept: anyLive || !anyTombstone, changed }
 }
 
 /**

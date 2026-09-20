@@ -312,7 +312,7 @@ export function createPlainSubstrate<V extends Version>(
         const inverse = invert(pre, change)
         record(path, inverse)
       }
-      applyChange(doc, path, ownedForStore(change, options))
+      applyChange(doc, path, ownedForStore(change))
       // Freeze to an immutable RawPath before the op enters the log. The live
       // AddressedPath aliases memoized registry Address objects that a later
       // delete tombstones and a later insert re-indexes, in place — logging it
@@ -439,7 +439,7 @@ export function createPlainSubstrate<V extends Version>(
         // State image — decompose to ReplaceChange ops and apply through
         // the prepare/flush pipeline so the changefeed fires and refs
         // observe the transition.
-        const ops = stateImageToOps(content as Record<string, unknown>)
+        const ops = objectToReplaceOps(content as Record<string, unknown>)
         if (ops.length > 0) {
           executeBatch(ctx, ops, replayOptions)
         }
@@ -489,7 +489,7 @@ export function createPlainSubstrate<V extends Version>(
       // entirety (built from Zero.structural on the sender), so replacing
       // each field fully supersedes the prior lineage's value — no explicit
       // doc wipe is needed for the schema-aware substrate case.
-      const ops = stateImageToOps(content as Record<string, unknown>)
+      const ops = objectToReplaceOps(content as Record<string, unknown>)
       if (ops.length > 0) {
         executeBatch(ctx, ops, replayOptions)
       }
@@ -804,7 +804,7 @@ export function createPlainReplica<V extends Version>(
       if (payload.kind === "entirety") {
         // State image — decompose to ReplaceChange ops and append as
         // a single batch. No applyChange, no step — just log it.
-        const ops = stateImageToOps(content as Record<string, unknown>)
+        const ops = objectToReplaceOps(content as Record<string, unknown>)
         if (ops.length === 0) return
         for (const op of ops) {
           core.pendingOps.push(op)
@@ -850,7 +850,7 @@ export function createPlainReplica<V extends Version>(
       // clear the base, project the new state directly onto it, and
       // synchronize the log/version with the sender's authoritative value.
       // This prevents flush-count inflation across lineages.
-      const ops = stateImageToOps(content as Record<string, unknown>)
+      const ops = objectToReplaceOps(content as Record<string, unknown>)
       for (const key of Object.keys(base)) {
         delete base[key]
       }
@@ -888,15 +888,17 @@ export function plainContext(doc: PlainState): WritableContext {
 }
 
 // ---------------------------------------------------------------------------
-// objectToReplaceOps / stateImageToOps — shared helpers
+// objectToReplaceOps — shared helper
 // ---------------------------------------------------------------------------
 
 /**
  * Build one `ReplaceChange` op per top-level key in a state object.
  *
- * This is the primitive used by:
- * - `stateImageToOps` (entirety payload absorption)
- * - `buildUpgrade` (initialization ops for missing schema keys)
+ * Every path that turns a whole state image into changes goes through here:
+ * `PlainSubstrate.merge` and `PlainReplica.merge` (entirety absorption),
+ * `buildPlainSubstrateFromEntirety` (cold start), `buildUpgrade`
+ * (initialization ops for schema keys a document lacks), and the ephemeral
+ * substrate's announcement of what a merge or a decay sweep moved.
  */
 export function objectToReplaceOps(state: Record<string, unknown>): Op[] {
   const ops: Op[] = []
@@ -913,18 +915,6 @@ export function parsePlainPayload(data: string): {
   content: unknown
 } {
   return { content: JSON.parse(data) }
-}
-
-/**
- * Parse a JSON state image and build one `ReplaceChange` op per top-level key.
- *
- * Used by three call sites:
- * - `PlainSubstrate.merge` (entirety path — apply via executeBatch)
- * - `PlainReplica.merge` (entirety path — append to log)
- * - `buildPlainSubstrateFromEntirety` (cold-start construction)
- */
-function stateImageToOps(state: Record<string, unknown>): Op[] {
-  return objectToReplaceOps(state)
 }
 
 // ---------------------------------------------------------------------------
@@ -974,7 +964,7 @@ export function buildPlainSubstrateFromEntirety<V extends Version>(
     adoptLineage,
     getLineage,
   )
-  const ops = stateImageToOps(content as Record<string, unknown>)
+  const ops = objectToReplaceOps(content as Record<string, unknown>)
   if (ops.length > 0) {
     executeBatch(substrate.context(), ops)
   }

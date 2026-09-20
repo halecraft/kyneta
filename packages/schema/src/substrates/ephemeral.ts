@@ -17,15 +17,13 @@
 // log (`exportSince` returns `null`).
 
 import type { ChangeBase } from "../change.js"
-import { replaceChange, trustAsOwned } from "../change.js"
-import type { Op } from "../changefeed.js"
+import { replaceChange } from "../change.js"
 import { deepClonePlain } from "../clone.js"
 import { findOpaqueBoundary } from "../fold-path.js"
 import type { Path } from "../interpret.js"
 import type { WritableContext } from "../interpreters/writable.js"
-import { buildWritableContext } from "../interpreters/writable.js"
+import { buildWritableContext, executeBatch } from "../interpreters/writable.js"
 import { invert } from "../inverse.js"
-import { RawPath } from "../path.js"
 import {
   decodePlainPosition,
   type PlainPosition,
@@ -51,7 +49,7 @@ import type {
 } from "../substrate.js"
 import { BACKING_DOC, RECORD_INVERSE } from "../substrate.js"
 import { Zero } from "../zero.js"
-import { DEFAULT_LINEAGE } from "./plain.js"
+import { DEFAULT_LINEAGE, objectToReplaceOps } from "./plain.js"
 import {
   applyChangeToStateTree,
   extractPlainState,
@@ -167,17 +165,26 @@ function createStateReplicaCore(
   setTree: (tree: StateTree) => void,
 ) {
   let cachedVersion = new StateVersion(0)
-  const pendingOps: Op[] = []
+  // Whether a write has landed since the last batch ended. Not an op log:
+  // `exportSince` is always `null` here, so an op would be pushed, counted
+  // and dropped without anything ever reading it. What ends a batch needs to
+  // know is only whether σ moved.
+  let written = false
 
   return {
-    pendingOps,
+    markWritten(): void {
+      written = true
+    },
 
-    flush(): void {
-      if (pendingOps.length > 0) {
-        pendingOps.length = 0
-        // Version bumps on every flush, just like LWW.
-        cachedVersion = StateVersion.now()
-      }
+    /**
+     * End a batch. A write since the last one advances the version clock,
+     * just like LWW — unless the batch was a projection, where σ moved but
+     * the StateTree math did not, so the network version must stay still.
+     */
+    endBatch(projection: boolean): void {
+      const moved = written
+      written = false
+      if (moved && !projection) cachedVersion = StateVersion.now()
     },
 
     version(): StateVersion {
@@ -188,12 +195,9 @@ function createStateReplicaCore(
       return cachedVersion
     },
 
-    advance(
-      to: StateVersion,
-      _applyTrimmedOps?: (batches: Op[][]) => void,
-    ): void {
-      // CvRDT has no log to trim, so advance is functionally a no-op
-      // for the data structure, but we must update the version.
+    advance(to: StateVersion): void {
+      // No history to trim — a CvRDT carries its whole meaning in the tree.
+      // Only the version moves, so `exportSince` reports the right base.
       cachedVersion = to
     },
 
@@ -268,6 +272,40 @@ export function createStateSubstrate(
 
   let cachedCtx: WritableContext | undefined
 
+  /**
+   * The tree moved without a local write: re-project σ from it and tell
+   * subscribers which root fields changed.
+   *
+   * Both ways that happens — a peer's merge and a decay sweep — need the
+   * same two steps, and differ only in the `options` they announce under.
+   *
+   * The announcement names the fields that actually moved, which
+   * `extractPlainState` reports as it writes them. Delivery notifies a changed
+   * path's *ancestors*, so one blanket op at the root reaches root subscribers
+   * and nobody else — a presence roster's per-entry subscribers would never
+   * hear a peer arrive or expire. Naming every field instead would wake
+   * subscribers whose subtree nothing touched, which for a roster is most of
+   * them, on every tick and every sync.
+   *
+   * It has to go through the writable context. Notifications are accumulated
+   * by `ctx.prepare` and released by `ctx.flush`; advancing the substrate
+   * directly reaches neither, which is how a merge came to land its state and
+   * tell no one.
+   */
+  function announceReprojection(now: number, options: BatchOptions): void {
+    if (isStateTuple(currentTree)) return
+
+    const changedKeys = extractPlainState(currentTree, shadow, schema, now)
+    if (changedKeys.size === 0) return
+
+    const moved: PlainState = {}
+    for (const key of changedKeys) moved[key] = shadow[key]
+
+    // A state image of what changed, turned into ops by the same primitive
+    // the plain substrate absorbs an entirety payload with.
+    executeBatch(substrate.context(), objectToReplaceOps(moved), options)
+  }
+
   const substrate = {
     get [BACKING_DOC]() {
       return currentTree
@@ -296,13 +334,22 @@ export function createStateSubstrate(
       }
 
       // We apply the change directly to the shadow PlainState
-      applyChange(shadow, path, ownedForStore(change, options))
+      applyChange(shadow, path, ownedForStore(change))
 
       // Then, we apply the change to the StateTree so that ONLY
-      // the mutated fields get their timestamps bumped — UNLESS this
-      // is a projection (tick/decay), in which case the math stays
-      // untouched and only the local shadow moves.
-      if (!options?.projection) {
+      // the mutated fields get their timestamps bumped — unless the change
+      // did not originate here. A projection (tick/decay) leaves the math
+      // untouched and moves only the local shadow. A replay is already in
+      // the tree: `merge` runs the lattice join first and then wakes
+      // subscribers, and applying its wake-up op here would stamp the whole
+      // document with local `Date.now()` and clobber what just merged.
+      //
+      // Replay can only reach here from `merge`. This substrate is
+      // snapshot-only — `exportSince` always returns `null` and `merge`
+      // refuses anything but an entirety payload — so no peer's op batch is
+      // ever replayed through `prepare`, and `applyChanges` never sets the
+      // flag.
+      if (!options?.projection && !options?.replay) {
         // A register — a sum variant or a `.json()` blob — lives in the tree as
         // ONE leaf tuple, so that concurrent edits to it settle
         // as a single unit. A change aimed at or inside one has nowhere to go:
@@ -345,34 +392,11 @@ export function createStateSubstrate(
         }
       }
 
-      // Record op for changefeed delivery. Freeze to an immutable RawPath
-      // at authoring time so the log never aliases the live addressing
-      // registry (uniform with the plain substrate; defense-in-depth even
-      // though this substrate exports entirety, not serialized ops). Context: jj:mlurlzqt.
-      core.pendingOps.push({ path: path.toRaw(), change })
+      core.markWritten()
     },
 
-    afterBatch(options?: BatchOptions): Op[][] {
-      // Re-extract the shadow from the tree just in case the tree was mutated
-      // out of band (e.g. by `merge()` calling `setTree()`).
-      if (
-        options?.replay &&
-        !options?.projection &&
-        !isStateTuple(currentTree)
-      ) {
-        extractPlainState(currentTree, shadow, schema, Date.now())
-      }
-
-      const flushed = [...core.pendingOps]
-      // Projections (tick/decay) never bump the version — the StateTree
-      // math is untouched, so the network version must stay still.
-      if (!options?.projection) {
-        core.flush()
-      } else {
-        // Just drain pendingOps without bumping the version.
-        core.pendingOps.length = 0
-      }
-      return flushed.length > 0 ? [flushed] : []
+    afterBatch(options?: BatchOptions): void {
+      core.endBatch(options?.projection === true)
     },
 
     writable(): PositionCapable {
@@ -427,27 +451,18 @@ export function createStateSubstrate(
     },
 
     merge(payload: SubstratePayload, options?: BatchOptions): void {
-      const replayOptions: BatchOptions = {
-        origin: options?.origin,
-        replay: true,
-      }
-
-      if (payload.kind === "entirety") {
-        core.merge(payload)
-        // Fire a blanket root replace event so subscribers update.
-        // Replay flag ensures the changefeed doesn't rebroadcast.
-        core.pendingOps.push({
-          path: RawPath.empty,
-          // The shadow itself, deliberately: this op exists to wake
-          // subscribers, and its payload is never read. Copying a whole
-          // presence document on every merge to satisfy the type would be
-          // pure waste.
-          change: replaceChange(trustAsOwned(shadow)),
-        })
-        substrate.afterBatch(replayOptions)
-      } else {
+      if (payload.kind !== "entirety") {
         throw new Error("StateSubstrate only accepts entirety payloads.")
       }
+
+      core.merge(payload)
+      // `replay: true` keeps the Exchange from broadcasting back what it just
+      // received. No `projection` — a merge is real state, so the version
+      // clock moves with it.
+      announceReprojection(Date.now(), {
+        origin: options?.origin,
+        replay: true,
+      })
     },
 
     resetFromEntirety(
@@ -467,43 +482,21 @@ export function createStateSubstrate(
     /**
      * Heartbeat hook driven by the `Runtime` clock (see `tickInterval`).
      *
-     * Re-projects the shadow with the upgraded schema-aware
-     * `extractPlainState`, which masks expired presence leaves with their
-     * structural zero. If any field transitioned to decayed, we route the
-     * updated shadow through the writable context's batch machinery as a
-     * `projection` prepare — this fires the changefeed so local
-     * subscribers (React components, etc.) refresh, while `replay: true`
-     * prevents the Exchange from broadcasting to peers.
+     * Re-projects the shadow, which masks expired presence leaves with their
+     * structural zero, and announces whichever fields that moved — see
+     * `announceReprojection`, which a peer's merge shares.
      *
-     * The `projection` flag tells `prepare` to skip
-     * `applyChangeToStateTree` and `afterBatch` to skip the version bump.
-     * The underlying `StateTree` math is never mutated, so the network
-     * never sees a synthesized "absent" write that could clobber a slower
-     * peer's still-valid value.
+     * `projection: true` tells `prepare` to skip `applyChangeToStateTree`
+     * and `afterBatch` to skip the version bump; `replay: true` tells the
+     * Exchange not to broadcast. The underlying `StateTree` math is never
+     * mutated, so the network never sees a synthesized "absent" write that
+     * could clobber a slower peer's still-valid value.
      */
     tick(now: number): void {
-      if (schema === undefined || isStateTuple(currentTree)) return
-      if (!cachedCtx) return // No writable context — bare substrate, no subscribers
-
-      // Snapshot the shadow before re-projection so we can detect changes.
-      const anyDecayed = extractPlainState(currentTree, shadow, schema, now)
-      if (!anyDecayed) return
-
-      // Route through the writable context's batch machinery so the
-      // changefeed fires for local subscribers. `projection: true` keeps
-      // the StateTree math and version clock untouched; `replay: true`
-      // tells the Exchange not to broadcast.
-      const ctx = cachedCtx
-      ctx.runBatch(
-        () => {
-          // Same trigger, on the decay path — see the note in `merge`.
-          ctx.prepare(RawPath.empty, replaceChange(trustAsOwned(shadow)), {
-            replay: true,
-            projection: true,
-          })
-        },
-        { replay: true, projection: true },
-      )
+      // Decay is declared on the schema, so a schemaless substrate has
+      // nothing that can expire and need not re-project on every heartbeat.
+      if (schema === undefined) return
+      announceReprojection(now, { replay: true, projection: true })
     },
   }
 
@@ -531,7 +524,6 @@ export function createStateReplica(): Replica<StateVersion> {
     exportSince: core.exportSince,
     merge(payload: SubstratePayload) {
       core.merge(payload)
-      core.flush()
     },
     resetFromEntirety(payload: SubstratePayload, _remoteVersion: Version) {
       // See createStateSubstrate's resetFromEntirety — same rationale:

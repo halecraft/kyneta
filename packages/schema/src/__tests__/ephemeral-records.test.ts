@@ -177,6 +177,24 @@ describe("two peers merge a roster without clobbering", () => {
     expect(peerA.reader.read(peersPath)).toEqual({ alice: 1, bob: 2 })
   })
 
+  it("a merge leaves every timestamp where the join put it", () => {
+    // Reads come from the shadow, so a merge that restamps the tree with
+    // local time reads perfectly on this peer — and then nothing ever
+    // expires, here or on any peer that later receives this tree. The
+    // assertion has to reach past the document.
+    const peerA = ephemeralSubstrateFactory.fromEntirety(
+      payload({ peers: { alice: [1, 100] } }),
+      Roster,
+    )
+    peerA.merge(payload({ peers: { bob: [2, 200] } }))
+
+    const tree = JSON.parse(peerA.exportEntirety().data as string) as {
+      peers: Record<string, unknown>
+    }
+    expect(tree.peers.alice).toEqual([1, 100])
+    expect(tree.peers.bob).toEqual([2, 200])
+  })
+
   it("a key merely missing from an incoming payload is not a delete", () => {
     // `mergeStateTree` unions keys, so absence carries no information: a key
     // one peer lacks is indistinguishable from one it has never seen. This is

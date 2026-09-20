@@ -289,7 +289,7 @@ export function createYjsSubstrate(
       // inside the ambient Y.transact opened by runBatch (the
       // substrate's `runBatch` wraps `executeBatch`'s prepare-loop +
       // flush).
-      applyChange(shadow, path, ownedForStore(change, options))
+      applyChange(shadow, path, ownedForStore(change))
 
       // JSON-boundary write: stage a full-value write at the
       // boundary segment of the parent container. Coalesces with

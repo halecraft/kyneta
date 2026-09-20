@@ -8,7 +8,9 @@
 //   `exportEntirety()` retains the original tuple.
 // - Hashing: different `decayMs` values produce different schema hashes.
 
+import type { Changeset } from "@kyneta/changefeed"
 import { describe, expect, it } from "vitest"
+import type { Op, WritableContext } from "../index.js"
 import {
   bind,
   computeSchemaHash,
@@ -155,19 +157,26 @@ describe("state substrate tick() decay sweep", () => {
     name: Schema.string(),
   })
 
+  const DECAY_MS = 1000
+
   /**
-   * Build a substrate pre-populated with an expired presence tuple,
-   * then initialize its writable context (required for tick() to fire
-   * the changefeed).
+   * A substrate whose `presence` tuple is still live at `base`.
+   *
+   * Freshness is the point. The substrate projects σ once at construction
+   * against the wall clock, so a fixture stamped with a small fixed time is
+   * born already masked — and a later tick then re-states a transition that
+   * has already happened, which is not what any of these tests mean to
+   * exercise. Seeding at `base` makes a tick past `base + DECAY_MS` the
+   * moment the field actually expires.
    */
-  function makeDecayedSubstrate(_now: number) {
+  function makeSubstrate(base: number) {
     const substrate = ephemeralSubstrateFactory.fromEntirety(
       {
         kind: "entirety",
         encoding: "json",
         data: JSON.stringify({
-          presence: ["online", 1000],
-          name: ["alice", 1000],
+          presence: ["online", base],
+          name: ["alice", base],
         }),
       },
       PresenceSchema,
@@ -177,17 +186,27 @@ describe("state substrate tick() decay sweep", () => {
     return substrate
   }
 
-  it("tick() reverts expired presence fields to structural zero", () => {
-    const substrate = makeDecayedSubstrate(2001)
+  /** A full ref over `substrate`, with the changefeed wired. */
+  function makeRef(substrate: { context: () => WritableContext }) {
+    return interpret(PresenceSchema, substrate.context())
+      .with(readable)
+      .with(writable)
+      .with(observation)
+      .done()
+  }
 
-    // Verify the tree carries the expired timestamp.
+  it("tick() reverts expired presence fields to structural zero", () => {
+    const base = Date.now()
+    const substrate = makeSubstrate(base)
+
+    // Verify the tree carries the original value.
     const entiretyBefore = JSON.parse(
       substrate.exportEntirety().data as string,
     ) as Record<string, unknown>
     expect((entiretyBefore.presence as unknown[])[0]).toBe("online")
 
-    // Tick at now=2001: presence (T=1000, decayMs=1000) should decay.
-    substrate.tick?.(2001)
+    // Tick past the decay window: presence should decay.
+    substrate.tick?.(base + DECAY_MS + 1)
 
     // Read the shadow via the reader. The shadow's `presence` should now
     // be the structural zero for a string ("").
@@ -202,24 +221,25 @@ describe("state substrate tick() decay sweep", () => {
   })
 
   it("tick() does NOT bump the version clock", () => {
-    const substrate = makeDecayedSubstrate(2001)
-    substrate.context() // ensure writable context is initialized
+    const base = Date.now()
+    const substrate = makeSubstrate(base)
     const versionBefore = substrate.version()
 
     // Tick — even if something decays, the version must not change.
-    substrate.tick?.(2001)
+    substrate.tick?.(base + DECAY_MS + 1)
 
     const versionAfter = substrate.version()
     expect(versionAfter.serialize()).toBe(versionBefore.serialize())
   })
 
   it("tick() does NOT mutate exportEntirety() — the tree is untouched", () => {
-    const substrate = makeDecayedSubstrate(5000)
+    const base = Date.now()
+    const substrate = makeSubstrate(base)
 
     const entiretyBefore = substrate.exportEntirety().data as string
 
     // Tick well past the decay window.
-    substrate.tick?.(5000)
+    substrate.tick?.(base + DECAY_MS * 4)
 
     const entiretyAfter = substrate.exportEntirety().data as string
     expect(entiretyAfter).toBe(entiretyBefore)
@@ -307,53 +327,103 @@ describe("state substrate tick() decay sweep", () => {
   // Changefeed notification + peer broadcast suppression
   // ---------------------------------------------------------------------------
 
-  it("tick() fires the changefeed so local subscribers refresh", () => {
-    const substrate = makeDecayedSubstrate(2001)
+  it("a decay is announced once, at the moment the field expires", () => {
+    // A tick announces the fields its re-projection *moved*, not the fields
+    // it masked. Masking stays true on every tick from expiry onwards, so an
+    // announcement keyed on it would wake every subscriber on every
+    // heartbeat, for as long as one peer stays gone.
+    const base = Date.now()
+    const substrate = makeSubstrate(base)
+    const ref = makeRef(substrate)
 
-    // Build a full ref with changefeed (observation layer).
-    const ref = interpret(PresenceSchema, substrate.context())
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done() as any
-
-    // Subscribe to the ref's changefeed.
-    let fired = false
+    let fired = 0
     const unsub = subscribe(ref, () => {
-      fired = true
+      fired++
     })
 
-    // Tick — presence should decay and the changefeed should fire.
-    substrate.tick?.(2001)
+    substrate.tick?.(base + DECAY_MS - 1)
+    expect(fired).toBe(0)
 
-    expect(fired).toBe(true)
+    substrate.tick?.(base + DECAY_MS + 1)
+    expect(fired).toBe(1)
+
+    substrate.tick?.(base + DECAY_MS + 2)
+    substrate.tick?.(base + DECAY_MS * 10)
+    expect(fired).toBe(1)
+
     unsub()
   })
 
-  it("tick() fires with replay: true so the Exchange does NOT broadcast", () => {
-    const substrate = makeDecayedSubstrate(2001)
+  it("a decay's changeset is marked replay, so the Exchange does not broadcast it", () => {
+    // Decay is a local projection of state every peer can compute for
+    // itself. Broadcasting it would clobber a slower peer's still-valid
+    // value with a synthesized "absent".
+    const base = Date.now()
+    const substrate = makeSubstrate(base)
+    const ref = makeRef(substrate)
 
-    // Build a full ref with changefeed (observation layer).
-    const ref = interpret(PresenceSchema, substrate.context())
+    let captured: Changeset<Op> | undefined
+    const unsub = subscribe(ref, (changeset: Changeset<Op>) => {
+      captured = changeset
+    })
+
+    substrate.tick?.(base + DECAY_MS + 1)
+
+    expect(captured?.replay).toBe(true)
+    unsub()
+  })
+
+  it("a decay's changeset payload does not alias the live shadow", () => {
+    // The shadow is re-projected in place, container objects and all, so an
+    // op that handed out a shadow subtree would be rewritten underneath a
+    // subscriber the next time that subtree moved.
+    const RosterSchema = Schema.struct({
+      peers: Schema.struct({
+        alice: Schema.string().decay(DECAY_MS),
+        bob: Schema.string(),
+      }),
+    })
+    const base = Date.now()
+    const substrate = ephemeralSubstrateFactory.fromEntirety(
+      {
+        kind: "entirety",
+        encoding: "json",
+        data: JSON.stringify({
+          peers: { alice: ["online", base], bob: ["online", base] },
+        }),
+      },
+      RosterSchema,
+    )
+    const ref = interpret(RosterSchema, substrate.context())
       .with(readable)
       .with(writable)
       .with(observation)
-      .done() as any
+      .done()
 
-    // Capture the changeset to inspect the `replay` flag.
-    let capturedChangeset: any
-    const unsub = subscribe(ref, (changeset: any) => {
-      capturedChangeset = changeset
+    const seen: Changeset<Op>[] = []
+    const unsub = subscribe(ref, (changeset: Changeset<Op>) => {
+      seen.push(changeset)
     })
 
-    // Tick — presence should decay.
-    substrate.tick?.(2001)
+    substrate.tick?.(base + DECAY_MS + 1)
+    const decayChangeset = seen[0]
+    const asDelivered = JSON.stringify(decayChangeset?.changes)
+    expect(asDelivered).toContain("peers")
 
-    // The changeset must carry `replay: true` so the Exchange's
-    // onDocChangeset hook skips notifyLocalChange (peer broadcast).
-    expect(capturedChangeset).toBeDefined()
-    expect(capturedChangeset.replay).toBe(true)
+    // Alice comes back: σ is re-projected over the same container object.
+    substrate.merge({
+      kind: "entirety",
+      encoding: "json",
+      data: JSON.stringify({
+        peers: {
+          alice: ["online", base + DECAY_MS + 2],
+          bob: ["online", base],
+        },
+      }),
+    })
 
+    // What the first subscriber received still says what it said.
+    expect(JSON.stringify(decayChangeset?.changes)).toBe(asDelivered)
     unsub()
   })
 })
@@ -373,9 +443,8 @@ describe("extractPlainState schema-aware projection", () => {
     }
     const target: Record<string, unknown> = {}
 
-    const anyDecayed = extractPlainState(tree, target, schema, 2001)
+    extractPlainState(tree, target, schema, 2001)
 
-    expect(anyDecayed).toBe(true)
     expect(target.presence).toBe("") // structural zero of a string
   })
 
@@ -389,9 +458,8 @@ describe("extractPlainState schema-aware projection", () => {
     }
     const target: Record<string, unknown> = {}
 
-    const anyDecayed = extractPlainState(tree, target, schema, 2001)
+    extractPlainState(tree, target, schema, 2001)
 
-    expect(anyDecayed).toBe(false)
     expect(target.presence).toBe("online")
   })
 
@@ -401,10 +469,9 @@ describe("extractPlainState schema-aware projection", () => {
     }
     const target: Record<string, unknown> = {}
 
-    // No schema, no now — behaves exactly as before the decay feature.
-    const anyDecayed = extractPlainState(tree, target)
+    // No schema, no now — nothing can expire, so nothing is masked.
+    extractPlainState(tree, target)
 
-    expect(anyDecayed).toBe(false)
     expect(target.presence).toBe("online")
   })
 
@@ -440,9 +507,8 @@ describe("extractPlainState schema-aware projection", () => {
     }
     const target: Record<string, unknown> = {}
 
-    const anyDecayed = extractPlainState(tree, target, schema, 2000)
+    extractPlainState(tree, target, schema, 2000)
 
-    expect(anyDecayed).toBe(true)
     const user = target.user as Record<string, unknown>
     expect(user.presence).toBe("")
     expect(user.name).toBe("alice")

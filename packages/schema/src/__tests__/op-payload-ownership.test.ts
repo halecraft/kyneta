@@ -131,16 +131,16 @@ describe("ownedForStore", () => {
     // the store still takes it and later mutates it, and a merge's changesets
     // reach subscribers like any other.
     const change = replaceChange(own(value))
-    expect(ownedForStore(change, { replay: true })).not.toBe(change)
+    expect(ownedForStore(change)).not.toBe(change)
   })
 
-  it("leaves projection batches alone", () => {
-    // A decay tick whose payload is the substrate's own shadow, passed to wake
-    // subscribers and never read. Copying it per tick would be pure waste.
+  it("exempts nothing \u2014 a decay tick's payload is copied like any other", () => {
+    // The exemption `projection` used to carry was justified by a payload that
+    // was the whole shadow and that nobody read. A tick now names the fields
+    // its re-projection moved and carries their values, which subscribers do
+    // read, so the exemption had become the alias this function severs.
     const change = replaceChange(own(value))
-    expect(ownedForStore(change, { replay: true, projection: true })).toBe(
-      change,
-    )
+    expect(ownedForStore(change)).not.toBe(change)
   })
 
   it("leaves non-replace changes and scalar payloads alone", () => {
@@ -165,18 +165,10 @@ describe("ownedForStore", () => {
 // ---------------------------------------------------------------------------
 
 describe("paths that deliberately hand the store an unshared value", () => {
-  it("a projection reaches the store as the very object that arrived", () => {
-    const change = replaceChange(own({ dark: true, font: 9 }))
-    // Identity, not equality: the ephemeral trigger passes the whole shadow.
-    expect(ownedForStore(change, { projection: true, replay: true })).toBe(
-      change,
-    )
-  })
-
   it("root-path replaces are still copied for local writes", () => {
     const change = replaceChange(own({ tick: 1 }))
-    expect(ownedForStore(change, {})).not.toBe(change)
-    expect(ownedForStore(change, {})).toEqual(change)
+    expect(ownedForStore(change)).not.toBe(change)
+    expect(ownedForStore(change)).toEqual(change)
     void RawPath.empty
   })
 })

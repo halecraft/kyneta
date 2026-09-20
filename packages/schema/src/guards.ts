@@ -52,11 +52,12 @@ export function isPropertyHost(value: unknown): value is object {
 }
 
 /**
- * Structural content equality for `Schema.set` members.
+ * Structural equality over plain JSON values.
  *
- * Single source of truth for set membership — consumed by `stepSet`
- * (uniqueness invariant), `validate` (duplicate detection), and
- * `SetRef.has(value)` (membership query).
+ * Single source of truth wherever two plain values have to be compared by
+ * content: set membership (`stepSet`'s uniqueness invariant, `validate`'s
+ * duplicate detection, `SetRef.has(value)`) and the ephemeral substrate's
+ * decision about which fields a merge actually moved.
  *
  * Semantics:
  * - **Primitives**: `Object.is` (so `NaN === NaN`, but `+0 !== -0`).
@@ -64,11 +65,11 @@ export function isPropertyHost(value: unknown): value is object {
  * - **Plain objects**: same key set, same value at every key (recursive).
  * - **Mixed types**: not equal.
  *
- * Operates on JSON-compatible plain values. Functions, symbols, Dates,
- * and other non-JSON values produce arbitrary results — set members are
- * expected to be JSON-compatible.
+ * Functions, symbols, Dates and other non-JSON values produce arbitrary
+ * results. Every value the schema grammar can hold is JSON-compatible by
+ * declaration, so this is a statement about misuse, not a gap.
  */
-export function isSameSetMember(a: unknown, b: unknown): boolean {
+export function samePlainValue(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true
   if (a === null || b === null) return false
   if (typeof a !== "object" || typeof b !== "object") return false
@@ -82,7 +83,7 @@ export function isSameSetMember(a: unknown, b: unknown): boolean {
     const arrB = b as readonly unknown[]
     if (arrA.length !== arrB.length) return false
     for (let i = 0; i < arrA.length; i++) {
-      if (!isSameSetMember(arrA[i], arrB[i])) return false
+      if (!samePlainValue(arrA[i], arrB[i])) return false
     }
     return true
   }
@@ -94,7 +95,7 @@ export function isSameSetMember(a: unknown, b: unknown): boolean {
   if (aKeys.length !== bKeys.length) return false
   for (const key of aKeys) {
     if (!Object.hasOwn(objB, key)) return false
-    if (!isSameSetMember(objA[key], objB[key])) return false
+    if (!samePlainValue(objA[key], objB[key])) return false
   }
   return true
 }

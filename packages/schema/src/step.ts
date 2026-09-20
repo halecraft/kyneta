@@ -20,7 +20,7 @@ import type {
   TextChange,
   TreeChange,
 } from "./change.js"
-import { isPlainObject, isSameSetMember } from "./guards.js"
+import { isPlainObject, samePlainValue } from "./guards.js"
 
 // ---------------------------------------------------------------------------
 // Container mutation primitives — shared by the pure and in-place duals
@@ -373,7 +373,7 @@ export function stepRichText(
  * means set-wins for map; SetChange's natural order is add-then-remove,
  * giving remove-wins).
  *
- * **Output is normalized.** No duplicates (via `isSameSetMember`).
+ * **Output is normalized.** No duplicates (via `samePlainValue`).
  * Order: existing members retain relative position; new adds appended
  * in `add[]` order; an add of an existing member is a no-op (preserves
  * original position, does *not* re-append).
@@ -396,7 +396,7 @@ function mutateSet<T>(target: T[], change: SetChange<T>): T[] {
 
   // Remove-wins: an add that matches a removal is a no-op.
   const isRemoved = (v: unknown): boolean =>
-    removes.some(r => isSameSetMember(r, v))
+    removes.some(r => samePlainValue(r, v))
 
   // 1. Drop removed members, keeping the survivors' relative order.
   if (removes.length > 0) {
@@ -414,7 +414,7 @@ function mutateSet<T>(target: T[], change: SetChange<T>): T[] {
   // is a no-op — it keeps its original position rather than re-appending.
   for (const candidate of adds) {
     if (isRemoved(candidate)) continue
-    if (target.some(m => isSameSetMember(m, candidate))) continue
+    if (target.some(m => samePlainValue(m, candidate))) continue
     target.push(candidate)
   }
   return target

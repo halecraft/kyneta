@@ -392,7 +392,7 @@ export function createLoroSubstrate(
 
       // Local write — σ advances eagerly so reads are immediately
       // consistent regardless of where λ is in the bracket.
-      applyChange(shadow, path, ownedForStore(change, options))
+      applyChange(shadow, path, ownedForStore(change))
 
       // JSON-boundary write: every write targeting a path that
       // crosses a struct.json/list.json/record.json boundary is

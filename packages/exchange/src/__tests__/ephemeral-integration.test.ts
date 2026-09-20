@@ -10,7 +10,13 @@
 // the synchronizer's decision to import an offer at all.
 
 import { Bridge, createBridgeTransport } from "@kyneta/bridge-transport"
-import { batch, ephemeral, lastUpdated, Schema } from "@kyneta/schema"
+import {
+  batch,
+  ephemeral,
+  lastUpdated,
+  Schema,
+  subscribe,
+} from "@kyneta/schema"
 import { describe, expect, it } from "vitest"
 import { Exchange } from "../exchange.js"
 
@@ -85,6 +91,51 @@ describe("ephemeral substrate — field-level LWW through a live Exchange", () =
     expect(tA).toBeGreaterThan(0)
     expect(tB).toBeGreaterThan(0)
 
+    await exchangeA.shutdown()
+    await exchangeB.shutdown()
+  })
+
+  it("tells local subscribers when a peer's state arrives", async () => {
+    // State landing is not the same as being told it landed. A merge that
+    // writes σ without going through the changefeed leaves every read
+    // correct and every view stale — which for a presence roster means it
+    // simply never updates.
+    const bridge = new Bridge()
+    const exchangeA = new Exchange({
+      id: "alice",
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
+      schemas: [StateDoc],
+    })
+    const exchangeB = new Exchange({
+      id: "bob",
+      transports: [createBridgeTransport({ transportId: "bob", bridge })],
+      schemas: [StateDoc],
+    })
+
+    const docA = exchangeA.get("presence", StateDoc)
+    const docB = exchangeB.get("presence", StateDoc)
+    await drain(20)
+
+    let onDoc = 0
+    let onField = 0
+    const unsubDoc = subscribe(docB, () => {
+      onDoc++
+    })
+    const unsubField = subscribe(docB.alice, () => {
+      onField++
+    })
+
+    batch(docA, d => d.alice.set("online-alice"))
+    await drain(20)
+
+    expect(docB.alice()).toBe("online-alice")
+    expect(onDoc).toBeGreaterThan(0)
+    // The field's own subscriber too, not just the document root: a roster
+    // is watched per entry.
+    expect(onField).toBeGreaterThan(0)
+
+    unsubDoc()
+    unsubField()
     await exchangeA.shutdown()
     await exchangeB.shutdown()
   })

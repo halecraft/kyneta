@@ -4,7 +4,7 @@
 // child refs, no `.at(value)`, no per-key caching. The surface is:
 //
 //   - `()` → `Plain<I>[]` (call signature: whole-set snapshot)
-//   - `.has(value)` (membership query via `isSameSetMember`)
+//   - `.has(value)` (membership query via `samePlainValue`)
 //   - `.size` (member count)
 //   - `[Symbol.iterator]` (iterates plain values, not refs)
 //   - `.add(value)` / `.delete(value)` / `.clear()` (writable)
@@ -15,7 +15,7 @@
 // infrastructure — invalidation is whole-carrier on any `SetChange`.
 
 import { setOpChange } from "../change.js"
-import { isSameSetMember } from "../guards.js"
+import { samePlainValue } from "../guards.js"
 import type { Path } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
 import { CALL } from "./bottom.js"
@@ -29,13 +29,13 @@ import type { WritableContext } from "./writable.js"
  * Install the readable surface for a set ref:
  *
  * - `[CALL]` returns a snapshot of the set as `Plain<I>[]`.
- * - `.has(value)` runs `isSameSetMember` over the current members.
+ * - `.has(value)` runs `samePlainValue` over the current members.
  * - `.size` returns the member count.
  * - `[Symbol.iterator]` iterates plain values (not refs).
  *
  * All operations consult `ctx.reader.read(path)`, which returns the
  * `T[]` storage shape directly. Membership is content-equal via
- * `isSameSetMember` (not identity).
+ * `samePlainValue` (not identity).
  */
 export interface SetReadable {
   readonly [CALL]: () => unknown[]
@@ -63,7 +63,7 @@ export function installSetReadable<T extends object>(
 
   Object.defineProperty(result, "has", {
     value: (value: unknown): boolean =>
-      readMembers().some(member => isSameSetMember(member, value)),
+      readMembers().some(member => samePlainValue(member, value)),
     enumerable: false,
     configurable: true,
   })
@@ -129,7 +129,7 @@ export function installSetWriteOps<T extends object>(
 
   Object.defineProperty(result, "delete", {
     value: (value: unknown): boolean => {
-      const wasPresent = readMembers().some(m => isSameSetMember(m, value))
+      const wasPresent = readMembers().some(m => samePlainValue(m, value))
       if (wasPresent) {
         ctx.dispatch(path, setOpChange(undefined, [value]))
       }

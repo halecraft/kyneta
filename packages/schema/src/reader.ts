@@ -10,7 +10,6 @@ import { deepClonePlain } from "./clone.js"
 import { isNonNullObject } from "./guards.js"
 import type { Path } from "./path.js"
 import { stepInPlace } from "./step.js"
-import type { BatchOptions } from "./substrate.js"
 
 // ---------------------------------------------------------------------------
 // FlatTreeNodeTopology — topology projection without per-node data
@@ -271,9 +270,13 @@ export function syncShadow(target: PlainState, source: PlainState): void {
  * merge into per-key leaf replaces, which are overwhelmingly scalars, and a
  * scalar short-circuits in ~1ns.
  *
- * Skipped for `projection` batches only. Those are decay ticks whose payload is
- * the substrate's own shadow, passed to wake subscribers and never read —
- * copying a whole presence document per tick would be pure waste.
+ * No batch is exempt. `projection` batches once were, on the grounds that a
+ * decay tick's payload was the substrate's own shadow passed to wake
+ * subscribers and never read, so copying a whole presence document per tick
+ * was waste. A tick now names the fields its re-projection moved and carries
+ * their values, which subscribers do read — the exemption became exactly the
+ * alias this function exists to sever, and the waste it avoided is bounded by
+ * the diff rather than by the document.
  *
  * Deliberately a transform rather than a `shouldCopy()` predicate. Four
  * substrates call this; a predicate would let a caller ask the question and
@@ -283,11 +286,7 @@ export function syncShadow(target: PlainState, source: PlainState): void {
  * The caller's half of this is enforced separately, at compile time — see
  * `Owned` in `change.ts`.
  */
-export function ownedForStore(
-  change: ChangeBase,
-  options?: BatchOptions,
-): ChangeBase {
-  if (options?.projection) return change
+export function ownedForStore(change: ChangeBase): ChangeBase {
   if (change.type !== "replace") return change
   // Narrowed by the discriminant just above; `ChangeBase` is only `{ type }`,
   // so the payload is not reachable without saying which change this is.

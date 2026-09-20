@@ -6,14 +6,9 @@ import { describe, expect, it } from "vitest"
 import {
   batch,
   createRef,
-  ephemeralSubstrateFactory,
-  interpret,
-  observation,
   plainReplicaFactory,
   plainSubstrateFactory,
-  readable,
   Schema,
-  writable,
 } from "../index.js"
 import { type Address, AddressedPath, AddressTableRegistry } from "../path.js"
 
@@ -29,12 +24,6 @@ const SetDoc = Schema.struct({ tags: Schema.set(Schema.string()) })
 const TreeDoc = Schema.struct({
   outline: Schema.tree(Schema.struct({ label: Schema.string() })),
 })
-// The `ephemeral` substrate rejects ordered sequences and errors on record
-// whole-entry sets, so its freeze is exercised via a plain nested field.
-const StateDoc = Schema.struct({
-  settings: Schema.struct({ theme: Schema.string() }),
-})
-
 const KEY = "37687726-cafe-4000-8000-000000000001"
 
 function recordDoc() {
@@ -292,42 +281,5 @@ describe("plain op-log: set and tree entry deletes survive export", () => {
 
     const replica = replayInto(substrate, v0)
     expect(snap(replica)).toEqual(snap(substrate))
-  })
-})
-
-// ===========================================================================
-// The `ephemeral` substrate got the same authoring-time freeze. It exports
-// entirety (never serialized ops) and drains its op-log every batch, so the
-// freeze has no observable corruption path — its changefeed even re-derives
-// addressed paths. The one place the frozen value surfaces is the ops
-// `afterBatch` flushes; assert those are RawPath, a direct guard on the
-// `path.toRaw()` line (defense-in-depth, uniform with the plain substrate).
-// ===========================================================================
-
-describe("state substrate: flushed op-log paths are frozen too", () => {
-  it("records flushed ops as immutable RawPath, not live AddressedPath", () => {
-    const substrate = ephemeralSubstrateFactory.create(StateDoc) as any
-    const flushed: Array<{ path: { isAddressed: boolean } }> = []
-    // Intercept afterBatch's return — the only surface exposing the frozen
-    // ops before they're drained (the changefeed re-derives addressed paths).
-    const origAfterBatch = substrate.afterBatch.bind(substrate)
-    substrate.afterBatch = (options: unknown) => {
-      const result = origAfterBatch(options)
-      if (Array.isArray(result)) {
-        for (const b of result) for (const op of b) flushed.push(op)
-      }
-      return result
-    }
-    const doc = interpret(StateDoc, substrate.context())
-      .with(readable)
-      .with(writable)
-      .with(observation)
-      .done() as any
-    batch(doc, (d: any) => d.settings.theme.set("dark"))
-
-    expect(flushed.length).toBeGreaterThan(0)
-    // Without the freeze these paths would be the live AddressedPath
-    // (isAddressed === true) that the addressing registry mutates in place.
-    for (const op of flushed) expect(op.path.isAddressed).toBe(false)
   })
 })

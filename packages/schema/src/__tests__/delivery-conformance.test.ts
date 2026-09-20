@@ -1,15 +1,21 @@
-// delivery-conformance.test — runs the shared delivery suite against the plain
-// substrate.
+// delivery-conformance.test — runs the shared delivery suite against the two
+// substrates that live in this package: plain and ephemeral.
 //
 // The Loro and Yjs backends run the same suite from their own packages. Between
-// the three, the notification engine's contract is pinned on every substrate
+// the four, the notification engine's contract is pinned on every substrate
 // that ships, through both entry points: a local `batch()` and an incoming
 // merge.
+//
+// Ephemeral was absent until a downstream report of a merge that delivered
+// nothing. It is the one substrate whose merge cannot be driven by an op
+// delta — `exportSince` returns `null`, so every merge is a whole-snapshot
+// join — which is precisely the path the other three never exercise here.
 
 import { describe, expect, it } from "vitest"
 import { createRef } from "../create-doc.js"
 import { batch } from "../facade/batch.js"
 import { subscribe } from "../facade/observe.js"
+import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
 import { plainSubstrateFactory } from "../substrates/plain.js"
 import {
   DeliveryFixture,
@@ -48,6 +54,34 @@ function createPlainEnv(): DeliveryTestEnv {
 }
 
 deliveryConformance(createPlainEnv, { label: "plain" })
+
+/**
+ * Two ephemeral-substrate peers over the same schema.
+ *
+ * No `exportSince` here — this substrate is snapshot-only, so B's whole tree
+ * is what crosses, and A's merge is a lattice join rather than a replay of
+ * B's ops. The suite's invariants still have to hold: what A's subscribers
+ * hear must name the fields the join actually moved.
+ */
+function createEphemeralEnv(): DeliveryTestEnv {
+  const substrateA = ephemeralSubstrateFactory.create(DeliveryFixture)
+  const doc = createRef(DeliveryFixture, substrateA)
+
+  return {
+    doc,
+    remoteMerge(fn) {
+      const substrateB = ephemeralSubstrateFactory.fromEntirety(
+        substrateA.exportEntirety(),
+        DeliveryFixture,
+      )
+      const docB = createRef(DeliveryFixture, substrateB)
+      batch(docB, fn)
+      substrateA.merge(substrateB.exportEntirety(), { origin: "sync" })
+    },
+  }
+}
+
+deliveryConformance(createEphemeralEnv, { label: "ephemeral" })
 
 // ===========================================================================
 // The example TECHNICAL.md has always used

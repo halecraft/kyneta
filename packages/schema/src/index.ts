@@ -150,7 +150,7 @@ export {
   isNonNullObject,
   isPlainObject,
   isPropertyHost,
-  isSameSetMember,
+  samePlainValue,
 } from "./guards.js"
 export type {
   ChangefeedBrand,
