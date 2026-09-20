@@ -461,4 +461,53 @@ describe("protocol.listen", () => {
     lineToServer.close()
     lineToBob.close()
   })
+
+  it("carries the same message shape in both directions", async () => {
+    // The asymmetric form does not require the two schemas to differ. A
+    // mirrored control channel or an echo declares the same shape in both
+    // directions, and binding each direction separately produces two
+    // interchangeable BoundSchemas that must both be able to open their
+    // document.
+    const bridge = new Bridge()
+    const exchangeClient = createExchange({
+      id: "client",
+      transports: [createBridgeTransport({ transportId: "client", bridge })],
+    })
+    const exchangeServer = createExchange({
+      id: "server",
+      transports: [createBridgeTransport({ transportId: "server", bridge })],
+    })
+    await drain()
+
+    // Distinct schema objects of identical shape — the same thing a caller
+    // writes when the two directions are declared independently.
+    const Echo = Line.protocol({
+      topic: "echo",
+      client: Schema.struct({ value: Schema.number() }),
+      server: Schema.struct({ value: Schema.number() }),
+    })
+
+    const listener = Echo.listen(exchangeServer)
+    listener.onReceive((sender, receiver) => {
+      ;(async () => {
+        for await (const msg of receiver) {
+          sender.send({ value: (msg as { value: number }).value * 2 })
+        }
+      })()
+    })
+
+    const sender = Echo.sender(exchangeClient, "server")
+    const receiver = Echo.claimReceiver(exchangeClient, "server")
+    const received: Array<{ value: number }> = []
+    collect(receiver, received)
+
+    sender.send({ value: 21 })
+    await drain()
+
+    expect(received).toEqual([{ value: 42 }])
+
+    listener.dispose()
+    sender.close()
+    receiver.close()
+  })
 })

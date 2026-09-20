@@ -667,22 +667,19 @@ export class Line<SendMsg, RecvMsg>
   static protocol = ((opts: any) => {
     const topic = opts.topic
 
-    // Resolve schemas: symmetric uses one BoundSchema for both directions;
-    // asymmetric creates two distinct BoundSchema objects.
-    // For symmetric protocols, a single json.bind() call is essential —
-    // two calls produce distinct references with the same schemaHash, and
-    // the capabilities registry overwrites on duplicate hashes. Using the
-    // same reference ensures exchange.get() reference equality is satisfied.
-    let clientBound: BoundSchema
-    let serverBound: BoundSchema
-    if ("schema" in opts) {
-      const bound = json.bind(createLineDocSchema(opts.schema))
-      clientBound = bound
-      serverBound = bound
-    } else {
-      clientBound = json.bind(createLineDocSchema(opts.client))
-      serverBound = json.bind(createLineDocSchema(opts.server))
-    }
+    // Symmetric protocols share one BoundSchema between the directions;
+    // asymmetric ones bind each. Two binds of structurally identical schemas
+    // are interchangeable and need no special handling here — `exchange.get()`
+    // compares what a schema can read, not which object the caller held.
+    const clientSchema = "schema" in opts ? opts.schema : opts.client
+    const serverSchema = "schema" in opts ? opts.schema : opts.server
+    const clientBound: BoundSchema = json.bind(
+      createLineDocSchema(clientSchema),
+    )
+    const serverBound: BoundSchema =
+      serverSchema === clientSchema
+        ? clientBound
+        : json.bind(createLineDocSchema(serverSchema))
 
     return {
       topic,

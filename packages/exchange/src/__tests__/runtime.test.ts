@@ -431,23 +431,26 @@ describe("Runtime.get and replicate-mode documents", () => {
     await runtime.shutdown()
   })
 
-  it("throws when the same docId is requested with a different BoundSchema", () => {
+  it("throws when the same docId is requested with an unreadable schema", () => {
     const runtime = new Runtime({ peerId: "alice" })
-    const OtherDoc = json.bind(TodoSchema)
+    const OtherDoc = json.bind(Schema.struct({ unrelated: Schema.string() }))
 
     runtime.get("todo-1", TodoDoc)
     expect(() => runtime.get("todo-1", OtherDoc)).toThrow(
-      /different BoundSchema/,
+      /schemaHash disagrees/,
     )
 
     runtime.shutdown()
   })
 
-  it("still returns the identical ref for the same BoundSchema", () => {
-    // Guards the check above against over-reaching: it must reject a
-    // *different* bound object, not repeat calls with the same one.
+  it("returns the identical ref for a schema that can read the document", () => {
+    // Including one bound by a second `bind()` call over the same schema:
+    // the two are interchangeable, and the cached ref is the right answer
+    // for both.
     const runtime = new Runtime({ peerId: "alice" })
-    expect(runtime.get("todo-1", TodoDoc)).toBe(runtime.get("todo-1", TodoDoc))
+    const first = runtime.get("todo-1", TodoDoc)
+    expect(runtime.get("todo-1", TodoDoc)).toBe(first)
+    expect(runtime.get("todo-1", json.bind(TodoSchema))).toBe(first)
     runtime.shutdown()
   })
 

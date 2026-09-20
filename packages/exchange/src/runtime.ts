@@ -448,16 +448,9 @@ export class Runtime {
    * are configured, hydration completes asynchronously — the ref starts
    * empty and the changefeed fires when stored data is merged.
    *
-   * Multiple calls with the same `docId` return the same instance.
-   * Calling with a different BoundSchema for the same `docId` throws.
-   *
-   * That last check lives here and not in {@link createInterpretDoc}, because
-   * `createInterpretDoc` is shared. The Exchange calls it both for a caller's
-   * own `get()` and for documents a peer announces — and in the second case
-   * the `BoundSchema` is whichever object the capability registry returned,
-   * not one the caller ever held. Comparing object identity catches a caller
-   * that rebuilds its schema on every call, which is worth catching; applied
-   * to the network path it would reject documents that are perfectly fine.
+   * Multiple calls with the same `docId` return the same instance. Calling
+   * with a schema that cannot read what is already there throws, naming the
+   * axis that disagrees.
    *
    * @param docId - The document ID
    * @param bound - A BoundSchema created by `bind()`
@@ -465,12 +458,6 @@ export class Runtime {
    */
   get: RuntimeGet = (docId, bound) => {
     const cached = this.#docCache.get(docId)
-    if (cached && cached.mode === "interpret" && cached.bound !== bound) {
-      throw new Error(
-        `Document '${docId}' already exists with a different BoundSchema. ` +
-          `Use the same BoundSchema object when calling get() for the same document.`,
-      )
-    }
 
     // A standalone Runtime is a complete door, not a shortcut through the
     // Exchange's. Both consult the same classifier, so a local-first
@@ -480,15 +467,21 @@ export class Runtime {
     //
     // Only `deferred` needs metadata the Runtime does not hold, and it never
     // holds a deferred document, so that arm is unreachable from here.
-    if (cached?.mode === "replicate") {
+    if (cached?.mode === "replicate" || cached?.mode === "interpret") {
       const action = planInterpretation({
-        phase: "replicate",
+        phase: cached.mode,
         reader: metadataOf(bound),
-        doc: {
-          replicaType: cached.readyInfo.replicaFactory.replicaType,
-          syncMode: cached.readyInfo.syncMode,
-          schemaHash: cached.readyInfo.schemaHash,
-        },
+        // An interpreted document's shape is the `BoundSchema` it was made
+        // with — a `BoundSchema` carries the three `DocMetadata` fields, so
+        // it *is* that shape.
+        doc:
+          cached.mode === "interpret"
+            ? cached.bound
+            : {
+                replicaType: cached.readyInfo.replicaFactory.replicaType,
+                syncMode: cached.readyInfo.syncMode,
+                schemaHash: cached.readyInfo.schemaHash,
+              },
         hydrated: this.hydrated(docId),
       })
       if (action.action === "refuse") {

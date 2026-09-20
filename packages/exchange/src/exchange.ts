@@ -723,8 +723,11 @@ export class Exchange {
    * factory builder. The bound schema's sync protocol determines how
    * the exchange syncs this document with peers.
    *
-   * Multiple calls with the same `docId` return the same instance.
-   * Calling with a different BoundSchema for the same `docId` throws.
+   * Multiple calls with the same `docId` return the same instance, for any
+   * schema that can read what is already open — including a second `bind()`
+   * over the same schema, and a schema whose migration chain reaches the
+   * document's shape. A schema that cannot read it throws, naming the axis
+   * that disagrees.
    *
    * The ref is returned synchronously. If stores are configured,
    * hydration happens asynchronously — the ref starts empty and the
@@ -784,22 +787,17 @@ export class Exchange {
       // sync-graph membership**; only `resume()` does — and matches what a
       // standalone `Runtime` has always done.
 
-      // The BoundSchema identity check is this door's own, and stays here
-      // rather than moving into the classifier: it guards against a *caller*
-      // rebuilding its schema on every call, which is a fact about the caller.
-      // The network path must not apply it — there the BoundSchema is
-      // whichever object the capability registry returned.
-      if (cached.mode === "interpret" && cached.bound !== bound) {
-        throw new Error(
-          `Document '${docId}' already exists with a different BoundSchema. ` +
-            `Use the same BoundSchema object when calling exchange.get() for the same document.`,
-        )
-      }
-
       const action = planInterpretation({
         phase: cached.mode,
         reader: metadataOf(bound),
-        doc: this.#synchronizer.getDocMetadata(docId),
+        // A document the synchronizer knows nothing about is one we made
+        // ourselves, and its shape is the `BoundSchema` we made it with,
+        // which carries the three `DocMetadata` fields and so *is* that
+        // shape. Without it the classifier has nothing to compare a
+        // local-only document against.
+        doc:
+          this.#synchronizer.getDocMetadata(docId) ??
+          (cached.mode === "interpret" ? cached.bound : undefined),
         hydrated: this.#runtime.hydrated(docId),
       })
 

@@ -322,11 +322,16 @@ determines *whether* it does anything at all. Suspension participates in neither
 |-------|--------|
 | absent | Create the `DocRuntime`, register with `Store[]`, broadcast `present`, return a fresh `Ref<S>`. |
 | interpret | Return the existing `Ref<S>`. No substrate reconstruction. |
+
 | deferred | Promote to interpret; send `interest` to the peer that presented; run sync. |
 | replicate | Promote to interpret over the *same* accumulated state — see below. |
 
 Reconcilability is `mismatchForInterpretation` (`@kyneta/schema`) over the three
-axes a document is identified by: `replicaType`, `syncMode`, `schemaHash`. A
+axes a document is identified by: `replicaType`, `syncMode`, `schemaHash`. Every
+phase that holds a document is checked against it, including `interpret` — being
+already open is not an exemption. For a document no peer has announced, the
+document's own metadata is the `BoundSchema` it was created with, which carries
+those same three fields. A
 disagreement on the first two is refused outright — they decide whether bytes
 can be exchanged at all, and no local intent makes an undecodable format
 decodable. A `schemaHash` disagreement on a *deferred* document is the one
@@ -337,9 +342,12 @@ rather than in the classifier, because it is the only door that holds it.
 
 **Totality is over *phase*.** `get()` never refuses a document for being
 deferred, interpreted, or suspended. It still throws for an incoherent
-*request* — a `BoundSchema` object that differs from the one the document was
-created with, or a `replicaType`/`syncMode` that cannot work — and those are
-about the arguments, not the document's state.
+*request* — a schema that cannot read what is there — and that is about the
+arguments, not the document's state.
+
+Note what that does *not* include: which `BoundSchema` object the caller held.
+Two `bind()` calls over one schema are interchangeable, and a schema whose
+migration chain reaches the document's shape can read it. Both are accepted.
 
 ### Promoting a replicate document
 

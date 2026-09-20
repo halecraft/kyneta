@@ -51,9 +51,11 @@ export type InterpretAction =
  *   this document *for you*", two questions in one signature. Where callers
  *   genuinely differ, the difference is written at the caller.
  * - **whether the `BoundSchema` is the same object** — a fact about the
- *   caller, not the document, and true of only one of the three doors. The
- *   network path holds whichever object the capability registry returned, so
- *   applying it there would reject documents that are perfectly fine.
+ *   caller, not the document. What a caller needs to be told is whether its
+ *   schema can read what is there, and `reader` already says that. Object
+ *   identity is a different question with a coincidentally similar answer:
+ *   too strict (two `bind()` calls over one schema are interchangeable) and
+ *   too weak (holding on to an object proves nothing about compatibility).
  *
  * `hydrated` passes that same test and so belongs here: whether a document's
  * stored state has finished loading is a fact about the document, not about
@@ -78,8 +80,17 @@ export function planInterpretation(input: {
     case "absent":
       return { action: "create" }
 
-    case "interpret":
-      return { action: "return-cached" }
+    case "interpret": {
+      // Being open is no exemption: the caller's schema still has to be able
+      // to read what is there. Reaching a cached ref is this phase's answer,
+      // not a reason to skip the question — and returning unconditionally is
+      // what pushed the doors into comparing `BoundSchema` object identity.
+      const mismatch =
+        input.doc && mismatchForInterpretation(input.reader, input.doc)
+      return mismatch
+        ? { action: "refuse", kind: "mismatch", mismatch }
+        : { action: "return-cached" }
+    }
 
     case "replicate": {
       // The caller supplies the one thing a replicate document lacks — a

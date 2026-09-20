@@ -130,13 +130,24 @@ describe("Exchange", () => {
       expect(doc1).toBe(doc2)
     })
 
-    it("different BoundSchema for same docId throws", () => {
+    it("a schema that cannot read the open document throws, naming the axis", () => {
       const exchange = new Exchange({ id: "test" })
 
       exchange.get("doc-1", TestDoc)
       expect(() => exchange.get("doc-1", OtherDoc)).toThrow(
-        "different BoundSchema",
+        /schemaHash disagrees/,
       )
+    })
+
+    it("re-binding the same schema is not a different schema", () => {
+      // Two `bind()` calls over one schema are interchangeable: same shape,
+      // same substrate family, same sync mode. A caller that builds its
+      // BoundSchema inside a component, or a library that binds each
+      // direction of a protocol separately, must not be punished for it.
+      const exchange = new Exchange({ id: "test" })
+
+      const first = exchange.get("doc-1", TestDoc)
+      expect(exchange.get("doc-1", json.bind(testSchema))).toBe(first)
     })
 
     it("batch() values are applied", () => {
