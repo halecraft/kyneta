@@ -12,7 +12,14 @@
 // registers in the StateTree" that has caught this substrate before.
 
 import { describe, expect, it } from "vitest"
-import { batch, createDoc, ephemeral, mapChange, Schema } from "../index.js"
+import {
+  batch,
+  createDoc,
+  ephemeral,
+  mapChange,
+  Schema,
+  sequenceChange,
+} from "../index.js"
 import { RawPath } from "../path.js"
 import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
 import {
@@ -127,6 +134,25 @@ describe("a record decomposes into one tuple per key", () => {
     // `bob` was only deleted, so he is tombstoned rather than removed — the
     // tuple has to stay in the tree for the delete to replicate.
     expect(isTombstone(asRecord(tree).peers.bob)).toBe(true)
+  })
+
+  it("refuses a change kind the tree cannot record", () => {
+    // Unreachable through a substrate, because a schema carrying a sequence
+    // is now rejected at both seams. It is asserted here because the silent
+    // alternative is the defect this guard replaces: an unhandled change type
+    // used to fall off the end, advancing σ and leaving λ untouched, so the
+    // writing peer read back perfectly and every other peer saw nothing.
+    const tree: StateTree = {}
+    expect(() =>
+      applyChangeToStateTree(
+        tree,
+        peersPath,
+        sequenceChange([{ insert: [1] }]),
+        100,
+        Roster,
+      ),
+    ).toThrow(/cannot store a sequence change/)
+    expect(tree).toEqual({})
   })
 
   it("refuses a map change aimed at an atomic register", () => {

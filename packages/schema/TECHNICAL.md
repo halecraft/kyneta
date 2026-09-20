@@ -173,7 +173,9 @@ Each binding target declares its closed law set:
 
 `target.bind(schema)` applies `RestrictLaws<S, AllowedLaws>` at the type level. A schema with `"additive"` in its `[LAWS]` (from `Schema.counter()`) cannot be bound to the `yjs` target — the compiler refuses.
 
-No runtime dispatch, no substrate-specific error messages. The type system is the enforcement mechanism.
+No runtime dispatch, no substrate-specific error messages. The type system is the enforcement mechanism, and `[LAWS]` is a phantom brand — reading it at runtime is a bug.
+
+The `ephemeral` substrate carries a runtime counterpart anyway, and the reason is worth knowing before adding one elsewhere. A caller holding an `any`, or one writing JavaScript, reaches a substrate without ever meeting `tsc`. Behind that guard, a change the `StateTree` could not record used to be dropped in silence. The counterpart asks a different question from a different table — what this substrate's storage can hold, read off `node[KIND]` rather than `[LAWS]` — so the two can drift, and `bind-constraints-ephemeral.test.ts` §4 pins them against each other as data.
 
 Each row of that table has an executable form. `packages/schema/backends/loro` and `.../yjs` carry a `bind-constraints` suite for their own law sets, and `src/__tests__/bind-constraints-ephemeral.test.ts` covers `ephemeral` — accepted shapes as ordinary assertions, rejected ones under `@ts-expect-error`, where **`tsc` is the assertion rather than the test runner**: a directive that stops suppressing an error becomes unused and fails the build. Without those suites the contract holds only by review, which is how a defect against this target once came to be filed against behaviour the compiler had already ruled out.
 
@@ -497,9 +499,13 @@ It does not interact with tombstones, and cannot be used to collect them — dro
 
 Decay works **per leaf tuple**: it compares one stored timestamp against `now`. That fixes where it can legally sit.
 
-An atomic register — a `sum` variant or a `.json()` blob — is stored as ONE tuple holding the whole value, so a field inside it has no timestamp of its own and can never age out independently. `decayMs` is therefore **legal at or above an opaque boundary and illegal strictly below one**, and `bind()` rejects the illegal case (`validateDecayConstraints`, `bind.ts`). Attaching it to the sum or `.json()` node itself is supported and means what it says: the whole variant decays to its structural zero together.
+An atomic register — a `sum` variant or a `.json()` blob — is stored as ONE tuple holding the whole value, so a field inside it has no timestamp of its own and can never age out independently. `decayMs` is therefore **legal at or above an opaque boundary and illegal strictly below one**. Attaching it to the sum or `.json()` node itself is supported and means what it says: the whole variant decays to its structural zero together.
 
-Two rules now live in that validator, checked in order — never on a durable substrate, then never below a boundary. The order is deliberate. A schema can break both at once, and the two are independent, so leading with the boundary message would tell a caller to move an annotation when their real problem is that the substrate supports no decay at all. Asking *where* decay may sit only has meaning once decay is permitted somewhere.
+Two rules enforce this, and they are split by **scope** rather than by subject. *"`.decay()` needs a transient substrate"* is about the schema *and* the `SyncMode`; it is meaningless once you are inside an ephemeral substrate, so it lives in `validateEphemeralSchema` (`bind.ts`) alone. *"not below a register"* is a fact about how a `StateTree` stores things, so it lives with the other storage facts in `stateTreeViolation` (`state-tree.ts`) and runs at both seams a schema enters by.
+
+The split is what closed a gap. While the placement rule ran only from `bind()`, reaching a substrate through `ephemeralSubstrateFactory.create` skipped it, and the failure the rule exists to prevent — binds cleanly, never fires — was still reachable.
+
+The pairing rule is reported first, and the order is what a caller sees. A schema can break both at once, and the two are independent, so leading with a storage message would tell a caller to restructure a field when their real problem is that the substrate supports no decay at all.
 
 Before this check existed, `decayMs` below a boundary bound cleanly and then silently never fired — no throw, no log, just a field that never decayed.
 
@@ -507,9 +513,17 @@ Before this check existed, `decayMs` below a boundary bound cleanly and then sil
 
 A `StateTuple` is `[value, timestamp, deleted?]`. The third slot is present only on a tombstone (see "Deletion" above); the marker lives in its own slot rather than in the value because it has to be **out-of-band from the value domain** — `null` is a legitimate value under a nullable schema, and any in-band sentinel is something a `.json()` blob could legitimately contain. Note that `isStateTuple` deliberately does **not** check the tuple's length: an array in a StateTree is always a leaf, since sequences are not a supported container here, and an arity check would have to be revised every time the tuple gains a slot. Getting that wrong is quiet and expensive — a tuple the guard rejects is treated as a container, and its slots are then merged and projected as if they were keys.
 
-The leaf-vs-container decision reuses `needsContainer` (`materialize-value.ts`), the same predicate the Loro/Yjs backends use for insert detection: `product`/`map` decompose into per-field tuples (that is what gives `ephemeral` its field-level merge), while `scalar`, `sum`, and `.json()` nodes are stored as one leaf tuple. Storing a register whole is deliberate — a sum variant is an opaque LWW value (variant fields are not independently addressable; a switch is one whole-value `.set()`, per the `WritableDiscriminantProductRef` contract), so decomposing it would let the schema-blind `mergeStateTree` interleave fields from different variants.
+How a node is stored has one definition, `stateTreeRole` (`state-tree.ts`), in the sense `storageClass` is for substrates generally. It answers three ways, not two: `decompose` for `product`/`map` (that is what gives `ephemeral` its field-level merge), `register` for `scalar`, `sum` and `.json()` nodes stored as one leaf tuple, and `unrepresentable` for everything else. Its consumers hold no logic of their own: `childSchemaForKey`, `isDecomposedContainer`, `stateTreeViolation`, and the map-change guard in `applyChangeToStateTree`.
 
-A write aimed *at or inside* a register is re-aimed at the register itself before it reaches the tree (`state.ts:prepare`, via the same `findOpaqueBoundary` the CRDT backends use). Applying such a write literally would split the tuple into per-field tuples and drop every sibling field the change never mentioned. This is easy to miss in testing: `prepare` updates the plain-object shadow that local reads are served from, so the document reads back correctly on the peer that made the write, and only replicated state is damaged. Assert on the exported tree, not on the document.
+Three answers rather than two, because *register* and *unrepresentable* are different and were previously the same `default` arm. A sequence reaching `childSchemaForKey` got the answer meant for a sum — "no child here" — and then decomposed schema-blind one level down. The accepted set is enumerated rather than the rejected one, so a schema kind added later lands in `unrepresentable` instead of joining the storable set silently.
+
+**A schema the tree cannot hold is refused before a document exists.** `stateTreeViolation` walks a schema and reports the first node with no representation, or the first `.decay()` below a register. Both seams a schema enters by call it: `bind()`, for the error site a caller expects, and `createStateSubstrate`, which is exported and skips `bind()`. The second is not belt-and-braces: the tree is seeded from the schema's structural zero at construction, so an unrepresentable field is already stored wrongly before any write. `.json()` is the escape hatch the message names, and a wrapped list keeps its `push`/`insert`/`delete` surface while replicating as one register value.
+
+Only `.json()` launders an unrepresentable kind. A `sum` also stores as one tuple, but `.nullable()` is not a request for opaque storage the way `.json()` is, so a list inside one still means the list semantics the schema asked for. `EphemeralLaws` draws the line in the same place, and `bind-constraints-ephemeral.test.ts` §4 pins the two against each other — that test found this exact disagreement.
+
+`applyChangeToStateTree` enumerates every member of `BuiltinChange` and closes with a `never`. A ninth member is a compile error there until someone decides whether this tree can store it. A `default` arm would swallow it into the refusal silently, which is how an unhandled change type came to fall off the end of that function: σ advanced, λ did not, and the writing peer read back perfectly while every other peer saw nothing. Storing a register whole is deliberate — a sum variant is an opaque LWW value (variant fields are not independently addressable; a switch is one whole-value `.set()`, per the `WritableDiscriminantProductRef` contract), so decomposing it would let the schema-blind `mergeStateTree` interleave fields from different variants.
+
+A write aimed *at or inside* a register is re-aimed at the register itself before it reaches the tree (`state.ts:prepare`, via the same `findOpaqueBoundary` the CRDT backends use). Applying such a write literally would split the tuple into per-field tuples and drop every sibling field the change never mentioned. This is easy to miss in testing: `prepare` updates the plain-object shadow that local reads are served from, so the document reads back correctly on the peer that made the write, and only replicated state is damaged. Assert on the exported tree, not on the document — and see [The functional shadow](#the-functional-shadow) for the suite that now asserts it for you.
 
 The property this buys — a concurrent variant switch resolving to one coherent variant, never a blend of two — is asserted across every substrate in `tests/conformance`, not just for `ephemeral`. If you change how registers are stored, that is where the cross-substrate guard lives.
 
@@ -537,6 +551,22 @@ CRDT substrates (Loro, Yjs) maintain a **shadow**: a `PlainState` object that se
 **`Reader` vs `MaterializeResolver`.** `Reader` (4 methods) is the runtime read interface backed by the `PlainState` shadow — schema-blind, live. `MaterializeResolver` (6 methods) is the materialization interface backed by the CRDT — schema-aware via catamorphism dispatch, one-shot. They share a conceptual lineage — the resolver is what a CRDT Reader would look like if it were schema-aware and didn't need liveness.
 
 This design makes the read-your-writes invariant true by construction for all substrates: reads always go through `plainReader(shadow)`, and local writes always land in the shadow eagerly. No coordination, no flags, no special-casing per substrate.
+
+### The projection law, and where it is pinned
+
+A shadow-carrying substrate holds the document twice, and the law is that the two agree:
+
+```
+σ ≡ Π(λ)
+```
+
+Π is the substrate's own materialiser — `extractPlainState`, `materializeLoroShadow`, `materializeYjsShadow`. `projectionConformance` (`src/testing/projection-conformance.ts`) applies a sequence of writes and compares the two derivations after each one. `ephemeral`, `loro` and `yjs` run it.
+
+The comparison is not a function against itself. On the write path σ is advanced by `applyChange` and λ by `applyChangeToStateTree` or `changeToDiff` — different code reading the same change. A substrate uses its materialiser only on the replay path, so reprojecting after a local write crosses from one derivation to the other. `plain` does not run the suite: σ *is* the document there, so Π is the identity and the comparison would hold for a reason unrelated to any substrate behaviour.
+
+Before this suite existed the law was tested twice by hand, in the Loro and Yjs `eager-write-coherence` files, and not at all for `ephemeral` — which is where it broke. Both hand-written versions compared Π(λ) against an object literal and spot-checked two fields of σ, so neither compared the two derivations at all.
+
+**One known violation, unfixed.** Deleting a record's last key leaves `{}` in σ, while `extractPlainState` drops a container whose every leaf is tombstoned. The two disagree until the next merge or tick re-projects. Document reads hide it, because the readable layer supplies a record's structural zero for a missing key. The ephemeral fixture omits that write and says so.
 
 ---
 
@@ -583,7 +613,9 @@ function foldPath(
 
    **That constraint is now retired rather than restated.** This document used to say the walk-side predicate and `needsContainer` (`materialize-value.ts`) "must agree", which is the same kind of prose invariant the section below diagnoses — a rule living in a doc comment, enforced by review. Both are now one-line derivations of `storageClass` (`schema.ts`), the single place the decision is made: `isOpaqueBoundary` asks it the walk-side question, `needsContainer` the write-side one. They cannot disagree, so nothing has to remember that they must.
 
-   There is now a third consumer outside the traversal entirely: `validateDecayConstraints` (`bind.ts`) uses `isOpaqueBoundary` to find where a register begins, because `.decay()` is illegal below one (see §"Where `.decay()` may be attached"). Under the old arrangement that would have meant a third hand-written copy of the rule, since `isJsonBoundary` and `KIND` are both public and the disjunction is one line away. Sharing the predicate is what makes the validator agree with the traversal by construction rather than by review — and note that `!needsContainer` is *not* a substitute for it, because that is also false for scalars, which are leaves rather than boundaries.
+   There is now a third consumer outside the traversal entirely: `stateTreeViolation` (`state-tree.ts`) uses `isOpaqueBoundary` to find where a register begins, because `.decay()` is illegal below one (see §"Where `.decay()` may be attached"). Under the old arrangement that would have meant a third hand-written copy of the rule, since `isJsonBoundary` and `KIND` are both public and the disjunction is one line away. Sharing the predicate is what makes the validator agree with the traversal by construction rather than by review — and note that `!needsContainer` is *not* a substitute for it, because that is also false for scalars, which are leaves rather than boundaries.
+
+   That same validator asks `isJsonBoundary` separately, for its other rule. Decay uses the wider boundary because a `sum` shares one timestamp across its variant's fields; representability uses the narrower one because only `.json()` is a request for opaque storage.
 
    The cost of the old arrangement was paid: `richtext` was classified as a container by one and a leaf by the other, which broke the `EagerPolicy` subset relation described in §"Value materialization — the write-side unfold".
 
@@ -1751,9 +1783,9 @@ The package exposes three subpath exports via `package.json` `"exports"`:
 |---------|-------------|-------|------|
 | `"."` | `@kyneta/schema` | `src/index.ts` | Public barrel — every public symbol. |
 | `"./basic"` | `@kyneta/schema/basic` | `src/basic/index.ts` | Test-only helpers (re-exports of internal utilities for backend test suites). |
-| `"./testing"` | `@kyneta/schema/testing` | `src/testing/index.ts` | Backend conformance testing: `positionConformance` and `PositionTestEnv`. |
+| `"./testing"` | `@kyneta/schema/testing` | `src/testing/index.ts` | Backend conformance suites: `positionConformance`, `deliveryConformance`, `projectionConformance`. |
 
-The `"./testing"` subpath exists so that backend packages (`@kyneta/loro-schema`, `@kyneta/yjs-schema`) can import the position conformance harness without depending on vitest at runtime. The tsdown config externalises vitest via `neverBundle: ["vitest"]`, so vitest internals are never bundled into the published `dist/`.
+The `"./testing"` subpath exists so that backend packages (`@kyneta/loro-schema`, `@kyneta/yjs-schema`) can import the conformance harnesses without depending on vitest at runtime. The tsdown config externalises vitest via `neverBundle: ["vitest"]`, so vitest internals are never bundled into the published `dist/`.
 
 ### Code splitting and stable chunk names
 

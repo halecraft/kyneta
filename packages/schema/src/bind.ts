@@ -38,7 +38,7 @@ import type {
   ProductSchema,
   Schema as SchemaNode,
 } from "./schema.js"
-import { isOpaqueBoundary, KIND } from "./schema.js"
+import { KIND } from "./schema.js"
 import type {
   ReadCapability,
   ReplicaFactory,
@@ -60,6 +60,10 @@ import {
   plainReplicaFactory,
   plainSubstrateFactory,
 } from "./substrates/plain.js"
+import {
+  formatStateTreeViolation,
+  stateTreeViolation,
+} from "./substrates/state-tree.js"
 
 // ---------------------------------------------------------------------------
 // FactoryBuilder — deferred factory construction with peer identity
@@ -337,12 +341,9 @@ export function bind<S extends SchemaNode>(config: {
 }): BoundSchema<S> {
   const schemaHash = computeSchemaHash(config.schema)
 
-  // Validate where `.decay()` may sit: never on a durable substrate (history
-  // cannot be retroactively forgotten), and never below an opaque boundary
-  // (everything inside a register shares one timestamp, so a field within it
-  // has nothing of its own to age out). Runs before any other work so the
-  // error fires loudly at module load.
-  validateDecayConstraints(config.schema, config.syncMode)
+  // Runs before any other work so the error fires at module load, where a
+  // schema is usually bound.
+  validateEphemeralSchema(config.schema, config.syncMode)
 
   // Derive identity binding from the migration chain (if present).
   const chain = getMigrationChain(config.schema)
@@ -571,8 +572,52 @@ export const ephemeral: BindingTarget<EphemeralLaws, PlainNativeMap> =
   })
 
 // ---------------------------------------------------------------------------
-// validateDecayConstraints — where `.decay()` may legally sit
+// validateEphemeralSchema — what a transient substrate can store
 // ---------------------------------------------------------------------------
+
+/**
+ * Reject a schema the `ephemeral` substrate cannot store, or can store only by
+ * losing what the schema declared.
+ *
+ * Two rules, split by scope rather than by subject.
+ *
+ * **Pairing: `.decay()` needs a transient substrate.** Decay is a
+ * projection-only property of the local shadow, and it cannot retroactively
+ * forget durable history. On a persistent substrate the log would still carry
+ * the timed-out value while the shadow pretended it was gone. This rule is
+ * about the schema *and* the `SyncMode`, so it is meaningless once you are
+ * inside an ephemeral substrate and lives only here.
+ *
+ * **Storage: what a `StateTree` can hold.** Representable kinds, and where
+ * `.decay()` may sit within them, are facts about the tree. They live with it
+ * in `state-tree.ts` and run at both seams a schema enters the substrate by
+ * (`stateTreeViolation`).
+ *
+ * The pairing rule is checked first, and the order is what a caller sees. A
+ * schema can break both at once, and they are independent, so leading with a
+ * storage message would tell someone to restructure a field when their real
+ * problem is that the substrate supports no decay at all.
+ */
+export function validateEphemeralSchema(
+  schema: SchemaNode,
+  syncMode: SyncMode,
+): void {
+  if (syncMode.durability !== "transient") {
+    if (declaresDecay(schema, 0)) {
+      throw new Error(
+        "Durable and collaborative substrates do not support .decay(). " +
+          "Time-decay is ephemeral-only: the local shadow reverts to its " +
+          "structural zero after `decayMs`, but durable history cannot be " +
+          "retroactively forgotten. Bind this schema via `ephemeral` " +
+          "instead.",
+      )
+    }
+    return
+  }
+
+  const violation = stateTreeViolation(schema)
+  if (violation) throw new Error(formatStateTreeViolation(violation))
+}
 
 /**
  * The maximum schema-graph traversal depth. Matches {@link MAX_CANON_DEPTH}:
@@ -582,111 +627,39 @@ export const ephemeral: BindingTarget<EphemeralLaws, PlainNativeMap> =
 const MAX_VALIDATE_DEPTH = 1000
 
 /**
- * Recursively walk a schema graph, rejecting `.decay()` where it cannot work.
+ * Does any node in this schema declare `decayMs`?
  *
- * Two rules, both about `.decay()`, checked in this order because they are not
- * peers — the second is a refinement of the first.
- *
- * **1. Not on a durable or collaborative substrate.** `.decay()` is a
- * projection-only property of the local shadow — it cannot retroactively
- * forget durable history. Allowing it on a persistent substrate would be a
- * math-vs-projection contradiction: the history log would still carry the
- * timed-out value, but the shadow would pretend it was gone. We surface the
- * contradiction loudly, at `bind()` time, rather than letting it manifest as a
- * silent divergence later.
- *
- * **2. Not below an opaque boundary.** Decay works per leaf tuple, by testing
- * one stored timestamp against `now`. A `sum` variant or a `.json()` blob is
- * stored as ONE tuple holding the whole value, so a field inside it has no
- * timestamp of its own and cannot age out independently. Left unchecked, such a
- * binding succeeds and the decay simply never fires.
- *
- * The order is what a caller sees. A schema can break both rules at once, and
- * they are independent — fixing either leaves the other — so leading with the
- * boundary rule would tell someone to move an annotation when their real
- * problem is that the substrate supports no decay at all.
- *
- * Visited-set is intentionally omitted: legitimate shared-node DAGs (a
- * `Schema.string()` reused across many fields) would false-positive.
- * A depth cap converts cycles into a clear error instead.
+ * No visited-set: a legitimate shared node — one `Schema.string()` reused
+ * across many fields — would false-positive. The depth cap turns a cycle into
+ * a clear error instead.
  */
-export function validateDecayConstraints(
-  schema: SchemaNode,
-  syncMode: SyncMode,
-): void {
-  const isEphemeral = syncMode.durability === "transient"
-  walk(schema, 0, false)
+function declaresDecay(node: SchemaNode, depth: number): boolean {
+  if (depth > MAX_VALIDATE_DEPTH) {
+    throw new Error(
+      `declaresDecay: schema nesting exceeds limit (${MAX_VALIDATE_DEPTH}) — cycle or pathological depth`,
+    )
+  }
+  if ((node as { decayMs?: number }).decayMs !== undefined) return true
 
-  /**
-   * `belowBoundary` is true once the walk has descended *through* a sum or
-   * `.json()` node. It is raised for a node's children rather than for the node
-   * itself, which is what keeps `.decay()` legal ON a boundary — the register
-   * is one tuple with one timestamp, so the whole variant decaying together is
-   * coherent — while rejecting it anywhere underneath.
-   */
-  function walk(node: SchemaNode, depth: number, belowBoundary: boolean): void {
-    if (depth > MAX_VALIDATE_DEPTH) {
-      throw new Error(
-        `validateDecayConstraints: schema nesting exceeds limit (${MAX_VALIDATE_DEPTH}) — cycle or pathological depth`,
+  switch (node[KIND]) {
+    case "product": {
+      const fields = (node as { fields: Record<string, SchemaNode> }).fields
+      return Object.keys(fields).some(key =>
+        declaresDecay(fields[key] as SchemaNode, depth + 1),
       )
     }
-
-    if ((node as { decayMs?: number }).decayMs !== undefined) {
-      if (!isEphemeral) {
-        throw new Error(
-          "Durable and collaborative substrates do not support .decay(). " +
-            "Time-decay is ephemeral-only: the local shadow reverts to its " +
-            "structural zero after `decayMs`, but durable history cannot be " +
-            "retroactively forgotten. Bind this schema via `ephemeral` " +
-            "instead.",
-        )
-      }
-      if (belowBoundary) {
-        throw new Error(
-          ".decay() cannot be set inside a sum variant or a .json() blob. " +
-            "The whole value is stored as one register with a single " +
-            "timestamp, so a field inside it has nothing of its own to age " +
-            "out. Move .decay() onto the sum or .json() node itself if the " +
-            "whole value should decay together.",
-        )
-      }
+    case "sum": {
+      const variants = (node as { variants: readonly SchemaNode[] }).variants
+      return variants.some(variant => declaresDecay(variant, depth + 1))
     }
-
-    // Raised for the children, not for this node — see `belowBoundary` above.
-    const childrenAreBelowBoundary = belowBoundary || isOpaqueBoundary(node)
-
-    switch (node[KIND]) {
-      case "product": {
-        const fields = (node as { fields: Record<string, SchemaNode> }).fields
-        for (const key of Object.keys(fields)) {
-          walk(fields[key] as SchemaNode, depth + 1, childrenAreBelowBoundary)
-        }
-        return
-      }
-      case "sequence":
-      case "map":
-      case "set":
-      case "tree":
-      case "movable":
-        walk(
-          (node as { item: SchemaNode }).item,
-          depth + 1,
-          childrenAreBelowBoundary,
-        )
-        return
-      case "sum": {
-        const variants = (node as { variants: readonly SchemaNode[] }).variants
-        for (const variant of variants) {
-          walk(variant, depth + 1, childrenAreBelowBoundary)
-        }
-        return
-      }
-      case "richtext":
-        // marks are a fixed vocabulary, not a schema tree.
-        return
-      default:
-        // scalar, text, counter — leaves. No children to walk.
-        return
-    }
+    case "sequence":
+    case "map":
+    case "set":
+    case "tree":
+    case "movable":
+      return declaresDecay((node as { item: SchemaNode }).item, depth + 1)
+    default:
+      // scalar, text, counter, richtext: no children to walk.
+      return false
   }
 }

@@ -10,3 +10,10 @@ export {
   type PositionTestEnv,
   positionConformance,
 } from "./position-conformance.js"
+export {
+  type ProjectionConformanceFactory,
+  type ProjectionConformanceOptions,
+  type ProjectionTestEnv,
+  type ProjectionWrite,
+  projectionConformance,
+} from "./projection-conformance.js"

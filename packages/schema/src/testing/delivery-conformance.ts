@@ -40,12 +40,17 @@ import { Schema } from "../schema.js"
 
 /**
  * The document every conformance run writes against. Deliberately shallow and
- * broad: a scalar, a nested struct, a list of structs and a record, so that one
- * batch can touch several sibling subtrees at different depths.
+ * broad: a scalar, a nested struct and a record, so that one batch can touch
+ * several sibling subtrees at different depths.
  *
  * `blob` exists for the payload-stability invariant. Aliasing needs an object
  * payload to alias — the rest of this fixture is scalars all the way down, so
  * without it the invariant would check the one shape that cannot fail.
+ *
+ * Every kind here is one all four substrates admit. `ephemeral` accepts the
+ * narrowest set — no sequence, set, text or counter — so a fixture that
+ * reaches past it cannot run on all four, and a sequence that no assertion
+ * writes to would buy nothing for the price.
  *
  * The suite owns this rather than accepting it from the factory, because the
  * assertions below refer to specific paths within it.
@@ -53,7 +58,6 @@ import { Schema } from "../schema.js"
 export const DeliveryFixture = Schema.struct({
   top: Schema.number(),
   outer: Schema.struct({ x: Schema.number(), y: Schema.number() }),
-  items: Schema.list(Schema.struct({ title: Schema.string() })),
   entries: Schema.record(Schema.number()),
   blob: Schema.struct({ label: Schema.string(), count: Schema.number() }),
 })

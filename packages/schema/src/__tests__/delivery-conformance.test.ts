@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest"
 import { createRef } from "../create-doc.js"
 import { batch } from "../facade/batch.js"
 import { subscribe } from "../facade/observe.js"
+import { Schema } from "../schema.js"
 import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
 import { plainSubstrateFactory } from "../substrates/plain.js"
 import {
@@ -87,14 +88,24 @@ deliveryConformance(createEphemeralEnv, { label: "ephemeral" })
 // The example TECHNICAL.md has always used
 // ===========================================================================
 
+// Carries its own schema. The example turns on a list of structs, and
+// `DeliveryFixture` holds only kinds all four substrates admit — `ephemeral`
+// has no representation for a sequence.
+const ExampleDoc = Schema.struct({
+  top: Schema.number(),
+  items: Schema.list(Schema.struct({ title: Schema.string() })),
+})
+
 describe("the documented delivery example", () => {
   // `packages/schema/TECHNICAL.md` has described this exact shape since the
   // descendant-delivery rewrite. Promoted to a test so the claim is anchored
   // to something that runs, rather than to prose that drifted from the code
   // for two major versions.
   it("one changeset to every level, each covering its own subtree", () => {
-    const env = createPlainEnv()
-    const doc = env.doc
+    const substrate = plainSubstrateFactory.create(ExampleDoc)
+    // biome-ignore lint/suspicious/noExplicitAny: the example reads untyped,
+    // exercising the runtime surface rather than the type surface.
+    const doc = createRef(ExampleDoc, substrate) as any
     batch(doc, (d: any) => d.items.push({ title: "a" }))
 
     const counts: Record<string, number> = {}

@@ -123,7 +123,7 @@ describe("durable substrate rejects .decay()", () => {
     })
 
     // Constructing a binding with SYNC_COLLABORATIVE directly should throw
-    // because bind() runs validateDecayConstraints.
+    // because bind() runs validateEphemeralSchema.
     expect(() =>
       bind({
         schema,

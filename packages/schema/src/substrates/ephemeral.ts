@@ -53,10 +53,12 @@ import { DEFAULT_LINEAGE, objectToReplaceOps } from "./plain.js"
 import {
   applyChangeToStateTree,
   extractPlainState,
+  formatStateTreeViolation,
   insertStructuralZeros,
   isStateTuple,
   mergeStateTree,
   type StateTree,
+  stateTreeViolation,
 } from "./state-tree.js"
 
 // ---------------------------------------------------------------------------
@@ -254,6 +256,16 @@ export function createStateSubstrate(
   tree: StateTree,
   schema?: SchemaNode,
 ): Substrate<StateVersion> {
+  // Refuse a schema this tree cannot hold, before the shadow below seeds it.
+  // `bind()` asks the same question earlier and with a better error site, but
+  // it is not on every path: this factory is exported and takes a schema
+  // directly. Seeding is itself a write, so an unrepresentable field is
+  // already stored wrongly by the time any caller could observe it.
+  if (schema !== undefined) {
+    const violation = stateTreeViolation(schema)
+    if (violation) throw new Error(formatStateTreeViolation(violation))
+  }
+
   let currentTree = tree
   const core = createStateReplicaCore(
     () => currentTree,

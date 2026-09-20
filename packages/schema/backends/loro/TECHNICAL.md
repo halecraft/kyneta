@@ -258,7 +258,7 @@ batch(doc, d => { d.title.insert(0, "hi"); d.items.push(x) })
        nextIsOurs = false
 ```
 
-The write path advances **both** σ (the shadow) and λ (the LoroDoc tree) at every prepare boundary. PlainSubstrate has σ ≡ λ; CRDT substrates generalise to the two-store product where `applyDiff` is called eagerly inside `prepare` (immediately for structural inserts, via the coalescing buffer for plain MapDiff writes that drain in `afterBatch`). The projection law `σ ≡ Π(λ)` (the naturality condition of `materializeLoroShadow`) is preserved at every prepare return.
+The write path advances **both** σ (the shadow) and λ (the LoroDoc tree) at every prepare boundary. PlainSubstrate has σ ≡ λ; CRDT substrates generalise to the two-store product where `applyDiff` is called eagerly inside `prepare` (immediately for structural inserts, via the coalescing buffer for plain MapDiff writes that drain in `afterBatch`). The projection law `σ ≡ Π(λ)` (the naturality condition of `materializeLoroShadow`) is preserved at every prepare return. It is pinned by `projectionConformance` (`@kyneta/schema/testing`), run from `src/__tests__/eager-write-coherence.test.ts`, which compares the substrate's shadow against a fresh `materializeLoroShadow` after each write.
 
 `changeToDiff` is **pure** (source: `src/change-mapping.ts`). Given a kyneta `Change` + path + schema + binding, it produces the Loro `Diff[]` that reproduces the change. It handles every built-in change type:
 

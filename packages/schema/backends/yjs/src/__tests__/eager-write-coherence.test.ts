@@ -5,10 +5,10 @@
 //      Substrate writes land synchronously; both reads (σ via the
 //      Reader) AND subsequent writes (λ via applyChangeToYjs) succeed
 //      against the new state.
-//   2. Projection law: `σ ≡ Π(λ)` holds at every prepare boundary
-//      (asserted via deep-equal between the substrate's reader view
-//      and a fresh `materializeYjsShadow` after a non-trivial
-//      mutation sequence).
+//   2. Projection law: `σ ≡ Π(λ)` holds at every prepare boundary.
+//      Asserted by `projectionConformance` (`@kyneta/schema/testing`),
+//      which compares the shadow against a fresh `materializeYjsShadow`
+//      after each write. The suite is shared with Loro and `ephemeral`.
 //   3. Json-boundary storage: `struct.json` / `record.json` subtrees
 //      round-trip as plain JSON values in the parent Y.Map entry, not
 //      as nested Y.Map containers.
@@ -20,12 +20,14 @@ import {
   batch,
   interpret,
   observation,
+  RawPath,
   readable,
   Schema,
   subscribe,
   unwrap,
   writable,
 } from "@kyneta/schema"
+import { projectionConformance } from "@kyneta/schema/testing"
 import { describe, expect, it } from "vitest"
 import * as Y from "yjs"
 import { materializeYjsShadow } from "../materialize.js"
@@ -121,46 +123,70 @@ describe("Yjs re-entry: subscriber writes after subscriber push", () => {
 // 2. Projection law σ ≡ Π(λ)
 // ---------------------------------------------------------------------------
 
-describe("Yjs projection law", () => {
-  it("shadow equals materialized projection of native doc after a mixed mutation sequence", () => {
-    const schema = Schema.struct({
-      title: Schema.text(),
-      items: Schema.list(
-        Schema.struct({ name: Schema.string(), done: Schema.boolean() }),
-      ),
-      meta: Schema.struct.json({
-        tags: Schema.string(),
-        version: Schema.number(),
-      }),
-      peers: Schema.record(Schema.boolean()),
-    })
-    const { doc } = buildUnbound(schema)
+const ProjectionFixture = Schema.struct({
+  title: Schema.text(),
+  items: Schema.list(
+    Schema.struct({ name: Schema.string(), done: Schema.boolean() }),
+  ),
+  meta: Schema.struct.json({
+    tags: Schema.string(),
+    version: Schema.number(),
+  }),
+  peers: Schema.record(Schema.boolean()),
+})
 
-    batch(doc, (d: any) => {
-      d.title.insert(0, "Hello")
-      d.items.push({ name: "a", done: false })
-    })
-    batch(doc, (d: any) => {
-      d.items.at(0).done.set(true)
-      d.items.push({ name: "b", done: false })
-    })
-    batch(doc, (d: any) => {
-      d.meta.set({ tags: "kyneta", version: 2 })
-      d.peers.set("alice", true)
-      d.peers.set("bob", false)
-    })
+projectionConformance(
+  () => {
+    // Unbound, so `materializeYjsShadow(doc, schema)` called without a binding
+    // finds the same raw field names in the native tree.
+    const { substrate, doc } = buildUnbound(ProjectionFixture)
 
-    const nativeDoc = unwrap(doc) as Y.Doc
-    const projected = materializeYjsShadow(nativeDoc, schema)
-    expect(projected).toEqual({
-      title: "Hello",
-      items: [
-        { name: "a", done: true },
-        { name: "b", done: false },
+    return {
+      writes: [
+        {
+          name: "text insert and list push",
+          apply: () =>
+            batch(doc, (d: any) => {
+              d.title.insert(0, "Hello")
+              d.items.push({ name: "a", done: false })
+            }),
+        },
+        {
+          // Staggered across batches so the address table reflects each
+          // structural step before the next prepare runs.
+          name: "write inside a pushed item, then push another",
+          apply: () =>
+            batch(doc, (d: any) => {
+              d.items.at(0).done.set(true)
+              d.items.push({ name: "b", done: false })
+            }),
+        },
+        {
+          name: "json boundary and record keys",
+          apply: () =>
+            batch(doc, (d: any) => {
+              d.meta.set({ tags: "kyneta", version: 2 })
+              d.peers.set("alice", true)
+              d.peers.set("bob", false)
+            }),
+        },
       ],
-      meta: { tags: "kyneta", version: 2 },
-      peers: { alice: true, bob: false },
-    })
+      shadow: () => substrate.reader.read(RawPath.empty),
+      reproject: () =>
+        materializeYjsShadow(unwrap(doc) as Y.Doc, ProjectionFixture),
+    }
+  },
+  { label: "yjs" },
+)
+
+describe("Yjs reader path", () => {
+  // The law itself is asserted by the shared suite above. What stays here is
+  // the canonical reader path, which the suite does not reach: it compares the
+  // two derivations of the document, not what a caller sees on a field.
+  it("agrees with the shadow", () => {
+    const schema = Schema.struct({ title: Schema.text() })
+    const { doc } = buildUnbound(schema)
+    batch(doc, (d: any) => d.title.insert(0, "Hello"))
     expect((doc.title as any)()).toBe("Hello")
   })
 })

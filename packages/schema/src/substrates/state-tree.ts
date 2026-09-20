@@ -29,15 +29,20 @@
 // the requirement that headless replicas (relays, stores) can merge entirety
 // payloads without schema knowledge.
 
-import type { ChangeBase, MapChange } from "../change.js"
+import type { BuiltinChange, ChangeBase, MapChange } from "../change.js"
 import { isReplaceChange } from "../change.js"
 import { deepClonePlain } from "../clone.js"
 import { walkPath } from "../fold-path.js"
 import { samePlainValue } from "../guards.js"
 import type { Path } from "../interpret.js"
-import { needsContainer } from "../materialize-value.js"
 import type { PlainState } from "../reader.js"
-import { KIND, type Schema as SchemaNode } from "../schema.js"
+import {
+  isJsonBoundary,
+  isOpaqueBoundary,
+  KIND,
+  type Schema as SchemaNode,
+  storageClass,
+} from "../schema.js"
 import { Zero } from "../zero.js"
 
 // ---------------------------------------------------------------------------
@@ -425,22 +430,265 @@ function extractInto(
 }
 
 /**
- * The schema node for a named child of a container schema. This substrate's only
- * containers are product (`fields[key]`) and map (`item`) — a sum is stored as
- * one atomic leaf tuple, so it is never descended into and needs no case here.
+ * How the StateTree stores a schema node.
+ *
+ * - `decompose` — per-field or per-key tuples, which is what gives this
+ *   substrate its field-level merge.
+ * - `register` — one leaf tuple holding the whole value, so a concurrent
+ *   variant switch resolves to one coherent variant.
+ * - `unrepresentable` — the tree has no shape for it.
+ *
+ * The single definition of that decision, in the sense `storageClass`
+ * (`schema.ts`) is for substrates generally. Its four consumers hold no logic
+ * of their own: `childSchemaForKey`, `isDecomposedContainer`,
+ * `stateTreeViolation`, and the map-change guard in
+ * `applyChangeToStateTree`.
+ *
+ * Two kinds are listed, not seven. `register` and `unrepresentable` are
+ * different answers, and stating the accepted set means a schema kind added
+ * later lands in `unrepresentable` rather than joining the storable set
+ * silently.
+ */
+export type StateTreeRole = "decompose" | "register" | "unrepresentable"
+
+export function stateTreeRole(node: SchemaNode): StateTreeRole {
+  // A `sum` or `.json()` node is one tuple whatever its kind says, so the
+  // storage class answers before the kind is consulted.
+  if (storageClass(node) !== "container") return "register"
+  switch (node[KIND]) {
+    case "product":
+    case "map":
+      return "decompose"
+    default:
+      return "unrepresentable"
+  }
+}
+
+/**
+ * The schema node for a named child, or `undefined` where there is nothing to
+ * descend into. A register holds its whole value in one tuple, and an
+ * unrepresentable node has no tuples at all.
  */
 function childSchemaForKey(
   schema: SchemaNode,
   key: string,
 ): SchemaNode | undefined {
+  if (stateTreeRole(schema) !== "decompose") return undefined
   switch (schema[KIND]) {
     case "product":
       return (schema as { fields: Record<string, SchemaNode> }).fields[key]
-    case "map":
-      return (schema as { item: SchemaNode }).item
     default:
-      return undefined
+      return (schema as { item: SchemaNode }).item
   }
+}
+
+/**
+ * Why a schema cannot be stored in a StateTree.
+ *
+ * - `unrepresentable` — a node whose kind has no shape here.
+ * - `decay-below-register` — `.decay()` under a `sum` or `.json()` node.
+ *   A register is one tuple with one timestamp, so a field inside it has
+ *   nothing of its own to age out.
+ */
+export type StateTreeViolation =
+  | { rule: "unrepresentable"; path: string; kind: string }
+  | { rule: "decay-below-register"; path: string }
+
+/**
+ * The maximum schema-graph traversal depth. The grammar guarantees finite
+ * acyclic schemas, so this is only ever hit by an `as any`-crafted cycle.
+ */
+const MAX_SCHEMA_DEPTH = 1000
+
+/**
+ * The first reason this schema cannot be stored, if any.
+ *
+ * Both callers are seams a schema enters the substrate by: `bind()` and
+ * `createStateSubstrate`. Neither can rely on the other, because
+ * `ephemeralSubstrateFactory.create` is exported and skips `bind()`, and the
+ * tree is seeded from the schema's zero at construction, so an unrepresentable
+ * field is already stored wrongly before any write.
+ *
+ * Reports rather than throws, so the two callers cannot word the same failure
+ * differently. `stepSchema` (`schema.ts`) states the reason for the shape.
+ *
+ * Representability outranks decay placement: being unable to store a field at
+ * all subsumes any question about where its `.decay()` sits.
+ *
+ * No visited-set, deliberately. A legitimate shared node — one
+ * `Schema.string()` reused across many fields — would false-positive. The
+ * depth cap turns a cycle into a clear error instead.
+ */
+export function stateTreeViolation(
+  schema: SchemaNode,
+): StateTreeViolation | undefined {
+  let decayViolation: StateTreeViolation | undefined
+
+  const walk = (
+    node: SchemaNode,
+    path: string,
+    depth: number,
+    belowRegister: boolean,
+    belowJson: boolean,
+  ): StateTreeViolation | undefined => {
+    if (depth > MAX_SCHEMA_DEPTH) {
+      throw new Error(
+        `stateTreeViolation: schema nesting exceeds limit (${MAX_SCHEMA_DEPTH}) — cycle or pathological depth`,
+      )
+    }
+
+    // Only `.json()` launders an unrepresentable kind, and a `sum` does not,
+    // even though both store as one tuple. `.json()` is a request for opaque
+    // storage; a `sum` is not, so a list inside a `.nullable()` wrap still
+    // means the list semantics the schema asked for and this tree cannot keep
+    // them. `EphemeralLaws` draws the line in the same place.
+    if (!belowJson && stateTreeRole(node) === "unrepresentable") {
+      return { rule: "unrepresentable", path, kind: String(node[KIND]) }
+    }
+
+    if (
+      belowRegister &&
+      (node as { decayMs?: number }).decayMs !== undefined &&
+      decayViolation === undefined
+    ) {
+      decayViolation = { rule: "decay-below-register", path }
+    }
+
+    // Raised for the children, not for this node: `.decay()` on a register
+    // itself is legal and means the whole value decays together. Decay uses
+    // the wider boundary because a sum shares one timestamp across its
+    // variant's fields whether or not it is opaque to the law set.
+    const childrenBelowRegister = belowRegister || isOpaqueBoundary(node)
+    const childrenBelowJson = belowJson || isJsonBoundary(node)
+    const at = (key: string) => (path === "" ? key : `${path}.${key}`)
+
+    switch (node[KIND]) {
+      case "product": {
+        const fields = (node as { fields: Record<string, SchemaNode> }).fields
+        for (const key of Object.keys(fields)) {
+          const found = walk(
+            fields[key] as SchemaNode,
+            at(key),
+            depth + 1,
+            childrenBelowRegister,
+            childrenBelowJson,
+          )
+          if (found) return found
+        }
+        return undefined
+      }
+      case "sum": {
+        const variants = (node as { variants: readonly SchemaNode[] }).variants
+        for (const [i, variant] of variants.entries()) {
+          const found = walk(
+            variant,
+            at(`<${i}>`),
+            depth + 1,
+            childrenBelowRegister,
+            childrenBelowJson,
+          )
+          if (found) return found
+        }
+        return undefined
+      }
+      case "sequence":
+      case "map":
+      case "set":
+      case "tree":
+      case "movable":
+        return walk(
+          (node as { item: SchemaNode }).item,
+          at("*"),
+          depth + 1,
+          childrenBelowRegister,
+          childrenBelowJson,
+        )
+      default:
+        // scalar, text, counter, richtext: no children to walk.
+        return undefined
+    }
+  }
+
+  return walk(schema, "", 0, false, false) ?? decayViolation
+}
+
+/**
+ * Refuse a change the StateTree has no way to record.
+ *
+ * Unreachable in production: `stateTreeViolation` rejects the schemas that
+ * could produce one at both seams a schema enters by, so a document whose
+ * substrate exists can only issue `replace` and `map`. It is kept for the
+ * shape rather than for the coverage.
+ *
+ * Every member of `BuiltinChange` is named, and `never` closes the switch.
+ * A ninth member is then a compile error here until someone decides whether
+ * this tree can store it. A `default` arm would have swallowed it into the
+ * refusal silently, which is the failure this whole file is being changed for:
+ * an unhandled change type used to fall off the end of `applyChangeToStateTree`
+ * and advance σ while leaving λ untouched.
+ *
+ * `ChangeBase` is open — third-party backends extend it — so the unknown-type
+ * case is answered separately below. The exhaustiveness check covers the
+ * builtin vocabulary, not every possible change.
+ */
+function refuseUnstorableChange(change: ChangeBase): void {
+  const refuse = (kind: string): never => {
+    throw new Error(
+      `The ephemeral substrate cannot store a ${kind} change. It keeps one ` +
+        `timestamped tuple per leaf, so only whole-value replaces and map ` +
+        `set/delete have a representation. Wrap the field with .json() to ` +
+        `carry it as one opaque value.`,
+    )
+  }
+
+  const type = change.type as BuiltinChange["type"]
+  switch (type) {
+    case "replace":
+    case "map":
+      return
+    case "text":
+    case "sequence":
+    case "set-op":
+    case "tree":
+    case "increment":
+    case "richtext":
+      refuse(type)
+      return
+    default: {
+      const exhaustive: never = type
+      refuse(String(exhaustive))
+    }
+  }
+}
+
+/**
+ * The message both seams throw, so the same failure cannot be worded two ways.
+ *
+ * Each names what to do rather than only what is wrong: a caller who reaches
+ * either one got past `bind()`'s compile-time law check, so they are already
+ * somewhere the types said they would not be.
+ */
+export function formatStateTreeViolation(
+  violation: StateTreeViolation,
+): string {
+  const where =
+    violation.path === "" ? "the root schema" : `"${violation.path}"`
+  if (violation.rule === "unrepresentable") {
+    return (
+      `The ephemeral substrate cannot store a ${violation.kind} at ${where}. ` +
+      `It keeps one timestamped tuple per leaf and decomposes only structs ` +
+      `and records, so an ordered or counted container has no shape here. ` +
+      `Wrap it with .json() to carry it as one opaque value — ` +
+      `Schema.list.json(...) keeps push/insert/delete and replicates whole.`
+    )
+  }
+  return (
+    `.decay() cannot be set inside a sum variant or a .json() blob, at ` +
+    `${where}. The whole value is stored as one register with a single ` +
+    `timestamp, so a field inside it has nothing of its own to age out. ` +
+    `Move .decay() onto the sum or .json() node itself if the whole value ` +
+    `should decay together.`
+  )
 }
 
 /**
@@ -495,20 +743,22 @@ function deepClone(value: any): any {
 // transform layer is one functional core; the `ephemeral` substrate (the
 // imperative shell) just calls them.
 //
-// The one decision they share is leaf-vs-container. Products and maps
-// decompose into per-field tuples — that is what gives `ephemeral` its
-// field-level merge. Scalars and *registers* — a `sum` variant or a
-// `.json()` blob, for which `needsContainer` is false — are stored as ONE
-// leaf tuple. Storing a register whole is what stops
-// `mergeStateTree` from blending fields across variants: a sum is opaque to
-// the CRDT, exactly like a scalar (variant fields are not independently
-// addressable — a variant switch is a single whole-value `.set()`).
+// The one decision they share is `stateTreeRole`. Storing a register whole is
+// what stops `mergeStateTree` from blending fields across variants: a sum is
+// opaque to the CRDT, exactly like a scalar (variant fields are not
+// independently addressable, and a variant switch is a single whole-value
+// `.set()`).
 
 /**
- * Should `value` be decomposed into per-field tuples (a container), or stored
- * as one atomic tuple (a scalar or register)? Only a plain (non-array) object
- * can be a decomposed container. A missing schema falls back to the
- * historical "decompose any object" behavior.
+ * Should `value` be decomposed into per-field tuples, or stored as one atomic
+ * tuple? Only a plain (non-array) object can be decomposed. A missing schema
+ * falls back to the historical "decompose any object" behavior.
+ *
+ * Asks `stateTreeRole`, not `needsContainer`. The two differ on `sequence`,
+ * `text`, `set`, `tree`, `movable` and `richtext`: every one is a container to
+ * `storageClass` and none has a representation here. `needsContainer` gave the
+ * right answer for them only because none carries a plain-object value, so the
+ * check above reached `false` first.
  */
 function isDecomposedContainer(
   value: unknown,
@@ -517,7 +767,8 @@ function isDecomposedContainer(
   const isPlainObject =
     typeof value === "object" && value !== null && !Array.isArray(value)
   if (!isPlainObject) return false
-  return nodeSchema === undefined || needsContainer(nodeSchema)
+  if (nodeSchema === undefined) return true
+  return stateTreeRole(nodeSchema) === "decompose"
 }
 
 /**
@@ -569,6 +820,11 @@ function schemaAtPath(
  * given timestamp. `schema` is the document root schema; it is threaded so a
  * mutated register (sum / `.json()`) lands as a single atomic tuple instead of
  * being decomposed into blendable per-field tuples.
+ *
+ * Total over the builtin change vocabulary: a change this tree has no way to
+ * record throws (`refuseUnstorableChange`) rather than returning. The tree is
+ * the only half of the substrate that replicates, so a change dropped here
+ * leaves the writing peer reading back correctly and every other peer wrong.
  */
 export function applyChangeToStateTree(
   tree: StateTree,
@@ -577,6 +833,8 @@ export function applyChangeToStateTree(
   timestamp: number,
   schema: SchemaNode | undefined,
 ): void {
+  refuseUnstorableChange(change)
+
   if (path.length === 0) {
     if (isReplaceChange(change)) {
       const val = change.value
@@ -591,7 +849,7 @@ export function applyChangeToStateTree(
       } else {
         throw new Error("Cannot replace root with a scalar")
       }
-    } else if (change.type === "map") {
+    } else {
       applyMapChange(
         tree as Record<string, StateTree>,
         change as MapChange,
@@ -631,7 +889,7 @@ export function applyChangeToStateTree(
     } else {
       target[key] = leafTuple(val, timestamp)
     }
-  } else if (change.type === "map") {
+  } else {
     let child = target[key]
 
     // A map change is only meaningful at a container. An atomic register — a
@@ -647,10 +905,13 @@ export function applyChangeToStateTree(
     // some other peer.
     //
     // The schema is authoritative and catches a register not yet written; the
-    // tuple check covers the case where there is no schema opinion.
-    const schemaSaysRegister =
-      targetSchema !== undefined && !needsContainer(targetSchema)
-    if (schemaSaysRegister || isStateTuple(child)) {
+    // tuple check covers the case where there is no schema opinion. An
+    // unrepresentable node refuses here too, for the same reason: building a
+    // container under it would give the tree a shape the schema never
+    // declared.
+    const schemaRefusesDecomposition =
+      targetSchema !== undefined && stateTreeRole(targetSchema) !== "decompose"
+    if (schemaRefusesDecomposition || isStateTuple(child)) {
       throw new Error(
         `Cannot apply a map change at "${key}": it is an atomic register ` +
           `(a sum or .json() node). Such writes must be widened to a ` +

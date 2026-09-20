@@ -262,7 +262,7 @@ One Yjs-specific wrinkle: because everything lives inside the single root `Y.Map
 
 Source: `packages/schema/backends/yjs/src/substrate.ts` → `prepare` / `afterBatch` / `runBatch`; `src/change-mapping.ts` → `applyChangeToYjs`; `src/populate.ts` → `populate`.
 
-Yjs's natural programming model is imperative: open a `Y.transact`, mutate shared types, close. Kyneta's write path advances **both** σ (the shadow, read-visible) AND λ (the live `Y.Doc` tree, sync-visible) inside the ambient `Y.transact` opened by `runBatch`. The projection law `σ ≡ Π(λ)` (the naturality condition of `materializeYjsShadow`) holds at every prepare boundary.
+Yjs's natural programming model is imperative: open a `Y.transact`, mutate shared types, close. Kyneta's write path advances **both** σ (the shadow, read-visible) AND λ (the live `Y.Doc` tree, sync-visible) inside the ambient `Y.transact` opened by `runBatch`. The projection law `σ ≡ Π(λ)` (the naturality condition of `materializeYjsShadow`) holds at every prepare boundary. It is pinned by `projectionConformance` (`@kyneta/schema/testing`), run from `src/__tests__/eager-write-coherence.test.ts`, which compares the substrate's shadow against a fresh `materializeYjsShadow` after each write.
 
 ```
 batch(doc, d => { d.title.insert(0, "hi"); d.items.push(x) })

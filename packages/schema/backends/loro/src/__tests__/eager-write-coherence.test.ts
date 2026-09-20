@@ -5,10 +5,10 @@
 //      Substrate writes land synchronously; both reads (σ via the
 //      Reader) AND subsequent writes (λ via change-mapping) succeed
 //      against the new state.
-//   2. Projection law: `σ ≡ Π(λ)` holds at every prepare boundary
-//      (asserted by deep-equal between the substrate shadow and a
-//      fresh `materializeLoroShadow` after a non-trivial mutation
-//      sequence — including ops at every supported constructor).
+//   2. Projection law: `σ ≡ Π(λ)` holds at every prepare boundary.
+//      Asserted by `projectionConformance` (`@kyneta/schema/testing`),
+//      which compares the shadow against a fresh `materializeLoroShadow`
+//      after each write. The suite is shared with Yjs and `ephemeral`.
 //   3. Json-boundary storage: `struct.json`/`list.json`/`record.json`
 //      subtrees round-trip as plain JSON values in the parent CRDT
 //      container, not as nested LoroMap/LoroList containers.
@@ -24,12 +24,14 @@ import {
   batch,
   interpret,
   observation,
+  RawPath,
   readable,
   Schema,
   subscribe,
   unwrap,
   writable,
 } from "@kyneta/schema"
+import { projectionConformance } from "@kyneta/schema/testing"
 import { LoroDoc, type LoroDoc as LoroDocType } from "loro-crdt"
 import { describe, expect, it } from "vitest"
 import { materializeLoroShadow } from "../materialize.js"
@@ -137,63 +139,88 @@ describe("Loro re-entry: subscriber writes after subscriber push", () => {
 // ---------------------------------------------------------------------------
 
 describe("Loro projection law", () => {
-  it("shadow equals materialized projection of native doc after a mixed mutation sequence", () => {
+  // The law itself is asserted by the shared suite at the bottom of this file.
+  // What stays here is the canonical reader path, which the suite does not
+  // reach: it compares the two derivations of the document, not what a caller
+  // sees when it calls a field.
+  it("the reader path agrees with the shadow", () => {
     const schema = Schema.struct({
       title: Schema.text(),
       count: Schema.counter(),
-      items: Schema.list(
-        Schema.struct({ name: Schema.string(), done: Schema.boolean() }),
-      ),
-      meta: Schema.struct.json({
-        tags: Schema.string(),
-        version: Schema.number(),
-      }),
-      peers: Schema.record(Schema.boolean()),
     })
-    // Unbound substrate — raw field names in the native Loro tree
-    // so `materializeLoroShadow(doc, schema)` (called without a
-    // binding) finds the same keys.
     const { doc } = buildUnbound(schema)
 
-    // Stagger the pushes and the inner field mutation across batch()
-    // batches so the address table fully reflects each structural step
-    // before the next prepare runs.
     batch(doc, (d: any) => {
       d.title.insert(0, "Hello")
       d.count.increment(5)
-      d.items.push({ name: "a", done: false })
-    })
-    batch(doc, (d: any) => {
-      d.items.at(0).done.set(true)
-      d.items.push({ name: "b", done: false })
-    })
-    batch(doc, (d: any) => {
-      d.meta.set({ tags: "kyneta", version: 2 })
-      d.peers.set("alice", true)
-      d.peers.set("bob", false)
     })
 
-    const nativeDoc = unwrap(doc) as LoroDocType
-    const projected = materializeLoroShadow(nativeDoc, schema)
-    // The shadow is the σ that the Reader closes over — same view
-    // any subscriber would see via `doc.field()`. Π(λ) must agree
-    // with σ at every prepare boundary, which after the final
-    // commit means a fresh materialise round-trips to the same view.
-    expect(projected).toEqual({
-      title: "Hello",
-      count: 5,
-      items: [
-        { name: "a", done: true },
-        { name: "b", done: false },
-      ],
-      meta: { tags: "kyneta", version: 2 },
-      peers: { alice: true, bob: false },
-    })
-    // Spot check the canonical reader path.
     expect((doc.title as any)()).toBe("Hello")
     expect((doc.count as any)()).toBe(5)
   })
 })
+
+// ---------------------------------------------------------------------------
+// 2b. Projection law — the shared cross-substrate suite
+// ---------------------------------------------------------------------------
+
+const ProjectionFixture = Schema.struct({
+  title: Schema.text(),
+  count: Schema.counter(),
+  items: Schema.list(
+    Schema.struct({ name: Schema.string(), done: Schema.boolean() }),
+  ),
+  meta: Schema.struct.json({
+    tags: Schema.string(),
+    version: Schema.number(),
+  }),
+  peers: Schema.record(Schema.boolean()),
+})
+
+projectionConformance(
+  () => {
+    // Unbound, so `materializeLoroShadow(doc, schema)` called without a binding
+    // finds the same raw field names in the native tree.
+    const { substrate, doc } = buildUnbound(ProjectionFixture)
+
+    return {
+      writes: [
+        {
+          name: "text insert, counter increment, list push",
+          apply: () =>
+            batch(doc, (d: any) => {
+              d.title.insert(0, "Hello")
+              d.count.increment(5)
+              d.items.push({ name: "a", done: false })
+            }),
+        },
+        {
+          // Staggered across batches so the address table reflects each
+          // structural step before the next prepare runs.
+          name: "write inside a pushed item, then push another",
+          apply: () =>
+            batch(doc, (d: any) => {
+              d.items.at(0).done.set(true)
+              d.items.push({ name: "b", done: false })
+            }),
+        },
+        {
+          name: "json boundary and record keys",
+          apply: () =>
+            batch(doc, (d: any) => {
+              d.meta.set({ tags: "kyneta", version: 2 })
+              d.peers.set("alice", true)
+              d.peers.set("bob", false)
+            }),
+        },
+      ],
+      shadow: () => substrate.reader.read(RawPath.empty),
+      reproject: () =>
+        materializeLoroShadow(unwrap(doc) as LoroDocType, ProjectionFixture),
+    }
+  },
+  { label: "loro" },
+)
 
 // ---------------------------------------------------------------------------
 // 3. JSON boundary: subtrees stored as plain JSON; nested writes
