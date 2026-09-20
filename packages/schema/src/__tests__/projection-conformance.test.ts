@@ -22,12 +22,11 @@ import {
 // it refuses cannot appear, because `createStateSubstrate` now rejects the
 // schema outright.
 //
-// Deleting a record's last key is deliberately absent, and it is the one write
-// known to break the law: `applyChange` leaves `{}` in σ, while
-// `extractPlainState` drops a container whose every leaf is tombstoned, so the
-// two disagree until the next merge or tick re-projects. Document reads hide
-// it, because the readable layer supplies a record's structural zero for a
-// missing key. Adding the step here turns this suite red.
+// Deleting a record's last key is included deliberately. A record is a
+// declared field of the root product, so it projects as `{}` when emptied
+// rather than dropping out — dropping is for keys that were written, not for
+// fields the schema declares. The law caught this disagreement before
+// `keySpace` existed to state the rule.
 const Fixture = Schema.struct({
   top: Schema.number(),
   outer: Schema.struct({ x: Schema.number(), y: Schema.string() }),
@@ -93,6 +92,11 @@ function createEphemeralEnv(): ProjectionTestEnv {
         name: "json list push",
         // biome-ignore lint/suspicious/noExplicitAny: see above
         apply: () => batch(doc, (d: any) => d.tags.push("t")),
+      },
+      {
+        name: "record entry delete (last key)",
+        // biome-ignore lint/suspicious/noExplicitAny: see above
+        apply: () => batch(doc, (d: any) => d.entries.delete("k")),
       },
     ],
 

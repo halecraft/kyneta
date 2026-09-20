@@ -513,6 +513,28 @@ Before this check existed, `decayMs` below a boundary bound cleanly and then sil
 
 A `StateTuple` is `[value, timestamp, deleted?]`. The third slot is present only on a tombstone (see "Deletion" above); the marker lives in its own slot rather than in the value because it has to be **out-of-band from the value domain** — `null` is a legitimate value under a nullable schema, and any in-band sentinel is something a `.json()` blob could legitimately contain. Note that `isStateTuple` deliberately does **not** check the tuple's length: an array in a StateTree is always a leaf, since sequences are not a supported container here, and an arity check would have to be revised every time the tuple gains a slot. Getting that wrong is quiet and expensive — a tuple the guard rejects is treated as a container, and its slots are then merged and projected as if they were keys.
 
+### Two key spaces
+
+Where a node's keys come from decides what their absence means, and the two answers are opposites.
+
+| | keys come from | an absent key means |
+|---|---|---|
+| `product` — **declared** | the schema | the value written was partial; the tree would be malformed |
+| `map` — **dynamic** | whatever was written | removed, or never there |
+
+"Absence carries no information" is the rule for a *map*, and it is why a removal has to be a tombstone rather than a missing key. It is false for a product, whose fields exist because the type says so. `keySpace` (`state-tree.ts`) is the one place that decides. Two sites ask it:
+
+- `extractInto` drops an all-tombstoned child only when its key is dynamic. An emptied record projects as `{}`; it does not vanish.
+- `syncStateTreeToShadow` tombstones an omitted key only when it is dynamic. A declared field a partial value omits is left alone.
+
+A third site had to stop answering the question for itself. `applyChangeToStateTree` built a fresh subtree for a container replace and assigned it over the old one, so *every* omitted key vanished — wrong for both key spaces at once, and invisible to either rule above. It now syncs into the existing subtree, which routes the decision through `syncStateTreeToShadow`.
+
+`insertStructuralZeros` already had this right before the rule had a name: it walks `Zero.structural(schema)` rather than the tree, so it only ever fills declared keys.
+
+Two defects came from the missing distinction, and both were invisible locally because reads come from σ. A record whose last key was deleted dropped out of the projection. A partial struct value — which `tryValidate` rejects, so only a caller past the type guard produces one — dropped the fields it did not mention from the tree, where they then resurrected from the next peer that still held them.
+
+### How a node is stored
+
 How a node is stored has one definition, `stateTreeRole` (`state-tree.ts`), in the sense `storageClass` is for substrates generally. It answers three ways, not two: `decompose` for `product`/`map` (that is what gives `ephemeral` its field-level merge), `register` for `scalar`, `sum` and `.json()` nodes stored as one leaf tuple, and `unrepresentable` for everything else. Its consumers hold no logic of their own: `childSchemaForKey`, `isDecomposedContainer`, `stateTreeViolation`, and the map-change guard in `applyChangeToStateTree`.
 
 Three answers rather than two, because *register* and *unrepresentable* are different and were previously the same `default` arm. A sequence reaching `childSchemaForKey` got the answer meant for a sum — "no child here" — and then decomposed schema-blind one level down. The accepted set is enumerated rather than the rejected one, so a schema kind added later lands in `unrepresentable` instead of joining the storable set silently.
@@ -526,6 +548,24 @@ Only `.json()` launders an unrepresentable kind. A `sum` also stores as one tupl
 A write aimed *at or inside* a register is re-aimed at the register itself before it reaches the tree (`state.ts:prepare`, via the same `findOpaqueBoundary` the CRDT backends use). Applying such a write literally would split the tuple into per-field tuples and drop every sibling field the change never mentioned. This is easy to miss in testing: `prepare` updates the plain-object shadow that local reads are served from, so the document reads back correctly on the peer that made the write, and only replicated state is damaged. Assert on the exported tree, not on the document — and see [The functional shadow](#the-functional-shadow) for the suite that now asserts it for you.
 
 The property this buys — a concurrent variant switch resolving to one coherent variant, never a blend of two — is asserted across every substrate in `tests/conformance`, not just for `ephemeral`. If you change how registers are stored, that is where the cross-substrate guard lives.
+
+### The state digest
+
+`stateTreeDigest` (`state-tree.ts`) fingerprints everything that replicates: each leaf's path, value, timestamp, and tombstone flag. Two peers holding the same tree hold the same digest, whatever order they reached it in, because the per-leaf hashes are combined with XOR.
+
+It exists to answer the question `StateVersion.compare` cannot. A wall clock cannot say whether two peers hold the same state — two peers writing different fields in the same millisecond carry the same timestamp over divergent trees — so `compare` returns `"concurrent"` unconditionally rather than guess, and every ephemeral exchange ships a whole document as a result.
+
+Three properties are load-bearing, and each has a test:
+
+- **Order independence.** XOR is commutative, so peers that converge by opposite merge orders agree. Without this the comparison reports divergence forever and the digest is worse than useless.
+- **Path sensitivity.** The same value under a different key must not fold alike. The path is encoded *structurally*: four lanes of the path prefix travel down the recursion as plain numbers with each key folded in, so no path string is ever built. That is also what keeps the walk allocation-free — an early version that allocated a digest per node cost 29.7 ms over 5000 leaves against 3.8 ms for this one.
+- **Nothing local.** `.decay()` is a read-time projection that never touches the tree, so two peers configured with different `decayMs` hold identical trees and must agree. `decayMs` is excluded from the schema hash for the same reason.
+
+The digest is deliberately **not** part of `Version`. A version orders things and supports `meet`, which `exchange.compact` relies on; digests have no meet, so putting one inside a version string would leave `StateVersion.meet` with no defined answer.
+
+Collision resistance is four independent FNV-1a-32 lanes, which is ample against ordinary divergence and is not a claim of adversarial resistance. A peer that can choose leaf values could attack one lane at a time. Making this hostile-safe needs a real multiset hash.
+
+### Atomicity is shape, not logic
 
 Crucially, atomicity is encoded in the tree's *shape* (register = leaf tuple), **not** in the merge logic. That is why `mergeStateTree` stays schema-blind: a headless relay/store merges raw entirety payloads by timestamp without ever needing the schema. The schema is consulted only when translating between plain values and the tree (build via `applyChangeToStateTree`/`syncStateTreeToShadow`, extract via `extractPlainState`), which always runs on a schema-aware peer. Register values are deep-cloned (`deepClonePlain`) at the tree↔shadow boundary so the two never alias — a projection that finds a register unchanged keeps the shadow's existing copy, which was cloned when it was written, rather than re-cloning.
 
@@ -566,7 +606,7 @@ The comparison is not a function against itself. On the write path σ is advance
 
 Before this suite existed the law was tested twice by hand, in the Loro and Yjs `eager-write-coherence` files, and not at all for `ephemeral` — which is where it broke. Both hand-written versions compared Π(λ) against an object literal and spot-checked two fields of σ, so neither compared the two derivations at all.
 
-**One known violation, unfixed.** Deleting a record's last key leaves `{}` in σ, while `extractPlainState` drops a container whose every leaf is tombstoned. The two disagree until the next merge or tick re-projects. Document reads hide it, because the readable layer supplies a record's structural zero for a missing key. The ephemeral fixture omits that write and says so.
+The suite found one violation on its first run, since fixed: deleting a record's last key left `{}` in σ while the projection dropped the record entirely. The cause was `extractInto` applying a map's rule to a declared field — see [Two key spaces](#two-key-spaces).
 
 ---
 

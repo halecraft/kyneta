@@ -34,6 +34,7 @@ import { isReplaceChange } from "../change.js"
 import { deepClonePlain } from "../clone.js"
 import { walkPath } from "../fold-path.js"
 import { samePlainValue } from "../guards.js"
+import { DIGEST_SEEDS, type Digest, digestFold } from "../hash.js"
 import type { Path } from "../interpret.js"
 import type { PlainState } from "../reader.js"
 import {
@@ -325,12 +326,18 @@ function extractInto(
 } {
   let maxTimestamp = 0
   let changed = false
-  // A subtree drops out of the projection only when it is entirely tombstoned.
-  // Tracking "has a tombstone" separately from "has a live leaf" is what
-  // distinguishes a deleted entry from a legitimately EMPTY container: an
-  // empty record still projects as `{}`, while a deleted one is absent.
+  // A subtree drops out of the projection when it is entirely tombstoned AND
+  // its key was written rather than declared. Tracking "has a tombstone"
+  // separately from "has a live leaf" is what distinguishes a deleted entry
+  // from a legitimately EMPTY container: an empty record still projects as
+  // `{}`, while a deleted one is absent.
   let anyLive = false
   let anyTombstone = false
+
+  // Dropping says a key was written and then removed, so it applies only
+  // where keys are written. A declared field with nothing live under it is an
+  // empty container, not an absent one.
+  const dropsWhenEmpty = (schema ? keySpace(schema) : undefined) !== "declared"
 
   /** Note a key whose projected value moved. */
   const moved = (key: string): void => {
@@ -354,7 +361,7 @@ function extractInto(
         childSchema,
         now,
       )
-      if (result.kept) {
+      if (result.kept || !dropsWhenEmpty) {
         anyLive = true
       } else {
         // Every leaf beneath it is tombstoned: the whole entry was deleted.
@@ -374,7 +381,9 @@ function extractInto(
 
     if (isTombstone(child)) {
       // Deleted: present in the tree so the delete can replicate, absent from
-      // every read. The tuple stays; the projection drops it.
+      // every read. The tuple stays; the projection drops it. A tombstoned
+      // *declared* leaf still drops — the field exists, its value does not —
+      // and the reader supplies the structural zero.
       if (key in target) moved(key)
       delete target[key]
       anyTombstone = true
@@ -462,6 +471,30 @@ export function stateTreeRole(node: SchemaNode): StateTreeRole {
     default:
       return "unrepresentable"
   }
+}
+
+/**
+ * Where a node's key set comes from.
+ *
+ * - `declared` — a product's fields. A constant index set fixed by the schema,
+ *   with no lattice: the keys do not arrive, change, or leave.
+ * - `dynamic` — a map's keys. A last-writer-wins element set, which is why a
+ *   removal has to be represented rather than expressed by omission.
+ *
+ * This is the distinction behind "absence carries no information". That rule
+ * is true of a map and false of a product, where an absent field means the
+ * tree is malformed. Applying the map's rule to a product is what made a
+ * record's last delete drop the record, and a partial struct write drop the
+ * fields it did not mention.
+ *
+ * A node with no keys at all — a register, or an unrepresentable kind — has no
+ * key space, and callers that reach one have nothing to decide.
+ */
+export type KeySpace = "declared" | "dynamic"
+
+export function keySpace(parent: SchemaNode): KeySpace | undefined {
+  if (stateTreeRole(parent) !== "decompose") return undefined
+  return parent[KIND] === "product" ? "declared" : "dynamic"
 }
 
 /**
@@ -771,6 +804,79 @@ function isDecomposedContainer(
   return stateTreeRole(nodeSchema) === "decompose"
 }
 
+// ---------------------------------------------------------------------------
+// Digest — an order-independent fingerprint of the tree
+// ---------------------------------------------------------------------------
+
+/**
+ * A fingerprint of everything that replicates, and nothing that does not.
+ *
+ * Two peers holding the same tree hold the same digest, whatever order they
+ * got there in. That is what lets a version comparison answer "do we hold the
+ * same state?", which a wall clock cannot — see `StateVersion.compare`.
+ *
+ * Covers each leaf's path, value, timestamp and tombstone flag. It must not
+ * cover anything local: `.decay()` is a read-time projection that never
+ * touches the tree, so two peers configured with different `decayMs` hold
+ * identical trees and must agree.
+ *
+ * The path is encoded structurally rather than built as a string. Four lanes
+ * of the path prefix travel down the recursion as plain numbers, and each key
+ * is folded into them on the way. That keeps the walk allocation-free apart
+ * from the leaf's own value, which is the difference between 3.8 ms and 30 ms
+ * over 5000 leaves.
+ *
+ * Folding the whole tree, rather than updating a running digest as leaves are
+ * written. Updating per write needs each leaf's full path, and the four sites
+ * that write leaves hold only a container and a key, so supplying one means
+ * threading a path string through every recursion — and a digest maintained in
+ * several places can drift, which would make two divergent peers agree to stop
+ * talking. Encoding the path structurally costs a walk and removes both
+ * problems. Memoize per flush: at 5000 leaves this is 3.8 ms against the 1.7 ms
+ * `JSON.stringify` already spends once per offer per peer.
+ */
+export function stateTreeDigest(tree: StateTree): Digest {
+  const lanes: [number, number, number, number] = [0, 0, 0, 0]
+
+  const walk = (
+    node: StateTree,
+    a: number,
+    b: number,
+    c: number,
+    d: number,
+  ) => {
+    if (isStateTuple(node)) {
+      const value = node[0]
+      const encoded =
+        typeof value === "object" && value !== null
+          ? JSON.stringify(value)
+          : String(value)
+      const stamp = String(node[1])
+      // A tombstone and a live `null` are different states, and `String(null)`
+      // cannot tell them apart.
+      const dead = node[2] === true ? "\u0001" : ""
+      lanes[0] ^= digestFold(digestFold(digestFold(a, encoded), stamp), dead)
+      lanes[1] ^= digestFold(digestFold(digestFold(b, encoded), stamp), dead)
+      lanes[2] ^= digestFold(digestFold(digestFold(c, encoded), stamp), dead)
+      lanes[3] ^= digestFold(digestFold(digestFold(d, encoded), stamp), dead)
+      return
+    }
+    const container = node as Record<string, StateTree>
+    for (const key of Object.keys(container)) {
+      walk(
+        container[key] as StateTree,
+        digestFold(a, key),
+        digestFold(b, key),
+        digestFold(c, key),
+        digestFold(d, key),
+      )
+    }
+  }
+
+  walk(tree, DIGEST_SEEDS[0], DIGEST_SEEDS[1], DIGEST_SEEDS[2], DIGEST_SEEDS[3])
+  return [lanes[0] >>> 0, lanes[1] >>> 0, lanes[2] >>> 0, lanes[3] >>> 0]
+}
+
 /**
  * Wrap a leaf value in a `StateTuple`, deep-cloning objects/arrays (register
  * values) so the tree never aliases the caller's live value.
@@ -841,11 +947,9 @@ export function applyChangeToStateTree(
       if (typeof val === "object" && val !== null && !Array.isArray(val)) {
         // Deep replace of the whole root (always a product). Decompose so
         // nested registers still land atomically (schema threaded through).
-        const newTree: Record<string, StateTree> = {}
-        syncStateTreeToShadow(newTree, val, schema, timestamp)
-        const target = tree as Record<string, StateTree>
-        for (const k of Object.keys(target)) delete target[k]
-        for (const k of Object.keys(newTree)) target[k] = newTree[k]
+        // Sync in place for the same reason as the keyed case below: the root
+        // is a product, so a field the value omits is not a removal.
+        syncStateTreeToShadow(tree, val, schema, timestamp)
       } else {
         throw new Error("Cannot replace root with a scalar")
       }
@@ -883,9 +987,14 @@ export function applyChangeToStateTree(
   if (isReplaceChange(change)) {
     const val = change.value
     if (isDecomposedContainer(val, targetSchema)) {
-      const newTree: Record<string, StateTree> = {}
-      syncStateTreeToShadow(newTree, val, targetSchema, timestamp)
-      target[key] = newTree
+      // Sync into the existing subtree rather than building a fresh one and
+      // assigning over it. A fresh subtree makes every omitted key vanish,
+      // which is right for neither key space: a dynamic key should tombstone
+      // so the removal replicates, and a declared field should survive
+      // untouched. Both follow from reusing the subtree, because
+      // `syncStateTreeToShadow` then sees what was there.
+      if (!target[key] || isStateTuple(target[key])) target[key] = {}
+      syncStateTreeToShadow(target[key], val, targetSchema, timestamp)
     } else {
       target[key] = leafTuple(val, timestamp)
     }
@@ -1015,13 +1124,21 @@ export function syncStateTreeToShadow(
     }
   }
 
-  // A key in the tree but absent from the plain value has been deleted, so it
-  // tombstones exactly as an explicit `delete` does — otherwise which call a
-  // writer happened to use would decide whether the removal survives a merge.
+  // A *dynamic* key in the tree but absent from the plain value has been
+  // deleted, so it tombstones exactly as an explicit `delete` does — otherwise
+  // which call a writer happened to use would decide whether the removal
+  // survives a merge.
+  //
+  // A declared field is left alone. Its key set comes from the schema, so an
+  // omission is a caller writing a partial value, not a removal. Tombstoning
+  // it would drop a field the schema says exists, and the field would then
+  // resurrect from the next peer that still held it.
   //
   // An existing tombstone is left alone rather than re-stamped: refreshing it
   // on every unrelated whole-value write would let an old delete keep beating
   // a newer remote re-add.
+  if (schema !== undefined && keySpace(schema) === "declared") return
+
   for (const key of Object.keys(target)) {
     if (key in plain) continue
     if (isTombstone(target[key])) continue

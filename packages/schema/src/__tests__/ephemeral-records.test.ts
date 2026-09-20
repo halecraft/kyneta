@@ -15,8 +15,11 @@ import { describe, expect, it } from "vitest"
 import {
   batch,
   createDoc,
+  createRef,
   ephemeral,
   mapChange,
+  own,
+  replaceChange,
   Schema,
   sequenceChange,
 } from "../index.js"
@@ -233,5 +236,84 @@ describe("two peers merge a roster without clobbering", () => {
     peerA.merge(payload({ peers: {} }))
 
     expect(peerA.reader.read(peersPath)).toEqual({ alice: 1 })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Key space — a product's fields are declared, a map's keys are written
+// ---------------------------------------------------------------------------
+//
+// The tree applies one rule per key space, and the two are opposites. Absence
+// under a map means "removed, or never there"; absence under a product means
+// the value a caller passed was partial. Treating a product like a map is what
+// dropped a record when its last key went, and dropped struct fields a partial
+// write did not mention.
+
+describe("a declared field is not a written key", () => {
+  const Mixed = Schema.struct({
+    rec: Schema.record(Schema.number()),
+    str: Schema.struct({ a: Schema.number(), b: Schema.number() }),
+  })
+  const recPath = RawPath.empty.field("rec")
+  const strPath = RawPath.empty.field("str")
+
+  it("keeps a declared field a partial value omits", () => {
+    const tree: StateTree = {}
+    applyChangeToStateTree(
+      tree,
+      strPath,
+      replaceChange(own({ a: 1, b: 2 })),
+      100,
+      Mixed,
+    )
+    // `{a: 9}` is not a valid struct value — `tryValidate` rejects it — so
+    // this is a caller past the type guard. The tree must not turn a partial
+    // value into a removal.
+    applyChangeToStateTree(
+      tree,
+      strPath,
+      replaceChange(own({ a: 9 } as never)),
+      500,
+      Mixed,
+    )
+
+    expect(asRecord(tree).str).toEqual({ a: [9, 500], b: [2, 100] })
+  })
+
+  it("still deletes a written key a whole-value set omits", () => {
+    const tree: StateTree = {}
+    applyChangeToStateTree(
+      tree,
+      recPath,
+      replaceChange(own({ x: 1, y: 2 })),
+      100,
+      Mixed,
+    )
+    applyChangeToStateTree(
+      tree,
+      recPath,
+      replaceChange(own({ x: 5 })),
+      200,
+      Mixed,
+    )
+
+    // The case the rule must not break: under a map, omission IS removal, and
+    // a removal has to be a tombstone so it survives the next merge.
+    expect(asRecord(tree).rec).toEqual({ x: [5, 200], y: [null, 200, true] })
+  })
+
+  it("projects an emptied record as an empty record, not as absent", () => {
+    const substrate = ephemeralSubstrateFactory.create(Roster)
+    // biome-ignore lint/suspicious/noExplicitAny: the substrate suites read untyped
+    const d: any = createRef(Roster, substrate)
+    // biome-ignore lint/suspicious/noExplicitAny: see above
+    batch(d, (w: any) => w.peers.set("alice", 1))
+    // biome-ignore lint/suspicious/noExplicitAny: see above
+    batch(d, (w: any) => w.peers.delete("alice"))
+
+    // `peers` is a field of the root product, so it exists whatever happens to
+    // its keys. Reading the shadow directly — the document read would supply a
+    // structural zero and hide a disagreement.
+    expect(substrate.reader.read(RawPath.empty)).toEqual({ peers: {} })
   })
 })
