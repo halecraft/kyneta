@@ -160,8 +160,8 @@ export const SyncModeWireToMode: Record<SyncModeWireValue, SyncMode> = {
 /** Forward lookup: SyncMode → wire integer discriminant. */
 export function syncModeToWire(mode: SyncMode): SyncModeWireValue {
   if (mode.writerModel === "serialized") return SyncModeWire.Authoritative
-  if (mode.delivery === "delta-capable") return SyncModeWire.Collaborative
-  return SyncModeWire.Ephemeral
+  if (mode.durability === "transient") return SyncModeWire.Ephemeral
+  return SyncModeWire.Collaborative
 }
 
 // ---------------------------------------------------------------------------
@@ -267,6 +267,15 @@ export type WireInterestMsg = {
   dx?: number
   v?: string
   r?: boolean
+  /**
+   * `Replica.digest()` — a fingerprint of the sender's replicated state.
+   *
+   * Absent when the sender's *version* already answers equality, which is the
+   * case for every version-vector substrate. It is not an optional extra for
+   * older peers: absence says "compare my version instead", and that is the
+   * only thing it says.
+   */
+  g?: string
 }
 
 /**
@@ -285,6 +294,8 @@ export type WireOfferMsg = {
   r?: boolean
   /** SubstratePayload.lineage, optional — absent for legacy peers/payloads. */
   ln?: string
+  /** `Replica.digest()` of the sender's state — see `WireInterestMsg.g`. */
+  g?: string
 }
 
 /**

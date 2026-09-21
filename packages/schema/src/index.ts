@@ -531,7 +531,6 @@ export {
 // Tree node allocation — substrate capability for tree.create()
 export type {
   BatchOptions,
-  Delivery,
   DevtoolsHistory,
   DevtoolsHistorySummary,
   DocMetadata,

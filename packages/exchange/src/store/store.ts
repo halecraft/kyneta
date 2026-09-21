@@ -177,17 +177,13 @@ export interface Store {
 /**
  * Compare two `SyncMode` values for deep equality.
  *
- * All three axes (`writerModel`, `delivery`, `durability`) must match.
+ * Both axes (`writerModel`, `durability`) must match.
  */
 function syncModesEqual(
   a: StoreMeta["syncMode"],
   b: StoreMeta["syncMode"],
 ): boolean {
-  return (
-    a.writerModel === b.writerModel &&
-    a.delivery === b.delivery &&
-    a.durability === b.durability
-  )
+  return a.writerModel === b.writerModel && a.durability === b.durability
 }
 
 /**
@@ -203,7 +199,7 @@ function syncModesEqual(
  * - `replicaType` must be compatible with existing metadata
  *   (via `replicaTypesCompatible` — name + major version).
  * - `syncMode` must exactly match existing metadata
- *   (all three axes: writerModel, delivery, durability).
+ *   (both axes: writerModel, durability).
  * - `schemaHash` is last-writer-wins (the last `meta` record in
  *   the batch determines it).
  *

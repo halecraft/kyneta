@@ -184,3 +184,71 @@ describe("a three-peer mesh settles", () => {
     expect(docs[2].alice()).toBe("online-alice")
   }, 10_000)
 })
+
+// Metered end to end, because the byte count is the whole point and a test
+// that only checks convergence passes just as well with a full resend.
+describe("a change ships itself, not the document", () => {
+  const Roster = ephemeral.bind(
+    Schema.struct({ peers: Schema.record(Schema.string()) }),
+  )
+
+  /** Bytes crossing the bridge — the choke point every frame passes through. */
+  const meter = (bridge: Bridge) => {
+    const counter = { bytes: 0, frames: 0 }
+    const route = bridge.routeBytes.bind(bridge)
+    bridge.routeBytes = (from, to, bytes) => {
+      counter.frames += 1
+      counter.bytes += bytes.byteLength
+      route(from, to, bytes)
+    }
+    return counter
+  }
+
+  const rosterOf = (size: number): Record<string, string> =>
+    Object.fromEntries(
+      Array.from({ length: size }, (_, i) => [`peer-${i}`, `online-${i}`]),
+    )
+
+  it("is flat in roster size", async () => {
+    const quietBytes = async (rosterSize: number): Promise<number> => {
+      const bridge = new Bridge()
+      const alice = new Exchange({
+        id: "alice",
+        transports: [createBridgeTransport({ transportId: "alice", bridge })],
+        schemas: [Roster],
+      })
+      const bob = new Exchange({
+        id: "bob",
+        transports: [createBridgeTransport({ transportId: "bob", bridge })],
+        schemas: [Roster],
+      })
+      const docA = alice.get("presence", Roster)
+      const docB = bob.get("presence", Roster)
+
+      batch(docA, d => {
+        for (const [key, value] of Object.entries(rosterOf(rosterSize))) {
+          d.peers.set(key, value)
+        }
+      })
+      await drain(30)
+      expect(Object.keys(docB.peers() ?? {})).toHaveLength(rosterSize)
+
+      // Everything above is setup. Only what follows is the quiet round.
+      const counter = meter(bridge)
+      batch(docA, d => d.peers.set("peer-0", "online-0"))
+      await drain(30)
+      return counter.bytes
+    }
+
+    const small = await quietBytes(5)
+    const large = await quietBytes(200)
+
+    // A forty-fold roster must not cost forty times the bytes for the same
+    // one-leaf change. Measured at 148 B and 150 B; before deltas the larger
+    // was 7 895 B, so the whole roster was crossing the wire every time.
+    //
+    // Stated as a ratio rather than an absolute so it pins the scaling
+    // property and not today's frame overhead.
+    expect(large).toBeLessThan(small * 2)
+  }, 30_000)
+})

@@ -55,8 +55,8 @@ type ReplicaEntry = {
 /** Canonical string key for `ReplicaKey` construction. */
 function syncModeName(mode: SyncMode): string {
   if (mode.writerModel === "serialized") return "authoritative"
-  if (mode.delivery === "delta-capable") return "collaborative"
-  return "ephemeral"
+  if (mode.durability === "transient") return "ephemeral"
+  return "collaborative"
 }
 
 // ---------------------------------------------------------------------------

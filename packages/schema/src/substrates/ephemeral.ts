@@ -20,6 +20,7 @@ import type { ChangeBase } from "../change.js"
 import { replaceChange } from "../change.js"
 import { deepClonePlain } from "../clone.js"
 import { findOpaqueBoundary } from "../fold-path.js"
+import { digestToHex } from "../hash.js"
 import type { Path } from "../interpret.js"
 import type { WritableContext } from "../interpreters/writable.js"
 import { buildWritableContext, executeBatch } from "../interpreters/writable.js"
@@ -61,6 +62,7 @@ import {
   leavesInstalledAfter,
   mergeStateTree,
   type StateTree,
+  stateTreeDigest,
   stateTreeViolation,
   type WriteStamp,
 } from "./state-tree.js"
@@ -245,6 +247,19 @@ function createStateReplicaCore(
       // Nothing to trim. A CvRDT carries its whole meaning in the tree, and
       // the install counter is not history — it is a position in our own
       // intake that only ever moves forward, on its own.
+    },
+
+    /**
+     * The tree's fingerprint, for peers to compare against their own.
+     *
+     * This is what `compare` cannot do: an install counter describes our
+     * intake, not the state, so two peers holding identical trees report
+     * different counts. The digest is a function of the tree alone — not of
+     * the order it arrived in, and not of anything local — so peers that
+     * converged by opposite routes agree and stop exchanging.
+     */
+    digest(): string {
+      return digestToHex(stateTreeDigest(getTree()))
     },
 
     exportEntirety(): SubstratePayload {
@@ -534,6 +549,10 @@ export function createStateSubstrate(
       core.advance(to)
     },
 
+    digest(): string {
+      return core.digest()
+    },
+
     exportEntirety(): SubstratePayload {
       return core.exportEntirety()
     },
@@ -543,10 +562,9 @@ export function createStateSubstrate(
     },
 
     merge(payload: SubstratePayload, options?: BatchOptions): void {
-      if (payload.kind !== "entirety") {
-        throw new Error("StateSubstrate only accepts entirety payloads.")
-      }
-
+      // Both kinds join the same way. A delta is a partial tree and the merge
+      // unions keys, so a key it omits is one it makes no claim about — the
+      // same rule that makes an entirety safe to join rather than adopt.
       core.merge(payload)
       // `replay: true` keeps the Exchange from broadcasting back what it just
       // received. No `projection` — a merge is real state, so the version

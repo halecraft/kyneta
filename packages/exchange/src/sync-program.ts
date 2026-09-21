@@ -265,6 +265,12 @@ export type SyncEffect =
       payload: SubstratePayload
       version: string
       fromPeerId: PeerId
+      /**
+       * The sender's `Replica.digest()`, when its version cannot answer
+       * equality on its own. Compared *after* the merge: the question is
+       * whether we still differ once we have taken in what arrived.
+       */
+      digest?: string
     }
   | {
       /**
@@ -283,6 +289,11 @@ export type SyncEffect =
       peerId: PeerId
       /** The sender's serialized version, or `undefined` when the interest carried none. */
       version: string | undefined
+      /**
+       * The sender's `Replica.digest()`, when its version cannot answer
+       * equality on its own. Absent means "compare my version".
+       */
+      digest?: string
     }
   | {
       type: "ensure-doc"
@@ -541,8 +552,8 @@ function buildPush(
   const peerIds = filterPeersByShare(model, raw, docId, canShare)
   if (peerIds.length === 0) return undefined
 
-  // Delta-capable: include sinceVersion so the substrate can compute a delta.
-  // Snapshot-only: omit sinceVersion — the substrate always sends entirety.
+  // Every substrate can compute a delta now, so every push carries the
+  // baseline to compute it from.
   //
   // sinceVersion is the doc's own pre-change baseline (docEntry.version),
   // deliberately shared across all target peers rather than resolved per
@@ -559,10 +570,7 @@ function buildPush(
     type: "send-offers",
     to: peerIds,
     docId,
-    sinceVersion:
-      docEntry.syncMode.delivery === "delta-capable"
-        ? docEntry.version
-        : undefined,
+    sinceVersion: docEntry.version,
   }
 }
 
@@ -648,34 +656,26 @@ function buildInterestResponse(
 ): SyncEffect[] {
   const effects: SyncEffect[] = []
 
-  if (docEntry.syncMode.delivery === "delta-capable") {
-    effects.push({
-      type: "send-offer",
-      to: fromPeerId,
-      docId: message.docId,
-      sinceVersion: message.version,
-      reciprocate: false,
-    })
+  effects.push({
+    type: "send-offer",
+    to: fromPeerId,
+    docId: message.docId,
+    sinceVersion: message.version,
+    reciprocate: false,
+  })
 
-    // CRDTs need bidirectional exchange — send interest back so the peer can receive our state too
-    if (requiresBidirectionalSync(docEntry.syncMode) && message.reciprocate) {
-      effects.push({
-        type: "send-to-peer",
-        to: fromPeerId,
-        message: {
-          type: "interest",
-          docId: message.docId,
-          version: docEntry.version,
-          reciprocate: false, // prevent infinite loop
-        },
-      })
-    }
-  } else {
+  // Concurrent writers need to hear each other, so ask for the peer's state
+  // in turn. `reciprocate: false` on the way back stops the loop.
+  if (requiresBidirectionalSync(docEntry.syncMode) && message.reciprocate) {
     effects.push({
-      type: "send-offer",
+      type: "send-to-peer",
       to: fromPeerId,
-      docId: message.docId,
-      reciprocate: false,
+      message: {
+        type: "interest",
+        docId: message.docId,
+        version: docEntry.version,
+        reciprocate: false,
+      },
     })
   }
 
@@ -1409,6 +1409,7 @@ function handleInterestForKnownDoc(
       docId: message.docId,
       peerId: fromPeerId,
       version: message.version,
+      digest: message.digest,
     },
   ]
 }
@@ -1446,6 +1447,7 @@ function handleOffer(
       payload: message.payload,
       version: message.version,
       fromPeerId: from,
+      digest: message.digest,
     })
   }
 

@@ -283,3 +283,12 @@ export const DIGEST_SEEDS = LANE_SEEDS
  * which is where the cost of this lives.
  */
 export const digestFold = foldLane
+
+/**
+ * Wire form of a digest: 32 lowercase hex digits.
+ *
+ * Compared as an opaque string by peers, who never interpret the lanes.
+ */
+export function digestToHex(digest: Digest): string {
+  return digest.map(lane => lane.toString(16).padStart(8, "0")).join("")
+}

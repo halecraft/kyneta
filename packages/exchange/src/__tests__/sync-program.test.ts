@@ -1509,7 +1509,7 @@ describe("sync-program", () => {
       expect(defined(offers[0]).sinceVersion).toBeDefined()
     })
 
-    it("pushes to synced peers for ephemeral (no sinceVersion)", () => {
+    it("pushes to synced peers for ephemeral, with a baseline to delta from", () => {
       const update = makeUpdate()
       let model = initSync(alice)
       ;[model] = addPeer(update, model, "bob", bob)
@@ -1541,7 +1541,9 @@ describe("sync-program", () => {
       expect(offers.length).toBe(1)
       expect(defined(offers[0]).to).toContain("bob")
       expect(defined(offers[0]).to).not.toContain("carol")
-      expect(defined(offers[0]).sinceVersion).toBeUndefined() // snapshot-only = no delta
+      // The baseline is the document's own pre-change version, shared by every
+      // recipient — one delta computed for the whole fan-out, not one per peer.
+      expect(defined(offers[0]).sinceVersion).toBe("v2")
     })
 
     it("emits state-advanced via model.pendingStateAdvancedDocIds", () => {

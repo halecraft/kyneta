@@ -124,6 +124,19 @@ export type InterestMsg = {
   version?: string
   /** Whether the receiver should send a reciprocal interest. */
   reciprocate?: boolean
+  /**
+   * `Replica.digest()` — a fingerprint of the sender's replicated state.
+   *
+   * Absent when the sender's *version* already answers equality, which every
+   * version-vector substrate's does. Absence is a statement, not a gap: it
+   * says "compare my version instead".
+   *
+   * The ephemeral substrate needs it because its version is an install
+   * counter — a fact about itself that no peer can interpret — so two peers
+   * holding identical state report different versions and would resync
+   * forever without something that compares the state itself.
+   */
+  digest?: string
 }
 
 /**
@@ -148,6 +161,19 @@ export type OfferMsg = {
   version: string
   /** Whether the receiver should send an interest back. */
   reciprocate?: boolean
+  /**
+   * `Replica.digest()` — a fingerprint of the sender's replicated state.
+   *
+   * Absent when the sender's *version* already answers equality, which every
+   * version-vector substrate's does. Absence is a statement, not a gap: it
+   * says "compare my version instead".
+   *
+   * The ephemeral substrate needs it because its version is an install
+   * counter — a fact about itself that no peer can interpret — so two peers
+   * holding identical state report different versions and would resync
+   * forever without something that compares the state itself.
+   */
+  digest?: string
 }
 
 /**

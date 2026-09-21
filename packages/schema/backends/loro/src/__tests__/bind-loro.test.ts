@@ -29,7 +29,6 @@ describe("loro.bind()", () => {
     expect(bound.schema).toBe(testSchema)
     expect(bound.syncMode).toEqual({
       writerModel: "concurrent",
-      delivery: "delta-capable",
       durability: "persistent",
     })
   })

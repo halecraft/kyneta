@@ -259,13 +259,24 @@ function resolveInboundVersionGap(
   replica: ReplicaLike,
   replicaFactory: ReplicaFactoryLike,
   serializedVersion: string | undefined,
+  peerDigest?: string,
 ): VersionGapResult {
   if (serializedVersion === undefined) return { kind: "absent" }
   const result = classifyVersionGap(
     replica,
     replicaFactory,
     serializedVersion,
-    (parsed, current) => parsed.compare(current),
+    // The digest enters as part of the comparison, not as part of the
+    // `Version`: a version is a lattice element with a `meet`, and a
+    // fingerprint has neither. Reporting `"equal"` on a match is the whole
+    // mechanism — the existing `behind || equal → no-gap` branch does the
+    // rest, and `classifyVersionGap` needs no knowledge of any of it.
+    (parsed, current) => {
+      if (peerDigest !== undefined && replica.digest?.() === peerDigest) {
+        return "equal"
+      }
+      return parsed.compare(current)
+    },
   )
   return result
 }
@@ -1425,8 +1436,25 @@ export class Synchronizer {
 
     this.#outboundQueue.push({
       toChannelIds,
-      message,
+      message: this.#withDigest(message),
     })
+  }
+
+  /**
+   * Attach our state fingerprint to a message that carries a version.
+   *
+   * Done here, at the one place messages leave, rather than where they are
+   * built: the sync program is pure and holds no replica, and the digest is
+   * a fact about the replica at the moment of sending.
+   *
+   * A substrate whose version already answers equality returns nothing, and
+   * the field stays absent — which is itself the instruction to compare
+   * versions instead.
+   */
+  #withDigest(message: SyncMsg): SyncMsg {
+    if (message.type !== "interest" && message.type !== "offer") return message
+    const digest = this.#docRuntimes.get(message.docId)?.replica.digest?.()
+    return digest === undefined ? message : { ...message, digest }
   }
 
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -1500,13 +1528,13 @@ export class Synchronizer {
 
     this.#outboundQueue.push({
       toChannelIds: Array.from(peer.channels),
-      message: {
+      message: this.#withDigest({
         type: "offer",
         docId,
         payload,
         version: runtime.replica.version().serialize(),
         reciprocate,
-      },
+      }),
     })
   }
 
@@ -1529,11 +1557,13 @@ export class Synchronizer {
     docId: DocId,
     peerId: PeerId,
     version: string | undefined,
+    digest?: string,
   ): Extract<VersionGapResult, { kind: "gap" }> | null {
     const gap = resolveInboundVersionGap(
       runtime.replica,
       runtime.replicaFactory,
       version,
+      digest,
     )
 
     switch (gap.kind) {
@@ -1566,10 +1596,17 @@ export class Synchronizer {
     docId: DocId
     peerId: PeerId
     version: string | undefined
+    digest?: string
   }): void {
     const runtime = this.#docRuntimes.get(effect.docId)
     if (!runtime) return
-    this.#classifyPeer(runtime, effect.docId, effect.peerId, effect.version)
+    this.#classifyPeer(
+      runtime,
+      effect.docId,
+      effect.peerId,
+      effect.version,
+      effect.digest,
+    )
   }
 
   #executeImportDocData(effect: {
@@ -1578,6 +1615,7 @@ export class Synchronizer {
     payload: SubstratePayload
     version: string
     fromPeerId: PeerId
+    digest?: string
   }): void {
     const runtime = this.#docRuntimes.get(effect.docId)
     if (!runtime) return
@@ -1587,6 +1625,7 @@ export class Synchronizer {
       effect.docId,
       effect.fromPeerId,
       effect.version,
+      effect.digest,
     )
     if (!gap) return
 

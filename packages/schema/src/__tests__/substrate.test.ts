@@ -1393,16 +1393,19 @@ describe("lineage-aware merge", () => {
 // ---------------------------------------------------------------------------
 
 describe("requiresBidirectionalSync", () => {
-  it("collaborative (concurrent + delta) requires bidirectional", () => {
+  it("collaborative requires bidirectional", () => {
     expect(requiresBidirectionalSync(SYNC_COLLABORATIVE)).toBe(true)
   })
 
-  it("authoritative (serialized + delta) does not require bidirectional", () => {
+  it("authoritative does not: it is request/response, not exchange", () => {
     expect(requiresBidirectionalSync(SYNC_AUTHORITATIVE)).toBe(false)
   })
 
-  it("ephemeral (concurrent + snapshot) does not require bidirectional", () => {
-    expect(requiresBidirectionalSync(SYNC_EPHEMERAL)).toBe(false)
+  it("ephemeral requires bidirectional — both peers write", () => {
+    // It did not while ephemeral could only send snapshots, so a peer had
+    // nothing to ask for. Now that it sends deltas, two concurrent writers
+    // need to hear each other like any other pair.
+    expect(requiresBidirectionalSync(SYNC_EPHEMERAL)).toBe(true)
   })
 
   // ===========================================================================

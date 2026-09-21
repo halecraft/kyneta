@@ -234,9 +234,10 @@ describe("state binding target", () => {
     expect(target.reader.read(RawPath.empty.field("title"))).toBe("merged")
   })
 
-  it("exportSince returns null — snapshot-only delivery, no delta log", () => {
-    // `delivery: "snapshot-only"` is not a policy the exchange applies from
-    // outside; it falls out of the substrate keeping no op log to diff.
+  it("exportSince from our own cursor is empty — nothing arrived after now", () => {
+    // Not a claim that deltas are unsupported: asking for what was installed
+    // after the latest install is asking for nothing, and the quiet round
+    // between two agreeing peers rests on this being empty rather than whole.
     const bound = ephemeral.bind(testSchema)
     const factory = bound.factory({
       peerId: "test-peer",

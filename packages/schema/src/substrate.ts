@@ -389,6 +389,23 @@ export interface ReplicaLike {
   exportSince(since: Version): SubstratePayload | null
 
   /**
+   * A fingerprint of everything this replica would replicate, or `undefined`
+   * when the version already answers equality.
+   *
+   * Only substrates whose version cannot say "equal" need one. A version
+   * vector compares two replicas exactly, so Plain and Loro return nothing and
+   * mean it: *ask my version*. The ephemeral substrate's version is an install
+   * counter — a fact about itself, meaningless to a peer — so it answers here
+   * instead.
+   *
+   * Equal fingerprints must mean equal replicated state, and must not depend
+   * on the order state arrived in or on anything local. Two peers that
+   * converged by opposite routes have to agree, or they will resync forever
+   * while each looks correct.
+   */
+  digest?(): string | undefined
+
+  /**
    * Merge a payload into this live replica.
    *
    * Accepts both `"entirety"` and `"since"` payloads. The replica
@@ -726,9 +743,6 @@ export function replicaTypesCompatible(
 /** Who can write to this document? */
 export type WriterModel = "serialized" | "concurrent"
 
-/** What's sent over the wire? */
-export type Delivery = "delta-capable" | "snapshot-only"
-
 /**
  * Is this document persisted?
  *
@@ -749,46 +763,47 @@ export type Delivery = "delta-capable" | "snapshot-only"
 export type Durability = "persistent" | "transient"
 
 /**
- * The sync mode for a document — decomposed into three independent axes
- * so each dispatch site in the exchange can match on exactly the field it
- * cares about.
+ * The sync mode for a document — decomposed into independent axes so each
+ * dispatch site in the exchange can match on exactly the field it cares about.
+ *
+ * There were three. A `delivery` axis distinguished substrates that could send
+ * a delta from those that could only send a snapshot, and once the ephemeral
+ * substrate gained `exportSince` it had one value and discriminated nothing.
+ * The two sites that branched on it wanted `durability` instead, which is what
+ * they had always been reaching for through it.
  */
 export interface SyncMode {
   readonly writerModel: WriterModel
-  readonly delivery: Delivery
   readonly durability: Durability
 }
 
-/** Authoritative: serialized writes, delta-capable, persistent. Used by `json`. */
+/** Authoritative: serialized writes, persistent. Used by `json`. */
 export const SYNC_AUTHORITATIVE: SyncMode = {
   writerModel: "serialized",
-  delivery: "delta-capable",
   durability: "persistent",
 } as const
 
-/** Collaborative: concurrent CRDT writes, delta-capable, persistent. Used by `loro`, `yjs`. */
+/** Collaborative: concurrent CRDT writes, persistent. Used by `loro`, `yjs`. */
 export const SYNC_COLLABORATIVE: SyncMode = {
   writerModel: "concurrent",
-  delivery: "delta-capable",
   durability: "persistent",
 } as const
 
-/** Ephemeral: concurrent LWW writes, snapshot-only, transient. Used by `ephemeral`. */
+/** Ephemeral: concurrent LWW writes, transient. Used by `ephemeral`. */
 export const SYNC_EPHEMERAL: SyncMode = {
   writerModel: "concurrent",
-  delivery: "snapshot-only",
   durability: "transient",
 } as const
 
 /**
  * Does this mode require bidirectional state exchange (causal merge)?
  *
- * True for collaborative CRDTs (concurrent + delta-capable).
- * False for ephemeral LWW (concurrent + snapshot-only) — unidirectional push suffices.
- * False for authoritative (serialized + delta-capable) — request/response, not exchange.
+ * True wherever writes are concurrent: two peers that both write need to hear
+ * each other, whatever they are storing. False for authoritative, which is
+ * request/response rather than exchange.
  */
 export function requiresBidirectionalSync(mode: SyncMode): boolean {
-  return mode.writerModel === "concurrent" && mode.delivery === "delta-capable"
+  return mode.writerModel === "concurrent"
 }
 
 // ---------------------------------------------------------------------------
@@ -941,7 +956,6 @@ function mismatchOnSharedAxes(
   }
   if (
     local.syncMode.writerModel !== remote.syncMode.writerModel ||
-    local.syncMode.delivery !== remote.syncMode.delivery ||
     local.syncMode.durability !== remote.syncMode.durability
   ) {
     return {

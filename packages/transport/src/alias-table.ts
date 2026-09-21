@@ -281,6 +281,7 @@ export function applyOutboundAliasing(
       }
       if (msg.version !== undefined) wire.v = msg.version
       if (msg.reciprocate !== undefined) wire.r = msg.reciprocate
+      if (msg.digest !== undefined) wire.g = msg.digest
       return { state, result: ok(wire) }
     }
 
@@ -320,6 +321,7 @@ export function applyOutboundAliasing(
       }
       if (msg.reciprocate !== undefined) wire.r = msg.reciprocate
       if (msg.payload.lineage !== undefined) wire.ln = msg.payload.lineage
+      if (msg.digest !== undefined) wire.g = msg.digest
       return { state, result: ok(wire) }
     }
 
@@ -464,6 +466,7 @@ export function applyInboundAliasing(
       const msg: InterestMsg = { type: "interest", docId: docResult.docId }
       if (wire.v !== undefined) msg.version = wire.v
       if (wire.r !== undefined) msg.reciprocate = wire.r
+      if (wire.g !== undefined) msg.digest = wire.g
       return { state, result: ok(msg) }
     }
 
@@ -498,6 +501,7 @@ export function applyInboundAliasing(
         version: wire.v,
       }
       if (wire.r !== undefined) msg.reciprocate = wire.r
+      if (wire.g !== undefined) msg.digest = wire.g
       return { state, result: ok(msg) }
     }
 

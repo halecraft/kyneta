@@ -25,7 +25,6 @@ const plainMeta: StoreMeta = {
   replicaType: ["plain", 1, 0] as const,
   syncMode: {
     writerModel: "serialized" as const,
-    delivery: "delta-capable" as const,
     durability: "persistent" as const,
   },
   schemaHash: "test-hash",
