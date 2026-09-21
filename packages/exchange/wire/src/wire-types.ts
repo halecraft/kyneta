@@ -276,6 +276,8 @@ export type WireInterestMsg = {
    * only thing it says.
    */
   g?: string
+  /** `InterestMsg.since` — a cursor the *receiver* minted, quoted back. */
+  s?: string
 }
 
 /**

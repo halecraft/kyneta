@@ -280,13 +280,15 @@ function createStateReplicaCore(
      * while a peer was behind is returned at its *current* value, which is the
      * only one that peer needs.
      *
-     * A cursor from another epoch is not ours to interpret, so this declines
-     * and the caller sends an entirety.
+     * `null` means **cannot serve**, not **nothing to send** — the caller
+     * answers it with a whole document. Only a cursor from another epoch earns
+     * that; a cursor that is simply current earns an empty delta, which is the
+     * quiet round. Conflating the two turns every agreement into a full
+     * resend, which is the cost this substrate exists to avoid.
      */
     exportSince(since: StateVersion): SubstratePayload | null {
       if (since.epoch !== epoch) return null
-      const delta = leavesInstalledAfter(getTree(), since.installSeq)
-      if (delta === undefined) return null
+      const delta = leavesInstalledAfter(getTree(), since.installSeq) ?? {}
       return {
         kind: "since",
         encoding: "json",

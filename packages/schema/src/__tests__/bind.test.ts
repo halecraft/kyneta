@@ -234,10 +234,12 @@ describe("state binding target", () => {
     expect(target.reader.read(RawPath.empty.field("title"))).toBe("merged")
   })
 
-  it("exportSince from our own cursor is empty — nothing arrived after now", () => {
-    // Not a claim that deltas are unsupported: asking for what was installed
-    // after the latest install is asking for nothing, and the quiet round
-    // between two agreeing peers rests on this being empty rather than whole.
+  it("exportSince from our own cursor is an empty delta, not null", () => {
+    // The distinction is load-bearing. `null` means "I cannot serve this
+    // cursor" and the caller answers it with a whole document; an empty
+    // payload means "you are current". Returning null here made every
+    // agreement cost a full resend — measured at 9 015 B where the repair
+    // needed 43 B.
     const bound = ephemeral.bind(testSchema)
     const factory = bound.factory({
       peerId: "test-peer",
@@ -248,6 +250,23 @@ describe("state binding target", () => {
       { path: RawPath.empty.field("count"), change: replaceChange(7) },
     ])
 
-    expect(substrate.exportSince(substrate.version())).toBeNull()
+    const delta = substrate.exportSince(substrate.version())
+    expect(delta).not.toBeNull()
+    expect(delta?.kind).toBe("since")
+    expect(delta?.data).toBe("{}")
+  })
+
+  it("exportSince declines a cursor from another replica's epoch", () => {
+    // The one case that earns a whole document: a counter we did not mint
+    // says nothing about what this replica holds.
+    const bound = ephemeral.bind(testSchema)
+    const factory = bound.factory({
+      peerId: "test-peer",
+      binding: bound.identityBinding,
+    })
+    const mine = factory.create(testSchema)
+    const theirs = factory.create(testSchema)
+
+    expect(mine.exportSince(theirs.version() as StateVersion)).toBeNull()
   })
 })

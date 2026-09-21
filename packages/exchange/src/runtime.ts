@@ -751,8 +751,8 @@ export class Runtime {
    * a document ever does acquire a phase, the rule upstream has already failed
    * and this will not save it. It is not idle work, though — before that rule
    * existed, every presence mutation ran this method almost to the end and
-   * computed an `exportSince` delta that a snapshot-only substrate always
-   * returns `null` for.
+   * computed an `exportSince` delta that the substrate always returned `null`
+   * for, back when it could not produce one at all.
    *
    * Deduplicates on the *target* version, not just on an empty delta.
    *

@@ -60,8 +60,8 @@ Imported by applications to construct the top-level sync graph; by `@kyneta/reac
 | `Replicate(replicaBound)` | Decision: persist and forward without interpretation. For relays / stores. | `Interpret(bound)` |
 | `Defer()` | Decision: accept `present`, don't sync yet. The doc is known but inactive; the app can promote it later. | `Reject()` — defer keeps the peer-doc relationship |
 | `Reject()` | Decision: refuse the doc. The peer's `present` for this doc is silently dropped. | `Defer()` |
-| `SyncMode` | Structured record from `@kyneta/schema` with three orthogonal axes: `writerModel` (`"concurrent" \| "serialized"`), `delivery` (`"delta-capable" \| "snapshot-only"`), `durability` (`"persistent" \| "transient"`). Three named constants: `SYNC_COLLABORATIVE`, `SYNC_AUTHORITATIVE`, `SYNC_EPHEMERAL`. Drives protocol shape via field-level dispatch. | A CRDT algorithm, a string enum |
-| `requiresBidirectionalSync(protocol)` | Pure predicate: `true` when `protocol.writerModel === "concurrent" && protocol.delivery === "delta-capable"`. Used to decide whether `interest.reciprocate` should be set. `writerModel` alone is insufficient — ephemeral protocols have `writerModel: "concurrent"` but `delivery: "snapshot-only"`, meaning they do NOT require bidirectional sync. | A single-field check |
+| `SyncMode` | Structured record from `@kyneta/schema` with two orthogonal axes: `writerModel` (`"concurrent" \| "serialized"`), `durability` (`"persistent" \| "transient"`). Three named constants: `SYNC_COLLABORATIVE`, `SYNC_AUTHORITATIVE`, `SYNC_EPHEMERAL`. Drives protocol shape via field-level dispatch. | A CRDT algorithm, a string enum |
+| `requiresBidirectionalSync(protocol)` | Pure predicate: `true` when `protocol.writerModel === "concurrent"`. Decides whether `interest.reciprocate` is set. | A check on what is stored rather than who writes |
 | `BindingTarget` | A fixed `(substrate, sync-mode, supported-laws)` bundle with `.bind()` and `.replica()`. Named targets (`json`, `ephemeral`, `loro`, `yjs`) follow the rename-over-configure ergonomic rule. | A strategy-parameterized namespace |
 | `createBindingTarget` | Pure factory for building custom `BindingTarget` objects. | A strategy-dispatching factory |
 | `PeerSyncState` | The raw per-peer, per-doc projection (`{ docId, peer, state: "pending" \| "synced" \| "vacant" }`) surfaced by `sync(doc).peerStates`. Volatile — can regress on reconnect. | The monotonic `sync(doc).ready` latch |
@@ -218,37 +218,25 @@ Both programs emit one unified `diagnostic` effect carrying a structured `Diagno
 
 ### Sync-mode dispatch
 
-Each `BoundSchema` carries a `SyncMode` — a structured record with three orthogonal axes. The sync program dispatches on individual fields, not a monolithic enum:
+Each `BoundSchema` carries a `SyncMode` — a structured record with two orthogonal axes. The sync program dispatches on individual fields, not a monolithic enum:
 
-**Primary dispatch axis: `syncMode.delivery`**
+| Constant | `writerModel` | `durability` | `requiresBidirectionalSync` | Use case |
+|----------|---------------|--------------|-----------------------------|----------|
+| `SYNC_COLLABORATIVE` | `concurrent` | `persistent` | `true` | Loro / Yjs CRDTs |
+| `SYNC_AUTHORITATIVE` | `serialized` | `persistent` | `false` | Plain JSON, single-writer |
+| `SYNC_EPHEMERAL` | `concurrent` | `transient` | `true` | Presence, cursors, typing |
 
-| `delivery` | On local change | Primary export |
-|-------------|-----------------|----------------|
-| `"delta-capable"` | Push delta to synced peers (interest-based routing) | `exportSince(peerVersion)` |
-| `"snapshot-only"` | Broadcast entirety to all interested peers | `exportEntirety()` always |
+`requiresBidirectionalSync` is `writerModel === "concurrent"`: two peers that both write have to hear each other, whatever they are storing. Authoritative is request/response, not exchange.
 
-**Secondary dispatch axis: `requiresBidirectionalSync(syncMode)`**
+**There was a third axis, `delivery`.** It separated substrates that could compute a delta from those that could only send a snapshot, and only `SYNC_EPHEMERAL` was ever `"snapshot-only"`. Once the ephemeral substrate gained `exportSince` the axis had one value and discriminated nothing, so it is gone. The two sites that branched on it wanted `durability`, which is what they had been reaching for through it: `syncModeToWire` and `syncModeName` now test `durability === "transient"` directly.
 
-| Result | Condition | `interest.reciprocate` on first? | Meaning |
-|--------|-----------|----------------------------------|---------|
-| `true` | `writerModel === "concurrent" && delivery === "delta-capable"` | `true` (bidirectional exchange) | CRDT — both peers must exchange deltas |
-| `false` | all other combinations | `false` (request/response) | One-way push suffices |
+Deleting it is not cosmetic. `syncModeToWire` tested `delivery` **before** falling through to `Ephemeral`, so flipping the axis without removing it would have announced ephemeral documents as `Collaborative`; the peer decodes that as `SYNC_COLLABORATIVE` with `durability: "persistent"`, `mismatchOnSharedAxes` refuses it, and ephemeral sync stops with an error naming the wrong thing. The round-trip test in `cbor.test.ts` is the guard — it fails first and by name.
 
-**Why `writerModel` alone is insufficient**: Ephemeral protocols have `writerModel: "concurrent"` (any peer can write) but `delivery: "snapshot-only"` (no delta computation). If `requiresBidirectionalSync` checked only `writerModel`, ephemeral docs would trigger reciprocal interest exchange — wasting a round-trip for a protocol that always sends entireties. The conjunction of both fields is the correct discriminant.
-
-**The three named constants map to these dispatch paths:**
-
-| Constant | `writerModel` | `delivery` | `durability` | `requiresBidirectionalSync` | Routing | Use case |
-|----------|---------------|------------|--------------|----------------------------|---------|----------|
-| `SYNC_COLLABORATIVE` | `concurrent` | `delta-capable` | `persistent` | `true` | Interest-based (synced peers only) | Loro / Yjs CRDTs |
-| `SYNC_AUTHORITATIVE` | `serialized` | `delta-capable` | `persistent` | `false` | Interest-based (synced peers only) | Plain JSON, single-writer |
-| `SYNC_EPHEMERAL` | `concurrent` | `snapshot-only` | `transient` | `false` | Interest-based (all interested peers) | Presence, cursors, typing |
-
-**Routing fix**: All three protocols now use interest-based routing. Previously, ephemeral docs broadcast to *all* available peers regardless of interest. Now, ephemeral pushes go only to peers who have expressed interest (via the interest-based routing path in `buildPush`), filtered by `canShare`. The `delivery` axis determines *what* is sent (delta vs entirety), but interest registration determines *who* receives it.
+All modes use interest-based routing: a push goes only to peers who have expressed interest, filtered by `canShare`.
 
 The sync mode is a property of the document, not of the exchange: one exchange hosts documents of all three modes at once, dispatching per document on the axes above.
 
-**Only these three modes are network-expressible.** `SyncMode` has three orthogonal axes locally, but the wire carries a single 3-valued enum: `syncModeToWire` (`wire/src/wire-types.ts`) collapses any `writerModel: "serialized"` to `Authoritative`, any remaining `delivery: "delta-capable"` to `Collaborative`, and everything else to `Ephemeral`; the decode side maps that enum straight back to one of the three constants above. A custom mode built with `createBindingTarget` — say `{serialized, delta-capable, transient}` — therefore **cannot survive a round trip**: it is announced as `Authoritative` and arrives at the peer as `SYNC_AUTHORITATIVE`.
+**Only these three modes are network-expressible.** The wire carries a single 3-valued enum: `syncModeToWire` (`wire/src/wire-types.ts`) collapses any `writerModel: "serialized"` to `Authoritative`, any remaining `durability: "transient"` to `Ephemeral`, and everything else to `Collaborative`; the decode side maps that enum straight back to one of the three constants above. With two axes of two values there are four combinations and three names, so a custom mode built with `createBindingTarget` — `{serialized, transient}` — **cannot survive a round trip**: it is announced as `Authoritative` and arrives as `SYNC_AUTHORITATIVE`, persistent.
 
 Two consequences worth knowing:
 

@@ -50,7 +50,7 @@ Imported by every other Kyneta package that touches documents: the CRDT backends
 | `Change` | The universal currency of change — discriminated union with `type` (`"text" \| "sequence" \| "map" \| "tree" \| "replace" \| "increment" \| "richtext" \| "set-op"`, and extensible). Flows both inbound (intent) and outbound (notification). | A diff, a patch — `Change` is applied atomically by the substrate |
 | `SubstratePayload` | `{ kind: "entirety" \| "since", encoding: "json" \| "binary", data: string \| Uint8Array }` — opaque state carrier. Produced by the substrate, carried by the exchange. | A `ChannelMsg` — payloads ride *inside* `offer` messages |
 
-| `SyncMode` | Structured record decomposing sync semantics into three orthogonal axes: `WriterModel` (`"serialized"` / `"concurrent"`), `Delivery` (`"delta-capable"` / `"snapshot-only"`), `Durability` (`"persistent"` / `"transient"`). Three constants: `SYNC_AUTHORITATIVE`, `SYNC_COLLABORATIVE`, `SYNC_EPHEMERAL`. `requiresBidirectionalSync(mode)` is the helper predicate. `durability: "transient"` is a commitment the exchange enforces — such a document is never read from, written to, or deleted from a store. | A string enum, a CRDT algorithm |
+| `SyncMode` | Structured record decomposing sync semantics into two orthogonal axes: `WriterModel` (`"serialized"` / `"concurrent"`) and `Durability` (`"persistent"` / `"transient"`). Three constants: `SYNC_AUTHORITATIVE`, `SYNC_COLLABORATIVE`, `SYNC_EPHEMERAL`. `requiresBidirectionalSync(mode)` is `writerModel === "concurrent"`. `durability: "transient"` is a commitment the exchange enforces — such a document is never read from, written to, or deleted from a store. | A string enum, a CRDT algorithm |
 | σ / λ / Π | The three names the write path and the substrates share. **σ** is the *shadow*: a plain JS object the Reader closes over, where every `ref[CALL]` read bottoms out. **λ** is the *native container tree* — `LoroDoc` and its containers, `Y.Doc` and its shared types; for the plain substrate λ ≡ σ. **Π** is the *materialisation*: the one-pass catamorphism that produces σ from λ. The projection law `σ ≡ Π(λ)` holds at every prepare boundary. | Greek letters as decoration — each names a specific object the code holds |
 | `NativeMap<S>` | Type-level functor mapping each schema kind to its substrate-native type (e.g. Loro's `LoroText`, Yjs's `Y.Text`, plain JS `string`). | A runtime `Map<K,V>` |
 | `NATIVE` / `SUBSTRATE` / `BACKING_DOC` | Symbol-keyed accessors for the underlying native container, the substrate instance, and the backing document object. | User-facing APIs — these are escape hatches |
@@ -320,7 +320,7 @@ Every replica exposes six methods:
 - `version()` → the current state's version.
 - `baseVersion()` → the earliest version retained (trimmed history starts here).
 - `exportEntirety()` → full state as an opaque payload.
-- `exportSince(since)` → delta relative to the given version, or `null` if not possible.
+- `exportSince(since)` → delta relative to the given version, or `null` when the cursor **cannot be served** (history trimmed past it, or an epoch this replica did not mint). `null` is not "nothing to send": the caller answers it with a whole document, so a peer that is merely current must get an empty delta instead. Conflating the two makes every agreement cost a full resend.
 - `advance(to)` → trim history up to the given version.
 - `merge(payload, options?)` → fold an incoming payload into local state. `options.origin` propagates through the changefeed as an app-level label; the substrate forces `replay: true` on the resulting `Changeset` so layered consumers (e.g. the exchange's echo filter) can discriminate the merge from a local write.
 
@@ -454,7 +454,7 @@ whole-document last-writer-wins, where whichever peer wrote most recently
 clobbers everyone else. Kyneta shipped exactly that substrate through 2.x under
 this same name with a different implementation. See the CHANGELOG.
 
-Two properties follow from being snapshot-only and transient:
+Two properties follow from being log-free and transient:
 
 - A `sum`/discriminated-union variant and a `.json()` blob are stored as a
   **single atomic register** tuple holding the whole value, not decomposed — so
@@ -462,6 +462,22 @@ Two properties follow from being snapshot-only and transient:
   fields across two.
 - There is no op log, so nothing accumulates and nothing is persisted.
   `.decay()` can retire a leaf on a timer, which is meaningful only here.
+
+### Two clocks, and only one of them is a clock
+
+A leaf is `[value, timestamp, installedAt, deleted?]`.
+
+`timestamp` is a wall clock: it orders LWW and it is what `.decay()` measures. `installedAt` is this replica's **install ordinal** — which batch *we* took the value in — and it answers a different question. A peer returning from an hour offline sends leaves written an hour ago that we are installing now; a delta filtered by write time would drop exactly those, and the peer that relayed them would never learn they had not arrived.
+
+The ordinal is local and never crosses the wire. `encodeTree` strips it, which shifts the tombstone marker down to index 2 — the encoding peers already spoke, so the ordinal's existence changed no wire format. `decodeTree` restores the slot, and the merge stamps only what it actually adopts, so **"the counter moved" and "our state changed" are one fact**.
+
+Both conversions walk the tree explicitly rather than passing a replacer to `JSON.stringify`, which would have been free. A replacer descends into every array including a leaf's *value*, and a register value may itself be an array — indistinguishable from a tuple by any test. Walking descends only through container keys and stops at a leaf, which is the rule `deepClone` already followed.
+
+Nothing that decides agreement may read the ordinal. Two peers holding identical state stamp it differently, so `joinTuples`, `sameTuple` and `stateTreeDigest` all skip it. `sameTuple` is the dangerous one: it decides whether a join moved, and reading the ordinal there would report a change on every merge — which is the three-peer cycle described under "A merge reports whether it moved", arrived at from the opposite direction.
+
+`StateVersion` is `(epoch, installSeq)`: which replica instance is counting, and how far. That is structurally `PlainVersion`, so this substrate is no longer an exception to the version-vector family. `lineage` stays `DEFAULT_LINEAGE` deliberately — `classifyResetTrigger` reads two differing non-default lineages as a lineage boundary, and every instance mints a distinct epoch, so surfacing it there would make *every pair of peers* a boundary and delta sync would silently never happen.
+
+`compare` still answers `"concurrent"`, now for an honest reason: an install count describes intake, not state, so two peers holding the same tree report different numbers. Equality is answered by `stateTreeDigest`, carried beside the version on the wire and read by the classifier.
 
 ### The merge rule, in full
 

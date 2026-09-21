@@ -252,3 +252,57 @@ describe("a change ships itself, not the document", () => {
     expect(large).toBeLessThan(small * 2)
   }, 30_000)
 })
+
+// Repair is the half the digest exists for. Detection alone is worth little:
+// if the answer to "we differ" is always a full resend, a lossy transport
+// costs the whole document every time it drops a frame.
+describe("a peer that misses an update is repaired precisely", () => {
+  const Roster = ephemeral.bind(
+    Schema.struct({ peers: Schema.record(Schema.string()) }),
+  )
+
+  it("sends the missing leaves, not the whole roster", async () => {
+    const bridge = new Bridge()
+    const alice = new Exchange({
+      id: "alice",
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
+      schemas: [Roster],
+    })
+    const bob = new Exchange({
+      id: "bob",
+      transports: [createBridgeTransport({ transportId: "bob", bridge })],
+      schemas: [Roster],
+    })
+    const docA = alice.get("presence", Roster)
+    const docB = bob.get("presence", Roster)
+
+    batch(docA, d => {
+      for (let i = 0; i < 200; i++) d.peers.set(`peer-${i}`, `online-${i}`)
+    })
+    await drain(30)
+    expect(Object.keys(docB.peers() ?? {})).toHaveLength(200)
+
+    // Sever the link and write while Bob cannot hear it. Driven through the
+    // transport rather than by reaching inside: `Exchange` uses true #private
+    // members and cannot be poisoned from a test.
+    alice.removeTransport("alice")
+    batch(docA, d => d.peers.set("peer-7", "away"))
+    await drain(10)
+    expect(docB.peers()?.["peer-7"]).toBe("online-7") // Bob missed it
+
+    alice.addTransport(createBridgeTransport({ transportId: "alice", bridge }))
+    const counter = { bytes: 0 }
+    const route = bridge.routeBytes.bind(bridge)
+    bridge.routeBytes = (from, to, bytes) => {
+      counter.bytes += bytes.byteLength
+      route(from, to, bytes)
+    }
+    await drain(40)
+
+    expect(docB.peers()?.["peer-7"]).toBe("away")
+    // A 200-entry roster is several kilobytes. Repair carries the leaf that
+    // changed, so this stays far below it.
+    console.log(`repair bytes: ${counter.bytes}`)
+    expect(counter.bytes).toBeLessThan(1500)
+  }, 30_000)
+})

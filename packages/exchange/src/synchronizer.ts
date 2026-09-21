@@ -370,10 +370,9 @@ export type ResetTrigger = "none" | "lineage" | "compaction"
  * mismatch to find.
  *
  * Transient documents are excluded from compaction outright. The heuristic
- * presumes a sender that can trim history, but a snapshot-only substrate keeps
- * no trimmable log, and *every* steady-state push is already an entirety —
- * applying it to presence traffic would classify ordinary sync as a reset on
- * every message after the first.
+ * presumes a sender that can trim history, and a CvRDT keeps no trimmable log
+ * — it carries its whole meaning in the tree, so every cursor stays
+ * serviceable and there is no compaction to detect.
  *
  * One consequence is worth stating, because it depends on two facts that live
  * in different files: **a transient CvRDT document reaches neither trigger.**

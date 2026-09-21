@@ -25,6 +25,7 @@ import {
   mergeStateTree,
   type StateTree,
   type StateTuple,
+  stateTreeDigest,
 } from "../substrates/state-tree.js"
 
 const clone = (tuple: StateTuple): StateTuple => tuple.slice() as StateTuple
@@ -403,5 +404,90 @@ describe("a version advances whenever state advances", () => {
     // No clock gap: `Date.now()` would hand back the same value here, and a
     // caller comparing versions would read a real change as none.
     expect(replica.version().serialize()).not.toBe(first)
+  })
+})
+
+// The install ordinal is the one slot a peer must never see, and the one a
+// comparison must never read. Both halves have a failure mode that looks
+// like working software: leak it to the wire and the tombstone marker moves,
+// read it in a comparison and every merge reports a change.
+describe("the install ordinal stays local", () => {
+  const entirety = (data: string) => ({
+    kind: "entirety" as const,
+    encoding: "json" as const,
+    data,
+    lineage: "genesis",
+  })
+
+  it("never reaches the wire, and leaves the tombstone where peers expect it", () => {
+    const replica = ephemeralReplicaFactory.createEmpty()
+    replica.merge(
+      entirety(
+        JSON.stringify({
+          peers: { alice: ["online", 100], bob: [null, 200, true] },
+        }),
+      ),
+    )
+
+    // Byte-identical to what a peer spoke before the ordinal existed: three
+    // slots for a tombstone, two for a live value, and the marker at index 2.
+    expect(replica.exportEntirety().data).toBe(
+      '{"peers":{"alice":["online",100],"bob":[null,200,true]}}',
+    )
+  })
+
+  it("does not reach the digest, so opposite install orders agree", () => {
+    const fromB = { peers: { bob: tup("here", 200) } }
+    const fromC = { peers: { carol: tup("here", 300) } }
+
+    // Same leaves, opposite arrival order, so every ordinal differs.
+    const bThenC = merge(merge({}, fromB).tree, fromC).tree
+    const cThenB = merge(merge({}, fromC).tree, fromB).tree
+
+    expect(stateTreeDigest(bThenC)).toEqual(stateTreeDigest(cThenB))
+  })
+
+  it("does not reach the join, so a re-merge reports no change", () => {
+    // The guard against the three-peer cycle. A merge that reported a change
+    // here would have every peer re-announce everything it receives.
+    const tree = { peers: { alice: tup("online", 100) } }
+    const incoming = { peers: { alice: tup("online", 100) } }
+    expect(merge(tree, incoming).changed).toBe(false)
+  })
+
+  it("survives a round trip through the wire unchanged", () => {
+    const original = JSON.stringify({ peers: { alice: ["online", 100] } })
+    const a = ephemeralReplicaFactory.createEmpty()
+    a.merge(entirety(original))
+    const b = ephemeralReplicaFactory.createEmpty()
+    b.merge(entirety(a.exportEntirety().data as string))
+
+    expect(b.exportEntirety().data).toBe(original)
+  })
+})
+
+describe("a no-op merge leaves no trace", () => {
+  it("does not advance the version, across a millisecond boundary", () => {
+    // The boundary is the test. Both merges inside one tick share a wall
+    // clock, so the old unconditional bump looked correct — which is exactly
+    // how it survived until three peers wedged on it.
+    const payload = {
+      kind: "entirety" as const,
+      encoding: "json" as const,
+      data: JSON.stringify({ a: ["hello", 1000] }),
+      lineage: "genesis",
+    }
+    const replica = ephemeralReplicaFactory.createEmpty()
+
+    replica.merge(payload)
+    const first = replica.version().serialize()
+
+    const until = Date.now() + 3
+    while (Date.now() < until) {
+      /* spin past the millisecond boundary */
+    }
+    replica.merge(payload)
+
+    expect(replica.version().serialize()).toBe(first)
   })
 })

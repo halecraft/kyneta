@@ -282,6 +282,7 @@ export function applyOutboundAliasing(
       if (msg.version !== undefined) wire.v = msg.version
       if (msg.reciprocate !== undefined) wire.r = msg.reciprocate
       if (msg.digest !== undefined) wire.g = msg.digest
+      if (msg.since !== undefined) wire.s = msg.since
       return { state, result: ok(wire) }
     }
 
@@ -467,6 +468,7 @@ export function applyInboundAliasing(
       if (wire.v !== undefined) msg.version = wire.v
       if (wire.r !== undefined) msg.reciprocate = wire.r
       if (wire.g !== undefined) msg.digest = wire.g
+      if (wire.s !== undefined) msg.since = wire.s
       return { state, result: ok(msg) }
     }
 

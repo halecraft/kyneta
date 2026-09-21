@@ -125,6 +125,21 @@ export type InterestMsg = {
   /** Whether the receiver should send a reciprocal interest. */
   reciprocate?: boolean
   /**
+   * The last version *of the receiver's* that this sender applied — quoted
+   * back so the receiver can answer "what have you missed?".
+   *
+   * `version` above says where the sender is, in the sender's own terms. For
+   * a substrate whose version is comparable across peers those are the same
+   * question, and this is absent. For one whose version is a private counter
+   * they are not: the sender's own position tells the receiver nothing about
+   * what to send, and only a cursor the receiver itself minted will do.
+   *
+   * It may be stale, which costs a few extra leaves, or from an epoch the
+   * receiver no longer recognises, which costs one entirety. Neither costs
+   * correctness, so it is never worth keeping accurate.
+   */
+  since?: string
+  /**
    * `Replica.digest()` — a fingerprint of the sender's replicated state.
    *
    * Absent when the sender's *version* already answers equality, which every

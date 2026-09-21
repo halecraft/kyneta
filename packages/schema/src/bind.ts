@@ -552,7 +552,7 @@ export type EphemeralLaws = "lww" | "lww-per-key" | "lww-tag-replaced"
 /**
  * The transient broadcast binding target — presence, cursors, live input.
  *
- * `ephemeral.bind(schema)` — field-level LWW, snapshot-only delivery, transient.
+ * `ephemeral.bind(schema)` — field-level LWW, transient.
  * `ephemeral.replica()` — headless replication for relays.
  *
  * Only LWW-family composition laws bind here; anything carrying `additive`,

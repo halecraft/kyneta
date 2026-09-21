@@ -539,6 +539,24 @@ function getSyncedPeers(
  * When `excludePeerId` is provided, that peer is excluded from the push
  * (relay case: don't echo back to the sender).
  */
+/**
+ * The last version we applied *from* this peer for this document.
+ *
+ * Quoted back in an interest so the peer can answer "what have you missed?"
+ * precisely. Absent before the first exchange, which simply means the peer
+ * falls back to sending everything — the correct answer when we have nothing.
+ */
+function cursorFor(
+  model: SyncModel,
+  peerId: PeerId,
+  docId: DocId,
+): string | undefined {
+  const state = model.peers.get(peerId)?.docSyncStates.get(docId)
+  return state && "lastKnownVersion" in state
+    ? state.lastKnownVersion
+    : undefined
+}
+
 function buildPush(
   docId: DocId,
   docEntry: DocEntry,
@@ -653,6 +671,7 @@ function buildInterestResponse(
   fromPeerId: PeerId,
   message: InterestMsg,
   docEntry: DocEntry,
+  model: SyncModel,
 ): SyncEffect[] {
   const effects: SyncEffect[] = []
 
@@ -660,7 +679,11 @@ function buildInterestResponse(
     type: "send-offer",
     to: fromPeerId,
     docId: message.docId,
-    sinceVersion: message.version,
+    // Prefer the cursor the peer quoted back to us over its own version. They
+    // answer different questions, and only the first is one we can serve: a
+    // peer's own version is stated in its terms, which for a private counter
+    // we cannot interpret at all.
+    sinceVersion: message.since ?? message.version,
     reciprocate: false,
   })
 
@@ -675,6 +698,7 @@ function buildInterestResponse(
         docId: message.docId,
         version: docEntry.version,
         reciprocate: false,
+        since: cursorFor(model, fromPeerId, message.docId),
       },
     })
   }
@@ -1308,6 +1332,7 @@ function handlePresent(
           version: docEntry.version,
           // Causal merge needs bidirectional exchange
           reciprocate: isCausal,
+          since: cursorFor(model, from, docId),
         },
       })
     } else {
@@ -1384,7 +1409,7 @@ function handleInterestForKnownDoc(
   const peerState = model.peers.get(fromPeerId)
   if (!peerState) return [model]
 
-  const effects = buildInterestResponse(fromPeerId, message, docEntry)
+  const effects = buildInterestResponse(fromPeerId, message, docEntry, model)
 
   // An interest tells us the sender *wants our state*. It says nothing about
   // whether we want theirs — that depends on their version, which only the
@@ -1461,6 +1486,7 @@ function handleOffer(
         docId: message.docId,
         version: docEntry.version,
         reciprocate: false,
+        since: cursorFor(model, from, message.docId),
       },
     })
   }
