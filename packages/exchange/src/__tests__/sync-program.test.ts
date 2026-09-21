@@ -220,6 +220,7 @@ describe("sync-program", () => {
           docId: "doc-1",
           version: "v2",
           fromPeerId: "bob",
+          changed: true,
         },
         model,
       )
@@ -261,6 +262,7 @@ describe("sync-program", () => {
           docId: "doc-1",
           version: "v2",
           fromPeerId: "bob",
+          changed: true,
         },
         model,
       )
@@ -286,6 +288,7 @@ describe("sync-program", () => {
           docId: "doc-1",
           version: "v2",
           fromPeerId: "bob",
+          changed: true,
         },
         model,
       )
@@ -339,6 +342,7 @@ describe("sync-program", () => {
           docId: "doc-1",
           version: "v2",
           fromPeerId: "bob",
+          changed: true,
         },
         model,
       )
@@ -1097,6 +1101,7 @@ describe("sync-program", () => {
           docId: "doc-1",
           version: "bob:54",
           fromPeerId: "bob",
+          changed: true,
         },
         model,
       )
@@ -1122,6 +1127,7 @@ describe("sync-program", () => {
           docId: "doc-1",
           version: "v1",
           fromPeerId: "bob",
+          changed: true,
         },
         model,
       )
@@ -1485,6 +1491,7 @@ describe("sync-program", () => {
           docId: "doc-1",
           version: "v2",
           fromPeerId: "bob",
+          changed: true,
         },
         model,
       )
@@ -1518,6 +1525,7 @@ describe("sync-program", () => {
           docId: "doc-1",
           version: "v2",
           fromPeerId: "bob",
+          changed: true,
         },
         model,
       )
@@ -1610,6 +1618,7 @@ describe("sync-program", () => {
           docId: "doc-1",
           version: "v2",
           fromPeerId: "bob",
+          changed: true,
         },
         model,
       )
@@ -1639,6 +1648,7 @@ describe("sync-program", () => {
           docId: "doc-1",
           version: "v2",
           fromPeerId: "bob",
+          changed: true,
         },
         model,
       )
@@ -1648,6 +1658,7 @@ describe("sync-program", () => {
           docId: "doc-1",
           version: "v3",
           fromPeerId: "carol",
+          changed: true,
         },
         model,
       )
@@ -1660,6 +1671,7 @@ describe("sync-program", () => {
           docId: "doc-1",
           version: "v4",
           fromPeerId: "bob",
+          changed: true,
         },
         model,
       )
@@ -1683,6 +1695,7 @@ describe("sync-program", () => {
           docId: "doc-1",
           version: "v2",
           fromPeerId: "bob",
+          changed: true,
         },
         model,
       )
@@ -1837,6 +1850,7 @@ describe("sync-program", () => {
         docId: VETOED_DOC,
         version: "v3",
         fromPeerId: "bob",
+        changed: true,
       })
       drive({ type: "sync/doc-dismiss", docId: VETOED_DOC })
       drive({

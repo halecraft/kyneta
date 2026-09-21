@@ -140,3 +140,47 @@ describe("ephemeral substrate — field-level LWW through a live Exchange", () =
     await exchangeB.shutdown()
   })
 })
+
+// A third peer is not a bigger version of two. With two peers, excluding the
+// sender from the relay is enough to break the cycle: A pushes to B, and B has
+// nobody left to forward to. With three there is always another peer to
+// forward to, so a merge that announces a change it did not make circulates
+// forever. The cascade is synchronous, so a failure here wedges the event loop
+// rather than failing an assertion — which is why the suite-level timeout is
+// the real guard, and why every test above this one uses two peers.
+describe("a three-peer mesh settles", () => {
+  const MeshSchema = Schema.struct({
+    alice: Schema.string().nullable(),
+    bob: Schema.string().nullable(),
+    carol: Schema.string().nullable(),
+  })
+  const MeshDoc = ephemeral.bind(MeshSchema)
+
+  const mesh = (ids: readonly string[]) => {
+    const bridge = new Bridge()
+    const exchanges = ids.map(
+      id =>
+        new Exchange({
+          id,
+          transports: [createBridgeTransport({ transportId: id, bridge })],
+          schemas: [MeshDoc],
+        }),
+    )
+    return exchanges.map(e => e.get("presence", MeshDoc))
+  }
+
+  it("opening the document on three peers terminates", async () => {
+    const docs = mesh(["alice", "bob", "carol"])
+    await drain(20)
+    expect(docs.length).toBe(3)
+  }, 10_000)
+
+  it("one write reaches both peers and stops", async () => {
+    const docs = mesh(["alice", "bob", "carol"])
+    await drain(20)
+    batch(docs[0], d => d.alice.set("online-alice"))
+    await drain(20)
+    expect(docs[1].alice()).toBe("online-alice")
+    expect(docs[2].alice()).toBe("online-alice")
+  }, 10_000)
+})

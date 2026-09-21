@@ -515,6 +515,14 @@ Before this check existed, `decayMs` below a boundary bound cleanly and then sil
 
 A `StateTuple` is `[value, timestamp, deleted?]`. The third slot is present only on a tombstone (see "Deletion" above); the marker lives in its own slot rather than in the value because it has to be **out-of-band from the value domain** — `null` is a legitimate value under a nullable schema, and any in-band sentinel is something a `.json()` blob could legitimately contain. Note that `isStateTuple` deliberately does **not** check the tuple's length: an array in a StateTree is always a leaf, since sequences are not a supported container here, and an arity check would have to be revised every time the tuple gains a slot. Getting that wrong is quiet and expensive — a tuple the guard rejects is treated as a container, and its slots are then merged and projected as if they were keys.
 
+### A merge reports whether it moved
+
+`mergeStateTree` returns `{ tree, changed }`. `changed` is a lattice question rather than bookkeeping: `a ⊔ b = a` exactly when `b ≤ a`, so a false answer means the incoming payload was already subsumed. The substrate advances its version only when the join moved, and the synchronizer relays only an import that changed something.
+
+Getting this wrong is not a waste of bytes, it is a cycle. Each peer relays an import to every peer except the sender. With two peers that closes immediately — the sender is the only candidate — which is why announcing every merge was survivable and why every ephemeral test in the suite passed. With three peers there is always somewhere left to forward to, and because `StateVersion.compare` can never answer `"equal"`, no receiver can decline a payload it already holds. Three peers opening the same ephemeral document wedged the event loop before this was fixed, with nobody writing anything.
+
+A related trap sits underneath it: the version must advance *strictly*. `Date.now()` has millisecond resolution and presence traffic arrives in bursts, so two changes inside one millisecond would otherwise share a version — and a caller comparing versions reads a real change as none. `nextVersion` takes `max(now, current + 1)`.
+
 ### Two key spaces
 
 Where a node's keys come from decides what their absence means, and the two answers are opposites.

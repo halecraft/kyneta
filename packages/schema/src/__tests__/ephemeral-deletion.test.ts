@@ -130,8 +130,8 @@ describe("a delete converges", () => {
     const aThenB = mergeStateTree(
       { peers: { alice: [null, 200, true] } },
       stale,
-    )
-    const bThenA = mergeStateTree(roster({ alice: 1 }, 100), deleted)
+    ).tree
+    const bThenA = mergeStateTree(roster({ alice: 1 }, 100), deleted).tree
 
     // Both directions agree, and both agree she is gone.
     expect(aThenB).toEqual(bThenA)
@@ -165,7 +165,7 @@ describe("delete and re-add resolve by timestamp", () => {
     const merged = mergeStateTree(
       { peers: { alice: [null, 10, true] } },
       { peers: { alice: [7, 11] } },
-    )
+    ).tree
     expect(asRecord(merged).peers.alice).toEqual([7, 11])
     expect(Object.keys(asRecord(merged).peers)).toEqual(["alice"])
   })
@@ -174,7 +174,7 @@ describe("delete and re-add resolve by timestamp", () => {
     const merged = mergeStateTree(
       { peers: { alice: [7, 11] } },
       { peers: { alice: [null, 12, true] } },
-    )
+    ).tree
     expect(isTombstone(asRecord(merged).peers.alice)).toBe(true)
   })
 
@@ -182,11 +182,11 @@ describe("delete and re-add resolve by timestamp", () => {
     const forward = mergeStateTree(
       { peers: { alice: [null, 10, true] } },
       { peers: { alice: [7, 11] } },
-    )
+    ).tree
     const backward = mergeStateTree(
       { peers: { alice: [7, 11] } },
       { peers: { alice: [null, 10, true] } },
-    )
+    ).tree
     expect(forward).toEqual(backward)
   })
 })
@@ -311,11 +311,11 @@ describe("deleting an entry whose value is a container", () => {
     const forward = mergeStateTree(
       { peers: { alice: { x: [null, 200, true] } } },
       { peers: { alice: { x: [1, 100] } } },
-    )
+    ).tree
     const backward = mergeStateTree(
       { peers: { alice: { x: [1, 100] } } },
       { peers: { alice: { x: [null, 200, true] } } },
-    )
+    ).tree
     expect(forward).toEqual(backward)
 
     // Every leaf beneath `alice` is tombstoned, so the whole entry drops out

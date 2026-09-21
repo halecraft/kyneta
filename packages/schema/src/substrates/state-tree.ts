@@ -154,6 +154,21 @@ function valueRank(value: unknown): string {
 }
 
 /**
+ * Whether two leaf tuples carry the same replicating content.
+ *
+ * Compares exactly the slots a peer can observe — value, timestamp, tombstone
+ * marker — by the same rule as `joinTuples`, so "the join did not move" and
+ * "the join picked an equal tuple" cannot disagree.
+ */
+function sameTuple(a: StateTuple, b: StateTuple): boolean {
+  return (
+    a[1] === b[1] &&
+    isTombstone(a) === isTombstone(b) &&
+    valueRank(a[0]) === valueRank(b[0])
+  )
+}
+
+/**
  * The join of two leaf tuples — which one wins.
  *
  * Highest timestamp wins; on a tie, a live tuple beats a tombstone, and
@@ -221,17 +236,47 @@ function subtreeTimestamp(node: StateTree): number {
  * variants. That structural encoding is exactly why merge needs no schema:
  * headless relays/stores converge on raw payloads without one.
  *
- * Modifies `local` in-place and returns it.
+ * Modifies `local` in-place and returns it, along with whether the join moved.
+ *
+ * `changed` is a lattice question, not a bookkeeping one: `a ⊔ b = a` exactly
+ * when `b ≤ a`, so a false answer means the incoming payload was already
+ * subsumed. The caller needs it because announcing a change that did not happen
+ * is not merely wasteful — in a mesh of three or more peers it is a cycle,
+ * since each peer relays to everyone but the sender and no peer can decline a
+ * re-import it has no way to recognise as redundant.
  */
-export function mergeStateTree(local: StateTree, remote: StateTree): StateTree {
+export interface MergeResult {
+  readonly tree: StateTree
+  readonly changed: boolean
+}
+
+export function mergeStateTree(
+  local: StateTree,
+  remote: StateTree,
+): MergeResult {
+  const moved = { changed: false }
+  const tree = mergeInto(local, remote, moved)
+  return { tree, changed: moved.changed }
+}
+
+function mergeInto(
+  local: StateTree,
+  remote: StateTree,
+  moved: { changed: boolean },
+): StateTree {
   if (isStateTuple(local) && isStateTuple(remote)) {
     // Adopt the winner WHOLE rather than copying slot by slot: copying fixed
     // slots preserves any slot this function does not know about, so a losing
     // tombstone would leave its marker sitting on the value that beat it.
     const winner = joinTuples(local, remote)
+    if (winner === local) return local
+    // A won tie returns the incoming tuple even when it is indistinguishable
+    // from the local one, so compare content rather than identity: adopting an
+    // equal tuple is not a change, and treating it as one is what circulates.
+    moved.changed = !sameTuple(local, winner)
     // Clone when remote wins, so the merged tree never aliases a payload the
     // caller may still own.
-    return winner === local ? local : cloneTuple(winner)
+    return cloneTuple(winner)
   }
 
   // One side is a leaf where the other is a container: the peers disagree
@@ -251,11 +296,16 @@ export function mergeStateTree(local: StateTree, remote: StateTree): StateTree {
   if (isStateTuple(local) || isStateTuple(remote)) {
     const localTimestamp = subtreeTimestamp(local)
     const remoteTimestamp = subtreeTimestamp(remote)
-    if (remoteTimestamp > localTimestamp) return deepClone(remote)
+    if (remoteTimestamp > localTimestamp) {
+      moved.changed = true
+      return deepClone(remote)
+    }
     if (localTimestamp > remoteTimestamp) return local
     // Same rule as the tuple tie-break: greater serialisation wins, giving a
     // total order both peers compute identically.
-    return valueRank(remote) > valueRank(local) ? deepClone(remote) : local
+    if (valueRank(remote) <= valueRank(local)) return local
+    moved.changed = true
+    return deepClone(remote)
   }
 
   // Both are objects (containers). Union the keys.
@@ -264,8 +314,11 @@ export function mergeStateTree(local: StateTree, remote: StateTree): StateTree {
 
   for (const key of Object.keys(r)) {
     if (key in l) {
-      l[key] = mergeStateTree(l[key], r[key])
+      l[key] = mergeInto(l[key], r[key], moved)
     } else {
+      // A key we have never seen. Absence carries no information under a
+      // key-unioning merge, so this is always new state.
+      moved.changed = true
       l[key] = deepClone(r[key])
     }
   }

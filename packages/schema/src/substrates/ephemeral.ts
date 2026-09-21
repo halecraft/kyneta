@@ -167,6 +167,20 @@ function createStateReplicaCore(
   setTree: (tree: StateTree) => void,
 ) {
   let cachedVersion = new StateVersion(0)
+
+  /**
+   * The next version, guaranteed to differ from the current one.
+   *
+   * `Date.now()` has millisecond resolution, and two state changes inside one
+   * millisecond are routine for presence traffic, which arrives in bursts. A
+   * bare `now()` would hand out the same version twice, making a state change
+   * indistinguishable from none to anyone comparing versions — a relay would
+   * conclude it had nothing to forward and the document would stop there.
+   * Strict monotonicity is what a version owes its readers; the clock is only
+   * how this substrate picks a starting point.
+   */
+  const nextVersion = (): StateVersion =>
+    new StateVersion(Math.max(Date.now(), cachedVersion.timestamp + 1))
   // Whether a write has landed since the last batch ended. Not an op log:
   // `exportSince` is always `null` here, so an op would be pushed, counted
   // and dropped without anything ever reading it. What ends a batch needs to
@@ -186,7 +200,7 @@ function createStateReplicaCore(
     endBatch(projection: boolean): void {
       const moved = written
       written = false
-      if (moved && !projection) cachedVersion = StateVersion.now()
+      if (moved && !projection) cachedVersion = nextVersion()
     },
 
     version(): StateVersion {
@@ -224,12 +238,15 @@ function createStateReplicaCore(
 
       if (payload.kind === "entirety") {
         const incomingTree = JSON.parse(payload.data) as StateTree
-        const merged = mergeStateTree(getTree(), incomingTree)
-        setTree(merged)
+        const { tree, changed } = mergeStateTree(getTree(), incomingTree)
+        setTree(tree)
 
-        // After merging, bump the version so this peer advertises a state
-        // change (merges can cause changes that need to be re-broadcast).
-        cachedVersion = StateVersion.now()
+        // Advertise a change only when the join actually moved. Bumping
+        // unconditionally makes every peer re-announce every payload it
+        // receives, including ones it already had — harmless between two peers,
+        // where the sender is excluded from the relay and the cycle closes, and
+        // an endless loop among three, where it never does.
+        if (changed) cachedVersion = nextVersion()
       }
     },
 

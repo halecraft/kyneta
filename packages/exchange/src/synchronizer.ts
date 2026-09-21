@@ -1673,6 +1673,9 @@ export class Synchronizer {
           docId: effect.docId,
           version: newVersion,
           fromPeerId: effect.fromPeerId,
+          // A reset rebuilds the replica from the payload rather than joining
+          // it, so the state moved by construction.
+          changed: true,
         })
         return
       } else {
@@ -1699,11 +1702,15 @@ export class Synchronizer {
           docId: effect.docId,
           version: newVersion,
           fromPeerId: effect.fromPeerId,
+          // A reset rebuilds the replica from the payload rather than joining
+          // it, so the state moved by construction.
+          changed: true,
         })
         return
       }
     }
 
+    const priorVersion = runtime.replica.version().serialize()
     try {
       runtime.replica.merge(effect.payload, { origin: "sync" })
     } catch (err) {
@@ -1720,6 +1727,7 @@ export class Synchronizer {
       docId: effect.docId,
       version: newVersion,
       fromPeerId: effect.fromPeerId,
+      changed: newVersion !== priorVersion,
     })
   }
 

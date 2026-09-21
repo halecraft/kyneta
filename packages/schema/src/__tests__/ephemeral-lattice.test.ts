@@ -14,7 +14,10 @@
 // almost never produce two equal ones.
 
 import { describe, expect, it } from "vitest"
-import { StateVersion } from "../substrates/ephemeral.js"
+import {
+  ephemeralReplicaFactory,
+  StateVersion,
+} from "../substrates/ephemeral.js"
 import { DEFAULT_LINEAGE } from "../substrates/plain.js"
 import {
   joinTuples,
@@ -113,8 +116,8 @@ describe("the tie rule", () => {
     const a: StateTree = { v: ["from-A", 1000] }
     const b: StateTree = { v: ["from-B", 1000] }
 
-    const ab = mergeStateTree({ v: ["from-A", 1000] }, b)
-    const ba = mergeStateTree({ v: ["from-B", 1000] }, a)
+    const ab = mergeStateTree({ v: ["from-A", 1000] }, b).tree
+    const ba = mergeStateTree({ v: ["from-B", 1000] }, a).tree
 
     expect(ab).toEqual(ba)
   })
@@ -152,19 +155,22 @@ describe("mergeStateTree over whole trees", () => {
   })
 
   it("converges regardless of merge direction", () => {
-    expect(mergeStateTree(treeA(), treeB())).toEqual(
-      mergeStateTree(treeB(), treeA()),
+    expect(mergeStateTree(treeA(), treeB()).tree).toEqual(
+      mergeStateTree(treeB(), treeA()).tree,
     )
   })
 
   it("is idempotent over a tree", () => {
-    const once = mergeStateTree(treeA(), treeB())
-    const twice = mergeStateTree(mergeStateTree(treeA(), treeB()), treeB())
+    const once = mergeStateTree(treeA(), treeB()).tree
+    const twice = mergeStateTree(
+      mergeStateTree(treeA(), treeB()).tree,
+      treeB(),
+    ).tree
     expect(twice).toEqual(once)
   })
 
   it("unions keys and keeps the higher timestamp per leaf", () => {
-    const merged = mergeStateTree(treeA(), treeB()) as any
+    const merged = mergeStateTree(treeA(), treeB()).tree as any
     expect(merged.nested.x).toEqual([1, 1000]) // local is newer
     expect(merged.nested.y).toEqual([2, 500]) // absent from remote
     expect(merged.nested.z).toEqual([3, 700]) // only in remote
@@ -216,8 +222,8 @@ describe("mergeStateTree over whole trees", () => {
     const divergent: string[] = []
     for (const a of TREES) {
       for (const b of TREES) {
-        const ab = mergeStateTree(fresh(a), fresh(b))
-        const ba = mergeStateTree(fresh(b), fresh(a))
+        const ab = mergeStateTree(fresh(a), fresh(b)).tree
+        const ba = mergeStateTree(fresh(b), fresh(a)).tree
         if (JSON.stringify(ab) !== JSON.stringify(ba)) {
           divergent.push(
             `${JSON.stringify(a)} vs ${JSON.stringify(b)} → ${JSON.stringify(ab)} / ${JSON.stringify(ba)}`,
@@ -232,13 +238,13 @@ describe("mergeStateTree over whole trees", () => {
     expect(
       law("assoc", (a, b, c) => {
         const left = mergeStateTree(
-          mergeStateTree(fresh(a), fresh(b)),
+          mergeStateTree(fresh(a), fresh(b)).tree,
           fresh(c),
-        )
+        ).tree
         const right = mergeStateTree(
           fresh(a),
-          mergeStateTree(fresh(b), fresh(c)),
-        )
+          mergeStateTree(fresh(b), fresh(c)).tree,
+        ).tree
         return JSON.stringify(left) === JSON.stringify(right)
       }),
     ).toEqual([])
@@ -246,7 +252,7 @@ describe("mergeStateTree over whole trees", () => {
 
   it("is idempotent over shape-stable trees", () => {
     for (const a of TREES) {
-      expect(JSON.stringify(mergeStateTree(fresh(a), fresh(a)))).toBe(
+      expect(JSON.stringify(mergeStateTree(fresh(a), fresh(a)).tree)).toBe(
         JSON.stringify(a),
       )
     }
@@ -260,8 +266,8 @@ describe("mergeStateTree over whole trees", () => {
     // side's contents are discarded, so no later merge can recover them.
     const leaf: StateTree = { k: ["leaf", 300] }
     const container: StateTree = { k: { x: [1, 100] } }
-    expect(mergeStateTree(fresh(leaf), fresh(container))).toEqual(
-      mergeStateTree(fresh(container), fresh(leaf)),
+    expect(mergeStateTree(fresh(leaf), fresh(container)).tree).toEqual(
+      mergeStateTree(fresh(container), fresh(leaf)).tree,
     )
   })
 
@@ -270,7 +276,7 @@ describe("mergeStateTree over whole trees", () => {
     // reference, a later local write would reach back and mutate a payload the
     // caller still owns.
     const remote = treeB()
-    const merged = mergeStateTree({ scalar: ["A", 1] }, remote) as Record<
+    const merged = mergeStateTree({ scalar: ["A", 1] }, remote).tree as Record<
       string,
       StateTuple
     >
@@ -298,5 +304,74 @@ describe("StateVersion carries no lineage", () => {
     // of `Synchronizer.#executeImportDocData`.
     expect(StateVersion.now().lineage).toBe(DEFAULT_LINEAGE)
     expect(new StateVersion(0).lineage).toBe(DEFAULT_LINEAGE)
+  })
+})
+
+// A join reports whether it moved, and the answer has to be exact. It is what
+// a peer uses to decide there is news worth relaying, and a false positive is
+// not wasted bytes but a cycle: every peer relays to everyone but the sender,
+// so in a mesh of three there is always somewhere left to forward to.
+describe("the join reports whether it moved", () => {
+  it("merging an identical tree changes nothing", () => {
+    const tree = { peers: { alice: ["online", 1000] } }
+    expect(
+      mergeStateTree(tree, { peers: { alice: ["online", 1000] } }).changed,
+    ).toBe(false)
+  })
+
+  it("a losing tuple changes nothing", () => {
+    const tree = { peers: { alice: ["new", 2000] } }
+    expect(
+      mergeStateTree(tree, { peers: { alice: ["old", 1000] } }).changed,
+    ).toBe(false)
+  })
+
+  it("a tie the incoming tuple wins, with equal content, changes nothing", () => {
+    // `joinTuples` returns the incoming tuple on some ties, so identity is not
+    // the test — two peers holding the same value must not keep announcing it.
+    const tree = { peers: { alice: ["same", 1000] } }
+    expect(
+      mergeStateTree(tree, { peers: { alice: ["same", 1000] } }).changed,
+    ).toBe(false)
+  })
+
+  it("a newer timestamp on the same value is a change", () => {
+    // The timestamp replicates and decay reads it, so it is state.
+    const tree = { peers: { alice: ["online", 1000] } }
+    expect(
+      mergeStateTree(tree, { peers: { alice: ["online", 2000] } }).changed,
+    ).toBe(true)
+  })
+
+  it("a key we have never seen is a change", () => {
+    const tree = { peers: { alice: ["online", 1000] } }
+    expect(
+      mergeStateTree(tree, { peers: { bob: ["online", 1000] } }).changed,
+    ).toBe(true)
+  })
+
+  it("a tombstone arriving over a live value is a change", () => {
+    const tree = { peers: { alice: ["online", 1000] } }
+    expect(
+      mergeStateTree(tree, { peers: { alice: [null, 2000, true] } }).changed,
+    ).toBe(true)
+  })
+})
+
+describe("a version advances whenever state advances", () => {
+  it("two changes inside one millisecond produce different versions", () => {
+    const replica = ephemeralReplicaFactory.createEmpty()
+    const payload = (value: string, ts: number) => ({
+      kind: "entirety" as const,
+      encoding: "json" as const,
+      data: JSON.stringify({ a: [value, ts] }),
+      lineage: "genesis",
+    })
+    replica.merge(payload("first", 1000))
+    const first = replica.version().serialize()
+    replica.merge(payload("second", 2000))
+    // No clock gap: `Date.now()` would hand back the same value here, and a
+    // caller comparing versions would read a real change as none.
+    expect(replica.version().serialize()).not.toBe(first)
   })
 })

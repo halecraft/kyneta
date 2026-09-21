@@ -88,7 +88,7 @@ describe("mergeStateTree merges a sum register atomically", () => {
       shape: [{ kind: "square", side: 3 }, 200],
       label: ["b", 50],
     }
-    mergeStateTree(a, b)
+    mergeStateTree(a, b).tree
     const shape = asRecord(a).shape
     expect(shape[0]).toEqual({ kind: "square", side: 3 })
     expect(shape[0].radius).toBeUndefined() // losing variant's field is gone
@@ -101,16 +101,16 @@ describe("mergeStateTree merges a sum register atomically", () => {
       { shape: [{ kind: "square", side: 3 }, 200] },
     ]
     const [a1, b1] = mk()
-    mergeStateTree(a1, b1)
+    mergeStateTree(a1, b1).tree
     const [a2, b2] = mk()
-    mergeStateTree(b2, a2)
+    mergeStateTree(b2, a2).tree
     expect(asRecord(a1).shape).toEqual(asRecord(b2).shape)
   })
 
   it("field-level product merge still works (regression)", () => {
     const a: StateTree = { x: [1, 100], y: [2, 50] }
     const b: StateTree = { x: [9, 50], y: [8, 200] }
-    mergeStateTree(a, b)
+    mergeStateTree(a, b).tree
     expect(asRecord(a).x).toEqual([1, 100]) // A wins x
     expect(asRecord(a).y).toEqual([8, 200]) // B wins y
   })
@@ -160,7 +160,7 @@ describe("nullable struct is an atomic register", () => {
     )
     expect(isStateTuple((tree as Record<string, StateTree>).opt)).toBe(true)
 
-    mergeStateTree(tree, { opt: [null, 200] })
+    mergeStateTree(tree, { opt: [null, 200] }).tree
     expect(asRecord(tree).opt).toEqual([null, 200])
   })
 })

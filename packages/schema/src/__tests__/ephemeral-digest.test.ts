@@ -36,13 +36,13 @@ describe("the digest is a function of the tree, not the route", () => {
     const fromC: StateTree = { peers: { carol: tuple("here", 300) } }
 
     const bThenC = mergeStateTree(
-      mergeStateTree(clone(base), clone(fromB)),
+      mergeStateTree(clone(base), clone(fromB)).tree,
       clone(fromC),
-    )
+    ).tree
     const cThenB = mergeStateTree(
-      mergeStateTree(clone(base), clone(fromC)),
+      mergeStateTree(clone(base), clone(fromC)).tree,
       clone(fromB),
-    )
+    ).tree
 
     expect(stateTreeDigest(bThenC)).toEqual(stateTreeDigest(cThenB))
   })

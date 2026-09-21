@@ -174,6 +174,13 @@ export type SyncInput =
       docId: DocId
       version: string
       fromPeerId: PeerId
+      /**
+       * Whether the import moved this replica's state. A payload a peer
+       * already held is still an import — the sender learns we are synced —
+       * but it is not news to relay, and saying otherwise circulates it
+       * forever in a mesh of three or more.
+       */
+      changed: boolean
     }
   | {
       type: "sync/peer-synced"
@@ -1113,21 +1120,27 @@ function handleDocImported(
   const docEntry = model.documents.get(msg.docId)
   if (!docEntry) return [model]
 
-  // Relay to other peers (multi-hop propagation).
+  // Relay to other peers (multi-hop propagation), but only for an import that
+  // actually moved us. Re-broadcasting state a peer already held is what turns
+  // a three-peer mesh into a cycle: every peer relays to everyone but the
+  // sender, so there is always somewhere left to forward to.
+  //
   // Must read docEntry.version BEFORE updating — this is the "since" version
   // for delta export, so peers receive exactly the imported ops.
-  const effect = buildPush(msg.docId, docEntry, model, canShare, msg.fromPeerId)
+  const effect = msg.changed
+    ? buildPush(msg.docId, docEntry, model, canShare, msg.fromPeerId)
+    : undefined
 
-  // Bump version + record state-advanced (always, regardless of peer presence).
+  // Bump version + record state-advanced (regardless of peer presence). An
+  // import that changed nothing advanced nothing, so subscribers hear nothing.
   const documents = new Map(model.documents)
   documents.set(msg.docId, { ...docEntry, version: msg.version })
   const bumped: SyncModel = {
     ...model,
     documents,
-    pendingStateAdvancedDocIds: appendUniqueDocId(
-      model.pendingStateAdvancedDocIds,
-      msg.docId,
-    ),
+    pendingStateAdvancedDocIds: msg.changed
+      ? appendUniqueDocId(model.pendingStateAdvancedDocIds, msg.docId)
+      : model.pendingStateAdvancedDocIds,
   }
 
   // Fold the peer's sync transition through the single fold point.
