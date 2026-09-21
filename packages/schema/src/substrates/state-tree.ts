@@ -156,7 +156,8 @@ function valueRank(value: unknown): string {
 /**
  * The join of two leaf tuples — which one wins.
  *
- * Highest timestamp wins; on a tie, the greater value rank.
+ * Highest timestamp wins; on a tie, a live tuple beats a tombstone, and
+ * otherwise the greater value rank.
  *
  * The tie rule is a decision rather than a detail. On a tie the greater
  * *value* wins, not the later writer: a tie IS simultaneity, so there is no
@@ -169,12 +170,25 @@ function valueRank(value: unknown): string {
  * opposite directions diverged permanently. TECHNICAL.md §"The merge rule, in
  * full" has the longer argument.
  *
- * Only the tie path pays for `stringify`. Returns one of its arguments rather
+ * The rank has to cover **every slot that replicates**, not just the value.
+ * Ranking the value alone made a tombstone and a live `null` at the same
+ * timestamp indistinguishable — a delete on one peer against a `null` write on
+ * another, in the same millisecond, left each keeping its own and diverging
+ * permanently. Live beats tombstone because a tie carries no reason to prefer
+ * the deletion and that direction discards less. Any slot added here that does
+ * **not** replicate must stay out of this comparison: two peers agree on the
+ * tree and not on their own bookkeeping.
+ *
+ * Only the value tie pays for `stringify`. Returns one of its arguments rather
  * than a copy; the caller decides whether the winner needs cloning.
  */
 export function joinTuples(local: StateTuple, remote: StateTuple): StateTuple {
   if (remote[1] > local[1]) return remote
   if (local[1] > remote[1]) return local
+
+  const localLive = !isTombstone(local)
+  if (localLive !== !isTombstone(remote)) return localLive ? local : remote
+
   return valueRank(remote[0]) > valueRank(local[0]) ? remote : local
 }
 

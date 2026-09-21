@@ -27,6 +27,11 @@ import {
 // timestamp ordering, and the value shapes a register can actually hold —
 // objects (a sum variant or `.json()` blob), null (legal under a nullable
 // schema), and undefined (whose serialisation needs special handling).
+//
+// Tombstones are in here because they are the case the laws are least likely
+// to hold for and the most likely to be left out: the tie-break ranks the
+// tuple, and a tombstone differs from a live `null` in no other slot. A
+// sample without one pins the laws over exactly the inputs that cannot fail.
 const SAMPLES: StateTuple[] = [
   ["from-A", 1000],
   ["from-B", 1000], // ties with the above — the case that used to diverge
@@ -38,6 +43,9 @@ const SAMPLES: StateTuple[] = [
   [undefined, 1000],
   [0, 1000],
   ["", 1000],
+  [null, 1000, true], // a tombstone, tied against the live `null` above
+  [null, 2000, true], // ...and against the later live write
+  [null, 999, true],
 ]
 
 const clone = (tuple: StateTuple): StateTuple => tuple.slice() as StateTuple
