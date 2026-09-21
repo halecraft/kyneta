@@ -17,11 +17,16 @@ import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
 import {
   mergeStateTree,
   type StateTree,
+  type StateTuple,
   stateTreeDigest,
 } from "../substrates/state-tree.js"
 
-const tuple = (v: unknown, t: number) => [v, t] as unknown as StateTree
-const tombstoned = (t: number) => [null, t, true] as unknown as StateTree
+/** A tuple as a peer holds it; the install ordinal is fixed and never folded. */
+const tup = (value: unknown, timestamp: number, deleted?: true): StateTuple =>
+  deleted ? [value, timestamp, 1, true] : [value, timestamp, 1]
+
+const merge = (local: StateTree, remote: StateTree) =>
+  mergeStateTree(local, remote, 1)
 
 const clone = (t: StateTree): StateTree =>
   JSON.parse(JSON.stringify(t)) as StateTree
@@ -31,16 +36,16 @@ describe("the digest is a function of the tree, not the route", () => {
     // The property the XOR is for. Peer A hears from B then C; peer D hears
     // from C then B. Both end at the same tree and must report the same
     // fingerprint.
-    const base: StateTree = { peers: { alice: tuple("here", 100) } }
-    const fromB: StateTree = { peers: { bob: tuple("here", 200) } }
-    const fromC: StateTree = { peers: { carol: tuple("here", 300) } }
+    const base: StateTree = { peers: { alice: tup("here", 100) } }
+    const fromB: StateTree = { peers: { bob: tup("here", 200) } }
+    const fromC: StateTree = { peers: { carol: tup("here", 300) } }
 
-    const bThenC = mergeStateTree(
-      mergeStateTree(clone(base), clone(fromB)).tree,
+    const bThenC = merge(
+      merge(clone(base), clone(fromB)).tree,
       clone(fromC),
     ).tree
-    const cThenB = mergeStateTree(
-      mergeStateTree(clone(base), clone(fromC)).tree,
+    const cThenB = merge(
+      merge(clone(base), clone(fromC)).tree,
       clone(fromB),
     ).tree
 
@@ -51,8 +56,8 @@ describe("the digest is a function of the tree, not the route", () => {
     // Paths are encoded structurally rather than as a string, so this is the
     // case that catches a folding bug: the same value under a different key
     // must not fold to the same lanes.
-    const here: StateTree = { peers: { alice: tuple("x", 100) } }
-    const there: StateTree = { peers: { bob: tuple("x", 100) } }
+    const here: StateTree = { peers: { alice: tup("x", 100) } }
+    const there: StateTree = { peers: { bob: tup("x", 100) } }
 
     expect(stateTreeDigest(here)).not.toEqual(stateTreeDigest(there))
   })
@@ -60,8 +65,8 @@ describe("the digest is a function of the tree, not the route", () => {
   it("separates a tombstone from a live null", () => {
     // Both serialise as `null`. The tombstone flag is out-of-band in the tuple
     // for exactly this reason, and the digest has to read it.
-    const deleted: StateTree = { peers: { alice: tombstoned(100) } }
-    const nulled: StateTree = { peers: { alice: tuple(null, 100) } }
+    const deleted: StateTree = { peers: { alice: tup(null, 100, true) } }
+    const nulled: StateTree = { peers: { alice: tup(null, 100) } }
 
     expect(stateTreeDigest(deleted)).not.toEqual(stateTreeDigest(nulled))
   })
@@ -69,8 +74,8 @@ describe("the digest is a function of the tree, not the route", () => {
   it("separates two trees that differ only in a timestamp", () => {
     // Timestamps decide the merge, so a digest blind to them would call two
     // trees equal when one is about to win over the other.
-    const older: StateTree = { peers: { alice: tuple("here", 100) } }
-    const newer: StateTree = { peers: { alice: tuple("here", 200) } }
+    const older: StateTree = { peers: { alice: tup("here", 100) } }
+    const newer: StateTree = { peers: { alice: tup("here", 200) } }
 
     expect(stateTreeDigest(older)).not.toEqual(stateTreeDigest(newer))
   })
@@ -93,7 +98,7 @@ describe("the digest covers what replicates, and nothing else", () => {
     const db: any = createRef(Decaying, b)
 
     // Same write, same timestamp, so the trees are identical.
-    const tree: StateTree = { presence: tuple("online", 500) }
+    const tree: StateTree = { presence: tup("online", 500) }
     void da
     void db
     expect(stateTreeDigest(clone(tree))).toEqual(stateTreeDigest(clone(tree)))
@@ -124,9 +129,9 @@ describe("the digest covers what replicates, and nothing else", () => {
     // A write and its undo leave the tree where it started apart from
     // timestamps, so this pins that the digest tracks state rather than
     // accumulating history.
-    const one: StateTree = { a: tuple(1, 100), b: tuple(2, 100) }
-    const two: StateTree = { a: tuple(9, 100), b: tuple(2, 100) }
-    const back: StateTree = { a: tuple(1, 100), b: tuple(2, 100) }
+    const one: StateTree = { a: tup(1, 100), b: tup(2, 100) }
+    const two: StateTree = { a: tup(9, 100), b: tup(2, 100) }
+    const back: StateTree = { a: tup(1, 100), b: tup(2, 100) }
 
     expect(stateTreeDigest(one)).not.toEqual(stateTreeDigest(two))
     expect(stateTreeDigest(back)).toEqual(stateTreeDigest(one))

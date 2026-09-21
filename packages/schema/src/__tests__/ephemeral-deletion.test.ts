@@ -31,8 +31,20 @@ import {
   isTombstone,
   mergeStateTree,
   type StateTree,
+  type StateTuple,
   syncStateTreeToShadow,
+  type WriteStamp,
 } from "../substrates/state-tree.js"
+
+/** A tuple as a peer holds it; the install ordinal is fixed and unread here. */
+const tup = (value: unknown, timestamp: number, deleted?: true): StateTuple =>
+  deleted ? [value, timestamp, 1, true] : [value, timestamp, 1]
+
+/** A write's stamp. The ordinal only has to be above a structural zero. */
+const stamp = (timestamp: number): WriteStamp => ({ timestamp, installedAt: 1 })
+
+const merge = (local: StateTree, remote: StateTree) =>
+  mergeStateTree(local, remote, 1)
 
 const Roster = Schema.struct({ peers: Schema.record(Schema.number()) })
 const peersPath = RawPath.empty.field("peers")
@@ -43,6 +55,13 @@ const payload = (data: unknown) => ({
   encoding: "json" as const,
   data: JSON.stringify(data),
 })
+
+/**
+ * A tuple in wire shape: no install ordinal, because that is a fact about the
+ * receiver and a sender has no business asserting it.
+ */
+const wire = (value: unknown, timestamp: number, deleted?: true) =>
+  deleted ? [value, timestamp, true] : [value, timestamp]
 
 /** A roster tree with the given entries, all stamped at `t`. */
 function roster(entries: Record<string, number>, t: number): StateTree {
@@ -62,20 +81,20 @@ describe("a delete writes a tombstone", () => {
       tree,
       peersPath,
       mapChange({ alice: 1, bob: 2 }),
-      100,
+      stamp(100),
       Roster,
     )
     applyChangeToStateTree(
       tree,
       peersPath,
       mapChange(undefined, ["alice"]),
-      200,
+      stamp(200),
       Roster,
     )
 
     expect(isTombstone(asRecord(tree).peers.alice)).toBe(true)
     expect(asRecord(tree).peers.alice[1]).toBe(200)
-    expect(asRecord(tree).peers.bob).toEqual([2, 100])
+    expect(asRecord(tree).peers.bob).toEqual(tup(2, 100))
   })
 
   it("reads as absent through the document", () => {
@@ -98,8 +117,8 @@ describe("a delete writes a tombstone", () => {
     // it has to converge the same way an explicit `delete` does — otherwise
     // which one a caller happened to use would decide whether the removal
     // survives a merge.
-    const tree: StateTree = { peers: { alice: [1, 100], bob: [2, 100] } }
-    syncStateTreeToShadow(tree, { peers: { bob: 2 } }, Roster, 200)
+    const tree: StateTree = { peers: { alice: tup(1, 100), bob: tup(2, 100) } }
+    syncStateTreeToShadow(tree, { peers: { bob: 2 } }, Roster, stamp(200))
 
     expect(isTombstone(asRecord(tree).peers.alice)).toBe(true)
     expect(asRecord(tree).peers.alice[1]).toBe(200)
@@ -109,9 +128,9 @@ describe("a delete writes a tombstone", () => {
     // Refreshing a tombstone's timestamp on every unrelated whole-value write
     // would let an old delete keep beating a newer remote re-add.
     const tree: StateTree = {
-      peers: { alice: [null, 100, true], bob: [2, 100] },
+      peers: { alice: tup(null, 100, true), bob: tup(2, 100) },
     }
-    syncStateTreeToShadow(tree, { peers: { bob: 2 } }, Roster, 900)
+    syncStateTreeToShadow(tree, { peers: { bob: 2 } }, Roster, stamp(900))
 
     expect(asRecord(tree).peers.alice[1]).toBe(100)
   })
@@ -124,14 +143,11 @@ describe("a delete writes a tombstone", () => {
 describe("a delete converges", () => {
   it("survives a merge with a peer that never saw it", () => {
     // A deletes alice at t=200. B still holds her at t=100.
-    const deleted: StateTree = { peers: { alice: [null, 200, true] } }
+    const deleted: StateTree = { peers: { alice: tup(null, 200, true) } }
     const stale = roster({ alice: 1 }, 100)
 
-    const aThenB = mergeStateTree(
-      { peers: { alice: [null, 200, true] } },
-      stale,
-    ).tree
-    const bThenA = mergeStateTree(roster({ alice: 1 }, 100), deleted).tree
+    const aThenB = merge({ peers: { alice: tup(null, 200, true) } }, stale).tree
+    const bThenA = merge(roster({ alice: 1 }, 100), deleted).tree
 
     // Both directions agree, and both agree she is gone.
     expect(aThenB).toEqual(bThenA)
@@ -144,10 +160,10 @@ describe("a delete converges", () => {
     // come from a separate shadow, so a tree-level pass can coexist with a
     // document that still shows the key.
     const peerA = ephemeralSubstrateFactory.fromEntirety(
-      payload({ peers: { alice: [1, 100], bob: [2, 100] } }),
+      payload({ peers: { alice: wire(1, 100), bob: wire(2, 100) } }),
       Roster,
     )
-    peerA.merge(payload({ peers: { alice: [null, 200, true] } }))
+    peerA.merge(payload({ peers: { alice: wire(null, 200, true) } }))
 
     expect(peerA.reader.read(peersPath)).toEqual({ bob: 2 })
   })
@@ -162,30 +178,30 @@ describe("delete and re-add resolve by timestamp", () => {
     // A deletes at t=10; B re-adds at t=11. The re-add wins, and — the part
     // worth noticing — it OVERWRITES the tombstone rather than sitting beside
     // it, so the key holds exactly one tuple either way.
-    const merged = mergeStateTree(
-      { peers: { alice: [null, 10, true] } },
-      { peers: { alice: [7, 11] } },
+    const merged = merge(
+      { peers: { alice: tup(null, 10, true) } },
+      { peers: { alice: tup(7, 11) } },
     ).tree
-    expect(asRecord(merged).peers.alice).toEqual([7, 11])
+    expect(asRecord(merged).peers.alice).toEqual(tup(7, 11))
     expect(Object.keys(asRecord(merged).peers)).toEqual(["alice"])
   })
 
   it("a later delete beats an earlier add", () => {
-    const merged = mergeStateTree(
-      { peers: { alice: [7, 11] } },
-      { peers: { alice: [null, 12, true] } },
+    const merged = merge(
+      { peers: { alice: tup(7, 11) } },
+      { peers: { alice: tup(null, 12, true) } },
     ).tree
     expect(isTombstone(asRecord(merged).peers.alice)).toBe(true)
   })
 
   it("resolves the same way whichever peer merges first", () => {
-    const forward = mergeStateTree(
-      { peers: { alice: [null, 10, true] } },
-      { peers: { alice: [7, 11] } },
+    const forward = merge(
+      { peers: { alice: tup(null, 10, true) } },
+      { peers: { alice: tup(7, 11) } },
     ).tree
-    const backward = mergeStateTree(
-      { peers: { alice: [7, 11] } },
-      { peers: { alice: [null, 10, true] } },
+    const backward = merge(
+      { peers: { alice: tup(7, 11) } },
+      { peers: { alice: tup(null, 10, true) } },
     ).tree
     expect(forward).toEqual(backward)
   })
@@ -250,14 +266,14 @@ describe("tombstones do not accumulate", () => {
         tree,
         peersPath,
         mapChange({ alice: cycle }),
-        cycle * 2,
+        stamp(cycle * 2),
         Roster,
       )
       applyChangeToStateTree(
         tree,
         peersPath,
         mapChange(undefined, ["alice"]),
-        cycle * 2 + 1,
+        stamp(cycle * 2 + 1),
         Roster,
       )
     }
@@ -290,14 +306,14 @@ describe("deleting an entry whose value is a container", () => {
       tree,
       peersPath,
       mapChange({ alice: { x: 1 } }),
-      100,
+      stamp(100),
       Cursors,
     )
     applyChangeToStateTree(
       tree,
       peersPath,
       mapChange(undefined, ["alice"]),
-      200,
+      stamp(200),
       Cursors,
     )
 
@@ -306,22 +322,24 @@ describe("deleting an entry whose value is a container", () => {
   })
 
   it("converges, and reads as absent on both peers", () => {
-    const deleted: StateTree = { peers: { alice: { x: [null, 200, true] } } }
+    const deleted = { peers: { alice: { x: wire(null, 200, true) } } }
 
-    const forward = mergeStateTree(
-      { peers: { alice: { x: [null, 200, true] } } },
-      { peers: { alice: { x: [1, 100] } } },
+    const forward = merge(
+      { peers: { alice: { x: tup(null, 200, true) } } },
+      { peers: { alice: { x: tup(1, 100) } } },
     ).tree
-    const backward = mergeStateTree(
-      { peers: { alice: { x: [1, 100] } } },
-      { peers: { alice: { x: [null, 200, true] } } },
+    const backward = merge(
+      { peers: { alice: { x: tup(1, 100) } } },
+      { peers: { alice: { x: tup(null, 200, true) } } },
     ).tree
     expect(forward).toEqual(backward)
 
     // Every leaf beneath `alice` is tombstoned, so the whole entry drops out
     // of the projection — not an empty `{}` where she used to be.
     const peerA = ephemeralSubstrateFactory.fromEntirety(
-      payload({ peers: { alice: { x: [1, 100] }, bob: { x: [5, 100] } } }),
+      payload({
+        peers: { alice: { x: wire(1, 100) }, bob: { x: wire(5, 100) } },
+      }),
       Cursors,
     )
     peerA.merge(payload(deleted))

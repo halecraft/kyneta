@@ -103,7 +103,7 @@ import type {
 
 /**
  * Fields shared by both document modes — the uniform surface that
- * `#executeSendOfferToPeer`, `#executeImportDocData`, `registerDoc`, and
+ * `#buildOffer`/`#sendOfferToPeer`, `#executeImportDocData`, `registerDoc`, and
  * `notifyLocalChange` operate on without mode branching.
  */
 type DocRuntimeBase = {
@@ -1349,22 +1349,28 @@ export class Synchronizer {
         break
       }
       case "send-offer": {
-        this.#executeSendOfferToPeer(
-          effect.to,
-          effect.docId,
-          effect.sinceVersion,
-          effect.reciprocate,
-        )
+        const offer = this.#buildOffer(effect.docId, effect.sinceVersion)
+        if (offer) {
+          this.#sendOfferToPeer(
+            effect.to,
+            effect.docId,
+            offer,
+            effect.reciprocate,
+          )
+        }
         break
       }
       case "send-offers": {
+        // One payload for the whole fan-out. `sinceVersion` is the document's
+        // own pre-change baseline and is deliberately the same for every
+        // recipient, so resolving and exporting inside the loop produced N
+        // identical payloads — N delta computations and N serializations for
+        // one change. At roster scale that is the cost the delta was meant to
+        // remove, reintroduced by the fan-out.
+        const offer = this.#buildOffer(effect.docId, effect.sinceVersion)
+        if (!offer) break
         for (const peerId of effect.to) {
-          this.#executeSendOfferToPeer(
-            peerId,
-            effect.docId,
-            effect.sinceVersion,
-            effect.reciprocate,
-          )
+          this.#sendOfferToPeer(peerId, effect.docId, offer, effect.reciprocate)
         }
         break
       }
@@ -1427,76 +1433,81 @@ export class Synchronizer {
   // SEND OFFER — build and queue outbound offer for a document
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
-  #executeSendOfferToPeer(
-    peerId: PeerId,
+  /**
+   * The payload to offer, computed once for every recipient of one fan-out.
+   *
+   * Separate from delivery because it depends only on the document: the
+   * baseline is the document's own pre-change version, not anything per-peer,
+   * so the same bytes go to everyone.
+   */
+  #buildOffer(
     docId: DocId,
     sinceVersion?: string,
+  ): SubstratePayload | undefined {
+    const runtime = this.#docRuntimes.get(docId)
+    if (!runtime) {
+      console.warn(`[exchange] doc runtime not found, offer not sent: ${docId}`)
+      return undefined
+    }
+
+    if (!sinceVersion) return runtime.replica.exportEntirety()
+
+    const gap = resolveOutboundVersionGap(
+      runtime.replica,
+      runtime.replicaFactory,
+      sinceVersion,
+    )
+
+    switch (gap.kind) {
+      case "parse-error":
+        console.warn(
+          `[exchange] version parse failed for doc '${docId}':`,
+          gap.error,
+        )
+        return undefined
+
+      case "no-gap":
+        // Nothing has happened since the baseline we are offering from, so
+        // there is nothing to send. A substrate that still produces a payload
+        // here is answering a different question and is offered as-is.
+        return (
+          runtime.replica.exportSince(runtime.replica.version()) ?? undefined
+        )
+
+      case "gap": {
+        // `null` means the peer's cursor is one we cannot serve — history
+        // trimmed past it, or an epoch that is not ours. An entirety resets
+        // them to our current state rather than leaving them diverged.
+        return (
+          runtime.replica.exportSince(gap.parsed) ??
+          runtime.replica.exportEntirety()
+        )
+      }
+    }
+  }
+
+  #sendOfferToPeer(
+    peerId: PeerId,
+    docId: DocId,
+    payload: SubstratePayload,
     reciprocate?: boolean,
   ): void {
     const peer = this.#sessionHandle.getState().peers.get(peerId)
     if (!peer || peer.channels.size === 0) return
 
     const runtime = this.#docRuntimes.get(docId)
-    if (!runtime) {
-      console.warn(`[exchange] doc runtime not found, offer not sent: ${docId}`)
-      return
-    }
+    if (!runtime) return
 
-    const toChannelIds = Array.from(peer.channels)
-
-    const enqueueOffer = (payload: SubstratePayload): void => {
-      const version = runtime.replica.version().serialize()
-      this.#outboundQueue.push({
-        toChannelIds,
-        message: {
-          type: "offer",
-          docId,
-          payload,
-          version,
-          reciprocate,
-        },
-      })
-    }
-
-    if (sinceVersion) {
-      const gap = resolveOutboundVersionGap(
-        runtime.replica,
-        runtime.replicaFactory,
-        sinceVersion,
-      )
-
-      switch (gap.kind) {
-        case "parse-error":
-          console.warn(
-            `[exchange] version parse failed for doc '${docId}':`,
-            gap.error,
-          )
-          return
-
-        case "no-gap": {
-          const payload = runtime.replica.exportSince(runtime.replica.version())
-          if (payload) enqueueOffer(payload)
-          return
-        }
-
-        case "gap": {
-          const payload = runtime.replica.exportSince(gap.parsed)
-          if (!payload) {
-            // exportSince returns null when the peer's version is older
-            // than our replica's base (history has been trimmed via
-            // advance()). Falling back to entirety lets the peer reset
-            // to our current state rather than diverge.
-            enqueueOffer(runtime.replica.exportEntirety())
-            return
-          }
-
-          enqueueOffer(payload)
-          return
-        }
-      }
-    }
-
-    enqueueOffer(runtime.replica.exportEntirety())
+    this.#outboundQueue.push({
+      toChannelIds: Array.from(peer.channels),
+      message: {
+        type: "offer",
+        docId,
+        payload,
+        version: runtime.replica.version().serialize(),
+        reciprocate,
+      },
+    })
   }
 
   // =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=

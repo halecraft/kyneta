@@ -30,7 +30,16 @@ import {
   isStateTuple,
   isTombstone,
   type StateTree,
+  type StateTuple,
+  type WriteStamp,
 } from "../substrates/state-tree.js"
+
+/** A tuple as a peer holds it; the install ordinal is fixed and unread here. */
+const tup = (value: unknown, timestamp: number, deleted?: true): StateTuple =>
+  deleted ? [value, timestamp, 1, true] : [value, timestamp, 1]
+
+/** A write's stamp. The ordinal only has to be above a structural zero. */
+const stamp = (timestamp: number): WriteStamp => ({ timestamp, installedAt: 1 })
 
 const Roster = Schema.struct({ peers: Schema.record(Schema.number()) })
 const Bound = ephemeral.bind(Roster)
@@ -85,7 +94,7 @@ describe("a record decomposes into one tuple per key", () => {
       tree,
       peersPath,
       mapChange({ alice: 1, bob: 2 }),
-      100,
+      stamp(100),
       Roster,
     )
 
@@ -94,8 +103,8 @@ describe("a record decomposes into one tuple per key", () => {
     // one another on merge, which is exactly what this substrate exists to
     // avoid.
     expect(isStateTuple(asRecord(tree).peers)).toBe(false)
-    expect(asRecord(tree).peers.alice).toEqual([1, 100])
-    expect(asRecord(tree).peers.bob).toEqual([2, 100])
+    expect(asRecord(tree).peers.alice).toEqual(tup(1, 100))
+    expect(asRecord(tree).peers.bob).toEqual(tup(2, 100))
   })
 
   it("stamps only the keys a change mentions", () => {
@@ -104,15 +113,21 @@ describe("a record decomposes into one tuple per key", () => {
       tree,
       peersPath,
       mapChange({ alice: 1 }),
-      100,
+      stamp(100),
       Roster,
     )
-    applyChangeToStateTree(tree, peersPath, mapChange({ bob: 2 }), 200, Roster)
+    applyChangeToStateTree(
+      tree,
+      peersPath,
+      mapChange({ bob: 2 }),
+      stamp(200),
+      Roster,
+    )
 
     // Alice keeps her original timestamp. A later write to a sibling key must
     // not refresh her, or a decaying presence field would never expire.
-    expect(asRecord(tree).peers.alice).toEqual([1, 100])
-    expect(asRecord(tree).peers.bob).toEqual([2, 200])
+    expect(asRecord(tree).peers.alice).toEqual(tup(1, 100))
+    expect(asRecord(tree).peers.bob).toEqual(tup(2, 200))
   })
 
   it("applies deletes before sets, matching stepMap", () => {
@@ -121,19 +136,19 @@ describe("a record decomposes into one tuple per key", () => {
       tree,
       peersPath,
       mapChange({ alice: 1, bob: 2 }),
-      100,
+      stamp(100),
       Roster,
     )
     applyChangeToStateTree(
       tree,
       peersPath,
       mapChange({ alice: 9 }, ["alice", "bob"]),
-      200,
+      stamp(200),
       Roster,
     )
 
     // `alice` appears in both `set` and `delete`, so the set wins.
-    expect(asRecord(tree).peers.alice).toEqual([9, 200])
+    expect(asRecord(tree).peers.alice).toEqual(tup(9, 200))
     // `bob` was only deleted, so he is tombstoned rather than removed — the
     // tuple has to stay in the tree for the delete to replicate.
     expect(isTombstone(asRecord(tree).peers.bob)).toBe(true)
@@ -151,7 +166,7 @@ describe("a record decomposes into one tuple per key", () => {
         tree,
         peersPath,
         sequenceChange([{ insert: [1] }]),
-        100,
+        stamp(100),
         Roster,
       ),
     ).toThrow(/cannot store a sequence change/)
@@ -175,7 +190,7 @@ describe("a record decomposes into one tuple per key", () => {
         tree,
         RawPath.empty.field("blob"),
         mapChange({ a: 1 }),
-        100,
+        stamp(100),
         Blob,
       ),
     ).toThrow(/atomic register/)
@@ -196,12 +211,18 @@ describe("two peers merge a roster without clobbering", () => {
     data: JSON.stringify(data),
   })
 
+  /**
+   * A tuple in wire shape: no install ordinal, because that is a fact about
+   * the receiver and the sender has no business asserting it.
+   */
+  const wire = (value: unknown, timestamp: number) => [value, timestamp]
+
   it("each peer's own key survives the merge", () => {
     const peerA = ephemeralSubstrateFactory.fromEntirety(
-      payload({ peers: { alice: [1, 100] } }),
+      payload({ peers: { alice: wire(1, 100) } }),
       Roster,
     )
-    peerA.merge(payload({ peers: { bob: [2, 100] } }))
+    peerA.merge(payload({ peers: { bob: wire(2, 100) } }))
 
     expect(peerA.reader.read(peersPath)).toEqual({ alice: 1, bob: 2 })
   })
@@ -212,16 +233,16 @@ describe("two peers merge a roster without clobbering", () => {
     // expires, here or on any peer that later receives this tree. The
     // assertion has to reach past the document.
     const peerA = ephemeralSubstrateFactory.fromEntirety(
-      payload({ peers: { alice: [1, 100] } }),
+      payload({ peers: { alice: wire(1, 100) } }),
       Roster,
     )
-    peerA.merge(payload({ peers: { bob: [2, 200] } }))
+    peerA.merge(payload({ peers: { bob: wire(2, 200) } }))
 
     const tree = JSON.parse(peerA.exportEntirety().data as string) as {
       peers: Record<string, unknown>
     }
-    expect(tree.peers.alice).toEqual([1, 100])
-    expect(tree.peers.bob).toEqual([2, 200])
+    expect(tree.peers.alice).toEqual(wire(1, 100))
+    expect(tree.peers.bob).toEqual(wire(2, 200))
   })
 
   it("a key merely missing from an incoming payload is not a delete", () => {
@@ -230,7 +251,7 @@ describe("two peers merge a roster without clobbering", () => {
     // exactly why deletion has to be represented rather than expressed by
     // omission — see ephemeral-deletion.test.ts for the tombstone that does it.
     const peerA = ephemeralSubstrateFactory.fromEntirety(
-      payload({ peers: { alice: [1, 100] } }),
+      payload({ peers: { alice: wire(1, 100) } }),
       Roster,
     )
     peerA.merge(payload({ peers: {} }))
@@ -263,7 +284,7 @@ describe("a declared field is not a written key", () => {
       tree,
       strPath,
       replaceChange(own({ a: 1, b: 2 })),
-      100,
+      stamp(100),
       Mixed,
     )
     // `{a: 9}` is not a valid struct value — `tryValidate` rejects it — so
@@ -273,11 +294,11 @@ describe("a declared field is not a written key", () => {
       tree,
       strPath,
       replaceChange(own({ a: 9 } as never)),
-      500,
+      stamp(500),
       Mixed,
     )
 
-    expect(asRecord(tree).str).toEqual({ a: [9, 500], b: [2, 100] })
+    expect(asRecord(tree).str).toEqual({ a: tup(9, 500), b: tup(2, 100) })
   })
 
   it("still deletes a written key a whole-value set omits", () => {
@@ -286,20 +307,23 @@ describe("a declared field is not a written key", () => {
       tree,
       recPath,
       replaceChange(own({ x: 1, y: 2 })),
-      100,
+      stamp(100),
       Mixed,
     )
     applyChangeToStateTree(
       tree,
       recPath,
       replaceChange(own({ x: 5 })),
-      200,
+      stamp(200),
       Mixed,
     )
 
     // The case the rule must not break: under a map, omission IS removal, and
     // a removal has to be a tombstone so it survives the next merge.
-    expect(asRecord(tree).rec).toEqual({ x: [5, 200], y: [null, 200, true] })
+    expect(asRecord(tree).rec).toEqual({
+      x: tup(5, 200),
+      y: tup(null, 200, true),
+    })
   })
 
   it("projects an emptied record as an empty record, not as absent", () => {

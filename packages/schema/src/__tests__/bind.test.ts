@@ -174,7 +174,7 @@ describe("state binding target", () => {
 
     const versionBefore = substrate.version()
     expect(versionBefore).toBeInstanceOf(StateVersion)
-    expect((versionBefore as StateVersion).timestamp).toBe(0)
+    expect((versionBefore as StateVersion).installSeq).toBe(0)
 
     // Trigger prepare → flush via executeBatch
     executeBatch(substrate.context(), [
@@ -183,10 +183,10 @@ describe("state binding target", () => {
 
     const versionAfter = substrate.version()
     expect(versionAfter).toBeInstanceOf(StateVersion)
-    expect((versionAfter as StateVersion).timestamp).toBeGreaterThan(0)
+    expect((versionAfter as StateVersion).installSeq).toBeGreaterThan(0)
   })
 
-  it("each mutation advances the timestamp (monotonic wall clock)", () => {
+  it("each mutation advances the install counter", () => {
     const bound = ephemeral.bind(testSchema)
     const factory = bound.factory({
       peerId: "test-peer",
@@ -194,25 +194,26 @@ describe("state binding target", () => {
     })
     const substrate = factory.create(testSchema)
 
-    const ts0 = (substrate.version() as StateVersion).timestamp
+    const ts0 = (substrate.version() as StateVersion).installSeq
     expect(ts0).toBe(0)
 
     executeBatch(substrate.context(), [
       { path: RawPath.empty.field("title"), change: replaceChange("v1") },
     ])
-    const ts1 = (substrate.version() as StateVersion).timestamp
+    const ts1 = (substrate.version() as StateVersion).installSeq
 
     executeBatch(substrate.context(), [
       { path: RawPath.empty.field("title"), change: replaceChange("v2") },
     ])
-    const ts2 = (substrate.version() as StateVersion).timestamp
+    const ts2 = (substrate.version() as StateVersion).installSeq
 
-    // Each flush should produce a wall-clock timestamp >= the previous
+    // The counter is an ordinal, not a clock: each write takes the next one,
+    // so a second write is strictly ahead however fast it followed.
     expect(ts1).toBeGreaterThan(0)
-    expect(ts2).toBeGreaterThanOrEqual(ts1)
+    expect(ts2).toBeGreaterThan(ts1)
   })
 
-  it("merge with an entirety payload absorbs state and bumps the timestamp", () => {
+  it("merge with an entirety payload absorbs state and advances the counter", () => {
     const bound = ephemeral.bind(testSchema)
     const factory = bound.factory({
       peerId: "test-peer",
@@ -225,11 +226,11 @@ describe("state binding target", () => {
     ])
 
     const target = factory.create(testSchema)
-    expect((target.version() as StateVersion).timestamp).toBe(0)
+    expect((target.version() as StateVersion).installSeq).toBe(0)
 
     target.merge(source.exportEntirety(), { origin: "sync" })
 
-    expect((target.version() as StateVersion).timestamp).toBeGreaterThan(0)
+    expect((target.version() as StateVersion).installSeq).toBeGreaterThan(0)
     expect(target.reader.read(RawPath.empty.field("title"))).toBe("merged")
   })
 

@@ -53,16 +53,56 @@ import { Zero } from "../zero.js"
 /**
  * The fundamental LWW field-level state element.
  *
- * `[0]` is the scalar value (or structural zero), `[1]` is the wall-clock
- * timestamp, and `[2]` — when present and `true` — marks a **tombstone**: the
- * key was deleted at `[1]`, and reads project it as absent.
+ * `[0]` is the scalar value (or structural zero) and `[1]` is the wall-clock
+ * timestamp the value was *written* at — what LWW orders by and what decay
+ * measures. `[3]`, when present and `true`, marks a **tombstone**: the key was
+ * deleted at `[1]`, and reads project it as absent.
  *
  * The marker needs its own slot rather than a sentinel value, because it has
  * to be out-of-band from the value domain: `null` is legitimate under a
  * nullable schema, and any in-band marker is something a `.json()` blob could
  * itself contain.
+ *
+ * `[2]` is the local install ordinal: which batch *this* replica took the
+ * value in. It answers a different question from `[1]` — a peer returning from
+ * an hour offline sends leaves written an hour ago and installed just now, and
+ * filtering an outgoing delta by write time would drop exactly those.
+ *
+ * It is **local**, so it is stripped on the way out and re-stamped on the way
+ * in. Two peers holding identical data stamp it differently, which is why no
+ * comparison that decides agreement may read it: see `joinTuples`,
+ * `sameTuple` and `stateTreeDigest`. Stripping it shifts the tombstone marker
+ * down to index 2, which is exactly the encoding peers already speak.
  */
-export type StateTuple = [value: unknown, timestamp: number, deleted?: boolean]
+export type StateTuple = [
+  value: unknown,
+  timestamp: number,
+  installedAt: number,
+  deleted?: boolean,
+]
+
+/**
+ * When a write happened, in both senses the tree needs.
+ *
+ * `timestamp` is the wall clock: what LWW orders by and what decay measures.
+ * `installedAt` is this replica's install ordinal: which batch *we* took the
+ * value in. They are not interchangeable and the difference is the whole
+ * reason deltas work — a peer back from an hour offline sends leaves with old
+ * timestamps that we are installing now, and a delta filtered by timestamp
+ * would drop exactly those.
+ */
+export interface WriteStamp {
+  readonly timestamp: number
+  readonly installedAt: number
+}
+
+/**
+ * The stamp a structural zero carries: nobody wrote it and nobody installed
+ * it. Timestamp zero loses every LWW comparison, and install ordinal zero sits
+ * below every cursor, so a zero is never mistaken for news and never ships in
+ * a delta.
+ */
+const STRUCTURAL_ZERO: WriteStamp = { timestamp: 0, installedAt: 0 }
 
 /**
  * A recursive tree of tuples.
@@ -99,15 +139,15 @@ export function isStateTuple(node: unknown): node is StateTuple {
  * next merge with anyone who still holds it.
  */
 export function isTombstone(node: unknown): node is StateTuple {
-  return isStateTuple(node) && node[2] === true
+  return isStateTuple(node) && node[3] === true
 }
 
 /**
  * Build a tombstone. The value slot is `null` and is never read: a tombstoned
  * key projects as absent, so nothing consults what it used to hold.
  */
-function tombstone(timestamp: number): StateTuple {
-  return [null, timestamp, true]
+function tombstone(stamp: WriteStamp): StateTuple {
+  return [null, stamp.timestamp, stamp.installedAt, true]
 }
 
 /**
@@ -125,13 +165,13 @@ function tombstone(timestamp: number): StateTuple {
  * leaf against leaf — where it is provably a lattice. See TECHNICAL.md
  * §"Deletion" for the worked example.
  */
-function tombstoneSubtree(node: StateTree, timestamp: number): StateTree {
-  if (isStateTuple(node)) return tombstone(timestamp)
+function tombstoneSubtree(node: StateTree, stamp: WriteStamp): StateTree {
+  if (isStateTuple(node)) return tombstone(stamp)
   const marked: Record<string, StateTree> = {}
   for (const key of Object.keys(node)) {
     marked[key] = tombstoneSubtree(
       (node as Record<string, StateTree>)[key],
-      timestamp,
+      stamp,
     )
   }
   return marked
@@ -253,15 +293,38 @@ export interface MergeResult {
 export function mergeStateTree(
   local: StateTree,
   remote: StateTree,
+  installedAt: number,
 ): MergeResult {
   const moved = { changed: false }
-  const tree = mergeInto(local, remote, moved)
+  const tree = mergeInto(local, remote, installedAt, moved)
   return { tree, changed: moved.changed }
+}
+
+/**
+ * Adopt an incoming node, stamping every leaf in it as installed now.
+ *
+ * The incoming payload carries no install ordinal — it is stripped on the
+ * wire, because it is a fact about the receiver. Stamping here rather than at
+ * parse time means only leaves that actually *win* are stamped, which is what
+ * makes "the counter moved" and "the state changed" the same question.
+ */
+function adopt(node: StateTree, installedAt: number): StateTree {
+  if (isStateTuple(node)) {
+    const copy = cloneTuple(node)
+    copy[2] = installedAt
+    return copy
+  }
+  const clone: Record<string, StateTree> = {}
+  for (const key of Object.keys(node)) {
+    clone[key] = adopt((node as Record<string, StateTree>)[key], installedAt)
+  }
+  return clone
 }
 
 function mergeInto(
   local: StateTree,
   remote: StateTree,
+  installedAt: number,
   moved: { changed: boolean },
 ): StateTree {
   if (isStateTuple(local) && isStateTuple(remote)) {
@@ -273,10 +336,11 @@ function mergeInto(
     // A won tie returns the incoming tuple even when it is indistinguishable
     // from the local one, so compare content rather than identity: adopting an
     // equal tuple is not a change, and treating it as one is what circulates.
-    moved.changed = !sameTuple(local, winner)
+    if (sameTuple(local, winner)) return local
+    moved.changed = true
     // Clone when remote wins, so the merged tree never aliases a payload the
     // caller may still own.
-    return cloneTuple(winner)
+    return adopt(winner, installedAt) as StateTuple
   }
 
   // One side is a leaf where the other is a container: the peers disagree
@@ -298,14 +362,14 @@ function mergeInto(
     const remoteTimestamp = subtreeTimestamp(remote)
     if (remoteTimestamp > localTimestamp) {
       moved.changed = true
-      return deepClone(remote)
+      return adopt(remote, installedAt)
     }
     if (localTimestamp > remoteTimestamp) return local
     // Same rule as the tuple tie-break: greater serialisation wins, giving a
     // total order both peers compute identically.
     if (valueRank(remote) <= valueRank(local)) return local
     moved.changed = true
-    return deepClone(remote)
+    return adopt(remote, installedAt)
   }
 
   // Both are objects (containers). Union the keys.
@@ -314,12 +378,12 @@ function mergeInto(
 
   for (const key of Object.keys(r)) {
     if (key in l) {
-      l[key] = mergeInto(l[key], r[key], moved)
+      l[key] = mergeInto(l[key], r[key], installedAt, moved)
     } else {
       // A key we have never seen. Absence carries no information under a
       // key-unioning merge, so this is always new state.
       moved.changed = true
-      l[key] = deepClone(r[key])
+      l[key] = adopt(r[key], installedAt)
     }
   }
 
@@ -810,6 +874,93 @@ function isExpired(
 // ---------------------------------------------------------------------------
 
 /**
+ * Serialize a tree for a peer, without our install ordinals.
+ *
+ * Dropping slot 2 shifts the tombstone marker down to index 2, which is the
+ * encoding peers already speak — so the wire format is unchanged by the
+ * ordinal's existence.
+ *
+ * This walks the tree rather than passing a replacer to `JSON.stringify`,
+ * which would have been free. A replacer descends into *every* array,
+ * including a leaf's value — and a register value may itself be an array,
+ * which the tuple test cannot distinguish from a tuple. Walking explicitly
+ * descends only through container keys and stops at a leaf, which is the same
+ * rule `deepClone` follows and the only one that is safe here.
+ */
+export function encodeTree(tree: StateTree): string {
+  return JSON.stringify(stripInstalledAt(tree))
+}
+
+function stripInstalledAt(node: StateTree): unknown {
+  if (isStateTuple(node)) {
+    return node[3] === true ? [node[0], node[1], true] : [node[0], node[1]]
+  }
+  const stripped: Record<string, unknown> = {}
+  for (const key of Object.keys(node)) {
+    stripped[key] = stripInstalledAt((node as Record<string, StateTree>)[key])
+  }
+  return stripped
+}
+
+/**
+ * Parse a tree from a peer, leaving install ordinals unset.
+ *
+ * The merge stamps what it adopts, so filling them here would stamp leaves
+ * that go on to lose the join — and "the counter moved" would stop meaning
+ * "our state changed".
+ */
+export function decodeTree(data: string): StateTree {
+  return restoreInstalledAt(JSON.parse(data))
+}
+
+function restoreInstalledAt(node: unknown): StateTree {
+  // The wire tuple is `[value, timestamp, deleted?]`, so the marker sits where
+  // the install ordinal will. Same reason as `stripInstalledAt` for walking
+  // rather than reviving: a reviver cannot tell a register value that happens
+  // to be an array from the tuple containing it.
+  if (Array.isArray(node)) {
+    const wire = node as [unknown, number, boolean?]
+    return wire[2] === true
+      ? [wire[0], wire[1], 0, true]
+      : [wire[0], wire[1], 0]
+  }
+  const restored: Record<string, StateTree> = {}
+  for (const key of Object.keys(node as Record<string, unknown>)) {
+    restored[key] = restoreInstalledAt((node as Record<string, unknown>)[key])
+  }
+  return restored
+}
+
+/**
+ * The leaves this replica took in after `installedAt`, as a partial tree, or
+ * `undefined` when there are none.
+ *
+ * Containers are kept only when something beneath them survives, so the
+ * result carries the paths of the changed leaves and nothing else. A key the
+ * result omits is a key it makes no claim about, which is what lets the
+ * receiver merge a delta with the same join it uses for an entirety.
+ */
+export function leavesInstalledAfter(
+  node: StateTree,
+  installedAt: number,
+): StateTree | undefined {
+  if (isStateTuple(node)) {
+    return node[2] > installedAt ? node : undefined
+  }
+  let kept: Record<string, StateTree> | undefined
+  for (const key of Object.keys(node)) {
+    const child = leavesInstalledAfter(
+      (node as Record<string, StateTree>)[key],
+      installedAt,
+    )
+    if (child === undefined) continue
+    kept ??= {}
+    kept[key] = child
+  }
+  return kept
+}
+
+/**
  * Copy a leaf tuple, whatever slots it has.
  *
  * Arity-agnostic on purpose: naming slots here would quietly truncate any
@@ -819,20 +970,6 @@ function isExpired(
  */
 function cloneTuple(tuple: StateTuple): StateTuple {
   return tuple.slice() as StateTuple
-}
-
-function deepClone(value: any): any {
-  // An array inside a StateTree is always a leaf tuple: sequences are not a
-  // supported container on this substrate, so nothing else can be an array.
-  if (Array.isArray(value)) return cloneTuple(value as StateTuple)
-  if (typeof value === "object" && value !== null) {
-    const clone: Record<string, any> = {}
-    for (const key of Object.keys(value)) {
-      clone[key] = deepClone(value[key])
-    }
-    return clone
-  }
-  return value
 }
 
 // ---------------------------------------------------------------------------
@@ -921,7 +1058,7 @@ export function stateTreeDigest(tree: StateTree): Digest {
       const stamp = String(node[1])
       // A tombstone and a live `null` are different states, and `String(null)`
       // cannot tell them apart.
-      const dead = node[2] === true ? "\u0001" : ""
+      const dead = node[3] === true ? "\u0001" : ""
       lanes[0] ^= digestFold(digestFold(digestFold(a, encoded), stamp), dead)
       lanes[1] ^= digestFold(digestFold(digestFold(b, encoded), stamp), dead)
       lanes[2] ^= digestFold(digestFold(digestFold(c, encoded), stamp), dead)
@@ -948,10 +1085,10 @@ export function stateTreeDigest(tree: StateTree): Digest {
  * Wrap a leaf value in a `StateTuple`, deep-cloning objects/arrays (register
  * values) so the tree never aliases the caller's live value.
  */
-function leafTuple(value: unknown, timestamp: number): StateTuple {
+function leafTuple(value: unknown, stamp: WriteStamp): StateTuple {
   const stored =
     typeof value === "object" && value !== null ? deepClonePlain(value) : value
-  return [stored, timestamp]
+  return [stored, stamp.timestamp, stamp.installedAt]
 }
 
 /**
@@ -1003,7 +1140,7 @@ export function applyChangeToStateTree(
   tree: StateTree,
   path: Path,
   change: ChangeBase,
-  timestamp: number,
+  stamp: WriteStamp,
   schema: SchemaNode | undefined,
 ): void {
   refuseUnstorableChange(change)
@@ -1016,7 +1153,7 @@ export function applyChangeToStateTree(
         // nested registers still land atomically (schema threaded through).
         // Sync in place for the same reason as the keyed case below: the root
         // is a product, so a field the value omits is not a removal.
-        syncStateTreeToShadow(tree, val, schema, timestamp)
+        syncStateTreeToShadow(tree, val, schema, stamp)
       } else {
         throw new Error("Cannot replace root with a scalar")
       }
@@ -1025,7 +1162,7 @@ export function applyChangeToStateTree(
         tree as Record<string, StateTree>,
         change as MapChange,
         schema,
-        timestamp,
+        stamp,
       )
     }
     return
@@ -1061,9 +1198,9 @@ export function applyChangeToStateTree(
       // untouched. Both follow from reusing the subtree, because
       // `syncStateTreeToShadow` then sees what was there.
       if (!target[key] || isStateTuple(target[key])) target[key] = {}
-      syncStateTreeToShadow(target[key], val, targetSchema, timestamp)
+      syncStateTreeToShadow(target[key], val, targetSchema, stamp)
     } else {
-      target[key] = leafTuple(val, timestamp)
+      target[key] = leafTuple(val, stamp)
     }
   } else {
     let child = target[key]
@@ -1103,7 +1240,7 @@ export function applyChangeToStateTree(
       child as Record<string, StateTree>,
       change as MapChange,
       targetSchema,
-      timestamp,
+      stamp,
     )
   }
 }
@@ -1124,7 +1261,7 @@ function applyMapChange(
   target: Record<string, StateTree>,
   change: MapChange,
   containerSchema: SchemaNode | undefined,
-  timestamp: number,
+  stamp: WriteStamp,
 ): void {
   for (const key of change.delete ?? []) {
     // A tombstone, not a removal: `mergeStateTree` unions keys, so a key taken
@@ -1138,8 +1275,8 @@ function applyMapChange(
     const existing = target[key]
     target[key] =
       existing === undefined
-        ? tombstone(timestamp)
-        : tombstoneSubtree(existing, timestamp)
+        ? tombstone(stamp)
+        : tombstoneSubtree(existing, stamp)
   }
 
   for (const [key, value] of Object.entries(change.set ?? {})) {
@@ -1150,10 +1287,10 @@ function applyMapChange(
       : undefined
     if (isDecomposedContainer(value, itemSchema)) {
       const subtree: Record<string, StateTree> = {}
-      syncStateTreeToShadow(subtree, value, itemSchema, timestamp)
+      syncStateTreeToShadow(subtree, value, itemSchema, stamp)
       target[key] = subtree
     } else {
-      target[key] = leafTuple(value, timestamp)
+      target[key] = leafTuple(value, stamp)
     }
   }
 }
@@ -1166,7 +1303,7 @@ export function syncStateTreeToShadow(
   tree: StateTree,
   plain: any,
   schema: SchemaNode | undefined,
-  timestamp: number,
+  stamp: WriteStamp,
 ): void {
   if (isStateTuple(tree)) {
     throw new Error("Cannot sync into a root tuple.")
@@ -1184,10 +1321,10 @@ export function syncStateTreeToShadow(
       if (!target[key] || isStateTuple(target[key])) {
         target[key] = {}
       }
-      syncStateTreeToShadow(target[key], val, childSchema, timestamp)
+      syncStateTreeToShadow(target[key], val, childSchema, stamp)
     } else {
       // Scalar or register (sum / .json()): one atomic tuple.
-      target[key] = leafTuple(val, timestamp)
+      target[key] = leafTuple(val, stamp)
     }
   }
 
@@ -1209,12 +1346,12 @@ export function syncStateTreeToShadow(
   for (const key of Object.keys(target)) {
     if (key in plain) continue
     if (isTombstone(target[key])) continue
-    target[key] = tombstoneSubtree(target[key], timestamp)
+    target[key] = tombstoneSubtree(target[key], stamp)
   }
 }
 
 /**
- * Seed structural-zero defaults (timestamp 0 = genesis, lineage ⊥) for keys
+ * Seed structural-zero defaults (stamp 0 = genesis, lineage ⊥) for keys
  * missing from `tree`, guided by `schema` so a register default (e.g. a sum's
  * first variant) is seeded as one atomic tuple.
  */
@@ -1236,7 +1373,7 @@ export function insertStructuralZeros(
         t[key] = {}
         insertStructuralZeros(t[key], defaultVal, childSchema)
       } else {
-        t[key] = leafTuple(defaultVal, 0)
+        t[key] = leafTuple(defaultVal, STRUCTURAL_ZERO)
       }
     } else if (isDecomposedContainer(defaultVal, childSchema)) {
       // Present container: fill any nested gaps.

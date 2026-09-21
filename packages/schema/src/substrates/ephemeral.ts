@@ -52,13 +52,17 @@ import { Zero } from "../zero.js"
 import { DEFAULT_LINEAGE, objectToReplaceOps } from "./plain.js"
 import {
   applyChangeToStateTree,
+  decodeTree,
+  encodeTree,
   extractPlainState,
   formatStateTreeViolation,
   insertStructuralZeros,
   isStateTuple,
+  leavesInstalledAfter,
   mergeStateTree,
   type StateTree,
   stateTreeViolation,
+  type WriteStamp,
 } from "./state-tree.js"
 
 // ---------------------------------------------------------------------------
@@ -91,29 +95,56 @@ import {
  * reached by a different road.
  */
 export class StateVersion implements Version {
-  readonly timestamp: number
+  /**
+   * Which replica instance minted this, and how much it had installed.
+   *
+   * The pair is structurally what `PlainVersion` is — a lineage and a counter
+   * — so this substrate stops being an exception to the version-vector family
+   * it belongs to. An install ordinal is strictly monotone by construction,
+   * which a wall clock is not: `Date.now()` has millisecond resolution and
+   * presence traffic arrives in bursts, so two changes in one tick used to
+   * share a version and a real change read as none.
+   */
+  readonly epoch: string
+  readonly installSeq: number
 
-  constructor(timestamp: number) {
-    this.timestamp = timestamp
+  constructor(epoch: string, installSeq: number) {
+    this.epoch = epoch
+    this.installSeq = installSeq
   }
 
+  /**
+   * Deliberately `DEFAULT_LINEAGE`, never the epoch.
+   *
+   * `classifyResetTrigger` treats two differing non-default lineages as a
+   * lineage boundary, which discards the payload and re-requests an entirety.
+   * Every replica instance mints a distinct epoch, so surfacing it here would
+   * make *every pair of peers* a boundary and delta sync would silently never
+   * happen. The epoch identifies whose counter this is; it is not a claim
+   * about the document's history.
+   */
   get lineage(): string {
     return DEFAULT_LINEAGE
   }
 
-  static now(): StateVersion {
-    return new StateVersion(Date.now())
-  }
-
   serialize(): string {
-    return String(this.timestamp)
+    return `${this.epoch}:${this.installSeq}`
   }
 
+  /**
+   * Two epochs are incomparable, so the meet of versions from different
+   * replicas is the bottom of this replica's own lineage: nothing is known to
+   * be common. Within one epoch the counters order, so the meet is the lower.
+   */
   meet(other: Version): StateVersion {
     if (!(other instanceof StateVersion)) {
       throw new Error("StateVersion mismatch")
     }
-    return new StateVersion(Math.min(this.timestamp, other.timestamp))
+    if (other.epoch !== this.epoch) return new StateVersion(this.epoch, 0)
+    return new StateVersion(
+      this.epoch,
+      Math.min(this.installSeq, other.installSeq),
+    )
   }
 
   compare(other: Version): "behind" | "equal" | "ahead" | "concurrent" {
@@ -121,40 +152,53 @@ export class StateVersion implements Version {
       throw new Error("StateVersion mismatch")
     }
 
-    // Always "concurrent" — never "equal", even for identical timestamps.
+    // Always "concurrent" — a version cannot answer this question here.
     //
-    // The synchronizer skips importing any offer it classifies as "equal", on
-    // the assumption that equal versions mean equal state. True of a
-    // total-order version; false here. This timestamp records the document's
-    // newest *write*, so two peers that wrote to *different fields* in the
-    // same millisecond carry the same timestamp over divergent trees. Saying
-    // "equal" makes each of them discard the payload that would have
-    // reconciled them, and the field-level merge never runs.
+    // An install counter says how much *this* replica has taken in, which is
+    // a fact about us and meaningless to anyone else: two peers holding
+    // identical trees reached them by different routes and hold different
+    // counts. So there is no ordering between epochs to report, and within an
+    // epoch a higher count does not imply the lower one is behind — it may
+    // have installed different leaves.
     //
-    // A wall clock cannot answer "do we hold the same state?", so this does
-    // not guess. The cost is that no offer is ever skipped as redundant, which
-    // is why this substrate re-merges and re-broadcasts more than it needs to.
-    // Answering properly needs a digest of the tree instead of a timestamp;
-    // until then merging needlessly is the safe direction, because a merge is
-    // idempotent and a skipped merge is not recoverable.
+    // Equality is answered by `stateTreeDigest` instead, carried beside the
+    // version on the wire, and the synchronizer's classifier reads it. The
+    // counter's job is narrower and different: it says what to *send*, not who
+    // is ahead.
     return "concurrent"
   }
 
   static parse(serialized: string): StateVersion {
-    if (serialized === "") {
-      throw new Error("Invalid StateVersion value: (empty string)")
-    }
-    const n = Number(serialized)
-    if (!Number.isFinite(n) || n < 0) {
+    const separator = serialized.lastIndexOf(":")
+    if (separator <= 0) {
       throw new Error(`Invalid StateVersion value: ${serialized}`)
     }
-    return new StateVersion(n)
+    const epoch = serialized.slice(0, separator)
+    const n = Number(serialized.slice(separator + 1))
+    if (!Number.isInteger(n) || n < 0) {
+      throw new Error(`Invalid StateVersion value: ${serialized}`)
+    }
+    return new StateVersion(epoch, n)
   }
 }
 
 // ---------------------------------------------------------------------------
 // createStateReplicaCore — headless history-free replication surface
 // ---------------------------------------------------------------------------
+
+/**
+ * A fresh identity for one replica instance's install counter.
+ *
+ * Only distinctness matters: it is compared for identity, never for order, and
+ * a peer that sees an unfamiliar one simply asks for an entirety. It is not a
+ * peer identity — see `StateVersion` for why this substrate declines to have
+ * one — and it never persists, because the documents do not either.
+ */
+let epochCounter = 0
+function newEpoch(): string {
+  epochCounter += 1
+  return `e${epochCounter}-${Math.random().toString(36).slice(2, 10)}`
+}
 
 /**
  * Creates the core replication surface for the ephemeral substrate.
@@ -166,69 +210,74 @@ function createStateReplicaCore(
   getTree: () => StateTree,
   setTree: (tree: StateTree) => void,
 ) {
-  let cachedVersion = new StateVersion(0)
+  // Identifies whose install counter this is. Minted per replica instance
+  // because the counter means nothing across a restart: a fresh replica
+  // starts at zero, and a peer still holding a cursor from the previous life
+  // would ask for leaves above a number that now refers to different state.
+  // A mismatched epoch makes `exportSince` decline, and the caller falls back
+  // to an entirety.
+  const epoch = newEpoch()
 
-  /**
-   * The next version, guaranteed to differ from the current one.
-   *
-   * `Date.now()` has millisecond resolution, and two state changes inside one
-   * millisecond are routine for presence traffic, which arrives in bursts. A
-   * bare `now()` would hand out the same version twice, making a state change
-   * indistinguishable from none to anyone comparing versions — a relay would
-   * conclude it had nothing to forward and the document would stop there.
-   * Strict monotonicity is what a version owes its readers; the clock is only
-   * how this substrate picks a starting point.
-   */
-  const nextVersion = (): StateVersion =>
-    new StateVersion(Math.max(Date.now(), cachedVersion.timestamp + 1))
-  // Whether a write has landed since the last batch ended. Not an op log:
-  // `exportSince` is always `null` here, so an op would be pushed, counted
-  // and dropped without anything ever reading it. What ends a batch needs to
-  // know is only whether σ moved.
-  let written = false
+  // How much this replica has installed. Advanced by every leaf it takes in,
+  // from a local write or from a merge, and never by anything else — so
+  // "the counter moved" and "our state changed" are the same fact, and
+  // `exportSince` can answer "what have I taken in since?" by reading it.
+  let installSeq = 0
 
   return {
-    markWritten(): void {
-      written = true
-    },
-
-    /**
-     * End a batch. A write since the last one advances the version clock,
-     * just like LWW — unless the batch was a projection, where σ moved but
-     * the StateTree math did not, so the network version must stay still.
-     */
-    endBatch(projection: boolean): void {
-      const moved = written
-      written = false
-      if (moved && !projection) cachedVersion = nextVersion()
+    /** Open the next install ordinal, for one write or one merge. */
+    nextStamp(timestamp: number): WriteStamp {
+      installSeq += 1
+      return { timestamp, installedAt: installSeq }
     },
 
     version(): StateVersion {
-      return cachedVersion
+      return new StateVersion(epoch, installSeq)
     },
 
     baseVersion(): StateVersion {
-      return cachedVersion
+      // Always the bottom of this epoch: nothing is ever trimmed, so every
+      // cursor within the epoch remains serviceable however old it is.
+      return new StateVersion(epoch, 0)
     },
 
-    advance(to: StateVersion): void {
-      // No history to trim — a CvRDT carries its whole meaning in the tree.
-      // Only the version moves, so `exportSince` reports the right base.
-      cachedVersion = to
+    advance(_to: StateVersion): void {
+      // Nothing to trim. A CvRDT carries its whole meaning in the tree, and
+      // the install counter is not history — it is a position in our own
+      // intake that only ever moves forward, on its own.
     },
 
     exportEntirety(): SubstratePayload {
       return {
         kind: "entirety",
         encoding: "json",
-        data: JSON.stringify(getTree()),
+        data: encodeTree(getTree()),
         lineage: DEFAULT_LINEAGE,
       }
     },
 
-    exportSince(_since: StateVersion): SubstratePayload | null {
-      // Snapshot-only — no delta sync.
-      return null
+    /**
+     * The leaves taken in since `since`, as a partial tree.
+     *
+     * Any cursor within our epoch is serviceable, however old: nothing is
+     * discarded, so this is a scan rather than a lookup into a log that might
+     * have been trimmed. Staleness repairs itself too — a leaf overwritten
+     * while a peer was behind is returned at its *current* value, which is the
+     * only one that peer needs.
+     *
+     * A cursor from another epoch is not ours to interpret, so this declines
+     * and the caller sends an entirety.
+     */
+    exportSince(since: StateVersion): SubstratePayload | null {
+      if (since.epoch !== epoch) return null
+      const delta = leavesInstalledAfter(getTree(), since.installSeq)
+      if (delta === undefined) return null
+      return {
+        kind: "since",
+        encoding: "json",
+        data: encodeTree(delta),
+        lineage: DEFAULT_LINEAGE,
+      }
     },
 
     merge(payload: SubstratePayload): void {
@@ -236,18 +285,27 @@ function createStateReplicaCore(
         throw new Error("StateReplica expects JSON-encoded StateTree payloads.")
       }
 
-      if (payload.kind === "entirety") {
-        const incomingTree = JSON.parse(payload.data) as StateTree
-        const { tree, changed } = mergeStateTree(getTree(), incomingTree)
-        setTree(tree)
+      // Both kinds join identically. A delta is a partial tree, and the merge
+      // unions keys, so a key it omits is a key it says nothing about — which
+      // is exactly the "absence carries no information" rule the whole
+      // substrate rests on. Handling only `"entirety"` would drop deltas in
+      // silence.
+      const incomingTree = decodeTree(payload.data)
+      installSeq += 1
+      const { tree, changed } = mergeStateTree(
+        getTree(),
+        incomingTree,
+        installSeq,
+      )
+      setTree(tree)
 
-        // Advertise a change only when the join actually moved. Bumping
-        // unconditionally makes every peer re-announce every payload it
-        // receives, including ones it already had — harmless between two peers,
-        // where the sender is excluded from the relay and the cycle closes, and
-        // an endless loop among three, where it never does.
-        if (changed) cachedVersion = nextVersion()
-      }
+      // The counter advanced speculatively, to have an ordinal ready for
+      // whatever the join adopts. Nothing adopted it if nothing moved, so
+      // give it back: a merge that changed nothing must leave no trace, or
+      // every peer re-announces every payload it receives — harmless between
+      // two peers, where the sender is excluded from the relay and the cycle
+      // closes, and an endless loop among three, where it never does.
+      if (!changed) installSeq -= 1
     },
 
     resetFromEntirety(
@@ -373,11 +431,10 @@ export function createStateSubstrate(
       // subscribers, and applying its wake-up op here would stamp the whole
       // document with local `Date.now()` and clobber what just merged.
       //
-      // Replay can only reach here from `merge`. This substrate is
-      // snapshot-only — `exportSince` always returns `null` and `merge`
-      // refuses anything but an entirety payload — so no peer's op batch is
-      // ever replayed through `prepare`, and `applyChanges` never sets the
-      // flag.
+      // Replay can only reach here from `merge`, which joins whole trees
+      // rather than replaying ops: this substrate has no op log, so no peer's
+      // batch is ever replayed through `prepare` and `applyChanges` never sets
+      // the flag.
       if (!options?.projection && !options?.replay) {
         // A register — a sum variant or a `.json()` blob — lives in the tree as
         // ONE leaf tuple, so that concurrent edits to it settle
@@ -413,19 +470,25 @@ export function createStateSubstrate(
             currentTree,
             registerPath,
             replaceChange(deepClonePlain(registerPath.read(shadow))),
-            Date.now(),
+            core.nextStamp(Date.now()),
             schema,
           )
         } else {
-          applyChangeToStateTree(currentTree, path, change, Date.now(), schema)
+          applyChangeToStateTree(
+            currentTree,
+            path,
+            change,
+            core.nextStamp(Date.now()),
+            schema,
+          )
         }
       }
-
-      core.markWritten()
     },
 
-    afterBatch(options?: BatchOptions): void {
-      core.endBatch(options?.projection === true)
+    afterBatch(): void {
+      // Nothing to settle. The install counter advances as each leaf lands, so
+      // a batch has no bookkeeping left to reconcile when it ends — and a
+      // projection never reaches the tree at all, so it cannot have moved it.
     },
 
     writable(): PositionCapable {

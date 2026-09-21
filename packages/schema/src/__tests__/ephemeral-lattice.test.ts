@@ -20,11 +20,49 @@ import {
 } from "../substrates/ephemeral.js"
 import { DEFAULT_LINEAGE } from "../substrates/plain.js"
 import {
+  encodeTree,
   joinTuples,
   mergeStateTree,
   type StateTree,
   type StateTuple,
 } from "../substrates/state-tree.js"
+
+const clone = (tuple: StateTuple): StateTuple => tuple.slice() as StateTuple
+
+/**
+ * A tuple as a peer would hold it. The install ordinal is fixed because these
+ * tests are about the join, which never reads it.
+ */
+const tup = (value: unknown, timestamp: number, deleted?: true): StateTuple =>
+  deleted ? [value, timestamp, 1, true] : [value, timestamp, 1]
+
+const merge = (local: StateTree, remote: StateTree) =>
+  mergeStateTree(local, remote, 1)
+
+/**
+ * Compare what replicates, not what a replica happens to hold.
+ *
+ * Two peers that reach the same state by opposite merge orders differ in two
+ * ways that carry no meaning: their install ordinals, which are each
+ * replica's own bookkeeping, and the order keys were added in, since a merge
+ * unions keys in whichever order it met them. `encodeTree` drops the first
+ * and sorting drops the second. What is left is the state peers exchange.
+ */
+const canonical = (node: unknown): unknown => {
+  if (node === null || typeof node !== "object") return node
+  if (Array.isArray(node)) return node
+  const sorted: Record<string, unknown> = {}
+  for (const key of Object.keys(node as Record<string, unknown>).sort()) {
+    sorted[key] = canonical((node as Record<string, unknown>)[key])
+  }
+  return sorted
+}
+
+const replicated = (tree: StateTree): string =>
+  JSON.stringify(canonical(JSON.parse(encodeTree(tree))))
+
+const sameState = (a: StateTree, b: StateTree): boolean =>
+  replicated(a) === replicated(b)
 
 // Representative tuples: ties on both equal and differing values, ordinary
 // timestamp ordering, and the value shapes a register can actually hold —
@@ -36,22 +74,20 @@ import {
 // tuple, and a tombstone differs from a live `null` in no other slot. A
 // sample without one pins the laws over exactly the inputs that cannot fail.
 const SAMPLES: StateTuple[] = [
-  ["from-A", 1000],
-  ["from-B", 1000], // ties with the above — the case that used to diverge
-  ["from-A", 2000],
-  ["from-B", 999],
-  [{ kind: "circle", radius: 5 }, 1000], // a register value, tied
-  [{ kind: "square", side: 3 }, 1000], // ...against another whole variant
-  [null, 1000],
-  [undefined, 1000],
-  [0, 1000],
-  ["", 1000],
-  [null, 1000, true], // a tombstone, tied against the live `null` above
-  [null, 2000, true], // ...and against the later live write
-  [null, 999, true],
+  tup("from-A", 1000),
+  tup("from-B", 1000), // ties with the above — the case that used to diverge
+  tup("from-A", 2000),
+  tup("from-B", 999),
+  tup({ kind: "circle", radius: 5 }, 1000), // a register value, tied
+  tup({ kind: "square", side: 3 }, 1000), // ...against another whole variant
+  tup(null, 1000),
+  tup(undefined, 1000),
+  tup(0, 1000),
+  tup("", 1000),
+  tup(null, 1000, true), // a tombstone, tied against the live `null` above
+  tup(null, 2000, true), // ...and against the later live write
+  tup(null, 999, true),
 ]
-
-const clone = (tuple: StateTuple): StateTuple => tuple.slice() as StateTuple
 
 describe("joinTuples is a join-semilattice", () => {
   it("is commutative — a ⊔ b equals b ⊔ a for every pair", () => {
@@ -105,19 +141,19 @@ describe("joinTuples is a join-semilattice", () => {
     // could not be serialised at all must not affect this case.
     const circular: any = {}
     circular.self = circular
-    expect(joinTuples(["old", 1000], [circular, 2000])[1]).toBe(2000)
-    expect(joinTuples([circular, 2000], ["old", 1000])[1]).toBe(2000)
+    expect(joinTuples(tup("old", 1000), tup(circular, 2000))[1]).toBe(2000)
+    expect(joinTuples(tup(circular, 2000), tup("old", 1000))[1]).toBe(2000)
   })
 })
 
 describe("the tie rule", () => {
   it("resolves same-millisecond writes to one agreed value", () => {
     // The exact divergence this fix exists for.
-    const a: StateTree = { v: ["from-A", 1000] }
-    const b: StateTree = { v: ["from-B", 1000] }
+    const a: StateTree = { v: tup("from-A", 1000) }
+    const b: StateTree = { v: tup("from-B", 1000) }
 
-    const ab = mergeStateTree({ v: ["from-A", 1000] }, b).tree
-    const ba = mergeStateTree({ v: ["from-B", 1000] }, a).tree
+    const ab = merge({ v: tup("from-A", 1000) }, b).tree
+    const ba = merge({ v: tup("from-B", 1000) }, a).tree
 
     expect(ab).toEqual(ba)
   })
@@ -125,8 +161,8 @@ describe("the tie rule", () => {
   it("prefers the greater value, not the later writer", () => {
     // Stated as a decision rather than left to be inferred: a tie IS
     // simultaneity, so there is no later writer to prefer.
-    expect(joinTuples(["a", 1000], ["b", 1000])[0]).toBe("b")
-    expect(joinTuples(["b", 1000], ["a", 1000])[0]).toBe("b")
+    expect(joinTuples(tup("a", 1000), tup("b", 1000))[0]).toBe("b")
+    expect(joinTuples(tup("b", 1000), tup("a", 1000))[0]).toBe("b")
   })
 
   it("keeps a tied register whole rather than blending variants", () => {
@@ -134,7 +170,7 @@ describe("the tie rule", () => {
     // Coherence matters more than which one wins.
     const circle = { kind: "circle", radius: 5 }
     const square = { kind: "square", side: 3 }
-    const winner = joinTuples([circle, 1000], [square, 1000])[0] as any
+    const winner = joinTuples(tup(circle, 1000), tup(square, 1000))[0] as any
     expect(winner).toEqual(
       expect.objectContaining({ kind: expect.any(String) }),
     )
@@ -146,34 +182,34 @@ describe("the tie rule", () => {
 
 describe("mergeStateTree over whole trees", () => {
   const treeA = (): StateTree => ({
-    scalar: ["A", 1000],
-    nested: { x: [1, 1000], y: [2, 500] },
+    scalar: tup("A", 1000),
+    nested: { x: tup(1, 1000), y: tup(2, 500) },
   })
   const treeB = (): StateTree => ({
-    scalar: ["B", 1000],
-    nested: { x: [9, 900], z: [3, 700] },
+    scalar: tup("B", 1000),
+    nested: { x: tup(9, 900), z: tup(3, 700) },
   })
 
   it("converges regardless of merge direction", () => {
-    expect(mergeStateTree(treeA(), treeB()).tree).toEqual(
-      mergeStateTree(treeB(), treeA()).tree,
-    )
+    expect(
+      sameState(merge(treeA(), treeB()).tree, merge(treeB(), treeA()).tree),
+    ).toBe(true)
   })
 
   it("is idempotent over a tree", () => {
-    const once = mergeStateTree(treeA(), treeB()).tree
-    const twice = mergeStateTree(
-      mergeStateTree(treeA(), treeB()).tree,
-      treeB(),
-    ).tree
+    const once = merge(treeA(), treeB()).tree
+    const twice = merge(merge(treeA(), treeB()).tree, treeB()).tree
     expect(twice).toEqual(once)
   })
 
   it("unions keys and keeps the higher timestamp per leaf", () => {
-    const merged = mergeStateTree(treeA(), treeB()).tree as any
-    expect(merged.nested.x).toEqual([1, 1000]) // local is newer
-    expect(merged.nested.y).toEqual([2, 500]) // absent from remote
-    expect(merged.nested.z).toEqual([3, 700]) // only in remote
+    const merged = merge(treeA(), treeB()).tree as any
+    expect(merged.nested.x).toEqual(tup(1, 1000)) // local is newer
+    expect(merged.nested.y).toEqual(tup(2, 500)) // absent from remote
+    // Adopted from remote, so stamped as installed by us rather than carrying
+    // the sender's ordinal — which would be a number from someone else's
+    // counter and meaningless here.
+    expect(merged.nested.z).toEqual([3, 700, 1])
   })
 
   // -------------------------------------------------------------------------
@@ -186,12 +222,12 @@ describe("mergeStateTree over whole trees", () => {
   // tombstones the leaves inside it rather than replacing the subtree with one
   // tuple. The laws are guaranteed here, and this is the set that matters.
   const TREES: StateTree[] = [
-    { k: { x: ["live", 100], y: [1, 100] } },
-    { k: { x: ["other", 100], y: [1, 100] } }, // ties with the above on x
-    { k: { x: ["live", 300], y: [1, 100] } },
-    { k: { x: [null, 200, true], y: [null, 200, true] } }, // deleted entry
-    { k: { x: [null, 100, true], y: [1, 100] } }, // partially tombstoned
-    { k: { x: ["live", 400], y: [9, 50] } },
+    { k: { x: tup("live", 100), y: [1, 100] } },
+    { k: { x: tup("other", 100), y: [1, 100] } }, // ties with the above on x
+    { k: { x: tup("live", 300), y: [1, 100] } },
+    { k: { x: tup(null, 200, true), y: tup(null, 200, true) } }, // deleted entry
+    { k: { x: tup(null, 100, true), y: [1, 100] } }, // partially tombstoned
+    { k: { x: tup("live", 400), y: [9, 50] } },
     { k: {} }, // empty container — distinct from a deleted one
     {}, // key absent entirely
   ]
@@ -222,9 +258,9 @@ describe("mergeStateTree over whole trees", () => {
     const divergent: string[] = []
     for (const a of TREES) {
       for (const b of TREES) {
-        const ab = mergeStateTree(fresh(a), fresh(b)).tree
-        const ba = mergeStateTree(fresh(b), fresh(a)).tree
-        if (JSON.stringify(ab) !== JSON.stringify(ba)) {
+        const ab = merge(fresh(a), fresh(b)).tree
+        const ba = merge(fresh(b), fresh(a)).tree
+        if (!sameState(ab, ba)) {
           divergent.push(
             `${JSON.stringify(a)} vs ${JSON.stringify(b)} → ${JSON.stringify(ab)} / ${JSON.stringify(ba)}`,
           )
@@ -237,22 +273,16 @@ describe("mergeStateTree over whole trees", () => {
   it("is associative over shape-stable trees", () => {
     expect(
       law("assoc", (a, b, c) => {
-        const left = mergeStateTree(
-          mergeStateTree(fresh(a), fresh(b)).tree,
-          fresh(c),
-        ).tree
-        const right = mergeStateTree(
-          fresh(a),
-          mergeStateTree(fresh(b), fresh(c)).tree,
-        ).tree
-        return JSON.stringify(left) === JSON.stringify(right)
+        const left = merge(merge(fresh(a), fresh(b)).tree, fresh(c)).tree
+        const right = merge(fresh(a), merge(fresh(b), fresh(c)).tree).tree
+        return sameState(left, right)
       }),
     ).toEqual([])
   })
 
   it("is idempotent over shape-stable trees", () => {
     for (const a of TREES) {
-      expect(JSON.stringify(mergeStateTree(fresh(a), fresh(a)).tree)).toBe(
+      expect(JSON.stringify(merge(fresh(a), fresh(a)).tree)).toBe(
         JSON.stringify(a),
       )
     }
@@ -264,10 +294,10 @@ describe("mergeStateTree over whole trees", () => {
     // Commutativity still holds, which the old "remote always wins" did not.
     // Associativity deliberately does NOT hold and is not claimed: the losing
     // side's contents are discarded, so no later merge can recover them.
-    const leaf: StateTree = { k: ["leaf", 300] }
+    const leaf: StateTree = { k: tup("leaf", 300) }
     const container: StateTree = { k: { x: [1, 100] } }
-    expect(mergeStateTree(fresh(leaf), fresh(container)).tree).toEqual(
-      mergeStateTree(fresh(container), fresh(leaf)).tree,
+    expect(merge(fresh(leaf), fresh(container)).tree).toEqual(
+      merge(fresh(container), fresh(leaf)).tree,
     )
   })
 
@@ -276,7 +306,7 @@ describe("mergeStateTree over whole trees", () => {
     // reference, a later local write would reach back and mutate a payload the
     // caller still owns.
     const remote = treeB()
-    const merged = mergeStateTree({ scalar: ["A", 1] }, remote).tree as Record<
+    const merged = merge({ scalar: tup("A", 1) }, remote).tree as Record<
       string,
       StateTuple
     >
@@ -302,8 +332,8 @@ describe("StateVersion carries no lineage", () => {
     // trigger — lives in @kyneta/exchange's `reset-trigger.test.ts`, which
     // points back here. Changing this line means revisiting the replicate arm
     // of `Synchronizer.#executeImportDocData`.
-    expect(StateVersion.now().lineage).toBe(DEFAULT_LINEAGE)
-    expect(new StateVersion(0).lineage).toBe(DEFAULT_LINEAGE)
+    expect(new StateVersion("epoch", 7).lineage).toBe(DEFAULT_LINEAGE)
+    expect(new StateVersion("epoch", 0).lineage).toBe(DEFAULT_LINEAGE)
   })
 })
 
@@ -313,47 +343,47 @@ describe("StateVersion carries no lineage", () => {
 // so in a mesh of three there is always somewhere left to forward to.
 describe("the join reports whether it moved", () => {
   it("merging an identical tree changes nothing", () => {
-    const tree = { peers: { alice: ["online", 1000] } }
-    expect(
-      mergeStateTree(tree, { peers: { alice: ["online", 1000] } }).changed,
-    ).toBe(false)
+    const tree = { peers: { alice: tup("online", 1000) } }
+    expect(merge(tree, { peers: { alice: tup("online", 1000) } }).changed).toBe(
+      false,
+    )
   })
 
   it("a losing tuple changes nothing", () => {
-    const tree = { peers: { alice: ["new", 2000] } }
-    expect(
-      mergeStateTree(tree, { peers: { alice: ["old", 1000] } }).changed,
-    ).toBe(false)
+    const tree = { peers: { alice: tup("new", 2000) } }
+    expect(merge(tree, { peers: { alice: tup("old", 1000) } }).changed).toBe(
+      false,
+    )
   })
 
   it("a tie the incoming tuple wins, with equal content, changes nothing", () => {
     // `joinTuples` returns the incoming tuple on some ties, so identity is not
     // the test — two peers holding the same value must not keep announcing it.
-    const tree = { peers: { alice: ["same", 1000] } }
-    expect(
-      mergeStateTree(tree, { peers: { alice: ["same", 1000] } }).changed,
-    ).toBe(false)
+    const tree = { peers: { alice: tup("same", 1000) } }
+    expect(merge(tree, { peers: { alice: tup("same", 1000) } }).changed).toBe(
+      false,
+    )
   })
 
   it("a newer timestamp on the same value is a change", () => {
     // The timestamp replicates and decay reads it, so it is state.
-    const tree = { peers: { alice: ["online", 1000] } }
-    expect(
-      mergeStateTree(tree, { peers: { alice: ["online", 2000] } }).changed,
-    ).toBe(true)
+    const tree = { peers: { alice: tup("online", 1000) } }
+    expect(merge(tree, { peers: { alice: tup("online", 2000) } }).changed).toBe(
+      true,
+    )
   })
 
   it("a key we have never seen is a change", () => {
-    const tree = { peers: { alice: ["online", 1000] } }
-    expect(
-      mergeStateTree(tree, { peers: { bob: ["online", 1000] } }).changed,
-    ).toBe(true)
+    const tree = { peers: { alice: tup("online", 1000) } }
+    expect(merge(tree, { peers: { bob: tup("online", 1000) } }).changed).toBe(
+      true,
+    )
   })
 
   it("a tombstone arriving over a live value is a change", () => {
-    const tree = { peers: { alice: ["online", 1000] } }
+    const tree = { peers: { alice: tup("online", 1000) } }
     expect(
-      mergeStateTree(tree, { peers: { alice: [null, 2000, true] } }).changed,
+      merge(tree, { peers: { alice: tup(null, 2000, true) } }).changed,
     ).toBe(true)
   })
 })
