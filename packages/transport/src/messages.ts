@@ -134,7 +134,7 @@ export type InterestMsg = {
    * they are not: the sender's own position tells the receiver nothing about
    * what to send, and only a cursor the receiver itself minted will do.
    *
-   * It may be stale, which costs a few extra leaves, or from an epoch the
+   * It may be stale, which costs a few extra leaves, or from an incarnation the
    * receiver no longer recognises, which costs one entirety. Neither costs
    * correctness, so it is never worth keeping accurate.
    */

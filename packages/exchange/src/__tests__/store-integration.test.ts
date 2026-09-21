@@ -224,9 +224,9 @@ describe("Storage persist + hydrate", () => {
     // Asserted against that contract rather than against the mechanism, which
     // is why this test did not have to change when the mechanism did. It used
     // to hold by accident — nothing told the store the document was transient,
-    // it simply could not persist updates, because a snapshot-only substrate
-    // always returns `null` from `exportSince`. The rule is now declared, and
-    // the assertion is untouched.
+    // it simply could not persist updates, because the substrate could not
+    // produce a delta at all. It can now, and this assertion did not move:
+    // the rule became declared before the accident disappeared.
     expect(doc2.name()).toBe("")
     expect(doc2.cursor.x()).toBe(0)
     expect(doc2.cursor.y()).toBe(0)

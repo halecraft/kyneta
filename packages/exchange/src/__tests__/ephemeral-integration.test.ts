@@ -300,9 +300,109 @@ describe("a peer that misses an update is repaired precisely", () => {
     await drain(40)
 
     expect(docB.peers()?.["peer-7"]).toBe("away")
+    // A delta names only what changed. If the receiver read the keys it omits
+    // as removals, repairing one entry would empty the roster.
+    expect(Object.keys(docB.peers() ?? {})).toHaveLength(200)
+    expect(docB.peers()?.["peer-42"]).toBe("online-42")
     // A 200-entry roster is several kilobytes. Repair carries the leaf that
     // changed, so this stays far below it.
     console.log(`repair bytes: ${counter.bytes}`)
     expect(counter.bytes).toBeLessThan(1500)
   }, 30_000)
+})
+
+// What a presence roster actually does: every peer in one mesh, writing its
+// own key. The payload scales as intended — a one-leaf change is 43 bytes at
+// any roster size — but the *number of frames* does not, because an imported
+// change is relayed to every peer except the sender and in a full mesh they
+// all already have it.
+//
+// Measured, one peer writing:
+//
+//     peers   frames   bytes
+//         3        4     572
+//         5       16   2 300
+//        10       81  11 745
+//
+// That is (n-1)²: the writer reaches n-1 peers directly, and each of those
+// relays to the other n-2. The second hop changes nothing, so it stops there
+// rather than continuing — the relay is bounded, not free. It is what makes a
+// partial mesh work, and pure waste in a complete one.
+//
+// These assertions pin the bound. They are deliberately loose: the point is
+// to fail if the relay stops damping (cubic, or unbounded as it once was),
+// not to freeze today's framing overhead.
+describe("a roster of peers all writing their own key", () => {
+  const Roster = ephemeral.bind(
+    Schema.struct({ peers: Schema.record(Schema.string()) }),
+  )
+
+  const meshOf = (size: number) => {
+    const bridge = new Bridge()
+    const ids = Array.from({ length: size }, (_, i) => `peer-${i}`)
+    const docs = ids
+      .map(
+        id =>
+          new Exchange({
+            id,
+            transports: [createBridgeTransport({ transportId: id, bridge })],
+            schemas: [Roster],
+          }),
+      )
+      .map(e => e.get("presence", Roster))
+    return { bridge, ids, docs }
+  }
+
+  const meterFrames = (bridge: Bridge) => {
+    const counter = { frames: 0 }
+    const route = bridge.routeBytes.bind(bridge)
+    bridge.routeBytes = (from, to, bytes) => {
+      counter.frames += 1
+      route(from, to, bytes)
+    }
+    return counter
+  }
+
+  it("converges with ten peers, and one write stays within the square bound", async () => {
+    const size = 10
+    const { bridge, ids, docs } = meshOf(size)
+    await drain(40)
+
+    for (let i = 0; i < size; i++) {
+      batch(docs[i], d => d.peers.set(ids[i], "online"))
+    }
+    await drain(60)
+    for (const doc of docs) {
+      expect(Object.keys(doc.peers() ?? {})).toHaveLength(size)
+    }
+
+    const counter = meterFrames(bridge)
+    batch(docs[0], d => d.peers.set(ids[0], "away"))
+    await drain(40)
+
+    for (const doc of docs) {
+      expect(doc.peers()?.[ids[0]]).toBe("away")
+    }
+    // (n-1)² = 81. Anything much above means a hop stopped damping.
+    expect(counter.frames).toBeLessThanOrEqual((size - 1) ** 2 + size)
+  }, 60_000)
+
+  it("converges when every peer writes at once", async () => {
+    const size = 10
+    const { ids, docs } = meshOf(size)
+    await drain(40)
+
+    for (let i = 0; i < size; i++) {
+      batch(docs[i], d => d.peers.set(ids[i], "online"))
+    }
+    await drain(80)
+
+    // The property the substrate exists for: concurrent writes to different
+    // keys all survive, on every peer.
+    for (const doc of docs) {
+      const roster = doc.peers() ?? {}
+      expect(Object.keys(roster)).toHaveLength(size)
+      for (const id of ids) expect(roster[id]).toBe("online")
+    }
+  }, 60_000)
 })

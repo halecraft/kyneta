@@ -343,7 +343,6 @@ const mySubstrate = createBindingTarget({
   replicaFactory: myReplicaFactory,
   syncMode: {
     writerModel: "concurrent",
-    delivery: "delta-capable",
     durability: "persistent",
   }
 })
@@ -354,13 +353,13 @@ const replica = mySubstrate.replica()
 
 ### Three sync modes, one wire format
 
-Each BoundSchema carries a `SyncMode` — a structured record with three orthogonal axes (`writerModel`, `delivery`, `durability`) — that determines how the exchange syncs documents of that type. These are genuinely different sync algorithms, not transport optimizations:
+Each BoundSchema carries a `SyncMode` — a structured record with two orthogonal axes (`writerModel`, `durability`) — that determines how the exchange syncs documents of that type. These are genuinely different sync algorithms, not transport optimizations:
 
 | SyncMode constant | Axes | Protocol | Version Order | Use Case |
 |-----------------------|------|----------|---------------|----------|
-| `SYNC_COLLABORATIVE` | concurrent + delta-capable + persistent | Bidirectional exchange | Partial (concurrent possible) | Loro / Yjs CRDTs |
-| `SYNC_AUTHORITATIVE` | serialized + delta-capable + persistent | Request/response | Total (no concurrency) | Plain substrates |
-| `SYNC_EPHEMERAL` | concurrent + snapshot-only + transient | Interest-based broadcast | Total (timestamp-based) | Ephemeral/presence |
+| `SYNC_COLLABORATIVE` | concurrent + persistent | Bidirectional exchange | Partial (concurrent possible) | Loro / Yjs CRDTs |
+| `SYNC_AUTHORITATIVE` | serialized + persistent | Request/response | Total (no concurrency) | Plain substrates |
+| `SYNC_EPHEMERAL` | concurrent + transient | Bidirectional exchange | Unordered (digest decides equality) | Ephemeral/presence |
 
 All three run over the same five-message sync protocol:
 

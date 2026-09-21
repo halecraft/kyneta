@@ -11,7 +11,7 @@
 //   1. The lineage trigger fires independent of payload shape. It reads only
 //      the two lineage strings, so it fires on a `kind: "since"` offer just as
 //      readily as on an entirety.
-//   2. A transient snapshot-only document reaches NEITHER trigger. That is
+//   2. A transient CvRDT document reaches NEITHER trigger. That is
 //      what makes it safe for the reset path to rebuild the replica rather
 //      than merge into it — see the replicate arm of `#executeImportDocData`.
 

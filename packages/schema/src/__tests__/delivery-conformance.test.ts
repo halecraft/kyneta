@@ -59,10 +59,10 @@ deliveryConformance(createPlainEnv, { label: "plain" })
 /**
  * Two ephemeral-substrate peers over the same schema.
  *
- * No `exportSince` here — this substrate is snapshot-only, so B's whole tree
- * is what crosses, and A's merge is a lattice join rather than a replay of
- * B's ops. The suite's invariants still have to hold: what A's subscribers
- * hear must name the fields the join actually moved.
+ * B's whole tree is what crosses here rather than a delta, and A's merge is a
+ * lattice join rather than a replay of B's ops. The suite's invariants still
+ * have to hold: what A's subscribers hear must name the fields the join
+ * actually moved.
  */
 function createEphemeralEnv(): DeliveryTestEnv {
   const substrateA = ephemeralSubstrateFactory.create(DeliveryFixture)

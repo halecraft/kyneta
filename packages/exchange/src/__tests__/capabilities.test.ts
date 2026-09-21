@@ -141,8 +141,8 @@ describe("Capabilities", () => {
 
   it("resolveSchema declines a bucket collision the key cannot see", () => {
     // `replicaKey` collapses a SyncMode into one of three names: anything with
-    // a serialized writer becomes "authoritative", whatever its delivery or
-    // durability. So this mode and SYNC_AUTHORITATIVE share a bucket while
+    // a serialized writer becomes "authoritative", whatever its durability.
+    // So this mode and SYNC_AUTHORITATIVE share a bucket while
     // differing on `durability` — the lookup finds the schema, and only the
     // exact law can tell that it is the wrong one.
     //

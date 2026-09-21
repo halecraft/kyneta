@@ -14,8 +14,10 @@
 // almost never produce two equal ones.
 
 import { describe, expect, it } from "vitest"
+import { batch, createRef, type Ref, Schema } from "../index.js"
 import {
   ephemeralReplicaFactory,
+  ephemeralSubstrateFactory,
   StateVersion,
 } from "../substrates/ephemeral.js"
 import { DEFAULT_LINEAGE } from "../substrates/plain.js"
@@ -333,8 +335,8 @@ describe("StateVersion carries no lineage", () => {
     // trigger — lives in @kyneta/exchange's `reset-trigger.test.ts`, which
     // points back here. Changing this line means revisiting the replicate arm
     // of `Synchronizer.#executeImportDocData`.
-    expect(new StateVersion("epoch", 7).lineage).toBe(DEFAULT_LINEAGE)
-    expect(new StateVersion("epoch", 0).lineage).toBe(DEFAULT_LINEAGE)
+    expect(new StateVersion("incarnation", 7).lineage).toBe(DEFAULT_LINEAGE)
+    expect(new StateVersion("incarnation", 0).lineage).toBe(DEFAULT_LINEAGE)
   })
 })
 
@@ -344,6 +346,9 @@ describe("StateVersion carries no lineage", () => {
 // so in a mesh of three there is always somewhere left to forward to.
 describe("the join reports whether it moved", () => {
   it("merging an identical tree changes nothing", () => {
+    // The guard against a mesh that never settles: a merge reporting a change
+    // it did not make has every peer re-announce everything it receives, and
+    // with three or more peers there is always somewhere left to forward to.
     const tree = { peers: { alice: tup("online", 1000) } }
     expect(merge(tree, { peers: { alice: tup("online", 1000) } }).changed).toBe(
       false,
@@ -357,12 +362,14 @@ describe("the join reports whether it moved", () => {
     )
   })
 
-  it("a tie the incoming tuple wins, with equal content, changes nothing", () => {
-    // `joinTuples` returns the incoming tuple on some ties, so identity is not
-    // the test — two peers holding the same value must not keep announcing it.
-    const tree = { peers: { alice: tup("same", 1000) } }
-    expect(merge(tree, { peers: { alice: tup("same", 1000) } }).changed).toBe(
-      false,
+  it("a tie broken in the incoming tuple's favour is a change", () => {
+    // Both comparisons in the join are strict, so an incoming tuple only wins
+    // by differing in a slot that replicates — here the value, at equal
+    // timestamps. That strictness is what lets the caller read "the winner is
+    // not ours" as "something changed" without comparing contents.
+    const tree = { peers: { alice: tup("aaa", 1000) } }
+    expect(merge(tree, { peers: { alice: tup("zzz", 1000) } }).changed).toBe(
+      true,
     )
   })
 
@@ -447,14 +454,6 @@ describe("the install ordinal stays local", () => {
     expect(stateTreeDigest(bThenC)).toEqual(stateTreeDigest(cThenB))
   })
 
-  it("does not reach the join, so a re-merge reports no change", () => {
-    // The guard against the three-peer cycle. A merge that reported a change
-    // here would have every peer re-announce everything it receives.
-    const tree = { peers: { alice: tup("online", 100) } }
-    const incoming = { peers: { alice: tup("online", 100) } }
-    expect(merge(tree, incoming).changed).toBe(false)
-  })
-
   it("survives a round trip through the wire unchanged", () => {
     const original = JSON.stringify({ peers: { alice: ["online", 100] } })
     const a = ephemeralReplicaFactory.createEmpty()
@@ -489,5 +488,29 @@ describe("a no-op merge leaves no trace", () => {
     replica.merge(payload)
 
     expect(replica.version().serialize()).toBe(first)
+  })
+})
+
+describe("a delta carries only what this replica took in", () => {
+  const Doc = Schema.struct({
+    name: Schema.string(),
+    other: Schema.string(),
+  })
+
+  it("omits structural zeros, which nobody wrote", () => {
+    // Every declared field exists in the tree from the start, at the schema's
+    // zero. Shipping those would make a first delta as large as the schema,
+    // and would hand a peer writes that never happened.
+    const substrate = ephemeralSubstrateFactory.create(Doc)
+    const doc = createRef(Doc, substrate) as Ref<typeof Doc>
+    batch(doc, d => d.name.set("written"))
+
+    // The bottom of this replica's own counter: everything it has installed.
+    const bottom = substrate.version() as StateVersion
+    const delta = substrate.exportSince(new StateVersion(bottom.incarnation, 0))
+    expect(delta).not.toBeNull()
+    expect(JSON.parse(delta?.data as string)).toEqual({
+      name: ["written", expect.any(Number)],
+    })
   })
 })

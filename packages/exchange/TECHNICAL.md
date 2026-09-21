@@ -353,7 +353,7 @@ from success by any structural check, which is why the tests assert on content.
 Three preconditions, and together they are the whole contract:
 
 1. **The caller supplies a schema.** Promotion never happens without one.
-2. **The schema is compatible on all three axes** — `replicaType`, `syncMode`,
+2. **The schema is compatible on all three counts** — `replicaType`, `syncMode`,
    `schemaHash`, via `mismatchForInterpretation`. Note the deferred-document
    exception below does *not* apply here.
 3. **The document has finished loading.** `upgrade()` claims this peer's stable
@@ -913,7 +913,7 @@ Persistence is driven by a pure Mealy machine: `Program<StoreInput, StoreModel, 
 
 Those decisions have to agree. The readiness latch is registered as a settle term before hydration starts, so a document that is set up to hydrate and then never does stays `pending` forever — `whenSettled` never returns and `docStatus` never leaves `pending`. That is why the rule is one predicate rather than a condition repeated at each site.
 
-The rule is *declared*, read off the type, rather than emergent. Previously nothing told the store a document was transient: it simply could not persist updates, because a snapshot-only substrate always returns `null` from `exportSince`. That kept later writes off disk by accident, did nothing about the creation-time write, and would have reversed silently the day a transient substrate learned delta export.
+The rule is *declared*, read off the type, rather than emergent. Previously nothing told the store a document was transient: it simply could not persist updates, because the ephemeral substrate always returned `null` from `exportSince`. That kept later writes off disk by accident and did nothing about the creation-time write — and it would have reversed silently the day a transient substrate learned delta export. **That day came.** The substrate now produces deltas, the accident is gone, and the declared rule carried the behaviour across unchanged: `store-integration.test.ts` asserts the contract rather than the mechanism and did not need touching.
 
 Two asymmetries in the same area, both deliberate:
 
@@ -1070,7 +1070,7 @@ Source: `src/synchronizer.ts` → `#executeImportDocData`, `governance.ts` → `
 
 The lineage trigger requires a REAL lineage on *both* sides; `LEGACY_EPOCH` and `DEFAULT_LINEAGE` are excluded as untrustworthy mismatch signals (LEGACY predates lineage support; DEFAULT is the normal lazy-mint/first-sync path, already handled by `merge()`). It fires independent of `payload.kind`, which is what lets it catch an identity discontinuity even when the offending offer carries a `"since"` payload. Only `PlainVersion` ever mints a real lineage — `LoroVersion`, `YjsVersion` and `StateVersion` all report `DEFAULT_LINEAGE` — so in practice this trigger belongs to `json`.
 
-The compaction trigger is the *only* signal for a same-lineage history gap, since there is no lineage mismatch to find. It requires a whole-state image from a peer already marked synced: a first entirety is just initial sync. **Transient documents are excluded from it entirely** — the heuristic presumes a sender that can trim history, but a snapshot-only substrate accumulates no trimmable log, and every steady-state push is already an entirety. Applying it to presence traffic would classify ordinary sync as a reset on every message after the first.
+The compaction trigger is the *only* signal for a same-lineage history gap, since there is no lineage mismatch to find. It requires a whole-state image from a peer already marked synced: a first entirety is just initial sync. **Transient documents are excluded from it entirely** — the heuristic presumes a sender that can trim history, and a CvRDT keeps no trimmable log: it carries its whole meaning in the tree, so every cursor stays serviceable and there is no compaction to detect.
 
 Those two facts compose into an invariant worth stating plainly, because it is what makes item 1 below safe: **a transient CvRDT document reaches neither trigger.** Durability excludes it from compaction, and `StateVersion` reporting `DEFAULT_LINEAGE` excludes it from lineage. The two halves are pinned in `reset-trigger.test.ts` and `@kyneta/schema`'s `ephemeral-lattice.test.ts` respectively.
 

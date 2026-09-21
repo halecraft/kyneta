@@ -1,9 +1,13 @@
 // ephemeral — field-level LWW state-based CRDT (CvRDT).
 //
-// The substrate behind the `ephemeral` binding target: history-free,
-// snapshot-only, and merging concurrently at the field level. Rather than one
-// timestamp for the whole document, it tracks a `StateTuple` for every scalar
-// leaf.
+// The substrate behind the `ephemeral` binding target: history-free, and
+// merging concurrently at the field level. Rather than one timestamp for the
+// whole document, it tracks a `StateTuple` for every scalar leaf.
+//
+// History-free does not mean snapshot-only. There is no op log to replay, but
+// each leaf records the local ordinal it was installed at, so `exportSince`
+// answers "what have I taken in since?" by scanning rather than by reading a
+// log — which is why no cursor is ever too old to serve.
 //
 // The `State*` vocabulary throughout this file refers to *state-based CRDT* —
 // the family that exchanges whole states and joins them — not to any binding
@@ -12,9 +16,6 @@
 // This enables true decentralized presence: multiple peers can write
 // to their own keys in a shared document without clobbering each other,
 // and without accumulating op-log history.
-//
-// Because it is snapshot-only (`SYNC_EPHEMERAL`), it has no delta-sync
-// log (`exportSince` returns `null`).
 
 import type { ChangeBase } from "../change.js"
 import { replaceChange } from "../change.js"
@@ -107,22 +108,22 @@ export class StateVersion implements Version {
    * presence traffic arrives in bursts, so two changes in one tick used to
    * share a version and a real change read as none.
    */
-  readonly epoch: string
+  readonly incarnation: string
   readonly installSeq: number
 
-  constructor(epoch: string, installSeq: number) {
-    this.epoch = epoch
+  constructor(incarnation: string, installSeq: number) {
+    this.incarnation = incarnation
     this.installSeq = installSeq
   }
 
   /**
-   * Deliberately `DEFAULT_LINEAGE`, never the epoch.
+   * Deliberately `DEFAULT_LINEAGE`, never the incarnation.
    *
    * `classifyResetTrigger` treats two differing non-default lineages as a
    * lineage boundary, which discards the payload and re-requests an entirety.
-   * Every replica instance mints a distinct epoch, so surfacing it here would
+   * Every replica instance mints a distinct incarnation, so surfacing it here would
    * make *every pair of peers* a boundary and delta sync would silently never
-   * happen. The epoch identifies whose counter this is; it is not a claim
+   * happen. The incarnation identifies whose counter this is; it is not a claim
    * about the document's history.
    */
   get lineage(): string {
@@ -130,21 +131,22 @@ export class StateVersion implements Version {
   }
 
   serialize(): string {
-    return `${this.epoch}:${this.installSeq}`
+    return `${this.incarnation}:${this.installSeq}`
   }
 
   /**
-   * Two epochs are incomparable, so the meet of versions from different
+   * Two incarnations are incomparable, so the meet of versions from different
    * replicas is the bottom of this replica's own lineage: nothing is known to
-   * be common. Within one epoch the counters order, so the meet is the lower.
+   * be common. Within one incarnation the counters order, so the meet is the lower.
    */
   meet(other: Version): StateVersion {
     if (!(other instanceof StateVersion)) {
       throw new Error("StateVersion mismatch")
     }
-    if (other.epoch !== this.epoch) return new StateVersion(this.epoch, 0)
+    if (other.incarnation !== this.incarnation)
+      return new StateVersion(this.incarnation, 0)
     return new StateVersion(
-      this.epoch,
+      this.incarnation,
       Math.min(this.installSeq, other.installSeq),
     )
   }
@@ -159,8 +161,8 @@ export class StateVersion implements Version {
     // An install counter says how much *this* replica has taken in, which is
     // a fact about us and meaningless to anyone else: two peers holding
     // identical trees reached them by different routes and hold different
-    // counts. So there is no ordering between epochs to report, and within an
-    // epoch a higher count does not imply the lower one is behind — it may
+    // counts. So there is no ordering between incarnations to report, and within an
+    // incarnation a higher count does not imply the lower one is behind — it may
     // have installed different leaves.
     //
     // Equality is answered by `stateTreeDigest` instead, carried beside the
@@ -175,12 +177,12 @@ export class StateVersion implements Version {
     if (separator <= 0) {
       throw new Error(`Invalid StateVersion value: ${serialized}`)
     }
-    const epoch = serialized.slice(0, separator)
+    const incarnation = serialized.slice(0, separator)
     const n = Number(serialized.slice(separator + 1))
     if (!Number.isInteger(n) || n < 0) {
       throw new Error(`Invalid StateVersion value: ${serialized}`)
     }
-    return new StateVersion(epoch, n)
+    return new StateVersion(incarnation, n)
   }
 }
 
@@ -191,15 +193,19 @@ export class StateVersion implements Version {
 /**
  * A fresh identity for one replica instance's install counter.
  *
+ * Called an *incarnation* rather than an epoch: this package reserves "epoch"
+ * for the declared T3 migration boundary (`.epoch()` / `EpochStep`), which is
+ * a global generation a developer chooses. This is neither global nor chosen.
+ *
  * Only distinctness matters: it is compared for identity, never for order, and
  * a peer that sees an unfamiliar one simply asks for an entirety. It is not a
  * peer identity — see `StateVersion` for why this substrate declines to have
  * one — and it never persists, because the documents do not either.
  */
-let epochCounter = 0
-function newEpoch(): string {
-  epochCounter += 1
-  return `e${epochCounter}-${Math.random().toString(36).slice(2, 10)}`
+let incarnationCounter = 0
+function newIncarnation(): string {
+  incarnationCounter += 1
+  return `e${incarnationCounter}-${Math.random().toString(36).slice(2, 10)}`
 }
 
 /**
@@ -216,9 +222,9 @@ function createStateReplicaCore(
   // because the counter means nothing across a restart: a fresh replica
   // starts at zero, and a peer still holding a cursor from the previous life
   // would ask for leaves above a number that now refers to different state.
-  // A mismatched epoch makes `exportSince` decline, and the caller falls back
+  // A mismatched incarnation makes `exportSince` decline, and the caller falls back
   // to an entirety.
-  const epoch = newEpoch()
+  const incarnation = newIncarnation()
 
   // How much this replica has installed. Advanced by every leaf it takes in,
   // from a local write or from a merge, and never by anything else — so
@@ -234,13 +240,13 @@ function createStateReplicaCore(
     },
 
     version(): StateVersion {
-      return new StateVersion(epoch, installSeq)
+      return new StateVersion(incarnation, installSeq)
     },
 
     baseVersion(): StateVersion {
-      // Always the bottom of this epoch: nothing is ever trimmed, so every
-      // cursor within the epoch remains serviceable however old it is.
-      return new StateVersion(epoch, 0)
+      // Always the bottom of this incarnation: nothing is ever trimmed, so every
+      // cursor within the incarnation remains serviceable however old it is.
+      return new StateVersion(incarnation, 0)
     },
 
     advance(_to: StateVersion): void {
@@ -274,21 +280,21 @@ function createStateReplicaCore(
     /**
      * The leaves taken in since `since`, as a partial tree.
      *
-     * Any cursor within our epoch is serviceable, however old: nothing is
+     * Any cursor within our incarnation is serviceable, however old: nothing is
      * discarded, so this is a scan rather than a lookup into a log that might
      * have been trimmed. Staleness repairs itself too — a leaf overwritten
      * while a peer was behind is returned at its *current* value, which is the
      * only one that peer needs.
      *
      * `null` means **cannot serve**, not **nothing to send** — the caller
-     * answers it with a whole document. Only a cursor from another epoch earns
+     * answers it with a whole document. Only a cursor from another incarnation earns
      * that; a cursor that is simply current earns an empty delta, which is the
      * quiet round. Conflating the two turns every agreement into a full
      * resend, which is the cost this substrate exists to avoid.
      */
     exportSince(since: StateVersion): SubstratePayload | null {
-      if (since.epoch !== epoch) return null
-      const delta = leavesInstalledAfter(getTree(), since.installSeq) ?? {}
+      if (since.incarnation !== incarnation) return null
+      const delta = leavesInstalledAfter(getTree(), since.installSeq)
       return {
         kind: "since",
         encoding: "json",

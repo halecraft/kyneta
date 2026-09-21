@@ -286,7 +286,7 @@ export function createCapabilities(params: {
 
       // The bucket above is an *index*, not a decision. `replicaKey` collapses
       // a SyncMode into one of three names — anything with a serialized writer
-      // becomes "authoritative" whatever its delivery or durability — so two
+      // becomes "authoritative" whatever its durability — so two
       // genuinely different modes can share a key. Landing in the same bucket
       // therefore says "worth comparing", not "compatible".
       //

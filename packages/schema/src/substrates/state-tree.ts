@@ -194,21 +194,6 @@ function valueRank(value: unknown): string {
 }
 
 /**
- * Whether two leaf tuples carry the same replicating content.
- *
- * Compares exactly the slots a peer can observe — value, timestamp, tombstone
- * marker — by the same rule as `joinTuples`, so "the join did not move" and
- * "the join picked an equal tuple" cannot disagree.
- */
-function sameTuple(a: StateTuple, b: StateTuple): boolean {
-  return (
-    a[1] === b[1] &&
-    isTombstone(a) === isTombstone(b) &&
-    valueRank(a[0]) === valueRank(b[0])
-  )
-}
-
-/**
  * The join of two leaf tuples — which one wins.
  *
  * Highest timestamp wins; on a tie, a live tuple beats a tombstone, and
@@ -236,6 +221,12 @@ function sameTuple(a: StateTuple, b: StateTuple): boolean {
  *
  * Only the value tie pays for `stringify`. Returns one of its arguments rather
  * than a copy; the caller decides whether the winner needs cloning.
+ *
+ * **Both comparisons must stay strict.** `mergeStateTree` reads "the winner is
+ * not the local tuple" as "our state changed", so returning the incoming tuple
+ * for one that merely ties would report a change on every re-merge of state a
+ * peer already holds — and in a mesh of three or more that circulates forever,
+ * because each peer relays to everyone but the sender.
  */
 export function joinTuples(local: StateTuple, remote: StateTuple): StateTuple {
   if (remote[1] > local[1]) return remote
@@ -332,11 +323,11 @@ function mergeInto(
     // slots preserves any slot this function does not know about, so a losing
     // tombstone would leave its marker sitting on the value that beat it.
     const winner = joinTuples(local, remote)
+    // Identity is the whole test, and it is exact rather than approximate:
+    // `joinTuples` returns the local tuple for anything it cannot strictly
+    // beat, so a winning incoming tuple always differs in a slot that
+    // replicates. See the note there — the strictness is what makes this safe.
     if (winner === local) return local
-    // A won tie returns the incoming tuple even when it is indistinguishable
-    // from the local one, so compare content rather than identity: adopting an
-    // equal tuple is not a change, and treating it as one is what circulates.
-    if (sameTuple(local, winner)) return local
     moved.changed = true
     // Clone when remote wins, so the merged tree never aliases a payload the
     // caller may still own.
@@ -932,15 +923,27 @@ function restoreInstalledAt(node: unknown): StateTree {
 }
 
 /**
- * The leaves this replica took in after `installedAt`, as a partial tree, or
- * `undefined` when there are none.
+ * The leaves this replica took in after `installedAt`, as a partial tree.
  *
  * Containers are kept only when something beneath them survives, so the
  * result carries the paths of the changed leaves and nothing else. A key the
  * result omits is a key it makes no claim about, which is what lets the
  * receiver merge a delta with the same join it uses for an entirety.
+ *
+ * Returns an empty tree when nothing is newer, never `undefined`. "Nothing
+ * changed" and "nothing to say" must not share a representation here: one
+ * layer up, `exportSince` answering `null` for an empty delta made every
+ * already-current peer receive a whole document.
  */
 export function leavesInstalledAfter(
+  node: StateTree,
+  installedAt: number,
+): StateTree {
+  return keptAfter(node, installedAt) ?? {}
+}
+
+/** `undefined` means "prune this branch" — internal to the walk only. */
+function keptAfter(
   node: StateTree,
   installedAt: number,
 ): StateTree | undefined {
@@ -949,7 +952,7 @@ export function leavesInstalledAfter(
   }
   let kept: Record<string, StateTree> | undefined
   for (const key of Object.keys(node)) {
-    const child = leavesInstalledAfter(
+    const child = keptAfter(
       (node as Record<string, StateTree>)[key],
       installedAt,
     )

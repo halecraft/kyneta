@@ -1503,7 +1503,7 @@ export class Synchronizer {
 
       case "gap": {
         // `null` means the peer's cursor is one we cannot serve — history
-        // trimmed past it, or an epoch that is not ours. An entirety resets
+        // trimmed past it, or an incarnation that is not ours. An entirety resets
         // them to our current state rather than leaving them diverged.
         return (
           runtime.replica.exportSince(gap.parsed) ??

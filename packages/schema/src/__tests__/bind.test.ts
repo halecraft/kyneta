@@ -256,7 +256,7 @@ describe("state binding target", () => {
     expect(delta?.data).toBe("{}")
   })
 
-  it("exportSince declines a cursor from another replica's epoch", () => {
+  it("exportSince declines a cursor from another replica's incarnation", () => {
     // The one case that earns a whole document: a counter we did not mint
     // says nothing about what this replica holds.
     const bound = ephemeral.bind(testSchema)
