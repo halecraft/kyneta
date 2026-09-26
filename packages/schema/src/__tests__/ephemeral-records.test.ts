@@ -338,3 +338,37 @@ describe("a declared field is not a written key", () => {
     expect(substrate.reader.read(RawPath.empty)).toEqual({ peers: {} })
   })
 })
+
+// ---------------------------------------------------------------------------
+// A partial entry is a legitimate state
+// ---------------------------------------------------------------------------
+
+describe("an entry missing declared fields reads them as their zeros", () => {
+  // A delta carries only the leaves that changed, so a peer can hold an entry
+  // with some of its declared fields and not others — a peer that joins
+  // after `alice.y` was written and receives only a later write to `alice.x`,
+  // say. The tree is right to hold only what arrived; the projection has to be
+  // total anyway, because the entry's type says `y` exists.
+  //
+  // Nothing supplies the zero today. Structural zeros are seeded into the tree
+  // for declared fields at construction, and a record's entries are not
+  // declared, so nothing seeds them; and the reader is schema-blind, so it
+  // cannot. The zero has to come from the projection, which is where the
+  // schema is.
+  const Cursors = Schema.struct({
+    peers: Schema.record(
+      Schema.struct({ x: Schema.number(), y: Schema.number() }),
+    ),
+  })
+
+  it("after a delta carrying one of its fields", () => {
+    const substrate = ephemeralSubstrateFactory.create(Cursors)
+    substrate.merge({
+      kind: "since",
+      encoding: "json",
+      data: JSON.stringify({ peers: { alice: { x: [5, 100] } } }),
+    })
+
+    expect(substrate.reader.read(peersPath)).toEqual({ alice: { x: 5, y: 0 } })
+  })
+})

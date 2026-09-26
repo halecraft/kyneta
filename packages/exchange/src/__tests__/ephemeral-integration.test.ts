@@ -14,6 +14,7 @@ import {
   batch,
   ephemeral,
   lastUpdated,
+  Replicate,
   Schema,
   subscribe,
 } from "@kyneta/schema"
@@ -405,4 +406,57 @@ describe("a roster of peers all writing their own key", () => {
       for (const id of ids) expect(roster[id]).toBe("online")
     }
   }, 60_000)
+})
+
+// Promotion is the deployment a relay exists for: a peer carries a document
+// headlessly, then an application on it opens the document with a schema.
+// `upgrade` rebuilt the tree by reading the wire shape as if it were the
+// in-memory one, so every delete it had relayed came back as a live `null` —
+// on this peer, and then on every peer it spoke to, because a live value beats
+// a tombstone on a tie.
+describe("a delete survives promotion", () => {
+  const Roster = ephemeral.bind(
+    Schema.struct({ peers: Schema.record(Schema.string()) }),
+  )
+
+  it("a relayed document opened later keeps its deletes", async () => {
+    const bridge = new Bridge()
+    const alice = new Exchange({
+      id: "alice",
+      transports: [createBridgeTransport({ transportId: "alice", bridge })],
+      schemas: [Roster],
+    })
+    const bob = new Exchange({
+      id: "bob",
+      transports: [createBridgeTransport({ transportId: "bob", bridge })],
+      resolve: () => Replicate(),
+    })
+
+    const docA = alice.get("presence", Roster)
+    batch(docA, d => {
+      d.peers.set("carol", "here")
+      d.peers.set("dave", "here")
+    })
+    await drain(30)
+    // Past the millisecond, so the delete is not a same-tick rewrite: that is
+    // a different defect, pinned in `@kyneta/schema`'s ephemeral-inflation.
+    const tick = Date.now()
+    while (Date.now() <= tick) {
+      /* spin */
+    }
+    batch(docA, d => d.peers.delete("carol"))
+    await drain(30)
+
+    expect(bob.has("presence")).toBe(true)
+    const docB = bob.get("presence", Roster)
+    expect(docB.peers()).toEqual({ dave: "here" })
+
+    // Bob's first write carries whatever his tree holds back to Alice, so a
+    // resurrected entry spreads from here.
+    batch(docB, d => d.peers.set("erin", "here"))
+    await drain(30)
+    const settled = { dave: "here", erin: "here" }
+    expect(docB.peers()).toEqual(settled)
+    expect(docA.peers()).toEqual(settled)
+  }, 30_000)
 })

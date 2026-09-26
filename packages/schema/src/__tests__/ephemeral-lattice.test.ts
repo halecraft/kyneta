@@ -514,3 +514,33 @@ describe("a delta carries only what this replica took in", () => {
     })
   })
 })
+
+// Every guarantee a local write makes rests on `ts + 1 > ts`, which fails for
+// `Infinity` — and `JSON.parse("1e400")` is `Infinity` — and above 2^53. A
+// payload that cannot be stored faithfully is refused whole, before anything
+// moves, rather than half-applied.
+describe("a payload that cannot be stored is refused", () => {
+  const entirety = (data: string) => ({
+    kind: "entirety" as const,
+    encoding: "json" as const,
+    data,
+    lineage: DEFAULT_LINEAGE,
+  })
+
+  it.each([
+    ["an infinite timestamp", '{"a":["x",1e400]}'],
+    ["a negative timestamp", '{"a":["x",-1]}'],
+    ["a fractional timestamp", '{"a":["x",1.5]}'],
+    ["a timestamp past 2^53", `{"a":["x",${2 ** 53}]}`],
+    ["a deletion marker that is not a boolean", '{"a":[null,5,"yes"]}'],
+  ])("%s", (_, data) => {
+    const replica = ephemeralReplicaFactory.createEmpty()
+    replica.merge(entirety('{"b":["kept",100]}'))
+    const version = replica.version().serialize()
+    const held = replica.exportEntirety().data
+
+    expect(() => replica.merge(entirety(data))).toThrow()
+    expect(replica.version().serialize()).toBe(version)
+    expect(replica.exportEntirety().data).toBe(held)
+  })
+})

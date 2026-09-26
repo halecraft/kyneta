@@ -15,17 +15,23 @@
 // add always wins, the distinguishing case is pinned below as a decision
 // rather than left to be inferred.
 
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   batch,
   createDoc,
+  createRef,
   ephemeral,
   lastUpdated,
   mapChange,
   Schema,
+  type SchemaNode,
 } from "../index.js"
 import { RawPath } from "../path.js"
-import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
+import type { Substrate } from "../substrate.js"
+import {
+  ephemeralSubstrateFactory,
+  type StateVersion,
+} from "../substrates/ephemeral.js"
 import {
   applyChangeToStateTree,
   isTombstone,
@@ -351,5 +357,232 @@ describe("deleting an entry whose value is a container", () => {
       Cursors,
     )
     expect(empty.reader.read(peersPath)).toEqual({})
+  })
+})
+
+// ---------------------------------------------------------------------------
+// A delete reaches what the deleter never saw
+// ---------------------------------------------------------------------------
+//
+// A delete is a statement about a whole entry as of one moment: everything
+// written under the key before it is gone. Tombstoning leaf by leaf can only
+// say that about the leaves the deleting peer holds, so each case below is a
+// leaf it does not hold — an entry never seen, an inner key never seen, an
+// entry with no leaves at all.
+//
+// Asserted through substrates, projections and digests rather than tree
+// shapes, so these pin behaviour and survive a change of representation.
+
+interface Peer {
+  readonly substrate: Substrate<StateVersion>
+  readonly doc: any
+}
+
+function peerOf(schema: SchemaNode): Peer {
+  const substrate = ephemeralSubstrateFactory.create(schema)
+  return { substrate, doc: createRef(schema, substrate) }
+}
+
+/** Anti-entropy by entirety: `to` joins everything `from` holds. */
+function ship(from: Peer, to: Peer): void {
+  to.substrate.merge(from.substrate.exportEntirety())
+}
+
+function digestOf(p: Peer): string {
+  const digest = p.substrate.digest?.()
+  if (digest === undefined) throw new Error("ephemeral must digest")
+  return digest
+}
+
+describe("a delete reaches what the deleter never saw", () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  const Rooms = Schema.struct({
+    rooms: Schema.record(Schema.record(Schema.number())),
+  })
+
+  it("an entry the deleter never saw converges whatever the merge order", () => {
+    // The delete lands as a leaf where the others hold a container, and the
+    // join's leaf-versus-container branch discards one side whole — which is
+    // not associative. B's `x` predates the delete and must go; C's `y` was
+    // written after it and must stay.
+    const now = vi.spyOn(Date, "now")
+    const a = peerOf(Rooms)
+    const b = peerOf(Rooms)
+    const c = peerOf(Rooms)
+    now.mockReturnValue(150)
+    batch(b.doc, (d: any) => d.rooms.set("r1", { x: 1 }))
+    now.mockReturnValue(300)
+    batch(a.doc, (d: any) => d.rooms.delete("r1"))
+    now.mockReturnValue(400)
+    batch(c.doc, (d: any) => d.rooms.set("r1", { y: 2 }))
+
+    const first = peerOf(Rooms)
+    const second = peerOf(Rooms)
+    for (const from of [a, b, c]) ship(from, first)
+    for (const from of [b, c, a]) ship(from, second)
+
+    expect(first.doc.rooms()).toEqual({ r1: { y: 2 } })
+    expect(second.doc.rooms()).toEqual({ r1: { y: 2 } })
+    expect(digestOf(first)).toBe(digestOf(second))
+  })
+
+  it("an inner key the deleter never saw does not outlive the delete", () => {
+    const now = vi.spyOn(Date, "now")
+    const a = peerOf(Rooms)
+    const b = peerOf(Rooms)
+    now.mockReturnValue(100)
+    batch(a.doc, (d: any) => d.rooms.set("r1", { a: 1 }))
+    ship(a, b)
+    now.mockReturnValue(150)
+    batch(b.doc, (d: any) => d.rooms.at("r1").set("b", 2))
+    now.mockReturnValue(200)
+    batch(a.doc, (d: any) => d.rooms.delete("r1"))
+    ship(a, b)
+    ship(b, a)
+
+    expect(a.doc.rooms()).toEqual({})
+    expect(b.doc.rooms()).toEqual({})
+    expect(digestOf(a)).toBe(digestOf(b))
+  })
+
+  it("an inner key written after the delete brings the entry back", () => {
+    // The converse, and it holds today. Pinned so the fix for the case above
+    // cannot overshoot into "a delete wins regardless of clock", which is
+    // OR-Set's opposite and not what this substrate promises.
+    const now = vi.spyOn(Date, "now")
+    const a = peerOf(Rooms)
+    const b = peerOf(Rooms)
+    now.mockReturnValue(100)
+    batch(a.doc, (d: any) => d.rooms.set("r1", { a: 1 }))
+    ship(a, b)
+    now.mockReturnValue(200)
+    batch(a.doc, (d: any) => d.rooms.delete("r1"))
+    now.mockReturnValue(250)
+    batch(b.doc, (d: any) => d.rooms.at("r1").set("b", 2))
+    ship(a, b)
+    ship(b, a)
+
+    expect(a.doc.rooms()).toEqual({ r1: { b: 2 } })
+    expect(b.doc.rooms()).toEqual({ r1: { b: 2 } })
+  })
+
+  describe("replacing a whole record", () => {
+    const Lobby = Schema.struct({
+      room: Schema.struct({ peers: Schema.record(Schema.string()) }),
+    })
+
+    it("clears an older key the writer never saw", () => {
+      const now = vi.spyOn(Date, "now")
+      const a = peerOf(Lobby)
+      const b = peerOf(Lobby)
+      now.mockReturnValue(100)
+      batch(b.doc, (d: any) => d.room.peers.set("carol", "here"))
+      now.mockReturnValue(200)
+      batch(a.doc, (d: any) => d.room.set({ peers: { alice: "here" } }))
+      ship(a, b)
+      ship(b, a)
+
+      expect(a.doc.room.peers()).toEqual({ alice: "here" })
+      expect(b.doc.room.peers()).toEqual({ alice: "here" })
+    })
+
+    it("while a per-key set clears nothing else", () => {
+      const now = vi.spyOn(Date, "now")
+      const a = peerOf(Lobby)
+      const b = peerOf(Lobby)
+      now.mockReturnValue(100)
+      batch(b.doc, (d: any) => d.room.peers.set("carol", "here"))
+      now.mockReturnValue(200)
+      batch(a.doc, (d: any) => d.room.peers.set("alice", "here"))
+      ship(a, b)
+      ship(b, a)
+
+      const both = { alice: "here", carol: "here" }
+      expect(a.doc.room.peers()).toEqual(both)
+      expect(b.doc.room.peers()).toEqual(both)
+    })
+  })
+
+  it("clear() reaches older entries even when the clearer sees none", () => {
+    // The cross-substrate half of this, a clear against an earlier unseen add,
+    // is in `tests/conformance` under `clearReach`. This half is ephemeral's
+    // alone: a clear is a statement about the record as of now, so it has
+    // something to say even when the local view is empty, and has to be sent.
+    const Roster = Schema.struct({ peers: Schema.record(Schema.string()) })
+    const now = vi.spyOn(Date, "now")
+    const a = peerOf(Roster)
+    const b = peerOf(Roster)
+    now.mockReturnValue(100)
+    batch(b.doc, (d: any) => d.peers.set("carol", "here"))
+    now.mockReturnValue(200)
+    batch(a.doc, (d: any) => d.peers.clear())
+    ship(a, b)
+    ship(b, a)
+
+    expect(a.doc.peers()).toEqual({})
+    expect(b.doc.peers()).toEqual({})
+  })
+
+  describe("an empty entry", () => {
+    // It has no leaves, and deltas, digests and tombstones all see only
+    // leaves — so it neither arrives nor leaves.
+
+    it("reaches a peer by delta", () => {
+      const a = peerOf(Rooms)
+      const b = peerOf(Rooms)
+      const cursor = a.substrate.version()
+      batch(a.doc, (d: any) => d.rooms.set("r1", {}))
+      const delta = a.substrate.exportSince(cursor)
+      if (delta === null) throw new Error("same incarnation; must be served")
+      b.substrate.merge(delta)
+
+      expect(b.doc.rooms()).toEqual({ r1: {} })
+    })
+
+    it("stays deleted on every peer", () => {
+      const now = vi.spyOn(Date, "now")
+      const a = peerOf(Rooms)
+      const b = peerOf(Rooms)
+      now.mockReturnValue(100)
+      batch(a.doc, (d: any) => d.rooms.set("r1", {}))
+      ship(a, b)
+      now.mockReturnValue(200)
+      batch(a.doc, (d: any) => d.rooms.delete("r1"))
+      ship(a, b)
+
+      expect(a.doc.rooms()).toEqual({})
+      expect(b.doc.rooms()).toEqual({})
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// A delete survives being loaded
+// ---------------------------------------------------------------------------
+
+describe("a delete survives being loaded from a payload", () => {
+  // `fromEntirety(payload, schema)` is what `createDoc(bound, payload)` and an
+  // exchange promotion both reach. It read the payload with `JSON.parse`,
+  // taking the wire's tombstone marker for the install ordinal, so every
+  // delete came back as a live `null` — which then beat the tombstone on
+  // every peer, because live beats tombstone on a tie.
+  const loaded = () =>
+    ephemeralSubstrateFactory.fromEntirety(
+      payload({ peers: { alice: wire(null, 200, true), bob: wire(2, 100) } }),
+      Roster,
+    )
+
+  it("reads as absent", () => {
+    expect(loaded().reader.read(peersPath)).toEqual({ bob: 2 })
+  })
+
+  it("does not resurrect on a peer it is shipped to", () => {
+    const holder = ephemeralSubstrateFactory.fromEntirety(
+      payload({ peers: { alice: wire(1, 100), bob: wire(2, 100) } }),
+      Roster,
+    )
+    holder.merge(loaded().exportEntirety())
+    expect(holder.reader.read(peersPath)).toEqual({ bob: 2 })
   })
 })

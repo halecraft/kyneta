@@ -66,6 +66,20 @@ export const ConformanceSchema = Schema.struct({
 export type FieldConcurrency = "both-survive" | "one-wins"
 
 /**
+ * What `record.clear()` removes that the clearing peer has not seen yet.
+ *
+ * - `"observed"`: nothing. The clear removes the keys the clearer holds, and a
+ *   concurrent add it never saw survives however early it was written. This is
+ *   observed-remove, which the CRDT backends get from causal metadata.
+ * - `"older"`: everything written before the clear, seen or not. This is
+ *   last-writer-wins by timestamp, the same rule a per-key delete follows on a
+ *   substrate that orders by clock rather than by causality.
+ *
+ * Either way, a key written after the clear survives it.
+ */
+export type ClearReach = "observed" | "older"
+
+/**
  * The row of the substrate-unification matrix, as data. Each substrate declares
  * its axes; the conformance harness asserts the universal invariants hold and
  * that the capability-gated ones match what is declared here. This table is the
@@ -92,6 +106,7 @@ export type SubstrateProfile = {
    */
   readonly liveCompactable: boolean
   readonly fieldConcurrency: FieldConcurrency
+  readonly clearReach: ClearReach
 }
 
 // A substrate-agnostic BoundSchema. The harness accesses docs untyped on
@@ -107,6 +122,9 @@ export const PROFILES: readonly SubstrateProfile[] = [
     liveCompactable: true,
     // Sequential authorship — one writer at a time, so no field conflict arises.
     fieldConcurrency: "both-survive",
+    // One writer at a time, so a clear always follows everything written
+    // before it and removes all of it.
+    clearReach: "older",
   },
   {
     name: "state (field-level LWW)",
@@ -118,6 +136,9 @@ export const PROFILES: readonly SubstrateProfile[] = [
     // never clobber each other. That is the whole reason this substrate
     // exists: a presence roster where each peer writes only its own key.
     fieldConcurrency: "both-survive",
+    // Last-writer-wins by timestamp for a clear exactly as for a per-key
+    // delete: a clear is a statement about the whole record as of one moment.
+    clearReach: "older",
   },
   {
     name: "loro (CRDT)",
@@ -126,6 +147,7 @@ export const PROFILES: readonly SubstrateProfile[] = [
     durable: true,
     liveCompactable: false, // compactable via a headless replica, not a live doc
     fieldConcurrency: "both-survive",
+    clearReach: "observed",
   },
   {
     name: "yjs (CRDT)",
@@ -134,5 +156,6 @@ export const PROFILES: readonly SubstrateProfile[] = [
     durable: true,
     liveCompactable: false, // compactable via a headless replica, not a live doc
     fieldConcurrency: "both-survive",
+    clearReach: "observed",
   },
 ]

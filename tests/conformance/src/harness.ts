@@ -407,6 +407,72 @@ export function runSubstrateConformance(profile: SubstrateProfile): void {
       }
     })
 
+    it("a clear reaches an earlier add it never saw iff the substrate orders by clock", async () => {
+      // `clear()` is where the two ways of ordering a removal part. A CRDT
+      // removes what the clearer has observed, so a concurrent add survives
+      // however early it was. A clock-ordered substrate removes everything
+      // written before the clear, seen or not, exactly as its per-key delete
+      // does. `clearReach` declares which; the scenario holds each to it.
+      const bound = profile.bind()
+
+      if (profile.writerModel === "serialized") {
+        const [docA, docB] = connectedPair(bound)
+        batch(docA, (d: Doc) => {
+          d.peers.set("alice", 1)
+          d.peers.set("carol", 3)
+        })
+        await drain()
+        batch(docB, (d: Doc) => d.peers.clear())
+        await drain()
+        expect(docA.peers()).toEqual({})
+        expect(docA.peers()).toEqual(docB.peers())
+        return
+      }
+
+      const [docA, docB] = await seededPartition(
+        bound,
+        (d: Doc) => d.peers.set("alice", 1),
+        // A adds carol first; B, which never sees it, clears afterwards.
+        (d: Doc) => d.peers.set("carol", 3),
+        (d: Doc) => d.peers.clear(),
+      )
+
+      expect(docA.peers()).toEqual(docB.peers())
+      expect(docA.peers()).toEqual(
+        profile.clearReach === "observed" ? { carol: 3 } : {},
+      )
+    })
+
+    it("a key written after a clear survives it", async () => {
+      // Universal, and the guard on the scenario above: a clock-ordered clear
+      // removes what came before it, not what came after.
+      const bound = profile.bind()
+
+      if (profile.writerModel === "serialized") {
+        const [docA, docB] = connectedPair(bound)
+        batch(docA, (d: Doc) => d.peers.set("alice", 1))
+        await drain()
+        batch(docA, (d: Doc) => d.peers.clear())
+        await drain()
+        batch(docB, (d: Doc) => d.peers.set("carol", 3))
+        await drain()
+        expect(docA.peers()).toEqual({ carol: 3 })
+        expect(docA.peers()).toEqual(docB.peers())
+        return
+      }
+
+      const [docA, docB] = await seededPartition(
+        bound,
+        (d: Doc) => d.peers.set("alice", 1),
+        (d: Doc) => d.peers.clear(),
+        // B never sees the clear, and writes after it.
+        (d: Doc) => d.peers.set("carol", 3),
+      )
+
+      expect(docA.peers()).toEqual(docB.peers())
+      expect(docA.peers()).toEqual({ carol: 3 })
+    })
+
     it("a fresh peer adopts an incumbent's state on join", async () => {
       const bound = profile.bind()
       const [docA, docB] = connectedPair(bound)
