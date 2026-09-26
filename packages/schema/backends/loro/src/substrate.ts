@@ -60,6 +60,7 @@ import {
   isSetSchema,
   isTreeSchema,
   KIND,
+  type MapChange,
   type MarkConfig,
   ownedForStore,
   type Path,
@@ -410,6 +411,12 @@ export function createLoroSubstrate(
       if (boundary !== null) {
         applyJsonBoundaryWrite(path, boundary.prefixLength)
         return
+      }
+
+      // A clear removes the keys the container holds, so buffered writes
+      // to it have to be in λ first, or the clear misses keys σ has.
+      if (change.type === "map" && (change as MapChange).clear) {
+        flushCoalesceBuffer()
       }
 
       // Non-boundary write — translate to a Loro diff group.

@@ -41,6 +41,7 @@ import {
   fieldAbsPath,
   KIND,
   type MaterializedNode,
+  mapChangeEffects,
   materializeValue,
   pathSchema,
   RawPath,
@@ -274,36 +275,46 @@ function applyMapChange(
   const targetSchema = pathSchema(rootSchema, path)
   const parentAbsPath = fieldAbsPath(path.segments)
   const isProduct = targetSchema[KIND] === "product"
-
-  // Apply deletes first
-  if (change.delete) {
-    for (const key of change.delete) {
-      resolved.delete(key)
-    }
+  if (change.clear && isProduct) {
+    throw new Error("applyChangeToYjs: only a record can be cleared")
   }
 
-  // Apply sets. Product fields are identity-keyed and advance the abs-path;
-  // map/record entries keep their runtime key and leave the abs-path unchanged.
-  if (change.set) {
-    for (const [key, value] of Object.entries(change.set)) {
-      const fieldSchema = getFieldSchema(targetSchema, key)
-      const childAbsPath = isProduct
-        ? extendSchemaPathKey(parentAbsPath, key)
-        : parentAbsPath
-      const mapKey = isProduct ? containerKey(binding, childAbsPath, key) : key
-      const yjsValue = fieldSchema
-        ? realizeYjs(
-            materializeValue(
-              fieldSchema,
-              value,
-              binding,
-              childAbsPath,
-              YJS_EAGER,
-            ),
-          )
-        : value
-      resolved.set(mapKey, yjsValue)
-    }
+  // Product fields are identity-keyed and advance the abs-path; map/record
+  // entries keep their runtime key and leave the abs-path unchanged. Deletes
+  // and sets share the mapping, so a deleted field is the one that was set.
+  const keyFor = (key: string): { mapKey: string; childAbsPath: string } => {
+    if (!isProduct) return { mapKey: key, childAbsPath: parentAbsPath }
+    const childAbsPath = extendSchemaPathKey(parentAbsPath, key)
+    return { mapKey: containerKey(binding, childAbsPath, key), childAbsPath }
+  }
+
+  // A clear removes the keys the map holds now: Yjs's own clear is
+  // observed-remove, and this keeps it so. Only a record can be cleared, so
+  // these are runtime keys, never identity-keyed field names.
+  const { set, remove } = mapChangeEffects(
+    change,
+    change.clear ? Array.from(resolved.keys()) : [],
+  )
+
+  for (const key of remove) {
+    resolved.delete(keyFor(key).mapKey)
+  }
+
+  for (const [key, value] of Object.entries(set)) {
+    const fieldSchema = getFieldSchema(targetSchema, key)
+    const { mapKey, childAbsPath } = keyFor(key)
+    const yjsValue = fieldSchema
+      ? realizeYjs(
+          materializeValue(
+            fieldSchema,
+            value,
+            binding,
+            childAbsPath,
+            YJS_EAGER,
+          ),
+        )
+      : value
+    resolved.set(mapKey, yjsValue)
   }
 }
 

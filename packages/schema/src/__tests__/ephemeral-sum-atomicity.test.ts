@@ -14,21 +14,27 @@ import { RawPath } from "../path.js"
 import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
 import {
   applyChangeToStateTree,
-  isStateTuple,
+  type Container,
+  type Horizon,
+  isLive,
+  type Live,
   mergeStateTree,
   type StateTree,
-  type StateTuple,
   type WriteStamp,
 } from "../substrates/state-tree.js"
 
 /** A tuple as a peer holds it; the install ordinal is fixed and unread here. */
-const tup = (value: unknown, timestamp: number, deleted?: true): StateTuple =>
-  deleted ? [value, timestamp, 1, true] : [value, timestamp, 1]
+const tup = (
+  value: unknown,
+  timestamp: number,
+  deleted?: true,
+): Live | Horizon =>
+  deleted ? [null, timestamp, 1, true] : [value, timestamp, 1]
 
 /** A write's stamp. The ordinal only has to be above a structural zero. */
-const stamp = (timestamp: number): WriteStamp => ({ timestamp, installedAt: 1 })
+const stamp = (notBefore: number): WriteStamp => ({ notBefore, installedAt: 1 })
 
-const merge = (local: StateTree, remote: StateTree) =>
+const merge = (local: Container, remote: Container) =>
   mergeStateTree(local, remote, 1)
 
 const Shape = Schema.discriminatedUnion("kind", [
@@ -38,7 +44,7 @@ const Shape = Schema.discriminatedUnion("kind", [
 const Doc = Schema.struct({ shape: Shape, label: Schema.string() })
 
 const shapePath = RawPath.empty.field("shape")
-const asRecord = (t: StateTree) => t as Record<string, [any, number]>
+const asRecord = (t: StateTree) => t as Record<string, any>
 
 // ---------------------------------------------------------------------------
 // Builder: a register is stored as ONE tuple, not a decomposed record
@@ -46,7 +52,7 @@ const asRecord = (t: StateTree) => t as Record<string, [any, number]>
 
 describe("applyChangeToStateTree stores a sum as one atomic tuple", () => {
   it("a variant write becomes a single [value, ts] leaf", () => {
-    const tree: StateTree = {}
+    const tree: Container = {}
     applyChangeToStateTree(
       tree,
       shapePath,
@@ -55,12 +61,12 @@ describe("applyChangeToStateTree stores a sum as one atomic tuple", () => {
       Doc,
     )
     const node = asRecord(tree).shape
-    expect(isStateTuple(node)).toBe(true)
+    expect(isLive(node)).toBe(true)
     expect(node[0]).toEqual({ kind: "square", side: 3 })
   })
 
   it("deep-clones the value so the tree does not alias the caller", () => {
-    const tree: StateTree = {}
+    const tree: Container = {}
     const value = { kind: "circle", radius: 5 }
     applyChangeToStateTree(
       tree,
@@ -77,7 +83,7 @@ describe("applyChangeToStateTree stores a sum as one atomic tuple", () => {
     const Prod = Schema.struct({
       user: Schema.struct({ x: Schema.number(), y: Schema.number() }),
     })
-    const tree: StateTree = {}
+    const tree: Container = {}
     applyChangeToStateTree(
       tree,
       RawPath.empty.field("user"),
@@ -86,7 +92,7 @@ describe("applyChangeToStateTree stores a sum as one atomic tuple", () => {
       Prod,
     )
     const user = (tree as Record<string, StateTree>).user
-    expect(isStateTuple(user)).toBe(false)
+    expect(isLive(user)).toBe(false)
     expect((user as Record<string, StateTree>).x).toEqual(tup(1, 100))
     expect((user as Record<string, StateTree>).y).toEqual(tup(2, 100))
   })
@@ -98,11 +104,11 @@ describe("applyChangeToStateTree stores a sum as one atomic tuple", () => {
 
 describe("mergeStateTree merges a sum register atomically", () => {
   it("higher-timestamp variant wins whole; no field blend", () => {
-    const a: StateTree = {
+    const a: Container = {
       shape: tup({ kind: "circle", radius: 5 }, 100),
       label: tup("a", 100),
     }
-    const b: StateTree = {
+    const b: Container = {
       shape: tup({ kind: "square", side: 3 }, 200),
       label: tup("b", 50),
     }
@@ -114,7 +120,7 @@ describe("mergeStateTree merges a sum register atomically", () => {
   })
 
   it("converges regardless of merge order (commutative)", () => {
-    const mk = (): [StateTree, StateTree] => [
+    const mk = (): [Container, Container] => [
       { shape: tup({ kind: "circle", radius: 5 }, 100) },
       { shape: tup({ kind: "square", side: 3 }, 200) },
     ]
@@ -126,8 +132,8 @@ describe("mergeStateTree merges a sum register atomically", () => {
   })
 
   it("field-level product merge still works (regression)", () => {
-    const a: StateTree = { x: tup(1, 100), y: tup(2, 50) }
-    const b: StateTree = { x: tup(9, 50), y: tup(8, 200) }
+    const a: Container = { x: tup(1, 100), y: tup(2, 50) }
+    const b: Container = { x: tup(9, 50), y: tup(8, 200) }
     merge(a, b).tree
     expect(asRecord(a).x).toEqual(tup(1, 100)) // A wins x
     expect(asRecord(a).y).toEqual(tup(8, 200)) // B wins y
@@ -144,7 +150,7 @@ describe(".json() blob is an atomic register", () => {
   })
 
   it("stores the whole blob as one tuple", () => {
-    const tree: StateTree = {}
+    const tree: Container = {}
     applyChangeToStateTree(
       tree,
       RawPath.empty.field("blob"),
@@ -153,8 +159,8 @@ describe(".json() blob is an atomic register", () => {
       JsonDoc,
     )
     const node = (tree as Record<string, StateTree>).blob
-    expect(isStateTuple(node)).toBe(true)
-    expect((node as [any, number])[0]).toEqual({ a: 1, b: 2 })
+    expect(isLive(node)).toBe(true)
+    expect((node as Live)[0]).toEqual({ a: 1, b: 2 })
   })
 })
 
@@ -168,7 +174,7 @@ describe("nullable struct is an atomic register", () => {
   })
 
   it("stores the present variant whole; null wins by timestamp", () => {
-    const tree: StateTree = {}
+    const tree: Container = {}
     applyChangeToStateTree(
       tree,
       RawPath.empty.field("opt"),
@@ -176,7 +182,7 @@ describe("nullable struct is an atomic register", () => {
       stamp(100),
       NullDoc,
     )
-    expect(isStateTuple((tree as Record<string, StateTree>).opt)).toBe(true)
+    expect(isLive((tree as Record<string, StateTree>).opt)).toBe(true)
 
     merge(tree, { opt: tup(null, 200) }).tree
     expect(asRecord(tree).opt).toEqual(tup(null, 200))
@@ -194,18 +200,21 @@ describe("state substrate converges concurrent variant switches", () => {
     data: JSON.stringify(data),
   })
 
+  /** A live leaf in wire shape: no install ordinal, which is the receiver's. */
+  const wire = (value: unknown, timestamp: number) => [value, timestamp]
+
   it("merged peers read a coherent single variant", () => {
     const subA = ephemeralSubstrateFactory.fromEntirety(
       payload({
-        shape: tup({ kind: "circle", radius: 5 }, 100),
-        label: tup("a", 100),
+        shape: wire({ kind: "circle", radius: 5 }, 100),
+        label: wire("a", 100),
       }),
       Doc,
     )
     subA.merge(
       payload({
-        shape: tup({ kind: "square", side: 3 }, 200),
-        label: tup("b", 50),
+        shape: wire({ kind: "square", side: 3 }, 200),
+        label: wire("b", 50),
       }),
     )
 

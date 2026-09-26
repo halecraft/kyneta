@@ -2,7 +2,8 @@
 //
 // The substrate behind the `ephemeral` binding target: history-free, and
 // merging concurrently at the field level. Rather than one timestamp for the
-// whole document, it tracks a `StateTuple` for every scalar leaf.
+// whole document, it keeps a timestamped `Live` tuple for every scalar leaf,
+// and a `Horizon` for every key deleted or written whole.
 //
 // History-free does not mean snapshot-only. There is no op log to replay, but
 // each leaf records the local ordinal it was installed at, so `exportSince`
@@ -50,19 +51,17 @@ import type {
   Version,
 } from "../substrate.js"
 import { BACKING_DOC, RECORD_INVERSE } from "../substrate.js"
-import { Zero } from "../zero.js"
 import { DEFAULT_LINEAGE, objectToReplaceOps } from "./plain.js"
 import {
   applyChangeToStateTree,
+  type Container,
   decodeTree,
   encodeTree,
-  extractPlainState,
   formatStateTreeViolation,
-  insertStructuralZeros,
-  isStateTuple,
   leavesInstalledAfter,
   mergeStateTree,
-  type StateTree,
+  movedRootKeys,
+  projectStateTree,
   stateTreeDigest,
   stateTreeViolation,
   type WriteStamp,
@@ -73,20 +72,22 @@ import {
 // ---------------------------------------------------------------------------
 
 /**
- * A Version wrapping a wall-clock timestamp for the `ephemeral` substrate.
+ * The `ephemeral` substrate's version: which replica instance is counting, and
+ * how much it has installed.
  *
  * A CvRDT has no total order to offer. Where `PlainVersion` can say "you are
  * behind me", this can only ever say "we are concurrent" — any payload may
  * carry the newest value for some individual field, so none can be discarded
- * as stale. See `compare` for why that extends even to identical timestamps.
+ * as stale. See `compare`.
  *
- * **This substrate has no peer identity, deliberately.** A scalar timestamp,
+ * **This substrate has no peer identity, deliberately.** One install counter,
  * not a per-peer version vector — and the binding target hands back the shared
  * `ephemeralSubstrateFactory` rather than building one per peer, so the
  * exchange's `peerId` never arrives here. It can afford that because it merges
  * field by field and lets timestamps decide, so it never has to order two
- * writes by their author. Peer identity is the tie-breaker it chose not to
- * need.
+ * writes by their author. One writer's own writes are ordered anyway, by
+ * construction: each is stamped past what it replaces. Peer identity is the
+ * tie-breaker it chose not to need.
  *
  * **If that ever changes, derive the identity from the exchange's stable
  * `peerId` rather than minting one per session.** Transient documents are
@@ -215,8 +216,8 @@ function newIncarnation(): string {
  * a cached version, with no op-log.
  */
 function createStateReplicaCore(
-  getTree: () => StateTree,
-  setTree: (tree: StateTree) => void,
+  getTree: () => Container,
+  setTree: (tree: Container) => void,
 ) {
   // Identifies whose install counter this is. Minted per replica instance
   // because the counter means nothing across a restart: a fresh replica
@@ -233,10 +234,13 @@ function createStateReplicaCore(
   let installSeq = 0
 
   return {
-    /** Open the next install ordinal, for one write or one merge. */
-    nextStamp(timestamp: number): WriteStamp {
+    /**
+     * Open the next install ordinal for a local write, stamped no earlier
+     * than the wall clock the caller read.
+     */
+    nextStamp(notBefore: number): WriteStamp {
       installSeq += 1
-      return { timestamp, installedAt: installSeq }
+      return { notBefore, installedAt: installSeq }
     },
 
     version(): StateVersion {
@@ -351,18 +355,15 @@ function createStateReplicaCore(
 // ---------------------------------------------------------------------------
 
 export function createStateSubstrate(
-  tree: StateTree,
-  schema?: SchemaNode,
+  tree: Container,
+  schema: SchemaNode,
 ): Substrate<StateVersion> {
-  // Refuse a schema this tree cannot hold, before the shadow below seeds it.
-  // `bind()` asks the same question earlier and with a better error site, but
-  // it is not on every path: this factory is exported and takes a schema
-  // directly. Seeding is itself a write, so an unrepresentable field is
-  // already stored wrongly by the time any caller could observe it.
-  if (schema !== undefined) {
-    const violation = stateTreeViolation(schema)
-    if (violation) throw new Error(formatStateTreeViolation(violation))
-  }
+  // Refuse a schema this tree cannot hold. `bind()` asks the same question
+  // with a better error site, but `ephemeralSubstrateFactory` can be called
+  // without it, and the first write to an unrepresentable field would store it
+  // in a shape the schema never declared.
+  const violation = stateTreeViolation(schema)
+  if (violation) throw new Error(formatStateTreeViolation(violation))
 
   let currentTree = tree
   const core = createStateReplicaCore(
@@ -372,12 +373,14 @@ export function createStateSubstrate(
     },
   )
 
-  // The PlainState shadow that the reader consumes.
-  // Updated on every prepare (locally) and afterBatch (from merges).
-  const shadow: PlainState = {}
-  if (!isStateTuple(currentTree)) {
-    extractPlainState(currentTree, shadow, schema, Date.now())
-  }
+  // The PlainState shadow that the reader consumes. After this, only
+  // `prepare` writes it: local writes directly, and merges and decay through
+  // the replay ops `announceReprojection` executes.
+  //
+  // A copy, because a projection shares register values with the tree.
+  const shadow: PlainState = deepClonePlain(
+    projectStateTree(currentTree, schema, Date.now()),
+  )
   const reader = plainReader(shadow)
 
   let cachedCtx: WritableContext | undefined
@@ -389,9 +392,9 @@ export function createStateSubstrate(
    * Both ways that happens — a peer's merge and a decay sweep — need the
    * same two steps, and differ only in the `options` they announce under.
    *
-   * The announcement names the fields that actually moved, which
-   * `extractPlainState` reports as it writes them. Delivery notifies a changed
-   * path's *ancestors*, so one blanket op at the root reaches root subscribers
+   * The announcement names the root fields that actually moved. Delivery
+   * notifies a changed path's *ancestors*, so one blanket op at the root
+   * reaches root subscribers
    * and nobody else — a presence roster's per-entry subscribers would never
    * hear a peer arrive or expire. Naming every field instead would wake
    * subscribers whose subtree nothing touched, which for a roster is most of
@@ -403,13 +406,16 @@ export function createStateSubstrate(
    * tell no one.
    */
   function announceReprojection(now: number, options: BatchOptions): void {
-    if (isStateTuple(currentTree)) return
-
-    const changedKeys = extractPlainState(currentTree, shadow, schema, now)
-    if (changedKeys.size === 0) return
-
+    const next = projectStateTree(currentTree, schema, now)
     const moved: PlainState = {}
-    for (const key of changedKeys) moved[key] = shadow[key]
+    // Each moved value is copied here, and `prepare` copies it again on the
+    // way into σ. The first copy detaches the op, which subscribers receive,
+    // from the tree the projection shares register values with; the second
+    // detaches σ from the op.
+    for (const key of movedRootKeys(shadow, next)) {
+      moved[key] = deepClonePlain(next[key])
+    }
+    if (Object.keys(moved).length === 0) return
 
     // A state image of what changed, turned into ops by the same primitive
     // the plain substrate absorbs an entirety payload with.
@@ -475,18 +481,14 @@ export function createStateSubstrate(
         // oracle is the point: "which subtrees are indivisible" is a property
         // of the schema and should have one answer, not one per substrate.
         //
-        // Re-aiming also normalizes the change into a `replace`, which is the
-        // only kind `applyChangeToStateTree` handles well. That incidentally
-        // makes register-shaped `map` and `sequence` changes work. Bare
-        // containers get no such help and remain broken independently of this.
+        // Re-aiming also normalizes the change into a `replace`, which is what
+        // makes register-shaped `map` and `sequence` changes work: the tree
+        // has no container to apply them to inside a register.
         //
         // Watch out when testing this: `prepare` also updates the shadow above,
         // and local reads come from the shadow. Get this branch wrong and reads
         // on this peer still look perfect — only what replicates is damaged.
-        //
-        // With no schema there are no registers to find, so a schemaless
-        // substrate keeps the old decompose-everything behaviour.
-        const boundary = schema ? findOpaqueBoundary(schema, path) : null
+        const boundary = findOpaqueBoundary(schema, path)
         if (boundary !== null) {
           const registerPath = path.slice(0, boundary.prefixLength + 1)
           applyChangeToStateTree(
@@ -604,16 +606,13 @@ export function createStateSubstrate(
      * structural zero, and announces whichever fields that moved — see
      * `announceReprojection`, which a peer's merge shares.
      *
-     * `projection: true` tells `prepare` to skip `applyChangeToStateTree`
-     * and `afterBatch` to skip the version bump; `replay: true` tells the
+     * `projection: true` tells `prepare` to leave the tree alone, and the
+     * version moves only when the tree does; `replay: true` tells the
      * Exchange not to broadcast. The underlying `StateTree` math is never
      * mutated, so the network never sees a synthesized "absent" write that
      * could clobber a slower peer's still-valid value.
      */
     tick(now: number): void {
-      // Decay is declared on the schema, so a schemaless substrate has
-      // nothing that can expire and need not re-project on every heartbeat.
-      if (schema === undefined) return
       announceReprojection(now, { replay: true, projection: true })
     },
   }
@@ -626,7 +625,7 @@ export function createStateSubstrate(
 // ---------------------------------------------------------------------------
 
 export function createStateReplica(): Replica<StateVersion> {
-  let tree: StateTree = {}
+  let tree: Container = {}
   const core = createStateReplicaCore(
     () => tree,
     t => {
@@ -691,23 +690,18 @@ export const ephemeralSubstrateFactory: SubstrateFactory<StateVersion> = {
     replica: Replica<StateVersion>,
     schema: SchemaNode,
   ): Substrate<StateVersion> {
-    // 1. Get the existing StateTree from the replica.
-    // The headless replica stores its tree in closure, but we can't easily extract it
-    // without a symbol. Let's rely on exportEntirety for extraction.
-    const entirety = replica.exportEntirety()
-    const tree = JSON.parse(entirety.data as string) as StateTree
-
-    // 2. Compute structural zeros, filter to missing keys
-    const defaults = Zero.structural(schema) as Record<string, unknown>
-
-    // We will do a recursive walk to insert structural zeros tagged with T=0.
-    insertStructuralZeros(tree, defaults, schema)
-
-    // 3. Create the substrate with the upgraded tree AND schema.
-    // The schema is needed for `tick()` to know which fields have `decayMs`.
-    const substrate = createStateSubstrate(tree, schema)
-
-    return substrate
+    // The headless replica keeps its tree in a closure, so the tree is read
+    // back out through its entirety, and through `decodeTree` like any other
+    // payload. The wire shape is not the in-memory one: on the wire a
+    // deletion's marker sits where the install ordinal lives in memory, so
+    // reading it as-is turns every deletion into a live `null`.
+    //
+    // Adopted nodes keep install ordinal 0: this incarnation's counter never
+    // took them in, and no peer holds a cursor into an incarnation minted now.
+    return createStateSubstrate(
+      decodeTree(replica.exportEntirety().data as string),
+      schema,
+    )
   },
 
   create(schema: SchemaNode): Substrate<StateVersion> {

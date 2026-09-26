@@ -20,7 +20,11 @@ import {
   type Changeset,
   hasChangefeed,
 } from "@kyneta/changefeed"
-import type { ReplaceChange } from "./change.js"
+import {
+  type MapChange,
+  mapChangeEffects,
+  type ReplaceChange,
+} from "./change.js"
 import { pathSchema } from "./fold-path.js"
 import type { Path } from "./interpret.js"
 import { KIND, type Schema as SchemaNode } from "./schema.js"
@@ -108,28 +112,29 @@ export function expandMapOpsToLeaves(
       }
     }
 
-    const mapChange = op.change as {
-      type: "map"
-      set?: Record<string, unknown>
-      delete?: string[]
+    const change = op.change as MapChange
+    // A product's fields are declared, so there is nothing a clear could
+    // reach that a delete of each field would not name.
+    if (change.clear) {
+      throw new Error(
+        `expandMapOpsToLeaves: a clear at a product path [${op.path.segments.map(segment => String(segment.resolve())).join(".")}]; only a record can be cleared.`,
+      )
     }
 
-    if (mapChange.set) {
-      for (const [key, value] of Object.entries(mapChange.set)) {
-        result.push({
-          path: op.path.field(key),
-          change: { type: "replace", value },
-        })
-      }
+    // Read through `mapChangeEffects`, so a key named in both lists ends up
+    // set here exactly as `stepMap` leaves it.
+    const { set, remove } = mapChangeEffects(change, [])
+    for (const key of remove) {
+      result.push({
+        path: op.path.field(key),
+        change: { type: "replace", value: undefined },
+      })
     }
-
-    if (mapChange.delete) {
-      for (const key of mapChange.delete) {
-        result.push({
-          path: op.path.field(key),
-          change: { type: "replace", value: undefined },
-        })
-      }
+    for (const [key, value] of Object.entries(set)) {
+      result.push({
+        path: op.path.field(key),
+        change: { type: "replace", value },
+      })
     }
   }
 

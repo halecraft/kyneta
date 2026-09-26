@@ -7,19 +7,20 @@
 // holds a state that no join can produce, and a peer still holding `before`
 // computes `before ⊔ after`, which is not `after`.
 //
-// A write here overwrites the leaves it touches outright, stamped with the
-// wall clock. The join orders tuples by timestamp and breaks ties by
-// liveness and then value. So the overwrite is inflationary only when its
-// stamp beats the tuple it replaces, and nothing checked that it did:
+// A write overwrites the nodes it touches, and the join orders them by
+// timestamp, breaking ties by presence and then value. So an overwrite is
+// inflationary only when its stamp beats what it replaces. Stamped with the
+// wall clock alone, it did not:
 //
 // - A same-millisecond rewrite ties, and loses the tie whenever the new tuple
-//   ranks lower — a tombstone against a live value, or a smaller value.
+//   ranks lower: a deletion against a live value, or a smaller value.
 // - A clock behind a tuple this replica already merged loses outright, with
 //   no coincidence required: a write causally after another loses to it.
 //
-// The writer shows its own write and every other peer shows the tuple it
-// replaced. When anti-entropy runs back the other way the writer adopts the
-// old tuple, so the write is not merely late but undone.
+// The writer then shows its own write and every other peer shows the tuple it
+// replaced, and when anti-entropy runs back the other way the writer adopts
+// the old tuple, so the write is undone. Every write is now stamped past what
+// it replaces (`stampOver`), and these tests hold each write path to it.
 //
 // The first half pins the invariant on the pure core with literal stamps, one
 // test per path that overwrites a leaf. The second half pins the symptom a
@@ -44,19 +45,25 @@ import {
 } from "../substrates/ephemeral.js"
 import {
   applyChangeToStateTree,
+  type Container,
   encodeTree,
+  type Horizon,
+  type Live,
   mergeStateTree,
   type StateTree,
-  type StateTuple,
   type WriteStamp,
 } from "../substrates/state-tree.js"
 
 /** A tuple as a peer holds it; the install ordinal is fixed and unread here. */
-const tup = (value: unknown, timestamp: number, deleted?: true): StateTuple =>
-  deleted ? [value, timestamp, 1, true] : [value, timestamp, 1]
+const tup = (
+  value: unknown,
+  timestamp: number,
+  deleted?: true,
+): Live | Horizon =>
+  deleted ? [null, timestamp, 1, true] : [value, timestamp, 1]
 
 /** A write's stamp. The ordinal only has to be above a structural zero. */
-const stamp = (timestamp: number): WriteStamp => ({ timestamp, installedAt: 1 })
+const stamp = (notBefore: number): WriteStamp => ({ notBefore, installedAt: 1 })
 
 /**
  * Sorted keys, no install ordinals: what replicates. Two trees that agree
@@ -84,12 +91,12 @@ const replicated = (tree: StateTree): unknown =>
  * `before ⊔ after = after` is the definition of `before ⊑ after`.
  */
 function write(
-  before: StateTree,
+  before: Container,
   path: Path,
   change: Parameters<typeof applyChangeToStateTree>[2],
   at: WriteStamp,
   schema: SchemaNode,
-): { writer: unknown; peer: unknown; after: StateTree } {
+): { writer: unknown; peer: unknown; after: Container } {
   const after = structuredClone(before)
   applyChangeToStateTree(after, path, change, at, schema)
   const joined = mergeStateTree(
@@ -113,7 +120,7 @@ describe("a local write dominates every tuple it overwrites", () => {
   const name = RawPath.empty.field("name")
   const pos = RawPath.empty.field("pos")
 
-  const profile = (nameTs: number): StateTree => ({
+  const profile = (nameTs: number): Container => ({
     name: tup("b", nameTs),
     other: tup("o", 900),
     pos: { x: tup(5, 500), y: tup(0, 500) },
@@ -232,13 +239,13 @@ describe("a local write dominates every tuple it overwrites", () => {
       peers: Schema.record(Schema.struct({ name: Schema.string() })),
     })
     const peers = RawPath.empty.field("peers")
-    const before = (): StateTree => ({
+    const before = (): Container => ({
       peers: { alice: { name: tup("x", 500) } },
     })
 
     it("a delete of an entry whose fields are newer", () => {
-      // `tombstoneSubtree` stamps every leaf with the write's stamp, so each
-      // one has to beat the leaf it covers, not just the newest.
+      // The deletion has to beat the newest leaf in the entry, since the
+      // join prunes everything below it.
       const { writer, peer } = write(
         before(),
         peers,
@@ -303,7 +310,7 @@ describe("the wall clock stays a floor, and stays per-leaf", () => {
       stamp(500),
       Profile,
     )
-    expect((after as Record<string, StateTuple>).name[1]).toBe(500)
+    expect((after as Record<string, Live>).name[1]).toBe(500)
   })
 
   it("does not borrow time from a sibling it did not overwrite", () => {
@@ -317,8 +324,8 @@ describe("the wall clock stays a floor, and stays per-leaf", () => {
       stamp(100),
       Profile,
     )
-    expect((after as Record<string, StateTuple>).name[1]).toBeLessThan(900)
-    expect((after as Record<string, StateTuple>).other).toEqual(tup("o", 900))
+    expect((after as Record<string, Live>).name[1]).toBeLessThan(900)
+    expect((after as Record<string, Live>).other).toEqual(tup("o", 900))
   })
 })
 
@@ -421,9 +428,9 @@ describe("a writer's later write wins everywhere", () => {
   })
 
   it("delete then re-add in one millisecond, synced between", () => {
-    // Converges today, because live beats tombstone on a tie. Pinned because
-    // it is what "break ties toward tombstones" would break: it trades the
-    // set-then-delete case for this one rather than fixing the cause.
+    // Pinned because it is what "break ties toward tombstones" would break:
+    // that trades the set-then-delete case for this one rather than fixing
+    // the cause.
     vi.spyOn(Date, "now").mockReturnValue(1000)
     const a = peer()
     const b = peer()
@@ -436,5 +443,51 @@ describe("a writer's later write wins everywhere", () => {
     aToB()
 
     expectConverged(a, b, { alice: "y" })
+  })
+})
+
+describe("a write is stamped at or above every horizon over it", () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it("survives a horizon set by a peer whose clock runs ahead", () => {
+    // B replaces r1 at 5000; A, whose clock reads 1000, then writes into it.
+    // Stamped 1000, A's write would sit below B's horizon and the next prune
+    // would drop it, on A and everywhere else.
+    const Rooms = Schema.struct({
+      rooms: Schema.record(Schema.record(Schema.number())),
+    })
+    const now = vi.spyOn(Date, "now")
+    const a = { substrate: ephemeralSubstrateFactory.create(Rooms) }
+    const b = { substrate: ephemeralSubstrateFactory.create(Rooms) }
+    const docA: any = createRef(Rooms, a.substrate)
+    const docB: any = createRef(Rooms, b.substrate)
+
+    now.mockReturnValue(5000)
+    batch(docB, (d: any) => d.rooms.set("r1", { x: 9 }))
+    a.substrate.merge(b.substrate.exportEntirety())
+    now.mockReturnValue(1000)
+    batch(docA, (d: any) => d.rooms.at("r1").set("a", 1))
+    b.substrate.merge(a.substrate.exportEntirety())
+
+    expect(docA.rooms()).toEqual({ r1: { x: 9, a: 1 } })
+    expect(docB.rooms()).toEqual({ r1: { x: 9, a: 1 } })
+  })
+})
+
+describe("one change names a key once", () => {
+  it("a delete and a set of the same key carry exactly the wall-clock stamp", () => {
+    // `mapChangeEffects` makes the key a set. Applying the delete and then the
+    // set would stamp it twice, and the second stamp would land past the
+    // first rather than at the wall clock.
+    const Roster = Schema.struct({ peers: Schema.record(Schema.number()) })
+    const tree: Container = { peers: { alice: tup(1, 100) } }
+    applyChangeToStateTree(
+      tree,
+      RawPath.empty.field("peers"),
+      mapChange({ alice: 2 }, ["alice"]),
+      stamp(500),
+      Roster,
+    )
+    expect((tree.peers as Record<string, Live>).alice).toEqual(tup(2, 500))
   })
 })

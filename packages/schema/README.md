@@ -127,6 +127,7 @@ doc.labels.at("bug")?.()   // navigate + read
 doc.labels.get("bug")      // read plain value
 doc.labels.set("bug", "red")
 doc.labels.delete("bug")
+doc.labels.clear()          // what a concurrent clear removes depends on the binding target
 doc.labels.keys()           // string[]
 doc.labels.has("bug")       // boolean
 doc.labels()                // convert labels to plain JSON

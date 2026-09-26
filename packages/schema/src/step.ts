@@ -20,6 +20,7 @@ import type {
   TextChange,
   TreeChange,
 } from "./change.js"
+import { mapChangeEffects } from "./change.js"
 import { isPlainObject, samePlainValue } from "./guards.js"
 
 // ---------------------------------------------------------------------------
@@ -147,8 +148,8 @@ function mutateSequence<T>(target: T[], action: SequenceChange<T>): T[] {
  * → { a: 10 }
  * ```
  *
- * Order: deletes are applied first, then sets. This means a key that
- * appears in both `delete` and `set` will end up with the `set` value.
+ * A key named in both `delete` and `set` ends up set, and a `clear` removes
+ * every key the object holds before the sets apply (`mapChangeEffects`).
  */
 export function stepMap<T extends Record<string, unknown>>(
   state: T,
@@ -157,23 +158,22 @@ export function stepMap<T extends Record<string, unknown>>(
   return mutateMap({ ...(state ?? ({} as T)) }, action)
 }
 
-/** `stepMap`'s mutating core. O(|delete| + |set|). */
+/**
+ * `stepMap`'s mutating core. O(|delete| + |set|), and O(|record|) for a
+ * clear, which reaches every key held.
+ */
 function mutateMap<T extends Record<string, unknown>>(
   target: T,
   action: MapChange,
 ): T {
   const record = target as Record<string, unknown>
+  const { set, remove } = mapChangeEffects(action, Object.keys(record))
 
-  if (action.delete) {
-    for (const key of action.delete) {
-      delete record[key]
-    }
+  for (const key of remove) {
+    delete record[key]
   }
-
-  if (action.set) {
-    for (const [key, value] of Object.entries(action.set)) {
-      record[key] = value
-    }
+  for (const [key, value] of Object.entries(set)) {
+    record[key] = value
   }
 
   return target

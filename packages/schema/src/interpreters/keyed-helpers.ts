@@ -1,25 +1,17 @@
-// keyed-helpers — shared keyed-coalgebra helpers.
+// keyed-helpers: the `map` kind's refs, addressed by string key.
 //
-// `map` and `set` are instances of the **keyed coalgebra** — same
-// structural addressing (by string key), same mutation surface
-// (set/delete/clear), same navigation surface (at/has/keys/size/
-// entries/values/iterator).
-//
-// Currently unextended, but the helpers provide a clean extension
-// point if keyed kinds gain new operations in the future.
+// Mutation (set/delete/clear), reading, navigation (at/has/keys/size/
+// entries/values/iterator) and caching for a record. Sets are keyed too but
+// value-addressed, and install their own narrower surface from
+// `set-helpers.ts`.
 
-import { mapChange } from "../change.js"
+import { mapChange, mapClearChange } from "../change.js"
 import type { Path } from "../interpret.js"
 import type { RefContext } from "../interpreter-types.js"
 import { CALL, type NavigableCarrier } from "./bottom.js"
 import type { WritableContext } from "./writable.js"
 
-/**
- * Install keyed mutation methods onto a ref: `set`, `delete`, `clear`.
- *
- * Shared by both `map` and `set` kinds — the mutation surface is
- * identical (set a key, delete a key, clear all keys).
- */
+/** Install a record's mutation methods onto a ref: `set`, `delete`, `clear`. */
 export interface KeyedWriteOps {
   readonly set: (key: string, value: unknown) => void
   readonly delete: (key: string) => void
@@ -49,13 +41,13 @@ export function installKeyedWriteOps<T extends object>(
     configurable: true,
   })
 
+  // Dispatches the intent, not the keys this peer can see, and dispatches it
+  // even when it sees none: which keys a clear reaches is the substrate's
+  // merge law to decide. The ephemeral substrate also removes older entries
+  // that have not arrived yet.
   Object.defineProperty(result, "clear", {
     value: (): void => {
-      const allKeys = ctx.reader.keys(path)
-      if (allKeys.length > 0) {
-        const change = mapChange(undefined, allKeys)
-        ctx.dispatch(path, change)
-      }
+      ctx.dispatch(path, mapClearChange())
     },
     enumerable: false,
     configurable: true,

@@ -7,7 +7,7 @@
 //
 //   σ ≡ Π(λ)
 //
-// Π is the substrate's own materialiser: `extractPlainState`,
+// Π is the substrate's own materialiser: `projectStateTree`,
 // `materializeLoroShadow`, `materializeYjsShadow`. The suite applies each write
 // and compares the two derivations.
 //

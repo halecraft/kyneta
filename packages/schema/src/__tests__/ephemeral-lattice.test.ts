@@ -22,24 +22,37 @@ import {
 } from "../substrates/ephemeral.js"
 import { DEFAULT_LINEAGE } from "../substrates/plain.js"
 import {
+  type Container,
   encodeTree,
+  type Horizon,
   joinTuples,
+  type Live,
   mergeStateTree,
   type StateTree,
-  type StateTuple,
   stateTreeDigest,
 } from "../substrates/state-tree.js"
 
-const clone = (tuple: StateTuple): StateTuple => tuple.slice() as StateTuple
+const clone = <T extends Live | Horizon>(tuple: T): T => tuple.slice() as T
 
 /**
  * A tuple as a peer would hold it. The install ordinal is fixed because these
  * tests are about the join, which never reads it.
  */
-const tup = (value: unknown, timestamp: number, deleted?: true): StateTuple =>
-  deleted ? [value, timestamp, 1, true] : [value, timestamp, 1]
+const tup = (
+  value: unknown,
+  timestamp: number,
+  deleted?: true,
+): Live | Horizon =>
+  deleted ? [null, timestamp, 1, true] : [value, timestamp, 1]
 
-const merge = (local: StateTree, remote: StateTree) =>
+/** A horizon as a peer would hold it, with the same fixed install ordinal. */
+const hz = (
+  content: Container | null,
+  horizon: number,
+  deleted: boolean,
+): Horizon => [content, horizon, 1, deleted]
+
+const merge = (local: Container, remote: Container) =>
   mergeStateTree(local, remote, 1)
 
 /**
@@ -53,7 +66,9 @@ const merge = (local: StateTree, remote: StateTree) =>
  */
 const canonical = (node: unknown): unknown => {
   if (node === null || typeof node !== "object") return node
-  if (Array.isArray(node)) return node
+  // A horizon is an array holding a container, so key order has to be
+  // dropped inside arrays too.
+  if (Array.isArray(node)) return node.map(canonical)
   const sorted: Record<string, unknown> = {}
   for (const key of Object.keys(node as Record<string, unknown>).sort()) {
     sorted[key] = canonical((node as Record<string, unknown>)[key])
@@ -67,6 +82,15 @@ const replicated = (tree: StateTree): string =>
 const sameState = (a: StateTree, b: StateTree): boolean =>
   replicated(a) === replicated(b)
 
+/**
+ * Agreement as peers measure it: the same state, and the same digest. Normal
+ * form is what makes the two coincide, so a pair that differs only in how an
+ * empty container or a redundant horizon was left behind fails here.
+ */
+const agree = (a: StateTree, b: StateTree): boolean =>
+  sameState(a, b) &&
+  JSON.stringify(stateTreeDigest(a)) === JSON.stringify(stateTreeDigest(b))
+
 // Representative tuples: ties on both equal and differing values, ordinary
 // timestamp ordering, and the value shapes a register can actually hold —
 // objects (a sum variant or `.json()` blob), null (legal under a nullable
@@ -76,7 +100,7 @@ const sameState = (a: StateTree, b: StateTree): boolean =>
 // to hold for and the most likely to be left out: the tie-break ranks the
 // tuple, and a tombstone differs from a live `null` in no other slot. A
 // sample without one pins the laws over exactly the inputs that cannot fail.
-const SAMPLES: StateTuple[] = [
+const SAMPLES: (Live | Horizon)[] = [
   tup("from-A", 1000),
   tup("from-B", 1000), // ties with the above — the case that used to diverge
   tup("from-A", 2000),
@@ -152,8 +176,8 @@ describe("joinTuples is a join-semilattice", () => {
 describe("the tie rule", () => {
   it("resolves same-millisecond writes to one agreed value", () => {
     // The exact divergence this fix exists for.
-    const a: StateTree = { v: tup("from-A", 1000) }
-    const b: StateTree = { v: tup("from-B", 1000) }
+    const a: Container = { v: tup("from-A", 1000) }
+    const b: Container = { v: tup("from-B", 1000) }
 
     const ab = merge({ v: tup("from-A", 1000) }, b).tree
     const ba = merge({ v: tup("from-B", 1000) }, a).tree
@@ -184,11 +208,11 @@ describe("the tie rule", () => {
 })
 
 describe("mergeStateTree over whole trees", () => {
-  const treeA = (): StateTree => ({
+  const treeA = (): Container => ({
     scalar: tup("A", 1000),
     nested: { x: tup(1, 1000), y: tup(2, 500) },
   })
-  const treeB = (): StateTree => ({
+  const treeB = (): Container => ({
     scalar: tup("B", 1000),
     nested: { x: tup(9, 900), z: tup(3, 700) },
   })
@@ -220,27 +244,38 @@ describe("mergeStateTree over whole trees", () => {
   // -------------------------------------------------------------------------
 
   // Shape-stable trees: every peer agrees on which nodes are leaves and which
-  // are containers. This is what normal operation produces — shape comes from
-  // the schema, and even a delete preserves it, because deleting a record entry
-  // tombstones the leaves inside it rather than replacing the subtree with one
-  // tuple. The laws are guaranteed here, and this is the set that matters.
-  const TREES: StateTree[] = [
-    { k: { x: tup("live", 100), y: [1, 100] } },
-    { k: { x: tup("other", 100), y: [1, 100] } }, // ties with the above on x
-    { k: { x: tup("live", 300), y: [1, 100] } },
-    { k: { x: tup(null, 200, true), y: tup(null, 200, true) } }, // deleted entry
-    { k: { x: tup(null, 100, true), y: [1, 100] } }, // partially tombstoned
-    { k: { x: tup("live", 400), y: [9, 50] } },
-    { k: {} }, // empty container — distinct from a deleted one
+  // are containers. This is what normal operation produces: shape comes from
+  // the schema, and a horizon joins against a container by pruning it, so a
+  // delete or a whole write never makes two peers disagree about a shape. The
+  // laws are guaranteed here, and this is the set that matters. Every sample
+  // is in normal form, as the join requires.
+  const TREES: Container[] = [
+    { k: { x: tup("live", 100), y: tup(1, 100) } },
+    { k: { x: tup("other", 100), y: tup(1, 100) } }, // ties with the above on x
+    { k: { x: tup("live", 300), y: tup(1, 100) } },
+    { k: { x: tup(null, 200, true), y: tup(null, 200, true) } }, // every leaf deleted
+    { k: { x: tup(null, 100, true), y: tup(1, 100) } }, // one leaf deleted
+    { k: { x: tup("live", 400), y: tup(9, 50) } },
+    { k: hz(null, 250, true) }, // the entry deleted whole
+    { k: hz({ x: tup("after", 300) }, 250, true) }, // deleted, then written into
+    { k: hz({}, 250, false) }, // replaced empty, tied with the deletion above
+    // A replacement holding a nested replacement at a later horizon.
+    {
+      k: hz(
+        { y: tup(7, 260), n: hz({ z: tup(1, 300) }, 300, false) },
+        260,
+        false,
+      ),
+    },
     {}, // key absent entirely
   ]
 
-  const fresh = (tree: StateTree): StateTree =>
-    JSON.parse(JSON.stringify(tree)) as StateTree
+  const fresh = (tree: Container): Container =>
+    JSON.parse(JSON.stringify(tree)) as Container
 
   const law = (
     name: string,
-    check: (a: StateTree, b: StateTree, c: StateTree) => boolean,
+    check: (a: Container, b: Container, c: Container) => boolean,
   ) => {
     const divergent: string[] = []
     for (const a of TREES) {
@@ -263,7 +298,7 @@ describe("mergeStateTree over whole trees", () => {
       for (const b of TREES) {
         const ab = merge(fresh(a), fresh(b)).tree
         const ba = merge(fresh(b), fresh(a)).tree
-        if (!sameState(ab, ba)) {
+        if (!agree(ab, ba)) {
           divergent.push(
             `${JSON.stringify(a)} vs ${JSON.stringify(b)} → ${JSON.stringify(ab)} / ${JSON.stringify(ba)}`,
           )
@@ -278,7 +313,7 @@ describe("mergeStateTree over whole trees", () => {
       law("assoc", (a, b, c) => {
         const left = merge(merge(fresh(a), fresh(b)).tree, fresh(c)).tree
         const right = merge(fresh(a), merge(fresh(b), fresh(c)).tree).tree
-        return sameState(left, right)
+        return agree(left, right)
       }),
     ).toEqual([])
   })
@@ -297,8 +332,8 @@ describe("mergeStateTree over whole trees", () => {
     // Commutativity still holds, which the old "remote always wins" did not.
     // Associativity deliberately does NOT hold and is not claimed: the losing
     // side's contents are discarded, so no later merge can recover them.
-    const leaf: StateTree = { k: tup("leaf", 300) }
-    const container: StateTree = { k: { x: [1, 100] } }
+    const leaf: Container = { k: tup("leaf", 300) }
+    const container: Container = { k: { x: tup(1, 100) } }
     expect(merge(fresh(leaf), fresh(container)).tree).toEqual(
       merge(fresh(container), fresh(leaf)).tree,
     )
@@ -311,7 +346,7 @@ describe("mergeStateTree over whole trees", () => {
     const remote = treeB()
     const merged = merge({ scalar: tup("A", 1) }, remote).tree as Record<
       string,
-      StateTuple
+      Live
     >
     merged.scalar[0] = "mutated"
     expect((remote as any).scalar[0]).toBe("B")
@@ -393,6 +428,17 @@ describe("the join reports whether it moved", () => {
     expect(
       merge(tree, { peers: { alice: tup(null, 2000, true) } }).changed,
     ).toBe(true)
+  })
+
+  it("a leaf below a horizon we hold changes nothing when a peer re-sends it", () => {
+    // Pruning is collection, and it holds only if a pruned leaf stays pruned.
+    // A peer that has not yet seen the horizon keeps sending the leaf; if the
+    // join took it back, the relay loop above would never end.
+    const tree: Container = { peers: { alice: hz(null, 2000, true) } }
+    const resent: Container = { peers: { alice: { x: tup(1, 1000) } } }
+    const { tree: merged, changed } = merge(tree, resent)
+    expect(changed).toBe(false)
+    expect(merged).toEqual({ peers: { alice: hz(null, 2000, true) } })
   })
 })
 
@@ -497,10 +543,13 @@ describe("a delta carries only what this replica took in", () => {
     other: Schema.string(),
   })
 
-  it("omits structural zeros, which nobody wrote", () => {
-    // Every declared field exists in the tree from the start, at the schema's
-    // zero. Shipping those would make a first delta as large as the schema,
-    // and would hand a peer writes that never happened.
+  it("starts from an empty tree, so nothing nobody wrote ever ships", () => {
+    // A zero is supplied by the projection, not stored. A fresh substrate
+    // holds nothing, so neither an entirety nor a delta can carry a write that
+    // never happened.
+    const fresh = ephemeralSubstrateFactory.create(Doc)
+    expect(fresh.exportEntirety().data).toBe("{}")
+
     const substrate = ephemeralSubstrateFactory.create(Doc)
     const doc = createRef(Doc, substrate) as Ref<typeof Doc>
     batch(doc, d => d.name.set("written"))
@@ -533,6 +582,7 @@ describe("a payload that cannot be stored is refused", () => {
     ["a fractional timestamp", '{"a":["x",1.5]}'],
     ["a timestamp past 2^53", `{"a":["x",${2 ** 53}]}`],
     ["a deletion marker that is not a boolean", '{"a":[null,5,"yes"]}'],
+    ["a horizon whose content is not an object", '{"a":[5,100,true]}'],
   ])("%s", (_, data) => {
     const replica = ephemeralReplicaFactory.createEmpty()
     replica.merge(entirety('{"b":["kept",100]}'))

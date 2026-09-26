@@ -75,6 +75,30 @@ export interface MaterializeResolver {
 }
 
 // ---------------------------------------------------------------------------
+// plainResolution: answers for a value held as plain JSON
+// ---------------------------------------------------------------------------
+
+/**
+ * What each resolver method answers for a value the backend holds as plain
+ * JSON rather than as a container of its own, such as the inside of a
+ * `.json()` register. The fold does not special-case `.json()`: a `.json()`
+ * list is a `sequence` node, so `resolveLength` is asked of a plain array.
+ *
+ * Shared so that every backend reads a register's interior the same way.
+ */
+export const plainResolution = {
+  text: (value: unknown): string | undefined =>
+    typeof value === "string" ? value : undefined,
+  counter: (value: unknown): number | undefined =>
+    typeof value === "number" ? value : undefined,
+  richText: (value: unknown): RichTextDelta | undefined =>
+    Array.isArray(value) ? (value as RichTextDelta) : undefined,
+  length: (value: unknown): number => (Array.isArray(value) ? value.length : 0),
+  keys: (value: unknown): string[] =>
+    isNonNullObject(value) ? Object.keys(value) : [],
+} as const
+
+// ---------------------------------------------------------------------------
 // collectArray — shared array-collection helpers
 // ---------------------------------------------------------------------------
 //

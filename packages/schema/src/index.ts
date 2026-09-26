@@ -70,6 +70,8 @@ export {
   isTextChange,
   isTreeChange,
   mapChange,
+  mapChangeEffects,
+  mapClearChange,
   own,
   replaceChange,
   richTextChange,
@@ -212,6 +214,7 @@ export type {
 export {
   createMaterializeInterpreter,
   materializeContextFromResolver,
+  plainResolution,
 } from "./interpreters/materialize.js"
 // Navigable type interfaces — navigation-only collection refs
 export type {

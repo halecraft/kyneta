@@ -224,6 +224,21 @@ describe("withAddressing: maps", () => {
     expect(deleted(versionRef)).toBe(false)
     expect(versionRef()).toBe("2.0")
   })
+
+  it("a clear kills every entry ref, and one set again lives", () => {
+    const { doc } = createMapDoc({ version: "1.0", author: "alice" })
+    const versionRef = doc.metadata.at("version")
+    const authorRef = doc.metadata.at("author")
+
+    batch(doc, (d: any) => {
+      d.metadata.clear()
+      d.metadata.set("author", "bob")
+    })
+
+    expect(deleted(versionRef)).toBe(true)
+    expect(deleted(authorRef)).toBe(false)
+    expect(authorRef()).toBe("bob")
+  })
 })
 
 // ===========================================================================

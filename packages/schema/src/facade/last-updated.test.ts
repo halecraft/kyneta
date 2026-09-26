@@ -15,20 +15,16 @@ describe("lastUpdated", () => {
 
     const doc = createDoc(ephemeral.bind(s))
 
-    // initially they might be 0 due to structural zero initialization in state tree
-    const initialTs = lastUpdated(doc.server)
-    const ts0 = initialTs as number
-    expect(ts0).toBeTypeOf("number")
-
-    // wait a bit for timestamps to advance
-    const start = Date.now()
-    while (Date.now() === start) {}
+    // Nothing has been written, so there is no timestamp to report. The tree
+    // holds only written state; the zeros a read returns come from the
+    // projection.
+    expect(lastUpdated(doc.server)).toBeNull()
+    expect(lastUpdated(doc.server.peerId)).toBeNull()
 
     // update one field
     doc.server.peerId.set("peer-1")
     const ts1 = lastUpdated(doc.server.peerId) as number
     expect(ts1).toBeTypeOf("number")
-    expect(ts1).toBeGreaterThan(ts0)
 
     // container timestamp should be the same as the only updated field
     expect(lastUpdated(doc.server)).toBe(ts1)

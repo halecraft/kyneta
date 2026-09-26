@@ -28,7 +28,7 @@ import {
 import { RawPath } from "../path.js"
 import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
 import type { StateTree } from "../substrates/state-tree.js"
-import { extractPlainState } from "../substrates/state-tree.js"
+import { projectStateTree } from "../substrates/state-tree.js"
 
 // ---------------------------------------------------------------------------
 // Schema DSL
@@ -294,11 +294,9 @@ describe("state substrate tick() decay sweep", () => {
       {
         kind: "entirety",
         encoding: "json",
+        // A sum is an atomic register: one tuple holding the whole variant.
         data: JSON.stringify({
-          server: {
-            type: ["present", initialNow],
-            peerId: ["peer-xyz", initialNow],
-          },
+          server: [{ type: "present", peerId: "peer-xyz" }, initialNow],
         }),
       },
       TopologySchema,
@@ -429,21 +427,19 @@ describe("state substrate tick() decay sweep", () => {
 })
 
 // ---------------------------------------------------------------------------
-// extractPlainState — schema-aware projection
+// projectStateTree: decay applied through the fold
 // ---------------------------------------------------------------------------
 
-describe("extractPlainState schema-aware projection", () => {
-  it("masks expired tuples with structural zero when schema+now are provided", () => {
+describe("projectStateTree applies decay", () => {
+  it("masks an expired tuple with its structural zero", () => {
     const schema = Schema.struct({
       presence: Schema.string().decay(1000),
     })
 
     const tree: StateTree = {
-      presence: ["online", 1000],
+      presence: ["online", 1000, 1],
     }
-    const target: Record<string, unknown> = {}
-
-    extractPlainState(tree, target, schema, 2001)
+    const target = projectStateTree(tree, schema, 2001)
 
     expect(target.presence).toBe("") // structural zero of a string
   })
@@ -454,23 +450,9 @@ describe("extractPlainState schema-aware projection", () => {
     })
 
     const tree: StateTree = {
-      presence: ["online", 1500],
+      presence: ["online", 1500, 1],
     }
-    const target: Record<string, unknown> = {}
-
-    extractPlainState(tree, target, schema, 2001)
-
-    expect(target.presence).toBe("online")
-  })
-
-  it("backward-compatible: no schema means no decay masking", () => {
-    const tree: StateTree = {
-      presence: ["online", 1000],
-    }
-    const target: Record<string, unknown> = {}
-
-    // No schema, no now — nothing can expire, so nothing is masked.
-    extractPlainState(tree, target)
+    const target = projectStateTree(tree, schema, 2001)
 
     expect(target.presence).toBe("online")
   })
@@ -481,11 +463,9 @@ describe("extractPlainState schema-aware projection", () => {
     })
 
     const tree: StateTree = {
-      flag: [true, 1000],
+      flag: [true, 1000, 1],
     }
-    const target: Record<string, unknown> = {}
-
-    extractPlainState(tree, target, schema, 2000)
+    const target = projectStateTree(tree, schema, 2000)
 
     // Structural zero of boolean is `false`.
     expect(target.flag).toBe(false)
@@ -501,13 +481,11 @@ describe("extractPlainState schema-aware projection", () => {
 
     const tree: StateTree = {
       user: {
-        presence: ["online", 500],
-        name: ["alice", 500],
+        presence: ["online", 500, 1],
+        name: ["alice", 500, 1],
       },
     }
-    const target: Record<string, unknown> = {}
-
-    extractPlainState(tree, target, schema, 2000)
+    const target = projectStateTree(tree, schema, 2000)
 
     const user = target.user as Record<string, unknown>
     expect(user.presence).toBe("")

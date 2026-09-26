@@ -22,8 +22,8 @@ import type {
 import {
   createMaterializeInterpreter,
   interpret,
-  isNonNullObject,
   materializeContextFromResolver,
+  plainResolution,
 } from "@kyneta/schema"
 import * as Y from "yjs"
 import { extractValue, yTextToRichTextDelta } from "./yjs-extract.js"
@@ -49,8 +49,7 @@ function createYjsResolver(
       if (resolved instanceof Y.Text) {
         return resolved.toJSON()
       }
-      const value = extractValue(resolved)
-      return typeof value === "string" ? value : undefined
+      return plainResolution.text(extractValue(resolved))
     },
 
     // Yjs does not support counters — schemas with counter types are
@@ -72,7 +71,7 @@ function createYjsResolver(
       if (resolved instanceof Y.Array) {
         return resolved.length
       }
-      return Array.isArray(resolved) ? resolved.length : 0
+      return plainResolution.length(resolved)
     },
 
     resolveKeys(path: Path): string[] {
@@ -80,7 +79,7 @@ function createYjsResolver(
       if (resolved instanceof Y.Map) {
         return Array.from(resolved.keys())
       }
-      return isNonNullObject(resolved) ? Object.keys(resolved) : []
+      return plainResolution.keys(resolved)
     },
 
     // Yjs has no tree primitive — schemas with `Schema.tree` are rejected

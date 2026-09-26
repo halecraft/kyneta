@@ -21,8 +21,8 @@ import type {
 import {
   createMaterializeInterpreter,
   interpret,
-  isNonNullObject,
   materializeContextFromResolver,
+  plainResolution,
 } from "@kyneta/schema"
 import type { Delta, LoroDoc } from "loro-crdt"
 import { extractValue, loroDeltaToRichTextDelta } from "./loro-extract.js"
@@ -56,8 +56,7 @@ function createLoroResolver(
       if (hasKind(resolved) && resolved.kind() === "Text") {
         return resolved.toString() as string
       }
-      const value = extractValue(resolved)
-      return typeof value === "string" ? value : undefined
+      return plainResolution.text(extractValue(resolved))
     },
 
     resolveCounter(path: Path): number | undefined {
@@ -65,8 +64,7 @@ function createLoroResolver(
       if (isLoroCounter(resolved)) {
         return resolved.value
       }
-      const value = extractValue(resolved)
-      return typeof value === "number" ? value : undefined
+      return plainResolution.counter(extractValue(resolved))
     },
 
     resolveRichText(path: Path): RichTextDelta | undefined {
@@ -81,14 +79,14 @@ function createLoroResolver(
       const { resolved } = resolveContainer(doc, rootSchema, path, binding)
       if (isLoroList(resolved)) return resolved.length
       if (hasKind(resolved)) return 0
-      return Array.isArray(resolved) ? resolved.length : 0
+      return plainResolution.length(resolved)
     },
 
     resolveKeys(path: Path): string[] {
       const { resolved } = resolveContainer(doc, rootSchema, path, binding)
       if (isLoroMap(resolved)) return resolved.keys()
       if (hasKind(resolved)) return []
-      return isNonNullObject(resolved) ? Object.keys(resolved) : []
+      return plainResolution.keys(resolved)
     },
 
     resolveForest(path: Path): readonly FlatTreeNodeTopology[] {

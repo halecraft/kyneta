@@ -17,8 +17,10 @@
 // native `Y.transact` already collapses re-entrant nesting for free.
 
 import {
+  applyChanges,
   batch,
   interpret,
+  mapChange,
   observation,
   RawPath,
   readable,
@@ -169,6 +171,27 @@ projectionConformance(
               d.peers.set("alice", true)
               d.peers.set("bob", false)
             }),
+        },
+        {
+          // A clear removes the keys the native map holds, so a write to it
+          // earlier in the same batch has to have reached the map first.
+          name: "record set, cleared and set again in one batch",
+          apply: () =>
+            batch(doc, (d: any) => {
+              d.peers.set("carol", true)
+              d.peers.clear()
+              d.peers.set("dave", true)
+            }),
+        },
+        {
+          name: "record change naming a key in both delete and set",
+          apply: () =>
+            applyChanges(doc, [
+              {
+                path: RawPath.empty.field("peers"),
+                change: mapChange({ dave: false }, ["dave"]),
+              },
+            ]),
         },
       ],
       shadow: () => substrate.reader.read(RawPath.empty),

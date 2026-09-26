@@ -33,6 +33,7 @@ import {
   isReplaceChange,
   isSequenceChange,
   mapChange,
+  mapChangeEffects,
   sequenceChange,
 } from "../change.js"
 import { isPropertyHost } from "../guards.js"
@@ -358,24 +359,19 @@ function handleMapChange(table: MapAddressTable, change: ChangeBase): void {
 
   if (!isMapChange(change)) return
 
-  // Delete keys: mark addresses dead
-  if (change.delete) {
-    for (const key of change.delete) {
-      const entry = table.byKey.get(key)
-      if (entry) {
-        setDead(entry.address, true)
-      }
-    }
+  // Read against the keys this table addresses, so a clear kills every entry
+  // address it holds.
+  const { set, remove } = mapChangeEffects(change, table.byKey.keys())
+
+  for (const key of remove) {
+    const entry = table.byKey.get(key)
+    if (entry) setDead(entry.address, true)
   }
 
-  // Set keys: resurrect if previously dead
-  if (change.set) {
-    for (const key of Object.keys(change.set)) {
-      const entry = table.byKey.get(key)
-      if (entry) {
-        setDead(entry.address, false)
-      }
-    }
+  // A key set again comes back to life.
+  for (const key of Object.keys(set)) {
+    const entry = table.byKey.get(key)
+    if (entry) setDead(entry.address, false)
   }
 }
 

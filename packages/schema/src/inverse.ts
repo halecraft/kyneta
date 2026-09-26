@@ -36,6 +36,7 @@ import type {
 import {
   incrementChange,
   mapChange,
+  mapChangeEffects,
   own,
   replaceChange,
   richTextChange,
@@ -153,40 +154,36 @@ export function invertSequence<T>(
 // ---------------------------------------------------------------------------
 
 /**
- * Reverse arrow for `MapChange`. For every key written or deleted,
- * the inverse restores the pre-state value (or deletes if the key
- * didn't exist before).
+ * Reverse arrow for `MapChange`. For every key written or removed, the
+ * inverse restores the pre-state value, or deletes the key if it did not
+ * exist before. The two lists are disjoint, so their order does not matter.
  *
- * stepMap's order is "delete first, then set." The inverse applies
- * sets first (restore deleted keys) and deletes second (remove newly-set
- * keys that didn't exist before) — same shape as the forward change,
- * just with restored values.
+ * A clear is read against the pre-state's keys, so its inverse restores every
+ * entry the clearer held. It is not itself a clear, and cannot restore an
+ * entry the clearer never held: on a substrate where a clear also removes
+ * entries still in flight, undo does not bring those back.
  */
 export function invertMap(
   pre: Record<string, unknown>,
   change: MapChange,
 ): MapChange {
   const source = pre ?? {}
+  const { set, remove } = mapChangeEffects(change, Object.keys(source))
   const invertSet: Record<string, unknown> = {}
   const invertDelete: string[] = []
 
-  if (change.set) {
-    for (const key of Object.keys(change.set)) {
-      if (Object.hasOwn(source, key)) {
-        invertSet[key] = deepClonePlain(source[key])
-      } else {
-        invertDelete.push(key)
-      }
+  for (const key of Object.keys(set)) {
+    if (Object.hasOwn(source, key)) {
+      invertSet[key] = deepClonePlain(source[key])
+    } else {
+      invertDelete.push(key)
     }
   }
 
-  if (change.delete) {
-    for (const key of change.delete) {
-      if (Object.hasOwn(source, key)) {
-        invertSet[key] = deepClonePlain(source[key])
-      }
-      // If the key didn't exist, deleting it was a no-op; the inverse
-      // is also a no-op (no entry to add to invertSet or invertDelete).
+  // Removing a key that did not exist was a no-op, and so is its inverse.
+  for (const key of remove) {
+    if (Object.hasOwn(source, key)) {
+      invertSet[key] = deepClonePlain(source[key])
     }
   }
 

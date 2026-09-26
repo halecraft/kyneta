@@ -4,14 +4,14 @@
 // The Loro and Yjs backends run the same suite from their own packages.
 // `plain` does not participate: σ is the document there, so Π is the identity.
 
+import { mapChange } from "../change.js"
 import { createRef } from "../create-doc.js"
-import { batch } from "../facade/batch.js"
+import { applyChanges, batch } from "../facade/batch.js"
 import { RawPath } from "../path.js"
-import type { PlainState } from "../reader.js"
 import { Schema } from "../schema.js"
 import { BACKING_DOC, hasBackingDoc } from "../substrate.js"
 import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
-import { extractPlainState, type StateTree } from "../substrates/state-tree.js"
+import { projectStateTree, type StateTree } from "../substrates/state-tree.js"
 import {
   type ProjectionTestEnv,
   projectionConformance,
@@ -40,7 +40,7 @@ const Fixture = Schema.struct({
   tags: Schema.list.json(Schema.string()),
 })
 
-// Fixed rather than `Date.now()`. `extractPlainState` masks a leaf older than
+// Fixed rather than `Date.now()`. `projectStateTree` masks a leaf older than
 // its `decayMs`, so a moving clock could make the two projections differ for a
 // reason that has nothing to do with the law under test.
 const NOW = 1_700_000_000_000
@@ -91,6 +91,25 @@ function createEphemeralEnv(): ProjectionTestEnv {
         name: "record entry delete (last key)",
         apply: () => batch(doc, (d: any) => d.entries.delete("k")),
       },
+      {
+        name: "record set, cleared and set again in one batch",
+        apply: () =>
+          batch(doc, (d: any) => {
+            d.entries.set("a", 1)
+            d.entries.clear()
+            d.entries.set("b", 2)
+          }),
+      },
+      {
+        name: "record change naming a key in both delete and set",
+        apply: () =>
+          applyChanges(doc, [
+            {
+              path: RawPath.empty.field("entries"),
+              change: mapChange({ b: 5 }, ["b"]),
+            },
+          ]),
+      },
     ],
 
     shadow: () => substrate.reader.read(RawPath.empty),
@@ -99,9 +118,7 @@ function createEphemeralEnv(): ProjectionTestEnv {
       if (!hasBackingDoc<StateTree>(substrate)) {
         throw new Error("the ephemeral substrate exposes its tree")
       }
-      const target: PlainState = {}
-      extractPlainState(substrate[BACKING_DOC], target, Fixture, NOW)
-      return target
+      return projectStateTree(substrate[BACKING_DOC], Fixture, NOW)
     },
   }
 }

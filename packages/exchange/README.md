@@ -315,7 +315,7 @@ const NoteDoc = yjs.bind(Schema.struct({
 // Config data — plain substrate with sequential sync
 const ConfigDoc = json.bind(Schema.struct({ theme: Schema.string() }))
 
-// Ephemeral presence — snapshot broadcast, merged per field on each leaf's timestamp
+// Ephemeral presence — deltas, merged per field on each leaf's timestamp
 const PresenceDoc = ephemeral.bind(Schema.struct({
   cursor: Schema.struct({ x: Schema.number(), y: Schema.number() }),
   name: Schema.string(),

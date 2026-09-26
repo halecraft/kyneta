@@ -34,22 +34,32 @@ import {
 } from "../substrates/ephemeral.js"
 import {
   applyChangeToStateTree,
-  isTombstone,
+  type Container,
+  type Horizon,
+  isHorizon,
+  type Live,
   mergeStateTree,
   type StateTree,
-  type StateTuple,
-  syncStateTreeToShadow,
   type WriteStamp,
+  writeProduct,
 } from "../substrates/state-tree.js"
+import { defined } from "../testing/index.js"
+
+/** A horizon recording a deletion, whatever has been written since. */
+const isDeletion = (node: unknown): boolean => isHorizon(node) && node[3]
 
 /** A tuple as a peer holds it; the install ordinal is fixed and unread here. */
-const tup = (value: unknown, timestamp: number, deleted?: true): StateTuple =>
-  deleted ? [value, timestamp, 1, true] : [value, timestamp, 1]
+const tup = (
+  value: unknown,
+  timestamp: number,
+  deleted?: true,
+): Live | Horizon =>
+  deleted ? [null, timestamp, 1, true] : [value, timestamp, 1]
 
 /** A write's stamp. The ordinal only has to be above a structural zero. */
-const stamp = (timestamp: number): WriteStamp => ({ timestamp, installedAt: 1 })
+const stamp = (notBefore: number): WriteStamp => ({ notBefore, installedAt: 1 })
 
-const merge = (local: StateTree, remote: StateTree) =>
+const merge = (local: Container, remote: Container) =>
   mergeStateTree(local, remote, 1)
 
 const Roster = Schema.struct({ peers: Schema.record(Schema.number()) })
@@ -70,9 +80,9 @@ const wire = (value: unknown, timestamp: number, deleted?: true) =>
   deleted ? [value, timestamp, true] : [value, timestamp]
 
 /** A roster tree with the given entries, all stamped at `t`. */
-function roster(entries: Record<string, number>, t: number): StateTree {
-  const peers: Record<string, StateTree> = {}
-  for (const [key, value] of Object.entries(entries)) peers[key] = [value, t]
+function roster(entries: Record<string, number>, t: number): Container {
+  const peers: Container = {}
+  for (const [key, value] of Object.entries(entries)) peers[key] = [value, t, 1]
   return { peers }
 }
 
@@ -98,7 +108,7 @@ describe("a delete writes a tombstone", () => {
       Roster,
     )
 
-    expect(isTombstone(asRecord(tree).peers.alice)).toBe(true)
+    expect(isDeletion(asRecord(tree).peers.alice)).toBe(true)
     expect(asRecord(tree).peers.alice[1]).toBe(200)
     expect(asRecord(tree).peers.bob).toEqual(tup(2, 100))
   })
@@ -117,28 +127,21 @@ describe("a delete writes a tombstone", () => {
     expect(doc.peers()).toEqual({ bob: 2 })
   })
 
-  it("is written by a whole-value sync that omits a key, not just by delete", () => {
-    // `syncStateTreeToShadow` propagates a whole plain value into the tree and
-    // prunes keys the value no longer has. That pruning is a deletion too, and
-    // it has to converge the same way an explicit `delete` does — otherwise
-    // which one a caller happened to use would decide whether the removal
-    // survives a merge.
-    const tree: StateTree = { peers: { alice: tup(1, 100), bob: tup(2, 100) } }
-    syncStateTreeToShadow(tree, { peers: { bob: 2 } }, Roster, stamp(200))
-
-    expect(isTombstone(asRecord(tree).peers.alice)).toBe(true)
-    expect(asRecord(tree).peers.alice[1]).toBe(200)
-  })
-
-  it("does not re-stamp a key that is already tombstoned", () => {
-    // Refreshing a tombstone's timestamp on every unrelated whole-value write
-    // would let an old delete keep beating a newer remote re-add.
-    const tree: StateTree = {
-      peers: { alice: tup(null, 100, true), bob: tup(2, 100) },
+  it("a whole-record write puts every earlier key below one horizon", () => {
+    // Writing a record whole is a statement about all of it: a key the value
+    // omits is gone, whether or not this peer holds it. One horizon says that;
+    // a tombstone per omitted key could only reach the keys held.
+    const tree: Container = {
+      peers: { alice: tup(1, 100), bob: tup(2, 100) },
     }
-    syncStateTreeToShadow(tree, { peers: { bob: 2 } }, Roster, stamp(900))
+    writeProduct(tree, { peers: { bob: 2 } }, Roster, stamp(200))
 
-    expect(asRecord(tree).peers.alice[1]).toBe(100)
+    const replaced: Horizon = [{ bob: tup(2, 200) }, 200, 1, false]
+    expect(asRecord(tree).peers).toEqual(replaced)
+
+    // A peer that still holds alice has her dropped by the join.
+    const merged = merge(tree, { peers: { alice: tup(1, 100) } }).tree
+    expect(asRecord(merged).peers).toEqual(replaced)
   })
 })
 
@@ -157,8 +160,8 @@ describe("a delete converges", () => {
 
     // Both directions agree, and both agree she is gone.
     expect(aThenB).toEqual(bThenA)
-    expect(isTombstone(asRecord(aThenB).peers.alice)).toBe(true)
-    expect(isTombstone(asRecord(bThenA).peers.alice)).toBe(true)
+    expect(isDeletion(asRecord(aThenB).peers.alice)).toBe(true)
+    expect(isDeletion(asRecord(bThenA).peers.alice)).toBe(true)
   })
 
   it("is absent on both peers after a real sync", () => {
@@ -197,7 +200,7 @@ describe("delete and re-add resolve by timestamp", () => {
       { peers: { alice: tup(7, 11) } },
       { peers: { alice: tup(null, 12, true) } },
     ).tree
-    expect(isTombstone(asRecord(merged).peers.alice)).toBe(true)
+    expect(isDeletion(asRecord(merged).peers.alice)).toBe(true)
   })
 
   it("resolves the same way whichever peer merges first", () => {
@@ -286,7 +289,7 @@ describe("tombstones do not accumulate", () => {
 
     const peers = asRecord(tree).peers
     expect(Object.keys(peers)).toEqual(["alice"])
-    expect(isTombstone(peers.alice)).toBe(true)
+    expect(isDeletion(peers.alice)).toBe(true)
   })
 })
 
@@ -299,15 +302,11 @@ describe("deleting an entry whose value is a container", () => {
     peers: Schema.record(Schema.struct({ x: Schema.number() })),
   })
 
-  it("tombstones the leaves inside it, keeping the node's shape", () => {
-    // A cursor-per-peer roster is at least as plausible as a scalar one. The
-    // delete could replace the whole subtree with a single tombstone tuple,
-    // which is shorter — but then a peer that had seen the delete would hold a
-    // LEAF exactly where a peer that had not still held a CONTAINER, and
-    // resolving that shape disagreement means discarding one side's contents.
-    // Discarding breaks associativity, so peers given the same updates in
-    // different orders would end up with different state.
-    const tree: StateTree = {}
+  it("is one deletion, whatever the entry holds", () => {
+    // One horizon covers the whole entry, including anything written into it
+    // that this peer never saw. The join resolves it against a container by
+    // pruning, so no peer ever has to choose between two shapes.
+    const tree: Container = {}
     applyChangeToStateTree(
       tree,
       peersPath,
@@ -323,8 +322,7 @@ describe("deleting an entry whose value is a container", () => {
       Cursors,
     )
 
-    expect(isTombstone(asRecord(tree).peers.alice.x)).toBe(true)
-    expect(asRecord(tree).peers.alice.x[1]).toBe(200)
+    expect(asRecord(tree).peers.alice).toEqual([null, 200, 1, true])
   })
 
   it("converges, and reads as absent on both peers", () => {
@@ -357,6 +355,27 @@ describe("deleting an entry whose value is a container", () => {
       Cursors,
     )
     expect(empty.reader.read(peersPath)).toEqual({})
+  })
+
+  it("reads as absent on a peer when the entry holds a nested struct", () => {
+    // Presence at a dynamic key is decided by the leaves beneath it. It used
+    // to be decided field by field against the schema, and a declared nested
+    // container counted as present even with every leaf in it tombstoned, so
+    // the peer saw `{ alice: { pos: {} } }` while the deleter saw `{}`.
+    const Nested = Schema.struct({
+      peers: Schema.record(
+        Schema.struct({ pos: Schema.struct({ x: Schema.number() }) }),
+      ),
+    })
+    const writer = peerOf(Nested)
+    const peer = peerOf(Nested)
+    batch(writer.doc, (d: any) => d.peers.set("alice", { pos: { x: 1 } }))
+    ship(writer, peer)
+    batch(writer.doc, (d: any) => d.peers.delete("alice"))
+    ship(writer, peer)
+
+    expect(writer.doc.peers()).toEqual({})
+    expect(peer.doc.peers()).toEqual({})
   })
 })
 
@@ -508,7 +527,8 @@ describe("a delete reaches what the deleter never saw", () => {
     // The cross-substrate half of this, a clear against an earlier unseen add,
     // is in `tests/conformance` under `clearReach`. This half is ephemeral's
     // alone: a clear is a statement about the record as of now, so it has
-    // something to say even when the local view is empty, and has to be sent.
+    // something to say even when the local view is empty, and `clear()` sends
+    // it then too.
     const Roster = Schema.struct({ peers: Schema.record(Schema.string()) })
     const now = vi.spyOn(Date, "now")
     const a = peerOf(Roster)
@@ -553,6 +573,86 @@ describe("a delete reaches what the deleter never saw", () => {
 
       expect(a.doc.rooms()).toEqual({})
       expect(b.doc.rooms()).toEqual({})
+    })
+  })
+})
+
+describe("what a delete leaves behind", () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  const Cursors = Schema.struct({
+    peers: Schema.record(
+      Schema.struct({ x: Schema.number(), y: Schema.number() }),
+    ),
+  })
+
+  it("a field written after the delete brings the entry back with zeros beside it", () => {
+    // The delete removes everything written before it, so of alice only the
+    // later `x` survives. Her `y` is gone from the tree, and the projection
+    // supplies its zero because the schema says she has one.
+    const now = vi.spyOn(Date, "now")
+    const a = peerOf(Cursors)
+    const b = peerOf(Cursors)
+    now.mockReturnValue(100)
+    batch(a.doc, (d: any) => d.peers.set("alice", { x: 1, y: 2 }))
+    ship(a, b)
+    now.mockReturnValue(200)
+    batch(a.doc, (d: any) => d.peers.delete("alice"))
+    now.mockReturnValue(250)
+    batch(b.doc, (d: any) => d.peers.at("alice").x.set(5))
+    ship(a, b)
+    ship(b, a)
+
+    expect(a.doc.peers()).toEqual({ alice: { x: 5, y: 0 } })
+    expect(b.doc.peers()).toEqual({ alice: { x: 5, y: 0 } })
+  })
+
+  it("deleting an entry ships one tuple, however many fields it has", () => {
+    const Wide = Schema.struct({
+      peers: Schema.record(
+        Schema.struct(
+          Object.fromEntries(
+            Array.from({ length: 10 }, (_, i) => [`f${i}`, Schema.number()]),
+          ),
+        ),
+      ),
+    })
+    const now = vi.spyOn(Date, "now")
+    const a = peerOf(Wide)
+    now.mockReturnValue(100)
+    batch(a.doc, (d: any) =>
+      d.peers.set(
+        "alice",
+        Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`f${i}`, i])),
+      ),
+    )
+    const cursor = a.substrate.version()
+    now.mockReturnValue(200)
+    batch(a.doc, (d: any) => d.peers.delete("alice"))
+
+    const delta = defined(a.substrate.exportSince(cursor), "a delta")
+    expect(JSON.parse(delta.data as string)).toEqual({
+      peers: { alice: [null, 200, true] },
+    })
+  })
+
+  it("clearing a record ships one tuple, however many entries it has", () => {
+    const Roster = Schema.struct({ peers: Schema.record(Schema.number()) })
+    const now = vi.spyOn(Date, "now")
+    const a = peerOf(Roster)
+    now.mockReturnValue(100)
+    batch(a.doc, (d: any) => {
+      for (let i = 0; i < 50; i++) d.peers.set(`peer-${i}`, i)
+    })
+    const cursor = a.substrate.version()
+    now.mockReturnValue(200)
+    batch(a.doc, (d: any) => d.peers.clear())
+
+    // The horizon is the news. `null` content in a delta makes no claim about
+    // the content, and the receiver reads a replacement's `null` as empty.
+    const delta = defined(a.substrate.exportSince(cursor), "a delta")
+    expect(JSON.parse(delta.data as string)).toEqual({
+      peers: [null, 200, false],
     })
   })
 })

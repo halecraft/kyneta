@@ -54,6 +54,15 @@ export interface SequenceChange<T = unknown> extends ChangeBase {
 
 export interface MapChange extends ChangeBase {
   readonly type: "map"
+  /**
+   * Every key is removed, seen or not, before `delete` and `set` apply.
+   *
+   * Intent rather than a key list, because which keys a clear reaches is the
+   * substrate's merge law to decide. A substrate that orders removals by
+   * observation expands it against the keys it holds (`mapChangeEffects`); the
+   * ephemeral substrate reads it as a horizon over the whole map.
+   */
+  readonly clear?: true
   readonly set?: Readonly<Record<string, unknown>>
   readonly delete?: readonly string[]
 }
@@ -233,6 +242,35 @@ export function mapChange(
   del?: string[],
 ): MapChange {
   return { type: "map", set, delete: del }
+}
+
+/** A map change that clears the map, then writes `set` into it. */
+export function mapClearChange(set?: Record<string, unknown>): MapChange {
+  return set === undefined
+    ? { type: "map", clear: true }
+    : { type: "map", clear: true, set }
+}
+
+/**
+ * What a map change removes and writes, given the keys the map holds.
+ *
+ * A key named in both `delete` and `set` ends up set, and a clear removes
+ * every held key the change does not set. Every consumer that applies a map
+ * change key by key reads it through here, so they cannot disagree about
+ * either rule.
+ */
+export function mapChangeEffects(
+  change: MapChange,
+  held: Iterable<string>,
+): {
+  readonly set: Readonly<Record<string, unknown>>
+  readonly remove: readonly string[]
+} {
+  const set = change.set ?? {}
+  const remove = new Set<string>(change.clear ? held : [])
+  for (const key of change.delete ?? []) remove.add(key)
+  for (const key of Object.keys(set)) remove.delete(key)
+  return { set, remove: [...remove] }
 }
 
 // ---------------------------------------------------------------------------

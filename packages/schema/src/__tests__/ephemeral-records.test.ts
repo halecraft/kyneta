@@ -27,19 +27,27 @@ import { RawPath } from "../path.js"
 import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
 import {
   applyChangeToStateTree,
-  isStateTuple,
-  isTombstone,
+  type Horizon,
+  isHorizon,
+  isLive,
+  type Live,
   type StateTree,
-  type StateTuple,
   type WriteStamp,
 } from "../substrates/state-tree.js"
 
+/** A horizon recording a deletion, whatever has been written since. */
+const isDeletion = (node: unknown): boolean => isHorizon(node) && node[3]
+
 /** A tuple as a peer holds it; the install ordinal is fixed and unread here. */
-const tup = (value: unknown, timestamp: number, deleted?: true): StateTuple =>
-  deleted ? [value, timestamp, 1, true] : [value, timestamp, 1]
+const tup = (
+  value: unknown,
+  timestamp: number,
+  deleted?: true,
+): Live | Horizon =>
+  deleted ? [null, timestamp, 1, true] : [value, timestamp, 1]
 
 /** A write's stamp. The ordinal only has to be above a structural zero. */
-const stamp = (timestamp: number): WriteStamp => ({ timestamp, installedAt: 1 })
+const stamp = (notBefore: number): WriteStamp => ({ notBefore, installedAt: 1 })
 
 const Roster = Schema.struct({ peers: Schema.record(Schema.number()) })
 const Bound = ephemeral.bind(Roster)
@@ -102,7 +110,7 @@ describe("a record decomposes into one tuple per key", () => {
     // were stored whole, two peers each writing their own key would clobber
     // one another on merge, which is exactly what this substrate exists to
     // avoid.
-    expect(isStateTuple(asRecord(tree).peers)).toBe(false)
+    expect(isLive(asRecord(tree).peers)).toBe(false)
     expect(asRecord(tree).peers.alice).toEqual(tup(1, 100))
     expect(asRecord(tree).peers.bob).toEqual(tup(2, 100))
   })
@@ -151,7 +159,7 @@ describe("a record decomposes into one tuple per key", () => {
     expect(asRecord(tree).peers.alice).toEqual(tup(9, 200))
     // `bob` was only deleted, so he is tombstoned rather than removed — the
     // tuple has to stay in the tree for the delete to replicate.
-    expect(isTombstone(asRecord(tree).peers.bob)).toBe(true)
+    expect(isDeletion(asRecord(tree).peers.bob)).toBe(true)
   })
 
   it("refuses a change kind the tree cannot record", () => {
@@ -174,10 +182,10 @@ describe("a record decomposes into one tuple per key", () => {
   })
 
   it("refuses a map change aimed at an atomic register", () => {
-    // A sum or `.json()` node is one tuple, and `state.ts:prepare` widens any
-    // write at or inside it into a whole-value replace, so this is unreachable
-    // in normal operation. It is guarded because the old code responded by
-    // overwriting the register with `{}` and writing entries into it —
+    // A sum or `.json()` node is one tuple, and `prepare` (`ephemeral.ts`)
+    // widens any write at or inside it into a whole-value replace, so this is
+    // unreachable in normal operation. Without the guard, applying it would
+    // overwrite the register with a container and write entries into it,
     // decomposing an atomic register into blendable per-field tuples, and
     // silently, because local reads come from the shadow rather than the tree.
     const Blob = Schema.struct({
@@ -319,11 +327,11 @@ describe("a declared field is not a written key", () => {
     )
 
     // The case the rule must not break: under a map, omission IS removal, and
-    // a removal has to be a tombstone so it survives the next merge.
-    expect(asRecord(tree).rec).toEqual({
-      x: tup(5, 200),
-      y: tup(null, 200, true),
-    })
+    // the removal has to be recorded so it survives the next merge. Writing
+    // the map whole puts `y` below one horizon, along with any key this peer
+    // never saw.
+    const replaced: Horizon = [{ x: tup(5, 200) }, 200, 1, false]
+    expect(asRecord(tree).rec).toEqual(replaced)
   })
 
   it("projects an emptied record as an empty record, not as absent", () => {
@@ -350,11 +358,8 @@ describe("an entry missing declared fields reads them as their zeros", () => {
   // say. The tree is right to hold only what arrived; the projection has to be
   // total anyway, because the entry's type says `y` exists.
   //
-  // Nothing supplies the zero today. Structural zeros are seeded into the tree
-  // for declared fields at construction, and a record's entries are not
-  // declared, so nothing seeds them; and the reader is schema-blind, so it
-  // cannot. The zero has to come from the projection, which is where the
-  // schema is.
+  // The reader is schema-blind, so it cannot supply the zero. The projection
+  // can, because it is the schema's fold.
   const Cursors = Schema.struct({
     peers: Schema.record(
       Schema.struct({ x: Schema.number(), y: Schema.number() }),

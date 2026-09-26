@@ -1,82 +1,37 @@
 // facade/last-updated.ts — read the LWW timestamp from a state ref.
 //
-// Extracts the timestamp slot of the underlying `StateTuple` from
-// an `ephemeral` substrate ref.
+// Reads the write timestamps the `ephemeral` substrate keeps in its
+// `StateTree`.
 
 import { hasTransact, PATH, TRANSACT } from "../interpreters/writable.js"
 import { BACKING_DOC } from "../substrate.js"
 import type { StateTree } from "../substrates/state-tree.js"
-import { isStateTuple } from "../substrates/state-tree.js"
-
-function getMaxTimestamp(tree: StateTree | undefined | null): number | null {
-  if (tree === undefined || tree === null) return null
-  if (isStateTuple(tree)) {
-    return tree[1]
-  }
-  if (typeof tree !== "object" || Array.isArray(tree)) return null
-
-  let maxTs: number | null = null
-  for (const key of Object.keys(tree)) {
-    const childTs = getMaxTimestamp(tree[key] as StateTree)
-    if (childTs !== null) {
-      if (maxTs === null || childTs > maxTs) {
-        maxTs = childTs
-      }
-    }
-  }
-  return maxTs
-}
+import { newestTimestamp, stateTreeAt } from "../substrates/state-tree.js"
 
 /**
  * Reads the LWW timestamp for the given reference.
  *
  * This only works for references backed by the `ephemeral` substrate.
- * For any other substrate, or if the path does not resolve to a
- * tuple, it returns `null`.
+ * For any other substrate it returns `null`, and so it does for a path
+ * nothing has been written to, and for a path inside a register, whose
+ * fields share the register's one timestamp.
+ *
+ * A container's timestamp is its newest leaf's: the last time any part of it
+ * changed.
  *
  * @param ref - A reference from an `ephemeral` document.
- * @returns The timestamp (in milliseconds since lineage) or `null`.
+ * @returns The wall-clock timestamp in milliseconds, or `null`.
  */
 export function lastUpdated(ref: unknown): number | null {
   if (!hasTransact(ref)) return null
 
   const ctx = ref[TRANSACT]
-  const path = ref[PATH]
-
   if (!(BACKING_DOC in ctx)) return null
 
-  const backingDoc = ctx[BACKING_DOC]
+  const at = stateTreeAt(ctx[BACKING_DOC] as StateTree, ref[PATH])
+  if (at.kind !== "node") return null
 
-  // The backing doc for a `ephemeral` substrate is a StateTree.
-  // We need to traverse the path to find the tuple.
-  let current: unknown = backingDoc
-  for (const segment of path.segments) {
-    if (isStateTuple(current)) {
-      // Reached a leaf prematurely.
-      return null
-    }
-    if (
-      typeof current !== "object" ||
-      current === null ||
-      Array.isArray(current)
-    ) {
-      return null
-    }
-
-    // We only support field and entry segments in state trees,
-    // and both map to object properties.
-    const key = String(segment.resolve())
-
-    current = (current as Record<string, unknown>)[key]
-
-    if (current === undefined) return null
-  }
-
-  if (isStateTuple(current)) {
-    return current[1]
-  }
-
-  // If it's a container, its effective timestamp is the maximum
-  // timestamp of all its leaves (the last time any part of it changed).
-  return getMaxTimestamp(current as StateTree)
+  // `0` means no leaf beneath: nothing has been written here.
+  const newest = newestTimestamp(at.node)
+  return newest === 0 ? null : newest
 }

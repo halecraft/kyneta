@@ -42,6 +42,7 @@ import {
   isSetSchema,
   KIND,
   type MaterializedNode,
+  mapChangeEffects,
   materializeValue,
   pathSchema,
   RawPath,
@@ -68,6 +69,7 @@ import type {
 import {
   hasKind,
   isLoroContainer,
+  isLoroMap,
   isPlainProjectable,
   type LoroDocLike,
 } from "./loro-guards.js"
@@ -333,6 +335,9 @@ export function changeToDiff(
         targetSchema,
         binding,
         absPath,
+        // A clear removes the keys the container holds when it is applied:
+        // Loro's own clear is observed-remove, and this keeps it so.
+        isLoroMap(resolved) ? resolved.keys() : [],
       )
 
     case "increment":
@@ -546,6 +551,9 @@ function sequenceChangeToDiff(
  *
  * Product fields are identity-keyed and advance the abs-path; map/record
  * entries keep their runtime key and leave the abs-path unchanged.
+ *
+ * `held` is the container's keys, which a clear removes. Only a record can be
+ * cleared, so they are runtime keys, never identity-keyed field names.
  */
 function mapChangeToDiff(
   targetCID: ContainerID,
@@ -553,6 +561,7 @@ function mapChangeToDiff(
   targetSchema: SchemaNode,
   binding: SchemaBinding | undefined,
   absPath: string,
+  held: Iterable<string>,
 ): [ContainerID, Diff | JsonDiff][] {
   const result: [ContainerID, Diff | JsonDiff][] = []
   const updated: Record<string, Value | JsonContainerID | undefined> = {}
@@ -572,28 +581,30 @@ function mapChangeToDiff(
     return { mapKey: key, childAbs: absPath }
   }
 
-  // Set entries
-  if (change.set) {
-    for (const [key, value] of Object.entries(change.set)) {
-      let fieldSchema = valueSchema
-      if (!fieldSchema && isProduct && targetSchema.fields[key]) {
-        fieldSchema = targetSchema.fields[key]
-      }
-      const { mapKey, childAbs } = keyFor(key)
-      updated[mapKey] = fieldSchema
-        ? materializeChild(
-            materializeValue(fieldSchema, value, binding, childAbs, LORO_EAGER),
-            result,
-          )
-        : (value as Value)
-    }
+  if (change.clear && isProduct) {
+    throw new Error("mapChangeToDiff: only a record can be cleared")
   }
 
-  // Delete entries
-  if (change.delete) {
-    for (const key of change.delete) {
-      updated[keyFor(key).mapKey] = undefined
+  // `mapChangeEffects` keeps a key named in both lists set, as `stepMap`
+  // leaves it in σ.
+  const effects = mapChangeEffects(change, change.clear ? held : [])
+
+  for (const key of effects.remove) {
+    updated[keyFor(key).mapKey] = undefined
+  }
+
+  for (const [key, value] of Object.entries(effects.set)) {
+    let fieldSchema = valueSchema
+    if (!fieldSchema && isProduct && targetSchema.fields[key]) {
+      fieldSchema = targetSchema.fields[key]
     }
+    const { mapKey, childAbs } = keyFor(key)
+    updated[mapKey] = fieldSchema
+      ? materializeChild(
+          materializeValue(fieldSchema, value, binding, childAbs, LORO_EAGER),
+          result,
+        )
+      : (value as Value)
   }
 
   result.unshift([targetCID, { type: "map", updated } as MapJsonDiff])

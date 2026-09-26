@@ -141,7 +141,7 @@ Each CRDT kind contributes to the `[LAWS]` phantom of every ancestor node. A `Sc
 `Schema.set(item)` is structurally distinct from `Schema.record(item)`. Where map is a key→value relation (`Record<string, V>` at the user surface), set is an unordered uniqued bag of values:
 
 - **`Plain<SetSchema<I>>` is `Plain<I>[]`.** The user-facing shape is an array, not a keyed record. Storage on the plain substrate is also `T[]`; `materialize.set` projects CRDT-backed storage to `T[]` for shadow construction.
-- **Change vocabulary is `SetChange { add, remove }`** — value-addressed, not key-addressed. Distinct from `MapChange { set, delete }`. On overlap (an item appears in both `add` and `remove`), **remove-wins** (mirrors `stepMap`'s asymmetric set-wins-on-set-then-delete).
+- **Change vocabulary is `SetChange { add, remove }`** — value-addressed, not key-addressed. Distinct from `MapChange { set, delete, clear }`. On overlap (an item appears in both `add` and `remove`), **remove-wins** (mirrors `stepMap`'s asymmetric set-wins-on-set-then-delete).
 - **`stepSet` is total over arbitrary input** and produces normalized output: no duplicates (via `samePlainValue`), stable order (existing members retain relative position; new adds appended in `add[]` order). The `setOpChange(add?, remove?)` constructor is a thin passthrough — the invariant lives at the operation boundary, not the constructor.
 - **`SetRef` is leaf-shaped at the ref layer.** The interface is `.has(value)`, `.add(value)`, `.delete(value)`, `.clear()`, `.size`, `[Symbol.iterator]` over plain values, and a callable returning `T[]`. **No `.at(value)` and no per-member child refs** — sets have no addressable positions, and writing through a member ref would silently violate the set's uniqueness invariant.
 - **Membership is content-equal** (via `samePlainValue` in `guards.ts`) — single source of truth shared by `stepSet`, `validate`, and `SetRef.has(value)`. `Schema.set(Schema.struct({...}))` correctly recognises structurally-equal object members as duplicates; native JS `Set` (which uses identity equality for objects) is *not* used because it can't fulfil this contract.
@@ -445,8 +445,9 @@ Two totality rules follow:
 
 A **field-level LWW map**, and a state-based CRDT (CvRDT) — peers exchange whole
 states and reconcile them with a join, rather than shipping an op log. The
-substrate keeps a `StateTuple` — `[value, timestamp]` — for every scalar leaf,
-so concurrent writes merge field by field.
+substrate keeps a `Live` tuple, `[value, timestamp]`, for every scalar leaf, so
+concurrent writes merge field by field, and marks a deleted or wholly replaced
+key with a `Horizon` (see [Deletion](#deletion)).
 
 That granularity is the whole point. A presence roster where each peer writes
 only its own key is the motivating case, and it is unusable under
@@ -465,57 +466,101 @@ Two properties follow from being log-free and transient:
 
 ### Two clocks, and only one of them is a clock
 
-A leaf is `[value, timestamp, installedAt, deleted?]`.
+A live leaf is `[value, timestamp, installedAt]`, and a horizon is `[content, horizon, installedAt, deleted]`.
 
-`timestamp` is a wall clock: it orders LWW and it is what `.decay()` measures. `installedAt` is this replica's **install ordinal** — which batch *we* took the value in — and it answers a different question. A peer returning from an hour offline sends leaves written an hour ago that we are installing now; a delta filtered by write time would drop exactly those, and the peer that relayed them would never learn they had not arrived.
+`timestamp` (a horizon's `horizon`) is a wall clock: it orders LWW and it is what `.decay()` measures. It is never earlier than the writer's clock at the write, and may be later (see [A local write is later than what it overwrites](#a-local-write-is-later-than-what-it-overwrites)). `installedAt` is this replica's **install ordinal** — which batch *we* took the node in — and it answers a different question. A peer returning from an hour offline sends leaves written an hour ago that we are installing now; a delta filtered by write time would drop exactly those, and the peer that relayed them would never learn they had not arrived.
 
-The ordinal is local and never crosses the wire. `encodeTree` strips it, which shifts the tombstone marker down to index 2 — the encoding peers already spoke, so the ordinal's existence changed no wire format. `decodeTree` restores the slot, and the merge stamps only what it actually adopts, so **"the counter moved" and "our state changed" are one fact**.
+The ordinal is local and never crosses the wire. `encodeTree` strips it: a live leaf travels as `[value, timestamp]` and a horizon as `[content, horizon, deleted]`, so a deletion with nothing written since is `[null, horizon, true]`, the tombstone peers have always spoken. `decodeTree` restores the slot at 0, and the merge stamps only what it actually adopts, so **"the counter moved" and "our state changed" are one fact**.
 
-Both conversions walk the tree explicitly rather than passing a replacer to `JSON.stringify`, which would have been free. A replacer descends into every array including a leaf's *value*, and a register value may itself be an array — indistinguishable from a tuple by any test. Walking descends only through container keys and stops at a leaf, which is the rule `deepClone` already followed.
+Both conversions walk the tree explicitly rather than passing a replacer to `JSON.stringify`, which would have been free. A replacer descends into every array including a leaf's *value*, and a register value may itself be an array — indistinguishable from a tuple by any test. Walking descends only through container keys and horizon content, and stops at a leaf.
 
-Nothing that decides agreement may read the ordinal. Two peers holding identical state stamp it differently, so `joinTuples`, `sameTuple` and `stateTreeDigest` all skip it. `sameTuple` is the dangerous one: it decides whether a join moved, and reading the ordinal there would report a change on every merge — which is the three-peer cycle described under "A merge reports whether it moved", arrived at from the opposite direction.
+Nothing that decides agreement may read the ordinal. Two peers holding identical state stamp it differently, so `joinTuples`, `compareExistence` and `stateTreeDigest` all skip it. The join is the dangerous one: it decides whether a merge moved, and reading the ordinal there would report a change on every merge — which is the three-peer cycle described under "A merge reports whether it moved", arrived at from the opposite direction.
 
-`StateVersion` is `(epoch, installSeq)`: which replica instance is counting, and how far. That is structurally `PlainVersion`, so this substrate is no longer an exception to the version-vector family. `lineage` stays `DEFAULT_LINEAGE` deliberately — `classifyResetTrigger` reads two differing non-default lineages as a lineage boundary, and every instance mints a distinct epoch, so surfacing it there would make *every pair of peers* a boundary and delta sync would silently never happen.
+`StateVersion` is `(incarnation, installSeq)`: which replica instance is counting, and how far. That is structurally `PlainVersion`, so this substrate is no longer an exception to the version-vector family. `lineage` stays `DEFAULT_LINEAGE` deliberately — `classifyResetTrigger` reads two differing non-default lineages as a lineage boundary, and every instance mints a distinct incarnation, so surfacing it there would make *every pair of peers* a boundary and delta sync would silently never happen.
 
 `compare` still answers `"concurrent"`, now for an honest reason: an install count describes intake, not state, so two peers holding the same tree report different numbers. Equality is answered by `stateTreeDigest`, carried beside the version on the wire and read by the classifier.
 
+### A local write is later than what it overwrites
+
+A state-based CRDT converges only if two things hold. The join must be a lattice, and every **local write must be inflationary**: the tree after a write must sit at or above the tree before it, `before ⊑ after`. The second is not something the join can provide. A write that lowers the tree leaves the writer holding a state no join produces, and a peer still holding `before` computes `before ⊔ after`, which is not `after`. The writer shows its write, every other peer keeps what it replaced, and once sync runs back the other way the writer adopts that too, so the write is undone.
+
+Stamping writes with `Date.now()` and overwriting in place broke this three ways:
+
+- **A same-millisecond rewrite.** The tie goes to the old tuple whenever the new one ranks lower: a delete after a set (a tombstone loses a tie to a live value), or a smaller value written over a larger one.
+- **Clock skew.** A replica whose clock is behind a tuple it has already merged loses outright. A write that is causally *after* another loses to it, with no coincidence needed. This is the serious one.
+- **Timestamp regression.** A whole-value write rewrote unchanged leaves with older timestamps, so digests disagreed.
+
+The fix is that **every write is stamped strictly past what it replaces**. The shell reads the clock once, in the substrate's `prepare`, and hands it down as `WriteStamp.notBefore`: the earliest timestamp the write may install. `stampOver` moves it to `newestTimestamp(replaced) + 1` wherever the write replaces something newer. The new node then wins the join on timestamp alone, so the tie rule is never consulted, and nothing in `state-tree.ts` reads the clock.
+
+The floor also climbs through horizons. A write beneath a horizon is stamped at or above it, because a peer with a fast clock can set a horizon ahead of ours, and a write below it would be pruned the moment it was made.
+
+Two alternatives were rejected:
+
+- **Breaking ties toward tombstones** fixes set→delete and breaks delete→re-add. It addresses a symptom of the tie rule, not the missing invariant.
+- **A replica-wide hybrid logical clock**, taking `max(now, clock + 1)` for every write, is correct, but one fast-clocked peer drags every later write on every leaf forward, and decay measures from leaf timestamps. The per-leaf rule moves time only on the nodes that were actually contended. A write already past what it overwrites stores exactly its wall-clock stamp.
+
+**Timestamps from peers are validated.** Every guarantee above rests on `timestamp + 1 > timestamp`, which fails for `Infinity` (`JSON.parse("1e400")`) and above 2^53. `decodeTree` refuses a payload with any timestamp that is not a non-negative safe integer, before anything is mutated. What remains is inherent to last-writer-wins: it trusts clocks, so a peer can still pin a node with a far-future timestamp. That is the same stance the digest takes on adversarial peers.
+
 ### The merge rule, in full
 
-Highest timestamp wins; **on a tie, a live tuple beats a tombstone, and otherwise the greater `JSON.stringify(value)` wins**. State both halves — the tie is the half a reader will meet in production and not in testing, and getting it wrong is invisible.
+For two live leaves: highest timestamp wins; **on a tie, the greater `JSON.stringify(value)` wins**. State both halves — the tie is the half a reader will meet in production and not in testing, and getting it wrong is invisible.
 
-The tie rule is not a detail. Timestamps come from `Date.now()`, so a tie means two peers wrote in the same millisecond — routine for presence traffic, which arrives in bursts from many peers at once. A merge that resolved ties by preferring "the remote value" would be deterministic but *not commutative*: each peer would keep its own value and the two would diverge permanently, with no error raised and no convergence to follow. Commutativity, associativity and idempotence are pinned as laws in `ephemeral-lattice.test.ts`.
+The tie rule is not a detail. A merge that resolved ties by preferring "the remote value" would be deterministic but *not commutative*: each peer would keep its own value and the two would diverge permanently, with no error raised and no convergence to follow. Commutativity, associativity and idempotence are pinned as laws in `ephemeral-lattice.test.ts`.
 
-On a tie the greater **value** wins, not the later writer — a tie *is* simultaneity, so there is no later writer to prefer. Comparing serialisations is sound because both peers compare the same pair of strings and so reach the same verdict, and because string comparison is a total order, which is what makes the join associative across three or more tied peers. Only the value tie pays for `stringify`.
+On a tie the greater **value** wins, not the later writer. A tie is two different writers in the same millisecond: one writer's own writes cannot tie, because each is stamped past what it replaces. Comparing serialisations is sound because both peers compare the same pair of strings and so reach the same verdict, and because string comparison is a total order, which is what makes the join associative across three or more tied peers. Only the value tie pays for `stringify`.
 
-The rank must cover **every slot that replicates**. Ranking the value alone left a tombstone and a live `null` at the same timestamp indistinguishable — both rank as `null` — so a delete on one peer against a `null` write on another in the same millisecond left each keeping its own, diverging permanently through the schema-blind merge that headless relays and stores use. The tie-break now tests the tombstone slot first, preferring the live tuple because a tie carries no reason to prefer the deletion and that direction discards less. A slot that does *not* replicate must stay out of the comparison: two peers agree on the tree, not on each other's bookkeeping.
+**Existence has one tie rule.** A live leaf claims presence at its timestamp; a horizon claims `!deleted` at its horizon. `compareExistence` orders two claims by timestamp, and on a tie **present beats absent**: a tie carries no reason to prefer the deletion, and that direction discards less. It is how a live value beats a deletion on a tie, and how a replacement beats a deletion at the same horizon. The rank must cover every slot that replicates; ranking the value alone once left a deletion and a live `null` indistinguishable, and two peers diverged permanently.
+
+| local ⊔ remote | result |
+|---|---|
+| live ⊔ live | timestamp, then value rank |
+| live ⊔ deletion with nothing since | `compareExistence` |
+| horizon ⊔ horizon | existence from `compareExistence`; content joined, and pruned at the winning horizon |
+| horizon ⊔ container | the container joins the content, pruned at the horizon |
+| container ⊔ container | union keys, recurse |
+| live ⊔ container, or live ⊔ horizon with content | the peers disagree about a node's shape |
+
+The last row is reachable only by a malformed or mismatched-schema payload. It compares the newest timestamp on each side and keeps the winner whole: commutative, but not associative, since the loser's contents cannot be recovered by a later merge. Well-formed peers never disagree about shape, because shape comes from the schema and a horizon joins a container by pruning it rather than replacing it.
 
 ### Deletion
 
 `mergeStateTree` unions keys, so **absence carries no information**: a key one peer lacks is indistinguishable from a key it has never seen. Simply removing a key therefore survives only until the next merge with anyone who still holds it. A `Schema.record` used as a roster could gain members but never lose them.
 
-A delete instead writes a **tombstone** — a `StateTuple` whose third slot is `true`. It wins or loses by the rule above, so `mergeStateTree` needs no *schema* knowledge of it, which is what keeps the merge schema-blind for headless relays. It is not, however, an ordinary *value*: the marker lives in its own slot, so the tie-break has to read that slot rather than treating the tuple as its value alone. Reads project a tombstoned key as absent.
+A delete writes a **horizon**: `[content, horizon, installedAt, deleted]`. It says that everything under the key written before `horizon` is gone, and `content` holds what has been written under the key since. A replacement, a container written whole, is the same statement plus "the key exists". `(horizon, deleted)` is itself a last-writer-wins value (`compareExistence`), and the horizon lives in a tuple rather than under a reserved key of the container because any string is a valid record key, while arrays are a channel user data cannot reach.
 
-Deleting an entry whose value is a *container* tombstones every leaf inside it rather than replacing the subtree with a single tuple. This is deliberate and load-bearing. Replacing it would make two peers disagree about a node's **shape** — one holding a leaf where the other holds a container — and resolving a shape disagreement means discarding one side's contents, which breaks associativity: with a leaf `L` (t=300) and containers `B` (newest t=150) and `C` (newest t=400), `(L ⊔ B) ⊔ C` discards B's leaves while `L ⊔ (B ⊔ C)` keeps them, so two peers given the same three updates in different orders end up with different state. Tombstoning leaf-by-leaf keeps every shape stable, confining the join to leaf-against-leaf where it is provably a lattice. The merge still has a leaf-versus-container branch for malformed or mismatched-schema payloads; it is commutative but explicitly *not* associative, and well-formed peers cannot reach it.
+A delete therefore reaches what the deleter never saw. Deleting a record entry is one tuple whatever the entry holds, stamped past everything the deleter holds under the key. An entry it never saw, or an inner key another peer wrote before the delete, falls below the horizon when the join meets it, and is dropped. Something written *after* the delete survives and brings the entry back.
 
-An entry drops out of the projection only when **every** leaf beneath it is tombstoned. That is what distinguishes a deleted entry from a legitimately empty container — an empty record still reads as `{}`.
+Writing a whole record, or clearing one, raises a horizon on the record itself. That is last-writer-wins on the container: older keys the writer never saw are removed with the rest. The per-key calls, `.set(k, v)` and `.delete(k)`, remove nothing else.
 
 **This is LWW-Element-Set, not OR-Set.** Concurrent add and remove resolve by timestamp: a later add beats an earlier delete, and a later delete beats an earlier add. Anyone who reads "tombstone" is likely to assume observed-remove semantics, where a concurrent add always wins regardless of clock — that is *not* what this does. LWW is the correct reading for a target advertising `lww-per-key`, OR-Set would require per-element causal metadata this substrate does not carry, and for presence it is the behaviour you want: a peer removed and rejoining should be present again.
 
-**Tombstones do not need collecting.** Deleting *replaces* a tuple rather than adding one, and re-adding replaces it back, so they accumulate per **key**, not per operation — 500 alternating delete/add cycles leave one tuple. The tree stays bounded by the set of keys ever written, which is the bound it had when nothing was ever deleted. The only cost is that a currently-deleted key occupies a tuple where it would otherwise be absent. The phrase "tombstone garbage collection" is imported from CRDTs where deletes genuinely accumulate without bound; here they do not. If bounding this ever did matter, note that **`.decay()` cannot be the mechanism** — it never mutates the tree (see below). Collection would need a real tree mutation with its own safety argument, and on a log-free CvRDT that means causal stability, which is not available here.
+`clear()` follows the same rule, which is where ephemeral and the CRDT backends part. `MapChange.clear` carries intent, "every key goes, seen or not", and each substrate's merge law decides what that reaches. Loro and Yjs remove the keys the container holds, which is observed-remove: `mapChangeEffects` expands the clear against those keys. Ephemeral raises a horizon, which also removes older entries still in flight. The conformance profiles declare each substrate's reach as `clearReach: "observed" | "older"`, and `tests/conformance` holds each to it.
+
+**Collection is pruning.** `prune(node, floor)` drops everything stamped strictly before a horizon above it, and a horizon only ever rises, so whatever is below one now is below it for good. A peer that sends such a leaf again has it dropped again, the join reports no change, and nothing is relayed. That is collection without causal stability: a max-register's dominance is permanent, which OR-Set tombstones do not have. A deleted subtree is one tuple, and alternating delete and add on a key leaves one node. `.decay()` still cannot collect anything, because it never mutates the tree (see below).
+
+**Every tree is kept in normal form**, which the join relies on and the digest and `encodeTree` assume:
+
+- no live leaf below its floor, the highest horizon above it;
+- no horizon below its enclosing floor;
+- no empty plain container other than the root, because an empty container carries no timestamp and can be neither ordered nor hashed; existence is expressed only by horizons;
+- a horizon's content is `null` exactly when it is a deletion with nothing written since, and a replacement always has a container, even an empty one: that is how an empty entry exists;
+- no structural zeros: every node was written by someone.
+
+`decodeTree` is the only thing that normalises foreign input, and local writes produce normal form by construction, so the merge prunes only where a joined horizon rises above one side's own.
 
 ### What `.decay()` is
 
-A **read-time projection**, not a deletion mechanism. `tick(now)` re-projects the tree into the shadow, showing any leaf older than its `decayMs` as `Zero.structural` instead of its stored value, and announces the root fields the re-projection moved. It runs with `projection: true` and `replay: true`: the tree is untouched, the version clock does not advance, and nothing is broadcast.
+A **read-time projection**, not a deletion mechanism. It is the `withDecay` decorator over the projection's fold (`interpreters/with-decay.ts`): a node whose schema declares `decayMs`, and whose newest write is older than that, reads as its structural zero, without its subtree being walked. That one rule covers a leaf and a container alike; a product or map past its window reads as its structural zero, not as a mix of expired and unexpired fields. A node never written does not decay, since it is already the zero.
+
+`tick(now)` re-projects and announces the root fields that moved. It runs with `projection: true` and `replay: true`: the tree is untouched, the version clock does not advance, and nothing is broadcast.
 
 A field expiring is one event, not a standing condition. The announcement names what *changed*, so an expired field is reported once; a tick that moves nothing is silent, however many fields are currently being masked.
 
-Decay removes nothing. It is the rule *"when reading, treat a leaf older than `decayMs` as its zero value"*, and it converges across peers with **no communication at all**, because every peer applies the same age test to the same stored timestamp and therefore reaches the same answer.
-
-It does not interact with tombstones, and cannot be used to collect them — dropping a tombstone would be a tree mutation, which is exactly what decay does not do.
+Decay removes nothing. It is the rule *"when reading, treat a node older than `decayMs` as its zero value"*, and it converges across peers with **no communication at all**, because every peer applies the same age test to the same stored timestamps and therefore reaches the same answer. A horizon counts as a write: a container's age is its newest leaf or horizon. A horizon does not decay itself, and decay cannot collect one.
 
 ### Where `.decay()` may be attached
 
-Decay works **per leaf tuple**: it compares one stored timestamp against `now`. That fixes where it can legally sit.
+Decay works **per stored node**: it compares one node's newest timestamp against `now`. That fixes where it can legally sit.
 
 An atomic register — a `sum` variant or a `.json()` blob — is stored as ONE tuple holding the whole value, so a field inside it has no timestamp of its own and can never age out independently. `decayMs` is therefore **legal at or above an opaque boundary and illegal strictly below one**. Attaching it to the sum or `.json()` node itself is supported and means what it says: the whole variant decays to its structural zero together.
 
@@ -527,17 +572,21 @@ The pairing rule is reported first, and the order is what a caller sees. A schem
 
 Before this check existed, `decayMs` below a boundary bound cleanly and then silently never fired — no throw, no log, just a field that never decayed.
 
-### Atomic registers in the StateTree
+### Node kinds in the StateTree
 
-A `StateTuple` is `[value, timestamp, installedAt, deleted?]`. The last slot is present only on a tombstone (see "Deletion" above); the marker lives in its own slot rather than in the value because it has to be **out-of-band from the value domain** — `null` is a legitimate value under a nullable schema, and any in-band sentinel is something a `.json()` blob could legitimately contain. It sits last so that the only optional slot is the trailing one and the tuple never carries a hole. Note that `isStateTuple` deliberately does **not** check the tuple's length: an array in a StateTree is always a leaf, since sequences are not a supported container here, and an arity check would have to be revised every time the tuple gains a slot — which it since has, without the guard needing a line changed. Getting that wrong is quiet and expensive — a tuple the guard rejects is treated as a container, and its slots are then merged and projected as if they were keys.
+A node is `Live`, `Horizon` or `Container`, and `nodeKind` says which. A `Live` is an array of three slots and a `Horizon` an array of four whose last is a boolean; a container is a plain object. Sequences are not a supported container here, so every array in a tree is one of ours.
+
+A horizon's `deleted` marker lives in its own slot rather than in the value because it has to be **out-of-band from the value domain**: `null` is a legitimate value under a nullable schema, and any in-band sentinel is something a `.json()` blob could legitimately contain.
+
+`nodeKind` throws on anything else, and every walker switches on it exhaustively, closed with a `never`. Treating an unknown shape as a container is quiet and expensive: its slots are walked as keys, and the characters of a string value after them. A malformed fixture once did exactly that, and the walk recursed until the stack ran out.
 
 ### A merge reports whether it moved
 
-`mergeStateTree` returns `{ tree, changed }`. `changed` is a lattice question rather than bookkeeping: `a ⊔ b = a` exactly when `b ≤ a`, so a false answer means the incoming payload was already subsumed. The substrate advances its version only when the join moved, and the synchronizer relays only an import that changed something.
+`mergeStateTree` returns `{ tree, changed }`. `changed` is a lattice question rather than bookkeeping: `a ⊔ b = a` exactly when `b ≤ a`, so a false answer means the incoming payload was already subsumed. A horizon that rises or flips is a change; a leaf the join prunes on arrival is not. The substrate advances its version only when the join moved, and the synchronizer relays only an import that changed something.
 
 Getting this wrong is not a waste of bytes, it is a cycle. Each peer relays an import to every peer except the sender. With two peers that closes immediately — the sender is the only candidate — which is why announcing every merge was survivable and why every ephemeral test in the suite passed. With three peers there is always somewhere left to forward to, and because `StateVersion.compare` can never answer `"equal"`, no receiver can decline a payload it already holds. Three peers opening the same ephemeral document wedged the event loop before this was fixed, with nobody writing anything.
 
-A related trap sits underneath it: the version must advance *strictly*. `Date.now()` has millisecond resolution and presence traffic arrives in bursts, so two changes inside one millisecond would otherwise share a version — and a caller comparing versions reads a real change as none. `nextVersion` takes `max(now, current + 1)`.
+A related requirement sits underneath it: the version must advance *strictly*, or two changes inside one millisecond would share a version and a caller comparing versions would read a real change as none. The version is the install ordinal, which every write and every moving merge increments, so it is strict by construction; a merge that moves nothing gives its ordinal back.
 
 ### Two key spaces
 
@@ -545,45 +594,61 @@ Where a node's keys come from decides what their absence means, and the two answ
 
 | | keys come from | an absent key means |
 |---|---|---|
-| `product` — **declared** | the schema | the value written was partial; the tree would be malformed |
+| `product` — **declared** | the schema | nothing was written there; the projection supplies the zero |
 | `map` — **dynamic** | whatever was written | removed, or never there |
 
-"Absence carries no information" is the rule for a *map*, and it is why a removal has to be a tombstone rather than a missing key. It is false for a product, whose fields exist because the type says so. `keySpace` (`state-tree.ts`) is the one place that decides. Two sites ask it:
+"Absence carries no information" is the rule for a *map*, and it is why a removal has to be recorded rather than left as a missing key. It is false for a product, whose fields exist because the type says so. `keySpace` (`state-tree.ts`) is the one place that decides, and two things follow from it:
 
-- `extractInto` drops an all-tombstoned child only when its key is dynamic. An emptied record projects as `{}`; it does not vanish.
-- `syncStateTreeToShadow` tombstones an omitted key only when it is dynamic. A declared field a partial value omits is left alone.
+- **Writes.** `writeNode` writes a map, or a product at a dynamic key, as a replacement: the writer may not have seen every key, and an entry's existence is itself last-writer-wins. A product at a declared key is written field by field by `writeProduct`, and a field the value omits is left alone.
+- **Presence.** At a dynamic key a node is present if it is a live leaf or a replacement, or if anything beneath it is. A deletion with something written since is present because of that something. A declared key is always present, and its value comes from the fold.
 
-A third site had to stop answering the question for itself. `applyChangeToStateTree` built a fresh subtree for a container replace and assigned it over the old one, so *every* omitted key vanished — wrong for both key spaces at once, and invisible to either rule above. It now syncs into the existing subtree, which routes the decision through `syncStateTreeToShadow`.
+**Zeros come from the fold, not the tree.** The reader is schema-blind, so it cannot fill a declared field the tree does not hold. The projection can, because it is the schema's F-algebra: a declared field that is absent, pruned below a horizon, or missing from a partial entry reads as `Zero.structural` of its schema. A delta carries only the leaves that changed, so a peer can legitimately hold an entry with some of its fields.
 
-`insertStructuralZeros` already had this right before the rule had a name: it walks `Zero.structural(schema)` rather than the tree, so it only ever fills declared keys.
-
-Two defects came from the missing distinction, and both were invisible locally because reads come from σ. A record whose last key was deleted dropped out of the projection. A partial struct value — which `tryValidate` rejects, so only a caller past the type guard produces one — dropped the fields it did not mention from the tree, where they then resurrected from the next peer that still held them.
+Three defects came from the missing distinction, and all were invisible locally because reads come from σ. A record whose last key was deleted dropped out of the projection. A partial struct value dropped the fields it did not mention from the tree, where they then resurrected from the next peer that still held them. And a deleted entry holding a nested struct stayed present on other peers, because presence was decided field by field against the schema and a declared nested container counted as present even with every leaf in it tombstoned.
 
 ### How a node is stored
 
-How a node is stored has one definition, `stateTreeRole` (`state-tree.ts`), in the sense `storageClass` is for substrates generally. It answers three ways, not two: `decompose` for `product`/`map` (that is what gives `ephemeral` its field-level merge), `register` for `scalar`, `sum` and `.json()` nodes stored as one leaf tuple, and `unrepresentable` for everything else. Its consumers hold no logic of their own: `childSchemaForKey`, `isDecomposedContainer`, `stateTreeViolation`, and the map-change guard in `applyChangeToStateTree`.
+How a node is stored has one definition, `stateTreeRole` (`state-tree.ts`), in the sense `storageClass` is for substrates generally. It answers three ways, not two: `decompose` for `product`/`map` (that is what gives `ephemeral` its field-level merge), `register` for `scalar`, `sum` and `.json()` nodes stored as one leaf tuple, and `unrepresentable` for everything else. Its consumers hold no logic of their own: `childSchemaForKey`, `writeNode`, `stateTreeViolation`, and the map-change guard in `applyChangeToStateTree`.
 
 Three answers rather than two, because *register* and *unrepresentable* are different and were previously the same `default` arm. A sequence reaching `childSchemaForKey` got the answer meant for a sum — "no child here" — and then decomposed schema-blind one level down. The accepted set is enumerated rather than the rejected one, so a schema kind added later lands in `unrepresentable` instead of joining the storable set silently.
 
-**A schema the tree cannot hold is refused before a document exists.** `stateTreeViolation` walks a schema and reports the first node with no representation, or the first `.decay()` below a register. Both seams a schema enters by call it: `bind()`, for the error site a caller expects, and `createStateSubstrate`, which is exported and skips `bind()`. The second is not belt-and-braces: the tree is seeded from the schema's structural zero at construction, so an unrepresentable field is already stored wrongly before any write. `.json()` is the escape hatch the message names, and a wrapped list keeps its `push`/`insert`/`delete` surface while replicating as one register value.
+**A schema the tree cannot hold is refused before a document exists.** `stateTreeViolation` walks a schema and reports the first node with no representation, or the first `.decay()` below a register. Both seams a schema enters by call it: `bind()`, for the error site a caller expects, and `createStateSubstrate`, which `ephemeralSubstrateFactory` reaches without `bind()`. The second is not belt-and-braces: the first write to an unrepresentable field would store it in a shape the schema never declared. `.json()` is the escape hatch the message names, and a wrapped list keeps its `push`/`insert`/`delete` surface while replicating as one register value.
+
+The write path requires a schema, and a write whose path does not fit it throws rather than guessing a shape for the tree. The substrate always has a schema; the headless replica, which only merges, is the schemaless form.
 
 Only `.json()` launders an unrepresentable kind. A `sum` also stores as one tuple, but `.nullable()` is not a request for opaque storage the way `.json()` is, so a list inside one still means the list semantics the schema asked for. `EphemeralLaws` draws the line in the same place, and `bind-constraints-ephemeral.test.ts` §4 pins the two against each other — that test found this exact disagreement.
 
-`applyChangeToStateTree` enumerates every member of `BuiltinChange` and closes with a `never`. A ninth member is a compile error there until someone decides whether this tree can store it. A `default` arm would swallow it into the refusal silently, which is how an unhandled change type came to fall off the end of that function: σ advanced, λ did not, and the writing peer read back perfectly while every other peer saw nothing. Storing a register whole is deliberate — a sum variant is an opaque LWW value (variant fields are not independently addressable; a switch is one whole-value `.set()`, per the `WritableDiscriminantProductRef` contract), so decomposing it would let the schema-blind `mergeStateTree` interleave fields from different variants.
+`refuseUnstorableChange` enumerates every member of `BuiltinChange` and closes with a `never`. A ninth member is a compile error there until someone decides whether this tree can store it. A `default` arm would swallow it into the refusal silently, which is how an unhandled change type came to fall off the end of `applyChangeToStateTree`: σ advanced, λ did not, and the writing peer read back perfectly while every other peer saw nothing. Storing a register whole is deliberate — a sum variant is an opaque LWW value (variant fields are not independently addressable; a switch is one whole-value `.set()`, per the `WritableDiscriminantProductRef` contract), so decomposing it would let the schema-blind `mergeStateTree` interleave fields from different variants.
 
-A write aimed *at or inside* a register is re-aimed at the register itself before it reaches the tree (`state.ts:prepare`, via the same `findOpaqueBoundary` the CRDT backends use). Applying such a write literally would split the tuple into per-field tuples and drop every sibling field the change never mentioned. This is easy to miss in testing: `prepare` updates the plain-object shadow that local reads are served from, so the document reads back correctly on the peer that made the write, and only replicated state is damaged. Assert on the exported tree, not on the document — and see [The functional shadow](#the-functional-shadow) for the suite that now asserts it for you.
+A write aimed *at or inside* a register is re-aimed at the register itself before it reaches the tree (`prepare` in `ephemeral.ts`, via the same `findOpaqueBoundary` the CRDT backends use). Applying such a write literally would split the tuple into per-field tuples and drop every sibling field the change never mentioned. This is easy to miss in testing: `prepare` updates the plain-object shadow that local reads are served from, so the document reads back correctly on the peer that made the write, and only replicated state is damaged. Assert on the exported tree, not on the document — and see [The functional shadow](#the-functional-shadow) for the suite that now asserts it for you.
 
 The property this buys — a concurrent variant switch resolving to one coherent variant, never a blend of two — is asserted across every substrate in `tests/conformance`, not just for `ephemeral`. If you change how registers are stored, that is where the cross-substrate guard lives.
 
+### The projection
+
+Π for ephemeral is the materializer the CRDT backends use: `projectStateTree` is `interpret(schema, withDecay(createMaterializeInterpreter(resolver), …))` over `createStateTreeResolver(tree)`. The resolver is schema-blind, as theirs are. Every method resolves its path with `stateTreeAt`, which descends through horizons and continues into a live leaf's value for the rest of a path, so a register's fields are read from inside its one tuple. For a value held as plain JSON, a `.json()` list's length or a `.json()` record's keys, it answers with `plainResolution`, the same answers Loro and Yjs give for their plain values. The fold holds the schema, so it supplies every zero and applies decay.
+
+A projection returns register values by reference from the tree, so it is never kept or handed out as it is. A reprojection, after a merge or on a tick, is a batch of replay ops:
+
+1. gather: `projectStateTree(tree, schema, now)`;
+2. plan: `movedRootKeys(σ, next)`, the root fields whose values differ;
+3. execute: `executeBatch` with one replace op per moved field.
+
+Each moved value is copied once before it becomes an op payload, since subscribers receive the op, and `prepare` copies it again on the way into σ. σ is written only by `prepare`, and an unchanged root field is neither cloned nor rewritten. That is the shape of Loro's and Yjs's replay path, native state → `Op[]` → `executeBatch(replay)`, with a diff against the projection standing in for their event bridge.
+
+### One way in
+
+Peer data enters the tree only through `decodeTree`, which refuses a malformed node or an unstorable timestamp and brings the rest into normal form. That includes `upgrade`, which builds a substrate from a headless replica by decoding the replica's entirety. It once parsed that entirety with `JSON.parse`, reading the wire shape as the in-memory one: the wire's deletion marker sits where the install ordinal lives in memory, so every deletion became a live `null`, which then beat the deletion on every peer. `createDoc(bound, payload)` and an exchange promoting a relayed document both reach `upgrade`.
+
 ### The state digest
 
-`stateTreeDigest` (`state-tree.ts`) fingerprints everything that replicates: each leaf's path, value, timestamp, and tombstone flag. Two peers holding the same tree hold the same digest, whatever order they reached it in, because the per-leaf hashes are combined with XOR.
+`stateTreeDigest` (`state-tree.ts`) fingerprints everything that replicates: each live leaf's path, value and timestamp, and each horizon's path, horizon and `deleted` flag, with its content beneath the same path. A horizon folds a marker no live leaf can produce, so the two never collide at one path. Two peers holding the same tree hold the same digest, whatever order they reached it in, because the per-node hashes are combined with XOR.
 
-It exists to answer the question `StateVersion.compare` cannot. A wall clock cannot say whether two peers hold the same state — two peers writing different fields in the same millisecond carry the same timestamp over divergent trees — so `compare` returns `"concurrent"` unconditionally rather than guess, and every ephemeral exchange ships a whole document as a result.
+It exists to answer the question `StateVersion.compare` cannot. An install count describes intake, not state, so two peers holding the same tree report different versions; the digest is a function of the tree alone, so peers that converged by opposite routes agree and stop exchanging.
 
 Three properties are load-bearing, and each has a test:
 
-- **Order independence.** XOR is commutative, so peers that converge by opposite merge orders agree. Without this the comparison reports divergence forever and the digest is worse than useless.
+- **Order independence.** XOR is commutative, so peers that converge by opposite merge orders agree. Without this the comparison reports divergence forever and the digest is worse than useless. Normal form is what makes equal states equal trees: an empty container or a redundant horizon left behind on one peer would otherwise split them.
 - **Path sensitivity.** The same value under a different key must not fold alike. The path is encoded *structurally*: four lanes of the path prefix travel down the recursion as plain numbers with each key folded in, so no path string is ever built. That is also what keeps the walk allocation-free — an early version that allocated a digest per node cost 29.7 ms over 5000 leaves against 3.8 ms for this one.
 - **Nothing local.** `.decay()` is a read-time projection that never touches the tree, so two peers configured with different `decayMs` hold identical trees and must agree. `decayMs` is excluded from the schema hash for the same reason.
 
@@ -593,7 +658,7 @@ Collision resistance is four independent FNV-1a-32 lanes, which is ample against
 
 ### Atomicity is shape, not logic
 
-Crucially, atomicity is encoded in the tree's *shape* (register = leaf tuple), **not** in the merge logic. That is why `mergeStateTree` stays schema-blind: a headless relay/store merges raw entirety payloads by timestamp without ever needing the schema. The schema is consulted only when translating between plain values and the tree (build via `applyChangeToStateTree`/`syncStateTreeToShadow`, extract via `extractPlainState`), which always runs on a schema-aware peer. Register values are deep-cloned (`deepClonePlain`) at the tree↔shadow boundary so the two never alias — a projection that finds a register unchanged keeps the shadow's existing copy, which was cloned when it was written, rather than re-cloning.
+Crucially, atomicity is encoded in the tree's *shape* (register = leaf tuple), **not** in the merge logic, and so are deletion and replacement (horizon = tuple around content). That is why `mergeStateTree` stays schema-blind: a headless relay/store merges raw entirety payloads by timestamp without ever needing the schema. The schema is consulted only when translating between plain values and the tree (build via `applyChangeToStateTree`, extract via `projectStateTree`), which always runs on a schema-aware peer. Register values are deep-cloned (`deepClonePlain`) on the way into the tree, and copied on the way out to σ by the reprojection's ops, so the two never alias.
 
 ---
 
@@ -614,7 +679,9 @@ CRDT substrates (Loro, Yjs) maintain a **shadow**: a `PlainState` object that se
 
 **Initialization.** The shadow is created at substrate construction time via `materializeLoroShadow` (Loro) or `materializeYjsShadow` (Yjs). These functions now delegate to `createMaterializeInterpreter` with a backend-specific `MaterializeResolver`, rather than defining bespoke 370-line interpreters. The resolver closes over the CRDT doc and binding; the generic materializer walks the schema and calls resolver methods to produce a plain JS object matching the schema's shape. The shadow is also re-materialized on upgrade and after any replay flush.
 
-**`Reader` vs `MaterializeResolver`.** `Reader` (4 methods) is the runtime read interface backed by the `PlainState` shadow — schema-blind, live. `MaterializeResolver` (6 methods) is the materialization interface backed by the CRDT — schema-aware via catamorphism dispatch, one-shot. They share a conceptual lineage — the resolver is what a CRDT Reader would look like if it were schema-aware and didn't need liveness.
+The ephemeral substrate builds its shadow with the same fold, over a resolver for its `StateTree` (see [The projection](#the-projection)). Its replay has the same shape too: all three turn native state into `Op[]` and run it through `executeBatch(replay)`. Loro and Yjs take the ops from their CRDT events; ephemeral has no event bridge, so `movedRootKeys` diffs σ against a fresh projection instead. For a value a backend holds as plain JSON, such as the inside of a `.json()` register, every resolver answers with `plainResolution` (`interpreters/materialize.ts`), so they cannot disagree about it.
+
+**`Reader` vs `MaterializeResolver`.** `Reader` (5 methods) is the runtime read interface backed by the `PlainState` shadow — schema-blind, live. `MaterializeResolver` (7 methods) is the materialization interface backed by the native store — schema-aware via catamorphism dispatch, one-shot. They share a conceptual lineage — the resolver is what a CRDT Reader would look like if it were schema-aware and didn't need liveness.
 
 This design makes the read-your-writes invariant true by construction for all substrates: reads always go through `plainReader(shadow)`, and local writes always land in the shadow eagerly. No coordination, no flags, no special-casing per substrate.
 
@@ -626,13 +693,13 @@ A shadow-carrying substrate holds the document twice, and the law is that the tw
 σ ≡ Π(λ)
 ```
 
-Π is the substrate's own materialiser — `extractPlainState`, `materializeLoroShadow`, `materializeYjsShadow`. `projectionConformance` (`src/testing/projection-conformance.ts`) applies a sequence of writes and compares the two derivations after each one. `ephemeral`, `loro` and `yjs` run it.
+Π is the substrate's own materialiser — `projectStateTree`, `materializeLoroShadow`, `materializeYjsShadow`. `projectionConformance` (`src/testing/projection-conformance.ts`) applies a sequence of writes and compares the two derivations after each one. `ephemeral`, `loro` and `yjs` run it.
 
 The comparison is not a function against itself. On the write path σ is advanced by `applyChange` and λ by `applyChangeToStateTree` or `changeToDiff` — different code reading the same change. A substrate uses its materialiser only on the replay path, so reprojecting after a local write crosses from one derivation to the other. `plain` does not run the suite: σ *is* the document there, so Π is the identity and the comparison would hold for a reason unrelated to any substrate behaviour.
 
 Before this suite existed the law was tested twice by hand, in the Loro and Yjs `eager-write-coherence` files, and not at all for `ephemeral` — which is where it broke. Both hand-written versions compared Π(λ) against an object literal and spot-checked two fields of σ, so neither compared the two derivations at all.
 
-The suite found one violation on its first run, since fixed: deleting a record's last key left `{}` in σ while the projection dropped the record entirely. The cause was `extractInto` applying a map's rule to a declared field — see [Two key spaces](#two-key-spaces).
+The suite found one violation on its first run, since fixed: deleting a record's last key left `{}` in σ while the projection dropped the record entirely. The cause was the projection applying a map's rule to a declared field — see [Two key spaces](#two-key-spaces).
 
 ---
 
@@ -916,7 +983,7 @@ Source: `packages/schema/src/zero.ts`.
 
 `scalarDefault(kind)` is the scalar-only version. Used by `createDoc` when no initial state is supplied, by migrations' `setDefault` primitive, and by tests.
 
-The materializer is the canonical consumer of zeros for CRDT substrates — the `zeroInterpreter` is the single source of truth, and zeros are no longer eagerly written during CRDT initialization. CRDT initialization routines (`ensureRootContainer`, `ensureContainers`) now only create structural containers.
+The materializer is the canonical consumer of zeros for every shadow-carrying substrate: the `zeroInterpreter` is the single source of truth, and no substrate writes zeros into its native state. CRDT initialization routines (`ensureRootContainer`, `ensureContainers`) only create structural containers, and the ephemeral substrate's tree starts empty. A zero is what the fold answers for a node nothing has been written to, or one decay has retired.
 
 ---
 
@@ -938,11 +1005,13 @@ Every mutation flows through a `Change` — a discriminated union identified by 
 |--------|-------|-----------------|---------|
 | `"text"` | `{ instructions: TextInstruction[] }` — retain / insert / delete over characters | `positional-ot` | Text CRDTs |
 | `"sequence"` | `{ instructions: SequenceInstruction[] }` — retain / insert / delete over items | `positional-ot` | Lists, movable lists |
-| `"map"` | `{ entries: MapInstruction[] }` — set / delete over keys | `lww-per-key` | Maps, sets |
+| `"map"` | `{ set?, delete?, clear? }` — set / delete over keys, or clear the map | `lww-per-key` | Records, and products' fields |
 | `"tree"` | `{ instructions: TreeInstruction[] }` — create / move / delete nodes | `tree-move` | Trees |
 | `"replace"` | `{ value: unknown }` — overwrite this node | `lww` | Scalars, plain JSON sub-trees |
 | `"increment"` | `{ delta: number }` — counter increment | `additive` | Counters |
 | `"richtext"` | `{ instructions: RichTextInstruction[] }` — retain / insert / delete / format over characters | `positional-ot` | Rich text CRDTs |
+
+**A map change's `clear` is intent, not a key list.** It says every key goes, seen or not, before `delete` and `set` apply, and which keys that reaches is the substrate's merge law to decide. `mapChangeEffects(change, held)` is the single definition of what a map change removes and writes, given the keys a consumer holds: a key named in both `delete` and `set` ends up set, and a clear removes every held key the change does not set. `step`, `invert`, the address table and the Loro and Yjs bridges all read map changes through it, each against its own keys, which is what observed-remove is. The ephemeral substrate is the one reader that does not expand a clear: it raises a horizon over the whole map (see [Deletion](#deletion)). `record.clear()` dispatches the intent every time, even on a record that looks empty.
 
 Note: `TextChange` and `SequenceChange` are parameterizations of the same positional algebra, unified by the `Instruction` type. Both use `retain`/`insert`/`delete` cursor instructions; the only difference is the content type (`string` vs `T[]`). The shared algebra is captured by `foldInstructions`, `transformIndex`, and `advanceAddresses`, which operate on `Instruction` generically.
 
@@ -959,7 +1028,7 @@ The shapes are identical. The substrate's `prepare` pipeline consumes the inboun
 
 For every built-in change type:
 
-- Constructor: `textChange(instructions)`, `sequenceChange(instructions)`, `mapChange(entries)`, etc.
+- Constructor: `textChange(instructions)`, `sequenceChange(instructions)`, `mapChange(set, delete)`, `mapClearChange(set)`, etc.
 - Type guard: `isTextChange(change)`, `isSequenceChange(change)`, etc.
 - Pure transformer: `foldInstructions(instructions)`, `advanceIndex(index, instructions)`, `advanceAddresses(addresses, instructions)`.
 
@@ -1046,7 +1115,7 @@ The change algebra `⟨State, Change, step⟩` is extended into a groupoid by `i
 | `increment` | negate amount |
 | `text` | OT inverse: retain → retain, insert → delete, delete → insert (text from pre at preCursor) |
 | `sequence` | OT inverse with deep-cloned items |
-| `map` | restore prior entries; new keys → delete; overwritten keys → set to prior value |
+| `map` | restore prior entries; new keys → delete; overwritten keys → set to prior value; a clear restores every entry held before it |
 | `set` | swap add/remove (set membership equality, not order) |
 | `richtext` | OT inverse with mark restoration |
 | `tree` | per-instruction inverse with pre-state topology lookup; reversed instruction order for LIFO undo |

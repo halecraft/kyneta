@@ -28,7 +28,7 @@ import {
   SUBSTRATE,
   subscribe,
 } from "../index.js"
-import { isStateTuple } from "../substrates/state-tree.js"
+import { decodeTree, isLive, type Live } from "../substrates/state-tree.js"
 
 // ===========================================================================
 // Shared schemas — one per {shape × wrapper} cell
@@ -53,11 +53,11 @@ const RecordNullable = Schema.struct({
 const RecordJson = Schema.struct({ v: Schema.record.json(Schema.number()) })
 
 /** The StateTree as a peer would receive it. */
-function exported(doc: unknown): Record<string, [unknown, number]> {
+function exported(doc: unknown): Record<string, Live> {
   const substrate = (
     doc as Record<symbol, { exportEntirety(): { data: string } }>
   )[SUBSTRATE]
-  return JSON.parse(substrate.exportEntirety().data)
+  return decodeTree(substrate.exportEntirety().data) as Record<string, Live>
 }
 
 // A `.nullable()` field types as `ScalarRef<T | null>`, which exposes no
@@ -139,7 +139,7 @@ describe("state substrate — registers stay atomic", () => {
     inner(doc.v).to.set(2)
 
     const tree = exported(doc)
-    expect(isStateTuple(tree.v)).toBe(true)
+    expect(isLive(tree.v)).toBe(true)
     expect(tree.v?.[0]).toEqual({ from: 1, to: 2 })
   })
 
@@ -149,7 +149,7 @@ describe("state substrate — registers stay atomic", () => {
     inner(doc.v).to.set(2)
 
     const tree = exported(doc)
-    expect(isStateTuple(tree.v)).toBe(true)
+    expect(isLive(tree.v)).toBe(true)
     expect(tree.v?.[0]).toEqual({ from: 1, to: 2 })
   })
 
@@ -168,7 +168,7 @@ describe("state substrate — registers stay atomic", () => {
     inner(doc.v).set("b", 2)
 
     const tree = exported(doc)
-    expect(isStateTuple(tree.v)).toBe(true)
+    expect(isLive(tree.v)).toBe(true)
     expect(tree.v?.[0]).toEqual({ a: 1, b: 2 })
   })
 
@@ -178,7 +178,7 @@ describe("state substrate — registers stay atomic", () => {
     inner(doc.v).set("b", 2)
 
     const tree = exported(doc)
-    expect(isStateTuple(tree.v)).toBe(true)
+    expect(isLive(tree.v)).toBe(true)
     expect(tree.v?.[0]).toEqual({ a: 1, b: 2 })
   })
 })

@@ -58,9 +58,10 @@ describe("ephemeral substrate — field-level LWW through a live Exchange", () =
     expect(docA.alice()).toBeNull()
     expect(docA.bob()).toBeNull()
 
-    // The timestamps should be 0 for structural zeros
-    expect(lastUpdated(docA.alice)).toBe(0)
-    expect(lastUpdated(docA.bob)).toBe(0)
+    // A zero is supplied by the projection, not written, so there is no
+    // timestamp to report until someone writes the field.
+    expect(lastUpdated(docA.alice)).toBeNull()
+    expect(lastUpdated(docA.bob)).toBeNull()
 
     // Alice writes her presence
     batch(docA, d => d.alice.set("online-alice"))
