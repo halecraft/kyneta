@@ -19,6 +19,7 @@ import {
   Schema,
   SYNC_EPHEMERAL,
 } from "@kyneta/schema"
+import { decodeImportBlobMeta } from "loro-crdt"
 import { afterEach, describe, expect, it } from "vitest"
 import { docStatus } from "../doc-status.js"
 import {
@@ -26,6 +27,7 @@ import {
   type ExchangeParams,
   type PeerIdentityInput,
 } from "../exchange.js"
+import { whenHydrated } from "../settle.js"
 import {
   createInMemoryStore,
   InMemoryStore,
@@ -234,49 +236,88 @@ describe("Storage persist + hydrate", () => {
 })
 
 // ---------------------------------------------------------------------------
-// Writes that arrive while another write is in flight
+// Writes requested while another write is in flight
 // ---------------------------------------------------------------------------
 
-/** Wrap a store so appends resolve on a later turn, holding a write open. */
-function slowAppend(inner: Store): Store {
-  return wrapStore(inner, {
+/**
+ * Wrap a store so that, while held, appends wait until released — or fail.
+ * Lets a test decide exactly which writes are in flight when a mutation lands.
+ */
+function gatedAppend(inner: Store) {
+  let held: {
+    promise: Promise<void>
+    resolve: () => void
+    reject: (error: unknown) => void
+  } | null = null
+  const store = wrapStore(inner, {
     append: async (docId, record) => {
-      await new Promise(resolve => setTimeout(resolve, 5))
+      if (held) await held.promise
       return inner.append(docId, record)
     },
   })
+  return {
+    store,
+    hold(): void {
+      let resolve = (): void => {}
+      let reject = (_error: unknown): void => {}
+      const promise = new Promise<void>((res, rej) => {
+        resolve = res
+        reject = rej
+      })
+      held = { promise, resolve, reject }
+    },
+    release(): void {
+      const h = held
+      held = null
+      h?.resolve()
+    },
+    fail(error: unknown): void {
+      const h = held
+      held = null
+      h?.reject(error)
+    },
+  }
+}
+
+/** Let the Runtime's microtask drain dispatch what the last batch did. */
+async function tick(): Promise<void> {
+  await new Promise(resolve => setTimeout(resolve, 0))
+}
+
+/** The entry records stored for a document, in order. */
+function entriesOf(
+  sharedData: InMemoryStoreData,
+  docId: string,
+): (StoreRecord & { kind: "entry" })[] {
+  return (sharedData.records.get(docId) ?? []).filter(
+    (r): r is StoreRecord & { kind: "entry" } => r.kind === "entry",
+  )
 }
 
 describe("a mutation during an in-flight write", () => {
-  it("is queued and persisted, not dropped", async () => {
-    // At most one write per document is in flight at a time; anything that
-    // arrives meanwhile is queued by the store-program and replayed when the
-    // first completes. That only works if the runtime still *offers* it —
-    // computing the delta from the last confirmed version, which during a
-    // write is the version that write started from, not its pending one.
-    //
-    // Returning early for an in-flight write instead looks harmless and is
-    // not: nothing else would ever offer that mutation to the store, so it
-    // would sit unpersisted until some later mutation happened to sweep it up.
+  it("is persisted, not dropped", async () => {
+    // At most one write per document is in flight at a time. A request that
+    // arrives meanwhile is owed, and written once the first lands.
     const sharedData: InMemoryStoreData = {
       records: new Map(),
       metadata: new Map(),
     }
-    const exchange1 = createExchange({
-      id: "server",
-      stores: [slowAppend(createInMemoryStore({ sharedData }))],
-    })
+    const gate = gatedAppend(createInMemoryStore({ sharedData }))
+    const exchange1 = createExchange({ id: "server", stores: [gate.store] })
 
     const doc = exchange1.get("doc-1", SequentialDoc)
     await exchange1.flush()
 
+    gate.hold()
     batch(doc, d => {
       d.title.set("first")
     })
-    // Lands while the write above is still open.
+    await tick() // this write is in flight
     batch(doc, d => {
       d.count.set(99)
     })
+    await tick()
+    gate.release()
     await exchange1.shutdown()
 
     const exchange2 = createExchange({
@@ -289,10 +330,205 @@ describe("a mutation during an in-flight write", () => {
     expect(restored.title()).toBe("first")
     expect(restored.count()).toBe(99)
   })
+
+  it("is persisted when it lands during the document's first write", async () => {
+    // The first write is the whole document, and has no confirmed version
+    // behind it. A mutation landing while it is in flight used to be
+    // discarded — there was no base to diff it against yet — and nothing
+    // offered it again, so a restart found the document without it.
+    const sharedData: InMemoryStoreData = {
+      records: new Map(),
+      metadata: new Map(),
+    }
+    const gate = gatedAppend(createInMemoryStore({ sharedData }))
+    const exchange1 = createExchange({ id: "server", stores: [gate.store] })
+
+    gate.hold()
+    const doc = exchange1.get("doc-1", SequentialDoc)
+    await whenHydrated(doc) // loaded; the first write is now in flight
+    batch(doc, d => {
+      d.title.set("during the first write")
+    })
+    await tick()
+    gate.release()
+    await exchange1.shutdown()
+
+    const exchange2 = createExchange({
+      id: "server",
+      stores: [createInMemoryStore({ sharedData })],
+    })
+    const restored = exchange2.get("doc-1", SequentialDoc)
+    await exchange2.flush()
+
+    expect(restored.title()).toBe("during the first write")
+  })
+
+  it("is written as a delta from what the in-flight write confirmed, repeating none of it", async () => {
+    // The redundancy this guards against: a delta computed when the request
+    // arrived starts from before the in-flight write, so it carries that
+    // write's operations again. With a large in-flight write and a few small
+    // edits behind it, every record after the first used to be as large as
+    // the first.
+    const sharedData: InMemoryStoreData = {
+      records: new Map(),
+      metadata: new Map(),
+    }
+    const gate = gatedAppend(createInMemoryStore({ sharedData }))
+    const exchange1 = createExchange({ id: "server", stores: [gate.store] })
+
+    const doc = exchange1.get("doc-1", CausalDoc)
+    await exchange1.flush()
+    const before = entriesOf(sharedData, "doc-1").length
+
+    gate.hold()
+    batch(doc, d => {
+      d.title.insert(0, "x".repeat(50_000))
+    })
+    await tick() // the large write is now in flight
+    batch(doc, d => {
+      d.title.insert(0, "a")
+    })
+    await tick()
+    batch(doc, d => {
+      d.title.insert(0, "b")
+    })
+    await tick()
+    gate.release()
+    await exchange1.flush()
+
+    // Two records: the large write, and one owed write carrying both edits.
+    const written = entriesOf(sharedData, "doc-1").slice(before)
+    expect(written).toHaveLength(2)
+    const [large, owed] = written.map(e => {
+      const data = e.payload.data
+      if (!(data instanceof Uint8Array)) throw new Error("expected binary")
+      return { data, meta: decodeImportBlobMeta(data, false) }
+    })
+    if (!large || !owed) throw new Error("expected two records")
+
+    // Contiguous: the owed record starts exactly where the large one ends.
+    expect(owed.meta.partialStartVersionVector.toJSON()).toEqual(
+      large.meta.partialEndVersionVector.toJSON(),
+    )
+    expect(owed.data.byteLength).toBeLessThan(1_000)
+
+    await exchange1.shutdown()
+    const exchange2 = createExchange({
+      id: "server",
+      stores: [createInMemoryStore({ sharedData })],
+    })
+    const restored = exchange2.get("doc-1", CausalDoc)
+    await exchange2.flush()
+    expect(restored.title()).toBe(`ba${"x".repeat(50_000)}`)
+  })
+
+  it("covers the in-flight write's changes when that write fails", async () => {
+    // A write owed behind a failed one diffs from where the failed one
+    // started, so it carries both — nothing is lost, and nothing is retried
+    // in a loop.
+    const sharedData: InMemoryStoreData = {
+      records: new Map(),
+      metadata: new Map(),
+    }
+    const gate = gatedAppend(createInMemoryStore({ sharedData }))
+    const errors: unknown[] = []
+    const exchange1 = createExchange({
+      id: "server",
+      stores: [gate.store],
+      onStoreError: (_docId, _op, error) => errors.push(error),
+    })
+
+    const doc = exchange1.get("doc-1", SequentialDoc)
+    await exchange1.flush()
+
+    gate.hold()
+    batch(doc, d => {
+      d.title.set("lost with the failed write?")
+    })
+    await tick()
+    batch(doc, d => {
+      d.count.set(7)
+    })
+    await tick()
+    gate.fail(new Error("disk full"))
+    await exchange1.flush()
+    expect(errors).toHaveLength(1)
+    await exchange1.shutdown()
+
+    const exchange2 = createExchange({
+      id: "server",
+      stores: [createInMemoryStore({ sharedData })],
+    })
+    const restored = exchange2.get("doc-1", SequentialDoc)
+    await exchange2.flush()
+    expect(restored.title()).toBe("lost with the failed write?")
+    expect(restored.count()).toBe(7)
+  })
+})
+
+describe("a failed compaction", () => {
+  it("does not stop later writes from persisting", async () => {
+    // Compaction trims the replica's history before it writes. Queue one
+    // behind a write in flight and let both fail, and the store's confirmed
+    // version is left behind the trimmed base. `exportSince` from there
+    // answers `null` — "cannot", not "nothing" — and reading it as "nothing"
+    // silently wrote no further changes until some later compaction
+    // happened to succeed.
+    const sharedData: InMemoryStoreData = {
+      records: new Map(),
+      metadata: new Map(),
+    }
+    const gate = gatedAppend(createInMemoryStore({ sharedData }))
+    let failReplace = true
+    const exchange1 = createExchange({
+      id: "server",
+      stores: [
+        wrapStore(gate.store, {
+          replace: async (docId, records) => {
+            if (failReplace) {
+              failReplace = false
+              throw new Error("disk full")
+            }
+            return gate.store.replace(docId, records)
+          },
+        }),
+      ],
+      onStoreError: () => {}, // expected here; keep it out of the test output
+    })
+
+    const doc = exchange1.get("doc-1", SequentialDoc)
+    await exchange1.flush()
+    batch(doc, d => {
+      d.title.set("before")
+    })
+    await exchange1.flush()
+
+    gate.hold()
+    batch(doc, d => {
+      d.title.set("trimmed")
+    })
+    await tick() // this write is in flight
+    const compacted = exchange1.compact("doc-1") // trims, then waits its turn
+    gate.fail(new Error("disk full")) // the write fails, then the compaction
+    await compacted
+
+    batch(doc, d => {
+      d.count.set(3)
+    })
+    await exchange1.shutdown()
+
+    const exchange2 = createExchange({
+      id: "server",
+      stores: [createInMemoryStore({ sharedData })],
+    })
+    const restored = exchange2.get("doc-1", SequentialDoc)
+    await exchange2.flush()
+    expect(restored.title()).toBe("trimmed")
+    expect(restored.count()).toBe(3)
+  })
 })
 
 // ---------------------------------------------------------------------------
-
 // Recovering from a failed first write
 // ---------------------------------------------------------------------------
 
@@ -737,7 +973,7 @@ describe("onStoreError callback", () => {
 
     // Create a store that fails on append — currentMeta returns null
     // so hydration takes the "first boot" path, which dispatches
-    // `register` → `persist-append`. The executor calls append(),
+    // `register` → `persist` a `register` write. The executor calls append(),
     // which throws. The executor catches and dispatches `write-failed`.
     // The store-program emits `store-error`. The executor calls onStoreError.
     const failingStore: Store = {

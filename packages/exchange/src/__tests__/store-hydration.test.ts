@@ -187,15 +187,11 @@ describe("Exchange storage persistence", () => {
     // Exactly one entirety (first boot) + one delta (the mutation) — NOT
     // one delta per touched field.
     //
-    // Two mechanisms hold this, and the load has shifted between them.
-    // The multi-field batch here used to produce one changeset per field,
-    // and `#persistIfAdvanced`'s target-version dedup (jj:mrlnmlus) is
-    // what stopped that becoming several identical writes. Since
-    // `@kyneta/schema` 4.0 the batch delivers a single changeset, so the
-    // dedup is no longer what this particular case exercises — the
-    // microtask coalescing in `#dirtyLocalChanges` carries it instead.
-    // Both are still needed for the cases this test does not cover:
-    // several batches, or several documents, inside one tick.
+    // The mutation reaches the store program twice — from the Exchange's
+    // state-advanced listener and from the Runtime's own changeset
+    // subscription. The second request arrives while the first write is in
+    // flight, becomes the write owed after it, and that write finds nothing
+    // past the version just confirmed, so it touches no store.
     expect(entries).toHaveLength(2)
 
     // First entry: base entirety from first boot
@@ -250,19 +246,24 @@ describe("Exchange storage persistence", () => {
     await drain(200)
     await exchangeB.flush()
 
-    // Storage on B should have persisted the import — filter for entry records
+    // B hydrated empty, so its first write is the empty document, and the
+    // import lands while that write is in flight. The import is owed behind
+    // it and written as a delta from it. This test used to expect one entry,
+    // and got it because the import was dropped: a request arriving during
+    // the first write was discarded and nothing offered it again, so a
+    // restart found the document empty.
     const records = await collectAll(backend.loadAll("doc-1"))
-    const entries = records.filter(r => r.kind === "entry")
-    // Should have at least one entry from the network import
-    expect(entries.length).toBeGreaterThanOrEqual(1)
+    const entries = records.filter(
+      (r): r is StoreRecord & { kind: "entry" } => r.kind === "entry",
+    )
+    expect(entries.map(e => e.payload.kind)).toEqual(["entirety", "since"])
 
-    // jj:mrlnmlus — Exchange B is in `Replicate()` (headless) mode, which
-    // never wires a changefeed subscription (`#wireDocSubscription` is
-    // only called for interpret-mode docs), so the new local-changeset
-    // self-persist path added in Phase 2 cannot double-fire here. Remote
-    // import persistence flows exclusively through the Synchronizer's
-    // own `state-advanced` effect, untouched by this plan.
-    expect(entries).toHaveLength(1)
+    const replica = plainReplicaFactory.createEmpty()
+    for (const entry of entries) replica.merge(entry.payload)
+    expect(JSON.parse(replica.exportEntirety().data as string)).toEqual({
+      title: "from A",
+      count: 1,
+    })
 
     await exchangeA.shutdown()
     await exchangeB.shutdown()

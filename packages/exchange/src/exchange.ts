@@ -1023,7 +1023,8 @@ export class Exchange {
    * stored payloads with the trimmed entirety.
    *
    * This is a convenience that composes `leastCommonVersion()` →
-   * `replica.advance()` → `exportEntirety()` → store-program `compact`.
+   * `replica.advance()` → store-program `compact`, whose write exports the
+   * trimmed entirety when it starts.
    *
    * If no peers are synced, the full document is projected (all
    * history discarded). The undershoot contract ensures the base
@@ -1041,13 +1042,7 @@ export class Exchange {
 
     runtime.replica.advance(target)
 
-    await this.#runtime.compact(
-      docId,
-      runtime.replica,
-      runtime.replicaFactory,
-      runtime.syncMode,
-      runtime.schemaHash,
-    )
+    await this.#runtime.compact(docId)
   }
 
   /**

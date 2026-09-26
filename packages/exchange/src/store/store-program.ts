@@ -1,16 +1,14 @@
 // store-program — pure Mealy machine for store coordination.
 //
-// The store-program replaces imperative store coordination code in the
-// Exchange. It is a pure Program<StoreInput, StoreModel, StoreEffect>
-// run via createObservableProgram at the Exchange level. The Exchange's
-// executor interprets effects as actual I/O (persist-append → store.append,
-// persist-replace → store.replace, persist-delete → store.delete).
+// The program decides *which* write a document owes and *from what base*. It
+// never holds a payload. The executor (in `Runtime`) reads the replica at the
+// moment a write starts, so every write is computed against the version the
+// store has confirmed by then — including everything the previous write
+// carried.
 //
 // Every transition is pure: new Map for each model, no mutation.
 
-import type { SubstratePayload } from "@kyneta/schema"
 import type { DocId } from "@kyneta/transport"
-import type { StoreMeta, StoreRecord } from "./store.js"
 
 // ---------------------------------------------------------------------------
 // Program — local definition matching @kyneta/machine's Program type.
@@ -31,48 +29,35 @@ type Program<Msg, Model, Fx> = {
 /**
  * A phase with no write in flight — what a `writing` phase falls back to.
  *
- * The two cases are genuinely different, and keeping them apart is the whole
- * point of this type. `unwritten` means the store has never acknowledged
- * anything for this document, so there is no version to compute a delta
- * against; `idle` means it has, and names the version.
+ * `unwritten` means the store has never acknowledged anything for this
+ * document, so there is no version to compute a delta against; `idle` means
+ * it has, and names the version.
  */
 export type SettledPhase =
   | { status: "unwritten" }
   | { status: "idle"; version: string }
 
 /**
+ * A write requested while another is in flight.
+ *
+ * Not a payload: a request, resolved against the replica when the write in
+ * flight ends. `compact` absorbs `advance`, because a compaction writes the
+ * whole document as it stands when it starts, which includes any advance.
+ */
+export type Owed = "advance" | "compact"
+
+/**
  * Where a document's persistence has got to.
  *
  * A write in flight carries `revertTo` — the settled phase to return to if it
- * fails. That is what keeps this to three variants rather than four. The
- * alternative, a separate status for "writing with nothing to fall back to",
- * would silently fall out of every `status === "writing"` check in this file,
- * including the two that decide whether a completed write is acknowledged at
- * all. Carrying the fallback inside the phase means the decision is made once,
- * where the write starts and the caller knows which case it is in, rather than
- * being re-derived at each place a write can end.
+ * fails — and `owed`, the one further write requested since it started. Two
+ * requests during one write collapse into one follow-up, so the number of
+ * store records is bounded by the number of writes, not by the number of
+ * mutations that arrived during them.
  */
 export type DocPhase =
   | SettledPhase
-  | {
-      status: "writing"
-      revertTo: SettledPhase
-      pendingVersion: string
-      queued?: QueuedInput[]
-    }
-
-type QueuedInput =
-  | {
-      type: "state-advanced"
-      delta: SubstratePayload
-      newVersion: string
-    }
-  | {
-      type: "compact"
-      meta: StoreMeta
-      entirety: SubstratePayload
-      newVersion: string
-    }
+  | { status: "writing"; revertTo: SettledPhase; owed?: Owed }
 
 // ---------------------------------------------------------------------------
 // StoreModel
@@ -87,38 +72,39 @@ export type StoreModel = {
 // ---------------------------------------------------------------------------
 
 export type StoreInput =
-  | {
-      type: "register"
-      docId: DocId
-      meta: StoreMeta
-      entirety: SubstratePayload
-      version: string
-    }
+  /** Hydration found the document in no store. */
+  | { type: "register"; docId: DocId }
+  /** Hydration loaded the document at `version`. */
   | { type: "hydrated"; docId: DocId; version: string }
-  | {
-      type: "state-advanced"
-      docId: DocId
-      delta: SubstratePayload
-      newVersion: string
-    }
-  | {
-      type: "compact"
-      docId: DocId
-      meta: StoreMeta
-      entirety: SubstratePayload
-      newVersion: string
-    }
+  /** The document's state may have moved past what the store holds. */
+  | { type: "state-advanced"; docId: DocId }
+  /** Replace what the store holds with the document as it now stands. */
+  | { type: "compact"; docId: DocId }
   | { type: "destroy"; docId: DocId }
   | { type: "write-succeeded"; docId: DocId; version: string }
   | { type: "write-failed"; docId: DocId; error: unknown }
 
 // ---------------------------------------------------------------------------
-// StoreEffect — data effects interpreted by the Exchange executor
+// StoreEffect — data effects interpreted by the Runtime executor
 // ---------------------------------------------------------------------------
 
+/**
+ * The write to perform. The executor reads the replica when it starts it.
+ *
+ * - `register` — meta and the whole document, appended. For a document the
+ *   store has never acknowledged.
+ * - `since` — the delta since `version`, the store's confirmed version,
+ *   appended. If the document has not moved past it there is nothing to write,
+ *   and the executor reports success at `version` without touching the store.
+ * - `compact` — meta and the whole document, replacing what is stored.
+ */
+export type Write =
+  | { kind: "register" }
+  | { kind: "since"; version: string }
+  | { kind: "compact" }
+
 export type StoreEffect =
-  | { type: "persist-append"; docId: DocId; records: StoreRecord[] }
-  | { type: "persist-replace"; docId: DocId; records: StoreRecord[] }
+  | { type: "persist"; docId: DocId; write: Write }
   | { type: "persist-delete"; docId: DocId }
   | {
       type: "store-error"
@@ -146,70 +132,64 @@ function withDoc(
 }
 
 /**
- * The caller is responsible for splicing the returned phase into the model.
+ * Begin the write `owed` from `settled`.
  *
- * `settled` is where the replayed write reverts to if it also fails — carried
- * through rather than rebuilt, so a queued write inherits the same fallback the
- * write it was queued behind had.
- *
- * A queued `state-advanced` cannot arrive here with `settled.status ===
- * "unwritten"`. Queueing only happens while a write is in flight, and
- * `state-advanced` is dropped rather than queued for a document with nothing
- * written (see the `state-advanced` case). So the pairing is unreachable, and
- * there is no branch for it below.
+ * The only place a write starts, so the one place that decides its kind. An
+ * `advance` from `unwritten` has no confirmed version to diff against, so it
+ * writes the whole document; that is also how a failed first write is retried.
  */
-function processQueued(
+function start(
   docId: DocId,
   settled: SettledPhase,
-  queuedList: QueuedInput[],
-): [DocPhase, ...StoreEffect[]] {
-  // We process all queued inputs into a single batch of effects
-  // But wait, StoreProgram expects a single phase transition.
-  // If we have multiple queued inputs, we can only process the FIRST one,
-  // and keep the rest in the queue!
+  owed: Owed,
+): [DocPhase, StoreEffect] {
+  const write: Write =
+    owed === "compact"
+      ? { kind: "compact" }
+      : settled.status === "idle"
+        ? { kind: "since", version: settled.version }
+        : { kind: "register" }
+  return [
+    { status: "writing", revertTo: settled },
+    { type: "persist", docId, write },
+  ]
+}
 
-  const queued = queuedList[0]
-  const remaining = queuedList.slice(1)
+/** Least upper bound of two requests: `compact` absorbs `advance`. */
+function join(a: Owed | undefined, b: Owed): Owed {
+  return a === "compact" || b === "compact" ? "compact" : "advance"
+}
 
-  switch (queued.type) {
-    case "state-advanced": {
-      const phase: DocPhase = {
-        status: "writing",
-        revertTo: settled,
-        pendingVersion: queued.newVersion,
-        queued: remaining.length > 0 ? remaining : undefined,
-      }
-      const effect: StoreEffect = {
-        type: "persist-append",
-        docId,
-        records: [
-          { kind: "entry", payload: queued.delta, version: queued.newVersion },
-        ],
-      }
-      return [phase, effect]
-    }
-    case "compact": {
-      const phase: DocPhase = {
-        status: "writing",
-        revertTo: settled,
-        pendingVersion: queued.newVersion,
-        queued: remaining.length > 0 ? remaining : undefined,
-      }
-      const effect: StoreEffect = {
-        type: "persist-replace",
-        docId,
-        records: [
-          { kind: "meta", meta: queued.meta },
-          {
-            kind: "entry",
-            payload: queued.entirety,
-            version: queued.newVersion,
-          },
-        ],
-      }
-      return [phase, effect]
-    }
+/**
+ * Request a write: start it if nothing is in flight, otherwise owe it.
+ */
+function request(
+  model: StoreModel,
+  docId: DocId,
+  existing: DocPhase,
+  owed: Owed,
+): [StoreModel, ...StoreEffect[]] {
+  if (existing.status !== "writing") {
+    const [phase, effect] = start(docId, existing, owed)
+    return [withDoc(model, docId, phase), effect]
   }
+  const phase: DocPhase = { ...existing, owed: join(existing.owed, owed) }
+  return [withDoc(model, docId, phase)]
+}
+
+/**
+ * The write in flight has ended and the document settles at `settled`. Start
+ * what is owed, if anything, in the same transition — so a document with a
+ * write owed never passes through a settled phase, and `flush()` cannot
+ * observe it as quiescent in between.
+ */
+function settle(
+  docId: DocId,
+  existing: Extract<DocPhase, { status: "writing" }>,
+  settled: SettledPhase,
+): [DocPhase, ...StoreEffect[]] {
+  if (!existing.owed) return [settled]
+  return start(docId, settled, existing.owed)
 }
 
 // ---------------------------------------------------------------------------
@@ -221,158 +201,32 @@ export const storeProgram: Program<StoreInput, StoreModel, StoreEffect> = {
 
   update(msg: StoreInput, model: StoreModel): [StoreModel, ...StoreEffect[]] {
     switch (msg.type) {
-      // -------------------------------------------------------------------
-      // register — new doc, first boot
-      // -------------------------------------------------------------------
       case "register": {
-        // Arrives twice for one document, on two different occasions. First
-        // from hydration, when the document is opened and found in no store.
-        // Again from the runtime's persist path if that first write failed —
-        // there is no confirmed version to send a delta against, so a retry
-        // has to be another whole write.
-        //
-        // So this must be correct when a phase already exists, not only when
-        // the document is unknown. Overwriting is right: whatever the previous
-        // phase was, the document is now writing its whole self again.
-        //
-        // Nothing to fall back to either way. If this write fails there is
-        // still no earlier version to recompute a delta from.
-        const phase: DocPhase = {
-          status: "writing",
-          revertTo: { status: "unwritten" },
-          pendingVersion: msg.version,
-        }
-        const effect: StoreEffect = {
-          type: "persist-append",
-          docId: msg.docId,
-          records: [
-            { kind: "meta", meta: msg.meta },
-            {
-              kind: "entry",
-              payload: msg.entirety,
-              version: msg.version,
-            },
-          ],
-        }
-        return [withDoc(model, msg.docId, phase), effect]
+        // A document hydration found nowhere. It has nothing confirmed, so its
+        // first write is the whole document.
+        const existing = model.docs.get(msg.docId) ?? { status: "unwritten" }
+        return request(model, msg.docId, existing, "advance")
       }
 
-      // -------------------------------------------------------------------
-      // hydrated — existing doc loaded from store
-      // -------------------------------------------------------------------
       case "hydrated": {
         const phase: DocPhase = { status: "idle", version: msg.version }
         return [withDoc(model, msg.docId, phase)]
       }
 
-      // -------------------------------------------------------------------
-      // state-advanced — delta to persist
-      // -------------------------------------------------------------------
       case "state-advanced": {
+        // Unknown documents are not ours to write: transient, deferred, or
+        // still hydrating.
         const existing = model.docs.get(msg.docId)
         if (!existing) return [model]
-
-        // A delta is defined relative to a version the store acknowledged. An
-        // `unwritten` document has none, so there is nothing to append this to
-        // and nothing worth queueing — dropping it is the only coherent
-        // answer. Note `compact` below deliberately does the opposite, because
-        // it carries a whole document rather than a difference.
-        if (existing.status === "unwritten") return [model]
-
-        if (existing.status === "idle") {
-          const phase: DocPhase = {
-            status: "writing",
-            revertTo: existing,
-            pendingVersion: msg.newVersion,
-          }
-          const effect: StoreEffect = {
-            type: "persist-append",
-            docId: msg.docId,
-            records: [
-              {
-                kind: "entry",
-                payload: msg.delta,
-                version: msg.newVersion,
-              },
-            ],
-          }
-          return [withDoc(model, msg.docId, phase), effect]
-        }
-
-        // writing — queue. The fallback is inherited, not recomputed: a write
-        // queued behind another reverts to wherever that one would have.
-        const phase: DocPhase = {
-          status: "writing",
-          revertTo: existing.revertTo,
-          pendingVersion: existing.pendingVersion,
-          queued: [
-            ...(existing.queued || []),
-            {
-              type: "state-advanced",
-              delta: msg.delta,
-              newVersion: msg.newVersion,
-            },
-          ],
-        }
-        return [withDoc(model, msg.docId, phase)]
+        return request(model, msg.docId, existing, "advance")
       }
 
-      // -------------------------------------------------------------------
-      // compact — replace entire doc
-      // -------------------------------------------------------------------
       case "compact": {
         const existing = model.docs.get(msg.docId)
-        if (!existing) {
-          return [model]
-        }
-
-        // Unlike `state-advanced`, this writes from an `unwritten` document as
-        // readily as from an `idle` one. A compaction carries the whole
-        // document and its own `meta`, so it needs no base version — it is a
-        // complete write in its own right. `revertTo: existing` says the same
-        // thing for both cases: fall back to wherever we already were.
-        if (existing.status !== "writing") {
-          const phase: DocPhase = {
-            status: "writing",
-            revertTo: existing,
-            pendingVersion: msg.newVersion,
-          }
-          const effect: StoreEffect = {
-            type: "persist-replace",
-            docId: msg.docId,
-            records: [
-              { kind: "meta", meta: msg.meta },
-              {
-                kind: "entry",
-                payload: msg.entirety,
-                version: msg.newVersion,
-              },
-            ],
-          }
-          return [withDoc(model, msg.docId, phase), effect]
-        }
-
-        // writing — queue
-        const phase: DocPhase = {
-          status: "writing",
-          revertTo: existing.revertTo,
-          pendingVersion: existing.pendingVersion,
-          queued: [
-            ...(existing.queued || []),
-            {
-              type: "compact",
-              meta: msg.meta,
-              entirety: msg.entirety,
-              newVersion: msg.newVersion,
-            },
-          ],
-        }
-        return [withDoc(model, msg.docId, phase)]
+        if (!existing) return [model]
+        return request(model, msg.docId, existing, "compact")
       }
 
-      // -------------------------------------------------------------------
-      // destroy — remove doc entirely
-      // -------------------------------------------------------------------
       case "destroy": {
         const effect: StoreEffect = {
           type: "persist-delete",
@@ -381,66 +235,39 @@ export const storeProgram: Program<StoreInput, StoreModel, StoreEffect> = {
         return [withDoc(model, msg.docId, null), effect]
       }
 
-      // -------------------------------------------------------------------
-      // write-succeeded — I/O completed, advance version
-      // -------------------------------------------------------------------
       case "write-succeeded": {
         const existing = model.docs.get(msg.docId)
         if (!existing || existing.status !== "writing") return [model]
-
-        // The store acknowledged this version, so it is now the confirmed
-        // one — whatever the document fell back to before is irrelevant.
-        const settled: SettledPhase = { status: "idle", version: msg.version }
-
-        if (existing.queued) {
-          const [phase, ...effects] = processQueued(
-            msg.docId,
-            settled,
-            existing.queued,
-          )
-          return [withDoc(model, msg.docId, phase), ...effects]
-        }
-
-        return [withDoc(model, msg.docId, settled)]
+        const [phase, ...effects] = settle(msg.docId, existing, {
+          status: "idle",
+          version: msg.version,
+        })
+        return [withDoc(model, msg.docId, phase), ...effects]
       }
 
-      // -------------------------------------------------------------------
-      // write-failed — do NOT advance version (self-healing)
-      // -------------------------------------------------------------------
       case "write-failed": {
+        // Fall back to where this write started. For a document with a
+        // confirmed version the next `since` recomputes from it, covering the
+        // failed write's changes; for one without, the next write is whole
+        // again.
+        //
+        // A failed write with nothing owed is not retried. The next request
+        // retries it, which bounds a persistently failing store to one
+        // attempt per mutation rather than a loop.
         const existing = model.docs.get(msg.docId)
         if (!existing || existing.status !== "writing") return [model]
-
         const errorEffect: StoreEffect = {
           type: "store-error",
           docId: msg.docId,
           operation: "write",
           error: msg.error,
         }
-
-        // Fall back to whatever this write was started from. No branch on
-        // which kind of write failed: that decision was made when the phase
-        // was constructed, by the code that knew whether a confirmed version
-        // existed. For a document that had one, this preserves it so the next
-        // `exportSince` recomputes from the last known-good point. For one
-        // that did not, it returns to `unwritten` — still nothing on disk,
-        // and now say-so rather than an empty string.
-        const settled = existing.revertTo
-
-        if (existing.queued) {
-          const [phase, ...queuedEffects] = processQueued(
-            msg.docId,
-            settled,
-            existing.queued,
-          )
-          return [
-            withDoc(model, msg.docId, phase),
-            errorEffect,
-            ...queuedEffects,
-          ]
-        }
-
-        return [withDoc(model, msg.docId, settled), errorEffect]
+        const [phase, ...effects] = settle(
+          msg.docId,
+          existing,
+          existing.revertTo,
+        )
+        return [withDoc(model, msg.docId, phase), errorEffect, ...effects]
       }
     }
   },
@@ -450,22 +277,18 @@ export const storeProgram: Program<StoreInput, StoreModel, StoreEffect> = {
 // Query helpers
 // ---------------------------------------------------------------------------
 
+/** No write in flight for this document, and none owed. */
+export function isSettled(phase: DocPhase): phase is SettledPhase {
+  return phase.status !== "writing"
+}
+
 /**
- * Is every tracked document quiescent — no store I/O in flight?
- *
- * `flush()` and `shutdown()` both block until this is true, so it has to mean
- * "nothing is still being written", not "every document has status `idle`".
- * Those came to the same thing when `idle` was the only settled status. They
- * do not now: an `unwritten` document has no write outstanding and must
- * satisfy this, or every teardown hangs waiting for a write that will never
- * complete. Only `writing` is busy.
- *
- * The name predates the distinction. It is kept because it is what the callers
- * read, but test the status against `writing` rather than against `idle`.
+ * Is every tracked document settled? `flush()` and `shutdown()` block on this.
+ * An `unwritten` document counts: it has nothing in flight.
  */
-export function allDocsIdle(model: StoreModel): boolean {
+export function allDocsSettled(model: StoreModel): boolean {
   for (const phase of model.docs.values()) {
-    if (phase.status === "writing") return false
+    if (!isSettled(phase)) return false
   }
   return true
 }

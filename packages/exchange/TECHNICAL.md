@@ -463,7 +463,7 @@ Source: `src/synchronizer.ts` → `#wireLocalChanges`, `src/exchange.ts` → cha
 
 Every local mutation — `batch(doc, fn)`, direct writes on a ref, `applyChanges` — flows through the substrate's changefeed. The Synchronizer subscribes once per `DocRuntime` and filters by the structural `replay` flag:
 
-Since `@kyneta/schema` 4.0 that subscription receives **one changeset per transaction**, not one per changed path, and the same holds for a replayed merge — an incoming `offer` touching fifty paths now arrives as one changeset rather than fifty. Two mechanisms in `Runtime` were built when it was one per path, and both are retained: `#dirtyLocalChanges` still coalesces several *batches* and several *documents* within one microtask, and `#persistIfAdvanced`'s target-version dedup still guards any two calls landing before the confirmed version advances. What changed is which of them carries the common case, not whether either is needed.
+Since `@kyneta/schema` 4.0 that subscription receives **one changeset per transaction**, not one per changed path, and the same holds for a replayed merge — an incoming `offer` touching fifty paths now arrives as one changeset rather than fifty. Two mechanisms in `Runtime` were built when it was one per path, and both are retained: `#dirtyLocalChanges` still coalesces several *batches* and several *documents* within one microtask, and the store-program collapses any requests landing during a write into the one write owed after it. What changed is which of them carries the common case, not whether either is needed.
 
 ```
 batch(doc, d => d.title.insert(0, "hi"))
@@ -886,8 +886,8 @@ Persistence is driven by a pure Mealy machine: `Program<StoreInput, StoreModel, 
 |-------|---------|
 | `register` | First boot — doc not found in any store during hydration |
 | `hydrated` | Re-boot — doc loaded from a store during hydration |
-| `state-advanced` | Exchange's `onStateAdvanced` callback fires after a local or remote mutation |
-| `compact` | `exchange.compact(docId)` called |
+| `state-advanced` | `Runtime.onStateAdvanced` — after a local or remote mutation. Carries only the `docId`. |
+| `compact` | `exchange.compact(docId)` called. Carries only the `docId`. |
 | `destroy` | `exchange.destroy(docId)` called |
 | `write-succeeded` | Store `.append()` or `.replace()` resolved successfully |
 | `write-failed` | Store `.append()` or `.replace()` rejected |
@@ -896,8 +896,7 @@ Persistence is driven by a pure Mealy machine: `Program<StoreInput, StoreModel, 
 
 | Effect | Executed by shell |
 |--------|-------------------|
-| `persist-append` | Calls `store.append(docId, record)` for each record on each registered store |
-| `persist-replace` | Calls `store.replace(docId, records)` on each registered store |
+| `persist` | Reads the replica, builds the records for its `write`, and appends or replaces them on each registered store |
 | `persist-delete` | Calls `store.delete(docId)` on each registered store |
 | `store-error` | Calls the `onStoreError` callback |
 
@@ -906,8 +905,8 @@ Persistence is driven by a pure Mealy machine: `Program<StoreInput, StoreModel, 
 1. A local mutation or remote merge causes the sync program to emit a `notify/state-advanced` notification carrying the affected `docId`s.
 2. `#accumulateSyncNotification` adds each `docId` to a `Set<DocId>` (`#dirtyStateAdvanced`). The set deduplicates: multiple state advances for the same doc within a single dispatch cycle coalesce into one callback.
 3. At quiescence, `#drainPending` calls `#drainStateAdvanced`, which snapshots the dirty set, clears it, and fires each registered listener once per doc.
-4. The Exchange's listener forwards the `docId` to `Runtime.onStateAdvanced` and does nothing else. The Runtime resolves the document's replica from its own `#docCache`, computes `exportSince(confirmedVersion)` to get the delta, and dispatches `{ type: 'state-advanced', docId, delta, newVersion }` into the store-program. The listener used to be handed the replica from the Synchronizer's `DocRuntime` and pass it back in — the same object the Runtime had put there, fetched only to return it.
-5. The store-program emits `persist-append` effects; the Exchange's effect interpreter calls `store.append(docId, record)` on each registered store and feeds back `write-succeeded` or `write-failed`.
+4. The Exchange's listener forwards the `docId` to `Runtime.onStateAdvanced`, which dispatches `{ type: 'state-advanced', docId }` into the store-program and does nothing else.
+5. The store-program decides which write, if any, to start, and emits a `persist` effect naming it. The Runtime's executor resolves the replica from its own `#docCache`, builds the records, calls the stores, and feeds back `write-succeeded` or `write-failed`.
 
 **Transient documents are never offered to a store.** A document whose `SyncMode` carries `durability: "transient"` — today that is anything bound through `ephemeral` — is never registered, never hydrated, and never deleted. `Runtime` decides this once, in `#usesStores(syncMode)`, and every storage decision consults it: which substrate to build, how to initialise the readiness latch, whether to hydrate on creation, and whether to dispatch a delete on `destroy`.
 
@@ -926,13 +925,27 @@ Two asymmetries in the same area, both deliberate:
 |-------|-------|
 | `unwritten` | The store has never acknowledged anything for this document. Reached when its first write failed. |
 | `idle` | A version is confirmed, and named. Ready for the next write. |
-| `writing` | I/O in flight, with an optional queued input and a `revertTo`. |
+| `writing` | I/O in flight, with a `revertTo` and at most one write `owed` after it. |
 
 `unwritten` and `idle` are the two *settled* phases — nothing in flight — and `writing` carries one of them as `revertTo`: where to fall back if this write fails. Storing the fallback rather than deriving it is what keeps `writing` a single phase. The alternative, a separate status for "writing with nothing behind it", would fall silently out of every `status === "writing"` check, including the one that acknowledges a *successful* write — leaving the document mid-write forever and hanging every `flush()`.
 
-Note that `allDocsIdle`, which `flush()` and `shutdown()` block on, means "no I/O in flight" rather than "status is `idle`". An `unwritten` document satisfies it.
+`flush()` and `shutdown()` block on `allDocsSettled` — no document `writing`. An `unwritten` document satisfies it.
 
-When a `state-advanced` arrives during `writing`, the delta is queued (latest-wins) and replayed on `write-succeeded`. This ensures at most one in-flight write per document. On an `unwritten` document it is dropped instead: a delta has no base version to apply against. `compact` on the same document does write, because it carries the whole document and its own `meta` rather than a difference.
+**The program holds no payloads.** It decides which write a document owes and from what base; the executor reads the replica when that write *starts*. A `persist` effect names one of three writes:
+
+| `write` | Records | Store call |
+|---|---|---|
+| `register` | `meta` + the whole document | append |
+| `since`, with the confirmed `version` | the delta since `version` | append |
+| `compact` | `meta` + the whole document | replace |
+
+A request that arrives during `writing` is recorded as `owed` — `advance` or `compact`, with `compact` absorbing `advance` because a compaction writes everything an advance would. Any number of requests during one write collapse into one owed write, started in the same transition as the `write-succeeded` or `write-failed` that ends the first, so a document with a write owed is never observably settled and `flush()` cannot resolve in between.
+
+This is what keeps records disjoint. A delta computed when the request *arrived* would start from the version confirmed before the write in flight, and so repeat every operation that write carries — a record per request, each as large as the write it queued behind. Computed when the owed write *starts*, it begins exactly where the store's confirmed state ends.
+
+An `advance` on an `unwritten` document is a `register` — the whole document again, since there is no confirmed version to diff against. That includes an advance owed behind a first write that is still in flight: it becomes a `since` if that write lands and a `register` if it fails, and is never dropped.
+
+**`null` from `exportSince` is ambiguous**, and the executor does not read it as "nothing". The substrate contract returns `null` both when nothing is new and when `since` is behind the replica's trimmed base. The second happens after a compaction trims history and then fails to write: the document falls back to a confirmed version the replica can no longer diff from. So a `since` write first compares versions — equal means nothing to write, and the executor reports success at `version` without touching a store — and otherwise appends the delta, or the whole document when the delta cannot be computed.
 
 **Self-healing version tracking.** The store-program's confirmed version only advances on `write-succeeded`. A failed write falls back to whatever the phase it started from was — carried on the `writing` phase as `revertTo`, decided when the write began by the code that knew which case it was in. Temporary store failures (disk full, `QuotaExceededError` on IndexedDB, a network blip on a remote store) therefore recover on the next write, without data loss.
 
@@ -942,12 +955,12 @@ Recovery takes one of two shapes, and which one depends on whether anything was 
 
 | Failed write | Falls back to | Next write |
 |---|---|---|
-| incremental (`state-advanced`, `compact`) | `idle` at the last confirmed version | `exportSince` recomputes the full delta from that point |
+| incremental (`since`, `compact`) | `idle` at the last confirmed version | a `since` from that point, covering the failed write's changes |
 | the document's first (`register`) | `unwritten` | a fresh `register` carrying the whole document |
 
 The second exists because a delta is defined relative to a version the store acknowledged, and a first write has none. Without the distinction there is nothing to recompute from, and the document would stay unpersisted until the process restarted — which is what `version: ""` used to cause, by making "no confirmed version" indistinguishable from "a confirmed version" at the type level.
 
-The retry is driven by the *runtime*, from the next mutation (`Runtime.#persistIfAdvanced`), rather than by the program re-emitting its own failed effect. That keeps it bounded — one attempt per mutation against a persistently failing store, rather than a loop — and keeps the program a pure function of its inputs. Applications that want a different policy have `onStoreError`.
+A failed write is retried only when something asks for a write: the write already owed, if there is one, or the next mutation. The program never re-emits its own failed effect. That keeps it bounded — one attempt per request against a persistently failing store, rather than a loop. Applications that want a different policy have `onStoreError`.
 
 ### `onStoreError` callback
 
@@ -958,14 +971,12 @@ The retry is driven by the *runtime*, from the next mutation (`Runtime.#persistI
 Every local mutation and every remote `offer` merge drives the same persistence path. The pipeline (from quiescence drain to durable write):
 
 1. The Synchronizer's `#drainStateAdvanced` fires the Exchange's listener with a `docId` whose state advanced during the just-completed dispatch cycle.
-2. The listener reads the store-program's confirmed version for the doc (`phase.version`).
-3. It calls `replica.exportSince(confirmedVersion)` to compute the delta since the last persisted point. If the version didn't actually advance (deduplication guard), it returns early.
-4. It dispatches `{ type: 'state-advanced', docId, delta, newVersion }` into the store-program.
-5. The store-program emits a `persist-append` effect with the delta as an `entry` record.
-6. The effect interpreter fans out `store.append(docId, record)` to each registered store.
-7. On success, feeds `write-succeeded` back into the store-program, which advances the confirmed version.
+2. The listener calls `Runtime.onStateAdvanced(docId)`, which dispatches `{ type: 'state-advanced', docId }` into the store-program.
+3. If no write is in flight, the store-program emits `persist` with a `since` write from the confirmed version; otherwise it records the advance as owed.
+4. The executor reads the replica, computes `exportSince(confirmedVersion)`, and fans out `store.append(docId, record)` to each registered store.
+5. On success it feeds `write-succeeded` back, which advances the confirmed version and starts any owed write from there.
 
-Because the dirty set coalesces multiple advances per doc per dispatch cycle, a burst of rapid local edits produces at most one `state-advanced` dispatch (and therefore one write) per quiescence point. This unifies the persistence path: `exportSince` returns entirety or delta as appropriate, and the store's `append` semantic handles both.
+Because the dirty set coalesces multiple advances per doc per dispatch cycle, and the store-program collapses requests made during a write, a burst of edits produces at most one write in flight and one owed behind it, however long the burst.
 
 ### What `Store` is NOT
 

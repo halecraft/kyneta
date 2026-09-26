@@ -4,39 +4,21 @@
 // asserts on the resulting [StoreModel, ...StoreEffect[]] tuples. No I/O,
 // no mocks — pure state transitions.
 
-import type { SubstratePayload } from "@kyneta/schema"
 import type { DocId } from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
-import type { StoreMeta } from "../store.js"
 import {
-  allDocsIdle,
+  allDocsSettled,
   type DocPhase,
   type StoreEffect,
   type StoreInput,
   type StoreModel,
   storeProgram,
+  type Write,
 } from "../store-program.js"
 
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
-
-const plainMeta: StoreMeta = {
-  replicaType: ["plain", 1, 0] as const,
-  syncMode: {
-    writerModel: "serialized" as const,
-    durability: "persistent" as const,
-  },
-  schemaHash: "test-hash",
-}
-
-function fakePayload(label: string): SubstratePayload {
-  return { kind: "entirety" as const, encoding: "json" as const, data: label }
-}
-
-function fakeDelta(label: string): SubstratePayload {
-  return { kind: "since" as const, encoding: "json" as const, data: label }
-}
 
 /** Feed a single input and return the result tuple. */
 function step(
@@ -46,6 +28,16 @@ function step(
   return storeProgram.update(msg, model)
 }
 
+/** Feed inputs in order, returning the final model and the last effects. */
+function run(
+  model: StoreModel,
+  ...msgs: StoreInput[]
+): [StoreModel, ...StoreEffect[]] {
+  let result: [StoreModel, ...StoreEffect[]] = [model]
+  for (const msg of msgs) result = step(result[0], msg)
+  return result
+}
+
 /** Extract the DocPhase for a given docId, asserting it exists. */
 function getPhase(model: StoreModel, docId: DocId): DocPhase {
   const phase = model.docs.get(docId)
@@ -53,901 +45,356 @@ function getPhase(model: StoreModel, docId: DocId): DocPhase {
   return phase
 }
 
+function persist(write: Write, docId: DocId = "doc-1"): StoreEffect {
+  return { type: "persist", docId, write }
+}
+
+const init = storeProgram.init[0]
+const hydrated = (version: string): StoreInput => ({
+  type: "hydrated",
+  docId: "doc-1",
+  version,
+})
+const advanced: StoreInput = { type: "state-advanced", docId: "doc-1" }
+const compact: StoreInput = { type: "compact", docId: "doc-1" }
+const register: StoreInput = { type: "register", docId: "doc-1" }
+const succeeded = (version: string): StoreInput => ({
+  type: "write-succeeded",
+  docId: "doc-1",
+  version,
+})
+const failed = (error: unknown = new Error("io")): StoreInput => ({
+  type: "write-failed",
+  docId: "doc-1",
+  error,
+})
+
+/** `doc-1` idle at `v1`, with a `since v1` write in flight. */
+function writingFromV1(): StoreModel {
+  return run(init, hydrated("v1"), advanced)[0]
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 describe("storeProgram", () => {
-  // -----------------------------------------------------------------------
-  // 1. init
-  // -----------------------------------------------------------------------
   it("init — model has empty docs map, no effects", () => {
     const [model, ...effects] = storeProgram.init
     expect(model.docs.size).toBe(0)
     expect(effects).toHaveLength(0)
   })
 
-  // -----------------------------------------------------------------------
-  // 2. register
-  // -----------------------------------------------------------------------
-  it("register — emits persist-append with meta + entry, doc transitions to writing", () => {
-    const [initModel] = storeProgram.init
-    const [model, ...effects] = step(initModel, {
-      type: "register",
-      docId: "doc-1",
-      meta: plainMeta,
-      entirety: fakePayload("initial-state"),
-      version: "v1",
-    })
+  it("hydrated — idle at the loaded version, no effects", () => {
+    const [model, ...effects] = step(init, hydrated("v3"))
+    expect(getPhase(model, "doc-1")).toEqual({ status: "idle", version: "v3" })
+    expect(effects).toEqual([])
+  })
 
-    const phase = getPhase(model, "doc-1")
-    expect(phase).toEqual({
+  it("register — writes the whole document, reverting to unwritten", () => {
+    const [model, ...effects] = step(init, register)
+    expect(getPhase(model, "doc-1")).toEqual({
       status: "writing",
       revertTo: { status: "unwritten" },
-      pendingVersion: "v1",
     })
-
-    expect(effects).toHaveLength(1)
-    const fx = effects[0]
-    if (!fx) throw new Error("expected effect")
-    expect(fx.type).toBe("persist-append")
-    expect(fx.docId).toBe("doc-1")
-
-    const records = (fx as Extract<StoreEffect, { type: "persist-append" }>)
-      .records
-    expect(records).toHaveLength(2)
-    expect(records[0]).toEqual({ kind: "meta", meta: plainMeta })
-    expect(records[1]).toEqual({
-      kind: "entry",
-      payload: fakePayload("initial-state"),
-      version: "v1",
-    })
+    expect(effects).toEqual([persist({ kind: "register" })])
   })
 
   // -----------------------------------------------------------------------
-  // 3. hydrated
+  // Requests
   // -----------------------------------------------------------------------
-  it("hydrated — doc transitions to idle, no effects", () => {
-    const [initModel] = storeProgram.init
-    const [model, ...effects] = step(initModel, {
-      type: "hydrated",
-      docId: "doc-1",
-      version: "v3",
-    })
 
-    const phase = getPhase(model, "doc-1")
-    expect(phase).toEqual({ status: "idle", version: "v3" })
-    expect(effects).toHaveLength(0)
-  })
-
-  // -----------------------------------------------------------------------
-  // 4. state-advanced while idle
-  // -----------------------------------------------------------------------
-  it("state-advanced while idle — emits persist-append with entry, transitions to writing", () => {
-    const [initModel] = storeProgram.init
-    // Set up an idle doc
-    const [idleModel] = step(initModel, {
-      type: "hydrated",
-      docId: "doc-1",
-      version: "v1",
-    })
-
-    const [model, ...effects] = step(idleModel, {
-      type: "state-advanced",
-      docId: "doc-1",
-      delta: fakeDelta("delta-1"),
-      newVersion: "v2",
-    })
-
-    const phase = getPhase(model, "doc-1")
-    expect(phase).toEqual({
+  it("state-advanced while idle — writes since the confirmed version", () => {
+    const [model, ...effects] = run(init, hydrated("v1"), advanced)
+    expect(getPhase(model, "doc-1")).toEqual({
       status: "writing",
       revertTo: { status: "idle", version: "v1" },
-      pendingVersion: "v2",
     })
-
-    expect(effects).toHaveLength(1)
-    const fx = effects[0]
-    if (!fx) throw new Error("expected effect")
-    expect(fx.type).toBe("persist-append")
-    expect(fx.docId).toBe("doc-1")
-
-    const records = (fx as Extract<StoreEffect, { type: "persist-append" }>)
-      .records
-    expect(records).toEqual([
-      { kind: "entry", payload: fakeDelta("delta-1"), version: "v2" },
-    ])
+    expect(effects).toEqual([persist({ kind: "since", version: "v1" })])
   })
 
-  // -----------------------------------------------------------------------
-  // 5. state-advanced while writing
-  // -----------------------------------------------------------------------
-  it("state-advanced while writing — queues, no effects, pendingVersion updated", () => {
-    const [initModel] = storeProgram.init
-    const [idleModel] = step(initModel, {
-      type: "hydrated",
-      docId: "doc-1",
-      version: "v1",
-    })
-    // Transition to writing
-    const [writingModel] = step(idleModel, {
-      type: "state-advanced",
-      docId: "doc-1",
-      delta: fakeDelta("delta-1"),
-      newVersion: "v2",
-    })
-
-    // Now another state-advanced arrives while writing
-    const [model, ...effects] = step(writingModel, {
-      type: "state-advanced",
-      docId: "doc-1",
-      delta: fakeDelta("delta-2"),
-      newVersion: "v3",
-    })
-
-    const phase = getPhase(model, "doc-1")
-    expect(phase.status).toBe("writing")
-    expect(phase).toEqual({
+  it("compact while idle — writes a compaction", () => {
+    const [model, ...effects] = run(init, hydrated("v1"), compact)
+    expect(getPhase(model, "doc-1")).toEqual({
       status: "writing",
       revertTo: { status: "idle", version: "v1" },
-      pendingVersion: "v2",
-      queued: [
-        {
-          type: "state-advanced",
-          delta: fakeDelta("delta-2"),
-          newVersion: "v3",
-        },
-      ],
     })
-    expect(effects).toHaveLength(0)
+    expect(effects).toEqual([persist({ kind: "compact" })])
   })
 
-  // -----------------------------------------------------------------------
-  // 6. write-succeeded
-  // -----------------------------------------------------------------------
-  it("write-succeeded — version advances to pendingVersion, transitions to idle", () => {
-    const [initModel] = storeProgram.init
-    const [idleModel] = step(initModel, {
-      type: "hydrated",
-      docId: "doc-1",
-      version: "v1",
-    })
-    const [writingModel] = step(idleModel, {
-      type: "state-advanced",
-      docId: "doc-1",
-      delta: fakeDelta("delta-1"),
-      newVersion: "v2",
-    })
-
-    const [model, ...effects] = step(writingModel, {
-      type: "write-succeeded",
-      docId: "doc-1",
-      version: "v2",
-    })
-
-    const phase = getPhase(model, "doc-1")
-    expect(phase).toEqual({ status: "idle", version: "v2" })
-    expect(effects).toHaveLength(0)
-  })
-
-  // -----------------------------------------------------------------------
-  // 7. write-succeeded with queued state-advanced
-  // -----------------------------------------------------------------------
-  it("write-succeeded with queued state-advanced — processes queued, emits persist-append", () => {
-    const [initModel] = storeProgram.init
-    const [idleModel] = step(initModel, {
-      type: "hydrated",
-      docId: "doc-1",
-      version: "v1",
-    })
-    const [writingModel] = step(idleModel, {
-      type: "state-advanced",
-      docId: "doc-1",
-      delta: fakeDelta("delta-1"),
-      newVersion: "v2",
-    })
-    // Queue a second state-advanced
-    const [queuedModel] = step(writingModel, {
-      type: "state-advanced",
-      docId: "doc-1",
-      delta: fakeDelta("delta-2"),
-      newVersion: "v3",
-    })
-
-    const [model, ...effects] = step(queuedModel, {
-      type: "write-succeeded",
-      docId: "doc-1",
-      version: "v2",
-    })
-
-    // Should now be writing again with the queued input
-    const phase = getPhase(model, "doc-1")
-    expect(phase).toEqual({
-      status: "writing",
-      revertTo: { status: "idle", version: "v2" }, // advanced to pendingVersion from previous write
-      pendingVersion: "v3",
-    })
-
-    expect(effects).toHaveLength(1)
-    const fx = effects[0]
-    if (!fx) throw new Error("expected effect")
-    expect(fx.type).toBe("persist-append")
-    expect(fx.docId).toBe("doc-1")
-    expect(
-      (fx as Extract<StoreEffect, { type: "persist-append" }>).records,
-    ).toEqual([{ kind: "entry", payload: fakeDelta("delta-2"), version: "v3" }])
-  })
-
-  // -----------------------------------------------------------------------
-  // 8. write-succeeded with queued compact
-  // -----------------------------------------------------------------------
-  it("write-succeeded with queued compact — processes queued, emits persist-replace", () => {
-    const [initModel] = storeProgram.init
-    const [idleModel] = step(initModel, {
-      type: "hydrated",
-      docId: "doc-1",
-      version: "v1",
-    })
-    const [writingModel] = step(idleModel, {
-      type: "state-advanced",
-      docId: "doc-1",
-      delta: fakeDelta("delta-1"),
-      newVersion: "v2",
-    })
-    // Queue a compact while writing
-    const [queuedModel] = step(writingModel, {
-      type: "compact",
-      docId: "doc-1",
-      meta: plainMeta,
-      entirety: fakePayload("compacted-state"),
-      newVersion: "v3",
-    })
-
-    const [model, ...effects] = step(queuedModel, {
-      type: "write-succeeded",
-      docId: "doc-1",
-      version: "v2",
-    })
-
-    const phase = getPhase(model, "doc-1")
-    expect(phase).toEqual({
-      status: "writing",
-      revertTo: { status: "idle", version: "v2" },
-      pendingVersion: "v3",
-    })
-
-    expect(effects).toHaveLength(1)
-    const fx = effects[0]
-    if (!fx) throw new Error("expected effect")
-    expect(fx.type).toBe("persist-replace")
-    expect(fx.docId).toBe("doc-1")
-    expect(
-      (fx as Extract<StoreEffect, { type: "persist-replace" }>).records,
-    ).toEqual([
-      { kind: "meta", meta: plainMeta },
-      {
-        kind: "entry",
-        payload: fakePayload("compacted-state"),
-        version: "v3",
-      },
-    ])
-  })
-
-  // -----------------------------------------------------------------------
-  // 9. write-failed
-  // -----------------------------------------------------------------------
-  it("write-failed — version does NOT advance (self-healing), emits store-error, transitions to idle", () => {
-    const [initModel] = storeProgram.init
-    const [idleModel] = step(initModel, {
-      type: "hydrated",
-      docId: "doc-1",
-      version: "v1",
-    })
-    const [writingModel] = step(idleModel, {
-      type: "state-advanced",
-      docId: "doc-1",
-      delta: fakeDelta("delta-1"),
-      newVersion: "v2",
-    })
-
-    const testError = new Error("disk full")
-    const [model, ...effects] = step(writingModel, {
-      type: "write-failed",
-      docId: "doc-1",
-      error: testError,
-    })
-
-    // Version does NOT advance — stays at v1
-    const phase = getPhase(model, "doc-1")
-    expect(phase).toEqual({ status: "idle", version: "v1" })
-
-    expect(effects).toHaveLength(1)
-    const fx = effects[0]
-    if (!fx) throw new Error("expected effect")
-    expect(fx.type).toBe("store-error")
-    expect(fx.docId).toBe("doc-1")
-    expect(
-      (fx as Extract<StoreEffect, { type: "store-error" }>).operation,
-    ).toBe("write")
-    expect((fx as Extract<StoreEffect, { type: "store-error" }>).error).toBe(
-      testError,
-    )
-  })
-
-  // -----------------------------------------------------------------------
-  // 10. write-failed with queued input
-  // -----------------------------------------------------------------------
-  it("write-failed with queued input — processes queued at old version", () => {
-    const [initModel] = storeProgram.init
-    const [idleModel] = step(initModel, {
-      type: "hydrated",
-      docId: "doc-1",
-      version: "v1",
-    })
-    const [writingModel] = step(idleModel, {
-      type: "state-advanced",
-      docId: "doc-1",
-      delta: fakeDelta("delta-1"),
-      newVersion: "v2",
-    })
-    // Queue another state-advanced
-    const [queuedModel] = step(writingModel, {
-      type: "state-advanced",
-      docId: "doc-1",
-      delta: fakeDelta("delta-2"),
-      newVersion: "v3",
-    })
-
-    const testError = new Error("transient failure")
-    const [model, ...effects] = step(queuedModel, {
-      type: "write-failed",
-      docId: "doc-1",
-      error: testError,
-    })
-
-    // Queued input processed at old version (v1, not v2)
-    const phase = getPhase(model, "doc-1")
-    expect(phase.status).toBe("writing")
-    expect(phase).toEqual({
-      status: "writing",
-      revertTo: { status: "idle", version: "v1" }, // old version — write-failed does NOT advance
-      pendingVersion: "v3",
-    })
-
-    // First effect is the store-error, second is the queued persist-append
-    expect(effects).toHaveLength(2)
-    expect(effects[0]?.type).toBe("store-error")
-    expect(effects[1]?.type).toBe("persist-append")
-    expect(effects[1]?.docId).toBe("doc-1")
-    expect(
-      (effects[1] as Extract<StoreEffect, { type: "persist-append" }>).records,
-    ).toEqual([{ kind: "entry", payload: fakeDelta("delta-2"), version: "v3" }])
-  })
-
-  // -----------------------------------------------------------------------
-  // 11. compact while idle
-  // -----------------------------------------------------------------------
-  it("compact while idle — emits persist-replace, transitions to writing", () => {
-    const [initModel] = storeProgram.init
-    const [idleModel] = step(initModel, {
-      type: "hydrated",
-      docId: "doc-1",
-      version: "v5",
-    })
-
-    const [model, ...effects] = step(idleModel, {
-      type: "compact",
-      docId: "doc-1",
-      meta: plainMeta,
-      entirety: fakePayload("compacted"),
-      newVersion: "v6",
-    })
-
-    const phase = getPhase(model, "doc-1")
-    expect(phase).toEqual({
-      status: "writing",
-      revertTo: { status: "idle", version: "v5" },
-      pendingVersion: "v6",
-    })
-
-    expect(effects).toHaveLength(1)
-    const fx = effects[0]
-    if (!fx) throw new Error("expected effect")
-    expect(fx.type).toBe("persist-replace")
-    expect(fx.docId).toBe("doc-1")
-    expect(
-      (fx as Extract<StoreEffect, { type: "persist-replace" }>).records,
-    ).toEqual([
-      { kind: "meta", meta: plainMeta },
-      { kind: "entry", payload: fakePayload("compacted"), version: "v6" },
-    ])
-  })
-
-  // -----------------------------------------------------------------------
-  // 12. compact while writing
-  // -----------------------------------------------------------------------
-  it("compact while writing — queues, no effects", () => {
-    const [initModel] = storeProgram.init
-    const [idleModel] = step(initModel, {
-      type: "hydrated",
-      docId: "doc-1",
-      version: "v1",
-    })
-    const [writingModel] = step(idleModel, {
-      type: "state-advanced",
-      docId: "doc-1",
-      delta: fakeDelta("delta-1"),
-      newVersion: "v2",
-    })
-
-    const [model, ...effects] = step(writingModel, {
-      type: "compact",
-      docId: "doc-1",
-      meta: plainMeta,
-      entirety: fakePayload("compacted"),
-      newVersion: "v3",
-    })
-
-    const phase = getPhase(model, "doc-1")
-    expect(phase).toEqual({
-      status: "writing",
-      revertTo: { status: "idle", version: "v1" },
-      pendingVersion: "v2",
-      queued: [
-        {
-          type: "compact",
-          meta: plainMeta,
-          entirety: fakePayload("compacted"),
-          newVersion: "v3",
-        },
-      ],
-    })
-    expect(effects).toHaveLength(0)
-  })
-
-  // -----------------------------------------------------------------------
-  // 13. destroy
-  // -----------------------------------------------------------------------
-  it("destroy — removes doc from model, emits persist-delete", () => {
-    const [initModel] = storeProgram.init
-    const [idleModel] = step(initModel, {
-      type: "hydrated",
-      docId: "doc-1",
-      version: "v1",
-    })
-
-    const [model, ...effects] = step(idleModel, {
-      type: "destroy",
-      docId: "doc-1",
-    })
-
-    expect(model.docs.has("doc-1")).toBe(false)
-    expect(model.docs.size).toBe(0)
-
-    expect(effects).toHaveLength(1)
-    expect(effects[0]).toEqual({ type: "persist-delete", docId: "doc-1" })
-  })
-
-  // -----------------------------------------------------------------------
-  // 14. destroy while writing
-  // -----------------------------------------------------------------------
-  it("destroy while writing — removes doc, emits persist-delete", () => {
-    const [initModel] = storeProgram.init
-    const [idleModel] = step(initModel, {
-      type: "hydrated",
-      docId: "doc-1",
-      version: "v1",
-    })
-    const [writingModel] = step(idleModel, {
-      type: "state-advanced",
-      docId: "doc-1",
-      delta: fakeDelta("delta-1"),
-      newVersion: "v2",
-    })
-
-    const [model, ...effects] = step(writingModel, {
-      type: "destroy",
-      docId: "doc-1",
-    })
-
-    expect(model.docs.has("doc-1")).toBe(false)
-    expect(effects).toHaveLength(1)
-    expect(effects[0]).toEqual({ type: "persist-delete", docId: "doc-1" })
-  })
-
-  // -----------------------------------------------------------------------
-  // 15. allDocsIdle
-  // -----------------------------------------------------------------------
-  describe("allDocsIdle", () => {
-    it("true when docs map is empty", () => {
-      const [initModel] = storeProgram.init
-      expect(allDocsIdle(initModel)).toBe(true)
-    })
-
-    it("true when all docs are idle", () => {
-      const [initModel] = storeProgram.init
-      const [m1] = step(initModel, {
-        type: "hydrated",
-        docId: "doc-1",
-        version: "v1",
-      })
-      const [m2] = step(m1, {
-        type: "hydrated",
-        docId: "doc-2",
-        version: "v2",
-      })
-
-      expect(allDocsIdle(m2)).toBe(true)
-    })
-
-    it("false when any doc is writing", () => {
-      const [initModel] = storeProgram.init
-      const [m1] = step(initModel, {
-        type: "hydrated",
-        docId: "doc-1",
-        version: "v1",
-      })
-      const [m2] = step(m1, {
-        type: "hydrated",
-        docId: "doc-2",
-        version: "v2",
-      })
-      // Transition doc-1 to writing
-      const [m3] = step(m2, {
-        type: "state-advanced",
-        docId: "doc-1",
-        delta: fakeDelta("delta"),
-        newVersion: "v3",
-      })
-
-      expect(allDocsIdle(m3)).toBe(false)
-    })
-  })
-
-  // -----------------------------------------------------------------------
-  // 16. unknown doc for write-succeeded
-  // -----------------------------------------------------------------------
-  it("write-succeeded for unknown doc — returns model unchanged", () => {
-    const [initModel] = storeProgram.init
-    const [model, ...effects] = step(initModel, {
-      type: "write-succeeded",
-      docId: "nonexistent",
-      version: "v1",
-    })
-
-    expect(model).toBe(initModel)
-    expect(effects).toHaveLength(0)
-  })
-
-  it("write-succeeded for idle doc — returns model unchanged", () => {
-    const [initModel] = storeProgram.init
-    const [idleModel] = step(initModel, {
-      type: "hydrated",
-      docId: "doc-1",
-      version: "v1",
-    })
-
-    const [model, ...effects] = step(idleModel, {
-      type: "write-succeeded",
-      docId: "doc-1",
-      version: "v1",
-    })
-
-    expect(model).toBe(idleModel)
-    expect(effects).toHaveLength(0)
-  })
-
-  // -----------------------------------------------------------------------
-  // Additional edge cases
-  // -----------------------------------------------------------------------
-
-  it("write-failed for unknown doc — returns model unchanged", () => {
-    const [initModel] = storeProgram.init
-    const [model, ...effects] = step(initModel, {
-      type: "write-failed",
-      docId: "nonexistent",
-      error: new Error("nope"),
-    })
-
-    expect(model).toBe(initModel)
-    expect(effects).toHaveLength(0)
-  })
-
-  it("state-advanced for unknown doc — returns model unchanged", () => {
-    const [initModel] = storeProgram.init
-    const [model, ...effects] = step(initModel, {
-      type: "state-advanced",
-      docId: "nonexistent",
-      delta: fakeDelta("orphan"),
-      newVersion: "v1",
-    })
-
-    expect(model).toBe(initModel)
-    expect(effects).toHaveLength(0)
-  })
-
-  it("compact for unknown doc — returns model unchanged", () => {
-    const [initModel] = storeProgram.init
-    const [model, ...effects] = step(initModel, {
-      type: "compact",
-      docId: "nonexistent",
-      meta: plainMeta,
-      entirety: fakePayload("orphan"),
-      newVersion: "v1",
-    })
-
-    expect(model).toBe(initModel)
-    expect(effects).toHaveLength(0)
-  })
-
-  it("queued compact appends to queued state-advanced", () => {
-    const [initModel] = storeProgram.init
-    const [idleModel] = step(initModel, {
-      type: "hydrated",
-      docId: "doc-1",
-      version: "v1",
-    })
-    const [writingModel] = step(idleModel, {
-      type: "state-advanced",
-      docId: "doc-1",
-      delta: fakeDelta("delta-1"),
-      newVersion: "v2",
-    })
-    // Queue a state-advanced
-    const [queuedDelta] = step(writingModel, {
-      type: "state-advanced",
-      docId: "doc-1",
-      delta: fakeDelta("delta-2"),
-      newVersion: "v3",
-    })
-    // Append queue with a compact
-    const [queuedCompact] = step(queuedDelta, {
-      type: "compact",
-      docId: "doc-1",
-      meta: plainMeta,
-      entirety: fakePayload("compacted"),
-      newVersion: "v4",
-    })
-
-    const phase = getPhase(queuedCompact, "doc-1")
-    expect(phase.status).toBe("writing")
-    if (phase.status === "writing") {
-      expect(phase.queued).toEqual([
-        {
-          type: "state-advanced",
-          delta: fakeDelta("delta-2"),
-          newVersion: "v3",
-        },
-        {
-          type: "compact",
-          meta: plainMeta,
-          entirety: fakePayload("compacted"),
-          newVersion: "v4",
-        },
-      ])
-      expect(phase.pendingVersion).toBe("v2")
+  it("state-advanced and compact for an unknown doc — model unchanged", () => {
+    for (const msg of [advanced, compact]) {
+      const [model, ...effects] = step(init, msg)
+      expect(model).toBe(init)
+      expect(effects).toEqual([])
     }
   })
 
-  it("model immutability — original model is not mutated", () => {
-    const [initModel] = storeProgram.init
-    const originalSize = initModel.docs.size
-
-    step(initModel, {
-      type: "hydrated",
-      docId: "doc-1",
-      version: "v1",
-    })
-
-    // Original model is untouched
-    expect(initModel.docs.size).toBe(originalSize)
-    expect(initModel.docs.has("doc-1")).toBe(false)
-  })
-
-  it("register then write-succeeded — full lifecycle to idle", () => {
-    const [initModel] = storeProgram.init
-
-    const [registered] = step(initModel, {
-      type: "register",
-      docId: "doc-1",
-      meta: plainMeta,
-      entirety: fakePayload("initial"),
-      version: "v1",
-    })
-
-    expect(getPhase(registered, "doc-1").status).toBe("writing")
-
-    const [succeeded] = step(registered, {
-      type: "write-succeeded",
-      docId: "doc-1",
-      version: "v1",
-    })
-
-    const phase = getPhase(succeeded, "doc-1")
-    expect(phase).toEqual({ status: "idle", version: "v1" })
-  })
-
-  it("write-failed with queued compact — error + persist-replace emitted", () => {
-    const [initModel] = storeProgram.init
-    const [idleModel] = step(initModel, {
-      type: "hydrated",
-      docId: "doc-1",
-      version: "v1",
-    })
-    const [writingModel] = step(idleModel, {
-      type: "state-advanced",
-      docId: "doc-1",
-      delta: fakeDelta("delta-1"),
-      newVersion: "v2",
-    })
-    // Queue a compact
-    const [queuedModel] = step(writingModel, {
-      type: "compact",
-      docId: "doc-1",
-      meta: plainMeta,
-      entirety: fakePayload("compacted"),
-      newVersion: "v3",
-    })
-
-    const testError = new Error("io error")
-    const [model, ...effects] = step(queuedModel, {
-      type: "write-failed",
-      docId: "doc-1",
-      error: testError,
-    })
-
-    // Should be writing again from old version
-    const phase = getPhase(model, "doc-1")
-    expect(phase).toEqual({
+  it("state-advanced while writing — owes an advance, emits nothing", () => {
+    const [model, ...effects] = step(writingFromV1(), advanced)
+    expect(getPhase(model, "doc-1")).toEqual({
       status: "writing",
       revertTo: { status: "idle", version: "v1" },
-      pendingVersion: "v3",
+      owed: "advance",
     })
+    expect(effects).toEqual([])
+  })
 
-    // store-error first, then persist-replace for the queued compact
-    expect(effects).toHaveLength(2)
-    expect(effects[0]?.type).toBe("store-error")
-    expect(effects[1]?.type).toBe("persist-replace")
-    expect(
-      (effects[1] as Extract<StoreEffect, { type: "persist-replace" }>).records,
-    ).toEqual([
-      { kind: "meta", meta: plainMeta },
-      { kind: "entry", payload: fakePayload("compacted"), version: "v3" },
+  it("many requests during one write collapse into one owed write", () => {
+    const [once] = step(writingFromV1(), advanced)
+    const [many] = run(writingFromV1(), advanced, advanced, advanced)
+    expect(many.docs.get("doc-1")).toEqual(once.docs.get("doc-1"))
+  })
+
+  it("compact absorbs advance, in either order", () => {
+    const [a] = run(writingFromV1(), advanced, compact)
+    const [b] = run(writingFromV1(), compact, advanced)
+    for (const model of [a, b]) {
+      const phase = getPhase(model, "doc-1")
+      expect(phase.status === "writing" && phase.owed).toBe("compact")
+    }
+  })
+
+  // -----------------------------------------------------------------------
+  // Writes landing
+  // -----------------------------------------------------------------------
+
+  it("write-succeeded with nothing owed — idle at the written version", () => {
+    const [model, ...effects] = step(writingFromV1(), succeeded("v2"))
+    expect(getPhase(model, "doc-1")).toEqual({ status: "idle", version: "v2" })
+    expect(effects).toEqual([])
+  })
+
+  it("write-succeeded with an advance owed — the next write diffs from the version just confirmed", () => {
+    // The point of the program. A write owed behind another starts from what
+    // that one confirmed, not from where it started, so the two records carry
+    // disjoint operations.
+    const [model, ...effects] = run(writingFromV1(), advanced, succeeded("v2"))
+    expect(getPhase(model, "doc-1")).toEqual({
+      status: "writing",
+      revertTo: { status: "idle", version: "v2" },
+    })
+    expect(effects).toEqual([persist({ kind: "since", version: "v2" })])
+  })
+
+  it("write-succeeded with a compact owed — compacts", () => {
+    const [model, ...effects] = run(writingFromV1(), compact, succeeded("v2"))
+    expect(getPhase(model, "doc-1")).toEqual({
+      status: "writing",
+      revertTo: { status: "idle", version: "v2" },
+    })
+    expect(effects).toEqual([persist({ kind: "compact" })])
+  })
+
+  it("an owed write starts in the same transition — never observably settled", () => {
+    // `flush()` waits for `allDocsSettled`, and transition listeners run after
+    // each update. A document that settled and then started its owed write in
+    // a second step would let `flush()` resolve with a write still to come.
+    const [owing] = step(writingFromV1(), advanced)
+    const [model] = step(owing, succeeded("v2"))
+    expect(allDocsSettled(model)).toBe(false)
+  })
+
+  it("write-failed with nothing owed — falls back, reports, does not retry", () => {
+    const error = new Error("disk full")
+    const [model, ...effects] = step(writingFromV1(), failed(error))
+    expect(getPhase(model, "doc-1")).toEqual({ status: "idle", version: "v1" })
+    expect(effects).toEqual([
+      { type: "store-error", docId: "doc-1", operation: "write", error },
     ])
+  })
+
+  it("write-failed with an advance owed — the next write diffs from the fallback, covering the failed one", () => {
+    const error = new Error("disk full")
+    const [model, ...effects] = run(writingFromV1(), advanced, failed(error))
+    expect(getPhase(model, "doc-1")).toEqual({
+      status: "writing",
+      revertTo: { status: "idle", version: "v1" },
+    })
+    expect(effects).toEqual([
+      { type: "store-error", docId: "doc-1", operation: "write", error },
+      persist({ kind: "since", version: "v1" }),
+    ])
+  })
+
+  it("write-failed with a compact owed — reports, then compacts", () => {
+    const [, ...effects] = run(writingFromV1(), compact, failed())
+    expect(effects.map(e => e.type)).toEqual(["store-error", "persist"])
+    expect(effects[1]).toEqual(persist({ kind: "compact" }))
+  })
+
+  it("write-succeeded / write-failed for an unknown or settled doc — unchanged", () => {
+    const [idle] = step(init, hydrated("v1"))
+    for (const model of [init, idle]) {
+      for (const msg of [succeeded("v9"), failed()]) {
+        const [next, ...effects] = step(model, msg)
+        expect(next).toBe(model)
+        expect(effects).toEqual([])
+      }
+    }
   })
 
   // -----------------------------------------------------------------------
   // The first write, and what happens when it does not land
   // -----------------------------------------------------------------------
   //
-  // A document's first write is the one with nothing behind it. Every other
-  // write can fall back to the last version the store confirmed; this one has
-  // no such version, and the phase says so with `unwritten` rather than with
-  // an empty string.
+  // A document's first write has nothing behind it. Every other write can
+  // fall back to the last version the store confirmed; this one cannot, and
+  // the phase says so with `unwritten`.
 
-  /** Register `doc-1` and return the model with its first write in flight. */
-  function registered(): StoreModel {
-    const [model] = step(storeProgram.init[0], {
-      type: "register",
-      docId: "doc-1",
-      meta: plainMeta,
-      entirety: fakePayload("initial"),
-      version: "v1",
-    })
-    return model
-  }
+  const registered = (): StoreModel => step(init, register)[0]
+  const unwritten = (): StoreModel => step(registered(), failed())[0]
 
-  it("register → write-failed — falls back to unwritten, still reports the error", () => {
-    const [model, ...effects] = step(registered(), {
-      type: "write-failed",
-      docId: "doc-1",
-      error: new Error("disk full"),
-    })
-
-    // Not `{ status: "idle", version: "" }`. There is no confirmed version to
-    // be idle at, and saying so is what lets the runtime tell "never written"
-    // apart from "written, and here is where from".
+  it("register → write-failed — falls back to unwritten, reports the error", () => {
+    const [model, ...effects] = step(registered(), failed())
     expect(getPhase(model, "doc-1")).toEqual({ status: "unwritten" })
-    expect(effects).toHaveLength(1)
-    expect(effects[0].type).toBe("store-error")
+    expect(effects.map(e => e.type)).toEqual(["store-error"])
   })
 
-  it("register → write-succeeded — reaches idle at the confirmed version", () => {
-    const [model, ...effects] = step(registered(), {
-      type: "write-succeeded",
-      docId: "doc-1",
-      version: "v1",
-    })
-
-    // The happy path through the first write. Cheap, but it guards the case
-    // that would hang every `flush()`: if a successful write ever stopped
-    // being acknowledged, the document would sit in `writing` forever and
-    // `allDocsIdle` would never come true.
+  it("register → write-succeeded — idle at the confirmed version", () => {
+    const [model, ...effects] = step(registered(), succeeded("v1"))
     expect(getPhase(model, "doc-1")).toEqual({ status: "idle", version: "v1" })
-    expect(effects).toHaveLength(0)
+    expect(effects).toEqual([])
   })
 
-  it("allDocsIdle — true for unwritten, false while writing", () => {
-    // `flush()` and `shutdown()` block on this predicate, so it has to mean
-    // "no I/O outstanding" rather than "status is literally idle". An
-    // unwritten document has nothing in flight; treating it as busy would
-    // hang every teardown.
-    expect(allDocsIdle(registered())).toBe(false)
-
-    const [failed] = step(registered(), {
-      type: "write-failed",
-      docId: "doc-1",
-      error: new Error("disk full"),
+  it("unwritten → state-advanced — retries the whole document", () => {
+    // A delta needs a confirmed base and there is none, so an advance on an
+    // unwritten document is a whole write. This is how a failed first write
+    // recovers: from the next mutation, once per mutation.
+    const [model, ...effects] = step(unwritten(), advanced)
+    expect(getPhase(model, "doc-1")).toEqual({
+      status: "writing",
+      revertTo: { status: "unwritten" },
     })
-    expect(allDocsIdle(failed)).toBe(true)
-  })
+    expect(effects).toEqual([persist({ kind: "register" })])
 
-  it("unwritten → register → write-succeeded — recovers to idle", () => {
-    // The recovery path, and that `unwritten` is not a dead end. The runtime
-    // answers a mutation on an unwritten document by dispatching a fresh
-    // `register` carrying the whole document; this is the program's half.
-    const [unwritten] = step(registered(), {
-      type: "write-failed",
-      docId: "doc-1",
-      error: new Error("disk full"),
-    })
-    expect(getPhase(unwritten, "doc-1")).toEqual({ status: "unwritten" })
-
-    const [retrying, ...retryEffects] = step(unwritten, {
-      type: "register",
-      docId: "doc-1",
-      meta: plainMeta,
-      entirety: fakePayload("whole"),
-      version: "v2",
-    })
-    expect(retryEffects).toHaveLength(1)
-    expect(retryEffects[0].type).toBe("persist-append")
-
-    const [recovered] = step(retrying, {
-      type: "write-succeeded",
-      docId: "doc-1",
-      version: "v2",
-    })
+    const [recovered] = step(model, succeeded("v2"))
     expect(getPhase(recovered, "doc-1")).toEqual({
       status: "idle",
       version: "v2",
     })
   })
 
-  it("on an unwritten doc, compact writes but state-advanced does not", () => {
-    // The asymmetry is the point, and it follows from what each input
-    // carries. A compaction is a whole document plus its own meta, so it can
-    // be written with nothing behind it. A state advance is a *delta* — it is
-    // defined relative to a version the store confirmed, and there is none, so
-    // there is nothing coherent to append it to.
-    const [unwritten] = step(registered(), {
-      type: "write-failed",
-      docId: "doc-1",
-      error: new Error("disk full"),
-    })
+  it("unwritten → compact — compacts", () => {
+    const [, ...effects] = step(unwritten(), compact)
+    expect(effects).toEqual([persist({ kind: "compact" })])
+  })
 
-    const [advancedModel, ...advancedEffects] = step(unwritten, {
-      type: "state-advanced",
-      docId: "doc-1",
-      delta: fakeDelta("d1"),
-      newVersion: "v2",
-    })
-    expect(advancedEffects).toHaveLength(0)
-    expect(getPhase(advancedModel, "doc-1")).toEqual({ status: "unwritten" })
+  it("an advance owed behind a failed first write — retries the whole document", () => {
+    const [, ...effects] = run(registered(), advanced, failed())
+    expect(effects.map(e => e.type)).toEqual(["store-error", "persist"])
+    expect(effects[1]).toEqual(persist({ kind: "register" }))
+  })
 
-    const [compactedModel, ...compactEffects] = step(unwritten, {
-      type: "compact",
-      docId: "doc-1",
-      meta: plainMeta,
-      entirety: fakePayload("whole"),
-      newVersion: "v2",
-    })
-    expect(compactEffects).toHaveLength(1)
-    expect(compactEffects[0].type).toBe("persist-replace")
-    expect(getPhase(compactedModel, "doc-1")).toEqual({
-      status: "writing",
-      revertTo: { status: "unwritten" },
-      pendingVersion: "v2",
-    })
+  it("an advance owed behind a successful first write — diffs from it", () => {
+    const [, ...effects] = run(registered(), advanced, succeeded("v1"))
+    expect(effects).toEqual([persist({ kind: "since", version: "v1" })])
+  })
+
+  // -----------------------------------------------------------------------
+  // destroy, allDocsSettled, immutability
+  // -----------------------------------------------------------------------
+
+  it("destroy — removes the doc and deletes, idle or writing", () => {
+    for (const model of [step(init, hydrated("v1"))[0], writingFromV1()]) {
+      const [next, ...effects] = step(model, {
+        type: "destroy",
+        docId: "doc-1",
+      })
+      expect(next.docs.has("doc-1")).toBe(false)
+      expect(effects).toEqual([{ type: "persist-delete", docId: "doc-1" }])
+    }
+  })
+
+  it("allDocsSettled — true unless some doc is writing", () => {
+    expect(allDocsSettled(init)).toBe(true)
+    expect(allDocsSettled(step(init, hydrated("v1"))[0])).toBe(true)
+    expect(allDocsSettled(unwritten())).toBe(true)
+    expect(allDocsSettled(registered())).toBe(false)
+    expect(allDocsSettled(writingFromV1())).toBe(false)
+  })
+
+  it("model immutability — the input model is not mutated", () => {
+    const before = writingFromV1()
+    const snapshot = new Map(before.docs)
+    run(before, advanced, compact, succeeded("v2"), failed(), advanced)
+    expect(before.docs).toEqual(snapshot)
+  })
+
+  // -----------------------------------------------------------------------
+  // The invariant, under arbitrary interleavings
+  // -----------------------------------------------------------------------
+
+  it("every landed write starts exactly where the store's confirmed state ends", () => {
+    // A document whose version is an integer, and a store that appends
+    // `[from, to)` ranges. Mutations, landings and failures interleave in a
+    // seeded random order. Every write that lands must start exactly at the
+    // last confirmed version — no overlap, no gap — and once everything has
+    // drained the store must hold every mutation.
+    let seed = 0x2545f491
+    const random = (): number => {
+      seed ^= seed << 13
+      seed ^= seed >>> 17
+      seed ^= seed << 5
+      return (seed >>> 0) / 2 ** 32
+    }
+
+    for (let trial = 0; trial < 200; trial++) {
+      let model = step(init, hydrated("0"))[0]
+      let current = 0
+      let confirmed = 0
+      let inFlight: { from: number; to: number } | null = null
+
+      const apply = (msg: StoreInput): void => {
+        const [next, ...effects] = step(model, msg)
+        model = next
+        for (const effect of effects) {
+          if (effect.type !== "persist") continue
+          if (effect.write.kind !== "since") {
+            throw new Error(`unexpected ${effect.write.kind} write`)
+          }
+          inFlight = { from: Number(effect.write.version), to: current }
+        }
+      }
+
+      for (let i = 0; i < 60; i++) {
+        const r = random()
+        if (r < 0.5) {
+          current++
+          apply(advanced)
+        } else if (inFlight !== null) {
+          const write: { from: number; to: number } = inFlight
+          inFlight = null
+          if (r < 0.85) {
+            expect(write.from).toBe(confirmed)
+            confirmed = write.to
+            apply(succeeded(String(write.to)))
+          } else {
+            apply(failed())
+          }
+        }
+      }
+
+      // Drain: land everything still in flight or owed.
+      while (inFlight !== null) {
+        const write: { from: number; to: number } = inFlight
+        inFlight = null
+        expect(write.from).toBe(confirmed)
+        confirmed = write.to
+        apply(succeeded(String(write.to)))
+      }
+      // A failure with nothing owed leaves its changes for the next mutation.
+      if (confirmed !== current) {
+        apply(advanced)
+        const write = inFlight as { from: number; to: number } | null
+        if (write === null) throw new Error("expected a write")
+        expect(write.from).toBe(confirmed)
+        confirmed = write.to
+        apply(succeeded(String(write.to)))
+      }
+
+      expect(confirmed).toBe(current)
+      expect(allDocsSettled(model)).toBe(true)
+    }
   })
 })

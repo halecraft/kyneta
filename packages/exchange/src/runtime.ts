@@ -46,14 +46,15 @@ import type { DocId } from "@kyneta/transport"
 import { registerDocSyncMode } from "./doc-meta.js"
 import { planInterpretation } from "./interpret.js"
 import { makeSettleTerm, registerHydrationTerm } from "./settle.js"
-import type { Store, StoreMeta } from "./store/store.js"
+import type { Store, StoreRecord } from "./store/store.js"
 import {
-  allDocsIdle,
-  type DocPhase,
+  allDocsSettled,
+  isSettled,
   type StoreEffect,
   type StoreInput,
   type StoreModel,
   storeProgram,
+  type Write,
 } from "./store/store-program.js"
 
 /** The obligation a no-store document has: none. */
@@ -297,7 +298,7 @@ export class Runtime {
 
   /**
    * Doc-ids with a local (non-replay) changeset pending persistence,
-   * coalesced into one `#persistIfAdvanced` call per doc per microtask
+   * coalesced into one `onStateAdvanced` call per doc per microtask
    * tick — mirrors the Synchronizer's own dirty-set-drained-at-quiescence
    * pattern (`onStateAdvanced`'s doc comment: "Coalescing is intentional:
    * multiple advances within one dispatch cycle produce a single
@@ -311,7 +312,8 @@ export class Runtime {
    * *several separate batches* landing in one microtask, and it collapses
    * across *several documents* at once, neither of which the schema-layer
    * change addresses. A tick that issues three batches would otherwise
-   * export and dispatch three times. Context: jj:mrlnmlus.
+   * write twice: the first batch at once, the other two as the write owed
+   * behind it. Context: jj:mrlnmlus.
    */
   readonly #dirtyLocalChanges = new Set<DocId>()
   #localChangeDrain: Promise<void> | null = null
@@ -350,40 +352,8 @@ export class Runtime {
         storeProgram,
         (effect: StoreEffect, dispatch: (msg: StoreInput) => void) => {
           switch (effect.type) {
-            case "persist-append": {
-              const { docId, records } = effect
-              Promise.all(
-                stores.map(async store => {
-                  for (const record of records) {
-                    await store.append(docId, record)
-                  }
-                }),
-              ).then(
-                () => {
-                  let version = ""
-                  for (const r of records) {
-                    if (r.kind === "entry") version = r.version
-                  }
-                  dispatch({ type: "write-succeeded", docId, version })
-                },
-                error => dispatch({ type: "write-failed", docId, error }),
-              )
-              break
-            }
-            case "persist-replace": {
-              const { docId, records } = effect
-              Promise.all(
-                stores.map(store => store.replace(docId, records)),
-              ).then(
-                () => {
-                  let version = ""
-                  for (const r of records) {
-                    if (r.kind === "entry") version = r.version
-                  }
-                  dispatch({ type: "write-succeeded", docId, version })
-                },
-                error => dispatch({ type: "write-failed", docId, error }),
-              )
+            case "persist": {
+              this.#persist(effect.docId, effect.write, dispatch)
               break
             }
             case "persist-delete": {
@@ -711,15 +681,14 @@ export class Runtime {
 
   /**
    * Called by the Exchange when the Synchronizer reports a doc's state
-   * has advanced (from network sync or local change). Dispatches a
-   * delta-save into the store program.
+   * has advanced (from network sync or local change). Tells the store
+   * program the document may have moved past what the store holds.
    *
-   * No-op if no stores are configured. Delegates to {@link Runtime.#persistIfAdvanced},
-   * which a standalone Runtime (no Exchange) also calls directly from its
-   * own local-changeset subscription — see {@link Runtime.#wireDocSubscription}.
-   * Safe to call redundantly for the same mutation from both paths: the
-   * store-program's confirmed-version dedup means whichever call reaches
-   * it first performs the real write, the other is a no-op. Context: jj:mrlnmlus.
+   * A standalone Runtime (no Exchange) calls this from its own
+   * local-changeset subscription too — see {@link Runtime.#wireDocSubscription}.
+   * Calling it redundantly for the same mutation costs nothing: a request
+   * that arrives while a write is in flight collapses into the one write owed
+   * after it, and that write finds nothing new and touches no store.
    *
    * Carries a `docId` and nothing else. Every hook in {@link RuntimeHooks}
    * reports outward, from the Runtime to whoever wired it up; this is the one
@@ -728,7 +697,7 @@ export class Runtime {
    * from its own cache, which is where the document lives.
    */
   onStateAdvanced(docId: DocId): void {
-    this.#persistIfAdvanced(docId)
+    this.#storeHandle?.dispatch({ type: "state-advanced", docId })
   }
 
   /**
@@ -739,163 +708,110 @@ export class Runtime {
   }
 
   /**
-   * Shared core of {@link Runtime.onStateAdvanced} — exports the delta
-   * since the store program's last confirmed version and dispatches a
-   * `state-advanced` write if the version actually moved. No-op if no
-   * stores are configured, if the doc hasn't finished its initial
-   * registration yet, or if there's nothing new to persist.
-   *
-   * **Transient documents never get past the `!phase` guard**, because they
-   * are never registered with the store-program at all — see `#usesStores`.
-   * That guard is a second line of defence rather than the mechanism: if such
-   * a document ever does acquire a phase, the rule upstream has already failed
-   * and this will not save it. It is not idle work, though — before that rule
-   * existed, every presence mutation ran this method almost to the end and
-   * computed an `exportSince` delta that the substrate always returned `null`
-   * for, back when it could not produce one at all.
-   *
-   * Deduplicates on the *target* version, not just on an empty delta.
-   *
-   * The case that exposed this was a multi-field `batch()` back when
-   * `deliverNotifications` fired one `Changeset` per touched top-level
-   * field: the method was called several times synchronously, before the
-   * first dispatch's async write resolved, and every call computed the
-   * same `exportSince(confirmedVersion)` delta because the store-program's
-   * confirmed version had not advanced yet. An empty-delta check alone
-   * does not catch that — the delta is real, just redundant.
-   *
-   * Since `@kyneta/schema` 4.0 a batch delivers one changeset per
-   * subscriber, so that path no longer produces the repeat. The dedup
-   * stays because the hazard is structural rather than tied to that one
-   * trigger: any two calls landing before the confirmed version advances
-   * recompute the same delta, and re-entrant writes during a drain can
-   * still arrange it. Tracking the already-targeted version — both the
-   * in-flight `pendingVersion` and any versions already sitting in the
-   * `writing`-phase queue — closes it without touching the store-program's
-   * own Mealy-machine transitions. Context: jj:mrlnmlus.
+   * Compact a document: replace what the stores hold with the document as it
+   * stands when the write starts. Resolves once no write is in flight for it.
    */
-  #persistIfAdvanced(docId: DocId): void {
+  async compact(docId: DocId): Promise<void> {
     if (!this.#storeHandle) return
-
-    // Skip a document this Runtime does not hold. A deferred entry has no
-    // replica to export from, and one absent from the cache is no longer
-    // tracked here at all — persisting its state would write something whose
-    // lifecycle nothing local owns.
-    const entry = this.#docCache.get(docId)
-    if (!entry || entry.mode === "deferred") return
-    const { replica, replicaFactory } = entry.readyInfo
-
-    const phase = this.#storeHandle.getState().docs.get(docId)
-    if (!phase) return // Not yet registered — still hydrating
-
-    // The version the store has actually confirmed. While a write is in
-    // flight that is still whatever it was *before* that write started —
-    // `pendingVersion` is not confirmed until `write-succeeded` — which is
-    // exactly what the `writing` phase carries as `revertTo`.
-    //
-    // Deliberately not an early return for `writing`. A mutation arriving
-    // mid-write still has to compute its delta from the confirmed point and
-    // dispatch, so the store-program can queue it and replay it once the
-    // in-flight write lands. Returning here instead would drop that mutation:
-    // nothing else would ever offer it to the store.
-    const settled = phase.status === "writing" ? phase.revertTo : phase
-
-    // Nothing has ever been written for this document — its very first write
-    // failed. There is no confirmed version to compute a delta against, so the
-    // only correct attempt is another *whole* write, and `register` is the
-    // input that carries one. (`compact` is the other, but it means "replace
-    // what is there", and here there is nothing there.)
-    //
-    // Driving the retry from the next mutation, rather than having the
-    // store-program re-emit its own failed effect, is what keeps it bounded: a
-    // persistently failing store gets one attempt per mutation instead of a
-    // loop, and the program stays a function of its inputs.
-    if (phase.status === "unwritten") {
-      this.#storeHandle.dispatch({
-        type: "register",
-        docId,
-        meta: {
-          replicaType: replicaFactory.replicaType,
-          syncMode: entry.readyInfo.syncMode,
-          schemaHash: entry.readyInfo.schemaHash,
-        },
-        entirety: replica.exportEntirety(),
-        version: replica.version().serialize(),
-      })
-      return
-    }
-
-    // The first write is still in flight — `writing`, reverting to
-    // `unwritten`. There is no confirmed version to diff against yet, and
-    // dispatching a second `register` behind the outstanding one would just
-    // duplicate it. Wait for it to land.
-    if (settled.status === "unwritten") return
-
-    const confirmedVersion = settled.version
-
-    const newVersion = replica.version().serialize()
-    if (this.#versionAlreadyTargeted(phase, newVersion)) return
-
-    const sinceVersion = replicaFactory.parseVersion(confirmedVersion)
-    const delta = replica.exportSince(sinceVersion)
-    if (!delta) return // Version didn't actually advance — deduplication
-
-    this.#storeHandle.dispatch({
-      type: "state-advanced",
-      docId,
-      delta,
-      newVersion,
+    this.#storeHandle.dispatch({ type: "compact", docId })
+    await this.#storeHandle.waitForState((s: StoreModel) => {
+      const phase = s.docs.get(docId)
+      return !phase || isSettled(phase)
     })
   }
 
   /**
-   * True if `newVersion` is already the in-flight write's target, or
-   * already queued behind it, for a `"writing"` phase.
+   * Perform one write the store program asked for, and report how it went.
+   *
+   * The replica is read here, when the write starts, not when it was
+   * requested. A write owed behind another therefore diffs from the version
+   * that one confirmed, so no record repeats another's operations.
    */
-  #versionAlreadyTargeted(phase: DocPhase, newVersion: string): boolean {
-    if (phase.status !== "writing") return false
-    if (phase.pendingVersion === newVersion) return true
-    return (
-      phase.queued?.some(
-        q => q.type === "state-advanced" && q.newVersion === newVersion,
-      ) ?? false
+  #persist(
+    docId: DocId,
+    write: Write,
+    dispatch: (msg: StoreInput) => void,
+  ): void {
+    let prepared: { records: StoreRecord[]; version: string }
+    try {
+      prepared = this.#prepareWrite(docId, write)
+    } catch (error) {
+      dispatch({ type: "write-failed", docId, error })
+      return
+    }
+    const { records, version } = prepared
+
+    // Nothing past the confirmed version. The store already holds it all.
+    if (records.length === 0) {
+      dispatch({ type: "write-succeeded", docId, version })
+      return
+    }
+
+    Promise.all(
+      this.#stores.map(async store => {
+        if (write.kind === "compact") {
+          await store.replace(docId, records)
+          return
+        }
+        for (const record of records) await store.append(docId, record)
+      }),
+    ).then(
+      () => dispatch({ type: "write-succeeded", docId, version }),
+      error => dispatch({ type: "write-failed", docId, error }),
     )
   }
 
   /**
-   * Compact a document — replace stored payloads with the trimmed entirety.
+   * The records a write consists of, and the version they bring the store to.
    *
-   * @param docId - The document to compact
-   * @param replica - The replica to compact
-   * @param replicaFactory - The replica's factory (for metadata)
-   * @param syncMode - The sync mode
-   * @param schemaHash - The schema hash
+   * Throws if the document is not held here. The store program only writes
+   * documents this Runtime registered, and `destroy` removes both together,
+   * so that is a broken invariant; it is reported as a failed write rather
+   * than thrown through the dispatcher.
    */
-  async compact(
+  #prepareWrite(
     docId: DocId,
-    replica: ReplicaLike,
-    replicaFactory: ReplicaFactoryLike,
-    syncMode: SyncMode,
-    schemaHash: string,
-  ): Promise<void> {
-    if (!this.#storeHandle) return
-
-    const meta: StoreMeta = {
-      replicaType: replicaFactory.replicaType,
-      syncMode,
-      schemaHash,
+    write: Write,
+  ): { records: StoreRecord[]; version: string } {
+    const entry = this.#docCache.get(docId)
+    if (!entry || entry.mode === "deferred") {
+      throw new Error(`[runtime] cannot write '${docId}': document not held`)
     }
-    this.#storeHandle.dispatch({
-      type: "compact",
-      docId,
-      meta,
-      entirety: replica.exportEntirety(),
-      newVersion: replica.version().serialize(),
-    })
-    await this.#storeHandle.waitForState((s: StoreModel) => {
-      const phase = s.docs.get(docId)
-      return !phase || phase.status === "idle"
-    })
+    const { replica, replicaFactory, syncMode, schemaHash } = entry.readyInfo
+    const current = replica.version()
+    const version = current.serialize()
+
+    const whole = (): StoreRecord[] => [
+      {
+        kind: "meta",
+        meta: { replicaType: replicaFactory.replicaType, syncMode, schemaHash },
+      },
+      { kind: "entry", payload: replica.exportEntirety(), version },
+    ]
+
+    switch (write.kind) {
+      case "register":
+      case "compact":
+        return { records: whole(), version }
+      case "since": {
+        const since = replicaFactory.parseVersion(write.version)
+        // `compare` is only meaningful within one lineage.
+        if (
+          current.lineage === since.lineage &&
+          current.compare(since) === "equal"
+        ) {
+          return { records: [], version: write.version }
+        }
+        // `exportSince` answers `null` both for "nothing new" and for "cannot:
+        // `since` is behind the trimmed base". The second happens once a
+        // compaction has advanced the base past what the store confirmed, and
+        // reading it as the first would drop every change since. So an
+        // advanced replica always writes something: the delta if it can,
+        // otherwise the whole document, appended.
+        const payload = replica.exportSince(since) ?? replica.exportEntirety()
+        return { records: [{ kind: "entry", payload, version }], version }
+      }
+    }
   }
 
   // =========================================================================
@@ -908,7 +824,7 @@ export class Runtime {
   async flush(): Promise<void> {
     await this.#awaitHydrations()
     if (this.#storeHandle) {
-      await this.#storeHandle.waitForState(allDocsIdle)
+      await this.#storeHandle.waitForState(allDocsSettled)
     }
   }
 
@@ -919,7 +835,7 @@ export class Runtime {
   async shutdown(): Promise<void> {
     await this.#awaitHydrations()
     if (this.#storeHandle) {
-      await this.#storeHandle.waitForState(allDocsIdle)
+      await this.#storeHandle.waitForState(allDocsSettled)
       this.#storeHandle.dispose()
     }
     this.#stopTick()
@@ -1069,13 +985,7 @@ export class Runtime {
 
     // ── Divergent tail: hydrate, or be ready now ──
     if (willHydrate) {
-      const hydrationOp = this.#hydrate(
-        docId,
-        substrate,
-        factory.replica,
-        bound.syncMode,
-        bound.schemaHash,
-      ).then(
+      const hydrationOp = this.#hydrate(docId, substrate).then(
         () => {
           resolveHydration(hydration, { ok: true })
           // Claim identity before announcing or subscribing. Registration
@@ -1153,13 +1063,7 @@ export class Runtime {
     this.#docCache.set(docId, entry)
 
     if (willHydrate) {
-      const hydrationOp = this.#hydrate(
-        docId,
-        replica,
-        replicaFactory,
-        syncMode,
-        schemaHash,
-      ).then(
+      const hydrationOp = this.#hydrate(docId, replica).then(
         () => {
           resolveHydration(hydration, { ok: true })
           this.#register(entry)
@@ -1181,9 +1085,8 @@ export class Runtime {
    * self-persists local (non-replay) changesets unconditionally — so a
    * standalone Runtime (no Exchange) durably persists its own mutations
    * without depending on the Exchange's `Synchronizer → onStateAdvanced`
-   * wiring. Safe to run alongside that wiring: `#persistIfAdvanced` is
-   * idempotent per confirmed version, so whichever call reaches the store
-   * program first performs the real write and the other is a no-op.
+   * wiring. Safe to run alongside that wiring: the store program collapses
+   * the two requests, and the write owed by the second finds nothing new.
    *
    * Marks the doc dirty and schedules a microtask-deferred, coalesced
    * drain rather than persisting inline. A single `batch()` used to fire
@@ -1228,7 +1131,7 @@ export class Runtime {
   #drainLocalChanges(): void {
     const docIds = [...this.#dirtyLocalChanges]
     this.#dirtyLocalChanges.clear()
-    for (const docId of docIds) this.#persistIfAdvanced(docId)
+    for (const docId of docIds) this.onStateAdvanced(docId)
   }
 
   /**
@@ -1291,19 +1194,7 @@ export class Runtime {
    * state has. Merging stored data deduplicates the structural ops and
    * applies application ops. No separate replica, no upgrade step.
    */
-  async #hydrate(
-    docId: DocId,
-    replica: ReplicaLike,
-    replicaFactory: ReplicaFactoryLike,
-    syncMode: SyncMode,
-    schemaHash: string,
-  ): Promise<void> {
-    const meta: StoreMeta = {
-      replicaType: replicaFactory.replicaType,
-      syncMode,
-      schemaHash,
-    }
-
+  async #hydrate(docId: DocId, replica: ReplicaLike): Promise<void> {
     // First-hit semantics: use the first store that has data
     let hadStoredEntries = false
     // A store that throws has told us nothing — not "the document is empty",
@@ -1351,24 +1242,18 @@ export class Runtime {
       throw readFailures[0]
     }
 
-    const handle = this.#storeHandle
-    if (handle) {
-      if (hadStoredEntries) {
-        handle.dispatch({
-          type: "hydrated",
-          docId,
-          version: replica.version().serialize(),
-        })
-      } else {
-        handle.dispatch({
-          type: "register",
-          docId,
-          meta,
-          entirety: replica.exportEntirety(),
-          version: replica.version().serialize(),
-        })
-      }
+    // A document destroyed while it loaded is no longer ours to write.
+    // Registering it would put it back on disk.
+    const entry = this.#docCache.get(docId)
+    if (entry?.mode === "deferred" || entry?.readyInfo.replica !== replica) {
+      return
     }
+
+    this.#storeHandle?.dispatch(
+      hadStoredEntries
+        ? { type: "hydrated", docId, version: replica.version().serialize() }
+        : { type: "register", docId },
+    )
   }
 
   // =========================================================================
