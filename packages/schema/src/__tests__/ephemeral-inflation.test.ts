@@ -32,55 +32,28 @@ import {
   batch,
   createRef,
   mapChange,
-  type Ref,
   replaceChange,
   Schema,
   type SchemaNode,
 } from "../index.js"
 import { type Path, RawPath } from "../path.js"
-import type { Substrate } from "../substrate.js"
-import {
-  ephemeralSubstrateFactory,
-  type StateVersion,
-} from "../substrates/ephemeral.js"
+import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
 import {
   applyChangeToStateTree,
   type Container,
-  encodeTree,
-  type Horizon,
   type Live,
   mergeStateTree,
-  type StateTree,
   type WriteStamp,
 } from "../substrates/state-tree.js"
-
-/** A tuple as a peer holds it; the install ordinal is fixed and unread here. */
-const tup = (
-  value: unknown,
-  timestamp: number,
-  deleted?: true,
-): Live | Horizon =>
-  deleted ? [null, timestamp, 1, true] : [value, timestamp, 1]
-
-/** A write's stamp. The ordinal only has to be above a structural zero. */
-const stamp = (notBefore: number): WriteStamp => ({ notBefore, installedAt: 1 })
-
-/**
- * Sorted keys, no install ordinals: what replicates. Two trees that agree
- * here are the same state to every peer, whatever their bookkeeping.
- */
-const canonical = (node: unknown): unknown => {
-  if (node === null || typeof node !== "object" || Array.isArray(node)) {
-    return node
-  }
-  const sorted: Record<string, unknown> = {}
-  for (const key of Object.keys(node as Record<string, unknown>).sort()) {
-    sorted[key] = canonical((node as Record<string, unknown>)[key])
-  }
-  return sorted
-}
-const replicated = (tree: StateTree): unknown =>
-  canonical(JSON.parse(encodeTree(tree)))
+import {
+  digestOf,
+  link,
+  type Peer,
+  peerOf,
+  replicated,
+  stamp,
+  tup,
+} from "./ephemeral-fixtures.js"
 
 /**
  * Apply one local write to a copy of `before`, and return both sides of the
@@ -335,42 +308,11 @@ describe("the wall clock stays a floor, and stays per-leaf", () => {
 
 const Roster = Schema.struct({ peers: Schema.record(Schema.string()) })
 
-interface Peer {
-  readonly substrate: Substrate<StateVersion>
-  readonly doc: Ref<typeof Roster>
-}
-
-function peer(): Peer {
-  const substrate = ephemeralSubstrateFactory.create(Roster)
-  return { substrate, doc: createRef(Roster, substrate) as Ref<typeof Roster> }
-}
-
-/**
- * A one-way delta link, as the exchange runs it: each call ships whatever
- * `from` has installed since the previous call.
- */
-function link(from: Peer, to: Peer): () => void {
-  let cursor = from.substrate.baseVersion()
-  return () => {
-    const payload = from.substrate.exportSince(cursor)
-    if (payload === null) throw new Error("same incarnation; must be served")
-    cursor = from.substrate.version()
-    to.substrate.merge(payload)
-  }
-}
-
-/**
- * The fingerprint the exchange compares to decide two peers agree. Optional on
- * `Substrate`, so absence is refused rather than letting two `undefined`s
- * compare equal.
- */
-function digestOf(p: Peer): string {
-  const digest = p.substrate.digest?.()
-  if (digest === undefined) throw new Error("ephemeral must digest")
-  return digest
-}
-
-function expectConverged(a: Peer, b: Peer, expected: Record<string, string>) {
+function expectConverged(
+  a: Peer<typeof Roster>,
+  b: Peer<typeof Roster>,
+  expected: Record<string, string>,
+) {
   expect(a.doc.peers()).toEqual(expected)
   expect(b.doc.peers()).toEqual(expected)
   expect(digestOf(a)).toBe(digestOf(b))
@@ -381,8 +323,8 @@ describe("a writer's later write wins everywhere", () => {
 
   it("set then delete in one millisecond, synced between", () => {
     vi.spyOn(Date, "now").mockReturnValue(1000)
-    const a = peer()
-    const b = peer()
+    const a = peerOf(Roster)
+    const b = peerOf(Roster)
     const aToB = link(a, b)
 
     batch(a.doc, d => d.peers.set("alice", "x"))
@@ -395,8 +337,8 @@ describe("a writer's later write wins everywhere", () => {
 
   it("set then set in one millisecond, synced between", () => {
     vi.spyOn(Date, "now").mockReturnValue(1000)
-    const a = peer()
-    const b = peer()
+    const a = peerOf(Roster)
+    const b = peerOf(Roster)
     const aToB = link(a, b)
 
     batch(a.doc, d => d.peers.set("alice", "b"))
@@ -411,8 +353,8 @@ describe("a writer's later write wins everywhere", () => {
     // A saw B's write before making its own, so its own is causally later —
     // the wall clocks disagreeing about that is not A's problem to inherit.
     const now = vi.spyOn(Date, "now")
-    const a = peer()
-    const b = peer()
+    const a = peerOf(Roster)
+    const b = peerOf(Roster)
     const aToB = link(a, b)
     const bToA = link(b, a)
 
@@ -432,8 +374,8 @@ describe("a writer's later write wins everywhere", () => {
     // that trades the set-then-delete case for this one rather than fixing
     // the cause.
     vi.spyOn(Date, "now").mockReturnValue(1000)
-    const a = peer()
-    const b = peer()
+    const a = peerOf(Roster)
+    const b = peerOf(Roster)
     const aToB = link(a, b)
 
     batch(a.doc, d => d.peers.set("alice", "x"))

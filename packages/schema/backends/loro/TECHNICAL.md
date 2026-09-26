@@ -236,7 +236,8 @@ batch(doc, d => { d.title.insert(0, "hi"); d.items.push(x) })
   │       ├─ yes: stage the full σ-snapshot at the boundary key
   │       │       (MapDiff for map parents, ListDiff replace for list
   │       │       parents) in the per-CID coalescing buffer
-  │       └─ no:  changeToDiff(...) ─► [ContainerID, Diff][]
+  │       └─ no:  a record clear? → flushBuffer() first
+  │               changeToDiff(...) ─► [ContainerID, Diff][]
   │                ├─ single MapDiff, no JsonCID refs → coalesce
   │                │   into buffer (merge `updated` by spread)
   │                ├─ structural insert (multi-tuple, or single tuple
@@ -282,6 +283,8 @@ These are now routed through `findOpaqueBoundary` like any other boundary write,
 ### The coalescing buffer
 
 When a transaction mutates multiple fields of the same struct (`d.settings.a.set(1); d.settings.b.set(2)`), each prepare produces a single-tuple `[ContainerID, MapDiff]` group with one key in `updated`. The per-CID coalescing buffer merges these via spread so all sibling-key writes flush as a single `doc.applyDiff([[cid, {type:"map", updated:{...}}]])` in `afterBatch`. Last-write-wins per key. Multi-tuple structural inserts (which carry `🦜:JsonContainerID` references that must stay intact for CID resolution) force-flush the buffer first and then apply immediately — never coalesce.
+
+A record clear force-flushes the buffer too, before its diff is computed. A `MapChange` with `clear` removes the keys the container holds when it is applied (`mapChangeEffects` expanded against `LoroMap.keys()`), which is Loro's own observed-remove. A key written earlier in the same batch is still in the buffer rather than the container, so without the flush the clear would miss it, and the coalesced diff would keep a key σ removed. `projectionConformance` pins it: "record set, cleared and set again in one batch" fails without the flush.
 
 The buffer ALSO handles `struct.json` / `list.json` / `record.json` boundary writes: any write into a json subtree stages the full σ snapshot at the boundary segment in the parent CRDT container, instead of generating per-leaf diffs that would have to navigate non-existent nested CRDT containers. Map-shaped parents coalesce with sibling writes; list-shaped parents force-flush and apply a list-replace immediately (ListDiffs are positional, not key-addressed).
 

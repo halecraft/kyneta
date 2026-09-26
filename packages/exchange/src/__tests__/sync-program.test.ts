@@ -6,6 +6,7 @@ import {
   SYNC_EPHEMERAL,
   type SyncMode,
 } from "@kyneta/schema"
+import { defined } from "@kyneta/schema/testing"
 import { describe, expect, it } from "vitest"
 import {
   createSyncUpdate,
@@ -21,12 +22,6 @@ import type { Diagnostic } from "../types.js"
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
-
-/** Assert a value is defined and return it narrowed. */
-function defined<T>(value: T | undefined): T {
-  expect(value).toBeDefined()
-  return value as T
-}
 
 const alice = { peerId: "alice", type: "user" as const }
 const bob = { peerId: "bob", type: "user" as const }
@@ -167,7 +162,9 @@ describe("sync-program", () => {
       ;[model] = addPeer(update, model, "bob", bob)
 
       expect(model.peers.has("bob")).toBe(true)
-      expect(defined(model.peers.get("bob")).identity).toBe(bob)
+      expect(
+        defined(model.peers.get("bob"), 'model.peers.get("bob")').identity,
+      ).toBe(bob)
     })
 
     it("sends present for all existing documents to new peer", () => {
@@ -179,9 +176,9 @@ describe("sync-program", () => {
       const [_m, effects] = addPeer(update, model, "bob", bob)
       const sends = effectsOfType(effects, "send-to-peer")
       expect(sends.length).toBe(1)
-      expect(defined(sends[0]).to).toBe("bob")
-      expect(defined(sends[0]).message.type).toBe("present")
-      const presentMsg = defined(sends[0]).message as any
+      expect(defined(sends[0], "sends[0]").to).toBe("bob")
+      expect(defined(sends[0], "sends[0]").message.type).toBe("present")
+      const presentMsg = defined(sends[0], "sends[0]").message as any
       const docIds = presentMsg.docs.map((d: any) => d.docId)
       expect(docIds).toContain("doc-1")
       expect(docIds).toContain("doc-2")
@@ -198,7 +195,7 @@ describe("sync-program", () => {
       const [, effects] = addPeer(update, model, "bob", bob)
       const sends = effectsOfType(effects, "send-to-peer")
       expect(sends.length).toBe(1)
-      const presentMsg = defined(sends[0]).message as any
+      const presentMsg = defined(sends[0], "sends[0]").message as any
       const docIds = presentMsg.docs.map((d: any) => d.docId)
       expect(docIds).toContain("public-doc")
       expect(docIds).not.toContain("secret-doc")
@@ -225,11 +222,12 @@ describe("sync-program", () => {
         model,
       )
 
-      const syncStateBefore = defined(model.peers.get("bob")).docSyncStates.get(
-        "doc-1",
-      )
+      const syncStateBefore = defined(
+        model.peers.get("bob"),
+        'model.peers.get("bob")',
+      ).docSyncStates.get("doc-1")
       expect(syncStateBefore).toBeDefined()
-      expect(defined(syncStateBefore).status).toBe("synced")
+      expect(defined(syncStateBefore, "syncStateBefore").status).toBe("synced")
 
       // Peer goes unavailable (but NOT gone — state preserved)
       ;[model] = update({ type: "sync/peer-unavailable", peerId: "bob" }, model)
@@ -237,11 +235,12 @@ describe("sync-program", () => {
       // Peer comes back
       ;[model] = addPeer(update, model, "bob", bob)
 
-      const syncStateAfter = defined(model.peers.get("bob")).docSyncStates.get(
-        "doc-1",
-      )
+      const syncStateAfter = defined(
+        model.peers.get("bob"),
+        'model.peers.get("bob")',
+      ).docSyncStates.get("doc-1")
       expect(syncStateAfter).toBeDefined()
-      expect(defined(syncStateAfter).status).toBe("synced")
+      expect(defined(syncStateAfter, "syncStateAfter").status).toBe("synced")
     })
   })
 
@@ -272,7 +271,10 @@ describe("sync-program", () => {
       // Peer should still be in model
       expect(model.peers.has("bob")).toBe(true)
       expect(
-        defined(model.peers.get("bob")).docSyncStates.get("doc-1"),
+        defined(
+          model.peers.get("bob"),
+          'model.peers.get("bob")',
+        ).docSyncStates.get("doc-1"),
       ).toBeDefined()
     })
 
@@ -380,7 +382,10 @@ describe("sync-program", () => {
       ;[model] = ensureDoc(update, model, "doc-1")
 
       expect(model.documents.has("doc-1")).toBe(true)
-      const entry = defined(model.documents.get("doc-1"))
+      const entry = defined(
+        model.documents.get("doc-1"),
+        'model.documents.get("doc-1")',
+      )
       expect(entry.docId).toBe("doc-1")
       expect(entry.mode).toBe("interpret")
       expect(entry.version).toBe("v1")
@@ -399,8 +404,8 @@ describe("sync-program", () => {
         e => (e.message as any).type === "present",
       )
       expect(presentEffect).toBeDefined()
-      expect(defined(presentEffect).to).toContain("bob")
-      expect(defined(presentEffect).to).toContain("carol")
+      expect(defined(presentEffect, "presentEffect").to).toContain("bob")
+      expect(defined(presentEffect, "presentEffect").to).toContain("carol")
     })
 
     it("sends interest to peers for collaborative doc", () => {
@@ -416,7 +421,7 @@ describe("sync-program", () => {
         e => (e.message as any).type === "interest",
       )
       expect(interestEffect).toBeDefined()
-      const msg = defined(interestEffect).message as any
+      const msg = defined(interestEffect, "interestEffect").message as any
       expect(msg.type).toBe("interest")
       expect(msg.docId).toBe("doc-1")
       expect(msg.reciprocate).toBe(true) // collaborative → bidirectional
@@ -437,11 +442,20 @@ describe("sync-program", () => {
       let model = initSync(alice)
       ;[model] = deferDoc(update, model, "doc-1")
 
-      expect(defined(model.documents.get("doc-1")).mode).toBe("deferred")
+      expect(
+        defined(model.documents.get("doc-1"), 'model.documents.get("doc-1")')
+          .mode,
+      ).toBe("deferred")
 
       ;[model] = ensureDoc(update, model, "doc-1", { mode: "interpret" })
-      expect(defined(model.documents.get("doc-1")).mode).toBe("interpret")
-      expect(defined(model.documents.get("doc-1")).version).toBe("v1")
+      expect(
+        defined(model.documents.get("doc-1"), 'model.documents.get("doc-1")')
+          .mode,
+      ).toBe("interpret")
+      expect(
+        defined(model.documents.get("doc-1"), 'model.documents.get("doc-1")')
+          .version,
+      ).toBe("v1")
     })
   })
 
@@ -455,7 +469,10 @@ describe("sync-program", () => {
       ;[model] = deferDoc(update, model, "doc-1")
 
       expect(model.documents.has("doc-1")).toBe(true)
-      const entry = defined(model.documents.get("doc-1"))
+      const entry = defined(
+        model.documents.get("doc-1"),
+        'model.documents.get("doc-1")',
+      )
       expect(entry.mode).toBe("deferred")
       expect(entry.version).toBe("")
     })
@@ -519,8 +536,10 @@ describe("sync-program", () => {
         e => (e.message as any).type === "interest",
       )
       expect(interestSend).toBeDefined()
-      expect(defined(interestSend).to).toBe("bob")
-      expect((defined(interestSend).message as any).docId).toBe("doc-1")
+      expect(defined(interestSend, "interestSend").to).toBe("bob")
+      expect((defined(interestSend, "interestSend").message as any).docId).toBe(
+        "doc-1",
+      )
     })
 
     it("known doc with reciprocate for collaborative: sends interest with reciprocate", () => {
@@ -548,7 +567,9 @@ describe("sync-program", () => {
         e => (e.message as any).type === "interest",
       )
       expect(interestSend).toBeDefined()
-      expect((defined(interestSend).message as any).reciprocate).toBe(true)
+      expect(
+        (defined(interestSend, "interestSend").message as any).reciprocate,
+      ).toBe(true)
     })
 
     it("unknown doc: emits ensure-doc effect", () => {
@@ -570,8 +591,10 @@ describe("sync-program", () => {
 
       const ensureEffects = effectsOfType(effects, "ensure-doc")
       expect(ensureEffects.length).toBe(1)
-      expect(defined(ensureEffects[0]).docId).toBe("unknown-doc")
-      expect(defined(ensureEffects[0]).peer).toBe(bob)
+      expect(defined(ensureEffects[0], "ensureEffects[0]").docId).toBe(
+        "unknown-doc",
+      )
+      expect(defined(ensureEffects[0], "ensureEffects[0]").peer).toBe(bob)
     })
 
     it("unknown doc filtered by canShare: no ensure-doc", () => {
@@ -668,7 +691,9 @@ describe("sync-program", () => {
 
       const warnings = effectsOfType(effects, "diagnostic")
       expect(warnings.length).toBe(1)
-      expect(defined(warnings[0]).message).toContain("replica type mismatch")
+      expect(defined(warnings[0], "warnings[0]").message).toContain(
+        "replica type mismatch",
+      )
 
       // No interest should be sent
       const sends = effectsOfType(effects, "send-to-peer")
@@ -695,7 +720,9 @@ describe("sync-program", () => {
 
       const warnings = effectsOfType(effects, "diagnostic")
       expect(warnings.length).toBe(1)
-      expect(defined(warnings[0]).message).toContain("schema hash mismatch")
+      expect(defined(warnings[0], "warnings[0]").message).toContain(
+        "schema hash mismatch",
+      )
 
       const sends = effectsOfType(effects, "send-to-peer")
       expect(sends.length).toBe(0)
@@ -732,7 +759,7 @@ describe("sync-program", () => {
       // Should send interest (sync proceeds)
       const sends = effectsOfType(effects, "send-to-peer")
       expect(sends.length).toBe(1)
-      expect(defined(sends[0]).message.type).toBe("interest")
+      expect(defined(sends[0], "sends[0]").message.type).toBe("interest")
     })
 
     it("legacy peer without supportedHashes falls back to exact primary hash match", () => {
@@ -761,7 +788,7 @@ describe("sync-program", () => {
 
       const sends = effectsOfType(effects, "send-to-peer")
       expect(sends.length).toBe(1)
-      expect(defined(sends[0]).message.type).toBe("interest")
+      expect(defined(sends[0], "sends[0]").message.type).toBe("interest")
     })
 
     it("disjoint supportedHashes reject sync", () => {
@@ -789,7 +816,9 @@ describe("sync-program", () => {
 
       const warnings = effectsOfType(effects, "diagnostic")
       expect(warnings.length).toBe(1)
-      expect(defined(warnings[0]).message).toContain("schema hash mismatch")
+      expect(defined(warnings[0], "warnings[0]").message).toContain(
+        "schema hash mismatch",
+      )
 
       const sends = effectsOfType(effects, "send-to-peer")
       expect(sends.length).toBe(0)
@@ -817,7 +846,9 @@ describe("sync-program", () => {
 
       const warnings = effectsOfType(effects, "diagnostic")
       expect(warnings.length).toBe(1)
-      expect(defined(warnings[0]).message).toContain("syncMode mismatch")
+      expect(defined(warnings[0], "warnings[0]").message).toContain(
+        "syncMode mismatch",
+      )
 
       const sends = effectsOfType(effects, "send-to-peer")
       expect(sends.length).toBe(0)
@@ -844,7 +875,7 @@ describe("sync-program", () => {
       const diagnostics = effectsOfType(effects, "diagnostic")
       expect(diagnostics.length).toBe(1)
       // Structured — not a substring of `message`. Context: jj:nztkqwpm
-      expect(defined(diagnostics[0])).toMatchObject({
+      expect(defined(diagnostics[0], "diagnostics[0]")).toMatchObject({
         type: "diagnostic",
         code: "schema-hash-mismatch",
         severity: "error",
@@ -895,9 +926,9 @@ describe("sync-program", () => {
 
       const offers = effectsOfType(effects, "send-offer")
       expect(offers.length).toBe(1)
-      expect(defined(offers[0]).to).toBe("bob")
-      expect(defined(offers[0]).docId).toBe("doc-1")
-      expect(defined(offers[0]).sinceVersion).toBe("v0")
+      expect(defined(offers[0], "offers[0]").to).toBe("bob")
+      expect(defined(offers[0], "offers[0]").docId).toBe("doc-1")
+      expect(defined(offers[0], "offers[0]").sinceVersion).toBe("v0")
     })
 
     it("collaborative doc with reciprocate: sends offer + reciprocal interest", () => {
@@ -917,15 +948,17 @@ describe("sync-program", () => {
 
       const offers = effectsOfType(effects, "send-offer")
       expect(offers.length).toBe(1)
-      expect(defined(offers[0]).to).toBe("bob")
+      expect(defined(offers[0], "offers[0]").to).toBe("bob")
 
       const sends = effectsOfType(effects, "send-to-peer")
       const interestSend = sends.find(
         e => (e.message as any).type === "interest",
       )
       expect(interestSend).toBeDefined()
-      expect(defined(interestSend).to).toBe("bob")
-      expect((defined(interestSend).message as any).reciprocate).toBe(false) // prevent loop
+      expect(defined(interestSend, "interestSend").to).toBe("bob")
+      expect(
+        (defined(interestSend, "interestSend").message as any).reciprocate,
+      ).toBe(false) // prevent loop
     })
 
     it("authoritative doc: sends offer", () => {
@@ -944,8 +977,8 @@ describe("sync-program", () => {
 
       const offers = effectsOfType(effects, "send-offer")
       expect(offers.length).toBe(1)
-      expect(defined(offers[0]).docId).toBe("doc-1")
-      expect(defined(offers[0]).sinceVersion).toBe("v0")
+      expect(defined(offers[0], "offers[0]").docId).toBe("doc-1")
+      expect(defined(offers[0], "offers[0]").sinceVersion).toBe("v0")
     })
 
     it("ephemeral doc: sends offer (no sinceVersion)", () => {
@@ -963,8 +996,8 @@ describe("sync-program", () => {
 
       const offers = effectsOfType(effects, "send-offer")
       expect(offers.length).toBe(1)
-      expect(defined(offers[0]).docId).toBe("doc-1")
-      expect(defined(offers[0]).sinceVersion).toBeUndefined()
+      expect(defined(offers[0], "offers[0]").docId).toBe("doc-1")
+      expect(defined(offers[0], "offers[0]").sinceVersion).toBeUndefined()
     })
 
     it("unknown doc: no-op", () => {
@@ -1013,9 +1046,9 @@ describe("sync-program", () => {
 
       const peerState = m2.peers.get("bob")
       expect(peerState).toBeDefined()
-      const docSync = defined(peerState).docSyncStates.get("doc-1")
+      const docSync = defined(peerState, "peerState").docSyncStates.get("doc-1")
       expect(docSync).toBeDefined()
-      expect(defined(docSync).status).toBe("pending")
+      expect(defined(docSync, "docSync").status).toBe("pending")
     })
 
     it("a non-reciprocating interest marks the peer pending and asks the shell to classify its version", () => {
@@ -1037,8 +1070,11 @@ describe("sync-program", () => {
         reciprocate: false,
       })
 
-      const docSync = defined(m2.peers.get("bob")).docSyncStates.get("doc-1")
-      expect(defined(docSync).status).toBe("pending")
+      const docSync = defined(
+        m2.peers.get("bob"),
+        'm2.peers.get("bob")',
+      ).docSyncStates.get("doc-1")
+      expect(defined(docSync, "docSync").status).toBe("pending")
       expect(effects).toContainEqual({
         type: "classify-peer-version",
         docId: "doc-1",
@@ -1066,8 +1102,11 @@ describe("sync-program", () => {
         reciprocate: false,
       })
 
-      const docSync = defined(m2.peers.get("bob")).docSyncStates.get("doc-1")
-      expect(defined(docSync).status).toBe("pending")
+      const docSync = defined(
+        m2.peers.get("bob"),
+        'm2.peers.get("bob")',
+      ).docSyncStates.get("doc-1")
+      expect(defined(docSync, "docSync").status).toBe("pending")
       expect(effects.some(e => e.type === "classify-peer-version")).toBe(true)
     })
 
@@ -1107,8 +1146,13 @@ describe("sync-program", () => {
       )
       expect(hasReconciled(model, "doc-1")).toBe(true)
       expect(
-        defined(defined(model.peers.get("bob")).docSyncStates.get("doc-1"))
-          .status,
+        defined(
+          defined(
+            model.peers.get("bob"),
+            'model.peers.get("bob")',
+          ).docSyncStates.get("doc-1"),
+          'defined(model.peers.get("bob")).docSyncStates.get("doc-1")',
+        ).status,
       ).toBe("synced")
     })
 
@@ -1140,7 +1184,12 @@ describe("sync-program", () => {
       })
 
       expect(
-        defined(defined(m2.peers.get("bob")).docSyncStates.get("doc-1")).status,
+        defined(
+          defined(m2.peers.get("bob"), 'm2.peers.get("bob")').docSyncStates.get(
+            "doc-1",
+          ),
+          'defined(m2.peers.get("bob")).docSyncStates.get("doc-1")',
+        ).status,
       ).toBe("pending")
       expect(effects).toContainEqual({
         type: "classify-peer-version",
@@ -1168,8 +1217,13 @@ describe("sync-program", () => {
         reciprocate: false,
       })
       expect(
-        defined(defined(model.peers.get("bob")).docSyncStates.get("doc-1"))
-          .status,
+        defined(
+          defined(
+            model.peers.get("bob"),
+            'model.peers.get("bob")',
+          ).docSyncStates.get("doc-1"),
+          'defined(model.peers.get("bob")).docSyncStates.get("doc-1")',
+        ).status,
       ).toBe("pending")
 
       const [, effects] = applyUpdate(
@@ -1179,7 +1233,7 @@ describe("sync-program", () => {
       )
       const offers = effectsOfType(effects, "send-offers")
       expect(offers.length).toBe(1)
-      expect(defined(offers[0]).to).toContain("bob")
+      expect(defined(offers[0], "offers[0]").to).toContain("bob")
     })
 
     // The by-id request path. Announcing a doc has always been gated by
@@ -1205,17 +1259,19 @@ describe("sync-program", () => {
       expect(effectsOfType(effects, "send-offer")).toHaveLength(0)
       const replies = effectsOfType(effects, "send-to-peer")
       expect(replies).toHaveLength(1)
-      expect(defined(replies[0]).to).toBe("bob")
-      expect(defined(replies[0]).message).toEqual({
+      expect(defined(replies[0], "replies[0]").to).toBe("bob")
+      expect(defined(replies[0], "replies[0]").message).toEqual({
         type: "vacant",
         docId: "doc-1",
       })
 
       // No sync relationship is recorded. A `synced` entry here would put bob
       // into `getSyncedPeers` for a doc he is never going to receive.
-      expect(defined(m2.peers.get("bob")).docSyncStates.has("doc-1")).toBe(
-        false,
-      )
+      expect(
+        defined(m2.peers.get("bob"), 'm2.peers.get("bob")').docSyncStates.has(
+          "doc-1",
+        ),
+      ).toBe(false)
     })
 
     it("denied by canShare: a collaborative interest with reciprocate gets vacant, not a reciprocal interest", () => {
@@ -1238,7 +1294,9 @@ describe("sync-program", () => {
       expect(effectsOfType(effects, "send-offer")).toHaveLength(0)
       const replies = effectsOfType(effects, "send-to-peer")
       expect(replies).toHaveLength(1)
-      expect((defined(replies[0]).message as any).type).toBe("vacant")
+      expect((defined(replies[0], "replies[0]").message as any).type).toBe(
+        "vacant",
+      )
     })
 
     it("denied by canShare: an interest for a document we do not hold also gets vacant", () => {
@@ -1260,8 +1318,8 @@ describe("sync-program", () => {
       })
 
       expect(effects).toHaveLength(1)
-      expect(defined(effects[0]).type).toBe("send-to-peer")
-      expect((defined(effects[0]) as any).message).toEqual({
+      expect(defined(effects[0], "effects[0]").type).toBe("send-to-peer")
+      expect((defined(effects[0], "effects[0]") as any).message).toEqual({
         type: "vacant",
         docId: "doc-1",
       })
@@ -1292,10 +1350,10 @@ describe("sync-program", () => {
 
       const imports = effectsOfType(effects, "import-doc-data")
       expect(imports.length).toBe(1)
-      expect(defined(imports[0]).docId).toBe("doc-1")
-      expect(defined(imports[0]).payload).toBe(payload)
-      expect(defined(imports[0]).version).toBe("v2")
-      expect(defined(imports[0]).fromPeerId).toBe("bob")
+      expect(defined(imports[0], "imports[0]").docId).toBe("doc-1")
+      expect(defined(imports[0], "imports[0]").payload).toBe(payload)
+      expect(defined(imports[0], "imports[0]").version).toBe("v2")
+      expect(defined(imports[0], "imports[0]").fromPeerId).toBe("bob")
     })
 
     it("unauthorized peer: no import effect", () => {
@@ -1346,9 +1404,13 @@ describe("sync-program", () => {
         e => (e.message as any).type === "interest",
       )
       expect(interestSend).toBeDefined()
-      expect(defined(interestSend).to).toBe("bob")
-      expect((defined(interestSend).message as any).docId).toBe("doc-1")
-      expect((defined(interestSend).message as any).reciprocate).toBe(false)
+      expect(defined(interestSend, "interestSend").to).toBe("bob")
+      expect((defined(interestSend, "interestSend").message as any).docId).toBe(
+        "doc-1",
+      )
+      expect(
+        (defined(interestSend, "interestSend").message as any).reciprocate,
+      ).toBe(false)
     })
 
     it("unknown doc: no-op", () => {
@@ -1413,7 +1475,10 @@ describe("sync-program", () => {
         reciprocate: true,
       })
       expect(
-        defined(modelAfterInterest.peers.get("bob")).docSyncStates.has("doc-1"),
+        defined(
+          modelAfterInterest.peers.get("bob"),
+          'modelAfterInterest.peers.get("bob")',
+        ).docSyncStates.has("doc-1"),
       ).toBe(true)
 
       // Now receive dismiss
@@ -1422,9 +1487,11 @@ describe("sync-program", () => {
         docId: "doc-1",
       })
 
-      expect(defined(m2.peers.get("bob")).docSyncStates.has("doc-1")).toBe(
-        false,
-      )
+      expect(
+        defined(m2.peers.get("bob"), 'm2.peers.get("bob")').docSyncStates.has(
+          "doc-1",
+        ),
+      ).toBe(false)
     })
 
     it("emits ensure-doc-dismissed effect", () => {
@@ -1440,8 +1507,8 @@ describe("sync-program", () => {
 
       const dismissed = effectsOfType(effects, "ensure-doc-dismissed")
       expect(dismissed.length).toBe(1)
-      expect(defined(dismissed[0]).docId).toBe("doc-1")
-      expect(defined(dismissed[0]).peer).toBe(bob)
+      expect(defined(dismissed[0], "dismissed[0]").docId).toBe("doc-1")
+      expect(defined(dismissed[0], "dismissed[0]").peer).toBe(bob)
     })
 
     it("emits readyStateChanged", () => {
@@ -1473,7 +1540,10 @@ describe("sync-program", () => {
         model,
       )
 
-      expect(defined(model.documents.get("doc-1")).version).toBe("v2")
+      expect(
+        defined(model.documents.get("doc-1"), 'model.documents.get("doc-1")')
+          .version,
+      ).toBe("v2")
     })
 
     it("pushes to synced peers for collaborative", () => {
@@ -1504,9 +1574,9 @@ describe("sync-program", () => {
 
       const offers = effectsOfType(effects, "send-offers")
       expect(offers.length).toBe(1)
-      expect(defined(offers[0]).to).toContain("bob")
-      expect(defined(offers[0]).docId).toBe("doc-1")
-      expect(defined(offers[0]).sinceVersion).toBeDefined()
+      expect(defined(offers[0], "offers[0]").to).toContain("bob")
+      expect(defined(offers[0], "offers[0]").docId).toBe("doc-1")
+      expect(defined(offers[0], "offers[0]").sinceVersion).toBeDefined()
     })
 
     it("pushes to synced peers for ephemeral, with a baseline to delta from", () => {
@@ -1539,11 +1609,11 @@ describe("sync-program", () => {
       // Interest-based routing: only bob (synced) receives the push, not carol
       const offers = effectsOfType(effects, "send-offers")
       expect(offers.length).toBe(1)
-      expect(defined(offers[0]).to).toContain("bob")
-      expect(defined(offers[0]).to).not.toContain("carol")
+      expect(defined(offers[0], "offers[0]").to).toContain("bob")
+      expect(defined(offers[0], "offers[0]").to).not.toContain("carol")
       // The baseline is the document's own pre-change version, shared by every
       // recipient — one delta computed for the whole fan-out, not one per peer.
-      expect(defined(offers[0]).sinceVersion).toBe("v2")
+      expect(defined(offers[0], "offers[0]").sinceVersion).toBe("v2")
     })
 
     it("emits state-advanced via model.pendingStateAdvancedDocIds", () => {
@@ -1597,10 +1667,12 @@ describe("sync-program", () => {
 
       const sends = effectsOfType(effects, "send-to-peers")
       expect(sends.length).toBe(1)
-      expect((defined(sends[0]).message as any).type).toBe("dismiss")
-      expect((defined(sends[0]).message as any).docId).toBe("doc-1")
-      expect(defined(sends[0]).to).toContain("bob")
-      expect(defined(sends[0]).to).toContain("carol")
+      expect((defined(sends[0], "sends[0]").message as any).type).toBe(
+        "dismiss",
+      )
+      expect((defined(sends[0], "sends[0]").message as any).docId).toBe("doc-1")
+      expect(defined(sends[0], "sends[0]").to).toContain("bob")
+      expect(defined(sends[0], "sends[0]").to).toContain("carol")
     })
   })
 
@@ -1625,12 +1697,16 @@ describe("sync-program", () => {
         model,
       )
 
-      expect(defined(model.documents.get("doc-1")).version).toBe("v2")
-      const peerSync = defined(model.peers.get("bob")).docSyncStates.get(
-        "doc-1",
-      )
+      expect(
+        defined(model.documents.get("doc-1"), 'model.documents.get("doc-1")')
+          .version,
+      ).toBe("v2")
+      const peerSync = defined(
+        model.peers.get("bob"),
+        'model.peers.get("bob")',
+      ).docSyncStates.get("doc-1")
       expect(peerSync).toBeDefined()
-      expect(defined(peerSync).status).toBe("synced")
+      expect(defined(peerSync, "peerSync").status).toBe("synced")
       expect((peerSync as any).lastKnownVersion).toBe("v2")
     })
 
@@ -1680,8 +1756,8 @@ describe("sync-program", () => {
 
       const offers = effectsOfType(effects, "send-offers")
       expect(offers.length).toBe(1)
-      expect(defined(offers[0]).to).toContain("carol")
-      expect(defined(offers[0]).to).not.toContain("bob") // excluded sender
+      expect(defined(offers[0], "offers[0]").to).toContain("carol")
+      expect(defined(offers[0], "offers[0]").to).not.toContain("bob") // excluded sender
     })
 
     it("emits readyStateChanged and stateAdvanced via model fields", () => {
@@ -1729,8 +1805,8 @@ describe("sync-program", () => {
         e => (e.message as any).type === "present",
       )
       expect(presentEffect).toBeDefined()
-      expect(defined(presentEffect).to).toContain("bob")
-      expect(defined(presentEffect).to).not.toContain("carol")
+      expect(defined(presentEffect, "presentEffect").to).toContain("bob")
+      expect(defined(presentEffect, "presentEffect").to).not.toContain("carol")
     })
 
     it("filters peers for local-doc-change pushes", () => {
@@ -1755,8 +1831,8 @@ describe("sync-program", () => {
 
       const offers = effectsOfType(effects, "send-offers")
       if (offers.length > 0) {
-        expect(defined(offers[0]).to).toContain("bob")
-        expect(defined(offers[0]).to).not.toContain("carol")
+        expect(defined(offers[0], "offers[0]").to).toContain("bob")
+        expect(defined(offers[0], "offers[0]").to).not.toContain("carol")
       }
     })
 
@@ -1974,8 +2050,8 @@ describe("sync-program", () => {
 
       const imports = effectsOfType(effects, "import-doc-data")
       expect(imports.length).toBe(1)
-      expect(defined(imports[0]).docId).toBe("doc-1")
-      expect(defined(imports[0]).fromPeerId).toBe("bob")
+      expect(defined(imports[0], "imports[0]").docId).toBe("doc-1")
+      expect(defined(imports[0], "imports[0]").fromPeerId).toBe("bob")
     })
   })
 })
@@ -2051,8 +2127,8 @@ describe("vacant + reconciliation latch", () => {
       )
       const sends = effectsOfType(fx, "send-to-peer")
       expect(sends).toHaveLength(1)
-      expect(defined(sends[0]).to).toBe("bob")
-      expect(defined(sends[0]).message).toEqual({
+      expect(defined(sends[0], "sends[0]").to).toBe("bob")
+      expect(defined(sends[0], "sends[0]").message).toEqual({
         type: "vacant",
         docId: "doc-1",
       })

@@ -1,5 +1,6 @@
 // session-program — unit tests for the pure TEA update function.
 
+import { defined } from "@kyneta/schema/testing"
 import { PROTOCOL_VERSION } from "@kyneta/transport"
 import { describe, expect, it } from "vitest"
 import {
@@ -14,12 +15,6 @@ import type { PeerChange } from "../types.js"
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
-
-/** Assert a Map.get() result is defined and return it narrowed. */
-function defined<T>(value: T | undefined): T {
-  expect(value).toBeDefined()
-  return value as T
-}
 
 function makeUpdate(): SessionUpdate {
   return createSessionUpdate()
@@ -127,7 +122,7 @@ describe("session-program", () => {
 
       // Channel is registered
       expect(m.channels.size).toBe(1)
-      const entry = defined(m.channels.get(1))
+      const entry = defined(m.channels.get(1), "m.channels.get(1)")
       expect(entry.channelId).toBe(1)
       expect(entry.localEstablishSent).toBe(false)
       expect(entry.remoteIdentity).toBeUndefined()
@@ -158,7 +153,7 @@ describe("session-program", () => {
       )
 
       // localEstablishSent is now true
-      const entry = defined(m.channels.get(1))
+      const entry = defined(m.channels.get(1), "m.channels.get(1)")
       expect(entry.localEstablishSent).toBe(true)
 
       // Should emit a send effect with our identity and v1 default features
@@ -203,13 +198,13 @@ describe("session-program", () => {
       )
 
       // Channel is now fully established
-      const entry = defined(m.channels.get(1))
+      const entry = defined(m.channels.get(1), "m.channels.get(1)")
       expect(entry.localEstablishSent).toBe(true)
       expect(entry.remoteIdentity).toEqual(bob)
 
       // Peer registered
       expect(m.peers.size).toBe(1)
-      const peer = defined(m.peers.get("bob"))
+      const peer = defined(m.peers.get("bob"), 'm.peers.get("bob")')
       expect(peer.identity).toEqual(bob)
       expect(peer.channels.has(1)).toBe(true)
       expect(peer.departing).toBe(false)
@@ -243,13 +238,15 @@ describe("session-program", () => {
       )
 
       // Channel fully established
-      const entry = defined(m.channels.get(1))
+      const entry = defined(m.channels.get(1), "m.channels.get(1)")
       expect(entry.localEstablishSent).toBe(true)
       expect(entry.remoteIdentity).toEqual(bob)
 
       // Peer created
       expect(m.peers.has("bob")).toBe(true)
-      expect(defined(m.peers.get("bob")).channels.has(1)).toBe(true)
+      expect(
+        defined(m.peers.get("bob"), 'm.peers.get("bob")').channels.has(1),
+      ).toBe(true)
 
       // peer-established appended to pendingPeerEvents
       expect(peerEvents).toContainEqual({
@@ -294,13 +291,13 @@ describe("session-program", () => {
       )
 
       // handleEstablishReceived sets both localEstablishSent=true and remoteIdentity
-      const entry = defined(m.channels.get(1))
+      const entry = defined(m.channels.get(1), "m.channels.get(1)")
       expect(entry.localEstablishSent).toBe(true)
       expect(entry.remoteIdentity).toEqual(bob)
 
       // Channel is fully established — peer should exist
       expect(m.peers.size).toBe(1)
-      const peer = defined(m.peers.get("bob"))
+      const peer = defined(m.peers.get("bob"), 'm.peers.get("bob")')
       expect(peer.identity).toEqual(bob)
       expect(peer.channels.has(1)).toBe(true)
 
@@ -422,7 +419,7 @@ describe("session-program", () => {
       )
 
       // Bob now has two channels
-      const peer = defined(m.peers.get("bob"))
+      const peer = defined(m.peers.get("bob"), 'm.peers.get("bob")')
       expect(peer.channels.size).toBe(2)
       expect(peer.channels.has(1)).toBe(true)
       expect(peer.channels.has(2)).toBe(true)
@@ -474,7 +471,7 @@ describe("session-program", () => {
       expect(m.channels.has(2)).toBe(true)
 
       // Peer still has channel 2
-      const peer = defined(m.peers.get("bob"))
+      const peer = defined(m.peers.get("bob"), 'm.peers.get("bob")')
       expect(peer.channels.size).toBe(1)
       expect(peer.channels.has(2)).toBe(true)
 
@@ -523,7 +520,7 @@ describe("session-program", () => {
 
       // Peer stays in model with empty channels
       expect(m.peers.has("bob")).toBe(true)
-      const peer = defined(m.peers.get("bob"))
+      const peer = defined(m.peers.get("bob"), 'm.peers.get("bob")')
       expect(peer.channels.size).toBe(0)
       expect(peer.identity).toEqual(bob)
 
@@ -610,7 +607,9 @@ describe("session-program", () => {
 
       // Verify peer is disconnected (still in model, empty channels)
       expect(model.peers.has("bob")).toBe(true)
-      expect(defined(model.peers.get("bob")).channels.size).toBe(0)
+      expect(
+        defined(model.peers.get("bob"), 'model.peers.get("bob")').channels.size,
+      ).toBe(0)
 
       // Fire departure timer
       const [m, ...effects] = update(
@@ -649,7 +648,9 @@ describe("session-program", () => {
       ;[model] = establishChannel(update, model, 2, bob)
 
       // Verify peer is reconnected (has channels again)
-      expect(defined(model.peers.get("bob")).channels.size).toBe(1)
+      expect(
+        defined(model.peers.get("bob"), 'model.peers.get("bob")').channels.size,
+      ).toBe(1)
 
       // Fire stale departure timer
       const [m, ...effects] = update(
@@ -663,7 +664,9 @@ describe("session-program", () => {
 
       // Peer still exists
       expect(m.peers.has("bob")).toBe(true)
-      expect(defined(m.peers.get("bob")).channels.size).toBe(1)
+      expect(
+        defined(m.peers.get("bob"), 'm.peers.get("bob")').channels.size,
+      ).toBe(1)
     })
 
     it("departure-timer-expired for unknown peer: no-op", () => {
@@ -696,7 +699,9 @@ describe("session-program", () => {
       ;[model] = update({ type: "sess/channel-removed", channelId: 1 }, model)
 
       // Verify peer disconnected
-      expect(defined(model.peers.get("bob")).channels.size).toBe(0)
+      expect(
+        defined(model.peers.get("bob"), 'model.peers.get("bob")').channels.size,
+      ).toBe(0)
 
       // Establish on channel 2 (reconnection)
       const [m, allEffects, peerEvents] = establishChannel(
@@ -708,7 +713,7 @@ describe("session-program", () => {
 
       // Peer is reconnected
       expect(m.peers.has("bob")).toBe(true)
-      const peer = defined(m.peers.get("bob"))
+      const peer = defined(m.peers.get("bob"), 'm.peers.get("bob")')
       expect(peer.channels.size).toBe(1)
       expect(peer.channels.has(2)).toBe(true)
       expect(peer.departing).toBe(false)
@@ -747,7 +752,7 @@ describe("session-program", () => {
       // Re-establish
       ;[model] = establishChannel(update, model, 2, bob)
 
-      const peer = defined(model.peers.get("bob"))
+      const peer = defined(model.peers.get("bob"), 'model.peers.get("bob")')
       expect(peer.departing).toBe(false)
     })
   })
@@ -776,7 +781,10 @@ describe("session-program", () => {
       )
 
       // Peer is marked as departing
-      expect(defined(departModel.peers.get("bob")).departing).toBe(true)
+      expect(
+        defined(departModel.peers.get("bob"), 'departModel.peers.get("bob")')
+          .departing,
+      ).toBe(true)
 
       // No immediate effects or new pending peer events from just receiving depart
       // (peer still has channels)
@@ -826,13 +834,17 @@ describe("session-program", () => {
         },
         model,
       )
-      expect(defined(model.peers.get("bob")).departing).toBe(true)
+      expect(
+        defined(model.peers.get("bob"), 'model.peers.get("bob")').departing,
+      ).toBe(true)
 
       // Remove channel 10 — peer still has channel 20
       ;[model] = update({ type: "sess/channel-removed", channelId: 10 }, model)
       // Peer still alive with channel 20
       expect(model.peers.has("bob")).toBe(true)
-      expect(defined(model.peers.get("bob")).channels.size).toBe(1)
+      expect(
+        defined(model.peers.get("bob"), 'model.peers.get("bob")').channels.size,
+      ).toBe(1)
 
       // Remove channel 20 — last channel, departing=true → immediate departure
       const [m, ...effects] = update(
@@ -1014,8 +1026,12 @@ describe("session-program", () => {
       const [m] = update({ type: "sess/channel-removed", channelId: 1 }, model)
 
       // Bob disconnected, carol unaffected
-      expect(defined(m.peers.get("bob")).channels.size).toBe(0)
-      expect(defined(m.peers.get("carol")).channels.size).toBe(1)
+      expect(
+        defined(m.peers.get("bob"), 'm.peers.get("bob")').channels.size,
+      ).toBe(0)
+      expect(
+        defined(m.peers.get("carol"), 'm.peers.get("carol")').channels.size,
+      ).toBe(1)
 
       // Newly-appended pendingPeerEvents include peer-disconnected for bob
       const newEvents = m.pendingPeerEvents.slice(beforeRemove)
@@ -1046,7 +1062,9 @@ describe("session-program", () => {
       // Bob gone, carol still disconnected
       expect(m.peers.has("bob")).toBe(false)
       expect(m.peers.has("carol")).toBe(true)
-      expect(defined(m.peers.get("carol")).channels.size).toBe(0)
+      expect(
+        defined(m.peers.get("carol"), 'm.peers.get("carol")').channels.size,
+      ).toBe(0)
     })
   })
 
@@ -1078,7 +1096,9 @@ describe("session-program", () => {
       let model = initSession(alice)
       ;[model] = establishChannel(update, model, 1, bob)
 
-      const channelsBefore = new Set(defined(model.peers.get("bob")).channels)
+      const channelsBefore = new Set(
+        defined(model.peers.get("bob"), 'model.peers.get("bob")').channels,
+      )
 
       // Add another channel for bob
       ;[model] = establishChannel(update, model, 2, bob)

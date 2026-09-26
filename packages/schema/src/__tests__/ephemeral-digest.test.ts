@@ -17,22 +17,9 @@ import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
 import {
   type Container,
   decodeTree,
-  type Horizon,
-  type Live,
-  mergeStateTree,
   stateTreeDigest,
 } from "../substrates/state-tree.js"
-
-/** A tuple as a peer holds it; the install ordinal is fixed and never folded. */
-const tup = (
-  value: unknown,
-  timestamp: number,
-  deleted?: true,
-): Live | Horizon =>
-  deleted ? [null, timestamp, 1, true] : [value, timestamp, 1]
-
-const merge = (local: Container, remote: Container) =>
-  mergeStateTree(local, remote, 1)
+import { merge, tup } from "./ephemeral-fixtures.js"
 
 const clone = (t: Container): Container =>
   JSON.parse(JSON.stringify(t)) as Container

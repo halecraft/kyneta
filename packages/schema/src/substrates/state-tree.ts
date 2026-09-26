@@ -110,18 +110,18 @@ export function isHorizon(node: unknown): node is Horizon {
   )
 }
 
-export function isContainer(node: unknown): node is Container {
+function isContainer(node: unknown): node is Container {
   return isNonNullObject(node) && !Array.isArray(node)
 }
 
-export type NodeKind = "live" | "horizon" | "container"
+type NodeKind = "live" | "horizon" | "container"
 
 /**
  * Which of the three a node is. Throws on anything else: a malformed node
  * treated as a container would have its slots walked as keys, and the
  * characters of a string value after them.
  */
-export function nodeKind(node: StateTree): NodeKind {
+function nodeKind(node: StateTree): NodeKind {
   if (isLive(node)) return "live"
   if (isHorizon(node)) return "horizon"
   if (isContainer(node)) return "container"
@@ -166,7 +166,7 @@ function valueRank(value: unknown): string {
  * Only different writers can tie. A writer's own writes are ordered by
  * construction, because each one is stamped past what it replaces.
  */
-export function compareExistence(
+function compareExistence(
   a: readonly [number, boolean],
   b: readonly [number, boolean],
 ): -1 | 0 | 1 {
@@ -570,30 +570,16 @@ export function newestTimestamp(node: StateTree): number {
   }
 }
 
-/**
- * One step down the tree: the child at `key`, and the floor that holds
- * beneath it.
- *
- * The floor is the highest horizon passed on the way down. Reading needs no
- * floor, because a tree in normal form holds nothing below one. A write does:
- * it has to be stamped at or above the floor, or the next prune removes it.
- */
-export function descend(
-  node: StateTree,
-  key: string,
-  floor: number,
-): { readonly child: StateTree | undefined; readonly floor: number } {
+/** One step down the tree: the child at `key`, through a horizon's content. */
+function childOf(node: StateTree, key: string): StateTree | undefined {
   const kind = nodeKind(node)
   switch (kind) {
     case "live":
-      return { child: undefined, floor }
+      return undefined
     case "horizon":
-      return {
-        child: (node as Horizon)[0]?.[key],
-        floor: floorBeneath(node, floor),
-      }
+      return (node as Horizon)[0]?.[key]
     case "container":
-      return { child: (node as Container)[key], floor }
+      return (node as Container)[key]
     default:
       return unreachableKind(kind)
   }
@@ -619,7 +605,7 @@ export function stateTreeAt(tree: StateTree, path: Path): StateTreeAt {
   let node = tree
   for (const [i, segment] of path.segments.entries()) {
     if (isLive(node)) return valueAt(node[0], path.segments.slice(i))
-    const { child } = descend(node, String(segment.resolve()), 0)
+    const child = childOf(node, String(segment.resolve()))
     if (child === undefined) return ABSENT
     node = child
   }
@@ -685,7 +671,7 @@ function presentKeys(node: Container | Horizon): string[] {
  * and applies decay through `withDecay`. A leaf's value is returned by
  * reference, so a projection shares register values with the tree.
  */
-export function createStateTreeResolver(tree: StateTree): MaterializeResolver {
+function createStateTreeResolver(tree: StateTree): MaterializeResolver {
   function plainAt(path: Path): unknown {
     const at = stateTreeAt(tree, path)
     if (at.kind === "value") return at.value
@@ -770,9 +756,9 @@ export function movedRootKeys(current: PlainState, next: PlainState): string[] {
  * later lands in `unrepresentable` rather than joining the storable set
  * silently.
  */
-export type StateTreeRole = "decompose" | "register" | "unrepresentable"
+type StateTreeRole = "decompose" | "register" | "unrepresentable"
 
-export function stateTreeRole(node: SchemaNode): StateTreeRole {
+function stateTreeRole(node: SchemaNode): StateTreeRole {
   // A `sum` or `.json()` node is one tuple whatever its kind says, so the
   // storage class answers before the kind is consulted.
   if (storageClass(node) !== "container") return "register"
@@ -1166,7 +1152,7 @@ function timestampAt(value: unknown, path: string): number {
  * layer up, `exportSince` answering `null` for an empty delta made every
  * already-current peer receive a whole document.
  */
-export function leavesInstalledAfter(
+export function installedAfter(
   node: StateTree,
   installedAt: number,
 ): StateTree {
@@ -1437,7 +1423,14 @@ function containerAt(
   }
 }
 
-/** The floor that holds beneath `node`, given the floor it sits under. */
+/**
+ * The floor that holds beneath `node`, given the floor it sits under: the
+ * highest horizon passed on the way down.
+ *
+ * Reading needs no floor, because a tree in normal form holds nothing below
+ * one. A write does: it has to be stamped at or above the floor, or the next
+ * prune removes it.
+ */
 function floorBeneath(node: StateTree, floor: number): number {
   return isHorizon(node) ? Math.max(floor, node[1]) : floor
 }

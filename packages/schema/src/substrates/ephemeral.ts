@@ -58,7 +58,7 @@ import {
   decodeTree,
   encodeTree,
   formatStateTreeViolation,
-  leavesInstalledAfter,
+  installedAfter,
   mergeStateTree,
   movedRootKeys,
   projectStateTree,
@@ -298,7 +298,7 @@ function createStateReplicaCore(
      */
     exportSince(since: StateVersion): SubstratePayload | null {
       if (since.incarnation !== incarnation) return null
-      const delta = leavesInstalledAfter(getTree(), since.installSeq)
+      const delta = installedAfter(getTree(), since.installSeq)
       return {
         kind: "since",
         encoding: "json",
@@ -489,24 +489,17 @@ export function createStateSubstrate(
         // and local reads come from the shadow. Get this branch wrong and reads
         // on this peer still look perfect — only what replicates is damaged.
         const boundary = findOpaqueBoundary(schema, path)
-        if (boundary !== null) {
-          const registerPath = path.slice(0, boundary.prefixLength + 1)
-          applyChangeToStateTree(
-            currentTree,
-            registerPath,
-            replaceChange(deepClonePlain(registerPath.read(shadow))),
-            core.nextStamp(Date.now()),
-            schema,
-          )
-        } else {
-          applyChangeToStateTree(
-            currentTree,
-            path,
-            change,
-            core.nextStamp(Date.now()),
-            schema,
-          )
-        }
+        const registerPath =
+          boundary === null ? null : path.slice(0, boundary.prefixLength + 1)
+        applyChangeToStateTree(
+          currentTree,
+          registerPath ?? path,
+          registerPath === null
+            ? change
+            : replaceChange(deepClonePlain(registerPath.read(shadow))),
+          core.nextStamp(Date.now()),
+          schema,
+        )
       }
     },
 

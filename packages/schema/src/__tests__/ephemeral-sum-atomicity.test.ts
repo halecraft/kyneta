@@ -15,27 +15,11 @@ import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
 import {
   applyChangeToStateTree,
   type Container,
-  type Horizon,
   isLive,
   type Live,
-  mergeStateTree,
   type StateTree,
-  type WriteStamp,
 } from "../substrates/state-tree.js"
-
-/** A tuple as a peer holds it; the install ordinal is fixed and unread here. */
-const tup = (
-  value: unknown,
-  timestamp: number,
-  deleted?: true,
-): Live | Horizon =>
-  deleted ? [null, timestamp, 1, true] : [value, timestamp, 1]
-
-/** A write's stamp. The ordinal only has to be above a structural zero. */
-const stamp = (notBefore: number): WriteStamp => ({ notBefore, installedAt: 1 })
-
-const merge = (local: Container, remote: Container) =>
-  mergeStateTree(local, remote, 1)
+import { merge, payload, stamp, tup, wire } from "./ephemeral-fixtures.js"
 
 const Shape = Schema.discriminatedUnion("kind", [
   Schema.struct({ kind: Schema.string("circle"), radius: Schema.number() }),
@@ -194,15 +178,6 @@ describe("nullable struct is an atomic register", () => {
 // ---------------------------------------------------------------------------
 
 describe("state substrate converges concurrent variant switches", () => {
-  const payload = (data: unknown) => ({
-    kind: "entirety" as const,
-    encoding: "json" as const,
-    data: JSON.stringify(data),
-  })
-
-  /** A live leaf in wire shape: no install ordinal, which is the receiver's. */
-  const wire = (value: unknown, timestamp: number) => [value, timestamp]
-
   it("merged peers read a coherent single variant", () => {
     const subA = ephemeralSubstrateFactory.fromEntirety(
       payload({

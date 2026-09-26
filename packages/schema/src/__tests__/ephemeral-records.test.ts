@@ -30,24 +30,12 @@ import {
   type Horizon,
   isHorizon,
   isLive,
-  type Live,
   type StateTree,
-  type WriteStamp,
 } from "../substrates/state-tree.js"
+import { payload, stamp, tup, wire } from "./ephemeral-fixtures.js"
 
 /** A horizon recording a deletion, whatever has been written since. */
 const isDeletion = (node: unknown): boolean => isHorizon(node) && node[3]
-
-/** A tuple as a peer holds it; the install ordinal is fixed and unread here. */
-const tup = (
-  value: unknown,
-  timestamp: number,
-  deleted?: true,
-): Live | Horizon =>
-  deleted ? [null, timestamp, 1, true] : [value, timestamp, 1]
-
-/** A write's stamp. The ordinal only has to be above a structural zero. */
-const stamp = (notBefore: number): WriteStamp => ({ notBefore, installedAt: 1 })
 
 const Roster = Schema.struct({ peers: Schema.record(Schema.number()) })
 const Bound = ephemeral.bind(Roster)
@@ -213,18 +201,6 @@ describe("a record decomposes into one tuple per key", () => {
 // ---------------------------------------------------------------------------
 
 describe("two peers merge a roster without clobbering", () => {
-  const payload = (data: unknown) => ({
-    kind: "entirety" as const,
-    encoding: "json" as const,
-    data: JSON.stringify(data),
-  })
-
-  /**
-   * A tuple in wire shape: no install ordinal, because that is a fact about
-   * the receiver and the sender has no business asserting it.
-   */
-  const wire = (value: unknown, timestamp: number) => [value, timestamp]
-
   it("each peer's own key survives the merge", () => {
     const peerA = ephemeralSubstrateFactory.fromEntirety(
       payload({ peers: { alice: wire(1, 100) } }),

@@ -23,64 +23,15 @@ import {
 import { DEFAULT_LINEAGE } from "../substrates/plain.js"
 import {
   type Container,
-  encodeTree,
   type Horizon,
   joinTuples,
   type Live,
-  mergeStateTree,
   type StateTree,
   stateTreeDigest,
 } from "../substrates/state-tree.js"
+import { hz, merge, sameState, tup } from "./ephemeral-fixtures.js"
 
 const clone = <T extends Live | Horizon>(tuple: T): T => tuple.slice() as T
-
-/**
- * A tuple as a peer would hold it. The install ordinal is fixed because these
- * tests are about the join, which never reads it.
- */
-const tup = (
-  value: unknown,
-  timestamp: number,
-  deleted?: true,
-): Live | Horizon =>
-  deleted ? [null, timestamp, 1, true] : [value, timestamp, 1]
-
-/** A horizon as a peer would hold it, with the same fixed install ordinal. */
-const hz = (
-  content: Container | null,
-  horizon: number,
-  deleted: boolean,
-): Horizon => [content, horizon, 1, deleted]
-
-const merge = (local: Container, remote: Container) =>
-  mergeStateTree(local, remote, 1)
-
-/**
- * Compare what replicates, not what a replica happens to hold.
- *
- * Two peers that reach the same state by opposite merge orders differ in two
- * ways that carry no meaning: their install ordinals, which are each
- * replica's own bookkeeping, and the order keys were added in, since a merge
- * unions keys in whichever order it met them. `encodeTree` drops the first
- * and sorting drops the second. What is left is the state peers exchange.
- */
-const canonical = (node: unknown): unknown => {
-  if (node === null || typeof node !== "object") return node
-  // A horizon is an array holding a container, so key order has to be
-  // dropped inside arrays too.
-  if (Array.isArray(node)) return node.map(canonical)
-  const sorted: Record<string, unknown> = {}
-  for (const key of Object.keys(node as Record<string, unknown>).sort()) {
-    sorted[key] = canonical((node as Record<string, unknown>)[key])
-  }
-  return sorted
-}
-
-const replicated = (tree: StateTree): string =>
-  JSON.stringify(canonical(JSON.parse(encodeTree(tree))))
-
-const sameState = (a: StateTree, b: StateTree): boolean =>
-  replicated(a) === replicated(b)
 
 /**
  * Agreement as peers measure it: the same state, and the same digest. Normal

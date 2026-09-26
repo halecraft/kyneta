@@ -19,65 +19,39 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   batch,
   createDoc,
-  createRef,
   ephemeral,
   lastUpdated,
   mapChange,
   Schema,
-  type SchemaNode,
 } from "../index.js"
 import { RawPath } from "../path.js"
-import type { Substrate } from "../substrate.js"
-import {
-  ephemeralSubstrateFactory,
-  type StateVersion,
-} from "../substrates/ephemeral.js"
+import { ephemeralSubstrateFactory } from "../substrates/ephemeral.js"
 import {
   applyChangeToStateTree,
   type Container,
   type Horizon,
   isHorizon,
-  type Live,
-  mergeStateTree,
   type StateTree,
-  type WriteStamp,
   writeProduct,
 } from "../substrates/state-tree.js"
 import { defined } from "../testing/index.js"
+import {
+  digestOf,
+  merge,
+  payload,
+  peerOf,
+  ship,
+  stamp,
+  tup,
+  wire,
+} from "./ephemeral-fixtures.js"
 
 /** A horizon recording a deletion, whatever has been written since. */
 const isDeletion = (node: unknown): boolean => isHorizon(node) && node[3]
 
-/** A tuple as a peer holds it; the install ordinal is fixed and unread here. */
-const tup = (
-  value: unknown,
-  timestamp: number,
-  deleted?: true,
-): Live | Horizon =>
-  deleted ? [null, timestamp, 1, true] : [value, timestamp, 1]
-
-/** A write's stamp. The ordinal only has to be above a structural zero. */
-const stamp = (notBefore: number): WriteStamp => ({ notBefore, installedAt: 1 })
-
-const merge = (local: Container, remote: Container) =>
-  mergeStateTree(local, remote, 1)
-
 const Roster = Schema.struct({ peers: Schema.record(Schema.number()) })
 const peersPath = RawPath.empty.field("peers")
 const asRecord = (tree: StateTree) => tree as Record<string, any>
-
-const payload = (data: unknown) => ({
-  kind: "entirety" as const,
-  encoding: "json" as const,
-  data: JSON.stringify(data),
-})
-
-/**
- * A tuple in wire shape: no install ordinal, because that is a fact about the
- * receiver and a sender has no business asserting it.
- */
-const wire = (value: unknown, timestamp: number, deleted?: true) =>
-  deleted ? [value, timestamp, true] : [value, timestamp]
 
 /** A roster tree with the given entries, all stamped at `t`. */
 function roster(entries: Record<string, number>, t: number): Container {
@@ -391,27 +365,6 @@ describe("deleting an entry whose value is a container", () => {
 //
 // Asserted through substrates, projections and digests rather than tree
 // shapes, so these pin behaviour and survive a change of representation.
-
-interface Peer {
-  readonly substrate: Substrate<StateVersion>
-  readonly doc: any
-}
-
-function peerOf(schema: SchemaNode): Peer {
-  const substrate = ephemeralSubstrateFactory.create(schema)
-  return { substrate, doc: createRef(schema, substrate) }
-}
-
-/** Anti-entropy by entirety: `to` joins everything `from` holds. */
-function ship(from: Peer, to: Peer): void {
-  to.substrate.merge(from.substrate.exportEntirety())
-}
-
-function digestOf(p: Peer): string {
-  const digest = p.substrate.digest?.()
-  if (digest === undefined) throw new Error("ephemeral must digest")
-  return digest
-}
 
 describe("a delete reaches what the deleter never saw", () => {
   afterEach(() => vi.restoreAllMocks())
