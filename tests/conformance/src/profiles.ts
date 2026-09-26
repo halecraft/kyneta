@@ -94,8 +94,8 @@ export type SubstrateProfile = {
   readonly fieldConcurrency: FieldConcurrency
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: substrate-agnostic BoundSchema — the
-// harness accesses docs untyped on purpose, so the concrete NativeMap is irrelevant.
+// A substrate-agnostic BoundSchema. The harness accesses docs untyped on
+// purpose, so the concrete NativeMap is irrelevant.
 const anyBind = (b: unknown) => b as ReturnType<typeof json.bind>
 
 export const PROFILES: readonly SubstrateProfile[] = [

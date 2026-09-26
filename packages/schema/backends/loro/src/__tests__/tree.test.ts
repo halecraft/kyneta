@@ -9,6 +9,7 @@
 
 import type { Changeset } from "@kyneta/changefeed"
 import type { Op } from "@kyneta/schema"
+import { defined } from "@kyneta/schema/testing"
 import { describe, expect, it } from "vitest"
 import {
   batch,
@@ -185,9 +186,8 @@ describe("Schema.tree on Loro: peer sync via binary updates", () => {
       childId = d.tree.create({ parent: rootId, data: { label: "B" } })
     })
 
-    const delta = exportSince(docA, v0)
-    expect(delta).not.toBeNull()
-    merge(docB, delta!, { origin: "sync" })
+    const delta = defined(exportSince(docA, v0), "a delta")
+    merge(docB, delta, { origin: "sync" })
 
     expect(docB.tree()).toEqual(docA.tree())
     expect((docB.tree as any).has(rootId)).toBe(true)
@@ -219,8 +219,12 @@ describe("Schema.tree on Loro: concurrent move convergence", () => {
     // Sync both ways so each peer knows about both roots.
     const vBeforeMerge = version(docB)
     const vBeforeMergeA = version(docA)
-    merge(docB, exportSince(docA, vBeforeMerge)!, { origin: "sync" })
-    merge(docA, exportSince(docB, vBeforeMergeA)!, { origin: "sync" })
+    merge(docB, defined(exportSince(docA, vBeforeMerge), "a delta"), {
+      origin: "sync",
+    })
+    merge(docA, defined(exportSince(docB, vBeforeMergeA), "a delta"), {
+      origin: "sync",
+    })
 
     // Concurrent moves: each peer reparents the other's root under its own.
     batch(docA, (d: any) => {
@@ -233,11 +237,15 @@ describe("Schema.tree on Loro: concurrent move convergence", () => {
     // Cross-merge.
     const vA2 = version(docA)
     const vB2 = version(docB)
-    merge(docB, exportSince(docA, vBeforeMergeA)!, { origin: "sync" })
-    merge(docA, exportSince(docB, vBeforeMerge)!, { origin: "sync" })
+    merge(docB, defined(exportSince(docA, vBeforeMergeA), "a delta"), {
+      origin: "sync",
+    })
+    merge(docA, defined(exportSince(docB, vBeforeMerge), "a delta"), {
+      origin: "sync",
+    })
     // Re-merge to a quiescent state (each side may have advanced again).
-    merge(docB, exportSince(docA, vA2)!, { origin: "sync" })
-    merge(docA, exportSince(docB, vB2)!, { origin: "sync" })
+    merge(docB, defined(exportSince(docA, vA2), "a delta"), { origin: "sync" })
+    merge(docA, defined(exportSince(docB, vB2), "a delta"), { origin: "sync" })
 
     // Both peers converge to the same topology, whichever Loro picks.
     expect(docB.tree()).toEqual(docA.tree())
@@ -325,7 +333,7 @@ describe("Schema.tree on Loro: round-trip via binary sync (Phase 5)", () => {
       d.tree.move(target, { parent: b, index: 0 })
     })
 
-    merge(docB, exportSince(docA, vB0)!, { origin: "sync" })
+    merge(docB, defined(exportSince(docA, vB0), "a delta"), { origin: "sync" })
 
     expect(docB.tree()).toEqual(docA.tree())
   })
@@ -349,7 +357,7 @@ describe("Schema.tree on Loro: round-trip via binary sync (Phase 5)", () => {
       d.tree.delete(child)
     })
 
-    merge(docB, exportSince(docA, vB0)!, { origin: "sync" })
+    merge(docB, defined(exportSince(docA, vB0), "a delta"), { origin: "sync" })
 
     expect(docB.tree()).toEqual(docA.tree())
     expect((docB.tree as any).has(root)).toBe(true)
@@ -376,11 +384,13 @@ describe("Schema.tree on Loro: subscribe parity", () => {
     })
 
     const ops = changesets.flatMap(cs => cs.changes)
-    const treeOp = ops.find(op => op.change.type === "tree")
-    expect(treeOp).toBeDefined()
+    const treeOp = defined(
+      ops.find(op => op.change.type === "tree"),
+      "a tree op",
+    )
     expect(
       (
-        treeOp!.change as unknown as {
+        treeOp.change as unknown as {
           instructions: { action: string; target: string }[]
         }
       ).instructions[0],

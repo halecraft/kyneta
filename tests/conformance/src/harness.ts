@@ -4,8 +4,8 @@ import { batch } from "@kyneta/schema"
 import { afterEach, describe, expect, it } from "vitest"
 import type { SubstrateProfile } from "./profiles.js"
 
-// biome-ignore lint/suspicious/noExplicitAny: docs are accessed untyped — the harness
-// is deliberately substrate-agnostic, exercising the runtime, not the type surface.
+// Docs are accessed untyped: the harness is deliberately substrate-agnostic,
+// exercising the runtime, not the type surface.
 type Doc = any
 
 // The substrate-agnostic bound schema, taken from the profile table rather than

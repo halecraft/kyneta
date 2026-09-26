@@ -328,11 +328,8 @@ describe("a declared field is not a written key", () => {
 
   it("projects an emptied record as an empty record, not as absent", () => {
     const substrate = ephemeralSubstrateFactory.create(Roster)
-    // biome-ignore lint/suspicious/noExplicitAny: the substrate suites read untyped
     const d: any = createRef(Roster, substrate)
-    // biome-ignore lint/suspicious/noExplicitAny: see above
     batch(d, (w: any) => w.peers.set("alice", 1))
-    // biome-ignore lint/suspicious/noExplicitAny: see above
     batch(d, (w: any) => w.peers.delete("alice"))
 
     // `peers` is a field of the root product, so it exists whatever happens to

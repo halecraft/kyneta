@@ -31,7 +31,7 @@ import {
   unwrap,
   writable,
 } from "@kyneta/schema"
-import { projectionConformance } from "@kyneta/schema/testing"
+import { defined, projectionConformance } from "@kyneta/schema/testing"
 import { LoroDoc, type LoroDoc as LoroDocType } from "loro-crdt"
 import { describe, expect, it } from "vitest"
 import { materializeLoroShadow } from "../materialize.js"
@@ -257,7 +257,7 @@ describe("Loro json-boundary storage", () => {
     const propsMap = native.getMap("_props")
     const propsKeys = propsMap.keys()
     expect(propsKeys.length).toBe(1) // only `config` lives in _props
-    const value = propsMap.get(propsKeys[0]!)
+    const value = propsMap.get(defined(propsKeys[0], "the `_props` key"))
     expect(value).toEqual({ tags: "prod", retries: 3 })
     // A LoroMap would have a `.kind()` method; a plain JS object doesn't.
     expect(typeof (value as any)?.kind).not.toBe("function")
@@ -300,7 +300,7 @@ describe("Loro json-boundary storage", () => {
     // array, not a LoroList container.
     const native = unwrap(doc) as LoroDocType
     const propsMap = native.getMap("_props")
-    const value = propsMap.get(propsMap.keys()[0]!)
+    const value = propsMap.get(defined(propsMap.keys()[0], "a `_props` key"))
     expect(Array.isArray(value)).toBe(true)
   })
 

@@ -1,3 +1,4 @@
+export { defined } from "./defined.js"
 export {
   type DeliveryConformanceFactory,
   type DeliveryConformanceOptions,

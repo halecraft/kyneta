@@ -92,9 +92,7 @@ describe("the digest covers what replicates, and nothing else", () => {
 
     const a = ephemeralSubstrateFactory.create(Plain)
     const b = ephemeralSubstrateFactory.create(Decaying)
-    // biome-ignore lint/suspicious/noExplicitAny: the substrate suites read untyped
     const da: any = createRef(Plain, a)
-    // biome-ignore lint/suspicious/noExplicitAny: see above
     const db: any = createRef(Decaying, b)
 
     // Same write, same timestamp, so the trees are identical.
@@ -110,13 +108,11 @@ describe("the digest covers what replicates, and nothing else", () => {
     // hold nothing alike.
     const S = Schema.struct({ presence: Schema.string() })
     const substrate = ephemeralSubstrateFactory.create(S)
-    // biome-ignore lint/suspicious/noExplicitAny: see above
     const doc: any = createRef(S, substrate)
 
     const before = stateTreeDigest(
       JSON.parse(substrate.exportEntirety().data as string) as StateTree,
     )
-    // biome-ignore lint/suspicious/noExplicitAny: see above
     batch(doc, (d: any) => d.presence.set("online"))
     const after = stateTreeDigest(
       JSON.parse(substrate.exportEntirety().data as string) as StateTree,

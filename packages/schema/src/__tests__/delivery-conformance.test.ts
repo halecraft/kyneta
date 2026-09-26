@@ -103,8 +103,8 @@ describe("the documented delivery example", () => {
   // for two major versions.
   it("one changeset to every level, each covering its own subtree", () => {
     const substrate = plainSubstrateFactory.create(ExampleDoc)
-    // biome-ignore lint/suspicious/noExplicitAny: the example reads untyped,
-    // exercising the runtime surface rather than the type surface.
+    // The example reads untyped, exercising the runtime surface rather than
+    // the type surface.
     const doc = createRef(ExampleDoc, substrate) as any
     batch(doc, (d: any) => d.items.push({ title: "a" }))
 

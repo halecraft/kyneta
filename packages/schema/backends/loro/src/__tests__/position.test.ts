@@ -17,6 +17,7 @@ import {
   Schema,
 } from "@kyneta/schema"
 import {
+  defined,
   type PositionTestEnv,
   positionConformance,
 } from "@kyneta/schema/testing"
@@ -147,14 +148,12 @@ describe("LoroPosition: concurrent edits", () => {
     expect(ref2.title()).toBe(finalText)
 
     // Positions should resolve to valid indices on the converged doc
-    const idx1 = pos1.resolve()
-    const idx2 = pos2.resolve()
-    expect(idx1).not.toBeNull()
-    expect(idx2).not.toBeNull()
-    expect(idx1!).toBeGreaterThanOrEqual(0)
-    expect(idx2!).toBeGreaterThanOrEqual(0)
-    expect(idx1!).toBeLessThanOrEqual(finalText.length)
-    expect(idx2!).toBeLessThanOrEqual(finalText.length)
+    const idx1 = defined(pos1.resolve(), "pos1's index")
+    const idx2 = defined(pos2.resolve(), "pos2's index")
+    expect(idx1).toBeGreaterThanOrEqual(0)
+    expect(idx2).toBeGreaterThanOrEqual(0)
+    expect(idx1).toBeLessThanOrEqual(finalText.length)
+    expect(idx2).toBeLessThanOrEqual(finalText.length)
   })
 
   it("sticky side preserved through concurrent inserts at same position", () => {
@@ -199,14 +198,12 @@ describe("LoroPosition: concurrent edits", () => {
     expect(ref2.title()).toBe(finalText)
 
     // Both positions should resolve to valid indices
-    const leftIdx = leftPos.resolve()
-    const rightIdx = rightPos.resolve()
-    expect(leftIdx).not.toBeNull()
-    expect(rightIdx).not.toBeNull()
+    const leftIdx = defined(leftPos.resolve(), "the left-sticky index")
+    const rightIdx = defined(rightPos.resolve(), "the right-sticky index")
 
     // Left-sticky should be ≤ right-sticky: the left-sticky cursor
     // stays before insertions at its gap, while right-sticky shifts past.
-    expect(leftIdx!).toBeLessThanOrEqual(rightIdx!)
+    expect(leftIdx).toBeLessThanOrEqual(rightIdx)
   })
 
   it("position survives deletion on remote peer and re-insertion", () => {
@@ -239,10 +236,9 @@ describe("LoroPosition: concurrent edits", () => {
     doc1.import(doc2.export({ mode: "update" }))
 
     // Position should still resolve (Loro cursors survive deletion)
-    const afterDelete = pos.resolve()
-    expect(afterDelete).not.toBeNull()
-    expect(afterDelete!).toBeGreaterThanOrEqual(0)
-    expect(afterDelete!).toBeLessThanOrEqual(ref1.title().length)
+    const afterDelete = defined(pos.resolve(), "the index after the delete")
+    expect(afterDelete).toBeGreaterThanOrEqual(0)
+    expect(afterDelete).toBeLessThanOrEqual(ref1.title().length)
 
     // Now insert new content near the collapsed position
     batch(ref1, (d: any) => {
@@ -250,10 +246,9 @@ describe("LoroPosition: concurrent edits", () => {
     })
 
     // Position should still resolve to a valid index
-    const afterInsert = pos.resolve()
-    expect(afterInsert).not.toBeNull()
-    expect(afterInsert!).toBeGreaterThanOrEqual(0)
-    expect(afterInsert!).toBeLessThanOrEqual(ref1.title().length)
+    const afterInsert = defined(pos.resolve(), "the index after the insert")
+    expect(afterInsert).toBeGreaterThanOrEqual(0)
+    expect(afterInsert).toBeLessThanOrEqual(ref1.title().length)
   })
 
   it("encode/decode round-trip works across synced documents", () => {
@@ -352,10 +347,9 @@ describe("LoroPosition: concurrent edits", () => {
       ["posB", posB],
       ["posC", posC],
     ] as const) {
-      const idx = pos.resolve()
-      expect(idx, `${label} should resolve`).not.toBeNull()
-      expect(idx!, `${label} >= 0`).toBeGreaterThanOrEqual(0)
-      expect(idx!, `${label} <= length`).toBeLessThanOrEqual(finalText.length)
+      const idx = defined(pos.resolve(), `${label}'s index`)
+      expect(idx, `${label} >= 0`).toBeGreaterThanOrEqual(0)
+      expect(idx, `${label} <= length`).toBeLessThanOrEqual(finalText.length)
     }
   })
 })

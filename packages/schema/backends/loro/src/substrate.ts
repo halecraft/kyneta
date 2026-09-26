@@ -272,7 +272,12 @@ export function createLoroSubstrate(
    * through.
    */
   function boundaryKey(path: Path, prefixLength: number): string | number {
-    const seg = path.segments[prefixLength]!
+    const seg = path.segments[prefixLength]
+    if (seg === undefined) {
+      throw new Error(
+        `boundaryKey: no segment at ${prefixLength} in a path of ${path.length}`,
+      )
+    }
     if (seg.role === "field") {
       const absPath = fieldAbsPath(path.segments.slice(0, prefixLength + 1))
       return containerKey(binding, absPath, seg.resolve() as string)
@@ -895,17 +900,9 @@ export const loroSubstrateFactory: SubstrateFactory<LoroVersion> = {
 }
 
 // ---------------------------------------------------------------------------
-// ensureRootContainer — create root containers without populating values
+// Root containers — created up front, never populated
 // ---------------------------------------------------------------------------
 
-/**
- * Walk a schema and ensure all root-level Loro containers exist.
- *
- * Loro containers are lazily created — `doc.getText(key)`, `doc.getMap(key)`,
- * etc. are idempotent (return the existing container without generating ops).
- * Scalar and sum fields are no-ops — the materializer's zero fallback handles
- * default values on read.
- */
 /**
  * Recursively walk a schema tree collecting all RichTextSchema nodes'
  * `.marks` properties into a single MarkConfig. Throws if two richtext
@@ -918,9 +915,10 @@ function collectMarkConfigs(schema: SchemaNode): MarkConfig {
     if (s[KIND] === "richtext") {
       const rt = s as RichTextSchema
       for (const [name, config] of Object.entries(rt.marks)) {
-        if (name in result && result[name]!.expand !== config.expand) {
+        const prior = result[name]
+        if (prior !== undefined && prior.expand !== config.expand) {
           throw new Error(
-            `collectMarkConfigs: mark "${name}" declared with conflicting expand values: "${result[name]!.expand}" vs "${config.expand}"`,
+            `collectMarkConfigs: mark "${name}" declared with conflicting expand values: "${prior.expand}" vs "${config.expand}"`,
           )
         }
         result[name] = config
@@ -943,6 +941,14 @@ function collectMarkConfigs(schema: SchemaNode): MarkConfig {
   return result as MarkConfig
 }
 
+/**
+ * Walk a schema and ensure all root-level Loro containers exist.
+ *
+ * Loro containers are lazily created — `doc.getText(key)`, `doc.getMap(key)`,
+ * etc. are idempotent (return the existing container without generating ops).
+ * Scalar and sum fields are no-ops — the materializer's zero fallback handles
+ * default values on read.
+ */
 export function ensureLoroContainers(
   doc: LoroDocType,
   schema: SchemaNode,

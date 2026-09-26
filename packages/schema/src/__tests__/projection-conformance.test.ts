@@ -47,8 +47,8 @@ const NOW = 1_700_000_000_000
 
 function createEphemeralEnv(): ProjectionTestEnv {
   const substrate = ephemeralSubstrateFactory.create(Fixture)
-  // biome-ignore lint/suspicious/noExplicitAny: the suite exercises the
-  // runtime surface, not the type surface.
+  // Untyped on purpose: the suite exercises the runtime surface, not the
+  // type surface.
   const doc = createRef(Fixture, substrate) as any
 
   return {
@@ -56,7 +56,6 @@ function createEphemeralEnv(): ProjectionTestEnv {
       {
         name: "scalar and nested struct",
         apply: () =>
-          // biome-ignore lint/suspicious/noExplicitAny: see above
           batch(doc, (d: any) => {
             d.top.set(1)
             d.outer.x.set(2)
@@ -65,37 +64,31 @@ function createEphemeralEnv(): ProjectionTestEnv {
       },
       {
         name: "record of scalars",
-        // biome-ignore lint/suspicious/noExplicitAny: see above
         apply: () => batch(doc, (d: any) => d.entries.set("k", 3)),
       },
       {
         name: "record of structs",
-        // biome-ignore lint/suspicious/noExplicitAny: see above
         apply: () =>
           batch(doc, (d: any) => d.peers.set("alice", { name: "A" })),
       },
       {
         name: "sum variant switch",
         apply: () =>
-          // biome-ignore lint/suspicious/noExplicitAny: see above
           batch(doc, (d: any) => d.shape.set({ kind: "square", side: 4 })),
       },
       {
         name: "json blob",
         apply: () =>
-          // biome-ignore lint/suspicious/noExplicitAny: see above
           batch(doc, (d: any) => d.blob.set({ label: "L", count: 5 })),
       },
       {
         // A `.json()`-wrapped list carries the sequence API, not `.set()` —
         // the wrap changes how it is stored, not how it is written.
         name: "json list push",
-        // biome-ignore lint/suspicious/noExplicitAny: see above
         apply: () => batch(doc, (d: any) => d.tags.push("t")),
       },
       {
         name: "record entry delete (last key)",
-        // biome-ignore lint/suspicious/noExplicitAny: see above
         apply: () => batch(doc, (d: any) => d.entries.delete("k")),
       },
     ],

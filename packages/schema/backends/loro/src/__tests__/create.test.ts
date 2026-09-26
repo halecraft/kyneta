@@ -1,3 +1,4 @@
+import { defined } from "@kyneta/schema/testing"
 import { LoroDoc } from "loro-crdt"
 import { describe, expect, it } from "vitest"
 import {
@@ -319,10 +320,9 @@ describe("sync primitives", () => {
       d.count.increment(5)
     })
 
-    const delta = exportSince(docA, v0)
-    expect(delta).not.toBeNull()
+    const delta = defined(exportSince(docA, v0), "a delta")
 
-    merge(docB, delta!, { origin: "sync" })
+    merge(docB, delta, { origin: "sync" })
 
     expect(docB.title()).toBe("Hello")
     expect(docB.count()).toBe(5)
@@ -338,7 +338,7 @@ describe("sync primitives", () => {
     subscribe(docB, (cs: any) => received.push(cs))
 
     batch(docA, (d: any) => d.title.insert(0, "Remote"))
-    const delta = exportSince(docA, v0)!
+    const delta = defined(exportSince(docA, v0), "a delta")
     merge(docB, delta, { origin: "sync" })
 
     expect(received.length).toBeGreaterThanOrEqual(1)
@@ -385,9 +385,8 @@ describe("full workflow", () => {
     batch(docA, (d: any) => d.count.increment(9))
 
     // Sync A → B via delta
-    const delta = exportSince(docA, version(docB))
-    expect(delta).not.toBeNull()
-    merge(docB, delta!, { origin: "sync" })
+    const delta = defined(exportSince(docA, version(docB)), "a delta")
+    merge(docB, delta, { origin: "sync" })
 
     // B observed the change
     expect(bChanges.length).toBeGreaterThanOrEqual(1)

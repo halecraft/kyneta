@@ -13,6 +13,7 @@ import {
   unwrap,
   writable,
 } from "@kyneta/schema"
+import { defined } from "@kyneta/schema/testing"
 import { LoroDoc } from "loro-crdt"
 import { describe, expect, it } from "vitest"
 import {
@@ -179,8 +180,9 @@ describe("write round-trip", () => {
     // This triggers materializeValueDiffs for the nested list
     batch(doc, d => d.trace.set({ messages }))
 
-    expect([...doc.trace()!.messages]).toHaveLength(10)
-    expect([...doc.trace()!.messages][9]).toBe("msg 9")
+    const trace = defined(doc.trace(), "the trace")
+    expect([...trace.messages]).toHaveLength(10)
+    expect([...trace.messages][9]).toBe("msg 9")
   })
 })
 
@@ -290,9 +292,8 @@ describe("delta sync", () => {
     })
 
     // Export delta and import into B
-    const delta = substrateA.exportSince(sinceVV)
-    expect(delta).not.toBeNull()
-    substrateB.merge(delta!, { origin: "sync" })
+    const delta = defined(substrateA.exportSince(sinceVV), "a delta")
+    substrateB.merge(delta, { origin: "sync" })
 
     // B should now have A's state
     expect(substrateB.reader.read(RawPath.empty.field("title"))).toBe("Hello!")
@@ -357,7 +358,7 @@ describe("changefeed fires on merge", () => {
 
     // Mutate A, then sync to B
     batch(docA, d => d.title.insert(0, "Remote"))
-    const delta = substrateA.exportSince(sinceVV)!
+    const delta = defined(substrateA.exportSince(sinceVV), "a delta")
     substrateB.merge(delta, { origin: "sync" })
 
     // B's subscriber should have fired
@@ -398,7 +399,7 @@ describe("changefeed fires on merge", () => {
     })
 
     // Sync the toggle to B
-    const delta = substrateA.exportSince(sinceVV)!
+    const delta = defined(substrateA.exportSince(sinceVV), "a delta")
     substrateB.merge(delta, { origin: "sync" })
 
     // B should see the updated value
@@ -443,7 +444,7 @@ describe("changefeed fires on merge", () => {
     })
 
     // Sync to B
-    const delta = substrateA.exportSince(sinceVV)!
+    const delta = defined(substrateA.exportSince(sinceVV), "a delta")
     substrateB.merge(delta, { origin: "sync" })
 
     // Both field-level changefeeds should have fired
@@ -490,7 +491,7 @@ describe("changefeed fires on merge", () => {
     const cf = (itemB.done as any)[Symbol.for("kyneta:changefeed")]
     const unsub = cf.subscribe((cs: unknown) => fieldChanges.push(cs))
 
-    const delta = substrateA.exportSince(sinceVV)!
+    const delta = defined(substrateA.exportSince(sinceVV), "a delta")
     substrateB.merge(delta, { origin: "sync" })
 
     // The inbound path should have reached the same leaf path
@@ -525,7 +526,7 @@ describe("changefeed fires on merge", () => {
     })
 
     // Sync to B
-    const delta = substrateA.exportSince(sinceVV)!
+    const delta = defined(substrateA.exportSince(sinceVV), "a delta")
     substrateB.merge(delta, { origin: "sync" })
 
     // B's subscriber should have fired
@@ -558,7 +559,7 @@ describe("changefeed fires on merge", () => {
       d.peers.set("alice", true)
     })
 
-    const delta = substrateA.exportSince(sinceVV)!
+    const delta = defined(substrateA.exportSince(sinceVV), "a delta")
     substrateB.merge(delta, { origin: "sync" })
 
     expect(treeFireCount).toBeGreaterThanOrEqual(1)
@@ -589,7 +590,7 @@ describe("changefeed fires on merge", () => {
       d.title.insert(0, "Hello")
     })
 
-    const delta = substrateA.exportSince(sinceVV)!
+    const delta = defined(substrateA.exportSince(sinceVV), "a delta")
     substrateB.merge(delta, { origin: "sync" })
 
     expect(treeFireCount).toBeGreaterThanOrEqual(1)
@@ -651,7 +652,7 @@ describe("outbound: multi-key struct mutation batching", () => {
     })
 
     // Sync to B
-    const delta = substrateA.exportSince(sinceVV)!
+    const delta = defined(substrateA.exportSince(sinceVV), "a delta")
     substrateB.merge(delta, { origin: "sync" })
 
     const itemB = [...docB.items][0] as any
@@ -857,7 +858,7 @@ describe("re-entrant write during merge replay", () => {
     batch(docA, (d: any) => {
       d.title.insert(d.title().length, "more")
     })
-    const delta = substrateA.exportSince(v0 as LoroVersion)!
+    const delta = defined(substrateA.exportSince(v0 as LoroVersion), "a delta")
     substrateB.merge(delta, { origin: "sync" })
 
     expect(docB.title()).toBe("seedmore")
