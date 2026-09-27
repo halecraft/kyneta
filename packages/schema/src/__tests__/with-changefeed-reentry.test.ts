@@ -23,8 +23,9 @@ import {
   writable,
 } from "../index.js"
 import {
+  createPlainClock,
   createPlainSubstrate,
-  createPlainVersionStrategy,
+  EMPTY_HISTORY,
 } from "../substrates/plain.js"
 
 function buildPlainDoc<S extends ReturnType<typeof Schema.struct>>(
@@ -172,11 +173,13 @@ describe("with-changefeed: cross-doc cascade with shared lease", () => {
 
     const substrateA = createPlainSubstrate(
       { v: 0 },
-      createPlainVersionStrategy("testA").strategy,
+      createPlainClock("testA"),
+      EMPTY_HISTORY,
     )
     const substrateB = createPlainSubstrate(
       { v: 0 },
-      createPlainVersionStrategy("testB").strategy,
+      createPlainClock("testB"),
+      EMPTY_HISTORY,
     )
 
     const docA = createRef(schemaA, substrateA, { lease: sharedLease })

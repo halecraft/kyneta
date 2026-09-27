@@ -563,7 +563,7 @@ authority with no shared concurrency model. You'd need:
 
 1. **Detection** — triggers or `sqlite3_update_hook` to capture changes
 2. **Reverse mapping** — row changes → schema ops (same algorithm)
-3. **Application** — route ops through `executeBatch` into the CRDT
+3. **Application** — route ops through `applyChanges` into the CRDT
 4. **Re-entrancy suppression** — prevent the changefeed from projecting
    the same changes back to SQL
 

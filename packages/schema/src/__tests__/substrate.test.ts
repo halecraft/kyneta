@@ -21,10 +21,11 @@ import {
   Zero,
 } from "../index.js"
 import {
+  createPlainClock,
   createPlainReplica,
   createPlainSubstrate,
-  createPlainVersionStrategy,
   DEFAULT_LINEAGE,
+  EMPTY_HISTORY,
   parsePlainPayload,
 } from "../substrates/plain.js"
 
@@ -251,16 +252,16 @@ describe("PlainVersion.meet()", () => {
 })
 
 // ===========================================================================
-// createPlainVersionStrategy
+// createPlainClock
 // ===========================================================================
 
-describe("createPlainVersionStrategy", () => {
-  it("current(flushCount) embeds the strategy's lineage", () => {
-    // A non-DEFAULT initial lineage never lazy-mints — current() just
+describe("createPlainClock", () => {
+  it("version(flushCount) embeds the clock's lineage", () => {
+    // A non-DEFAULT initial lineage never lazy-mints — version() just
     // stamps every produced version with it, regardless of flushCount.
-    const { strategy } = createPlainVersionStrategy("inc-fixed")
-    const v1 = strategy.current(1)
-    const v5 = strategy.current(5)
+    const clock = createPlainClock("inc-fixed")
+    const v1 = clock.version(1)
+    const v5 = clock.version(5)
     expect(v1.lineage).toBe("inc-fixed")
     expect(v1.value).toBe(1)
     expect(v5.lineage).toBe("inc-fixed")
@@ -268,52 +269,32 @@ describe("createPlainVersionStrategy", () => {
   })
 
   it("logOffset returns null for a since-version from a different REAL lineage", () => {
-    const { strategy } = createPlainVersionStrategy("inc-a")
-    // Force past DEFAULT so the strategy's lineage is REAL for this test's
-    // purposes — "inc-a" is already REAL (not DEFAULT_LINEAGE).
-    const since = new PlainVersion(2, "inc-b")
-    expect(strategy.logOffset(since)).toBeNull()
+    const clock = createPlainClock("inc-a")
+    expect(clock.logOffset(new PlainVersion(2, "inc-b"))).toBeNull()
   })
 
   it("logOffset returns the value for a same-lineage since-version", () => {
-    const { strategy } = createPlainVersionStrategy("inc-a")
-    const since = new PlainVersion(2, "inc-a")
-    expect(strategy.logOffset(since)).toBe(2)
+    const clock = createPlainClock("inc-a")
+    expect(clock.logOffset(new PlainVersion(2, "inc-a"))).toBe(2)
   })
 
   it("logOffset maps genesis (DEFAULT_LINEAGE) to offset 0 regardless of counter", () => {
-    const { strategy } = createPlainVersionStrategy("inc-a")
+    const clock = createPlainClock("inc-a")
     // Genesis is the empty vector ⊥ → the start of the authored log.
-    expect(strategy.logOffset(new PlainVersion(3, DEFAULT_LINEAGE))).toBe(0)
-    expect(strategy.logOffset(new PlainVersion(0, DEFAULT_LINEAGE))).toBe(0)
+    expect(clock.logOffset(new PlainVersion(3, DEFAULT_LINEAGE))).toBe(0)
+    expect(clock.logOffset(new PlainVersion(0, DEFAULT_LINEAGE))).toBe(0)
   })
 
-  it("adoptLineage updates subsequent current()/zero output", () => {
-    const { strategy, adoptLineage } = createPlainVersionStrategy("inc-a")
-    expect(strategy.zero.lineage).toBe("inc-a")
+  it("version() is a pure projection (no mint); adopt is the sole lineage mutator", () => {
+    const clock = createPlainClock(DEFAULT_LINEAGE)
+    clock.version(1)
+    clock.version(2)
+    expect(clock.lineage()).toBe(DEFAULT_LINEAGE)
 
-    adoptLineage("inc-b")
-
-    expect(strategy.zero.lineage).toBe("inc-b")
-    expect(strategy.current(5).lineage).toBe("inc-b")
-  })
-
-  it("current() is a pure projection (no mint); adoptLineage is the sole lineage mutator", () => {
-    const { strategy, getLineage, adoptLineage } =
-      createPlainVersionStrategy(DEFAULT_LINEAGE)
-    expect(getLineage()).toBe(DEFAULT_LINEAGE)
-
-    // current() no longer mints — identity is claimed by the substrate on the
-    // first LOCAL authored flush (see the PlainSubstrate lifecycle tests).
-    strategy.current(1)
-    strategy.current(2)
-    expect(getLineage()).toBe(DEFAULT_LINEAGE)
-
-    // adoptLineage is the only lineage mutator (the substrate uses it to mint; a
-    // merge uses it to adopt a peer's lineage). It is stable afterwards.
-    adoptLineage("inc-real")
-    expect(getLineage()).toBe("inc-real")
-    expect(strategy.current(3).lineage).toBe("inc-real")
+    clock.adopt("inc-real")
+    expect(clock.lineage()).toBe("inc-real")
+    expect(clock.version(0).lineage).toBe("inc-real")
+    expect(clock.version(3).lineage).toBe("inc-real")
   })
 })
 
@@ -668,8 +649,8 @@ describe("Round-trip replication", () => {
     const delta = substrateA.exportSince(f0) as any
     substrateB.merge(delta)
 
-    // merge preserves batch boundaries — each batch is a separate
-    // executeBatch call → 2 version bumps (one per change on A).
+    // merge preserves batch boundaries — each sender batch is appended
+    // separately → 2 version bumps (one per change on A).
     // B starts at genesis (0) + 2 merged batches = 2, adopting A's lineage.
     expect(substrateB.version().value).toBe(2)
     expect((substrateB.version() as PlainVersion).lineage).toBe(
@@ -915,7 +896,7 @@ describe("Lineage boundaries", () => {
     const snapshot = substrateA.exportEntirety()
     const substrateB = plainSubstrateFactory.fromEntirety(snapshot, TestSchema)
 
-    // fromEntirety uses executeBatch internally, so version > 0
+    // fromEntirety logs the entirety as one batch, so version > 0
     expect(substrateB.version().value).toBeGreaterThan(0)
 
     // But the snapshot matches the source's current state
@@ -940,7 +921,7 @@ describe("Lineage boundaries", () => {
     const substrateB = plainSubstrateFactory.fromEntirety(snapshot, TestSchema)
     const docB = interpretSubstrate(substrateB)
 
-    // fromEntirety produces version > 0 because it uses executeBatch
+    // fromEntirety logs the entirety as one batch, so version > 0
     const vAfterSnapshot = substrateB.version().value
     expect(vAfterSnapshot).toBeGreaterThan(0)
 
@@ -1264,20 +1245,12 @@ describe("PlainSubstrate.advance()", () => {
 // lineage-aware merge / resetFromEntirety — cross-lineage adoption
 // ---------------------------------------------------------------------------
 
-// Helper: build a substrate whose strategy is seeded with a specific,
+// Helper: build a substrate whose clock is seeded with a specific,
 // already-REAL lineage (bypassing the DEFAULT lazy-mint path) so tests
 // can construct a known cross-lineage scenario deterministically.
 function createSubstrateWithLineage(lineage: string) {
-  const { strategy, adoptLineage, getLineage } =
-    createPlainVersionStrategy(lineage)
   const doc = { ...(Zero.structural(TestSchema) as object) }
-  const substrate = createPlainSubstrate(
-    doc,
-    strategy,
-    adoptLineage,
-    getLineage,
-  )
-  return substrate
+  return createPlainSubstrate(doc, createPlainClock(lineage), EMPTY_HISTORY)
 }
 
 describe("lineage-aware merge", () => {
@@ -1325,12 +1298,7 @@ describe("lineage-aware merge", () => {
     batch(sourceDoc, d => d.title.insert(0, "Fresh"))
 
     // Target already has its own REAL lineage from a prior session.
-    const targetHandle = createPlainVersionStrategy("inc-target-old")
-    const target = createPlainReplica(
-      targetHandle.strategy,
-      targetHandle.adoptLineage,
-      targetHandle.getLineage,
-    )
+    const target = createPlainReplica(createPlainClock("inc-target-old"))
     expect((target.version() as PlainVersion).lineage).toBe("inc-target-old")
 
     // REAL -> different REAL is a genuine lineage boundary. `merge()` no
@@ -1347,12 +1315,7 @@ describe("lineage-aware merge", () => {
     batch(sourceDoc, d => d.title.insert(0, "Fresh"))
 
     // Target already has its own REAL lineage from a prior session.
-    const targetHandle = createPlainVersionStrategy("inc-target-old")
-    const target = createPlainReplica(
-      targetHandle.strategy,
-      targetHandle.adoptLineage,
-      targetHandle.getLineage,
-    )
+    const target = createPlainReplica(createPlainClock("inc-target-old"))
     expect((target.version() as PlainVersion).lineage).toBe("inc-target-old")
 
     // `resetFromEntirety` is the lineage-boundary path: it adopts the new
@@ -1377,14 +1340,146 @@ describe("lineage-aware merge", () => {
   })
 
   it("exportSince falls back to entirety (not null) for a cross-REAL-lineage since-version", () => {
-    const { strategy, adoptLineage, getLineage } =
-      createPlainVersionStrategy("inc-a")
-    const replica = createPlainReplica(strategy, adoptLineage, getLineage)
+    const replica = createPlainReplica(createPlainClock("inc-a"))
 
     const crossLineageVersion = new PlainVersion(0, "inc-b")
     const result = replica.exportSince(crossLineageVersion)
     expect(result).not.toBeNull()
     expect(result?.kind).toBe("entirety")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Plain construction keeps history — upgrade, fromEntirety, replica cache
+// ---------------------------------------------------------------------------
+
+/** A source substrate with `n` authored batches, and its genesis version. */
+function sourceWithBatches(n: number) {
+  const source = plainSubstrateFactory.create(TestSchema)
+  const doc = interpretSubstrate(source)
+  const genesis = source.version()
+  for (let i = 0; i < n; i++) batch(doc, d => d.count.increment(1))
+  return { source, doc, genesis }
+}
+
+describe("plain upgrade keeps history", () => {
+  it("the upgraded substrate carries the replica's version and log", () => {
+    const { source, genesis } = sourceWithBatches(2)
+    const replica = plainReplicaFactory.createEmpty()
+    replica.merge(source.exportSince(genesis) as SubstratePayload)
+
+    const upgraded = plainSubstrateFactory.upgrade(replica, TestSchema)
+    expect(upgraded.version().serialize()).toBe(replica.version().serialize())
+    expect(upgraded.version().compare(source.version())).toBe("equal")
+
+    batch(interpretSubstrate(upgraded), d => d.count.increment(1))
+    expect(upgraded.version().compare(source.version())).toBe("ahead")
+
+    const delta = upgraded.exportSince(source.version())
+    expect(delta?.kind).toBe("since")
+    expect(JSON.parse(delta?.data as string)).toHaveLength(1)
+  })
+
+  it("the base offset survives the upgrade", () => {
+    const { source, genesis } = sourceWithBatches(2)
+    const replica = plainReplicaFactory.createEmpty()
+    replica.merge(source.exportSince(genesis) as SubstratePayload)
+    const first = new PlainVersion(1, source.version().lineage)
+    replica.advance(first)
+
+    const upgraded = plainSubstrateFactory.upgrade(replica, TestSchema)
+    expect(upgraded.baseVersion().serialize()).toBe(first.serialize())
+    expect(
+      upgraded.exportSince(new PlainVersion(0, source.version().lineage)),
+    ).toBeNull()
+  })
+
+  it("upgrade refuses a replica this factory did not build", () => {
+    const foreign = { ...plainReplicaFactory.createEmpty() }
+    expect(() => plainSubstrateFactory.upgrade(foreign, TestSchema)).toThrow(
+      "requires a replica produced by this substrate factory",
+    )
+  })
+})
+
+describe("plain fromEntirety", () => {
+  it("keeps genesis for a genesis payload", () => {
+    const payload = plainSubstrateFactory.create(TestSchema).exportEntirety()
+    const substrate = plainSubstrateFactory.fromEntirety(payload, TestSchema)
+    expect(substrate.version().lineage).toBe(DEFAULT_LINEAGE)
+    expect(substrate.version().serialize()).toBe(
+      plainReplicaFactory.fromEntirety(payload).version().serialize(),
+    )
+  })
+
+  it("adopts the payload's REAL lineage", () => {
+    const { source } = sourceWithBatches(1)
+    const payload = source.exportEntirety()
+    const substrate = plainSubstrateFactory.fromEntirety(payload, TestSchema)
+    expect(substrate.version().lineage).toBe(source.version().lineage)
+    expect(substrate.version().serialize()).toBe(
+      plainReplicaFactory.fromEntirety(payload).version().serialize(),
+    )
+  })
+})
+
+describe("plain merge announces after taking the ops in", () => {
+  it("delivers one replayed changeset per sender batch and matches the sender", () => {
+    const { source, genesis } = sourceWithBatches(2)
+    const target = plainSubstrateFactory.create(TestSchema)
+    const doc = interpretSubstrate(target)
+    const seen: { replay: boolean | undefined; count: unknown }[] = []
+    subscribe(doc, cs => {
+      seen.push({ replay: cs.replay, count: doc.count() })
+    })
+
+    target.merge(source.exportSince(genesis) as SubstratePayload)
+
+    // Each batch is announced once the doc holds it, and not before.
+    expect(seen).toEqual([
+      { replay: true, count: 1 },
+      { replay: true, count: 2 },
+    ])
+    expect(target.exportEntirety().data).toBe(source.exportEntirety().data)
+    expect(target.version().serialize()).toBe(source.version().serialize())
+  })
+})
+
+describe("plain replica materialization", () => {
+  it("reflects merge, advance and reset without corrupting its base", () => {
+    const S = Schema.struct({ items: Schema.list(Schema.number()) })
+    const source = plainSubstrateFactory.create(S)
+    const doc = interpret(S, source.context())
+      .with(readable)
+      .with(writable)
+      .with(observation)
+      .done()
+    const genesis = source.version()
+    batch(doc, d => d.items.push(1))
+    const afterFirst = source.version()
+    batch(doc, d => d.items.push(2))
+
+    const replica = plainReplicaFactory.createEmpty()
+    const state = () => JSON.parse(replica.exportEntirety().data as string)
+    replica.merge(source.exportSince(genesis) as SubstratePayload)
+    expect(state().items).toEqual([1, 2])
+
+    // After a trim, every later materialization replays the retained log onto
+    // the base. Replaying in place would grow `items` on each one.
+    replica.advance(afterFirst)
+    for (let i = 3; i <= 5; i++) {
+      const before = source.version()
+      batch(doc, d => d.items.push(i))
+      replica.merge(source.exportSince(before) as SubstratePayload)
+      expect(state().items).toEqual([
+        1,
+        2,
+        ...Array.from({ length: i - 2 }, (_, k) => k + 3),
+      ])
+    }
+
+    replica.resetFromEntirety(source.exportEntirety(), source.version())
+    expect(state().items).toEqual([1, 2, 3, 4, 5])
   })
 })
 

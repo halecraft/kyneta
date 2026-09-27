@@ -8,10 +8,10 @@
 // - `runBatch` brackets the prepare-loop-plus-flush block with a single
 //   `doc.commit()` per outermost logical action (depth-counter design;
 //   inner re-entrant batch()s collapse into the outer commit).
-// - `afterBatch` flushes the coalescing buffer on local writes; on
-//   replay it re-materialises σ from λ (CRDT merge is a lattice join
-//   that has no incremental σ-step decomposition).
-// - Persistent doc.subscribe() event bridge for external changes.
+// - `afterBatch` flushes the coalescing buffer.
+// - Persistent doc.subscribe() event bridge for external changes: it
+//   re-materialises σ from λ (CRDT merge is a lattice join that has no
+//   incremental σ-step decomposition), then announces the ops.
 // - Own-commit discriminator: a pre-commit-hook discriminator
 //   (`subscribePreCommit` captures the in-flight commit's identity;
 //   the subscribe handler matches via `batch.to`) prevents the bridge
@@ -27,27 +27,24 @@
 // underlying LoroDoc, regardless of source (local kyneta writes,
 // merge, external doc.import, external raw Loro API mutations).
 //
-// `prepare` and `afterBatch` accept `BatchOptions` and branch on
-// `options?.replay`. The event bridge constructs the replay batch via
-// `executeBatch(ctx, ops, { origin, replay: true })`; substrate-side
-// work (applyDiff, commit) is skipped when `replay` is true because the
-// native LoroDoc already absorbed the change. This makes `prepare` and
-// `afterBatch` total functions of their declared inputs — no hidden
-// ambient state for the substrate-write decision. Context: jj:qpultxsw.
+// `prepare` and `afterBatch` see only Kyneta's own writes. The event bridge
+// handles everything else: the LoroDoc already holds those ops, so it brings
+// σ up to date and announces them via `announce(ctx, ops, origin)`, which
+// never calls back into `prepare`.
 
 import {
+  announce,
   applyChange,
   BACKING_DOC,
-  type BatchOptions,
   buildWritableContext,
   type ChangeBase,
+  type CommitOptions,
   containerKey,
   DEFAULT_LINEAGE,
   DEVTOOLS_HISTORY,
   type DevtoolsHistory,
   type DevtoolsHistorySummary,
   deriveSchemaBinding,
-  executeBatch,
   fieldAbsPath,
   findOpaqueBoundary,
   hasBackingDoc,
@@ -62,13 +59,13 @@ import {
   KIND,
   type MapChange,
   type MarkConfig,
+  type MergeOptions,
   ownedForStore,
   type Path,
   type PlainState,
   type PositionCapable,
   type ProductSchema,
   plainReader,
-  RECORD_INVERSE,
   type RecordInverseFn,
   type Replica,
   type ReplicaFactory,
@@ -227,8 +224,8 @@ export function createLoroSubstrate(
   let cachedCtx: WritableContext | undefined
 
   // The shadow — a plain JS object materialized from the LoroDoc.
-  // The plainReader is a live view over this object; applyChange keeps
-  // it in sync with every mutation (local or replayed).
+  // The plainReader is a live view over this object. `prepare` steps it for
+  // local writes; the event bridge re-materializes it for everything else.
   const shadow: PlainState = materializeLoroShadow(doc, schema, binding)
   const reader = plainReader(shadow)
 
@@ -366,34 +363,23 @@ export function createLoroSubstrate(
       )
     },
 
-    prepare(path: Path, change: ChangeBase, options?: BatchOptions): void {
-      // Replay writes: the native LoroDoc has already absorbed these
-      // ops via doc.import; skip σ/λ advance — afterBatch(replay)
-      // rebuilds σ from λ in one Π pass.
-      if (options?.replay) return
-
-      // Inverse recording under the normal handler. Capture σ at the
-      // target path before applyChange mutates the shadow; the
-      // recording closure pushes onto the active runBatch frame's
-      // stack. Skipped under the undo-replay handler (compensating).
-      // For json-boundary writes the inverse is computed against the
-      // value at the change's target path inside the σ subtree — when
-      // the bracket later replays it under `compensating: true`, σ and
-      // λ both revert (naturality of Π over invert).
-      const record = (
-        options as
-          | (BatchOptions & { [RECORD_INVERSE]?: RecordInverseFn })
-          | undefined
-      )?.[RECORD_INVERSE]
-      if (record && !options?.compensating) {
+    prepare(
+      path: Path,
+      change: ChangeBase,
+      recordInverse: RecordInverseFn | null,
+    ): void {
+      // Capture σ at the target path before applyChange mutates the shadow.
+      // For json-boundary writes the inverse is computed against the value
+      // at the change's target path inside the σ subtree — when the bracket
+      // later applies it as a compensation, σ and λ both revert (naturality
+      // of Π over invert).
+      if (recordInverse) {
         // Read, don't copy. `invert` snapshots whatever it retains — see
         // `invertReplace`, `invertMap`, `invertSequence` and the rich-text
         // marks in `inverse.ts`, each of which deep-clones the pre-state it
         // captures. Copying here as well protected nothing and cost a deep
         // clone of the written subtree on every local write.
-        const pre = path.read(shadow)
-        const inverse = invert(pre, change)
-        record(path, inverse)
+        recordInverse(path, invert(path.read(shadow), change))
       }
 
       // Local write — σ advances eagerly so reads are immediately
@@ -447,21 +433,13 @@ export function createLoroSubstrate(
       applyDiffGroup(doc, group)
     },
 
-    afterBatch(options?: BatchOptions): void {
-      if (options?.replay) {
-        // CRDT merge is a lattice join — `batchToOps` may emit
-        // overlapping structural + leaf diffs whose sequential σ-step
-        // composition would double-count. Re-materialise σ from λ in
-        // one Π pass instead.
-        syncShadow(shadow, materializeLoroShadow(doc, schema, binding))
-        return
-      }
-      // Local write: drain the coalescing buffer. `runBatch` owns the
-      // commit boundary — we apply diffs here but do NOT commit.
+    afterBatch(): void {
+      // Drain the coalescing buffer. `runBatch` owns the commit
+      // boundary — we apply diffs here but do NOT commit.
       flushCoalesceBuffer()
     },
 
-    runBatch(work: () => void, options?: BatchOptions): void {
+    runBatch(work: () => void, options: CommitOptions): void {
       // Ctx-level outermost detection (frameStarts.length === 0)
       // means substrate.runBatch is invoked at most once per outermost
       // batch(doc, fn). No per-substrate depth counter needed.
@@ -469,9 +447,7 @@ export function createLoroSubstrate(
       try {
         work()
         doc.commit(
-          options?.origin !== undefined
-            ? { origin: options.origin }
-            : undefined,
+          options.origin !== undefined ? { origin: options.origin } : undefined,
         )
       } finally {
         // Empty-commit safety: if no event fired (probe-verified
@@ -583,7 +559,7 @@ export function createLoroSubstrate(
       }
     },
 
-    merge(payload: SubstratePayload, options?: BatchOptions): void {
+    merge(payload: SubstratePayload, options?: MergeOptions): void {
       if (
         payload.encoding !== "binary" ||
         !(payload.data instanceof Uint8Array)
@@ -600,14 +576,13 @@ export function createLoroSubstrate(
       } finally {
         pendingImportOrigin = undefined
       }
-      // That's it — the doc.subscribe() handler bridges events to the
-      // changefeed via executeBatch with `replay: true`.
+      // The doc.subscribe() handler announces the merged ops.
     },
 
     resetFromEntirety(
       payload: SubstratePayload,
       _remoteVersion: Version,
-      options?: BatchOptions,
+      options?: MergeOptions,
     ): void {
       // Loro never mints a new lineage automatically (see LoroVersion.lineage),
       // so an lineage boundary never arises for this substrate today — this
@@ -663,10 +638,12 @@ export function createLoroSubstrate(
     // Lazily ensure the context is built
     const ctx = substrate.context()
 
-    // `replay: true` tells substrate.prepare/afterBatch to skip native-side
-    // work (Loro has already absorbed these ops via doc.import) and
-    // surfaces on the Changeset for downstream filters (exchange echo).
-    executeBatch(ctx, ops, { origin, replay: true })
+    // The LoroDoc already holds these ops. `batchToOps` may emit
+    // overlapping structural + leaf diffs whose sequential σ-step
+    // composition would double-count, so σ is re-materialised from λ in
+    // one Π pass, and only then announced.
+    syncShadow(shadow, materializeLoroShadow(doc, schema, binding))
+    announce(ctx, ops, origin)
   })
 
   return substrate as Substrate<LoroVersion>
@@ -784,7 +761,7 @@ export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
       }
     },
 
-    merge(payload: SubstratePayload, _options?: BatchOptions): void {
+    merge(payload: SubstratePayload, _options?: MergeOptions): void {
       if (
         payload.encoding !== "binary" ||
         !(payload.data instanceof Uint8Array)
@@ -800,7 +777,7 @@ export function createLoroReplica(doc: LoroDocType): Replica<LoroVersion> {
     resetFromEntirety(
       payload: SubstratePayload,
       _remoteVersion: Version,
-      options?: BatchOptions,
+      options?: MergeOptions,
     ): void {
       // See createLoroSubstrate's resetFromEntirety — CRDT merge (set
       // union via doc.import) is always the correct absorption, lineage

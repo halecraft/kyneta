@@ -46,12 +46,13 @@ import type {
   TextSchema,
   TreeSchema,
 } from "../schema.js"
-import type { BatchOptions } from "../substrate.js"
+import type { PrepareOptions } from "../substrate.js"
 
 import type { HasCaching, HasNavigation } from "./bottom.js"
 import { markCaching } from "./bottom.js"
 import { installKeyedCaching } from "./keyed-helpers.js"
 import { installSequenceCaching } from "./sequence-helpers.js"
+import { hasPreparePipeline } from "./writable.js"
 
 // ---------------------------------------------------------------------------
 // INVALIDATE symbol — composability hook for cache coordination
@@ -86,42 +87,19 @@ const ADDRESS_TABLE_SYM = Symbol.for("kyneta:addressTable")
 // ---------------------------------------------------------------------------
 
 /**
- * Per-context state for the caching layer's prepare wrapping.
+ * Path-keyed invalidation handlers. Each composite node registers its
+ * handler here during interpretation.
  *
- * - `handlers`: path-keyed map of invalidation handlers. Each composite
- *   node registers its handler here during interpretation.
- * - `originalPrepare`: the unwrapped prepare method, called after
- *   the invalidation handler fires.
+ * Outer key: path where the handler fires. Inner key: registrant's own
+ * path (the product/sequence/etc. that owns the handler). Re-registration
+ * from the same registrant replaces — so re-interpretation of a sum's
+ * current variant doesn't accrete dead handlers.
  */
-interface CacheWiringState {
-  // Outer key: path where the handler fires. Inner key: registrant's own
-  // path (the product/sequence/etc. that owns the handler). Re-registration
-  // from the same registrant replaces — so re-interpretation of a sum's
-  // current variant doesn't accrete dead handlers.
-  readonly handlers: Map<string, Map<string, (change: ChangeBase) => void>>
-  readonly originalPrepare: (
-    path: Path,
-    change: ChangeBase,
-    options?: BatchOptions,
-  ) => void
-}
+type CacheHandlers = Map<string, Map<string, (change: ChangeBase) => void>>
 
 // WeakMap ensures a single prepare wrapper per context object,
 // shared across all nodes interpreted with that context.
-const cacheContextState = new WeakMap<object, CacheWiringState>()
-
-/**
- * Returns `true` if `ctx` has a `prepare` method — i.e. it's a
- * `WritableContext`, not a plain `RefContext`. This duck-type check
- * allows `withCaching` to keep its `RefContext` type signature while
- * participating in the prepare pipeline when composed inside
- * `withWritable`.
- */
-function hasPrepare(ctx: RefContext): ctx is RefContext & {
-  prepare: (path: Path, change: ChangeBase, options?: BatchOptions) => void
-} {
-  return "prepare" in ctx && typeof ctx.prepare === "function"
-}
+const cacheContextState = new WeakMap<object, CacheHandlers>()
 
 /**
  * Ensures the given context has its `prepare` wrapped for cache
@@ -137,22 +115,20 @@ function hasPrepare(ctx: RefContext): ctx is RefContext & {
  * Uses the same structural pattern as `ensurePrepareWiring` in
  * `withChangefeed` — WeakMap + idempotent wrapping + path-keyed map.
  */
-function ensureCacheWiring(
-  ctx: RefContext,
-): Map<string, Map<string, (change: ChangeBase) => void>> | null {
-  if (!hasPrepare(ctx)) return null
+function ensureCacheWiring(ctx: RefContext): CacheHandlers | null {
+  if (!hasPreparePipeline(ctx)) return null
 
-  let state = cacheContextState.get(ctx)
-  if (state) return state.handlers
+  const existing = cacheContextState.get(ctx)
+  if (existing) return existing
 
-  const handlers = new Map<string, Map<string, (change: ChangeBase) => void>>()
+  const handlers: CacheHandlers = new Map()
   const originalPrepare = ctx.prepare
 
   // Wrapped prepare: invalidate cache at path, then forward.
   const wrappedPrepare = (
     path: Path,
     change: ChangeBase,
-    options?: BatchOptions,
+    options: PrepareOptions,
   ): void => {
     const inner = handlers.get(path.key)
     if (inner) {
@@ -163,8 +139,7 @@ function ensureCacheWiring(
 
   ctx.prepare = wrappedPrepare
 
-  state = { handlers, originalPrepare }
-  cacheContextState.set(ctx, state)
+  cacheContextState.set(ctx, handlers)
   return handlers
 }
 
@@ -217,8 +192,7 @@ export function __getCacheHandlerCountAtPath(
   ctx: object,
   atPathKey: string,
 ): number {
-  const state = cacheContextState.get(ctx)
-  return state?.handlers.get(atPathKey)?.size ?? 0
+  return cacheContextState.get(ctx)?.get(atPathKey)?.size ?? 0
 }
 
 // ---------------------------------------------------------------------------

@@ -5,8 +5,8 @@
 // through it, so a bug there is a bug on all of them. Two things make a
 // plain-substrate-only test insufficient:
 //
-//   1. The replay path — an incoming sync merge — is where delivery fans out
-//      hardest. A merge prepares its whole payload and flushes once, so a
+//   1. An announcement — an incoming sync merge — is where delivery fans out
+//      hardest. A merge announces its whole payload and flushes once, so a
 //      payload touching N paths is one flush over N ops. That path is driven by
 //      the CRDT event bridges, which is exactly what a plain-only test misses.
 //   2. Substrates legitimately disagree about op *shape*. `expandMapOpsToLeaves`
@@ -81,10 +81,10 @@ export interface DeliveryTestEnv {
   /**
    * Write on a second peer and merge the result into `doc`.
    *
-   * This is the whole reason the factory takes two peers. Merging drives the
-   * substrate's event bridge, which calls `executeBatch(..., replay: true)` —
-   * a different entry point from a local `batch()`, and the one that carries
-   * the largest payloads in practice.
+   * This is the whole reason the factory takes two peers. A merge is
+   * announced with `announce(ctx, ops, origin)` — a different
+   * entry point from a local `batch()`, and the one that carries the largest
+   * payloads in practice.
    */
   remoteMerge(fn: (draft: DeliveryDoc) => void): void
 }
@@ -303,7 +303,7 @@ export function deliveryConformance(
           // to all peers; if a local one gained it, local writes would never
           // sync at all.
           for (const cs of atRoot.changesets) {
-            expect(cs.replay ?? false).toBe(driver.replay)
+            expect(cs.replay).toBe(driver.replay)
           }
         })
 

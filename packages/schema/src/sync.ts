@@ -7,7 +7,7 @@
 
 import { hasSubstrate, SUBSTRATE } from "./native.js"
 import type {
-  BatchOptions,
+  MergeOptions,
   Substrate,
   SubstratePayload,
   Version,
@@ -96,22 +96,20 @@ export function exportSince(
 /**
  * Import a delta or snapshot payload into a live document.
  *
- * After import, the changefeed fires for all subscribers — the event
- * bridge handles this automatically. The emitted `Changeset` carries
- * `replay: true` so layered consumers (e.g. the exchange's echo filter)
- * can distinguish merge replays from local writes.
+ * After import, the substrate announces the merged ops, and subscribers
+ * receive them with `replay: true`, so layered consumers (e.g. the
+ * exchange's echo filter) can tell a merge from a local write.
  *
  * @param ref - A root ref created by `createDoc()` or `exchange.get()`
  * @param payload - The delta or snapshot payload to import
- * @param options - Optional `BatchOptions`. `options.origin` is the
- *   app-level label propagated to subscribers; `options.replay` is
- *   ignored (the substrate forces `replay: true` internally).
+ * @param options - `origin` is the app-level label propagated to
+ *   subscribers.
  * @throws If the ref has no `[SUBSTRATE]`
  */
 export function merge(
   ref: object,
   payload: SubstratePayload,
-  options?: BatchOptions,
+  options?: MergeOptions,
 ): void {
   getSubstrate(ref).merge(payload, options)
 }

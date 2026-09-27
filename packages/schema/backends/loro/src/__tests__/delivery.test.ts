@@ -3,8 +3,8 @@
 // The notification engine lives in @kyneta/schema and every substrate routes
 // through it, so this is not re-testing schema's logic. What it pins is that
 // Loro's event bridge feeds that engine the same way the plain substrate does
-// — in particular on the replay path, where an incoming merge is replayed
-// through executeBatch(..., replay: true) with an op list that
+// — in particular for an incoming merge, which is announced through
+// announce(ctx, ops, origin) with an op list that
 // expandMapOpsToLeaves may have spread across many paths.
 
 import { batch, createRef } from "@kyneta/schema"

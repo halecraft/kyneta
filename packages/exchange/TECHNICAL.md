@@ -349,6 +349,10 @@ handed the missing piece.
 backing document. Accumulated state carries across rather than being rebuilt —
 a promotion that produced a fresh empty substrate would be indistinguishable
 from success by any structural check, which is why the tests assert on content.
+History carries across too, and so does the version: the promoted document
+publishes the version the replica held. For plain, whose replica *is* an op
+log, `upgrade` hands that log to the substrate; a promotion that restarted it
+would publish a regressed version and could no longer serve deltas.
 
 Three preconditions, and together they are the whole contract:
 
@@ -463,13 +467,13 @@ Source: `src/synchronizer.ts` → `#wireLocalChanges`, `src/exchange.ts` → cha
 
 Every local mutation — `batch(doc, fn)`, direct writes on a ref, `applyChanges` — flows through the substrate's changefeed. The Synchronizer subscribes once per `DocRuntime` and filters by the structural `replay` flag:
 
-Since `@kyneta/schema` 4.0 that subscription receives **one changeset per transaction**, not one per changed path, and the same holds for a replayed merge — an incoming `offer` touching fifty paths now arrives as one changeset rather than fifty. Two mechanisms in `Runtime` were built when it was one per path, and both are retained: `#dirtyLocalChanges` still coalesces several *batches* and several *documents* within one microtask, and the store-program collapses any requests landing during a write into the one write owed after it. What changed is which of them carries the common case, not whether either is needed.
+Since `@kyneta/schema` 4.0 that subscription receives **one changeset per transaction**, not one per changed path, and the same holds for an announced merge — an incoming `offer` touching fifty paths now arrives as one changeset rather than fifty. Two mechanisms in `Runtime` were built when it was one per path, and both are retained: `#dirtyLocalChanges` still coalesces several *batches* and several *documents* within one microtask, and the store-program collapses any requests landing during a write into the one write owed after it. What changed is which of them carries the common case, not whether either is needed.
 
 ```
 batch(doc, d => d.title.insert(0, "hi"))
   │
   ├─ substrate.prepare → applyChangeToYjs / applyDiff / etc.
-  │  onFlush → changefeed emits Changeset with origin: undefined, replay: undefined
+  │  flush → changefeed emits Changeset with origin: undefined, replay: false
   │
   ├─ Synchronizer's subscriber checks replay:
   │    if (changeset.replay) return   // echo from remote import; skip
@@ -487,15 +491,15 @@ batch(doc, d => d.title.insert(0, "hi"))
 
 ### Echo prevention
 
-Remote `offer` messages go through `substrate.merge(payload, { origin: "sync" })`. The substrate's event bridge replays the merge through `executeBatch(ctx, ops, { origin: "sync", replay: true })`, so every `Changeset` emitted during that merge carries `replay: true`. The Synchronizer's subscriber checks `changeset.replay` and **skips** `notifyLocalChange(docId)`. Without this skip, every incoming `offer` would re-emit a local `offer` back to all peers — an infinite feedback loop.
+Remote `offer` messages go through `substrate.merge(payload, { origin: "sync" })`. The substrate takes the ops in, brings its shadow up to date, and announces them through `announce(ctx, ops, "sync")`, so every `Changeset` emitted during that merge carries `replay: true`. The Synchronizer's subscriber checks `changeset.replay` and **skips** `notifyLocalChange(docId)`. Without this skip, every incoming `offer` would re-emit a local `offer` back to all peers — an infinite feedback loop.
 
-Pre-1.6.x the filter checked `changeset.origin === "sync"` — fragile because `origin` is a free-vocabulary app label, so a `batch(doc, fn, { origin: "sync" })` happened to be suppressed (wrong), and a `doc.import(payload, "from-some-other-pubsub")` would echo back to peers (also wrong). `replay` is a structural directive set by substrate event bridges and `merge` paths — apps never construct it, the schema layer never reads `origin`'s value, and the discrimination is correct regardless of what labels apps use. Context: jj:qpultxsw.
+Pre-1.6.x the filter checked `changeset.origin === "sync"` — fragile because `origin` is a free-vocabulary app label, so a `batch(doc, fn, { origin: "sync" })` happened to be suppressed (wrong), and a `doc.import(payload, "from-some-other-pubsub")` would echo back to peers (also wrong). `replay` is derived from the batch's `ingress` — apps cannot construct it, the schema layer never reads `origin`'s value, and the discrimination is correct regardless of what labels apps use. Context: jj:qpultxsw.
 
-The `replay` propagation is the substrate's responsibility (every substrate in `@kyneta/schema` correctly threads it through `executeBatch` and `deliverNotifications`). The sync-side check is *this* package's responsibility.
+Announcing is the substrate's responsibility (every substrate in `@kyneta/schema` announces what it did not author, and `changesetMetadata` derives `replay` from that). The sync-side check is *this* package's responsibility.
 
 #### Line: no inbox echo filter needed
 
-`Line` (`packages/exchange/src/line.ts`) subscribes to its inbox doc's changefeed to dispatch incoming messages. There is **no echo filter** on this subscription — by design, the Line only writes locally to its `outbox`, never to its own `inbox`. Inbox changes are delivered exclusively by the substrate event bridge (the replay path that surfaces remote peer writes). A previous `changeset.origin === "local"` filter (pre-jj:wpvtoxmw) was dead code — the convention it pinned had no writer in the exchange package — and was removed.
+`Line` (`packages/exchange/src/line.ts`) subscribes to its inbox doc's changefeed to dispatch incoming messages. There is **no echo filter** on this subscription — by design, the Line only writes locally to its `outbox`, never to its own `inbox`. Inbox changes are delivered exclusively by merges of remote peer writes, which arrive as announcements (`replay: true`). A previous `changeset.origin === "local"` filter (pre-jj:wpvtoxmw) was dead code — the convention it pinned had no writer in the exchange package — and was removed.
 
 The "exchange never branches on `origin`'s value" invariant is now globally true: every echo-discrimination decision in this package reads `replay` (structural) or relies on the absence of local inbox writes (Line). No code path inspects `origin`.
 

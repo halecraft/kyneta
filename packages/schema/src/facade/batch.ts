@@ -8,7 +8,7 @@
 //   without re-returning the ref.
 //
 // - `applyChanges(ref, ops, options?)` → `Op[]`
-//   Declarative: apply a list of changes via `executeBatch`, triggering
+//   Declarative: apply a list of changes inside one `runBatch`, triggering
 //   the full prepare pipeline (cache invalidation + store mutation +
 //   notification accumulation) and flush (batched Changeset delivery).
 //
@@ -18,47 +18,13 @@
 import type { Op } from "../changefeed.js"
 import type { HasRemove, WritableContext } from "../interpreters/writable.js"
 import {
-  executeBatch,
   FORWARD_OPS_MARKER,
   FORWARD_OPS_SINCE,
   hasTransact,
   REMOVE,
   TRANSACT,
 } from "../interpreters/writable.js"
-
-// ---------------------------------------------------------------------------
-// CommitOptions
-// ---------------------------------------------------------------------------
-
-/**
- * Extensible metadata surface for all mutation entry points
- * (`batch`, `applyChanges`, and future variants).
- */
-export interface CommitOptions {
-  /**
-   * App-level provenance label attached to the emitted `Changeset`.
-   *
-   * Subscribers receive this as `changeset.origin` — useful for
-   * categorizing batches (`"sync"`, `"undo"`, `"migration"`, etc.).
-   * The schema layer and the exchange never branch on its value.
-   * For kyneta-internal echo suppression use {@link CommitOptions.source}.
-   *
-   * @example
-   * applyChanges(doc, ops, { origin: "sync" })
-   */
-  origin?: string
-  /**
-   * Identity-typed echo-suppression token. Propagates to
-   * `Changeset.source`. Compared with `===` by subscribers that issued
-   * the change.
-   *
-   * @example
-   * const mySource = Symbol("my-binding")
-   * batch(ref, fn, { source: mySource })
-   * cf.subscribe(cs => { if (cs.source === mySource) return; / apply / })
-   */
-  source?: unknown
-}
+import type { CommitOptions } from "../substrate.js"
 
 // ---------------------------------------------------------------------------
 // batch — imperative mutation → Op[]
@@ -124,9 +90,10 @@ export function batch<D extends object>(
     )
   }
   const ctx: WritableContext = ref[TRANSACT]
-  const opts = options
-    ? { origin: options.origin, source: options.source }
-    : undefined
+  const opts: CommitOptions = {
+    origin: options?.origin,
+    source: options?.source,
+  }
   let captured: Op[] = []
   ctx.runBatch(() => {
     const marker = ctx[FORWARD_OPS_MARKER]()
@@ -156,9 +123,9 @@ export function batch<D extends object>(
  * applyChanges(docB, ops, { origin: "sync" })
  * ```
  *
- * Routes through `executeBatch`, which opens its own `ctx.runBatch` for
- * non-replay ops — that wrapper owns the depth-0 flush, so the whole
- * batch delivers as one Changeset per affected subscriber. The prepare
+ * Opens one `ctx.runBatch` around the list. That wrapper owns the depth-0
+ * flush, so the whole list delivers as one Changeset per affected
+ * subscriber; nested inside a `batch()` block, it joins the outer one. The prepare
  * pipeline handles cache invalidation (via `withCaching`) and
  * notification accumulation (via `withChangefeed`) automatically.
  *
@@ -185,12 +152,13 @@ export function applyChanges(
   // Empty ops → no-op. No prepare, no flush, no notification.
   if (ops.length === 0) return ops
 
-  // User-facing entry: never set `replay`. Origin propagates as a label;
-  // source propagates as an identity-typed echo token.
-  executeBatch(
-    ctx,
-    ops,
-    options ? { origin: options.origin, source: options.source } : undefined,
+  // Inside the frame, `dispatch` prepares each op as an authored write; the
+  // frame owns the flush, so the whole list delivers as one Changeset.
+  ctx.runBatch(
+    () => {
+      for (const { path, change } of ops) ctx.dispatch(path, change)
+    },
+    { origin: options?.origin, source: options?.source },
   )
   return ops
 }

@@ -3,7 +3,7 @@
 // Three regression guards against silent corruption of the
 // inverse-compensation pipeline:
 //
-//   1. Replay batches do not record inverses. (If they did, the inverse
+//   1. Merged ops do not record inverses. (If they did, the inverse
 //      would land on whatever frame happened to be open next, and a
 //      subsequent local abort would replay remote ops as a local revert.)
 //
@@ -15,18 +15,20 @@
 //      across consecutive blocks.)
 
 import { describe, expect, it } from "vitest"
-import { replaceChange } from "../change.js"
 import {
   batch,
-  executeBatch,
+  createRef,
+  exportSince,
   interpret,
+  merge,
   observation,
   plainContext,
+  plainSubstrateFactory,
   readable,
   Schema,
   writable,
 } from "../index.js"
-import { RawPath } from "../path.js"
+import type { SubstratePayload } from "../substrate.js"
 
 function buildDoc<S extends ReturnType<typeof Schema.struct>>(
   schema: S,
@@ -42,34 +44,28 @@ function buildDoc<S extends ReturnType<typeof Schema.struct>>(
   return { store, ctx, doc }
 }
 
-describe("replay batches do not record inverses", () => {
-  it("a remote-sync replay survives a subsequent local abort", () => {
+describe("merged ops do not record inverses", () => {
+  it("a merge survives a subsequent local abort", () => {
     const schema = Schema.struct({
       remote: Schema.string(),
       local: Schema.string(),
     })
-    const { ctx, doc } = buildDoc(schema, { remote: "", local: "" })
+    const peer = plainSubstrateFactory.create(schema)
+    const peerDoc = createRef(schema, peer)
+    const substrate = plainSubstrateFactory.create(schema)
+    const doc = createRef(schema, substrate)
 
-    // Simulate a replay batch landing (as a substrate event bridge would
-    // dispatch one). On the replay path, executeBatch bypasses runBatch
-    // and calls ctx.prepare directly with options.replay = true.
-    executeBatch(
-      ctx,
-      [
-        {
-          path: RawPath.empty.field("remote"),
-          change: replaceChange("from-peer"),
-        },
-      ],
-      { origin: "sync", replay: true },
-    )
-
+    const v0 = peer.version()
+    batch(peerDoc, d => d.remote.set("from-peer"))
+    merge(doc, exportSince(peerDoc, v0) as SubstratePayload, {
+      origin: "sync",
+    })
     expect(doc.remote()).toBe("from-peer")
 
-    // Now run a local batch() that throws. If the replay above had
-    // leaked an inverse onto any frame the next batch() opens, this
-    // abort would also revert `remote` — silently undoing the remote
-    // sync. The local "local" write must revert; "remote" must not.
+    // Now run a local batch() that throws. If the merge had leaked an
+    // inverse onto any frame the next batch() opens, this abort would
+    // also revert `remote`, silently undoing the sync. The local write
+    // must revert; `remote` must not.
     expect(() => {
       batch(doc, d => {
         d.local.set("ephemeral")

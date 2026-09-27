@@ -5,7 +5,37 @@
 // so they can be table-tested without spinning up a doc.
 
 import { describe, expect, it } from "vitest"
-import { synthesizeTreeDeleteTerminal } from "../interpreters/with-changefeed.js"
+import {
+  changesetMetadata,
+  synthesizeTreeDeleteTerminal,
+} from "../interpreters/with-changefeed.js"
+
+// ---------------------------------------------------------------------------
+// changesetMetadata — table tests
+// ---------------------------------------------------------------------------
+
+describe("changesetMetadata", () => {
+  const source = Symbol("writer")
+  it.each([
+    [
+      "author",
+      { ingress: "author", origin: "o", source } as const,
+      { origin: "o", replay: false, aborted: undefined, source },
+    ],
+    [
+      "aborted author",
+      { ingress: "author", origin: "o", source, aborted: true } as const,
+      { origin: "o", replay: false, aborted: true, source },
+    ],
+    [
+      "announce",
+      { ingress: "announce", origin: "sync" } as const,
+      { origin: "sync", replay: true, aborted: undefined, source: undefined },
+    ],
+  ])("%s", (_name, options, expected) => {
+    expect(changesetMetadata(options)).toEqual(expected)
+  })
+})
 
 // ---------------------------------------------------------------------------
 // planTreeMembershipUpdate — table tests

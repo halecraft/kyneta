@@ -1,7 +1,7 @@
 // applychanges-bulk — blast-radius sanity (NOT a benchmark, NOT a timing test).
 //
 // After the with-changefeed dispatcher refactor (jj:yksllknw), every
-// `executeBatch` calls `ctx.prepare × N` then `ctx.flush × 1`. Each prepare
+// `applyChanges` calls `ctx.prepare × N` then `ctx.flush × 1`. Each prepare
 // dispatches an `accumulate` Msg through the per-context dispatcher; the flush
 // dispatches a single `flush` Msg. This test applies 10_000 ops in one batch
 // and verifies the load-INVARIANT signals:
@@ -15,7 +15,7 @@
 // code, and flaked (~0.7s standalone vs ~2.5s under load). A genuine
 // O(N²)/dispatch-storm regression trips the budget above (or blows past any
 // cap by orders of magnitude), so the budget + correctness checks catch it
-// without the flake. If item 1 ever fails, bracket `executeBatch` with a
+// without the flake. If item 1 ever fails, bracket the prepare-loop with a
 // single synthetic begin/end dispatch so all N prepares + 1 flush share one
 // outer dispatch cycle.
 

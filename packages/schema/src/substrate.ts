@@ -35,7 +35,6 @@
 //
 // Context: jj:wmyomqzw (SubstratePrepare), jj:wqoqzzpp (Substrate)
 
-import type { BatchMetadata } from "@kyneta/changefeed"
 import type { ChangeBase } from "./change.js"
 import type { Path } from "./interpret.js"
 import type { WritableContext } from "./interpreters/writable.js"
@@ -416,19 +415,14 @@ export interface ReplicaLike {
    *   Handles both payload kinds identically via `doc.import()`.
    *
    * State-image substrates (Plain): dispatches on `payload.kind`.
-   *   `"since"` → apply ops incrementally.
+   *   `"since"` → append the sender's batches to the log.
    *   `"entirety"` → decompose state image to ReplaceChange ops.
    *
-   * For a full Substrate, merge also fires the changefeed so that
-   * subscribers observe the incoming mutations. For a bare Replica,
-   * no changefeed exists — merge only updates internal state and version.
-   *
-   * Accepts `options?: BatchOptions`. The substrate internally sets
-   * `replay: true` on the resulting `executeBatch` so the changefeed's
-   * `Changeset.replay` field surfaces "this batch was authored
-   * elsewhere" to consumers like the exchange's echo filter.
+   * A full Substrate then brings σ into agreement with λ and announces the
+   * ops, so subscribers receive them with `Changeset.replay: true`. A bare
+   * Replica has no changefeed and only updates its state and version.
    */
-  merge(payload: SubstratePayload, options?: BatchOptions): void
+  merge(payload: SubstratePayload, options?: MergeOptions): void
 
   /**
    * Discard local history and adopt an entirely new state and lineage.
@@ -448,7 +442,7 @@ export interface ReplicaLike {
   resetFromEntirety(
     payload: SubstratePayload,
     remoteVersion: Version,
-    options?: BatchOptions,
+    options?: MergeOptions,
   ): void
 }
 
@@ -504,80 +498,89 @@ export interface Replica<V extends Version = Version> extends ReplicaLike {
 }
 
 // ---------------------------------------------------------------------------
-// BatchOptions — BatchMetadata + the upstream-only `compensating` directive
+// Batch options — how a batch reached the changefeed
 // ---------------------------------------------------------------------------
 
 /**
- * Batch-level metadata threaded through the prepare/flush pipeline.
+ * How a batch reached the changefeed.
  *
- * Extends {@link BatchMetadata} (the four user/kyneta-visible fields that
- * also surface on `Changeset`) with one upstream-only directive:
+ * - `author` — a local Kyneta writer (`batch`, `applyChanges`, a ref helper).
+ *   The substrate applies it inside the `runBatch` bracket.
+ * - `announce` — the substrate took the ops in by another route (a merge, a
+ *   native event, a decay tick) and has already made λ and σ agree. The batch
+ *   only tells the changefeed what happened; the substrate never sees it.
  *
- * - `compensating` — kyneta-internal directive set when the prepare is
- *   running under the **undo-replay handler** of the bracket primitive
- *   (`ctx.runBatch` is one bracket primitive with three handlers —
- *   substrate, flush, inverse stack). `compensating: true` signals "this
- *   prepare is replaying an inverse, not applying a new forward change."
- *   Substrates skip inverse recording when set; recording an inverse of
- *   an inverse would re-emit the original forward change and loop.
- *   Conceptually not a property of the change but a "which handler am I
- *   under?" signal. User-facing APIs never set it; only the abort path
- *   inside `WritableContext.runBatch` sets it on the prepares it issues
- *   during inverse replay. Lives upstream-only — never surfaces on the
- *   delivered Changeset.
- *
- * `compensating` is the directive flag on the *prepare* of an inverse op;
- * `aborted` (inherited from `BatchMetadata`) is the directive flag on the
- * *flush* that delivers the resulting Changeset. They are siblings, not
- * synonyms — both end up `true` on a fully-aborted outermost batch, but a
- * `compensating` op without an `aborted` flush is what an *inner* caught
- * abort looks like from the outermost frame.
- *
- * Context: jj:qpultxsw (origin/replay), jj:ryquprut (compensating/aborted),
- * jj:wpvtoxmw (source).
+ * `Changeset.replay` is `ingress !== "author"`.
  */
-export interface BatchOptions extends BatchMetadata {
-  /** Kyneta-internal directive: this prepare is running under the
-   *  undo-replay handler of `WritableContext.runBatch`. Substrates skip
-   *  inverse recording. Set only by the abort path inside `runBatch`. */
-  readonly compensating?: boolean
+export type BatchIngress = "author" | "announce"
 
+/**
+ * How one op reached `ctx.prepare`. `compensate` is an inverse replayed by the
+ * abort path of an `author` batch; the substrate applies it without recording
+ * an inverse of its own.
+ */
+export type PrepareIngress = BatchIngress | "compensate"
+
+/**
+ * Options for a local writer: `batch`, `applyChanges`, and the `runBatch`
+ * bracket. Both fields surface unchanged on the delivered `Changeset`.
+ */
+export interface CommitOptions {
   /**
-   * Kyneta-internal directive: this prepare is a **local projection**
-   * (e.g. time-decay via `substrate.tick()`), not a real write.
+   * App-level provenance label attached to the emitted `Changeset`.
    *
-   * State substrates that maintain a separate `PlainState` shadow use
-   * this to skip mutating the underlying CRDT math (`applyChangeToStateTree`)
-   * and to skip bumping the version clock — only the local-facing shadow
-   * moves. Always paired with `replay: true` so the Exchange does not
-   * broadcast the projection to peers.
+   * Subscribers receive this as `changeset.origin` — useful for
+   * categorizing batches (`"sync"`, `"undo"`, `"migration"`, etc.).
+   * The schema layer and the exchange never branch on its value.
+   * For kyneta-internal echo suppression use {@link CommitOptions.source}.
    *
-   * Set only by `substrate.tick()`; never surfaces on user-facing writes.
+   * @example
+   * applyChanges(doc, ops, { origin: "sync" })
    */
-  readonly projection?: boolean
+  readonly origin?: string
+  /**
+   * Identity-typed echo-suppression token. Propagates to
+   * `Changeset.source`. Compared with `===` by subscribers that issued
+   * the change.
+   *
+   * @example
+   * const mySource = Symbol("my-binding")
+   * batch(ref, fn, { source: mySource })
+   * cf.subscribe(cs => { if (cs.source === mySource) return; / apply / })
+   */
+  readonly source?: unknown
 }
 
-// ---------------------------------------------------------------------------
-// RECORD_INVERSE — internal callback for substrate→bracket inverse recording
-// ---------------------------------------------------------------------------
-
 /**
- * Internal-only symbol that `buildWritableContext` attaches to every
- * `prepare` invocation's options. The substrate calls it after computing
- * the inverse of a forward change, passing `(path, inverse)`. The
- * receiving closure pushes onto the active runBatch frame's inverse stack.
- *
- * Not part of the public `BatchOptions` interface — substrates and the
- * ctx wrapper coordinate through this symbol on the options bag, keeping
- * the public surface clean.
- *
- * Context: jj:ryquprut (three-primitive substrate refactor).
+ * Options for `merge` and `resetFromEntirety`. There is no `source`: an echo
+ * token names a local caller and never survives a merge.
  */
-export const RECORD_INVERSE: unique symbol = Symbol.for("kyneta:record-inverse")
+export interface MergeOptions {
+  /** App-level provenance label for the announced `Changeset`. */
+  readonly origin?: string
+}
 
 /**
- * The shape of the inverse-recording callback threaded through prepare
- * options under the `RECORD_INVERSE` symbol key.
+ * Batch-level options, taken by `ctx.flush`.
+ *
+ * Only an authored batch carries `source` or can be `aborted` (the outermost
+ * `batch()` block threw and was compensated).
+ */
+export type BatchOptions =
+  | (CommitOptions & {
+      readonly ingress: "author"
+      readonly aborted?: boolean
+    })
+  | { readonly ingress: "announce"; readonly origin?: string }
+
+/** Per-op options, taken by `ctx.prepare`. */
+export interface PrepareOptions {
+  readonly ingress: PrepareIngress
+}
+
+/**
+ * Records the inverse of a change on the active `runBatch` frame. The bracket
+ * replays recorded inverses LIFO if the block throws.
  */
 export type RecordInverseFn = (path: Path, inverse: ChangeBase) => void
 
@@ -588,73 +591,55 @@ export type RecordInverseFn = (path: Path, inverse: ChangeBase) => void
 /**
  * The mutation primitives a substrate exposes to the WritableContext.
  *
- * `prepare` applies a single addressed delta to the substrate's state.
- * `afterBatch` is a post-batch lifecycle hook — called once at the end
- * of every `executeBatch`, for both local-write and replay batches. It
- * is *not* a buffer-drain (the eager-prepare model removes prepare-time
- * buffers); on CRDT substrates it now flushes coalescing buffers and
- * re-materialises the shadow on replay.
+ * These see only local writes and their compensations. Every other change
+ * (a merge, a native event, a decay tick) is applied by the substrate itself,
+ * which then brings σ into agreement with λ and announces the ops through
+ * `announce(ctx, ops, origin)`, which never calls back into `prepare` or
+ * `afterBatch`.
  *
- * `runBatch` (optional) is the *transaction-boundary bracket* for local
- * writes — it wraps the entire prepare-loop + flush block from
- * `executeBatch`. CRDT substrates use this seam to install their native
- * transaction primitive (Loro: a single `doc.commit()` after the body;
- * Yjs: `Y.transact(doc, body, KYNETA_ORIGIN)`) at the right scope so
- * external observers see one batched event per logical user action.
- * Substrates that don't need a bracket (Plain) omit it; the caller
- * falls back to invoking the body directly.
- *
- * All methods accept `options?: BatchOptions`:
- * - `options?.origin` is opaque label, substrate-passthrough only (Loro
- *   uses it for commit messages; plain ignores).
- * - `options?.replay === true` means "this batch represents state
- *   authored elsewhere; substrates with external mutation paths skip
- *   native-side work." The plain substrate ignores `replay` because it
- *   has no out-of-band mutation path. Replay batches *bypass* `runBatch`
- *   entirely — the bracket is for local writes only.
- *
- * These are the ground floor of the prepare/flush pipeline. Caching and
- * changefeed layers wrap them — the substrate never needs to know about
- * those layers.
+ * Caching and changefeed layers wrap the context built over these; the
+ * substrate never needs to know about those layers.
  */
 export interface SubstratePrepare {
   /** The readable reader for the interpreter's RefContext. */
   readonly reader: Reader
 
-  /** Apply a single (path, change) to the backing state. */
-  prepare(path: Path, change: ChangeBase, options?: BatchOptions): void
+  /**
+   * Apply one change to σ and λ. `recordInverse` is present for a forward
+   * write: the substrate reads the pre-state at `path`, computes the inverse,
+   * and records it before writing. It is `null` for a compensation, which
+   * records nothing.
+   */
+  prepare(
+    path: Path,
+    change: ChangeBase,
+    recordInverse: RecordInverseFn | null,
+  ): void
 
   /**
-   * Post-batch lifecycle hook — called once at the end of every
-   * `executeBatch`, after all prepares and before changefeed
-   * notification delivery (so subscribers see the updated version/log).
+   * End of an authored batch, called once at the depth-0 flush and before
+   * changefeed delivery, so subscribers see the updated version and log.
    *
-   * For PlainSubstrate: bumps version, appends to operation log.
-   * For CRDT substrates: flushes any prepare-time coalescing buffer
-   * on local writes; re-materialises the shadow from the native doc
-   * on replay.
+   * For PlainSubstrate: mints the lineage on the first authored flush and
+   * logs the batch. For CRDT substrates: drains the coalescing buffer.
    */
-  afterBatch(options?: BatchOptions): void
+  afterBatch(): void
 
   /**
-   * Optional transaction-boundary bracket for local-write batches.
+   * Optional transaction-boundary bracket for authored batches.
    *
-   * `executeBatch` invokes `runBatch(work, options)` when present
-   * (skipping it for replay batches). `work` is the prepare-loop +
-   * `ctx.flush` block. CRDT substrates use this to install their
-   * native transaction primitive at the right scope:
+   * `WritableContext.runBatch` invokes it at the outermost depth transition,
+   * around the prepare loop and the depth-0 flush. CRDT substrates install
+   * their native transaction here, so external observers see one native event
+   * per outermost logical action:
    *
-   * - Loro: increment a depth counter; on outermost release (depth
-   *   returns to 0) run `doc.commit()` once — collapses nested
-   *   `batch()` re-entries into one Loro commit.
-   * - Yjs: `Y.transact(doc, work, KYNETA_ORIGIN)` — Yjs's native
-   *   transact nesting handles the collapse for free.
+   * - Loro: one `doc.commit()` after the body.
+   * - Yjs: `Y.transact(doc, work, options.origin)`; Yjs collapses nested
+   *   transacts on its own.
    *
-   * Substrates that omit this method get the trivial default
-   * (caller just calls `work()`); PlainSubstrate is the canonical
-   * no-op case.
+   * Substrates that omit it (plain, ephemeral) get the body called directly.
    */
-  runBatch?(work: () => void, options?: BatchOptions): void
+  runBatch?(work: () => void, options: CommitOptions): void
 }
 
 // ---------------------------------------------------------------------------
@@ -699,8 +684,9 @@ export interface Substrate<V extends Version = Version>
   context(): WritableContext
 
   /**
-   * Optional pure function to advance time-based projections.
-   * If implemented, the Exchange will call this on a periodic interval.
+   * Heartbeat for time-based projections (ephemeral decay): re-project σ at
+   * `now` and announce what moved. The `Runtime` calls it every
+   * `tickInterval` milliseconds.
    */
   tick?(now: number): void
 }
@@ -1260,7 +1246,7 @@ export interface SubstrateFactory<V extends Version = Version> {
    * reconnection past log compaction, etc. For live absorption into an
    * existing replica, use `replica.merge()` instead.
    *
-   * For PlainSubstrate: parses JSON state image, applies via executeBatch.
+   * For PlainSubstrate: `upgrade(replica.fromEntirety(payload), schema)`.
    * For LoroSubstrate: LoroDoc.fromSnapshot(bytes).
    */
   fromEntirety(payload: SubstratePayload, schema: SchemaNode): Substrate<V>

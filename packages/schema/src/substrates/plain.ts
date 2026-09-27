@@ -1,35 +1,16 @@
 // plain — the plain JS object substrate.
 //
-// The plain substrate wraps a passive `Record<string, unknown>` and
-// delegates mutations to `applyChange`. It is the degenerate
-// case of the Substrate abstraction — no CRDT runtime, no native
-// oplog, just a plain JS object.
+// The plain substrate wraps a passive `Record<string, unknown>` and applies
+// changes with `applyChange`. It has no native runtime: σ is λ, and the version
+// is a flush count on a single authored lineage (`PlainVersion`).
 //
-// `createPlainSubstrate(doc, strategy)` returns a full `Substrate<V>`
-// with version tracking via a shadow buffer in `prepare`/`afterBatch`,
-// plus `version`, `exportEntirety`, `exportSince`, `merge`.
-// `plainContext(doc)` is a shorthand that returns just the
-// `WritableContext` — convenient for tests that don't need the
-// substrate reference.
+// A plain replica is its core: a base state, the op log retained after it, the
+// base offset, and a `PlainClock`. The substrate is that core plus σ and a
+// changefeed. `buildUpgrade` hands the replica's history to the substrate, so
+// `create`, `fromEntirety` and promotion from a headless replica all keep it.
 //
-// `PlainVersion` wraps a monotonic integer — the external version
-// marker for plain (authoritative) substrates. Plain substrates have
-// a total order, so `compare()` never returns "concurrent".
-//
-// `plainSubstrateFactory` is the canonical factory for constructing
-// plain substrates from schemas or entirety payloads. It delegates
-// to `createPlainSubstrate` internally.
-//
-// The `VersionStrategy<V>` type parameterizes version construction
-// and log-to-delta mapping. `plainVersionStrategy` and the LWW
-// module's `timestampVersionStrategy` are the two concrete strategies.
-// This eliminates the decorator pattern previously used by LWW.
-//
-// The replication core is parameterized on a `materialize` callback:
-// - Substrates pass `() => doc` (eagerly-mutated state).
-// - Replicas pass a log-replay function (lazy materialization).
-// The core's `exportEntirety()` calls `JSON.stringify(materialize())`
-// without knowing whether materialization is eager or lazy.
+// The core reads state through a `materialize` callback: the substrate passes
+// `() => doc`, and the headless replica replays base + log on demand.
 //
 // Context: jj:wmyomqzw (Phase 0), jj:wqoqzzpp (Phase 2), jj:umtmlpvn (version strategy extraction)
 // Context: jj:oyouvrss (Phase 1 — append-log replica, init ops, batched wire format)
@@ -38,9 +19,10 @@ import { randomHex } from "@kyneta/random"
 import type { ChangeBase } from "../change.js"
 import { replaceChange } from "../change.js"
 import type { Op } from "../changefeed.js"
+import { deepClonePlain } from "../clone.js"
 import type { Path } from "../interpret.js"
 import type { WritableContext } from "../interpreters/writable.js"
-import { buildWritableContext, executeBatch } from "../interpreters/writable.js"
+import { announce, buildWritableContext } from "../interpreters/writable.js"
 import { invert } from "../inverse.js"
 import { RawPath } from "../path.js"
 import {
@@ -57,7 +39,8 @@ import {
 } from "../reader.js"
 import type { Schema as SchemaNode } from "../schema.js"
 import type {
-  BatchOptions,
+  HasBackingDoc,
+  MergeOptions,
   RecordInverseFn,
   Replica,
   ReplicaFactory,
@@ -66,55 +49,9 @@ import type {
   SubstratePayload,
   Version,
 } from "../substrate.js"
-import { BACKING_DOC, hasBackingDoc, RECORD_INVERSE } from "../substrate.js"
+import { BACKING_DOC, hasBackingDoc } from "../substrate.js"
 import { versionVectorCompare, versionVectorMeet } from "../version-vector.js"
 import { Zero } from "../zero.js"
-
-// ---------------------------------------------------------------------------
-// VersionStrategy<V> — parameterizes version algebra for plain substrates
-// ---------------------------------------------------------------------------
-
-/**
- * Version algebra for plain-backed substrates.
- *
- * Parameterizes version construction, advancement, and log-to-delta
- * mapping. This is the single axis of variation between Plain (monotonic
- * counter) and LWW (wall-clock timestamp) substrates.
- *
- * Three members:
- * - `zero` — the version for a replica with no state transitions.
- * - `current(flushCount)` — the version after N flush cycles.
- * - `logOffset(since)` — map a since-version to a log array index,
- *   or null if the version cannot be mapped (→ entirety fallback).
- *
- * The type itself is pure — no member mutates anything through this
- * interface. But `createPlainVersionStrategy`'s concrete implementation for
- * `PlainVersion` is per-replica *stateful*: it closes over a mutable
- * `lineage` string (lazily minted, and updatable via the accompanying
- * `adoptLineage` closure returned alongside the strategy — see below).
- * `timestampVersionStrategy` (LWW, in `lww.ts`) remains a genuinely stateless
- * `VersionStrategy` singleton, unaffected by this.
- */
-export type VersionStrategy<V extends Version> = {
-  /** Version for a replica with no state transitions. */
-  readonly zero: V
-
-  /**
-   * Produce the current version after `flushCount` flush cycles.
-   * For PlainVersion: `new PlainVersion(flushCount)`.
-   * For a wall-clock version: the current time.
-   */
-  current(flushCount: number): V
-
-  /**
-   * Map a since-version to a log offset, or null if the version
-   * cannot be mapped (e.g. a wall-clock version has no log index).
-   *
-   * The core uses this to slice the op log for delta export.
-   * When null, the core falls back to `exportEntirety()`.
-   */
-  logOffset(since: V): number | null
-}
 
 // ---------------------------------------------------------------------------
 // PlainVersion — monotonic integer version marker
@@ -126,7 +63,7 @@ export type VersionStrategy<V extends Version> = {
 // peer from the schema alone), so its `toVector()` projection is the EMPTY
 // version vector: it compares "equal" to any other genesis and "behind"
 // (a subset of) any REAL lineage. The first authored write mints a REAL
-// lineage (see `createPlainVersionStrategy`). This is Plain's analog of a
+// lineage (see `PlainClock`). This is Plain's analog of a
 // fresh Loro doc's empty version vector — see jj:kxswmuzx.
 export const DEFAULT_LINEAGE = "kyneta.genesis"
 
@@ -192,87 +129,95 @@ export class PlainVersion implements Version {
 }
 
 // ---------------------------------------------------------------------------
-// plainVersionStrategy — the PlainVersion algebra
-// ---------------------------------------------------------------------------
-
-export function createPlainVersionStrategy(initialLineage: string): {
-  strategy: VersionStrategy<PlainVersion>
-  adoptLineage: (next: string) => void
-  getLineage: () => string
-} {
-  let lineage = initialLineage
-
-  const strategy: VersionStrategy<PlainVersion> = {
-    get zero() {
-      return new PlainVersion(0, lineage)
-    },
-    current(flushCount: number) {
-      // Pure projection. A REAL lineage is minted by the substrate on the
-      // first LOCAL authored flush (see createPlainSubstrate.afterBatch), never
-      // here — so a headless replica, or a merge that only absorbs a peer's
-      // ops, never invents an identity for content it does not own. Genesis is
-      // the empty vector ⊥ (value 0) until that mint. Context: jj:kxswmuzx.
-      return new PlainVersion(flushCount, lineage)
-    },
-    logOffset(since: PlainVersion) {
-      // Genesis (DEFAULT) is the empty vector ⊥ — it maps to the start of the
-      // authored log (offset 0), so a genesis peer receives the full authored
-      // delta regardless of any phantom counter it may carry.
-      if (since.lineage === DEFAULT_LINEAGE) {
-        return 0
-      }
-      if (since.lineage !== lineage) {
-        return null
-      }
-      return since.value
-    },
-  }
-
-  return {
-    strategy,
-    adoptLineage: (next: string) => {
-      lineage = next
-    },
-    getLineage: () => lineage,
-  }
-}
-
-// ---------------------------------------------------------------------------
-// createPlainSubstrate — full Substrate<V> from a bare doc + strategy
+// PlainClock — lineage and the flush-count ↔ version mapping
 // ---------------------------------------------------------------------------
 
 /**
- * Creates a full `Substrate<V>` wrapping a plain JS object document,
- * with version tracking, export/merge, and the shadow buffer
- * for op logging.
+ * A plain document's version clock: the lineage it authors under, and how
+ * flush counts map to versions and back.
  *
- * The version algebra is determined by the `strategy` parameter:
- * `plainVersionStrategy` for authoritative substrates,
- * `timestampVersionStrategy` (from lww.ts) for LWW/ephemeral substrates.
- *
- * The substrate eagerly mutates `doc` in `prepare()` — the backing doc
- * is always up to date. The core's `materialize` callback is `() => doc`.
- *
- * This is the low-level entry point when you already have a document.
- * For schema-aware construction (with `Zero.structural`),
- * use `plainSubstrateFactory.create(schema)` instead.
+ * `adopt` is the only mutator. The substrate mints a lineage on its first
+ * authored flush, and a merge adopts a peer's lineage while still at genesis.
+ * `version` is a pure projection and never mints. Context: jj:kxswmuzx.
  */
-export function createPlainSubstrate<V extends Version>(
-  doc: PlainState,
-  strategy: VersionStrategy<V>,
-  adoptLineage?: (next: string) => void,
-  getLineage?: () => string,
-): Substrate<V> {
-  const reader = plainReader(doc)
+export interface PlainClock {
+  lineage(): string
+  adopt(next: string): void
+  /** The version after `flushCount` flush cycles on the current lineage. */
+  version(flushCount: number): PlainVersion
+  /** The log offset `since` names, or `null` when it is from another lineage. */
+  logOffset(since: PlainVersion): number | null
+}
 
-  // --- Shared replication core ---
-  // Substrate passes `() => doc` because it eagerly mutates `doc` in prepare().
-  const replicaCore = createPlainReplicaCore(
-    () => doc,
-    strategy,
-    adoptLineage,
-    getLineage,
-  )
+export function createPlainClock(initialLineage: string): PlainClock {
+  let lineage = initialLineage
+  return {
+    lineage: () => lineage,
+    adopt(next: string) {
+      lineage = next
+    },
+    version: (flushCount: number) => new PlainVersion(flushCount, lineage),
+    logOffset(since: PlainVersion) {
+      // Genesis is the empty vector ⊥: it precedes the whole authored log, so
+      // a genesis peer receives everything regardless of the counter it carries.
+      if (since.lineage === DEFAULT_LINEAGE) return 0
+      if (since.lineage !== lineage) return null
+      return since.value
+    },
+  }
+}
+
+/**
+ * Narrow a `Version` received through the variance-safe `ReplicaLike`
+ * surface. The synchronizer pairs every replica with its own factory, so
+ * anything else is a wiring error.
+ */
+function asPlainVersion(version: Version): PlainVersion {
+  if (!(version instanceof PlainVersion)) {
+    throw new Error(
+      `plain substrate expected a PlainVersion, got ${version.serialize()}`,
+    )
+  }
+  return version
+}
+
+// ---------------------------------------------------------------------------
+// PlainHistory — the op log a substrate inherits on upgrade
+// ---------------------------------------------------------------------------
+
+/**
+ * Retained op history: the batches logged after `baseOffset` flush cycles
+ * were trimmed into the base state.
+ */
+export interface PlainHistory {
+  readonly log: readonly (readonly Op[])[]
+  readonly baseOffset: number
+}
+
+export const EMPTY_HISTORY: PlainHistory = { log: [], baseOffset: 0 }
+
+// ---------------------------------------------------------------------------
+// createPlainSubstrate — full Substrate from a doc, a clock and a history
+// ---------------------------------------------------------------------------
+
+/**
+ * Creates a `Substrate<PlainVersion>` over a plain JS object document.
+ *
+ * `prepare` mutates `doc` eagerly, so the core's `materialize` is `() => doc`.
+ * `history` must describe `doc`: its log replayed onto the trimmed base
+ * produces `doc`. `plainSubstrateFactory` is the schema-aware entry point.
+ */
+export function createPlainSubstrate(
+  doc: PlainState,
+  clock: PlainClock,
+  history: PlainHistory,
+): Substrate<PlainVersion> {
+  const reader = plainReader(doc)
+  const core = createPlainCore(() => doc, clock, history)
+
+  // Ops of the authored batch in progress: filled by `prepare`, logged by
+  // `afterBatch`.
+  const pendingOps: Op[] = []
 
   // The WritableContext is built lazily and cached — the same context
   // is returned on every call to `context()`.
@@ -283,34 +228,18 @@ export function createPlainSubstrate<V extends Version>(
 
     reader: reader,
 
-    prepare(path: Path, change: ChangeBase, options?: BatchOptions): void {
-      // Plain has no event bridge / external mutation path, so the
-      // replay-vs-local distinction doesn't matter for the substrate
-      // write itself. The flag still flows to subscribers via
-      // Changeset.replay (set in `merge` below).
-      //
-      // Inverse recording: under the normal handler, capture σ at the
-      // target path before the write, compute the reverse arrow in the
-      // change groupoid, and push it on the active runBatch frame's
-      // stack. Skipped when `options.compensating === true` — the
-      // change is itself an inverse being replayed during abort, and
-      // recording its inverse would loop. Also skipped on replay
-      // (afterBatch re-materialises σ from λ in one Π pass, so
-      // sequential inverse-step would double-count).
-      const record = (
-        options as
-          | (BatchOptions & { [RECORD_INVERSE]?: RecordInverseFn })
-          | undefined
-      )?.[RECORD_INVERSE]
-      if (record && !options?.compensating && !options?.replay) {
+    prepare(
+      path: Path,
+      change: ChangeBase,
+      recordInverse: RecordInverseFn | null,
+    ): void {
+      if (recordInverse) {
         // Read, don't copy. `invert` snapshots whatever it retains — see
         // `invertReplace`, `invertMap`, `invertSequence` and the rich-text
         // marks in `inverse.ts`, each of which deep-clones the pre-state it
         // captures. Copying here as well protected nothing and cost a deep
         // clone of the written subtree on every local write.
-        const pre = path.read(doc)
-        const inverse = invert(pre, change)
-        record(path, inverse)
+        recordInverse(path, invert(path.read(doc), change))
       }
       applyChange(doc, path, ownedForStore(change))
       // Freeze to an immutable RawPath before the op enters the log. The live
@@ -319,25 +248,17 @@ export function createPlainSubstrate<V extends Version>(
       // would let those mutations corrupt this historical op (export throws, or
       // serializes a drifted index). The addressed `path` above is still needed
       // for the σ read and inverse; only the logged copy is frozen. jj:mlurlzqt
-      replicaCore.pendingOps.push({ path: path.toRaw(), change })
+      pendingOps.push({ path: path.toRaw(), change })
     },
 
-    afterBatch(options?: BatchOptions): void {
-      // Mint a REAL lineage on the first LOCAL authored write. A merge sets
-      // `replay: true` (absorbing a peer's ops must never claim identity), and
-      // a headless replica flushes without ever reaching afterBatch — so both
-      // stay genesis / adopt the sender's lineage instead. Must precede flush()
-      // so the flushed version already carries the new lineage. `getLineage` is
-      // undefined for LWW/timestamp substrates, which never mint.
-      if (
-        !options?.replay &&
-        replicaCore.pendingOps.length > 0 &&
-        getLineage &&
-        getLineage() === DEFAULT_LINEAGE
-      ) {
-        adoptLineage?.(randomHex(8))
-      }
-      replicaCore.flush()
+    afterBatch(): void {
+      if (pendingOps.length === 0) return
+      // Mint a REAL lineage on the first authored flush. Only authored
+      // batches reach here: a merge appends to the log directly, so taking
+      // in a peer's ops never claims an identity. Minting before the append
+      // makes the new version carry the new lineage.
+      if (clock.lineage() === DEFAULT_LINEAGE) clock.adopt(randomHex(8))
+      core.append(pendingOps.splice(0))
     },
 
     context(): WritableContext {
@@ -373,236 +294,132 @@ export function createPlainSubstrate<V extends Version>(
       return cachedCtx
     },
 
-    version(): V {
-      return replicaCore.version()
+    version(): PlainVersion {
+      return core.version()
     },
 
-    baseVersion(): V {
-      return replicaCore.baseVersion()
+    baseVersion(): PlainVersion {
+      return core.baseVersion()
     },
 
-    advance(to: V): void {
-      replicaCore.advance(to, (_batches: Op[][]) => {
-        // Substrate eagerly mutates doc — project trimmed ops in place.
-        // The doc is already up to date (prepare applies eagerly), but
-        // the base offset needs to advance so exportSince knows what's
-        // available. The ops in the trimmed batches are already reflected
-        // in doc — no replay needed for the substrate case.
-        // (The applyChange calls are redundant here because the substrate
-        // already applied them in prepare(). The advance callback exists
-        // for the replica case where the base is separate from the log.)
-      })
+    advance(to: Version): void {
+      // `doc` already holds every logged op, so trimming moves only the base
+      // offset; there is nothing to project.
+      core.advance(asPlainVersion(to), () => {})
     },
 
     exportEntirety(): SubstratePayload {
-      return replicaCore.exportEntirety()
+      return core.exportEntirety()
     },
 
-    exportSince(since: V): SubstratePayload | null {
-      return replicaCore.exportSince(since)
+    exportSince(since: Version): SubstratePayload | null {
+      return core.exportSince(asPlainVersion(since))
     },
 
-    merge(payload: SubstratePayload, options?: BatchOptions): void {
-      if (payload.encoding !== "json" || typeof payload.data !== "string") {
-        throw new Error(
-          "PlainSubstrate.merge expects JSON-encoded payloads. " +
-            "If you recently switched CRDT backends, stale clients may be sending incompatible data.",
-        )
+    merge(payload: SubstratePayload, options?: MergeOptions): void {
+      const batches = payloadBatches(payload, "PlainSubstrate.merge")
+      if (shouldAdoptLineage(payload.lineage, clock.lineage())) {
+        clock.adopt(payload.lineage)
       }
-
-      const { content } = parsePlainPayload(payload.data)
-      const lineage = payload.lineage
-
-      // Adopt the incoming lineage if we are still DEFAULT (accept our first
-      // real identity). True lineage-boundary resets (REAL -> different REAL)
-      // are handled exclusively by `resetFromEntirety` — the Synchronizer
-      // calls that instead of `merge()` once it detects an lineage mismatch.
-      if (
-        lineage !== undefined &&
-        getLineage &&
-        lineage !== getLineage() &&
-        getLineage() === DEFAULT_LINEAGE
-      ) {
-        adoptLineage?.(lineage)
-      }
-
-      const ctx = substrate.context()
-      // A merge replays authored-elsewhere state; surface `replay: true`
-      // so layered consumers (exchange echo filter) can short-circuit
-      // without parsing the origin label.
-      const replayOptions: BatchOptions = {
-        origin: options?.origin,
-        replay: true,
-      }
-
-      if (payload.kind === "entirety") {
-        // State image — decompose to ReplaceChange ops and apply through
-        // the prepare/flush pipeline so the changefeed fires and refs
-        // observe the transition.
-        const ops = objectToReplaceOps(content as Record<string, unknown>)
-        if (ops.length > 0) {
-          executeBatch(ctx, ops, replayOptions)
-        }
-      } else {
-        // Batched op array — each inner array is one flush cycle.
-        // Apply each batch through the prepare/flush pipeline so that
-        // version parity is preserved across export → merge → re-export.
-        const batches = content as SerializedOp[][]
-        for (const batch of batches) {
-          if (batch.length === 0) continue
-          const ops = deserializeOps(batch)
-          executeBatch(ctx, ops, replayOptions)
-        }
+      // One announcement per sender batch, each after the doc and the log
+      // hold it.
+      for (const batch of batches) {
+        applyOps(doc, batch)
+        core.append(batch)
+        announce(substrate.context(), batch, options?.origin)
       }
     },
 
     resetFromEntirety(
       payload: SubstratePayload,
       remoteVersion: Version,
-      options?: BatchOptions,
+      options?: MergeOptions,
     ): void {
-      if (
-        payload.encoding !== "json" ||
-        typeof payload.data !== "string" ||
-        payload.kind !== "entirety"
-      ) {
-        throw new Error(
-          "PlainSubstrate.resetFromEntirety expects a JSON entirety payload",
-        )
+      const { lineage, ops } = resetPlan(
+        payload,
+        "PlainSubstrate.resetFromEntirety",
+      )
+      if (lineage !== undefined && lineage !== clock.lineage()) {
+        clock.adopt(lineage)
       }
-
-      const { content } = parsePlainPayload(payload.data)
-      const lineage = payload.lineage
-      if (lineage !== undefined && getLineage && lineage !== getLineage()) {
-        adoptLineage?.(lineage)
-      }
-
-      const ctx = substrate.context()
-      const replayOptions: BatchOptions = {
-        origin: options?.origin,
-        replay: true,
-      }
-
-      // Decompose to ReplaceChange ops and apply through the prepare/flush
-      // pipeline so the changefeed fires and refs observe the transition.
       // Every schema-defined top-level field is present in the incoming
-      // entirety (built from Zero.structural on the sender), so replacing
-      // each field fully supersedes the prior lineage's value — no explicit
-      // doc wipe is needed for the schema-aware substrate case.
-      const ops = objectToReplaceOps(content as Record<string, unknown>)
-      if (ops.length > 0) {
-        executeBatch(ctx, ops, replayOptions)
-      }
-
-      // Resynchronize the log/version with the remote's authoritative
-      // value — this prevents flush-count inflation across lineages.
-      if (remoteVersion instanceof PlainVersion) {
-        replicaCore.resetLog(remoteVersion.value)
-      }
+      // entirety (built from Zero.structural on the sender), so replacing each
+      // field supersedes the prior lineage's value without wiping the doc.
+      applyOps(doc, ops)
+      // Adopt the remote's flush count, so the version does not inflate
+      // across lineages.
+      core.resetLog(asPlainVersion(remoteVersion).value)
+      if (ops.length > 0) announce(substrate.context(), ops, options?.origin)
     },
   }
 
-  return substrate as Substrate<V>
+  return substrate
 }
 
 // ---------------------------------------------------------------------------
-// createPlainReplicaCore — shared versioning and export core
+// createPlainCore — the log, versioning and export of replica and substrate
 // ---------------------------------------------------------------------------
 
 /**
- * The shared replication core used by both `createPlainSubstrate` and
- * `createPlainReplica`. Holds the op log and export logic — the
- * parts that don't require schema interpretation or the changefeed
- * pipeline.
+ * The replication core of a plain replica or substrate: the op log, the base
+ * offset, and export. It knows nothing of schemas or the changefeed.
  *
- * Parameterized on a `materialize` callback that returns the current
- * `PlainState`. This eliminates mode branching:
- * - Substrates pass `() => doc` (eagerly-mutated state).
- * - Replicas pass a log-replay function (lazy materialization).
- *
- * Version construction and log-to-delta mapping are delegated to the
- * `VersionStrategy<V>` — the core never mentions `PlainVersion` or
- * a concrete version type directly.
+ * `materialize` returns the current state: `() => doc` for a substrate, a
+ * base + log replay for a headless replica.
  */
-function createPlainReplicaCore<V extends Version>(
+function createPlainCore(
   materialize: () => PlainState,
-  strategy: VersionStrategy<V>,
-  _adoptLineage?: (next: string) => void,
-  getLineage?: () => string,
+  clock: PlainClock,
+  history: PlainHistory,
 ) {
-  // Version log: log[i] = batch of Ops from flush cycle (baseOffset + i).
-  // The absolute flush count is baseOffset + log.length.
-  const log: Op[][] = []
+  // log[i] is the batch of flush cycle (baseOffset + i). Batches are never
+  // mutated after they are logged, so the seed is copied one level deep.
+  const log: (readonly Op[])[] = [...history.log]
+  let baseOffset = history.baseOffset
 
-  // Base offset: the number of flush cycles that have been trimmed
-  // (projected into the base state). Initially 0 — no history trimmed.
-  // After advance(), baseOffset increases and log entries are spliced.
-  let baseOffset = 0
-
-  // Cached version — computed once per flush cycle via strategy.current().
-  // For PlainVersion (monotonic counter), this is deterministic: same
-  // flushCount always produces the same version.
-  // For a wall-clock version, caching is critical: version()
-  // must return the timestamp from the last flush, not a fresh Date.now()
-  // on every call. Without caching, a receiver's version() advances in
-  // real-time, causing inbound offers from the near-past to be rejected
-  // as "behind" even though they carry new data.
-  let cachedVersion: V = strategy.zero
-
-  // Pending ops buffer — filled by prepare (Substrate) or
-  // merge (Replica), drained by flush.
-  const pendingOps: Op[] = []
+  // Bumped by every change to the log or the base, so a lazily materialized
+  // state can tell whether it is stale.
+  let revision = 0
 
   return {
-    pendingOps,
-    log,
+    log: log as readonly (readonly Op[])[],
 
-    flush(): void {
-      if (pendingOps.length > 0) {
-        log.push([...pendingOps])
-        pendingOps.length = 0
-        cachedVersion = strategy.current(baseOffset + log.length)
-      }
+    /** Log one flush cycle's batch. An empty batch is not a flush cycle. */
+    append(ops: readonly Op[]): void {
+      if (ops.length === 0) return
+      log.push(ops)
+      revision++
     },
 
-    version(): V {
-      return cachedVersion
+    revision(): number {
+      return revision
     },
 
-    baseVersion(): V {
-      return strategy.current(baseOffset)
+    history(): PlainHistory {
+      return { log: [...log], baseOffset }
+    },
+
+    version(): PlainVersion {
+      return clock.version(baseOffset + log.length)
+    },
+
+    baseVersion(): PlainVersion {
+      return clock.version(baseOffset)
     },
 
     /**
-     * Advance the base, trimming log entries before `to`.
-     *
-     * The `advanceBase` callback is invoked with the ops to project into
-     * the base state. For a substrate, this replays via `applyChange()`
-     * on the doc. For a replica, this replays onto the mutable base state.
-     *
-     * For strategies without log offset mapping (LWW/Timestamp), only
-     * full projection is supported: if `to = version()`, the entire log
-     * is projected. Otherwise, the call is a no-op.
+     * Trim the log up to `to`, handing the trimmed batches to `advanceBase`
+     * to project into the base state.
      */
-    advance(to: V, advanceBase: (batches: Op[][]) => void): void {
-      const targetOffset = strategy.logOffset(to)
+    advance(
+      to: PlainVersion,
+      advanceBase: (batches: readonly (readonly Op[])[]) => void,
+    ): void {
+      const targetOffset = clock.logOffset(to)
+      // A version from another lineage names no position in this log. The
+      // base stays put, which the undershoot contract of `advance` allows.
+      if (targetOffset === null) return
 
-      if (targetOffset === null) {
-        // Strategy cannot map versions to log offsets (LWW/Timestamp).
-        // Only full projection is supported: to must equal version().
-        if (to.compare(this.version()) === "equal") {
-          // Full projection: project entire log, clear it.
-          if (log.length > 0) {
-            advanceBase([...log])
-            baseOffset = baseOffset + log.length
-            log.length = 0
-          }
-        }
-        // Otherwise: no-op (undershoot contract — base doesn't move).
-        return
-      }
-
-      // Validate: targetOffset must be within [baseOffset, baseOffset + log.length].
       if (targetOffset < baseOffset) {
         throw new Error(
           `advance(${to.serialize()}): target offset ${targetOffset} is behind ` +
@@ -617,18 +434,18 @@ function createPlainReplicaCore<V extends Version>(
       }
 
       const count = targetOffset - baseOffset
-      if (count === 0) return // Already at this base — no-op.
+      if (count === 0) return
 
-      // Project the trimmed log entries onto the base state.
-      const trimmed = log.splice(0, count)
-      advanceBase(trimmed)
+      advanceBase(log.splice(0, count))
       baseOffset = targetOffset
+      revision++
     },
 
+    /** Discard the log and restart counting at `newBaseOffset`. */
     resetLog(newBaseOffset: number): void {
       log.length = 0
       baseOffset = newBaseOffset
-      cachedVersion = strategy.current(baseOffset)
+      revision++
     },
 
     exportEntirety(): SubstratePayload {
@@ -636,17 +453,15 @@ function createPlainReplicaCore<V extends Version>(
         kind: "entirety",
         encoding: "json",
         data: JSON.stringify(materialize()),
-        lineage: getLineage ? getLineage() : undefined,
+        lineage: clock.lineage(),
       }
     },
 
-    exportSince(since: V): SubstratePayload | null {
-      const offset = strategy.logOffset(since)
+    exportSince(since: PlainVersion): SubstratePayload | null {
+      const offset = clock.logOffset(since)
 
-      // Strategy cannot map the version to a log index — fall back to
-      // entirety. This is the wall-clock path: timestamps
-      // have no relationship to the op log array.
-      // Additionally, for PlainVersion, this is now triggered for cross-lineage versions.
+      // A cursor from another lineage cannot be served from this log; the
+      // whole document is the only answer that means anything to it.
       if (offset === null) return this.exportEntirety()
 
       // Peer is behind the base — incremental export is not possible.
@@ -660,13 +475,11 @@ function createPlainReplicaCore<V extends Version>(
       const batches = log.slice(offset - baseOffset)
       if (batches.every(b => b.length === 0)) return null
 
-      const serializedBatches = batches.map(batch => serializeOps(batch))
-
       return {
         kind: "since",
         encoding: "json",
-        data: JSON.stringify(serializedBatches),
-        lineage: getLineage ? getLineage() : undefined,
+        data: JSON.stringify(batches.map(batch => serializeOps(batch))),
+        lineage: clock.lineage(),
       }
     },
   }
@@ -677,96 +490,71 @@ function createPlainReplicaCore<V extends Version>(
 // ---------------------------------------------------------------------------
 
 /**
- * Creates a headless `Replica<V>` — an append-log that accumulates
- * payloads without interpreting them, materializing state on demand.
- *
- * The replica never calls `step()` or `applyChange()` during merge.
- * Ops are pushed to the log and flushed. Materialized state is derived
- * lazily from `Base + Log` when needed (for `exportEntirety()` or
- * `[BACKING_DOC]` access).
- *
- * Used by conduit participants (stores, routing servers)
- * that need to accumulate state, compute deltas, and compact storage
- * without ever reading or writing document fields.
- *
- * @param strategy - The version algebra (plain or timestamp).
+ * The history of every replica `createPlainReplica` built, for `buildUpgrade`.
+ * Module-private, so no other code can reach a replica's log.
  */
-export function createPlainReplica<V extends Version>(
-  strategy: VersionStrategy<V>,
-  adoptLineage?: (next: string) => void,
-  getLineage?: () => string,
-): Replica<V> {
-  // --- Mutable base state ---
-  // After advance(), the base incorporates projected ops. Starts empty.
-  // materialize() clones this and replays the retained log on top.
+const replicaHistories = new WeakMap<
+  Replica<PlainVersion>,
+  () => PlainHistory
+>()
+
+/**
+ * Creates a headless `Replica<PlainVersion>`: an append-log that accumulates
+ * payloads without interpreting them, and materializes state on demand.
+ *
+ * Merge never touches state; ops are appended to the log. State is derived
+ * from base + log when `exportEntirety()` or `[BACKING_DOC]` asks for it.
+ *
+ * Used by conduit participants (stores, routing servers) that need to
+ * accumulate state, compute deltas, and compact storage without ever reading
+ * or writing document fields.
+ */
+export function createPlainReplica(clock: PlainClock): Replica<PlainVersion> {
+  // The base incorporates every op trimmed by `advance`.
   const base: PlainState = {}
 
-  // --- Lazy materialization cache ---
-  // The cache is the single materialized PlainState, built by replaying
-  // the retained log on top of a clone of `base`. Invalidated on every
-  // flush and on advance.
-  let cachedState: PlainState | null = null
+  let cached: { readonly revision: number; readonly state: PlainState } | null =
+    null
 
-  /** Replay Base + Log through applyChange to produce current state. */
+  /**
+   * Replay base + log. `applyChange` steps containers in place, so the replay
+   * runs on a deep copy of the base, and each logged payload is copied before
+   * it is applied: the base and the log both outlive this state.
+   */
   function materialize(): PlainState {
-    if (cachedState !== null) return cachedState
-    // Clone the base — we must not mutate it, as it represents the
-    // trim frontier and must remain stable until the next advance().
-    const state: PlainState = { ...base }
-    for (const batch of core.log) {
-      for (const op of batch) {
-        applyChange(state, op.path, op.change)
-      }
-    }
-    cachedState = state
+    const revision = core.revision()
+    if (cached !== null && cached.revision === revision) return cached.state
+    const state = deepClonePlain(base)
+    for (const batch of core.log) applyOps(state, batch)
+    cached = { revision, state }
     return state
   }
 
-  // The core owns the log — the replica reads core.log for replay.
-  // Single source of truth; no parallel data structure to keep in sync.
-  const core = createPlainReplicaCore(
-    materialize,
-    strategy,
-    adoptLineage,
-    getLineage,
-  )
+  const core = createPlainCore(materialize, clock, EMPTY_HISTORY)
 
-  // Wrap core.flush to invalidate the materialization cache.
-  // Centralized: any path that flushes automatically invalidates —
-  // impossible to forget when adding new merge paths.
-  const coreFlush = core.flush.bind(core)
-  core.flush = () => {
-    coreFlush()
-    cachedState = null
-  }
-
-  const replica = {
+  const replica: Replica<PlainVersion> & HasBackingDoc<PlainState> = {
     get [BACKING_DOC](): PlainState {
       return materialize()
     },
 
-    version(): V {
+    version(): PlainVersion {
       return core.version()
     },
 
-    baseVersion(): V {
+    baseVersion(): PlainVersion {
       return core.baseVersion()
     },
 
     advance(to: Version): void {
-      // The ReplicaLike contract uses `Version` for variance safety.
-      // The synchronizer always pairs replicas with matching factories,
-      // so the runtime type is always the correct concrete V.
-      core.advance(to as V, (batches: Op[][]) => {
-        // Project trimmed ops onto the base state.
+      // Trimmed batches leave the log, so the base may take their payloads
+      // without copying.
+      core.advance(asPlainVersion(to), batches => {
         for (const batch of batches) {
           for (const op of batch) {
             applyChange(base, op.path, op.change)
           }
         }
       })
-      // Invalidate the materialization cache — the base has changed.
-      cachedState = null
     },
 
     exportEntirety(): SubstratePayload {
@@ -774,97 +562,42 @@ export function createPlainReplica<V extends Version>(
     },
 
     exportSince(since: Version): SubstratePayload | null {
-      // Same variance-safety rationale as advance() above.
-      return core.exportSince(since as V)
+      return core.exportSince(asPlainVersion(since))
     },
 
-    merge(payload: SubstratePayload, _options?: BatchOptions): void {
-      if (payload.encoding !== "json" || typeof payload.data !== "string") {
-        throw new Error(
-          "PlainReplica.merge expects JSON-encoded payloads. " +
-            "If you recently switched CRDT backends, stale clients may be sending incompatible data.",
-        )
+    merge(payload: SubstratePayload, _options?: MergeOptions): void {
+      const batches = payloadBatches(payload, "PlainReplica.merge")
+      if (shouldAdoptLineage(payload.lineage, clock.lineage())) {
+        clock.adopt(payload.lineage)
       }
-
-      const { content } = parsePlainPayload(payload.data)
-      const lineage = payload.lineage
-      // Adopt the incoming lineage only while still DEFAULT (accept our first
-      // real identity). Genuine lineage-boundary resets (REAL -> different
-      // REAL) go through `resetFromEntirety` instead — the Synchronizer
-      // calls that once it detects an lineage mismatch.
-      if (
-        lineage !== undefined &&
-        getLineage &&
-        lineage !== getLineage() &&
-        getLineage() === DEFAULT_LINEAGE
-      ) {
-        adoptLineage?.(lineage)
-      }
-
-      if (payload.kind === "entirety") {
-        // State image — decompose to ReplaceChange ops and append as
-        // a single batch. No applyChange, no step — just log it.
-        const ops = objectToReplaceOps(content as Record<string, unknown>)
-        if (ops.length === 0) return
-        for (const op of ops) {
-          core.pendingOps.push(op)
-        }
-        core.flush()
-      } else {
-        // Batched op array — each inner array is one flush cycle.
-        // Replay one flush per batch to preserve version parity.
-        const batches = content as SerializedOp[][]
-        for (const batch of batches) {
-          if (batch.length === 0) continue
-          const ops = deserializeOps(batch)
-          for (const op of ops) {
-            core.pendingOps.push(op)
-          }
-          core.flush()
-        }
-      }
+      for (const batch of batches) core.append(batch)
     },
 
     resetFromEntirety(
       payload: SubstratePayload,
       remoteVersion: Version,
-      _options?: BatchOptions,
+      _options?: MergeOptions,
     ): void {
-      if (
-        payload.encoding !== "json" ||
-        typeof payload.data !== "string" ||
-        payload.kind !== "entirety"
-      ) {
-        throw new Error(
-          "PlainReplica.resetFromEntirety expects a JSON entirety payload",
-        )
+      const { lineage, ops } = resetPlan(
+        payload,
+        "PlainReplica.resetFromEntirety",
+      )
+      if (lineage !== undefined && lineage !== clock.lineage()) {
+        clock.adopt(lineage)
       }
-
-      const { content } = parsePlainPayload(payload.data)
-      const lineage = payload.lineage
-      if (lineage !== undefined && getLineage && lineage !== getLineage()) {
-        adoptLineage?.(lineage)
-      }
-
-      // Discard local history and adopt the incoming state and lineage:
-      // clear the base, project the new state directly onto it, and
-      // synchronize the log/version with the sender's authoritative value.
-      // This prevents flush-count inflation across lineages.
-      const ops = objectToReplaceOps(content as Record<string, unknown>)
+      // Discard local history: the incoming state becomes the base.
       for (const key of Object.keys(base)) {
         delete base[key]
       }
       for (const op of ops) {
         applyChange(base, op.path, op.change)
       }
-      if (remoteVersion instanceof PlainVersion) {
-        core.resetLog(remoteVersion.value)
-      }
-      cachedState = null
+      core.resetLog(asPlainVersion(remoteVersion).value)
     },
   }
 
-  return replica as Replica<V>
+  replicaHistories.set(replica, core.history)
+  return replica
 }
 
 // ---------------------------------------------------------------------------
@@ -883,22 +616,24 @@ export function createPlainReplica<V extends Version>(
  * ```
  */
 export function plainContext(doc: PlainState): WritableContext {
-  const { strategy } = createPlainVersionStrategy("test")
-  return createPlainSubstrate(doc, strategy).context()
+  return createPlainSubstrate(
+    doc,
+    createPlainClock("test"),
+    EMPTY_HISTORY,
+  ).context()
 }
 
 // ---------------------------------------------------------------------------
-// objectToReplaceOps — shared helper
+// Payload decomposition — pure helpers shared by replica and substrate
 // ---------------------------------------------------------------------------
 
 /**
  * Build one `ReplaceChange` op per top-level key in a state object.
  *
  * Every path that turns a whole state image into changes goes through here:
- * `PlainSubstrate.merge` and `PlainReplica.merge` (entirety absorption),
- * `buildPlainSubstrateFromEntirety` (cold start), `buildUpgrade`
- * (initialization ops for schema keys a document lacks), and the ephemeral
- * substrate's announcement of what a merge or a decay sweep moved.
+ * entirety payloads (`payloadBatches`, `resetPlan`), `buildUpgrade`'s
+ * structural defaults, and the ephemeral substrate's announcement of what a
+ * merge or a decay sweep moved.
  */
 export function objectToReplaceOps(state: Record<string, unknown>): Op[] {
   const ops: Op[] = []
@@ -917,154 +652,109 @@ export function parsePlainPayload(data: string): {
   return { content: JSON.parse(data) }
 }
 
-// ---------------------------------------------------------------------------
-// Shared fromEntirety helpers — used by both plain and LWW factories
-// ---------------------------------------------------------------------------
-
 /**
- * Construct a `Substrate<V>` from a self-sufficient entirety payload.
- *
- * Validates payload encoding, creates a substrate with Zero.structural
- * defaults, then applies the entirety state through the prepare/flush
- * pipeline. This produces version > 0 with ops in the log, so version
- * comparison works correctly for authoritative sync.
- *
- * Used by both `plainSubstrateFactory.fromEntirety` and
- * a wall-clock-versioned factory's `fromEntirety` — the only difference is the
- * strategy parameter.
+ * The batches a payload carries, one per flush cycle on the sender. An
+ * entirety is one batch of top-level replaces; a delta is its non-empty
+ * logged batches. Keeping the sender's batching preserves version parity
+ * across export → merge → re-export.
  */
-export function buildPlainSubstrateFromEntirety<V extends Version>(
-  payload: SubstratePayload,
-  schema: SchemaNode,
-  strategy: VersionStrategy<V>,
-  adoptLineage?: (next: string) => void,
-  getLineage?: () => string,
-): Substrate<V> {
+function payloadBatches(payload: SubstratePayload, label: string): Op[][] {
   if (payload.encoding !== "json" || typeof payload.data !== "string") {
     throw new Error(
-      "PlainSubstrateFactory.fromEntirety only supports JSON-encoded payloads",
+      `${label} expects JSON-encoded payloads. ` +
+        "If you recently switched CRDT backends, stale clients may be sending incompatible data.",
     )
   }
-
   const { content } = parsePlainPayload(payload.data)
-  const lineage = payload.lineage
-  if (lineage !== undefined && getLineage && lineage !== getLineage()) {
-    adoptLineage?.(lineage)
+  if (payload.kind === "entirety") {
+    const ops = objectToReplaceOps(content as Record<string, unknown>)
+    return ops.length === 0 ? [] : [ops]
   }
+  return (content as SerializedOp[][])
+    .filter(batch => batch.length > 0)
+    .map(deserializeOps)
+}
 
-  // Plain substrates track version via log length — creating a fresh
-  // substrate and applying ops via executeBatch advances the version
-  // correctly. (CRDT substrates use the two-phase path instead because
-  // their version is inherent in the document state.)
-  const defaults = Zero.structural(schema) as Record<string, unknown>
-  const doc = { ...defaults } as PlainState
-  const substrate = createPlainSubstrate(
-    doc,
-    strategy,
-    adoptLineage,
-    getLineage,
+/**
+ * Apply ops taken in from elsewhere to `state`. Each payload is copied, since
+ * the op is also logged and delivered to subscribers.
+ */
+function applyOps(state: PlainState, ops: readonly Op[]): void {
+  for (const op of ops) {
+    applyChange(state, op.path, ownedForStore(op.change))
+  }
+}
+
+/**
+ * Whether a merge adopts the payload's lineage: only while this document is
+ * still at genesis. A REAL → different REAL transition is a lineage boundary,
+ * which only `resetFromEntirety` crosses.
+ */
+function shouldAdoptLineage(
+  incoming: string | undefined,
+  current: string,
+): incoming is string {
+  return (
+    incoming !== undefined &&
+    incoming !== current &&
+    current === DEFAULT_LINEAGE
   )
-  const ops = objectToReplaceOps(content as Record<string, unknown>)
-  if (ops.length > 0) {
-    executeBatch(substrate.context(), ops)
-  }
-  return substrate
 }
 
-/**
- * Construct a `Replica<V>` from a self-sufficient entirety payload.
- *
- * Validates payload encoding, parses JSON state, and creates a replica
- * that merges the entirety into its log.
- *
- * Used by both `plainReplicaFactory.fromEntirety` and
- * a wall-clock-versioned replica factory's `fromEntirety` — the difference is the
- * strategy parameter.
- */
-export function buildPlainReplicaFromEntirety<V extends Version>(
+/** The lineage and top-level replaces of an entirety that resets a document. */
+function resetPlan(
   payload: SubstratePayload,
-  strategy: VersionStrategy<V>,
-  adoptLineage?: (next: string) => void,
-  getLineage?: () => string,
-): Replica<V> {
-  if (payload.encoding !== "json" || typeof payload.data !== "string") {
-    throw new Error(
-      "PlainReplicaFactory.fromEntirety only supports JSON-encoded payloads",
-    )
+  label: string,
+): { readonly lineage: string | undefined; readonly ops: Op[] } {
+  if (payload.kind !== "entirety") {
+    throw new Error(`${label} expects an entirety payload`)
   }
-  const replica = createPlainReplica(strategy, adoptLineage, getLineage)
-  replica.merge(payload)
-  return replica
+  const [ops = []] = payloadBatches(payload, label)
+  return { lineage: payload.lineage, ops }
 }
 
 // ---------------------------------------------------------------------------
-// buildUpgrade — shared two-phase construction for plain-backed substrates
+// buildUpgrade — a replica gains a schema, σ and a changefeed
 // ---------------------------------------------------------------------------
 
 /**
- * Shared `upgrade` implementation for both `plainSubstrateFactory` and
- * a wall-clock-versioned substrate factory.
+ * Upgrade a replica built by `createPlainReplica` into a substrate over the
+ * same state and history.
  *
- * 1. Read the materialized state from the replica via `[BACKING_DOC]`
- * 2. Create the substrate (so `context()` is available for `executeBatch`)
- * 3. Compute `Zero.structural(schema)` defaults
- * 4. Filter to keys not already present in the materialized state
- * 5. Build init ops via `objectToReplaceOps(filtered)`
- * 6. If the strategy supports delta sync (`logOffset` returns non-null),
- *    apply via `executeBatch` so init ops enter the log and advance the
- *    version. Otherwise (ephemeral), apply directly to the doc via
- *    `applyChange` without entering the log or advancing the version.
- * 7. Return the substrate
- *
- * The `logOffset(zero)` probe discriminates: strategies with log-indexed
- * versions (authoritative) emit init ops through the log; strategies
- * without (ephemeral/LWW) apply them silently. This prevents independent
- * peers from diverging on creation timestamp for ephemeral docs.
+ * Structural defaults for schema keys the state lacks are applied to the doc
+ * without entering the log. They are a pure function of the schema, so every
+ * interpreter reconstructs them, and a fresh doc's version stays genesis ⊥.
+ * Context: jj:kxswmuzx.
  */
-export function buildUpgrade<V extends Version>(
-  replica: Replica<V>,
+function buildUpgrade(
+  replica: Replica<PlainVersion>,
   schema: SchemaNode,
-  strategy: VersionStrategy<V>,
-  adoptLineage?: (next: string) => void,
-  getLineage?: () => string,
-): Substrate<V> {
-  if (!hasBackingDoc<PlainState>(replica)) {
+): Substrate<PlainVersion> {
+  const history = replicaHistories.get(replica)
+  if (history === undefined || !hasBackingDoc<PlainState>(replica)) {
     throw new Error(
       "upgrade() requires a replica produced by this substrate factory.",
     )
   }
-  const materializedState = replica[BACKING_DOC]
 
-  // Create a fresh doc seeded from the replica's materialized state.
-  // The substrate owns this doc — the replica's state is not shared.
-  const doc = { ...materializedState } as PlainState
+  // The replica keeps its materialized state cached, and the substrate
+  // steps containers in place, so the substrate takes a copy.
+  const doc = deepClonePlain(replica[BACKING_DOC])
   const substrate = createPlainSubstrate(
     doc,
-    strategy,
-    adoptLineage,
-    getLineage,
+    createPlainClock(replica.version().lineage),
+    history(),
   )
 
-  // Compute defaults and filter to keys not already present.
   const defaults = Zero.structural(schema) as Record<string, unknown>
   const missing: Record<string, unknown> = {}
   for (const key of Object.keys(defaults)) {
-    if (!(key in materializedState)) {
+    if (!(key in doc)) {
       missing[key] = defaults[key]
     }
   }
-
-  const initOps = objectToReplaceOps(missing)
-  if (initOps.length > 0) {
-    // Op-free genesis: structural defaults are a pure function of the schema,
-    // so every interpreter reconstructs them locally (this same `buildUpgrade`
-    // fills missing keys via `Zero.structural`) — they need not be versioned
-    // or synced. Apply them directly to the doc WITHOUT entering the log, so a
-    // fresh doc's version() is the empty vector (genesis ⊥). Ephemeral already
-    // did this; authoritative now matches. Context: jj:kxswmuzx.
-    for (const op of initOps) {
-      applyChange(doc, op.path, op.change)
-    }
+  for (const op of objectToReplaceOps(missing)) {
+    applyChange(doc, op.path, op.change)
   }
 
   return substrate
@@ -1085,20 +775,13 @@ export const plainReplicaFactory: ReplicaFactory<PlainVersion> = {
   replicaType: ["plain", 1, 0] as const,
 
   createEmpty(): Replica<PlainVersion> {
-    const { strategy, adoptLineage, getLineage } =
-      createPlainVersionStrategy(DEFAULT_LINEAGE)
-    return createPlainReplica(strategy, adoptLineage, getLineage)
+    return createPlainReplica(createPlainClock(DEFAULT_LINEAGE))
   },
 
   fromEntirety(payload: SubstratePayload): Replica<PlainVersion> {
-    const { strategy, adoptLineage, getLineage } =
-      createPlainVersionStrategy(DEFAULT_LINEAGE)
-    return buildPlainReplicaFromEntirety(
-      payload,
-      strategy,
-      adoptLineage,
-      getLineage,
-    )
+    const replica = this.createEmpty()
+    replica.merge(payload)
+    return replica
   },
 
   parseVersion(serialized: string): PlainVersion {
@@ -1123,32 +806,25 @@ export const plainReplicaFactory: ReplicaFactory<PlainVersion> = {
 // ---------------------------------------------------------------------------
 
 /**
- * Factory for constructing plain JS object substrates.
+ * Factory for constructing plain JS object substrates. Every construction is
+ * `upgrade` of a replica, so none of them restarts history.
  *
- * Supports two-phase construction:
  * - `createReplica()` → bare replica (empty doc)
- * - `upgrade(replica, schema)` → full substrate (conditional defaults)
- *
- * Convenience:
- * - `create(schema)` — composes `upgrade(createReplica(), schema)`
- * - `fromEntirety(payload, schema)` — reconstruct from an entirety payload
+ * - `upgrade(replica, schema)` → full substrate over the replica's state and log
+ * - `create(schema)` = `upgrade(createReplica(), schema)`
+ * - `fromEntirety(payload, schema)` = `upgrade(replica.fromEntirety(payload), schema)`
  * - `parseVersion(serialized)` — deserialize a PlainVersion
  */
 export const plainSubstrateFactory: SubstrateFactory<PlainVersion> = {
   createReplica(): Replica<PlainVersion> {
-    const { strategy, adoptLineage, getLineage } =
-      createPlainVersionStrategy(DEFAULT_LINEAGE)
-    return createPlainReplica(strategy, adoptLineage, getLineage)
+    return plainReplicaFactory.createEmpty()
   },
 
   upgrade(
     replica: Replica<PlainVersion>,
     schema: SchemaNode,
   ): Substrate<PlainVersion> {
-    const lineage = replica.version().lineage
-    const { strategy, adoptLineage, getLineage } =
-      createPlainVersionStrategy(lineage)
-    return buildUpgrade(replica, schema, strategy, adoptLineage, getLineage)
+    return buildUpgrade(replica, schema)
   },
 
   create(schema: SchemaNode): Substrate<PlainVersion> {
@@ -1159,15 +835,7 @@ export const plainSubstrateFactory: SubstrateFactory<PlainVersion> = {
     payload: SubstratePayload,
     schema: SchemaNode,
   ): Substrate<PlainVersion> {
-    const { strategy, adoptLineage, getLineage } =
-      createPlainVersionStrategy(DEFAULT_LINEAGE)
-    return buildPlainSubstrateFromEntirety(
-      payload,
-      schema,
-      strategy,
-      adoptLineage,
-      getLineage,
-    )
+    return this.upgrade(plainReplicaFactory.fromEntirety(payload), schema)
   },
 
   parseVersion(serialized: string): PlainVersion {

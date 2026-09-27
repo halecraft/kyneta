@@ -228,8 +228,9 @@ function isFlatForestArray(arr: readonly unknown[]): boolean {
  * Replace the contents of `target` with the contents of `source`,
  * preserving `target`'s object identity.
  *
- * Used by CRDT substrates' replay path: after `materializeXxxShadow`
- * produces a fresh `PlainState` from the merged CRDT tree, this copies
+ * Used by the CRDT event bridges before they announce: after
+ * `materializeXxxShadow` produces a fresh `PlainState` from the CRDT tree,
+ * this copies
  * its keys onto the live shadow object so the existing `Reader` keeps
  * working (the reader closes over the shadow's identity, not its
  * current snapshot). Keys absent from `source` are deleted from

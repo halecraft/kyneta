@@ -374,11 +374,16 @@ describe("Runtime.get and replicate-mode documents", () => {
       runtime.getEntry("source-doc") as { readyInfo: { replica: any } }
     ).readyInfo.replica.exportEntirety()
     before.readyInfo.replica.merge(payload)
+    const versionBefore = before.readyInfo.replica.version().serialize()
 
     const doc = runtime.get("todo-1", TodoDoc) as DocRef<typeof TodoSchema>
 
     expect(runtime.getEntry("todo-1")?.mode).toBe("interpret")
     expect(doc.title()).toBe("relayed")
+    // History carries across too: a promotion that restarted the log would
+    // publish a regressed version to the sync graph.
+    const after = runtime.getEntry("todo-1") as { readyInfo: { replica: any } }
+    expect(after.readyInfo.replica.version().serialize()).toBe(versionBefore)
 
     runtime.shutdown()
   })

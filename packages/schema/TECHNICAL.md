@@ -290,7 +290,8 @@ interface ReplicaLike {
   exportEntirety(): SubstratePayload
   exportSince(since: Version): SubstratePayload | null
   advance(to: Version): void
-  merge(payload: SubstratePayload, options?: BatchOptions): void
+  merge(payload: SubstratePayload, options?: MergeOptions): void
+  resetFromEntirety(payload: SubstratePayload, remoteVersion: Version, options?: MergeOptions): void
 }
 
 interface Replica<V> extends ReplicaLike {
@@ -299,11 +300,16 @@ interface Replica<V> extends ReplicaLike {
   // exportSince, advance, merge inherited from ReplicaLike
 }
 
-interface Substrate<V> extends Replica<V> {
-  reader(): Reader
-  writable(): WritableContext
-  prepare(): SubstratePrepare
-  context(): RefContext
+interface SubstratePrepare {
+  readonly reader: Reader
+  prepare(path: Path, change: ChangeBase, recordInverse: RecordInverseFn | null): void
+  afterBatch(): void
+  runBatch?(work: () => void, options: CommitOptions): void
+}
+
+interface Substrate<V> extends Replica<V>, SubstratePrepare {
+  context(): WritableContext
+  tick?(now: number): void
 }
 ```
 
@@ -322,26 +328,24 @@ Every replica exposes six methods:
 - `exportEntirety()` → full state as an opaque payload.
 - `exportSince(since)` → delta relative to the given version, or `null` when the cursor **cannot be served** (history trimmed past it, or an epoch this replica did not mint). `null` is not "nothing to send": the caller answers it with a whole document, so a peer that is merely current must get an empty delta instead. Conflating the two makes every agreement cost a full resend.
 - `advance(to)` → trim history up to the given version.
-- `merge(payload, options?)` → fold an incoming payload into local state. `options.origin` propagates through the changefeed as an app-level label; the substrate forces `replay: true` on the resulting `Changeset` so layered consumers (e.g. the exchange's echo filter) can discriminate the merge from a local write.
+- `merge(payload, options?)` → fold an incoming payload into local state. A full substrate then brings σ up to date and announces the ops (see [The functional shadow](#the-functional-shadow)); subscribers receive them with `replay: true`, so layered consumers (e.g. the exchange's echo filter) can discriminate the merge from a local write. `options.origin` propagates as an app-level label. `MergeOptions` has no `source`: an echo token names a local caller and never survives a merge.
 
 A `Substrate` adds interpretation:
 
-- `reader()` → plain reads by path.
-- `writable()` → mutation primitives (`replace`, `insert`, `delete`, `increment`, etc.).
-- `prepare()` → the flush pipeline that turns accumulated mutations into a single `merge` call (plus notifications).
-- `context()` → the `RefContext` the interpreter stack closes over.
+- `reader` → plain reads by path, over σ.
+- `prepare` / `afterBatch` / `runBatch` → the mutation primitives the `WritableContext` is built over. They see only local writes and their compensations.
+- `context()` → the `WritableContext` the interpreter stack closes over.
+- `tick(now)` → optional heartbeat for time-based projections (ephemeral decay).
 
 ### The `SubstratePrepare` pipeline
 
-Mutations apply eagerly per the σ-eager design. For each `prepare(path, change)`:
+The substrate boundary knows nothing about provenance: `prepare`, `afterBatch` and `runBatch` are called only for local writes and their compensations. Mutations apply eagerly per the σ-eager design. For each `prepare(path, change, recordInverse)`:
 
-1. Read `pre = path.read(σ)` before the change applies.
-2. Compute `inverse = invert(pre, change)` — the reverse arrow in the change groupoid.
-3. Push `{ path, inverse }` on the active runBatch frame's inverse stack via the `RECORD_INVERSE` callback threaded through options.
-4. Advance σ via `applyChange(shadow, path, change)`.
-5. Advance λ via the substrate-native path (Loro: applyDiff or coalescing buffer; Yjs: applyChangeToYjs inside the ambient transact).
+1. If `recordInverse` is present (a forward write), read `pre = path.read(σ)`, compute `inverse = invert(pre, change)` — the reverse arrow in the change groupoid — and record it on the active runBatch frame's inverse stack.
+2. Advance σ via `applyChange(shadow, path, change)`.
+3. Advance λ via the substrate-native path (Loro: applyDiff or coalescing buffer; Yjs: applyChangeToYjs inside the ambient transact).
 
-The inverse stack belongs to the bracket primitive (`WritableContext.runBatch`'s wrapper). On the bracket's depth-0 success release, the frame's inverse range is discarded and `ctx.flush(opts)` fires. On a throw, the catch path replays the frame's inverses LIFO through `ctx.prepare(path, inverse, { compensating: true })` (the substrate skips inverse recording under the undo-replay handler), then flushes with `aborted: true`, then rethrows. The bracket's commit contains forward + inverse ops with net-zero delta when the outermost throws.
+The inverse stack belongs to the bracket primitive (`WritableContext.runBatch`'s wrapper). On the bracket's depth-0 success release, the frame's inverse range is discarded and `ctx.flush` fires. On a throw, the catch path replays the frame's inverses LIFO through `ctx.prepare(path, inverse, { ingress: "compensate" })`, which reaches the substrate with `recordInverse === null`, then flushes with `aborted: true`, then rethrows. The bracket's commit contains forward + inverse ops with net-zero delta when the outermost throws.
 
 This is how `batch(doc, d => { d.title.insert(0, "hi"); d.items.push(x); })` becomes one atomic changefeed emission with read-your-writes inside the block, and how a throwing block becomes one batched native event with net-zero delta plus one `Changeset` with `aborted: true`.
 
@@ -377,15 +381,18 @@ The built-in substrate. Stores state as plain JS objects, tracks a monotonic int
 - The default binding when no CRDT is needed (`Schema.string`, small configs, ephemeral UI state).
 - Reference implementation for testing the `Substrate<V>` contract.
 
-All substrates now share the same read semantics: reads go through `plainReader` backed by a `PlainState` object. For the plain substrate this is trivially the substrate's own state. For CRDT substrates (Loro, Yjs), the `PlainState` is a shadow that is kept in sync — eagerly on local writes, re-materialized from the CRDT doc on replay. See [§The functional shadow](#the-functional-shadow).
+All substrates now share the same read semantics: reads go through `plainReader` backed by a `PlainState` object. For the plain substrate this is trivially the substrate's own state. For CRDT substrates (Loro, Yjs), the `PlainState` is a shadow that is kept in sync — eagerly on local writes, re-materialized from the CRDT doc before every announcement. See [§The functional shadow](#the-functional-shadow).
 
-Key functions:
+**A plain substrate is its replica's core plus σ and a changefeed.** The core (`createPlainCore`) holds the base offset, the op log retained after it, and a `PlainClock`. `buildUpgrade` seeds the substrate from the replica's materialized state and its history, so `create` (`upgrade(createReplica())`), `fromEntirety` (`upgrade(replica.fromEntirety(payload))`) and promotion of a replicate document all keep the replica's version and log. Nothing restarts history.
 
-- `createPlainSubstrate(schema, context)` → `Substrate<PlainVersion>`.
-- `createPlainReplica(context)` → `Replica<PlainVersion>`.
-- `plainSubstrateFactory` / `plainReplicaFactory` — exported factory instances.
-- `buildUpgrade(schema)` → function that re-derives internal structures after hydration.
-- `objectToReplaceOps(obj)` → flatten a plain object into a sequence of `ReplaceChange` ops for migration.
+Key functions (in `src/substrates/plain.ts`):
+
+- `plainSubstrateFactory` / `plainReplicaFactory` — the public construction surface. `plainContext(doc)` is a test shorthand.
+- `createPlainClock(lineage)` → `PlainClock`: the lineage, `adopt` (its only mutator), and the flush-count ↔ version mapping (`version`, `logOffset`).
+- `createPlainSubstrate(doc, clock, history)` / `createPlainReplica(clock)` — module-level constructors, not exported from the package.
+- `objectToReplaceOps(obj)` → one `ReplaceChange` op per top-level key; how an entirety payload, structural defaults, and ephemeral reprojections become ops.
+
+A headless replica materializes base + log on demand, cached per core revision. `applyChange` steps containers in place, so the replay runs on a deep copy of the base and copies each logged payload; replaying onto the base itself would re-apply the retained log on every rematerialization after a trim.
 
 ### `PlainVersion`
 
@@ -397,7 +404,7 @@ class PlainVersion {
 }
 ```
 
-A **single-entry version vector**: at most one authored *lineage* `{lineage: value}`, with genesis (`DEFAULT_LINEAGE`) as the empty vector ⊥ (see [§Version vector algebra](#version-vector-algebra)). `serialize()` produces `"lineage:value"` (genesis serializes as `"kyneta.genesis:0"`); `parseVersion` also accepts legacy bare-integer strings (e.g. `"5"`), which parse as belonging to `LEGACY_EPOCH`.
+A **single-entry version vector**: at most one authored *lineage* `{lineage: value}`, with genesis (`DEFAULT_LINEAGE`) as the empty vector ⊥ (see [§Version vector algebra](#version-vector-algebra)). `serialize()` produces `"lineage:value"` (genesis serializes as `"kyneta.genesis:0"`), and `parseVersion` accepts only that form.
 
 `lineage` is the version-vector *lineage key* — the identity coordinate, universal to every `Version` (see [§Version vector algebra](#version-vector-algebra)). Plain is the substrate where the lineage changes during normal operation (a fresh REAL lineage is minted on the first authored write, or on a writer restart with no persisted store); CRDT substrates (Loro, Yjs) and `ephemeral` hold a constant `DEFAULT_LINEAGE`, their identity living in their own native vectors.
 
@@ -406,9 +413,9 @@ A **single-entry version vector**: at most one authored *lineage* `{lineage: val
 - Same REAL lineage → total order on `value`.
 - Two different REAL lineages → `concurrent` (disjoint keys); their `meet` is the empty vector → genesis (a valid compaction floor).
 
-**Op-free genesis.** A freshly created doc is the empty vector: `buildUpgrade` applies structural defaults directly to the doc *without* flushing them into the log (structure is schema-derived and reconstructed by every interpreter), so `version()` starts at `DEFAULT_LINEAGE:0`. Identity is minted lazily by `createPlainSubstrate.afterBatch` on the first **local, non-`replay`** authored flush (via `adoptEpoch(randomHex(8))`) — never in `strategy.current()` (a pure projection now), and never on a merge/replica that merely *absorbs* a peer's ops, so absorbed content never causes a peer to invent an identity.
+**Op-free genesis.** A freshly created doc is the empty vector: `buildUpgrade` applies structural defaults directly to the doc *without* flushing them into the log (structure is schema-derived and reconstructed by every interpreter), so `version()` starts at `DEFAULT_LINEAGE:0`. Identity is minted lazily by `createPlainSubstrate.afterBatch` on the first authored flush (via `clock.adopt(randomHex(8))`) — never in `clock.version()` (a pure projection), and never on a merge, which appends to the log without reaching `afterBatch`. Absorbed content never causes a peer to invent an identity; a document built by `fromEntirety` from a genesis payload stays genesis until its own first write.
 
-`merge()` adopts an incoming lineage (via the `adoptEpoch` closure) only while the current lineage is still `DEFAULT_LINEAGE` — accepting the substrate's first real lineage. Genuine lineage-boundary resets (a REAL lineage transitioning to a *different* REAL lineage) are handled by `resetFromEntirety` (see `Substrate.resetFromEntirety` and `@kyneta/exchange`'s [Compaction and lineage boundaries](../exchange/TECHNICAL.md#compaction-and-lineage-boundaries)), which the Synchronizer invokes on an explicit mismatch — `merge()` never adopts across two REAL lineages. `SubstratePayload.lineage` is the preferred source for the incoming lineage; `parsePlainPayload`'s legacy `{ i, s|b }` envelope extraction is the fallback for peers that pre-date lineage support.
+`merge()` adopts an incoming lineage (via `clock.adopt`) only while the current lineage is still `DEFAULT_LINEAGE` — accepting the substrate's first real lineage. Genuine lineage-boundary resets (a REAL lineage transitioning to a *different* REAL lineage) are handled by `resetFromEntirety` (see `Substrate.resetFromEntirety` and `@kyneta/exchange`'s [Compaction and lineage boundaries](../exchange/TECHNICAL.md#compaction-and-lineage-boundaries)), which the Synchronizer invokes on an explicit mismatch — `merge()` never adopts across two REAL lineages. `SubstratePayload.lineage` is the preferred source for the incoming lineage; `parsePlainPayload`'s legacy `{ i, s|b }` envelope extraction is the fallback for peers that pre-date lineage support.
 
 ### Wire-codec opacity
 
@@ -424,7 +431,7 @@ The lineage now travels as an explicit field, `SubstratePayload.lineage`, set by
 
 The fix is a one-token change at the authoring seam: `PlainSubstrate.prepare` (and the `ephemeral` substrate's) pushes `{ path: path.toRaw(), change }`, not `{ path, change }`. `Path.toRaw()` (`path.ts`) is a pure projection — `RawPath.toRaw()` returns `this`; `AddressedPath.toRaw()` reads each segment's **`coord()`** (never `resolve()`, so it succeeds even for a dead address). It is the named inverse of `resolveToAddressed`. Two consequences worth internalizing:
 
-- **Freeze at *push*, not flush.** Index addresses advance in place *within* a batch, before `log.push([...pendingOps])` runs, so freezing later would capture the post-advance index. Push-time captures the coordinate as-authored. (The addressing prepare-handler fires *before* `substrate.prepare` for the same change, but an op's own path coordinate is stable under its own change — structural effects live in the change *payload* at the container path, not in the op's path segments; `index`/`entry` segments appear only on *nested* writes, which don't advance the address they sit on.)
+- **Freeze at *push*, not flush.** Index addresses advance in place *within* a batch, before `afterBatch` appends the pending ops to the log, so freezing later would capture the post-advance index. Push-time captures the coordinate as-authored. (The addressing prepare-handler fires *before* `substrate.prepare` for the same change, but an op's own path coordinate is stable under its own change — structural effects live in the change *payload* at the container path, not in the op's path segments; `index`/`entry` segments appear only on *nested* writes, which don't advance the address they sit on.)
 - **The log is now byte-shape-homogeneous.** Local-write ops and merge ops (which were already `RawPath` via `deserializeOps`) are the same value type, replayed by the same `applyChange`. `serializeOps` needs no special case: its `seg.resolve()` runs only on total `RawSegment`s and never throws — the defect was the *input*, not the code.
 
 ### `resolve()` vs `coord()` — liveness assertion vs coordinate projection
@@ -552,7 +559,7 @@ Writing a whole record, or clearing one, raises a horizon on the record itself. 
 
 A **read-time projection**, not a deletion mechanism. It is the `withDecay` decorator over the projection's fold (`interpreters/with-decay.ts`): a node whose schema declares `decayMs`, and whose newest write is older than that, reads as its structural zero, without its subtree being walked. That one rule covers a leaf and a container alike; a product or map past its window reads as its structural zero, not as a mix of expired and unexpired fields. A node never written does not decay, since it is already the zero.
 
-`tick(now)` re-projects and announces the root fields that moved. It runs with `projection: true` and `replay: true`: the tree is untouched, the version clock does not advance, and nothing is broadcast.
+`tick(now)` re-projects, writes the root fields that moved into σ, and announces them. The tree is untouched, the version clock does not advance, and nothing is broadcast; subscribers receive the changeset with `replay: true`, because no local writer authored it.
 
 A field expiring is one event, not a standing condition. The announcement names what *changed*, so an expired field is reported once; a tick that moves nothing is silent, however many fields are currently being masked.
 
@@ -628,13 +635,13 @@ The property this buys — a concurrent variant switch resolving to one coherent
 
 Π for ephemeral is the materializer the CRDT backends use: `projectStateTree` is `interpret(schema, withDecay(createMaterializeInterpreter(resolver), …))` over `createStateTreeResolver(tree)`. The resolver is schema-blind, as theirs are. Every method resolves its path with `stateTreeAt`, which descends through horizons and continues into a live leaf's value for the rest of a path, so a register's fields are read from inside its one tuple. For a value held as plain JSON, a `.json()` list's length or a `.json()` record's keys, it answers with `plainResolution`, the same answers Loro and Yjs give for their plain values. The fold holds the schema, so it supplies every zero and applies decay.
 
-A projection returns register values by reference from the tree, so it is never kept or handed out as it is. A reprojection, after a merge or on a tick, is a batch of replay ops:
+A projection returns register values by reference from the tree, so it is never kept or handed out as it is. A reprojection, after a merge or on a tick, is an announcement:
 
 1. gather: `projectStateTree(tree, schema, now)`;
 2. plan: `movedRootKeys(σ, next)`, the root fields whose values differ;
-3. execute: `executeBatch` with one replace op per moved field.
+3. execute: write a copy of each moved value into σ, then `announce` one replace op per moved field.
 
-Each moved value is copied once before it becomes an op payload, since subscribers receive the op, and `prepare` copies it again on the way into σ. σ is written only by `prepare`, and an unchanged root field is neither cloned nor rewritten. That is the shape of Loro's and Yjs's replay path, native state → `Op[]` → `executeBatch(replay)`, with a diff against the projection standing in for their event bridge.
+Each moved value is copied twice, once into σ and once into the op payload that subscribers receive, so neither shares a register value with the tree or with the other. An unchanged root field is neither cloned nor rewritten. That is the shape of Loro's and Yjs's event bridge, native state → σ → `Op[]` → announce, with a diff against the projection standing in for their CRDT events.
 
 ### One way in
 
@@ -673,13 +680,23 @@ CRDT substrates (Loro, Yjs) maintain a **shadow**: a `PlainState` object that se
 | **Position surface** | CRDT doc | `positionResolver` — cursor / relative-position operations that require CRDT structure |
 | **Native escape hatch** | CRDT doc | `nativeResolver` — direct access to the underlying CRDT container for advanced use |
 
-**On local writes**, `prepare` calls `applyChange(shadow, path, change)` — the same σ-advance the plain substrate uses — making the write immediately visible to reads. CRDT diffs are buffered and applied to the CRDT doc in `onFlush`. This two-phase design means the read surface is always ahead of (or equal to) the sync surface during a transaction.
+**On local writes**, `prepare` calls `applyChange(shadow, path, change)` — the same σ-advance the plain substrate uses — making the write immediately visible to reads, and advances the CRDT doc in the same call (Loro coalesces plain map writes until `afterBatch`; Yjs defers `.json()` boundary writes the same way).
 
-**On replay (merge)**, the CRDT doc absorbs the remote state first (via `doc.import` or `Y.applyUpdate`). `onFlush` then re-materializes the shadow from the CRDT doc, ensuring `ctx.reader` reflects the merged state for subscriber callbacks.
+**On everything else** (a merge, a raw native write), the CRDT doc holds the ops first (via `doc.import`, `Y.applyUpdate`, or the native call). The event bridge re-materializes the shadow from the CRDT doc and only then announces the ops, so `ctx.reader` already reflects the new state when any subscriber runs.
 
-**Initialization.** The shadow is created at substrate construction time via `materializeLoroShadow` (Loro) or `materializeYjsShadow` (Yjs). These functions now delegate to `createMaterializeInterpreter` with a backend-specific `MaterializeResolver`, rather than defining bespoke 370-line interpreters. The resolver closes over the CRDT doc and binding; the generic materializer walks the schema and calls resolver methods to produce a plain JS object matching the schema's shape. The shadow is also re-materialized on upgrade and after any replay flush.
+**A substrate announces only after λ and σ agree.** Every change that a local writer did not author reaches the changefeed as an announcement, `announce(ctx, ops, origin)` (`src/interpreters/writable.ts`), issued after the substrate has taken the ops into λ and brought σ up to date. The announcement never calls `substrate.prepare` or `afterBatch`; it only feeds the changefeed layers and delivers. Those layers work from the ops alone, so σ is final for every observer.
 
-The ephemeral substrate builds its shadow with the same fold, over a resolver for its `StateTree` (see [The projection](#the-projection)). Its replay has the same shape too: all three turn native state into `Op[]` and run it through `executeBatch(replay)`. Loro and Yjs take the ops from their CRDT events; ephemeral has no event bridge, so `movedRootKeys` diffs σ against a fresh projection instead. For a value a backend holds as plain JSON, such as the inside of a `.json()` register, every resolver answers with `plainResolution` (`interpreters/materialize.ts`), so they cannot disagree about it.
+| announcer | reconcile λ | reconcile σ |
+|---|---|---|
+| Yjs / Loro event bridge | CRDT import or native write, already done | `syncShadow(shadow, materialize(λ))` |
+| plain `merge` | apply each op to the doc, `core.append(batch)` | σ is λ |
+| plain `resetFromEntirety` | apply replace ops, `core.resetLog(remote)` | σ is λ |
+| ephemeral `merge` | `core.merge` joins the tree | write copies of the moved root values |
+| ephemeral `tick` | none | write copies of the moved root values |
+
+**Initialization.** The shadow is created at substrate construction time via `materializeLoroShadow` (Loro) or `materializeYjsShadow` (Yjs). These functions now delegate to `createMaterializeInterpreter` with a backend-specific `MaterializeResolver`, rather than defining bespoke 370-line interpreters. The resolver closes over the CRDT doc and binding; the generic materializer walks the schema and calls resolver methods to produce a plain JS object matching the schema's shape. The shadow is also re-materialized on upgrade and before every bridge announcement.
+
+The ephemeral substrate builds its shadow with the same fold, over a resolver for its `StateTree` (see [The projection](#the-projection)). Its announcements have the same shape too: all three bring σ up to date, turn native state into `Op[]`, and announce it. Loro and Yjs take the ops from their CRDT events; ephemeral has no event bridge, so `movedRootKeys` diffs σ against a fresh projection instead. For a value a backend holds as plain JSON, such as the inside of a `.json()` register, every resolver answers with `plainResolution` (`interpreters/materialize.ts`), so they cannot disagree about it.
 
 **`Reader` vs `MaterializeResolver`.** `Reader` (5 methods) is the runtime read interface backed by the `PlainState` shadow — schema-blind, live. `MaterializeResolver` (7 methods) is the materialization interface backed by the native store — schema-aware via catamorphism dispatch, one-shot. They share a conceptual lineage — the resolver is what a CRDT Reader would look like if it were schema-aware and didn't need liveness.
 
@@ -695,7 +712,7 @@ A shadow-carrying substrate holds the document twice, and the law is that the tw
 
 Π is the substrate's own materialiser — `projectStateTree`, `materializeLoroShadow`, `materializeYjsShadow`. `projectionConformance` (`src/testing/projection-conformance.ts`) applies a sequence of writes and compares the two derivations after each one. `ephemeral`, `loro` and `yjs` run it.
 
-The comparison is not a function against itself. On the write path σ is advanced by `applyChange` and λ by `applyChangeToStateTree` or `changeToDiff` — different code reading the same change. A substrate uses its materialiser only on the replay path, so reprojecting after a local write crosses from one derivation to the other. `plain` does not run the suite: σ *is* the document there, so Π is the identity and the comparison would hold for a reason unrelated to any substrate behaviour.
+The comparison is not a function against itself. On the write path σ is advanced by `applyChange` and λ by `applyChangeToStateTree` or `changeToDiff` — different code reading the same change. A substrate uses its materialiser only when it announces, so reprojecting after a local write crosses from one derivation to the other. `plain` does not run the suite: σ *is* the document there, so Π is the identity and the comparison would hold for a reason unrelated to any substrate behaviour.
 
 Before this suite existed the law was tested twice by hand, in the Loro and Yjs `eager-write-coherence` files, and not at all for `ephemeral` — which is where it broke. Both hand-written versions compared Π(λ) against an object literal and spot-checked two fields of σ, so neither compared the two derivations at all.
 
@@ -1059,9 +1076,9 @@ End-to-end flow:
 1. `change` resolves `ref[TRANSACT]` → the `WritableContext`.
 2. `ctx.runBatch(work, opts)` opens a frame (push on `frameStarts`/`inverseStack`). At depth-0 entry it invokes the substrate's `runBatch` bracket (Loro `doc.commit()`, Yjs `Y.transact`) wrapping the whole body.
 3. `fn(doc)` runs. Inside `fn`, each helper (`.set`, `.push`, `.insert`, …) routes through `ctx.dispatch(path, change)` — the depth-aware combinator. Inside a frame, dispatch is just `ctx.prepare`; outside any frame it opens an implicit single-op runBatch (auto-commit).
-4. `ctx.prepare` writes to the writer log (for `batch()`'s return value), calls `substrate.prepare`. The substrate captures σ at the change's target path, computes the inverse via `invert(pre, change)` and records it on the active frame, then advances σ and λ in lockstep.
-5. After `fn` returns, the bracket's depth-0 release calls `ctx.flush(opts)` exactly once → `wrappedFlush` → `planDelivery` → `deliverNotifications`. One `Changeset` per affected subscriber.
-6. If `fn` throws, the catch path replays this frame's recorded inverses LIFO through `ctx.prepare(path, inverse, { compensating: true })`, then flushes with `aborted: true`, then rethrows. External observers see one batched native event whose ops net to zero.
+4. `ctx.prepare(path, change, { ingress: "author" })` appends to the writer log (for `batch()`'s return value) and calls `substrate.prepare(path, change, recordInverse)`. The substrate captures σ at the change's target path, computes the inverse via `invert(pre, change)` and records it on the active frame, then advances σ and λ in lockstep.
+5. After `fn` returns, the bracket's depth-0 release calls `ctx.flush` exactly once → `wrappedFlush` → `substrate.afterBatch()` → `planDelivery` → `deliverNotifications`. One `Changeset` per affected subscriber.
+6. If `fn` throws, the catch path replays this frame's recorded inverses LIFO through `ctx.prepare(path, inverse, { ingress: "compensate" })` (reaching the substrate with `recordInverse === null`, and never logged), then flushes with `aborted: true`, then rethrows. External observers see one batched native event whose ops net to zero.
 
 The substrate's `runBatch` bracket invocation is gated on `frameStarts.length === 0`: substrate.runBatch is invoked at most once per outermost block, regardless of how deeply `dispatch` nests. The exchange sees the transaction as a single `merge` source: after commit the substrate's `exportSince()` captures the entire delta.
 
@@ -1083,9 +1100,9 @@ Under the three-primitive substrate contract, `ctx.runBatch` is **one bracket pr
 
 2. **Changefeed-flush handler** — fires exactly once at the depth 1→0 transition. Success path: `ctx.flush(opts)`. Catch path: `ctx.flush({ ...opts, aborted: true })`. Inner frames push/pop without flushing — the depth-0 release is the single delivery point per outermost block.
 
-3. **Inverse-stack handler** — every successful `prepare` pushes an `InverseEntry` (path + reverse arrow). On throw, the frame's range is replayed LIFO through `ctx.prepare(path, inverse, { compensating: true })`. Substrates skip inverse recording under the undo-replay handler (the `compensating` flag signals "this prepare is replaying an inverse, not applying a new forward change"). External observers see one batched native event whose ops net to zero.
+3. **Inverse-stack handler** — every successful authored `prepare` pushes an `InverseEntry` (path + reverse arrow). On throw, the frame's range is replayed LIFO through `ctx.prepare(path, inverse, { ingress: "compensate" })`, which hands the substrate no recorder, so the inverse of an inverse is never recorded. External observers see one batched native event whose ops net to zero.
 
-The three handlers are co-extensive — they all open and close at the same boundary. `executeBatch` invokes `ctx.runBatch` for local-write batches; replay batches bypass it (the substrate's native state already absorbed those ops at the event-bridge call site, so there's no need for a bracket).
+The three handlers are co-extensive — they all open and close at the same boundary. Every authored write goes through `ctx.runBatch` (`batch`, `applyChanges`, or `dispatch`'s auto-commit); `announce` bypasses it, because the substrate has already applied those ops and there is nothing to bracket.
 
 Substrate.runBatch is invoked at most once per outermost `batch(doc, fn)` — re-entrant subscriber writes open their own outermost runBatch (frameStarts goes to 0 between outer flush and subscriber re-entry), each block is its own atomic abort unit and gets its own commit.
 
@@ -1120,7 +1137,7 @@ The change algebra `⟨State, Change, step⟩` is extended into a groupoid by `i
 | `richtext` | OT inverse with mark restoration |
 | `tree` | per-instruction inverse with pre-state topology lookup; reversed instruction order for LIFO undo |
 
-Substrates read `pre = path.read(σ)` before applying the forward change — no copy, because `invert` snapshots whatever it retains — compute the inverse, and push it onto the active runBatch frame's stack via the `RECORD_INVERSE` callback threaded through prepare options. On throw, the bracket's catch path replays inverses LIFO inside the same commit — observers see one batched event with net-zero delta.
+Substrates read `pre = path.read(σ)` before applying the forward change — no copy, because `invert` snapshots whatever it retains — compute the inverse, and push it onto the active runBatch frame's stack via the `recordInverse` callback `prepare` receives for a forward write. On throw, the bracket's catch path replays inverses LIFO inside the same commit — observers see one batched event with net-zero delta.
 
 ### The projection law
 
@@ -1133,7 +1150,7 @@ Both must hold. Naturality over `invert` is what makes the abort path correct: w
 
 Substrate-implementation contract: **any backend whose `applyChange` is a natural transformation over the change groupoid (forward AND inverse arrows) automatically gets correct abort for free.** PlainSubstrate is the degenerate case (σ ≡ λ, Π = id; both naturality squares hold trivially). Loro and Yjs satisfy naturality by design.
 
-Replay can't use incremental σ-step: CRDT merge is a lattice join with no sequential decomposition. The correct response is `syncShadow(materialize(λ))` in `afterBatch` on replay — re-materialise σ from λ in one Π pass.
+A bridged change can't use incremental σ-step: CRDT merge is a lattice join with no sequential decomposition. The correct response is `syncShadow(materialize(λ))` in the event bridge, before the announcement — re-materialise σ from λ in one Π pass.
 
 ### Op payloads are snapshots, not views
 
@@ -1144,7 +1161,7 @@ An op's payload is a value, not a window onto the store. Two independent copies 
 
 The store edge applies to **all four `PlainState`-backed substrates**: plain, ephemeral, and both CRDT backends, whose shadow (σ) is a plain object mutated by the same `applyChange` even though their native tree (λ) is not.
 
-Replayed changes are copied too. It is tempting to skip them, since a wire-built op has no local caller — but that is a fact about the *caller* edge. The store still takes the payload and later mutates it, and a merge's changesets reach subscribers like any other. Nothing is exempt. `projection` batches once were, on the grounds that a decay tick's payload was the whole shadow and nobody read it; a tick now names the fields its re-projection moved and carries their values, so the exemption had become the very alias this severs.
+Merged changes are copied too. It is tempting to skip them, since a wire-built op has no local caller — but that is a fact about the *caller* edge. The store still takes the payload and later mutates it, and a merge's changesets reach subscribers like any other. Nothing is exempt, decay ticks included: a tick names the fields its re-projection moved and carries their values, so its payload and σ take separate copies.
 
 **The cost, measured end-to-end, is a few percent on small writes and a large *improvement* on writes into a big collection** — because removing the inverse-path clone below matters more than adding the ownership copies. That clone captured pre-state at the write's path, which for a record entry is the *whole record*: the old cost scaled with collection size, and the new one does not.
 
@@ -1210,7 +1227,7 @@ This invariant is uniform across all substrates — plain, Loro, Yjs — because
 
 Concretely, the projection law `σ ≡ Π(λ)` (the naturality condition of the materialisation catamorphism) holds at every prepare boundary. A re-entrant subscriber may either read through σ (via the Reader / the ref `[CALL]`) or write through λ (via re-entrant `batch()`, which itself walks λ through `changeToDiff`/`applyChangeToYjs`) — both views are coherent.
 
-When the outer batch is a **replay** batch from a substrate event bridge (e.g. an incoming sync merge), S1's local re-entrant write inside the replay-batch delivery is *not* a replay (the user code constructs a normal `batch(doc, ...)` with no `replay` flag), so the substrate's `prepare`/`afterBatch` apply it natively. This is why `replay` is a typed parameter on every batch rather than an ambient flag around the event bridge: a flag would cover S1's write too, and the substrate would silently drop it. See [Batch metadata](#batch-metadata).
+When the outer batch is an **announcement** (e.g. an incoming sync merge), S1's re-entrant write during its delivery is an ordinary authored batch, so the substrate's `prepare`/`afterBatch` apply it natively. This is why `ingress` is a required parameter on every batch rather than an ambient flag around the event bridge: a flag would cover S1's write too, and the substrate would silently drop it. See [Batch metadata](#batch-metadata).
 
 Two guidances:
 
@@ -1223,13 +1240,37 @@ To derive "pure pre-mutation state," consume the `Changeset` semantically; do no
 
 ## Batch metadata
 
-`BatchOptions` extends `BatchMetadata` (defined in `@kyneta/changefeed`) with one upstream-only field `compensating`. Four channels ride on every batch through `executeBatch → ctx.prepare → ctx.flush → substrate.prepare → substrate.onFlush`, all surfacing on the delivered `Changeset` via `BatchMetadata`:
+Source: `src/substrate.ts`, `src/interpreters/writable.ts`, `src/interpreters/with-changefeed.ts`.
+
+Every batch declares how it reached the changefeed, in a **required** `ingress`. Nothing defaults: a call site that forgets to say it is a compile error rather than a silent claim of local authorship.
+
+```ts
+type BatchIngress = "author" | "announce"
+type PrepareIngress = BatchIngress | "compensate"
+
+type BatchOptions =                                   // ctx.flush
+  | (CommitOptions & { ingress: "author"; aborted?: boolean })
+  | { ingress: "announce"; origin?: string }
+interface PrepareOptions { ingress: PrepareIngress }  // ctx.prepare
+interface CommitOptions { origin?: string; source?: unknown } // batch, applyChanges, runBatch
+interface MergeOptions { origin?: string }            // merge, resetFromEntirety
+```
+
+| ingress | how it arrives | `substrate.prepare` | writer log | `substrate.afterBatch` | `Changeset.replay` |
+|---|---|---|---|---|---|
+| `author` | `dispatch` (inside `runBatch`, or auto-committing) | `(path, change, recordInverse)` | forward op | at the depth-0 flush | `false` |
+| `compensate` | the undo handler inside `runBatch` | `(path, change, null)` | not logged | (the author flush) | — |
+| `announce` | `announce(ctx, ops, origin)` | not called | not logged | not called | `true` |
+
+The union encodes two contracts. Only an authored batch carries `source` (an echo token names a local caller and never survives a merge), and only an authored batch can be `aborted`.
+
+`BatchOptions` does not extend `BatchMetadata`. The four `Changeset` channels are derived from it by one pure function, `changesetMetadata` (`with-changefeed.ts`), at delivery:
 
 - **`origin`** — opaque application-level label. Propagates to `Changeset.origin` so subscribers can categorize batches (`"sync"`, `"undo"`, `"migration"` — or anything else). The schema layer and the exchange **never branch on origin's value**. It is *free vocabulary* for app code.
 
-- **`replay`** — kyneta-internal structural directive. `true` iff the batch represents state authored elsewhere: substrate event bridge replaying `doc.import`, a `merge` payload, or version travel. Substrates with external mutation paths (Loro, Yjs) skip native-side work in `prepare`/`onFlush` when `replay: true` (the native state already absorbed the change); the changefeed layer still delivers `Changeset` notifications, and surfaces `replay: true` to subscribers. The plain substrate ignores `replay` in `prepare` because it has no out-of-band mutation path. **User-facing APIs (`change`, `applyChanges`) never construct `replay: true`** — only substrate event bridges and `merge` paths do.
+- **`replay`** — `ingress !== "author"`: true iff no local writer authored the batch (a substrate event bridge, a `merge` payload, an ephemeral decay tick). **User-facing APIs (`batch`, `applyChanges`) cannot produce it**: they only ever build `author` batches.
 
-- **`source`** — identity-typed echo-suppression token. Compared with `===` by subscribers that issued the change. Unlike `origin` (app vocabulary) and `replay` (kyneta-internal structural directive), `source` is a kyneta-managed handshake between writer and reader: the originating `batch()` caller mints a token (`Symbol("...")` or `{}`), passes it via `options.source`, and the same token round-trips to `Changeset.source` so the caller's subscriber can identify and skip its own writes. The schema layer NEVER branches on `source`'s identity — it threads it through the pipeline unchanged, the same way it threads `origin`. **Substrate replay paths explicitly drop `source`** — `source` never survives a CRDT round-trip; any value reaching a subscriber is therefore from a local `batch()` on this peer.
+- **`source`** — identity-typed echo-suppression token. Compared with `===` by subscribers that issued the change. Unlike `origin` (app vocabulary) and `replay` (kyneta-internal), `source` is a kyneta-managed handshake between writer and reader: the originating `batch()` caller mints a token (`Symbol("...")` or `{}`), passes it via `options.source`, and the same token round-trips to `Changeset.source` so the caller's subscriber can identify and skip its own writes. The schema layer NEVER branches on `source`'s identity. An announcement has no `source`, so any value reaching a subscriber is from a local `batch()` on this peer.
 
 - **`aborted`** — kyneta-internal outcome directive. See §"`Changeset.aborted`" above.
 
@@ -1306,7 +1347,7 @@ Ordering *across changed paths* used to be first-touch order and was never contr
 
 #### Replay is where the fan-out is largest
 
-The local-`batch()` framing hides the high-traffic case. A replay batch bypasses `ctx.runBatch` but calls `ctx.flush` **once** for its whole payload (`executeBatch`, `src/interpreters/writable.ts`), so one incoming sync merge is one flush over every op in it. An `offer` touching fifty paths once delivered **fifty** changesets to every doc-root subscriber; it delivers one. The factor is the number of distinct paths in a merge payload, which is unbounded in practice, and `@kyneta/exchange`, `@kyneta/react` and `@kyneta/devtools` all sit on that path.
+The local-`batch()` framing hides the high-traffic case. An announcement bypasses `ctx.runBatch` but calls `ctx.flush` **once** for its whole payload (`announce`, `src/interpreters/writable.ts`), so one incoming sync merge is one flush over every op in it. An `offer` touching fifty paths once delivered **fifty** changesets to every doc-root subscriber; it delivers one. The factor is the number of distinct paths in a merge payload, which is unbounded in practice, and `@kyneta/exchange`, `@kyneta/react` and `@kyneta/devtools` all sit on that path.
 
 Ordering has two halves here, and only one is universal. The engine preserves the relative order of the ops it is handed — that holds on every substrate and both entry points. That those ops arrive in *write* order is true only of a local batch: a merge carries a CRDT diff, so the event bridge reconstructs ops by enumerating what changed rather than replaying a write log. `deliveryConformance` pins the universal half for both drivers and the dispatch-order half for local writes. It runs against all four substrates: plain and ephemeral in this package, Loro and Yjs in theirs.
 
@@ -1316,7 +1357,7 @@ Because the planner runs before any callback, a subscriber that writes during de
 
 ### `expandMapOpsToLeaves`
 
-A single `MapChange` (e.g. `replaceEntry("alice", {...})`) represents a structural operation on a `map` node. For subscribers on descendants of that map, the change has to be *expanded* into per-leaf `ReplaceChange` ops. `expandMapOpsToLeaves` does this pure expansion. It is **not** part of the notification engine: its only callers are the CRDT event bridges (`backends/loro/src/change-mapping.ts`, `backends/yjs/src/change-mapping.ts`), which run it before handing `executeBatch` a finished op list. This is why the same logical write can reach subscribers as one map op on the plain substrate and as several per-key ops on Loro or Yjs — and why `deliveryConformance` asserts invariants rather than literal op lists.
+A single `MapChange` (e.g. `replaceEntry("alice", {...})`) represents a structural operation on a `map` node. For subscribers on descendants of that map, the change has to be *expanded* into per-leaf `ReplaceChange` ops. `expandMapOpsToLeaves` does this pure expansion. It is **not** part of the notification engine: its only callers are the CRDT event bridges (`backends/loro/src/change-mapping.ts`, `backends/yjs/src/change-mapping.ts`), which run it before handing `announce` a finished op list. This is why the same logical write can reach subscribers as one map op on the plain substrate and as several per-key ops on Loro or Yjs — and why `deliveryConformance` asserts invariants rather than literal op lists.
 
 ### Why there are no dynamic-collection changefeed factories
 
@@ -1976,7 +2017,7 @@ The worked example is `__getCacheHandlerCountAtPath` (`src/interpreters/with-cac
 | `src/interpreters/with-readable.ts` | `.current`, `()`, read-by-path. Sequence/movable and map/set cases delegate to shared helpers. |
 | `src/interpreters/with-addressing.ts` | Address-table layer. Sequence/movable and map/set cases delegate to shared helpers. |
 | `src/interpreters/with-caching.ts` | Identity-preserving memoization + `INVALIDATE`. Sequence/movable and map/set cases delegate to shared helpers. |
-| `src/interpreters/writable.ts` | Mutation primitives + `REMOVE` + `TRANSACT` + `executeBatch`. Text/sequence/movable/map/set cases delegate to shared helpers. |
+| `src/interpreters/writable.ts` | Mutation primitives + `REMOVE` + `TRANSACT` + `announce` + `hasPreparePipeline`. Text/sequence/movable/map/set cases delegate to shared helpers. |
 | `src/interpreters/with-changefeed.ts` | Observation layer + `planDelivery` + `deliverNotifications` + `listenIn` + `createNodeChangefeed` + `wireChangefeed`. All cases use `wireChangefeed` to unify changefeed boilerplate. The notification engine itself is internal — not exported. |
 | `src/interpreters/validate.ts` | Validation interpreter. |
 | `src/interpreters/plain.ts` | Plain-state interpreter (reader + canonical shape). |

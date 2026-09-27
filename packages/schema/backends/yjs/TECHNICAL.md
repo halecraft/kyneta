@@ -82,8 +82,8 @@ The two backends implement the same `Substrate<V>` contract and share the overal
 | Root layout | One Loro container per root field (typed accessors: `doc.getText(k)`, `doc.getMap(k)`, …) plus a reserved `_props` map for root scalars | One `Y.Map` at `doc.getMap("root")` holds *every* field (shared types and plain values alike) |
 | Container discrimination | `.kind()` method (strings: `"Map"`, `"Text"`, `"List"`, …) | `instanceof Y.Map`, `instanceof Y.Array`, `instanceof Y.Text` |
 | Why | Loro containers are WASM handles; `instanceof` is unreliable across module boundaries | Yjs shared types are native JS classes; `instanceof` is stable |
-| Write commit | Eager `applyDiff` in `prepare` (plain MapDiff writes coalesce into a per-CID buffer drained in `afterBatch`; structural inserts apply immediately). `runBatch` brackets with a depth counter + single `doc.commit()` on outermost release | Eager imperative mutations inside the ambient `Y.transact` opened by `runBatch` (origin-tagged `KYNETA_ORIGIN`); Yjs's native transact nesting collapses re-entries for free |
-| Event bridge | `doc.subscribe` + pre-commit-hook discriminator + `BatchOptions.replay` directive | `observeDeep` + `transaction.meta` mark discriminator + `BatchOptions.replay` directive |
+| Write commit | Eager `applyDiff` in `prepare` (plain MapDiff writes coalesce into a per-CID buffer drained in `afterBatch`; structural inserts apply immediately). `runBatch` brackets with a depth counter + single `doc.commit()` on outermost release | Eager imperative mutations inside the ambient `Y.transact` opened by `runBatch` (marked via `transaction.meta`); Yjs's native transact nesting collapses re-entries for free |
+| Event bridge | `doc.subscribe` + pre-commit-hook discriminator; re-materialize σ, then announce | `observeDeep` + `transaction.meta` mark discriminator; re-materialize σ, then announce |
 | Structural identity | Identity hash as Loro container key | Identity hash as `Y.Map` key within the root `Y.Map` |
 | Structural creation | Lazy — creation happens on first typed accessor call | Eager — `ensureContainers` walks the schema on upgrade |
 | Structural client ID | Not needed (Loro has no equivalent concern) | `STRUCTURAL_YJS_CLIENT_ID = 0` during `ensureContainers` |
@@ -267,7 +267,7 @@ Yjs's natural programming model is imperative: open a `Y.transact`, mutate share
 ```
 batch(doc, d => { d.title.insert(0, "hi"); d.items.push(x) })
   │
-  ├─ runBatch opens ONE Y.transact(doc, body, KYNETA_ORIGIN)
+  ├─ runBatch opens ONE Y.transact(doc, body, options.origin)
   │   (re-entrant runBatch calls nest natively — Yjs collapses them
   │   into the outermost transact; no depth counter needed)
   │
@@ -298,9 +298,9 @@ Non-boundary writes bypass the buffer entirely and go straight to `applyChangeTo
 
 ### Nested-transact collapse under re-entry
 
-Yjs's `Y.transact` natively collapses nesting: an inner `Y.transact` call inside an outer one runs as part of the outer transact and emits no separate `observeDeep` event. The substrate's `runBatch` just opens `Y.transact(work, KYNETA_ORIGIN)` without any depth counter — Yjs handles the collapse. Practical effect: a subscriber's re-entrant `batch(doc, ...)` from inside `deliverNotifications` opens a nested transact that folds into the outer one, producing a single batched `observeDeep` for the whole logical user action. External Yjs providers (y-websocket, y-webrtc) ship one binary update per outermost `batch(doc, fn)` — strictly fewer / smaller-equal updates than the pre-Phase-3 design.
+Yjs's `Y.transact` natively collapses nesting: an inner `Y.transact` call inside an outer one runs as part of the outer transact and emits no separate `observeDeep` event. The substrate's `runBatch` just opens `Y.transact(work, options.origin)` without any depth counter — Yjs handles the collapse. Practical effect: a subscriber's re-entrant `batch(doc, ...)` from inside `deliverNotifications` opens a nested transact that folds into the outer one, producing a single batched `observeDeep` for the whole logical user action. External Yjs providers (y-websocket, y-webrtc) ship one binary update per outermost `batch(doc, fn)` — strictly fewer / smaller-equal updates than the pre-Phase-3 design.
 
-`BatchOptions.origin` (the app-level provenance label) flows through the kyneta `Changeset.origin` channel only — it never reaches Yjs's transact origin, which is always `KYNETA_ORIGIN` so the event-bridge handler can recognise and skip its own writes.
+`CommitOptions.origin` (the app-level provenance label) flows through the kyneta `Changeset.origin` channel and becomes Yjs's `transaction.origin`, so Yjs ecosystem tools that key on origin see the app's label. The event-bridge handler recognises and skips its own writes by the `KYNETA_MARK` that `runBatch` sets in `transaction.meta`.
 
 ### Populate-then-attach for structural inserts
 
@@ -377,7 +377,7 @@ Three properties this gives us:
 
 Mixing raw CRDT mutations with `batch()` calls inside the same atomic unit (a single Yjs `transact` body) is unsupported. The raw mutations will be silently absorbed into kyneta's own-commit skip and not bridged to the kyneta changefeed. To intermix, use separate transacts for raw mutations. This is a fundamental limit of commit-level discrimination.
 
-During replay, `onFlush` re-materializes the `PlainState` shadow from the `Y.Doc` via `materializeYjsShadow`, ensuring that `ctx.reader` — which reads through `plainReader(shadow)` — is consistent with the merged Yjs state for any subscriber callbacks that fire during notification delivery. See [§The functional shadow](../../TECHNICAL.md#the-functional-shadow).
+Before announcing (`announce(ctx, ops, origin)`), the bridge re-materializes the `PlainState` shadow from the `Y.Doc` via `materializeYjsShadow`, so `ctx.reader` — which reads through `plainReader(shadow)` — already reflects the merged Yjs state when any subscriber runs. The announcement never reaches `substrate.prepare` or `afterBatch`. See [§The functional shadow](../../TECHNICAL.md#the-functional-shadow).
 
 `materializeYjsShadow` itself uses the generic `createMaterializeInterpreter` from `@kyneta/schema` core with a Yjs-specific `MaterializeResolver` (created by `createYjsResolver`), rather than defining a bespoke interpreter. The resolver (~50 lines) handles only CRDT-specific value extraction (reading from `Y.Text`, `Y.Map`, `Y.Array`); the structural traversal, zero-default production for missing scalars/sums, and recursive descent are all handled by the shared core interpreter.
 

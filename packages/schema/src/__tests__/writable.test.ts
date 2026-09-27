@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest"
-import type { Ref, WritableContext } from "../index.js"
+import type {
+  ChangeBase,
+  Path,
+  RecordInverseFn,
+  Ref,
+  WritableContext,
+} from "../index.js"
 import {
+  announce,
   batch,
   bottomInterpreter,
   buildWritableContext,
@@ -8,10 +15,14 @@ import {
   FORWARD_OPS_SINCE,
   hasTransact,
   interpret,
+  observation,
   plainContext,
   plainReader,
+  RawPath,
   readable,
+  replaceChange,
   Schema,
+  subscribe,
   TRANSACT,
   withCaching,
   withNavigation,
@@ -859,18 +870,15 @@ describe("writable: compensation loop", () => {
     // Create a mock substrate where prepare throws, and compensation also throws
     const mockSubstrate = {
       reader: plainReader(store),
-      prepare: (_path: any, _change: any, opts: any) => {
+      prepare: (
+        path: Path,
+        _change: ChangeBase,
+        recordInverse: RecordInverseFn | null,
+      ) => {
+        // A compensation arrives without a recorder.
+        if (recordInverse === null) throw compensationError
         // Record an inverse so compensation loop has something to run
-        if (opts?.[Symbol.for("kyneta:record-inverse")]) {
-          opts[Symbol.for("kyneta:record-inverse")](_path, {
-            type: "increment",
-            amount: -1,
-          })
-        }
-
-        if (opts?.compensating) {
-          throw compensationError
-        }
+        recordInverse(path, { type: "increment", amount: -1 } as ChangeBase)
         throw originalError
       },
       afterBatch: () => {},
@@ -898,17 +906,13 @@ describe("writable: compensation loop", () => {
 
     const mockSubstrate = {
       reader: plainReader(store),
-      prepare: (_path: any, _change: any, opts: any) => {
-        if (opts?.[Symbol.for("kyneta:record-inverse")]) {
-          opts[Symbol.for("kyneta:record-inverse")](_path, {
-            type: "increment",
-            amount: -1,
-          })
-        }
-
-        if (opts?.compensating) {
-          throw compensationErrorStr
-        }
+      prepare: (
+        path: Path,
+        _change: ChangeBase,
+        recordInverse: RecordInverseFn | null,
+      ) => {
+        if (recordInverse === null) throw compensationErrorStr
+        recordInverse(path, { type: "increment", amount: -1 } as ChangeBase)
         throw originalError
       },
       afterBatch: () => {},
@@ -926,6 +930,43 @@ describe("writable: compensation loop", () => {
       expect(e.message).toBe(compensationErrorStr)
       expect(e.cause).toBe(originalError)
     }
+  })
+})
+
+describe("writable: announcements never reach the substrate", () => {
+  it("an announced batch is delivered without calling prepare or afterBatch", () => {
+    const schema = Schema.struct({ title: Schema.string() })
+    const store = { title: "" }
+    const calls = { prepare: 0, afterBatch: 0 }
+    const stub = {
+      reader: plainReader(store),
+      prepare: () => {
+        calls.prepare++
+      },
+      afterBatch: () => {
+        calls.afterBatch++
+      },
+    }
+    const ctx = buildWritableContext(stub, {})
+    const doc = interpret(schema, ctx)
+      .with(readable)
+      .with(writable)
+      .with(observation)
+      .done() as any
+    const replays: unknown[] = []
+    subscribe(doc, cs => replays.push(cs.replay))
+
+    // The substrate brings σ up to date itself before announcing.
+    store.title = "merged"
+    announce(
+      ctx,
+      [{ path: RawPath.empty.field("title"), change: replaceChange("merged") }],
+      "sync",
+    )
+
+    expect(calls).toEqual({ prepare: 0, afterBatch: 0 })
+    expect(replays).toEqual([true])
+    expect(doc.title()).toBe("merged")
   })
 })
 

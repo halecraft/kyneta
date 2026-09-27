@@ -30,9 +30,9 @@
 // Compose: withChangefeed(withWritable(withCaching(withReadable(withNavigation(bottom)))))
 // Or read-only: withChangefeed(withCaching(withReadable(withNavigation(bottom))))
 
-import type { HasChangefeed } from "@kyneta/changefeed"
+import type { BatchMetadata, HasChangefeed } from "@kyneta/changefeed"
 import { CHANGEFEED } from "@kyneta/changefeed"
-import type { DispatcherHandle, Lease } from "@kyneta/machine"
+import type { Lease } from "@kyneta/machine"
 import { createDispatcher } from "@kyneta/machine"
 import type { ChangeBase } from "../change.js"
 import { isTreeChange, treeChange } from "../change.js"
@@ -63,10 +63,11 @@ import type {
   TextSchema,
   TreeSchema,
 } from "../schema.js"
-import type { BatchOptions } from "../substrate.js"
+import type { BatchOptions, PrepareOptions } from "../substrate.js"
 
 import type { HasRead } from "./bottom.js"
 import { CALL } from "./bottom.js"
+import { hasPreparePipeline } from "./writable.js"
 
 export const POPULATED: unique symbol = Symbol.for("kyneta:populated")
 
@@ -370,6 +371,30 @@ function listenIn<C>(
 }
 
 /**
+ * The metadata a flushed batch puts on each `Changeset`. `replay` is true for
+ * every announcement: no local writer authored those ops. Only an authored
+ * batch carries `source` and `aborted`.
+ */
+export function changesetMetadata(options: BatchOptions): BatchMetadata {
+  switch (options.ingress) {
+    case "author":
+      return {
+        origin: options.origin,
+        replay: false,
+        aborted: options.aborted,
+        source: options.source,
+      }
+    case "announce":
+      return {
+        origin: options.origin,
+        replay: true,
+        aborted: undefined,
+        source: undefined,
+      }
+  }
+}
+
+/**
  * Fire a plan's callbacks. Imperative Shell — all the deciding happened in
  * `planDelivery`; this only builds changesets and calls functions.
  *
@@ -388,10 +413,8 @@ function listenIn<C>(
  * @param plan - From `planDelivery`.
  * @param listeners - Own-path subscribers, keyed by path (from `ensurePrepareWiring`).
  * @param descendants - Deep subscribers, keyed by their own path.
- * @param options - `BatchOptions`. All four `BatchMetadata` channels ride
- *   unchanged onto every emitted `Changeset`: `origin` (app label), `replay`
- *   (state authored elsewhere), `aborted` (the block threw and was
- *   compensated), and `source` (echo-suppression token).
+ * @param options - The flushed batch's options; `changesetMetadata` turns
+ *   them into the metadata every emitted `Changeset` carries.
  */
 export function deliverNotifications(
   plan: DeliveryPlan,
@@ -400,18 +423,13 @@ export function deliverNotifications(
     ReadonlySet<(cs: Changeset<ChangeBase>) => void>
   >,
   descendants: ReadonlyMap<string, ReadonlySet<(cs: Changeset<Op>) => void>>,
-  options?: BatchOptions,
+  options: BatchOptions,
 ): void {
+  const metadata = changesetMetadata(options)
   for (const [key, changes] of plan.ownPath) {
     const set = listeners.get(key)
     if (!set || set.size === 0) continue
-    const changeset: Changeset<ChangeBase> = {
-      changes,
-      origin: options?.origin,
-      replay: options?.replay,
-      aborted: options?.aborted,
-      source: options?.source,
-    }
+    const changeset: Changeset<ChangeBase> = { changes, ...metadata }
     // Snapshot before calling. A callback is free to unsubscribe — itself or
     // anyone else — and a `Set` being iterated live would then skip a
     // subscriber it had not reached yet, silencing someone who never asked to
@@ -424,13 +442,7 @@ export function deliverNotifications(
     if (!subscribersHere || subscribersHere.size === 0) continue
     const changes = plan.deep.get(key)
     if (!changes) continue
-    const changeset: Changeset<Op> = {
-      changes,
-      origin: options?.origin,
-      replay: options?.replay,
-      aborted: options?.aborted,
-      source: options?.source,
-    }
+    const changeset: Changeset<Op> = { changes, ...metadata }
     // Snapshot for the same reason as the own-path loop above.
     for (const callback of [...subscribersHere]) callback(changeset)
   }
@@ -491,8 +503,6 @@ export function synthesizeTreeDeleteTerminal(
  * - `listeners` / `descendants`: the two subscriber registries, written into
  *   by `listenIn` when someone subscribes. Together they are the
  *   `ChangefeedChannels` a factory is handed.
- * - `originalPrepare` / `originalFlush`: the unwrapped methods, called
- *   before/after the changefeed layer's logic.
  * - `populated`: monotonic set of path keys that have received at least
  *   one mutation. Once a key enters this set it never leaves (except
  *   on substrate reset). Used by `populated` changefeeds.
@@ -508,15 +518,8 @@ export function synthesizeTreeDeleteTerminal(
 interface ContextWiringState {
   readonly listeners: OwnPathRegistry
   readonly descendants: DeepRegistry
-  readonly originalPrepare: (
-    path: Path,
-    change: ChangeBase,
-    options?: BatchOptions,
-  ) => void
-  readonly originalFlush: (options?: BatchOptions) => void
   readonly populated: Set<string>
   readonly populatedListeners: Map<string, Set<() => void>>
-  readonly handle: DispatcherHandle<ChangefeedMsg>
 }
 
 /**
@@ -528,37 +531,12 @@ interface ContextWiringState {
  *   in `wrappedPrepare` *before* this Msg is dispatched, so the accumulate
  *   Msg carries no options — it's a pure notification-side concern.
  * - `flush`: a `flush` call requested commit + notification delivery.
- *   Carries `options` so the resulting `Changeset` surfaces both `origin`
- *   and `replay` to subscribers.
+ *   Carries `options` so the resulting `Changeset` carries the batch's
+ *   metadata.
  */
-/**
- * Sum-typed writer log entry — the change-Writer monad's log element.
- * `compensating: true` discriminates inverse ops (run under the
- * undo-replay handler) from forward ops.
- */
-type AccumulatorEntry = { readonly op: Op; readonly compensating?: boolean }
-
 type ChangefeedMsg =
-  | { type: "accumulate"; op: Op; compensating?: boolean }
-  | { type: "flush"; options: BatchOptions | undefined }
-
-/**
- * Returns `true` if `ctx` has `prepare` and `flush` methods — i.e. it's
- * a `WritableContext`, not a plain `RefContext`. This duck-type check
- * allows `withChangefeed` to keep its `RefContext` type signature while
- * participating in the prepare pipeline when composed with `withWritable`.
- */
-function hasPreparePipeline(ctx: RefContext): ctx is RefContext & {
-  prepare: (path: Path, change: ChangeBase, options?: BatchOptions) => void
-  flush: (options?: BatchOptions) => void
-} {
-  return (
-    "prepare" in ctx &&
-    typeof ctx.prepare === "function" &&
-    "flush" in ctx &&
-    typeof ctx.flush === "function"
-  )
-}
+  | { type: "accumulate"; op: Op }
+  | { type: "flush"; options: BatchOptions }
 
 // WeakMap ensures a single prepare/flush wrapper per context,
 // shared across all nodes interpreted with that context.
@@ -623,12 +601,9 @@ function ensurePrepareWiring(ctx: RefContext): ChangefeedChannels {
 
   const listeners: OwnPathRegistry = new Map()
   const descendants: DeepRegistry = new Map()
-  // The change-Writer monad's log — sum-typed `Forward Op | Inverse Op`.
-  // `batch(doc, fn)` slices this via FORWARD_OPS_MARKER/SINCE to recover
-  // its forward-only return value. planDelivery consumes the whole
-  // log (both forward and inverse entries) so subscribers see the full
-  // op trace on aborted Changesets.
-  const accumulator: AccumulatorEntry[] = []
+  // Every op prepared since the last flush, forward and inverse alike, so
+  // an aborted Changeset shows the full op trace.
+  const accumulator: Op[] = []
   const populated = new Set<string>()
   const populatedListeners = new Map<string, Set<() => void>>()
   const originalPrepare = ctx.prepare
@@ -643,7 +618,7 @@ function ensurePrepareWiring(ctx: RefContext): ChangefeedChannels {
   const handle = createDispatcher<ChangefeedMsg>(
     msg => {
       if (msg.type === "accumulate") {
-        accumulator.push({ op: msg.op, compensating: msg.compensating })
+        accumulator.push(msg.op)
         return
       }
       // msg.type === "flush"
@@ -651,20 +626,10 @@ function ensurePrepareWiring(ctx: RefContext): ChangefeedChannels {
         originalFlush(msg.options)
         return
       }
-      // The planner consumes the whole log — both forward and inverse
-      // entries land in the delivered Changeset. Subscribers see the full
-      // op log on aborted Changesets (forward+inverse pairs that net to
-      // identity), so the `compensating` tag is deliberately not filtered
-      // here. It exists for the writer log's own forward-only slicing.
-      //
       // `listeners` and `descendants` are passed as membership tests: the
       // planner only asks whether a key has subscribers, so there is no need
       // to snapshot their keys.
-      const plan = planDelivery(
-        accumulator.map(e => e.op),
-        listeners,
-        descendants,
-      )
+      const plan = planDelivery(accumulator, listeners, descendants)
       accumulator.length = 0
       // Commit to the substrate first so version() and delta() reflect
       // the just-flushed operations when subscribers read them.
@@ -677,16 +642,13 @@ function ensurePrepareWiring(ctx: RefContext): ChangefeedChannels {
     },
   )
 
-  // Wrapped prepare: apply change to substrate synchronously (forwarding
-  // `options` so the substrate sees `replay`/`compensating` at write
-  // time), mark populated synchronously, then dispatch the accumulate
-  // Msg tagged with `compensating` so the writer log can discriminate
-  // forward from inverse entries. Notification-side `origin`/`replay`/
-  // `aborted` ride on the subsequent `flush` Msg.
+  // Wrapped prepare: forward to the inner prepare synchronously, mark
+  // populated synchronously, then dispatch the accumulate Msg. Batch
+  // metadata rides on the subsequent `flush` Msg.
   const wrappedPrepare = (
     path: Path,
     change: ChangeBase,
-    options?: BatchOptions,
+    options: PrepareOptions,
   ): void => {
     // Resolve raw paths to addressed paths so that path.key matches
     // the identity-stable keys used by changefeed listeners and cache
@@ -698,17 +660,13 @@ function ensurePrepareWiring(ctx: RefContext): ChangefeedChannels {
         : path
     originalPrepare(resolved, change, options)
     markPopulated(resolved, populated, populatedListeners)
-    handle.dispatch({
-      type: "accumulate",
-      op: { path: resolved, change },
-      compensating: options?.compensating,
-    })
+    handle.dispatch({ type: "accumulate", op: { path: resolved, change } })
   }
 
   // Wrapped flush: dispatch a flush Msg carrying the full options. The
   // handler enforces the order (originalFlush → deliverNotifications)
   // inside the dispatcher's drain.
-  const wrappedFlush = (options?: BatchOptions): void => {
+  const wrappedFlush = (options: BatchOptions): void => {
     handle.dispatch({ type: "flush", options })
   }
 
@@ -723,11 +681,8 @@ function ensurePrepareWiring(ctx: RefContext): ChangefeedChannels {
   state = {
     listeners,
     descendants,
-    originalPrepare,
-    originalFlush,
     populated,
     populatedListeners,
-    handle,
   }
   contextState.set(ctx, state)
   return { listeners, descendants }
@@ -1088,16 +1043,11 @@ function createTreeChangefeed(
  * entries by path and deliver one `Changeset` per subscriber.
  *
  * This means:
- * - Auto-commit (single mutation via `dispatch`): `executeBatch` calls
- *   `prepare` once + `flush` once → subscribers receive a `Changeset`
- *   with exactly 1 change.
- * - Transaction commit: `executeBatch` calls `prepare` N times + `flush`
- *   once → subscribers receive a `Changeset` with N changes. Subscribers
- *   never see partially-applied state.
- *
- * **Transaction compatibility:** During a transaction, `dispatch` buffers
- * changes. On `commit()`, `executeBatch` calls `prepare` N times then
- * `flush` once, so subscribers fire at commit time — not during buffering.
+ * - Auto-commit (single mutation via `dispatch`): `prepare` once + `flush`
+ *   once → subscribers receive a `Changeset` with exactly 1 change.
+ * - A `batch()` block, `applyChanges`, or an announcement: `prepare` N
+ *   times + `flush` once → subscribers receive a `Changeset` with N
+ *   changes, and never see partially-applied state.
  *
  * ```ts
  * // Full stack (read + write + observe):

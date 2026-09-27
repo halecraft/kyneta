@@ -335,7 +335,7 @@ export class Line<SendMsg, RecvMsg>
 
     // Subscribe to inbox changes — dispatch to callbacks and queue.
     // The Line never writes to its own inbox locally; inbox changes are
-    // delivered exclusively by the substrate event bridge (replay path).
+    // delivered exclusively by merges from the sender.
     // No echo-suppression filter is needed here.
     this.#unsubscribeInbox = subscribe(inbox, () => {
       this.#processInbox()

@@ -25,7 +25,7 @@ import { findOpaqueBoundary } from "../fold-path.js"
 import { digestToHex } from "../hash.js"
 import type { Path } from "../interpret.js"
 import type { WritableContext } from "../interpreters/writable.js"
-import { buildWritableContext, executeBatch } from "../interpreters/writable.js"
+import { announce, buildWritableContext } from "../interpreters/writable.js"
 import { invert } from "../inverse.js"
 import {
   decodePlainPosition,
@@ -41,7 +41,7 @@ import {
 } from "../reader.js"
 import type { Schema as SchemaNode } from "../schema.js"
 import type {
-  BatchOptions,
+  MergeOptions,
   RecordInverseFn,
   Replica,
   ReplicaFactory,
@@ -50,7 +50,7 @@ import type {
   SubstratePayload,
   Version,
 } from "../substrate.js"
-import { BACKING_DOC, RECORD_INVERSE } from "../substrate.js"
+import { BACKING_DOC } from "../substrate.js"
 import { DEFAULT_LINEAGE, objectToReplaceOps } from "./plain.js"
 import {
   applyChangeToStateTree,
@@ -373,9 +373,8 @@ export function createStateSubstrate(
     },
   )
 
-  // The PlainState shadow that the reader consumes. After this, only
-  // `prepare` writes it: local writes directly, and merges and decay through
-  // the replay ops `announceReprojection` executes.
+  // The PlainState shadow that the reader consumes. `prepare` writes it for
+  // local writes; `announceReprojection` writes it for merges and decay.
   //
   // A copy, because a projection shares register values with the tree.
   const shadow: PlainState = deepClonePlain(
@@ -390,7 +389,7 @@ export function createStateSubstrate(
    * subscribers which root fields changed.
    *
    * Both ways that happens — a peer's merge and a decay sweep — need the
-   * same two steps, and differ only in the `options` they announce under.
+   * same two steps, and differ only in the `origin` they announce under.
    *
    * The announcement names the root fields that actually moved. Delivery
    * notifies a changed path's *ancestors*, so one blanket op at the root
@@ -400,26 +399,26 @@ export function createStateSubstrate(
    * subscribers whose subtree nothing touched, which for a roster is most of
    * them, on every tick and every sync.
    *
-   * It has to go through the writable context. Notifications are accumulated
-   * by `ctx.prepare` and released by `ctx.flush`; advancing the substrate
-   * directly reaches neither, which is how a merge came to land its state and
-   * tell no one.
+   * σ is written here, before announcing: an announcement never reaches
+   * `prepare`. The announcement still has to go through the writable
+   * context, because notifications are accumulated by `ctx.prepare` and
+   * released by `ctx.flush`.
    */
-  function announceReprojection(now: number, options: BatchOptions): void {
+  function announceReprojection(now: number, origin?: string): void {
     const next = projectStateTree(currentTree, schema, now)
     const moved: PlainState = {}
-    // Each moved value is copied here, and `prepare` copies it again on the
-    // way into σ. The first copy detaches the op, which subscribers receive,
-    // from the tree the projection shares register values with; the second
-    // detaches σ from the op.
+    // Each moved value is copied twice: once into σ, once into the op that
+    // subscribers receive. The projection shares register values with the
+    // tree, and σ and the op must not share them with each other.
     for (const key of movedRootKeys(shadow, next)) {
       moved[key] = deepClonePlain(next[key])
+      shadow[key] = deepClonePlain(next[key])
     }
     if (Object.keys(moved).length === 0) return
 
     // A state image of what changed, turned into ops by the same primitive
     // the plain substrate absorbs an entirety payload with.
-    executeBatch(substrate.context(), objectToReplaceOps(moved), options)
+    announce(substrate.context(), objectToReplaceOps(moved), origin)
   }
 
   const substrate = {
@@ -429,84 +428,67 @@ export function createStateSubstrate(
 
     reader,
 
-    prepare(path: Path, change: ChangeBase, options?: BatchOptions): void {
-      // Inverse recording (same as plain)
-      const record = (
-        options as
-          | (BatchOptions & { [RECORD_INVERSE]?: RecordInverseFn })
-          | undefined
-      )?.[RECORD_INVERSE]
-      if (record && !options?.compensating && !options?.replay) {
+    prepare(
+      path: Path,
+      change: ChangeBase,
+      recordInverse: RecordInverseFn | null,
+    ): void {
+      if (recordInverse) {
         // Read, don't copy. `invert` snapshots whatever it retains — see
         // `invertReplace`, `invertMap`, `invertSequence` and the rich-text
         // marks in `inverse.ts`, each of which deep-clones the pre-state it
         // captures. Copying here as well protected nothing and cost a deep
         // clone of the written subtree on every local write.
-        const pre = path.read(shadow)
-        const inverse = invert(pre, change)
-        if (inverse) {
-          record(path, inverse)
-        }
+        recordInverse(path, invert(path.read(shadow), change))
       }
 
       // We apply the change directly to the shadow PlainState
       applyChange(shadow, path, ownedForStore(change))
 
-      // Then, we apply the change to the StateTree so that ONLY
-      // the mutated fields get their timestamps bumped — unless the change
-      // did not originate here. A projection (tick/decay) leaves the math
-      // untouched and moves only the local shadow. A replay is already in
-      // the tree: `merge` runs the lattice join first and then wakes
-      // subscribers, and applying its wake-up op here would stamp the whole
-      // document with local `Date.now()` and clobber what just merged.
+      // Then, we apply the change to the StateTree so that ONLY the mutated
+      // fields get their timestamps bumped. Merges and decay never reach
+      // here: they move the tree (or nothing) and σ themselves, then announce.
       //
-      // Replay can only reach here from `merge`, which joins whole trees
-      // rather than replaying ops: this substrate has no op log, so no peer's
-      // batch is ever replayed through `prepare` and `applyChanges` never sets
-      // the flag.
-      if (!options?.projection && !options?.replay) {
-        // A register — a sum variant or a `.json()` blob — lives in the tree as
-        // ONE leaf tuple, so that concurrent edits to it settle
-        // as a single unit. A change aimed at or inside one has nowhere to go:
-        // applying it literally would split that tuple into per-field tuples,
-        // throwing away every sibling field the change never mentioned and
-        // handing the schema-blind `mergeStateTree` something it can blend
-        // across two peers' variants. So re-aim the change at the register
-        // itself and store the whole post-change value, which the shadow is
-        // already holding — the `applyChange` call above just put it there.
-        //
-        // Yjs and Loro do the same thing at the same point, asking the same
-        // function where the boundary is. For them it decides what lands in a
-        // CRDT container; here it decides what lands in a tuple. Sharing the
-        // oracle is the point: "which subtrees are indivisible" is a property
-        // of the schema and should have one answer, not one per substrate.
-        //
-        // Re-aiming also normalizes the change into a `replace`, which is what
-        // makes register-shaped `map` and `sequence` changes work: the tree
-        // has no container to apply them to inside a register.
-        //
-        // Watch out when testing this: `prepare` also updates the shadow above,
-        // and local reads come from the shadow. Get this branch wrong and reads
-        // on this peer still look perfect — only what replicates is damaged.
-        const boundary = findOpaqueBoundary(schema, path)
-        const registerPath =
-          boundary === null ? null : path.slice(0, boundary.prefixLength + 1)
-        applyChangeToStateTree(
-          currentTree,
-          registerPath ?? path,
-          registerPath === null
-            ? change
-            : replaceChange(deepClonePlain(registerPath.read(shadow))),
-          core.nextStamp(Date.now()),
-          schema,
-        )
-      }
+      // A register — a sum variant or a `.json()` blob — lives in the tree as
+      // ONE leaf tuple, so that concurrent edits to it settle
+      // as a single unit. A change aimed at or inside one has nowhere to go:
+      // applying it literally would split that tuple into per-field tuples,
+      // throwing away every sibling field the change never mentioned and
+      // handing the schema-blind `mergeStateTree` something it can blend
+      // across two peers' variants. So re-aim the change at the register
+      // itself and store the whole post-change value, which the shadow is
+      // already holding — the `applyChange` call above just put it there.
+      //
+      // Yjs and Loro do the same thing at the same point, asking the same
+      // function where the boundary is. For them it decides what lands in a
+      // CRDT container; here it decides what lands in a tuple. Sharing the
+      // oracle is the point: "which subtrees are indivisible" is a property
+      // of the schema and should have one answer, not one per substrate.
+      //
+      // Re-aiming also normalizes the change into a `replace`, which is what
+      // makes register-shaped `map` and `sequence` changes work: the tree
+      // has no container to apply them to inside a register.
+      //
+      // Watch out when testing this: `prepare` also updates the shadow above,
+      // and local reads come from the shadow. Get the re-aim wrong and reads
+      // on this peer still look perfect — only what replicates is damaged.
+      const boundary = findOpaqueBoundary(schema, path)
+      const registerPath =
+        boundary === null ? null : path.slice(0, boundary.prefixLength + 1)
+      applyChangeToStateTree(
+        currentTree,
+        registerPath ?? path,
+        registerPath === null
+          ? change
+          : replaceChange(deepClonePlain(registerPath.read(shadow))),
+        core.nextStamp(Date.now()),
+        schema,
+      )
     },
 
     afterBatch(): void {
       // Nothing to settle. The install counter advances as each leaf lands, so
-      // a batch has no bookkeeping left to reconcile when it ends — and a
-      // projection never reaches the tree at all, so it cannot have moved it.
+      // a batch has no bookkeeping left to reconcile when it ends.
     },
 
     writable(): PositionCapable {
@@ -564,24 +546,18 @@ export function createStateSubstrate(
       return core.exportSince(since)
     },
 
-    merge(payload: SubstratePayload, options?: BatchOptions): void {
+    merge(payload: SubstratePayload, options?: MergeOptions): void {
       // Both kinds join the same way. A delta is a partial tree and the merge
       // unions keys, so a key it omits is one it makes no claim about — the
       // same rule that makes an entirety safe to join rather than adopt.
       core.merge(payload)
-      // `replay: true` keeps the Exchange from broadcasting back what it just
-      // received. No `projection` — a merge is real state, so the version
-      // clock moves with it.
-      announceReprojection(Date.now(), {
-        origin: options?.origin,
-        replay: true,
-      })
+      announceReprojection(Date.now(), options?.origin)
     },
 
     resetFromEntirety(
       payload: SubstratePayload,
       _remoteVersion: Version,
-      options?: BatchOptions,
+      options?: MergeOptions,
     ): void {
       // This substrate is a CvRDT with a single constant lineage for its entire
       // lifetime — a true lineage boundary never arises here. Field-level
@@ -599,14 +575,12 @@ export function createStateSubstrate(
      * structural zero, and announces whichever fields that moved — see
      * `announceReprojection`, which a peer's merge shares.
      *
-     * `projection: true` tells `prepare` to leave the tree alone, and the
-     * version moves only when the tree does; `replay: true` tells the
-     * Exchange not to broadcast. The underlying `StateTree` math is never
-     * mutated, so the network never sees a synthesized "absent" write that
-     * could clobber a slower peer's still-valid value.
+     * Only σ moves. The `StateTree` is never mutated and the version stays
+     * put, so the network never sees a synthesized "absent" write that could
+     * clobber a slower peer's still-valid value.
      */
     tick(now: number): void {
-      announceReprojection(now, { replay: true, projection: true })
+      announceReprojection(now)
     },
   }
 

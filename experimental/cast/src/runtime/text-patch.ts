@@ -129,7 +129,7 @@ export function patchInputValue(
  *   writer that minted a source token is a local subscriber.
  * - `source === undefined` → `"preserve"` (cursor shifts relative to
  *   remote edits). Correct for remote collaborator edits, which arrive
- *   via the substrate replay path that explicitly drops source.
+ *   as merges, which never carry a source.
  *
  * Cast has no paired write helper yet, so the discriminator is
  * *source presence*, not identity-match. A future cast plan can tighten

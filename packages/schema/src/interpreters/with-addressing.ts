@@ -65,11 +65,16 @@ import type {
   TextSchema,
   TreeSchema,
 } from "../schema.js"
-import type { BatchOptions } from "../substrate.js"
+import type { PrepareOptions } from "../substrate.js"
 import { currentScope, dependencyKey, reportRead } from "../tracking.js"
 import type { HasNavigation } from "./bottom.js"
 import type { WritableContext } from "./writable.js"
-import { hasTransact, REMOVE, TRANSACT } from "./writable.js"
+import {
+  hasPreparePipeline,
+  hasTransact,
+  REMOVE,
+  TRANSACT,
+} from "./writable.js"
 
 /**
  * Expose a node's address table under a symbol, and register the prepare
@@ -213,22 +218,9 @@ export function deletedFeed(
 // Per-context state — prepare wrapping for address advancement
 // ---------------------------------------------------------------------------
 
-interface AddressingState {
-  readonly handlers: Map<string, (change: ChangeBase) => void>
-  readonly originalPrepare: (
-    path: Path,
-    change: ChangeBase,
-    options?: BatchOptions,
-  ) => void
-}
+type AddressingHandlers = Map<string, (change: ChangeBase) => void>
 
-const addressingContextState = new WeakMap<object, AddressingState>()
-
-function hasPrepare(ctx: RefContext): ctx is RefContext & {
-  prepare: (path: Path, change: ChangeBase, options?: BatchOptions) => void
-} {
-  return "prepare" in ctx && typeof ctx.prepare === "function"
-}
+const addressingContextState = new WeakMap<object, AddressingHandlers>()
 
 /**
  * Ensures the given context has its `prepare` wrapped for address
@@ -240,21 +232,19 @@ function hasPrepare(ctx: RefContext): ctx is RefContext & {
  * wrapper (because withAddressing is inner to withCaching in composition),
  * so addresses are advanced before cache invalidation.
  */
-function ensureAddressingWiring(
-  ctx: RefContext,
-): Map<string, (change: ChangeBase) => void> | null {
-  if (!hasPrepare(ctx)) return null
+function ensureAddressingWiring(ctx: RefContext): AddressingHandlers | null {
+  if (!hasPreparePipeline(ctx)) return null
 
-  let state = addressingContextState.get(ctx)
-  if (state) return state.handlers
+  const existing = addressingContextState.get(ctx)
+  if (existing) return existing
 
-  const handlers = new Map<string, (change: ChangeBase) => void>()
+  const handlers: AddressingHandlers = new Map()
   const originalPrepare = ctx.prepare
 
   const wrappedPrepare = (
     path: Path,
     change: ChangeBase,
-    options?: BatchOptions,
+    options: PrepareOptions,
   ): void => {
     const key = path.key
     const handler = handlers.get(key)
@@ -264,8 +254,7 @@ function ensureAddressingWiring(
 
   ctx.prepare = wrappedPrepare
 
-  state = { handlers, originalPrepare }
-  addressingContextState.set(ctx, state)
+  addressingContextState.set(ctx, handlers)
   return handlers
 }
 
@@ -515,8 +504,7 @@ export function withAddressing<A extends HasNavigation>(
         if (isPropertyHost(ref) && hasTransact(ref)) {
           const isContainerChild =
             lastAddr.kind === "index" ||
-            (addressingContextState.get(ctx)?.handlers.has(parentPath.key) ??
-              false)
+            (addressingContextState.get(ctx)?.has(parentPath.key) ?? false)
 
           if (isContainerChild) {
             Object.defineProperty(ref, REMOVE, {

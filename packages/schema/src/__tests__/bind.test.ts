@@ -10,7 +10,6 @@
 import { describe, expect, it, vi } from "vitest"
 import { bind, ephemeral, isBoundSchema, json } from "../bind.js"
 import { replaceChange } from "../change.js"
-import { executeBatch } from "../interpreters/writable.js"
 import { RawPath } from "../path.js"
 import { Schema } from "../schema.js"
 import {
@@ -176,10 +175,10 @@ describe("state binding target", () => {
     expect(versionBefore).toBeInstanceOf(StateVersion)
     expect((versionBefore as StateVersion).installSeq).toBe(0)
 
-    // Trigger prepare → flush via executeBatch
-    executeBatch(substrate.context(), [
-      { path: RawPath.empty.field("title"), change: replaceChange("hello") },
-    ])
+    // An auto-committed local write: prepare → flush
+    substrate
+      .context()
+      .dispatch(RawPath.empty.field("title"), replaceChange("hello"))
 
     const versionAfter = substrate.version()
     expect(versionAfter).toBeInstanceOf(StateVersion)
@@ -197,14 +196,14 @@ describe("state binding target", () => {
     const ts0 = (substrate.version() as StateVersion).installSeq
     expect(ts0).toBe(0)
 
-    executeBatch(substrate.context(), [
-      { path: RawPath.empty.field("title"), change: replaceChange("v1") },
-    ])
+    substrate
+      .context()
+      .dispatch(RawPath.empty.field("title"), replaceChange("v1"))
     const ts1 = (substrate.version() as StateVersion).installSeq
 
-    executeBatch(substrate.context(), [
-      { path: RawPath.empty.field("title"), change: replaceChange("v2") },
-    ])
+    substrate
+      .context()
+      .dispatch(RawPath.empty.field("title"), replaceChange("v2"))
     const ts2 = (substrate.version() as StateVersion).installSeq
 
     // The counter is an ordinal, not a clock: each write takes the next one,
@@ -221,9 +220,9 @@ describe("state binding target", () => {
     })
 
     const source = factory.create(testSchema)
-    executeBatch(source.context(), [
-      { path: RawPath.empty.field("title"), change: replaceChange("merged") },
-    ])
+    source
+      .context()
+      .dispatch(RawPath.empty.field("title"), replaceChange("merged"))
 
     const target = factory.create(testSchema)
     expect((target.version() as StateVersion).installSeq).toBe(0)
@@ -246,9 +245,7 @@ describe("state binding target", () => {
       binding: bound.identityBinding,
     })
     const substrate = factory.create(testSchema)
-    executeBatch(substrate.context(), [
-      { path: RawPath.empty.field("count"), change: replaceChange(7) },
-    ])
+    substrate.context().dispatch(RawPath.empty.field("count"), replaceChange(7))
 
     const delta = substrate.exportSince(substrate.version())
     expect(delta).not.toBeNull()

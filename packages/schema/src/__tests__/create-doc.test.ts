@@ -124,6 +124,14 @@ describe("generic sync functions", () => {
     expect(doc2.title()).toBe("From doc1")
   })
 
+  it("merge() options carry only an origin", () => {
+    const doc = createDoc(json.bind(TestSchema))
+    const payload = exportEntirety(createDoc(json.bind(TestSchema)))
+    merge(doc, payload, { origin: "sync" })
+    // @ts-expect-error — a merge is never authored here, so it takes no batch metadata
+    merge(doc, payload, { replay: true })
+  })
+
   it("throws for non-root refs", () => {
     const doc = createDoc(json.bind(TestSchema))
     expect(() => version(doc.title as any)).toThrow("Sync functions")

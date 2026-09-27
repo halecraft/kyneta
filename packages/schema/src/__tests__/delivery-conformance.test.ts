@@ -25,11 +25,9 @@ import {
 } from "../testing/index.js"
 
 /**
- * Two plain-substrate peers over the same schema.
- *
- * B is seeded from A's genesis rather than created empty, because a
- * from-empty replica has no schema defaults to replay a delta onto. The
- * merge then carries only what the remote write produced.
+ * Two plain-substrate peers over the same schema, both at genesis. B's first
+ * write mints its lineage, so the delta since B's genesis carries only what
+ * that write produced.
  */
 function createPlainEnv(): DeliveryTestEnv {
   const substrateA = plainSubstrateFactory.create(DeliveryFixture)
@@ -38,10 +36,7 @@ function createPlainEnv(): DeliveryTestEnv {
   return {
     doc,
     remoteMerge(fn) {
-      const substrateB = plainSubstrateFactory.fromEntirety(
-        substrateA.exportEntirety(),
-        DeliveryFixture,
-      )
+      const substrateB = plainSubstrateFactory.create(DeliveryFixture)
       const docB = createRef(DeliveryFixture, substrateB) as any
       const before = substrateB.version()
       batch(docB, fn)

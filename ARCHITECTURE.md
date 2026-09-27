@@ -166,7 +166,7 @@ Schema composed changefeed emits Changeset<Op>            (5)
                      ▼
                substrate.merge(payload, { origin: "sync" }) (9)
                      │
-                     ├─ Y.applyUpdate → observeDeep fires
+                     ├─ Y.applyUpdate → observeDeep fires → σ re-materialized, ops announced
                      ▼
                changefeed emits Changeset (origin="sync", replay=true) (10)
                      │

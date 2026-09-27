@@ -36,9 +36,8 @@ export const CHANGEFEED: unique symbol = Symbol.for("kyneta:changefeed")
 // ---------------------------------------------------------------------------
 
 /**
- * Batch-level metadata that rides on each Changeset (and its upstream
- * `BatchOptions` in `@kyneta/schema`). The four fields sit on a two-axis
- * classification:
+ * Batch-level metadata that rides on each Changeset. The four fields sit on
+ * a two-axis classification:
  *
  *                | provenance       | outcome
  *     -----------|------------------|----------
@@ -57,10 +56,9 @@ export const CHANGEFEED: unique symbol = Symbol.for("kyneta:changefeed")
  * simultaneously.) Each field has its own consumer with its own typed
  * read; no string-convention discrimination is required.
  *
- * `Changeset<C>` extends this with `changes`. `BatchOptions` (in
- * `@kyneta/schema`) extends this with `compensating`, the only field
- * that lives upstream-only — substrate inverse-replay never reaches
- * subscribers, so it has no Changeset counterpart.
+ * `Changeset<C>` extends this with `changes`. `@kyneta/schema` derives
+ * these fields from its upstream `BatchOptions`, whose required `ingress`
+ * says whether a local writer authored the batch.
  *
  * Context: jj:qpultxsw (origin/replay), jj:ryquprut (aborted),
  * jj:wpvtoxmw (source).
@@ -75,12 +73,11 @@ export interface BatchMetadata {
    */
   readonly origin?: string
   /**
-   * Kyneta-internal structural directive — true iff this batch represents
-   * state authored elsewhere (substrate event bridge, `merge` payload,
-   * version travel). User-facing entry points (`change`, `applyChanges`)
-   * never set this; only substrate event bridges and `merge` paths do.
-   * Layered consumers (e.g. the exchange's auto-subscribe filter) read
-   * this to discriminate "echo from sync" from "local write."
+   * Kyneta-internal structural directive — true iff no local writer
+   * authored this batch: a substrate event bridge, a `merge` payload, or
+   * a decay tick. User-facing entry points (`batch`, `applyChanges`)
+   * never set it. Layered consumers (e.g. the exchange's auto-subscribe
+   * filter) read this to discriminate "echo from sync" from "local write."
    */
   readonly replay?: boolean
   /**
@@ -91,7 +88,7 @@ export interface BatchMetadata {
    * by an outer `batch()`'s try/catch produce a NON-aborted outermost
    * Changeset; the absorbed forward + inverse pair sits in the op list
    * alongside surviving outer ops. Default `undefined` (== falsy) for
-   * successful batches and replay batches.
+   * successful batches and for batches with `replay: true`.
    */
   readonly aborted?: boolean
   /**
@@ -104,7 +101,7 @@ export interface BatchMetadata {
    * that produced it; without the token, the subscriber cannot tell
    * its own writes from someone else's).
    *
-   * Substrate replay paths explicitly drop `source` — any value reaching
+   * A batch with `replay: true` never carries `source` — any value reaching
    * a subscriber is therefore from a local `batch()` on this peer.
    *
    * @example

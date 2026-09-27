@@ -10,14 +10,11 @@ export type { Changeset } from "@kyneta/changefeed"
 export type { Op } from "../changefeed.js"
 // --- Describe (human-readable schema view) ---
 export { describe } from "../describe.js"
-export type { CommitOptions } from "../facade/batch.js"
 // --- Change protocol (substrate-agnostic, re-exported for convenience) ---
 export { applyChanges, batch } from "../facade/batch.js"
-
 // --- Observation protocol (substrate-agnostic, re-exported for convenience) ---
 export { subscribe, subscribeNode } from "../facade/observe.js"
 export type { Plain } from "../interpreter-types.js"
-
 // --- Validation ---
 export {
   SchemaValidationError,
@@ -40,7 +37,7 @@ export type {
 } from "../schema.js"
 // --- Schema definition ---
 export { Schema } from "../schema.js"
-export type { SubstratePayload } from "../substrate.js"
+export type { CommitOptions, SubstratePayload } from "../substrate.js"
 // --- Zero (default values) ---
 export { Zero } from "../zero.js"
 

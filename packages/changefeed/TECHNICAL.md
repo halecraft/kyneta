@@ -121,12 +121,12 @@ The metadata fields sit on a two-axis classification:
 | **subscriber-set** | `source`       | (none)   |
 | **kyneta-set**   | `replay`         | `aborted` |
 
-- **Provenance** answers "where did this come from?" — `origin` is the app-level label, `source` is the originating caller's identity token, `replay` is the kyneta-internal "from elsewhere" flag.
+- **Provenance** answers "where did this come from?" — `origin` is the app-level label, `source` is the originating caller's identity token, `replay` is the kyneta-internal "no local writer authored this" flag.
 - **Outcome** answers "what happened?" — only kyneta sets it, and only to signal the abort-compensation case.
 
 The fields are **orthogonal**: a tagged local write that throws can simultaneously produce `{ source: T, aborted: true }`. Each field has its own consumer with its own typed read; no string-convention discrimination is required.
 
-`Changeset<C>` extends `BatchMetadata` with `changes`. `BatchOptions` (in `@kyneta/schema`) extends it with `compensating`, the only field that lives upstream-only — substrate inverse-replay never reaches subscribers, so it has no Changeset counterpart.
+`Changeset<C>` extends `BatchMetadata` with `changes`. `@kyneta/schema` does not pass these fields through from upstream: its `BatchOptions` carries a required `ingress` (`"author"` or `"announce"`), and one function derives the four channels from it at delivery. See `@kyneta/schema`'s TECHNICAL.md §"Batch metadata".
 
 ### `origin` — app-level free vocabulary
 
@@ -134,13 +134,13 @@ The fields are **orthogonal**: a tagged local write that throws can simultaneous
 
 ### `replay` — structural directive for state-from-elsewhere
 
-`replay` is the **structural directive** set by kyneta-internal layers — true iff this batch represents state authored elsewhere (substrate event bridge, `merge` payload, version travel). Layered consumers that need to discriminate "echo from sync" from "local write" (e.g. the exchange's auto-subscribe filter at `packages/exchange/src/exchange.ts`) read `replay` rather than parsing the `origin` string. User-facing entry points (`change`, `applyChanges`) never set `replay: true` — only substrate event bridges and `merge` paths do. Context: jj:qpultxsw.
+`replay` is the **structural directive** set by kyneta-internal layers — true iff no local writer authored this batch (a substrate event bridge, a `merge` payload, an ephemeral decay tick). Layered consumers that need to discriminate "echo from sync" from "local write" (e.g. the exchange's auto-subscribe filter at `packages/exchange/src/exchange.ts`) read `replay` rather than parsing the `origin` string. User-facing entry points (`batch`, `applyChanges`) cannot produce `replay: true`. Context: jj:qpultxsw.
 
 ### `Changeset.source` — identity-typed echo token
 
 An `unknown` value compared with `===`. Supplied by the originating `batch()` via `options.source`, propagated unchanged to the delivered `Changeset.source`. Used by subscribers (notably `@kyneta/react`'s `text-adapter`) that need to recognize their own writes — string-based discrimination via `origin` is unreliable because `origin` is app-level free vocabulary that callers may set to anything (or omit). The identity-typed token gives writer and reader a kyneta-managed handshake that cannot collide with app-level vocabulary.
 
-Substrate replay paths explicitly drop `source` — any value reaching a subscriber is therefore from a local `batch()` call on this peer.
+A batch with `replay: true` never carries `source` — any value reaching a subscriber is therefore from a local `batch()` call on this peer.
 
 Context: jj:wpvtoxmw.
 

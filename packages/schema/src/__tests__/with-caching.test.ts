@@ -635,8 +635,9 @@ describe("withCaching: prepare-pipeline invalidation", () => {
     // Bypass mutation methods — call prepare + flush directly.
     // This simulates what applyChanges will do in Phase 5.
     const path = RawPath.empty.field("settings").field("darkMode")
-    ctx.prepare(path, replaceChange(true))
-    ctx.flush()
+    ctx.runBatch(() => {
+      ctx.prepare(path, replaceChange(true), { ingress: "author" })
+    }, {})
 
     // The cache must be invalidated — reading should return the new value.
     // Pre-Phase 4 this would return `false` (stale cache).
@@ -674,11 +675,13 @@ describe("withCaching: prepare-pipeline invalidation", () => {
 
     // Insert at index 0 via prepare (bypassing mutation methods)
     const path = RawPath.empty.field("messages")
-    ctx.prepare(
-      path,
-      sequenceChange([{ insert: [{ author: "Eve", body: "Hi" }] }]),
-    )
-    ctx.flush()
+    ctx.runBatch(() => {
+      ctx.prepare(
+        path,
+        sequenceChange([{ insert: [{ author: "Eve", body: "Hi" }] }]),
+        { ingress: "author" },
+      )
+    }, {})
 
     // All indices are evicted and re-created with correct paths
     expect(doc.messages.at(0).author()).toBe("Eve") // new item

@@ -109,7 +109,6 @@ export {
   nodeSize,
   resolveDocPosition,
 } from "./doc-position.js"
-export type { CommitOptions } from "./facade/batch.js"
 // Facade — library-level change capture and declarative application
 export { applyChanges, batch, remove } from "./facade/batch.js"
 // Facade — metadata read
@@ -312,8 +311,8 @@ export type {
   WritableSetRef,
 } from "./interpreters/writable.js"
 export {
+  announce,
   buildWritableContext,
-  executeBatch,
   FORWARD_OPS_MARKER,
   FORWARD_OPS_SINCE,
   hasRemove,
@@ -533,7 +532,9 @@ export {
 // Substrate — state management, versioning, and transfer semantics
 // Tree node allocation — substrate capability for tree.create()
 export type {
+  BatchIngress,
   BatchOptions,
+  CommitOptions,
   DevtoolsHistory,
   DevtoolsHistorySummary,
   DocMetadata,
@@ -541,8 +542,11 @@ export type {
   HasDevtoolsHistory,
   HasTreeNodeAllocation,
   HydrationHandle,
+  MergeOptions,
   MetadataAxis,
   MetadataMismatch,
+  PrepareIngress,
+  PrepareOptions,
   ReadCapability,
   RecordInverseFn,
   Replica,
@@ -570,7 +574,6 @@ export {
   hasTreeNodeAllocation,
   mismatchForInterpretation,
   mismatchForSync,
-  RECORD_INVERSE,
   replicaTypesCompatible,
   requiresBidirectionalSync,
   STRUCTURAL_YJS_CLIENT_ID,
@@ -586,8 +589,6 @@ export {
 } from "./substrates/ephemeral.js"
 // Plain substrate — plain JS object store with version tracking
 export {
-  createPlainReplica,
-  createPlainSubstrate,
   DEFAULT_LINEAGE,
   objectToReplaceOps,
   PlainVersion,

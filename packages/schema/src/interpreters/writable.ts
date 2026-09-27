@@ -54,10 +54,11 @@ import type {
 } from "../schema.js"
 import type {
   BatchOptions,
-  RecordInverseFn,
+  CommitOptions,
+  PrepareOptions,
   SubstratePrepare,
 } from "../substrate.js"
-import { RECORD_INVERSE, TREE_NODE_ALLOCATE } from "../substrate.js"
+import { TREE_NODE_ALLOCATE } from "../substrate.js"
 import { installKeyedWriteOps } from "./keyed-helpers.js"
 import {
   installListWriteOps,
@@ -165,24 +166,17 @@ export function hasRemove(value: unknown): value is HasRemove {
  * before running `fn` to capture a starting position; `FORWARD_OPS_SINCE`
  * with the same marker returns the forward ops added during `fn`.
  *
- * Conceptually `runWriter` for the change-Writer monad: every `prepare`
- * writes one entry to the log (the changefeed accumulator); the marker
- * is just the log length at a moment in time.
- *
- * The accessor is attached to `WritableContext` by the changefeed layer
- * (`with-changefeed.ts`) where the accumulator is in scope. On a
- * read-only stack (no changefeed wrapping), the base implementation
- * returns `0` and `[FORWARD_OPS_SINCE]` returns `[]` — `batch()`
- * returns an empty Op[], consistent with "no Changesets are delivered."
+ * Conceptually `runWriter` for the change-Writer monad: every authored
+ * `prepare` appends one op to the writer log that `buildWritableContext`
+ * keeps; the marker is the log length at a moment in time.
  */
 export const FORWARD_OPS_MARKER: unique symbol = Symbol.for(
   "kyneta:forward-ops-marker",
 )
 
 /**
- * Slice the writer log from `marker` to the current length, filtering
- * out entries tagged `compensating: true` (the inverse log). Returns the
- * forward-only Op[].
+ * Slice the writer log from `marker` to the current length: the authored
+ * ops since then. Compensations are never logged.
  *
  * Conceptually `execWriter` (the value side; the result side is `void`
  * for `prepare`). See `FORWARD_OPS_MARKER`.
@@ -209,15 +203,15 @@ export const FORWARD_OPS_SINCE: unique symbol = Symbol.for(
  *
  * **Three primitives:**
  *
- * - `prepare` — apply a single change to the substrate (advance σ + λ,
- *   record the inverse for compensation). Substrates wrap this at the
- *   bottom; layers like `withCaching` and `withChangefeed` wrap it from
- *   the top to invalidate caches and accumulate notifications. Idempotent
- *   per call.
+ * - `prepare` — take one op into the batch. For an authored op the
+ *   substrate advances σ and λ and records the inverse; a compensation
+ *   records nothing; an announced op never reaches the substrate. Layers
+ *   like `withCaching` and `withChangefeed` wrap it from the top to
+ *   invalidate caches and accumulate notifications.
  * - `flush` — deliver accumulated notifications as a single Changeset
  *   per subscriber. Called exactly once per outermost `runBatch` release
  *   (success path: clean flush; catch path: flush with `aborted: true`).
- *   Replay batches call `flush` directly without entering `runBatch`.
+ *   Announcements call `flush` directly without entering `runBatch`.
  * - `runBatch` — open a frame; run `work`; on success pop and flush at
  *   depth-0; on throw replay this frame's inverses LIFO, pop, flush
  *   with `aborted: true` at depth-0, rethrow. Inner frames push/pop
@@ -240,24 +234,21 @@ export const FORWARD_OPS_SINCE: unique symbol = Symbol.for(
  * re-derived at each level — it's the same object throughout.
  */
 export interface WritableContext extends RefContext {
-  /** Apply a single change: substrate-write + inverse-record (under the
-   *  normal handler; skipped under the undo-replay handler keyed by
-   *  `options.compensating: true`). Mutable — caching and changefeed
-   *  layers wrap this at interpretation time. `options` carries batch
-   *  metadata (`origin`, `replay`, `compensating`, `aborted`). */
-  prepare: (path: Path, change: ChangeBase, options?: BatchOptions) => void
+  /** Take one op into the batch; `options.ingress` says how it arrived.
+   *  Mutable — caching and changefeed layers wrap this at interpretation
+   *  time. */
+  prepare: (path: Path, change: ChangeBase, options: PrepareOptions) => void
   /** Deliver accumulated notifications as a single Changeset per subscriber.
    *  Called by `runBatch` at the depth-0 release (success or aborted-catch)
-   *  and directly by `executeBatch` on replay batches. Mutable — the
+   *  and directly by `announce`. Mutable — the
    *  changefeed layer wraps this at interpretation time. */
-  flush: (options?: BatchOptions) => void
+  flush: (options: BatchOptions) => void
   /**
    * The bracket primitive. Pushes a frame on entry; on `work()` success,
    * pops and (at depth 0) invokes the substrate bracket + `ctx.flush(opts)`;
    * on `work()` throw, replays this frame's recorded inverses LIFO
-   * (running the undo-replay handler — `options.compensating: true` on
-   * each inverse prepare), pops, and (at depth 0) calls
-   * `ctx.flush({ ...opts, aborted: true })`, then rethrows.
+   * (each prepared with `ingress: "compensate"`), pops, and (at depth 0)
+   * flushes with `aborted: true`, then rethrows.
    *
    * Inner frames (depth > 0 at entry) push/pop without invoking the
    * substrate bracket and without flushing — the depth-0 transition is
@@ -265,18 +256,17 @@ export interface WritableContext extends RefContext {
    * "one Changeset per outermost `batch(doc, fn)` per affected
    * subscriber" contract.
    */
-  readonly runBatch: (work: () => void, options?: BatchOptions) => void
+  readonly runBatch: (work: () => void, options: CommitOptions) => void
   /** Depth-aware combinator: outside any frame opens an implicit
    *  single-op `runBatch` (auto-commit); inside a frame just calls
    *  `prepare`. Helper methods on refs route through this so multi-helper
    *  blocks collapse into one Changeset. */
   readonly dispatch: (path: Path, change: ChangeBase) => void
   /** `runWriter` for the change-Writer monad — snapshot the current
-   *  writer-log marker. Wired by the changefeed layer; base impl returns 0. */
+   *  writer-log marker. */
   readonly [FORWARD_OPS_MARKER]: () => number
-  /** `execWriter` for the change-Writer monad — slice the writer log
-   *  since `marker`, filtering out compensating (inverse) entries.
-   *  Wired by the changefeed layer; base impl returns []. */
+  /** `execWriter` for the change-Writer monad — the authored ops logged
+   *  since `marker`. */
   readonly [FORWARD_OPS_SINCE]: (marker: number) => Op[]
   /** Optional shared cascade budget. When the changefeed layer wires its
    *  per-context dispatcher in `ensurePrepareWiring`, it threads this lease
@@ -287,54 +277,50 @@ export interface WritableContext extends RefContext {
   lease?: Lease
 }
 
+/**
+ * Whether `ctx` carries the prepare/flush pipeline, i.e. was built by
+ * `buildWritableContext`. The caching, addressing and changefeed layers keep
+ * their `RefContext` signatures and wrap these only on a writable stack.
+ */
+export function hasPreparePipeline(
+  ctx: RefContext,
+): ctx is RefContext & Pick<WritableContext, "prepare" | "flush"> {
+  return (
+    "prepare" in ctx &&
+    typeof ctx.prepare === "function" &&
+    "flush" in ctx &&
+    typeof ctx.flush === "function"
+  )
+}
+
 // ---------------------------------------------------------------------------
-// executeBatch — the single primitive for phase-separated dispatch
+// announce — report ops a substrate has already applied
 // ---------------------------------------------------------------------------
 
 /**
- * The single primitive for executing a batch of changes.
+ * Tell the changefeed about ops the substrate has already applied, after it
+ * has brought σ into agreement with λ. Substrates call this for every change
+ * no local writer authored: a merge, a native event, a decay tick.
  *
- * **Local writes:** opens `ctx.runBatch` around a prepare-loop. The
- * `runBatch` wrapper owns the substrate bracket, the inverse-stack
- * frame, and the depth-0 `ctx.flush` call — `executeBatch` does NOT
- * call `ctx.flush` directly on this path. Nested under an outer
- * `batch(doc, fn)` block, this contributes only prepares; the outer
- * frame still owns the flush boundary.
- *
- * **Replay batches** (`options.replay === true`) bypass the substrate
- * bracket AND the `runBatch` wrapper — the native state has already
- * absorbed these ops at the event-bridge call site (Loro: `doc.import`;
- * Yjs: `Y.applyUpdate`), and there is no transaction to nest under.
- * Apply prepares directly and explicitly flush.
- *
- * Entry points:
- * - `dispatch(path, change)` (outside any frame) → opens a single-op `runBatch`
- * - `applyChanges(ref, ops, { origin })` → one `runBatch` for the whole batch
- * - Substrate event bridges → replay-bypass with explicit `flush`
+ * There is no bracket to open and nothing for the substrate to do, so the
+ * ops never reach `substrate.prepare` or `afterBatch`. The prepare-loop feeds
+ * the changefeed layers, and one `flush` delivers the whole payload.
+ * Subscribers receive it with `replay: true`.
  */
-export function executeBatch(
+export function announce(
   ctx: WritableContext,
-  changes: readonly Op[],
-  options?: BatchOptions,
+  ops: readonly Op[],
+  origin?: string,
 ): void {
-  if (options?.replay) {
-    // Replay-bypass: substrate already absorbed these ops; apply prepares
-    // directly and flush. Replay batches are the outermost (and only) frame
-    // from the kyneta perspective — never nested under a local-write runBatch.
-    for (const { path, change } of changes) {
-      ctx.prepare(path, change, options)
-    }
-    ctx.flush(options)
-    return
+  for (const { path, change } of ops) {
+    ctx.prepare(path, change, ANNOUNCE)
   }
-  // Local write: open ctx.runBatch around the prepare loop. The wrapper
-  // owns flush at the outermost depth transition.
-  ctx.runBatch(() => {
-    for (const { path, change } of changes) {
-      ctx.prepare(path, change, options)
-    }
-  }, options)
+  ctx.flush({ ingress: "announce", origin })
 }
+
+const AUTHOR: PrepareOptions = { ingress: "author" }
+const COMPENSATE: PrepareOptions = { ingress: "compensate" }
+const ANNOUNCE: PrepareOptions = { ingress: "announce" }
 
 // ---------------------------------------------------------------------------
 // buildWritableContext — shared builder for substrate factories
@@ -356,16 +342,14 @@ export interface SubstrateCapabilities {
 /**
  * Builds a WritableContext around a substrate's mutation primitives.
  *
- * The substrate provides the ground floor of the prepare/flush pipeline:
- * - `substrate.prepare(path, change, options?)` — apply change to backing
- *   state; record an inverse on the bracket's frame stack via the
- *   `RECORD_INVERSE` callback threaded through `options`.
- * - `substrate.afterBatch(options?)` — post-batch lifecycle hook (no-op
- *   for PlainSubstrate's local-write path beyond version tracking; CRDT
- *   substrates use it to flush coalescing buffers / rematerialise shadow).
- * - `substrate.runBatch?(body, options?)` — optional transaction-boundary
- *   bracket. If provided, `executeBatch` invokes it at the outermost
- *   depth transition.
+ * The substrate provides the ground floor of the prepare/flush pipeline,
+ * and sees only authored ops and their compensations:
+ * - `substrate.prepare(path, change, recordInverse)` — apply the change to
+ *   σ and λ; for a forward op, record its inverse on the active frame.
+ * - `substrate.afterBatch()` — end of an authored batch (plain logs the
+ *   batch; CRDT substrates drain their coalescing buffers).
+ * - `substrate.runBatch?(body, options)` — optional transaction-boundary
+ *   bracket, invoked at the outermost depth transition.
  */
 export function buildWritableContext(
   substrate: SubstratePrepare,
@@ -381,58 +365,48 @@ export function buildWritableContext(
   const inverseStack: InverseEntry[] = []
   const frameStarts: number[] = []
 
-  // Writer log for the change-Writer monad. Every `prepare` (under both
-  // the normal and undo-replay handlers) appends an entry; `batch()`
-  // slices the log via FORWARD_OPS_MARKER/SINCE to recover its forward
-  // Op[] return value. The log is cleared at the outermost runBatch
-  // release (success or aborted) so it doesn't grow without bound.
+  // Writer log for the change-Writer monad: the authored ops, in order.
+  // `batch()` slices it via FORWARD_OPS_MARKER/SINCE to recover its Op[]
+  // return value. Cleared at the outermost runBatch release (success or
+  // aborted) so it doesn't grow without bound.
   //
   // This log is INDEPENDENT of the with-changefeed accumulator (which
   // handles notification grouping). Two concerns, two logs — `batch()`'s
   // return value works on any writable stack, with or without observation.
-  type WriterLogEntry = { readonly op: Op; readonly compensating: boolean }
-  const writerLog: WriterLogEntry[] = []
+  const writerLog: Op[] = []
 
-  // The recordInverse closure is threaded through every prepare()'s
-  // options under the RECORD_INVERSE symbol. Substrates call it after
-  // computing an inverse; it pushes onto the active frame's stack range.
+  // Substrates call this after computing a forward op's inverse; it pushes
+  // onto the active frame's stack range.
   const recordInverse = (path: Path, inverse: ChangeBase): void => {
     inverseStack.push({ path, inverse })
   }
 
-  // Base prepare: append to the writer log (tagged with `compensating`
-  // so FORWARD_OPS_SINCE can filter inverse entries out of `batch()`'s
-  // forward-only return value), attach the RECORD_INVERSE callback to
-  // options, then delegate to the substrate. Layers like withChangefeed
-  // wrap this (replacing `ctx.prepare`) to accumulate notification
-  // entries; layers like withCaching wrap it to invalidate caches at
-  // the target path.
-  //
-  // Replay batches do NOT write to the writer log — `batch()`'s return
-  // value is forward ops authored locally, not state authored elsewhere.
+  // Base prepare. Layers like withChangefeed wrap this (replacing
+  // `ctx.prepare`) to accumulate notification entries; layers like
+  // withCaching wrap it to invalidate caches at the target path.
   const prepare = (
     path: Path,
     change: ChangeBase,
-    options?: BatchOptions,
+    options: PrepareOptions,
   ): void => {
-    if (!options?.replay) {
-      writerLog.push({
-        op: { path, change },
-        compensating: !!options?.compensating,
-      })
+    switch (options.ingress) {
+      case "author":
+        writerLog.push({ path, change })
+        substrate.prepare(path, change, recordInverse)
+        return
+      case "compensate":
+        substrate.prepare(path, change, null)
+        return
+      case "announce":
+        return
     }
-    const opts = {
-      ...(options ?? {}),
-      [RECORD_INVERSE]: recordInverse,
-    } as BatchOptions & { [RECORD_INVERSE]: RecordInverseFn }
-    substrate.prepare(path, change, opts)
   }
 
-  // Base flush: delegate to the substrate's afterBatch.
-  // The changefeed layer wraps this to deliver accumulated Changeset
-  // batches to subscribers before calling through to the substrate.
-  const flush = (options?: BatchOptions): void => {
-    substrate.afterBatch(options)
+  // Base flush: end the substrate's authored batch. The changefeed layer
+  // wraps this and delivers accumulated Changesets after it returns, so
+  // subscribers see the updated version and log.
+  const flush = (options: BatchOptions): void => {
+    if (options.ingress === "author") substrate.afterBatch()
   }
 
   // Bake the substrate-runBatch reference once. Substrates that
@@ -454,11 +428,11 @@ export function buildWritableContext(
         work()
       } catch (e) {
         // Undo-replay handler: pop this frame's start, replay its
-        // recorded inverses LIFO via ctx.prepare with `compensating: true`.
+        // recorded inverses LIFO via ctx.prepare with `ingress: "compensate"`.
         // Routing through ctx.prepare (not substrate.prepare) keeps the
         // changefeed accumulator filling so subscribers see the full op
-        // log on the aborted Changeset; the `compensating: true` flag
-        // tells substrates to skip recording the inverse-of-the-inverse.
+        // log on the aborted Changeset; the substrate receives no recorder,
+        // so it does not record the inverse-of-the-inverse.
         // `?? 0` rather than an assertion: the push/pop are paired by
         // construction, so an empty stack cannot happen — and if it ever did,
         // compensating the whole log is the safe reading, not crashing.
@@ -466,14 +440,14 @@ export function buildWritableContext(
         try {
           for (let i = inverseStack.length - 1; i >= frameStart; i--) {
             const { path, inverse } = inverseStack[i]
-            ctx.prepare(path, inverse, { ...opts, compensating: true })
+            ctx.prepare(path, inverse, COMPENSATE)
           }
           inverseStack.length = frameStart
           // Only the outermost frame flushes — the inner frame's catch
           // pops + compensates but lets the rethrow propagate to the
           // outer frame's wrappedWork.
           if (frameStarts.length === 0) {
-            ctx.flush({ ...opts, aborted: true })
+            ctx.flush({ ...opts, ingress: "author", aborted: true })
             writerLog.length = 0
           }
         } catch (compErr: any) {
@@ -497,7 +471,7 @@ export function buildWritableContext(
         // the stack across inner pops, but the outermost release is
         // where the whole block's range gets discarded.)
         inverseStack.length = 0
-        ctx.flush(opts)
+        ctx.flush({ ...opts, ingress: "author" })
         writerLog.length = 0
       }
     }
@@ -523,10 +497,10 @@ export function buildWritableContext(
   const dispatch = (path: Path, change: ChangeBase): void => {
     if (frameStarts.length === 0) {
       runBatch(() => {
-        ctx.prepare(path, change)
-      }, undefined)
+        ctx.prepare(path, change, AUTHOR)
+      }, {})
     } else {
-      ctx.prepare(path, change)
+      ctx.prepare(path, change, AUTHOR)
     }
   }
 
@@ -540,15 +514,7 @@ export function buildWritableContext(
     // log). Always live regardless of stack composition — `batch()`
     // works whether or not the observation layer is in play.
     [FORWARD_OPS_MARKER]: () => writerLog.length,
-    [FORWARD_OPS_SINCE]: (marker: number) => {
-      const out: Op[] = []
-      for (let i = marker; i < writerLog.length; i++) {
-        const entry = writerLog[i]
-        if (entry.compensating) continue
-        out.push(entry.op)
-      }
-      return out
-    },
+    [FORWARD_OPS_SINCE]: (marker: number) => writerLog.slice(marker),
   }
 
   if (capabilities.nativeResolver) {

@@ -15,9 +15,9 @@
 //   are buffered in a per-target-key coalescer and flushed in
 //   `afterBatch`. Non-boundary writes are applied directly to λ via
 //   `applyChangeToYjs`.
-// - `afterBatch` flushes the json-boundary coalescer on local writes
-//   and re-materialises σ from λ on replay.
-// - Persistent observeDeep event bridge for external changes.
+// - `afterBatch` flushes the json-boundary coalescer.
+// - Persistent observeDeep event bridge for external changes: it
+//   re-materialises σ from λ, then announces the ops.
 // - Per-transaction meta mark (`KYNETA_MARK`) inscribed from inside the
 //   transact body to ignore our own writes; survives Yjs's nested-transact
 //   collapse so external wrapping is handled correctly.
@@ -27,21 +27,19 @@
 // underlying Y.Doc, regardless of source (local kyneta writes,
 // merge, external Y.applyUpdate, external raw Yjs API mutations).
 //
-// `prepare` and `afterBatch` accept `BatchOptions` and branch on
-// `options?.replay`. The event bridge constructs the replay batch via
-// `executeBatch(ctx, ops, { origin, replay: true })`; substrate-side
-// work (transact, write) is skipped when `replay` is true because the
-// native Y.Doc already absorbed the change. This makes `prepare` and
-// `afterBatch` total functions of their declared inputs — no hidden
-// ambient state for the substrate-write decision. Context: jj:qpultxsw.
+// `prepare` and `afterBatch` see only Kyneta's own writes. The event bridge
+// handles everything else: the Y.Doc already holds those ops, so it brings σ
+// up to date and announces them via `announce(ctx, ops, origin)`, which never
+// calls back into `prepare`.
 //
 // Identity-keying: when a SchemaBinding is provided, all Y.Map key
 // lookups and writes use the identity hash instead of the field name.
 // The binding is threaded to the reader, event bridge, and write path.
 
 import type {
-  BatchOptions,
   ChangeBase,
+  CommitOptions,
+  MergeOptions,
   Path,
   PlainState,
   PositionCapable,
@@ -60,6 +58,7 @@ import type {
   WritableContext,
 } from "@kyneta/schema"
 import {
+  announce,
   applyChange,
   BACKING_DOC,
   buildWritableContext,
@@ -69,7 +68,6 @@ import {
   type DevtoolsHistory,
   type DevtoolsHistorySummary,
   deriveSchemaBinding,
-  executeBatch,
   fieldAbsPath,
   findOpaqueBoundary,
   hasBackingDoc,
@@ -77,7 +75,6 @@ import {
   KIND,
   ownedForStore,
   plainReader,
-  RECORD_INVERSE,
   syncShadow,
 } from "@kyneta/schema"
 import * as Y from "yjs"
@@ -158,7 +155,8 @@ export function createYjsSubstrate(
   const rootMap = doc.getMap("root")
 
   // The shadow — a plain JS object materialized from the Y.Doc.
-  // Kept in sync by applyChange() in prepare().
+  // `prepare` steps it for local writes; the event bridge re-materializes it
+  // for everything else.
   const shadow: PlainState = materializeYjsShadow(doc, schema, binding)
   const reader: Reader = plainReader(shadow)
 
@@ -258,37 +256,24 @@ export function createYjsSubstrate(
 
     reader: reader,
 
-    prepare(path: Path, change: ChangeBase, options?: BatchOptions): void {
-      // Replay writes: λ has already absorbed these ops via
-      // Y.applyUpdate at the event-bridge call site; skip σ/λ
-      // advance — afterBatch(replay) rebuilds σ from λ in one
-      // Π pass.
-      if (options?.replay) return
-
-      // Inverse recording under the normal handler. Capture σ at the
-      // target path before applyChange mutates the shadow; the
-      // recording closure pushes onto the active runBatch frame's
-      // stack. Skipped under the undo-replay handler (compensating).
-      const record = (
-        options as
-          | (BatchOptions & { [RECORD_INVERSE]?: RecordInverseFn })
-          | undefined
-      )?.[RECORD_INVERSE]
-      if (record && !options?.compensating) {
+    prepare(
+      path: Path,
+      change: ChangeBase,
+      recordInverse: RecordInverseFn | null,
+    ): void {
+      // Capture σ at the target path before applyChange mutates the shadow.
+      if (recordInverse) {
         // Read, don't copy. `invert` snapshots whatever it retains — see
         // `invertReplace`, `invertMap`, `invertSequence` and the rich-text
         // marks in `inverse.ts`, each of which deep-clones the pre-state it
         // captures. Copying here as well protected nothing and cost a deep
         // clone of the written subtree on every local write.
-        const pre = path.read(shadow)
-        const inverse = invert(pre, change)
-        record(path, inverse)
+        recordInverse(path, invert(path.read(shadow), change))
       }
 
       // Local write — σ advances eagerly. CRDT-side writes happen
-      // inside the ambient Y.transact opened by runBatch (the
-      // substrate's `runBatch` wraps `executeBatch`'s prepare-loop +
-      // flush).
+      // inside the ambient Y.transact opened by runBatch, which wraps
+      // the batch's prepare-loop and flush.
       applyChange(shadow, path, ownedForStore(change))
 
       // JSON-boundary write: stage a full-value write at the
@@ -302,27 +287,21 @@ export function createYjsSubstrate(
       }
 
       // Non-boundary write: imperatively apply to λ inside the
-      // ambient Y.transact. The KYNETA_ORIGIN tag lets the
-      // observeDeep bridge below recognise and skip the events we
+      // ambient Y.transact. The KYNETA_MARK on the transaction
+      // lets the observeDeep bridge below recognise and skip the events we
       // generate here, so the changefeed isn't fired twice.
       applyChangeToYjs(rootMap, schema, path, change, binding)
     },
 
-    afterBatch(options?: BatchOptions): void {
-      if (options?.replay) {
-        // CRDT merge is a lattice join — re-materialise σ from λ in
-        // one Π pass instead of replaying ops incrementally.
-        syncShadow(shadow, materializeYjsShadow(doc, schema, binding))
-        return
-      }
-      // Local write: drain the json-boundary coalescer. Runs inside
+    afterBatch(): void {
+      // Drain the json-boundary coalescer. Runs inside
       // the ambient Y.transact from `runBatch`; the transact closes
       // when `runBatch`'s body returns, emitting one batched
       // observeDeep event for the whole logical action.
       flushJsonBoundaryBuffer()
     },
 
-    runBatch(work: () => void, options?: BatchOptions): void {
+    runBatch(work: () => void, options: CommitOptions): void {
       // Yjs's native transact nesting collapses inner re-entrant
       // transacts into the outermost — exactly the "one batched
       // event per outermost logical action" semantic we want. No
@@ -335,7 +314,7 @@ export function createYjsSubstrate(
       doc.transact(tr => {
         tr.meta.set(KYNETA_MARK, true)
         work()
-      }, options?.origin)
+      }, options.origin)
     },
 
     context(): WritableContext {
@@ -439,7 +418,7 @@ export function createYjsSubstrate(
       }
     },
 
-    merge(payload: SubstratePayload, options?: BatchOptions): void {
+    merge(payload: SubstratePayload, options?: MergeOptions): void {
       if (
         payload.encoding !== "binary" ||
         !(payload.data instanceof Uint8Array)
@@ -456,14 +435,13 @@ export function createYjsSubstrate(
       } finally {
         pendingMergeOrigin = undefined
       }
-      // That's it — the observeDeep handler bridges events to the
-      // changefeed via executeBatch with `replay: true`.
+      // The observeDeep handler announces the merged ops.
     },
 
     resetFromEntirety(
       payload: SubstratePayload,
       _remoteVersion: Version,
-      options?: BatchOptions,
+      options?: MergeOptions,
     ): void {
       // Yjs never mints a new lineage automatically (see YjsVersion.lineage),
       // so an lineage boundary never arises for this substrate today — this
@@ -501,10 +479,11 @@ export function createYjsSubstrate(
     // Lazily ensure the context is built
     const ctx = substrate.context()
 
-    // `replay: true` tells substrate.prepare/afterBatch to skip native-side
-    // work (Yjs has already absorbed these ops via Y.applyUpdate) and
-    // surfaces on the Changeset for downstream filters (exchange echo).
-    executeBatch(ctx, ops, { origin, replay: true })
+    // The Y.Doc already holds these ops. CRDT merge is a lattice join with
+    // no sequential decomposition, so σ is re-materialised from λ in one Π
+    // pass rather than stepped op by op, and only then announced.
+    syncShadow(shadow, materializeYjsShadow(doc, schema, binding))
+    announce(ctx, ops, origin)
   })
 
   return substrate as Substrate<YjsVersion>
@@ -645,7 +624,7 @@ export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
       }
     },
 
-    merge(payload: SubstratePayload, _options?: BatchOptions): void {
+    merge(payload: SubstratePayload, _options?: MergeOptions): void {
       if (
         payload.encoding !== "binary" ||
         !(payload.data instanceof Uint8Array)
@@ -661,7 +640,7 @@ export function createYjsReplica(doc: Y.Doc): Replica<YjsVersion> {
     resetFromEntirety(
       payload: SubstratePayload,
       _remoteVersion: Version,
-      options?: BatchOptions,
+      options?: MergeOptions,
     ): void {
       // See createYjsSubstrate's resetFromEntirety — CRDT merge (set union
       // via Y.applyUpdate) is always the correct absorption, lineage boundary
